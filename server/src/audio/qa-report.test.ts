@@ -7,6 +7,7 @@ import { audioDir } from '../workspace/paths.js';
 import { writeVerdicts, writeAttempted, attemptedPath } from './render-integrity/verdicts-io.js';
 import { scoreBook } from './render-integrity/aggregate.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './render-integrity/embeddings-io.js';
+import { writeCentroids } from './render-integrity/centroids-io.js';
 import { buildAudioQaReport } from './qa-report.js';
 
 async function makeBook(): Promise<string> {
@@ -111,6 +112,9 @@ describe('buildAudioQaReport', () => {
       segments: [seg()],
       characterSnapshots: { wren: { voiceEngine: 'qwen' } },
     });
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
+      { characterId: 'wren', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
     await writeAttempted(attemptedPath(audioDir(dir), 'ch1'));
     await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
       { characterId: 'wren', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
@@ -187,6 +191,9 @@ describe('buildAudioQaReport', () => {
       segments: [seg()],
       characterSnapshots: { wren: { voiceEngine: 'qwen' } },
     });
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
+      { characterId: 'wren', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
     await writeAttempted(attemptedPath(audioDir(dir), 'ch1'));
     await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
       { characterId: 'wren', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
@@ -337,5 +344,127 @@ describe('buildAudioQaReport', () => {
 
     const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
     expect(report.acoustic.chaptersFlagged).toBe(1);
+  });
+});
+
+describe('qa-report — srv-36 hardening: embeddings-sourced roster + charactersPending', () => {
+  it("a character present in a chapter's snapshot but with ZERO embedding rows there does not block that chapter from being fully scored", async () => {
+    // ch1: narrator has embedding rows AND a verdict row. mairin appears in
+    // the snapshot (she speaks in ch1) but every one of her lines there fell
+    // under the duration floor — no embedding row for her in THIS chapter,
+    // even though she resolved fine elsewhere in the book.
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'narrator' }), seg({ characterId: 'mairin' })],
+      characterSnapshots: { narrator: { voiceEngine: 'qwen' }, mairin: { voiceEngine: 'qwen' } },
+    });
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
+      { characterId: 'narrator', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
+    await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
+      { characterId: 'narrator', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+    await writeCentroids(dir, [
+      { characterId: 'narrator', centroid: [1, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0.9, pSevere: 0.5, pBand: 0.7, referenceKind: 'in-book' },
+      { characterId: 'mairin', centroid: [0, 1, 0, 0, 0, 0, 0, 0], cleanMean: 0.9, pSevere: 0.5, pBand: 0.7, referenceKind: 'in-book' },
+    ]);
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.chaptersScored).toBe(1); // NOT stuck at 0
+  });
+
+  it('charactersPending lists a stochastic character with no row in centroids.json yet, and excludes a terminally too-short one', async () => {
+    // ch1: narrator (resolved, in centroids.json), ren (no row at all — still
+    // mid-retry-cycle), pell-hollis (a terminal too-short row in centroids.json).
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'narrator' }), seg({ characterId: 'ren' }), seg({ characterId: 'pell-hollis' })],
+      characterSnapshots: {
+        narrator: { voiceEngine: 'qwen' },
+        ren: { voiceEngine: 'qwen' },
+        'pell-hollis': { voiceEngine: 'qwen' },
+      },
+    });
+    await writeCentroids(dir, [
+      { characterId: 'narrator', centroid: [1, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0.9, pSevere: 0.5, pBand: 0.7, referenceKind: 'in-book' },
+      { characterId: 'pell-hollis', centroid: [0, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short' },
+    ]);
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.charactersPending).toEqual(['ren']);
+    expect(report.voiceDrift.charactersPending).not.toContain('pell-hollis');
+  });
+
+  it('chaptersEmbedFailed excludes a chapter whose only unscored roster character is in charactersPending', async () => {
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'narrator' }), seg({ characterId: 'ren' })],
+      characterSnapshots: { narrator: { voiceEngine: 'qwen' }, ren: { voiceEngine: 'qwen' } },
+    });
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
+      { characterId: 'narrator', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+      { characterId: 'ren', sentenceIds: [1], vec: Float32Array.from([0, 1, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch1'));
+    await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
+      { characterId: 'narrator', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+    // narrator scored; ren has no centroids row at all — still pending.
+    await writeCentroids(dir, [
+      { characterId: 'narrator', centroid: [1, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0.9, pSevere: 0.5, pBand: 0.7, referenceKind: 'in-book' },
+    ]);
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.chaptersEmbedFailed).toBe(0);
+  });
+
+  it('chaptersEmbedFailed DOES count a chapter whose only unscored roster character is terminally capped (not in charactersPending)', async () => {
+    // Deliberately hand-authored disk state (NOT a state a single scoreBook
+    // run produces on its own — that's the point: this test exercises the
+    // qa-report's OWN roster-vs-verdict comparison in isolation from
+    // scoreBook's write ordering).
+    //   - ch1.embeddings.json: rows for BOTH narrator and pell-hollis.
+    //   - ch1.segments.json: characterSnapshots for both, both classified
+    //     stochastic (qwen) — this makes rosterByChapter = {narrator, pell-hollis}.
+    //   - ch1.render-integrity-attempted.json: present (attempted).
+    //   - ch1.render-integrity.json: verdict rows for narrator ONLY (simulates
+    //     "narrator's per-character write landed, pell-hollis's per-character
+    //     write for this chapter has NOT landed yet or was lost") —
+    //     verdictCharactersByChapter.get(1) = {narrator} only.
+    //   - render-integrity.centroids.json: narrator resolved (in-book) AND
+    //     pell-hollis resolved too-short (a terminal row — present in
+    //     centroids.json, so NOT in charactersPending).
+    // Net effect: pell-hollis is on the roster, has a terminal centroid row
+    // (not pending), but her verdict row for ch1 is missing — the chapter is
+    // genuinely stuck, not "still working." That's what should count as
+    // embed-failed.
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'narrator' }), seg({ characterId: 'pell-hollis' })],
+      characterSnapshots: { narrator: { voiceEngine: 'qwen' }, 'pell-hollis': { voiceEngine: 'qwen' } },
+    });
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
+      { characterId: 'narrator', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+      { characterId: 'pell-hollis', sentenceIds: [1], vec: Float32Array.from([0, 1, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch1'));
+    await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
+      { characterId: 'narrator', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+    await writeCentroids(dir, [
+      { characterId: 'narrator', centroid: [1, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0.9, pSevere: 0.5, pBand: 0.7, referenceKind: 'in-book' },
+      { characterId: 'pell-hollis', centroid: [0, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short' },
+    ]);
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.chaptersEmbedFailed).toBe(1);
   });
 });

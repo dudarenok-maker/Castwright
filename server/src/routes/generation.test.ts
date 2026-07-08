@@ -18,8 +18,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import type { Response } from '../http.js';
 import { preventSleep, allowSleep } from '../system/prevent-sleep.js';
 import { quarantinedIt } from '../test-utils/quarantine.js';
+/* Safe to statically import — this module is fully vi.mock'd above, so its
+   real implementation (and real implementation's transitive imports, e.g.
+   workspace/paths.js) never loads. `configValue`/`scoreBook`/embeddings-io
+   below are NOT mocked, so they're captured via the SAME dynamic-import
+   pattern beforeAll already uses for generationRouter — a static import of
+   any of those here would evaluate workspace/paths.js's module-level
+   WORKSPACE_ROOT BEFORE beforeAll sets process.env.WORKSPACE_DIR below. */
+import { reconcileResidentQwenTiers } from '../tts/ensure-sidecar-loaded.js';
 
 /* Mock synthesiseChapter so the route never needs a real TTS provider. The
    mock is mutable per test case via the synthesiseImpl ref. */
@@ -55,8 +64,11 @@ vi.mock('../tts/index.js', async (importOriginal) => {
 vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
   ensureSidecarEngineReady: async () => undefined,
   /* Run-start tier reconcile — no-op here (no sidecar at :9000); the real
-     eviction logic is covered in ensure-sidecar-loaded.test.ts. */
-  reconcileResidentQwenTiers: async () => undefined,
+     eviction logic is covered in ensure-sidecar-loaded.test.ts. Wrapped in
+     vi.fn() (srv-36 hardening, Task 6) so the triggerScoring describe block
+     below can assert on its call args — behaviourally identical no-op for
+     every other test in this file. */
+  reconcileResidentQwenTiers: vi.fn(async () => undefined),
   /* Empty so the side-11 boundary-recycle check (the only SIDECAR_ENGINES
      consumer) is a no-op here — these tests don't exercise it and must not
      fire a real /health probe at a dev-box sidecar. */
@@ -98,6 +110,16 @@ let bookId: string;
 let getGenerationStats: typeof import('../tts/generation-stats.js').getGenerationStats;
 let resetGenerationStats: typeof import('../tts/generation-stats.js').__resetGenerationStatsForTest;
 let readTelemetry: typeof import('../tts/resource-telemetry.js').readTelemetry;
+/* srv-36 hardening (Task 6) — captured via the SAME dynamic-import-inside-
+   beforeAll pattern as the above (see the comment on the `reconcileResident-
+   QwenTiers` import up top for why these can't be static top-level imports). */
+let triggerScoring: typeof import('./generation.js').triggerScoring;
+let __awaitScoringSettled: typeof import('./generation.js').__awaitScoringSettled;
+let __registerFakeJobForTest: typeof import('./generation.js').__registerFakeJobForTest;
+let configModule: typeof import('../config/resolver.js');
+let aggregateModule: typeof import('../audio/render-integrity/aggregate.js');
+let writeEmbeddings: typeof import('../audio/render-integrity/embeddings-io.js').writeEmbeddings;
+let EMBEDDINGS_VERSION: typeof import('../audio/render-integrity/embeddings-io.js').EMBEDDINGS_VERSION;
 
 interface ParsedTick {
   type: string;
@@ -123,17 +145,36 @@ beforeAll(async () => {
   workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-generation-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ generationRouter }, { makeBookId }, cacheModule, statsModule, telemetryModule] =
-    await Promise.all([
-      import('./generation.js'),
-      import('../workspace/paths.js'),
-      import('../store/analysis-cache.js'),
-      import('../tts/generation-stats.js'),
-      import('../tts/resource-telemetry.js'),
-    ]);
+  const [
+    generationModule,
+    { makeBookId },
+    cacheModule,
+    statsModule,
+    telemetryModule,
+    configMod,
+    aggMod,
+    embMod,
+  ] = await Promise.all([
+    import('./generation.js'),
+    import('../workspace/paths.js'),
+    import('../store/analysis-cache.js'),
+    import('../tts/generation-stats.js'),
+    import('../tts/resource-telemetry.js'),
+    import('../config/resolver.js'),
+    import('../audio/render-integrity/aggregate.js'),
+    import('../audio/render-integrity/embeddings-io.js'),
+  ]);
+  const { generationRouter } = generationModule;
+  triggerScoring = generationModule.triggerScoring;
+  __awaitScoringSettled = generationModule.__awaitScoringSettled;
+  __registerFakeJobForTest = generationModule.__registerFakeJobForTest;
   getGenerationStats = statsModule.getGenerationStats;
   resetGenerationStats = statsModule.__resetGenerationStatsForTest;
   readTelemetry = telemetryModule.readTelemetry;
+  configModule = configMod;
+  aggregateModule = aggMod;
+  writeEmbeddings = embMod.writeEmbeddings;
+  EMBEDDINGS_VERSION = embMod.EMBEDDINGS_VERSION;
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
 
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
@@ -1663,4 +1704,205 @@ describe('POST /api/books/:bookId/generation — B1 QA-cost telemetry passthroug
     expect(ch1.rtf).not.toBeNull();
     expect(ch2.rtf).not.toBeNull();
   }, 15_000);
+});
+
+/* srv-36 hardening (Task 6) — triggerScoring extraction + SSE broadcast
+   wiring. Exercises the extracted function DIRECTLY (no HTTP layer/no
+   supertest) since triggerScoring's ctx is plain data; the "broadcasts to
+   every subscriber" case additionally drives __registerFakeJobForTest to
+   populate inFlightByBook the way a real in-flight SSE job would, without
+   spinning up a real POST end-to-end.
+
+   Round-2 plan-review fix (see the plan brief): triggerScoring itself is
+   fire-and-forget — it resolves once the run is REGISTERED
+   (scoringInFlight.set), NOT once scoreBook + broadcast + reconcile has
+   actually settled. Every test below that asserts on an effect of the
+   background run awaits __awaitScoringSettled(bookId) first.
+
+   Round-2 plan-review caution (also from the brief): the "off" test needs
+   scoreBook spied-and-never-called; the reconcile/broadcast tests need the
+   REAL scoreBook to run against an on-disk fixture so its callbacks
+   actually fire. This suite never `vi.mock`s '../audio/render-integrity/
+   aggregate.js' (unlike generation-spk.test.ts) — every test instead uses a
+   scoped `vi.spyOn` + explicit `.mockRestore()` in a `finally`, so there's
+   no module-mock state to leak between tests. */
+
+// 8-length unit vector at angle θ — mirrors aggregate.test.ts's convention
+// for cheap, deterministic anchor vectors that clear CENTROID_MIN_N (10)
+// without any sidecar synth/embed call.
+const triggerScoringVec = (theta: number) =>
+  Float32Array.from([Math.cos(theta), Math.sin(theta), 0, 0, 0, 0, 0, 0]);
+
+/** Builds a fresh on-disk book fixture with 12 clean, tightly-clustered
+ *  anchors (>= CENTROID_MIN_N=10) per character, so scoreBook resolves each
+ *  character's reference straight from in-book anchors — no __testSynthFn/
+ *  __testEmbedFn, no sidecar call needed. Mirrors aggregate.test.ts's
+ *  fixture conventions (see e.g. its "writes centroids.json ... incrementally"
+ *  case, which pairs a 12-anchor `characterSnapshots` entry the same way). */
+async function buildTriggerScoringFixture(
+  chars: { id: string; modelKey: 'qwen3-tts-0.6b' | 'qwen3-tts-1.7b' }[],
+): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'trigger-scoring-'));
+  const root = join(dir, 'audio');
+  mkdirSync(root, { recursive: true });
+
+  const rows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+  const characterSnapshots: Record<string, unknown> = {};
+  for (const c of chars) {
+    for (let i = 0; i < 12; i++) {
+      rows.push({ characterId: c.id, sentenceIds: [i], vec: triggerScoringVec(0.01 * i) });
+    }
+    characterSnapshots[c.id] = {
+      voiceEngine: 'qwen',
+      resolvedVoiceName: `${c.id}-voice`,
+      modelKey: c.modelKey,
+    };
+  }
+
+  await writeEmbeddings(join(root, 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
+  writeFileSync(
+    join(root, 'ch1.segments.json'),
+    JSON.stringify({
+      chapterId: 1,
+      segments: rows.map((r) => ({
+        characterId: r.characterId,
+        sentenceIds: r.sentenceIds,
+        renderedFallbackEngine: null,
+      })),
+      characterSnapshots,
+    }),
+  );
+  return dir;
+}
+
+describe('triggerScoring (srv-36 hardening)', () => {
+  it('no-ops without calling scoreBook when qa.speaker.enabled is off', async () => {
+    const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(false);
+    const scoreBookSpy = vi.spyOn(aggregateModule, 'scoreBook');
+    try {
+      await triggerScoring({
+        bookId: 'trig-off',
+        bookDir: '/tmp/trig-off',
+        chapters: [],
+        justFinalizedSlugs: [],
+      });
+      // No __awaitScoringSettled needed here — the qa.speaker.enabled guard
+      // returns synchronously before scoringInFlight is ever set.
+      expect(scoreBookSpy).not.toHaveBeenCalled();
+    } finally {
+      configSpy.mockRestore();
+      scoreBookSpy.mockRestore();
+    }
+  });
+
+  it('when keep is supplied, reconciles against it verbatim (chapter-finalize path behavior, unchanged)', async () => {
+    const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+    vi.mocked(reconcileResidentQwenTiers).mockClear();
+    const bookDirFixture = await buildTriggerScoringFixture([{ id: 'hero', modelKey: 'qwen3-tts-1.7b' }]);
+    try {
+      await triggerScoring({
+        bookId: 'trig-keep-supplied',
+        bookDir: bookDirFixture,
+        chapters: [{ id: 1, slug: 'ch1' }],
+        justFinalizedSlugs: ['ch1'],
+        keep: { keep06: true, keep17: false },
+      });
+      await __awaitScoringSettled('trig-keep-supplied');
+      expect(reconcileResidentQwenTiers).toHaveBeenCalledWith({ keep06: true, keep17: false });
+    } finally {
+      configSpy.mockRestore();
+    }
+  });
+
+  it("when keep is omitted, reconciles against scoreBook's own usedQwenTiers (resume-route path)", async () => {
+    const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+    vi.mocked(reconcileResidentQwenTiers).mockClear();
+    // Fixture: a qwen3-tts-1.7b character.
+    const bookDirFixture = await buildTriggerScoringFixture([{ id: 'hero', modelKey: 'qwen3-tts-1.7b' }]);
+    try {
+      await triggerScoring({
+        bookId: 'trig-keep-omitted',
+        bookDir: bookDirFixture,
+        chapters: [{ id: 1, slug: 'ch1' }],
+        justFinalizedSlugs: [],
+      });
+      await __awaitScoringSettled('trig-keep-omitted');
+      expect(reconcileResidentQwenTiers).toHaveBeenCalledWith({ keep06: false, keep17: true });
+    } finally {
+      configSpy.mockRestore();
+    }
+  });
+
+  it('broadcasts scoring_started/progress/complete to every subscriber of every in-flight job for the book, de-duplicated by res', async () => {
+    const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+    // 2-character in-book fixture, no sidecar needed.
+    const bookDirFixture = await buildTriggerScoringFixture([
+      { id: 'alice', modelKey: 'qwen3-tts-0.6b' },
+      { id: 'bob', modelKey: 'qwen3-tts-1.7b' },
+    ]);
+    const scoringBookId = 'trig-broadcast';
+    const receivedA: { type: string }[] = [];
+    const receivedB: { type: string }[] = [];
+    const resA = {} as unknown as Response;
+    const resB = {} as unknown as Response;
+    // One job has subscriber A; the other has subscribers A (same res as the
+    // first — the bare-resume reconnect case) and B.
+    const cleanupJob1 = __registerFakeJobForTest(scoringBookId, [
+      { send: (ev) => receivedA.push(ev as { type: string }), res: resA },
+    ]);
+    const cleanupJob2 = __registerFakeJobForTest(scoringBookId, [
+      { send: (ev) => receivedA.push(ev as { type: string }), res: resA },
+      { send: (ev) => receivedB.push(ev as { type: string }), res: resB },
+    ]);
+    try {
+      await triggerScoring({
+        bookId: scoringBookId,
+        bookDir: bookDirFixture,
+        chapters: [{ id: 1, slug: 'ch1' }],
+        justFinalizedSlugs: ['ch1'],
+      });
+      await __awaitScoringSettled(scoringBookId);
+
+      const countByType = (evs: { type: string }[], type: string) =>
+        evs.filter((e) => e.type === type).length;
+      // subA is registered on BOTH sibling jobs — de-dup by `res` means it
+      // must still see exactly ONE copy of each tick type, not two.
+      expect(countByType(receivedA, 'scoring_started')).toBe(1);
+      expect(countByType(receivedA, 'scoring_progress')).toBe(2); // one per character
+      expect(countByType(receivedA, 'scoring_complete')).toBe(1);
+      // subB is registered on only the second job — same one-copy-per-tick contract.
+      expect(countByType(receivedB, 'scoring_started')).toBe(1);
+      expect(countByType(receivedB, 'scoring_progress')).toBe(2);
+      expect(countByType(receivedB, 'scoring_complete')).toBe(1);
+      // Per the documented GenerationTick contract, scoring_complete carries
+      // the FINAL charactersChecked/charactersOnRoster alongside
+      // mismatchCount — not just mismatchCount alone.
+      const completeEvent = receivedA.find((e) => e.type === 'scoring_complete') as
+        | { charactersChecked?: number; charactersOnRoster?: number; mismatchCount?: number }
+        | undefined;
+      expect(completeEvent?.charactersChecked).toBe(2);
+      expect(completeEvent?.charactersOnRoster).toBe(2);
+      expect(completeEvent?.mismatchCount).toEqual(expect.any(Number));
+    } finally {
+      cleanupJob1();
+      cleanupJob2();
+      configSpy.mockRestore();
+    }
+  });
+
+  it('resume-shaped call (no in-flight job for the book) completes without throwing even though broadcastToBook has nothing to send to', async () => {
+    const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+    const bookDirFixture = await buildTriggerScoringFixture([{ id: 'hero', modelKey: 'qwen3-tts-1.7b' }]);
+    try {
+      await triggerScoring({
+        bookId: 'trig-resume-no-job',
+        bookDir: bookDirFixture,
+        chapters: [{ id: 1, slug: 'ch1' }],
+        justFinalizedSlugs: [],
+      });
+      await expect(__awaitScoringSettled('trig-resume-no-job')).resolves.toBeUndefined();
+    } finally {
+      configSpy.mockRestore();
+    }
+  });
 });

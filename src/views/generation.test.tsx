@@ -916,6 +916,34 @@ describe('GenerationView — fs-51 QA report card', () => {
 
     await waitFor(() => expect(getQaReportSpy).toHaveBeenCalledTimes(2));
   });
+
+  it('refetches the QA report when a background voice-match scoring pass completes', async () => {
+    const { store } = renderView();
+
+    await screen.findByText(/quality gate/i);
+    expect(getQaReportSpy).toHaveBeenCalledTimes(1);
+
+    /* Mirrors the real event shape appended by the generation-stream runner
+       (see buildScoringCompleteEvent / ACTIVITY_FEED_TYPES) — a live
+       scoring_complete entry landing in this book's activity feed once the
+       srv-36 background scoreBook pass finishes. */
+    act(() => {
+      store.dispatch(
+        changeLogSlice.actions.appendLogEvent({
+          id: Date.now(),
+          at: new Date().toISOString(),
+          ts: 'Just now',
+          date: 'today',
+          type: 'scoring_complete',
+          title: 'Voice-match scoring complete',
+          note: '0 mismatches found.',
+          actor: 'system',
+        }),
+      );
+    });
+
+    await waitFor(() => expect(getQaReportSpy).toHaveBeenCalledTimes(2));
+  });
 });
 
 describe('GenerationView — header action once the run is complete', () => {

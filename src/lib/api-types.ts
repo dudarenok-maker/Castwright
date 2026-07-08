@@ -2859,9 +2859,19 @@ export interface components {
              *     affected characters in `fallbackCharacters` so the frontend can
              *     prompt the user to confirm or skip. The worker frees its slot; other
              *     chapters keep flowing. See plan `docs/features/archive/102-global-queue-modal.md`.
+             *     `scoring_started` / `scoring_progress` / `scoring_complete` (srv-36
+             *     hardening) surface the voice-match background scoring pass:
+             *     `scoring_started` fires once when a scoreBook run begins, carrying
+             *     `charactersOnRoster`; `scoring_progress` fires once per character
+             *     resolved, carrying `characterId` (reusing the existing field above)
+             *     plus updated `charactersChecked`/`charactersOnRoster`;
+             *     `scoring_complete` fires once at the end, carrying final
+             *     `charactersChecked`/`charactersOnRoster`/`mismatchCount`. Scoped to
+             *     the book the stream handle belongs to (no separate `bookId` field
+             *     needed — same as every other tick type here).
              * @enum {string}
              */
-            type: "progress" | "chapter_assembling" | "chapter_verifying" | "chapter_recovering" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from" | "warning" | "chapter_awaiting_fallback_confirm";
+            type: "progress" | "chapter_assembling" | "chapter_verifying" | "chapter_recovering" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from" | "warning" | "chapter_awaiting_fallback_confirm" | "scoring_started" | "scoring_progress" | "scoring_complete";
             chapterId?: number;
             /** @description null = chapter-wide tick (not character-specific). */
             characterId?: string | null;
@@ -2989,6 +2999,12 @@ export interface components {
                 id?: string;
                 name?: string;
             }[];
+            /** @description srv-36 hardening — total stochastic characters being scored this run. Carried on scoring_started/scoring_progress/scoring_complete. */
+            charactersOnRoster?: number;
+            /** @description srv-36 hardening — characters resolved so far this run. Carried on scoring_progress/scoring_complete. */
+            charactersChecked?: number;
+            /** @description srv-36 hardening — total voice-mismatch verdicts found. Carried on scoring_complete only. */
+            mismatchCount?: number;
         };
         QueueEntry: {
             /** @description Stable unique entry id. Frontend-minted at enqueue time. */
@@ -3414,7 +3430,7 @@ export interface components {
             /** @enum {string} */
             date: "today" | "yesterday" | "earlier";
             /** @enum {string} */
-            type: "regenerate" | "voice_tune" | "voice_reuse" | "voice_lock" | "boundary_move" | "chapter_complete" | "generation_run_complete" | "chapter_failed" | "generation_started" | "cast_confirm" | "name_change" | "analysis_complete" | "import" | "library_add" | "reparse";
+            type: "regenerate" | "voice_tune" | "voice_reuse" | "voice_lock" | "boundary_move" | "chapter_complete" | "generation_run_complete" | "chapter_failed" | "generation_started" | "cast_confirm" | "name_change" | "analysis_complete" | "import" | "library_add" | "reparse" | "scoring_started" | "scoring_complete";
             title: string;
             note: string;
             /** @enum {string} */
@@ -4230,6 +4246,8 @@ export interface components {
                 chaptersEmbedFailed: number;
                 charactersOnRoster: number;
                 charactersChecked: number;
+                /** @description srv-36 hardening — stochastic characters with no row in centroids.json yet: genuinely incomplete (never attempted, or mid-retry-cycle under the transient-failure cap). Drives the frontend's Resume-scoring affordance — narrower than "charactersChecked < charactersOnRoster", which also stays true forever for a terminally too-short character (nothing left to resume for those). */
+                charactersPending: string[];
                 mismatches: {
                     characterId: string;
                     /** @description Absent on rows from legacy verdict files written before chapter-scoping existed (see `voiceDrift.attribution`). */

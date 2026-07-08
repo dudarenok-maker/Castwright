@@ -17,6 +17,7 @@ export const MOCK_QA_REPORT: BookQaReport = {
     chaptersEmbedFailed: 0,
     charactersOnRoster: 18,
     charactersChecked: 18,
+    charactersPending: [],
     mismatches: [],
     inconclusiveCount: 0,
     uncheckedCharacterIds: [],

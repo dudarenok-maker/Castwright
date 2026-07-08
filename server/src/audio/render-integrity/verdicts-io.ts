@@ -39,6 +39,24 @@ export async function readVerdicts(path: string): Promise<VerdictRow[] | null> {
   return JSON.parse(raw) as VerdictRow[];
 }
 
+/** Read-modify-write a single character's verdict rows into a chapter's
+ *  verdict file: drops any existing rows for `characterId`, appends the new
+ *  ones, writes atomically. Idempotent — safe to call again with a fresh
+ *  `rows` set for the same character (e.g. a re-scored run). This is the
+ *  srv-36 incremental-writes primitive: `scoreBook` calls this once per
+ *  character per affected chapter, immediately after that character
+ *  resolves, instead of collecting every character's rows and writing the
+ *  whole file once at the end. */
+export async function mergeVerdictRows(
+  path: string,
+  characterId: string,
+  rows: VerdictRow[],
+): Promise<void> {
+  const existing = (await readVerdicts(path)) ?? [];
+  const kept = existing.filter((r) => r.characterId !== characterId);
+  await writeVerdicts(path, [...kept, ...rows]);
+}
+
 /** Path for a chapter's attempted-sentinel file, sibling to its
  *  `<slug>.render-integrity.json` verdict file. Exported so `scoreBook`'s
  *  per-chapter loop (the writer, in aggregate.ts) and `deriveBookOutline`
@@ -92,13 +110,14 @@ export async function deriveBookOutline(
   counts: { suspect: number; fixable: number; uncheckedCharacters: string[] };
   scoredChapterIds: number[];
   inconclusiveChapterIds: number[];
-  /** fs-51 correctness fix — chapters where `scoreBook` actually began
-   *  per-chapter processing (attempted sentinel present), regardless of
-   *  whether that chapter went on to produce a verdict file. Lets callers
-   *  distinguish "gate never ran" (empty) from "gate ran but every eligible
-   *  chapter's embeddings failed" (non-empty, yet scoredChapterIds is still
-   *  empty) — see qa-report.ts's `chaptersEmbedFailed` computation. */
   attemptedChapterIds: number[];
+  /** srv-36 hardening — the distinct characterIds that have a verdict row in
+   *  a given chapter, keyed by chapter id. A chapter's key is absent iff no
+   *  verdict rows exist for it at all (mirrors `scoredChapterIds`'s
+   *  presence test, just at character granularity — see qa-report.ts's
+   *  roster-coverage "fully scored" computation, which compares this
+   *  against a chapter's expected-character roster). */
+  verdictCharactersByChapter: Map<number, Set<string>>;
 }> {
   const root = audioDir(bookDir);
   const issues: VerdictRow[] = [];
@@ -106,6 +125,7 @@ export async function deriveBookOutline(
   const scoredChapterIds = new Set<number>();
   const inconclusiveChapterIds = new Set<number>();
   const attemptedChapterIds = new Set<number>();
+  const verdictCharactersByChapter = new Map<number, Set<string>>();
 
   for (const ch of chapters) {
     const path = join(root, `${ch.slug}.render-integrity.json`);
@@ -121,7 +141,9 @@ export async function deriveBookOutline(
     if (!rows) continue;
     scoredChapterIds.add(ch.id);
 
+    const chapterCharIds = new Set<string>();
     for (const row of rows) {
+      chapterCharIds.add(row.characterId);
       if (row.verdict === 'voice-mismatch') {
         issues.push(row);
       }
@@ -132,6 +154,7 @@ export async function deriveBookOutline(
         uncheckedSet.add(row.characterId);
       }
     }
+    verdictCharactersByChapter.set(ch.id, chapterCharIds);
   }
 
   const uncheckedCharacters = Array.from(uncheckedSet).sort();
@@ -146,5 +169,6 @@ export async function deriveBookOutline(
     scoredChapterIds: Array.from(scoredChapterIds).sort((a, b) => a - b),
     inconclusiveChapterIds: Array.from(inconclusiveChapterIds).sort((a, b) => a - b),
     attemptedChapterIds: Array.from(attemptedChapterIds).sort((a, b) => a - b),
+    verdictCharactersByChapter,
   };
 }

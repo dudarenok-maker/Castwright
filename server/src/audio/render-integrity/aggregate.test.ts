@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { scoreBook } from './aggregate.js';
 import { readVerdicts, readAttempted, attemptedPath } from './verdicts-io.js';
 import { readCentroids } from './centroids-io.js';
+import { readPendingAttempts } from './pending-attempts-io.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './embeddings-io.js';
 
 // helper: a 2-d unit vector at angle θ, padded to length 8 (test vectors are small)
@@ -204,11 +205,15 @@ describe('scoreBook', () => {
     expect(await readAttempted(attemptedPath(join(dir, 'audio'), 'ch3'))).toBe(true);
   });
 
-  it('too-few anchors → audition fallback → null (no sidecar) → all segments inconclusive with referenceKind too-short', async () => {
+  it('too-few anchors → audition fallback → null (no sidecar), repeated past the retry cap → all segments inconclusive with referenceKind too-short', async () => {
     // Fixture: only 3 anchor-eligible vectors (below CENTROID_MIN_N=10) for a
     // Qwen character. This triggers the too-thin branch → auditionCentroid is called.
-    // Without a live sidecar, auditionCentroid returns null → referenceKind:'too-short'
-    // → all segments of this character score 'inconclusive'.
+    // Without a live sidecar, auditionCentroid returns null — a TRANSIENT failure
+    // under the srv-36 hardening design (see pending-attempts-io.ts): a single
+    // null no longer immediately degrades the character to 'too-short'. It takes
+    // MAX_PENDING_ATTEMPTS (3) consecutive null results before the character
+    // becomes terminal — so this call scoreBook 3 times, mirroring the "no
+    // sidecar ever comes back" real-world case.
     //
     // auditionCentroid has no injection seam threaded through scoreBook, so it
     // makes a REAL network call to getResolvedSidecarUrl() (default
@@ -249,6 +254,14 @@ describe('scoreBook', () => {
     }));
 
     try {
+      // First MAX_PENDING_ATTEMPTS-1 calls are transient failures — nothing
+      // written yet, just a bumped pending-attempts counter.
+      for (let i = 0; i < 2; i++) {
+        await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+        expect(await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'))).toBeNull();
+      }
+      // The 3rd consecutive null result spends the retry cap and degrades
+      // the character to a terminal too-short row.
       await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
     } finally {
       if (prevLocalTtsUrl === undefined) delete process.env.LOCAL_TTS_URL;
@@ -369,6 +382,162 @@ describe('scoreBook', () => {
 
     const centroids = await readCentroids(dir);
     expect(centroids).toBeNull();
+  });
+});
+
+describe('scoreBook — incremental per-character writes (srv-36 hardening)', () => {
+  it('writes centroids.json and a chapter\'s verdict file incrementally, one character at a time, in cheap-first order', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-incremental-'));
+    const root = join(dir, 'audio');
+    mkdirSync(root, { recursive: true });
+
+    // narrator: 12 clean anchors (clears CENTROID_MIN_N=10 — "cheap").
+    // ren: 1 anchor only (too-thin — needs the "expensive" audition fallback).
+    const rows = [
+      ...Array.from({ length: 12 }, (_, i) => ({ characterId: 'narrator', sentenceIds: [i], vec: vec(0) })),
+      { characterId: 'ren', sentenceIds: [200], vec: vec(0.02) },
+    ];
+    await writeEmbeddings(join(root, 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
+    writeFileSync(
+      join(root, 'ch1.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        modelKey: 'qwen3-tts-1.7b',
+        segments: rows.map((r) => ({ characterId: r.characterId, sentenceIds: r.sentenceIds })),
+        characterSnapshots: {
+          narrator: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-narrator', modelKey: 'qwen3-tts-1.7b' },
+          ren: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-ren', modelKey: 'qwen3-tts-1.7b' },
+        },
+      }),
+    );
+
+    const resolveOrder: string[] = [];
+    const fakeSynth = async ({ voiceName }: { voiceName: string }) => {
+      resolveOrder.push(voiceName.includes('ren') ? 'ren-synth' : voiceName);
+      return { pcm: Buffer.alloc(48_000 * 2), sampleRate: 48_000, mimeType: 'audio/wav' }; // 1s of silence, clears MIN_DURATION_SEC
+    };
+    const fakeEmbed = async () => vec(0.02);
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, {
+      onCharacterScored: (characterId: string) => resolveOrder.push(`scored:${characterId}`),
+      __testSynthFn: fakeSynth,
+      __testEmbedFn: fakeEmbed,
+    });
+
+    // narrator (already-clears-the-floor) must be scored before ren (needs synthesis).
+    const narratorScoredIdx = resolveOrder.indexOf('scored:narrator');
+    const renScoredIdx = resolveOrder.indexOf('scored:ren');
+    expect(narratorScoredIdx).toBeGreaterThanOrEqual(0);
+    expect(renScoredIdx).toBeGreaterThan(narratorScoredIdx);
+
+    const centroids = await readCentroids(dir);
+    expect(centroids!.narrator.referenceKind).toBe('in-book');
+    expect(centroids!.ren).toBeDefined();
+
+    const verdicts = await readVerdicts(join(root, 'ch1.render-integrity.json'));
+    expect(verdicts!.some((v) => v.characterId === 'narrator')).toBe(true);
+    expect(verdicts!.some((v) => v.characterId === 'ren')).toBe(true);
+  });
+
+  it('a null (transient) auditionCentroid result increments pendingAttempts and writes nothing to centroids.json for that character', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-transient-'));
+    const root = join(dir, 'audio');
+    mkdirSync(root, { recursive: true });
+    await writeEmbeddings(join(root, 'ch1.embeddings.json'), [{ characterId: 'ren', sentenceIds: [1], vec: vec(0) }], EMBEDDINGS_VERSION);
+    writeFileSync(
+      join(root, 'ch1.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        segments: [{ characterId: 'ren', sentenceIds: [1] }],
+        characterSnapshots: { ren: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-ren', modelKey: 'qwen3-tts-1.7b' } },
+      }),
+    );
+
+    const throwingSynth = async () => { throw new Error('sidecar unreachable'); };
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, { __testSynthFn: throwingSynth });
+
+    expect((await readCentroids(dir))?.ren).toBeUndefined();
+    expect((await readPendingAttempts(dir))?.ren).toBe(1);
+    expect(await readVerdicts(join(root, 'ch1.render-integrity.json'))).toBeNull();
+  });
+
+  it('after 3 consecutive null results the character degrades to a terminal too-short row and stops retrying (absorbing state)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-cap-'));
+    const root = join(dir, 'audio');
+    mkdirSync(root, { recursive: true });
+    await writeEmbeddings(join(root, 'ch1.embeddings.json'), [{ characterId: 'ren', sentenceIds: [1], vec: vec(0) }], EMBEDDINGS_VERSION);
+    writeFileSync(
+      join(root, 'ch1.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        segments: [{ characterId: 'ren', sentenceIds: [1] }],
+        characterSnapshots: { ren: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-ren', modelKey: 'qwen3-tts-1.7b' } },
+      }),
+    );
+
+    let synthCalls = 0;
+    const throwingSynth = async () => { synthCalls++; throw new Error('sidecar unreachable'); };
+
+    for (let i = 0; i < 3; i++) {
+      await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, { __testSynthFn: throwingSynth });
+    }
+    expect(synthCalls).toBe(3);
+    expect((await readCentroids(dir))?.ren.referenceKind).toBe('too-short');
+    expect((await readPendingAttempts(dir))?.ren).toBeUndefined();
+
+    // 4th call — the state is absorbing, the synth fn must NOT fire again.
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, { __testSynthFn: throwingSynth });
+    expect(synthCalls).toBe(3);
+  });
+
+  it('a { kind: "too-short" } audition result (pool completed, still too thin) writes a terminal row immediately without ever touching pending-attempts', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-tooshort-'));
+    const root = join(dir, 'audio');
+    mkdirSync(root, { recursive: true });
+    await writeEmbeddings(join(root, 'ch1.embeddings.json'), [{ characterId: 'ren', sentenceIds: [1], vec: vec(0) }], EMBEDDINGS_VERSION);
+    writeFileSync(
+      join(root, 'ch1.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        segments: [{ characterId: 'ren', sentenceIds: [1] }],
+        characterSnapshots: { ren: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-ren', modelKey: 'qwen3-tts-1.7b' } },
+      }),
+    );
+    // Renders that never clear MIN_DURATION_SEC — auditionCentroid exhausts
+    // its budget and returns { kind: 'too-short' }, not null.
+    const tooShortSynth = async () => ({ pcm: Buffer.alloc(10), sampleRate: 48_000, mimeType: 'audio/wav' });
+
+    let synthCalls = 0;
+    const countingSynth = async (...args: Parameters<typeof tooShortSynth>) => { synthCalls++; return tooShortSynth(...args); };
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, { __testSynthFn: countingSynth });
+
+    expect((await readCentroids(dir))?.ren.referenceKind).toBe('too-short');
+    expect((await readPendingAttempts(dir))?.ren).toBeUndefined();
+
+    const callsAfterFirst = synthCalls;
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }], undefined, { __testSynthFn: countingSynth });
+    expect(synthCalls).toBe(callsAfterFirst); // absorbing — no second attempt
+  });
+
+  it('scoreBook returns usedQwenTiers reflecting the tiers actually seen this call', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-tiers-'));
+    const root = join(dir, 'audio');
+    mkdirSync(root, { recursive: true });
+    const rows = Array.from({ length: 12 }, (_, i) => ({ characterId: 'narrator', sentenceIds: [i], vec: vec(0) }));
+    await writeEmbeddings(join(root, 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
+    writeFileSync(
+      join(root, 'ch1.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        modelKey: 'qwen3-tts-1.7b',
+        segments: rows.map((r) => ({ characterId: r.characterId, sentenceIds: r.sentenceIds })),
+        characterSnapshots: { narrator: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-narrator', modelKey: 'qwen3-tts-1.7b' } },
+      }),
+    );
+    const result = await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(result.usedQwenTiers).toEqual({ keep06: false, keep17: true });
   });
 });
 

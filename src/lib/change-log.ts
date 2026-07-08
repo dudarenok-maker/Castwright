@@ -192,6 +192,40 @@ export function buildGenerationRunCompleteEvent(args: {
   };
 }
 
+/** System-emitted event: the srv-36 voice-match scoring pass started running
+    in the background. See buildScoringCompleteEvent for its terminal pair. */
+export function buildScoringStartedEvent(args: { charactersOnRoster: number; now?: Date }): ChangeLogEvent {
+  const { charactersOnRoster } = args;
+  const now = args.now ?? new Date();
+  const n = charactersOnRoster;
+  return {
+    id: now.getTime(),
+    at: now.toISOString(),
+    ts: 'Just now',
+    date: 'today',
+    type: 'scoring_started',
+    title: `Voice-match scoring started — ${n} character${n === 1 ? '' : 's'}`,
+    note: `Checking ${charactersOnRoster} character${charactersOnRoster === 1 ? '' : 's'} against their own voice.`,
+    actor: 'system',
+  };
+}
+
+/** System-emitted event: the srv-36 voice-match scoring pass finished. */
+export function buildScoringCompleteEvent(args: { mismatchCount: number; now?: Date }): ChangeLogEvent {
+  const { mismatchCount } = args;
+  const now = args.now ?? new Date();
+  return {
+    id: now.getTime(),
+    at: now.toISOString(),
+    ts: 'Just now',
+    date: 'today',
+    type: 'scoring_complete',
+    title: 'Voice-match scoring complete',
+    note: `${mismatchCount} mismatch${mismatchCount === 1 ? '' : 'es'} found.`,
+    actor: 'system',
+  };
+}
+
 /** System-emitted event: a chapter just transitioned to `done`.
 
     No longer dispatched by the generation-stream middleware — kept so legacy

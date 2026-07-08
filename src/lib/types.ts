@@ -665,7 +665,9 @@ export type ChangeLogType =
   | 'analysis_complete'
   | 'import'
   | 'library_add'
-  | 'reparse';
+  | 'reparse'
+  | 'scoring_started'
+  | 'scoring_complete';
 
 /* fs-15/fs-16 — listening stats + continue-listening shapes. Source of truth:
    openapi.yaml components.schemas.LibraryStats / ContinueListeningItem. */

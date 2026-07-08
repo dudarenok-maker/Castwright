@@ -2106,7 +2106,32 @@ async function realGetQaReport(bookId: string): Promise<BookQaReport> {
 }
 
 async function mockGetQaReport(_bookId: string): Promise<BookQaReport> {
-  return MOCK_QA_REPORT;
+  /* srv-36 hardening (Task 14 e2e) — the mock ignores bookId and always
+     returns the same fixed MOCK_QA_REPORT (voiceDrift.charactersPending is
+     always []), so there's no way to reach the Resume-scoring branch of
+     VoiceMatchRow (src/components/qa-report-card.tsx) through the mock's
+     default response. Browser-level specs can seed
+     `window.__mockQaReportOverride` to force an arbitrary report shape —
+     mirrors the existing `window.__mockGenConcurrency` idiom
+     (mockStreamGeneration, above) rather than inventing a new mechanism. */
+  const override =
+    typeof window !== 'undefined'
+      ? (window as unknown as { __mockQaReportOverride?: BookQaReport }).__mockQaReportOverride
+      : undefined;
+  return override ?? MOCK_QA_REPORT;
+}
+
+async function realResumeScoring(bookId: string): Promise<void> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/resume-scoring`, { method: 'POST' });
+  if (!res.ok && res.status !== 409)
+    throw new Error(
+      `Resume scoring failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  if (res.status === 409) throw Object.assign(new Error('Book is currently generating.'), { code: 'generation-active' });
+}
+
+async function mockResumeScoring(_bookId: string): Promise<void> {
+  // No-op in mock mode — there's no real scoreBook to trigger.
 }
 
 /* Workspace-wide cold-boot scan. Library layout calls this once on
@@ -8831,6 +8856,7 @@ const real = {
   getGpuDevices: realGetGpuDevices,
   getAnalyzerDevice: realGetAnalyzerDevice,
   getQaReport: realGetQaReport,
+  resumeScoring: realResumeScoring,
 };
 
 const mock = {
@@ -9075,6 +9101,7 @@ const mock = {
   getGpuDevices: mockGetGpuDevices,
   getAnalyzerDevice: mockGetAnalyzerDevice,
   getQaReport: mockGetQaReport,
+  resumeScoring: mockResumeScoring,
 };
 
 /* fs-20 — re-export so the Admin trend panel + its tests import the telemetry

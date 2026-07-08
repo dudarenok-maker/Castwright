@@ -13,6 +13,8 @@ import {
   buildVoiceLockEvent,
   buildNameChangeEvent,
   buildBoundaryMoveEvent,
+  buildScoringStartedEvent,
+  buildScoringCompleteEvent,
   bucketDate,
   relativeTime,
   withRecomputedDisplay,
@@ -230,6 +232,28 @@ describe('buildBoundaryMoveEvent', () => {
   it('uses singular phrasing for a single reassigned sentence', () => {
     const ev = buildBoundaryMoveEvent({ chapterId: 1, count: 1, now: NOW });
     expect(ev.note).toContain('1 sentence reassigned');
+  });
+});
+
+describe('buildScoringStartedEvent', () => {
+  it('builds a scoring_started event naming the character count', () => {
+    const ev = buildScoringStartedEvent({ charactersOnRoster: 13, now: new Date('2026-07-08T00:00:00Z') });
+    expect(ev.type).toBe('scoring_started');
+    expect(ev.title).toContain('13');
+    expect(ev.actor).toBe('system');
+  });
+});
+
+describe('buildScoringCompleteEvent', () => {
+  it('builds a scoring_complete event naming zero mismatches', () => {
+    const ev = buildScoringCompleteEvent({ mismatchCount: 0, now: new Date('2026-07-08T00:00:00Z') });
+    expect(ev.type).toBe('scoring_complete');
+    expect(ev.note).toContain('0 mismatches');
+  });
+
+  it('pluralizes a nonzero mismatch count', () => {
+    const ev = buildScoringCompleteEvent({ mismatchCount: 3, now: new Date('2026-07-08T00:00:00Z') });
+    expect(ev.note).toContain('3 mismatches');
   });
 });
 
