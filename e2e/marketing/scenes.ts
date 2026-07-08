@@ -963,4 +963,110 @@ export const SCENES: Scene[] = [
       await page.waitForSelector('[data-testid="mini-player-next-issue"]', { timeout: 5000 });
     },
   },
+  {
+    /* v1.11 book-level QA receipt (src/components/qa-report-card.tsx),
+       shown on the Listen view once a book has rendered. Uses hollow-tide-2
+       (Saltgrave) so the receipt's mixed figures agree with the same book's
+       existing chapter-suspect/voice-drift-report/preview-flagged scenes
+       (Task 3's HOLLOW_TIDE_QA_REPORT reuses HOLLOW_TIDE_DRIFT_EVENTS). No
+       action needed — the Listen view calls useQaReport(bookId) with the
+       route's own bookId (src/views/listen.tsx), the same per-book routing
+       every other book-scoped scene in this file already relies on. */
+    id: 'qa-report-card',
+    hash: '#/books/hollow-tide-2/listen',
+    viewports: ['desktop'],
+    waitFor: 'text=Quality gate',
+  },
+  {
+    /* Emotion + delivery-direction story — a single line (Coalfall ch.4,
+       sentence 107) carrying both chips filled in: the emotion chip
+       (already-existing fixture data) and the new instruct chip (Task 1's
+       fixture patch).
+
+       NOT `[data-sentence-id="107"] [data-testid="instruct-chip"]` — the
+       chip is rendered as a SIBLING of the `data-sentence-id` span, not a
+       descendant (sentence-instruct-control.tsx / manuscript.tsx's own
+       comment: chips sit outside the text span deliberately, so they never
+       perturb the selection→split offset math). A descendant selector can
+       never match. Instead target the chip's own aria-label, which bakes in
+       Task 1's exact instruct text — unambiguous regardless of DOM nesting.
+
+       NOT passive-load, unlike most manuscript scenes: chapter 4 has 160
+       segments (manuscript.tsx's own `virtualEnabled = segments.length >=
+       60`, plan 92), so sentence 107 (segment index 68/160) is unmounted
+       until scrolled near — chapter 3, which every other manuscript scene in
+       this file uses, has only 48 segments and never crosses that
+       threshold, which is why none of them needed this. `waitFor` below only
+       confirms the (always-mounted) virtual container exists; `action`
+       window-scrolls in a loop until the sentence's span actually mounts,
+       then centers it; `waitForAfterAction` (strict) is what actually
+       confirms the aria-label resolved. */
+    id: 'manuscript-emotion-direction',
+    hash: '#/books/coalfall-commission/manuscript?chapter=4',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="manuscript-virtual-container"]',
+    action: async (page) => {
+      for (let i = 0; i < 40; i++) {
+        if (await page.locator('[data-sentence-id="107"]').count()) break;
+        await page.evaluate(() => window.scrollBy(0, 1000));
+        await page.waitForTimeout(50);
+      }
+      await page.locator('[data-sentence-id="107"]').scrollIntoViewIfNeeded({ timeout: 5000 });
+    },
+    waitForAfterAction: '[aria-label="Delivery direction: shouted from across the yard, half-laughing — edit"]',
+    scrollTo: '[data-sentence-id="107"]',
+    strict: true,
+  },
+  {
+    /* Higher-quality tier story — the bulk "Pin higher quality" flow
+       (cast.tsx:773, visible whenever the book has any Qwen cast members;
+       Saltgrave does). Captures the confirm dialog, not just the button. */
+    id: 'cast-pin-higher-quality',
+    hash: '#/books/hollow-tide-2/cast',
+    viewports: ['desktop'],
+    waitFor: '[data-testid^="cast-row-"]',
+    action: async (page) => {
+      await page.getByTestId('pin-higher-quality').click({ timeout: 5000 });
+    },
+    waitForAfterAction: 'text=Pin 1.7B quality to all Qwen cast?',
+    strict: true,
+  },
+  {
+    /* Series memory — "N books in, not a voice changed" reveal panel,
+       opened from the library shelf's series-memory-chip (Task 2's fixture
+       fix is what makes this chip render at all under DEMO_CAPTURE).
+
+       Depends on the library rendering in CARD view, not table view — the
+       chip only exists in library-grid.tsx, never library-table.tsx
+       (book-library.tsx:228's effectiveViewMode reads a persisted
+       localStorage value, defaulting to 'card' on the empty storage a fresh
+       Playwright context always has). This holds today; if that default or
+       a persisted value ever flips to 'table', this scene and
+       series-share-card below silently stop finding the chip. */
+    id: 'series-memory-reveal',
+    hash: '#/',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="series-memory-chip"]',
+    action: async (page) => {
+      await page.getByTestId('series-memory-chip').click({ timeout: 5000 });
+    },
+    waitForAfterAction: 'text=books in, and not a voice has changed',
+    strict: true,
+  },
+  {
+    /* Series memory — the shareable portrait card (ShareCardModal / +
+       SeriesShareCard), opened from the reveal panel's "Share this cast"
+       button. Same chip + fixture dependency as series-memory-reveal above. */
+    id: 'series-share-card',
+    hash: '#/',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="series-memory-chip"]',
+    action: async (page) => {
+      await page.getByTestId('series-memory-chip').click({ timeout: 5000 });
+      await page.waitForSelector('text=books in, and not a voice has changed', { timeout: 5000 });
+      await page.getByRole('button', { name: 'Share this cast' }).click({ timeout: 5000 });
+    },
+    waitForAfterAction: 'text=Download image',
+    strict: true,
+  },
 ];
