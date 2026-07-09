@@ -11,7 +11,7 @@
 //   node scripts/clear-done-project-items.mjs --apply   (archives them)
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -22,6 +22,15 @@ const PROJECT_OWNER = 'dudarenok-maker';
 
 function info(msg) { process.stdout.write(`${msg}\n`); }
 function die(msg) { process.stderr.write(`[FAIL] ${msg}\n`); process.exit(1); }
+// Surfaces what was archived on the GitHub Actions run summary page (not just
+// buried step logs) — the release.yml job runs --apply unattended on every
+// tag with no human dry-run checkpoint, so this is the audit trail for
+// catching an item that was wrongly Done. No-op outside CI (env var unset).
+function writeStepSummary(lines) {
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (!summaryPath) return;
+  appendFileSync(summaryPath, `${lines.join('\n')}\n`);
+}
 function gh(args) { return execFileSync('gh', args, { cwd: repoRoot, encoding: 'utf8' }); }
 function ghAvailable() {
   const r = spawnSync('gh', ['--version'], { stdio: 'ignore' });
@@ -109,6 +118,11 @@ async function main() {
     info(`  archived #${item.content.number}`);
   }
   info(`\n[OK] archived ${doneItems.length} Done item(s).`);
+
+  writeStepSummary([
+    `## Archived ${doneItems.length} Done board item(s)`,
+    ...doneItems.map((item) => `- #${item.content.number} ${item.content.title}`),
+  ]);
 }
 
 const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
