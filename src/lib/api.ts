@@ -3236,7 +3236,7 @@ interface MockScriptReviewState {
   entries: Record<string, LedgerEntryDTO>;
 }
 
-function mockScriptReviewKey(bookId: string): string {
+export function mockScriptReviewKey(bookId: string): string {
   return `mock-script-review:${bookId}`;
 }
 
@@ -3405,7 +3405,7 @@ async function realPatchScriptReviewSelection(
   return res.json();
 }
 
-async function mockGetScriptReviewState(bookId: string): Promise<ScriptReviewStateDTO> {
+export async function mockGetScriptReviewState(bookId: string): Promise<ScriptReviewStateDTO> {
   const state = readMockScriptReviewState(bookId);
   if (state.running) return { kind: 'running', replay: { lastPhase: state.running.lastPhase } };
   return { kind: 'ledger', entries: state.entries };
@@ -3415,10 +3415,47 @@ async function mockDiscardScriptReview(bookId: string, chapterIds: number[]): Pr
   for (const id of chapterIds) delete state.entries[String(id)];
   writeMockScriptReviewState(bookId, state);
 }
-async function mockResolveScriptReviewOps(): Promise<{ ok: boolean }> {
+/* fs-58 persistence PR-review fix (Finding 2) — mirror the real server's
+   resolveOps/patchSelection (server/src/workspace/script-review-ledger.ts)
+   against the sessionStorage-backed mock ledger. The previous stubs ignored
+   every parameter and never called writeMockScriptReviewState, so mock/e2e
+   mode couldn't actually prove the reload-persistence guarantee: the caller
+   would optimistically drop the op from the Redux bucket while the mock
+   ledger still had it, and a reload would re-surface it as pending again.
+   Exported (like mockCreateCharacter above) so api.test.ts can drive them
+   directly without a live fetch. */
+export async function mockResolveScriptReviewOps(
+  bookId: string,
+  params: { chapterId: number; version: number; appliedOpKeys: string[] },
+): Promise<{ ok: boolean }> {
+  const state = readMockScriptReviewState(bookId);
+  const key = String(params.chapterId);
+  const entry = state.entries[key];
+  if (!entry || entry.version !== params.version) return { ok: false };
+  const removed = new Set(params.appliedOpKeys);
+  entry.ops = (entry.ops as Array<{ id: number; op: string }>).filter(
+    (op) => !removed.has(`${params.chapterId}:${op.id}:${op.op}`),
+  );
+  for (const key2 of params.appliedOpKeys) delete entry.selected[key2];
+  if (entry.ops.length === 0) {
+    delete state.entries[key];
+  } else {
+    state.entries[key] = entry;
+  }
+  writeMockScriptReviewState(bookId, state);
   return { ok: true };
 }
-async function mockPatchScriptReviewSelection(): Promise<{ ok: boolean }> {
+export async function mockPatchScriptReviewSelection(
+  bookId: string,
+  params: { chapterId: number; version: number; selected: Record<string, boolean> },
+): Promise<{ ok: boolean }> {
+  const state = readMockScriptReviewState(bookId);
+  const key = String(params.chapterId);
+  const entry = state.entries[key];
+  if (!entry || entry.version !== params.version) return { ok: false };
+  entry.selected = { ...entry.selected, ...params.selected };
+  state.entries[key] = entry;
+  writeMockScriptReviewState(bookId, state);
   return { ok: true };
 }
 

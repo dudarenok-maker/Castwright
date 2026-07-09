@@ -814,6 +814,101 @@ describe('fs-58 — ScriptReviewDiff', () => {
     resolveSpy.mockRestore();
   });
 
+  /* PR-review fix (Finding 1) — regression test for the reattribute-to-
+     existing-roster-member path never resolving server-side. Modeled on the
+     'two same-name proposed ops create EXACTLY one character' test above,
+     but the typed/proposed name matches an EXISTING cast member, so
+     CreateCharacterForm routes through onReattributeExisting instead of
+     onSubmit. */
+  it('reattribute-to-an-existing-cast-member op resolves server-side (Finding 1 regression)', async () => {
+    const resolveSpy = vi.spyOn(api, 'resolveScriptReviewOps').mockResolvedValue({ ok: true });
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        cast: castSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'book-A',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          sentences: [{ id: 5, chapterId: 1, text: 'Line five.', characterId: 'narr' }] as never,
+        },
+        cast: {
+          ...castSlice.getInitialState(),
+          characters: [{ id: 'ferra-id', name: 'Ferra' }] as never,
+        },
+      },
+    });
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: 'book-A',
+        ops: [
+          {
+            id: 5,
+            chapterId: 1,
+            op: 'reattribute',
+            proposed: { name: 'Ferra' },
+            rationale: 'off-roster speaker, name matches an existing cast member',
+          },
+        ],
+        unappliable: [],
+        versionByChapter: { 1: 3 },
+      }),
+    );
+    // reattribute defaults to UNSELECTED — select the class so Apply picks it up.
+    store.dispatch(scriptReviewActions.toggleClass({ bookId: 'book-A', op: 'reattribute' }));
+
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('apply-button'));
+
+    // Confirm dialog is pre-filled with "Ferra", which matches the existing
+    // roster member — the submit button switches to the reattribute-existing
+    // label/handler instead of create.
+    expect(screen.getByTestId('confirm-reattribute')).toBeInTheDocument();
+    expect(screen.getByTestId('create-character-submit')).toHaveTextContent('Reattribute to «Ferra»');
+    fireEvent.click(screen.getByTestId('create-character-submit'));
+
+    // Manuscript mutation applies immediately (this part already worked pre-fix).
+    await waitFor(() => {
+      const sentences = store.getState().manuscript.sentences;
+      expect(sentences.find((s) => s.id === 5)?.characterId).toBe('ferra-id');
+    });
+    expect(createSpy).not.toHaveBeenCalled();
+
+    // Previously this op was applied but NEVER resolved server-side, so it
+    // stayed in the bucket/ledger forever. It must now be resolved exactly
+    // like any other applied op.
+    await waitFor(() => {
+      expect(resolveSpy).toHaveBeenCalledWith('book-A', {
+        chapterId: 1,
+        version: 3,
+        appliedOpKeys: [opKey(1, 5, 'reattribute')],
+      });
+    });
+    await waitFor(() => {
+      expect(store.getState().scriptReview.byBook['book-A']).toBeUndefined();
+    });
+
+    resolveSpy.mockRestore();
+  });
+
   it('cancelling the confirm queue mid-batch hides rather than discards', async () => {
     const discardSpy = vi.spyOn(api, 'discardScriptReview').mockResolvedValue(undefined);
     const store = makeProposedStore(
@@ -988,6 +1083,85 @@ describe('fs-58 — ScriptReviewDiff', () => {
 
       patchSpy.mockRestore();
       vi.useRealTimers();
+    });
+
+    /* PR-review fix (Finding 3) — a stale server-side ledger version (e.g. a
+       second tab already resolved this chapter) must surface a warning toast
+       instead of silently swallowing the failure, and must NOT remove the op
+       from the local bucket (the manuscript mutation already happened, so
+       dropping it silently risks a duplicate re-apply on a second click). */
+    it('a stale-version resolve failure surfaces a warn toast and keeps the op in the bucket', async () => {
+      const resolveSpy = vi.spyOn(api, 'resolveScriptReviewOps').mockResolvedValue({ ok: false });
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          manuscript: manuscriptSlice.reducer,
+          cast: castSlice.reducer,
+          scriptReview: scriptReviewSlice.reducer,
+          changeLog: changeLogSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: {
+              kind: 'ready',
+              bookId: 'book-1',
+              view: 'manuscript',
+              currentChapterId: 1,
+              openProfileId: null,
+            } as never,
+          },
+          manuscript: {
+            ...manuscriptSlice.getInitialState(),
+            sentences: [{ id: 1, chapterId: 1, text: 'Hi tag', characterId: 'c1' }] as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [{ id: 'c1', name: 'Ada' }] as never,
+          },
+        },
+      });
+      store.dispatch(
+        scriptReviewActions.setReview({
+          bookId: 'book-1',
+          ops: [{ id: 1, chapterId: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }],
+          unappliable: [],
+          versionByChapter: { 1: 5 },
+        }),
+      );
+      render(
+        <Provider store={store}>
+          <ScriptReviewDiff bookId="book-1" />
+        </Provider>,
+      );
+
+      fireEvent.click(screen.getByTestId('apply-button'));
+
+      // The manuscript mutation already happened (dispatchAcceptedOps runs
+      // before the async resolve call), regardless of the resolve outcome.
+      await waitFor(() => {
+        const sentences = store.getState().manuscript.sentences;
+        expect(sentences.find((s) => s.id === 1)?.text).toBe('Hi');
+      });
+
+      await waitFor(() => expect(resolveSpy).toHaveBeenCalled());
+
+      // Warn toast surfaced instead of silently swallowing the failure.
+      await waitFor(() => {
+        const toasts: Toast[] = store.getState().notifications.toasts;
+        expect(
+          toasts.some((t) => t.kind === 'warn' && /changed elsewhere/i.test(t.message)),
+        ).toBe(true);
+      });
+
+      // The op is NOT removed from the bucket — resolveOpsLocally must never
+      // fire on a failed resolve.
+      const bucket = store.getState().scriptReview.byBook['book-1'];
+      expect(bucket).toBeDefined();
+      expect(bucket?.ops.map((o) => o.id)).toEqual([1]);
+
+      resolveSpy.mockRestore();
     });
   });
 });

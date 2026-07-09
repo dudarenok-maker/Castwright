@@ -12,6 +12,11 @@ import {
   readE2eWorkspaceRootOverride,
   readCastDesignStream,
   mockCreateCharacter,
+  mockGetScriptReviewState,
+  mockResolveScriptReviewOps,
+  mockPatchScriptReviewSelection,
+  mockScriptReviewKey,
+  type LedgerEntryDTO,
   api,
 } from './api';
 
@@ -282,5 +287,151 @@ describe('script-review persistence endpoints', () => {
       expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ chapterId: 3, version: 2, selected: { '3:1:strip_tag': false } }) }),
     );
     expect(result).toEqual({ ok: false });
+  });
+});
+
+/* fs-58 persistence PR-review fix (Finding 2) — the mock-mode resolve/
+   selection endpoints were no-op stubs that never touched the
+   sessionStorage-backed mock ledger (unlike mockGetScriptReviewState /
+   mockDiscardScriptReview, which correctly read/write it). Drives the mock
+   functions directly (like mockCreateCharacter above) rather than through
+   `api.*`, since `api` in this test env resolves to the real, fetch-based
+   functions (VITE_USE_MOCKS is off) — see the "script-review persistence
+   endpoints" describe block above. Seeds the ledger via the same
+   sessionStorage key format the mock reads/writes
+   (mockScriptReviewKey/LedgerEntryDTO), mirroring how mockReviewScript
+   seeds it in real usage. */
+describe('mock-mode script-review resolve/selection persistence (fs-58 PR-review Finding 2)', () => {
+  const bookId = 'book-mock-1';
+
+  beforeEach(() => {
+    sessionStorage.clear();
+  });
+
+  function seedLedger(entries: Record<string, LedgerEntryDTO>) {
+    sessionStorage.setItem(mockScriptReviewKey(bookId), JSON.stringify({ running: null, entries }));
+  }
+
+  it('mockResolveScriptReviewOps removes the named op and mockGetScriptReviewState reflects it', async () => {
+    seedLedger({
+      '3': {
+        manuscriptId: bookId,
+        version: 2,
+        ops: [
+          { id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' },
+          { id: 2, op: 'fix_emotion', emotion: 'sad', rationale: 'r' },
+        ],
+        selected: { '3:1:strip_tag': true, '3:2:fix_emotion': false },
+        completedAt: '2026-01-01T00:00:00.000Z',
+      },
+    });
+
+    const result = await mockResolveScriptReviewOps(bookId, {
+      chapterId: 3,
+      version: 2,
+      appliedOpKeys: ['3:1:strip_tag'],
+    });
+    expect(result).toEqual({ ok: true });
+
+    const state = await mockGetScriptReviewState(bookId);
+    expect(state.kind).toBe('ledger');
+    if (state.kind !== 'ledger') throw new Error('expected ledger');
+    // The resolved op is gone; the other op (and its selection) survives.
+    expect(state.entries['3'].ops).toEqual([{ id: 2, op: 'fix_emotion', emotion: 'sad', rationale: 'r' }]);
+    expect(state.entries['3'].selected).toEqual({ '3:2:fix_emotion': false });
+  });
+
+  it('mockResolveScriptReviewOps deletes the entry entirely once every op is resolved', async () => {
+    seedLedger({
+      '3': {
+        manuscriptId: bookId,
+        version: 2,
+        ops: [{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' }],
+        selected: { '3:1:strip_tag': true },
+        completedAt: '2026-01-01T00:00:00.000Z',
+      },
+    });
+
+    await mockResolveScriptReviewOps(bookId, { chapterId: 3, version: 2, appliedOpKeys: ['3:1:strip_tag'] });
+
+    const state = await mockGetScriptReviewState(bookId);
+    if (state.kind !== 'ledger') throw new Error('expected ledger');
+    expect(state.entries['3']).toBeUndefined();
+  });
+
+  it('mockResolveScriptReviewOps on a version mismatch returns { ok: false } and mutates nothing', async () => {
+    seedLedger({
+      '3': {
+        manuscriptId: bookId,
+        version: 2,
+        ops: [{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' }],
+        selected: {},
+        completedAt: '2026-01-01T00:00:00.000Z',
+      },
+    });
+
+    const result = await mockResolveScriptReviewOps(bookId, {
+      chapterId: 3,
+      version: 99, // stale
+      appliedOpKeys: ['3:1:strip_tag'],
+    });
+    expect(result).toEqual({ ok: false });
+
+    const state = await mockGetScriptReviewState(bookId);
+    if (state.kind !== 'ledger') throw new Error('expected ledger');
+    expect(state.entries['3'].ops).toEqual([{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' }]);
+  });
+
+  it('mockPatchScriptReviewSelection merges into the ledger entry\'s selected map', async () => {
+    seedLedger({
+      '3': {
+        manuscriptId: bookId,
+        version: 5,
+        ops: [
+          { id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' },
+          { id: 2, op: 'fix_emotion', emotion: 'sad', rationale: 'r' },
+        ],
+        selected: { '3:1:strip_tag': true },
+        completedAt: '2026-01-01T00:00:00.000Z',
+      },
+    });
+
+    const result = await mockPatchScriptReviewSelection(bookId, {
+      chapterId: 3,
+      version: 5,
+      selected: { '3:2:fix_emotion': false },
+    });
+    expect(result).toEqual({ ok: true });
+
+    const state = await mockGetScriptReviewState(bookId);
+    if (state.kind !== 'ledger') throw new Error('expected ledger');
+    // Merged, not replaced — the pre-existing key survives alongside the new one.
+    expect(state.entries['3'].selected).toEqual({
+      '3:1:strip_tag': true,
+      '3:2:fix_emotion': false,
+    });
+  });
+
+  it('mockPatchScriptReviewSelection on a version mismatch returns { ok: false } and mutates nothing', async () => {
+    seedLedger({
+      '3': {
+        manuscriptId: bookId,
+        version: 5,
+        ops: [{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' }],
+        selected: { '3:1:strip_tag': true },
+        completedAt: '2026-01-01T00:00:00.000Z',
+      },
+    });
+
+    const result = await mockPatchScriptReviewSelection(bookId, {
+      chapterId: 3,
+      version: 1, // stale
+      selected: { '3:1:strip_tag': false },
+    });
+    expect(result).toEqual({ ok: false });
+
+    const state = await mockGetScriptReviewState(bookId);
+    if (state.kind !== 'ledger') throw new Error('expected ledger');
+    expect(state.entries['3'].selected).toEqual({ '3:1:strip_tag': true });
   });
 });

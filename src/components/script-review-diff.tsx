@@ -194,7 +194,23 @@ async function resolveAppliedOps(
     const version = bucket.versionByChapter[chapterId];
     if (version === undefined) continue;
     const result = await api.resolveScriptReviewOps(bookId, { chapterId, version, appliedOpKeys: opKeys });
-    if (result.ok) dispatch(scriptReviewActions.resolveOpsLocally({ bookId, opKeys }));
+    if (result.ok) {
+      dispatch(scriptReviewActions.resolveOpsLocally({ bookId, opKeys }));
+    } else {
+      // Stale version — another client/tab already resolved or replaced this
+      // chapter's ledger entry since this bucket loaded. The manuscript
+      // mutation already happened locally (dispatchAcceptedOps runs before
+      // this call), so we can't safely mark it resolved server-side or
+      // silently drop it from the bucket without risking a re-apply on a
+      // second click — surface it instead of swallowing it.
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'warn',
+          message: `Chapter ${chapterId}'s script-review findings changed elsewhere — reload to see the latest state.`,
+          dedupeKey: `script-review-stale-${bookId}-${chapterId}`,
+        }),
+      );
+    }
   }
 }
 
@@ -372,6 +388,17 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
         }),
       );
       dispatch(changeLogActions.bumpBoundaryMove({ chapterId: finalizedOp.chapterId, count: 1 }));
+      // This op bypasses the batched off-roster helper entirely (it's an
+      // immediate on-roster reassign, not a create-new-character), so it must
+      // be resolved server-side here — the same per-op resolve
+      // applyProposedReattributions' onOpApplied does for every other applied
+      // op (design spec §6.5). Without this it never leaves the ledger: it
+      // keeps counting toward the unresolved badge and reappears on every
+      // reopen/reload even though it was already actioned.
+      if (bucket) {
+        const startBookId = confirm?.startBookId ?? bookId;
+        void resolveAppliedOps(dispatch, startBookId, bucket, [finalizedOp]);
+      }
     }
     setConfirm((prev) => {
       if (!prev) return prev;
