@@ -85,3 +85,24 @@ describe('parser — ru dash-dialogue', () => {
     expect(body.slice(paras[1].spans[0].start, paras[1].spans[0].end)).toContain('Привет');
   });
 });
+
+describe('parser — quote conventions', () => {
+  const enIdx = buildNameIndex([{ id: 'halloran', name: 'Halloran' }, { id: 'marcus', name: 'Marcus' }], conventionsFor('en')!);
+  it('en quotes: "…," he said splits quote → speech, tail → tag, anchored by name', () => {
+    const paras = parseChapterStructure('“Hard to starboard,” Halloran said.', enIdx);
+    const spans = paras[0].spans;
+    expect(spans.map((s) => s.kind)).toEqual(['speech', 'tag']);
+    expect(spans[0].speaker).toEqual({ characterId: 'halloran', source: 'tag-name' });
+  });
+  it('en quotes: multi-turn paragraph yields one speech span PER quoted run', () => {
+    const paras = parseChapterStructure('Marcus turned. “Get below,” he muttered. “Now.” The deck pitched.', enIdx);
+    const speech = paras[0].spans.filter((s) => s.kind === 'speech');
+    expect(speech.length).toBe(2);
+  });
+  it('ru guillemet (coalfall.ru shape): «…, — сказал X. — …» inside a narration paragraph anchors', () => {
+    const ruIdx = buildNameIndex([{ id: 'mairin', name: 'Майрин' }], conventionsFor('ru')!);
+    const paras = parseChapterStructure('«Осторожнее, — сказала Майрин. — Здесь скользко».', ruIdx);
+    const speech = paras[0].spans.filter((s) => s.kind === 'speech');
+    expect(speech.every((s) => s.speaker?.characterId === 'mairin')).toBe(true);
+  });
+});
