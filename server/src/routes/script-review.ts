@@ -30,7 +30,7 @@ import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
-import { upsertChapterEntry } from '../workspace/script-review-ledger.js';
+import { upsertChapterEntry, readLedger } from '../workspace/script-review-ledger.js';
 import {
   chunkSentencesByBudget,
   chunkWithContext,
@@ -405,6 +405,30 @@ scriptReviewRouter.post(
       if (targetMap.get(registeredKey) === registeredJob) targetMap.delete(registeredKey);
       throw err;
     }
+  },
+);
+
+scriptReviewRouter.get(
+  '/:bookId/script-review/state',
+  async (req: Request, res: Response): Promise<void> => {
+    const { bookId } = req.params;
+    const located = await findBookByBookId(bookId);
+    if (!located) {
+      res.status(404).json({ error: 'Book not found.' });
+      return;
+    }
+    const running = mainScriptReviewJobByBook.get(bookId) ?? findSubsetJobForBook(bookId);
+    if (running) {
+      res.json({ kind: 'running', chapterId: running.chapterId, replay: running.replay });
+      return;
+    }
+    const manuscriptId = located.state.manuscriptId;
+    if (!manuscriptId) {
+      res.json({ kind: 'ledger', entries: {} });
+      return;
+    }
+    const ledger = await readLedger(located.bookDir, manuscriptId);
+    res.json({ kind: 'ledger', entries: ledger.entries });
   },
 );
 

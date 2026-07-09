@@ -962,3 +962,46 @@ describe('ledger checkpointing', () => {
     }
   });
 });
+
+describe('GET /:bookId/script-review/state', () => {
+  it('returns kind:"ledger" with existing entries when no job is running', async () => {
+    const { upsertChapterEntry } = await import('../workspace/script-review-ledger.js');
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    await upsertChapterEntry(bookDir(), bookId, {
+      chapterId: 1,
+      manuscriptId,
+      ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.kind).toBe('ledger');
+    expect(res.body.entries['1'].ops).toHaveLength(1);
+  });
+
+  it('returns kind:"running" with the replay buffer while a job is in flight', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let resolveReview: ((v: { ops: unknown[] }) => void) | undefined;
+    runReview.mockImplementation(() => new Promise((resolve) => { resolveReview = resolve; }));
+
+    // Use firePost, not a bare `request(app).post(...).send(...)` — per the
+    // established pattern documented above (see the "res.on('close')"
+    // sticky-registry test), an unawaited/undispatched supertest Request
+    // never actually sends until awaited/.end()'d, so the job would not yet
+    // be registered when the GET below fires.
+    const { done } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(res.body.kind).toBe('running');
+    expect(res.body.chapterId).toBe(1);
+
+    resolveReview?.({ ops: [] });
+    await done;
+  });
+
+  it('returns kind:"ledger" with empty entries for a book with neither a job nor pending findings', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(res.body).toEqual({ kind: 'ledger', entries: {} });
+  });
+});
