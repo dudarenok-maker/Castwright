@@ -114,8 +114,9 @@ full commit history):
    pinned in `parser.test.ts` (multi-sentence utterance cases) and end-to-end in
    `analysis.structure-fixture.test.ts` (assertion 3, the multi-sentence utterance test — the
    continuation is explicitly asserted `!== 'narrator'`).
-4. **Engine-OFF / unsupported-language / below-alignment-floor → byte-identical current
-   behaviour.** Three independent fallback paths, all landing on the SAME safe output:
+4. **Engine-OFF / unsupported-language → byte-identical; below-alignment-floor → flag-only
+   (correction disabled).** Three independent fallback paths, all safe, but not all the same
+   output:
    - `analyzer.structure.enabled = false` (env `STRUCTURE_ENGINE=0`): the engine does not run at
      all; `attributeChapterStage2` falls back to the pre-engine `applyNarratorDefault` call.
      Pinned by a dedicated `toEqual` test comparing the two code paths (task 8).
@@ -126,7 +127,11 @@ full commit history):
      concept from spec §5.2, default 80%): `crossExamine`'s `flagOnly` branch
      (`cross-examine.ts:264, 77-85`) disables correction chapter-wide — every sentence passes
      through via `flagOnlyDecision`, keeping the model's own id and only capping confidence at
-     `UNALIGNED_CAP` (0.74). A misaligned engine must never rewrite attributions.
+     `UNALIGNED_CAP` (0.74). This is a distinct third behaviour, not byte-identical to the other
+     two (the model's id survives uncorrected instead of being demoted to `narrator`). Escalation
+     (§6) is also skipped entirely below the floor — a misaligned engine must never rewrite
+     attributions, and escalation is a rewrite (`attributeChapterStage2`,
+     `server/src/routes/analysis.ts`, gates the escalation block on `!examined.report.flagOnly`).
 5. **`lumped` entries are never auto-corrected.** When one model sentence spans both a speech
    span and a tag/beat span, the engine cannot un-lump it (retagging the whole entry to the
    speaker would voice the tag words too) — it keeps the model's id, flags it, and stamps
