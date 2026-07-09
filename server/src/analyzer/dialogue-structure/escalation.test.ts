@@ -80,10 +80,16 @@ function buildFixture() {
   return { body, paras, sentences: examined.sentences, flags: examined.flags };
 }
 
-/** Same shape as buildFixture, but Anton's tag-anchored line is padded well
-    past MAX_WINDOW_CHARS (1500) by itself — the window's core dialogue
+/** Same shape as buildFixture, but EVERY core-dialogue paragraph (all 5,
+    including both flagged unanchored lines) is padded well past its
+    equal-share of MAX_WINDOW_CHARS (1500) — the window's core dialogue
     alone exceeds the cap before any short-narration context is even
-    considered, exercising the hard-slice fallback branch. */
+    considered, exercising the hard-slice fallback branch. Padding all 5
+    (not just one) means per-paragraph truncation fires on every paragraph,
+    which is what exercises the join-separator budget: with N=5 paragraphs
+    joined by 4 '\n' separators, the old `floor(1500/N)` calc let each
+    paragraph fill its FULL share and then added the separators on top,
+    landing the joined text at 1504 chars (4 over cap) — see srv-59 Minor. */
 function buildOversizedFixture() {
   const enIdx = buildNameIndex(
     [
@@ -93,14 +99,14 @@ function buildOversizedFixture() {
     ],
     conventionsFor('en')!,
   );
-  const filler = 'lorem '.repeat(300); // ~1800 chars
+  const filler = 'lorem '.repeat(60); // ~360 chars — over any 5-way equal share of 1500
   const body = [
     'He waited quietly.',
     `"Ready? ${filler}" said Anton.`,
-    '"Ready," said Olga.',
-    '"Confirmed," said Boris.',
-    '"Then let\'s go."',
-    '"After you."',
+    `"Ready, ${filler}" said Olga.`,
+    `"Confirmed, ${filler}" said Boris.`,
+    `"Then let's go. ${filler}"`,
+    `"After you. ${filler}"`,
     'She smiled and walked ahead.',
   ].join('\n');
 
@@ -109,10 +115,10 @@ function buildOversizedFixture() {
 
   const sentences: SentenceOutput[] = [
     { id: 1, chapterId: 1, characterId: 'anton', text: `Ready? ${filler}` },
-    { id: 2, chapterId: 1, characterId: 'olga', text: 'Ready,' },
-    { id: 3, chapterId: 1, characterId: 'boris', text: 'Confirmed,' },
-    { id: 4, chapterId: 1, characterId: 'narrator', text: "Then let's go." },
-    { id: 5, chapterId: 1, characterId: 'narrator', text: 'After you.' },
+    { id: 2, chapterId: 1, characterId: 'olga', text: `Ready, ${filler}` },
+    { id: 3, chapterId: 1, characterId: 'boris', text: `Confirmed, ${filler}` },
+    { id: 4, chapterId: 1, characterId: 'narrator', text: `Then let's go. ${filler}` },
+    { id: 5, chapterId: 1, characterId: 'narrator', text: `After you. ${filler}` },
   ];
 
   const alignment = alignSentences(sentences, paras, body);

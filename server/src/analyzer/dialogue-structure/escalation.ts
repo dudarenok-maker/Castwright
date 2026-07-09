@@ -133,7 +133,7 @@ function buildWindowText(
     // paragraph and silently drop every marker after it — instead, cap each
     // paragraph to an equal share of the budget so every paragraph (and any
     // marker stamped at its start) survives, just with its body truncated.
-    const perParaBudget = Math.max(1, Math.floor(MAX_WINDOW_CHARS / selected.length));
+    const perParaBudget = Math.max(1, Math.floor((MAX_WINDOW_CHARS - (selected.length - 1)) / selected.length));
     text = selected.map((pIdx) => renderPara(pIdx).slice(0, perParaBudget)).join('\n');
   }
 
