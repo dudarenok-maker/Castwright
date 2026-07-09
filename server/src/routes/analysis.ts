@@ -1748,7 +1748,10 @@ export function aggregateStructureReports(
     totalWeight += weight;
   }
   return {
-    alignedPct: totalWeight > 0 ? weightedAlignedSum / totalWeight : 0,
+    // totalWeight === 0 means no sentence was classified across every
+    // aggregated chapter — omit alignedPct rather than reporting a
+    // misleading 0% (see AnalysisProvenanceReport's doc comment).
+    ...(totalWeight > 0 ? { alignedPct: weightedAlignedSum / totalWeight } : {}),
     confirmed,
     corrected,
     flagged,

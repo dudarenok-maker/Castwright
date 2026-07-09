@@ -2508,6 +2508,21 @@ describe('aggregateStructureReports (srv-59 Task 11 — provenance report aggreg
     const result = aggregateStructureReports([chapterA, chapterB]);
     expect(result?.alignedPct).toBe(90);
   });
+
+  it('omits alignedPct (rather than reporting 0) when every chapter classified zero sentences', () => {
+    // confirmed/corrected/flagged/lumped all 0 -> totalWeight is 0. A 0%
+    // here would misrepresent "nothing was classified" as "0% aligned".
+    const emptyChapter = makeReport({ alignedPct: 0 });
+    const result = aggregateStructureReports([emptyChapter]);
+    expect(result?.alignedPct).toBeUndefined();
+    expect(result).toEqual({
+      confirmed: 0,
+      corrected: 0,
+      flagged: 0,
+      escalated: 0,
+      escalationAccepted: 0,
+    });
+  });
 });
 
 describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persistence (srv-59 Task 11)', () => {

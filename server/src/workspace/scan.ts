@@ -271,7 +271,11 @@ export interface BookStateJson {
     drops the per-chapter-only `language`/`lumped`/`flagOnly` fields that
     don't make sense once summed across a whole book. */
 export interface AnalysisProvenanceReport {
-  alignedPct: number;
+  /* Omitted (not 0) when every aggregated chapter had zero classified
+     sentences (totalWeight === 0) — a real "0% aligned" run and "nothing
+     was classified" are different facts; a 0 here would misrepresent the
+     latter as the former. See aggregateStructureReports in analysis.ts. */
+  alignedPct?: number;
   confirmed: number;
   corrected: number;
   flagged: number;
