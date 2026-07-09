@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   mockGetSetupReadiness,
   mockCompleteSetup,
@@ -233,5 +233,46 @@ describe('mockCreateCharacter (fs-58 Unit B)', () => {
 
   it('is registered on the api object (mock surface)', () => {
     expect(typeof api.createCharacter).toBe('function');
+  });
+});
+
+describe('script-review persistence endpoints', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('getScriptReviewState GETs the state endpoint and returns the parsed body', async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: async () => ({ kind: 'ledger', entries: {} }),
+    });
+    const result = await api.getScriptReviewState('book-1');
+    expect(fetch).toHaveBeenCalledWith('/api/books/book-1/script-review/state', expect.objectContaining({ method: 'GET' }));
+    expect(result).toEqual({ kind: 'ledger', entries: {} });
+  });
+
+  it('discardScriptReview POSTs the chapter ids', async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, json: async () => ({ ok: true }) });
+    await api.discardScriptReview('book-1', [3, 4]);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/books/book-1/script-review/discard',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ chapterIds: [3, 4] }) }),
+    );
+  });
+
+  it('resolveScriptReviewOps POSTs chapterId/version/appliedOpKeys and returns { ok }', async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, json: async () => ({ ok: true }) });
+    const result = await api.resolveScriptReviewOps('book-1', { chapterId: 3, version: 2, appliedOpKeys: ['3:1:strip_tag'] });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('patchScriptReviewSelection PATCHes chapterId/version/selected and returns { ok }', async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, json: async () => ({ ok: false }) });
+    const result = await api.patchScriptReviewSelection('book-1', { chapterId: 3, version: 2, selected: { '3:1:strip_tag': false } });
+    expect(result).toEqual({ ok: false });
   });
 });

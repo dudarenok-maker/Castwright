@@ -3281,6 +3281,69 @@ async function mockReviewScript(
   return { reviewedChapters: 1, totalOps: 5 };
 }
 
+interface LedgerEntryDTO {
+  manuscriptId: string;
+  version: number;
+  ops: unknown[];
+  selected: Record<string, boolean>;
+  completedAt: string;
+}
+type ScriptReviewStateDTO =
+  | { kind: 'running'; chapterId?: number; replay: unknown }
+  | { kind: 'ledger'; entries: Record<string, LedgerEntryDTO> };
+
+async function realGetScriptReviewState(bookId: string): Promise<ScriptReviewStateDTO> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/script-review/state`, { method: 'GET' });
+  if (!res.ok) throw new Error(`Failed to load script-review state (${res.status}).`);
+  return res.json();
+}
+
+async function realDiscardScriptReview(bookId: string, chapterIds: number[]): Promise<void> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/script-review/discard`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chapterIds }),
+  });
+  if (!res.ok) throw new Error(`Failed to discard script-review findings (${res.status}).`);
+}
+
+async function realResolveScriptReviewOps(
+  bookId: string,
+  params: { chapterId: number; version: number; appliedOpKeys: string[] },
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/script-review/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error(`Failed to resolve script-review ops (${res.status}).`);
+  return res.json();
+}
+
+async function realPatchScriptReviewSelection(
+  bookId: string,
+  params: { chapterId: number; version: number; selected: Record<string, boolean> },
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/script-review/selection`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error(`Failed to sync script-review selection (${res.status}).`);
+  return res.json();
+}
+
+async function mockGetScriptReviewState(_bookId: string): Promise<ScriptReviewStateDTO> {
+  return { kind: 'ledger', entries: {} };
+}
+async function mockDiscardScriptReview(_bookId: string, _chapterIds: number[]): Promise<void> {}
+async function mockResolveScriptReviewOps(): Promise<{ ok: boolean }> {
+  return { ok: true };
+}
+async function mockPatchScriptReviewSelection(): Promise<{ ok: boolean }> {
+  return { ok: true };
+}
+
 /* fs-34 — drop a designed Qwen emotion variant (route deletes the slot + .pt). */
 async function realRemoveQwenVariant(
   bookId: string,
@@ -8691,6 +8754,10 @@ const real = {
   detectEmotions: realDetectEmotions,
   detectInstruct: realDetectInstruct,
   reviewScript: realReviewScript,
+  getScriptReviewState: realGetScriptReviewState,
+  discardScriptReview: realDiscardScriptReview,
+  resolveScriptReviewOps: realResolveScriptReviewOps,
+  patchScriptReviewSelection: realPatchScriptReviewSelection,
   removeQwenVariant: realRemoveQwenVariant,
   promoteQwenVoice: realPromoteQwenVoice,
   discardQwenPreview: realDiscardQwenPreview,
@@ -8961,6 +9028,10 @@ const mock = {
   detectEmotions: mockDetectEmotions,
   detectInstruct: mockDetectInstruct,
   reviewScript: mockReviewScript,
+  getScriptReviewState: mockGetScriptReviewState,
+  discardScriptReview: mockDiscardScriptReview,
+  resolveScriptReviewOps: mockResolveScriptReviewOps,
+  patchScriptReviewSelection: mockPatchScriptReviewSelection,
   removeQwenVariant: mockRemoveQwenVariant,
   promoteQwenVoice: mockPromoteQwenVoice,
   discardQwenPreview: mockDiscardQwenPreview,
