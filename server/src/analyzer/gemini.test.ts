@@ -800,6 +800,91 @@ describe('GeminiAnalyzer.runStage3Chapter — fs-57 instruct-annotation pass', (
   });
 });
 
+/* srv-59 Task 9 — the escalation primitive is deliberately NOT built on
+   runStage: no schema-constrained retry loop, and an empty/malformed reply
+   must resolve to `null` rather than throw. These mirror the ollama.test.ts
+   coverage for the same contract, on the Gemini transport. */
+describe('GeminiAnalyzer.runAttributionEscalation (srv-59 Task 9)', () => {
+  const VALID_ESCALATION = JSON.stringify({
+    assignments: [{ line: 12, characterId: 'wren' }],
+  });
+
+  it('round-trips a valid {assignments} reply and still goes through the per-model rate limiter', async () => {
+    generateContentStream.mockResolvedValue(asyncFromArray([{ text: VALID_ESCALATION }]));
+    /* Re-resolve the limiter singleton dynamically rather than spying on the
+       module-top-level import: an earlier describe block in this file
+       (`stream watchdog + abort`) calls `vi.resetModules()`, which detaches
+       gemini.js's internal `geminiRateLimiter` reference from the one bound
+       at this file's static import time. Importing it here — right before
+       constructing the analyzer — guarantees we spy on whichever instance
+       gemini.js will actually call. */
+    const { geminiRateLimiter: limiter } = await import('./rate-limit.js');
+    const acquireSpy = vi.spyOn(limiter, 'acquire');
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+
+    const result = await analyzer.runAttributionEscalation(
+      'm_escalation_gemini_ok',
+      1,
+      'resolve these lines',
+      {},
+    );
+
+    expect(result).toEqual({ assignments: [{ line: 12, characterId: 'wren' }] });
+    expect(generateContentStream).toHaveBeenCalledTimes(1);
+    /* Every call — including this one — flows through the shared limiter;
+       do not bypass it for this pass. */
+    expect(acquireSpy).toHaveBeenCalledTimes(1);
+    expect(acquireSpy.mock.calls[0][0]).toBe('gemma-4-31b-it');
+  });
+
+  it('resolves to null (not a throw) when the model returns an empty response (RECITATION/SAFETY block)', async () => {
+    generateContentStream.mockResolvedValue(asyncFromArray([{ text: '' }]));
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+
+    const result = await analyzer.runAttributionEscalation(
+      'm_escalation_gemini_empty',
+      1,
+      'resolve these lines',
+      {},
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it('resolves to null (not a throw) on malformed JSON', async () => {
+    generateContentStream.mockResolvedValue(
+      asyncFromArray([{ text: '{ "assignments": [ { "line": 1' }]),
+    );
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+
+    const result = await analyzer.runAttributionEscalation(
+      'm_escalation_gemini_malformed',
+      1,
+      'resolve these lines',
+      {},
+    );
+
+    expect(result).toBeNull();
+  });
+
+  afterAll(async () => {
+    for (const id of [
+      'm_escalation_gemini_ok',
+      'm_escalation_gemini_empty',
+      'm_escalation_gemini_malformed',
+    ]) {
+      await rm(resolve(HANDOFF_ROOT, 'inbox', `${id}-stageescalation-ch1.md`), { force: true });
+      await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stageescalation-ch1.json`), { force: true });
+    }
+  });
+});
+
 afterAll(async () => {
   await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_s3-stageinstruct-ch2.md'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_s3_extra-stageinstruct-ch2.md'), { force: true });

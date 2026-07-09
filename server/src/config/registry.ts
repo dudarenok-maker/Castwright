@@ -12,6 +12,7 @@ export const GROUPS: ConfigGroup[] = [
   { id: 'gpu-lifecycle', label: 'GPU arbitration, memory & lifecycle', help: 'GPU concurrency, VRAM budgets, and sidecar recycling. Footguns live here.', risk: 'high', collapsedByDefault: true },
   { id: 'rate-limits', label: 'Gemini rate limits', help: 'Per-model request/token/day caps for the Gemini API.', risk: 'low', collapsedByDefault: false },
   { id: 'lan-access', label: 'LAN access & device tokens', help: 'Lifetime of browser/device authorizations minted from Admin.', risk: 'low', collapsedByDefault: false },
+  { id: 'analyzer-structure', label: 'Dialogue-structure attribution', help: 'Deterministic structure engine that corrects/flags stage-2 attributions.', risk: 'medium', collapsedByDefault: false },
 ];
 
 export const KNOBS: ConfigKnob[] = [
@@ -1055,6 +1056,48 @@ export const KNOBS: ConfigKnob[] = [
     help: 'How long a browser/device authorization stays valid before it must be re-paired.',
     type: 'integer', min: 1,
     default: 30,
+    apply: 'live', risk: 'low',
+  },
+
+  // ── analyzer-structure ────────────────────────────────────────────────────
+  {
+    key: 'analyzer.structure.enabled',
+    env: 'STRUCTURE_ENGINE',
+    group: 'analyzer-structure',
+    label: 'Structure engine',
+    help: 'Deterministic dialogue-structure pass that corrects tag-proven attributions and derives honest confidence. Off = pre-engine behaviour.',
+    type: 'boolean',
+    default: true,
+    apply: 'live', risk: 'medium',
+  },
+  {
+    key: 'analyzer.structure.escalation',
+    env: 'ATTRIBUTION_ESCALATION',
+    group: 'analyzer-structure',
+    label: 'Attribution escalation',
+    help: "Second-pass re-query of unresolved dialogue windows: 'local' (default) uses the configured analyzer, 'cloud' the Gemini-API Gemma model, 'off' disables.",
+    type: 'enum', options: ['off', 'local', 'cloud'],
+    default: 'local',
+    apply: 'live', risk: 'medium',
+  },
+  {
+    key: 'analyzer.structure.maxWindowsPerChapter',
+    env: 'ESCALATION_MAX_WINDOWS_PER_CHAPTER',
+    group: 'analyzer-structure',
+    label: 'Escalation windows per chapter',
+    help: 'Cap on re-queried conversation windows per chapter.',
+    type: 'integer', min: 0,
+    default: 120,
+    apply: 'live', risk: 'low',
+  },
+  {
+    key: 'analyzer.structure.maxWindowsPerBook',
+    env: 'ESCALATION_MAX_WINDOWS_PER_BOOK',
+    group: 'analyzer-structure',
+    label: 'Escalation windows per book',
+    help: 'Cap on re-queried conversation windows per full-book analysis.',
+    type: 'integer', min: 0,
+    default: 600,
     apply: 'live', risk: 'low',
   },
 ];

@@ -308,3 +308,31 @@ export const stage3ChapterSchema = z
   .strict();
 
 export type Stage3ChapterOutput = z.infer<typeof stage3ChapterSchema>;
+
+/* ── srv-59 Task 9 — attribution-escalation schema ──────────────────────────
+   The escalation pass resolves speaker attribution for a small window of
+   flagged dialogue lines (see analyzer/dialogue-structure/escalation.ts,
+   Task 9b). Unlike every other analyzer call, this reply is NOT
+   schema-constrained through the stage2 grammar (its shape — a sparse
+   {line, characterId} list — doesn't fit stage2ChapterSchema), and an
+   empty/RECITATION-blocked reply must be OBSERVABLE rather than a thrown
+   validation error. `.min(1)` is deliberately omitted: a window the model
+   declines to resolve returns `{ assignments: [] }`, which is a valid,
+   non-throwing outcome — the caller (escalateFlaggedWindows) just skips it. */
+export const escalationSchema = z
+  .object({
+    assignments: z.array(
+      /* Inner element deliberately NOT `.strict()` (unlike every other
+         per-item schema in this file): an extra per-assignment key (e.g. a
+         model stamping `confidence` onto its answer) is stripped rather than
+         rejecting the whole reply — same tolerant-by-default behavior as
+         `chapterStub` above. The OUTER envelope stays `.strict()`. */
+      z.object({
+        line: z.number().int(),
+        characterId: z.string().min(1),
+      }),
+    ),
+  })
+  .strict();
+
+export type EscalationOutput = z.infer<typeof escalationSchema>;

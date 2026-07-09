@@ -24,6 +24,7 @@
    injected via `callForBody`, mirroring stage2-coverage.ts / roster-coverage.ts. */
 
 import type { SentenceOutput } from '../handoff/schemas.js';
+import type { EngineReport } from './dialogue-structure/types.js';
 import { AnalyzerTruncatedError } from './errors.js';
 import { configValue } from '../config/resolver.js';
 import {
@@ -153,6 +154,9 @@ export interface Stage2ChunkRunResult {
   coverage: Stage2CoverageVerdict;
   /** How many chunks the chapter was split into (1 = single-call path). */
   chunkCount: number;
+  /** Dialogue-structure engine counters (srv-59) — set only when the engine
+      ran (knob on + language supported); absent on the pre-engine path. */
+  structureReport?: EngineReport;
 }
 
 export interface Stage2ChunkRunOptions {

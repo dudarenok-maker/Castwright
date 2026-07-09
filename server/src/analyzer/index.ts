@@ -15,6 +15,7 @@ import type {
   EmotionAnnotationOutput,
   ScriptReviewOutput,
   Stage3ChapterOutput,
+  EscalationOutput,
 } from '../handoff/schemas.js';
 import { GeminiAnalyzer } from './gemini.js';
 import { OllamaAnalyzer, LocalUnreachableError, AnalysisAbortedError } from './ollama.js';
@@ -113,6 +114,21 @@ export interface Analyzer {
     promptMd: string,
     call: StageCall,
   ): Promise<Stage3ChapterOutput>;
+  /* srv-59 Task 9 — flagged-window attribution escalation. Unlike every
+     other analyzer call, this is NOT schema-constrained decoding: the
+     reply shape `{assignments:[…]}` doesn't fit the stage2 grammar, and an
+     empty/RECITATION-blocked reply must be observable rather than thrown.
+     Returns `null` for an empty/blocked/unparseable response — NEVER a
+     throw for those cases; the caller (escalateFlaggedWindows, Task 9b)
+     just skips the window. A genuinely unreachable local daemon (or a
+     client abort) still throws, same as every other method here, so
+     FallbackAnalyzer/the route's abort handling keep working unchanged. */
+  runAttributionEscalation(
+    manuscriptId: string,
+    chapterId: number,
+    prompt: string,
+    call: StageCall,
+  ): Promise<EscalationOutput | null>;
 }
 
 export interface SelectAnalyzerOptions {
@@ -303,6 +319,23 @@ export class FallbackAnalyzer implements Analyzer {
       if (err instanceof AnalysisAbortedError) throw err;
       if (err instanceof LocalUnreachableError) {
         return await this.fallback.runStage3Chapter(manuscriptId, chapterId, promptMd, call);
+      }
+      throw err;
+    }
+  }
+
+  async runAttributionEscalation(
+    manuscriptId: string,
+    chapterId: number,
+    prompt: string,
+    call: StageCall,
+  ): Promise<EscalationOutput | null> {
+    try {
+      return await this.primary.runAttributionEscalation(manuscriptId, chapterId, prompt, call);
+    } catch (err) {
+      if (err instanceof AnalysisAbortedError) throw err;
+      if (err instanceof LocalUnreachableError) {
+        return await this.fallback.runAttributionEscalation(manuscriptId, chapterId, prompt, call);
       }
       throw err;
     }

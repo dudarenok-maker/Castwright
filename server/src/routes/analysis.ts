@@ -67,6 +67,7 @@ import { stripFrontMatterBoilerplate } from '../analyzer/strip-front-matter.js';
 import {
   readUserSettings,
   getCachedUserSettings,
+  getResolvedGeminiApiKey,
   type UserSettings,
 } from '../workspace/user-settings.js';
 import {
@@ -103,7 +104,7 @@ import {
   applyRewriteToPriorCast,
 } from '../store/merge-analysis-cast.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
-import type { BookStateJson } from '../workspace/scan.js';
+import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, bookStateLanguage } from '../workspace/scan.js';
 import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy } from '../tts/design-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
@@ -129,6 +130,16 @@ import {
   FAILURE_REMEDIATIONS,
 } from './failure-taxonomy.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
+import { conventionsFor } from '../analyzer/dialogue-structure/lang/index.js';
+import { buildNameIndex } from '../analyzer/dialogue-structure/name-matcher.js';
+import { parseChapterStructure } from '../analyzer/dialogue-structure/parser.js';
+import { resolveWindows, type WindowRoster } from '../analyzer/dialogue-structure/windows.js';
+import { alignSentences } from '../analyzer/dialogue-structure/aligner.js';
+import { crossExamine } from '../analyzer/dialogue-structure/cross-examine.js';
+import { escalateFlaggedWindows } from '../analyzer/dialogue-structure/escalation.js';
+import type { EngineReport, LanguageConventions } from '../analyzer/dialogue-structure/types.js';
+import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
+import { GeminiAnalyzer } from '../analyzer/gemini.js';
 
 /* srv-13 — the existing cast's voice/reuse fields to overlay onto a fresh
    analysis roster. Prefer cast.json; when it's absent (a reparse just deleted
@@ -1518,6 +1529,49 @@ ${subBody}
 `;
 }
 
+/* srv-59 — roster character whose aliases include the language's
+   first-person pronoun (the "я" -> Антон first-person-narrator case). Null
+   when the language has no first-person pronoun convention or no roster
+   character claims it. */
+function findFirstPersonCharacter(
+  characters: Array<{ id: string; aliases?: string[] }>,
+  conv: LanguageConventions,
+): string | null {
+  if (!conv.pronouns.firstPerson) return null;
+  const hit = characters.find((c) =>
+    (c.aliases ?? []).some((a) => conv.pronouns.firstPerson!.test(` ${a} `)),
+  );
+  return hit?.id ?? null;
+}
+
+/* srv-59 — roster gender lookup for windows.ts's pronoun resolution.
+   Defaults an ungendered character to 'neutral' (never guessed). */
+function rosterGenderMap(
+  characters: Array<{ id: string; gender?: string }>,
+): WindowRoster {
+  return Object.fromEntries(
+    characters.map((c) => [c.id, (c.gender as 'male' | 'female' | 'neutral') ?? 'neutral']),
+  );
+}
+
+/* srv-59 Task 9b — `analyzer.structure.escalation === 'cloud'` routing.
+   Mirrors selectAnalyzer's gemini branch (analyzer/index.ts ~180-194): a
+   dedicated GeminiAnalyzer, independent of whichever engine is running the
+   chapter's main stage-2 attribution. Escalation is best-effort, so a
+   missing API key skips escalation for the chapter (warn + null) rather
+   than throwing and failing the whole analysis over a second-pass extra. */
+function buildCloudEscalationAnalyzer(): Analyzer | null {
+  const apiKey = getResolvedGeminiApiKey();
+  if (!apiKey) {
+    console.warn(
+      '[analysis:structure] escalation mode is "cloud" but no Gemini API key is configured — skipping escalation.',
+    );
+    return null;
+  }
+  const model = process.env.GEMINI_MODEL ?? 'gemma-4-31b-it';
+  return new GeminiAnalyzer({ apiKey, model });
+}
+
 /* Shared resilient stage-2 runner used by BOTH the main and subset routes
    (#528). Wraps the chapter in the large-chapter chunker (which itself wraps
    each call in the coverage guard), so an over-budget chapter is split into
@@ -1525,7 +1579,7 @@ ${subBody}
    adaptively re-split. For a chapter within budget this is exactly one guarded
    call against the full body (byte-identical to the prior behaviour). Returns
    the stitched sentences + combined coverage verdict. */
-async function attributeChapterStage2(opts: {
+export async function attributeChapterStage2(opts: {
   analyzer: Analyzer;
   manuscriptId: string;
   title: string;
@@ -1540,6 +1594,20 @@ async function attributeChapterStage2(opts: {
   onCoverageRetry?: (attempt: number, verdict: { issues: string[] }) => void;
   onChunk?: (info: { index: number; total: number; chars: number }) => void;
   onSectionDone?: (index: number, sentenceCount: number) => void;
+  /* srv-59 Task 9b — per-BOOK escalation-window budget, shared/mutable
+     across every chapter's call (the caller creates ONE object and threads
+     it through). Falls back to a fresh per-call budget when omitted, so
+     existing callers keep working (just without the cross-chapter cap). */
+  structureBudget?: { remainingWindows: number };
+  /* srv-59 Task 9b (review follow-up) — the 'cloud' escalation analyzer,
+     built ONCE per book by the caller (mirrors structureBudget) and threaded
+     through every chapter's call so a book doesn't construct a throwaway
+     GeminiAnalyzer (and re-warn on a missing API key) per chapter. `null`
+     means "already resolved this book, no key configured" — distinct from
+     `undefined` ("caller didn't thread it"), which falls back to the old
+     per-call construction for any caller that hasn't been migrated. Only
+     consulted when `analyzer.structure.escalation === 'cloud'`. */
+  escalationAnalyzer?: Analyzer | null;
 }): Promise<Stage2ChunkRunResult> {
   const callForBody = (subBody: string, preceding: string | null) => {
     const prompt =
@@ -1569,12 +1637,131 @@ async function attributeChapterStage2(opts: {
     onChunk: opts.onChunk,
     onSectionDone: opts.onSectionDone,
   });
-  /* Deterministic narrator-default: force non-spoken sentences to `narrator`
-     and flag the first of each demoted block low-confidence. Runs for ALL
-     languages, AFTER coverage (coverage keys on text, not characterId, so the
-     verdict is unchanged) and UPSTREAM of fold/reconcile. */
-  result.sentences = applyNarratorDefault(result.sentences);
+  /* srv-59 — deterministic dialogue-structure engine: replays the model's
+     per-sentence attribution against the chapter's structural evidence (dash/
+     quote dialogue tags, conversation-window alternation, pronoun resolution)
+     and derives an honest confidence for every sentence, auto-correcting
+     tag-proven misattributions. Gated by the `analyzer.structure.enabled`
+     knob AND language support; the ELSE branch is byte-identical to the
+     pre-engine `applyNarratorDefault` behaviour (coverage keys on text, not
+     characterId, so the verdict above is unaffected either way). */
+  const conventions = configValue<boolean>('analyzer.structure.enabled')
+    ? conventionsFor(opts.stageCall.language)
+    : null;
+  if (conventions) {
+    const index = buildNameIndex(opts.stage1.characters, conventions);
+    const paras = parseChapterStructure(opts.chapter.body, index);
+    const firstPersonId = findFirstPersonCharacter(opts.stage1.characters, conventions);
+    resolveWindows(paras, rosterGenderMap(opts.stage1.characters), firstPersonId);
+    const alignment = alignSentences(result.sentences, paras, opts.chapter.body);
+    const rosterIds = new Set(opts.stage1.characters.map((c) => c.id));
+    const examined = crossExamine(alignment, {
+      rosterIds,
+      unknownBucketIds: new Set([MALE_BUCKET_ID, FEMALE_BUCKET_ID]),
+      alignmentFloorPct: 80,
+    });
+    result.sentences = examined.sentences;
+
+    /* Task 9b — second-pass re-query of the windows crossExamine couldn't
+       resolve. 'off' disables the model re-query entirely (the deterministic
+       engine still runs unchanged above); 'cloud' routes through a dedicated
+       GeminiAnalyzer instead of whichever engine ran the main attribution. */
+    const escalationMode = configValue<string>('analyzer.structure.escalation');
+    if (escalationMode !== 'off' && !examined.report.flagOnly) {
+      const escalationAnalyzer =
+        escalationMode === 'cloud'
+          ? opts.escalationAnalyzer !== undefined
+            ? opts.escalationAnalyzer
+            : buildCloudEscalationAnalyzer()
+          : opts.analyzer;
+      if (escalationAnalyzer) {
+        const budget = opts.structureBudget ?? {
+          remainingWindows: configValue<number>('analyzer.structure.maxWindowsPerBook'),
+        };
+        const escalationOutcome = await escalateFlaggedWindows({
+          sentences: examined.sentences,
+          flags: examined.flags,
+          paras,
+          body: opts.chapter.body,
+          analyzer: escalationAnalyzer,
+          manuscriptId: opts.manuscriptId,
+          chapterId: opts.chapter.id,
+          stageCall: opts.stageCall,
+          rosterIds,
+          budget,
+          maxWindowsPerChapter: configValue<number>('analyzer.structure.maxWindowsPerChapter'),
+        });
+        examined.report.escalated = escalationOutcome.attempted;
+        examined.report.escalationAccepted = escalationOutcome.applied;
+      }
+    } else if (escalationMode !== 'off' && examined.report.flagOnly) {
+      console.log(
+        `[analysis:structure] ch=${opts.chapter.id} below alignment floor (${examined.report.alignedPct.toFixed(0)}%) — escalation skipped`,
+      );
+    }
+
+    result.structureReport = { ...examined.report, language: conventions.language };
+    console.log(
+      `[analysis:structure] ch=${opts.chapter.id} aligned=${examined.report.alignedPct.toFixed(0)}% ` +
+        `confirmed=${examined.report.confirmed} corrected=${examined.report.corrected} flagged=${examined.report.flagged} ` +
+        `escalated=${examined.report.escalated} escalationAccepted=${examined.report.escalationAccepted}`,
+    );
+  } else {
+    /* Deterministic narrator-default: force non-spoken sentences to `narrator`
+       and flag the first of each demoted block low-confidence. Runs for ALL
+       languages, AFTER coverage (coverage keys on text, not characterId, so the
+       verdict is unchanged) and UPSTREAM of fold/reconcile. */
+    result.sentences = applyNarratorDefault(result.sentences);
+  }
   return result;
+}
+
+/** srv-59 Task 11 — roll up every chapter's `structureReport` (set only when
+    the dialogue-structure engine actually ran for that chapter — see
+    `attributeChapterStage2` above) into the single `report` slice persisted
+    on `BookStateJson.analysisProvenance`. Returns undefined when `reports` is
+    empty — the engine was off (or every chapter in this pass came back from
+    the stage-2 cache, which doesn't carry a stored EngineReport) — so the
+    caller omits `report` entirely rather than persisting a zeroed-out one.
+
+    `confirmed`/`corrected`/`flagged`/`escalated`/`escalationAccepted` are
+    plain sums. `alignedPct` is a per-chapter-sentence-count-weighted mean
+    (weight = confirmed+corrected+flagged+lumped, i.e. every sentence
+    crossExamine classified for that chapter) rather than a flat average of
+    percentages, so one huge chapter doesn't get diluted to the same weight
+    as a two-sentence one. */
+export function aggregateStructureReports(
+  reports: EngineReport[],
+): AnalysisProvenanceReport | undefined {
+  if (reports.length === 0) return undefined;
+  let confirmed = 0;
+  let corrected = 0;
+  let flagged = 0;
+  let escalated = 0;
+  let escalationAccepted = 0;
+  let weightedAlignedSum = 0;
+  let totalWeight = 0;
+  for (const r of reports) {
+    confirmed += r.confirmed;
+    corrected += r.corrected;
+    flagged += r.flagged;
+    escalated += r.escalated;
+    escalationAccepted += r.escalationAccepted;
+    const weight = r.confirmed + r.corrected + r.flagged + r.lumped;
+    weightedAlignedSum += r.alignedPct * weight;
+    totalWeight += weight;
+  }
+  return {
+    // totalWeight === 0 means no sentence was classified across every
+    // aggregated chapter — omit alignedPct rather than reporting a
+    // misleading 0% (see AnalysisProvenanceReport's doc comment).
+    ...(totalWeight > 0 ? { alignedPct: weightedAlignedSum / totalWeight } : {}),
+    confirmed,
+    corrected,
+    flagged,
+    escalated,
+    escalationAccepted,
+  };
 }
 
 /* ── Sticky analysis: in-flight job map + multi-subscriber broadcast ────
@@ -2224,6 +2411,18 @@ export async function runMainAnalyzerJob(
   const phase1Analyzer = phase1Selection.analyzer;
   const phase1ModelId = phase1Selection.model;
   const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1ModelId);
+  /* srv-59 Task 9b — ONE escalation-window budget shared across every
+     chapter's attributeChapterStage2 call below, so the cap is per-BOOK
+     (`analyzer.structure.maxWindowsPerBook`), not silently reset per chapter. */
+  const structureBudget = { remainingWindows: configValue<number>('analyzer.structure.maxWindowsPerBook') };
+  /* srv-59 Task 9b (review follow-up) — build the 'cloud' escalation
+     analyzer ONCE per book (mirrors structureBudget above), not per chapter:
+     a per-chapter build constructed a throwaway GeminiAnalyzer (and re-warned
+     on a missing key) on every chapter in cloud mode. `undefined` when the
+     mode isn't 'cloud' — attributeChapterStage2 only consults this field
+     when it is. */
+  const escalationAnalyzer =
+    configValue<string>('analyzer.structure.escalation') === 'cloud' ? buildCloudEscalationAnalyzer() : undefined;
   const pipelinedPerPhase = !opts.requestedModel && isPerPhaseModelSelectionActive(userSettings);
   if (pipelinedPerPhase) {
     console.log(
@@ -3359,6 +3558,14 @@ export async function runMainAnalyzerJob(
        narrative order at the end regardless of which chapter finishes first
        under concurrency. */
     const sentencesByChapter = new Map<number, SentenceOutput[]>();
+    /* srv-59 Task 11 — every freshly-attributed chapter's structureReport
+       (attributeChapterStage2 only sets one when the engine ran — see its
+       comment). A chapter replayed from the stage-2 cache above contributes
+       nothing (the cache doesn't store EngineReport), so a resumed run's
+       aggregate only reflects the chapters that actually ran this pass.
+       Rolled up into `analysisProvenance.report` at the persist site below
+       via aggregateStructureReports. */
+    const structureReports: EngineReport[] = [];
     const completedSet = new Set<number>();
 
     /* Replay cached chapters synchronously up front. Cheap, deterministic
@@ -3694,6 +3901,7 @@ export async function runMainAnalyzerJob(
         sentences: stage2Sentences,
         coverage: coverageVerdict,
         chunkCount: stage2ChunkCount,
+        structureReport: stage2StructureReport,
       } = await attributeChapterStage2({
         analyzer: phase1Analyzer,
         manuscriptId,
@@ -3702,6 +3910,8 @@ export async function runMainAnalyzerJob(
         chapter: ch,
         stageCall: stage2Call,
         engine: phase1Selection.engine,
+        structureBudget,
+        escalationAnalyzer,
         // Section START: record this section's char count and total. Do NOT add
         // it to committedChars yet — committedChars must stay in lockstep with
         // committedSentences (completed sections only), or the rate dilutes and
@@ -3767,6 +3977,7 @@ export async function runMainAnalyzerJob(
       }
       for (const s of stage2Sentences) s.chapterId = ch.id;
       sentencesByChapter.set(ch.id, stage2Sentences);
+      if (stage2StructureReport) structureReports.push(stage2StructureReport);
       cachedChapters[ch.id] = stage2Sentences;
       cache.chapters = cachedChapters;
       /* Persist this chapter's wall-clock duration so a future resumed run
@@ -4156,6 +4367,19 @@ export async function runMainAnalyzerJob(
                 excluded: prevExcludedById.get(c.id) || undefined,
                 held: prevHeldById.get(c.id) || undefined,
               })),
+              /* srv-59 Task 11 — record which analyzer produced this cast/
+                 sentence set and, when the dialogue-structure engine ran,
+                 the aggregated run report. Additive + schema-tolerant: no
+                 reader may require this block (see BookStateJson). */
+              analysisProvenance: {
+                engine: phase1Selection.engine,
+                model: phase1Selection.model,
+                at: new Date().toISOString(),
+                structureEngineVersion: 1,
+                report: aggregateStructureReports(structureReports),
+                scope: 'book',
+                chaptersCovered: chapters.length,
+              },
               updatedAt: new Date().toISOString(),
             };
             await writeJsonAtomic(statePath, stampStateSchema(next));
@@ -4476,7 +4700,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
    (sticky semantics). Broadcasts every event to job.subscribers and
    tracks replay state via trackForReplay; endJob handles teardown +
    map deregistration on every exit path. */
-async function runSubsetAnalyzerJob(
+export async function runSubsetAnalyzerJob(
   job: AnalysisJob,
   record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
   selection: AnalyzerSelection,
@@ -4503,6 +4727,14 @@ async function runSubsetAnalyzerJob(
   const phase1Analyzer = phase1Selection.analyzer;
   const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1Selection.model);
   const phase1ModelId = phase1Selection.model;
+  /* srv-59 Task 9b — ONE escalation-window budget shared across every
+     chapter's attributeChapterStage2 call in this subset/retry job, mirroring
+     the main route's per-book budget above. */
+  const structureBudget = { remainingWindows: configValue<number>('analyzer.structure.maxWindowsPerBook') };
+  /* srv-59 Task 9b (review follow-up) — build the 'cloud' escalation
+     analyzer ONCE for this subset/retry job, mirroring the main route. */
+  const escalationAnalyzer =
+    configValue<string>('analyzer.structure.escalation') === 'cloud' ? buildCloudEscalationAnalyzer() : undefined;
 
   const send = (payload: unknown) => {
     broadcastToJob(job, payload);
@@ -4879,6 +5111,12 @@ async function runSubsetAnalyzerJob(
       label: PHASES[1].label,
       model: phase1ModelId,
     });
+    /* srv-59 Task 11 — every freshly-attributed chapter's structureReport
+       this subset pass produces, rolled up into `analysisProvenance.report`
+       at the persist site below (mirrors the main route's accumulator).
+       Only chapters actually re-run here (`toRun`) can contribute — a
+       subset retry never touches other chapters' cached sentences. */
+    const subsetStructureReports: EngineReport[] = [];
     for (let idx = 0; idx < toRun.length; idx++) {
       const ch = toRun[idx];
       log(1, `Chapter ${ch.id} — ${ch.title}: attributing sentences via ${phase1AnalyzerLabel}…`);
@@ -4887,14 +5125,19 @@ async function runSubsetAnalyzerJob(
          a bare runStage2Chapter call with no guard and no chunking, so a large
          chapter (The Drowning Bell ch19, 507 sentences) truncated mid-JSON, threw,
          and discarded the whole job — the reported failure. */
-      const { sentences: chapterSentences, chunkCount: subsetChunkCount } =
-        await attributeChapterStage2({
+      const {
+        sentences: chapterSentences,
+        chunkCount: subsetChunkCount,
+        structureReport: subsetStructureReport,
+      } = await attributeChapterStage2({
           analyzer: phase1Analyzer,
           manuscriptId,
           title: record.title,
           stage1,
           chapter: ch,
           engine: phase1Selection.engine,
+          structureBudget,
+          escalationAnalyzer,
           stageCall: {
             signal: abortController.signal,
             language: bookLanguage,
@@ -4927,6 +5170,7 @@ async function runSubsetAnalyzerJob(
       }
       for (const s of chapterSentences) s.chapterId = ch.id;
       cachedChapters[ch.id] = chapterSentences;
+      if (subsetStructureReport) subsetStructureReports.push(subsetStructureReport);
       cache.chapters = cachedChapters;
       await saveAnalysisCache(manuscriptId, cache);
       /* Roll a partial manuscript-edits.json after each chapter completes, so a
@@ -5164,6 +5408,19 @@ async function runSubsetAnalyzerJob(
                 excluded: prevExcludedById.get(c.id) || undefined,
                 held: prevHeldById.get(c.id) || undefined,
               })),
+              /* srv-59 Task 11 — a subset retry supersedes whatever
+                 provenance the last full run left, so this REWRITES the
+                 block wholesale (fresh `at` + a report recomputed from just
+                 this pass's chapters) rather than merging with `prev`'s. */
+              analysisProvenance: {
+                engine: phase1Selection.engine,
+                model: phase1Selection.model,
+                at: new Date().toISOString(),
+                structureEngineVersion: 1,
+                report: aggregateStructureReports(subsetStructureReports),
+                scope: 'subset',
+                chaptersCovered: toRun.length,
+              },
               updatedAt: new Date().toISOString(),
             };
             await writeJsonAtomic(statePath, stampStateSchema(next));

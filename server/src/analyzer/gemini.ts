@@ -22,12 +22,14 @@ import {
   stage3ChapterSchema,
   stage1GrammarSchema,
   stage1ChapterGrammarSchema,
+  escalationSchema,
   type Stage1Output,
   type Stage1ChapterOutput,
   type Stage2ChapterOutput,
   type EmotionAnnotationOutput,
   type ScriptReviewOutput,
   type Stage3ChapterOutput,
+  type EscalationOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
 import { isNonEnglish, normaliseBookLanguage } from '../tts/language.js';
@@ -332,6 +334,54 @@ export class GeminiAnalyzer implements Analyzer {
       stage3ChapterSchema,
       call,
     );
+  }
+
+  /* srv-59 Task 9 — flagged-window attribution escalation. Deliberately NOT
+     built on runStage: that helper validates-then-retries-then-throws,
+     which is wrong here — an empty/RECITATION-blocked reply must resolve to
+     `null` (never a throw) so the caller just skips the window, with no
+     retry (a second identical call burns latency on a best-effort pass).
+     The prompt is fully self-contained (built by escalateFlaggedWindows,
+     Task 9b), so it goes as the sole user turn with no system instruction /
+     skill file. Still routed through `generateWithLimiter` — so every call
+     (there are no retries here, so "every call" is just the one) still
+     acquires the per-model rate limiter exactly like every other Gemini
+     call; nothing about this path bypasses it. */
+  async runAttributionEscalation(
+    manuscriptId: string,
+    chapterId: number,
+    prompt: string,
+    call: StageCall,
+  ): Promise<EscalationOutput | null> {
+    const key = `escalation-ch${chapterId}` as const;
+    await writeInbox(manuscriptId, key, prompt);
+
+    let text: string;
+    try {
+      text = await this.generateWithLimiter(
+        [{ role: 'user', parts: [{ text: prompt }] }],
+        '',
+        call,
+      );
+    } catch (err) {
+      if (err instanceof AnalysisAbortedError) throw err;
+      /* Everything else (empty/blocked response, truncation, retry-budget
+         exhaustion) — this pass is best-effort, so surface "no usable
+         answer" rather than hard-failing the whole chapter over one
+         escalation window. */
+      console.warn(
+        `[gemini] ${this.model} ${key} produced no usable response: ${(err as Error)?.message ?? err}`,
+      );
+      return null;
+    }
+
+    const attempt = parseAndValidate(text, escalationSchema);
+    if (!attempt.ok) {
+      console.warn(`[gemini] ${this.model} ${key} failed to parse: ${attempt.kind}`);
+      return null;
+    }
+    await persistResponse(manuscriptId, key, text);
+    return attempt.value;
   }
 
   private async runStage<T>(

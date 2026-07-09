@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { GROUPS, KNOBS, allKnobs, getKnob, knobByEnv, knobsInGroup } from './registry.js';
 
 describe('config registry', () => {
-  it('declares the eleven groups', () => {
+  it('declares the twelve groups', () => {
     expect(GROUPS.map((g) => g.id)).toEqual([
       'analyzer-sampling',
       'analyzer-chunking',
@@ -15,6 +15,7 @@ describe('config registry', () => {
       'gpu-lifecycle',
       'rate-limits',
       'lan-access',
+      'analyzer-structure',
     ]);
   });
 

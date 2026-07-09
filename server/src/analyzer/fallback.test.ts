@@ -16,6 +16,7 @@ import type {
   EmotionAnnotationOutput,
   ScriptReviewOutput,
   Stage3ChapterOutput,
+  EscalationOutput,
 } from '../handoff/schemas.js';
 
 const STAGE1_RESULT: Stage1Output = {
@@ -37,6 +38,9 @@ const SCRIPT_REVIEW_RESULT: ScriptReviewOutput = {
 const STAGE3_RESULT: Stage3ChapterOutput = {
   annotations: [{ sentenceId: 1, instruct: 'whisper this line' }],
 };
+const ESCALATION_RESULT: EscalationOutput = {
+  assignments: [{ line: 12, characterId: 'wren' }],
+};
 
 function makeAnalyzer(impl: Partial<Analyzer>): Analyzer & {
   runStage1: ReturnType<typeof vi.fn>;
@@ -45,6 +49,7 @@ function makeAnalyzer(impl: Partial<Analyzer>): Analyzer & {
   runEmotionChapter: ReturnType<typeof vi.fn>;
   runScriptReviewChapter: ReturnType<typeof vi.fn>;
   runStage3Chapter: ReturnType<typeof vi.fn>;
+  runAttributionEscalation: ReturnType<typeof vi.fn>;
 } {
   return {
     runStage1: vi.fn(impl.runStage1 ?? (() => Promise.resolve(STAGE1_RESULT))),
@@ -58,6 +63,9 @@ function makeAnalyzer(impl: Partial<Analyzer>): Analyzer & {
     ),
     runStage3Chapter: vi.fn(
       impl.runStage3Chapter ?? (() => Promise.resolve(STAGE3_RESULT)),
+    ),
+    runAttributionEscalation: vi.fn(
+      impl.runAttributionEscalation ?? (() => Promise.resolve(ESCALATION_RESULT)),
     ),
   };
 }
@@ -273,5 +281,66 @@ describe('FallbackAnalyzer — all three Analyzer methods share the same policy'
       AnalysisAbortedError,
     );
     expect(fallback.runStage3Chapter).not.toHaveBeenCalled();
+  });
+
+  /* srv-59 Task 9 — runAttributionEscalation follows the same fallback
+     policy as every other Analyzer method. A `null` return (empty/blocked/
+     unparseable reply) is NOT an error — it just comes straight back from
+     the primary without ever consulting the fallback. */
+  it('runAttributionEscalation delegates to the primary when it succeeds; fallback is never invoked', async () => {
+    const primary = makeAnalyzer({});
+    const fallback = makeAnalyzer({});
+    const f = new FallbackAnalyzer(primary, fallback);
+
+    const result = await f.runAttributionEscalation('m', 1, 'resolve these lines', CALL);
+    expect(result).toBe(ESCALATION_RESULT);
+    expect(primary.runAttributionEscalation).toHaveBeenCalledTimes(1);
+    expect(fallback.runAttributionEscalation).not.toHaveBeenCalled();
+  });
+
+  it('runAttributionEscalation returns the primary\'s `null` verbatim without falling back', async () => {
+    const primary = makeAnalyzer({ runAttributionEscalation: () => Promise.resolve(null) });
+    const fallback = makeAnalyzer({});
+    const f = new FallbackAnalyzer(primary, fallback);
+
+    const result = await f.runAttributionEscalation('m', 1, 'resolve these lines', CALL);
+    expect(result).toBeNull();
+    expect(fallback.runAttributionEscalation).not.toHaveBeenCalled();
+  });
+
+  it('runAttributionEscalation follows the same LocalUnreachableError fallback rule', async () => {
+    const primary = makeAnalyzer({
+      runAttributionEscalation: () => Promise.reject(new LocalUnreachableError('down')),
+    });
+    const fallback = makeAnalyzer({});
+    const f = new FallbackAnalyzer(primary, fallback);
+    const result = await f.runAttributionEscalation('m', 1, 'resolve these lines', CALL);
+    expect(result).toBe(ESCALATION_RESULT);
+    expect(primary.runAttributionEscalation).toHaveBeenCalledTimes(1);
+    expect(fallback.runAttributionEscalation).toHaveBeenCalledTimes(1);
+  });
+
+  it('runAttributionEscalation does NOT fall back on a plain Error', async () => {
+    const primary = makeAnalyzer({
+      runAttributionEscalation: () => Promise.reject(new Error('boom')),
+    });
+    const fallback = makeAnalyzer({});
+    const f = new FallbackAnalyzer(primary, fallback);
+    await expect(f.runAttributionEscalation('m', 1, 'resolve these lines', CALL)).rejects.toThrow(
+      /boom/,
+    );
+    expect(fallback.runAttributionEscalation).not.toHaveBeenCalled();
+  });
+
+  it('runAttributionEscalation does NOT fall back on AnalysisAbortedError', async () => {
+    const primary = makeAnalyzer({
+      runAttributionEscalation: () => Promise.reject(new AnalysisAbortedError('client gone')),
+    });
+    const fallback = makeAnalyzer({});
+    const f = new FallbackAnalyzer(primary, fallback);
+    await expect(
+      f.runAttributionEscalation('m', 1, 'resolve these lines', CALL),
+    ).rejects.toBeInstanceOf(AnalysisAbortedError);
+    expect(fallback.runAttributionEscalation).not.toHaveBeenCalled();
   });
 });

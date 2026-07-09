@@ -243,6 +243,56 @@ export interface BookStateJson {
      Additive optional field — `CURRENT_STATE_SCHEMA` does NOT bump
      (plan 27 rename-vs-add policy). */
   prosodyAnnotated?: boolean;
+  /* srv-59 Task 11 — provenance of the analyzer run that produced the
+     current cast/sentences. Written at BOTH analysis-completion persist
+     sites in server/src/routes/analysis.ts (the main whole-book route and
+     the chapter-subset retry route); the subset route REWRITES this block
+     wholesale (fresh `at` + recomputed `report`), since a subset run
+     supersedes whatever provenance the last full run left behind.
+     `report` is present only when the dialogue-structure engine (srv-59)
+     actually ran for at least one chapter this pass (aggregated via
+     `aggregateStructureReports` in analysis.ts) — omitted when the engine
+     was off (or every chapter served from cache) for the whole run.
+     Additive optional field — `CURRENT_STATE_SCHEMA` does NOT bump (plan 27
+     rename-vs-add policy); absent on state.json files written before this
+     landed, and no reader may require it. */
+  analysisProvenance?: {
+    engine: string;
+    model: string;
+    at: string;
+    structureEngineVersion: 1;
+    report?: AnalysisProvenanceReport;
+    /* srv-59 Task 11 (review follow-up) — which kind of run produced this
+       block: `'book'` from the main whole-book route, `'subset'` from a
+       chapter-retry ("Re-analyse") pass that only reprocessed some
+       chapters. Without this, a subset run's report is indistinguishable
+       from a whole-book one even though it covers far fewer chapters.
+       Optional + additive: absent on state.json files written before this
+       landed, and no reader may require it. */
+    scope?: 'book' | 'subset';
+    /** Count of chapters this pass actually reprocessed — 'book': every
+        chapter; 'subset': just the retried ones. Optional/additive, same as
+        `scope`. */
+    chaptersCovered?: number;
+  };
+}
+
+/** Aggregated dialogue-structure engine (srv-59) counters for a completed
+    analysis run — the `report` slice of `BookStateJson.analysisProvenance`.
+    A subset of `EngineReport` (server/src/analyzer/dialogue-structure/types.ts):
+    drops the per-chapter-only `language`/`lumped`/`flagOnly` fields that
+    don't make sense once summed across a whole book. */
+export interface AnalysisProvenanceReport {
+  /* Omitted (not 0) when every aggregated chapter had zero classified
+     sentences (totalWeight === 0) — a real "0% aligned" run and "nothing
+     was classified" are different facts; a 0 here would misrepresent the
+     latter as the former. See aggregateStructureReports in analysis.ts. */
+  alignedPct?: number;
+  confirmed: number;
+  corrected: number;
+  flagged: number;
+  escalated: number;
+  escalationAccepted: number;
 }
 
 /** Resolved chapter audio format for a book — `audioFormat` from

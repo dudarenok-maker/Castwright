@@ -28,16 +28,19 @@ import {
   resolveBookAuthorForManuscript,
   dedupAndPrepare,
   runMainAnalyzerJob,
+  runSubsetAnalyzerJob,
+  aggregateStructureReports,
   type AnalysisJob,
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput, Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
+import type { EngineReport } from '../analyzer/dialogue-structure/types.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
 import { normaliseNameKey } from '../util/safe-id.js';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
-import { clearAnalysisCache } from '../store/analysis-cache.js';
+import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { putManuscript, removeManuscript, getManuscript, type ChapterHint } from '../store/manuscripts.js';
 
 /* W2.6 — Node cross-charge/cross-evict guards: the analyzer's confirmed
@@ -2274,6 +2277,9 @@ describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
       async runStage3Chapter() {
         throw new Error('Phase-0 analyzer does not run instruct-annotation calls');
       },
+      async runAttributionEscalation() {
+        throw new Error('Phase-0 analyzer does not run escalation calls');
+      },
     };
   }
 
@@ -2310,6 +2316,9 @@ describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
       },
       async runStage3Chapter() {
         throw new Error('Phase-1 analyzer does not run instruct-annotation calls');
+      },
+      async runAttributionEscalation() {
+        throw new Error('Phase-1 analyzer does not run escalation calls');
       },
     };
   }
@@ -2450,6 +2459,422 @@ describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
       await runJobWith('gemini', 'gemini');
       expect(detectOllamaDeviceMock).not.toHaveBeenCalled();
       expect(setLastKnownAnalyzerDeviceMock).not.toHaveBeenCalled();
+    },
+    60_000,
+  );
+});
+
+describe('aggregateStructureReports (srv-59 Task 11 — provenance report aggregation)', () => {
+  function makeReport(overrides: Partial<EngineReport>): EngineReport {
+    return {
+      language: 'en',
+      alignedPct: 100,
+      confirmed: 0,
+      corrected: 0,
+      flagged: 0,
+      lumped: 0,
+      escalated: 0,
+      escalationAccepted: 0,
+      flagOnly: false,
+      ...overrides,
+    };
+  }
+
+  it('returns undefined for an empty list (engine off / every chapter served from cache)', () => {
+    expect(aggregateStructureReports([])).toBeUndefined();
+  });
+
+  it('sums confirmed/corrected/flagged/escalated/escalationAccepted across chapters', () => {
+    const result = aggregateStructureReports([
+      makeReport({ confirmed: 2, corrected: 1, flagged: 0, escalated: 0, escalationAccepted: 0 }),
+      makeReport({ confirmed: 1, corrected: 0, flagged: 1, escalated: 1, escalationAccepted: 1 }),
+    ]);
+    expect(result).toEqual({
+      alignedPct: 100,
+      confirmed: 3,
+      corrected: 1,
+      flagged: 1,
+      escalated: 1,
+      escalationAccepted: 1,
+    });
+  });
+
+  it('weights alignedPct by each chapter\'s sentence count (confirmed+corrected+flagged+lumped), not a flat average', () => {
+    /* Chapter A: 1 sentence at 0% aligned. Chapter B: 9 sentences at 100%
+       aligned. A flat average would read 50%; the sentence-count-weighted
+       mean reads 90% — the honest picture given B did 9x A's work. */
+    const chapterA = makeReport({ alignedPct: 0, flagged: 1 });
+    const chapterB = makeReport({ alignedPct: 100, confirmed: 9 });
+    const result = aggregateStructureReports([chapterA, chapterB]);
+    expect(result?.alignedPct).toBe(90);
+  });
+
+  it('omits alignedPct (rather than reporting 0) when every chapter classified zero sentences', () => {
+    // confirmed/corrected/flagged/lumped all 0 -> totalWeight is 0. A 0%
+    // here would misrepresent "nothing was classified" as "0% aligned".
+    const emptyChapter = makeReport({ alignedPct: 0 });
+    const result = aggregateStructureReports([emptyChapter]);
+    expect(result?.alignedPct).toBeUndefined();
+    expect(result).toEqual({
+      confirmed: 0,
+      corrected: 0,
+      flagged: 0,
+      escalated: 0,
+      escalationAccepted: 0,
+    });
+  });
+});
+
+describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persistence (srv-59 Task 11)', () => {
+  /* English tag-anchored dialogue fixture (mirrors the proven shape in
+     parser.test.ts's "en quotes" case: “…,” Name verb.). Paragraph 1 is a
+     tag-anchored speech span (tag-name -> anton). Paragraph 2 is pure
+     narration (no quotes at all). The mock Phase-1 analyzer misattributes
+     the speech line to 'olga' (proven wrong by the "Anton asked" tag) and
+     correctly calls the narration line 'narrator' — same fixture shape
+     analysis.structure-engine.test.ts already exercises for 'ru', here in
+     'en' (the language `resolveBookLanguageForManuscript` actually resolves
+     to for a manuscript with no matching on-disk book — see that function's
+     'en' fallback). Both test chapters reuse this exact body so each
+     produces an identical per-chapter EngineReport, making the aggregated
+     total (2x every counter) trivial to assert without re-deriving the
+     dialogue-structure engine's own arithmetic. */
+  const CHAPTER_BODY = '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
+
+  function stage1Roster(): CharacterOutput[] {
+    return [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+      {
+        id: 'anton',
+        name: 'Anton',
+        role: 'lead',
+        color: '#111111',
+        gender: 'male',
+        evidence: [{ quote: 'Anton asked' }],
+      },
+      {
+        id: 'olga',
+        name: 'Olga',
+        role: 'lead',
+        color: '#222222',
+        gender: 'female',
+        evidence: [{ quote: 'Olga nodded' }],
+      },
+    ];
+  }
+
+  function mockAttributionSentences(chapterId: number): SentenceOutput[] {
+    return [
+      {
+        id: chapterId * 100 + 1,
+        chapterId,
+        characterId: 'olga', // wrong — the tag proves 'anton'
+        confidence: 0.42,
+        text: 'Are you sure this will work',
+      },
+      {
+        id: chapterId * 100 + 2,
+        chapterId,
+        characterId: 'narrator',
+        confidence: 0.33,
+        text: 'Olga nodded and looked away',
+      },
+    ];
+  }
+
+  function buildPhase0Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        return { characters: stage1Roster() };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+    };
+  }
+
+  function buildPhase1Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () =>
+        Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+      async runStage2Chapter(
+        _manuscriptId: string,
+        chapterId: number,
+        _prompt: string,
+        _call: StageCall,
+      ): Promise<Stage2ChapterOutput> {
+        return { sentences: mockAttributionSentences(chapterId) };
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () =>
+        Promise.reject(new Error('no flagged windows — escalation should never be called')),
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function setPhase1Selection(sel: AnalyzerSelection): void {
+    (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = sel;
+  }
+  function clearPhase1Selection(): void {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  }
+
+  afterEach(() => {
+    clearPhase1Selection();
+  });
+
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-provenance-test-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  function seedStateJson(
+    bookDir: string,
+    manuscriptId: string,
+    extra: Record<string, unknown> = {},
+  ): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_provenance_test',
+        manuscriptId,
+        title: 'Provenance Test Book',
+        author: 'Test Author',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [
+          { id: 1, title: 'Chapter One', slug: '01-chapter-one' },
+          { id: 2, title: 'Chapter Two', slug: '02-chapter-two' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        ...extra,
+      }),
+    );
+  }
+
+  function buildStubChapters(): ChapterHint[] {
+    return [
+      { id: 1, title: 'Chapter One', body: CHAPTER_BODY },
+      { id: 2, title: 'Chapter Two', body: CHAPTER_BODY },
+    ];
+  }
+
+  function registerManuscript(manuscriptId: string, bookDir: string): ChapterHint[] {
+    const chapterHints = buildStubChapters();
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: 'Provenance Test Book',
+      wordCount: 100,
+      byteSize: 1000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+      chapterHints,
+      bookDir,
+    });
+    return chapterHints;
+  }
+
+  function readState(bookDir: string): Record<string, unknown> {
+    return JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+  }
+
+  const EXPECTED_REPORT = {
+    alignedPct: 100,
+    confirmed: 2,
+    corrected: 2,
+    flagged: 0,
+    escalated: 0,
+    escalationAccepted: 0,
+  };
+
+  it(
+    'main route: writes analysisProvenance with the aggregated structure-engine report after a full run',
+    async () => {
+      const manuscriptId = `test-provenance-main-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      registerManuscript(manuscriptId, bookDir);
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: true,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        const stateAfter = readState(bookDir);
+        const provenance = stateAfter.analysisProvenance as {
+          engine: string;
+          model: string;
+          at: string;
+          structureEngineVersion: number;
+          report?: unknown;
+          scope?: string;
+          chaptersCovered?: number;
+        };
+        expect(provenance).toBeDefined();
+        expect(provenance.engine).toBe('gemini');
+        expect(provenance.model).toBe('phase1-model');
+        expect(provenance.structureEngineVersion).toBe(1);
+        expect(typeof provenance.at).toBe('string');
+        expect(new Date(provenance.at).toString()).not.toBe('Invalid Date');
+        expect(provenance.report).toEqual(EXPECTED_REPORT);
+        // srv-59 Task 11 (review follow-up) — the main whole-book route
+        // marks its own report distinctly from a subset retry's.
+        expect(provenance.scope).toBe('book');
+        expect(provenance.chaptersCovered).toBe(2);
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+
+  it(
+    "subset retry route: REWRITES analysisProvenance with a fresh `at` + recomputed report, superseding the prior run's",
+    async () => {
+      const manuscriptId = `test-provenance-subset-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      const staleAt = '2020-01-01T00:00:00.000Z';
+      seedStateJson(bookDir, manuscriptId, {
+        analysisProvenance: {
+          engine: 'local',
+          model: 'stale-model',
+          at: staleAt,
+          structureEngineVersion: 1,
+          report: {
+            alignedPct: 50,
+            confirmed: 1,
+            corrected: 0,
+            flagged: 1,
+            escalated: 0,
+            escalationAccepted: 0,
+          },
+        },
+      });
+      const chapterHints = registerManuscript(manuscriptId, bookDir);
+
+      /* Pre-seed cache.stage1 so the subset route takes the "book already
+         fully analysed" branch (stage1Existed === true) instead of the
+         cast-detection-retry branch that defers Phase 1 to the main route
+         (see the comment on `stage1Existed` in runSubsetAnalyzerJob). */
+      const stage1: Stage1Output = {
+        characters: stage1Roster(),
+        chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+      };
+      await saveAnalysisCache(manuscriptId, { chapters: {}, stage1 });
+
+      const selection = buildSelection(buildPhase0Analyzer(), 'phase0-model-subset');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model-subset');
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'subset',
+        subsetChapterIds: chapterHints.map((c) => c.id),
+        bookDir,
+        engine: selection.engine,
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runSubsetAnalyzerJob(
+          job,
+          recordRef as never,
+          selection,
+          phase1Selection,
+          recordRef.chapterHints,
+          false,
+        );
+
+        const stateAfter = readState(bookDir);
+        const provenance = stateAfter.analysisProvenance as {
+          engine: string;
+          model: string;
+          at: string;
+          structureEngineVersion: number;
+          report?: unknown;
+          scope?: string;
+          chaptersCovered?: number;
+        };
+        expect(provenance).toBeDefined();
+        expect(provenance.at).not.toBe(staleAt);
+        expect(new Date(provenance.at).toString()).not.toBe('Invalid Date');
+        expect(provenance.model).toBe('phase1-model-subset');
+        expect(provenance.report).toEqual(EXPECTED_REPORT);
+        // srv-59 Task 11 (review follow-up) — a subset (chapter-retry) run
+        // marks its report distinctly from a whole-book one, since it only
+        // covers the retried chapters (here: both, so scope alone is the
+        // distinguishing assertion vs. the main-route test above).
+        expect(provenance.scope).toBe('subset');
+        expect(provenance.chaptersCovered).toBe(2);
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
     },
     60_000,
   );

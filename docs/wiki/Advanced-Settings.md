@@ -10,9 +10,9 @@ The knobs are grouped into a collapsible, side-nav-indexed accordion:
 LLM sampling parameters, analyzer chunking & truncation, analyzer prompts &
 skills, analyzer models & endpoints, voice engine & device, voice batching &
 throughput, per-sentence QA gates, audio loudness targets, GPU arbitration &
-memory, Gemini rate limits, and LAN access & device tokens — 100 knobs
-across 11 groups in total. High-risk groups (marked with a small warning
-glyph) start collapsed; the rest start open.
+memory, Gemini rate limits, LAN access & device tokens, and dialogue-structure
+attribution — 104 knobs across 12 groups in total. High-risk groups (marked
+with a small warning glyph) start collapsed; the rest start open.
 
 - **Reset all** (top-right) and a per-section **Reset section** button
   (once that section has at least one overridden value) both revert to
@@ -306,5 +306,14 @@ mismatches) — the table's risk column shows each correctly.
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
 | Device authorization lifetime (days) | How long a browser/device authorization stays valid before re-pairing | 30 | integer, min 1 | live | low |
+
+## 12. Dialogue-structure attribution
+
+| Knob | What it does | Default | Range | Apply | Risk |
+|---|---|---|---|---|---|
+| Structure engine | Deterministic dialogue-structure pass that corrects tag-proven attributions and derives honest confidence. Off = pre-engine behaviour. | `true` | boolean | live | medium |
+| Attribution escalation | Second-pass re-query of unresolved dialogue windows: 'local' (default) uses the configured analyzer, 'cloud' the Gemini-API Gemma model, 'off' disables. | `local` | off / local / cloud | live | medium |
+| Escalation windows per chapter | Cap on re-queried conversation windows per chapter. | 120 | integer, min 0 | live | low |
+| Escalation windows per book | Cap on re-queried conversation windows per full-book analysis. | 600 | integer, min 0 | live | low |
 
 Next: [Account & Settings](Account-and-Settings).
