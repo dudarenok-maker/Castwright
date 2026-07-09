@@ -147,16 +147,6 @@ describe('scriptReviewSlice', () => {
     expect(s.selected[key2]).toBe(true);
   });
 
-  it('clearReview removes the book bucket', () => {
-    const store = makeStore();
-    store.dispatch(
-      scriptReviewActions.setReview({ bookId: 'book-a', ops: [op1], unappliable: [] }),
-    );
-    expect(selectReview(store.getState(), 'book-a')).toBeDefined();
-    store.dispatch(scriptReviewActions.clearReview({ bookId: 'book-a' }));
-    expect(selectReview(store.getState(), 'book-a')).toBeUndefined();
-  });
-
   it('unappliable is stored and accessible', () => {
     const store = makeStore();
     const unappliableOp: ReviewOpWithChapter = {
@@ -408,15 +398,6 @@ describe('script-review-slice — hide vs discard', () => {
     expect(state.byBook['b1']?.visible).toBe(true);
   });
 
-  it('removeBucket deletes the bucket entirely', () => {
-    let state = scriptReviewSlice.reducer(
-      undefined,
-      scriptReviewActions.setReview({ bookId: 'b1', ops: [], unappliable: [], manuscriptId: 'ms-1', versionByChapter: { 1: 1 } }),
-    );
-    state = scriptReviewSlice.reducer(state, scriptReviewActions.removeBucket({ bookId: 'b1' }));
-    expect(state.byBook['b1']).toBeUndefined();
-  });
-
   it('resolveOpsLocally removes named ops and deletes the bucket once empty', () => {
     let state = scriptReviewSlice.reducer(
       undefined,
@@ -432,6 +413,37 @@ describe('script-review-slice — hide vs discard', () => {
     expect(state.byBook['b1']?.ops).toHaveLength(1);
     state = scriptReviewSlice.reducer(state, scriptReviewActions.resolveOpsLocally({ bookId: 'b1', opKeys: [opKey(1, 2, 'fix_emotion')] }));
     expect(state.byBook['b1']).toBeUndefined();
+  });
+
+  /* Round-3 review Important Finding 4 — resolveOpsLocally only checked
+     `bucket.ops.length === 0` before deleting the whole bucket, ignoring
+     `bucket.unappliable` — which can still have genuinely-pending findings
+     (e.g. a reattribute whose target is currently invalid) that were never
+     included in appliedOpKeys and are still sitting unresolved in the
+     server ledger too. The bucket must survive until BOTH are empty. */
+  it('resolveOpsLocally does NOT delete the bucket when unappliable findings remain, even once ops empties', () => {
+    const staleOp = makeOp(99, 'reattribute');
+    let state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.setReview({
+        bookId: 'b1',
+        ops: [makeOp(1, 'strip_tag')],
+        unappliable: [{ op: staleOp, reason: 'stale id' }],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 1: 1 },
+      }),
+    );
+    expect(state.byBook['b1']?.ops).toHaveLength(1);
+    expect(state.byBook['b1']?.unappliable).toHaveLength(1);
+
+    // Resolve the ONLY appliable op — ops empties, but the unappliable
+    // finding is still genuinely pending.
+    state = scriptReviewSlice.reducer(state, scriptReviewActions.resolveOpsLocally({ bookId: 'b1', opKeys: [opKey(1, 1, 'strip_tag')] }));
+
+    expect(state.byBook['b1']).toBeDefined();
+    expect(state.byBook['b1']?.ops).toHaveLength(0);
+    expect(state.byBook['b1']?.unappliable).toHaveLength(1);
+    expect(state.byBook['b1']?.unappliable[0].op.id).toBe(99);
   });
 
   it('selectVisibleReview returns undefined when the bucket is hidden, selectActiveReview still returns it', () => {

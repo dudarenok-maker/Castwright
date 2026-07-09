@@ -10,10 +10,11 @@ vi.mock('../lib/api', () => ({
   },
 }));
 
+import { configureStore } from '@reduxjs/toolkit';
 import { api } from '../lib/api';
 import type { ReviewScriptOpts } from '../lib/api';
 import { runReviewScript, hydrateScriptReview, attachToRunningReview, discardReview } from './script-review-thunk';
-import { scriptReviewActions } from './script-review-slice';
+import { scriptReviewActions, scriptReviewSlice } from './script-review-slice';
 
 describe('runReviewScript', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -194,6 +195,75 @@ describe('hydrateScriptReview', () => {
     expect(opsById.get(1)).toBe(1); // chapter-1 op keeps chapter 1
     expect(opsById.get(2)).toBe(2); // chapter-2 op keeps chapter 2 (not hoisted to a shared/last chapterId)
     expect(opsById.get(3)).toBe(2);
+  });
+
+  /* Round-3 review Critical Finding 2 — GET /state used to return EITHER a
+     running job's replay OR the ledger entries, never both, so a chapter
+     outside a currently-running job's scope was invisible to a hydrating
+     client for the job's entire duration. The fix has the server always
+     include ledger `entries` alongside a `kind:'running'` response;
+     hydrateScriptReview must process BOTH: hydrateBucket for the ledger
+     entries (any chapter NOT covered by the running job) followed by
+     attachToRunningReview's own setReview for the running job's chapter —
+     and the two must MERGE into one bucket with both chapters' data, not
+     clobber each other. Uses a real scriptReviewSlice-backed store (not a
+     bare dispatch spy) so the merge is verified on actual reducer state,
+     not just on which actions fired. */
+  it('when kind is "running" with non-empty entries, hydrates the ledger entries AND attaches to the running job — the final bucket carries BOTH chapters\' data', async () => {
+    const store = configureStore({ reducer: { scriptReview: scriptReviewSlice.reducer } });
+    const fakeStore = makeFakeStore({
+      manuscriptId: 'ms-1',
+      characters: [{ id: 'c1' }],
+      sentences: [
+        { id: 1, chapterId: 3, text: 'Chapter three line.', characterId: 'c1' },
+        { id: 2, chapterId: 7, text: 'Chapter seven line.', characterId: 'c1' },
+      ],
+    });
+    vi.mocked(api.getScriptReviewState).mockResolvedValue({
+      kind: 'running',
+      chapterId: 7,
+      replay: {
+        opsEvents: [],
+        chapterFailedEvents: [],
+        checkpointEvents: [],
+        lastPhase: null,
+        result: null,
+        errorEvent: null,
+      },
+      // Chapter 3's finding is already persisted, outside the running
+      // chapter-7 job's own scope.
+      entries: {
+        '3': {
+          manuscriptId: 'ms-1',
+          version: 2,
+          ops: [{ id: 1, op: 'strip_tag', newText: 'Chapter three fixed', rationale: 'r' }],
+          selected: {},
+          completedAt: '2026-01-01',
+        },
+      },
+    });
+    // attachToRunningReview's join replays the running job's own chapter's
+    // ops via api.reviewScript's onOps/onCheckpoint callbacks.
+    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      opts.onCheckpoint?.({ chapterId: 7, version: 1 });
+      opts.onOps?.({ chapterId: 7, ops: [{ id: 2, op: 'strip_tag', newText: 'Chapter seven fixed', rationale: 'r' }] });
+      return { reviewedChapters: 1, totalOps: 1 } as never;
+    });
+
+    await hydrateScriptReview('book-1', {
+      dispatch: store.dispatch,
+      getState: fakeStore.getState as never,
+      subscribe: fakeStore.subscribe,
+    });
+
+    const bucket = store.getState().scriptReview.byBook['book-1'];
+    expect(bucket).toBeDefined();
+    const chapterIds = new Set(bucket!.ops.map((o) => o.chapterId));
+    // Both chapter 3 (from the ledger hydrateBucket) and chapter 7 (from the
+    // running job's own setReview) must be present in the SAME bucket.
+    expect(chapterIds.has(3)).toBe(true);
+    expect(chapterIds.has(7)).toBe(true);
+    expect(bucket!.versionByChapter).toEqual({ 3: 2, 7: 1 });
   });
 });
 

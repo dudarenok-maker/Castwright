@@ -150,9 +150,18 @@ export function ManuscriptView({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const hasActiveReview = useAppSelector((s) => !!(bookId && (s as any).scriptReview && selectVisibleReview(s as any, bookId)));
   const store = useStore<RootState>();
+  /* Finding 1 (PR review round 3): hydration is fire-and-forget, so a fast
+     click on Review Script before it resolves would see an undefined
+     bucket, read 0 unresolved findings, and skip the confirm gate — silently
+     overwriting a chapter's still-unresolved ledger entry. Gate both the
+     buttons and handleReviewScript's early-return on this flag. */
+  const [scriptReviewHydrating, setScriptReviewHydrating] = useState(false);
   useEffect(() => {
     if (!bookId) return;
-    void hydrateScriptReview(bookId, { dispatch, getState: store.getState, subscribe: store.subscribe });
+    setScriptReviewHydrating(true);
+    void hydrateScriptReview(bookId, { dispatch, getState: store.getState, subscribe: store.subscribe }).finally(() =>
+      setScriptReviewHydrating(false),
+    );
     // Intentionally no cleanup/abort: hydration is a one-shot reconciliation
     // per mount, and the sticky job registry (server Task 2) makes a
     // duplicate in-flight POST from attachToRunningReview safe to abandon.
@@ -786,7 +795,7 @@ export function ManuscriptView({
   const reviewableChapterCount = chapters.filter((c) => !c.excluded).length;
   const rpdWarning = rpdWarningFor(reviewableChapterCount, reviewModel);
 
-  async function startNewReview(wholeBook: boolean) {
+  async function startNewReview(wholeBook: boolean, explicitChapterId?: number) {
     if (!bookId) return;
     setReviewLoading(true);
     setReviewMenuOpen(false);
@@ -794,7 +803,7 @@ export function ManuscriptView({
       await runReviewScript(bookId, {
         dispatch,
         wholeBook,
-        chapterId: wholeBook ? undefined : currentChapterId ?? undefined,
+        chapterId: wholeBook ? undefined : explicitChapterId ?? currentChapterId ?? undefined,
         model: reviewModel,
         /* sentencesRef.current gives the latest Redux value even after the
            await, without depending on the stale-closure capture. */
@@ -815,7 +824,7 @@ export function ManuscriptView({
   }
 
   async function handleReviewScript(wholeBook: boolean) {
-    if (!bookId || reviewLoading) return;
+    if (!bookId || reviewLoading || scriptReviewHydrating) return;
     if (!wholeBook && currentChapterId == null) return;
 
     // Case 1 (design spec §6.4): a job is already running for this book,
@@ -846,7 +855,7 @@ export function ManuscriptView({
     setConfirmGate(null);
     try {
       await discardReview(bookId, chapterIds, { dispatch });
-      await startNewReview(wholeBook);
+      await startNewReview(wholeBook, chapterIds[0]);
     } catch (err) {
       dispatch(
         notificationsActions.pushToast({
@@ -975,7 +984,7 @@ export function ManuscriptView({
                 <button
                   data-testid="review-script-chapter"
                   onClick={() => void handleReviewScript(false)}
-                  disabled={reviewLoading || !bookId || analysisBusy}
+                  disabled={reviewLoading || !bookId || analysisBusy || scriptReviewHydrating}
                   className="inline-flex items-center gap-2 px-4 min-h-[44px] sm:min-h-0 py-2 rounded-l-full border border-ink/20 bg-white text-ink text-sm font-semibold hover:bg-ink/5 disabled:opacity-50"
                 >
                   {reviewLoading
@@ -987,7 +996,7 @@ export function ManuscriptView({
                 <button
                   data-testid="review-script-menu-toggle"
                   onClick={() => setReviewMenuOpen((o) => !o)}
-                  disabled={reviewLoading || !bookId || analysisBusy}
+                  disabled={reviewLoading || !bookId || analysisBusy || scriptReviewHydrating}
                   aria-label="Script review options"
                   aria-expanded={reviewMenuOpen}
                   className="inline-flex items-center justify-center px-2 min-h-[44px] sm:min-h-0 py-2 rounded-r-full border border-l-0 border-ink/20 bg-white text-ink/60 hover:bg-ink/5 hover:text-ink disabled:opacity-50"
@@ -1002,7 +1011,7 @@ export function ManuscriptView({
                     <button
                       data-testid="review-script-wholebook"
                       onClick={() => void handleReviewScript(true)}
-                      disabled={reviewLoading || !bookId || analysisBusy}
+                      disabled={reviewLoading || !bookId || analysisBusy || scriptReviewHydrating}
                       className="w-full text-left px-3 min-h-[44px] sm:min-h-0 py-2 rounded-xl hover:bg-ink/5 text-sm font-medium text-ink disabled:opacity-50"
                     >
                       Review whole book

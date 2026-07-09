@@ -398,6 +398,19 @@ scriptReviewRouter.post(
       });
 
       void runScriptReviewJob(registeredJob, { located, manuscriptId, allChapterIds, excludedChapterIds, chapterIds, byChapter, roster, model: requestedModel })
+        .catch((err) => {
+          // Finding 5 (PR review round 3): a synchronous throw inside
+          // runScriptReviewJob (e.g. selectAnalyzerForPhase throwing on a
+          // misconfigured engine) previously became an unhandled rejection
+          // — no error/SSE event was ever sent and res.end() was never
+          // called, so the client's request hung forever.
+          broadcast(registeredJob, {
+            kind: 'error',
+            code: 'internal_error',
+            message: err instanceof Error ? err.message : 'Script review failed to start.',
+          });
+          for (const sub of registeredJob.subscribers) sub.res.end();
+        })
         .finally(() => {
           if (targetMap.get(registeredKey) === registeredJob) targetMap.delete(registeredKey);
         });
@@ -417,18 +430,21 @@ scriptReviewRouter.get(
       res.status(404).json({ error: 'Book not found.' });
       return;
     }
+    // Finding 2 (PR review round 3): a job running for one chapter used to
+    // short-circuit before the ledger read ever ran, hiding every OTHER
+    // chapter's already-persisted, unresolved findings from a hydrating
+    // client for the running job's entire duration (subsetScriptReviewJobByChapter
+    // allows two different chapters' single-chapter jobs to run concurrently
+    // for the same book). Read the ledger unconditionally so it's always
+    // included alongside a running job's own replay.
+    const manuscriptId = located.state.manuscriptId;
+    const entries = manuscriptId ? (await readLedger(located.bookDir, manuscriptId)).entries : {};
     const running = mainScriptReviewJobByBook.get(bookId) ?? findSubsetJobForBook(bookId);
     if (running) {
-      res.json({ kind: 'running', chapterId: running.chapterId, replay: running.replay });
+      res.json({ kind: 'running', chapterId: running.chapterId, replay: running.replay, entries });
       return;
     }
-    const manuscriptId = located.state.manuscriptId;
-    if (!manuscriptId) {
-      res.json({ kind: 'ledger', entries: {} });
-      return;
-    }
-    const ledger = await readLedger(located.bookDir, manuscriptId);
-    res.json({ kind: 'ledger', entries: ledger.entries });
+    res.json({ kind: 'ledger', entries });
   },
 );
 

@@ -10,10 +10,10 @@
    Also covers the chapter-filter affordance added so a 500+ chapter book
    does not push the cast list off the bottom of the sidebar. */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { changeLogSlice } from '../store/change-log-slice';
@@ -1927,6 +1927,98 @@ describe('ManuscriptView — unresolved-findings badge', () => {
   });
 });
 
+/* Round-3 review Critical Finding 1 — the mount-time hydration effect was
+   fire-and-forget with no loading flag, so a fast click on Review Script
+   before hydrateScriptReview's GET /state fetch resolved would see an
+   undefined scriptReviewBucket, read 0 unresolved findings, and skip the
+   confirm gate entirely — silently overwriting a chapter's still-unresolved
+   persisted findings. This pins the fix: the button must stay disabled for
+   the lifetime of the mount-time hydration fetch. */
+describe('ManuscriptView — mount hydration race (fs-58 PR review round 3, Finding 1)', () => {
+  const hydrationChapter: Chapter = {
+    id: 1,
+    title: 'Chapter One',
+    duration: '10:00',
+    state: 'done',
+    progress: 1,
+    characters: {},
+  };
+
+  beforeEach(() => {
+    getScriptReviewState.mockReset();
+  });
+
+  afterEach(() => {
+    // Restore the file-wide default (a resolved empty ledger) so later
+    // describe blocks' mount-time hydration doesn't hang forever on the
+    // never-resolving promise this block installs.
+    getScriptReviewState.mockReset().mockResolvedValue({ kind: 'ledger', entries: {} });
+  });
+
+  function renderHydrationView() {
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'bk-hydrate',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+      },
+    });
+    return render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[hydrationChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[]}
+        />
+      </Provider>,
+    );
+  }
+
+  it('disables the Review Script button while the mount-time hydration fetch is pending, and re-enables it once resolved', async () => {
+    let resolveHydration!: (value: { kind: 'ledger'; entries: Record<string, never> }) => void;
+    getScriptReviewState.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveHydration = resolve;
+        }),
+    );
+
+    renderHydrationView();
+
+    // Still pending — the button must be disabled, closing the race a fast
+    // click would otherwise exploit.
+    expect(screen.getByTestId('review-script-chapter')).toBeDisabled();
+    expect(screen.getByTestId('review-script-menu-toggle')).toBeDisabled();
+
+    // Resolve the hydration fetch.
+    await act(async () => {
+      resolveHydration({ kind: 'ledger', entries: {} });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('review-script-chapter')).not.toBeDisabled();
+    });
+    expect(screen.getByTestId('review-script-menu-toggle')).not.toBeDisabled();
+  });
+});
+
 describe('ManuscriptView — re-run confirm gate (fs-58 Task 11)', () => {
   const gateChapter: Chapter = {
     id: 1,
@@ -2123,6 +2215,95 @@ describe('ManuscriptView — re-run confirm gate (fs-58 Task 11)', () => {
     await waitFor(() => {
       expect(reviewScript).toHaveBeenCalled();
     });
+  });
+
+  /* Round-3 review Important Finding 3 — "Discard and start new" used the
+     LIVE `currentChapterId` to pick the restart target, not the chapter the
+     confirm gate actually froze. Round 2 only fixed the dialog's DISPLAY
+     text (confirmGate.chapterIds[0]); this pins the actual restart action:
+     if the user navigates to a different chapter while the dialog is still
+     open (browser Back/Forward isn't blocked by the modal), the new review
+     must still target the FROZEN chapter, not whatever is live when the
+     button is clicked. */
+  it('"Discard and start new" restarts against the frozen gate chapter, not the live current chapter', async () => {
+    const user = userEvent.setup();
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+      preloadedState: {
+        scriptReview: {
+          byBook: {
+            'bk-gate': {
+              ops: [{ id: 1, op: 'strip_tag', chapterId: 1, rationale: 'r' }],
+              unappliable: [],
+              selected: {},
+              manuscriptId: 'ms-1',
+              versionByChapter: { 1: 1 },
+              visible: false,
+            },
+          },
+          activeStreams: {},
+        } as never,
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'bk-gate',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+      },
+    });
+    const { rerender } = render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[gateChapter, otherGateChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[]}
+        />
+      </Provider>,
+    );
+
+    // Opens the gate for chapter 1 — confirmGate.chapterIds freezes [1].
+    await user.click(screen.getByTestId('review-script-chapter'));
+    expect(screen.getByTestId('review-script-confirm-gate')).toHaveTextContent('chapter 1');
+
+    // The user navigates to chapter 2 while the dialog is still open (the
+    // live `currentChapterId` prop changes, standing in for browser
+    // Back/Forward, which the modal's CSS backdrop doesn't intercept).
+    rerender(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[gateChapter, otherGateChapter]}
+          currentChapterId={2}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[]}
+        />
+      </Provider>,
+    );
+
+    await user.click(screen.getByTestId('review-script-confirm-discard'));
+
+    await waitFor(() => {
+      expect(discardScriptReview).toHaveBeenCalledWith('bk-gate', [1]);
+    });
+    await waitFor(() => {
+      expect(reviewScript).toHaveBeenCalled();
+    });
+    // The restart must target the FROZEN chapter (1), not the live chapter
+    // (2) that became current while the dialog was still open.
+    const [, reviewOpts] = reviewScript.mock.calls[0] as [string, { chapterId?: number }];
+    expect(reviewOpts.chapterId).toBe(1);
   });
 
   /* PR-gate finding 2 — a failed discardScriptReview must surface an error

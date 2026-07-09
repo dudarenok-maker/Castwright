@@ -290,6 +290,27 @@ describe('POST /api/books/:bookId/script-review', () => {
     expect(events.some((e) => e.kind === 'result')).toBe(false);
   });
 
+  /* Round-3 review Important Finding 5 — the detached job launch
+     (`void runScriptReviewJob(...).finally(...)`) had no `.catch`, so a
+     SYNCHRONOUS throw inside runScriptReviewJob (e.g. selectAnalyzerForPhase
+     throwing on a misconfigured engine, BEFORE the analyzer is ever called)
+     became an unhandled promise rejection: no error/SSE event was ever sent
+     and res.end() was never called, hanging the client's request forever.
+     The fix broadcasts a kind:'error' event and ends every subscriber's
+     response. */
+  it('when the job runner throws synchronously (e.g. a misconfigured analyzer engine), the SSE client receives a kind:"error" event instead of hanging', async () => {
+    writeBook(SENTENCES);
+    selectAnalyzerForPhaseMock.mockImplementationOnce(() => {
+      throw new Error('misconfigured engine: missing GEMINI_API_KEY');
+    });
+
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.kind === 'error' && e.code === 'internal_error')).toBe(true);
+    expect(runReview).not.toHaveBeenCalled();
+  });
+
   it('a single chapter failure does not abort the rest of the pass', async () => {
     writeBook(SENTENCES);
     runReview.mockImplementation((_m, chapterId): Promise<ScriptReviewOutput> => {
@@ -1003,6 +1024,46 @@ describe('GET /:bookId/script-review/state', () => {
     writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
     const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
     expect(res.body).toEqual({ kind: 'ledger', entries: {} });
+  });
+
+  /* Round-3 review Critical Finding 2 — subsetScriptReviewJobByChapter allows
+     two DIFFERENT chapters' single-chapter jobs to run concurrently for the
+     same book. The `running` branch used to short-circuit before the ledger
+     read ever ran, so a job running for chapter 7 completely hid chapter 3's
+     already-persisted, unresolved ledger entry from any client hydrating
+     while chapter 7's job was in flight. The fix reads the ledger
+     unconditionally and includes it alongside a running job's own replay. */
+  it('includes ledger entries for OTHER chapters alongside kind:"running" when a job is running for a different chapter', async () => {
+    const { upsertChapterEntry } = await import('../workspace/script-review-ledger.js');
+    writeBook([
+      { id: 1, chapterId: 3, characterId: 'narrator', text: 'Chapter three line.' },
+      { id: 2, chapterId: 7, characterId: 'narrator', text: 'Chapter seven line.' },
+    ]);
+    // Chapter 3 already has a persisted, unresolved finding from an earlier run.
+    await upsertChapterEntry(bookDir(), bookId, {
+      chapterId: 3,
+      manuscriptId,
+      ops: [{ id: 1, op: 'strip_tag', newText: 'Chapter three line', rationale: 'r' }],
+    });
+
+    let resolveReview: ((v: { ops: unknown[] }) => void) | undefined;
+    runReview.mockImplementation(() => new Promise((resolve) => { resolveReview = resolve; }));
+
+    // Start a job for chapter 7 — a DIFFERENT chapter than the one with the
+    // persisted ledger entry.
+    const { done } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 7 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(res.body.kind).toBe('running');
+    expect(res.body.chapterId).toBe(7);
+    // Chapter 3's persisted finding must still be visible, not hidden by
+    // chapter 7's in-flight job.
+    expect(res.body.entries['3']).toBeDefined();
+    expect(res.body.entries['3'].ops).toHaveLength(1);
+
+    resolveReview?.({ ops: [] });
+    await done;
   });
 });
 

@@ -274,6 +274,43 @@ export async function hydrateScriptReview(
 ): Promise<void> {
   const { dispatch, getState, subscribe } = opts;
   const state = await api.getScriptReviewState(bookId);
+
+  // Finding 2 (PR review round 3): hydrate whatever is currently persisted
+  // in the ledger FIRST, even when a job is also running — otherwise
+  // chapters outside the running job's own scope would be invisible to the
+  // client for the job's entire duration (this let a user start a fresh
+  // review for a chapter whose findings were still sitting unresolved
+  // server-side, silently overwriting them). setReview's own per-chapter
+  // merge (see the earlier whole-branch-review fix) means the running
+  // job's eventual setReview dispatch below layers cleanly on top of this
+  // without disturbing it.
+  const chapterEntries = Object.entries(state.entries);
+  if (chapterEntries.length > 0) {
+    const { sentences, characterIds, manuscriptId } = await waitForManuscriptAndCast(getState, subscribe);
+
+    const allOps: ReviewOpWithChapter[] = [];
+    const versionByChapter: Record<number, number> = {};
+    const persistedSelected: Record<string, boolean> = {};
+    for (const [chapterKey, entry] of chapterEntries) {
+      const chapterId = Number(chapterKey);
+      versionByChapter[chapterId] = entry.version;
+      for (const op of entry.ops as ReviewOp[]) allOps.push({ ...op, chapterId });
+      Object.assign(persistedSelected, entry.selected);
+    }
+
+    const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
+      appliable: ReviewOpWithChapter[];
+      unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
+    };
+    const selected: Record<string, boolean> = {};
+    for (const o of appliable) {
+      const key = opKey(o.chapterId, o.id, o.op);
+      selected[key] = key in persistedSelected ? persistedSelected[key] : !DEFAULT_OFF.has(o.op);
+    }
+
+    dispatch(scriptReviewActions.hydrateBucket({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter, selected }));
+  }
+
   if (state.kind === 'running') {
     const { sentences, characterIds, manuscriptId } = await waitForManuscriptAndCast(getState, subscribe);
     // state.replay is `unknown` on the wire DTO (api.ts's ScriptReviewStateDTO)
@@ -283,32 +320,5 @@ export async function hydrateScriptReview(
     // satisfies this narrower shape; the cast just recovers that at the
     // type level since the DTO itself only guarantees `unknown`.
     await attachToRunningReview(bookId, state as RunningReviewState, { dispatch, sentences, characterIds, manuscriptId });
-    return;
   }
-  const chapterEntries = Object.entries(state.entries);
-  if (chapterEntries.length === 0) return;
-
-  const { sentences, characterIds, manuscriptId } = await waitForManuscriptAndCast(getState, subscribe);
-
-  const allOps: ReviewOpWithChapter[] = [];
-  const versionByChapter: Record<number, number> = {};
-  const persistedSelected: Record<string, boolean> = {};
-  for (const [chapterKey, entry] of chapterEntries) {
-    const chapterId = Number(chapterKey);
-    versionByChapter[chapterId] = entry.version;
-    for (const op of entry.ops as ReviewOp[]) allOps.push({ ...op, chapterId });
-    Object.assign(persistedSelected, entry.selected);
-  }
-
-  const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
-    appliable: ReviewOpWithChapter[];
-    unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
-  };
-  const selected: Record<string, boolean> = {};
-  for (const o of appliable) {
-    const key = opKey(o.chapterId, o.id, o.op);
-    selected[key] = key in persistedSelected ? persistedSelected[key] : !DEFAULT_OFF.has(o.op);
-  }
-
-  dispatch(scriptReviewActions.hydrateBucket({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter, selected }));
 }

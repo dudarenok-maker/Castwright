@@ -3361,7 +3361,7 @@ export interface LedgerEntryDTO {
   completedAt: string;
 }
 export type ScriptReviewStateDTO =
-  | { kind: 'running'; chapterId?: number; replay: unknown }
+  | { kind: 'running'; chapterId?: number; replay: unknown; entries: Record<string, LedgerEntryDTO> }
   | { kind: 'ledger'; entries: Record<string, LedgerEntryDTO> };
 
 async function realGetScriptReviewState(bookId: string): Promise<ScriptReviewStateDTO> {
@@ -3407,7 +3407,7 @@ async function realPatchScriptReviewSelection(
 
 export async function mockGetScriptReviewState(bookId: string): Promise<ScriptReviewStateDTO> {
   const state = readMockScriptReviewState(bookId);
-  if (state.running) return { kind: 'running', replay: { lastPhase: state.running.lastPhase } };
+  if (state.running) return { kind: 'running', replay: { lastPhase: state.running.lastPhase }, entries: state.entries };
   return { kind: 'ledger', entries: state.entries };
 }
 async function mockDiscardScriptReview(bookId: string, chapterIds: number[]): Promise<void> {

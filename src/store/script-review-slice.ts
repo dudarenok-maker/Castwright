@@ -185,11 +185,6 @@ export const scriptReviewSlice = createSlice({
       }
     },
 
-    /** Remove one book's bucket entirely (e.g. on modal close / dismiss). */
-    clearReview: (s, a: PayloadAction<{ bookId: string }>) => {
-      delete s.byBook[a.payload.bookId];
-    },
-
     /** Hide the modal without touching any data — the X button / backdrop
         click (design spec §6.2). */
     hideReview: (s, a: PayloadAction<{ bookId: string }>) => {
@@ -201,13 +196,6 @@ export const scriptReviewSlice = createSlice({
       const bucket = s.byBook[a.payload.bookId];
       if (bucket) bucket.visible = true;
     },
-    /** Delete a book's bucket entirely — the same behavior as clearReview,
-        under the name Task 12's discardReview thunk will call after a
-        successful server discard. clearReview itself is removed in Task 12
-        once every call site has migrated to hideReview/removeBucket. */
-    removeBucket: (s, a: PayloadAction<{ bookId: string }>) => {
-      delete s.byBook[a.payload.bookId];
-    },
     /** Remove specific applied ops (by opKey) from a book's bucket, deleting
         the whole bucket once none remain — the client-side mirror of the
         server's /resolve (Task 5), applied optimistically once the server
@@ -218,7 +206,12 @@ export const scriptReviewSlice = createSlice({
       const removed = new Set(a.payload.opKeys);
       bucket.ops = bucket.ops.filter((o) => !removed.has(opKey(o.chapterId, o.id, o.op)));
       for (const key of a.payload.opKeys) delete bucket.selected[key];
-      if (bucket.ops.length === 0) delete s.byBook[a.payload.bookId];
+      // Finding 4 (PR review round 3): unappliable findings (e.g. a
+      // reattribute whose target is currently invalid) can still be
+      // genuinely pending even once ops empties — only delete the bucket
+      // once BOTH are empty, or a still-unresolved-server-side finding
+      // becomes silently invisible client-side.
+      if (bucket.ops.length === 0 && bucket.unappliable.length === 0) delete s.byBook[a.payload.bookId];
     },
 
     /** Remove all ops/unappliable/selected/versionByChapter entries
