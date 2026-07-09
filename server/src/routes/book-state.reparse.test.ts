@@ -549,10 +549,48 @@ describe('GET handler — tolerates state.json without analysisProvenance (srv-5
      case in this file already exercises GET/POST against that same
      provenance-less state.json without incident; this test just names the
      contract explicitly so a future reader that starts requiring the field
-     fails loudly here instead of silently. */
-  it('GET /:bookId/state succeeds and omits analysisProvenance when state.json predates it', async () => {
+     fails loudly here instead of silently.
+
+     The route nests the whole persisted state under `state` in the response
+     body (`res.json({ state: stateView, cast, manuscript, ... })` in
+     book-state.ts) — so analysisProvenance, when present, surfaces at
+     `res.body.state.analysisProvenance`, never at the top level. The
+     positive case below proves the route actually surfaces the field at
+     that nested path (so the negative case's "undefined" means "this
+     state.json has no block", not "the route never returns it at all");
+     the negative case then proves an older state.json missing the block
+     loads fine and the field reads back as undefined at that same path. */
+  it('GET /:bookId/state surfaces analysisProvenance at res.body.state when state.json has it', async () => {
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const cur = JSON.parse(readFileSync(statePath, 'utf8'));
+    cur.analysisProvenance = {
+      engine: 'ollama',
+      model: 'qwen2.5:7b',
+      at: '2026-07-01T00:00:00.000Z',
+      structureEngineVersion: 1,
+      report: {
+        alignedPct: 0.92,
+        confirmed: 40,
+        corrected: 3,
+        flagged: 1,
+        escalated: 1,
+        escalationAccepted: 1,
+      },
+    };
+    writeFileSync(statePath, JSON.stringify(cur));
+
     const res = await request(app).get(`/api/books/${bookId}/state`);
     expect(res.status).toBe(200);
-    expect(res.body.analysisProvenance).toBeUndefined();
+    expect(res.body.state.analysisProvenance).toBeDefined();
+    expect(res.body.state.analysisProvenance.model).toBe('qwen2.5:7b');
+    expect(res.body.state.analysisProvenance.structureEngineVersion).toBe(1);
+  });
+
+  it('GET /:bookId/state succeeds and omits analysisProvenance when state.json predates it', async () => {
+    // The default beforeEach state.json has no analysisProvenance block —
+    // simulating a legacy book directory written before srv-59 Task 11.
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.state.analysisProvenance).toBeUndefined();
   });
 });
