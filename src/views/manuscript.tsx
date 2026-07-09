@@ -43,7 +43,7 @@ import { PromoteFirstSentenceButton } from '../components/promote-first-sentence
 import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-bar';
 import { ScriptReviewDiff } from '../components/script-review-diff';
 import { api } from '../lib/api';
-import { selectActiveReview, unresolvedCountForChapters, scriptReviewActions } from '../store/script-review-slice';
+import { selectVisibleReview, unresolvedCountForChapters, scriptReviewActions } from '../store/script-review-slice';
 import { selectAnalysisBusyForBook } from '../store/analysis-substage-selectors';
 import { formatSubstageDetail } from '../lib/substage-progress-text';
 import { notificationsActions } from '../store/notifications-slice';
@@ -148,7 +148,7 @@ export function ManuscriptView({
      opens this instead of immediately starting a fresh run. */
   const [confirmGate, setConfirmGate] = useState<{ wholeBook: boolean; chapterIds: number[]; count: number } | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const hasActiveReview = useAppSelector((s) => !!(bookId && (s as any).scriptReview && selectActiveReview(s as any, bookId)));
+  const hasActiveReview = useAppSelector((s) => !!(bookId && (s as any).scriptReview && selectVisibleReview(s as any, bookId)));
   const store = useStore<RootState>();
   useEffect(() => {
     if (!bookId) return;

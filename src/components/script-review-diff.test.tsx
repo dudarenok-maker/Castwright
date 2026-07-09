@@ -152,7 +152,11 @@ describe('fs-58 — ScriptReviewDiff', () => {
     expect(events[0]?.type).toBe('boundary_move');
   });
 
-  it('dismisses all without applying on Dismiss all', () => {
+  /* fs-58 persistence Task 12 — this is now a TWO-step flow: "Dismiss all"
+     opens a confirm prompt (no discard yet); the discard only fires once the
+     operator explicitly confirms it. Nothing is applied either way. */
+  it('dismisses all without applying, but only after confirming Dismiss all', async () => {
+    const discardSpy = vi.spyOn(api, 'discardScriptReview').mockResolvedValue(undefined);
     const store = makeStore();
     render(
       <Provider store={store}>
@@ -162,16 +166,107 @@ describe('fs-58 — ScriptReviewDiff', () => {
 
     fireEvent.click(screen.getByTestId('dismiss-button'));
 
-    // clearReview fired → no bucket
-    expect(store.getState().scriptReview.byBook['book-A']).toBeUndefined();
+    // Confirm prompt shown; nothing discarded yet.
+    expect(screen.getByTestId('dismiss-confirm')).toBeInTheDocument();
+    expect(discardSpy).not.toHaveBeenCalled();
+    expect(store.getState().scriptReview.byBook['book-A']).toBeDefined();
+
+    fireEvent.click(screen.getByTestId('dismiss-confirm-yes'));
+
+    await waitFor(() => expect(discardSpy).toHaveBeenCalledWith('book-A', [1]));
+    await waitFor(() =>
+      expect(store.getState().scriptReview.byBook['book-A']).toBeUndefined(),
+    );
 
     // No sentence changes applied
     const sentences = store.getState().manuscript.sentences;
     const sent1 = sentences.find((s) => s.chapterId === 1 && s.id === 1);
     expect(sent1?.text).toBe('<em>Hello world</em>');
+
+    discardSpy.mockRestore();
   });
 
-  it('close button dispatches clearReview', () => {
+  it('Cancel on the Dismiss-all confirm prompt keeps the bucket and never discards', () => {
+    const discardSpy = vi.spyOn(api, 'discardScriptReview').mockResolvedValue(undefined);
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('dismiss-button'));
+    fireEvent.click(screen.getByTestId('dismiss-confirm-cancel'));
+
+    expect(screen.queryByTestId('dismiss-confirm')).toBeNull();
+    expect(discardSpy).not.toHaveBeenCalled();
+    expect(store.getState().scriptReview.byBook['book-A']).toBeDefined();
+
+    discardSpy.mockRestore();
+  });
+
+  /* confirmDismissAll must derive chapterIds from the CURRENT ops array
+     (dedup'd), not a stale or hardcoded list — cover a bucket spanning
+     multiple chapters, including a repeated chapterId, to pin the dedupe. */
+  it('confirming Dismiss all discards every chapter present in the bucket\'s ops, deduped', async () => {
+    const discardSpy = vi.spyOn(api, 'discardScriptReview').mockResolvedValue(undefined);
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        cast: castSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'book-A',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+        manuscript: { ...manuscriptSlice.getInitialState() },
+      },
+    });
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: 'book-A',
+        ops: [
+          { id: 1, op: 'strip_tag', newText: 'x', rationale: 'r', chapterId: 1 },
+          { id: 2, op: 'fix_emotion', emotion: 'angry', rationale: 'r', chapterId: 3 },
+          // Same chapter as the first op — must not produce a duplicate entry.
+          { id: 3, op: 'fix_emotion', emotion: 'sad', rationale: 'r', chapterId: 1 },
+          { id: 4, op: 'flag_nonstory', rationale: 'r', chapterId: 2 },
+        ],
+        unappliable: [],
+      }),
+    );
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('dismiss-button'));
+    fireEvent.click(screen.getByTestId('dismiss-confirm-yes'));
+
+    await waitFor(() => expect(discardSpy).toHaveBeenCalledTimes(1));
+    const [calledBookId, calledChapterIds] = discardSpy.mock.calls[0];
+    expect(calledBookId).toBe('book-A');
+    expect([...calledChapterIds].sort()).toEqual([1, 2, 3]);
+
+    discardSpy.mockRestore();
+  });
+
+  /* This is the regression test for the reported data-loss bug: closing the
+     modal (X button or backdrop) must never discard the findings the user
+     hasn't acted on yet. */
+  it('the X button dispatches hideReview, not a discard', () => {
+    const discardSpy = vi.spyOn(api, 'discardScriptReview').mockResolvedValue(undefined);
     const store = makeStore();
     render(
       <Provider store={store}>
@@ -180,7 +275,37 @@ describe('fs-58 — ScriptReviewDiff', () => {
     );
 
     fireEvent.click(screen.getByTestId('close-button'));
-    expect(store.getState().scriptReview.byBook['book-A']).toBeUndefined();
+
+    // Bucket data survives; only `visible` flips.
+    const bucket = store.getState().scriptReview.byBook['book-A'];
+    expect(bucket).toBeDefined();
+    expect(bucket?.visible).toBe(false);
+    expect(bucket?.ops).toHaveLength(2);
+    expect(discardSpy).not.toHaveBeenCalled();
+
+    discardSpy.mockRestore();
+  });
+
+  it('clicking the backdrop dispatches hideReview, not a discard — this is the regression test for the reported data-loss bug', () => {
+    const discardSpy = vi.spyOn(api, 'discardScriptReview').mockResolvedValue(undefined);
+    const store = makeStore();
+    const { container } = render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+
+    const backdrop = container.querySelector('.fixed.inset-0.bg-ink\\/40');
+    expect(backdrop).toBeTruthy();
+    fireEvent.click(backdrop as Element);
+
+    const bucket = store.getState().scriptReview.byBook['book-A'];
+    expect(bucket).toBeDefined();
+    expect(bucket?.visible).toBe(false);
+    expect(bucket?.ops).toHaveLength(2);
+    expect(discardSpy).not.toHaveBeenCalled();
+
+    discardSpy.mockRestore();
   });
 
   it('renders the unappliable notice when bucket.unappliable is non-empty', () => {

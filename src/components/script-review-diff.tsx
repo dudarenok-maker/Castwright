@@ -15,6 +15,7 @@ import {
   type ReviewOpWithChapter,
 } from '../store/script-review-slice';
 import { planApply, dispatchAcceptedOps } from '../lib/script-review-apply';
+import { discardReview } from '../store/script-review-thunk';
 import { applyProposedReattributions } from '../lib/apply-proposed';
 import { changeLogActions } from '../store/change-log-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
@@ -197,6 +198,12 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
     startBookId: string;
   } | null>(null);
 
+  /* fs-58 persistence Task 12 — "Dismiss all" is destructive (discards the
+     persisted ledger via discardReview), so it requires this confirm step
+     before firing. Close/backdrop stay non-destructive (handleClose below)
+     and never touch this state. */
+  const [confirmDismiss, setConfirmDismiss] = useState(false);
+
   if (!bucket) return null;
 
   const { ops, selected, unappliable } = bucket;
@@ -212,11 +219,17 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
   const selectedCount = ops.filter((o) => selected[opKey(o.chapterId, o.id, o.op)]).length;
 
   function handleClose() {
-    dispatch(scriptReviewActions.clearReview({ bookId }));
+    dispatch(scriptReviewActions.hideReview({ bookId }));
   }
 
   function handleDismiss() {
-    dispatch(scriptReviewActions.clearReview({ bookId }));
+    setConfirmDismiss(true);
+  }
+
+  async function confirmDismissAll() {
+    const chapterIds = [...new Set(ops.map((o) => o.chapterId))];
+    setConfirmDismiss(false);
+    await discardReview(bookId, chapterIds, { dispatch });
   }
 
   /* Run the finalized off-roster reattributes through the interleaved
@@ -388,6 +401,41 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                 }
                 onCancel={cancelConfirm}
               />
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* fs-58 persistence Task 12 — "Dismiss all" confirm step. This is the
+          sole destructive action left in this modal; close/backdrop
+          (handleClose) never reach here. */}
+      {confirmDismiss && (
+        <>
+          <div className="fixed inset-0 bg-ink/50 z-[60]" aria-hidden="true" />
+          <div className="fixed inset-0 z-[60] grid place-items-center p-4 pointer-events-none">
+            <div
+              data-testid="dismiss-confirm"
+              className="bg-white rounded-3xl shadow-float w-full max-w-sm pointer-events-auto p-6 space-y-4"
+            >
+              <p className="text-sm text-ink/80">
+                Discard {ops.length} unresolved suggestion{ops.length === 1 ? '' : 's'}? This can&apos;t be undone.
+              </p>
+              <div className="flex items-center gap-3">
+                <button
+                  data-testid="dismiss-confirm-yes"
+                  onClick={() => void confirmDismissAll()}
+                  className="px-4 min-h-[44px] sm:min-h-0 py-2 rounded-full bg-ink text-canvas text-sm font-semibold"
+                >
+                  Discard
+                </button>
+                <button
+                  data-testid="dismiss-confirm-cancel"
+                  onClick={() => setConfirmDismiss(false)}
+                  className="px-4 min-h-[44px] sm:min-h-0 py-2 rounded-full border border-ink/20 text-ink text-sm font-semibold"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
         </>
