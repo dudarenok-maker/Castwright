@@ -67,6 +67,7 @@ import { stripFrontMatterBoilerplate } from '../analyzer/strip-front-matter.js';
 import {
   readUserSettings,
   getCachedUserSettings,
+  getResolvedGeminiApiKey,
   type UserSettings,
 } from '../workspace/user-settings.js';
 import {
@@ -135,8 +136,10 @@ import { parseChapterStructure } from '../analyzer/dialogue-structure/parser.js'
 import { resolveWindows, type WindowRoster } from '../analyzer/dialogue-structure/windows.js';
 import { alignSentences } from '../analyzer/dialogue-structure/aligner.js';
 import { crossExamine } from '../analyzer/dialogue-structure/cross-examine.js';
+import { escalateFlaggedWindows } from '../analyzer/dialogue-structure/escalation.js';
 import type { LanguageConventions } from '../analyzer/dialogue-structure/types.js';
 import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
+import { GeminiAnalyzer } from '../analyzer/gemini.js';
 
 /* srv-13 — the existing cast's voice/reuse fields to overlay onto a fresh
    analysis roster. Prefer cast.json; when it's absent (a reparse just deleted
@@ -1551,6 +1554,24 @@ function rosterGenderMap(
   );
 }
 
+/* srv-59 Task 9b — `analyzer.structure.escalation === 'cloud'` routing.
+   Mirrors selectAnalyzer's gemini branch (analyzer/index.ts ~180-194): a
+   dedicated GeminiAnalyzer, independent of whichever engine is running the
+   chapter's main stage-2 attribution. Escalation is best-effort, so a
+   missing API key skips escalation for the chapter (warn + null) rather
+   than throwing and failing the whole analysis over a second-pass extra. */
+function buildCloudEscalationAnalyzer(): Analyzer | null {
+  const apiKey = getResolvedGeminiApiKey();
+  if (!apiKey) {
+    console.warn(
+      '[analysis:structure] escalation mode is "cloud" but no Gemini API key is configured — skipping escalation.',
+    );
+    return null;
+  }
+  const model = process.env.GEMINI_MODEL ?? 'gemma-4-31b-it';
+  return new GeminiAnalyzer({ apiKey, model });
+}
+
 /* Shared resilient stage-2 runner used by BOTH the main and subset routes
    (#528). Wraps the chapter in the large-chapter chunker (which itself wraps
    each call in the coverage guard), so an over-budget chapter is split into
@@ -1573,6 +1594,11 @@ export async function attributeChapterStage2(opts: {
   onCoverageRetry?: (attempt: number, verdict: { issues: string[] }) => void;
   onChunk?: (info: { index: number; total: number; chars: number }) => void;
   onSectionDone?: (index: number, sentenceCount: number) => void;
+  /* srv-59 Task 9b — per-BOOK escalation-window budget, shared/mutable
+     across every chapter's call (the caller creates ONE object and threads
+     it through). Falls back to a fresh per-call budget when omitted, so
+     existing callers keep working (just without the cross-chapter cap). */
+  structureBudget?: { remainingWindows: number };
 }): Promise<Stage2ChunkRunResult> {
   const callForBody = (subBody: string, preceding: string | null) => {
     const prompt =
@@ -1619,18 +1645,50 @@ export async function attributeChapterStage2(opts: {
     const firstPersonId = findFirstPersonCharacter(opts.stage1.characters, conventions);
     resolveWindows(paras, rosterGenderMap(opts.stage1.characters), firstPersonId);
     const alignment = alignSentences(result.sentences, paras, opts.chapter.body);
+    const rosterIds = new Set(opts.stage1.characters.map((c) => c.id));
     const examined = crossExamine(alignment, {
-      rosterIds: new Set(opts.stage1.characters.map((c) => c.id)),
+      rosterIds,
       unknownBucketIds: new Set([MALE_BUCKET_ID, FEMALE_BUCKET_ID]),
       alignmentFloorPct: 80,
     });
     result.sentences = examined.sentences;
+
+    /* Task 9b — second-pass re-query of the windows crossExamine couldn't
+       resolve. 'off' disables the model re-query entirely (the deterministic
+       engine still runs unchanged above); 'cloud' routes through a dedicated
+       GeminiAnalyzer instead of whichever engine ran the main attribution. */
+    const escalationMode = configValue<string>('analyzer.structure.escalation');
+    if (escalationMode !== 'off') {
+      const escalationAnalyzer =
+        escalationMode === 'cloud' ? buildCloudEscalationAnalyzer() : opts.analyzer;
+      if (escalationAnalyzer) {
+        const budget = opts.structureBudget ?? {
+          remainingWindows: configValue<number>('analyzer.structure.maxWindowsPerBook'),
+        };
+        const escalationOutcome = await escalateFlaggedWindows({
+          sentences: examined.sentences,
+          flags: examined.flags,
+          paras,
+          body: opts.chapter.body,
+          analyzer: escalationAnalyzer,
+          manuscriptId: opts.manuscriptId,
+          chapterId: opts.chapter.id,
+          stageCall: opts.stageCall,
+          rosterIds,
+          budget,
+          maxWindowsPerChapter: configValue<number>('analyzer.structure.maxWindowsPerChapter'),
+        });
+        examined.report.escalated = escalationOutcome.attempted;
+        examined.report.escalationAccepted = escalationOutcome.applied;
+      }
+    }
+
     result.structureReport = { ...examined.report, language: conventions.language };
     console.log(
       `[analysis:structure] ch=${opts.chapter.id} aligned=${examined.report.alignedPct.toFixed(0)}% ` +
-        `confirmed=${examined.report.confirmed} corrected=${examined.report.corrected} flagged=${examined.report.flagged}`,
+        `confirmed=${examined.report.confirmed} corrected=${examined.report.corrected} flagged=${examined.report.flagged} ` +
+        `escalated=${examined.report.escalated} escalationAccepted=${examined.report.escalationAccepted}`,
     );
-    // Task 9b inserts escalation here, consuming examined.flags.
   } else {
     /* Deterministic narrator-default: force non-spoken sentences to `narrator`
        and flag the first of each demoted block low-confidence. Runs for ALL
@@ -2288,6 +2346,10 @@ export async function runMainAnalyzerJob(
   const phase1Analyzer = phase1Selection.analyzer;
   const phase1ModelId = phase1Selection.model;
   const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1ModelId);
+  /* srv-59 Task 9b — ONE escalation-window budget shared across every
+     chapter's attributeChapterStage2 call below, so the cap is per-BOOK
+     (`analyzer.structure.maxWindowsPerBook`), not silently reset per chapter. */
+  const structureBudget = { remainingWindows: configValue<number>('analyzer.structure.maxWindowsPerBook') };
   const pipelinedPerPhase = !opts.requestedModel && isPerPhaseModelSelectionActive(userSettings);
   if (pipelinedPerPhase) {
     console.log(
@@ -3766,6 +3828,7 @@ export async function runMainAnalyzerJob(
         chapter: ch,
         stageCall: stage2Call,
         engine: phase1Selection.engine,
+        structureBudget,
         // Section START: record this section's char count and total. Do NOT add
         // it to committedChars yet — committedChars must stay in lockstep with
         // committedSentences (completed sections only), or the rate dilutes and
@@ -4567,6 +4630,10 @@ async function runSubsetAnalyzerJob(
   const phase1Analyzer = phase1Selection.analyzer;
   const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1Selection.model);
   const phase1ModelId = phase1Selection.model;
+  /* srv-59 Task 9b — ONE escalation-window budget shared across every
+     chapter's attributeChapterStage2 call in this subset/retry job, mirroring
+     the main route's per-book budget above. */
+  const structureBudget = { remainingWindows: configValue<number>('analyzer.structure.maxWindowsPerBook') };
 
   const send = (payload: unknown) => {
     broadcastToJob(job, payload);
@@ -4959,6 +5026,7 @@ async function runSubsetAnalyzerJob(
           stage1,
           chapter: ch,
           engine: phase1Selection.engine,
+          structureBudget,
           stageCall: {
             signal: abortController.signal,
             language: bookLanguage,
