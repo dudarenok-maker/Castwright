@@ -3343,7 +3343,12 @@ async function mockReviewScript(
     entries[chIdStr] = {
       manuscriptId: bookId,
       version: versionAccum[Number(chIdStr)] ?? 1,
-      ops,
+      // ops is the mock's own ReviewOp[] accumulator; LedgerEntryDTO['ops'] is
+      // the generated schema's deliberately-loose `{[key: string]: unknown}[]`
+      // (see the ScriptReviewLedgerEntry.ops description in openapi.yaml) — no
+      // index signature on ReviewOp itself, so the widening needs the
+      // `unknown` bounce same as every other ops-array cast in this feature.
+      ops: ops as unknown as LedgerEntryDTO['ops'],
       selected: {},
       completedAt: new Date().toISOString(),
     };
@@ -3353,13 +3358,19 @@ async function mockReviewScript(
   return { reviewedChapters: 1, totalOps: 5 };
 }
 
-export interface LedgerEntryDTO {
-  manuscriptId: string;
-  version: number;
-  ops: unknown[];
-  selected: Record<string, boolean>;
-  completedAt: string;
-}
+// Finding 3 (PR review round 5): sourced from the generated
+// ScriptReviewLedgerEntry/ScriptReviewRunningJob schemas (openapi.yaml's
+// "Script review persistence" section) instead of hand-written duplicates —
+// mirrors this file's existing ApiComponents['schemas'][...] pattern (see
+// MergeSuggestion above). `ScriptReviewStateResponse` itself is declared in
+// openapi.yaml as a flat object (`required: [kind, entries]`, `running`
+// always optional) rather than a `oneOf`+`discriminator`, so
+// openapi-typescript can't generate a true discriminated union for it —
+// composing the union by hand here, out of the two generated leaf schemas,
+// keeps the `kind === 'running'` narrowing this file's callers rely on
+// (state.running being definitely present) without hand-duplicating the
+// leaf shapes themselves.
+export type LedgerEntryDTO = ApiComponents['schemas']['ScriptReviewLedgerEntry'];
 export type ScriptReviewStateDTO =
   | {
       kind: 'running';
@@ -3367,7 +3378,7 @@ export type ScriptReviewStateDTO =
       // reviews can legitimately run concurrently for the same book — report
       // ALL of them, not just the first match (see the server-side comment
       // in server/src/routes/script-review.ts's GET /state handler).
-      running: Array<{ chapterId?: number; replay: unknown }>;
+      running: ApiComponents['schemas']['ScriptReviewRunningJob'][];
       entries: Record<string, LedgerEntryDTO>;
     }
   | { kind: 'ledger'; entries: Record<string, LedgerEntryDTO> };

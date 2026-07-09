@@ -185,49 +185,65 @@ async function resolveAppliedOps(
   bucket: { versionByChapter: Record<number, number> },
   appliedOps: ReviewOpWithChapter[],
 ): Promise<void> {
+  // Finding 5 (PR review round 5): push each op's key onto the chapter's
+  // existing array in place instead of spreading a brand-new array per op —
+  // the old `[...(byChapter.get(...) ?? []), key]` was O(n^2) in ops-per-
+  // chapter (a fresh copy on every push).
   const byChapter = new Map<number, string[]>();
   for (const op of appliedOps) {
     const key = opKey(op.chapterId, op.id, op.op);
-    byChapter.set(op.chapterId, [...(byChapter.get(op.chapterId) ?? []), key]);
+    const existing = byChapter.get(op.chapterId);
+    if (existing) {
+      existing.push(key);
+    } else {
+      byChapter.set(op.chapterId, [key]);
+    }
   }
-  for (const [chapterId, opKeys] of byChapter) {
-    const version = bucket.versionByChapter[chapterId];
-    if (version === undefined) continue;
-    try {
-      const result = await api.resolveScriptReviewOps(bookId, { chapterId, version, appliedOpKeys: opKeys });
-      if (result.ok) {
-        dispatch(scriptReviewActions.resolveOpsLocally({ bookId, opKeys }));
-      } else {
-        // Stale version — another client/tab already resolved or replaced this
-        // chapter's ledger entry since this bucket loaded. The manuscript
-        // mutation already happened locally (dispatchAcceptedOps runs before
-        // this call), so we can't safely mark it resolved server-side or
-        // silently drop it from the bucket without risking a re-apply on a
-        // second click — surface it instead of swallowing it.
+  // Finding 4 (PR review round 5): each chapter's /resolve call is
+  // independent (own chapterId/version/opKeys) — run them concurrently
+  // instead of sequentially awaiting one chapter at a time, so a whole-book
+  // Apply spanning many chapters pays ~1 round-trip's worth of latency
+  // instead of N.
+  await Promise.all(
+    [...byChapter].map(async ([chapterId, opKeys]) => {
+      const version = bucket.versionByChapter[chapterId];
+      if (version === undefined) return;
+      try {
+        const result = await api.resolveScriptReviewOps(bookId, { chapterId, version, appliedOpKeys: opKeys });
+        if (result.ok) {
+          dispatch(scriptReviewActions.resolveOpsLocally({ bookId, opKeys }));
+        } else {
+          // Stale version — another client/tab already resolved or replaced this
+          // chapter's ledger entry since this bucket loaded. The manuscript
+          // mutation already happened locally (dispatchAcceptedOps runs before
+          // this call), so we can't safely mark it resolved server-side or
+          // silently drop it from the bucket without risking a re-apply on a
+          // second click — surface it instead of swallowing it.
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'warn',
+              message: `Chapter ${chapterId}'s script-review findings changed elsewhere — reload to see the latest state.`,
+              dedupeKey: `script-review-stale-${bookId}-${chapterId}`,
+            }),
+          );
+        }
+      } catch (err) {
+        // A thrown network/HTTP error must not abort the whole batch — every
+        // other chapter in `appliedOps` still deserves its own resolve
+        // attempt. The manuscript mutation for THIS chapter already applied
+        // locally; it stays unresolved in the bucket/ledger until the user
+        // retries (e.g. re-running or re-applying), same recovery path as the
+        // stale-version case above.
         dispatch(
           notificationsActions.pushToast({
-            kind: 'warn',
-            message: `Chapter ${chapterId}'s script-review findings changed elsewhere — reload to see the latest state.`,
-            dedupeKey: `script-review-stale-${bookId}-${chapterId}`,
+            kind: 'error',
+            message: err instanceof Error ? err.message : `Failed to save chapter ${chapterId}'s script-review resolution.`,
+            dedupeKey: `script-review-resolve-failed-${bookId}-${chapterId}`,
           }),
         );
       }
-    } catch (err) {
-      // A thrown network/HTTP error must not abort the whole batch — every
-      // other chapter in `appliedOps` still deserves its own resolve
-      // attempt. The manuscript mutation for THIS chapter already applied
-      // locally; it stays unresolved in the bucket/ledger until the user
-      // retries (e.g. re-running or re-applying), same recovery path as the
-      // stale-version case above.
-      dispatch(
-        notificationsActions.pushToast({
-          kind: 'error',
-          message: err instanceof Error ? err.message : `Failed to save chapter ${chapterId}'s script-review resolution.`,
-          dedupeKey: `script-review-resolve-failed-${bookId}-${chapterId}`,
-        }),
-      );
-    }
-  }
+    }),
+  );
 }
 
 export function ScriptReviewDiff({ bookId }: { bookId: string }) {

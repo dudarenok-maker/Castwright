@@ -147,11 +147,6 @@ export async function attachToRunningReview(
   opts: { dispatch: AppDispatch; sentences: ReviewLiveSentence[]; characterIds: Set<string>; manuscriptId: string },
 ): Promise<void> {
   const { dispatch, sentences, characterIds, manuscriptId } = opts;
-  const seedProgress = running.replay.lastPhase?.progress ?? 0;
-  dispatch(
-    scriptReviewActions.setActive({ bookId, progress: seedProgress, label: running.replay.lastPhase?.label ?? 'Reviewing script' }),
-  );
-
   const allOps: ReviewOpWithChapter[] = [];
   const versionByChapter: Record<number, number> = {};
 
@@ -187,8 +182,6 @@ export async function attachToRunningReview(
         message: err instanceof Error ? err.message : 'Script review failed.',
       }),
     );
-  } finally {
-    dispatch(scriptReviewActions.clear({ bookId }));
   }
 }
 
@@ -309,7 +302,12 @@ export async function hydrateScriptReview(
     for (const [chapterKey, entry] of chapterEntries) {
       const chapterId = Number(chapterKey);
       versionByChapter[chapterId] = entry.version;
-      for (const op of entry.ops as ReviewOp[]) allOps.push({ ...op, chapterId });
+      // entry.ops is the generated ScriptReviewLedgerEntry's deliberately-loose
+      // `{[key: string]: unknown}[]` (openapi.yaml keeps the per-op-kind shape
+      // permissive rather than duplicating ReviewOp's discriminated shape) —
+      // the `unknown` bounce recovers the concrete shape this code already
+      // knows the ledger actually carries.
+      for (const op of entry.ops as unknown as ReviewOp[]) allOps.push({ ...op, chapterId });
       Object.assign(persistedSelected, entry.selected);
     }
 
@@ -336,18 +334,48 @@ export async function hydrateScriptReview(
     // setReview dispatch, which already correctly MERGES by chapter rather
     // than replacing — running them concurrently does not reintroduce the
     // double-counting risk the single-job version was written to avoid.
-    await Promise.all(
-      state.running.map(async (running) => {
-        const { sentences, characterIds, manuscriptId } = await waitForManuscriptAndCast(getState, subscribe, bookId);
-        // running.replay is `unknown` on the wire DTO (api.ts's
-        // ScriptReviewStateDTO) — attachToRunningReview's RunningReviewState
-        // narrows it to just the `lastPhase` field it actually reads (see
-        // the comment above that function for why). The server's actual
-        // replay object structurally satisfies this narrower shape; the
-        // cast just recovers that at the type level since the DTO itself
-        // only guarantees `unknown`.
-        await attachToRunningReview(bookId, running as RunningReviewState, { dispatch, sentences, characterIds, manuscriptId });
+    //
+    // Findings 1/2 (PR review round 5): setActive/clear and
+    // waitForManuscriptAndCast used to live INSIDE attachToRunningReview
+    // (dispatched once per job), which broke on 2+ concurrent jobs for the
+    // same book — activeStreams is keyed only by bookId, so the FASTEST job
+    // to finish cleared the shared "review in progress" flag while a
+    // sibling job was still genuinely streaming, silently re-enabling the
+    // Review Script button mid-run. Both are hoisted here so they run
+    // exactly ONCE per hydration batch: setActive is dispatched before any
+    // job starts (seeded from the first job's replay — a reasonable initial
+    // value; onPhase from whichever job fires next keeps it live),
+    // waitForManuscriptAndCast's snapshot is shared by every job in the
+    // batch instead of being re-subscribed/re-mapped per job, and clear
+    // only fires once ALL jobs in the batch have settled (Promise.all),
+    // not after the first one to finish.
+    // running.replay is `{[key: string]: unknown}` on the generated
+    // ScriptReviewRunningJob schema (openapi.yaml deliberately keeps it
+    // permissive rather than modeling its actual shape — see the ops/replay
+    // additionalProperties comments in openapi.yaml) —
+    // attachToRunningReview's RunningReviewState narrows it to just the
+    // `lastPhase` field it actually reads (see the comment above that
+    // function for why). The server's actual replay object structurally
+    // satisfies this narrower shape; the cast just recovers that at the
+    // type level since the generated schema itself only guarantees an
+    // unknown-valued object.
+    const seedPhase = (state.running[0] as RunningReviewState | undefined)?.replay.lastPhase;
+    dispatch(
+      scriptReviewActions.setActive({
+        bookId,
+        progress: seedPhase?.progress ?? 0,
+        label: seedPhase?.label ?? 'Reviewing script',
       }),
     );
+    const { sentences, characterIds, manuscriptId } = await waitForManuscriptAndCast(getState, subscribe, bookId);
+    try {
+      await Promise.all(
+        state.running.map((running) =>
+          attachToRunningReview(bookId, running as RunningReviewState, { dispatch, sentences, characterIds, manuscriptId }),
+        ),
+      );
+    } finally {
+      dispatch(scriptReviewActions.clear({ bookId }));
+    }
   }
 }

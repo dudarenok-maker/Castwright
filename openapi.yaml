@@ -2890,8 +2890,13 @@ components:
           description: Book-scoped monotonic ledger version, minted at checkpoint time.
         ops:
           type: array
-          items: { type: object }
-          description: Raw review ops for this chapter (strip_tag, split, extract_dialogue, merge, fix_emotion, reattribute, flag_nonstory, validate_instruct).
+          items: { type: object, additionalProperties: true }
+          description: |
+            Raw review ops for this chapter (strip_tag, split, extract_dialogue,
+            merge, fix_emotion, reattribute, flag_nonstory, validate_instruct).
+            Permissive — the per-op-kind shape is hand-modeled as `ReviewOp` in
+            `src/lib/script-review-apply.ts`, kept loose here rather than
+            duplicating that discriminated shape.
         selected:
           type: object
           description: 'Map of op key (`${chapterId}:${id}:${op}`) to whether it is currently checked, merged in via the selection PATCH.'
@@ -2911,10 +2916,14 @@ components:
           description: Set only for a single-chapter job; absent means whole-book.
         replay:
           type: object
+          additionalProperties: true
           description: |
             The job's buffered SSE events so far (opsEvents, chapterFailedEvents,
             checkpointEvents, lastPhase, result, errorEvent) — replayed to a
             newly-joining subscriber in the same shape the live stream uses.
+            Permissive — kept loose here rather than duplicating that shape;
+            consumers narrow the field(s) they actually read (see
+            `RunningReviewState` in `src/store/script-review-thunk.ts`).
 
     ScriptReviewStateResponse:
       type: object

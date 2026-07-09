@@ -374,6 +374,86 @@ describe('hydrateScriptReview', () => {
     expect(chapterIds.has(9)).toBe(true);
     expect(bucket!.versionByChapter).toEqual({ 5: 1, 9: 1 });
   });
+
+  /* Round-5 review Findings 1/2 — setActive/clear used to live inside
+     attachToRunningReview, dispatched once PER job. With 2+ concurrently-
+     running jobs for the same book, activeStreams (keyed only by bookId) got
+     cleared by whichever job finished FIRST while a sibling job was still
+     genuinely streaming — silently re-enabling the Review Script button and
+     dropping the progress pill mid-run. setActive/clear now live in
+     hydrateScriptReview instead: setActive fires exactly ONCE up front
+     (seeded from the first running job's replay.lastPhase), and clear fires
+     exactly ONCE, only after EVERY job in the batch has settled. Uses two
+     independently-controllable promises so the test can resolve the FASTER
+     job first and prove `clear` still waits for the SLOWER one. */
+  it('dispatches setActive exactly once (seeded from the first job\'s replay) and clear exactly once, only after ALL concurrent jobs settle', async () => {
+    const dispatch = vi.fn();
+    const fakeStore = makeFakeStore({
+      manuscriptId: 'ms-1',
+      characters: [{ id: 'c1' }],
+      sentences: [
+        { id: 1, chapterId: 5, text: 'Chapter five line.', characterId: 'c1' },
+        { id: 2, chapterId: 9, text: 'Chapter nine line.', characterId: 'c1' },
+      ],
+    });
+    vi.mocked(api.getScriptReviewState).mockResolvedValue({
+      kind: 'running',
+      running: [
+        { chapterId: 5, replay: { lastPhase: { progress: 0.2, label: 'Reviewing script' } } },
+        { chapterId: 9, replay: { lastPhase: null } },
+      ],
+      entries: {},
+    });
+
+    let resolveFive!: () => void;
+    let resolveNine!: () => void;
+    const fivePromise = new Promise<void>((r) => {
+      resolveFive = r;
+    });
+    const ninePromise = new Promise<void>((r) => {
+      resolveNine = r;
+    });
+    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      if (opts.chapterId === 5) await fivePromise;
+      else if (opts.chapterId === 9) await ninePromise;
+      return { reviewedChapters: 1, totalOps: 0 } as never;
+    });
+    // Finding 2 — waitForManuscriptAndCast (via snapshotIfReady's getState()
+    // read) used to run once PER running job. Spy on getState to prove it's
+    // called exactly once for this 2-job batch, not twice.
+    const getStateSpy = vi.fn(fakeStore.getState);
+
+    const promise = hydrateScriptReview('book-1', {
+      dispatch,
+      getState: getStateSpy,
+      subscribe: fakeStore.subscribe,
+    });
+
+    // Give setActive + the initial join POSTs a tick to fire.
+    await new Promise((r) => setTimeout(r, 10));
+    const setActiveCalls = dispatch.mock.calls.filter((c) => c[0].type === scriptReviewActions.setActive.type);
+    expect(setActiveCalls).toHaveLength(1);
+    expect(setActiveCalls[0][0].payload).toEqual(
+      expect.objectContaining({ bookId: 'book-1', progress: 0.2, label: 'Reviewing script' }),
+    );
+
+    // Resolve the FASTER job (chapter 5) first — clear must NOT fire yet,
+    // since chapter 9's job is still streaming. This is the exact bug this
+    // fix closes: the old per-job clear would have fired here.
+    resolveFive();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(dispatch.mock.calls.some((c) => c[0].type === scriptReviewActions.clear.type)).toBe(false);
+
+    // Resolve the SLOWER job — now clear fires, exactly once.
+    resolveNine();
+    await promise;
+    const clearCalls = dispatch.mock.calls.filter((c) => c[0].type === scriptReviewActions.clear.type);
+    expect(clearCalls).toHaveLength(1);
+    // snapshotIfReady resolves immediately (manuscript/cast already ready),
+    // so one waitForManuscriptAndCast call reads getState() exactly once —
+    // two calls (the pre-fix per-job behavior) would read it twice.
+    expect(getStateSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('runReviewScript — version delivery', () => {
@@ -398,21 +478,22 @@ describe('runReviewScript — version delivery', () => {
   });
 });
 
+// Round-5 review Findings 1/2 — attachToRunningReview used to dispatch
+// setActive on entry and clear in its own `finally`, so hydrateScriptReview's
+// Promise.all over N concurrently-running jobs for the same book dispatched
+// setActive/clear N times each — and since activeStreams is keyed only by
+// bookId, the FASTEST job to finish cleared the shared progress pill while a
+// sibling job was still genuinely streaming. setActive/clear now live
+// exclusively in hydrateScriptReview (once per hydration batch, not once per
+// job) — see the 'hydrateScriptReview' describe block below for the seeding/
+// batching coverage that replaces the two assertions removed from here.
 describe('attachToRunningReview', () => {
-  it('seeds progress from the replay buffer instead of resetting to 0', async () => {
+  it('does NOT dispatch setActive or clear itself — that is hydrateScriptReview\'s job now', async () => {
     const dispatch = vi.fn();
     vi.mocked(api.reviewScript).mockResolvedValue({ reviewedChapters: 0, totalOps: 0 } as never);
     const runningState = {
-      kind: 'running' as const,
       chapterId: undefined,
-      replay: {
-        opsEvents: [{ chapterId: 1, ops: [{ id: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }] }],
-        chapterFailedEvents: [],
-        checkpointEvents: [{ chapterId: 1, version: 5 }],
-        lastPhase: { progress: 0.4, label: 'Reviewing script' },
-        result: null,
-        errorEvent: null,
-      },
+      replay: { lastPhase: { progress: 0.4, label: 'Reviewing script' } },
     };
     await attachToRunningReview('book-1', runningState, {
       dispatch,
@@ -420,10 +501,9 @@ describe('attachToRunningReview', () => {
       characterIds: new Set(['c1']),
       manuscriptId: 'ms-1',
     });
-    expect(dispatch).toHaveBeenCalledWith(
-      scriptReviewActions.setActive(expect.objectContaining({ bookId: 'book-1', progress: 0.4 })),
-    );
-    expect(dispatch).not.toHaveBeenCalledWith(scriptReviewActions.setActive(expect.objectContaining({ progress: 0 })));
+    const types = dispatch.mock.calls.map((c) => c[0].type);
+    expect(types).not.toContain(scriptReviewActions.setActive.type);
+    expect(types).not.toContain(scriptReviewActions.clear.type);
   });
 
   it('dispatches setReview with the ops/versions delivered by the join\'s own replay — not double-counted with the GET /state snapshot', async () => {
@@ -478,8 +558,9 @@ describe('attachToRunningReview', () => {
      its sibling runReviewScript (which pushes an error toast). A rejected
      join POST (e.g. the network drops, or the TOCTOU race documented above
      falls through to a failing create) would propagate as an unhandled
-     rejection with no user-visible feedback, while still clearing the
-     progress pill via `finally`. */
+     rejection with no user-visible feedback. (Round-5 review Findings 1/2:
+     `clear` no longer fires from here at all — see the batch-level assertion
+     in the 'hydrateScriptReview' describe block below.) */
   it('dispatches an error toast when the join POST rejects, mirroring runReviewScript\'s catch path', async () => {
     const dispatch = vi.fn();
     vi.mocked(api.reviewScript).mockRejectedValue(new Error('join failed'));
@@ -495,9 +576,6 @@ describe('attachToRunningReview', () => {
     });
     const toastCall = dispatch.mock.calls.find(([action]) => action?.type === notificationsActions.pushToast.type);
     expect(toastCall?.[0].payload).toEqual(expect.objectContaining({ kind: 'error', message: 'join failed' }));
-    // clear still fires last, same as before this fix.
-    const types = dispatch.mock.calls.map((c) => c[0].type);
-    expect(types[types.length - 1]).toBe(scriptReviewActions.clear.type);
   });
 });
 

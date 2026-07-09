@@ -1395,5 +1395,107 @@ describe('fs-58 — ScriptReviewDiff', () => {
 
       resolveSpy.mockRestore();
     });
+
+    /* Finding 4 (PR review round 5): resolveAppliedOps used to `await` each
+       chapter's /resolve call sequentially inside a `for` loop — a whole-book
+       Apply spanning many chapters paid one full network round-trip PER
+       chapter instead of running them concurrently. This drives an Apply
+       spanning TWO chapters with independently-controllable resolve
+       promises and proves BOTH chapters' resolveScriptReviewOps calls are
+       made — i.e. both are already in flight — before EITHER promise
+       resolves. A sequential implementation would only have called chapter
+       1's resolve at that point, since it would still be awaiting it before
+       ever reaching chapter 2. */
+    it('resolves multiple chapters concurrently, not one at a time', async () => {
+      let resolveOne!: (v: { ok: boolean }) => void;
+      let resolveTwo!: (v: { ok: boolean }) => void;
+      const onePromise = new Promise<{ ok: boolean }>((r) => {
+        resolveOne = r;
+      });
+      const twoPromise = new Promise<{ ok: boolean }>((r) => {
+        resolveTwo = r;
+      });
+      const resolveSpy = vi
+        .spyOn(api, 'resolveScriptReviewOps')
+        .mockImplementation(async (_bookId, { chapterId }) => (chapterId === 1 ? onePromise : twoPromise));
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          manuscript: manuscriptSlice.reducer,
+          cast: castSlice.reducer,
+          scriptReview: scriptReviewSlice.reducer,
+          changeLog: changeLogSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: {
+              kind: 'ready',
+              bookId: 'book-1',
+              view: 'manuscript',
+              currentChapterId: 1,
+              openProfileId: null,
+            } as never,
+          },
+          manuscript: {
+            ...manuscriptSlice.getInitialState(),
+            sentences: [
+              { id: 1, chapterId: 1, text: 'Hi tag', characterId: 'c1' },
+              { id: 2, chapterId: 2, text: 'Other.', characterId: 'c1' },
+            ] as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [{ id: 'c1', name: 'Ada' }] as never,
+          },
+        },
+      });
+      store.dispatch(
+        scriptReviewActions.setReview({
+          bookId: 'book-1',
+          ops: [
+            { id: 1, chapterId: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' },
+            { id: 2, chapterId: 2, op: 'fix_emotion', emotion: 'sad', rationale: 'r' },
+          ],
+          unappliable: [],
+          versionByChapter: { 1: 5, 2: 7 },
+        }),
+      );
+      // Both ops default-selected (strip_tag/fix_emotion aren't in
+      // DEFAULT_OFF) — Apply touches both chapters in one batch.
+      render(
+        <Provider store={store}>
+          <ScriptReviewDiff bookId="book-1" />
+        </Provider>,
+      );
+
+      fireEvent.click(screen.getByTestId('apply-button'));
+
+      // Both calls fire before either promise settles — proof of
+      // concurrency, not a sequential await chain.
+      await waitFor(() => expect(resolveSpy).toHaveBeenCalledTimes(2));
+      expect(resolveSpy).toHaveBeenCalledWith('book-1', {
+        chapterId: 1,
+        version: 5,
+        appliedOpKeys: [opKey(1, 1, 'strip_tag')],
+      });
+      expect(resolveSpy).toHaveBeenCalledWith('book-1', {
+        chapterId: 2,
+        version: 7,
+        appliedOpKeys: [opKey(2, 2, 'fix_emotion')],
+      });
+
+      // Now let both settle — both chapters resolve out of the bucket.
+      resolveOne({ ok: true });
+      resolveTwo({ ok: true });
+
+      await waitFor(() => {
+        const bucket = store.getState().scriptReview.byBook['book-1'];
+        expect(bucket?.ops ?? []).toEqual([]);
+      });
+
+      resolveSpy.mockRestore();
+    });
   });
 });
