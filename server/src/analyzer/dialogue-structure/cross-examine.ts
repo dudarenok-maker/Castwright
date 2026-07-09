@@ -112,53 +112,84 @@ function decideUnanchoredSpeech(modelId: string, opts: CrossExamineOpts): Decisi
 function decideAnchoredSpeech(modelId: string, span: SpanEvidence, opts: CrossExamineOpts): Decision {
   const { characterId: x, source } = span.speaker!;
 
-  if (source === 'tag-name') {
-    return modelId === x
-      ? { characterId: x, confidence: CONFIDENCE.TAG_CONFIRM, reason: `tag-confirm:${x}`, bucket: 'confirmed', flagged: false }
-      : { characterId: x, confidence: CONFIDENCE.TAG_CORRECT, reason: `tag-correct:${x}`, bucket: 'corrected', flagged: false };
-  }
+  switch (source) {
+    case 'tag-name':
+      return modelId === x
+        ? { characterId: x, confidence: CONFIDENCE.TAG_CONFIRM, reason: `tag-confirm:${x}`, bucket: 'confirmed', flagged: false }
+        : { characterId: x, confidence: CONFIDENCE.TAG_CORRECT, reason: `tag-correct:${x}`, bucket: 'corrected', flagged: false };
 
-  if (source === 'tag-pronoun') {
-    if (modelId === x) {
-      return { characterId: x, confidence: CONFIDENCE.PRONOUN_CONFIRM, reason: `pronoun-confirm:${x}`, bucket: 'confirmed', flagged: false };
-    }
-    if (isNarratorOrUnknown(modelId, opts)) {
-      return { characterId: x, confidence: CONFIDENCE.PRONOUN_CORRECT, reason: `pronoun-correct:${x}`, bucket: 'corrected', flagged: false };
-    }
-    return {
-      characterId: modelId,
-      confidence: CONFIDENCE.PRONOUN_KEEP_FLAG,
-      reason: `pronoun-keep-flag:${modelId}-vs-${x}`,
-      bucket: 'flagged',
-      flagged: true,
-    };
-  }
+    case 'tag-pronoun':
+      if (modelId === x) {
+        return { characterId: x, confidence: CONFIDENCE.PRONOUN_CONFIRM, reason: `pronoun-confirm:${x}`, bucket: 'confirmed', flagged: false };
+      }
+      if (isNarratorOrUnknown(modelId, opts)) {
+        return { characterId: x, confidence: CONFIDENCE.PRONOUN_CORRECT, reason: `pronoun-correct:${x}`, bucket: 'corrected', flagged: false };
+      }
+      return {
+        characterId: modelId,
+        confidence: CONFIDENCE.PRONOUN_KEEP_FLAG,
+        reason: `pronoun-keep-flag:${modelId}-vs-${x}`,
+        bucket: 'flagged',
+        flagged: true,
+      };
 
-  // alternation
-  if (modelId === x) {
-    return { characterId: x, confidence: CONFIDENCE.ALT_CONFIRM, reason: `alt-confirm:${x}`, bucket: 'confirmed', flagged: false };
+    case 'alternation':
+      if (modelId === x) {
+        return { characterId: x, confidence: CONFIDENCE.ALT_CONFIRM, reason: `alt-confirm:${x}`, bucket: 'confirmed', flagged: false };
+      }
+      if (isNarratorOrUnknown(modelId, opts)) {
+        return { characterId: x, confidence: CONFIDENCE.ALT_CORRECT_FLAG, reason: `alt-correct-flag:${x}`, bucket: 'corrected', flagged: true };
+      }
+      return {
+        characterId: modelId,
+        confidence: CONFIDENCE.ALT_KEEP_FLAG,
+        reason: `alt-keep-flag:${modelId}-vs-${x}`,
+        bucket: 'flagged',
+        flagged: true,
+      };
+
+    case 'unanchored':
+      // Defensive: `unanchored` IS a real EvidenceSource member, but windows.ts
+      // never actually stamps it when `speaker` is set (it just leaves
+      // `speaker` undefined instead — see decideUnanchoredSpeech above). That
+      // invariant is enforced two files away with no local guard here. Never
+      // auto-correct on evidence this function doesn't recognise: keep the
+      // model's id and flag it, so a future regression surfaces as a review
+      // stop instead of a silently fabricated correction.
+      return {
+        characterId: modelId,
+        confidence: CONFIDENCE.ALT_KEEP_FLAG,
+        reason: 'unexpected-source:unanchored',
+        bucket: 'flagged',
+        flagged: true,
+      };
+
+    default: {
+      // Compile-time tripwire: EvidenceSource has exactly 4 members, all
+      // cased above, so `source` is `never` here. If the union ever grows a
+      // 5th member without a matching `case`, this line fails to compile —
+      // forcing a conscious decision instead of a silent fallthrough — while
+      // still returning the same safe keep+flag default at runtime.
+      const _exhaustive: never = source;
+      return {
+        characterId: modelId,
+        confidence: CONFIDENCE.ALT_KEEP_FLAG,
+        reason: `unexpected-source:${String(_exhaustive)}`,
+        bucket: 'flagged',
+        flagged: true,
+      };
+    }
   }
-  if (isNarratorOrUnknown(modelId, opts)) {
-    return { characterId: x, confidence: CONFIDENCE.ALT_CORRECT_FLAG, reason: `alt-correct-flag:${x}`, bucket: 'corrected', flagged: true };
-  }
-  return {
-    characterId: modelId,
-    confidence: CONFIDENCE.ALT_KEEP_FLAG,
-    reason: `alt-keep-flag:${modelId}-vs-${x}`,
-    bucket: 'flagged',
-    flagged: true,
-  };
 }
 
 /** A sentence whose only aligned spans are `tag` (a beat/tag clause itself,
     e.g. "сказал Антон") — never `speech`. The tag/beat text is narrator
     voice, not the character's: demote (Wave A rule, kept), no block-clamp
-    (that footnote is scoped to the pure-narration row below). */
-function decideTagSpanOnly(modelId: string): Decision {
-  if (modelId === NARRATOR_ID) {
-    return { characterId: NARRATOR_ID, confidence: CONFIDENCE.NARRATION_CONFIRM, reason: 'narration-confirm', bucket: 'confirmed', flagged: false };
-  }
-  return { characterId: NARRATOR_ID, confidence: CONFIDENCE.TAG_SPAN, reason: 'tag-span-demote', bucket: 'corrected', flagged: false };
+    (that footnote is scoped to the pure-narration row below). Spec §5.3 row 3
+    is a single unconditional line — tag/beat span -> narrator @ TAG_SPAN —
+    with no separate confirm sub-case for a model that already said narrator. */
+function decideTagSpanOnly(): Decision {
+  return { characterId: NARRATOR_ID, confidence: CONFIDENCE.TAG_SPAN, reason: 'tag-span-narrator', bucket: 'corrected', flagged: false };
 }
 
 /** A sentence whose only aligned spans are pure `narration` (no `speech`,
@@ -220,7 +251,7 @@ function decideSentence(as: AlignedSentence, opts: CrossExamineOpts, block: { ac
 
   if (as.spans.some((s) => s.kind === 'tag')) {
     block.active = false;
-    return decideTagSpanOnly(modelId);
+    return decideTagSpanOnly();
   }
 
   return decideNarrationOnly(modelId, block);

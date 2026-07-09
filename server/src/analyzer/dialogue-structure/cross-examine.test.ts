@@ -77,6 +77,14 @@ describe('crossExamine — §5.3 decision matrix (one case per row)', () => {
     expect(result.report.corrected).toBe(1);
   });
 
+  it('row 3: tag/beat span itself, model already says narrator -> same flat TAG_SPAN row, no 0.95 confirm sub-case', () => {
+    const s = mkSentence('narrator');
+    const result = run([aligned(s, [tagSpan()])]);
+    expect(result.sentences[0].characterId).toBe('narrator');
+    expect(result.sentences[0].confidence).toBe(CONFIDENCE.TAG_SPAN);
+    expect(result.flags).toEqual([]);
+  });
+
   it('row 4: tag-pronoun -> X, model says X -> confirm at PRONOUN_CONFIRM', () => {
     const s = mkSentence('anton');
     const result = run([aligned(s, [speechSpan({ characterId: 'anton', source: 'tag-pronoun' })])]);
@@ -249,6 +257,22 @@ describe('crossExamine — hard invariants', () => {
     // model ids pass through completely unchanged, even the tag-name-contradicting one
     expect(result.sentences.map((s) => s.characterId)).toEqual(['narrator', 'olga', 'anton']);
     for (const s of result.sentences) expect(s.confidence).toBeLessThanOrEqual(CONFIDENCE.UNALIGNED_CAP);
+  });
+
+  it('DEFENSIVE GUARD: an anchored speech span with an unexpected EvidenceSource (neither tag-name, tag-pronoun, nor alternation) keeps the model id and flags it — never auto-corrects to the span speaker', () => {
+    // `unanchored` is a real EvidenceSource member, but windows.ts never
+    // actually stamps it on a span that HAS a `speaker` (it just leaves
+    // `speaker` undefined instead). This fixture forces that combination
+    // anyway to prove decideAnchoredSpeech's defensive fallback: it must
+    // not silently fabricate a correction just because some future producer
+    // stamps a source this matrix doesn't otherwise recognise.
+    const s = mkSentence('olga');
+    const result = run([aligned(s, [speechSpan({ characterId: 'anton', source: 'unanchored' })])]);
+    expect(result.sentences[0].characterId).toBe('olga'); // kept, NOT corrected to 'anton'
+    expect(result.sentences[0].confidence).toBeLessThan(0.75);
+    expect(result.flags).toEqual([{ index: 0, reason: 'unexpected-source:unanchored' }]);
+    expect(result.report.flagged).toBe(1);
+    expect(result.report.corrected).toBe(0);
   });
 
   it('INVARIANT: derived confidence REPLACES model confidence on every sentence', () => {
