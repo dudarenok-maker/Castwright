@@ -30,7 +30,7 @@ export interface AlignmentResult {
 }
 
 // Quote/dash glyphs the model may substitute with an ASCII look-alike.
-const QUOTE_CHARS = new Set(['«', '»', '„', '“', '”', '"', "'"]);
+const QUOTE_CHARS = new Set(['«', '»', '„', '“', '”', '"', "'", '‘', '’']);
 const DASH_CHARS = new Set(['–', '—']); // – —
 
 /** Normalize-with-offset-map: builds the normalized form of `raw` alongside,

@@ -102,4 +102,41 @@ describe('alignSentences', () => {
 
     expect(result.alignedPct).toBeCloseTo((2 / 3) * 100, 5);
   });
+
+  it('(f) ellipsis expansion (…→...) keeps the offset map accurate — the crux path', () => {
+    const enIdx = buildNameIndex([{ id: 'halloran', name: 'Halloran' }], conventionsFor('en')!);
+    // Raw speech span text contains a literal single-glyph ellipsis: "Wait… go,".
+    const body = '“Wait… go,” Halloran said.';
+    const paras = parseChapterStructure(body, enIdx);
+    const speechSpan = paras.flatMap((p) => p.spans).find((s) => s.kind === 'speech')!;
+    expect(body.slice(speechSpan.start, speechSpan.end)).toBe('Wait… go,');
+
+    // Model expands the single ellipsis glyph to three ASCII dots — normalize()
+    // expands the raw "…" the same way, so the needle matches, but the match
+    // spans the +2-char-longer normalized region; translating matchStart/matchEnd
+    // back through rawStart/rawEnd must still land on the ORIGINAL raw span.
+    const sentences = [mkSentence(1, 'halloran', 'Wait... go,')];
+    const result = alignSentences(sentences, paras, body);
+
+    expect(result.aligned).toHaveLength(1);
+    expect(result.aligned[0].spans).toEqual([speechSpan]);
+    expect(result.alignedPct).toBe(100);
+  });
+
+  it('(g) curly-apostrophe drift (’ vs \') still aligns via normalization', () => {
+    const enIdx = buildNameIndex([{ id: 'halloran', name: 'Halloran' }], conventionsFor('en')!);
+    // Raw speech span uses the curly (typographic) apostrophe.
+    const body = '“Don’t stop,” Halloran said.';
+    const paras = parseChapterStructure(body, enIdx);
+    const speechSpan = paras.flatMap((p) => p.spans).find((s) => s.kind === 'speech')!;
+    expect(body.slice(speechSpan.start, speechSpan.end)).toBe('Don’t stop,');
+
+    // Model drift: straight apostrophe instead of the curly one.
+    const sentences = [mkSentence(1, 'halloran', "Don't stop,")];
+    const result = alignSentences(sentences, paras, body);
+
+    expect(result.aligned).toHaveLength(1);
+    expect(result.aligned[0].spans).toEqual([speechSpan]);
+    expect(result.alignedPct).toBe(100);
+  });
 });
