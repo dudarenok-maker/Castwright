@@ -80,6 +80,54 @@ function buildFixture() {
   return { body, paras, sentences: examined.sentences, flags: examined.flags };
 }
 
+/** Same shape as buildFixture, but Anton's tag-anchored line is padded well
+    past MAX_WINDOW_CHARS (1500) by itself — the window's core dialogue
+    alone exceeds the cap before any short-narration context is even
+    considered, exercising the hard-slice fallback branch. */
+function buildOversizedFixture() {
+  const enIdx = buildNameIndex(
+    [
+      { id: 'anton', name: 'Anton' },
+      { id: 'olga', name: 'Olga' },
+      { id: 'boris', name: 'Boris' },
+    ],
+    conventionsFor('en')!,
+  );
+  const filler = 'lorem '.repeat(300); // ~1800 chars
+  const body = [
+    'He waited quietly.',
+    `"Ready? ${filler}" said Anton.`,
+    '"Ready," said Olga.',
+    '"Confirmed," said Boris.',
+    '"Then let\'s go."',
+    '"After you."',
+    'She smiled and walked ahead.',
+  ].join('\n');
+
+  const paras = parseChapterStructure(body, enIdx);
+  resolveWindows(paras, { anton: 'male', olga: 'female', boris: 'male' }, null);
+
+  const sentences: SentenceOutput[] = [
+    { id: 1, chapterId: 1, characterId: 'anton', text: `Ready? ${filler}` },
+    { id: 2, chapterId: 1, characterId: 'olga', text: 'Ready,' },
+    { id: 3, chapterId: 1, characterId: 'boris', text: 'Confirmed,' },
+    { id: 4, chapterId: 1, characterId: 'narrator', text: "Then let's go." },
+    { id: 5, chapterId: 1, characterId: 'narrator', text: 'After you.' },
+  ];
+
+  const alignment = alignSentences(sentences, paras, body);
+  const examined = crossExamine(alignment, {
+    rosterIds: new Set(ROSTER),
+    unknownBucketIds: new Set([MALE_BUCKET_ID, FEMALE_BUCKET_ID]),
+    alignmentFloorPct: 80,
+  });
+  expect(examined.flags).toEqual([
+    { index: 3, reason: 'unanchored-narrator' },
+    { index: 4, reason: 'unanchored-narrator' },
+  ]);
+  return { body, paras, sentences: examined.sentences, flags: examined.flags };
+}
+
 function fakeAnalyzer(impl: (prompt: string) => EscalationOutput | null): Analyzer {
   return {
     runStage1: () => Promise.reject(new Error('not used')),
@@ -129,6 +177,31 @@ describe('escalateFlaggedWindows', () => {
     // core dialogue present
     expect(windowText).toContain("Then let's go");
     expect(windowText).toContain('After you');
+  });
+
+  it('(a2) hard-slice fallback: core dialogue alone > 1500 chars still caps the text AND keeps both flagged-line markers', async () => {
+    const { body, paras, sentences, flags } = buildOversizedFixture();
+    let capturedPrompt = '';
+    const analyzer = fakeAnalyzer((prompt) => {
+      capturedPrompt = prompt;
+      return { assignments: [] };
+    });
+
+    const outcome = await escalateFlaggedWindows({
+      ...baseOpts(),
+      sentences,
+      flags,
+      paras,
+      body,
+      analyzer,
+    });
+
+    expect(outcome.attempted).toBe(1);
+    const windowText = capturedPrompt.split('Text (>>N<< marks the lines to resolve):\n')[1];
+    expect(windowText.length).toBeLessThanOrEqual(1500);
+    // both flagged-line markers must survive truncation, not just the cap itself
+    expect(windowText).toContain('>>4<<');
+    expect(windowText).toContain('>>5<<');
   });
 
   it('(b) prompt contains window text, flagged-line markers, participant candidates, and the JSON-shape ask', async () => {

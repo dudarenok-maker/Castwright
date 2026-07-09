@@ -128,9 +128,13 @@ function buildWindowText(
       text = candidate;
     }
   } else {
-    // Core dialogue alone already exceeds the cap — hard cap as a last
-    // resort rather than desync the marker numbering by dropping a line.
-    text = text.slice(0, MAX_WINDOW_CHARS);
+    // Core dialogue alone already exceeds the cap. Blindly slicing the
+    // joined string from the front can land entirely inside one oversized
+    // paragraph and silently drop every marker after it — instead, cap each
+    // paragraph to an equal share of the budget so every paragraph (and any
+    // marker stamped at its start) survives, just with its body truncated.
+    const perParaBudget = Math.max(1, Math.floor(MAX_WINDOW_CHARS / selected.length));
+    text = selected.map((pIdx) => renderPara(pIdx).slice(0, perParaBudget)).join('\n');
   }
 
   const participantIds = new Set<string>();
