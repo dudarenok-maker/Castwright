@@ -2753,6 +2753,8 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
           at: string;
           structureEngineVersion: number;
           report?: unknown;
+          scope?: string;
+          chaptersCovered?: number;
         };
         expect(provenance).toBeDefined();
         expect(provenance.engine).toBe('gemini');
@@ -2761,6 +2763,10 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
         expect(typeof provenance.at).toBe('string');
         expect(new Date(provenance.at).toString()).not.toBe('Invalid Date');
         expect(provenance.report).toEqual(EXPECTED_REPORT);
+        // srv-59 Task 11 (review follow-up) — the main whole-book route
+        // marks its own report distinctly from a subset retry's.
+        expect(provenance.scope).toBe('book');
+        expect(provenance.chaptersCovered).toBe(2);
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
@@ -2849,12 +2855,20 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
           at: string;
           structureEngineVersion: number;
           report?: unknown;
+          scope?: string;
+          chaptersCovered?: number;
         };
         expect(provenance).toBeDefined();
         expect(provenance.at).not.toBe(staleAt);
         expect(new Date(provenance.at).toString()).not.toBe('Invalid Date');
         expect(provenance.model).toBe('phase1-model-subset');
         expect(provenance.report).toEqual(EXPECTED_REPORT);
+        // srv-59 Task 11 (review follow-up) — a subset (chapter-retry) run
+        // marks its report distinctly from a whole-book one, since it only
+        // covers the retried chapters (here: both, so scope alone is the
+        // distinguishing assertion vs. the main-route test above).
+        expect(provenance.scope).toBe('subset');
+        expect(provenance.chaptersCovered).toBe(2);
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);

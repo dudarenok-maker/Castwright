@@ -4373,6 +4373,8 @@ export async function runMainAnalyzerJob(
                 at: new Date().toISOString(),
                 structureEngineVersion: 1,
                 report: aggregateStructureReports(structureReports),
+                scope: 'book',
+                chaptersCovered: chapters.length,
               },
               updatedAt: new Date().toISOString(),
             };
@@ -5412,6 +5414,8 @@ export async function runSubsetAnalyzerJob(
                 at: new Date().toISOString(),
                 structureEngineVersion: 1,
                 report: aggregateStructureReports(subsetStructureReports),
+                scope: 'subset',
+                chaptersCovered: toRun.length,
               },
               updatedAt: new Date().toISOString(),
             };

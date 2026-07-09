@@ -262,6 +262,18 @@ export interface BookStateJson {
     at: string;
     structureEngineVersion: 1;
     report?: AnalysisProvenanceReport;
+    /* srv-59 Task 11 (review follow-up) — which kind of run produced this
+       block: `'book'` from the main whole-book route, `'subset'` from a
+       chapter-retry ("Re-analyse") pass that only reprocessed some
+       chapters. Without this, a subset run's report is indistinguishable
+       from a whole-book one even though it covers far fewer chapters.
+       Optional + additive: absent on state.json files written before this
+       landed, and no reader may require it. */
+    scope?: 'book' | 'subset';
+    /** Count of chapters this pass actually reprocessed — 'book': every
+        chapter; 'subset': just the retried ones. Optional/additive, same as
+        `scope`. */
+    chaptersCovered?: number;
   };
 }
 
