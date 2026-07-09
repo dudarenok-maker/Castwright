@@ -4,9 +4,11 @@ import {
   scriptReviewSlice,
   scriptReviewActions,
   selectActiveReview,
+  selectVisibleReview,
   opKey,
   type ReviewOpWithChapter,
 } from './script-review-slice';
+import type { RootState } from './index';
 import type { SubstageEntry } from './prosody-slice';
 
 // ---------------------------------------------------------------------------
@@ -368,5 +370,78 @@ describe('script-review-slice activeStreams', () => {
       totalChapters: 3,
       estRemainingMs: 20_000,
     });
+  });
+});
+
+function makeOp(id: number, op: string, chapterId = 1) {
+  return { id, op, chapterId, rationale: 'r' } as never;
+}
+
+describe('script-review-slice — hide vs discard', () => {
+  it('setReview always sets visible:true and stores manuscriptId/version', () => {
+    const state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.setReview({ bookId: 'b1', ops: [makeOp(1, 'strip_tag')], unappliable: [], manuscriptId: 'ms-1', versionByChapter: { 1: 3 } }),
+    );
+    expect(state.byBook['b1']?.visible).toBe(true);
+    expect(state.byBook['b1']?.manuscriptId).toBe('ms-1');
+    expect(state.byBook['b1']?.versionByChapter).toEqual({ 1: 3 });
+  });
+
+  it('hideReview flips visible to false without touching ops/selected', () => {
+    let state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.setReview({ bookId: 'b1', ops: [makeOp(1, 'strip_tag')], unappliable: [], manuscriptId: 'ms-1', versionByChapter: { 1: 1 } }),
+    );
+    state = scriptReviewSlice.reducer(state, scriptReviewActions.hideReview({ bookId: 'b1' }));
+    expect(state.byBook['b1']?.visible).toBe(false);
+    expect(state.byBook['b1']?.ops).toHaveLength(1);
+  });
+
+  it('showReview flips visible back to true', () => {
+    let state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.setReview({ bookId: 'b1', ops: [], unappliable: [], manuscriptId: 'ms-1', versionByChapter: { 1: 1 } }),
+    );
+    state = scriptReviewSlice.reducer(state, scriptReviewActions.hideReview({ bookId: 'b1' }));
+    state = scriptReviewSlice.reducer(state, scriptReviewActions.showReview({ bookId: 'b1' }));
+    expect(state.byBook['b1']?.visible).toBe(true);
+  });
+
+  it('removeBucket deletes the bucket entirely', () => {
+    let state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.setReview({ bookId: 'b1', ops: [], unappliable: [], manuscriptId: 'ms-1', versionByChapter: { 1: 1 } }),
+    );
+    state = scriptReviewSlice.reducer(state, scriptReviewActions.removeBucket({ bookId: 'b1' }));
+    expect(state.byBook['b1']).toBeUndefined();
+  });
+
+  it('resolveOpsLocally removes named ops and deletes the bucket once empty', () => {
+    let state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.setReview({
+        bookId: 'b1',
+        ops: [makeOp(1, 'strip_tag'), makeOp(2, 'fix_emotion')],
+        unappliable: [],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 1: 1 },
+      }),
+    );
+    state = scriptReviewSlice.reducer(state, scriptReviewActions.resolveOpsLocally({ bookId: 'b1', opKeys: [opKey(1, 1, 'strip_tag')] }));
+    expect(state.byBook['b1']?.ops).toHaveLength(1);
+    state = scriptReviewSlice.reducer(state, scriptReviewActions.resolveOpsLocally({ bookId: 'b1', opKeys: [opKey(1, 2, 'fix_emotion')] }));
+    expect(state.byBook['b1']).toBeUndefined();
+  });
+
+  it('selectVisibleReview returns undefined when the bucket is hidden, selectActiveReview still returns it', () => {
+    let state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.setReview({ bookId: 'b1', ops: [], unappliable: [], manuscriptId: 'ms-1', versionByChapter: { 1: 1 } }),
+    );
+    state = scriptReviewSlice.reducer(state, scriptReviewActions.hideReview({ bookId: 'b1' }));
+    const root = { scriptReview: state } as unknown as RootState;
+    expect(selectVisibleReview(root, 'b1')).toBeUndefined();
+    expect(selectActiveReview(root, 'b1')).toBeDefined();
   });
 });

@@ -35,6 +35,23 @@ export interface ScriptReviewBucket {
   unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
   /** Key = opKey(chapterId, id, op); value = whether this op is selected. */
   selected: Record<string, boolean>;
+  /** The manuscript these ops' sentence ids belong to — a reparse changes
+      this, which invalidates the bucket (see hydration in Task 8). One value
+      for the whole bucket: readLedger already drops any entry whose
+      manuscriptId doesn't match the book's current one before the client
+      ever sees it, so every chapter remaining in a hydrated bucket shares
+      this same value. */
+  manuscriptId: string;
+  /** Per-CHAPTER ledger version (design spec §4.2's version nonce is minted
+      per ledger entry, i.e. per chapter — a whole-book bucket spans many
+      chapters, each with its own). Keyed by chapterId. Echoed back on
+      /resolve and the selection PATCH for that chapter so a stale write
+      against a discarded-and-recreated entry no-ops server-side. */
+  versionByChapter: Record<number, number>;
+  /** Whether the results modal is currently shown. Closing (X/backdrop) sets
+      this false WITHOUT touching ops/selected — only discardReview (Task 12)
+      removes the bucket outright. */
+  visible: boolean;
 }
 
 export interface ScriptReviewState {
@@ -58,15 +75,17 @@ export const scriptReviewSlice = createSlice({
         bookId: string;
         ops: ReviewOpWithChapter[];
         unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
+        manuscriptId?: string;
+        versionByChapter?: Record<number, number>;
       }>,
     ) => {
-      const { bookId, ops, unappliable } = a.payload;
+      const { bookId, ops, unappliable, manuscriptId = '', versionByChapter = {} } = a.payload;
       const DEFAULT_OFF = new Set(['reattribute', 'flag_nonstory']); // fs-58 Unit B — higher-risk classes opt-in
       const selected: Record<string, boolean> = {};
       for (const o of ops) {
         selected[opKey(o.chapterId, o.id, o.op)] = !DEFAULT_OFF.has(o.op);
       }
-      s.byBook[bookId] = { ops, unappliable, selected };
+      s.byBook[bookId] = { ops, unappliable, selected, manuscriptId, versionByChapter, visible: true };
     },
 
     /** Flip the selected state of one op by key. */
@@ -95,6 +114,37 @@ export const scriptReviewSlice = createSlice({
     /** Remove one book's bucket entirely (e.g. on modal close / dismiss). */
     clearReview: (s, a: PayloadAction<{ bookId: string }>) => {
       delete s.byBook[a.payload.bookId];
+    },
+
+    /** Hide the modal without touching any data — the X button / backdrop
+        click (design spec §6.2). */
+    hideReview: (s, a: PayloadAction<{ bookId: string }>) => {
+      const bucket = s.byBook[a.payload.bookId];
+      if (bucket) bucket.visible = false;
+    },
+    /** Reopen a hidden bucket (the badge/re-run-gate "Review existing" path). */
+    showReview: (s, a: PayloadAction<{ bookId: string }>) => {
+      const bucket = s.byBook[a.payload.bookId];
+      if (bucket) bucket.visible = true;
+    },
+    /** Delete a book's bucket entirely — the same behavior as clearReview,
+        under the name Task 12's discardReview thunk will call after a
+        successful server discard. clearReview itself is removed in Task 12
+        once every call site has migrated to hideReview/removeBucket. */
+    removeBucket: (s, a: PayloadAction<{ bookId: string }>) => {
+      delete s.byBook[a.payload.bookId];
+    },
+    /** Remove specific applied ops (by opKey) from a book's bucket, deleting
+        the whole bucket once none remain — the client-side mirror of the
+        server's /resolve (Task 5), applied optimistically once the server
+        call succeeds (Task 13). */
+    resolveOpsLocally: (s, a: PayloadAction<{ bookId: string; opKeys: string[] }>) => {
+      const bucket = s.byBook[a.payload.bookId];
+      if (!bucket) return;
+      const removed = new Set(a.payload.opKeys);
+      bucket.ops = bucket.ops.filter((o) => !removed.has(opKey(o.chapterId, o.id, o.op)));
+      for (const key of a.payload.opKeys) delete bucket.selected[key];
+      if (bucket.ops.length === 0) delete s.byBook[a.payload.bookId];
     },
 
     /** Start or restart a review-progress stream for one book. progress is 0..1. */
@@ -128,4 +178,13 @@ export function selectActiveReview(
   bookId: string,
 ): ScriptReviewBucket | undefined {
   return state.scriptReview.byBook[bookId];
+}
+
+/** Like selectActiveReview, but returns undefined for a hidden bucket — use
+    this to gate the modal's render, not selectActiveReview (which still
+    answers "does this book have a pending review at all", used by the
+    unresolved-findings badge in Task 10). */
+export function selectVisibleReview(state: RootState, bookId: string): ScriptReviewBucket | undefined {
+  const bucket = state.scriptReview.byBook[bookId];
+  return bucket?.visible ? bucket : undefined;
 }
