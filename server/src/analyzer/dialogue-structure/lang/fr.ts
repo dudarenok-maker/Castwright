@@ -5,15 +5,15 @@ export const fr: LanguageConventions = {
   dialogueOpen: /^\s*(?:&mdash;|[-–—])\s*/iu,
   quotePairs: [['«', '»']],
   speechVerbStems: [
-    'dit', 'demand', 'répond', 'murmur', 'cri', 'soupir', 'ajout', 'repri', 'lanc', 'rétorqu',
-    'continu', 'interrupt', 'observ', 'remark', 'affirm', 'assur', 'promis', 'averti', 'déclara', 'ajouta',
+    'dit', 'demand', 'répond', 'murmur', 'cri', 'soupir', 'ajout', 'repri', 'lanç', 'rétorqu',
+    'continu', 'interromp', 'observ', 'remarqu', 'affirm', 'assur', 'promis', 'averti', 'déclara',
   ],
   beatVerbStems: ['hocha', 'sourit', 'soupira', 'fronça', 'rit', 'haussa'],
   nameStemmer: (t) => t,
   minStemLength: 3,
   pronouns: {
-    firstPerson: /(^|[^a-z])je([^a-z]|$)/iu,
-    male: /(^|[^a-z])il([^a-z]|$)/iu,
-    female: /(^|[^a-z])elle([^a-z]|$)/iu,
+    firstPerson: /(^|[^\p{L}])je([^\p{L}]|$)/iu,
+    male: /(^|[^\p{L}])il([^\p{L}]|$)/iu,
+    female: /(^|[^\p{L}])elle([^\p{L}]|$)/iu,
   },
 };

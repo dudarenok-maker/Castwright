@@ -5,7 +5,7 @@ export const en: LanguageConventions = {
   dialogueOpen: null, // English opens with quotes, not paragraph dashes
   quotePairs: [
     ['“', '”'],
-    ['“', '”'],
+    ['"', '"'],
     ['‘', '’'],
   ],
   speechVerbStems: [

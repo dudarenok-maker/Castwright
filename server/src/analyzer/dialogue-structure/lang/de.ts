@@ -3,17 +3,17 @@ import type { LanguageConventions } from '../types.js';
 export const de: LanguageConventions = {
   language: 'de',
   dialogueOpen: null,
-  quotePairs: [['„', '"'], ['»', '«']],
+  quotePairs: [['„', '“'], ['»', '«']],
   speechVerbStems: [
-    'sagt', 'fragt', 'antwortet', 'flüstert', 'rief', 'murmelt', 'erwidert', 'ergänzte', 'bemerkt', 'meint',
-    'verkündet', 'ruft', 'stammelt', 'quietscht', 'grollte', 'heult', 'bewahrt', 'äußert', 'beteuert', 'versichert',
+    'sagt', 'fragt', 'antwortet', 'flüstert', 'rief', 'murmelt', 'erwidert', 'ergänzt', 'bemerkt', 'meint',
+    'verkündet', 'ruft', 'stammelt', 'quietscht', 'grollt', 'heult', 'beharrt', 'äußert', 'beteuert', 'versichert',
   ],
   beatVerbStems: ['nickt', 'lächelt', 'seufzt', 'runzelt', 'lacht', 'zuckt'],
   nameStemmer: (t) => t,
   minStemLength: 3,
   pronouns: {
-    firstPerson: /(^|[^a-z])ich([^a-z]|$)/iu,
-    male: /(^|[^a-z])er([^a-z]|$)/iu,
-    female: /(^|[^a-z])sie([^a-z]|$)/iu,
+    firstPerson: /(^|[^\p{L}])ich([^\p{L}]|$)/iu,
+    male: /(^|[^\p{L}])er([^\p{L}]|$)/iu,
+    female: /(^|[^\p{L}])sie([^\p{L}]|$)/iu,
   },
 };
