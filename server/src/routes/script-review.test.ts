@@ -1005,3 +1005,50 @@ describe('GET /:bookId/script-review/state', () => {
     expect(res.body).toEqual({ kind: 'ledger', entries: {} });
   });
 });
+
+describe('mutation endpoints', () => {
+  async function seedEntry() {
+    const { upsertChapterEntry } = await import('../workspace/script-review-ledger.js');
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    return upsertChapterEntry(bookDir(), bookId, {
+      chapterId: 1,
+      manuscriptId,
+      ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }],
+    });
+  }
+
+  it('POST /discard removes the named chapters entirely', async () => {
+    await seedEntry();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/script-review/discard`)
+      .send({ chapterIds: [1] });
+    expect(res.status).toBe(200);
+    const state = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(state.body.entries['1']).toBeUndefined();
+  });
+
+  it('POST /resolve removes only the named op keys and no-ops on a stale version', async () => {
+    const entry = await seedEntry();
+    const stale = await request(app)
+      .post(`/api/books/${bookId}/script-review/resolve`)
+      .send({ chapterId: 1, version: entry.version + 1, appliedOpKeys: ['1:1:strip_tag'] });
+    expect(stale.body.ok).toBe(false);
+
+    const ok = await request(app)
+      .post(`/api/books/${bookId}/script-review/resolve`)
+      .send({ chapterId: 1, version: entry.version, appliedOpKeys: ['1:1:strip_tag'] });
+    expect(ok.body.ok).toBe(true);
+    const state = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(state.body.entries['1']).toBeUndefined(); // was the only op — entry deleted
+  });
+
+  it('PATCH /selection merges overrides and no-ops on a stale version', async () => {
+    const entry = await seedEntry();
+    const res = await request(app)
+      .patch(`/api/books/${bookId}/script-review/selection`)
+      .send({ chapterId: 1, version: entry.version, selected: { '1:1:strip_tag': false } });
+    expect(res.body.ok).toBe(true);
+    const state = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(state.body.entries['1'].selected).toEqual({ '1:1:strip_tag': false });
+  });
+});

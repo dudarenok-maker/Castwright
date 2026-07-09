@@ -30,7 +30,7 @@ import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
-import { upsertChapterEntry, readLedger } from '../workspace/script-review-ledger.js';
+import { upsertChapterEntry, readLedger, discardChapters, resolveOps, patchSelection } from '../workspace/script-review-ledger.js';
 import {
   chunkSentencesByBudget,
   chunkWithContext,
@@ -429,6 +429,59 @@ scriptReviewRouter.get(
     }
     const ledger = await readLedger(located.bookDir, manuscriptId);
     res.json({ kind: 'ledger', entries: ledger.entries });
+  },
+);
+
+scriptReviewRouter.post(
+  '/:bookId/script-review/discard',
+  async (req: Request, res: Response): Promise<void> => {
+    const { bookId } = req.params;
+    const located = await findBookByBookId(bookId);
+    if (!located) {
+      res.status(404).json({ error: 'Book not found.' });
+      return;
+    }
+    const chapterIds: number[] = Array.isArray(req.body?.chapterIds) ? req.body.chapterIds : [];
+    await discardChapters(located.bookDir, bookId, chapterIds);
+    res.json({ ok: true });
+  },
+);
+
+scriptReviewRouter.post(
+  '/:bookId/script-review/resolve',
+  async (req: Request, res: Response): Promise<void> => {
+    const { bookId } = req.params;
+    const located = await findBookByBookId(bookId);
+    if (!located) {
+      res.status(404).json({ error: 'Book not found.' });
+      return;
+    }
+    const { chapterId, version, appliedOpKeys } = req.body ?? {};
+    if (typeof chapterId !== 'number' || typeof version !== 'number' || !Array.isArray(appliedOpKeys)) {
+      res.status(400).json({ error: 'chapterId, version, and appliedOpKeys are required.' });
+      return;
+    }
+    const result = await resolveOps(located.bookDir, bookId, { chapterId, version, appliedOpKeys });
+    res.json(result);
+  },
+);
+
+scriptReviewRouter.patch(
+  '/:bookId/script-review/selection',
+  async (req: Request, res: Response): Promise<void> => {
+    const { bookId } = req.params;
+    const located = await findBookByBookId(bookId);
+    if (!located) {
+      res.status(404).json({ error: 'Book not found.' });
+      return;
+    }
+    const { chapterId, version, selected } = req.body ?? {};
+    if (typeof chapterId !== 'number' || typeof version !== 'number' || typeof selected !== 'object') {
+      res.status(400).json({ error: 'chapterId, version, and selected are required.' });
+      return;
+    }
+    const result = await patchSelection(located.bookDir, bookId, { chapterId, version, selected });
+    res.json(result);
   },
 );
 
