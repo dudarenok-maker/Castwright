@@ -43,7 +43,7 @@ import {
   chapterPacingPhaseFields,
   accumulateChapterPacing,
 } from '../analyzer/chapter-pacing.js';
-import type { SentenceOutput } from '../handoff/schemas.js';
+import type { SentenceOutput, ScriptReviewOp } from '../handoff/schemas.js';
 
 export const scriptReviewRouter = Router();
 
@@ -439,9 +439,21 @@ scriptReviewRouter.get(
     // included alongside a running job's own replay.
     const manuscriptId = located.state.manuscriptId;
     const entries = manuscriptId ? (await readLedger(located.bookDir, manuscriptId)).entries : {};
-    const running = mainScriptReviewJobByBook.get(bookId) ?? findSubsetJobForBook(bookId);
-    if (running) {
-      res.json({ kind: 'running', chapterId: running.chapterId, replay: running.replay, entries });
+    // Finding 6 (PR review round 4): two different chapters' single-chapter
+    // reviews can run concurrently for the same book (subsetScriptReviewJobByChapter
+    // is keyed by bookId:chapterId), so reporting only the first match here
+    // silently hid the other job's live progress/error visibility from a
+    // hydrating client — the job itself still completes and checkpoints
+    // correctly regardless, but a reload only ever reattached to one of the
+    // two. Report every currently-running job for this book instead.
+    const runningJobs: Array<{ chapterId?: number; replay: ScriptReviewReplayState }> = [];
+    const mainJob = mainScriptReviewJobByBook.get(bookId);
+    if (mainJob) runningJobs.push({ chapterId: mainJob.chapterId, replay: mainJob.replay });
+    for (const job of subsetScriptReviewJobByChapter.values()) {
+      if (job.bookId === bookId) runningJobs.push({ chapterId: job.chapterId, replay: job.replay });
+    }
+    if (runningJobs.length > 0) {
+      res.json({ kind: 'running', running: runningJobs, entries });
       return;
     }
     res.json({ kind: 'ledger', entries });
@@ -598,6 +610,11 @@ async function runScriptReviewJob(
         overlap: 3,
         serialize: (s) => JSON.stringify({ id: s.id, characterId: s.characterId, text: s.text }),
       });
+      // Finding 8 (PR review round 4): accumulate this chapter's own ops
+      // locally as they're produced instead of re-filtering the ENTIRE
+      // job-lifetime opsEvents array after every chapter (O(n^2) over a
+      // long book) — see chapterOps below.
+      const chapterOpsAccum: ScriptReviewOp[] = [];
       for (let index = 0; index < chunks.length; index += 1) {
         const chunk = chunks[index];
         if (job.controller.signal.aborted) break;
@@ -615,6 +632,7 @@ async function runScriptReviewJob(
           if (owned.length) {
             send({ kind: 'ops', chapterId, ops: owned });
             totalOps += owned.length;
+            chapterOpsAccum.push(...owned);
           }
         } catch (err) {
           if (err instanceof AnalysisAbortedError) break;
@@ -629,9 +647,7 @@ async function runScriptReviewJob(
       ({ actualMsTotal, actualCharsTotal } = accumulateChapterPacing({ actualMsTotal, actualCharsTotal }, chapterStartedAt, charsByChapter.get(chapterId) ?? 0));
       reviewedChapters += 1;
 
-      const chapterOps = job.replay.opsEvents
-        .filter((e) => e.chapterId === chapterId)
-        .flatMap((e) => e.ops);
+      const chapterOps = chapterOpsAccum;
       if (chapterOps.length > 0) {
         try {
           const entry = await upsertChapterEntry(located.bookDir, job.bookId, {

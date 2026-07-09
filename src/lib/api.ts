@@ -3361,7 +3361,15 @@ export interface LedgerEntryDTO {
   completedAt: string;
 }
 export type ScriptReviewStateDTO =
-  | { kind: 'running'; chapterId?: number; replay: unknown; entries: Record<string, LedgerEntryDTO> }
+  | {
+      kind: 'running';
+      // Finding 6 (PR review round 4): two different chapters' single-chapter
+      // reviews can legitimately run concurrently for the same book — report
+      // ALL of them, not just the first match (see the server-side comment
+      // in server/src/routes/script-review.ts's GET /state handler).
+      running: Array<{ chapterId?: number; replay: unknown }>;
+      entries: Record<string, LedgerEntryDTO>;
+    }
   | { kind: 'ledger'; entries: Record<string, LedgerEntryDTO> };
 
 async function realGetScriptReviewState(bookId: string): Promise<ScriptReviewStateDTO> {
@@ -3407,7 +3415,9 @@ async function realPatchScriptReviewSelection(
 
 export async function mockGetScriptReviewState(bookId: string): Promise<ScriptReviewStateDTO> {
   const state = readMockScriptReviewState(bookId);
-  if (state.running) return { kind: 'running', replay: { lastPhase: state.running.lastPhase }, entries: state.entries };
+  if (state.running) {
+    return { kind: 'running', running: [{ replay: { lastPhase: state.running.lastPhase } }], entries: state.entries };
+  }
   return { kind: 'ledger', entries: state.entries };
 }
 async function mockDiscardScriptReview(bookId: string, chapterIds: number[]): Promise<void> {

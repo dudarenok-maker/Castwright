@@ -670,4 +670,40 @@ describe('script-review-slice — removeChaptersLocally scopes to the given chap
     );
     expect(state.byBook['b1']).toBeUndefined();
   });
+
+  /* Round-4 review Finding 1 — removeChaptersLocally's bucket-deletion
+     condition only checked `bucket.ops.length === 0`, unlike its sibling
+     resolveOpsLocally (fixed in round 3, see the test above) which
+     correctly requires BOTH arrays empty. A chapter left with only an
+     unappliable finding (e.g. a stale-id reattribute) after removing OTHER
+     chapters would incorrectly delete the whole bucket, silently hiding a
+     still-server-persisted finding from the client. */
+  it('does NOT delete the bucket when unappliable findings remain for a surviving chapter, even once ops empties', () => {
+    const staleOp = makeOp(99, 'reattribute', 2);
+    let state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.setReview({
+        bookId: 'b1',
+        ops: [makeOp(1, 'strip_tag', 1)],
+        unappliable: [{ op: staleOp, reason: 'stale id' }],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 1: 1, 2: 3 },
+      }),
+    );
+    expect(state.byBook['b1']?.ops).toHaveLength(1);
+    expect(state.byBook['b1']?.unappliable).toHaveLength(1);
+
+    // Remove chapter 1 (the only chapter with an appliable op) — ops
+    // empties, but chapter 2's unappliable finding is still genuinely
+    // pending server-side.
+    state = scriptReviewSlice.reducer(
+      state,
+      scriptReviewActions.removeChaptersLocally({ bookId: 'b1', chapterIds: [1] }),
+    );
+
+    expect(state.byBook['b1']).toBeDefined();
+    expect(state.byBook['b1']?.ops).toHaveLength(0);
+    expect(state.byBook['b1']?.unappliable).toHaveLength(1);
+    expect(state.byBook['b1']?.unappliable[0].op.id).toBe(99);
+  });
 });

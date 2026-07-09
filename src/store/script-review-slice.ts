@@ -236,7 +236,10 @@ export const scriptReviewSlice = createSlice({
       }
       bucket.selected = survivingSelected;
       for (const chapterId of a.payload.chapterIds) delete bucket.versionByChapter[chapterId];
-      if (bucket.ops.length === 0) delete s.byBook[a.payload.bookId];
+      // Finding 1 (PR review round 4): mirror resolveOpsLocally's fix (round
+      // 3) — unappliable findings can still be genuinely pending even once
+      // ops empties; only delete the bucket once BOTH are empty.
+      if (bucket.ops.length === 0 && bucket.unappliable.length === 0) delete s.byBook[a.payload.bookId];
     },
 
     /** Start or restart a review-progress stream for one book. progress is 0..1. */

@@ -19,7 +19,7 @@ import { manuscriptSlice } from '../store/manuscript-slice';
 import { changeLogSlice } from '../store/change-log-slice';
 import { tourSlice } from '../store/tour-slice';
 import { scriptReviewSlice, unresolvedCountForChapters } from '../store/script-review-slice';
-import { uiSlice } from '../store/ui-slice';
+import { uiSlice, uiActions } from '../store/ui-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { castSlice } from '../store/cast-slice';
@@ -2016,6 +2016,114 @@ describe('ManuscriptView — mount hydration race (fs-58 PR review round 3, Find
       expect(screen.getByTestId('review-script-chapter')).not.toBeDisabled();
     });
     expect(screen.getByTestId('review-script-menu-toggle')).not.toBeDisabled();
+  });
+});
+
+/* Round-4 review Finding 4 — the mount-time hydration effect is keyed only
+   on [bookId] with no cleanup. If the user switches books before an
+   in-flight hydration resolves, the effect re-fires for the NEW book — and
+   if the STALE hydration for the OLD book then resolves, its `.finally`
+   would clear scriptReviewHydrating for whichever book is on screen now,
+   reopening the exact race Finding 1 (round 3, above) closed, just via
+   cross-book interleaving instead of a same-book double-click. Pins the
+   generation-counter fix: only the most recent effect run may clear the
+   loading flag. */
+describe('ManuscriptView — cross-book mount hydration race (fs-58 PR review round 4, Finding 4)', () => {
+  const raceChapter: Chapter = {
+    id: 1,
+    title: 'Chapter One',
+    duration: '10:00',
+    state: 'done',
+    progress: 1,
+    characters: {},
+  };
+
+  beforeEach(() => {
+    getScriptReviewState.mockReset();
+  });
+
+  afterEach(() => {
+    getScriptReviewState.mockReset().mockResolvedValue({ kind: 'ledger', entries: {} });
+  });
+
+  function renderRaceView(store: ReturnType<typeof configureStore>) {
+    return render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[raceChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[]}
+        />
+      </Provider>,
+    );
+  }
+
+  it('a stale hydration for a book the user switched away from does not clear the loading flag for the NEW (current) book', async () => {
+    const resolvers: Array<(v: { kind: 'ledger'; entries: Record<string, never> }) => void> = [];
+    getScriptReviewState.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'bk-A',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+      },
+    });
+
+    renderRaceView(store);
+
+    // Book A's mount-time hydration is in flight — button disabled.
+    expect(resolvers).toHaveLength(1);
+    expect(screen.getByTestId('review-script-chapter')).toBeDisabled();
+
+    // The user switches to book B before A's hydration resolves — the
+    // effect re-fires (still keyed on [bookId]), starting a SECOND
+    // hydration and bumping the generation counter.
+    await act(async () => {
+      store.dispatch(uiActions.openBook({ id: 'bk-B', status: 'complete' }));
+    });
+    expect(resolvers).toHaveLength(2);
+    expect(screen.getByTestId('review-script-chapter')).toBeDisabled();
+
+    // Book A's STALE hydration resolves. Pre-fix, this `.finally` would
+    // unconditionally clear scriptReviewHydrating — re-enabling the button
+    // while book B's (current) hydration is still pending.
+    await act(async () => {
+      resolvers[0]({ kind: 'ledger', entries: {} });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('review-script-chapter')).toBeDisabled();
+
+    // Book B's hydration (the current generation) resolves — only NOW does
+    // the flag clear.
+    await act(async () => {
+      resolvers[1]({ kind: 'ledger', entries: {} });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('review-script-chapter')).not.toBeDisabled();
+    });
   });
 });
 

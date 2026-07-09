@@ -120,7 +120,6 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
 // double-count this task exists to fix — the wider server response object
 // still satisfies this narrower type structurally, so no caller changes.
 interface RunningReviewState {
-  kind: 'running';
   chapterId?: number;
   replay: {
     lastPhase: { progress: number; label: string; chapterIndex?: number; totalChapters?: number; estRemainingMs?: number } | null;
@@ -181,6 +180,13 @@ export async function attachToRunningReview(
       unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
     };
     dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter }));
+  } catch (err) {
+    dispatch(
+      notificationsActions.pushToast({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Script review failed.',
+      }),
+    );
   } finally {
     dispatch(scriptReviewActions.clear({ bookId }));
   }
@@ -210,11 +216,19 @@ interface ManuscriptCastSnapshot {
   manuscriptId: string;
 }
 
-function snapshotIfReady(getState: () => RootState): ManuscriptCastSnapshot | null {
+function snapshotIfReady(getState: () => RootState, bookId: string): ManuscriptCastSnapshot | null {
   const state = getState();
   const manuscriptId = state.manuscript.manuscriptId;
   const characters = state.cast?.characters;
   if (!manuscriptId || !characters) return null;
+  // Cross-book race guard (PR review round 4): manuscript/cast are global
+  // slices, not book-scoped. If the caller's book was switched away from
+  // while this hydration was waiting, state.manuscript could now belong to
+  // a DIFFERENT book entirely — mirror the same manuscript.bookId===bookId
+  // guard src/routes/index.tsx already uses for this identical race,
+  // rather than risk stamping this book's script-review bucket with
+  // another book's live sentences/cast.
+  if (state.manuscript.bookId !== bookId) return null;
   return {
     manuscriptId,
     characterIds: new Set(characters.map((c) => c.id)),
@@ -235,15 +249,16 @@ function snapshotIfReady(getState: () => RootState): ManuscriptCastSnapshot | nu
 function waitForManuscriptAndCast(
   getState: () => RootState,
   subscribe: (listener: () => void) => () => void,
+  bookId: string,
 ): Promise<ManuscriptCastSnapshot> {
   return new Promise((resolve) => {
-    const immediate = snapshotIfReady(getState);
+    const immediate = snapshotIfReady(getState, bookId);
     if (immediate) {
       resolve(immediate);
       return;
     }
     const unsubscribe = subscribe(() => {
-      const snapshot = snapshotIfReady(getState);
+      const snapshot = snapshotIfReady(getState, bookId);
       if (snapshot) {
         unsubscribe();
         resolve(snapshot);
@@ -286,7 +301,7 @@ export async function hydrateScriptReview(
   // without disturbing it.
   const chapterEntries = Object.entries(state.entries);
   if (chapterEntries.length > 0) {
-    const { sentences, characterIds, manuscriptId } = await waitForManuscriptAndCast(getState, subscribe);
+    const { sentences, characterIds, manuscriptId } = await waitForManuscriptAndCast(getState, subscribe, bookId);
 
     const allOps: ReviewOpWithChapter[] = [];
     const versionByChapter: Record<number, number> = {};
@@ -312,13 +327,27 @@ export async function hydrateScriptReview(
   }
 
   if (state.kind === 'running') {
-    const { sentences, characterIds, manuscriptId } = await waitForManuscriptAndCast(getState, subscribe);
-    // state.replay is `unknown` on the wire DTO (api.ts's ScriptReviewStateDTO)
-    // — attachToRunningReview's RunningReviewState narrows it to just the
-    // `lastPhase` field it actually reads (see the comment above that
-    // function for why). The server's actual replay object structurally
-    // satisfies this narrower shape; the cast just recovers that at the
-    // type level since the DTO itself only guarantees `unknown`.
-    await attachToRunningReview(bookId, state as RunningReviewState, { dispatch, sentences, characterIds, manuscriptId });
+    // Finding 6 (PR review round 4): two different chapters' single-chapter
+    // reviews can legitimately run concurrently for the same book — the
+    // server now reports every currently-running job in `state.running`
+    // rather than just the first match. Attach to ALL of them, in parallel.
+    // Each call is independently scoped to its own chapter/job with its own
+    // local allOps/versionByChapter accumulator and its own eventual
+    // setReview dispatch, which already correctly MERGES by chapter rather
+    // than replacing — running them concurrently does not reintroduce the
+    // double-counting risk the single-job version was written to avoid.
+    await Promise.all(
+      state.running.map(async (running) => {
+        const { sentences, characterIds, manuscriptId } = await waitForManuscriptAndCast(getState, subscribe, bookId);
+        // running.replay is `unknown` on the wire DTO (api.ts's
+        // ScriptReviewStateDTO) — attachToRunningReview's RunningReviewState
+        // narrows it to just the `lastPhase` field it actually reads (see
+        // the comment above that function for why). The server's actual
+        // replay object structurally satisfies this narrower shape; the
+        // cast just recovers that at the type level since the DTO itself
+        // only guarantees `unknown`.
+        await attachToRunningReview(bookId, running as RunningReviewState, { dispatch, sentences, characterIds, manuscriptId });
+      }),
+    );
   }
 }

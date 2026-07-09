@@ -1014,7 +1014,11 @@ describe('GET /:bookId/script-review/state', () => {
 
     const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
     expect(res.body.kind).toBe('running');
-    expect(res.body.chapterId).toBe(1);
+    // Finding 6 (PR review round 4): `running` is now an ARRAY of running
+    // jobs (two different chapters can legitimately run concurrently for
+    // the same book) rather than a single {chapterId, replay} pair.
+    expect(res.body.running).toHaveLength(1);
+    expect(res.body.running[0].chapterId).toBe(1);
 
     resolveReview?.({ ops: [] });
     await done;
@@ -1056,7 +1060,8 @@ describe('GET /:bookId/script-review/state', () => {
 
     const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
     expect(res.body.kind).toBe('running');
-    expect(res.body.chapterId).toBe(7);
+    expect(res.body.running).toHaveLength(1);
+    expect(res.body.running[0].chapterId).toBe(7);
     // Chapter 3's persisted finding must still be visible, not hidden by
     // chapter 7's in-flight job.
     expect(res.body.entries['3']).toBeDefined();
@@ -1064,6 +1069,44 @@ describe('GET /:bookId/script-review/state', () => {
 
     resolveReview?.({ ops: [] });
     await done;
+  });
+
+  /* Round-4 review Finding 6 — two different chapters' single-chapter
+     reviews can legitimately run concurrently for the same book
+     (subsetScriptReviewJobByChapter is keyed by bookId:chapterId — see the
+     "sticky job registry" Bug-1 regression test above). GET /state used to
+     report only the FIRST match (mainScriptReviewJobByBook.get(bookId) ??
+     findSubsetJobForBook(bookId)), so a client reloading while two jobs were
+     running only ever attached to one of them, missing the other job's live
+     progress/error visibility entirely (a visibility gap, not data loss —
+     the other job still completes and checkpoints correctly regardless).
+     Report every currently-running job for the book. */
+  it('reports BOTH running jobs when two different chapters are concurrently running for the same book', async () => {
+    writeBook([
+      { id: 1, chapterId: 5, characterId: 'narrator', text: 'Chapter five line.' },
+      { id: 2, chapterId: 8, characterId: 'narrator', text: 'Chapter eight line.' },
+    ]);
+    let resolveChapter5: ((v: { ops: unknown[] }) => void) | undefined;
+    let resolveChapter8: ((v: { ops: unknown[] }) => void) | undefined;
+    runReview.mockImplementation((_m, chapterId): Promise<{ ops: unknown[] }> => {
+      if (chapterId === 5) return new Promise((resolve) => { resolveChapter5 = resolve; });
+      return new Promise((resolve) => { resolveChapter8 = resolve; });
+    });
+
+    const first = firePost(`/api/books/${bookId}/script-review`, { chapterId: 5 });
+    await new Promise((r) => setTimeout(r, 20));
+    const second = firePost(`/api/books/${bookId}/script-review`, { chapterId: 8 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(res.body.kind).toBe('running');
+    expect(res.body.running).toHaveLength(2);
+    const chapterIds = res.body.running.map((r: { chapterId: number }) => r.chapterId).sort();
+    expect(chapterIds).toEqual([5, 8]);
+
+    resolveChapter5?.({ ops: [] });
+    resolveChapter8?.({ ops: [] });
+    await Promise.all([first.done, second.done]);
   });
 });
 

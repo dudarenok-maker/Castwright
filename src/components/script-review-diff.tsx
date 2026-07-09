@@ -321,7 +321,11 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
   }
 
   async function confirmDismissAll() {
-    const chapterIds = [...new Set(ops.map((o) => o.chapterId))];
+    // Finding 3 (PR review round 4): scoping the discard to only `ops`
+    // (the appliable set) silently left out a chapter whose findings are
+    // ALL unappliable — even though this button's own copy claims "This
+    // can't be undone." Include unappliable's chapters too.
+    const chapterIds = [...new Set([...ops.map((o) => o.chapterId), ...unappliable.map((u) => u.op.chapterId)])];
     setConfirmDismiss(false);
     try {
       await discardReview(bookId, chapterIds, { dispatch });

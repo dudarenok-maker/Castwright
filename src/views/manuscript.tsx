@@ -156,12 +156,29 @@ export function ManuscriptView({
      overwriting a chapter's still-unresolved ledger entry. Gate both the
      buttons and handleReviewScript's early-return on this flag. */
   const [scriptReviewHydrating, setScriptReviewHydrating] = useState(false);
+  /* Findings 4/5 (PR review round 4): this effect deliberately has no
+     cleanup (see the comment below), keyed only on [bookId]. If the user
+     switches books before a hydration completes, the effect re-fires for
+     the new book — and if the STALE hydration for the OLD book then
+     resolves, its `.finally` would clear scriptReviewHydrating for
+     whichever book is actually on screen now, reopening the exact race
+     Finding 1 (round 3) closed, just via cross-book interleaving instead of
+     a same-book double-click. A generation counter — the standard
+     "ignore a stale async result" idiom — ensures only the MOST RECENT
+     effect run for this component instance is allowed to act. */
+  const scriptReviewHydrationGenerationRef = useRef(0);
   useEffect(() => {
     if (!bookId) return;
+    const generation = ++scriptReviewHydrationGenerationRef.current;
     setScriptReviewHydrating(true);
-    void hydrateScriptReview(bookId, { dispatch, getState: store.getState, subscribe: store.subscribe }).finally(() =>
-      setScriptReviewHydrating(false),
-    );
+    void hydrateScriptReview(bookId, { dispatch, getState: store.getState, subscribe: store.subscribe }).finally(() => {
+      // Cross-book race guard (PR review round 4): only the MOST RECENT
+      // effect run for this component instance is allowed to clear the
+      // loading flag. If the user switched books while an older hydration
+      // was still in flight, that stale call's completion must not flip the
+      // flag off for whatever book is actually on screen now.
+      if (scriptReviewHydrationGenerationRef.current === generation) setScriptReviewHydrating(false);
+    });
     // Intentionally no cleanup/abort: hydration is a one-shot reconciliation
     // per mount, and the sticky job registry (server Task 2) makes a
     // duplicate in-flight POST from attachToRunningReview safe to abandon.
@@ -866,6 +883,18 @@ export function ManuscriptView({
     }
   }
 
+  // Finding 7 (PR review round 4): match this file's own existing
+  // convention for a chapter label (the main chapter header shows both the
+  // id and the stripped title, e.g. `Chapter {id} — {title}`) instead of
+  // showing the confirm-gate dialog a raw internal chapter id on its own.
+  const confirmGateChapterLabel =
+    confirmGate && !confirmGate.wholeBook
+      ? (() => {
+          const title = chapters.find((c) => c.id === confirmGate.chapterIds[0])?.title;
+          return title ? `chapter ${confirmGate.chapterIds[0]} — ${stripChapterPrefix(title)}` : `chapter ${confirmGate.chapterIds[0]}`;
+        })()
+      : null;
+
   return (
     <div
       className="max-w-[1500px] mx-auto px-3 md:px-6 py-6 md:py-8 lg:grid lg:grid-cols-[280px_1fr_360px] lg:gap-6"
@@ -885,7 +914,7 @@ export function ManuscriptView({
             >
               <p className="text-sm text-ink/80">
                 You have {confirmGate.count} unresolved suggestion{confirmGate.count === 1 ? '' : 's'} in{' '}
-                {confirmGate.wholeBook ? 'this book' : `chapter ${confirmGate.chapterIds[0]}`}. Review them, or discard
+                {confirmGate.wholeBook ? 'this book' : confirmGateChapterLabel}. Review them, or discard
                 and start a new review?
               </p>
               <div className="flex items-center gap-3">

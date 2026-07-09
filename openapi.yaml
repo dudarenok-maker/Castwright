@@ -2652,6 +2652,159 @@ paths:
         '409':
           description: Book has not been analysed yet
 
+  /api/books/{bookId}/script-review/state:
+    get:
+      summary: Read the current script-review state for a book (fs-58 persistence)
+      operationId: getScriptReviewState
+      description: |
+        Reconciliation entry point, called on mount to hydrate a book's
+        script-review bucket from the persisted per-chapter ledger and any
+        currently-running review job(s). Always includes the ledger `entries`
+        (pruned to the book's current manuscriptId); when `kind` is
+        `running`, `running` additionally lists every review job in flight
+        for this book — two DIFFERENT chapters' single-chapter reviews can
+        run concurrently for the same book, so this is an array, not a
+        single job.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Current ledger entries, plus any running job(s)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScriptReviewStateResponse' }
+        '404':
+          description: Book not found
+
+  /api/books/{bookId}/script-review/discard:
+    post:
+      summary: Discard persisted script-review findings for the given chapters
+      operationId: discardScriptReview
+      description: |
+        Removes the ledger entries for the given chapterIds — used both by
+        "Dismiss all" (chapters spanning the whole visible bucket) and the
+        re-run confirm gate (just the chapters about to be re-reviewed).
+        Idempotent — discarding an already-absent chapter entry is a no-op.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chapterIds]
+              properties:
+                chapterIds:
+                  type: array
+                  items: { type: integer }
+                  description: Chapter ids whose ledger entries should be discarded.
+      responses:
+        '200':
+          description: Findings discarded (or were already absent)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean }
+        '404':
+          description: Book not found
+
+  /api/books/{bookId}/script-review/resolve:
+    post:
+      summary: Resolve (remove) applied script-review ops from the ledger
+      operationId: resolveScriptReviewOps
+      description: |
+        Removes the named ops (by `${chapterId}:${id}:${op}` key) from one
+        chapter's ledger entry once the client has applied them locally —
+        the server-side mirror of the client's optimistic
+        `resolveOpsLocally`. `version` must match the chapter's current
+        ledger version (minted by the last checkpoint or a prior
+        resolve/selection write); a stale version no-ops (`ok: false`)
+        rather than erroring, so a client racing a discard-and-re-review
+        just silently drops the write instead of corrupting the new entry.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chapterId, version, appliedOpKeys]
+              properties:
+                chapterId: { type: integer }
+                version:
+                  type: integer
+                  description: The chapter's current ledger version, echoed back from the last checkpoint/resolve/selection event.
+                appliedOpKeys:
+                  type: array
+                  items: { type: string }
+                  description: 'Op keys (`${chapterId}:${id}:${op}`) to remove from the ledger entry.'
+      responses:
+        '200':
+          description: Resolve applied (or a stale version made it a no-op)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+                    description: 'false when `version` did not match the ledger''s current version for this chapter — a stale, safely-ignored write.'
+        '400':
+          description: chapterId, version, and appliedOpKeys are required
+        '404':
+          description: Book not found
+
+  /api/books/{bookId}/script-review/selection:
+    patch:
+      summary: Sync per-op selection (checkbox) state to the persisted ledger
+      operationId: patchScriptReviewSelection
+      description: |
+        Merges the given op-key -> selected map into one chapter's ledger
+        entry, debounced client-side ~500ms after the last checkbox toggle
+        so the persisted ledger stays in sync with what the diff modal shows
+        without a round-trip per click. Same stale-version no-op contract as
+        `/resolve`.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chapterId, version, selected]
+              properties:
+                chapterId: { type: integer }
+                version:
+                  type: integer
+                  description: The chapter's current ledger version, echoed back from the last checkpoint/resolve/selection event.
+                selected:
+                  type: object
+                  description: 'Map of op key (`${chapterId}:${id}:${op}`) to whether it is currently checked.'
+                  additionalProperties: { type: boolean }
+      responses:
+        '200':
+          description: Selection merged (or a stale version made it a no-op)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+                    description: 'false when `version` did not match the ledger''s current version for this chapter — a stale, safely-ignored write.'
+        '400':
+          description: chapterId, version, and selected are required
+        '404':
+          description: Book not found
+
   /api/books/{bookId}/cast/{characterId}/emotion-variant/{emotion}:
     delete:
       summary: Remove a designed emotion variant (fs-34)
@@ -2716,6 +2869,71 @@ components:
         suggestions:
           type: array
           items: { $ref: '#/components/schemas/MergeSuggestion' }
+
+    # --- Script review persistence (fs-58) ---------------------------
+    ScriptReviewLedgerEntry:
+      type: object
+      description: |
+        One chapter's persisted, checkpointed script-review findings.
+        `ops` carries the RAW findings only (never appliability — that's a
+        client-side, live-manuscript-dependent computation); `version` is a
+        book-scoped monotonic counter echoed back on `/resolve` and the
+        selection PATCH so a stale write against a discarded-and-recreated
+        entry safely no-ops.
+      required: [manuscriptId, version, ops, selected, completedAt]
+      properties:
+        manuscriptId:
+          type: string
+          description: The manuscript this entry's sentence ids belong to.
+        version:
+          type: integer
+          description: Book-scoped monotonic ledger version, minted at checkpoint time.
+        ops:
+          type: array
+          items: { type: object }
+          description: Raw review ops for this chapter (strip_tag, split, extract_dialogue, merge, fix_emotion, reattribute, flag_nonstory, validate_instruct).
+        selected:
+          type: object
+          description: 'Map of op key (`${chapterId}:${id}:${op}`) to whether it is currently checked, merged in via the selection PATCH.'
+          additionalProperties: { type: boolean }
+        completedAt:
+          type: string
+          format: date-time
+          description: When this chapter was last checkpointed.
+
+    ScriptReviewRunningJob:
+      type: object
+      description: One review job currently in flight for the book (whole-book or single-chapter scope).
+      required: [replay]
+      properties:
+        chapterId:
+          type: integer
+          description: Set only for a single-chapter job; absent means whole-book.
+        replay:
+          type: object
+          description: |
+            The job's buffered SSE events so far (opsEvents, chapterFailedEvents,
+            checkpointEvents, lastPhase, result, errorEvent) — replayed to a
+            newly-joining subscriber in the same shape the live stream uses.
+
+    ScriptReviewStateResponse:
+      type: object
+      description: |
+        GET /script-review/state's response. Always carries the persisted
+        ledger `entries` (keyed by chapterId, pruned to the book's current
+        manuscriptId); `kind: 'running'` additionally lists every review job
+        currently in flight for this book (two different chapters can run
+        concurrently — see ScriptReviewRunningJob).
+      required: [kind, entries]
+      properties:
+        kind: { type: string, enum: [running, ledger] }
+        running:
+          type: array
+          description: Present only when kind is `running` — one entry per currently in-flight job for this book.
+          items: { $ref: '#/components/schemas/ScriptReviewRunningJob' }
+        entries:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/ScriptReviewLedgerEntry' }
 
     # --- User settings ----------------------------------------------
     BackupSnapshot:

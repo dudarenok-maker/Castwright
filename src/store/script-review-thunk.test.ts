@@ -15,6 +15,7 @@ import { api } from '../lib/api';
 import type { ReviewScriptOpts } from '../lib/api';
 import { runReviewScript, hydrateScriptReview, attachToRunningReview, discardReview } from './script-review-thunk';
 import { scriptReviewActions, scriptReviewSlice } from './script-review-slice';
+import { notificationsActions } from './notifications-slice';
 
 describe('runReviewScript', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -81,17 +82,29 @@ describe('runReviewScript', () => {
   });
 });
 
-function makeFakeStore(initial: { manuscriptId: string | null; characters: Array<{ id: string }>; sentences: unknown[] }) {
+// Finding 5 (PR review round 4): `bookId` now drives snapshotIfReady's
+// manuscript.bookId===bookId guard — a fake store used by hydrateScriptReview
+// tests must carry a `bookId` on its manuscript slice that matches (or
+// deliberately mismatches, for the cross-book guard test) the bookId the
+// hydration call under test uses. Default 'book-1' matches every existing
+// test's `hydrateScriptReview('book-1', ...)` call.
+function makeFakeStore(initial: {
+  manuscriptId: string | null;
+  characters: Array<{ id: string }>;
+  sentences: unknown[];
+  bookId?: string | null;
+}) {
+  const bookId = initial.bookId === undefined ? 'book-1' : initial.bookId;
   let state = {
-    manuscript: { manuscriptId: initial.manuscriptId, sentences: initial.sentences },
+    manuscript: { bookId, manuscriptId: initial.manuscriptId, sentences: initial.sentences },
     cast: { characters: initial.characters },
   };
   const listeners: Array<() => void> = [];
   return {
     getState: () => state as never,
     subscribe: (fn: () => void) => { listeners.push(fn); return () => {}; },
-    setManuscriptReady: (manuscriptId: string, sentences: unknown[], characters: Array<{ id: string }>) => {
-      state = { manuscript: { manuscriptId, sentences }, cast: { characters } };
+    setManuscriptReady: (manuscriptId: string, sentences: unknown[], characters: Array<{ id: string }>, readyBookId = 'book-1') => {
+      state = { manuscript: { bookId: readyBookId, manuscriptId, sentences }, cast: { characters } };
       listeners.forEach((l) => l());
     },
   };
@@ -221,15 +234,22 @@ describe('hydrateScriptReview', () => {
     });
     vi.mocked(api.getScriptReviewState).mockResolvedValue({
       kind: 'running',
-      chapterId: 7,
-      replay: {
-        opsEvents: [],
-        chapterFailedEvents: [],
-        checkpointEvents: [],
-        lastPhase: null,
-        result: null,
-        errorEvent: null,
-      },
+      // Finding 6 (PR review round 4): the DTO's running variant is now an
+      // ARRAY of running jobs (a book can have two concurrent single-chapter
+      // jobs) rather than a single {chapterId, replay} pair.
+      running: [
+        {
+          chapterId: 7,
+          replay: {
+            opsEvents: [],
+            chapterFailedEvents: [],
+            checkpointEvents: [],
+            lastPhase: null,
+            result: null,
+            errorEvent: null,
+          },
+        },
+      ],
       // Chapter 3's finding is already persisted, outside the running
       // chapter-7 job's own scope.
       entries: {
@@ -264,6 +284,95 @@ describe('hydrateScriptReview', () => {
     expect(chapterIds.has(3)).toBe(true);
     expect(chapterIds.has(7)).toBe(true);
     expect(bucket!.versionByChapter).toEqual({ 3: 2, 7: 1 });
+  });
+
+  /* Round-4 review Finding 5 — waitForManuscriptAndCast/snapshotIfReady used
+     to read the GLOBAL manuscript/cast slices with no check they actually
+     belonged to the bookId hydration was called for. If the user switched
+     books while this was waiting, a still-pending subscription could
+     resolve with a DIFFERENT book's manuscript/cast data, corrupting this
+     book's script-review bucket. snapshotIfReady now guards on
+     state.manuscript.bookId===bookId (mirroring src/routes/index.tsx's
+     existing manuscriptMatchesBook check) — proves the hydration does NOT
+     resolve/dispatch while the live manuscript belongs to a different book,
+     and DOES once it matches. */
+  it('does not resolve/dispatch while state.manuscript.bookId belongs to a different book, and does once it matches', async () => {
+    const dispatch = vi.fn();
+    const fakeStore = makeFakeStore({ manuscriptId: null, characters: [], sentences: [], bookId: null });
+    vi.mocked(api.getScriptReviewState).mockResolvedValue({
+      kind: 'ledger',
+      entries: { '1': { manuscriptId: 'ms-1', version: 5, ops: [{ id: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }], selected: {}, completedAt: '2026-01-01' } },
+    });
+
+    const promise = hydrateScriptReview('book-A', { dispatch, getState: fakeStore.getState, subscribe: fakeStore.subscribe });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(dispatch).not.toHaveBeenCalled();
+
+    // Manuscript/cast become ready — but for a DIFFERENT book (book-B). The
+    // hydration for book-A must keep waiting, not corrupt book-A's bucket
+    // with book-B's live sentences.
+    fakeStore.setManuscriptReady('ms-1', [{ id: 1, chapterId: 1, text: 'Hi tag', characterId: 'c1' }], [{ id: 'c1' }], 'book-B');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(dispatch).not.toHaveBeenCalled();
+
+    // Now the SAME book (book-A) becomes ready — hydration resolves.
+    fakeStore.setManuscriptReady('ms-1', [{ id: 1, chapterId: 1, text: 'Hi tag', characterId: 'c1' }], [{ id: 'c1' }], 'book-A');
+    await promise;
+
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.hydrateBucket(expect.objectContaining({ bookId: 'book-A', manuscriptId: 'ms-1' })),
+    );
+  });
+
+  /* Round-4 review Finding 6 — GET /state's `running` variant is now an
+     ARRAY (two different chapters' single-chapter jobs can legitimately run
+     concurrently for the same book). hydrateScriptReview must attach to
+     EVERY job in the array and MERGE all of them into the same bucket. */
+  it('attaches to multiple concurrently-running jobs from the running array and merges both into the bucket', async () => {
+    const store = configureStore({ reducer: { scriptReview: scriptReviewSlice.reducer } });
+    const fakeStore = makeFakeStore({
+      manuscriptId: 'ms-1',
+      characters: [{ id: 'c1' }],
+      sentences: [
+        { id: 1, chapterId: 5, text: 'Chapter five line.', characterId: 'c1' },
+        { id: 2, chapterId: 9, text: 'Chapter nine line.', characterId: 'c1' },
+      ],
+    });
+    vi.mocked(api.getScriptReviewState).mockResolvedValue({
+      kind: 'running',
+      running: [
+        { chapterId: 5, replay: { opsEvents: [], chapterFailedEvents: [], checkpointEvents: [], lastPhase: null, result: null, errorEvent: null } },
+        { chapterId: 9, replay: { opsEvents: [], chapterFailedEvents: [], checkpointEvents: [], lastPhase: null, result: null, errorEvent: null } },
+      ],
+      entries: {},
+    });
+    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      // Both joins replay through the same api.reviewScript mock — key off
+      // the requested chapterId (threaded via opts) to reply with each
+      // job's own ops, so the two attaches don't cross-contaminate.
+      const chapterId = opts.chapterId;
+      if (chapterId === 5) {
+        opts.onCheckpoint?.({ chapterId: 5, version: 1 });
+        opts.onOps?.({ chapterId: 5, ops: [{ id: 1, op: 'strip_tag', newText: 'Five fixed', rationale: 'r' }] });
+      } else if (chapterId === 9) {
+        opts.onCheckpoint?.({ chapterId: 9, version: 1 });
+        opts.onOps?.({ chapterId: 9, ops: [{ id: 2, op: 'strip_tag', newText: 'Nine fixed', rationale: 'r' }] });
+      }
+      return { reviewedChapters: 1, totalOps: 1 } as never;
+    });
+
+    await hydrateScriptReview('book-1', {
+      dispatch: store.dispatch,
+      getState: fakeStore.getState as never,
+      subscribe: fakeStore.subscribe,
+    });
+
+    const bucket = store.getState().scriptReview.byBook['book-1'];
+    expect(bucket).toBeDefined();
+    const chapterIds = new Set(bucket!.ops.map((o) => o.chapterId));
+    expect(chapterIds.has(5)).toBe(true);
+    expect(chapterIds.has(9)).toBe(true);
+    expect(bucket!.versionByChapter).toEqual({ 5: 1, 9: 1 });
   });
 });
 
@@ -363,6 +472,32 @@ describe('attachToRunningReview', () => {
     );
     // The critical assertion: exactly ONE copy of the op, not two.
     expect(setReviewCall?.[0].payload.ops).toHaveLength(1);
+  });
+
+  /* Round-4 review Finding 2 — attachToRunningReview had no `catch`, unlike
+     its sibling runReviewScript (which pushes an error toast). A rejected
+     join POST (e.g. the network drops, or the TOCTOU race documented above
+     falls through to a failing create) would propagate as an unhandled
+     rejection with no user-visible feedback, while still clearing the
+     progress pill via `finally`. */
+  it('dispatches an error toast when the join POST rejects, mirroring runReviewScript\'s catch path', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.reviewScript).mockRejectedValue(new Error('join failed'));
+    const runningState = {
+      chapterId: undefined,
+      replay: { lastPhase: null },
+    };
+    await attachToRunningReview('book-1', runningState, {
+      dispatch,
+      sentences: [],
+      characterIds: new Set<string>(),
+      manuscriptId: 'ms-1',
+    });
+    const toastCall = dispatch.mock.calls.find(([action]) => action?.type === notificationsActions.pushToast.type);
+    expect(toastCall?.[0].payload).toEqual(expect.objectContaining({ kind: 'error', message: 'join failed' }));
+    // clear still fires last, same as before this fix.
+    const types = dispatch.mock.calls.map((c) => c[0].type);
+    expect(types[types.length - 1]).toBe(scriptReviewActions.clear.type);
   });
 });
 

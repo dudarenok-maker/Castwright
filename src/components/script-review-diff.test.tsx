@@ -269,6 +269,65 @@ describe('fs-58 — ScriptReviewDiff', () => {
     discardSpy.mockRestore();
   });
 
+  /* Round-4 review Finding 3 — confirmDismissAll only scoped the discard to
+     chapters with entries in `ops` (the appliable set), silently leaving out
+     a chapter whose findings are ALL unappliable — even though "Dismiss
+     all"'s own copy says "This can't be undone." Cover a bucket where one
+     chapter (2) has ONLY an unappliable finding and no appliable ops at
+     all, asserting that chapter's id is still included in the discard
+     call. */
+  it('confirming Dismiss all also discards a chapter whose findings are ALL unappliable', async () => {
+    const discardSpy = vi.spyOn(api, 'discardScriptReview').mockResolvedValue(undefined);
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        cast: castSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'book-A',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+        manuscript: { ...manuscriptSlice.getInitialState() },
+      },
+    });
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: 'book-A',
+        ops: [{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'r', chapterId: 1 }],
+        // Chapter 2 has NO appliable ops — only an unappliable finding.
+        unappliable: [
+          { op: { id: 9, op: 'reattribute', proposed: { name: 'Ferra' }, rationale: 'r', chapterId: 2 }, reason: 'off-roster' },
+        ],
+      }),
+    );
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('dismiss-button'));
+    fireEvent.click(screen.getByTestId('dismiss-confirm-yes'));
+
+    await waitFor(() => expect(discardSpy).toHaveBeenCalledTimes(1));
+    const [calledBookId, calledChapterIds] = discardSpy.mock.calls[0];
+    expect(calledBookId).toBe('book-A');
+    // Chapter 2 (unappliable-only) must be included alongside chapter 1.
+    expect([...calledChapterIds].sort()).toEqual([1, 2]);
+
+    discardSpy.mockRestore();
+  });
+
   /* Round-2 review Important Finding 3 — confirmDismissAll was missing the
      try/catch its manuscript.tsx sibling (handleDiscardAndStartNew) already
      has: a failed discard (network/HTTP error) must surface an error toast,
