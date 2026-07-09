@@ -121,7 +121,7 @@ function parseDashParagraph(
        left unanchored (the single-tag continuation case, e.g. "— Привет, —
        сказал Антон. — Как дела?"). */
   const applyTag = (tag: SpanEvidence, sp: SpanEvidence | null) => {
-    if (!sp || sp.speaker) return;
+    if (!sp || sp.speaker || 'pendingPronoun' in sp) return;
     const text = line.slice(tag.start - base, tag.end - base);
     const name = findRosterName(text, index);
     if (name) {

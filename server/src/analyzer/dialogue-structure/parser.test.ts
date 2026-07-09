@@ -63,6 +63,14 @@ describe('parser — ru dash-dialogue', () => {
     expect(speech[0].speaker).toBeUndefined();
     expect((speech[0] as SpanEvidence & { pendingPronoun?: string }).pendingPronoun).toBe('female');
   });
+  it('dash-dialogue: a later pronoun-only tag\'s span is NOT clobbered by an earlier named tag\'s forward-fill (regression)', () => {
+    const paras = parseChapterStructure('— A, — сказал Антон. — B, — сказала она.', idx);
+    const speech = spansOf(paras).filter((s) => s.kind === 'speech');
+    expect(speech).toHaveLength(2);
+    expect(speech[0].speaker).toEqual({ characterId: 'anton', source: 'tag-name' });
+    expect(speech[1].speaker).toBeUndefined();
+    expect((speech[1] as SpanEvidence & { pendingPronoun?: string }).pendingPronoun).toBe('female');
+  });
   it('dash-dialogue: &mdash; entity leakage treated as a dash', () => {
     const paras = parseChapterStructure('&mdash; Привет.', idx);
     expect(paras[0].kind).toBe('dialogue');
