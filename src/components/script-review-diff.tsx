@@ -284,12 +284,14 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
   }
 
   /* Run the finalized off-roster reattributes through the interleaved
-     create→reassign helper (dedupe + book-switch guard), then clear the
-     review bucket. Called once, after the LAST confirm resolves. */
+     create→reassign helper (dedupe + book-switch guard); each applied op is
+     resolved server-side one at a time via onOpApplied as it happens (fs-58
+     persistence Task 14) — no whole-bucket clear at the end. Called once,
+     after the LAST confirm resolves. */
   async function runProposed(finalized: FinalizedProposed[], startBookId: string) {
     const rosterByName = new Map(cast.map((c) => [c.name.trim().toLowerCase(), { id: c.id }]));
     try {
-      const { createdCharacters } = await applyProposedReattributions(finalized, {
+      const { createdCharacters, aborted } = await applyProposedReattributions(finalized, {
         rosterByName,
         createCharacter: async (p) => {
           // api.createCharacter resolves to a { character } envelope — unwrap it.
@@ -304,7 +306,19 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
         onBoundaryMove: (chapterId) =>
           dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 })),
         isSameBook: () => stageBookIdRef.current === startBookId,
+        onOpApplied: (op) => {
+          if (!bucket) return;
+          void resolveAppliedOps(dispatch, startBookId, bucket, [op]);
+        },
       });
+      if (aborted) {
+        // Book-switch guard tripped mid-batch (silent, no throw) — whatever
+        // was already resolved via onOpApplied above stays resolved; hide,
+        // don't discard the rest (design spec §6.5).
+        setConfirm(null);
+        dispatch(scriptReviewActions.hideReview({ bookId: startBookId }));
+        return;
+      }
       // fs-63 — on success, nudge to auto-voice any newly-created off-roster
       // character (qwen-only; no-op otherwise). Inside the try so a failed
       // create falls to the catch and never nudges.
@@ -324,7 +338,10 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
       return;
     }
     setConfirm(null);
-    dispatch(scriptReviewActions.clearReview({ bookId: startBookId }));
+    // fs-58 persistence Task 14 — no clearReview/discard here: every applied
+    // op was already resolved per-op via onOpApplied as it happened; any op
+    // left in the bucket (unselected, or never reached because an earlier op
+    // failed) stays, unresolved.
   }
 
   /* Advance the confirm queue by one finalized op. A "create new" decision is
@@ -353,19 +370,24 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
       const nextIndex = prev.index + 1;
       if (nextIndex >= prev.queue.length) {
         void runProposed(finalized, prev.startBookId);
-        // Keep `confirm` populated until runProposed resolves to clearReview;
-        // the form unmounts once the bucket is gone.
+        // Keep `confirm` populated until runProposed resolves — every applied
+        // op is resolved per-op via onOpApplied as it happens, so there's no
+        // whole-bucket action to wait on; runProposed itself calls
+        // setConfirm(null) once it's done (success, abort, or failure).
       }
       return { ...prev, finalized, index: nextIndex };
     });
   }
 
   /* Cancel mid-confirm: leave the already-applied direct ops in place, do NOT
-     create any not-yet-confirmed member, and tear the review bucket down. */
+     create any not-yet-confirmed member, and hide (not discard) the review
+     bucket — whatever's left (including ops from this batch that were never
+     confirmed) survives, reachable again via the badge/"Review existing"
+     path (fs-58 persistence Task 14). */
   function cancelConfirm() {
     const startBookId = confirm?.startBookId ?? bookId;
     setConfirm(null);
-    dispatch(scriptReviewActions.clearReview({ bookId: startBookId }));
+    dispatch(scriptReviewActions.hideReview({ bookId: startBookId }));
   }
 
   function handleApply() {

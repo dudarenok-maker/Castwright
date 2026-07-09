@@ -7,6 +7,13 @@ export interface ApplyProposedDeps {
   setSentenceCharacter: (chapterId: number, sentenceId: number, characterId: string) => void;
   onBoundaryMove: (chapterId: number) => void;
   isSameBook: () => boolean;
+  /** Fires immediately after EVERY successfully-applied op, including one
+      that reused an existing/memoized id and never called createCharacter
+      (design spec §6.5) — lets the caller resolve this op server-side
+      one at a time, so a later op's failure never causes an earlier,
+      genuinely-applied op to be left unresolved or a not-yet-applied one
+      to be resolved by mistake. */
+  onOpApplied: (op: ReviewOpWithChapter) => void;
 }
 
 const norm = (s: string) => s.trim().toLowerCase();
@@ -37,6 +44,7 @@ export async function applyProposedReattributions(
     }
     deps.setSentenceCharacter(op.chapterId, op.id, id);
     deps.onBoundaryMove(op.chapterId);
+    deps.onOpApplied(op);
   }
   return { created, createdCharacters, aborted: false };
 }

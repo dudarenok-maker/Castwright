@@ -11,6 +11,7 @@ function deps(over = {}) {
     setSentenceCharacter: (_chapterId: number, id: number, cid: string) => dispatched.push(['reassign', id, cid]),
     onBoundaryMove: () => {},
     isSameBook: () => true,
+    onOpApplied: () => {},
     ...over,
   };
 }
@@ -86,5 +87,59 @@ describe('fs-58 Unit B — applyProposedReattributions', () => {
     ] as any, d);
     expect(r.aborted).toBe(true);
     expect(d.createCharacter).toHaveBeenCalledTimes(1); // stopped before the second
+  });
+});
+
+describe('onOpApplied', () => {
+  it('fires for a newly-created character', async () => {
+    const onOpApplied = vi.fn();
+    const op = { id: 1, chapterId: 3, op: 'reattribute', proposed: { name: 'Nova' }, rationale: 'r' } as never;
+    await applyProposedReattributions([op], {
+      rosterByName: new Map(),
+      createCharacter: async (p) => ({ id: 'c-new', name: p.name }),
+      addCharacter: vi.fn(),
+      setSentenceCharacter: vi.fn(),
+      onBoundaryMove: vi.fn(),
+      isSameBook: () => true,
+      onOpApplied,
+    });
+    expect(onOpApplied).toHaveBeenCalledWith(op);
+  });
+
+  it('fires for a deduped op that reuses an existing roster id and never calls createCharacter', async () => {
+    const onOpApplied = vi.fn();
+    const createCharacter = vi.fn();
+    const op = { id: 2, chapterId: 3, op: 'reattribute', proposed: { name: 'Existing' }, rationale: 'r' } as never;
+    await applyProposedReattributions([op], {
+      rosterByName: new Map([['existing', { id: 'c-existing' }]]),
+      createCharacter,
+      addCharacter: vi.fn(),
+      setSentenceCharacter: vi.fn(),
+      onBoundaryMove: vi.fn(),
+      isSameBook: () => true,
+      onOpApplied,
+    });
+    expect(createCharacter).not.toHaveBeenCalled();
+    expect(onOpApplied).toHaveBeenCalledWith(op);
+  });
+
+  it('does not fire for ops after a create failure aborts the batch', async () => {
+    const onOpApplied = vi.fn();
+    const ops = [
+      { id: 1, chapterId: 3, op: 'reattribute', proposed: { name: 'Nova' }, rationale: 'r' },
+      { id: 2, chapterId: 3, op: 'reattribute', proposed: { name: 'Sol' }, rationale: 'r' },
+    ] as never[];
+    await expect(
+      applyProposedReattributions(ops, {
+        rosterByName: new Map(),
+        createCharacter: vi.fn().mockRejectedValue(new Error('network')),
+        addCharacter: vi.fn(),
+        setSentenceCharacter: vi.fn(),
+        onBoundaryMove: vi.fn(),
+        isSameBook: () => true,
+        onOpApplied,
+      }),
+    ).rejects.toThrow('network');
+    expect(onOpApplied).not.toHaveBeenCalled();
   });
 });

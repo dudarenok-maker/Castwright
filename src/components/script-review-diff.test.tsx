@@ -531,6 +531,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
     ops: Array<{ id: number; chapterId: number; proposed: { name: string } }>,
     sentences: Array<{ id: number; chapterId: number; text: string; characterId: string }>,
     bookId = 'book-A',
+    versionByChapter: Record<number, number> = {},
   ) {
     const store = configureStore({
       reducer: {
@@ -569,6 +570,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
           rationale: 'off-roster speaker',
         })),
         unappliable: [],
+        versionByChapter,
       }),
     );
     // reattribute defaults to UNSELECTED — select the class so Apply picks them up.
@@ -600,6 +602,11 @@ describe('fs-58 — ScriptReviewDiff', () => {
   });
 
   it('two same-name proposed ops create EXACTLY one character through the queue (dedupe)', async () => {
+    // fs-58 persistence Task 14 — seed a ledger version so the per-op
+    // onOpApplied → resolveAppliedOps wiring has something to resolve
+    // against; mock the resolve endpoint so both ops (the newly-created one
+    // AND the deduped one that reused its id) get resolved server-side.
+    const resolveSpy = vi.spyOn(api, 'resolveScriptReviewOps').mockResolvedValue({ ok: true });
     const store = makeProposedStore(
       [
         { id: 5, chapterId: 1, proposed: { name: 'Ferra' } },
@@ -609,6 +616,8 @@ describe('fs-58 — ScriptReviewDiff', () => {
         { id: 5, chapterId: 1, text: 'Line five.', characterId: 'narr' },
         { id: 7, chapterId: 1, text: 'Line seven.', characterId: 'narr' },
       ],
+      'book-A',
+      { 1: 1 },
     );
     render(
       <Provider store={store}>
@@ -626,10 +635,21 @@ describe('fs-58 — ScriptReviewDiff', () => {
     await waitFor(() => expect(screen.getByTestId('confirm-reattribute')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('create-character-submit'));
 
-    // Helper resolves → bucket cleared.
+    // Both ops resolve per-op (including the deduped one, which never calls
+    // createCharacter) → bucket ends up empty → deleted by resolveOpsLocally.
     await waitFor(() =>
       expect(store.getState().scriptReview.byBook['book-A']).toBeUndefined(),
     );
+    expect(resolveSpy).toHaveBeenCalledWith('book-A', {
+      chapterId: 1,
+      version: 1,
+      appliedOpKeys: [opKey(1, 5, 'reattribute')],
+    });
+    expect(resolveSpy).toHaveBeenCalledWith('book-A', {
+      chapterId: 1,
+      version: 1,
+      appliedOpKeys: [opKey(1, 7, 'reattribute')],
+    });
 
     // EXACTLY one create despite two same-name ops.
     expect(createSpy).toHaveBeenCalledTimes(1);
@@ -641,6 +661,8 @@ describe('fs-58 — ScriptReviewDiff', () => {
     const sentences = store.getState().manuscript.sentences;
     expect(sentences.find((s) => s.id === 5)?.characterId).toBe(newId);
     expect(sentences.find((s) => s.id === 7)?.characterId).toBe(newId);
+
+    resolveSpy.mockRestore();
   });
 
   it('a failed create surfaces a toast, closes the confirm dialog, and keeps the review for retry (#1122)', async () => {
@@ -674,7 +696,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
     expect(store.getState().scriptReview.byBook['book-A']).toBeDefined();
   });
 
-  it('cancelling mid-confirm creates NO not-yet-confirmed member and clears the review', async () => {
+  it('cancelling mid-confirm creates NO not-yet-confirmed member and hides (not discards) the review', async () => {
     const store = makeProposedStore(
       [
         { id: 5, chapterId: 1, proposed: { name: 'Ferra' } },
@@ -697,10 +719,134 @@ describe('fs-58 — ScriptReviewDiff', () => {
     // Cancel on the FIRST op — Gus is never even reached.
     fireEvent.click(screen.getByText('Cancel'));
 
-    // No character created; review torn down.
+    // No character created; confirm dialog closed.
     expect(createSpy).not.toHaveBeenCalled();
     expect(store.getState().cast.characters).toHaveLength(0);
-    expect(store.getState().scriptReview.byBook['book-A']).toBeUndefined();
+    expect(screen.queryByTestId('confirm-reattribute')).toBeNull();
+
+    // fs-58 persistence Task 14 — cancel HIDES, it does not discard: the
+    // bucket (both proposed ops, still unresolved) survives, just hidden.
+    const bucket = store.getState().scriptReview.byBook['book-A'];
+    expect(bucket).toBeDefined();
+    expect(bucket?.visible).toBe(false);
+    expect(bucket?.ops.map((o) => o.id)).toEqual([5, 7]);
+  });
+
+  /* fs-58 persistence Task 14 — the async off-roster reattribute confirm
+     queue gets the same per-op resolve treatment Task 13 gave the
+     synchronous Apply path: a batch-tail failure or a mid-batch cancel must
+     never discard an op that was never actually applied (or already
+     resolved). */
+  it('a partially-failing off-roster reattribute batch resolves only the ops that succeeded', async () => {
+    // First proposed name creates successfully; the second (queued after it
+    // in the confirm sequence) rejects, aborting the rest of the batch.
+    createSpy.mockResolvedValueOnce({
+      character: {
+        id: 'nova-id',
+        name: 'Nova',
+        role: 'character',
+        color: 'unset',
+        voiceState: 'generated',
+      },
+    } as never);
+    createSpy.mockRejectedValueOnce(new Error('boom'));
+    const resolveSpy = vi.spyOn(api, 'resolveScriptReviewOps').mockResolvedValue({ ok: true });
+
+    const store = makeProposedStore(
+      [
+        { id: 5, chapterId: 1, proposed: { name: 'Nova' } },
+        { id: 7, chapterId: 1, proposed: { name: 'Sol' } },
+      ],
+      [
+        { id: 5, chapterId: 1, text: 'Line five.', characterId: 'narr' },
+        { id: 7, chapterId: 1, text: 'Line seven.', characterId: 'narr' },
+      ],
+      'book-A',
+      { 1: 1 },
+    );
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('apply-button'));
+    expect(screen.getByTestId('confirm-reattribute')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('create-character-submit')); // Nova
+
+    await waitFor(() => expect(screen.getByTestId('confirm-reattribute')).toBeInTheDocument());
+    // The confirm form's Name field is uncontrolled-from-props (useState(initial)
+    // with no key on the wrapper, so it doesn't reset between confirm-queue
+    // steps) — mirror what an operator actually does and retype the name for
+    // op 2 so it submits «Sol», not the stale «Nova» left over from op 1.
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Sol' } });
+    fireEvent.click(screen.getByTestId('create-character-submit')); // Sol → rejects
+
+    await waitFor(() => {
+      const toasts: Toast[] = store.getState().notifications.toasts;
+      expect(
+        toasts.some((t) => t.kind === 'error' && /couldn't create character/i.test(t.message)),
+      ).toBe(true);
+    });
+
+    const novaKey = opKey(1, 5, 'reattribute');
+    const solKey = opKey(1, 7, 'reattribute');
+    // Nova (the op that actually applied) was resolved server-side — exactly once.
+    expect(resolveSpy).toHaveBeenCalledWith('book-A', {
+      chapterId: 1,
+      version: 1,
+      appliedOpKeys: [novaKey],
+    });
+    // Sol never applied (the create for it rejected) — never resolved.
+    expect(resolveSpy).not.toHaveBeenCalledWith(
+      'book-A',
+      expect.objectContaining({ appliedOpKeys: [solKey] }),
+    );
+
+    // Nova is gone from the bucket (resolved + removed); Sol is still there,
+    // still visible in the list, for the operator to retry.
+    await waitFor(() => {
+      const bucket = store.getState().scriptReview.byBook['book-A'];
+      expect(bucket?.ops.map((o) => o.id)).toEqual([7]);
+    });
+    expect(screen.getByText(/#7/)).toBeInTheDocument();
+
+    resolveSpy.mockRestore();
+  });
+
+  it('cancelling the confirm queue mid-batch hides rather than discards', async () => {
+    const discardSpy = vi.spyOn(api, 'discardScriptReview').mockResolvedValue(undefined);
+    const store = makeProposedStore(
+      [{ id: 5, chapterId: 1, proposed: { name: 'Nova' } }],
+      [{ id: 5, chapterId: 1, text: 'Line five.', characterId: 'narr' }],
+    );
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('apply-button'));
+    expect(screen.getByTestId('confirm-reattribute')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Cancel'));
+
+    // Modal's confirm overlay is gone; nothing was discarded server-side.
+    expect(screen.queryByTestId('confirm-reattribute')).toBeNull();
+    expect(discardSpy).not.toHaveBeenCalled();
+
+    const bucket = store.getState().scriptReview.byBook['book-A'];
+    expect(bucket).toBeDefined();
+    expect(bucket?.visible).toBe(false);
+    expect(bucket?.ops.map((o) => o.id)).toEqual([5]);
+
+    // Reopening (the badge/"Review existing" path — showReview) flips
+    // visible back and the op is still there; cancel never discarded it.
+    store.dispatch(scriptReviewActions.showReview({ bookId: 'book-A' }));
+    const reopened = store.getState().scriptReview.byBook['book-A'];
+    expect(reopened?.visible).toBe(true);
+    expect(reopened?.ops.map((o) => o.id)).toEqual([5]);
+
+    discardSpy.mockRestore();
   });
 
   /* fs-58 persistence Task 13 — Apply now resolves the applied ops server-side
