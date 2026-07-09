@@ -66,12 +66,17 @@ starting a fresh review over a chapter that already has unresolved findings sitt
 ### 4.1 Server-side job registry (sticky, join-or-create, scope-safe)
 
 `POST /api/books/:bookId/script-review` changes from "one request handler runs the whole loop and
-`res.on('close')` aborts it" to the same sticky pattern `analysis.ts` already uses for book analysis —
-including mirroring its **split main/subset registries**, not a single map. `analysis.ts` deliberately
-keeps `inFlightAnalysisByManuscript` (whole-book) and `inFlightSubsetByManuscript` (chapter-scoped)
-separate precisely so a subset job can never be mistaken for — or silently joined by — a whole-book
-request. Script review needs the same split, or a whole-book POST could join an existing single-chapter
-job and return that chapter's findings as if they were a complete whole-book pass.
+`res.on('close')` aborts it" to the same **sticky, detached-from-the-request** pattern `analysis.ts`
+already uses for book analysis, including its split **main/subset registries** — `inFlightAnalysisByManuscript`
+(whole-book) and `inFlightSubsetByManuscript` (chapter-scoped) — so a subset job can never be mistaken
+for, or silently joined by, a whole-book request. This split is a mirror of `analysis.ts`; the
+**cross-scope 409 below is not** — `analysis.ts` actually lets a main and a subset job run concurrently
+for the same manuscript (it just has a tiebreak selector, `snapshotInFlightAnalysis`, for reporting status
+when both are live) because two independent analyses don't conflict with each other's output. Script
+review can't allow that: two concurrent jobs would both be checkpointing into the *same* per-chapter
+ledger (§4.2), and an overlapping-chapter case has no obvious reconciliation rule the way "report whichever
+analysis is more relevant" does for `analysis.ts`. So script review adds a stricter rule `analysis.ts`
+doesn't need:
 
 - Two module-level maps: `mainScriptReviewJobByBook: Map<bookId, ScriptReviewJob>` (whole-book runs) and
   `subsetScriptReviewJobByBook: Map<bookId, ScriptReviewJob>` (single-chapter runs; the job carries its
@@ -85,14 +90,22 @@ job and return that chapter's findings as if they were a complete whole-book pas
   - Single-chapter POST: joins an existing `subsetScriptReviewJobByBook` entry for this book **only if
     its `chapterId` matches**. If it exists for a *different* chapter, or `mainScriptReviewJobByBook` has
     an active whole-book job for this book, reject with 409 with a message naming the conflicting scope.
-  - This keeps the original "at most one active review per book" intent while making a scope mismatch a
-    visible, explicit error instead of a silent wrong-data join.
+  - Today's `script-review.ts` has no registry at all (each request is independent and non-sticky), so
+    there's no prior "one active review per book" behavior being preserved here — this is a new rule this
+    spec introduces, justified by the shared-ledger conflict above, not a carryover from either the old
+    script-review behavior or from `analysis.ts`.
 - `res.on('close')` no longer aborts the controller — it only removes that one subscriber. The LLM work
   keeps running server-side even with zero clients attached.
 - A reconnecting client (reload, or a second tab) attaches as a new subscriber to whichever map/entry
   matches its requested scope, and is replayed the buffered events before continuing to receive live
   ones, so it catches up instantly.
 - If the server process itself restarts, both maps are gone and any in-flight job is genuinely lost (§3).
+- **Deliberately no `fresh:true` displacement path.** `analysis.ts`'s POST is a three-way dispatch
+  (join / abort-and-displace via `fresh:true` / create) because a user can legitimately want to force a
+  brand-new analysis while one is running. Script review has no equivalent user-reachable need: the
+  client-side gate (§6.4, case 1) already disables the button for a scope with a running job, so there is
+  no path that would ever need to abort and replace an in-flight run. This is an intentional
+  simplification, not a gap.
 
 ### 4.2 Per-chapter checkpointed persistence ledger
 
@@ -106,18 +119,26 @@ means there is no "staleness prune to keep in sync with the ledger" (no such red
 `script-review-slice.ts` today) — since appliability is never persisted, there's nothing about it to keep
 in sync.
 
-A JSON file in the book's workspace, `.script-review-pending.json`, keyed by `chapterId`:
+A JSON file in the book's workspace, `.script-review-pending.json`:
 
 ```
 {
-  "<chapterId>": {
-    "ops": ReviewOp[],
-    "selected": Record<opKey, boolean>,
-    "completedAt": "<ISO timestamp>"
-  },
-  ...
+  "nextVersion": <integer>,
+  "entries": {
+    "<chapterId>": {
+      "manuscriptId": "<id>",
+      "version": <integer>,
+      "ops": ReviewOp[],
+      "selected": Record<opKey, boolean>,
+      "completedAt": "<ISO timestamp>"
+    },
+    ...
+  }
 }
 ```
+
+`selected` stores only **explicit user overrides**, not a fully-populated map — see the note on
+`DEFAULT_OFF` below.
 
 - Written incrementally: as each chapter finishes during a run, its entry is upserted into the ledger —
   not one wholesale write at the end of the whole run. This is what makes the "crash mid-chapter loses
@@ -132,6 +153,55 @@ A JSON file in the book's workspace, `.script-review-pending.json`, keyed by `ch
   - **Apply** (§6.5, new) removes just the applied ops' keys from the entry, once the client has
     successfully applied them; any ops the user left unselected stay in the entry as still-unresolved.
   - An entry is deleted once its `ops` array is empty (all ops either applied or discarded).
+- **Each entry also carries `manuscriptId` and a `version` nonce.**
+  - `manuscriptId`: the manuscript this entry's sentence ids belong to. If a book is reparsed
+    (`manuscriptId` changes, sentences renumbered), an entry whose stored `manuscriptId` no longer matches
+    the book's current one is dropped entirely on the next hydration — its ops reference ids that no
+    longer exist, so there's nothing to recover, and without this check a fully-stale entry would never
+    self-delete (its `ops` array isn't empty, it's just permanently unappliable) and would sit forever as
+    a phantom badge count.
+  - `version`: **must be unique across an entry's entire create/delete/re-create history, not just unique
+    at a point in time** — a per-entry counter that resets to 1 on every re-creation would defeat the
+    whole mechanism, since two incarnations of the same chapter's entry could easily mint the same value
+    and a stale write from the first would then pass validation against the second. So `version` is drawn
+    from a single **book-scoped monotonic counter** stored at the top level of the ledger file
+    (`nextVersion` above, not inside any one entry) — every entry creation or re-creation reads and
+    increments it under the same write queue (below) that guards every other mutation, so no two entries
+    for the same book (across any chapter, across any re-creation) ever share a value. `/resolve` and the
+    selection-sync `PATCH` (§5) must include the `version` they last saw; the server no-ops the call if it
+    doesn't match the entry's *current* version. This is stronger than a bare existence check (§7's
+    original "no-op if missing" rule): existence alone can't distinguish "this entry" from "a different
+    entry that now happens to occupy the same chapter key" — e.g. discard-then-immediately-re-review the
+    same chapter — which a bare existence check would let a stale in-flight write silently poison. The
+    client learns an entry's current `version` the same way it learns everything else about the ledger:
+    it's part of the entry shape returned by `GET .../script-review/state` (§4.3) and carried alongside
+    `ops`/`selected` in `byBook[bookId]` (§6.1), and echoed back on every `/resolve`/`PATCH` call for that
+    chapter.
+  - **`selected` never needs a server-side default.** The fs-58 `DEFAULT_OFF` set
+    (`reattribute`/`flag_nonstory` default unchecked, `script-review-slice.ts:64`) is a purely
+    client-side, non-persisted display rule — it's computed at render/hydration time from `DEFAULT_OFF`
+    plus whatever the `selected` map (explicit overrides only) contains, the same way `setReview` computes
+    it live today. The server-written checkpoint never has to know `DEFAULT_OFF` or invent a default: a
+    chapter checkpointed by a run with zero clients attached simply has an empty `selected` map (no
+    overrides yet), and the client applies `DEFAULT_OFF` to it identically to a chapter that streamed in
+    live. This closes the "what does the server write for `selected` at checkpoint time" gap without
+    needing the server to duplicate a client-side constant.
+- **Op-key collisions are a pre-existing constraint, now load-bearing.** `opKey`
+  (`` `${chapterId}:${id}:${op}` ``, `script-review-slice.ts:29-31`) has no disambiguator beyond sentence
+  id + op class, so two ops of the same class on the same sentence in one run already collide in today's
+  client-only `selected` map. Persistence raises the stakes: `/resolve` now uses this key to mutate server
+  state, so a collision would resolve/keep the wrong finding rather than just mis-render a checkbox. This
+  spec doesn't change the key format or add analyzer-side uniqueness enforcement — it inherits the
+  existing one-op-per-class-per-sentence-per-run invariant as-is; a violation of that invariant is a
+  pre-existing analyzer-output bug outside this spec's scope.
+- **Every mutation to a book's ledger file — all four of them — goes through one in-process per-book write
+  queue**, keyed by `bookId`: the per-chapter completion upsert (during a run), the debounced
+  selection-sync `PATCH`, `/resolve`, and `/discard` (§5). All four read-modify-write the same file, and
+  they aren't mutually exclusive in time — e.g. a user can discard chapter 2's findings while chapters
+  10–20 of the same whole-book run are still being checkpointed. Since all four originate from the same
+  Node process, a simple async queue (not a cross-process file lock — nothing else writes this file) is
+  enough to serialize them and avoid one write clobbering another. The `nextVersion` counter increment
+  above rides through this same queue.
 
 ### 4.3 Client reconciliation on load
 
@@ -152,9 +222,21 @@ terminal event arrives — so a completed-while-you-were-reconnecting run still 
 `byBook[bookId]` correctly.
 
 When there's no running job, the client hydrates `byBook[bookId]` from the ledger's raw `ops`/`selected`
-and immediately re-runs `planApply` against the current live manuscript to derive `unappliable` for
-display — exactly the computation that already happens when ops first arrive live, just re-run against
-whatever the manuscript looks like now (see §4.2 on why this can't be a persisted, cached value).
+and re-runs `planApply` against the current live manuscript to derive `unappliable` for display — exactly
+the computation that already happens when ops first arrive live, just re-run against whatever the
+manuscript looks like now (see §4.2 on why this can't be a persisted, cached value). Any entry whose
+`manuscriptId` doesn't match the book's current manuscript is dropped instead of being run through
+`planApply` at all (§4.2).
+
+**This `planApply` re-derivation must happen after *both* `manuscript.sentences` and the cast roster for
+the book are loaded, not on a bare view-mount timer.** `planApply(ops, live, roster)` takes the cast
+roster as a third argument and marks an on-roster `reattribute` op unappliable if its `characterId` isn't
+in `roster` yet (`script-review-apply.ts`) — so sequencing only after manuscript sentences load half-fixes
+the problem: an early re-derivation that races the *cast* load would still misclassify on-roster
+reattribute ops as unappliable and undercount the badge, the same class of "did I lose my work?" false
+negative this fix targets for sentences. The hydration thunk must therefore be sequenced to run after (or
+re-run once) *both* the existing manuscript-load and cast-load thunks for that book resolve, not fired
+independently from a `useEffect` on mount.
 
 This replaces the current assumption that `scriptReview` Redux state is only ever populated by a live SSE
 session within the current tab.
@@ -170,15 +252,18 @@ session within the current tab.
   those chapters' entries from the ledger entirely and, if a job is currently running for one of those
   chapters, has no effect on the running job itself (discard only ever targets completed/persisted
   findings, never an in-flight run).
-- `POST /api/books/:bookId/script-review/resolve` — new. Body: `{ chapterId, appliedOpKeys: string[] }`,
-  sent by the client immediately after it successfully applies those ops locally (§6.5). Removes just
-  those op keys from the chapter's ledger entry; deletes the entry once it's empty. This is the "apply"
+- `POST /api/books/:bookId/script-review/resolve` — new. Body: `{ chapterId, version, appliedOpKeys:
+  string[] }`. Removes just those op keys from the chapter's ledger entry; deletes the entry once it's
+  empty. No-ops if `version` doesn't match the entry's current version (§4.2). This is the "apply"
   counterpart to discard — without it the server has no way to learn an op was resolved, since applying
-  is a purely client-side action (§4.2).
+  is a purely client-side action (§4.2). Called once per synchronous apply batch, or per-op for the async
+  off-roster `reattribute` path — see §6.5 for why that path can't use a single end-of-batch call.
 - Selection-state sync rides on a debounced `PATCH`-style update to the ledger (exact wire shape is an
-  implementation detail for the plan) with one safety rule: **the PATCH is a no-op if the chapter's ledger
-  entry no longer exists.** This prevents a selection-toggle sent just before a discard from landing just
-  after it and resurrecting a deleted entry (§7).
+  implementation detail for the plan), body including the chapter's last-seen `version`. The server no-ops
+  the update if `version` doesn't match current (§4.2) — this covers both a PATCH landing after a discard
+  (no entry exists → no-op) and a PATCH landing after a discard-and-re-review of the same chapter (an
+  entry exists again, but with a new `version` → no-op), which a bare existence check alone cannot tell
+  apart (§7).
 
 ## 6. Client-side changes
 
@@ -220,8 +305,13 @@ per section.
 Clicking "Review Script" for a given scope (one chapter, or whole-book) does exactly one of three things,
 checked in order:
 
-1. **A job is already running for this scope** (§4.1) → no-op beyond showing the existing "Reviewing…"
-   progress state (button stays disabled, same as today).
+1. **A job is already running for this scope, or for a scope that conflicts with it** (§4.1 — a
+   whole-book click while any single-chapter job is running for this book, or vice versa, in addition to
+   the literal same-scope case) → no-op beyond showing the existing "Reviewing…" progress state (button
+   stays disabled, same as today). Checking conflicts client-side too, not just relying on the server's
+   409, means the UI never has to surface a raw rejection — the 409 (§4.1, §7) becomes a defensive
+   backend-only backstop for a race between two near-simultaneous clicks (e.g. two tabs), not a state this
+   click handler needs to render.
 2. **Unresolved findings exist for this scope** (§6.3's badge is non-zero, counting only chapters the
    requested scope actually touches) → a confirm dialog: "You have N unresolved suggestions in
    [chapter(s)]. Review them, or discard and start a new review?" — "Review existing" reopens the hidden
@@ -235,16 +325,47 @@ checks every chapter it's about to touch.
 
 ### 6.5 What "Apply" does to the ledger
 
-This is a deliberate behavior change from today: currently, applying selected ops calls `clearReview`
-afterward, which discards the *entire* bucket — including whatever the user left unchecked. Under
-persistence, silently discarding unactioned findings on Apply would defeat the point of this feature, so:
+This is a deliberate behavior change from today: currently, both apply paths — `handleApply`
+(`script-review-diff.tsx:349`) for the seven synchronous op classes, and `runProposed`'s success branch
+(`:263`) for the async off-roster `reattribute` flow — call `clearReview` afterward, which discards the
+*entire* bucket, including whatever the user left unchecked. Under persistence, silently discarding
+unactioned findings on Apply would defeat the point of this feature, so both call sites are rescoped:
 
-- Applying dispatches the existing manual-edit reducers for the selected ops (unchanged), then calls
-  `POST .../script-review/resolve` with just those ops' keys (§5).
-- Ops the user left **unselected** are *not* discarded — they remain in the ledger as still-unresolved
-  findings, and the badge (§6.3) reflects them on the next load/render.
-- To clear the unselected leftovers, the user uses "Dismiss all" (§6.2, now an explicit discard) or
-  applies them in a later pass.
+- **Synchronous op classes** (`strip_tag`, `split`, `extract_dialogue`, `merge`, `fix_emotion`,
+  `validate_instruct`, `flag_nonstory`): dispatching the manual-edit reducers for the selected ops is a
+  single synchronous action, so `/resolve` is called once, immediately after, with all of that batch's op
+  keys.
+- **Async off-roster `reattribute`** (`runProposed`, `script-review-diff.tsx:225-264`, backed by
+  `applyProposedReattributions` in `apply-proposed.ts`): the confirm queue (`advanceConfirm`) only
+  *collects* the user's per-op decisions; the actual `createCharacter`/`setSentenceCharacter` calls fire
+  afterward in **one batch call** to `applyProposedReattributions`, which today returns only aggregate
+  counts — there is no per-op success signal to hang a resolve call off, and a deduped-name op
+  (`apply-proposed.ts`, the `if (!id)` branch) applies via `setSentenceCharacter` with **no create call at
+  all**, so "resolve after the create call succeeds" wouldn't even fire for it. Calling `/resolve` once
+  for the whole selected set (as if the batch were all-or-nothing) would let a mid-batch failure delete
+  ledger entries for ops that were never actually applied — reintroducing the exact silent-loss failure
+  this spec exists to eliminate. Closing this requires a small, scoped change to
+  `applyProposedReattributions` itself: instead of (or in addition to) aggregate counts, it must report
+  **which specific ops succeeded**, including deduped-name ones, as each is applied — not only ops that
+  went through a `createCharacter` call — so the caller can call `/resolve` per op as that per-op result
+  arrives, not once at the end. If the batch throws or partially fails, every op already reported
+  succeeded stays resolved (correctly removed); anything not reported as succeeded is never resolved and
+  remains in the ledger as still-unresolved, exactly as if it had never been attempted. **Retrying a
+  batch that left some ops resolved and others not must not re-create characters for ops that already
+  applied** — `applyProposedReattributions`' existing dedupe-by-proposed-name check (the same `if (!id)`
+  branch) already prevents creating a second character for the same proposed name within a run; a retry
+  after a partial resolve failure relies on that same check recognizing the character already exists
+  rather than creating a duplicate, so only the previously-failed ops' `/resolve` calls need to actually
+  go out again.
+- **Cancelling the confirm queue mid-batch** (`cancelConfirm`, `:301-305`), or the batch's own
+  book-switch guard returning `{aborted: true}` without throwing (`apply-proposed.ts`), no longer calls
+  `clearReview`. Both dispatch `hideReview` only: whatever was already resolved before the cancel/abort
+  stays resolved; the cancelled-and-remaining ops stay in the ledger as unresolved, consistent with the
+  rest of this section.
+- Ops the user left **unselected** in the first place are never touched by any of the above — they remain
+  in the ledger as still-unresolved findings, and the badge (§6.3) reflects them on the next load/render.
+- To clear unresolved leftovers (unselected, or left over from a cancelled batch), the user uses "Dismiss
+  all" (§6.2, now an explicit discard) or applies them in a later pass.
 
 ## 7. Error handling & edge cases
 
@@ -261,9 +382,34 @@ persistence, silently discarding unactioned findings on Apply would defeat the p
 - **A debounced selection PATCH lands after a discard:** the PATCH is a no-op against a nonexistent ledger
   entry (§5) — it must never re-create the entry, or a discarded chapter's findings would silently
   reappear.
+- **A debounced selection PATCH lands after a discard-and-re-review of the same chapter:** an entry exists
+  again by the time the stale PATCH arrives, so a bare existence check would incorrectly let it through
+  and poison the new run with stale checkbox state. The `version` nonce (§4.2, §5) catches this case
+  specifically — the stale PATCH's version won't match the new entry's version, so it still no-ops.
 - **A whole-book POST while a same-book single-chapter job is running (or vice versa):** rejected with 409
-  rather than silently joining mismatched-scope data (§4.1) — the client surfaces this as "a review is
+  rather than silently joining mismatched-scope data (§4.1). The client-side gate (§6.4, case 1) already
+  checks for this before ever sending the request, so the 409 in practice only fires on a genuine race
+  (e.g. two tabs clicking within the same moment) — when it does, the client surfaces it as "a review is
   already running for [scope]; wait for it to finish."
+- **A book is reparsed while a ledger has pending entries:** entries are scoped by `manuscriptId` (§4.2);
+  on the next hydration, any entry whose `manuscriptId` doesn't match the book's current one is dropped
+  outright rather than run through `planApply` (which would otherwise mark everything permanently
+  unappliable and leave a zero-count phantom entry that never self-deletes).
+- **Concurrent writes to the ledger file:** all four mutating paths (completion upsert, selection PATCH,
+  `/resolve`, `/discard`) read-modify-write `.script-review-pending.json`; all four are serialized through
+  the per-book in-process write queue (§4.2) so none clobbers another.
+- **A `/resolve` call fails (network blip) after its op was already successfully applied client-side:**
+  for the synchronous op classes this is harmless — the op reappears as unresolved on next load and
+  re-applying a manual-edit reducer is idempotent (it just re-sets the same field). For the async
+  off-roster `reattribute` path it's not automatically harmless, since re-applying means calling
+  `api.createCharacter` again — but §6.5's retry behavior relies on `applyProposedReattributions`'
+  existing dedupe-by-proposed-name check to recognize the character already exists and skip re-creating
+  it, so only the failed `/resolve` call itself needs to be retried, not the character creation.
+- **A whole-book review chapter spans multiple analyzer chunks** (`script-review.ts` emits ops per chunk,
+  not once per chapter) **and one chunk fails while its siblings succeed:** the per-chapter ledger upsert
+  accumulates whichever chunks' ops did land before checkpointing that chapter — a partially-failed
+  chapter is checkpointed with whatever succeeded, not held back entirely, consistent with "a chapter's
+  findings survive independently of chapters around it" (§2).
 
 ## 8. Testing plan
 
@@ -279,18 +425,41 @@ persistence, silently discarding unactioned findings on Apply would defeat the p
     `/resolve` removes a subset of its ops, and disappears once its `ops` array is empty.
   - `/resolve` never removes ops the caller didn't name; `/discard` removes the whole entry regardless.
   - A `PATCH` selection update against a chapter with no ledger entry (already discarded) is a no-op, not
-    a re-creation.
-  - `GET .../script-review/state` returns the right shape for: job running, ledger-only (no job), neither.
+    a re-creation. A `PATCH` or `/resolve` call carrying a stale `version` (entry was discarded and a new
+    review re-created it) is also a no-op, even though an entry now exists again — the version-mismatch
+    case a bare existence check can't catch (§4.2, §7).
+  - Concurrent writes across all four mutating paths (completion upsert, selection PATCH, `/resolve`,
+    `/discard` — not just the first two) land correctly against each other — the per-book write queue
+    (§4.2) serializes all of them.
+  - `nextVersion` is a single book-scoped counter: discarding a chapter and immediately re-reviewing it
+    produces a *new* entry whose `version` differs from the discarded one's, even though both used the
+    same chapter key — proving the mint can't collide across an entry's create/delete/re-create history.
+  - An entry whose `manuscriptId` doesn't match the book's current manuscript is dropped on read rather
+    than surfaced (§4.2, §7).
+  - `GET .../script-review/state` returns the right shape for: job running, ledger-only (no job), neither
+    — and the ledger-only shape includes each entry's `version` and `manuscriptId`.
 - **Client:**
   - `hideReview` never mutates `ops`/`selected`; `discardReview` does and calls the server.
   - On hydration from a persisted ledger, `unappliable` is (re-)computed via `planApply` against current
-    manuscript state, not read from the ledger (there is nothing to read — §4.2).
+    manuscript state, not read from the ledger (there is nothing to read — §4.2) — and this recompute is
+    proven to happen only after *both* `manuscript.sentences` and the cast roster for the book have loaded
+    (a test that hydrates the ledger before either arrives must not show a false 0-count badge or
+    misclassify an on-roster `reattribute` op as unappliable, per §4.3).
   - Badge count excludes ops `planApply` currently classifies as unappliable.
-  - The three-way click behavior in §6.4 (running → no-op progress; unresolved → confirm dialog;
-    neither → start new) is covered for both single-chapter and whole-book scopes.
-  - Applying selected ops calls `/resolve` with exactly those ops' keys; unselected ops remain in
-    `byBook[bookId]` afterward (§6.5) — a regression test for the "Apply used to discard everything"
-    behavior change.
+  - The click behavior in §6.4 (running-or-conflicting-scope → no-op progress; unresolved → confirm
+    dialog; neither → start new) is covered for both single-chapter and whole-book scopes, including the
+    cross-scope conflict case (whole-book click while a single-chapter job is running, and vice versa).
+  - Applying selected ops from a synchronous op class calls `/resolve` once with exactly that batch's op
+    keys; unselected ops remain in `byBook[bookId]` afterward (§6.5) — a regression test for the "Apply
+    used to discard everything" behavior change.
+  - Applying an off-roster `reattribute` batch that fails partway through calls `/resolve` per-op as each
+    op is reported successful by `applyProposedReattributions` (including a deduped-name op that applies
+    with no `createCharacter` call), not once at the end; ops after the failure point remain in the ledger
+    as unresolved, and cancelling the confirm queue — or the batch's silent `{aborted: true}` book-switch
+    guard — dispatches `hideReview`, not `discardReview` (§6.5).
+  - Retrying a `reattribute` batch after a `/resolve` call failed post-apply does not create a duplicate
+    character for an op that already succeeded — the existing dedupe-by-proposed-name check is exercised
+    on retry, not bypassed (§7).
 - **E2E (Playwright), regression-focused, run at a ≥1280px (`xl`) viewport** (the nav tab strip this test
   depends on clicking is `hidden xl:flex` and collapses into a hamburger below that — see
   `docs/superpowers/specs/2026-06-19-responsive-topbar-nav-design.md`; the test must pin `xl` or it won't
