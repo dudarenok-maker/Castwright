@@ -3115,6 +3115,7 @@ export interface ReviewScriptOpts {
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onOps?: (e: { chapterId: number; ops: import('./script-review-apply').ReviewOp[] }) => void;
   onChapterFailed?: (e: { chapterId: number; message: string }) => void;
+  onCheckpoint?: (ev: { chapterId: number; version: number }) => void;
 }
 export interface ReviewScriptResult {
   reviewedChapters: number;
@@ -3132,7 +3133,7 @@ export class ReviewScriptError extends Error {
 
 async function realReviewScript(
   bookId: string,
-  { chapterId, model, signal, onPhase, onThrottle, onOps, onChapterFailed }: ReviewScriptOpts = {},
+  { chapterId, model, signal, onPhase, onThrottle, onOps, onChapterFailed, onCheckpoint }: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult> {
   const body: Record<string, unknown> = {};
   if (chapterId !== undefined) body.chapterId = chapterId;
@@ -3180,6 +3181,11 @@ async function realReviewScript(
           onChapterFailed?.({ chapterId: p.chapterId, message: typeof p.message === 'string' ? p.message : 'Chapter review failed.' });
         }
         break;
+      case 'checkpoint':
+        if (typeof p.chapterId === 'number' && typeof p.version === 'number') {
+          onCheckpoint?.({ chapterId: p.chapterId, version: p.version });
+        }
+        break;
       case 'result':
         result = {
           reviewedChapters: typeof p.reviewedChapters === 'number' ? p.reviewedChapters : 0,
@@ -3215,14 +3221,70 @@ async function realReviewScript(
   return result;
 }
 
+/* Task 15 — a tiny sessionStorage-backed shim so mock mode's GET /state can
+   report real running/ledger state across a `page.reload()`. e2e always runs
+   mock mode (playwright.config.ts never talks to the real Node backend), so
+   without this the reload-survival specs this whole plan exists to prove
+   would have nothing genuine to assert against — the real ledger lives
+   server-side (server/src/workspace/script-review-ledger.ts) and is
+   unreachable from a client-only mock. Scoped to sessionStorage (not
+   localStorage) so state doesn't leak across tabs/runs; each Playwright test
+   gets a fresh browser context, so this starts empty for every test that
+   doesn't explicitly drive it — no behavior change for existing specs. */
+interface MockScriptReviewState {
+  running: { lastPhase: SubstagePhaseEvent } | null;
+  entries: Record<string, LedgerEntryDTO>;
+}
+
+export function mockScriptReviewKey(bookId: string): string {
+  return `mock-script-review:${bookId}`;
+}
+
+function readMockScriptReviewState(bookId: string): MockScriptReviewState {
+  try {
+    const raw = sessionStorage.getItem(mockScriptReviewKey(bookId));
+    if (raw) return JSON.parse(raw) as MockScriptReviewState;
+  } catch {
+    // corrupt/unavailable storage — fall through to empty state
+  }
+  return { running: null, entries: {} };
+}
+
+function writeMockScriptReviewState(bookId: string, state: MockScriptReviewState): void {
+  try {
+    sessionStorage.setItem(mockScriptReviewKey(bookId), JSON.stringify(state));
+  } catch {
+    // sessionStorage unavailable — the mock degrades to its old stateless
+    // behavior, which is still correct, just not reload-durable.
+  }
+}
+
 async function mockReviewScript(
-  _bookId: string,
-  { onOps, onPhase, onChapterFailed: _onChapterFailed }: ReviewScriptOpts = {},
+  bookId: string,
+  { onOps, onPhase, onChapterFailed: _onChapterFailed, onCheckpoint }: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult> {
+  const opsAccum: Record<number, import('./script-review-apply').ReviewOp[]> = {};
+  const versionAccum: Record<number, number> = {};
+  const notePhase = (phase: SubstagePhaseEvent) => {
+    writeMockScriptReviewState(bookId, {
+      running: { lastPhase: phase },
+      entries: readMockScriptReviewState(bookId).entries,
+    });
+    onPhase?.(phase);
+  };
+  const noteOps = (chId: number, ops: import('./script-review-apply').ReviewOp[]) => {
+    (opsAccum[chId] ??= []).push(...ops);
+    onOps?.({ chapterId: chId, ops });
+  };
+  const noteCheckpoint = (chId: number, version: number) => {
+    versionAccum[chId] = version;
+    onCheckpoint?.({ chapterId: chId, version });
+  };
+
   await wait(60);
-  onPhase?.({ progress: 0.25, label: 'Reviewing script', chapterId: 1, chapterIndex: 1, totalChapters: 3 });
+  notePhase({ progress: 0.25, label: 'Reviewing script', chapterId: 1, chapterIndex: 1, totalChapters: 3 });
   await wait(500);
-  onPhase?.({
+  notePhase({
     progress: 0.5,
     label: 'Reviewing script',
     chapterId: 3,
@@ -3231,7 +3293,7 @@ async function mockReviewScript(
     estRemainingMs: 20_000,
   });
   await wait(500);
-  onPhase?.({
+  notePhase({
     progress: 0.85,
     label: 'Reviewing script',
     chapterId: 3,
@@ -3241,44 +3303,181 @@ async function mockReviewScript(
   });
   await wait(400);
   /* fs-58 Unit A: strip_tag on sentence id:1 (chapterId:3). */
-  onOps?.({
-    chapterId: 3,
-    ops: [{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' }],
-  });
+  noteOps(3, [{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' }]);
+  noteCheckpoint(3, 1);
   /* fs-58 validate_instruct (origin/main): strip_tag + validate_instruct on
      chapter 1, sentence id:1. */
-  onOps?.({
-    chapterId: 1,
-    ops: [
-      { id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' },
-      {
-        id: 1,
-        op: 'validate_instruct',
-        newInstruct: 'a calm tone',
-        rationale: 'contradicts the line',
-      },
-    ],
-  });
+  noteOps(1, [
+    { id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' },
+    {
+      id: 1,
+      op: 'validate_instruct',
+      newInstruct: 'a calm tone',
+      rationale: 'contradicts the line',
+    },
+  ]);
+  noteCheckpoint(1, 1);
   /* fs-58 Unit B: off-roster reattribute on sentence id:3 (dialogue line),
      and flag_nonstory on sentence id:15 (the "p. 42" artefact line).
      Both default OFF in the diff modal (script-review-slice DEFAULT_OFF set). */
-  onOps?.({
-    chapterId: 3,
-    ops: [
-      {
-        id: 3,
-        op: 'reattribute',
-        proposed: { name: 'Ferra', gender: 'female' },
-        rationale: 'speaker not in cast',
-      },
-      {
-        id: 15,
-        op: 'flag_nonstory',
-        rationale: 'page number artefact',
-      },
-    ],
-  });
+  noteOps(3, [
+    {
+      id: 3,
+      op: 'reattribute',
+      proposed: { name: 'Ferra', gender: 'female' },
+      rationale: 'speaker not in cast',
+    },
+    {
+      id: 15,
+      op: 'flag_nonstory',
+      rationale: 'page number artefact',
+    },
+  ]);
+  noteCheckpoint(3, 2);
+
+  /* Finalize: fold this run's ops/versions into the ledger and clear the
+     running flag — close enough to the real server's checkpoint-then-
+     complete lifecycle for the e2e specs to observe reload-survival. */
+  const entries: Record<string, LedgerEntryDTO> = { ...readMockScriptReviewState(bookId).entries };
+  for (const [chIdStr, ops] of Object.entries(opsAccum)) {
+    entries[chIdStr] = {
+      manuscriptId: bookId,
+      version: versionAccum[Number(chIdStr)] ?? 1,
+      // ops is the mock's own ReviewOp[] accumulator; LedgerEntryDTO['ops'] is
+      // the generated schema's deliberately-loose `{[key: string]: unknown}[]`
+      // (see the ScriptReviewLedgerEntry.ops description in openapi.yaml) — no
+      // index signature on ReviewOp itself, so the widening needs the
+      // `unknown` bounce same as every other ops-array cast in this feature.
+      ops: ops as unknown as LedgerEntryDTO['ops'],
+      selected: {},
+      completedAt: new Date().toISOString(),
+    };
+  }
+  writeMockScriptReviewState(bookId, { running: null, entries });
+
   return { reviewedChapters: 1, totalOps: 5 };
+}
+
+// Finding 3 (PR review round 5): sourced from the generated
+// ScriptReviewLedgerEntry/ScriptReviewRunningJob schemas (openapi.yaml's
+// "Script review persistence" section) instead of hand-written duplicates —
+// mirrors this file's existing ApiComponents['schemas'][...] pattern (see
+// MergeSuggestion above). `ScriptReviewStateResponse` itself is declared in
+// openapi.yaml as a flat object (`required: [kind, entries]`, `running`
+// always optional) rather than a `oneOf`+`discriminator`, so
+// openapi-typescript can't generate a true discriminated union for it —
+// composing the union by hand here, out of the two generated leaf schemas,
+// keeps the `kind === 'running'` narrowing this file's callers rely on
+// (state.running being definitely present) without hand-duplicating the
+// leaf shapes themselves.
+export type LedgerEntryDTO = ApiComponents['schemas']['ScriptReviewLedgerEntry'];
+export type ScriptReviewStateDTO =
+  | {
+      kind: 'running';
+      // Finding 6 (PR review round 4): two different chapters' single-chapter
+      // reviews can legitimately run concurrently for the same book — report
+      // ALL of them, not just the first match (see the server-side comment
+      // in server/src/routes/script-review.ts's GET /state handler).
+      running: ApiComponents['schemas']['ScriptReviewRunningJob'][];
+      entries: Record<string, LedgerEntryDTO>;
+    }
+  | { kind: 'ledger'; entries: Record<string, LedgerEntryDTO> };
+
+async function realGetScriptReviewState(bookId: string): Promise<ScriptReviewStateDTO> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/script-review/state`, { method: 'GET' });
+  if (!res.ok) throw new Error(`Failed to load script-review state (${res.status}).`);
+  return res.json();
+}
+
+async function realDiscardScriptReview(bookId: string, chapterIds: number[]): Promise<void> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/script-review/discard`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chapterIds }),
+  });
+  if (!res.ok) throw new Error(`Failed to discard script-review findings (${res.status}).`);
+}
+
+async function realResolveScriptReviewOps(
+  bookId: string,
+  params: { chapterId: number; version: number; appliedOpKeys: string[] },
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/script-review/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error(`Failed to resolve script-review ops (${res.status}).`);
+  return res.json();
+}
+
+async function realPatchScriptReviewSelection(
+  bookId: string,
+  params: { chapterId: number; version: number; selected: Record<string, boolean> },
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/script-review/selection`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error(`Failed to sync script-review selection (${res.status}).`);
+  return res.json();
+}
+
+export async function mockGetScriptReviewState(bookId: string): Promise<ScriptReviewStateDTO> {
+  const state = readMockScriptReviewState(bookId);
+  if (state.running) {
+    return { kind: 'running', running: [{ replay: { lastPhase: state.running.lastPhase } }], entries: state.entries };
+  }
+  return { kind: 'ledger', entries: state.entries };
+}
+async function mockDiscardScriptReview(bookId: string, chapterIds: number[]): Promise<void> {
+  const state = readMockScriptReviewState(bookId);
+  for (const id of chapterIds) delete state.entries[String(id)];
+  writeMockScriptReviewState(bookId, state);
+}
+/* fs-58 persistence PR-review fix (Finding 2) — mirror the real server's
+   resolveOps/patchSelection (server/src/workspace/script-review-ledger.ts)
+   against the sessionStorage-backed mock ledger. The previous stubs ignored
+   every parameter and never called writeMockScriptReviewState, so mock/e2e
+   mode couldn't actually prove the reload-persistence guarantee: the caller
+   would optimistically drop the op from the Redux bucket while the mock
+   ledger still had it, and a reload would re-surface it as pending again.
+   Exported (like mockCreateCharacter above) so api.test.ts can drive them
+   directly without a live fetch. */
+export async function mockResolveScriptReviewOps(
+  bookId: string,
+  params: { chapterId: number; version: number; appliedOpKeys: string[] },
+): Promise<{ ok: boolean }> {
+  const state = readMockScriptReviewState(bookId);
+  const key = String(params.chapterId);
+  const entry = state.entries[key];
+  if (!entry || entry.version !== params.version) return { ok: false };
+  const removed = new Set(params.appliedOpKeys);
+  entry.ops = (entry.ops as Array<{ id: number; op: string }>).filter(
+    (op) => !removed.has(`${params.chapterId}:${op.id}:${op.op}`),
+  );
+  for (const key2 of params.appliedOpKeys) delete entry.selected[key2];
+  if (entry.ops.length === 0) {
+    delete state.entries[key];
+  } else {
+    state.entries[key] = entry;
+  }
+  writeMockScriptReviewState(bookId, state);
+  return { ok: true };
+}
+export async function mockPatchScriptReviewSelection(
+  bookId: string,
+  params: { chapterId: number; version: number; selected: Record<string, boolean> },
+): Promise<{ ok: boolean }> {
+  const state = readMockScriptReviewState(bookId);
+  const key = String(params.chapterId);
+  const entry = state.entries[key];
+  if (!entry || entry.version !== params.version) return { ok: false };
+  entry.selected = { ...entry.selected, ...params.selected };
+  state.entries[key] = entry;
+  writeMockScriptReviewState(bookId, state);
+  return { ok: true };
 }
 
 /* fs-34 — drop a designed Qwen emotion variant (route deletes the slot + .pt). */
@@ -8691,6 +8890,10 @@ const real = {
   detectEmotions: realDetectEmotions,
   detectInstruct: realDetectInstruct,
   reviewScript: realReviewScript,
+  getScriptReviewState: realGetScriptReviewState,
+  discardScriptReview: realDiscardScriptReview,
+  resolveScriptReviewOps: realResolveScriptReviewOps,
+  patchScriptReviewSelection: realPatchScriptReviewSelection,
   removeQwenVariant: realRemoveQwenVariant,
   promoteQwenVoice: realPromoteQwenVoice,
   discardQwenPreview: realDiscardQwenPreview,
@@ -8961,6 +9164,10 @@ const mock = {
   detectEmotions: mockDetectEmotions,
   detectInstruct: mockDetectInstruct,
   reviewScript: mockReviewScript,
+  getScriptReviewState: mockGetScriptReviewState,
+  discardScriptReview: mockDiscardScriptReview,
+  resolveScriptReviewOps: mockResolveScriptReviewOps,
+  patchScriptReviewSelection: mockPatchScriptReviewSelection,
   removeQwenVariant: mockRemoveQwenVariant,
   promoteQwenVoice: mockPromoteQwenVoice,
   discardQwenPreview: mockDiscardQwenPreview,

@@ -28,7 +28,8 @@ import { SentenceEmotionControl } from '../components/sentence-emotion-control';
 import { SentenceInstructControl } from '../components/sentence-instruct-control';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
-import { useAppDispatch, useAppSelector } from '../store';
+import { useStore } from 'react-redux';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
 import { useMarkCharacterStaleIfRendered } from '../lib/stale-chapters';
 import { TOUR_STEPS } from '../lib/tour-steps';
 import { manuscriptActions } from '../store/manuscript-slice';
@@ -42,12 +43,12 @@ import { PromoteFirstSentenceButton } from '../components/promote-first-sentence
 import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-bar';
 import { ScriptReviewDiff } from '../components/script-review-diff';
 import { api } from '../lib/api';
-import { selectActiveReview } from '../store/script-review-slice';
+import { selectVisibleReview, unresolvedCountForChapters, scriptReviewActions } from '../store/script-review-slice';
 import { selectAnalysisBusyForBook } from '../store/analysis-substage-selectors';
 import { formatSubstageDetail } from '../lib/substage-progress-text';
 import { notificationsActions } from '../store/notifications-slice';
 import { rpdWarningFor } from '../lib/script-review-apply';
-import { runReviewScript } from '../store/script-review-thunk';
+import { runReviewScript, hydrateScriptReview, discardReview } from '../store/script-review-thunk';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 import type { SeriesRosterEntry } from '../lib/api';
 
@@ -131,6 +132,7 @@ export function ManuscriptView({
   const dispatch = useAppDispatch();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bookId = useAppSelector((s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null);
+  const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
   const [reviewLoading, setReviewLoading] = useState(false);
   const analysisBusy = useAppSelector((s) => (bookId ? selectAnalysisBusyForBook(s, bookId) : false));
   const reviewSubstage = useAppSelector((s) =>
@@ -141,8 +143,46 @@ export function ManuscriptView({
      per-chapter "Review Script" stays the primary, low-cost default. */
   const [reviewMenuOpen, setReviewMenuOpen] = useState(false);
   const reviewMenuRef = useRef<HTMLDivElement>(null);
+  /* fs-58 Task 11 — re-run confirm gate (design spec §6.4): a click on
+     Review Script when the target scope already has unresolved findings
+     opens this instead of immediately starting a fresh run. */
+  const [confirmGate, setConfirmGate] = useState<{ wholeBook: boolean; chapterIds: number[]; count: number } | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const hasActiveReview = useAppSelector((s) => !!(bookId && (s as any).scriptReview && selectActiveReview(s as any, bookId)));
+  const hasActiveReview = useAppSelector((s) => !!(bookId && (s as any).scriptReview && selectVisibleReview(s as any, bookId)));
+  const store = useStore<RootState>();
+  /* Finding 1 (PR review round 3): hydration is fire-and-forget, so a fast
+     click on Review Script before it resolves would see an undefined
+     bucket, read 0 unresolved findings, and skip the confirm gate — silently
+     overwriting a chapter's still-unresolved ledger entry. Gate both the
+     buttons and handleReviewScript's early-return on this flag. */
+  const [scriptReviewHydrating, setScriptReviewHydrating] = useState(false);
+  /* Findings 4/5 (PR review round 4): this effect deliberately has no
+     cleanup (see the comment below), keyed only on [bookId]. If the user
+     switches books before a hydration completes, the effect re-fires for
+     the new book — and if the STALE hydration for the OLD book then
+     resolves, its `.finally` would clear scriptReviewHydrating for
+     whichever book is actually on screen now, reopening the exact race
+     Finding 1 (round 3) closed, just via cross-book interleaving instead of
+     a same-book double-click. A generation counter — the standard
+     "ignore a stale async result" idiom — ensures only the MOST RECENT
+     effect run for this component instance is allowed to act. */
+  const scriptReviewHydrationGenerationRef = useRef(0);
+  useEffect(() => {
+    if (!bookId) return;
+    const generation = ++scriptReviewHydrationGenerationRef.current;
+    setScriptReviewHydrating(true);
+    void hydrateScriptReview(bookId, { dispatch, getState: store.getState, subscribe: store.subscribe }).finally(() => {
+      // Cross-book race guard (PR review round 4): only the MOST RECENT
+      // effect run for this component instance is allowed to clear the
+      // loading flag. If the user switched books while an older hydration
+      // was still in flight, that stale call's completion must not flip the
+      // flag off for whatever book is actually on screen now.
+      if (scriptReviewHydrationGenerationRef.current === generation) setScriptReviewHydrating(false);
+    });
+    // Intentionally no cleanup/abort: hydration is a one-shot reconciliation
+    // per mount, and the sticky job registry (server Task 2) makes a
+    // duplicate in-flight POST from attachToRunningReview safe to abandon.
+  }, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
   /* Sentences are the single source of truth in Redux. All edits go via
      dispatch(manuscriptActions.*) — no local copy. */
   const sentences: Sentence[] = sentencesFromStore ?? EMPTY_SENTENCES;
@@ -668,6 +708,29 @@ export function ManuscriptView({
     [bookId, dispatch],
   );
 
+  /* fs-58 Task 10 — unresolved-findings badges on the Review Script button
+     and the whole-book menu item (design spec §6.3). fs-58 Task 11 — the raw
+     bucket (for unresolvedCountForChapters at click time, over an arbitrary
+     target scope) and whether a job is already running for this book, any
+     scope (design spec §6.4 Case 1). These hooks MUST live before the
+     `if (!currentChapter) return null` guard below — hooks cannot be called
+     conditionally (Rules of Hooks); currentChapterUnresolvedCount guards its
+     own `currentChapter.id` read since currentChapter may still be
+     undefined here. */
+  const currentChapterUnresolvedCount = useAppSelector((s) =>
+    bookId && currentChapter ? unresolvedCountForChapters(s.scriptReview?.byBook[bookId], [currentChapter.id]) : 0,
+  );
+  const wholeBookUnresolvedCount = useAppSelector((s) =>
+    bookId
+      ? unresolvedCountForChapters(
+          s.scriptReview?.byBook[bookId],
+          chapters.filter((c) => !c.excluded).map((c) => c.id),
+        )
+      : 0,
+  );
+  const scriptReviewBucket = useAppSelector((s) => (bookId ? s.scriptReview?.byBook[bookId] : undefined));
+  const jobActiveForBook = useAppSelector((s) => !!(bookId && s.scriptReview?.activeStreams[bookId]));
+
   /* Defensive guard for the empty-chapters transient (e.g. the manuscript
      slice rehydrating after a reparse, or a stale URL pointing at a book
      whose chapter list hasn't loaded yet). The whole view dereferences
@@ -749,16 +812,15 @@ export function ManuscriptView({
   const reviewableChapterCount = chapters.filter((c) => !c.excluded).length;
   const rpdWarning = rpdWarningFor(reviewableChapterCount, reviewModel);
 
-  async function handleReviewScript(wholeBook: boolean) {
-    if (!bookId || reviewLoading) return;
-    if (!wholeBook && currentChapterId == null) return;
+  async function startNewReview(wholeBook: boolean, explicitChapterId?: number) {
+    if (!bookId) return;
     setReviewLoading(true);
     setReviewMenuOpen(false);
     try {
       await runReviewScript(bookId, {
         dispatch,
         wholeBook,
-        chapterId: wholeBook ? undefined : currentChapterId ?? undefined,
+        chapterId: wholeBook ? undefined : explicitChapterId ?? currentChapterId ?? undefined,
         model: reviewModel,
         /* sentencesRef.current gives the latest Redux value even after the
            await, without depending on the stale-closure capture. */
@@ -771,17 +833,120 @@ export function ManuscriptView({
           vocalization: s.vocalization,
         })),
         characterIds: new Set(characters.map((c) => c.id)),
+        manuscriptId: manuscriptId ?? '',
       });
     } finally {
       setReviewLoading(false);
     }
   }
 
+  async function handleReviewScript(wholeBook: boolean) {
+    if (!bookId || reviewLoading || scriptReviewHydrating) return;
+    if (!wholeBook && currentChapterId == null) return;
+
+    // Case 1 (design spec §6.4): a job is already running for this book,
+    // any scope. The button is already disabled via reviewLoading/
+    // analysisBusy in the common case; this is the defensive check for
+    // e.g. a job attached via hydrateScriptReview on a different tab/mount.
+    if (jobActiveForBook) return;
+
+    const targetChapterIds = wholeBook ? chapters.filter((c) => !c.excluded).map((c) => c.id) : [currentChapterId!];
+    const unresolvedCount = unresolvedCountForChapters(scriptReviewBucket, targetChapterIds);
+    if (unresolvedCount > 0) {
+      setConfirmGate({ wholeBook, chapterIds: targetChapterIds, count: unresolvedCount });
+      return;
+    }
+
+    await startNewReview(wholeBook);
+  }
+
+  function handleReviewExisting() {
+    if (!bookId) return;
+    dispatch(scriptReviewActions.showReview({ bookId }));
+    setConfirmGate(null);
+  }
+
+  async function handleDiscardAndStartNew() {
+    if (!bookId || !confirmGate) return;
+    const { wholeBook, chapterIds } = confirmGate;
+    setConfirmGate(null);
+    try {
+      await discardReview(bookId, chapterIds, { dispatch });
+      // Defensive re-check (PR review round 6) — a sibling chapter's job
+      // could have started between the confirm gate opening and this click
+      // (the same rare cross-tab/multi-mount race handleReviewScript's own
+      // jobActiveForBook check guards against above). Skip starting a new
+      // review in that case rather than clobbering the shared
+      // activeStreams[bookId] progress state out from under the still-
+      // running sibling job — the discard above already completed safely
+      // (it only touches this chapter's ledger entry, not the job registry).
+      if (jobActiveForBook) return;
+      await startNewReview(wholeBook, chapterIds[0]);
+    } catch (err) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Failed to discard script-review findings.',
+        }),
+      );
+    }
+  }
+
+  // Finding 7 (PR review round 4): match this file's own existing
+  // convention for a chapter label (the main chapter header shows both the
+  // id and the stripped title, e.g. `Chapter {id} — {title}`) instead of
+  // showing the confirm-gate dialog a raw internal chapter id on its own.
+  const confirmGateChapterLabel =
+    confirmGate && !confirmGate.wholeBook
+      ? (() => {
+          const title = chapters.find((c) => c.id === confirmGate.chapterIds[0])?.title;
+          return title ? `chapter ${confirmGate.chapterIds[0]} — ${stripChapterPrefix(title)}` : `chapter ${confirmGate.chapterIds[0]}`;
+        })()
+      : null;
+
   return (
     <div
       className="max-w-[1500px] mx-auto px-3 md:px-6 py-6 md:py-8 lg:grid lg:grid-cols-[280px_1fr_360px] lg:gap-6"
       ref={containerRef}
     >
+      {/* fs-58 Task 11 — re-run confirm gate (design spec §6.4): blocks a
+          fresh Review Script run when the target scope already has
+          unresolved findings, offering "Review existing" (reopen the
+          hidden modal) or "Discard and start new". */}
+      {confirmGate && (
+        <>
+          <div className="fixed inset-0 bg-ink/40 z-50" aria-hidden="true" />
+          <div className="fixed inset-0 z-50 grid place-items-center p-4 pointer-events-none">
+            <div
+              data-testid="review-script-confirm-gate"
+              className="bg-white rounded-3xl shadow-float w-full max-w-md pointer-events-auto p-6 space-y-4"
+            >
+              <p className="text-sm text-ink/80">
+                You have {confirmGate.count} unresolved suggestion{confirmGate.count === 1 ? '' : 's'} in{' '}
+                {confirmGate.wholeBook ? 'this book' : confirmGateChapterLabel}. Review them, or discard
+                and start a new review?
+              </p>
+              <div className="flex items-center gap-3">
+                <button
+                  data-testid="review-script-confirm-review-existing"
+                  onClick={handleReviewExisting}
+                  className="px-4 min-h-[44px] sm:min-h-0 py-2 rounded-full bg-ink text-canvas text-sm font-semibold"
+                >
+                  Review existing
+                </button>
+                <button
+                  data-testid="review-script-confirm-discard"
+                  onClick={() => void handleDiscardAndStartNew()}
+                  className="px-4 min-h-[44px] sm:min-h-0 py-2 rounded-full border border-ink/20 text-ink text-sm font-semibold"
+                >
+                  Discard and start new
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* fs-58 — ScriptReviewDiff modal: fixed-overlay, renders null when no active review */}
       {hasActiveReview && bookId && <ScriptReviewDiff bookId={bookId} />}
 
@@ -857,15 +1022,19 @@ export function ManuscriptView({
                 <button
                   data-testid="review-script-chapter"
                   onClick={() => void handleReviewScript(false)}
-                  disabled={reviewLoading || !bookId || analysisBusy}
+                  disabled={reviewLoading || !bookId || analysisBusy || scriptReviewHydrating}
                   className="inline-flex items-center gap-2 px-4 min-h-[44px] sm:min-h-0 py-2 rounded-l-full border border-ink/20 bg-white text-ink text-sm font-semibold hover:bg-ink/5 disabled:opacity-50"
                 >
-                  {reviewLoading ? 'Reviewing…' : 'Review Script'}
+                  {reviewLoading
+                    ? 'Reviewing…'
+                    : currentChapterUnresolvedCount > 0
+                      ? `Review Script (${currentChapterUnresolvedCount})`
+                      : 'Review Script'}
                 </button>
                 <button
                   data-testid="review-script-menu-toggle"
                   onClick={() => setReviewMenuOpen((o) => !o)}
-                  disabled={reviewLoading || !bookId || analysisBusy}
+                  disabled={reviewLoading || !bookId || analysisBusy || scriptReviewHydrating}
                   aria-label="Script review options"
                   aria-expanded={reviewMenuOpen}
                   className="inline-flex items-center justify-center px-2 min-h-[44px] sm:min-h-0 py-2 rounded-r-full border border-l-0 border-ink/20 bg-white text-ink/60 hover:bg-ink/5 hover:text-ink disabled:opacity-50"
@@ -880,10 +1049,15 @@ export function ManuscriptView({
                     <button
                       data-testid="review-script-wholebook"
                       onClick={() => void handleReviewScript(true)}
-                      disabled={reviewLoading || !bookId || analysisBusy}
+                      disabled={reviewLoading || !bookId || analysisBusy || scriptReviewHydrating}
                       className="w-full text-left px-3 min-h-[44px] sm:min-h-0 py-2 rounded-xl hover:bg-ink/5 text-sm font-medium text-ink disabled:opacity-50"
                     >
                       Review whole book
+                      {wholeBookUnresolvedCount > 0 && (
+                        <span className="ml-1.5 text-xs font-semibold text-ink/70">
+                          ({wholeBookUnresolvedCount} unresolved)
+                        </span>
+                      )}
                       <span className="block text-xs font-normal text-ink/50">
                         {reviewableChapterCount} chapter
                         {reviewableChapterCount === 1 ? '' : 's'}

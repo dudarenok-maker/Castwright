@@ -4,7 +4,7 @@
    whole classes, then applies the selected set via planApply +
    dispatchAcceptedOps. Mirrors drift-report.tsx overlay pattern. */
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Dispatch } from '@reduxjs/toolkit';
 import { Checkbox } from './primitives';
 import { useAppDispatch, useAppSelector } from '../store';
@@ -15,6 +15,7 @@ import {
   type ReviewOpWithChapter,
 } from '../store/script-review-slice';
 import { planApply, dispatchAcceptedOps } from '../lib/script-review-apply';
+import { discardReview } from '../store/script-review-thunk';
 import { applyProposedReattributions } from '../lib/apply-proposed';
 import { changeLogActions } from '../store/change-log-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
@@ -170,6 +171,81 @@ function OpPreview({
    (possibly edited) proposed name OR a rewrite to an existing roster member. */
 type FinalizedProposed = ReviewOpWithChapter;
 
+/* fs-58 persistence Task 13 — mirror a batch of already-applied ops into the
+   server ledger (design spec §4.2's per-chapter /resolve) and, on success,
+   remove exactly those ops from the local bucket via resolveOpsLocally. This
+   is what replaced the old handleApply tail's whole-bucket `clearReview` —
+   that call deleted every op in the bucket, including ones the user left
+   unchecked, which is the silent-data-loss bug this plan exists to fix. A
+   chapter missing from `versionByChapter` (no ledger entry to resolve
+   against) is skipped rather than resolved — nothing local changes for it. */
+async function resolveAppliedOps(
+  dispatch: Dispatch,
+  bookId: string,
+  bucket: { versionByChapter: Record<number, number> },
+  appliedOps: ReviewOpWithChapter[],
+): Promise<void> {
+  // Finding 5 (PR review round 5): push each op's key onto the chapter's
+  // existing array in place instead of spreading a brand-new array per op —
+  // the old `[...(byChapter.get(...) ?? []), key]` was O(n^2) in ops-per-
+  // chapter (a fresh copy on every push).
+  const byChapter = new Map<number, string[]>();
+  for (const op of appliedOps) {
+    const key = opKey(op.chapterId, op.id, op.op);
+    const existing = byChapter.get(op.chapterId);
+    if (existing) {
+      existing.push(key);
+    } else {
+      byChapter.set(op.chapterId, [key]);
+    }
+  }
+  // Finding 4 (PR review round 5): each chapter's /resolve call is
+  // independent (own chapterId/version/opKeys) — run them concurrently
+  // instead of sequentially awaiting one chapter at a time, so a whole-book
+  // Apply spanning many chapters pays ~1 round-trip's worth of latency
+  // instead of N.
+  await Promise.all(
+    [...byChapter].map(async ([chapterId, opKeys]) => {
+      const version = bucket.versionByChapter[chapterId];
+      if (version === undefined) return;
+      try {
+        const result = await api.resolveScriptReviewOps(bookId, { chapterId, version, appliedOpKeys: opKeys });
+        if (result.ok) {
+          dispatch(scriptReviewActions.resolveOpsLocally({ bookId, opKeys }));
+        } else {
+          // Stale version — another client/tab already resolved or replaced this
+          // chapter's ledger entry since this bucket loaded. The manuscript
+          // mutation already happened locally (dispatchAcceptedOps runs before
+          // this call), so we can't safely mark it resolved server-side or
+          // silently drop it from the bucket without risking a re-apply on a
+          // second click — surface it instead of swallowing it.
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'warn',
+              message: `Chapter ${chapterId}'s script-review findings changed elsewhere — reload to see the latest state.`,
+              dedupeKey: `script-review-stale-${bookId}-${chapterId}`,
+            }),
+          );
+        }
+      } catch (err) {
+        // A thrown network/HTTP error must not abort the whole batch — every
+        // other chapter in `appliedOps` still deserves its own resolve
+        // attempt. The manuscript mutation for THIS chapter already applied
+        // locally; it stays unresolved in the bucket/ledger until the user
+        // retries (e.g. re-running or re-applying), same recovery path as the
+        // stale-version case above.
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'error',
+            message: err instanceof Error ? err.message : `Failed to save chapter ${chapterId}'s script-review resolution.`,
+            dedupeKey: `script-review-resolve-failed-${bookId}-${chapterId}`,
+          }),
+        );
+      }
+    }),
+  );
+}
+
 export function ScriptReviewDiff({ bookId }: { bookId: string }) {
   const dispatch = useAppDispatch();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -197,6 +273,29 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
     startBookId: string;
   } | null>(null);
 
+  /* fs-58 persistence Task 12 — "Dismiss all" is destructive (discards the
+     persisted ledger via discardReview), so it requires this confirm step
+     before firing. Close/backdrop stay non-destructive (handleClose below)
+     and never touch this state. */
+  const [confirmDismiss, setConfirmDismiss] = useState(false);
+
+  /* fs-58 persistence Task 13 — debounce the selection PATCH per chapter so a
+     burst of checkbox toggles collapses into one network call. Keyed by
+     chapterId (not a single timer) so toggles across different chapters
+     don't cancel each other's pending sync. */
+  const selectionSyncTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+
+  /* Clear any pending debounced-PATCH timers on unmount — otherwise a
+     scheduled selection sync can fire after the modal has closed (e.g. the
+     user hides it right after toggling a checkbox), which combined with
+     mount-time re-hydration could cause a brief selection flicker. */
+  useEffect(() => {
+    const timers = selectionSyncTimers.current;
+    return () => {
+      for (const id of Object.values(timers)) clearTimeout(id);
+    };
+  }, []);
+
   if (!bucket) return null;
 
   const { ops, selected, unappliable } = bucket;
@@ -211,21 +310,60 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
 
   const selectedCount = ops.filter((o) => selected[opKey(o.chapterId, o.id, o.op)]).length;
 
+  /* fs-58 persistence Task 13 — mirror the operator's checkbox state to the
+     server (design spec §6.5's selection PATCH) 500ms after the last toggle
+     for that chapter, so the persisted ledger stays in sync with what the
+     modal shows without a round-trip on every click. */
+  function scheduleSelectionSync(chapterId: number, currentSelected: Record<string, boolean>) {
+    clearTimeout(selectionSyncTimers.current[chapterId]);
+    selectionSyncTimers.current[chapterId] = setTimeout(() => {
+      const version = bucket?.versionByChapter[chapterId];
+      if (version === undefined) return;
+      const chapterSelected: Record<string, boolean> = {};
+      for (const op of ops) {
+        if (op.chapterId !== chapterId) continue;
+        chapterSelected[opKey(op.chapterId, op.id, op.op)] = !!currentSelected[opKey(op.chapterId, op.id, op.op)];
+      }
+      void api.patchScriptReviewSelection(bookId, { chapterId, version, selected: chapterSelected });
+    }, 500);
+  }
+
   function handleClose() {
-    dispatch(scriptReviewActions.clearReview({ bookId }));
+    dispatch(scriptReviewActions.hideReview({ bookId }));
   }
 
   function handleDismiss() {
-    dispatch(scriptReviewActions.clearReview({ bookId }));
+    setConfirmDismiss(true);
+  }
+
+  async function confirmDismissAll() {
+    // Finding 3 (PR review round 4): scoping the discard to only `ops`
+    // (the appliable set) silently left out a chapter whose findings are
+    // ALL unappliable — even though this button's own copy claims "This
+    // can't be undone." Include unappliable's chapters too.
+    const chapterIds = [...new Set([...ops.map((o) => o.chapterId), ...unappliable.map((u) => u.op.chapterId)])];
+    setConfirmDismiss(false);
+    try {
+      await discardReview(bookId, chapterIds, { dispatch });
+    } catch (err) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Failed to discard script-review findings.',
+        }),
+      );
+    }
   }
 
   /* Run the finalized off-roster reattributes through the interleaved
-     create→reassign helper (dedupe + book-switch guard), then clear the
-     review bucket. Called once, after the LAST confirm resolves. */
+     create→reassign helper (dedupe + book-switch guard); each applied op is
+     resolved server-side one at a time via onOpApplied as it happens (fs-58
+     persistence Task 14) — no whole-bucket clear at the end. Called once,
+     after the LAST confirm resolves. */
   async function runProposed(finalized: FinalizedProposed[], startBookId: string) {
     const rosterByName = new Map(cast.map((c) => [c.name.trim().toLowerCase(), { id: c.id }]));
     try {
-      const { createdCharacters } = await applyProposedReattributions(finalized, {
+      const { createdCharacters, aborted } = await applyProposedReattributions(finalized, {
         rosterByName,
         createCharacter: async (p) => {
           // api.createCharacter resolves to a { character } envelope — unwrap it.
@@ -240,7 +378,19 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
         onBoundaryMove: (chapterId) =>
           dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 })),
         isSameBook: () => stageBookIdRef.current === startBookId,
+        onOpApplied: (op) => {
+          if (!bucket) return;
+          void resolveAppliedOps(dispatch, startBookId, bucket, [op]);
+        },
       });
+      if (aborted) {
+        // Book-switch guard tripped mid-batch (silent, no throw) — whatever
+        // was already resolved via onOpApplied above stays resolved; hide,
+        // don't discard the rest (design spec §6.5).
+        setConfirm(null);
+        dispatch(scriptReviewActions.hideReview({ bookId: startBookId }));
+        return;
+      }
       // fs-63 — on success, nudge to auto-voice any newly-created off-roster
       // character (qwen-only; no-op otherwise). Inside the try so a failed
       // create falls to the catch and never nudges.
@@ -260,7 +410,10 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
       return;
     }
     setConfirm(null);
-    dispatch(scriptReviewActions.clearReview({ bookId: startBookId }));
+    // fs-58 persistence Task 14 — no clearReview/discard here: every applied
+    // op was already resolved per-op via onOpApplied as it happened; any op
+    // left in the bucket (unselected, or never reached because an earlier op
+    // failed) stays, unresolved.
   }
 
   /* Advance the confirm queue by one finalized op. A "create new" decision is
@@ -280,6 +433,17 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
         }),
       );
       dispatch(changeLogActions.bumpBoundaryMove({ chapterId: finalizedOp.chapterId, count: 1 }));
+      // This op bypasses the batched off-roster helper entirely (it's an
+      // immediate on-roster reassign, not a create-new-character), so it must
+      // be resolved server-side here — the same per-op resolve
+      // applyProposedReattributions' onOpApplied does for every other applied
+      // op (design spec §6.5). Without this it never leaves the ledger: it
+      // keeps counting toward the unresolved badge and reappears on every
+      // reopen/reload even though it was already actioned.
+      if (bucket) {
+        const startBookId = confirm?.startBookId ?? bookId;
+        void resolveAppliedOps(dispatch, startBookId, bucket, [finalizedOp]);
+      }
     }
     setConfirm((prev) => {
       if (!prev) return prev;
@@ -289,19 +453,24 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
       const nextIndex = prev.index + 1;
       if (nextIndex >= prev.queue.length) {
         void runProposed(finalized, prev.startBookId);
-        // Keep `confirm` populated until runProposed resolves to clearReview;
-        // the form unmounts once the bucket is gone.
+        // Keep `confirm` populated until runProposed resolves — every applied
+        // op is resolved per-op via onOpApplied as it happens, so there's no
+        // whole-bucket action to wait on; runProposed itself calls
+        // setConfirm(null) once it's done (success, abort, or failure).
       }
       return { ...prev, finalized, index: nextIndex };
     });
   }
 
   /* Cancel mid-confirm: leave the already-applied direct ops in place, do NOT
-     create any not-yet-confirmed member, and tear the review bucket down. */
+     create any not-yet-confirmed member, and hide (not discard) the review
+     bucket — whatever's left (including ops from this batch that were never
+     confirmed) survives, reachable again via the badge/"Review existing"
+     path (fs-58 persistence Task 14). */
   function cancelConfirm() {
     const startBookId = confirm?.startBookId ?? bookId;
     setConfirm(null);
-    dispatch(scriptReviewActions.clearReview({ bookId: startBookId }));
+    dispatch(scriptReviewActions.hideReview({ bookId: startBookId }));
   }
 
   function handleApply() {
@@ -329,7 +498,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
     ) as ReviewOpWithChapter[];
     const directOps = appliable.filter(
       (o) => !(o.op === 'reattribute' && o.proposed && !o.characterId),
-    );
+    ) as ReviewOpWithChapter[];
 
     dispatchAcceptedOps(
       dispatch,
@@ -340,13 +509,30 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
           dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 })),
       },
     );
+    // fs-58 persistence Task 13 — resolve directOps server-side UNCONDITIONALLY
+    // whenever there are any, before the proposedOps early-return below. A
+    // mixed batch (some direct ops + some off-roster proposed ops) would
+    // otherwise skip past the old tail entirely and never resolve directOps.
+    if (bucket && directOps.length > 0) {
+      void resolveAppliedOps(dispatch, startBookId, bucket, directOps);
+    }
 
     if (proposedOps.length > 0) {
       setConfirm({ queue: proposedOps, index: 0, finalized: [], startBookId });
-      return; // clearReview happens after the confirm queue resolves
+      return; // the confirm queue's own cleanup (Task 14) handles this path
     }
 
-    dispatch(scriptReviewActions.clearReview({ bookId: startBookId }));
+    // fs-58 persistence Task 13 — hide the modal, don't wipe the bucket.
+    // clearReview deleted the WHOLE bucket, including any op the user left
+    // unchecked — the exact silent-data-loss bug this plan exists to fix.
+    // hideReview only flips `visible`; anything resolveOpsLocally hasn't
+    // (yet, or ever) removed stays reachable via the badge/"Review existing"
+    // path (Task 11). resolveAppliedOps above is fire-and-forget (`void`), so
+    // it may still be in flight here; once it resolves, resolveOpsLocally's
+    // own empty-bucket cleanup (Task 6) deletes the bucket if every op ended
+    // up resolved — hideReview on an already- or soon-to-be-deleted bucket is
+    // a documented no-op (Task 6's reducer guards on `if (bucket)`).
+    dispatch(scriptReviewActions.hideReview({ bookId: startBookId }));
   }
 
   // fs-58 Unit B — the active confirm-queue op (off-roster reattribute), if any.
@@ -388,6 +574,41 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                 }
                 onCancel={cancelConfirm}
               />
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* fs-58 persistence Task 12 — "Dismiss all" confirm step. This is the
+          sole destructive action left in this modal; close/backdrop
+          (handleClose) never reach here. */}
+      {confirmDismiss && (
+        <>
+          <div className="fixed inset-0 bg-ink/50 z-[60]" aria-hidden="true" />
+          <div className="fixed inset-0 z-[60] grid place-items-center p-4 pointer-events-none">
+            <div
+              data-testid="dismiss-confirm"
+              className="bg-white rounded-3xl shadow-float w-full max-w-sm pointer-events-auto p-6 space-y-4"
+            >
+              <p className="text-sm text-ink/80">
+                Discard {ops.length} unresolved suggestion{ops.length === 1 ? '' : 's'}? This can&apos;t be undone.
+              </p>
+              <div className="flex items-center gap-3">
+                <button
+                  data-testid="dismiss-confirm-yes"
+                  onClick={() => void confirmDismissAll()}
+                  className="px-4 min-h-[44px] sm:min-h-0 py-2 rounded-full bg-ink text-canvas text-sm font-semibold"
+                >
+                  Discard
+                </button>
+                <button
+                  data-testid="dismiss-confirm-cancel"
+                  onClick={() => setConfirmDismiss(false)}
+                  className="px-4 min-h-[44px] sm:min-h-0 py-2 rounded-full border border-ink/20 text-ink text-sm font-semibold"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
         </>
@@ -474,9 +695,14 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                         data-testid={`class-toggle-${cls}`}
                         checked={allClassSelected}
                         accent="ink"
-                        onChange={() =>
-                          dispatch(scriptReviewActions.toggleClass({ bookId, op: cls as ReviewOpWithChapter['op'] }))
-                        }
+                        onChange={() => {
+                          dispatch(scriptReviewActions.toggleClass({ bookId, op: cls as ReviewOpWithChapter['op'] }));
+                          const nextSelected = { ...selected };
+                          for (const o of classOps) nextSelected[opKey(o.chapterId, o.id, o.op)] = !allClassSelected;
+                          for (const chapterId of new Set(classOps.map((o) => o.chapterId))) {
+                            scheduleSelectionSync(chapterId, nextSelected);
+                          }
+                        }}
                       />
                       Select all
                     </label>
@@ -503,7 +729,10 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                             data-testid={`op-toggle-${key}`}
                             checked={isSelected}
                             accent="ink"
-                            onChange={() => dispatch(scriptReviewActions.toggleOp({ bookId, key }))}
+                            onChange={() => {
+                              dispatch(scriptReviewActions.toggleOp({ bookId, key }));
+                              scheduleSelectionSync(op.chapterId, { ...selected, [key]: !selected[key] });
+                            }}
                             aria-label={`Toggle this ${op.op} suggestion`}
                           />
                         </label>

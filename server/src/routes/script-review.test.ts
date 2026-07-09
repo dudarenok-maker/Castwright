@@ -41,9 +41,10 @@ let priorChapterIdFor: typeof PriorChapterIdFor;
    `selectedEngine` lets a test flip the reported engine to 'local' (so the
    chunker derives a finite, num_ctx-bound budget and a large chapter splits);
    it defaults to 'gemini' so the existing single-call tests are unchanged. */
-const { runReview, engineState } = vi.hoisted(() => ({
+const { runReview, engineState, selectAnalyzerForPhaseMock } = vi.hoisted(() => ({
   runReview: vi.fn(),
   engineState: { engine: 'gemini' as 'gemini' | 'local' },
+  selectAnalyzerForPhaseMock: vi.fn(),
 }));
 
 vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
@@ -58,12 +59,12 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
   };
   return {
     ...actual,
-    selectAnalyzerForPhase: () => ({
+    selectAnalyzerForPhase: selectAnalyzerForPhaseMock.mockImplementation(() => ({
       analyzer: fakeAnalyzer,
       engine: engineState.engine,
       model: 'test-model',
       fallbackModel: null,
-    }),
+    })),
   };
 });
 
@@ -113,6 +114,24 @@ function parseSse(body: string): Array<Record<string, unknown>> {
     .split('\n')
     .filter((l) => l.startsWith('data: '))
     .map((l) => JSON.parse(l.slice('data: '.length)));
+}
+
+/** Fires a POST immediately and returns both the in-flight request (so a
+    caller can `.abort()` it) and a promise that resolves once the response
+    completes. A bare `request(app).post(...).send(...)` assigned to a
+    variable does NOT actually dispatch — supertest/superagent defer the
+    real HTTP send until the request is awaited or `.then()`/`.end()` is
+    invoked — so a "kick off request A, sleep, then send request B" test
+    would otherwise send both around the same tick instead of A first. */
+function firePost(path: string, body: Record<string, unknown>): { req: request.Test; done: Promise<request.Response> } {
+  const req = request(app).post(path).send(body);
+  const done = new Promise<request.Response>((resolve, reject) => {
+    req.end((err, res) => {
+      if (err && !res) reject(err);
+      else resolve(res as request.Response);
+    });
+  });
+  return { req, done };
 }
 
 const SENTENCES = [
@@ -269,6 +288,27 @@ describe('POST /api/books/:bookId/script-review', () => {
     // Quota error reported; no success result.
     expect(events.some((e) => e.kind === 'error' && e.code === 'quota_exhausted')).toBe(true);
     expect(events.some((e) => e.kind === 'result')).toBe(false);
+  });
+
+  /* Round-3 review Important Finding 5 — the detached job launch
+     (`void runScriptReviewJob(...).finally(...)`) had no `.catch`, so a
+     SYNCHRONOUS throw inside runScriptReviewJob (e.g. selectAnalyzerForPhase
+     throwing on a misconfigured engine, BEFORE the analyzer is ever called)
+     became an unhandled promise rejection: no error/SSE event was ever sent
+     and res.end() was never called, hanging the client's request forever.
+     The fix broadcasts a kind:'error' event and ends every subscriber's
+     response. */
+  it('when the job runner throws synchronously (e.g. a misconfigured analyzer engine), the SSE client receives a kind:"error" event instead of hanging', async () => {
+    writeBook(SENTENCES);
+    selectAnalyzerForPhaseMock.mockImplementationOnce(() => {
+      throw new Error('misconfigured engine: missing GEMINI_API_KEY');
+    });
+
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.kind === 'error' && e.code === 'internal_error')).toBe(true);
+    expect(runReview).not.toHaveBeenCalled();
   });
 
   it('a single chapter failure does not abort the rest of the pass', async () => {
@@ -674,5 +714,454 @@ describe('priorChapterIdFor (fs-64)', () => {
   });
   it('handles non-contiguous ids', () => {
     expect(priorChapterIdFor(10, [2, 5, 10, 11], new Set())).toBe(5);
+  });
+});
+
+describe('sticky job registry', () => {
+  it('a second POST for the same chapter joins the running job and is replayed its ops', async () => {
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' },
+    ]);
+    let releaseFirst: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    runReview.mockImplementation(async () => {
+      await gate;
+      return { ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] };
+    });
+
+    const first = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20)); // let the first request register the job
+
+    // A joined SSE response only completes once the job finishes broadcasting
+    // to every subscriber — so it must not be awaited before releaseFirst()
+    // unblocks the gated analyzer call, or both requests deadlock waiting on
+    // each other. Kick the join off, give it time to attach as a subscriber,
+    // THEN release the gate and await both responses together.
+    const second = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20)); // let the second request join as a subscriber
+
+    releaseFirst?.();
+    const [, secondRes] = await Promise.all([first.done, second.done]);
+
+    expect(runReview).toHaveBeenCalledTimes(1); // joined the running job, didn't start a second analyzer call
+    expect(secondRes.text).toContain('"kind":"ops"');
+    expect(secondRes.text).toContain('strip_tag');
+  });
+
+  it('a whole-book POST while a single-chapter job is running for the same book is rejected with 409', async () => {
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
+    ]);
+    let releaseFirst: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    runReview.mockImplementation(async () => { await gate; return { ops: [] }; });
+
+    const first = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const conflict = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    expect(conflict.status).toBe(409);
+
+    releaseFirst?.();
+    await first.done;
+  });
+
+  it('res.on("close") removes only the disconnecting subscriber; the job keeps running and completes', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let resolveReview: ((v: { ops: unknown[] }) => void) | undefined;
+    // Gate only the FIRST (aborted) request's analyzer call. Once the earlier
+    // job has actually finished and cleaned itself out of the job map, the
+    // reconnect below starts a genuinely new job with its own analyzer call —
+    // that one resolves immediately so the reconnect assertion doesn't need
+    // a second manual release.
+    runReview.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveReview = resolve; }),
+    );
+    runReview.mockResolvedValue({ ops: [] });
+
+    const { req, done } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    done.catch(() => {}); // aborting rejects the promise; the test only cares about the server-side effect
+    // Give the job time to actually register and reach the gated analyzer
+    // call BEFORE aborting — an immediate abort() (no delay) can cancel the
+    // request before the server even accepts the connection, so no job (and
+    // no runReview call) is ever created, which isn't the "disconnect mid-run"
+    // scenario this test means to exercise.
+    await new Promise((r) => setTimeout(r, 20));
+    req.abort(); // simulate client disconnect
+    await new Promise((r) => setTimeout(r, 20));
+
+    resolveReview?.({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+
+    // A fresh connection should see the job either already finished or still
+    // running to completion — never aborted by the earlier disconnect.
+    await new Promise((r) => setTimeout(r, 50));
+    const reconnect = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
+    expect(reconnect.status).toBe(200);
+  });
+
+  it('the requested model is threaded through to selectAnalyzerForPhase, not dropped by the detached job runner', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    runReview.mockResolvedValue({ ops: [] });
+    await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1, model: 'gemini-3.5-flash' });
+    expect(selectAnalyzerForPhaseMock).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'phase1', model: 'gemini-3.5-flash' }),
+    );
+  });
+
+  it('regression (Bug 1): two different chapters of the same book run independently — the subset map is keyed by bookId:chapterId, not bare bookId', async () => {
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Chapter one line.' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'Chapter two line.' },
+    ]);
+    let releaseChapter1: (() => void) | undefined;
+    const gate1 = new Promise<void>((resolve) => { releaseChapter1 = resolve; });
+    runReview.mockImplementation(async (_m, chapterId): Promise<ScriptReviewOutput> => {
+      if (chapterId === 1) {
+        await gate1;
+        return { ops: [{ id: 1, op: 'strip_tag', newText: 'Chapter one line', rationale: 'r' }] };
+      }
+      return { ops: [{ id: 2, op: 'strip_tag', newText: 'Chapter two line', rationale: 'r' }] };
+    });
+
+    // Start chapter 1's review — gated, not yet resolved.
+    const chapter1 = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20)); // let it register into the map
+
+    // Chapter 2 of the SAME book must NOT be treated as a conflict — before the
+    // fix, the bare-bookId subset map would have (incorrectly) let this request
+    // fall through to "no existing job for this scope" and then clobber chapter
+    // 1's map entry on write, since both would key on the same bare bookId.
+    const chapter2Res = await request(app)
+      .post(`/api/books/${bookId}/script-review`)
+      .send({ chapterId: 2 });
+    expect(chapter2Res.status).toBe(200);
+    const chapter2Events = parseSse(chapter2Res.text);
+    expect(chapter2Events.some((e) => e.kind === 'ops' && e.chapterId === 2)).toBe(true);
+
+    // Chapter 1's job must still be reachable — a third request for chapter 1
+    // joins the still-running job rather than starting a brand-new (duplicate)
+    // one. If Bug 1 were present, chapter 1's map entry would have been
+    // orphaned by chapter 2's registration and this would start a SECOND
+    // analyzer call for chapter 1 instead of joining.
+    const rejoin = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    releaseChapter1?.();
+    const [, rejoinRes] = await Promise.all([chapter1.done, rejoin.done]);
+
+    // Exactly one analyzer call for chapter 1 (the original), one for chapter 2.
+    const chapter1Calls = runReview.mock.calls.filter((c) => c[1] === 1);
+    const chapter2Calls = runReview.mock.calls.filter((c) => c[1] === 2);
+    expect(chapter1Calls).toHaveLength(1);
+    expect(chapter2Calls).toHaveLength(1);
+
+    // The rejoined response replays chapter 1's ops (from the ONE shared job).
+    expect(rejoinRes.text).toContain('"kind":"ops"');
+    expect(rejoinRes.text).toContain('Chapter one line');
+  });
+
+  it('regression (Bug 2): two near-simultaneous requests for the identical scope produce exactly one analyzer call, and both responses reflect the same job', async () => {
+    // This pins the OBSERVABLE correctness property, not the zero-width race
+    // window itself — the fix makes the conflict/join check and the new job's
+    // registration happen in one synchronous block with no `await` between
+    // them, so the window a black-box HTTP test could exploit to force two
+    // concurrent registrations no longer exists (Node can't interleave a
+    // second request's handler mid-synchronous-block). A raw fire-both-at-once
+    // test is therefore structurally equivalent to the "second POST joins the
+    // running job" test above; this test names the race explicitly so the
+    // regression intent is documented even though it can't observe the race
+    // window directly.
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    runReview.mockImplementation(async (): Promise<ScriptReviewOutput> => {
+      await gate;
+      return { ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] };
+    });
+
+    // Fire both requests back-to-back with no await between the two firePost
+    // calls, as close to simultaneous as this test harness allows.
+    const first = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    const second = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    release?.();
+    const [firstRes, secondRes] = await Promise.all([first.done, second.done]);
+
+    // Exactly one analyzer call — one of the two requests always registers
+    // the job and the other always joins it, never both registering.
+    expect(runReview).toHaveBeenCalledTimes(1);
+    // Both responses reflect the same single job's ops.
+    expect(firstRes.text).toContain('"kind":"ops"');
+    expect(secondRes.text).toContain('"kind":"ops"');
+    expect(firstRes.text).toContain('strip_tag');
+    expect(secondRes.text).toContain('strip_tag');
+  });
+});
+
+describe('ledger checkpointing', () => {
+  it('checkpoints a chapter to the ledger as soon as it completes, even with zero subscribers attached', async () => {
+    const { readLedger } = await import('../workspace/script-review-ledger.js');
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
+    ]);
+    let resolveChapter2: (() => void) | undefined;
+    runReview
+      .mockResolvedValueOnce({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] })
+      .mockImplementationOnce(() => new Promise<{ ops: unknown[] }>((resolve) => {
+        resolveChapter2 = () => resolve({ ops: [] });
+      }));
+
+    // Use firePost (not a bare `request(app)...send()`) so `.end()` actually
+    // dispatches the request — per the established pattern/comment above (see
+    // the "res.on('close')" sticky-registry test), an unawaited/undispatched
+    // supertest Request has no underlying `req` yet, so `.abort()` on it is a
+    // silent no-op and the server never even sees the POST.
+    const { req, done } = firePost(`/api/books/${bookId}/script-review`, {});
+    done.catch(() => {}); // aborting rejects the promise; only the server-side effect matters here
+    await new Promise((r) => setTimeout(r, 20)); // let chapter 1 finish and chapter 2 start before disconnecting
+    req.abort(); // disconnect before chapter 2 resolves — job keeps running
+    await new Promise((r) => setTimeout(r, 30));
+
+    const ledgerMidRun = await readLedger(bookDir(), manuscriptId);
+    expect(ledgerMidRun.entries['1'].ops).toHaveLength(1);
+    expect(ledgerMidRun.entries['1'].manuscriptId).toBe(manuscriptId);
+
+    resolveChapter2?.();
+    await new Promise((r) => setTimeout(r, 30));
+    const ledgerAfter = await readLedger(bookDir(), manuscriptId);
+    // Chapter 2 produced zero ops, so no entry is created for it.
+    expect(ledgerAfter.entries['2']).toBeUndefined();
+  });
+
+  it('broadcasts a checkpoint event carrying the minted version once a chapter is upserted', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    runReview.mockResolvedValue({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
+    expect(res.text).toContain('"kind":"checkpoint"');
+    expect(res.text).toMatch(/"chapterId":1,"version":\d+/);
+  });
+
+  it('a checkpoint write failure for one chapter reports chapter-failed and lets the rest of the run finish', async () => {
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
+    ]);
+    runReview.mockImplementation((_m, chapterId): Promise<ScriptReviewOutput> => {
+      if (chapterId === 1) return Promise.resolve({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+      return Promise.resolve({ ops: [{ id: 2, op: 'strip_tag', newText: 'World', rationale: 'r' }] });
+    });
+
+    // Not module-mocked (Task 3's other checkpointing tests need the real
+    // ledger reads/writes) — spy on the live namespace object so only this
+    // one call throws; vi.spyOn on a dynamically-imported ESM namespace
+    // works here because the route imports `upsertChapterEntry` as a named
+    // (live) binding, same pattern as generation.test.ts's configModule/
+    // aggregateModule spies.
+    const ledgerModule = await import('../workspace/script-review-ledger.js');
+    const spy = vi.spyOn(ledgerModule, 'upsertChapterEntry').mockRejectedValueOnce(new Error('disk full'));
+
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+      const events = parseSse(res.text);
+
+      // (a) chapter 1's checkpoint write failed -> chapter-failed reported, no checkpoint for it.
+      const chapter1Failed = events.find((e) => e.kind === 'chapter-failed' && e.chapterId === 1);
+      expect(chapter1Failed).toMatchObject({ message: expect.stringContaining('disk full') });
+      expect(events.some((e) => e.kind === 'checkpoint' && e.chapterId === 1)).toBe(false);
+
+      // (b) the job kept going — chapter 2 was still reviewed and checkpointed normally.
+      expect(events.some((e) => e.kind === 'ops' && e.chapterId === 2)).toBe(true);
+      expect(events.some((e) => e.kind === 'checkpoint' && e.chapterId === 2)).toBe(true);
+
+      // (c) the stream still closes cleanly with a final result event, not hung.
+      expect(events.find((e) => e.kind === 'result')).toMatchObject({ done: true, reviewedChapters: 2 });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('GET /:bookId/script-review/state', () => {
+  it('returns kind:"ledger" with existing entries when no job is running', async () => {
+    const { upsertChapterEntry } = await import('../workspace/script-review-ledger.js');
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    await upsertChapterEntry(bookDir(), bookId, {
+      chapterId: 1,
+      manuscriptId,
+      ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.kind).toBe('ledger');
+    expect(res.body.entries['1'].ops).toHaveLength(1);
+  });
+
+  it('returns kind:"running" with the replay buffer while a job is in flight', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let resolveReview: ((v: { ops: unknown[] }) => void) | undefined;
+    runReview.mockImplementation(() => new Promise((resolve) => { resolveReview = resolve; }));
+
+    // Use firePost, not a bare `request(app).post(...).send(...)` — per the
+    // established pattern documented above (see the "res.on('close')"
+    // sticky-registry test), an unawaited/undispatched supertest Request
+    // never actually sends until awaited/.end()'d, so the job would not yet
+    // be registered when the GET below fires.
+    const { done } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(res.body.kind).toBe('running');
+    // Finding 6 (PR review round 4): `running` is now an ARRAY of running
+    // jobs (two different chapters can legitimately run concurrently for
+    // the same book) rather than a single {chapterId, replay} pair.
+    expect(res.body.running).toHaveLength(1);
+    expect(res.body.running[0].chapterId).toBe(1);
+
+    resolveReview?.({ ops: [] });
+    await done;
+  });
+
+  it('returns kind:"ledger" with empty entries for a book with neither a job nor pending findings', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(res.body).toEqual({ kind: 'ledger', entries: {} });
+  });
+
+  /* Round-3 review Critical Finding 2 — subsetScriptReviewJobByChapter allows
+     two DIFFERENT chapters' single-chapter jobs to run concurrently for the
+     same book. The `running` branch used to short-circuit before the ledger
+     read ever ran, so a job running for chapter 7 completely hid chapter 3's
+     already-persisted, unresolved ledger entry from any client hydrating
+     while chapter 7's job was in flight. The fix reads the ledger
+     unconditionally and includes it alongside a running job's own replay. */
+  it('includes ledger entries for OTHER chapters alongside kind:"running" when a job is running for a different chapter', async () => {
+    const { upsertChapterEntry } = await import('../workspace/script-review-ledger.js');
+    writeBook([
+      { id: 1, chapterId: 3, characterId: 'narrator', text: 'Chapter three line.' },
+      { id: 2, chapterId: 7, characterId: 'narrator', text: 'Chapter seven line.' },
+    ]);
+    // Chapter 3 already has a persisted, unresolved finding from an earlier run.
+    await upsertChapterEntry(bookDir(), bookId, {
+      chapterId: 3,
+      manuscriptId,
+      ops: [{ id: 1, op: 'strip_tag', newText: 'Chapter three line', rationale: 'r' }],
+    });
+
+    let resolveReview: ((v: { ops: unknown[] }) => void) | undefined;
+    runReview.mockImplementation(() => new Promise((resolve) => { resolveReview = resolve; }));
+
+    // Start a job for chapter 7 — a DIFFERENT chapter than the one with the
+    // persisted ledger entry.
+    const { done } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 7 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(res.body.kind).toBe('running');
+    expect(res.body.running).toHaveLength(1);
+    expect(res.body.running[0].chapterId).toBe(7);
+    // Chapter 3's persisted finding must still be visible, not hidden by
+    // chapter 7's in-flight job.
+    expect(res.body.entries['3']).toBeDefined();
+    expect(res.body.entries['3'].ops).toHaveLength(1);
+
+    resolveReview?.({ ops: [] });
+    await done;
+  });
+
+  /* Round-4 review Finding 6 — two different chapters' single-chapter
+     reviews can legitimately run concurrently for the same book
+     (subsetScriptReviewJobByChapter is keyed by bookId:chapterId — see the
+     "sticky job registry" Bug-1 regression test above). GET /state used to
+     report only the FIRST match (mainScriptReviewJobByBook.get(bookId) ??
+     findSubsetJobForBook(bookId)), so a client reloading while two jobs were
+     running only ever attached to one of them, missing the other job's live
+     progress/error visibility entirely (a visibility gap, not data loss —
+     the other job still completes and checkpoints correctly regardless).
+     Report every currently-running job for the book. */
+  it('reports BOTH running jobs when two different chapters are concurrently running for the same book', async () => {
+    writeBook([
+      { id: 1, chapterId: 5, characterId: 'narrator', text: 'Chapter five line.' },
+      { id: 2, chapterId: 8, characterId: 'narrator', text: 'Chapter eight line.' },
+    ]);
+    let resolveChapter5: ((v: { ops: unknown[] }) => void) | undefined;
+    let resolveChapter8: ((v: { ops: unknown[] }) => void) | undefined;
+    runReview.mockImplementation((_m, chapterId): Promise<{ ops: unknown[] }> => {
+      if (chapterId === 5) return new Promise((resolve) => { resolveChapter5 = resolve; });
+      return new Promise((resolve) => { resolveChapter8 = resolve; });
+    });
+
+    const first = firePost(`/api/books/${bookId}/script-review`, { chapterId: 5 });
+    await new Promise((r) => setTimeout(r, 20));
+    const second = firePost(`/api/books/${bookId}/script-review`, { chapterId: 8 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(res.body.kind).toBe('running');
+    expect(res.body.running).toHaveLength(2);
+    const chapterIds = res.body.running.map((r: { chapterId: number }) => r.chapterId).sort();
+    expect(chapterIds).toEqual([5, 8]);
+
+    resolveChapter5?.({ ops: [] });
+    resolveChapter8?.({ ops: [] });
+    await Promise.all([first.done, second.done]);
+  });
+});
+
+describe('mutation endpoints', () => {
+  async function seedEntry() {
+    const { upsertChapterEntry } = await import('../workspace/script-review-ledger.js');
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    return upsertChapterEntry(bookDir(), bookId, {
+      chapterId: 1,
+      manuscriptId,
+      ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }],
+    });
+  }
+
+  it('POST /discard removes the named chapters entirely', async () => {
+    await seedEntry();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/script-review/discard`)
+      .send({ chapterIds: [1] });
+    expect(res.status).toBe(200);
+    const state = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(state.body.entries['1']).toBeUndefined();
+  });
+
+  it('POST /resolve removes only the named op keys and no-ops on a stale version', async () => {
+    const entry = await seedEntry();
+    const stale = await request(app)
+      .post(`/api/books/${bookId}/script-review/resolve`)
+      .send({ chapterId: 1, version: entry.version + 1, appliedOpKeys: ['1:1:strip_tag'] });
+    expect(stale.body.ok).toBe(false);
+
+    const ok = await request(app)
+      .post(`/api/books/${bookId}/script-review/resolve`)
+      .send({ chapterId: 1, version: entry.version, appliedOpKeys: ['1:1:strip_tag'] });
+    expect(ok.body.ok).toBe(true);
+    const state = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(state.body.entries['1']).toBeUndefined(); // was the only op — entry deleted
+  });
+
+  it('PATCH /selection merges overrides and no-ops on a stale version', async () => {
+    const entry = await seedEntry();
+    const res = await request(app)
+      .patch(`/api/books/${bookId}/script-review/selection`)
+      .send({ chapterId: 1, version: entry.version, selected: { '1:1:strip_tag': false } });
+    expect(res.body.ok).toBe(true);
+    const state = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(state.body.entries['1'].selected).toEqual({ '1:1:strip_tag': false });
+  });
+
+  it('PATCH /selection rejects null selected payload with 400', async () => {
+    const entry = await seedEntry();
+    const res = await request(app)
+      .patch(`/api/books/${bookId}/script-review/selection`)
+      .send({ chapterId: 1, version: entry.version, selected: null });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('chapterId, version, and selected are required.');
   });
 });
