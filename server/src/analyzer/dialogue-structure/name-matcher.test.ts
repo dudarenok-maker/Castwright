@@ -26,4 +26,25 @@ describe('name-matcher (ru)', () => {
   it('ignores stems shorter than minStemLength (the "я" alias never text-matches)', () => {
     expect(findRosterName('я не знаю', idx)).toBeNull();
   });
+
+  it('drops a stem shared by two distinct roster ids (ambiguous match)', () => {
+    const ambiguousRoster = [
+      { id: 'ivan-a', name: 'Иван' },
+      { id: 'ivan-b', name: 'Иван' },
+    ];
+    const ambIdx = buildNameIndex(ambiguousRoster, ru);
+    expect(findRosterName('позвал Ивана вслед', ambIdx)).toBeNull();
+  });
+
+  it('uses tokenized full-stem equality, not whole-text substring matching', () => {
+    const marsRoster = [{ id: 'mars', name: 'Марс' }];
+    const marsIdx = buildNameIndex(marsRoster, ru);
+    // "марсианина" contains the roster stem "марс" as a literal substring,
+    // but its own stem ("марсианин") is not equal to "марс" -- a naive
+    // text.includes(stem) regression would wrongly match here.
+    expect(findRosterName('он смотрел на марсианина', marsIdx)).toBeNull();
+    // Confirm the negative isn't "nothing ever matches": a genuine inflected
+    // form of the same name still resolves correctly.
+    expect(findRosterName('он позвал Марса', marsIdx)).toBe('mars');
+  });
 });
