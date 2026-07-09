@@ -38,6 +38,7 @@ export function parseChapterStructure(body: string, index: NameIndex): Paragraph
   const conv = index.conventions;
   const out: ParagraphEvidence[] = [];
   let offset = 0;
+  // Callers pass \n-normalized text; offsets below are absolute into that body.
   for (const line of body.split('\n')) {
     const start = offset;
     offset += line.length + 1; // +1 for the split '\n'
@@ -110,23 +111,38 @@ function parseDashParagraph(
     };
   }
 
-  /* Anchor speech spans from their adjacent tag: name > pronoun-pending. */
-  for (let i = 0; i < spans.length; i++) {
-    const s = spans[i];
-    if (s.kind !== 'tag') continue;
-    const text = line.slice(s.start - base, s.end - base);
+  /* Anchor speech spans from their adjacent tag: name > pronoun-pending.
+     Two-phase, highest-precedence first, so a tag can never claim a span
+     that rightfully belongs to a DIFFERENT, later tag in the same paragraph:
+       Phase 1: each tag anchors its immediately-PRECEDING speech span (its
+       `target`) — this is unambiguous, the tag always belongs to that span.
+       Phase 2: each tag anchors FOLLOWING speech spans, but only up to
+       (exclusive) the next tag in the paragraph, and only spans phase 1
+       left unanchored (the single-tag continuation case, e.g. "— Привет, —
+       сказал Антон. — Как дела?"). */
+  const applyTag = (tag: SpanEvidence, sp: SpanEvidence | null) => {
+    if (!sp || sp.speaker) return;
+    const text = line.slice(tag.start - base, tag.end - base);
     const name = findRosterName(text, index);
-    const target = (spans[i - 1]?.kind === 'speech' ? spans[i - 1] : null) ?? lastSpeech;
-    const following = spans.slice(i + 1).filter((x) => x.kind === 'speech');
     if (name) {
-      for (const sp of [target, ...following])
-        if (sp && !sp.speaker) sp.speaker = { characterId: name, source: 'tag-name' };
+      sp.speaker = { characterId: name, source: 'tag-name' };
     } else {
       const { pronoun } = classifyPronoun(text, conv.pronouns);
-      if (pronoun)
-        for (const sp of [target, ...following])
-          if (sp && !sp.speaker) (sp as SpanEvidence & { pendingPronoun?: ParsedTag['pronoun'] }).pendingPronoun = pronoun;
+      if (pronoun) (sp as SpanEvidence & { pendingPronoun?: ParsedTag['pronoun'] }).pendingPronoun = pronoun;
     }
+  };
+  const tagIdx = spans.reduce<number[]>((acc, s, i) => {
+    if (s.kind === 'tag') acc.push(i);
+    return acc;
+  }, []);
+  for (const i of tagIdx) {
+    const target = (spans[i - 1]?.kind === 'speech' ? spans[i - 1] : null) ?? lastSpeech;
+    applyTag(spans[i], target);
+  }
+  for (const i of tagIdx) {
+    const nextTagIdx = tagIdx.find((j) => j > i) ?? spans.length;
+    const following = spans.slice(i + 1, nextTagIdx).filter((x) => x.kind === 'speech');
+    for (const sp of following) applyTag(spans[i], sp);
   }
   return { start: base, end: base + line.length, kind: 'dialogue', spans };
 }
