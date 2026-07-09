@@ -69,6 +69,45 @@ Define success criteria, then loop until verified.
 - Strong success criteria let you loop independently; weak ones ("make it
   work") force constant clarification.
 
+## Execution model (default for all non-trivial work)
+
+All substantial work runs **sub-agent-driven, with design and implementation
+as SEPARATE threads.** Three phases, each with a clean handoff:
+
+**1. Design & brainstorming — its own thread.** Use `superpowers:brainstorming`
+→ `superpowers:writing-plans` to produce the spec/plan. Non-trivial specs/plans
+still get the mandatory Premium-tier `assumption-checker` pass (see Model
+routing). **The design thread produces two artifacts and no code:** (a) the
+full plan committed under `docs/features/` — the durable design of record; and
+(b) a comment on the item's GitHub issue that is the _handover brief for the
+implementation agent_ — it links the plan doc, then gives the implementation
+thread what it needs to START: the task breakdown, entry point, global
+constraints, key files, and acceptance criteria. The comment is the kickoff
+instructions the implementation agent reads first; the plan doc holds the rest.
+The design thread does **not** implement. Suggest `/compact` at the
+spec-approved and plan-approved checkpoints.
+
+**2. Implementation — a separate thread.** Picks up the ticket + its
+implementation-brief comment as the sole source of requirements. Runs
+`superpowers:subagent-driven-development` as the **primary** mode: cut the
+branch, then dispatch a fresh implementer subagent per task, a task-review
+subagent (spec + quality) after each, and a broad whole-branch `code-review`
+at the end — models chosen per the Model-routing table. The controlling thread
+coordinates and curates context; it does **not** hand-write task code a
+subagent could do. Keep the progress ledger (`.superpowers/sdd/progress.md`) so
+the run survives compaction.
+
+**3. Ship.** PR with `Closes #NN`, the mandatory `code-review` gate, merge —
+per the Before-shipping checklist and Branching workflow.
+
+**Why the split:** design and implementation have different context needs; one
+thread pollutes both. The issue-comment handoff lets an implementation thread
+(or a teammate) execute cold from the ticket alone.
+
+**When to skip:** trivial, immediately-shipped fixes (typo, one-line doc/config
+tweak) run inline — no design thread, no per-task subagent. Same "trivial" bar
+as the Branching workflow's direct-to-`main` carve-out.
+
 ## Model routing
 
 Route non-fork subagent/Workflow dispatch (and, as guidance, the main
@@ -591,7 +630,10 @@ feat/server-foo` and tell the agent in its prompt to check it out as its
 Plan agents (`subagent_type: "Plan"`) design strategies but don't write code,
 so they don't need their own branch. But the implementation work that follows
 a plan does — when you act on a plan, step 1 is cutting the branch named after
-the plan number (e.g. `feat/frontend-plan-38`).
+the plan number (e.g. `feat/frontend-plan-38`). This is the phase-1→phase-2
+boundary of the [Execution model](#execution-model-default-for-all-non-trivial-work):
+the design thread ends at the ticket + handover-brief comment, and cutting the
+branch is the implementation thread's first act.
 
 Hooks activate automatically after `npm install` via the `prepare` script
 (husky v9.1 — sets `core.hooksPath` to `.husky/_`, the dir holding the
@@ -659,6 +701,9 @@ before the next one begins.
 
 **Three checkpoints get a `/compact` suggestion**, left to the user to
 accept: spec approved (end of `brainstorming`), plan approved (end of
-`writing-plans`), and PR merged/shipped. There is no tool to trigger
-compaction directly — this is a suggestion at a good moment, not a
-state-preservation mechanism.
+`writing-plans`), and PR merged/shipped. These map onto the three phases of the
+[Execution model](#execution-model-default-for-all-non-trivial-work) — the
+spec- and plan-approved checkpoints both sit inside its design thread, before
+the handover to implementation. There is no tool to trigger compaction
+directly — this is a suggestion at a good moment, not a state-preservation
+mechanism.
