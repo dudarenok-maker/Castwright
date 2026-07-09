@@ -74,6 +74,15 @@ export function anchorSpansFromTags(spans: SpanEvidence[], line: string, base: n
   }
 }
 
+/** Parse a chapter body into per-paragraph span evidence.
+    Tiling contract (binds Task 6's aligner too): within a paragraph's
+    `spans`, CONTENT spans (`speech`/`tag`/`narration`) tile with no gaps
+    BETWEEN them — but a single-character quote/dash delimiter glyph (the
+    opening/closing quote mark, or the paragraph-leading dash + its
+    trailing space) is intentionally left uncovered by any span. Callers
+    must not assume `spans[].start`/`end` sum to the paragraph's full
+    length; the aligner is overlap-based and tolerant of these
+    micro-gaps. */
 export function parseChapterStructure(body: string, index: NameIndex): ParagraphEvidence[] {
   const conv = index.conventions;
   const out: ParagraphEvidence[] = [];
@@ -204,9 +213,16 @@ function parseQuoteParagraph(line: string, base: number, index: NameIndex): Para
   }
   if (cursor < line.length) spans.push({ kind: 'narration', start: base + cursor, end: base + line.length });
 
-  const verbs = [...conv.speechVerbStems, ...conv.beatVerbStems];
-  for (const s of spans) {
-    if (s.kind === 'narration' && hasStem(line.slice(s.start - base, s.end - base), verbs)) s.kind = 'tag';
+  // Only a gap ADJACENT TO A REAL QUOTE RUN may be reclassified `narration`→`tag`.
+  // When `runs` is empty, `spans` holds only the whole-paragraph fallback
+  // span above (plain prose with no dialogue at all) — it must never be
+  // reclassified, however many verb/beat stems ("smiled", "added", …) it
+  // happens to contain.
+  if (runs.length > 0) {
+    const verbs = [...conv.speechVerbStems, ...conv.beatVerbStems];
+    for (const s of spans) {
+      if (s.kind === 'narration' && hasStem(line.slice(s.start - base, s.end - base), verbs)) s.kind = 'tag';
+    }
   }
   anchorSpansFromTags(spans, line, base, index);
 

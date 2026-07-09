@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { conventionsFor } from './lang/index.js';
 import { buildNameIndex } from './name-matcher.js';
-import { parseChapterStructure } from './parser.js';
+import { anchorSpansFromTags, parseChapterStructure } from './parser.js';
 import type { SpanEvidence } from './types.js';
 
 const ru = conventionsFor('ru')!;
@@ -103,6 +103,37 @@ describe('parser — quote conventions', () => {
     const ruIdx = buildNameIndex([{ id: 'mairin', name: 'Майрин' }], conventionsFor('ru')!);
     const paras = parseChapterStructure('«Осторожнее, — сказала Майрин. — Здесь скользко».', ruIdx);
     const speech = paras[0].spans.filter((s) => s.kind === 'speech');
+    expect(speech.length).toBe(2);
     expect(speech.every((s) => s.speaker?.characterId === 'mairin')).toBe(true);
+  });
+  it('quote-free narration paragraph is never mislabeled as tag (regression — the zero-quote-run whole-paragraph fallback span must never reclassify to `tag`, even when it contains a verb/beat stem like "smiled")', () => {
+    const paras = parseChapterStructure('She smiled and walked away.', enIdx);
+    expect(paras[0].kind).toBe('narration');
+    expect(paras[0].spans).toHaveLength(1);
+    expect(paras[0].spans[0].kind).toBe('narration');
+  });
+});
+
+describe('anchorSpansFromTags — anchoring contract (Finding 3)', () => {
+  it('a leading tag with no preceding speech never reaches forward past its own following-window to steal a later, legitimate tag\'s speech span (regression: the old lastSpeech-fallback tracker, removed in the anchorSpansFromTags extraction, would have let it)', () => {
+    // Hand-built spans array (not derived from real text) so the shape is
+    // pinned exactly: tagA has NO preceding speech AND nothing between it
+    // and tagB (its following-window is empty), so under the current
+    // backward-scan-only anchoring it can claim nothing. speechC sits right
+    // after tagB and is tagB's own legitimate Phase-2 claim. The old
+    // `?? lastSpeech` fallback (a single global "last speech pushed",
+    // captured once after the whole span array was built) would have let
+    // tagA reach forward across tagB and steal speechC for the wrong
+    // speaker, since it never bounded the fallback to tagA's own window.
+    const partA = 'Тут сказал Антон. ';
+    const partB = 'Тут сказала Ольга. ';
+    const partC = 'Привет, мир.';
+    const line = partA + partB + partC;
+    const tagA: SpanEvidence = { kind: 'tag', start: 0, end: partA.length };
+    const tagB: SpanEvidence = { kind: 'tag', start: partA.length, end: partA.length + partB.length };
+    const speechC: SpanEvidence = { kind: 'speech', start: partA.length + partB.length, end: line.length };
+    const spans = [tagA, tagB, speechC];
+    anchorSpansFromTags(spans, line, 0, idx);
+    expect(speechC.speaker).toEqual({ characterId: 'olga', source: 'tag-name' });
   });
 });
