@@ -227,9 +227,29 @@ export interface ScriptReviewJob {
    mistaken for each other: unlike analysis.ts (which lets main+subset run
    concurrently because they don't share output), both scopes here would
    checkpoint into the SAME per-chapter ledger (Task 3), so this route adds a
-   stricter rule analysis.ts doesn't need — see design spec §4.1. */
+   stricter rule analysis.ts doesn't need — see design spec §4.1.
+
+   The subset map is keyed by `bookId:chapterId` (via subsetKey), NOT bare
+   bookId — two different chapters of the same book are independently
+   trackable single-chapter jobs and must never clobber each other's map
+   entry (the review gate is scoped per-chapter, not per-book).
+   findSubsetJobForBook is how a whole-book request checks "is any
+   single-chapter job running for this book" for the conflict rule above —
+   an O(n) scan over currently in-flight subset jobs, expected to be a
+   handful at most, so this is fine. */
 const mainScriptReviewJobByBook: Map<string, ScriptReviewJob> = new Map();
-const subsetScriptReviewJobByBook: Map<string, ScriptReviewJob> = new Map();
+const subsetScriptReviewJobByChapter: Map<string, ScriptReviewJob> = new Map();
+
+function subsetKey(bookId: string, chapterId: number): string {
+  return `${bookId}:${chapterId}`;
+}
+
+function findSubsetJobForBook(bookId: string): ScriptReviewJob | undefined {
+  for (const job of subsetScriptReviewJobByChapter.values()) {
+    if (job.bookId === bookId) return job;
+  }
+  return undefined;
+}
 
 function broadcast(job: ScriptReviewJob, payload: Record<string, unknown>): void {
   for (const sub of job.subscribers) sub.send(payload);
@@ -266,81 +286,124 @@ scriptReviewRouter.post(
       return;
     }
 
-    /* Join/conflict rule (design spec §4.1). */
-    const targetMap = requestedChapterId !== undefined ? subsetScriptReviewJobByBook : mainScriptReviewJobByBook;
-    const conflictMap = requestedChapterId !== undefined ? mainScriptReviewJobByBook : subsetScriptReviewJobByBook;
-    const existingConflict = conflictMap.get(bookId);
-    if (existingConflict) {
-      res.status(409).json({
-        error:
-          requestedChapterId !== undefined
-            ? 'A whole-book review is already running for this book.'
-            : 'A single-chapter review is already running for this book.',
-      });
-      return;
+    /* Join/conflict rule (design spec §4.1), closed against TOCTOU: the
+       conflict/join check and the new job's registration into its map all
+       happen synchronously in this block, with no `await` between them — a
+       concurrent request's handler can't interleave mid-synchronous-block,
+       so two near-simultaneous requests for the same scope can no longer
+       both pass the check and then both register (the second always
+       observes the first's already-registered job and joins it instead). */
+    let job: ScriptReviewJob | undefined;
+    let joinedExisting: ScriptReviewJob | undefined;
+    let targetMap: Map<string, ScriptReviewJob>;
+    let registeredKey: string;
+
+    if (requestedChapterId !== undefined) {
+      targetMap = subsetScriptReviewJobByChapter;
+      registeredKey = subsetKey(bookId, requestedChapterId);
+      const conflict = mainScriptReviewJobByBook.get(bookId);
+      if (conflict) {
+        res.status(409).json({ error: 'A whole-book review is already running for this book.' });
+        return;
+      }
+      const existing = subsetScriptReviewJobByChapter.get(registeredKey);
+      if (existing) {
+        joinedExisting = existing;
+      } else {
+        job = {
+          controller: new AbortController(),
+          subscribers: new Set(),
+          bookId,
+          chapterId: requestedChapterId,
+          replay: { opsEvents: [], chapterFailedEvents: [], checkpointEvents: [], lastPhase: null, result: null, errorEvent: null },
+        };
+        subsetScriptReviewJobByChapter.set(registeredKey, job);
+      }
+    } else {
+      targetMap = mainScriptReviewJobByBook;
+      registeredKey = bookId;
+      const conflict = findSubsetJobForBook(bookId);
+      if (conflict) {
+        res.status(409).json({ error: 'A single-chapter review is already running for this book.' });
+        return;
+      }
+      const existing = mainScriptReviewJobByBook.get(bookId);
+      if (existing) {
+        joinedExisting = existing;
+      } else {
+        job = {
+          controller: new AbortController(),
+          subscribers: new Set(),
+          bookId,
+          chapterId: undefined,
+          replay: { opsEvents: [], chapterFailedEvents: [], checkpointEvents: [], lastPhase: null, result: null, errorEvent: null },
+        };
+        mainScriptReviewJobByBook.set(bookId, job);
+      }
     }
-    const existingSameScope = targetMap.get(bookId);
-    if (existingSameScope && existingSameScope.chapterId === requestedChapterId) {
+
+    if (joinedExisting) {
       setUpSse(res);
       const sub = makeSubscriber(res);
-      attachSubscriber(existingSameScope, sub);
+      attachSubscriber(joinedExisting, sub);
       res.on('close', () => {
-        existingSameScope.subscribers.delete(sub);
+        joinedExisting!.subscribers.delete(sub);
         clearInterval(sub.keepAlive);
       });
       return;
     }
 
-    const byChapter = await loadPostFoldSentencesByChapter(manuscriptId, located.bookDir);
-    const allChapterIds = [...byChapter.keys()].sort((a, b) => a - b);
-    const excludedChapterIds = new Set<number>(
-      located.state.chapters.filter((c) => c.excluded).map((c) => c.id),
-    );
-    let chapterIds = allChapterIds;
-    if (requestedChapterId !== undefined) {
-      chapterIds = allChapterIds.filter((id) => id === requestedChapterId);
-    } else {
-      chapterIds = allChapterIds.filter((id) => !excludedChapterIds.has(id));
-    }
+    const registeredJob = job!;
 
-    const castFile = await readJson<CastFile>(castJsonPath(located.bookDir));
-    const roster: CastCharacterSlim[] = castFile?.characters ?? [];
-
-    setUpSse(res);
-    if (byChapter.size === 0) {
-      res.write(
-        `data: ${JSON.stringify({ kind: 'error', code: 'no_attribution', message: 'Run analysis first — there are no attributed sentences to review.' })}\n\n`,
+    try {
+      const byChapter = await loadPostFoldSentencesByChapter(manuscriptId, located.bookDir);
+      const allChapterIds = [...byChapter.keys()].sort((a, b) => a - b);
+      const excludedChapterIds = new Set<number>(
+        located.state.chapters.filter((c) => c.excluded).map((c) => c.id),
       );
-      res.end();
-      return;
-    }
-    if (chapterIds.length === 0) {
-      res.write(
-        `data: ${JSON.stringify({ kind: 'error', code: 'no_such_chapter', message: `Chapter ${requestedChapterId} has no attributed sentences to review.` })}\n\n`,
-      );
-      res.end();
-      return;
-    }
+      let chapterIds = allChapterIds;
+      if (requestedChapterId !== undefined) {
+        chapterIds = allChapterIds.filter((id) => id === requestedChapterId);
+      } else {
+        chapterIds = allChapterIds.filter((id) => !excludedChapterIds.has(id));
+      }
 
-    const job: ScriptReviewJob = {
-      controller: new AbortController(),
-      subscribers: new Set(),
-      bookId,
-      chapterId: requestedChapterId,
-      replay: { opsEvents: [], chapterFailedEvents: [], checkpointEvents: [], lastPhase: null, result: null, errorEvent: null },
-    };
-    targetMap.set(bookId, job);
-    const sub = makeSubscriber(res);
-    job.subscribers.add(sub);
-    res.on('close', () => {
-      job.subscribers.delete(sub);
-      clearInterval(sub.keepAlive);
-    });
+      const castFile = await readJson<CastFile>(castJsonPath(located.bookDir));
+      const roster: CastCharacterSlim[] = castFile?.characters ?? [];
 
-    void runScriptReviewJob(job, { located, manuscriptId, allChapterIds, excludedChapterIds, chapterIds, byChapter, roster, model: requestedModel })
-      .finally(() => {
-        if (targetMap.get(bookId) === job) targetMap.delete(bookId);
+      setUpSse(res);
+      if (byChapter.size === 0) {
+        if (targetMap.get(registeredKey) === registeredJob) targetMap.delete(registeredKey);
+        res.write(
+          `data: ${JSON.stringify({ kind: 'error', code: 'no_attribution', message: 'Run analysis first — there are no attributed sentences to review.' })}\n\n`,
+        );
+        res.end();
+        return;
+      }
+      if (chapterIds.length === 0) {
+        if (targetMap.get(registeredKey) === registeredJob) targetMap.delete(registeredKey);
+        res.write(
+          `data: ${JSON.stringify({ kind: 'error', code: 'no_such_chapter', message: `Chapter ${requestedChapterId} has no attributed sentences to review.` })}\n\n`,
+        );
+        res.end();
+        return;
+      }
+
+      const sub = makeSubscriber(res);
+      registeredJob.subscribers.add(sub);
+      res.on('close', () => {
+        registeredJob.subscribers.delete(sub);
+        clearInterval(sub.keepAlive);
       });
+
+      void runScriptReviewJob(registeredJob, { located, manuscriptId, allChapterIds, excludedChapterIds, chapterIds, byChapter, roster, model: requestedModel })
+        .finally(() => {
+          if (targetMap.get(registeredKey) === registeredJob) targetMap.delete(registeredKey);
+        });
+    } catch (err) {
+      if (targetMap.get(registeredKey) === registeredJob) targetMap.delete(registeredKey);
+      throw err;
+    }
   },
 );
 

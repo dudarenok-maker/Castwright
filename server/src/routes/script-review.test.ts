@@ -787,4 +787,94 @@ describe('sticky job registry', () => {
       expect.objectContaining({ phase: 'phase1', model: 'gemini-3.5-flash' }),
     );
   });
+
+  it('regression (Bug 1): two different chapters of the same book run independently — the subset map is keyed by bookId:chapterId, not bare bookId', async () => {
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Chapter one line.' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'Chapter two line.' },
+    ]);
+    let releaseChapter1: (() => void) | undefined;
+    const gate1 = new Promise<void>((resolve) => { releaseChapter1 = resolve; });
+    runReview.mockImplementation(async (_m, chapterId): Promise<ScriptReviewOutput> => {
+      if (chapterId === 1) {
+        await gate1;
+        return { ops: [{ id: 1, op: 'strip_tag', newText: 'Chapter one line', rationale: 'r' }] };
+      }
+      return { ops: [{ id: 2, op: 'strip_tag', newText: 'Chapter two line', rationale: 'r' }] };
+    });
+
+    // Start chapter 1's review — gated, not yet resolved.
+    const chapter1 = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20)); // let it register into the map
+
+    // Chapter 2 of the SAME book must NOT be treated as a conflict — before the
+    // fix, the bare-bookId subset map would have (incorrectly) let this request
+    // fall through to "no existing job for this scope" and then clobber chapter
+    // 1's map entry on write, since both would key on the same bare bookId.
+    const chapter2Res = await request(app)
+      .post(`/api/books/${bookId}/script-review`)
+      .send({ chapterId: 2 });
+    expect(chapter2Res.status).toBe(200);
+    const chapter2Events = parseSse(chapter2Res.text);
+    expect(chapter2Events.some((e) => e.kind === 'ops' && e.chapterId === 2)).toBe(true);
+
+    // Chapter 1's job must still be reachable — a third request for chapter 1
+    // joins the still-running job rather than starting a brand-new (duplicate)
+    // one. If Bug 1 were present, chapter 1's map entry would have been
+    // orphaned by chapter 2's registration and this would start a SECOND
+    // analyzer call for chapter 1 instead of joining.
+    const rejoin = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    releaseChapter1?.();
+    const [, rejoinRes] = await Promise.all([chapter1.done, rejoin.done]);
+
+    // Exactly one analyzer call for chapter 1 (the original), one for chapter 2.
+    const chapter1Calls = runReview.mock.calls.filter((c) => c[1] === 1);
+    const chapter2Calls = runReview.mock.calls.filter((c) => c[1] === 2);
+    expect(chapter1Calls).toHaveLength(1);
+    expect(chapter2Calls).toHaveLength(1);
+
+    // The rejoined response replays chapter 1's ops (from the ONE shared job).
+    expect(rejoinRes.text).toContain('"kind":"ops"');
+    expect(rejoinRes.text).toContain('Chapter one line');
+  });
+
+  it('regression (Bug 2): two near-simultaneous requests for the identical scope produce exactly one analyzer call, and both responses reflect the same job', async () => {
+    // This pins the OBSERVABLE correctness property, not the zero-width race
+    // window itself — the fix makes the conflict/join check and the new job's
+    // registration happen in one synchronous block with no `await` between
+    // them, so the window a black-box HTTP test could exploit to force two
+    // concurrent registrations no longer exists (Node can't interleave a
+    // second request's handler mid-synchronous-block). A raw fire-both-at-once
+    // test is therefore structurally equivalent to the "second POST joins the
+    // running job" test above; this test names the race explicitly so the
+    // regression intent is documented even though it can't observe the race
+    // window directly.
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    runReview.mockImplementation(async (): Promise<ScriptReviewOutput> => {
+      await gate;
+      return { ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] };
+    });
+
+    // Fire both requests back-to-back with no await between the two firePost
+    // calls, as close to simultaneous as this test harness allows.
+    const first = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    const second = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    release?.();
+    const [firstRes, secondRes] = await Promise.all([first.done, second.done]);
+
+    // Exactly one analyzer call — one of the two requests always registers
+    // the job and the other always joins it, never both registering.
+    expect(runReview).toHaveBeenCalledTimes(1);
+    // Both responses reflect the same single job's ops.
+    expect(firstRes.text).toContain('"kind":"ops"');
+    expect(secondRes.text).toContain('"kind":"ops"');
+    expect(firstRes.text).toContain('strip_tag');
+    expect(secondRes.text).toContain('strip_tag');
+  });
 });
