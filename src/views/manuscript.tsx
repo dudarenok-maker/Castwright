@@ -872,6 +872,15 @@ export function ManuscriptView({
     setConfirmGate(null);
     try {
       await discardReview(bookId, chapterIds, { dispatch });
+      // Defensive re-check (PR review round 6) — a sibling chapter's job
+      // could have started between the confirm gate opening and this click
+      // (the same rare cross-tab/multi-mount race handleReviewScript's own
+      // jobActiveForBook check guards against above). Skip starting a new
+      // review in that case rather than clobbering the shared
+      // activeStreams[bookId] progress state out from under the still-
+      // running sibling job — the discard above already completed safely
+      // (it only touches this chapter's ledger entry, not the job registry).
+      if (jobActiveForBook) return;
       await startNewReview(wholeBook, chapterIds[0]);
     } catch (err) {
       dispatch(
