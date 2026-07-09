@@ -1051,4 +1051,13 @@ describe('mutation endpoints', () => {
     const state = await request(app).get(`/api/books/${bookId}/script-review/state`);
     expect(state.body.entries['1'].selected).toEqual({ '1:1:strip_tag': false });
   });
+
+  it('PATCH /selection rejects null selected payload with 400', async () => {
+    const entry = await seedEntry();
+    const res = await request(app)
+      .patch(`/api/books/${bookId}/script-review/selection`)
+      .send({ chapterId: 1, version: entry.version, selected: null });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('chapterId, version, and selected are required.');
+  });
 });

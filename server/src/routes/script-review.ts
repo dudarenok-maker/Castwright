@@ -476,7 +476,13 @@ scriptReviewRouter.patch(
       return;
     }
     const { chapterId, version, selected } = req.body ?? {};
-    if (typeof chapterId !== 'number' || typeof version !== 'number' || typeof selected !== 'object') {
+    if (
+      typeof chapterId !== 'number' ||
+      typeof version !== 'number' ||
+      typeof selected !== 'object' ||
+      selected === null ||
+      Array.isArray(selected)
+    ) {
       res.status(400).json({ error: 'chapterId, version, and selected are required.' });
       return;
     }
