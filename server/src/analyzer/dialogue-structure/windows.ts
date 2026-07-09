@@ -70,6 +70,22 @@ function resolveWindow(speech: SpanEvidence[], roster: WindowRoster, firstPerson
   const anchoredIds = new Set(speech.filter((s) => s.speaker).map((s) => s.speaker!.characterId));
   if (anchoredIds.size !== 2) return; // no alternation fill outside a clean two-party window
 
+  // A pendingPronoun still hanging off an unanchored turn is positive evidence
+  // for/against a hidden third voice: if it's incompatible with BOTH anchored
+  // participants' genders, something other than these two is talking -> abort
+  // the whole window's fill rather than fabricate a gender-incompatible guess.
+  // Compatible with at least one participant (including a 'neutral'-gender
+  // one, whose gender is simply unknown) is not third-voice evidence.
+  const isCompatible = (pending: 'first' | 'male' | 'female'): boolean => {
+    if (pending === 'first') return firstPersonId !== null && anchoredIds.has(firstPersonId);
+    return [...anchoredIds].some((id) => roster[id] === pending || roster[id] === 'neutral');
+  };
+  const hasThirdVoiceSignal = speech.some((s) => {
+    const pending = (s as PendingSpan).pendingPronoun;
+    return !s.speaker && pending && !isCompatible(pending);
+  });
+  if (hasThirdVoiceSignal) return;
+
   const [a, b] = [...anchoredIds];
   const firstAnchorIndex = speech.findIndex((s) => s.speaker);
   const firstAnchorId = speech[firstAnchorIndex].speaker!.characterId;

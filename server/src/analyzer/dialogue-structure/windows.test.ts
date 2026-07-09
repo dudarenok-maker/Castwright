@@ -115,6 +115,63 @@ describe('resolveWindows — parity conflict (rule e)', () => {
   });
 });
 
+describe('resolveWindows — third-voice pronoun evidence aborts alternation (rule g)', () => {
+  it('an unresolved pronoun incompatible with both anchored participants signals a hidden third voice: aborts the whole window fill (CRITICAL regression)', () => {
+    // anton + viktor are both male; the "она" (female) pronoun on turn1 can't
+    // be either of them, so it's evidence of a hidden third (female) voice.
+    // The window must NOT be treated as clean two-party: turn1 stays
+    // unanchored (ambiguous pronoun, as before) AND turn2 must ALSO stay
+    // unanchored, because alternation fill is aborted for the whole window
+    // rather than fabricating a gender-incompatible speaker for turn1/turn2.
+    const twoMaleIdx = buildNameIndex(
+      [{ id: 'anton', name: 'Антон' }, { id: 'viktor', name: 'Виктор' }],
+      ru,
+    );
+    const body = [
+      '— Раз, — сказал Антон.',
+      '— Два, — ответила она.',
+      '— Три.',
+      '— Четыре, — сказал Виктор.',
+    ].join('\n');
+    const paras = parseChapterStructure(body, twoMaleIdx);
+    resolveWindows(paras, { anton: 'male', viktor: 'male' }, null);
+    const speech = speechOf(paras);
+    expect(speech[1].speaker).toBeUndefined();
+    expect(speech[2].speaker).toBeUndefined();
+    // originally-anchored turns are untouched
+    expect(speech[0].speaker).toEqual({ characterId: 'anton', source: 'tag-name' });
+    expect(speech[3].speaker).toEqual({ characterId: 'viktor', source: 'tag-name' });
+  });
+
+  it('an unresolved pronoun compatible with (matching) both anchored participants is NOT third-voice evidence: alternation still fills it', () => {
+    // "он" (male) is ambiguous between anton and viktor (both male) so the
+    // gendered-pronoun pass (rule c) leaves it unresolved -- but because it's
+    // COMPATIBLE with the anchored participants (not contradicting either),
+    // it is not evidence of a hidden third voice, so alternation (rule d)
+    // still fills it by parity. This locks the chosen behavior: "matches
+    // both" (ambiguous-but-compatible) is treated differently from "matches
+    // neither" (incompatible/third-voice) in the third-voice check.
+    const twoMaleIdx = buildNameIndex(
+      [{ id: 'anton', name: 'Антон' }, { id: 'viktor', name: 'Виктор' }],
+      ru,
+    );
+    const body = [
+      '— Раз, — сказал Антон.',
+      '— Два, — ответил он.',
+      '— Три.',
+      '— Четыре, — сказал Виктор.',
+    ].join('\n');
+    const paras = parseChapterStructure(body, twoMaleIdx);
+    resolveWindows(paras, { anton: 'male', viktor: 'male' }, null);
+    const speech = speechOf(paras);
+    expect(speech.map((s) => s.speaker?.characterId)).toEqual(['anton', 'viktor', 'anton', 'viktor']);
+    expect(speech[1].speaker?.source).toBe('alternation');
+    expect(speech[2].speaker?.source).toBe('alternation');
+    expect(speech[0].speaker).toEqual({ characterId: 'anton', source: 'tag-name' });
+    expect(speech[3].speaker).toEqual({ characterId: 'viktor', source: 'tag-name' });
+  });
+});
+
 describe('resolveWindows — three+ participants (rule f)', () => {
   it('never fills by alternation once a window has three or more distinct anchored speakers', () => {
     const triIdx = buildNameIndex(
