@@ -445,3 +445,150 @@ describe('script-review-slice — hide vs discard', () => {
     expect(selectActiveReview(root, 'b1')).toBeDefined();
   });
 });
+
+/* Whole-branch review Critical Finding 1 + Important Finding 2 regression
+   tests. Persistence (Tasks 8/10) turned the per-book bucket into a
+   multi-chapter aggregate of every unresolved chapter — setReview and
+   hydrateBucket both used to do a whole-bucket replace, which was correct
+   under the pre-persistence "one review's worth of chapters" model but
+   silently destroyed data once the bucket started spanning many chapters. */
+describe('script-review-slice — bucket merge preserves other chapters (Finding 1)', () => {
+  it('a single-chapter setReview run does not wipe other chapters still sitting in the bucket', () => {
+    // Seed the bucket as if an earlier whole-book run left chapters 1 and 2
+    // with unresolved findings.
+    let state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.setReview({
+        bookId: 'b1',
+        ops: [makeOp(1, 'strip_tag', 1), makeOp(2, 'strip_tag', 2)],
+        unappliable: [],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 1: 1, 2: 1 },
+      }),
+    );
+    expect(state.byBook['b1']!.ops.map((o) => o.chapterId).sort()).toEqual([1, 2]);
+
+    // The user reviews chapter 3 only — this is the exact scenario from the
+    // whole-branch review: the gate saw 0 unresolved for [3] and proceeded,
+    // and the run's completion must not blow away chapters 1/2.
+    state = scriptReviewSlice.reducer(
+      state,
+      scriptReviewActions.setReview({
+        bookId: 'b1',
+        ops: [makeOp(3, 'strip_tag', 3)],
+        unappliable: [],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 3: 1 },
+      }),
+    );
+
+    const bucket = state.byBook['b1']!;
+    expect(bucket.ops.map((o) => o.chapterId).sort()).toEqual([1, 2, 3]);
+    expect(bucket.versionByChapter).toEqual({ 1: 1, 2: 1, 3: 1 });
+  });
+
+  it('re-running a chapter that already had ops supersedes only that chapter, leaving other chapters untouched', () => {
+    let state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.setReview({
+        bookId: 'b1',
+        ops: [makeOp(1, 'strip_tag', 1), makeOp(2, 'strip_tag', 2)],
+        unappliable: [],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 1: 1, 2: 1 },
+      }),
+    );
+    // Re-run chapter 1 only, producing a new op set and a bumped version.
+    state = scriptReviewSlice.reducer(
+      state,
+      scriptReviewActions.setReview({
+        bookId: 'b1',
+        ops: [makeOp(9, 'fix_emotion', 1)],
+        unappliable: [],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 1: 2 },
+      }),
+    );
+    const bucket = state.byBook['b1']!;
+    // Chapter 1's old op (id 1) is superseded by the new one (id 9);
+    // chapter 2's op (id 2) survives untouched.
+    expect(bucket.ops.map((o) => o.id).sort()).toEqual([2, 9]);
+    expect(bucket.versionByChapter).toEqual({ 1: 2, 2: 1 });
+  });
+
+  it('setReview drops the whole prior bucket when manuscriptId changes (reparse mid-session)', () => {
+    let state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.setReview({
+        bookId: 'b1',
+        ops: [makeOp(1, 'strip_tag', 1), makeOp(2, 'strip_tag', 2)],
+        unappliable: [],
+        manuscriptId: 'ms-old',
+        versionByChapter: { 1: 1, 2: 1 },
+      }),
+    );
+    state = scriptReviewSlice.reducer(
+      state,
+      scriptReviewActions.setReview({
+        bookId: 'b1',
+        ops: [makeOp(9, 'strip_tag', 3)],
+        unappliable: [],
+        manuscriptId: 'ms-new',
+        versionByChapter: { 3: 1 },
+      }),
+    );
+    const bucket = state.byBook['b1']!;
+    // The old manuscript's chapters (1, 2) are NOT preserved — a reparse
+    // invalidates every sentence id they referenced.
+    expect(bucket.ops.map((o) => o.id)).toEqual([9]);
+    expect(bucket.manuscriptId).toBe('ms-new');
+  });
+});
+
+describe('script-review-slice — hydrateBucket preserves visibility (Finding 2)', () => {
+  it('hydrateBucket does not force a hidden bucket back to visible on remount', () => {
+    let state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.setReview({
+        bookId: 'b1',
+        ops: [makeOp(1, 'strip_tag')],
+        unappliable: [],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 1: 1 },
+      }),
+    );
+    // User closes the modal via the X / backdrop.
+    state = scriptReviewSlice.reducer(state, scriptReviewActions.hideReview({ bookId: 'b1' }));
+    expect(state.byBook['b1']!.visible).toBe(false);
+
+    // Navigate away and back — ManuscriptView remounts and re-hydrates from
+    // the still-unresolved ledger entries.
+    state = scriptReviewSlice.reducer(
+      state,
+      scriptReviewActions.hydrateBucket({
+        bookId: 'b1',
+        ops: [makeOp(1, 'strip_tag')],
+        unappliable: [],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 1: 1 },
+        selected: { '1:1:strip_tag': true },
+      }),
+    );
+    expect(state.byBook['b1']!.visible).toBe(false);
+  });
+
+  it('hydrateBucket defaults visible:true when no bucket previously existed', () => {
+    const state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.hydrateBucket({
+        bookId: 'b1',
+        ops: [makeOp(1, 'strip_tag')],
+        unappliable: [],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 1: 1 },
+        selected: { '1:1:strip_tag': true },
+      }),
+    );
+    expect(state.byBook['b1']!.visible).toBe(true);
+  });
+});

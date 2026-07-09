@@ -4,7 +4,7 @@
    whole classes, then applies the selected set via planApply +
    dispatchAcceptedOps. Mirrors drift-report.tsx overlay pattern. */
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Dispatch } from '@reduxjs/toolkit';
 import { Checkbox } from './primitives';
 import { useAppDispatch, useAppSelector } from '../store';
@@ -236,6 +236,17 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
      chapterId (not a single timer) so toggles across different chapters
      don't cancel each other's pending sync. */
   const selectionSyncTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+
+  /* Clear any pending debounced-PATCH timers on unmount — otherwise a
+     scheduled selection sync can fire after the modal has closed (e.g. the
+     user hides it right after toggling a checkbox), which combined with
+     mount-time re-hydration could cause a brief selection flicker. */
+  useEffect(() => {
+    const timers = selectionSyncTimers.current;
+    return () => {
+      for (const id of Object.values(timers)) clearTimeout(id);
+    };
+  }, []);
 
   if (!bucket) return null;
 

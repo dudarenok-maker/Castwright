@@ -68,7 +68,14 @@ export const scriptReviewSlice = createSlice({
   name: 'scriptReview',
   initialState,
   reducers: {
-    /** Replace the full review bucket for one book; default ALL ops selected. */
+    /** Merge this run's chapters into the existing bucket rather than
+        replacing it wholesale — the bucket is a multi-chapter aggregate of
+        every currently-unresolved chapter (Task 8/10), and a single-chapter
+        or partial-whole-book run must not wipe OTHER chapters' still-
+        unresolved findings out of the in-memory view (they're still sitting
+        in the server ledger; only chapters THIS run actually touched are
+        superseded, mirroring the server's own upsertChapterEntry semantics
+        — a chapter only gets superseded when it produced a checkpoint). */
     setReview: (
       s,
       a: PayloadAction<{
@@ -81,19 +88,57 @@ export const scriptReviewSlice = createSlice({
     ) => {
       const { bookId, ops, unappliable, manuscriptId = '', versionByChapter = {} } = a.payload;
       const DEFAULT_OFF = new Set(['reattribute', 'flag_nonstory']); // fs-58 Unit B — higher-risk classes opt-in
-      const selected: Record<string, boolean> = {};
+      const newSelected: Record<string, boolean> = {};
       for (const o of ops) {
-        selected[opKey(o.chapterId, o.id, o.op)] = !DEFAULT_OFF.has(o.op);
+        newSelected[opKey(o.chapterId, o.id, o.op)] = !DEFAULT_OFF.has(o.op);
       }
-      s.byBook[bookId] = { ops, unappliable, selected, manuscriptId, versionByChapter, visible: true };
+
+      const existing = s.byBook[bookId];
+      // Drop a stale existing bucket entirely if it belongs to a different
+      // manuscript (reparse mid-session) — its sentence ids may no longer
+      // be valid, mirroring readLedger's own manuscriptId-pruning (spec §4.2).
+      const preserveExisting = existing && (!existing.manuscriptId || existing.manuscriptId === manuscriptId);
+
+      const touchedChapterIds = new Set<number>(Object.keys(versionByChapter).map(Number));
+      for (const o of ops) touchedChapterIds.add(o.chapterId);
+      for (const u of unappliable) touchedChapterIds.add(u.op.chapterId);
+
+      const preservedOps = preserveExisting
+        ? existing!.ops.filter((o) => !touchedChapterIds.has(o.chapterId))
+        : [];
+      const preservedUnappliable = preserveExisting
+        ? existing!.unappliable.filter((u) => !touchedChapterIds.has(u.op.chapterId))
+        : [];
+      const preservedSelected: Record<string, boolean> = {};
+      if (preserveExisting) {
+        for (const o of preservedOps) {
+          const key = opKey(o.chapterId, o.id, o.op);
+          if (key in existing!.selected) preservedSelected[key] = existing!.selected[key];
+        }
+      }
+      const preservedVersionByChapter = preserveExisting ? { ...existing!.versionByChapter } : {};
+
+      s.byBook[bookId] = {
+        ops: [...preservedOps, ...ops],
+        unappliable: [...preservedUnappliable, ...unappliable],
+        selected: { ...preservedSelected, ...newSelected },
+        manuscriptId,
+        versionByChapter: { ...preservedVersionByChapter, ...versionByChapter },
+        visible: true,
+      };
     },
 
-    /** Hydrate a bucket from the persisted ledger (Task 8). Unlike setReview
-        (the live-run-completion path, which computes `selected` fresh from
-        DEFAULT_OFF), the caller here has ALREADY merged the DEFAULT_OFF
-        baseline with the ledger's persisted override map — the ledger only
-        ever stores explicit overrides (design spec §4.2), so there's no
-        recomputation to do inside the reducer. */
+    /** Hydrate a bucket from the persisted ledger (Task 8). The payload here
+        IS the complete, authoritative current state (the caller read the
+        whole ledger, not a partial scope), so — unlike setReview above —
+        a full replace of ops/unappliable/selected/versionByChapter is
+        correct. What must NOT be forced is `visible`: this runs on every
+        mount, so unconditionally setting visible:true would silently
+        re-open a modal the user already explicitly hid via hideReview
+        (backdrop/X, Task 12) the moment they navigate away and back —
+        directly undermining the hide-vs-discard split. Preserve whatever
+        visibility an existing bucket already has; only default to visible
+        for a genuinely NEW bucket (nothing existed at this book yet). */
     hydrateBucket: (
       s,
       a: PayloadAction<{
@@ -106,7 +151,15 @@ export const scriptReviewSlice = createSlice({
       }>,
     ) => {
       const { bookId, ops, unappliable, manuscriptId, versionByChapter, selected } = a.payload;
-      s.byBook[bookId] = { ops, unappliable, selected, manuscriptId, versionByChapter, visible: true };
+      const existing = s.byBook[bookId];
+      s.byBook[bookId] = {
+        ops,
+        unappliable,
+        selected,
+        manuscriptId,
+        versionByChapter,
+        visible: existing ? existing.visible : true,
+      };
     },
 
     /** Flip the selected state of one op by key. */
