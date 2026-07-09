@@ -88,8 +88,10 @@ describe('attributeChapterStage2 — structure engine wiring (srv-59)', () => {
     expect(result.sentences[1].confidence).toBe(CONFIDENCE.NARRATION_CONFIRM);
     expect(result.sentences[1].confidence).not.toBe(0.33);
 
-    // (c) structureReport counters populated and consistent.
+    // (c) structureReport counters populated and consistent, and the report
+    // carries the language that actually ran (not the crossExamine-internal null).
     expect(result.structureReport).toMatchObject({
+      language: 'ru',
       alignedPct: 100,
       confirmed: 1,
       corrected: 1,

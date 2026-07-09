@@ -1530,7 +1530,7 @@ ${subBody}
    first-person pronoun (the "я" -> Антон first-person-narrator case). Null
    when the language has no first-person pronoun convention or no roster
    character claims it. */
-export function findFirstPersonCharacter(
+function findFirstPersonCharacter(
   characters: Array<{ id: string; aliases?: string[] }>,
   conv: LanguageConventions,
 ): string | null {
@@ -1543,7 +1543,7 @@ export function findFirstPersonCharacter(
 
 /* srv-59 — roster gender lookup for windows.ts's pronoun resolution.
    Defaults an ungendered character to 'neutral' (never guessed). */
-export function rosterGenderMap(
+function rosterGenderMap(
   characters: Array<{ id: string; gender?: string }>,
 ): WindowRoster {
   return Object.fromEntries(
@@ -1625,7 +1625,7 @@ export async function attributeChapterStage2(opts: {
       alignmentFloorPct: 80,
     });
     result.sentences = examined.sentences;
-    result.structureReport = examined.report;
+    result.structureReport = { ...examined.report, language: conventions.language };
     console.log(
       `[analysis:structure] ch=${opts.chapter.id} aligned=${examined.report.alignedPct.toFixed(0)}% ` +
         `confirmed=${examined.report.confirmed} corrected=${examined.report.corrected} flagged=${examined.report.flagged}`,
