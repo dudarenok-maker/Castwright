@@ -64,6 +64,9 @@ function buildSpyPhase0Analyzer(): Analyzer {
     async runStage3Chapter() {
       throw new Error('Phase-0 analyzer does not run instruct-annotation calls');
     },
+    async runAttributionEscalation() {
+      throw new Error('Phase-0 analyzer does not run escalation calls');
+    },
   };
 }
 
@@ -100,6 +103,9 @@ function buildSpyPhase1Analyzer(): Analyzer {
     },
     async runStage3Chapter() {
       throw new Error('Phase-1 analyzer does not run instruct-annotation calls');
+    },
+    async runAttributionEscalation() {
+      throw new Error('Phase-1 analyzer does not run escalation calls');
     },
   };
 }

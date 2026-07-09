@@ -43,6 +43,7 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
     runEmotionChapter: () => Promise.reject(new Error('not used')),
     runScriptReviewChapter: () => Promise.reject(new Error('not used')),
     runStage3Chapter: (m, c, p, call) => runStage3(m, c, p, call),
+    runAttributionEscalation: () => Promise.resolve(null),
   };
   return {
     ...actual,

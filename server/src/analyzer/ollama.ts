@@ -30,12 +30,14 @@ import {
   stage3ChapterSchema,
   stage1GrammarSchema,
   stage1ChapterGrammarSchema,
+  escalationSchema,
   type Stage1Output,
   type Stage1ChapterOutput,
   type Stage2ChapterOutput,
   type EmotionAnnotationOutput,
   type ScriptReviewOutput,
   type Stage3ChapterOutput,
+  type EscalationOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
 import { AnalyzerTruncatedError } from './errors.js';
@@ -336,6 +338,61 @@ export class OllamaAnalyzer implements Analyzer {
       stage3ChapterSchema,
       call,
     );
+  }
+
+  /* srv-59 Task 9 — flagged-window attribution escalation. Deliberately NOT
+     built on top of runStage: that helper's contract is "validate-then-retry-
+     then-throw", which is exactly wrong here — an empty/RECITATION-blocked
+     reply must resolve to `null` (never a throw) so the caller just skips
+     the window, and there's no retry (a second identical call burns latency
+     for a best-effort pass). The prompt is fully self-contained (built by
+     escalateFlaggedWindows, Task 9b) so this sends it as a single user turn
+     with no system instruction / skill file, unlike every other runStage*
+     call. `escalationSchema` doubles as the Ollama structured-output grammar
+     (via `format`) and the post-hoc validator — same pattern as the other
+     stages, just without the retry loop. */
+  async runAttributionEscalation(
+    manuscriptId: string,
+    chapterId: number,
+    prompt: string,
+    call: StageCall,
+  ): Promise<EscalationOutput | null> {
+    const key = `escalation-ch${chapterId}` as const;
+    await writeInbox(manuscriptId, key, prompt);
+
+    const responseFormat = z.toJSONSchema(escalationSchema, {
+      target: 'draft-07',
+      reused: 'inline',
+    });
+
+    let text: string;
+    try {
+      text = await this.chat(
+        [{ role: 'user', content: prompt }],
+        responseFormat,
+        resolveOllamaTemperature(),
+        call.onChunk,
+        call.signal,
+      );
+    } catch (err) {
+      if (err instanceof AnalysisAbortedError) throw err;
+      if (err instanceof LocalUnreachableError) throw err;
+      /* Everything else (empty body, truncated stream, non-2xx) — this pass
+         is best-effort, so surface "no usable answer" rather than hard-
+         failing the whole chapter over one escalation window. */
+      console.warn(
+        `[ollama] ${this.model} ${key} produced no usable response: ${(err as Error)?.message ?? err}`,
+      );
+      return null;
+    }
+
+    const attempt = parseAndValidate(text, escalationSchema);
+    if (!attempt.ok) {
+      console.warn(`[ollama] ${this.model} ${key} failed to parse: ${attempt.kind}`);
+      return null;
+    }
+    await persistResponse(manuscriptId, key, text);
+    return attempt.value;
   }
 
   private async runStage<T>(

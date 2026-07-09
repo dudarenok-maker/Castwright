@@ -666,6 +666,111 @@ describe('OllamaAnalyzer — output truncation (#528)', () => {
   });
 });
 
+/* srv-59 Task 9 — the escalation primitive is deliberately NOT built on
+   runStage: no schema-constrained retry loop, and an empty/malformed reply
+   must resolve to `null` rather than throw. These tests pin that contract
+   at the wire level, mirroring the mocking style of the describe blocks
+   above (fetchMock over global.fetch, NDJSON streams via ndjsonStream). */
+describe('OllamaAnalyzer — runAttributionEscalation (srv-59 Task 9)', () => {
+  const VALID_ESCALATION_RESPONSE = JSON.stringify({
+    assignments: [
+      { line: 12, characterId: 'wren' },
+      { line: 14, characterId: 'marlow' },
+    ],
+  });
+
+  afterEach(async () => {
+    for (const id of ['m_escalation_ok', 'm_escalation_empty', 'm_escalation_malformed']) {
+      await rm(resolve(HANDOFF_ROOT, 'inbox', `${id}-stageescalation-ch1.md`), { force: true });
+      await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stageescalation-ch1.json`), { force: true });
+    }
+  });
+
+  it('round-trips a valid {assignments} reply', async () => {
+    fetchMock.mockResolvedValue(
+      okResponse(ndjsonStream(chunksOf(VALID_ESCALATION_RESPONSE, 16))),
+    );
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    const result = await analyzer.runAttributionEscalation(
+      'm_escalation_ok',
+      1,
+      'resolve these lines',
+      {},
+    );
+
+    expect(result).not.toBeNull();
+    expect(result?.assignments).toEqual([
+      { line: 12, characterId: 'wren' },
+      { line: 14, characterId: 'marlow' },
+    ]);
+
+    /* Self-contained prompt: single user turn, no system instruction / skill
+       file — unlike every other runStage* call. */
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.messages).toEqual([{ role: 'user', content: 'resolve these lines' }]);
+    /* Still schema-constrained decoding via `format`, just with the tolerant
+       escalation schema instead of stage2's. */
+    expect(body.format.required).toContain('assignments');
+  });
+
+  it('resolves to null (not a throw) on an EMPTY response body', async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream([])));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    const result = await analyzer.runAttributionEscalation(
+      'm_escalation_empty',
+      1,
+      'resolve these lines',
+      {},
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it('resolves to null (not a throw) on malformed JSON', async () => {
+    const malformed = '{ "assignments": [ { "line": 1'; // truncated
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(malformed, 8))));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    const result = await analyzer.runAttributionEscalation(
+      'm_escalation_malformed',
+      1,
+      'resolve these lines',
+      {},
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it('an empty assignments array is a valid (non-null) result — no .min(1)', async () => {
+    fetchMock.mockResolvedValue(
+      okResponse(ndjsonStream(chunksOf(JSON.stringify({ assignments: [] }), 8))),
+    );
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    const result = await analyzer.runAttributionEscalation(
+      'm_escalation_empty_valid',
+      1,
+      'resolve these lines',
+      {},
+    );
+
+    expect(result).toEqual({ assignments: [] });
+
+    await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_escalation_empty_valid-stageescalation-ch1.md'), {
+      force: true,
+    });
+    await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_escalation_empty_valid-stageescalation-ch1.json'), {
+      force: true,
+    });
+  });
+});
+
 import { gpuSemaphore } from '../gpu/semaphore.js';
 
 function mockChatResponse(text: string) {

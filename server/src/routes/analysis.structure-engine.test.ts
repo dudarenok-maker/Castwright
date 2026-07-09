@@ -52,6 +52,7 @@ function fakeAnalyzer(sentences: SentenceOutput[]): Analyzer {
     runEmotionChapter: () => Promise.reject(new Error('not used')),
     runScriptReviewChapter: () => Promise.reject(new Error('not used')),
     runStage3Chapter: () => Promise.reject(new Error('not used')),
+    runAttributionEscalation: () => Promise.resolve(null),
   };
 }
 

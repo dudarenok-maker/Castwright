@@ -2274,6 +2274,9 @@ describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
       async runStage3Chapter() {
         throw new Error('Phase-0 analyzer does not run instruct-annotation calls');
       },
+      async runAttributionEscalation() {
+        throw new Error('Phase-0 analyzer does not run escalation calls');
+      },
     };
   }
 
@@ -2310,6 +2313,9 @@ describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
       },
       async runStage3Chapter() {
         throw new Error('Phase-1 analyzer does not run instruct-annotation calls');
+      },
+      async runAttributionEscalation() {
+        throw new Error('Phase-1 analyzer does not run escalation calls');
       },
     };
   }

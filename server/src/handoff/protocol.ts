@@ -19,7 +19,8 @@ const OUTBOX = join(HANDOFF_ROOT, 'outbox');
    Literal types instead of free strings so callers can't typo a key.
    `1-ch{n}` is per-chapter Phase 0a cast detection (the current flow);
    plain `1` is the legacy whole-book stage 1 (kept for back-compat).
-   `emotion-ch{n}` is the fs-33 emotion-only backfill pass. */
+   `emotion-ch{n}` is the fs-33 emotion-only backfill pass. `escalation-ch{n}`
+   is the srv-59 flagged-window attribution-escalation pass (Task 9). */
 export type HandoffKey =
   | '1'
   | `1-ch${number}`
@@ -27,7 +28,8 @@ export type HandoffKey =
   | `2-ch${number}`
   | `emotion-ch${number}`
   | `review-ch${number}`
-  | `instruct-ch${number}`;
+  | `instruct-ch${number}`
+  | `escalation-ch${number}`;
 
 async function ensureDirs(): Promise<void> {
   await mkdir(INBOX, { recursive: true });
