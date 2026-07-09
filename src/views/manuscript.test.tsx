@@ -34,16 +34,17 @@ import type { Chapter, Character, Sentence } from '../lib/types';
    (fetch-backed) implementation would fire in every test. Default resolves
    to an empty ledger so pre-existing tests that don't care about hydration
    stay inert (hydrateScriptReview's early-return on zero entries). */
-const { reviewScript, createCharacter, getScriptReviewState } = vi.hoisted(() => ({
+const { reviewScript, createCharacter, getScriptReviewState, discardScriptReview } = vi.hoisted(() => ({
   reviewScript: vi.fn(),
   createCharacter: vi.fn(),
   getScriptReviewState: vi.fn().mockResolvedValue({ kind: 'ledger', entries: {} }),
+  discardScriptReview: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>();
   return {
     ...actual,
-    api: { ...(actual as { api: object }).api, reviewScript, createCharacter, getScriptReviewState },
+    api: { ...(actual as { api: object }).api, reviewScript, createCharacter, getScriptReviewState, discardScriptReview },
   };
 });
 
@@ -1855,5 +1856,122 @@ describe('ManuscriptView — unresolved-findings badge', () => {
     renderBadgeView(2);
     expect(screen.getByTestId('review-script-chapter')).toHaveTextContent('Review Script');
     expect(screen.getByTestId('review-script-chapter')).not.toHaveTextContent('Review Script (');
+  });
+});
+
+describe('ManuscriptView — re-run confirm gate (fs-58 Task 11)', () => {
+  const gateChapter: Chapter = {
+    id: 1,
+    title: 'Chapter One',
+    duration: '10:00',
+    state: 'done',
+    progress: 1,
+    characters: {},
+  };
+  const otherGateChapter: Chapter = {
+    id: 2,
+    title: 'Chapter Two',
+    duration: '10:00',
+    state: 'done',
+    progress: 1,
+    characters: {},
+  };
+
+  beforeEach(() => {
+    reviewScript.mockReset();
+    discardScriptReview.mockReset();
+    discardScriptReview.mockResolvedValue(undefined);
+  });
+
+  function renderGateView() {
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+      preloadedState: {
+        scriptReview: {
+          byBook: {
+            'bk-gate': {
+              ops: [{ id: 1, op: 'strip_tag', chapterId: 1, rationale: 'r' }],
+              unappliable: [],
+              selected: {},
+              manuscriptId: 'ms-1',
+              versionByChapter: { 1: 1 },
+              // Starts hidden — this is the "prior run finished, badge shows
+              // the count" state the re-run gate fires from; "Review
+              // existing" flips it back to visible.
+              visible: false,
+            },
+          },
+          activeStreams: {},
+        } as never,
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'bk-gate',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[gateChapter, otherGateChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[]}
+        />
+      </Provider>,
+    );
+    return store;
+  }
+
+  it('clicking Review Script with unresolved findings in scope opens a confirm dialog instead of starting a new run', async () => {
+    const user = userEvent.setup();
+    renderGateView();
+
+    await user.click(screen.getByTestId('review-script-chapter'));
+
+    expect(screen.getByTestId('review-script-confirm-gate')).toBeInTheDocument();
+    expect(screen.getByTestId('review-script-confirm-review-existing')).toBeInTheDocument();
+    expect(screen.getByTestId('review-script-confirm-discard')).toBeInTheDocument();
+    expect(reviewScript).not.toHaveBeenCalled();
+  });
+
+  it('"Review existing" in the confirm dialog reopens the hidden modal without discarding', async () => {
+    const user = userEvent.setup();
+    const store = renderGateView();
+
+    await user.click(screen.getByTestId('review-script-chapter'));
+    await user.click(screen.getByTestId('review-script-confirm-review-existing'));
+
+    const state = store.getState() as { scriptReview: { byBook: Record<string, { visible: boolean }> } };
+    expect(state.scriptReview.byBook['bk-gate'].visible).toBe(true);
+    expect(discardScriptReview).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('review-script-confirm-gate')).toBeNull();
+  });
+
+  it('"Discard and start new" calls discardReview then starts a fresh run', async () => {
+    const user = userEvent.setup();
+    renderGateView();
+
+    await user.click(screen.getByTestId('review-script-chapter'));
+    await user.click(screen.getByTestId('review-script-confirm-discard'));
+
+    await waitFor(() => {
+      expect(discardScriptReview).toHaveBeenCalledWith('bk-gate', [1]);
+    });
+    await waitFor(() => {
+      expect(reviewScript).toHaveBeenCalled();
+    });
   });
 });

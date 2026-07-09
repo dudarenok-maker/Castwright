@@ -43,12 +43,12 @@ import { PromoteFirstSentenceButton } from '../components/promote-first-sentence
 import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-bar';
 import { ScriptReviewDiff } from '../components/script-review-diff';
 import { api } from '../lib/api';
-import { selectActiveReview, unresolvedCountForChapters } from '../store/script-review-slice';
+import { selectActiveReview, unresolvedCountForChapters, scriptReviewActions } from '../store/script-review-slice';
 import { selectAnalysisBusyForBook } from '../store/analysis-substage-selectors';
 import { formatSubstageDetail } from '../lib/substage-progress-text';
 import { notificationsActions } from '../store/notifications-slice';
 import { rpdWarningFor } from '../lib/script-review-apply';
-import { runReviewScript, hydrateScriptReview } from '../store/script-review-thunk';
+import { runReviewScript, hydrateScriptReview, discardReview } from '../store/script-review-thunk';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 import type { SeriesRosterEntry } from '../lib/api';
 
@@ -143,6 +143,10 @@ export function ManuscriptView({
      per-chapter "Review Script" stays the primary, low-cost default. */
   const [reviewMenuOpen, setReviewMenuOpen] = useState(false);
   const reviewMenuRef = useRef<HTMLDivElement>(null);
+  /* fs-58 Task 11 — re-run confirm gate (design spec §6.4): a click on
+     Review Script when the target scope already has unresolved findings
+     opens this instead of immediately starting a fresh run. */
+  const [confirmGate, setConfirmGate] = useState<{ wholeBook: boolean; chapterIds: number[]; count: number } | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const hasActiveReview = useAppSelector((s) => !!(bookId && (s as any).scriptReview && selectActiveReview(s as any, bookId)));
   const store = useStore<RootState>();
@@ -766,10 +770,14 @@ export function ManuscriptView({
   const wholeBookUnresolvedCount = useAppSelector((s) =>
     bookId ? unresolvedCountForChapters(s.scriptReview?.byBook[bookId], chapters.map((c) => c.id)) : 0,
   );
+  /* fs-58 Task 11 — the raw bucket (for unresolvedCountForChapters at click
+     time, over an arbitrary target scope) and whether a job is already
+     running for this book, any scope (design spec §6.4 Case 1). */
+  const scriptReviewBucket = useAppSelector((s) => (bookId ? s.scriptReview?.byBook[bookId] : undefined));
+  const jobActiveForBook = useAppSelector((s) => !!(bookId && s.scriptReview?.activeStreams[bookId]));
 
-  async function handleReviewScript(wholeBook: boolean) {
-    if (!bookId || reviewLoading) return;
-    if (!wholeBook && currentChapterId == null) return;
+  async function startNewReview(wholeBook: boolean) {
+    if (!bookId) return;
     setReviewLoading(true);
     setReviewMenuOpen(false);
     try {
@@ -796,11 +804,83 @@ export function ManuscriptView({
     }
   }
 
+  async function handleReviewScript(wholeBook: boolean) {
+    if (!bookId || reviewLoading) return;
+    if (!wholeBook && currentChapterId == null) return;
+
+    // Case 1 (design spec §6.4): a job is already running for this book,
+    // any scope. The button is already disabled via reviewLoading/
+    // analysisBusy in the common case; this is the defensive check for
+    // e.g. a job attached via hydrateScriptReview on a different tab/mount.
+    if (jobActiveForBook) return;
+
+    const targetChapterIds = wholeBook ? chapters.filter((c) => !c.excluded).map((c) => c.id) : [currentChapterId!];
+    const unresolvedCount = unresolvedCountForChapters(scriptReviewBucket, targetChapterIds);
+    if (unresolvedCount > 0) {
+      setConfirmGate({ wholeBook, chapterIds: targetChapterIds, count: unresolvedCount });
+      return;
+    }
+
+    await startNewReview(wholeBook);
+  }
+
+  function handleReviewExisting() {
+    if (!bookId) return;
+    dispatch(scriptReviewActions.showReview({ bookId }));
+    setConfirmGate(null);
+  }
+
+  async function handleDiscardAndStartNew() {
+    if (!bookId || !confirmGate) return;
+    const { wholeBook, chapterIds } = confirmGate;
+    setConfirmGate(null);
+    await discardReview(bookId, chapterIds, { dispatch });
+    await startNewReview(wholeBook);
+  }
+
   return (
     <div
       className="max-w-[1500px] mx-auto px-3 md:px-6 py-6 md:py-8 lg:grid lg:grid-cols-[280px_1fr_360px] lg:gap-6"
       ref={containerRef}
     >
+      {/* fs-58 Task 11 — re-run confirm gate (design spec §6.4): blocks a
+          fresh Review Script run when the target scope already has
+          unresolved findings, offering "Review existing" (reopen the
+          hidden modal) or "Discard and start new". */}
+      {confirmGate && (
+        <>
+          <div className="fixed inset-0 bg-ink/40 z-50" aria-hidden="true" />
+          <div className="fixed inset-0 z-50 grid place-items-center p-4 pointer-events-none">
+            <div
+              data-testid="review-script-confirm-gate"
+              className="bg-white rounded-3xl shadow-float w-full max-w-md pointer-events-auto p-6 space-y-4"
+            >
+              <p className="text-sm text-ink/80">
+                You have {confirmGate.count} unresolved suggestion{confirmGate.count === 1 ? '' : 's'} in{' '}
+                {confirmGate.wholeBook ? 'this book' : `chapter ${currentChapter.id}`}. Review them, or discard
+                and start a new review?
+              </p>
+              <div className="flex items-center gap-3">
+                <button
+                  data-testid="review-script-confirm-review-existing"
+                  onClick={handleReviewExisting}
+                  className="px-4 min-h-[44px] sm:min-h-0 py-2 rounded-full bg-ink text-canvas text-sm font-semibold"
+                >
+                  Review existing
+                </button>
+                <button
+                  data-testid="review-script-confirm-discard"
+                  onClick={() => void handleDiscardAndStartNew()}
+                  className="px-4 min-h-[44px] sm:min-h-0 py-2 rounded-full border border-ink/20 text-ink text-sm font-semibold"
+                >
+                  Discard and start new
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* fs-58 — ScriptReviewDiff modal: fixed-overlay, renders null when no active review */}
       {hasActiveReview && bookId && <ScriptReviewDiff bookId={bookId} />}
 

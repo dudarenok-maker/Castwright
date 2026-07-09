@@ -12,7 +12,7 @@ vi.mock('../lib/api', () => ({
 
 import { api } from '../lib/api';
 import type { ReviewScriptOpts } from '../lib/api';
-import { runReviewScript, hydrateScriptReview, attachToRunningReview } from './script-review-thunk';
+import { runReviewScript, hydrateScriptReview, attachToRunningReview, discardReview } from './script-review-thunk';
 import { scriptReviewActions } from './script-review-slice';
 
 describe('runReviewScript', () => {
@@ -293,5 +293,15 @@ describe('attachToRunningReview', () => {
     );
     // The critical assertion: exactly ONE copy of the op, not two.
     expect(setReviewCall?.[0].payload.ops).toHaveLength(1);
+  });
+});
+
+describe('discardReview', () => {
+  it('calls the discard API then removes the bucket', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.discardScriptReview).mockResolvedValue(undefined);
+    await discardReview('book-1', [3, 4], { dispatch });
+    expect(api.discardScriptReview).toHaveBeenCalledWith('book-1', [3, 4]);
+    expect(dispatch).toHaveBeenCalledWith(scriptReviewActions.removeBucket({ bookId: 'book-1' }));
   });
 });

@@ -252,6 +252,21 @@ function waitForManuscriptAndCast(
   });
 }
 
+/** Discards the persisted ledger for the given chapters, then clears the
+    client-side bucket for the book. A whole-bucket removal is correct even
+    for a partial-chapter discard (e.g. from the re-run confirm gate) since
+    the client only ever holds one in-progress review's worth of chapters
+    per book at a time — the same simplification the existing
+    single-bucket-per-book model already makes. */
+export async function discardReview(
+  bookId: string,
+  chapterIds: number[],
+  opts: { dispatch: AppDispatch },
+): Promise<void> {
+  await api.discardScriptReview(bookId, chapterIds);
+  opts.dispatch(scriptReviewActions.removeBucket({ bookId }));
+}
+
 /** Reconciliation entry point — called on mount (Task 10) to hydrate a
     book's script-review bucket from the persisted server ledger. */
 export async function hydrateScriptReview(
