@@ -922,4 +922,43 @@ describe('ledger checkpointing', () => {
     expect(res.text).toContain('"kind":"checkpoint"');
     expect(res.text).toMatch(/"chapterId":1,"version":\d+/);
   });
+
+  it('a checkpoint write failure for one chapter reports chapter-failed and lets the rest of the run finish', async () => {
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
+    ]);
+    runReview.mockImplementation((_m, chapterId): Promise<ScriptReviewOutput> => {
+      if (chapterId === 1) return Promise.resolve({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+      return Promise.resolve({ ops: [{ id: 2, op: 'strip_tag', newText: 'World', rationale: 'r' }] });
+    });
+
+    // Not module-mocked (Task 3's other checkpointing tests need the real
+    // ledger reads/writes) — spy on the live namespace object so only this
+    // one call throws; vi.spyOn on a dynamically-imported ESM namespace
+    // works here because the route imports `upsertChapterEntry` as a named
+    // (live) binding, same pattern as generation.test.ts's configModule/
+    // aggregateModule spies.
+    const ledgerModule = await import('../workspace/script-review-ledger.js');
+    const spy = vi.spyOn(ledgerModule, 'upsertChapterEntry').mockRejectedValueOnce(new Error('disk full'));
+
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+      const events = parseSse(res.text);
+
+      // (a) chapter 1's checkpoint write failed -> chapter-failed reported, no checkpoint for it.
+      const chapter1Failed = events.find((e) => e.kind === 'chapter-failed' && e.chapterId === 1);
+      expect(chapter1Failed).toMatchObject({ message: expect.stringContaining('disk full') });
+      expect(events.some((e) => e.kind === 'checkpoint' && e.chapterId === 1)).toBe(false);
+
+      // (b) the job kept going — chapter 2 was still reviewed and checkpointed normally.
+      expect(events.some((e) => e.kind === 'ops' && e.chapterId === 2)).toBe(true);
+      expect(events.some((e) => e.kind === 'checkpoint' && e.chapterId === 2)).toBe(true);
+
+      // (c) the stream still closes cleanly with a final result event, not hung.
+      expect(events.find((e) => e.kind === 'result')).toMatchObject({ done: true, reviewedChapters: 2 });
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

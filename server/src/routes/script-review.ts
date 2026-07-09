@@ -534,17 +534,27 @@ async function runScriptReviewJob(
         .filter((e) => e.chapterId === chapterId)
         .flatMap((e) => e.ops);
       if (chapterOps.length > 0) {
-        const entry = await upsertChapterEntry(located.bookDir, job.bookId, {
-          chapterId,
-          manuscriptId,
-          ops: chapterOps,
-        });
-        // Broadcast the minted version so a live or reattaching client can
-        // learn it — this is the ONLY channel that delivers a chapter's
-        // ledger version to the client; without it, /resolve and the
-        // selection PATCH have nothing to echo back and silently no-op
-        // (design spec §5, and the version-delivery gap this fixes).
-        send({ kind: 'checkpoint', chapterId, version: entry.version });
+        try {
+          const entry = await upsertChapterEntry(located.bookDir, job.bookId, {
+            chapterId,
+            manuscriptId,
+            ops: chapterOps,
+          });
+          // Broadcast the minted version so a live or reattaching client can
+          // learn it — this is the ONLY channel that delivers a chapter's
+          // ledger version to the client; without it, /resolve and the
+          // selection PATCH have nothing to echo back and silently no-op
+          // (design spec §5, and the version-delivery gap this fixes).
+          send({ kind: 'checkpoint', chapterId, version: entry.version });
+        } catch (err) {
+          // A checkpoint write failure (disk error, lock contention) must not
+          // kill the rest of the run — mirror the sibling analyzer-error
+          // handling above: report this chapter and keep going. The chapter's
+          // ops were already broadcast live via the `ops` events above (if
+          // any subscribers were attached), so nothing already-streamed is
+          // lost — only the ledger persistence for this one chapter failed.
+          send({ kind: 'chapter-failed', chapterId, message: `Failed to save findings: ${(err as Error).message}` });
+        }
       }
     }
   } finally {
