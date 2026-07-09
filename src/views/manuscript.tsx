@@ -682,6 +682,29 @@ export function ManuscriptView({
     [bookId, dispatch],
   );
 
+  /* fs-58 Task 10 — unresolved-findings badges on the Review Script button
+     and the whole-book menu item (design spec §6.3). fs-58 Task 11 — the raw
+     bucket (for unresolvedCountForChapters at click time, over an arbitrary
+     target scope) and whether a job is already running for this book, any
+     scope (design spec §6.4 Case 1). These hooks MUST live before the
+     `if (!currentChapter) return null` guard below — hooks cannot be called
+     conditionally (Rules of Hooks); currentChapterUnresolvedCount guards its
+     own `currentChapter.id` read since currentChapter may still be
+     undefined here. */
+  const currentChapterUnresolvedCount = useAppSelector((s) =>
+    bookId && currentChapter ? unresolvedCountForChapters(s.scriptReview?.byBook[bookId], [currentChapter.id]) : 0,
+  );
+  const wholeBookUnresolvedCount = useAppSelector((s) =>
+    bookId
+      ? unresolvedCountForChapters(
+          s.scriptReview?.byBook[bookId],
+          chapters.filter((c) => !c.excluded).map((c) => c.id),
+        )
+      : 0,
+  );
+  const scriptReviewBucket = useAppSelector((s) => (bookId ? s.scriptReview?.byBook[bookId] : undefined));
+  const jobActiveForBook = useAppSelector((s) => !!(bookId && s.scriptReview?.activeStreams[bookId]));
+
   /* Defensive guard for the empty-chapters transient (e.g. the manuscript
      slice rehydrating after a reparse, or a stale URL pointing at a book
      whose chapter list hasn't loaded yet). The whole view dereferences
@@ -762,24 +785,6 @@ export function ManuscriptView({
      (excluded chapters never reach the analyzer). */
   const reviewableChapterCount = chapters.filter((c) => !c.excluded).length;
   const rpdWarning = rpdWarningFor(reviewableChapterCount, reviewModel);
-  /* fs-58 Task 10 — unresolved-findings badges on the Review Script button
-     and the whole-book menu item (design spec §6.3). */
-  const currentChapterUnresolvedCount = useAppSelector((s) =>
-    bookId ? unresolvedCountForChapters(s.scriptReview?.byBook[bookId], [currentChapter.id]) : 0,
-  );
-  const wholeBookUnresolvedCount = useAppSelector((s) =>
-    bookId
-      ? unresolvedCountForChapters(
-          s.scriptReview?.byBook[bookId],
-          chapters.filter((c) => !c.excluded).map((c) => c.id),
-        )
-      : 0,
-  );
-  /* fs-58 Task 11 — the raw bucket (for unresolvedCountForChapters at click
-     time, over an arbitrary target scope) and whether a job is already
-     running for this book, any scope (design spec §6.4 Case 1). */
-  const scriptReviewBucket = useAppSelector((s) => (bookId ? s.scriptReview?.byBook[bookId] : undefined));
-  const jobActiveForBook = useAppSelector((s) => !!(bookId && s.scriptReview?.activeStreams[bookId]));
 
   async function startNewReview(wholeBook: boolean) {
     if (!bookId) return;
