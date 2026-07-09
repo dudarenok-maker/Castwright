@@ -12,9 +12,14 @@
    (proven wrong by the "спросил Антон" tag) and correctly calls the
    narration line 'narrator'. */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Analyzer, StageCall } from '../analyzer/index.js';
-import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/schemas.js';
+import type {
+  CharacterOutput,
+  EscalationOutput,
+  SentenceOutput,
+  Stage1Output,
+} from '../handoff/schemas.js';
 import { applyNarratorDefault } from '../analyzer/narrator-default.js';
 import { CONFIDENCE } from '../analyzer/dialogue-structure/cross-examine.js';
 import { attributeChapterStage2 } from './analysis.js';
@@ -117,5 +122,159 @@ describe('attributeChapterStage2 — structure engine wiring (srv-59)', () => {
     const expected = applyNarratorDefault(mockSentences());
     expect(result.sentences).toEqual(expected);
     expect(result.structureReport).toBeUndefined();
+  });
+});
+
+/* srv-59 Task 9b — the escalation WIRING inside attributeChapterStage2:
+   reading the `analyzer.structure.escalation` knob, routing 'off'/'local',
+   calling escalateFlaggedWindows, and folding `escalated`/`escalationAccepted`
+   into result.structureReport. escalateFlaggedWindows itself is unit-tested
+   directly (escalation.test.ts) — this block only exercises the wiring
+   around it, end-to-end through attributeChapterStage2.
+
+   Fixture (ru dash-dialogue, one conversation window, 3 tag-anchored
+   speakers so windows.ts's alternation-fill never engages -> the next two
+   turns stay genuinely unanchored, not guessed):
+     1: '— Ты уверен, что это сработает? — спросил Антон.'  tag-name: anton
+     2: '— Да, вполне, — ответила Ольга.'                    tag-name: olga
+     3: '— Тогда идём, — сказал Борис.'                       tag-name: boris
+     4: '— Хорошо.'                                           UNANCHORED -> flagged
+     5: '— После тебя.'                                       UNANCHORED -> flagged
+   The mock model calls both unanchored turns 'narrator' (a plausible but
+   unproven guess), so crossExamine flags them `unanchored-narrator` at
+   CONFIDENCE.UNANCH_NARR_FLAG (0.5) — exactly the kind of window escalation
+   exists to re-query. */
+describe('attributeChapterStage2 — escalation wiring (srv-59 Task 9b)', () => {
+  const ESCALATION_CHARACTERS: CharacterOutput[] = [
+    { id: 'anton', name: 'Антон', role: 'lead', color: '#111111', gender: 'male' },
+    { id: 'olga', name: 'Ольга', role: 'lead', color: '#222222', gender: 'female' },
+    { id: 'boris', name: 'Борис', role: 'lead', color: '#333333', gender: 'male' },
+  ];
+
+  const ESCALATION_STAGE1: Stage1Output = {
+    characters: ESCALATION_CHARACTERS,
+    chapters: [{ id: 1, title: 'Chapter One' }],
+  };
+
+  const ESCALATION_BODY = [
+    '— Ты уверен, что это сработает? — спросил Антон.',
+    '— Да, вполне, — ответила Ольга.',
+    '— Тогда идём, — сказал Борис.',
+    '— Хорошо.',
+    '— После тебя.',
+  ].join('\n');
+
+  function escalationMockSentences(): SentenceOutput[] {
+    return [
+      { id: 1, chapterId: 1, characterId: 'anton', confidence: 0.9, text: 'Ты уверен, что это сработает' },
+      { id: 2, chapterId: 1, characterId: 'olga', confidence: 0.9, text: 'Да, вполне' },
+      { id: 3, chapterId: 1, characterId: 'boris', confidence: 0.9, text: 'Тогда идём' },
+      { id: 4, chapterId: 1, characterId: 'narrator', confidence: 0.4, text: 'Хорошо' },
+      { id: 5, chapterId: 1, characterId: 'narrator', confidence: 0.4, text: 'После тебя' },
+    ];
+  }
+
+  function fakeEscalationAnalyzer(runAttributionEscalation: Analyzer['runAttributionEscalation']): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () => Promise.reject(new Error('not used')),
+      runStage2Chapter: () => Promise.resolve({ sentences: escalationMockSentences() }),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation,
+    };
+  }
+
+  function escalationBaseOpts(analyzer: Analyzer) {
+    return {
+      analyzer,
+      manuscriptId: 'm1',
+      title: 'Test Book',
+      stage1: ESCALATION_STAGE1,
+      chapter: { id: 1, title: 'Chapter One', body: ESCALATION_BODY },
+      stageCall: { language: 'ru' } as StageCall,
+    };
+  }
+
+  beforeEach(() => {
+    delete process.env.STRUCTURE_ENGINE;
+    delete process.env.ATTRIBUTION_ESCALATION;
+  });
+  afterEach(() => {
+    delete process.env.STRUCTURE_ENGINE;
+    delete process.env.ATTRIBUTION_ESCALATION;
+  });
+
+  it('sanity: the fixture produces >=1 flagged window before crossExamine\'s output ever reaches escalation', async () => {
+    // Run with escalation forced OFF so we observe crossExamine's raw output
+    // (still flagged, untouched by any re-query) and confirm the fixture is
+    // actually exercising the code path this suite depends on.
+    process.env.ATTRIBUTION_ESCALATION = 'off';
+    const result = await attributeChapterStage2(
+      escalationBaseOpts(fakeEscalationAnalyzer(() => Promise.resolve(null))),
+    );
+
+    expect(result.structureReport?.flagged).toBeGreaterThanOrEqual(1);
+    // both unanchored turns kept the model's 'narrator' guess and its
+    // reduced (flagged) confidence — proves they never got corrected.
+    expect(result.sentences.find((s) => s.id === 4)).toMatchObject({
+      characterId: 'narrator',
+      confidence: CONFIDENCE.UNANCH_NARR_FLAG,
+    });
+    expect(result.sentences.find((s) => s.id === 5)).toMatchObject({
+      characterId: 'narrator',
+      confidence: CONFIDENCE.UNANCH_NARR_FLAG,
+    });
+  });
+
+  it("mode='local': routes the flagged window through the main analyzer, applies an accepted assignment, and folds escalated/escalationAccepted into structureReport", async () => {
+    process.env.ATTRIBUTION_ESCALATION = 'local';
+    const escalationResponse: EscalationOutput = {
+      assignments: [
+        { line: 4, characterId: 'boris' },
+        { line: 5, characterId: 'anton' },
+      ],
+    };
+    const runAttributionEscalation = vi.fn(() => Promise.resolve(escalationResponse));
+    const analyzer = fakeEscalationAnalyzer(runAttributionEscalation);
+
+    const result = await attributeChapterStage2(escalationBaseOpts(analyzer));
+
+    // The escalation analyzer WAS called (the mode routing engaged it).
+    expect(runAttributionEscalation).toHaveBeenCalled();
+
+    // Both previously-flagged lines were reassigned to the escalation
+    // analyzer's answer, at the escalation-applied confidence (0.8) — proof
+    // the flag was resolved, not left at the pre-escalation 0.4/0.5.
+    expect(result.sentences.find((s) => s.id === 4)).toMatchObject({ characterId: 'boris', confidence: 0.8 });
+    expect(result.sentences.find((s) => s.id === 5)).toMatchObject({ characterId: 'anton', confidence: 0.8 });
+
+    expect(result.structureReport?.escalated).toBeGreaterThanOrEqual(1);
+    expect(result.structureReport?.escalationAccepted).toBeGreaterThanOrEqual(1);
+  });
+
+  it("mode='off': never calls the escalation analyzer, and structureReport/sentences are byte-identical to the pre-escalation crossExamine output — this is the assertion that catches an inverted mode condition", async () => {
+    process.env.ATTRIBUTION_ESCALATION = 'off';
+    const runAttributionEscalation = vi.fn(() => Promise.resolve({ assignments: [{ line: 4, characterId: 'boris' }] }));
+    const analyzer = fakeEscalationAnalyzer(runAttributionEscalation);
+
+    const result = await attributeChapterStage2(escalationBaseOpts(analyzer));
+
+    expect(runAttributionEscalation).not.toHaveBeenCalled();
+
+    // The flagged lines are UNCHANGED: still 'narrator' at the flagged
+    // (not escalation-applied) confidence.
+    expect(result.sentences.find((s) => s.id === 4)).toMatchObject({
+      characterId: 'narrator',
+      confidence: CONFIDENCE.UNANCH_NARR_FLAG,
+    });
+    expect(result.sentences.find((s) => s.id === 5)).toMatchObject({
+      characterId: 'narrator',
+      confidence: CONFIDENCE.UNANCH_NARR_FLAG,
+    });
+
+    expect(result.structureReport?.escalated).toBe(0);
+    expect(result.structureReport?.escalationAccepted).toBe(0);
   });
 });
