@@ -93,6 +93,12 @@ _Full detail + acceptance:_ [#553](https://github.com/dudarenok-maker/Castwright
 - _Benefit:_ Converts merged-but-unvalidated multi-GPU safety code into a confirmed guarantee, and closes the auto-revert gap so a repeated bad GPU pin self-heals with an operator-visible toast instead of silently degrading.
 _Full detail + acceptance:_ [#1230](https://github.com/dudarenok-maker/Castwright/issues/1230).
 
+#### `srv-59` — Dialogue-structure attribution: deterministic evidence engine, derived confidence, escalation ([#1471](https://github.com/dudarenok-maker/Castwright/issues/1471))
+
+- _What:_ Pure-code dialogue-structure parser (per-language convention tables, en/ru/es/fr/de) that cross-examines stage-2 attributions: tag-proven errors auto-corrected, ambiguity flagged with **derived** (honest) confidence replacing the model's self-reported values, plus a default-on local escalation pass over unresolved conversation windows and structure-evidence annotations in the script-review inbox. Spec `docs/superpowers/specs/2026-07-09-dialogue-structure-attribution-design.md`; plan `docs/superpowers/plans/2026-07-09-dialogue-structure-attribution.md` (both adversarially reviewed; pilot-measured on the real _Ночной дозор_ analysis).
+- _Benefit:_ _(user)_ full-book attribution for Russian (and every language) becomes fixable in one triage sitting — the low-confidence navigator finally flags the genuinely ambiguous lines (today: 0 flags on 14k sentences with heaps of errors) and tag-provable mistakes are corrected before the user ever looks.
+_Full detail + acceptance:_ [#1471](https://github.com/dudarenok-maker/Castwright/issues/1471).
+
 ## Could — nice to have, low-cost win
 
 #### `fs-17` — Read-along: sentence highlight synced to audio ([#464](https://github.com/dudarenok-maker/Castwright/issues/464))
