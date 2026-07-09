@@ -322,12 +322,15 @@ export type Stage3ChapterOutput = z.infer<typeof stage3ChapterSchema>;
 export const escalationSchema = z
   .object({
     assignments: z.array(
-      z
-        .object({
-          line: z.number().int(),
-          characterId: z.string().min(1),
-        })
-        .strict(),
+      /* Inner element deliberately NOT `.strict()` (unlike every other
+         per-item schema in this file): an extra per-assignment key (e.g. a
+         model stamping `confidence` onto its answer) is stripped rather than
+         rejecting the whole reply — same tolerant-by-default behavior as
+         `chapterStub` above. The OUTER envelope stays `.strict()`. */
+      z.object({
+        line: z.number().int(),
+        characterId: z.string().min(1),
+      }),
     ),
   })
   .strict();

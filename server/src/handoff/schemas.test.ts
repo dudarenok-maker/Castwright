@@ -14,6 +14,7 @@ import {
   scriptReviewSchema,
   ScriptReviewOp,
   ScriptReviewOutput,
+  escalationSchema,
 } from './schemas.js';
 
 /* The Ollama analyzer (server/src/analyzer/ollama.ts) feeds these per-stage
@@ -427,5 +428,24 @@ describe('scriptReviewSchema — validate_instruct (fs-58)', () => {
       ops: [{ id: 3, op: 'validate_instruct', newInstruct: '', rationale: 'leaks spoken content' }],
     });
     expect(parsed.ops[0].newInstruct).toBe('');
+  });
+});
+
+describe('escalationSchema (srv-59 Task 9) — inner assignment tolerance', () => {
+  it('parses a normal reply', () => {
+    const parsed = escalationSchema.parse({ assignments: [{ line: 4, characterId: 'anton' }] });
+    expect(parsed.assignments).toEqual([{ line: 4, characterId: 'anton' }]);
+  });
+
+  it('strips an extra per-assignment key instead of rejecting the whole reply', () => {
+    const parsed = escalationSchema.parse({
+      assignments: [{ line: 4, characterId: 'anton', confidence: 0.9 }],
+    });
+    // stripped, not thrown: the assignment is still usable downstream
+    expect(parsed.assignments).toEqual([{ line: 4, characterId: 'anton' }]);
+  });
+
+  it('still rejects an unknown key on the OUTER envelope (.strict preserved there)', () => {
+    expect(() => escalationSchema.parse({ assignments: [], bogus: 1 })).toThrow();
   });
 });
