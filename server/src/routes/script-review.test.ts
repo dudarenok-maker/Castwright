@@ -878,3 +878,48 @@ describe('sticky job registry', () => {
     expect(secondRes.text).toContain('strip_tag');
   });
 });
+
+describe('ledger checkpointing', () => {
+  it('checkpoints a chapter to the ledger as soon as it completes, even with zero subscribers attached', async () => {
+    const { readLedger } = await import('../workspace/script-review-ledger.js');
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
+    ]);
+    let resolveChapter2: (() => void) | undefined;
+    runReview
+      .mockResolvedValueOnce({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] })
+      .mockImplementationOnce(() => new Promise<{ ops: unknown[] }>((resolve) => {
+        resolveChapter2 = () => resolve({ ops: [] });
+      }));
+
+    // Use firePost (not a bare `request(app)...send()`) so `.end()` actually
+    // dispatches the request — per the established pattern/comment above (see
+    // the "res.on('close')" sticky-registry test), an unawaited/undispatched
+    // supertest Request has no underlying `req` yet, so `.abort()` on it is a
+    // silent no-op and the server never even sees the POST.
+    const { req, done } = firePost(`/api/books/${bookId}/script-review`, {});
+    done.catch(() => {}); // aborting rejects the promise; only the server-side effect matters here
+    await new Promise((r) => setTimeout(r, 20)); // let chapter 1 finish and chapter 2 start before disconnecting
+    req.abort(); // disconnect before chapter 2 resolves — job keeps running
+    await new Promise((r) => setTimeout(r, 30));
+
+    const ledgerMidRun = await readLedger(bookDir(), manuscriptId);
+    expect(ledgerMidRun.entries['1'].ops).toHaveLength(1);
+    expect(ledgerMidRun.entries['1'].manuscriptId).toBe(manuscriptId);
+
+    resolveChapter2?.();
+    await new Promise((r) => setTimeout(r, 30));
+    const ledgerAfter = await readLedger(bookDir(), manuscriptId);
+    // Chapter 2 produced zero ops, so no entry is created for it.
+    expect(ledgerAfter.entries['2']).toBeUndefined();
+  });
+
+  it('broadcasts a checkpoint event carrying the minted version once a chapter is upserted', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    runReview.mockResolvedValue({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
+    expect(res.text).toContain('"kind":"checkpoint"');
+    expect(res.text).toMatch(/"chapterId":1,"version":\d+/);
+  });
+});

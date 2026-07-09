@@ -30,6 +30,7 @@ import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
+import { upsertChapterEntry } from '../workspace/script-review-ledger.js';
 import {
   chunkSentencesByBudget,
   chunkWithContext,
@@ -528,6 +529,23 @@ async function runScriptReviewJob(
       }
       ({ actualMsTotal, actualCharsTotal } = accumulateChapterPacing({ actualMsTotal, actualCharsTotal }, chapterStartedAt, charsByChapter.get(chapterId) ?? 0));
       reviewedChapters += 1;
+
+      const chapterOps = job.replay.opsEvents
+        .filter((e) => e.chapterId === chapterId)
+        .flatMap((e) => e.ops);
+      if (chapterOps.length > 0) {
+        const entry = await upsertChapterEntry(located.bookDir, job.bookId, {
+          chapterId,
+          manuscriptId,
+          ops: chapterOps,
+        });
+        // Broadcast the minted version so a live or reattaching client can
+        // learn it — this is the ONLY channel that delivers a chapter's
+        // ledger version to the client; without it, /resolve and the
+        // selection PATCH have nothing to echo back and silently no-op
+        // (design spec §5, and the version-delivery gap this fixes).
+        send({ kind: 'checkpoint', chapterId, version: entry.version });
+      }
     }
   } finally {
     for (const sub of job.subscribers) clearInterval(sub.keepAlive);
