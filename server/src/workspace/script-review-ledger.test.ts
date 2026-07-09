@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import {
   readLedger,
   upsertChapterEntry,
@@ -9,6 +9,7 @@ import {
   discardChapters,
   patchSelection,
 } from './script-review-ledger.js';
+import { scriptReviewLedgerJsonPath } from './paths.js';
 
 let bookDir: string;
 
@@ -92,5 +93,25 @@ describe('script-review-ledger', () => {
     expect(result.ok).toBe(true);
     const ledger = await readLedger(bookDir, 'ms-1');
     expect(ledger.entries['3'].selected).toEqual({ '3:1:strip_tag': false });
+  });
+
+  it('loadRaw returns an empty envelope when the ledger file contains syntactically invalid JSON (no throw)', async () => {
+    const ledgerPath = scriptReviewLedgerJsonPath(bookDir);
+    const ledgerDir = dirname(ledgerPath);
+    mkdirSync(ledgerDir, { recursive: true });
+    // Write syntactically invalid JSON to verify error is caught
+    writeFileSync(ledgerPath, 'INVALID [[ JSON }}', 'utf8');
+    // This should not throw; loadRaw's try/catch should handle it gracefully
+    let result;
+    try {
+      result = await readLedger(bookDir, 'ms-1');
+    } catch (err) {
+      throw new Error(`readLedger should not throw on corrupt JSON, but got: ${err}`);
+    }
+    // The exact structure returned after filtering depends on the internal state,
+    // but it should at minimum be a valid LedgerFile object, not undefined/null
+    expect(result).toBeDefined();
+    expect(result.nextVersion).toBeDefined();
+    expect(result.entries).toBeDefined();
   });
 });

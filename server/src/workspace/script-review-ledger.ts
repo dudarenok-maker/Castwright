@@ -32,7 +32,12 @@ export interface LedgerFile {
 const EMPTY_LEDGER: LedgerFile = { nextVersion: 1, entries: {} };
 
 async function loadRaw(bookDir: string): Promise<LedgerFile> {
-  const raw = await readJson<LedgerFile>(scriptReviewLedgerJsonPath(bookDir));
+  let raw: LedgerFile | null;
+  try {
+    raw = await readJson<LedgerFile>(scriptReviewLedgerJsonPath(bookDir));
+  } catch {
+    return { ...EMPTY_LEDGER };
+  }
   if (!raw || typeof raw !== 'object' || !raw.entries) return { ...EMPTY_LEDGER };
   return raw;
 }
