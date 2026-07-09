@@ -251,6 +251,13 @@ export function analysisStateJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'analysis-state.json');
 }
 
+/** fs-58 follow-up — per-chapter checkpointed script-review findings, keyed
+    by chapterId, with a book-scoped `nextVersion` counter at the top level.
+    Sibling to analysis-state.json. See script-review-ledger.ts for the I/O. */
+export function scriptReviewLedgerJsonPath(bookDir: string): string {
+  return join(dotAudiobook(bookDir), 'script-review-pending.json');
+}
+
 /** Per-book dropped-quote ledger. Each Phase 0 verify pass appends a
     batch; we never overwrite, so the user can audit what the model
     fabricated across every analyser run (model switch, retry, etc.).
