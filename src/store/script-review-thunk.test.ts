@@ -134,4 +134,64 @@ describe('hydrateScriptReview', () => {
     await hydrateScriptReview('book-1', { dispatch, getState: fakeStore.getState, subscribe: fakeStore.subscribe });
     expect(dispatch).not.toHaveBeenCalled();
   });
+
+  it('tags ops with their own chapter entry id and falls back to !DEFAULT_OFF for ops with no persisted override', async () => {
+    const dispatch = vi.fn();
+    const fakeStore = makeFakeStore({
+      manuscriptId: 'ms-1',
+      characters: [{ id: 'c1' }],
+      sentences: [
+        { id: 1, chapterId: 1, text: 'Hi tag', characterId: 'c1' },
+        { id: 2, chapterId: 2, text: 'Whisper this', characterId: 'c1' },
+        { id: 3, chapterId: 2, text: 'Wrong speaker', characterId: 'c1' },
+      ],
+    });
+    vi.mocked(api.getScriptReviewState).mockResolvedValue({
+      kind: 'ledger',
+      entries: {
+        '1': {
+          manuscriptId: 'ms-1',
+          version: 5,
+          ops: [{ id: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }],
+          // Explicit persisted override — this op's `selected` must match it exactly.
+          selected: { '1:1:strip_tag': false },
+          completedAt: '2026-01-01',
+        },
+        '2': {
+          manuscriptId: 'ms-1',
+          version: 7,
+          ops: [
+            { id: 2, op: 'fix_emotion', emotion: 'whisper', rationale: 'r' },
+            { id: 3, op: 'reattribute', characterId: 'c1', rationale: 'r' },
+          ],
+          // No persisted override for either op — both fall back to !DEFAULT_OFF.has(op).
+          selected: {},
+          completedAt: '2026-01-02',
+        },
+      },
+    });
+
+    await hydrateScriptReview('book-1', { dispatch, getState: fakeStore.getState, subscribe: fakeStore.subscribe });
+
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.hydrateBucket(
+        expect.objectContaining({
+          bookId: 'book-1',
+          manuscriptId: 'ms-1',
+          versionByChapter: { 1: 5, 2: 7 },
+          selected: expect.objectContaining({
+            '1:1:strip_tag': false, // explicit override, honored as-is
+            '2:2:fix_emotion': true, // no override, fix_emotion not in DEFAULT_OFF -> true
+            '2:3:reattribute': false, // no override, reattribute IS in DEFAULT_OFF -> false
+          }),
+        }),
+      ),
+    );
+
+    const dispatched = dispatch.mock.calls.map((c) => c[0]).find((a) => a.type === scriptReviewActions.hydrateBucket.type);
+    const opsById = new Map(dispatched.payload.ops.map((o: { id: number; chapterId: number }) => [o.id, o.chapterId]));
+    expect(opsById.get(1)).toBe(1); // chapter-1 op keeps chapter 1
+    expect(opsById.get(2)).toBe(2); // chapter-2 op keeps chapter 2 (not hoisted to a shared/last chapterId)
+    expect(opsById.get(3)).toBe(2);
+  });
 });
