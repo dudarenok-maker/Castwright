@@ -278,6 +278,61 @@ describe('attributeChapterStage2 — escalation wiring (srv-59 Task 9b)', () => 
     expect(result.structureReport?.escalationAccepted).toBe(0);
   });
 
+  it('below the alignment floor (spec §5.2): escalation never runs, even in a non-off mode, because a misaligned engine must not rewrite attributions', async () => {
+    process.env.ATTRIBUTION_ESCALATION = 'local';
+
+    // Same body as the fixture above, but lines 4 and 5 carry text that
+    // never appears in ESCALATION_BODY at all, so the aligner can't find a
+    // match for them — they come back unaligned. 3/5 sentences aligned =
+    // 60%, below the 80% floor, so crossExamine runs the whole chapter in
+    // flag-only mode. The three tag-anchored lines (anton/olga/boris) still
+    // align and still share a conversation window, so — absent the floor
+    // gate — escalation would find that window and re-query it.
+    const belowFloorSentences: SentenceOutput[] = [
+      { id: 1, chapterId: 1, characterId: 'anton', confidence: 0.9, text: 'Ты уверен, что это сработает' },
+      { id: 2, chapterId: 1, characterId: 'olga', confidence: 0.9, text: 'Да, вполне' },
+      { id: 3, chapterId: 1, characterId: 'boris', confidence: 0.9, text: 'Тогда идём' },
+      {
+        id: 4,
+        chapterId: 1,
+        characterId: 'narrator',
+        confidence: 0.4,
+        text: 'Совершенно посторонний текст, которого нет в теле главы',
+      },
+      {
+        id: 5,
+        chapterId: 1,
+        characterId: 'narrator',
+        confidence: 0.4,
+        text: 'Ещё одна строка, отсутствующая в оригинале',
+      },
+    ];
+
+    const runAttributionEscalation = vi.fn(() =>
+      Promise.resolve({ assignments: [{ line: 1, characterId: 'olga' }] }),
+    );
+    const analyzer: Analyzer = {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () => Promise.reject(new Error('not used')),
+      runStage2Chapter: () => Promise.resolve({ sentences: belowFloorSentences }),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation,
+    };
+
+    const result = await attributeChapterStage2(escalationBaseOpts(analyzer));
+
+    // Sanity: the fixture actually lands below the floor before asserting
+    // on the escalation behaviour that depends on it.
+    expect(result.structureReport?.flagOnly).toBe(true);
+    expect(result.structureReport?.alignedPct).toBeLessThan(80);
+
+    expect(runAttributionEscalation).not.toHaveBeenCalled();
+    expect(result.structureReport?.escalated).toBe(0);
+    expect(result.structureReport?.escalationAccepted).toBe(0);
+  });
+
   /* srv-59 Task 9b (review follow-up) — buildCloudEscalationAnalyzer() used
      to run fresh PER CHAPTER inside attributeChapterStage2 in 'cloud' mode:
      a throwaway GeminiAnalyzer construction (and a missing-key warn) every

@@ -1667,7 +1667,7 @@ export async function attributeChapterStage2(opts: {
        engine still runs unchanged above); 'cloud' routes through a dedicated
        GeminiAnalyzer instead of whichever engine ran the main attribution. */
     const escalationMode = configValue<string>('analyzer.structure.escalation');
-    if (escalationMode !== 'off') {
+    if (escalationMode !== 'off' && !examined.report.flagOnly) {
       const escalationAnalyzer =
         escalationMode === 'cloud'
           ? opts.escalationAnalyzer !== undefined
@@ -1694,6 +1694,10 @@ export async function attributeChapterStage2(opts: {
         examined.report.escalated = escalationOutcome.attempted;
         examined.report.escalationAccepted = escalationOutcome.applied;
       }
+    } else if (escalationMode !== 'off' && examined.report.flagOnly) {
+      console.log(
+        `[analysis:structure] ch=${opts.chapter.id} below alignment floor (${examined.report.alignedPct.toFixed(0)}%) — escalation skipped`,
+      );
     }
 
     result.structureReport = { ...examined.report, language: conventions.language };
