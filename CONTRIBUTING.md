@@ -772,6 +772,9 @@ still hold:
    (`node scripts/bump-version.mjs --notes-file <path>`); the release workflow
    publishes it verbatim. (Releases predating this format were refreshed
    directly via `gh release edit`.)
-8. After the tag is pushed and the release is published, clear the board's
-   `Done` lane: `node scripts/clear-done-project-items.mjs --apply`
-   (dry-run first without `--apply` to review what would archive).
+8. Once the tag is pushed, `release.yml`'s `clear-done-board-items` job
+   archives the board's `Done` lane automatically after `publish` succeeds —
+   no manual step needed. If that job didn't run (e.g. the release published
+   via a path that bypassed the workflow) run it yourself:
+   `node scripts/clear-done-project-items.mjs --apply` (dry-run first without
+   `--apply` to review what would archive).

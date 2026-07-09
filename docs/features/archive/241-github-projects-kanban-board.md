@@ -54,7 +54,12 @@ owner: null
 
 ## Out of scope (matches the spec)
 
-- Time-based auto-archive for `Done` (cron-based) — `clear-done-project-items.mjs` is a manual release-cut step only.
+- Time-based auto-archive for `Done` (cron-based) — still out of scope.
+  `clear-done-project-items.mjs` now runs automatically as the
+  `clear-done-board-items` job in `.github/workflows/release.yml`, gated on
+  each tag's `publish` job succeeding — release-tied, not a schedule (a
+  human forgetting the formerly-manual step let 63 items pile up before
+  v1.11.0; see PR #1476). The script remains runnable by hand too.
 - Bot-enforced "Parked needs a comment" check — process-mandatory, not automated.
 - A recurring (not just one-time) branch/worktree hygiene sweep — `audit-branches-worktrees.mjs` is a report-only tool run on demand, not scheduled.
 
