@@ -44,14 +44,22 @@ import {
   accumulateChapterPacing,
 } from '../analyzer/chapter-pacing.js';
 import type { SentenceOutput, ScriptReviewOp } from '../handoff/schemas.js';
+import { configValue } from '../config/resolver.js';
+import { getOrHydrateManuscript } from '../store/manuscripts.js';
+import { buildStructureEvidence } from '../analyzer/dialogue-structure/evidence.js';
 
 export const scriptReviewRouter = Router();
 
-/* Local type for the parts of cast.json we need. */
+/* Local type for the parts of cast.json we need. srv-59 Task 10 — widened
+   with gender/aliases (additive) so `roster` can double as
+   EvidenceRosterChar[] for buildStructureEvidence; cast.json already stores
+   both fields (LibraryCastCharacter), only this narrow type omitted them. */
 interface CastCharacterSlim {
   id: string;
   name: string;
   role?: string;
+  gender?: 'male' | 'female' | 'neutral';
+  aliases?: string[];
 }
 interface CastFile {
   characters?: CastCharacterSlim[];
@@ -136,6 +144,10 @@ export function priorChapterBoundaryExchange(
    rides along only when present, and `vocalization` only when `true` (never
    `false`), so the prompt sees the fields exactly as the apply layer stores
    them. Lifted out of buildScriptReviewChapterInbox so it can be unit-tested. */
+/* srv-59 Task 10 — the optional `evidence` map carries per-sentence
+   structural-attribution hints (from buildStructureEvidence), appended to
+   `text` when present for that sentence id. Undefined/empty map ⇒ `note` is
+   undefined ⇒ `text` is `s.text` unchanged ⇒ byte-identical to today. */
 export function buildReviewSentencesInput(
   sentences: Array<{
     id: number;
@@ -144,14 +156,18 @@ export function buildReviewSentencesInput(
     instruct?: string;
     vocalization?: boolean;
   }>,
+  evidence?: Map<number, string>,
 ): Array<Record<string, unknown>> {
-  return sentences.map((s) => ({
-    sentenceId: s.id,
-    characterId: s.characterId,
-    text: s.text,
-    ...(s.instruct ? { instruct: s.instruct } : {}),
-    ...(s.vocalization ? { vocalization: true } : {}),
-  }));
+  return sentences.map((s) => {
+    const note = evidence?.get(s.id);
+    return {
+      sentenceId: s.id,
+      characterId: s.characterId,
+      text: note ? `${s.text} ${note}` : s.text,
+      ...(s.instruct ? { instruct: s.instruct } : {}),
+      ...(s.vocalization ? { vocalization: true } : {}),
+    };
+  });
 }
 
 export function buildScriptReviewChapterInbox(
@@ -160,8 +176,9 @@ export function buildScriptReviewChapterInbox(
   sentences: SentenceOutput[],
   roster: CastCharacterSlim[],
   priorExchange: PriorExchange | null = null,
+  evidence?: Map<number, string>,
 ): string {
-  const sentencePayload = buildReviewSentencesInput(sentences);
+  const sentencePayload = buildReviewSentencesInput(sentences, evidence);
   const rosterPayload = roster.map((c) => ({
     id: c.id,
     name: c.name,
@@ -583,6 +600,14 @@ async function runScriptReviewJob(
   let actualMsTotal = 0;
   let actualCharsTotal = 0;
   const charsByChapter = buildCharsByChapter(chapterIds, byChapter);
+  /* srv-59 Task 10 — recompute structural evidence fresh over the chapter
+     body at review time. Gated by the SAME `analyzer.structure.enabled`
+     master switch as the analysis-time engine (Task 8): off → no hydrate,
+     no evidence, byte-identical inbox. */
+  const structureEnabled = configValue<boolean>('analyzer.structure.enabled');
+  const record = structureEnabled ? await getOrHydrateManuscript(manuscriptId) : undefined;
+  const bodyByChapter = new Map<number, string>((record?.chapterHints ?? []).map((h) => [h.id, h.body]));
+  const reviewLanguage = bookStateLanguage(located.state);
   try {
     for (let i = 0; i < chapterIds.length; i += 1) {
       if (job.controller.signal.aborted) break;
@@ -605,6 +630,9 @@ async function runScriptReviewJob(
       const chapterStartedAt = Date.now();
       const priorId = priorChapterIdFor(chapterId, allChapterIds, excludedChapterIds);
       const priorExchange = priorId !== null ? priorChapterBoundaryExchange(byChapter.get(priorId) ?? [], roster) : null;
+      const structureEvidence = structureEnabled
+        ? buildStructureEvidence(bodyByChapter.get(chapterId) ?? '', byChapter.get(chapterId) ?? [], roster, reviewLanguage)
+        : undefined;
       const chunks = chunkSentencesByBudget(byChapter.get(chapterId) ?? [], {
         charBudget: chapterChunkBudget(selection.engine),
         overlap: 3,
@@ -619,7 +647,7 @@ async function runScriptReviewJob(
         const chunk = chunks[index];
         if (job.controller.signal.aborted) break;
         const prompt = buildScriptReviewChapterInbox(
-          manuscriptId, chapterId, chunkWithContext(chunk), roster, index === 0 ? priorExchange : null,
+          manuscriptId, chapterId, chunkWithContext(chunk), roster, index === 0 ? priorExchange : null, structureEvidence,
         );
         try {
           const result = await selection.analyzer.runScriptReviewChapter(manuscriptId, chapterId, prompt, {

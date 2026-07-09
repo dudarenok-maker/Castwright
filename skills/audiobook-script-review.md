@@ -108,6 +108,29 @@ headers/footers, ISBN lines, a bare chapter-number line that became its own
 sentence. Supply `anchor` (verbatim). NEVER flag story prose or dialogue. When in
 doubt, omit.
 
+## Attribution audit
+
+A sentence's `text` may carry a trailing `[structure: …]` annotation. These are
+**strong deterministic hints** from the dialogue-structure engine, not guesses:
+
+- `[structure: speech, tag→<Name>]` — a dialogue tag/turn-taking structure
+  attributes this line to `<Name>`, disagreeing with the current attribution
+  → propose a `reattribute` op to `<Name>`, citing the annotation in
+  `rationale`.
+- `[structure: speech, speaker unproven]` — the line is dialogue but structure
+  could not prove the speaker → verify against context; reattribute only if
+  the surrounding turns make the speaker clear.
+- `[structure: narration]` — structure sees narrator/beat text, not character
+  speech, disagreeing with the current character attribution → propose
+  reattributing to the narrator.
+
+For dash-dialogue languages (e.g. Russian), verify speech/tag splits: when a
+single sentence lumps quote/dash speech together with its attribution tag
+(e.g. `— Да, — кивнул Антон`), propose a `split` op so the tag words aren't
+voiced as the character.
+
+Always cite the `[structure: …]` hint in the op `rationale`.
+
 ## Rules
 
 - Only flag sentences that clearly need correction. When in doubt, omit.

@@ -549,6 +549,29 @@ describe('buildReviewSentencesInput (fs-58)', () => {
     });
     expect(out[2]).toEqual({ sentenceId: 3, characterId: 'mira', text: 'No instruct.' });
   });
+
+  it('srv-59: appends the evidence annotation to text when present for that sentenceId', () => {
+    const evidence = new Map([[2, '[structure: speech, tag→Антон]']]);
+    const out = buildReviewSentencesInput(
+      [
+        { id: 1, characterId: 'narrator', text: 'Plain line.' },
+        { id: 2, characterId: 'marina', text: 'Да' },
+      ],
+      evidence,
+    );
+    expect(out[0]).toEqual({ sentenceId: 1, characterId: 'narrator', text: 'Plain line.' });
+    expect(out[1]).toEqual({
+      sentenceId: 2, characterId: 'marina', text: 'Да [structure: speech, tag→Антон]',
+    });
+  });
+
+  it('srv-59: no evidence arg / undefined lookup leaves text byte-identical', () => {
+    const sentences = [{ id: 1, characterId: 'narrator', text: 'Plain line.' }];
+    expect(buildReviewSentencesInput(sentences)).toEqual(buildReviewSentencesInput(sentences, new Map()));
+    expect(buildReviewSentencesInput(sentences)).toEqual([
+      { sentenceId: 1, characterId: 'narrator', text: 'Plain line.' },
+    ]);
+  });
 });
 
 describe('priorChapterBoundaryExchange (fs-64)', () => {
@@ -697,6 +720,68 @@ chapterId: 2
     expect(block).not.toMatch(/"id"\s*:\s*\d/); // no numeric id leaks into the block
     // block sits before the sentence list
     expect(out.indexOf('Prior chapter')).toBeLessThan(out.indexOf('## Sentences'));
+  });
+});
+
+describe('buildScriptReviewChapterInbox (srv-59 structure evidence)', () => {
+  const roster = [{ id: 'wren', name: 'Wren', role: 'protagonist' }];
+  const sentences = [{ id: 1, characterId: 'narrator', text: 'Hi.' }] as unknown as Parameters<
+    typeof buildScriptReviewChapterInbox
+  >[2];
+
+  it('(a) no evidence arg is byte-identical to an empty Map, and both equal the captured snapshot', () => {
+    const expected = `---
+manuscriptId: m1
+task: script-review
+chapterId: 2
+---
+
+## Cast roster (post-fold)
+
+\`\`\`json
+[
+  {
+    "id": "wren",
+    "name": "Wren",
+    "role": "protagonist"
+  }
+]
+\`\`\`
+
+## Sentences (already attributed)
+
+\`\`\`json
+[
+  {
+    "sentenceId": 1,
+    "characterId": "narrator",
+    "text": "Hi."
+  }
+]
+\`\`\`
+`;
+    const noArg = buildScriptReviewChapterInbox('m1', 2, sentences, roster);
+    const emptyMap = buildScriptReviewChapterInbox('m1', 2, sentences, roster, null, new Map());
+    expect(noArg).toBe(expected);
+    expect(emptyMap).toBe(expected);
+  });
+
+  it('(b) an evidence hit appends the annotation to only that sentence\'s text', () => {
+    const twoSentences = [
+      { id: 1, characterId: 'narrator', text: 'Hi.' },
+      { id: 2, characterId: 'marina', text: 'Да' },
+    ] as unknown as Parameters<typeof buildScriptReviewChapterInbox>[2];
+    const evidence = new Map([[2, '[structure: speech, tag→Антон]']]);
+    const out = buildScriptReviewChapterInbox('m1', 2, twoSentences, roster, null, evidence);
+    expect(out).toContain('"text": "Hi."');
+    expect(out).toContain('"text": "Да [structure: speech, tag→Антон]"');
+  });
+
+  it('(c) §4.6 cross-chapter guard: evidence keyed to ids NOT in this chunk leaves every text unchanged', () => {
+    const foreignEvidence = new Map([[999, '[structure: narration]']]);
+    const withForeign = buildScriptReviewChapterInbox('m1', 2, sentences, roster, null, foreignEvidence);
+    const withoutEvidence = buildScriptReviewChapterInbox('m1', 2, sentences, roster);
+    expect(withForeign).toBe(withoutEvidence);
   });
 });
 
