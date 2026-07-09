@@ -69,6 +69,45 @@ Define success criteria, then loop until verified.
 - Strong success criteria let you loop independently; weak ones ("make it
   work") force constant clarification.
 
+## Execution model (default for all non-trivial work)
+
+All substantial work runs **sub-agent-driven, with design and implementation
+as SEPARATE threads.** Three phases, each with a clean handoff:
+
+**1. Design & brainstorming — its own thread.** Use `superpowers:brainstorming`
+→ `superpowers:writing-plans` to produce the spec/plan. Non-trivial specs/plans
+still get the mandatory Premium-tier `assumption-checker` pass (see Model
+routing). **The design thread produces two artifacts and no code:** (a) the
+full plan committed under `docs/features/` — the durable design of record; and
+(b) a comment on the item's GitHub issue that is the _handover brief for the
+implementation agent_ — it links the plan doc, then gives the implementation
+thread what it needs to START: the task breakdown, entry point, global
+constraints, key files, and acceptance criteria. The comment is the kickoff
+instructions the implementation agent reads first; the plan doc holds the rest.
+The design thread does **not** implement. Suggest `/compact` at the
+spec-approved and plan-approved checkpoints.
+
+**2. Implementation — a separate thread.** Picks up the ticket + its
+implementation-brief comment as the sole source of requirements. Runs
+`superpowers:subagent-driven-development` as the **primary** mode: cut the
+branch, then dispatch a fresh implementer subagent per task, a task-review
+subagent (spec + quality) after each, and a broad whole-branch `code-review`
+at the end — models chosen per the Model-routing table. The controlling thread
+coordinates and curates context; it does **not** hand-write task code a
+subagent could do. Keep the progress ledger (`.superpowers/sdd/progress.md`) so
+the run survives compaction.
+
+**3. Ship.** PR with `Closes #NN`, the mandatory `code-review` gate, merge —
+per the Before-shipping checklist and Branching workflow.
+
+**Why the split:** design and implementation have different context needs; one
+thread pollutes both. The issue-comment handoff lets an implementation thread
+(or a teammate) execute cold from the ticket alone.
+
+**When to skip:** trivial, immediately-shipped fixes (typo, one-line doc/config
+tweak) run inline — no design thread, no per-task subagent. Same "trivial" bar
+as the Branching workflow's direct-to-`main` carve-out.
+
 ## Model routing
 
 Route non-fork subagent/Workflow dispatch (and, as guidance, the main
@@ -115,8 +154,8 @@ Design rationale:
 - `npm run dev` — Vite dev server (HMR) on `http://localhost:5173`.
 - `npm run typecheck` — `tsc --noEmit` (frontend + server).
 - `npm test` — Vitest single-run for the frontend.
-- `npm run test:server` — Vitest single-run for the server (parallel, excludes the 6 hot files routed to `test:server-slow`).
-- `npm run test:server-slow` — Vitest single-run for 6 timeout-prone server test files (analyzer/gemini + 5 routes test files), pinned to one fork via `server/vitest.config.slow.ts`. Runs in pre-push `verify` after `test:server`; not in `verify:fast` pre-commit. See `docs/features/archive/45-vitest-pool-tuning.md` for the rationale.
+- `npm run test:server` — Vitest single-run for the server (parallel, excludes the 10 hot files routed to `test:server-slow`).
+- `npm run test:server-slow` — Vitest single-run for 10 timeout-prone server test files (analyzer/gemini, a parsers PDF test, and routes tests), pinned to one fork via `server/vitest.config.slow.ts`. Runs in the cloud `verify.yml` battery and the full local `npm run verify`, not in pre-push `verify:fast:branch` or `verify:fast` pre-commit. See `docs/features/archive/45-vitest-pool-tuning.md` for the rationale.
 - `npm run test:scripts` — Pester 5 single-run for `scripts/lib/` PowerShell helpers
   (log rotation/pruning). Requires Pester >= 5.0; install once with
   `Install-Module -Name Pester -Scope CurrentUser -Force -SkipPublisherCheck`.
@@ -138,12 +177,12 @@ Design rationale:
   Cross-engine sanity needs `GOLDEN_COQUI=1` / `GOLDEN_QWEN_VOICE=<id>`.
 - `npm run test:e2e` — Playwright (chromium) against Vite in mock mode on port 5174.
   Requires one-time `npx playwright install chromium`. Excludes the visual baselines (run via `test:e2e:visual` separately). See `docs/features/archive/37-e2e-playwright.md`.
-- `npm run test:e2e:visual` — Playwright visual-snapshot specs at `e2e/responsive/visual.spec.ts`, chromium-only, `--workers=1` so per-snapshot Windows font-hinting drift can't race against the parallel `test:e2e` battery. Baselines are per-platform (`e2e/{linux,win32}/**`). Lands in pre-push `verify` AND label-gated PR CI (`verify.yml`, Ubuntu → `e2e/linux` baselines), so visual regressions surface at PR time rather than only at release.
+- `npm run test:e2e:visual` — Playwright visual-snapshot specs at `e2e/responsive/visual.spec.ts`, chromium-only, `--workers=1` so per-snapshot Windows font-hinting drift can't race against the parallel `test:e2e` battery. Baselines are per-platform (`e2e/{linux,win32}/**`). Runs in the cloud `verify.yml` PR battery (Ubuntu → `e2e/linux` baselines) and the full local `npm run verify`, not in pre-push `verify:fast:branch`, so visual regressions still surface at PR time rather than only at release.
 - `npm run test:fast` — frontend + server only (matches the pre-commit hook).
 - `npm run test:all` — frontend + server + server-slow + PowerShell-scripts + sidecar tests (no e2e).
 - `npm run verify` — full battery: typecheck + all tests + e2e + build. No longer the pre-push default (see "Commit gate") — run manually when you want the full local battery (e.g. before a release cut).
 - `npm run verify:quick` — all tests (no e2e, no typecheck, no build) — alias for `test:all`.
-- `npm run verify:fast` — fast tests only (alias for `test:fast`) — pre-commit gate.
+- `npm run verify:fast` — fast tests only (alias for `test:fast`); a manual full-fast run. NOTE: pre-commit actually gates on `verify:fast:scoped` (the scope-filtered variant), not this — see "Commit gate".
 - `npm run verify:fast:branch` — lint + typecheck + config:check + test:hooks + test + test:server + build, each scope-gated to whether the current branch's diff (vs local `main`) touches its inputs, plus `test:sidecar` scope-gated to `server/tts-sidecar/**`. This is the new pre-push default (see "Commit gate") — the fast, branch-scoped smoke check; cloud `verify.yml` is now the actual enforcement gate for everything else.
 - `npm run build` — production build into `dist/`.
 - `npm run apk:companion` — build the Android companion APK and drop it at
@@ -177,13 +216,14 @@ Design rationale:
 - `src/main.tsx` — entry; mounts `<App/>` inside `<Provider>`.
 - `src/App.tsx` — root component; selects off the discriminated-union `ui.stage`
   and renders the matching view + any active modals.
-- `src/lib/` — `icons.tsx`, `time.ts`, `colors.ts`, `router.ts`, `api.ts`,
-  `types.ts`, generated `api-types.ts`.
+- `src/lib/` — utilities and the API layer (~70 files), e.g. `icons.tsx`,
+  `time.ts`, `colors.ts`, `router.ts`, `api.ts`, `types.ts`, generated
+  `api-types.ts`.
 - `src/data/` — design fixtures (characters, chapters, voices, books, etc.).
-- `src/store/` — RTK slices (`ui`, `cast`, `chapters`, `revisions`, `manuscript`, `book-meta`, `notifications`) + `broadcast-middleware.ts` (cross-tab `BroadcastChannel` sync since plan 63)
+- `src/store/` — ~25 RTK slices + middleware, e.g. `ui`, `cast`, `chapters`, `revisions`, `manuscript`, `book-meta`, `notifications`, `voices`, `generation-stream`, … plus `broadcast-middleware.ts` (cross-tab `BroadcastChannel` sync since plan 63)
   - `index.ts` (configureStore, typed `useAppDispatch`/`useAppSelector`, router
     install).
-- `src/components/`, `src/modals/`, `src/views/` — UI. Since plan 60, `src/views/listen.tsx` is a thin orchestrator (~319 lines) over three region sub-components under `src/components/listen/` — `listen-header.tsx` (cover + title + book-meta + Notes card), `listen-player-region.tsx` (markers + chapter list + Share-clip button), `listen-download-section.tsx` (download tiles + export queue). New listen-view features should land in the relevant sub-component, not the orchestrator.
+- `src/components/`, `src/modals/`, `src/views/` — UI. Since plan 60, `src/views/listen.tsx` is a thin orchestrator (~440 lines) over three region sub-components under `src/components/listen/` — `listen-header.tsx` (cover + title + book-meta + Notes card), `listen-player-region.tsx` (markers + chapter list + Share-clip button), `listen-download-section.tsx` (download tiles + export queue). New listen-view features should land in the relevant sub-component, not the orchestrator.
 - `src/mocks/canned-data.ts` + `src/mocks/manuscripts/` — mock API payloads.
 - `openapi.yaml` (root) — **API contract**, source of truth for backend shapes.
 
@@ -232,8 +272,10 @@ Harnesses (five tiers):
 - PowerShell helpers (`scripts/lib/`): Pester 5 tests in `scripts/tests/`, invoked via `scripts/tests/run.ps1` or `npm run test:scripts`.
 - **E2E (`e2e/`)**: Playwright + chromium against Vite in mock mode on port 5174,
   invoked via `npm run test:e2e`. Browser-level golden paths + on-ramp for
-  visual regression (`toHaveScreenshot()`). See `docs/features/37-e2e-playwright.md`.
-- Top-level `npm run test:all` runs the four unit/integration harnesses.
+  visual regression (`toHaveScreenshot()`). See `docs/features/archive/37-e2e-playwright.md`.
+- Top-level `npm run test:all` runs the frontend, server (incl. server-slow),
+  PowerShell-scripts, and sidecar harnesses, plus `test:hooks` and the
+  `test:pinokio` stub.
   `npm run verify` adds typecheck + e2e + build on top (no longer the
   pre-push default — see "Commit gate" — but still the full local battery
   when you want to run it).
@@ -340,7 +382,7 @@ The app drives on phone + tablet over LAN HTTPS (plan 81 archive: `docs/features
 
 **Automated regression net:**
 
-- `npm run test:e2e` (pre-push gate, ~90s): `playwright test --project=chromium`. Runs every spec + the chromium project of the responsive specs (`e2e/responsive/*.spec.ts`).
+- `npm run test:e2e` (cloud `verify.yml` gate, ~90s): `playwright test --project=chromium`. Runs every spec + the chromium project of the responsive specs (`e2e/responsive/*.spec.ts`).
 - `npm run test:e2e:mobile` (opt-in, ~10-15min): `playwright test --project=mobile-chrome --project=tablet-chrome`. Runs only `e2e/responsive/*.spec.ts` at phone (Pixel 7) + tablet (iPad Pro 11) viewports.
 - `npm run test:e2e:all` (opt-in, ~17min): everything across all 3 projects.
 
@@ -352,13 +394,14 @@ Adding a new view? Append a case to `e2e/responsive/coverage.spec.ts` — it aut
   _Don't confuse "default generation engine" with "eagerly-resident model":_
   **Qwen is the default/main generation engine** (the hot path a book render
   uses); **Kokoro is the always-available fallback** that happens to be the
-  one *eagerly resident* (it's cheap — ~1 GB), gated by the `autoPreloadKokoro`
-  setting (`server/src/config/registry.ts:382` — "Turn off if Qwen is your main
+  one *eagerly resident* (it's cheap — ~1 GB), gated by the `PRELOAD_KOKORO`
+  setting (`server/src/config/registry.ts:553`, registry key `tts.preload.kokoro` — "Turn off if Qwen is your main
   engine"). Resident ≠ default-for-generation.
   - **Kokoro v1 (eagerly-resident fallback, new in 2026-05)**: eagerly loaded at sidecar
     startup, ~1 s cold load, ~1 GB VRAM. Permanently resident alongside
     the analyzer Ollama on an 8 GB GPU. NO Load/Stop pill — it's just
-    always available once `scripts/install-kokoro.ps1` has dropped the
+    always available once `server/tts-sidecar/scripts/install-kokoro.ps1` (or its
+    cross-platform `install-kokoro.mjs`/`.sh` wrappers) has dropped the
     weights into `server/tts-sidecar/voices/kokoro/`. Voice catalog
     filtered to English-only (28 voices: `af_*`, `am_*`, `bf_*`, `bm_*`).
   - **Coqui XTTS v2 (alternate)**: button-driven via `ModelControlPill`
@@ -368,7 +411,7 @@ Adding a new view? Append a case to `e2e/responsive/coverage.spec.ts` — it aut
     "TTS / Analyzer unloaded to free VRAM" banner). Endpoints:
     `POST /api/sidecar/{load,unload}` (60 s / 2 s budgets),
     `POST /api/ollama/{load,unload}` (uses Ollama's `keep_alive` idiom,
-    see `server/src/analyzer/ollama.ts:92` for the equivalent in-band
+    see `server/src/analyzer/ollama.ts:179` (`keepAliveFor`) for the equivalent in-band
     evict on real chat calls).
   - **Qwen has TWO models with split lifecycles** (`QwenEngine`,
     `server/tts-sidecar/main.py`): the **Base 0.6B** synth model is the
@@ -451,7 +494,7 @@ each step skips with `[cached]` when its input hash matches the last
 green run. Pass `npm run verify -- --no-cache` to force a full re-run.
 
 `npm run verify` also prepends `lint` (ESLint + Prettier via
-`eslint-config-prettier`) and includes `test:a11y` (axe-core on the four
+`eslint-config-prettier`) and includes `test:a11y` (axe-core on the six
 core views) — see [docs/features/archive/46-lint-format-a11y.md](docs/features/archive/46-lint-format-a11y.md)
 for the rulesets, the autofix-baseline shape, and the rationale for each
 relaxed rule.
@@ -491,7 +534,7 @@ docs-only diff, so the job just does env setup and reports green (see
 [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md)
 for why `paths-ignore` was deliberately removed rather than kept).
 See [docs/features/215-ci-label-gated-verify.md](docs/features/215-ci-label-gated-verify.md)
-and [103](docs/features/103-ci-cost-reduction.md) for the superseded opt-in
+and [103](docs/features/archive/103-ci-cost-reduction.md) for the superseded opt-in
 design's history/rationale, and
 [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md)
 for the current design.
@@ -591,7 +634,10 @@ feat/server-foo` and tell the agent in its prompt to check it out as its
 Plan agents (`subagent_type: "Plan"`) design strategies but don't write code,
 so they don't need their own branch. But the implementation work that follows
 a plan does — when you act on a plan, step 1 is cutting the branch named after
-the plan number (e.g. `feat/frontend-plan-38`).
+the plan number (e.g. `feat/frontend-plan-38`). This is the phase-1→phase-2
+boundary of the [Execution model](#execution-model-default-for-all-non-trivial-work):
+the design thread ends at the ticket + handover-brief comment, and cutting the
+branch is the implementation thread's first act.
 
 Hooks activate automatically after `npm install` via the `prepare` script
 (husky v9.1 — sets `core.hooksPath` to `.husky/_`, the dir holding the
@@ -659,6 +705,9 @@ before the next one begins.
 
 **Three checkpoints get a `/compact` suggestion**, left to the user to
 accept: spec approved (end of `brainstorming`), plan approved (end of
-`writing-plans`), and PR merged/shipped. There is no tool to trigger
-compaction directly — this is a suggestion at a good moment, not a
-state-preservation mechanism.
+`writing-plans`), and PR merged/shipped. These map onto the three phases of the
+[Execution model](#execution-model-default-for-all-non-trivial-work) — the
+spec- and plan-approved checkpoints both sit inside its design thread, before
+the handover to implementation. There is no tool to trigger compaction
+directly — this is a suggestion at a good moment, not a state-preservation
+mechanism.

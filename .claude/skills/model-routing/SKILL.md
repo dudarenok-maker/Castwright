@@ -81,7 +81,8 @@ for subagent dispatch above.
 
 ## Mandatory independent review (PRs)
 
-- **Sequence**: finalize implementation → local `npm run verify` → `gh pr
+- **Sequence**: finalize implementation → local `npm run verify:fast:branch`
+  (cloud `verify.yml` is the enforcing gate) → `gh pr
   create` → work through `CLAUDE.md`'s before-shipping checklist item by
   item (each done or explicitly marked not-applicable), committing and
   pushing along the way → once every applicable item is addressed and
