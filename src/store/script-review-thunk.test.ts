@@ -3,15 +3,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../lib/api', () => ({
   api: {
     reviewScript: vi.fn(),
+    getScriptReviewState: vi.fn(),
+    discardScriptReview: vi.fn(),
+    resolveScriptReviewOps: vi.fn(),
+    patchScriptReviewSelection: vi.fn(),
   },
-}));
-vi.mock('../lib/script-review-apply', () => ({
-  planApply: () => ({ appliable: [], unappliable: [] }),
 }));
 
 import { api } from '../lib/api';
 import type { ReviewScriptOpts } from '../lib/api';
-import { runReviewScript } from './script-review-thunk';
+import { runReviewScript, hydrateScriptReview } from './script-review-thunk';
 import { scriptReviewActions } from './script-review-slice';
 
 describe('runReviewScript', () => {
@@ -75,5 +76,62 @@ describe('runReviewScript', () => {
       totalChapters: 3,
       estRemainingMs: 20_000,
     });
+  });
+});
+
+function makeFakeStore(initial: { manuscriptId: string | null; characters: Array<{ id: string }>; sentences: unknown[] }) {
+  let state = {
+    manuscript: { manuscriptId: initial.manuscriptId, sentences: initial.sentences },
+    cast: { characters: initial.characters },
+  };
+  const listeners: Array<() => void> = [];
+  return {
+    getState: () => state as never,
+    subscribe: (fn: () => void) => { listeners.push(fn); return () => {}; },
+    setManuscriptReady: (manuscriptId: string, sentences: unknown[], characters: Array<{ id: string }>) => {
+      state = { manuscript: { manuscriptId, sentences }, cast: { characters } };
+      listeners.forEach((l) => l());
+    },
+  };
+}
+
+describe('hydrateScriptReview', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('dispatches hydrateBucket from a ledger-only state response, waiting for manuscript+cast readiness first', async () => {
+    const dispatch = vi.fn();
+    const fakeStore = makeFakeStore({ manuscriptId: null, characters: [], sentences: [] });
+    vi.mocked(api.getScriptReviewState).mockResolvedValue({
+      kind: 'ledger',
+      entries: { '1': { manuscriptId: 'ms-1', version: 5, ops: [{ id: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }], selected: { '1:1:strip_tag': false }, completedAt: '2026-01-01' } },
+    });
+
+    const promise = hydrateScriptReview('book-1', { dispatch, getState: fakeStore.getState, subscribe: fakeStore.subscribe });
+    // Not resolved yet — manuscript/cast aren't ready.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(dispatch).not.toHaveBeenCalled();
+
+    fakeStore.setManuscriptReady('ms-1', [{ id: 1, chapterId: 1, text: 'Hi tag', characterId: 'c1' }], [{ id: 'c1' }]);
+    await promise;
+
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.hydrateBucket(
+        expect.objectContaining({
+          bookId: 'book-1',
+          manuscriptId: 'ms-1',
+          versionByChapter: { 1: 5 },
+          selected: expect.objectContaining({ '1:1:strip_tag': false }),
+        }),
+      ),
+    );
+  });
+
+  it('resolves immediately without dispatching when the ledger has no entries', async () => {
+    const dispatch = vi.fn();
+    const fakeStore = makeFakeStore({ manuscriptId: 'ms-1', characters: [{ id: 'c1' }], sentences: [] });
+    vi.mocked(api.getScriptReviewState).mockResolvedValue({ kind: 'ledger', entries: {} });
+
+    await hydrateScriptReview('book-1', { dispatch, getState: fakeStore.getState, subscribe: fakeStore.subscribe });
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });

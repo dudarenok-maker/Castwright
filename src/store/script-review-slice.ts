@@ -88,6 +88,27 @@ export const scriptReviewSlice = createSlice({
       s.byBook[bookId] = { ops, unappliable, selected, manuscriptId, versionByChapter, visible: true };
     },
 
+    /** Hydrate a bucket from the persisted ledger (Task 8). Unlike setReview
+        (the live-run-completion path, which computes `selected` fresh from
+        DEFAULT_OFF), the caller here has ALREADY merged the DEFAULT_OFF
+        baseline with the ledger's persisted override map — the ledger only
+        ever stores explicit overrides (design spec §4.2), so there's no
+        recomputation to do inside the reducer. */
+    hydrateBucket: (
+      s,
+      a: PayloadAction<{
+        bookId: string;
+        ops: ReviewOpWithChapter[];
+        unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
+        manuscriptId: string;
+        versionByChapter: Record<number, number>;
+        selected: Record<string, boolean>;
+      }>,
+    ) => {
+      const { bookId, ops, unappliable, manuscriptId, versionByChapter, selected } = a.payload;
+      s.byBook[bookId] = { ops, unappliable, selected, manuscriptId, versionByChapter, visible: true };
+    },
+
     /** Flip the selected state of one op by key. */
     toggleOp: (s, a: PayloadAction<{ bookId: string; key: string }>) => {
       const { bookId, key } = a.payload;

@@ -5,10 +5,10 @@
    Dispatches setActive on entry, updateProgress from each onPhase callback,
    and clear in finally (success and error paths alike). */
 
-import type { AppDispatch } from './index';
+import type { AppDispatch, RootState } from './index';
 import { api } from '../lib/api';
 import { planApply, type ReviewOp } from '../lib/script-review-apply';
-import { scriptReviewActions, type ReviewOpWithChapter } from './script-review-slice';
+import { scriptReviewActions, opKey, type ReviewOpWithChapter } from './script-review-slice';
 import { notificationsActions } from './notifications-slice';
 
 /** Minimal sentence shape required for planApply's index-map (matches Sentence from api-types). */
@@ -98,4 +98,91 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
   } finally {
     dispatch(scriptReviewActions.clear({ bookId }));
   }
+}
+
+const DEFAULT_OFF = new Set(['reattribute', 'flag_nonstory']);
+
+interface ManuscriptCastSnapshot {
+  sentences: ReviewLiveSentence[];
+  characterIds: Set<string>;
+  manuscriptId: string;
+}
+
+function snapshotIfReady(getState: () => RootState): ManuscriptCastSnapshot | null {
+  const state = getState();
+  const manuscriptId = state.manuscript.manuscriptId;
+  const characters = state.cast?.characters;
+  if (!manuscriptId || !characters) return null;
+  return {
+    manuscriptId,
+    characterIds: new Set(characters.map((c) => c.id)),
+    sentences: state.manuscript.sentences.map((s) => ({
+      id: s.id,
+      chapterId: s.chapterId,
+      text: s.text,
+      characterId: s.characterId,
+      instruct: s.instruct,
+      vocalization: s.vocalization,
+    })),
+  };
+}
+
+/** Resolves once the manuscript + cast for the CURRENT book are loaded.
+    Guards against the false-zero-badge bug: hydrating before either is
+    ready would make planApply mark every op unappliable (design spec §4.3). */
+function waitForManuscriptAndCast(
+  getState: () => RootState,
+  subscribe: (listener: () => void) => () => void,
+): Promise<ManuscriptCastSnapshot> {
+  return new Promise((resolve) => {
+    const immediate = snapshotIfReady(getState);
+    if (immediate) {
+      resolve(immediate);
+      return;
+    }
+    const unsubscribe = subscribe(() => {
+      const snapshot = snapshotIfReady(getState);
+      if (snapshot) {
+        unsubscribe();
+        resolve(snapshot);
+      }
+    });
+  });
+}
+
+/** Reconciliation entry point — called on mount (Task 10) to hydrate a
+    book's script-review bucket from the persisted server ledger. */
+export async function hydrateScriptReview(
+  bookId: string,
+  opts: { dispatch: AppDispatch; getState: () => RootState; subscribe: (listener: () => void) => () => void },
+): Promise<void> {
+  const { dispatch, getState, subscribe } = opts;
+  const state = await api.getScriptReviewState(bookId);
+  if (state.kind === 'running') return; // Task 9 handles this branch.
+  const chapterEntries = Object.entries(state.entries);
+  if (chapterEntries.length === 0) return;
+
+  const { sentences, characterIds, manuscriptId } = await waitForManuscriptAndCast(getState, subscribe);
+
+  const allOps: ReviewOpWithChapter[] = [];
+  const versionByChapter: Record<number, number> = {};
+  const persistedSelected: Record<string, boolean> = {};
+  for (const [chapterKey, entry] of chapterEntries) {
+    const chapterId = Number(chapterKey);
+    versionByChapter[chapterId] = entry.version;
+    for (const op of entry.ops as ReviewOp[]) allOps.push({ ...op, chapterId });
+    Object.assign(persistedSelected, entry.selected);
+  }
+
+  const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
+    appliable: ReviewOpWithChapter[];
+    unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
+  };
+  const selected: Record<string, boolean> = {};
+  for (const o of appliable) {
+    const key = opKey(o.chapterId, o.id, o.op);
+    selected[key] = key in persistedSelected ? persistedSelected[key] : !DEFAULT_OFF.has(o.op);
+  }
+
+  dispatch(scriptReviewActions.hydrateBucket({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter, selected }));
 }
