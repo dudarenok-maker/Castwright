@@ -19,7 +19,7 @@ owner: null
 
 ## Architectural impact
 
-- **New seams:** `pinokio/` is a CommonJS island (`pinokio/package.json` `{"type":"commonjs"}`) under the root `"type":"module"` package; testable logic is factored into Node CLI helpers (`resolve-release`, `write-env`) invoked via Pinokio `shell.run` + the `menu` builder, all unit-tested with `node:test` via `scripts/run-pinokio-tests.mjs` (`npm run test:pinokio`, wired into `test:all` + a `verify-cache` step).
+- **New seams:** the root package.json is `"type":"commonjs"` (flipped from `"module"` — see "ESM/CommonJS" below) and `pinokio/` additionally carries its own `pinokio/package.json` `{"type":"commonjs"}` (now redundant with the root, kept as explicit documentation of the CommonJS boundary); testable logic is factored into Node CLI helpers (`resolve-release`, `write-env`) invoked via Pinokio `shell.run` + the `menu` builder, all unit-tested with `node:test` via `scripts/run-pinokio-tests.mjs` (`npm run test:pinokio`, wired into `test:all` + a `verify-cache` step). `eslint.config.js` was renamed to `eslint.config.mjs` (explicit ESM extension, immune to the root type flip) to keep its `import` syntax working.
 - **Invariants preserved:** GPU/overlay selection stays solely in `accelerator-profile.mjs` (the Pinokio script never inspects the GPU); the venv is created by the shared `bootstrap-venv.mjs`; teardown goes through `stop:prod`. No change to `release.yml`, `build-release-zip.mjs` MANIFEST (allowlist already excludes `pinokio/`), `fs-21`, or `launch.mjs` internals.
 - **Reversibility:** the entire surface is additive (`pinokio/` + helper tests + docs); deleting `pinokio/` and the `test:pinokio` wiring fully reverts it.
 
@@ -35,7 +35,7 @@ owner: null
 
 - `pinokio/lib/resolve-release.test.js` (6), `write-env.test.js` (2), `menu.test.js` (3) — `npm run test:pinokio` (node:test), in `test:all` + the `verify-cache` `test:pinokio` step (scope `pinokio/**`).
 - The declarative `pinokio/*.js` scripts are not unit-testable (no headless Pinokio); they are validated by the on-box acceptance matrix below.
-- `scripts/tests/pinokio-entry.test.mjs` (`npm run test:hooks`) dynamically imports root `pinokio.js` and asserts it loads without a `ReferenceError` and that `.menu()` delegates correctly — pins the CommonJS-globals-under-`type:module` bug found during #822 acceptance (bug #1458). Root `pinokio.js` must stay genuine ESM (`import`/`export default`); only `pinokio/**` is the CommonJS island.
+- `scripts/tests/pinokio-entry.test.mjs` (`npm run test:hooks`) `require()`s root `pinokio.js` via `createRequire` — the same synchronous `require(filepath)` call Pinokio's own kernel uses (`pinokiocomputer/pinokiod` `kernel/loader.js` `requireJS`) — and asserts it loads without error and that `.menu()` delegates correctly. This pins two bugs in sequence: #1458 (CommonJS globals thrown as a `ReferenceError` under `type:module`) and its follow-up regression, where the #1460 "fix" made `pinokio.js` genuine ESM (`import`/`export default`) on the mistaken assumption that Pinokio dynamically `import()`s scripts — Pinokio's kernel actually `require()`s them, which cannot load an ES module at all. Root `pinokio.js` must stay genuine CommonJS (`require`/`module.exports`), same as every other `pinokio/**` script; the root package.json is `"type":"commonjs"` accordingly.
 
 ## On-box manual acceptance (Windows + macOS)
 

@@ -2,7 +2,7 @@
   "name": "castwright",
   "version": "1.11.0",
   "private": true,
-  "type": "module",
+  "type": "commonjs",
   "engines": {
     "node": ">=20.19.0"
   },

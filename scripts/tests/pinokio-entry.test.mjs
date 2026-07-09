@@ -1,26 +1,33 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 
-// pinokio.js sits at the repo root, so it is loaded under the root
-// package.json's "type": "module". Pinokio's own runtime dynamically
-// imports it in-process (not spawned as a subprocess), so it must be valid
-// ESM — CommonJS globals (require/__dirname/module) throw a ReferenceError
-// at import time under type:module. See docs/features/218-pinokio-installer.md.
-test('pinokio.js loads as ESM without a CommonJS-global ReferenceError', async () => {
-  const mod = await import('../../pinokio.js');
-  assert.equal(typeof mod.default, 'object');
-  assert.equal(mod.default.title, 'Castwright');
-  assert.equal(typeof mod.default.menu, 'function');
+// pinokio.js sits at the repo root and MUST be genuine CommonJS: Pinokio's
+// own kernel loads app scripts via a plain synchronous `require(filepath)`
+// (pinokiocomputer/pinokiod kernel/loader.js `requireJS`) — it cannot load an
+// ES module. This test uses require(), via createRequire, to reproduce
+// Pinokio's actual loading mechanism rather than dynamic import() (which
+// would mask a "genuine ESM under require()" regression). See
+// docs/features/218-pinokio-installer.md.
+const require = createRequire(import.meta.url);
+
+test('pinokio.js require()s cleanly and matches Pinokio\'s expected shape', () => {
+  delete require.cache[require.resolve('../../pinokio.js')];
+  const config = require('../../pinokio.js');
+  assert.equal(typeof config, 'object');
+  assert.equal(config.title, 'Castwright');
+  assert.equal(typeof config.menu, 'function');
 });
 
 test('pinokio.js menu() delegates to buildMenu with derived state', async () => {
-  const mod = await import('../../pinokio.js');
+  delete require.cache[require.resolve('../../pinokio.js')];
+  const config = require('../../pinokio.js');
   const info = {
     exists: () => true,
     running: () => false,
     local: () => null,
   };
-  const items = await mod.default.menu({}, info);
+  const items = await config.menu({}, info);
   assert.deepEqual(
     items.map((i) => i.text),
     ['Start', 'Update', 'Reset'],
