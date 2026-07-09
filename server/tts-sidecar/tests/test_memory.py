@@ -304,7 +304,7 @@ def test_schedule_restart_is_idempotent(monkeypatch):
     wait past the flush delay to confirm it fired once. With nothing in flight
     (srv-17c) the drain returns immediately, so this is also the no-wait path."""
     calls: list[int] = []
-    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_restart_now", lambda *a, **k: calls.append(1))
     monkeypatch.setattr(main, "_restart_scheduled", False)
     monkeypatch.setattr(main, "_restart_pending", False)
     monkeypatch.setattr(main, "_inflight_synth", 0)  # nothing to drain → exits at once
@@ -360,7 +360,7 @@ def test_drain_waits_for_inflight_then_exits(monkeypatch):
     once the counter reaches 0 — so the in-flight chapter finishes on its worker
     instead of failing."""
     calls: list[int] = []
-    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_restart_now", lambda *a, **k: calls.append(1))
     monkeypatch.setattr(main, "_POISON_EXIT_DELAY_MS", 50)
     monkeypatch.setattr(main, "_inflight_synth", 1)  # one chapter mid-synth
 
@@ -379,7 +379,7 @@ def test_drain_grace_expiry_exits_anyway(monkeypatch):
     """If the grace expires with a synth STILL in flight, exit regardless — the
     server's in-worker recovery re-renders that chapter (best-effort drain)."""
     calls: list[int] = []
-    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_restart_now", lambda *a, **k: calls.append(1))
     monkeypatch.setattr(main, "_POISON_EXIT_DELAY_MS", 50)
     monkeypatch.setattr(main, "_inflight_synth", 1)  # never drains
 
@@ -394,7 +394,7 @@ def test_drain_disabled_exits_immediately(monkeypatch):
     """SIDECAR_DRAIN_GRACE_MS=0 → draining disabled: exit at once even with synth
     in flight (the pre-srv-17c immediate-recycle behaviour)."""
     calls: list[int] = []
-    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_restart_now", lambda *a, **k: calls.append(1))
     monkeypatch.setattr(main, "_POISON_EXIT_DELAY_MS", 50)
     monkeypatch.setattr(main, "_inflight_synth", 5)  # would block if draining
 
@@ -447,6 +447,76 @@ def test_load_reports_not_ready_while_recycling(monkeypatch):
     body = r.json()
     assert "recycling" in body["detail"].lower()
     assert body.get("status") != "ready"  # the gate must treat this as keep-waiting
+
+
+def test_design_voice_fast_fails_503_while_recycling(monkeypatch):
+    """Mirrors test_synthesize_fast_fails_503_while_recycling: a design/mint
+    call started AFTER a recycle is already pending must fast-fail 503 too,
+    not race the drain (code-review finding on the meta-tensor self-recycle:
+    design/mint calls were the only synth-shaped endpoints with NO drain-fence
+    coverage at all)."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+    monkeypatch.setattr(main, "_restart_pending", True)
+
+    with TestClient(main.app) as client:
+        r = client.post(
+            "/qwen/design-voice",
+            json={"voiceId": "v1", "instruct": "a calm narrator"},
+        )
+
+    assert r.status_code == 503
+    assert "recycling" in r.json()["detail"].lower()
+
+
+def test_design_voice_counts_as_inflight_synth(monkeypatch):
+    """The drain fence `_schedule_model_load_fault_restart` waits on
+    (`_inflight_synth`) must actually cover a design call — a load fault
+    triggered by a SIBLING request must not sever a design that's already
+    mid-GPU-forward. Asserts the counter is 1 while design_voice runs and back
+    to 0 (in the finally) once it returns, matching /synthesize's contract."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    engine = main.QwenEngine()
+    monkeypatch.setitem(main.ENGINES, "qwen", engine)
+    monkeypatch.setattr(main, "_restart_pending", False)
+
+    observed = {}
+
+    def fake_design_voice(*_a, **_k):
+        observed["inflight_during_call"] = main._inflight_synth
+        return main.SynthResult(pcm=b"\x00\x00", sample_rate=24000)
+
+    monkeypatch.setattr(engine, "design_voice", fake_design_voice)
+
+    with TestClient(main.app) as client:
+        r = client.post(
+            "/qwen/design-voice",
+            json={"voiceId": "v1", "instruct": "a calm narrator"},
+        )
+
+    assert r.status_code == 200
+    assert observed["inflight_during_call"] == 1
+    assert main._inflight_synth == 0  # released in the route's `finally`
+
+
+def test_mint_variant_fast_fails_503_while_recycling(monkeypatch):
+    """Same drain-fence coverage as design-voice, for /qwen/mint-variant."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+    monkeypatch.setattr(main, "_restart_pending", True)
+
+    with TestClient(main.app) as client:
+        r = client.post(
+            "/qwen/mint-variant",
+            json={
+                "baseVoiceId": "v1",
+                "variantVoiceId": "v1-angry",
+                "emotionInstruct": "angrier",
+            },
+        )
+
+    assert r.status_code == 503
+    assert "recycling" in r.json()["detail"].lower()
 
 
 # --- the diagnostic endpoint ---
@@ -667,7 +737,7 @@ def test_recycle_endpoint_schedules_clean_exit(monkeypatch):
     `_restart_pending`, fires exactly ONE exit, and a second POST is a no-op
     (idempotent via `_restart_scheduled`)."""
     calls: list[int] = []
-    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_restart_now", lambda *a, **k: calls.append(1))
     monkeypatch.setattr(main, "_POISON_EXIT_DELAY_MS", 50)
     monkeypatch.setattr(main, "_restart_scheduled", False)
     monkeypatch.setattr(main, "_restart_pending", False)
@@ -690,7 +760,7 @@ def test_recycle_endpoint_drains_inflight_before_exit(monkeypatch):
     """A /recycle while a synth is in flight holds the exit (the drain fence)
     until the in-flight count reaches 0 — the in-flight chapter finishes here."""
     calls: list[int] = []
-    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_restart_now", lambda *a, **k: calls.append(1))
     monkeypatch.setattr(main, "_POISON_EXIT_DELAY_MS", 50)
     monkeypatch.setattr(main, "_restart_scheduled", False)
     monkeypatch.setattr(main, "_restart_pending", False)
