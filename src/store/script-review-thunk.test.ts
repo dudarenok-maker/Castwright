@@ -12,7 +12,7 @@ vi.mock('../lib/api', () => ({
 
 import { api } from '../lib/api';
 import type { ReviewScriptOpts } from '../lib/api';
-import { runReviewScript, hydrateScriptReview } from './script-review-thunk';
+import { runReviewScript, hydrateScriptReview, attachToRunningReview } from './script-review-thunk';
 import { scriptReviewActions } from './script-review-slice';
 
 describe('runReviewScript', () => {
@@ -27,7 +27,7 @@ describe('runReviewScript', () => {
       },
     );
     const dispatch = vi.fn();
-    await runReviewScript('b1', { dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<string>() });
+    await runReviewScript('b1', { dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<string>(), manuscriptId: 'ms-1' });
     const types = dispatch.mock.calls.map((c) => c[0].type);
     expect(types).toContain(scriptReviewActions.setActive.type);
     expect(types).toContain(scriptReviewActions.updateProgress.type); // fired from onPhase
@@ -39,7 +39,7 @@ describe('runReviewScript', () => {
   it('clears in finally even when the API throws', async () => {
     vi.mocked(api.reviewScript).mockRejectedValue(new Error('boom'));
     const dispatch = vi.fn();
-    await runReviewScript('b1', { dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<string>() });
+    await runReviewScript('b1', { dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<string>(), manuscriptId: 'ms-1' });
     const types = dispatch.mock.calls.map((c) => c[0].type);
     expect(types[types.length - 1]).toBe(scriptReviewActions.clear.type);
   });
@@ -64,6 +64,7 @@ describe('runReviewScript', () => {
       model: 'gemma',
       sentences: [],
       characterIds: new Set<string>(),
+      manuscriptId: 'ms-1',
     });
     const progressCalls = dispatch.mock.calls
       .map((c) => c[0])
@@ -193,5 +194,104 @@ describe('hydrateScriptReview', () => {
     expect(opsById.get(1)).toBe(1); // chapter-1 op keeps chapter 1
     expect(opsById.get(2)).toBe(2); // chapter-2 op keeps chapter 2 (not hoisted to a shared/last chapterId)
     expect(opsById.get(3)).toBe(2);
+  });
+});
+
+describe('runReviewScript — version delivery', () => {
+  it('accumulates versionByChapter from onCheckpoint events and stamps them onto the final setReview dispatch', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      opts.onCheckpoint?.({ chapterId: 1, version: 7 });
+      opts.onOps?.({ chapterId: 1, ops: [{ id: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }] });
+      return { reviewedChapters: 1, totalOps: 1 } as never;
+    });
+    await runReviewScript('book-1', {
+      dispatch, wholeBook: false, chapterId: 1, model: 'test-model',
+      sentences: [{ id: 1, chapterId: 1, text: 'Hi tag', characterId: 'c1' }],
+      characterIds: new Set(['c1']),
+      manuscriptId: 'ms-1',
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.setReview(
+        expect.objectContaining({ bookId: 'book-1', manuscriptId: 'ms-1', versionByChapter: { 1: 7 } }),
+      ),
+    );
+  });
+});
+
+describe('attachToRunningReview', () => {
+  it('seeds progress from the replay buffer instead of resetting to 0', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.reviewScript).mockResolvedValue({ reviewedChapters: 0, totalOps: 0 } as never);
+    const runningState = {
+      kind: 'running' as const,
+      chapterId: undefined,
+      replay: {
+        opsEvents: [{ chapterId: 1, ops: [{ id: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }] }],
+        chapterFailedEvents: [],
+        checkpointEvents: [{ chapterId: 1, version: 5 }],
+        lastPhase: { progress: 0.4, label: 'Reviewing script' },
+        result: null,
+        errorEvent: null,
+      },
+    };
+    await attachToRunningReview('book-1', runningState, {
+      dispatch,
+      sentences: [{ id: 1, chapterId: 1, text: 'Hi tag', characterId: 'c1' }],
+      characterIds: new Set(['c1']),
+      manuscriptId: 'ms-1',
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.setActive(expect.objectContaining({ bookId: 'book-1', progress: 0.4 })),
+    );
+    expect(dispatch).not.toHaveBeenCalledWith(scriptReviewActions.setActive(expect.objectContaining({ progress: 0 })));
+  });
+
+  it('dispatches setReview with the ops/versions delivered by the join\'s own replay — not double-counted with the GET /state snapshot', async () => {
+    const dispatch = vi.fn();
+    // Simulates Task 2's attachSubscriber: the join POST replays every
+    // buffered event through the SAME onOps/onCheckpoint callbacks a live
+    // stream would use. attachToRunningReview must rely on THIS, not on
+    // pre-seeding from runningState.replay, or each op would count twice.
+    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      opts.onCheckpoint?.({ chapterId: 1, version: 5 });
+      opts.onOps?.({ chapterId: 1, ops: [{ id: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }] });
+      return { reviewedChapters: 1, totalOps: 1 } as never;
+    });
+    const runningState = {
+      kind: 'running' as const,
+      chapterId: undefined,
+      replay: {
+        // Deliberately non-empty (same op/version the mock below replays —
+        // that's fine, detection doesn't rely on the values differing).
+        // attachToRunningReview's type no longer even exposes these fields
+        // (see RunningReviewState below), so this object only typechecks
+        // because it's assigned to a variable first, not an inline literal
+        // (TS skips excess-property checks on variables) — if
+        // attachToRunningReview regressed to reading opsEvents/
+        // checkpointEvents from BOTH this snapshot and the mock's replay,
+        // the op would be pushed into allOps twice and the ops.length===1
+        // assertion below would fail. The assertion is what catches the
+        // regression, not any value mismatch.
+        opsEvents: [{ chapterId: 1, ops: [{ id: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }] }],
+        chapterFailedEvents: [],
+        checkpointEvents: [{ chapterId: 1, version: 5 }],
+        lastPhase: { progress: 0.9, label: 'Reviewing script' },
+        result: null,
+        errorEvent: null,
+      },
+    };
+    await attachToRunningReview('book-1', runningState, {
+      dispatch,
+      sentences: [{ id: 1, chapterId: 1, text: 'Hi tag', characterId: 'c1' }],
+      characterIds: new Set(['c1']),
+      manuscriptId: 'ms-1',
+    });
+    const setReviewCall = dispatch.mock.calls.find(([action]) => action.type === 'scriptReview/setReview');
+    expect(setReviewCall?.[0].payload).toEqual(
+      expect.objectContaining({ bookId: 'book-1', manuscriptId: 'ms-1', versionByChapter: { 1: 5 } }),
+    );
+    // The critical assertion: exactly ONE copy of the op, not two.
+    expect(setReviewCall?.[0].payload.ops).toHaveLength(1);
   });
 });

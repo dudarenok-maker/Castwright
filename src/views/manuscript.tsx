@@ -131,6 +131,7 @@ export function ManuscriptView({
   const dispatch = useAppDispatch();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bookId = useAppSelector((s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null);
+  const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
   const [reviewLoading, setReviewLoading] = useState(false);
   const analysisBusy = useAppSelector((s) => (bookId ? selectAnalysisBusyForBook(s, bookId) : false));
   const reviewSubstage = useAppSelector((s) =>
@@ -771,6 +772,7 @@ export function ManuscriptView({
           vocalization: s.vocalization,
         })),
         characterIds: new Set(characters.map((c) => c.id)),
+        manuscriptId: manuscriptId ?? '',
       });
     } finally {
       setReviewLoading(false);

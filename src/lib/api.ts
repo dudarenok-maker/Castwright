@@ -3115,6 +3115,7 @@ export interface ReviewScriptOpts {
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onOps?: (e: { chapterId: number; ops: import('./script-review-apply').ReviewOp[] }) => void;
   onChapterFailed?: (e: { chapterId: number; message: string }) => void;
+  onCheckpoint?: (ev: { chapterId: number; version: number }) => void;
 }
 export interface ReviewScriptResult {
   reviewedChapters: number;
@@ -3132,7 +3133,7 @@ export class ReviewScriptError extends Error {
 
 async function realReviewScript(
   bookId: string,
-  { chapterId, model, signal, onPhase, onThrottle, onOps, onChapterFailed }: ReviewScriptOpts = {},
+  { chapterId, model, signal, onPhase, onThrottle, onOps, onChapterFailed, onCheckpoint }: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult> {
   const body: Record<string, unknown> = {};
   if (chapterId !== undefined) body.chapterId = chapterId;
@@ -3180,6 +3181,11 @@ async function realReviewScript(
           onChapterFailed?.({ chapterId: p.chapterId, message: typeof p.message === 'string' ? p.message : 'Chapter review failed.' });
         }
         break;
+      case 'checkpoint':
+        if (typeof p.chapterId === 'number' && typeof p.version === 'number') {
+          onCheckpoint?.({ chapterId: p.chapterId, version: p.version });
+        }
+        break;
       case 'result':
         result = {
           reviewedChapters: typeof p.reviewedChapters === 'number' ? p.reviewedChapters : 0,
@@ -3217,7 +3223,7 @@ async function realReviewScript(
 
 async function mockReviewScript(
   _bookId: string,
-  { onOps, onPhase, onChapterFailed: _onChapterFailed }: ReviewScriptOpts = {},
+  { onOps, onPhase, onChapterFailed: _onChapterFailed, onCheckpoint }: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult> {
   await wait(60);
   onPhase?.({ progress: 0.25, label: 'Reviewing script', chapterId: 1, chapterIndex: 1, totalChapters: 3 });
@@ -3245,6 +3251,7 @@ async function mockReviewScript(
     chapterId: 3,
     ops: [{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' }],
   });
+  onCheckpoint?.({ chapterId: 3, version: 1 });
   /* fs-58 validate_instruct (origin/main): strip_tag + validate_instruct on
      chapter 1, sentence id:1. */
   onOps?.({
@@ -3259,6 +3266,7 @@ async function mockReviewScript(
       },
     ],
   });
+  onCheckpoint?.({ chapterId: 1, version: 1 });
   /* fs-58 Unit B: off-roster reattribute on sentence id:3 (dialogue line),
      and flag_nonstory on sentence id:15 (the "p. 42" artefact line).
      Both default OFF in the diff modal (script-review-slice DEFAULT_OFF set). */
@@ -3278,6 +3286,7 @@ async function mockReviewScript(
       },
     ],
   });
+  onCheckpoint?.({ chapterId: 3, version: 2 });
   return { reviewedChapters: 1, totalOps: 5 };
 }
 
