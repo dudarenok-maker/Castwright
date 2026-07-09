@@ -277,6 +277,25 @@ describe('escalateFlaggedWindows', () => {
     expect(budget.remainingWindows).toBe(4); // one window queried, one decrement
   });
 
+  it('a duplicated `line` in one reply is applied once, not double-counted', async () => {
+    const { body, paras, sentences, flags } = buildFixture();
+    const analyzer = fakeAnalyzer(() => ({
+      assignments: [
+        { line: 4, characterId: 'anton' },
+        { line: 4, characterId: 'olga' }, // duplicate line entry -> must be a no-op
+        { line: 5, characterId: 'olga' },
+      ],
+    }));
+
+    const outcome = await escalateFlaggedWindows({ ...baseOpts(), sentences, flags, paras, body, analyzer });
+
+    expect(outcome.applied).toBe(2); // 2 distinct lines, not 3 assignment entries
+    // first-seen assignment for line 4 wins; the duplicate never re-applies
+    expect(sentences.find((s) => s.id === 4)).toMatchObject({ characterId: 'anton', confidence: 0.8 });
+    expect(sentences.find((s) => s.id === 5)).toMatchObject({ characterId: 'olga', confidence: 0.8 });
+    expect(flags).toEqual([]);
+  });
+
   it('no flags -> returns a zero outcome without calling the analyzer', async () => {
     const { body, paras, sentences } = buildFixture();
     const runFn = vi.fn();

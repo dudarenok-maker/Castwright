@@ -206,9 +206,13 @@ export async function escalateFlaggedWindows(opts: EscalateFlaggedWindowsOpts): 
     );
     if (!response) continue; // empty/blocked/unparseable — skip, flags stay intact
 
+    // A model that returns the same `line` twice in one reply must only
+    // count/apply once — the second occurrence is a no-op, not a re-count.
+    const appliedIdx = new Set<number>();
     for (const assignment of response.assignments) {
       const idx = memberIdx.find((i) => opts.sentences[i].id === assignment.line);
       if (idx === undefined) continue; // not one of this window's marked lines
+      if (appliedIdx.has(idx)) continue; // duplicate line entry — no-op
       if (!opts.rosterIds.has(assignment.characterId)) continue;
 
       const as = alignment.aligned[idx];
@@ -219,6 +223,7 @@ export async function escalateFlaggedWindows(opts: EscalateFlaggedWindowsOpts): 
       opts.sentences[idx].confidence = ESCALATED_CONFIDENCE;
       const flagPos = opts.flags.findIndex((f) => f.index === idx);
       if (flagPos !== -1) opts.flags.splice(flagPos, 1);
+      appliedIdx.add(idx);
       outcome.applied += 1;
     }
   }
