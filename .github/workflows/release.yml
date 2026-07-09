@@ -398,6 +398,36 @@ jobs:
             "companion-apk/castwright-${{ github.ref_name }}.aab" \
             "companion-apk/castwright-${{ github.ref_name }}.aab.sha256" --clobber
 
+  # Ties the release-cut recipe's "clear the board's Done lane" step
+  # (CONTRIBUTING.md Recipe step 8) to the pipeline itself. Previously this was
+  # a manual `node scripts/clear-done-project-items.mjs --apply` a human had to
+  # remember to run after every tag — it was forgotten for v1.11.0 (63 Done
+  # items piled up unarchived). Running it here, gated on `publish`, matches
+  # the recipe's own ordering ("after the tag is pushed and the release is
+  # published") without adding new *scheduled* automation (spec §E in
+  # docs/superpowers/specs/2026-07-05-github-issues-kanban-design.md still
+  # holds — this fires once per release tag, not on a cron).
+  clear-done-board-items:
+    name: Archive Done board items
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Archive Done items
+        # The default GITHUB_TOKEN can't write a user-owned Projects v2 board
+        # (same constraint as add-to-project.yml) — reuse ADD_TO_PROJECT_PAT.
+        env:
+          GH_TOKEN: ${{ secrets.ADD_TO_PROJECT_PAT }}
+        run: node scripts/clear-done-project-items.mjs --apply
+
   # NOTE: the per-release iOS build (unsigned, "app-12 prep") was REMOVED to save
   # ~80-120 macOS-billed minutes/tag (macOS is 10×). It produced an un-installable
   # unsigned archive that nothing consumes (no iOS distribution exists yet), and

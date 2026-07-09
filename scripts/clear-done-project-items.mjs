@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 // Release-cut tool (ops-25 rollout step 9): archive every board item whose
-// Status is Done. Run manually as a step in the release-cut recipe
-// (CONTRIBUTING.md "Release notes" Recipe) — no scheduled automation (spec §E).
+// Status is Done. Run automatically by .github/workflows/release.yml's
+// `clear-done-board-items` job after every tag's `publish` job succeeds
+// (CONTRIBUTING.md "Release notes" Recipe step 8) — no *scheduled*
+// automation beyond that (spec §E). Safe to run manually too, e.g. if a
+// release published via a path that bypassed the workflow.
 //
 // Usage:
 //   node scripts/clear-done-project-items.mjs           (dry-run — lists Done items)
