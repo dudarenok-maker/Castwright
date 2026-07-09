@@ -541,3 +541,18 @@ describe('reparse handler — legacy text-masquerading-as-binary fallback', () =
     expect(res.body.chapterTitles).toEqual(['Chapter One', 'Chapter Two']);
   });
 });
+
+describe('GET handler — tolerates state.json without analysisProvenance (srv-59 Task 11 back-compat)', () => {
+  /* analysisProvenance is additive/optional (server/src/workspace/scan.ts) —
+     written only by the analysis routes' post-completion persist sites, and
+     the default beforeEach state.json above never includes it. Every other
+     case in this file already exercises GET/POST against that same
+     provenance-less state.json without incident; this test just names the
+     contract explicitly so a future reader that starts requiring the field
+     fails loudly here instead of silently. */
+  it('GET /:bookId/state succeeds and omits analysisProvenance when state.json predates it', async () => {
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.analysisProvenance).toBeUndefined();
+  });
+});

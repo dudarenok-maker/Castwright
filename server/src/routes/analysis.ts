@@ -104,7 +104,7 @@ import {
   applyRewriteToPriorCast,
 } from '../store/merge-analysis-cast.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
-import type { BookStateJson } from '../workspace/scan.js';
+import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, bookStateLanguage } from '../workspace/scan.js';
 import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy } from '../tts/design-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
@@ -137,7 +137,7 @@ import { resolveWindows, type WindowRoster } from '../analyzer/dialogue-structur
 import { alignSentences } from '../analyzer/dialogue-structure/aligner.js';
 import { crossExamine } from '../analyzer/dialogue-structure/cross-examine.js';
 import { escalateFlaggedWindows } from '../analyzer/dialogue-structure/escalation.js';
-import type { LanguageConventions } from '../analyzer/dialogue-structure/types.js';
+import type { EngineReport, LanguageConventions } from '../analyzer/dialogue-structure/types.js';
 import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import { GeminiAnalyzer } from '../analyzer/gemini.js';
 
@@ -1697,6 +1697,51 @@ export async function attributeChapterStage2(opts: {
     result.sentences = applyNarratorDefault(result.sentences);
   }
   return result;
+}
+
+/** srv-59 Task 11 — roll up every chapter's `structureReport` (set only when
+    the dialogue-structure engine actually ran for that chapter — see
+    `attributeChapterStage2` above) into the single `report` slice persisted
+    on `BookStateJson.analysisProvenance`. Returns undefined when `reports` is
+    empty — the engine was off (or every chapter in this pass came back from
+    the stage-2 cache, which doesn't carry a stored EngineReport) — so the
+    caller omits `report` entirely rather than persisting a zeroed-out one.
+
+    `confirmed`/`corrected`/`flagged`/`escalated`/`escalationAccepted` are
+    plain sums. `alignedPct` is a per-chapter-sentence-count-weighted mean
+    (weight = confirmed+corrected+flagged+lumped, i.e. every sentence
+    crossExamine classified for that chapter) rather than a flat average of
+    percentages, so one huge chapter doesn't get diluted to the same weight
+    as a two-sentence one. */
+export function aggregateStructureReports(
+  reports: EngineReport[],
+): AnalysisProvenanceReport | undefined {
+  if (reports.length === 0) return undefined;
+  let confirmed = 0;
+  let corrected = 0;
+  let flagged = 0;
+  let escalated = 0;
+  let escalationAccepted = 0;
+  let weightedAlignedSum = 0;
+  let totalWeight = 0;
+  for (const r of reports) {
+    confirmed += r.confirmed;
+    corrected += r.corrected;
+    flagged += r.flagged;
+    escalated += r.escalated;
+    escalationAccepted += r.escalationAccepted;
+    const weight = r.confirmed + r.corrected + r.flagged + r.lumped;
+    weightedAlignedSum += r.alignedPct * weight;
+    totalWeight += weight;
+  }
+  return {
+    alignedPct: totalWeight > 0 ? weightedAlignedSum / totalWeight : 0,
+    confirmed,
+    corrected,
+    flagged,
+    escalated,
+    escalationAccepted,
+  };
 }
 
 /* ── Sticky analysis: in-flight job map + multi-subscriber broadcast ────
@@ -3485,6 +3530,14 @@ export async function runMainAnalyzerJob(
        narrative order at the end regardless of which chapter finishes first
        under concurrency. */
     const sentencesByChapter = new Map<number, SentenceOutput[]>();
+    /* srv-59 Task 11 — every freshly-attributed chapter's structureReport
+       (attributeChapterStage2 only sets one when the engine ran — see its
+       comment). A chapter replayed from the stage-2 cache above contributes
+       nothing (the cache doesn't store EngineReport), so a resumed run's
+       aggregate only reflects the chapters that actually ran this pass.
+       Rolled up into `analysisProvenance.report` at the persist site below
+       via aggregateStructureReports. */
+    const structureReports: EngineReport[] = [];
     const completedSet = new Set<number>();
 
     /* Replay cached chapters synchronously up front. Cheap, deterministic
@@ -3820,6 +3873,7 @@ export async function runMainAnalyzerJob(
         sentences: stage2Sentences,
         coverage: coverageVerdict,
         chunkCount: stage2ChunkCount,
+        structureReport: stage2StructureReport,
       } = await attributeChapterStage2({
         analyzer: phase1Analyzer,
         manuscriptId,
@@ -3894,6 +3948,7 @@ export async function runMainAnalyzerJob(
       }
       for (const s of stage2Sentences) s.chapterId = ch.id;
       sentencesByChapter.set(ch.id, stage2Sentences);
+      if (stage2StructureReport) structureReports.push(stage2StructureReport);
       cachedChapters[ch.id] = stage2Sentences;
       cache.chapters = cachedChapters;
       /* Persist this chapter's wall-clock duration so a future resumed run
@@ -4283,6 +4338,17 @@ export async function runMainAnalyzerJob(
                 excluded: prevExcludedById.get(c.id) || undefined,
                 held: prevHeldById.get(c.id) || undefined,
               })),
+              /* srv-59 Task 11 — record which analyzer produced this cast/
+                 sentence set and, when the dialogue-structure engine ran,
+                 the aggregated run report. Additive + schema-tolerant: no
+                 reader may require this block (see BookStateJson). */
+              analysisProvenance: {
+                engine: phase1Selection.engine,
+                model: phase1Selection.model,
+                at: new Date().toISOString(),
+                structureEngineVersion: 1,
+                report: aggregateStructureReports(structureReports),
+              },
               updatedAt: new Date().toISOString(),
             };
             await writeJsonAtomic(statePath, stampStateSchema(next));
@@ -4603,7 +4669,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
    (sticky semantics). Broadcasts every event to job.subscribers and
    tracks replay state via trackForReplay; endJob handles teardown +
    map deregistration on every exit path. */
-async function runSubsetAnalyzerJob(
+export async function runSubsetAnalyzerJob(
   job: AnalysisJob,
   record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
   selection: AnalyzerSelection,
@@ -5010,6 +5076,12 @@ async function runSubsetAnalyzerJob(
       label: PHASES[1].label,
       model: phase1ModelId,
     });
+    /* srv-59 Task 11 — every freshly-attributed chapter's structureReport
+       this subset pass produces, rolled up into `analysisProvenance.report`
+       at the persist site below (mirrors the main route's accumulator).
+       Only chapters actually re-run here (`toRun`) can contribute — a
+       subset retry never touches other chapters' cached sentences. */
+    const subsetStructureReports: EngineReport[] = [];
     for (let idx = 0; idx < toRun.length; idx++) {
       const ch = toRun[idx];
       log(1, `Chapter ${ch.id} — ${ch.title}: attributing sentences via ${phase1AnalyzerLabel}…`);
@@ -5018,8 +5090,11 @@ async function runSubsetAnalyzerJob(
          a bare runStage2Chapter call with no guard and no chunking, so a large
          chapter (The Drowning Bell ch19, 507 sentences) truncated mid-JSON, threw,
          and discarded the whole job — the reported failure. */
-      const { sentences: chapterSentences, chunkCount: subsetChunkCount } =
-        await attributeChapterStage2({
+      const {
+        sentences: chapterSentences,
+        chunkCount: subsetChunkCount,
+        structureReport: subsetStructureReport,
+      } = await attributeChapterStage2({
           analyzer: phase1Analyzer,
           manuscriptId,
           title: record.title,
@@ -5059,6 +5134,7 @@ async function runSubsetAnalyzerJob(
       }
       for (const s of chapterSentences) s.chapterId = ch.id;
       cachedChapters[ch.id] = chapterSentences;
+      if (subsetStructureReport) subsetStructureReports.push(subsetStructureReport);
       cache.chapters = cachedChapters;
       await saveAnalysisCache(manuscriptId, cache);
       /* Roll a partial manuscript-edits.json after each chapter completes, so a
@@ -5296,6 +5372,17 @@ async function runSubsetAnalyzerJob(
                 excluded: prevExcludedById.get(c.id) || undefined,
                 held: prevHeldById.get(c.id) || undefined,
               })),
+              /* srv-59 Task 11 — a subset retry supersedes whatever
+                 provenance the last full run left, so this REWRITES the
+                 block wholesale (fresh `at` + a report recomputed from just
+                 this pass's chapters) rather than merging with `prev`'s. */
+              analysisProvenance: {
+                engine: phase1Selection.engine,
+                model: phase1Selection.model,
+                at: new Date().toISOString(),
+                structureEngineVersion: 1,
+                report: aggregateStructureReports(subsetStructureReports),
+              },
               updatedAt: new Date().toISOString(),
             };
             await writeJsonAtomic(statePath, stampStateSchema(next));
