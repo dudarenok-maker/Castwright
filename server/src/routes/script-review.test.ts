@@ -41,9 +41,10 @@ let priorChapterIdFor: typeof PriorChapterIdFor;
    `selectedEngine` lets a test flip the reported engine to 'local' (so the
    chunker derives a finite, num_ctx-bound budget and a large chapter splits);
    it defaults to 'gemini' so the existing single-call tests are unchanged. */
-const { runReview, engineState } = vi.hoisted(() => ({
+const { runReview, engineState, selectAnalyzerForPhaseMock } = vi.hoisted(() => ({
   runReview: vi.fn(),
   engineState: { engine: 'gemini' as 'gemini' | 'local' },
+  selectAnalyzerForPhaseMock: vi.fn(),
 }));
 
 vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
@@ -58,12 +59,12 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
   };
   return {
     ...actual,
-    selectAnalyzerForPhase: () => ({
+    selectAnalyzerForPhase: selectAnalyzerForPhaseMock.mockImplementation(() => ({
       analyzer: fakeAnalyzer,
       engine: engineState.engine,
       model: 'test-model',
       fallbackModel: null,
-    }),
+    })),
   };
 });
 
@@ -113,6 +114,24 @@ function parseSse(body: string): Array<Record<string, unknown>> {
     .split('\n')
     .filter((l) => l.startsWith('data: '))
     .map((l) => JSON.parse(l.slice('data: '.length)));
+}
+
+/** Fires a POST immediately and returns both the in-flight request (so a
+    caller can `.abort()` it) and a promise that resolves once the response
+    completes. A bare `request(app).post(...).send(...)` assigned to a
+    variable does NOT actually dispatch — supertest/superagent defer the
+    real HTTP send until the request is awaited or `.then()`/`.end()` is
+    invoked — so a "kick off request A, sleep, then send request B" test
+    would otherwise send both around the same tick instead of A first. */
+function firePost(path: string, body: Record<string, unknown>): { req: request.Test; done: Promise<request.Response> } {
+  const req = request(app).post(path).send(body);
+  const done = new Promise<request.Response>((resolve, reject) => {
+    req.end((err, res) => {
+      if (err && !res) reject(err);
+      else resolve(res as request.Response);
+    });
+  });
+  return { req, done };
 }
 
 const SENTENCES = [
@@ -674,5 +693,98 @@ describe('priorChapterIdFor (fs-64)', () => {
   });
   it('handles non-contiguous ids', () => {
     expect(priorChapterIdFor(10, [2, 5, 10, 11], new Set())).toBe(5);
+  });
+});
+
+describe('sticky job registry', () => {
+  it('a second POST for the same chapter joins the running job and is replayed its ops', async () => {
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' },
+    ]);
+    let releaseFirst: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    runReview.mockImplementation(async () => {
+      await gate;
+      return { ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] };
+    });
+
+    const first = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20)); // let the first request register the job
+
+    // A joined SSE response only completes once the job finishes broadcasting
+    // to every subscriber — so it must not be awaited before releaseFirst()
+    // unblocks the gated analyzer call, or both requests deadlock waiting on
+    // each other. Kick the join off, give it time to attach as a subscriber,
+    // THEN release the gate and await both responses together.
+    const second = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20)); // let the second request join as a subscriber
+
+    releaseFirst?.();
+    const [, secondRes] = await Promise.all([first.done, second.done]);
+
+    expect(runReview).toHaveBeenCalledTimes(1); // joined the running job, didn't start a second analyzer call
+    expect(secondRes.text).toContain('"kind":"ops"');
+    expect(secondRes.text).toContain('strip_tag');
+  });
+
+  it('a whole-book POST while a single-chapter job is running for the same book is rejected with 409', async () => {
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
+    ]);
+    let releaseFirst: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    runReview.mockImplementation(async () => { await gate; return { ops: [] }; });
+
+    const first = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const conflict = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    expect(conflict.status).toBe(409);
+
+    releaseFirst?.();
+    await first.done;
+  });
+
+  it('res.on("close") removes only the disconnecting subscriber; the job keeps running and completes', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let resolveReview: ((v: { ops: unknown[] }) => void) | undefined;
+    // Gate only the FIRST (aborted) request's analyzer call. Once the earlier
+    // job has actually finished and cleaned itself out of the job map, the
+    // reconnect below starts a genuinely new job with its own analyzer call —
+    // that one resolves immediately so the reconnect assertion doesn't need
+    // a second manual release.
+    runReview.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveReview = resolve; }),
+    );
+    runReview.mockResolvedValue({ ops: [] });
+
+    const { req, done } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    done.catch(() => {}); // aborting rejects the promise; the test only cares about the server-side effect
+    // Give the job time to actually register and reach the gated analyzer
+    // call BEFORE aborting — an immediate abort() (no delay) can cancel the
+    // request before the server even accepts the connection, so no job (and
+    // no runReview call) is ever created, which isn't the "disconnect mid-run"
+    // scenario this test means to exercise.
+    await new Promise((r) => setTimeout(r, 20));
+    req.abort(); // simulate client disconnect
+    await new Promise((r) => setTimeout(r, 20));
+
+    resolveReview?.({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+
+    // A fresh connection should see the job either already finished or still
+    // running to completion — never aborted by the earlier disconnect.
+    await new Promise((r) => setTimeout(r, 50));
+    const reconnect = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
+    expect(reconnect.status).toBe(200);
+  });
+
+  it('the requested model is threaded through to selectAnalyzerForPhase, not dropped by the detached job runner', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    runReview.mockResolvedValue({ ops: [] });
+    await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1, model: 'gemini-3.5-flash' });
+    expect(selectAnalyzerForPhaseMock).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'phase1', model: 'gemini-3.5-flash' }),
+    );
   });
 });

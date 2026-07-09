@@ -4,9 +4,13 @@
    The route never writes a file: it streams `ops` events and the FRONTEND
    applies them through existing Redux manual-edit reducers.
 
-   Non-sticky by design: a disconnect aborts the in-flight analyzer call.
-   Already-streamed chapters are already applied client-side, so a re-run
-   just fills the remaining chapters.
+   Sticky (fs-58 Task 2): the per-chapter loop runs against a detached
+   `ScriptReviewJob` that outlives any single response — a disconnect only
+   drops that connection's subscriber, it never aborts the run. A second
+   POST for the same book+scope joins the running job and is replayed its
+   events so far; a POST for the other scope (whole-book vs single-chapter)
+   while one is in flight for the same book is rejected with 409, since both
+   scopes would checkpoint into the same per-chapter ledger (Task 3).
 
    Large chapters: a chapter whose prompt exceeds the local model's context
    window is split by `chunkSentencesByBudget` (chapter-chunker.ts) into
@@ -187,12 +191,69 @@ ${JSON.stringify(sentencePayload, null, 2)}
 `;
 }
 
+export interface ScriptReviewSubscriber {
+  send: (payload: unknown) => void;
+  res: Response;
+  keepAlive: NodeJS.Timeout;
+}
+
+export interface ScriptReviewReplayState {
+  opsEvents: Array<{ kind: 'ops'; chapterId: number; ops: unknown[] }>;
+  chapterFailedEvents: Array<{ kind: 'chapter-failed'; chapterId: number; message: string }>;
+  lastPhase: Record<string, unknown> | null;
+  result: { kind: 'result'; done: true; reviewedChapters: number; totalOps: number } | null;
+  errorEvent: Record<string, unknown> | null;
+  /** One entry per chapter checkpointed to the ledger this run (Task 3) —
+      the ONLY channel that tells a live/reattaching client each chapter's
+      ledger `version`, which it must echo back on /resolve and the
+      selection PATCH (design spec §5). Without this, a client that ran or
+      reattached to a review has no way to learn versions at all, and every
+      resolve/PATCH call would silently no-op (Task 9 consumes this). */
+  checkpointEvents: Array<{ kind: 'checkpoint'; chapterId: number; version: number }>;
+}
+
+export interface ScriptReviewJob {
+  controller: AbortController;
+  subscribers: Set<ScriptReviewSubscriber>;
+  bookId: string;
+  /** Set only for a single-chapter run; absent means whole-book. */
+  chapterId?: number;
+  replay: ScriptReviewReplayState;
+}
+
+/* Two separate maps — mirrors analysis.ts's inFlightAnalysisByManuscript /
+   inFlightSubsetByManuscript split (server/src/routes/analysis.ts:1678-1684).
+   A whole-book job and a single-chapter job for the same book must never be
+   mistaken for each other: unlike analysis.ts (which lets main+subset run
+   concurrently because they don't share output), both scopes here would
+   checkpoint into the SAME per-chapter ledger (Task 3), so this route adds a
+   stricter rule analysis.ts doesn't need — see design spec §4.1. */
+const mainScriptReviewJobByBook: Map<string, ScriptReviewJob> = new Map();
+const subsetScriptReviewJobByBook: Map<string, ScriptReviewJob> = new Map();
+
+function broadcast(job: ScriptReviewJob, payload: Record<string, unknown>): void {
+  for (const sub of job.subscribers) sub.send(payload);
+}
+
+function attachSubscriber(job: ScriptReviewJob, sub: ScriptReviewSubscriber): void {
+  job.subscribers.add(sub);
+  const { opsEvents, chapterFailedEvents, checkpointEvents, lastPhase, errorEvent, result } = job.replay;
+  for (const ev of opsEvents) sub.send(ev);
+  for (const ev of chapterFailedEvents) sub.send(ev);
+  for (const ev of checkpointEvents) sub.send(ev);
+  if (lastPhase) sub.send(lastPhase);
+  if (errorEvent) sub.send(errorEvent);
+  if (result) sub.send(result);
+}
+
 scriptReviewRouter.post(
   '/:bookId/script-review',
   async (req: Request, res: Response): Promise<void> => {
     const { bookId } = req.params;
     const requestedChapterId: number | undefined =
       typeof req.body?.chapterId === 'number' ? req.body.chapterId : undefined;
+    const requestedModel: string | undefined =
+      typeof req.body?.model === 'string' ? req.body.model : undefined;
 
     const located = await findBookByBookId(bookId);
     if (!located) {
@@ -205,17 +266,36 @@ scriptReviewRouter.post(
       return;
     }
 
-    const byChapter = await loadPostFoldSentencesByChapter(manuscriptId, located.bookDir);
+    /* Join/conflict rule (design spec §4.1). */
+    const targetMap = requestedChapterId !== undefined ? subsetScriptReviewJobByBook : mainScriptReviewJobByBook;
+    const conflictMap = requestedChapterId !== undefined ? mainScriptReviewJobByBook : subsetScriptReviewJobByBook;
+    const existingConflict = conflictMap.get(bookId);
+    if (existingConflict) {
+      res.status(409).json({
+        error:
+          requestedChapterId !== undefined
+            ? 'A whole-book review is already running for this book.'
+            : 'A single-chapter review is already running for this book.',
+      });
+      return;
+    }
+    const existingSameScope = targetMap.get(bookId);
+    if (existingSameScope && existingSameScope.chapterId === requestedChapterId) {
+      setUpSse(res);
+      const sub = makeSubscriber(res);
+      attachSubscriber(existingSameScope, sub);
+      res.on('close', () => {
+        existingSameScope.subscribers.delete(sub);
+        clearInterval(sub.keepAlive);
+      });
+      return;
+    }
 
+    const byChapter = await loadPostFoldSentencesByChapter(manuscriptId, located.bookDir);
     const allChapterIds = [...byChapter.keys()].sort((a, b) => a - b);
-    /* Chapters the user excluded from narration (front/back-matter). Mirrors the
-       detect-emotions + generation filters, and gates fs-64 neighbour selection. */
     const excludedChapterIds = new Set<number>(
       located.state.chapters.filter((c) => c.excluded).map((c) => c.id),
     );
-
-    /* When chapterId is supplied in the body, limit the pass to that one chapter
-       (honoured even when excluded). Otherwise skip the excluded chapters. */
     let chapterIds = allChapterIds;
     if (requestedChapterId !== undefined) {
       chapterIds = allChapterIds.filter((id) => id === requestedChapterId);
@@ -223,194 +303,175 @@ scriptReviewRouter.post(
       chapterIds = allChapterIds.filter((id) => !excludedChapterIds.has(id));
     }
 
-    /* Load the post-fold cast roster so the prompt carries character names+roles.
-       cast.json is written after the minor-cast fold so it already has folded ids.
-       A missing or empty cast.json falls back to an empty roster — the model
-       will still review the prose even without character context. */
     const castFile = await readJson<CastFile>(castJsonPath(located.bookDir));
     const roster: CastCharacterSlim[] = castFile?.characters ?? [];
 
-    /* SSE setup (mirrors annotate-emotion.ts). */
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders();
-    res.write(':ok\n\n');
-    const keepAlive = setInterval(() => {
-      try {
-        res.write(':ka\n\n');
-      } catch {
-        /* socket gone */
-      }
-    }, 15_000);
-    const send = (payload: unknown): void => {
-      try {
-        res.write(`data: ${JSON.stringify(payload)}\n\n`);
-      } catch {
-        /* dead socket */
-      }
-    };
-
-    const controller = new AbortController();
-    let closed = false;
-    res.on('close', () => {
-      closed = true;
-      controller.abort();
-      clearInterval(keepAlive);
-    });
-
+    setUpSse(res);
     if (byChapter.size === 0) {
-      /* The book carries no attributed sentences at all — it was never
-         analysed (or analysis produced nothing). */
-      send({
-        kind: 'error',
-        code: 'no_attribution',
-        message: 'Run analysis first — there are no attributed sentences to review.',
-      });
-      clearInterval(keepAlive);
+      res.write(
+        `data: ${JSON.stringify({ kind: 'error', code: 'no_attribution', message: 'Run analysis first — there are no attributed sentences to review.' })}\n\n`,
+      );
       res.end();
       return;
     }
     if (chapterIds.length === 0) {
-      /* The book IS analysed, but the requested chapterId matched no chapter
-         with attributed sentences — a distinct case from the unanalysed book. */
-      send({
-        kind: 'error',
-        code: 'no_such_chapter',
-        message: `Chapter ${requestedChapterId} has no attributed sentences to review.`,
-      });
-      clearInterval(keepAlive);
+      res.write(
+        `data: ${JSON.stringify({ kind: 'error', code: 'no_such_chapter', message: `Chapter ${requestedChapterId} has no attributed sentences to review.` })}\n\n`,
+      );
       res.end();
       return;
     }
 
-    const heartbeat = makeThrottledHeartbeat(send, 2000);
-    const selection = selectAnalyzerForPhase({ phase: 'phase1', model: req.body?.model });
+    const job: ScriptReviewJob = {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      bookId,
+      chapterId: requestedChapterId,
+      replay: { opsEvents: [], chapterFailedEvents: [], checkpointEvents: [], lastPhase: null, result: null, errorEvent: null },
+    };
+    targetMap.set(bookId, job);
+    const sub = makeSubscriber(res);
+    job.subscribers.add(sub);
+    res.on('close', () => {
+      job.subscribers.delete(sub);
+      clearInterval(sub.keepAlive);
+    });
 
-    let totalOps = 0;
-    let reviewedChapters = 0;
-    let actualMsTotal = 0;
-    let actualCharsTotal = 0;
-    const charsByChapter = buildCharsByChapter(chapterIds, byChapter);
-    try {
-      for (let i = 0; i < chapterIds.length; i += 1) {
-        if (closed) break;
-        const chapterId = chapterIds[i];
-        const phaseEvent: Record<string, unknown> = {
-          kind: 'phase',
-          phaseId: 0,
-          progress: i / chapterIds.length,
-          label: 'Reviewing script',
-          chapterId,
-          ...chapterPacingPhaseFields({
-            index: i,
-            totalChapters: chapterIds.length,
-            actualMsTotal,
-            actualCharsTotal,
-            charsByChapter,
-            remainingChapterIds: chapterIds.slice(i),
-          }),
-        };
-        send(phaseEvent);
-
-        const chapterStartedAt = Date.now();
-
-        /* fs-64 — the prior chapter's final exchange (read-only) resolves a
-           tagless chapter-opening line. Null unless the immediately-preceding
-           non-excluded chapter ends in a live A/B exchange. */
-        const priorId = priorChapterIdFor(chapterId, allChapterIds, excludedChapterIds);
-        const priorExchange =
-          priorId !== null ? priorChapterBoundaryExchange(byChapter.get(priorId) ?? [], roster) : null;
-
-        /* Split the chapter's sentences into budgeted chunks (one call each).
-           The owned-core rule keeps each sentence reviewed exactly once across
-           the overlapping context windows. A cloud engine gets a huge budget so
-           the whole chapter is a single chunk (unchanged behaviour). */
-        const chunks = chunkSentencesByBudget(byChapter.get(chapterId) ?? [], {
-          charBudget: chapterChunkBudget(selection.engine),
-          overlap: 3,
-          serialize: (s) => JSON.stringify({ id: s.id, characterId: s.characterId, text: s.text }),
-        });
-
-        for (let index = 0; index < chunks.length; index += 1) {
-          const chunk = chunks[index];
-          if (closed) break;
-          const prompt = buildScriptReviewChapterInbox(
-            manuscriptId,
-            chapterId,
-            chunkWithContext(chunk),
-            roster,
-            index === 0 ? priorExchange : null,
-          );
-          try {
-            const result = await selection.analyzer.runScriptReviewChapter(
-              manuscriptId,
-              chapterId,
-              prompt,
-              {
-                signal: controller.signal,
-                language: bookStateLanguage(located.state),
-                onChunk: (info) =>
-                  heartbeat(0, chapterId, {
-                    receivedBytes: info.receivedBytes,
-                    elapsedMs: info.elapsedMs,
-                    sinceLastChunkMs: info.sinceLastChunkMs,
-                  }),
-                onThrottle: (waitMs, reason) =>
-                  send({
-                    kind: 'throttle',
-                    phaseId: 0,
-                    chapterIndex: chapterId,
-                    model: selection.model,
-                    waitMs,
-                    reason,
-                  }),
-              },
-            );
-            /* Emit only the ops this chunk OWNS (primary sentence in its core),
-               so a sentence appearing in another chunk's context isn't emitted twice. */
-            const owned = result.ops.filter((op) => ownsOp(chunk.coreIds, primarySentenceId(op)));
-            if (owned.length) {
-              send({ kind: 'ops', chapterId, ops: owned });
-              totalOps += owned.length;
-            }
-          } catch (err) {
-            if (err instanceof AnalysisAbortedError) break;
-            if (err instanceof DailyQuotaExhaustedError) {
-              send({
-                kind: 'error',
-                code: 'quota_exhausted',
-                message:
-                  'Daily analyzer quota exhausted. Already-reviewed chapters are streamed — re-run to finish.',
-                resetAt: err.resetAt instanceof Date ? err.resetAt.toISOString() : undefined,
-              });
-              clearInterval(keepAlive);
-              if (!closed) res.end();
-              return;
-            }
-            /* One bad chunk shouldn't kill the whole pass — report it and
-               carry on so the rest of the book still gets reviewed. */
-            send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
-          }
-        }
-        /* A failed chunk still took real wall-clock time — count it toward
-           the pacing rate so the next chapter's ETA stays honest. */
-        ({ actualMsTotal, actualCharsTotal } = accumulateChapterPacing(
-          { actualMsTotal, actualCharsTotal },
-          chapterStartedAt,
-          charsByChapter.get(chapterId) ?? 0,
-        ));
-        reviewedChapters += 1;
-      }
-    } finally {
-      clearInterval(keepAlive);
-    }
-
-    if (!closed) {
-      send({ kind: 'phase', phaseId: 0, progress: 1, label: 'Done' });
-      send({ kind: 'result', done: true, reviewedChapters, totalOps });
-      res.end();
-    }
+    void runScriptReviewJob(job, { located, manuscriptId, allChapterIds, excludedChapterIds, chapterIds, byChapter, roster, model: requestedModel })
+      .finally(() => {
+        if (targetMap.get(bookId) === job) targetMap.delete(bookId);
+      });
   },
 );
+
+function setUpSse(res: Response): void {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+  res.write(':ok\n\n');
+}
+
+function makeSubscriber(res: Response): ScriptReviewSubscriber {
+  const keepAlive = setInterval(() => {
+    try {
+      res.write(':ka\n\n');
+    } catch {
+      /* socket gone */
+    }
+  }, 15_000);
+  const send = (payload: unknown): void => {
+    try {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    } catch {
+      /* dead socket */
+    }
+  };
+  return { send, res, keepAlive };
+}
+
+async function runScriptReviewJob(
+  job: ScriptReviewJob,
+  ctx: {
+    located: Awaited<ReturnType<typeof findBookByBookId>> & object;
+    manuscriptId: string;
+    allChapterIds: number[];
+    excludedChapterIds: Set<number>;
+    chapterIds: number[];
+    byChapter: Map<number, SentenceOutput[]>;
+    roster: CastCharacterSlim[];
+    /** The client's requested analyzer model (req.body?.model), captured at
+        job creation and threaded through here — today's route passes this
+        straight to selectAnalyzerForPhase (script-review.ts:289); the
+        detached job runner must keep doing so, or every review silently
+        falls back to the default model regardless of what was requested. */
+    model: string | undefined;
+  },
+): Promise<void> {
+  const { located, manuscriptId, allChapterIds, excludedChapterIds, chapterIds, byChapter, roster, model } = ctx;
+  const send = (payload: unknown): void => {
+    const record = payload as Record<string, unknown>;
+    if (record.kind === 'ops') job.replay.opsEvents.push(record as ScriptReviewReplayState['opsEvents'][number]);
+    else if (record.kind === 'chapter-failed') job.replay.chapterFailedEvents.push(record as ScriptReviewReplayState['chapterFailedEvents'][number]);
+    else if (record.kind === 'phase') job.replay.lastPhase = record;
+    else if (record.kind === 'error') job.replay.errorEvent = record;
+    else if (record.kind === 'result') job.replay.result = record as ScriptReviewReplayState['result'];
+    else if (record.kind === 'checkpoint') job.replay.checkpointEvents.push(record as ScriptReviewReplayState['checkpointEvents'][number]);
+    broadcast(job, record);
+  };
+  const heartbeat = makeThrottledHeartbeat(send, 2000);
+  const selection = selectAnalyzerForPhase({ phase: 'phase1', model });
+
+  let totalOps = 0;
+  let reviewedChapters = 0;
+  let actualMsTotal = 0;
+  let actualCharsTotal = 0;
+  const charsByChapter = buildCharsByChapter(chapterIds, byChapter);
+  try {
+    for (let i = 0; i < chapterIds.length; i += 1) {
+      if (job.controller.signal.aborted) break;
+      const chapterId = chapterIds[i];
+      send({
+        kind: 'phase',
+        phaseId: 0,
+        progress: i / chapterIds.length,
+        label: 'Reviewing script',
+        chapterId,
+        ...chapterPacingPhaseFields({
+          index: i,
+          totalChapters: chapterIds.length,
+          actualMsTotal,
+          actualCharsTotal,
+          charsByChapter,
+          remainingChapterIds: chapterIds.slice(i),
+        }),
+      });
+      const chapterStartedAt = Date.now();
+      const priorId = priorChapterIdFor(chapterId, allChapterIds, excludedChapterIds);
+      const priorExchange = priorId !== null ? priorChapterBoundaryExchange(byChapter.get(priorId) ?? [], roster) : null;
+      const chunks = chunkSentencesByBudget(byChapter.get(chapterId) ?? [], {
+        charBudget: chapterChunkBudget(selection.engine),
+        overlap: 3,
+        serialize: (s) => JSON.stringify({ id: s.id, characterId: s.characterId, text: s.text }),
+      });
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunk = chunks[index];
+        if (job.controller.signal.aborted) break;
+        const prompt = buildScriptReviewChapterInbox(
+          manuscriptId, chapterId, chunkWithContext(chunk), roster, index === 0 ? priorExchange : null,
+        );
+        try {
+          const result = await selection.analyzer.runScriptReviewChapter(manuscriptId, chapterId, prompt, {
+            signal: job.controller.signal,
+            language: bookStateLanguage(located.state),
+            onChunk: (info) => heartbeat(0, chapterId, { receivedBytes: info.receivedBytes, elapsedMs: info.elapsedMs, sinceLastChunkMs: info.sinceLastChunkMs }),
+            onThrottle: (waitMs, reason) => send({ kind: 'throttle', phaseId: 0, chapterIndex: chapterId, model: selection.model, waitMs, reason }),
+          });
+          const owned = result.ops.filter((op) => ownsOp(chunk.coreIds, primarySentenceId(op)));
+          if (owned.length) {
+            send({ kind: 'ops', chapterId, ops: owned });
+            totalOps += owned.length;
+          }
+        } catch (err) {
+          if (err instanceof AnalysisAbortedError) break;
+          if (err instanceof DailyQuotaExhaustedError) {
+            send({ kind: 'error', code: 'quota_exhausted', message: 'Daily analyzer quota exhausted. Already-reviewed chapters are streamed — re-run to finish.', resetAt: err.resetAt instanceof Date ? err.resetAt.toISOString() : undefined });
+            for (const sub of job.subscribers) sub.res.end();
+            return;
+          }
+          send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
+        }
+      }
+      ({ actualMsTotal, actualCharsTotal } = accumulateChapterPacing({ actualMsTotal, actualCharsTotal }, chapterStartedAt, charsByChapter.get(chapterId) ?? 0));
+      reviewedChapters += 1;
+    }
+  } finally {
+    for (const sub of job.subscribers) clearInterval(sub.keepAlive);
+  }
+  if (!job.controller.signal.aborted) {
+    send({ kind: 'phase', phaseId: 0, progress: 1, label: 'Done' });
+    send({ kind: 'result', done: true, reviewedChapters, totalOps });
+  }
+  for (const sub of job.subscribers) sub.res.end();
+}
