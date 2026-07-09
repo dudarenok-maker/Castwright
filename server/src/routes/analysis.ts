@@ -129,6 +129,14 @@ import {
   FAILURE_REMEDIATIONS,
 } from './failure-taxonomy.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
+import { conventionsFor } from '../analyzer/dialogue-structure/lang/index.js';
+import { buildNameIndex } from '../analyzer/dialogue-structure/name-matcher.js';
+import { parseChapterStructure } from '../analyzer/dialogue-structure/parser.js';
+import { resolveWindows, type WindowRoster } from '../analyzer/dialogue-structure/windows.js';
+import { alignSentences } from '../analyzer/dialogue-structure/aligner.js';
+import { crossExamine } from '../analyzer/dialogue-structure/cross-examine.js';
+import type { LanguageConventions } from '../analyzer/dialogue-structure/types.js';
+import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 
 /* srv-13 — the existing cast's voice/reuse fields to overlay onto a fresh
    analysis roster. Prefer cast.json; when it's absent (a reparse just deleted
@@ -1518,6 +1526,31 @@ ${subBody}
 `;
 }
 
+/* srv-59 — roster character whose aliases include the language's
+   first-person pronoun (the "я" -> Антон first-person-narrator case). Null
+   when the language has no first-person pronoun convention or no roster
+   character claims it. */
+export function findFirstPersonCharacter(
+  characters: Array<{ id: string; aliases?: string[] }>,
+  conv: LanguageConventions,
+): string | null {
+  if (!conv.pronouns.firstPerson) return null;
+  const hit = characters.find((c) =>
+    (c.aliases ?? []).some((a) => conv.pronouns.firstPerson!.test(` ${a} `)),
+  );
+  return hit?.id ?? null;
+}
+
+/* srv-59 — roster gender lookup for windows.ts's pronoun resolution.
+   Defaults an ungendered character to 'neutral' (never guessed). */
+export function rosterGenderMap(
+  characters: Array<{ id: string; gender?: string }>,
+): WindowRoster {
+  return Object.fromEntries(
+    characters.map((c) => [c.id, (c.gender as 'male' | 'female' | 'neutral') ?? 'neutral']),
+  );
+}
+
 /* Shared resilient stage-2 runner used by BOTH the main and subset routes
    (#528). Wraps the chapter in the large-chapter chunker (which itself wraps
    each call in the coverage guard), so an over-budget chapter is split into
@@ -1525,7 +1558,7 @@ ${subBody}
    adaptively re-split. For a chapter within budget this is exactly one guarded
    call against the full body (byte-identical to the prior behaviour). Returns
    the stitched sentences + combined coverage verdict. */
-async function attributeChapterStage2(opts: {
+export async function attributeChapterStage2(opts: {
   analyzer: Analyzer;
   manuscriptId: string;
   title: string;
@@ -1569,11 +1602,42 @@ async function attributeChapterStage2(opts: {
     onChunk: opts.onChunk,
     onSectionDone: opts.onSectionDone,
   });
-  /* Deterministic narrator-default: force non-spoken sentences to `narrator`
-     and flag the first of each demoted block low-confidence. Runs for ALL
-     languages, AFTER coverage (coverage keys on text, not characterId, so the
-     verdict is unchanged) and UPSTREAM of fold/reconcile. */
-  result.sentences = applyNarratorDefault(result.sentences);
+  /* srv-59 — deterministic dialogue-structure engine: replays the model's
+     per-sentence attribution against the chapter's structural evidence (dash/
+     quote dialogue tags, conversation-window alternation, pronoun resolution)
+     and derives an honest confidence for every sentence, auto-correcting
+     tag-proven misattributions. Gated by the `analyzer.structure.enabled`
+     knob AND language support; the ELSE branch is byte-identical to the
+     pre-engine `applyNarratorDefault` behaviour (coverage keys on text, not
+     characterId, so the verdict above is unaffected either way). */
+  const conventions = configValue<boolean>('analyzer.structure.enabled')
+    ? conventionsFor(opts.stageCall.language)
+    : null;
+  if (conventions) {
+    const index = buildNameIndex(opts.stage1.characters, conventions);
+    const paras = parseChapterStructure(opts.chapter.body, index);
+    const firstPersonId = findFirstPersonCharacter(opts.stage1.characters, conventions);
+    resolveWindows(paras, rosterGenderMap(opts.stage1.characters), firstPersonId);
+    const alignment = alignSentences(result.sentences, paras, opts.chapter.body);
+    const examined = crossExamine(alignment, {
+      rosterIds: new Set(opts.stage1.characters.map((c) => c.id)),
+      unknownBucketIds: new Set([MALE_BUCKET_ID, FEMALE_BUCKET_ID]),
+      alignmentFloorPct: 80,
+    });
+    result.sentences = examined.sentences;
+    result.structureReport = examined.report;
+    console.log(
+      `[analysis:structure] ch=${opts.chapter.id} aligned=${examined.report.alignedPct.toFixed(0)}% ` +
+        `confirmed=${examined.report.confirmed} corrected=${examined.report.corrected} flagged=${examined.report.flagged}`,
+    );
+    // Task 9b inserts escalation here, consuming examined.flags.
+  } else {
+    /* Deterministic narrator-default: force non-spoken sentences to `narrator`
+       and flag the first of each demoted block low-confidence. Runs for ALL
+       languages, AFTER coverage (coverage keys on text, not characterId, so the
+       verdict is unchanged) and UPSTREAM of fold/reconcile. */
+    result.sentences = applyNarratorDefault(result.sentences);
+  }
   return result;
 }
 
