@@ -20,10 +20,17 @@ import type { Toast } from '../store/notifications-slice';
 import { ManuscriptView } from './manuscript';
 import type { Chapter, Character, Sentence } from '../lib/types';
 
-const { reviewScript } = vi.hoisted(() => ({ reviewScript: vi.fn() }));
+/* Task 10 — getScriptReviewState is stubbed too: ManuscriptView now hydrates
+   on mount for any bookId-bearing render, and without a mock the real
+   (fetch-backed) implementation would fire here. Default resolves to an
+   empty ledger so hydration is a no-op (early-return on zero entries). */
+const { reviewScript, getScriptReviewState } = vi.hoisted(() => ({
+  reviewScript: vi.fn(),
+  getScriptReviewState: vi.fn().mockResolvedValue({ kind: 'ledger', entries: {} }),
+}));
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>();
-  return { ...actual, api: { ...(actual as { api: object }).api, reviewScript } };
+  return { ...actual, api: { ...(actual as { api: object }).api, reviewScript, getScriptReviewState } };
 });
 
 const characters: Character[] = [{ id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' }];

@@ -18,7 +18,7 @@ import userEvent from '@testing-library/user-event';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { changeLogSlice } from '../store/change-log-slice';
 import { tourSlice } from '../store/tour-slice';
-import { scriptReviewSlice } from '../store/script-review-slice';
+import { scriptReviewSlice, unresolvedCountForChapters } from '../store/script-review-slice';
 import { uiSlice } from '../store/ui-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
@@ -28,14 +28,23 @@ import { TOUR_STEPS } from '../lib/tour-steps';
 import { ManuscriptView, isExcludedSentenceId } from './manuscript';
 import type { Chapter, Character, Sentence } from '../lib/types';
 
-/* fs-58 — api mock for reviewScript + createCharacter trigger tests. */
-const { reviewScript, createCharacter } = vi.hoisted(() => ({
+/* fs-58 — api mock for reviewScript + createCharacter trigger tests.
+   Task 10 — getScriptReviewState is stubbed too: ManuscriptView now hydrates
+   on mount for any bookId-bearing render, and without a mock the real
+   (fetch-backed) implementation would fire in every test. Default resolves
+   to an empty ledger so pre-existing tests that don't care about hydration
+   stay inert (hydrateScriptReview's early-return on zero entries). */
+const { reviewScript, createCharacter, getScriptReviewState } = vi.hoisted(() => ({
   reviewScript: vi.fn(),
   createCharacter: vi.fn(),
+  getScriptReviewState: vi.fn().mockResolvedValue({ kind: 'ledger', entries: {} }),
 }));
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>();
-  return { ...actual, api: { ...(actual as { api: object }).api, reviewScript, createCharacter } };
+  return {
+    ...actual,
+    api: { ...(actual as { api: object }).api, reviewScript, createCharacter, getScriptReviewState },
+  };
 });
 
 const characters: Character[] = [
@@ -1747,5 +1756,104 @@ describe('ManuscriptView — promote first sentence to title (2026-07-01)', () =
     rerender(renderAt(1));
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});
+
+/* fs-58 Task 10 — unresolved-findings count helper + the Review Script
+   button/menu badges it drives (design spec §6.3). */
+describe('unresolvedCountForChapters', () => {
+  it('counts only ops in the given chapters', () => {
+    const bucket = {
+      ops: [
+        { id: 1, op: 'strip_tag', chapterId: 1, rationale: 'r' },
+        { id: 2, op: 'fix_emotion', chapterId: 2, rationale: 'r' },
+      ],
+      unappliable: [],
+      selected: {},
+      manuscriptId: 'ms-1',
+      versionByChapter: { 1: 1, 2: 1 },
+      visible: true,
+    } as never;
+    expect(unresolvedCountForChapters(bucket, [1])).toBe(1);
+    expect(unresolvedCountForChapters(bucket, [1, 2])).toBe(2);
+    expect(unresolvedCountForChapters(undefined, [1])).toBe(0);
+  });
+});
+
+describe('ManuscriptView — unresolved-findings badge', () => {
+  const badgeChapter: Chapter = {
+    id: 1,
+    title: 'Chapter One',
+    duration: '10:00',
+    state: 'done',
+    progress: 1,
+    characters: {},
+  };
+  const otherChapter: Chapter = {
+    id: 2,
+    title: 'Chapter Two',
+    duration: '10:00',
+    state: 'done',
+    progress: 1,
+    characters: {},
+  };
+
+  function renderBadgeView(currentChapterId: number) {
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+      preloadedState: {
+        scriptReview: {
+          byBook: {
+            'bk-badge': {
+              ops: [{ id: 1, op: 'strip_tag', chapterId: 1, rationale: 'r' }],
+              unappliable: [],
+              selected: {},
+              manuscriptId: 'ms-1',
+              versionByChapter: { 1: 1 },
+              visible: true,
+            },
+          },
+          activeStreams: {},
+        } as never,
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'bk-badge',
+            view: 'manuscript',
+            currentChapterId,
+            openProfileId: null,
+          } as never,
+        },
+      },
+    });
+    return render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[badgeChapter, otherChapter]}
+          currentChapterId={currentChapterId}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[]}
+        />
+      </Provider>,
+    );
+  }
+
+  it('shows a count badge on the Review Script button when the current chapter has unresolved findings', () => {
+    renderBadgeView(1);
+    expect(screen.getByTestId('review-script-chapter')).toHaveTextContent('Review Script (1)');
+  });
+
+  it('omits the badge when the current chapter has no unresolved findings', () => {
+    renderBadgeView(2);
+    expect(screen.getByTestId('review-script-chapter')).toHaveTextContent('Review Script');
+    expect(screen.getByTestId('review-script-chapter')).not.toHaveTextContent('Review Script (');
   });
 });

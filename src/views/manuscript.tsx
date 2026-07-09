@@ -28,7 +28,8 @@ import { SentenceEmotionControl } from '../components/sentence-emotion-control';
 import { SentenceInstructControl } from '../components/sentence-instruct-control';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
-import { useAppDispatch, useAppSelector } from '../store';
+import { useStore } from 'react-redux';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
 import { useMarkCharacterStaleIfRendered } from '../lib/stale-chapters';
 import { TOUR_STEPS } from '../lib/tour-steps';
 import { manuscriptActions } from '../store/manuscript-slice';
@@ -42,12 +43,12 @@ import { PromoteFirstSentenceButton } from '../components/promote-first-sentence
 import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-bar';
 import { ScriptReviewDiff } from '../components/script-review-diff';
 import { api } from '../lib/api';
-import { selectActiveReview } from '../store/script-review-slice';
+import { selectActiveReview, unresolvedCountForChapters } from '../store/script-review-slice';
 import { selectAnalysisBusyForBook } from '../store/analysis-substage-selectors';
 import { formatSubstageDetail } from '../lib/substage-progress-text';
 import { notificationsActions } from '../store/notifications-slice';
 import { rpdWarningFor } from '../lib/script-review-apply';
-import { runReviewScript } from '../store/script-review-thunk';
+import { runReviewScript, hydrateScriptReview } from '../store/script-review-thunk';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 import type { SeriesRosterEntry } from '../lib/api';
 
@@ -144,6 +145,14 @@ export function ManuscriptView({
   const reviewMenuRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const hasActiveReview = useAppSelector((s) => !!(bookId && (s as any).scriptReview && selectActiveReview(s as any, bookId)));
+  const store = useStore<RootState>();
+  useEffect(() => {
+    if (!bookId) return;
+    void hydrateScriptReview(bookId, { dispatch, getState: store.getState, subscribe: store.subscribe });
+    // Intentionally no cleanup/abort: hydration is a one-shot reconciliation
+    // per mount, and the sticky job registry (server Task 2) makes a
+    // duplicate in-flight POST from attachToRunningReview safe to abandon.
+  }, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
   /* Sentences are the single source of truth in Redux. All edits go via
      dispatch(manuscriptActions.*) — no local copy. */
   const sentences: Sentence[] = sentencesFromStore ?? EMPTY_SENTENCES;
@@ -749,6 +758,14 @@ export function ManuscriptView({
      (excluded chapters never reach the analyzer). */
   const reviewableChapterCount = chapters.filter((c) => !c.excluded).length;
   const rpdWarning = rpdWarningFor(reviewableChapterCount, reviewModel);
+  /* fs-58 Task 10 — unresolved-findings badges on the Review Script button
+     and the whole-book menu item (design spec §6.3). */
+  const currentChapterUnresolvedCount = useAppSelector((s) =>
+    bookId ? unresolvedCountForChapters(s.scriptReview?.byBook[bookId], [currentChapter.id]) : 0,
+  );
+  const wholeBookUnresolvedCount = useAppSelector((s) =>
+    bookId ? unresolvedCountForChapters(s.scriptReview?.byBook[bookId], chapters.map((c) => c.id)) : 0,
+  );
 
   async function handleReviewScript(wholeBook: boolean) {
     if (!bookId || reviewLoading) return;
@@ -862,7 +879,11 @@ export function ManuscriptView({
                   disabled={reviewLoading || !bookId || analysisBusy}
                   className="inline-flex items-center gap-2 px-4 min-h-[44px] sm:min-h-0 py-2 rounded-l-full border border-ink/20 bg-white text-ink text-sm font-semibold hover:bg-ink/5 disabled:opacity-50"
                 >
-                  {reviewLoading ? 'Reviewing…' : 'Review Script'}
+                  {reviewLoading
+                    ? 'Reviewing…'
+                    : currentChapterUnresolvedCount > 0
+                      ? `Review Script (${currentChapterUnresolvedCount})`
+                      : 'Review Script'}
                 </button>
                 <button
                   data-testid="review-script-menu-toggle"
@@ -886,6 +907,11 @@ export function ManuscriptView({
                       className="w-full text-left px-3 min-h-[44px] sm:min-h-0 py-2 rounded-xl hover:bg-ink/5 text-sm font-medium text-ink disabled:opacity-50"
                     >
                       Review whole book
+                      {wholeBookUnresolvedCount > 0 && (
+                        <span className="ml-1.5 text-xs font-semibold text-ink/70">
+                          ({wholeBookUnresolvedCount} unresolved)
+                        </span>
+                      )}
                       <span className="block text-xs font-normal text-ink/50">
                         {reviewableChapterCount} chapter
                         {reviewableChapterCount === 1 ? '' : 's'}

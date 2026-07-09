@@ -201,6 +201,14 @@ export function selectActiveReview(
   return state.scriptReview.byBook[bookId];
 }
 
+/** Count of currently-appliable, unresolved ops touching any of the given
+    chapters — the "Review Script" button badge (design spec §6.3). */
+export function unresolvedCountForChapters(bucket: ScriptReviewBucket | undefined, chapterIds: number[]): number {
+  if (!bucket) return 0;
+  const set = new Set(chapterIds);
+  return bucket.ops.filter((o) => set.has(o.chapterId)).length;
+}
+
 /** Like selectActiveReview, but returns undefined for a hidden bucket — use
     this to gate the modal's render, not selectActiveReview (which still
     answers "does this book have a pending review at all", used by the
