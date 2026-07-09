@@ -1599,6 +1599,15 @@ export async function attributeChapterStage2(opts: {
      it through). Falls back to a fresh per-call budget when omitted, so
      existing callers keep working (just without the cross-chapter cap). */
   structureBudget?: { remainingWindows: number };
+  /* srv-59 Task 9b (review follow-up) — the 'cloud' escalation analyzer,
+     built ONCE per book by the caller (mirrors structureBudget) and threaded
+     through every chapter's call so a book doesn't construct a throwaway
+     GeminiAnalyzer (and re-warn on a missing API key) per chapter. `null`
+     means "already resolved this book, no key configured" — distinct from
+     `undefined` ("caller didn't thread it"), which falls back to the old
+     per-call construction for any caller that hasn't been migrated. Only
+     consulted when `analyzer.structure.escalation === 'cloud'`. */
+  escalationAnalyzer?: Analyzer | null;
 }): Promise<Stage2ChunkRunResult> {
   const callForBody = (subBody: string, preceding: string | null) => {
     const prompt =
@@ -1660,7 +1669,11 @@ export async function attributeChapterStage2(opts: {
     const escalationMode = configValue<string>('analyzer.structure.escalation');
     if (escalationMode !== 'off') {
       const escalationAnalyzer =
-        escalationMode === 'cloud' ? buildCloudEscalationAnalyzer() : opts.analyzer;
+        escalationMode === 'cloud'
+          ? opts.escalationAnalyzer !== undefined
+            ? opts.escalationAnalyzer
+            : buildCloudEscalationAnalyzer()
+          : opts.analyzer;
       if (escalationAnalyzer) {
         const budget = opts.structureBudget ?? {
           remainingWindows: configValue<number>('analyzer.structure.maxWindowsPerBook'),
@@ -2395,6 +2408,14 @@ export async function runMainAnalyzerJob(
      chapter's attributeChapterStage2 call below, so the cap is per-BOOK
      (`analyzer.structure.maxWindowsPerBook`), not silently reset per chapter. */
   const structureBudget = { remainingWindows: configValue<number>('analyzer.structure.maxWindowsPerBook') };
+  /* srv-59 Task 9b (review follow-up) — build the 'cloud' escalation
+     analyzer ONCE per book (mirrors structureBudget above), not per chapter:
+     a per-chapter build constructed a throwaway GeminiAnalyzer (and re-warned
+     on a missing key) on every chapter in cloud mode. `undefined` when the
+     mode isn't 'cloud' — attributeChapterStage2 only consults this field
+     when it is. */
+  const escalationAnalyzer =
+    configValue<string>('analyzer.structure.escalation') === 'cloud' ? buildCloudEscalationAnalyzer() : undefined;
   const pipelinedPerPhase = !opts.requestedModel && isPerPhaseModelSelectionActive(userSettings);
   if (pipelinedPerPhase) {
     console.log(
@@ -3883,6 +3904,7 @@ export async function runMainAnalyzerJob(
         stageCall: stage2Call,
         engine: phase1Selection.engine,
         structureBudget,
+        escalationAnalyzer,
         // Section START: record this section's char count and total. Do NOT add
         // it to committedChars yet — committedChars must stay in lockstep with
         // committedSentences (completed sections only), or the rate dilutes and
@@ -4700,6 +4722,10 @@ export async function runSubsetAnalyzerJob(
      chapter's attributeChapterStage2 call in this subset/retry job, mirroring
      the main route's per-book budget above. */
   const structureBudget = { remainingWindows: configValue<number>('analyzer.structure.maxWindowsPerBook') };
+  /* srv-59 Task 9b (review follow-up) — build the 'cloud' escalation
+     analyzer ONCE for this subset/retry job, mirroring the main route. */
+  const escalationAnalyzer =
+    configValue<string>('analyzer.structure.escalation') === 'cloud' ? buildCloudEscalationAnalyzer() : undefined;
 
   const send = (payload: unknown) => {
     broadcastToJob(job, payload);
@@ -5102,6 +5128,7 @@ export async function runSubsetAnalyzerJob(
           chapter: ch,
           engine: phase1Selection.engine,
           structureBudget,
+          escalationAnalyzer,
           stageCall: {
             signal: abortController.signal,
             language: bookLanguage,

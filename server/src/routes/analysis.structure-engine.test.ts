@@ -277,4 +277,48 @@ describe('attributeChapterStage2 — escalation wiring (srv-59 Task 9b)', () => 
     expect(result.structureReport?.escalated).toBe(0);
     expect(result.structureReport?.escalationAccepted).toBe(0);
   });
+
+  /* srv-59 Task 9b (review follow-up) — buildCloudEscalationAnalyzer() used
+     to run fresh PER CHAPTER inside attributeChapterStage2 in 'cloud' mode:
+     a throwaway GeminiAnalyzer construction (and a missing-key warn) every
+     chapter. The route callers now build it ONCE per book and thread it
+     through via the new `escalationAnalyzer` opt; attributeChapterStage2
+     must honor an explicitly-resolved value (including `null`, "no key
+     configured") without re-building. These two tests pin both halves: the
+     old per-call fallback (still used by any caller that omits the field)
+     re-warns every call, while a caller that threads the once-built value
+     never re-warns. */
+  describe('cloud mode — analyzer built once per book, not per chapter', () => {
+    beforeEach(() => {
+      process.env.ATTRIBUTION_ESCALATION = 'cloud';
+      delete process.env.GEMINI_API_KEY;
+    });
+    afterEach(() => {
+      delete process.env.GEMINI_API_KEY;
+    });
+
+    it('omitting escalationAnalyzer falls back to a fresh per-call build, re-warning on every chapter', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const analyzer = fakeEscalationAnalyzer(() => Promise.resolve(null));
+
+      await attributeChapterStage2(escalationBaseOpts(analyzer)); // chapter 1
+      await attributeChapterStage2(escalationBaseOpts(analyzer)); // chapter 2
+
+      expect(warn).toHaveBeenCalledTimes(2);
+      warn.mockRestore();
+    });
+
+    it('threading the once-built escalationAnalyzer (here: null, "no key") across chapters never re-warns/re-builds', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const analyzer = fakeEscalationAnalyzer(() => Promise.resolve(null));
+
+      // Mirrors what the route now does once per book, then threads through
+      // every chapter's call — simulated here across two chapter calls.
+      await attributeChapterStage2({ ...escalationBaseOpts(analyzer), escalationAnalyzer: null });
+      await attributeChapterStage2({ ...escalationBaseOpts(analyzer), escalationAnalyzer: null });
+
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+  });
 });
