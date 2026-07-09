@@ -221,6 +221,31 @@ export const scriptReviewSlice = createSlice({
       if (bucket.ops.length === 0) delete s.byBook[a.payload.bookId];
     },
 
+    /** Remove all ops/unappliable/selected/versionByChapter entries
+        belonging to the given chapters, deleting the whole bucket once none
+        remain — the client-side mirror of a scoped server /discard call
+        (Task 11's re-run confirm gate can discard just the chapters being
+        re-reviewed, not the whole bucket, now that the bucket is a
+        multi-chapter aggregate — see the fix note on discardReview). */
+    removeChaptersLocally: (s, a: PayloadAction<{ bookId: string; chapterIds: number[] }>) => {
+      const bucket = s.byBook[a.payload.bookId];
+      if (!bucket) return;
+      const removed = new Set(a.payload.chapterIds);
+      bucket.ops = bucket.ops.filter((o) => !removed.has(o.chapterId));
+      bucket.unappliable = bucket.unappliable.filter((u) => !removed.has(u.op.chapterId));
+      // Rebuild `selected` from the SURVIVING ops, mirroring setReview's own
+      // preservedSelected idiom (opKey reconstruction from a surviving ops
+      // array) rather than parsing the `${chapterId}:${id}:${op}` key string.
+      const survivingSelected: Record<string, boolean> = {};
+      for (const o of bucket.ops) {
+        const key = opKey(o.chapterId, o.id, o.op);
+        if (key in bucket.selected) survivingSelected[key] = bucket.selected[key];
+      }
+      bucket.selected = survivingSelected;
+      for (const chapterId of a.payload.chapterIds) delete bucket.versionByChapter[chapterId];
+      if (bucket.ops.length === 0) delete s.byBook[a.payload.bookId];
+    },
+
     /** Start or restart a review-progress stream for one book. progress is 0..1. */
     setActive: (s, a: PayloadAction<SetActiveSubstagePayload>) => {
       setActiveSubstage(s.activeStreams, a.payload);

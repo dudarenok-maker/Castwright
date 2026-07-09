@@ -2028,6 +2028,88 @@ describe('ManuscriptView — re-run confirm gate (fs-58 Task 11)', () => {
     expect(screen.queryByTestId('review-script-confirm-gate')).toBeNull();
   });
 
+  /* Round-2 review Important Finding 4 — the confirm-gate dialog's TEXT read
+     the LIVE `currentChapter.id` prop instead of `confirmGate.chapterIds[0]`,
+     the chapter actually frozen at gate-open time. If the user navigates to
+     a different chapter while the dialog is still open (browser Back/
+     Forward, which the modal's CSS backdrop doesn't intercept), the dialog
+     could show the NEW chapter's id while "Discard and start new" silently
+     discards the ORIGINAL (frozen) chapter — misleading the user about what
+     they're about to discard. This drives that exact sequence via `rerender`
+     with a new `currentChapterId` prop, standing in for a live navigation. */
+  it('the confirm dialog keeps naming the chapter it was opened for, even if the live current chapter changes while it is open', async () => {
+    const user = userEvent.setup();
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+      preloadedState: {
+        scriptReview: {
+          byBook: {
+            'bk-gate': {
+              ops: [{ id: 1, op: 'strip_tag', chapterId: 1, rationale: 'r' }],
+              unappliable: [],
+              selected: {},
+              manuscriptId: 'ms-1',
+              versionByChapter: { 1: 1 },
+              visible: false,
+            },
+          },
+          activeStreams: {},
+        } as never,
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'bk-gate',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+      },
+    });
+    const { rerender } = render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[gateChapter, otherGateChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[]}
+        />
+      </Provider>,
+    );
+
+    // Opens the gate for chapter 1 — confirmGate.chapterIds freezes [1].
+    await user.click(screen.getByTestId('review-script-chapter'));
+    expect(screen.getByTestId('review-script-confirm-gate')).toHaveTextContent('chapter 1');
+
+    // The user navigates to chapter 2 while the dialog is still open (e.g.
+    // browser Back/Forward) — the live `currentChapterId` prop changes, but
+    // the gate itself is untouched.
+    rerender(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[gateChapter, otherGateChapter]}
+          currentChapterId={2}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[]}
+        />
+      </Provider>,
+    );
+
+    // The dialog must still name chapter 1 (the frozen scope), not the new
+    // live chapter 2.
+    expect(screen.getByTestId('review-script-confirm-gate')).toHaveTextContent('chapter 1');
+    expect(screen.getByTestId('review-script-confirm-gate')).not.toHaveTextContent('chapter 2');
+  });
+
   it('"Discard and start new" calls discardReview then starts a fresh run', async () => {
     const user = userEvent.setup();
     renderGateView();

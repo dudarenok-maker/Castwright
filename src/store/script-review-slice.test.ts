@@ -592,3 +592,70 @@ describe('script-review-slice — hydrateBucket preserves visibility (Finding 2)
     expect(state.byBook['b1']!.visible).toBe(true);
   });
 });
+
+/* Round-2 review Critical Finding 1 regression test. discardReview's scoped
+   server call (only the named chapters' ledger entries) was previously
+   paired with a whole-bucket removeBucket dispatch — a partial-chapter
+   discard (e.g. the re-run confirm gate discarding just one chapter of a
+   whole-book review) wiped every OTHER chapter's still-server-persisted
+   findings out of the client view. removeChaptersLocally is the scoped
+   client-side mirror of the scoped server /discard call. */
+describe('script-review-slice — removeChaptersLocally scopes to the given chapters (round-2 Finding 1)', () => {
+  it('removes only the named chapter, leaving other chapters (ops/selected/versionByChapter) intact', () => {
+    let state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.setReview({
+        bookId: 'b1',
+        ops: [makeOp(1, 'strip_tag', 1), makeOp(2, 'fix_emotion', 2)],
+        unappliable: [{ op: makeOp(3, 'strip_tag', 1), reason: 'stale id' }],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 1: 1, 2: 5 },
+      }),
+    );
+    // Deselect chapter 2's op so we can also assert `selected` survives with
+    // its actual (non-default) value, not just its presence.
+    state = scriptReviewSlice.reducer(state, scriptReviewActions.toggleOp({ bookId: 'b1', key: opKey(2, 2, 'fix_emotion') }));
+    expect(state.byBook['b1']!.selected[opKey(2, 2, 'fix_emotion')]).toBe(false);
+
+    state = scriptReviewSlice.reducer(
+      state,
+      scriptReviewActions.removeChaptersLocally({ bookId: 'b1', chapterIds: [1] }),
+    );
+
+    const bucket = state.byBook['b1'];
+    expect(bucket).toBeDefined();
+    // Chapter 1's op and unappliable entry are gone.
+    expect(bucket!.ops.map((o) => o.chapterId)).toEqual([2]);
+    expect(bucket!.unappliable).toHaveLength(0);
+    expect(bucket!.versionByChapter).toEqual({ 2: 5 });
+    // Chapter 1's selected key is gone; chapter 2's survives with its value.
+    expect(opKey(1, 1, 'strip_tag') in bucket!.selected).toBe(false);
+    expect(bucket!.selected[opKey(2, 2, 'fix_emotion')]).toBe(false);
+  });
+
+  it('deletes the whole bucket once every remaining chapter is removed', () => {
+    let state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.setReview({
+        bookId: 'b1',
+        ops: [makeOp(1, 'strip_tag', 1), makeOp(2, 'fix_emotion', 2)],
+        unappliable: [],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 1: 1, 2: 5 },
+      }),
+    );
+    state = scriptReviewSlice.reducer(
+      state,
+      scriptReviewActions.removeChaptersLocally({ bookId: 'b1', chapterIds: [1, 2] }),
+    );
+    expect(state.byBook['b1']).toBeUndefined();
+  });
+
+  it('is a no-op when the bucket does not exist', () => {
+    const state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.removeChaptersLocally({ bookId: 'b1', chapterIds: [1] }),
+    );
+    expect(state.byBook['b1']).toBeUndefined();
+  });
+});

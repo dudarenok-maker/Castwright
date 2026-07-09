@@ -269,6 +269,80 @@ describe('fs-58 — ScriptReviewDiff', () => {
     discardSpy.mockRestore();
   });
 
+  /* Round-2 review Important Finding 3 — confirmDismissAll was missing the
+     try/catch its manuscript.tsx sibling (handleDiscardAndStartNew) already
+     has: a failed discard (network/HTTP error) must surface an error toast,
+     not silently close the (already-closed) confirm dialog with the bucket
+     left in an ambiguous state. Mirrors the discardScriptReview rejection
+     coverage this file already has for the confirm-gate's sibling call. */
+  it('a failed "Dismiss all" discard surfaces an error toast and does not wipe the bucket', async () => {
+    const discardSpy = vi.spyOn(api, 'discardScriptReview').mockRejectedValue(new Error('discard failed'));
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        cast: castSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'book-A',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          sentences: [
+            { id: 1, chapterId: 1, text: '<em>Hello world</em>', characterId: 'narr' },
+            { id: 2, chapterId: 1, text: 'She laughed.', characterId: 'narr' },
+          ] as never,
+        },
+      },
+    });
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: 'book-A',
+        ops: [
+          { id: 1, op: 'strip_tag', newText: 'Hello world', rationale: 'remove tag', chapterId: 1 },
+          { id: 2, op: 'fix_emotion', emotion: 'excited', rationale: 'energy up', chapterId: 1 },
+        ],
+        unappliable: [],
+      }),
+    );
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('dismiss-button'));
+    fireEvent.click(screen.getByTestId('dismiss-confirm-yes'));
+
+    await waitFor(() => expect(discardSpy).toHaveBeenCalled());
+
+    await waitFor(() => {
+      const toasts: Toast[] = store.getState().notifications.toasts;
+      expect(
+        toasts.some((t) => t.kind === 'error' && /discard failed|discard script-review/i.test(t.message)),
+      ).toBe(true);
+    });
+
+    // The bucket must NOT be silently wiped — the server call never
+    // succeeded, so removeChaptersLocally must never have dispatched.
+    const bucket = store.getState().scriptReview.byBook['book-A'];
+    expect(bucket).toBeDefined();
+    expect(bucket?.ops).toHaveLength(2);
+
+    discardSpy.mockRestore();
+  });
+
   /* This is the regression test for the reported data-loss bug: closing the
      modal (X button or backdrop) must never discard the findings the user
      hasn't acted on yet. */
@@ -1160,6 +1234,105 @@ describe('fs-58 — ScriptReviewDiff', () => {
       const bucket = store.getState().scriptReview.byBook['book-1'];
       expect(bucket).toBeDefined();
       expect(bucket?.ops.map((o) => o.id)).toEqual([1]);
+
+      resolveSpy.mockRestore();
+    });
+
+    /* Round-2 review Critical Finding 2 — resolveAppliedOps had no try/catch
+       around a throw-capable await, so a thrown network/HTTP error from ONE
+       chapter's resolve call aborted the whole batch (every subsequent
+       chapter's resolve was never even attempted), with zero feedback. This
+       drives an Apply spanning TWO chapters where the first chapter's resolve
+       rejects — it must (a) surface an error toast for the failing chapter
+       and (b) still resolve the SECOND chapter (proving the loop continued
+       instead of aborting). */
+    it('a thrown resolve error for one chapter surfaces a toast and does not block the other chapters in the batch', async () => {
+      const resolveSpy = vi.spyOn(api, 'resolveScriptReviewOps').mockImplementation(
+        async (_bookId, { chapterId }) => {
+          if (chapterId === 1) throw new Error('network down');
+          return { ok: true };
+        },
+      );
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          manuscript: manuscriptSlice.reducer,
+          cast: castSlice.reducer,
+          scriptReview: scriptReviewSlice.reducer,
+          changeLog: changeLogSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: {
+              kind: 'ready',
+              bookId: 'book-1',
+              view: 'manuscript',
+              currentChapterId: 1,
+              openProfileId: null,
+            } as never,
+          },
+          manuscript: {
+            ...manuscriptSlice.getInitialState(),
+            sentences: [
+              { id: 1, chapterId: 1, text: 'Hi tag', characterId: 'c1' },
+              { id: 2, chapterId: 2, text: 'Other.', characterId: 'c1' },
+            ] as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [{ id: 'c1', name: 'Ada' }] as never,
+          },
+        },
+      });
+      store.dispatch(
+        scriptReviewActions.setReview({
+          bookId: 'book-1',
+          ops: [
+            { id: 1, chapterId: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' },
+            { id: 2, chapterId: 2, op: 'fix_emotion', emotion: 'sad', rationale: 'r' },
+          ],
+          unappliable: [],
+          versionByChapter: { 1: 5, 2: 7 },
+        }),
+      );
+      // Both ops default-selected (strip_tag/fix_emotion aren't in
+      // DEFAULT_OFF) — Apply touches both chapters in one batch.
+      render(
+        <Provider store={store}>
+          <ScriptReviewDiff bookId="book-1" />
+        </Provider>,
+      );
+
+      fireEvent.click(screen.getByTestId('apply-button'));
+
+      // Both chapters were attempted — the throw on chapter 1 did not abort
+      // chapter 2's resolve call.
+      await waitFor(() => expect(resolveSpy).toHaveBeenCalledTimes(2));
+      expect(resolveSpy).toHaveBeenCalledWith('book-1', {
+        chapterId: 1,
+        version: 5,
+        appliedOpKeys: [opKey(1, 1, 'strip_tag')],
+      });
+      expect(resolveSpy).toHaveBeenCalledWith('book-1', {
+        chapterId: 2,
+        version: 7,
+        appliedOpKeys: [opKey(2, 2, 'fix_emotion')],
+      });
+
+      // An error toast surfaced for the failing chapter.
+      await waitFor(() => {
+        const toasts: Toast[] = store.getState().notifications.toasts;
+        expect(toasts.some((t) => t.kind === 'error' && /network down/i.test(t.message))).toBe(true);
+      });
+
+      // Chapter 2's op succeeded and was resolved out of the bucket; chapter
+      // 1's op failed and stays (unresolved, for retry).
+      await waitFor(() => {
+        const bucket = store.getState().scriptReview.byBook['book-1'];
+        expect(bucket?.ops.map((o) => o.id)).toEqual([1]);
+      });
 
       resolveSpy.mockRestore();
     });

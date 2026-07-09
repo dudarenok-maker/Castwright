@@ -876,7 +876,7 @@ export function ManuscriptView({
             >
               <p className="text-sm text-ink/80">
                 You have {confirmGate.count} unresolved suggestion{confirmGate.count === 1 ? '' : 's'} in{' '}
-                {confirmGate.wholeBook ? 'this book' : `chapter ${currentChapter.id}`}. Review them, or discard
+                {confirmGate.wholeBook ? 'this book' : `chapter ${confirmGate.chapterIds[0]}`}. Review them, or discard
                 and start a new review?
               </p>
               <div className="flex items-center gap-3">

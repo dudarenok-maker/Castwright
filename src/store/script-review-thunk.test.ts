@@ -297,11 +297,13 @@ describe('attachToRunningReview', () => {
 });
 
 describe('discardReview', () => {
-  it('calls the discard API then removes the bucket', async () => {
+  it('calls the discard API then removes only the given chapters from the bucket', async () => {
     const dispatch = vi.fn();
     vi.mocked(api.discardScriptReview).mockResolvedValue(undefined);
     await discardReview('book-1', [3, 4], { dispatch });
     expect(api.discardScriptReview).toHaveBeenCalledWith('book-1', [3, 4]);
-    expect(dispatch).toHaveBeenCalledWith(scriptReviewActions.removeBucket({ bookId: 'book-1' }));
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.removeChaptersLocally({ bookId: 'book-1', chapterIds: [3, 4] }),
+    );
   });
 });

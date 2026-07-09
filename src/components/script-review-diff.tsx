@@ -193,21 +193,37 @@ async function resolveAppliedOps(
   for (const [chapterId, opKeys] of byChapter) {
     const version = bucket.versionByChapter[chapterId];
     if (version === undefined) continue;
-    const result = await api.resolveScriptReviewOps(bookId, { chapterId, version, appliedOpKeys: opKeys });
-    if (result.ok) {
-      dispatch(scriptReviewActions.resolveOpsLocally({ bookId, opKeys }));
-    } else {
-      // Stale version — another client/tab already resolved or replaced this
-      // chapter's ledger entry since this bucket loaded. The manuscript
-      // mutation already happened locally (dispatchAcceptedOps runs before
-      // this call), so we can't safely mark it resolved server-side or
-      // silently drop it from the bucket without risking a re-apply on a
-      // second click — surface it instead of swallowing it.
+    try {
+      const result = await api.resolveScriptReviewOps(bookId, { chapterId, version, appliedOpKeys: opKeys });
+      if (result.ok) {
+        dispatch(scriptReviewActions.resolveOpsLocally({ bookId, opKeys }));
+      } else {
+        // Stale version — another client/tab already resolved or replaced this
+        // chapter's ledger entry since this bucket loaded. The manuscript
+        // mutation already happened locally (dispatchAcceptedOps runs before
+        // this call), so we can't safely mark it resolved server-side or
+        // silently drop it from the bucket without risking a re-apply on a
+        // second click — surface it instead of swallowing it.
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'warn',
+            message: `Chapter ${chapterId}'s script-review findings changed elsewhere — reload to see the latest state.`,
+            dedupeKey: `script-review-stale-${bookId}-${chapterId}`,
+          }),
+        );
+      }
+    } catch (err) {
+      // A thrown network/HTTP error must not abort the whole batch — every
+      // other chapter in `appliedOps` still deserves its own resolve
+      // attempt. The manuscript mutation for THIS chapter already applied
+      // locally; it stays unresolved in the bucket/ledger until the user
+      // retries (e.g. re-running or re-applying), same recovery path as the
+      // stale-version case above.
       dispatch(
         notificationsActions.pushToast({
-          kind: 'warn',
-          message: `Chapter ${chapterId}'s script-review findings changed elsewhere — reload to see the latest state.`,
-          dedupeKey: `script-review-stale-${bookId}-${chapterId}`,
+          kind: 'error',
+          message: err instanceof Error ? err.message : `Failed to save chapter ${chapterId}'s script-review resolution.`,
+          dedupeKey: `script-review-resolve-failed-${bookId}-${chapterId}`,
         }),
       );
     }
@@ -307,7 +323,16 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
   async function confirmDismissAll() {
     const chapterIds = [...new Set(ops.map((o) => o.chapterId))];
     setConfirmDismiss(false);
-    await discardReview(bookId, chapterIds, { dispatch });
+    try {
+      await discardReview(bookId, chapterIds, { dispatch });
+    } catch (err) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Failed to discard script-review findings.',
+        }),
+      );
+    }
   }
 
   /* Run the finalized off-roster reattributes through the interleaved
