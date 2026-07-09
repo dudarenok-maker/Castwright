@@ -108,10 +108,31 @@ describe('script-review-ledger', () => {
     } catch (err) {
       throw new Error(`readLedger should not throw on corrupt JSON, but got: ${err}`);
     }
-    // The exact structure returned after filtering depends on the internal state,
-    // but it should at minimum be a valid LedgerFile object, not undefined/null
-    expect(result).toBeDefined();
-    expect(result.nextVersion).toBeDefined();
-    expect(result.entries).toBeDefined();
+    // Verify exact deep equality — no shared references, no pollution
+    expect(result).toEqual({ nextVersion: 1, entries: {} });
+  });
+
+  it('cross-book ledger isolation: second book with missing ledger file does not inherit first book entries', async () => {
+    // Create two independent temp directories (both with no ledger files)
+    const bookDir1 = mkdtempSync(join(tmpdir(), 'script-review-ledger-book1-'));
+    const bookDir2 = mkdtempSync(join(tmpdir(), 'script-review-ledger-book2-'));
+    try {
+      // Upsert a chapter into the first book's ledger
+      await upsertChapterEntry(bookDir1, 'book-1', {
+        chapterId: 10,
+        manuscriptId: 'ms-1',
+        ops: [{ id: 1, op: 'strip_tag' }],
+      });
+
+      // Read the second book's ledger (which has no file, so loadRaw hits the missing-file fallback)
+      const ledger2 = await readLedger(bookDir2, 'ms-1');
+
+      // The second book must have an empty entries object, not inherited from book 1
+      expect(ledger2).toEqual({ nextVersion: 1, entries: {} });
+      expect(ledger2.entries).not.toBe({});  // Ensure it's a fresh object, not a shared constant
+    } finally {
+      rmSync(bookDir1, { recursive: true, force: true });
+      rmSync(bookDir2, { recursive: true, force: true });
+    }
   });
 });
