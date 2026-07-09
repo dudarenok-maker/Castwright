@@ -267,12 +267,20 @@ describe('script-review persistence endpoints', () => {
   it('resolveScriptReviewOps POSTs chapterId/version/appliedOpKeys and returns { ok }', async () => {
     (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, json: async () => ({ ok: true }) });
     const result = await api.resolveScriptReviewOps('book-1', { chapterId: 3, version: 2, appliedOpKeys: ['3:1:strip_tag'] });
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/books/book-1/script-review/resolve',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ chapterId: 3, version: 2, appliedOpKeys: ['3:1:strip_tag'] }) }),
+    );
     expect(result).toEqual({ ok: true });
   });
 
   it('patchScriptReviewSelection PATCHes chapterId/version/selected and returns { ok }', async () => {
     (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, json: async () => ({ ok: false }) });
     const result = await api.patchScriptReviewSelection('book-1', { chapterId: 3, version: 2, selected: { '3:1:strip_tag': false } });
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/books/book-1/script-review/selection',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ chapterId: 3, version: 2, selected: { '3:1:strip_tag': false } }) }),
+    );
     expect(result).toEqual({ ok: false });
   });
 });

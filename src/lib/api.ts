@@ -3281,14 +3281,14 @@ async function mockReviewScript(
   return { reviewedChapters: 1, totalOps: 5 };
 }
 
-interface LedgerEntryDTO {
+export interface LedgerEntryDTO {
   manuscriptId: string;
   version: number;
   ops: unknown[];
   selected: Record<string, boolean>;
   completedAt: string;
 }
-type ScriptReviewStateDTO =
+export type ScriptReviewStateDTO =
   | { kind: 'running'; chapterId?: number; replay: unknown }
   | { kind: 'ledger'; entries: Record<string, LedgerEntryDTO> };
 
