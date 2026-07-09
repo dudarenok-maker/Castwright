@@ -1857,6 +1857,74 @@ describe('ManuscriptView — unresolved-findings badge', () => {
     expect(screen.getByTestId('review-script-chapter')).toHaveTextContent('Review Script');
     expect(screen.getByTestId('review-script-chapter')).not.toHaveTextContent('Review Script (');
   });
+
+  /* PR-gate finding 1 — wholeBookUnresolvedCount must agree with
+     handleReviewScript's targetChapterIds scope (both exclude excluded
+     chapters), or the badge implies a confirm-gate prompt that a click
+     on "Review whole book" then silently skips. */
+  it('excludes an excluded chapter\'s unresolved ops from the whole-book badge, matching the confirm-gate scope', async () => {
+    reviewScript.mockReset();
+    const user = userEvent.setup();
+    const excludedChapter: Chapter = { ...otherChapter, excluded: true };
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+      preloadedState: {
+        scriptReview: {
+          byBook: {
+            'bk-badge-excl': {
+              // The only op is on the now-excluded chapter — a whole-book
+              // review will never touch it, so the badge must not count it.
+              ops: [{ id: 1, op: 'strip_tag', chapterId: 2, rationale: 'r' }],
+              unappliable: [],
+              selected: {},
+              manuscriptId: 'ms-1',
+              versionByChapter: { 2: 1 },
+              visible: true,
+            },
+          },
+          activeStreams: {},
+        } as never,
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'bk-badge-excl',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[badgeChapter, excludedChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[]}
+        />
+      </Provider>,
+    );
+
+    await user.click(screen.getByTestId('review-script-menu-toggle'));
+    const wholeBookButton = screen.getByTestId('review-script-wholebook');
+    expect(wholeBookButton).toHaveTextContent('Review whole book');
+    expect(wholeBookButton).not.toHaveTextContent('unresolved');
+
+    // Clicking through must match the badge: no confirm gate, since the
+    // excluded chapter's op is out of scope for both.
+    await user.click(wholeBookButton);
+    expect(screen.queryByTestId('review-script-confirm-gate')).toBeNull();
+    expect(reviewScript).toHaveBeenCalled();
+  });
 });
 
 describe('ManuscriptView — re-run confirm gate (fs-58 Task 11)', () => {
@@ -1973,5 +2041,73 @@ describe('ManuscriptView — re-run confirm gate (fs-58 Task 11)', () => {
     await waitFor(() => {
       expect(reviewScript).toHaveBeenCalled();
     });
+  });
+
+  /* PR-gate finding 2 — a failed discardScriptReview must surface an error
+     toast instead of silently closing the confirm dialog with no feedback. */
+  it('shows an error toast when "Discard and start new" fails', async () => {
+    discardScriptReview.mockReset();
+    discardScriptReview.mockRejectedValue(new Error('discard boom'));
+    const user = userEvent.setup();
+
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+      preloadedState: {
+        scriptReview: {
+          byBook: {
+            'bk-gate': {
+              ops: [{ id: 1, op: 'strip_tag', chapterId: 1, rationale: 'r' }],
+              unappliable: [],
+              selected: {},
+              manuscriptId: 'ms-1',
+              versionByChapter: { 1: 1 },
+              visible: false,
+            },
+          },
+          activeStreams: {},
+        } as never,
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'bk-gate',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[gateChapter, otherGateChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[]}
+        />
+      </Provider>,
+    );
+
+    await user.click(screen.getByTestId('review-script-chapter'));
+    await user.click(screen.getByTestId('review-script-confirm-discard'));
+
+    await waitFor(() => {
+      const toasts: Toast[] = store.getState().notifications.toasts;
+      expect(toasts.some((t) => t.kind === 'error' && /discard boom/i.test(t.message))).toBe(true);
+    });
+    // The confirm dialog does not reopen — the failure surfaces via toast,
+    // not by reviving the closed dialog.
+    expect(screen.queryByTestId('review-script-confirm-gate')).toBeNull();
+    // A fresh run must NOT have started when the discard itself failed.
+    expect(reviewScript).not.toHaveBeenCalled();
   });
 });

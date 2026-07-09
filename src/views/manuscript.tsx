@@ -768,7 +768,12 @@ export function ManuscriptView({
     bookId ? unresolvedCountForChapters(s.scriptReview?.byBook[bookId], [currentChapter.id]) : 0,
   );
   const wholeBookUnresolvedCount = useAppSelector((s) =>
-    bookId ? unresolvedCountForChapters(s.scriptReview?.byBook[bookId], chapters.map((c) => c.id)) : 0,
+    bookId
+      ? unresolvedCountForChapters(
+          s.scriptReview?.byBook[bookId],
+          chapters.filter((c) => !c.excluded).map((c) => c.id),
+        )
+      : 0,
   );
   /* fs-58 Task 11 — the raw bucket (for unresolvedCountForChapters at click
      time, over an arbitrary target scope) and whether a job is already
@@ -834,8 +839,17 @@ export function ManuscriptView({
     if (!bookId || !confirmGate) return;
     const { wholeBook, chapterIds } = confirmGate;
     setConfirmGate(null);
-    await discardReview(bookId, chapterIds, { dispatch });
-    await startNewReview(wholeBook);
+    try {
+      await discardReview(bookId, chapterIds, { dispatch });
+      await startNewReview(wholeBook);
+    } catch (err) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Failed to discard script-review findings.',
+        }),
+      );
+    }
   }
 
   return (
