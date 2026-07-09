@@ -133,8 +133,15 @@ describe('fs-58 — ScriptReviewDiff', () => {
     // Click Apply
     fireEvent.click(screen.getByTestId('apply-button'));
 
-    // clearReview should have fired → bucket is gone
-    expect(store.getState().scriptReview.byBook['book-A']).toBeUndefined();
+    // fs-58 persistence Task 13 — hideReview fires (NOT clearReview), so the
+    // bucket persists (just hidden). makeStore() doesn't seed versionByChapter,
+    // so resolveAppliedOps has no ledger entry to resolve chapter 1 against and
+    // skips its server call/local resolve — the persisted-resolve path (which
+    // DOES remove a resolved op from the bucket) is covered by the dedicated
+    // Task 13 tests below.
+    const bucketAfterApply = store.getState().scriptReview.byBook['book-A'];
+    expect(bucketAfterApply).toBeDefined();
+    expect(bucketAfterApply?.visible).toBe(false);
 
     // strip_tag (op 1) WAS selected → sentence id=1 text updated
     const sentences = store.getState().manuscript.sentences;
@@ -694,5 +701,147 @@ describe('fs-58 — ScriptReviewDiff', () => {
     expect(createSpy).not.toHaveBeenCalled();
     expect(store.getState().cast.characters).toHaveLength(0);
     expect(store.getState().scriptReview.byBook['book-A']).toBeUndefined();
+  });
+
+  /* fs-58 persistence Task 13 — Apply now resolves the applied ops server-side
+     (design spec §6.5) instead of wiping the whole bucket via clearReview.
+     This is the regression coverage for the Critical bug Round 3 review
+     caught: the old tail's `clearReview` deleted every op in the bucket,
+     including ones the user left unchecked — on the single most common Apply
+     path (a partial selection). Real slice reducers throughout, matching this
+     file's other tests; `api.*` is spied per-test (this file's convention —
+     see the discardScriptReview/createCharacter spies above) rather than a
+     module-level `vi.mock`. */
+  describe('fs-58 persistence Task 13 — resolve applied ops server-side, sync selection state', () => {
+    function makeResolvableStore(bookId = 'book-1') {
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          manuscript: manuscriptSlice.reducer,
+          cast: castSlice.reducer,
+          scriptReview: scriptReviewSlice.reducer,
+          changeLog: changeLogSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: {
+              kind: 'ready',
+              bookId,
+              view: 'manuscript',
+              currentChapterId: 1,
+              openProfileId: null,
+            } as never,
+          },
+          manuscript: {
+            ...manuscriptSlice.getInitialState(),
+            sentences: [
+              { id: 1, chapterId: 1, text: 'Hi tag', characterId: 'c1' },
+              { id: 2, chapterId: 2, text: 'Other.', characterId: 'c1' },
+            ] as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [{ id: 'c1', name: 'Ada' }] as never,
+          },
+        },
+      });
+      store.dispatch(
+        scriptReviewActions.setReview({
+          bookId,
+          ops: [
+            { id: 1, chapterId: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' },
+            { id: 2, chapterId: 2, op: 'fix_emotion', emotion: 'sad', rationale: 'r' },
+          ],
+          unappliable: [],
+          versionByChapter: { 1: 5, 2: 7 },
+        }),
+      );
+      // setReview's DEFAULT_OFF set only covers reattribute/flag_nonstory, so
+      // both ops default selected. Deselect the chapter-2 op to simulate the
+      // user leaving it unchecked — the scenario the Critical bug lost.
+      store.dispatch(scriptReviewActions.toggleOp({ bookId, key: opKey(2, 2, 'fix_emotion') }));
+      return store;
+    }
+
+    it("Apply calls resolveScriptReviewOps with exactly the applied ops' keys, grouped per chapter", async () => {
+      const resolveSpy = vi.spyOn(api, 'resolveScriptReviewOps').mockResolvedValue({ ok: true });
+      const store = makeResolvableStore('book-1');
+      render(
+        <Provider store={store}>
+          <ScriptReviewDiff bookId="book-1" />
+        </Provider>,
+      );
+
+      fireEvent.click(screen.getByTestId('apply-button'));
+
+      await waitFor(() => {
+        expect(resolveSpy).toHaveBeenCalledWith('book-1', {
+          chapterId: 1,
+          version: 5,
+          appliedOpKeys: [opKey(1, 1, 'strip_tag')],
+        });
+      });
+      expect(resolveSpy).not.toHaveBeenCalledWith(
+        'book-1',
+        expect.objectContaining({ chapterId: 2 }),
+      );
+
+      resolveSpy.mockRestore();
+    });
+
+    it('unselected ops remain in the bucket after Apply — regression test for the prior discard-everything behavior', async () => {
+      const resolveSpy = vi.spyOn(api, 'resolveScriptReviewOps').mockResolvedValue({ ok: true });
+      const store = makeResolvableStore('book-1');
+      render(
+        <Provider store={store}>
+          <ScriptReviewDiff bookId="book-1" />
+        </Provider>,
+      );
+
+      fireEvent.click(screen.getByTestId('apply-button'));
+
+      await waitFor(() => {
+        expect(resolveSpy).toHaveBeenCalled();
+      });
+      // The chapter-2 op was left unselected — it must still be in the store,
+      // not wiped by a whole-bucket clearReview call.
+      await waitFor(() => {
+        const bucket = store.getState().scriptReview.byBook['book-1'];
+        expect(bucket?.ops).toEqual([
+          expect.objectContaining({ id: 2, chapterId: 2, op: 'fix_emotion' }),
+        ]);
+      });
+
+      resolveSpy.mockRestore();
+    });
+
+    it("toggling a checkbox schedules a debounced selection PATCH with the chapter's version", () => {
+      vi.useFakeTimers();
+      const patchSpy = vi.spyOn(api, 'patchScriptReviewSelection').mockResolvedValue({ ok: true });
+      const store = makeResolvableStore('book-1');
+      render(
+        <Provider store={store}>
+          <ScriptReviewDiff bookId="book-1" />
+        </Provider>,
+      );
+
+      const key = opKey(1, 1, 'strip_tag');
+      fireEvent.click(screen.getByTestId(`op-toggle-${key}`));
+
+      // No PATCH yet — still inside the debounce window.
+      expect(patchSpy).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(500);
+
+      expect(patchSpy).toHaveBeenCalledWith('book-1', {
+        chapterId: 1,
+        version: 5,
+        selected: { [key]: false },
+      });
+
+      patchSpy.mockRestore();
+      vi.useRealTimers();
+    });
   });
 });

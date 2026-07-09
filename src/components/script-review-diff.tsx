@@ -171,6 +171,33 @@ function OpPreview({
    (possibly edited) proposed name OR a rewrite to an existing roster member. */
 type FinalizedProposed = ReviewOpWithChapter;
 
+/* fs-58 persistence Task 13 — mirror a batch of already-applied ops into the
+   server ledger (design spec §4.2's per-chapter /resolve) and, on success,
+   remove exactly those ops from the local bucket via resolveOpsLocally. This
+   is what replaced the old handleApply tail's whole-bucket `clearReview` —
+   that call deleted every op in the bucket, including ones the user left
+   unchecked, which is the silent-data-loss bug this plan exists to fix. A
+   chapter missing from `versionByChapter` (no ledger entry to resolve
+   against) is skipped rather than resolved — nothing local changes for it. */
+async function resolveAppliedOps(
+  dispatch: Dispatch,
+  bookId: string,
+  bucket: { versionByChapter: Record<number, number> },
+  appliedOps: ReviewOpWithChapter[],
+): Promise<void> {
+  const byChapter = new Map<number, string[]>();
+  for (const op of appliedOps) {
+    const key = opKey(op.chapterId, op.id, op.op);
+    byChapter.set(op.chapterId, [...(byChapter.get(op.chapterId) ?? []), key]);
+  }
+  for (const [chapterId, opKeys] of byChapter) {
+    const version = bucket.versionByChapter[chapterId];
+    if (version === undefined) continue;
+    const result = await api.resolveScriptReviewOps(bookId, { chapterId, version, appliedOpKeys: opKeys });
+    if (result.ok) dispatch(scriptReviewActions.resolveOpsLocally({ bookId, opKeys }));
+  }
+}
+
 export function ScriptReviewDiff({ bookId }: { bookId: string }) {
   const dispatch = useAppDispatch();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -204,6 +231,12 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
      and never touch this state. */
   const [confirmDismiss, setConfirmDismiss] = useState(false);
 
+  /* fs-58 persistence Task 13 — debounce the selection PATCH per chapter so a
+     burst of checkbox toggles collapses into one network call. Keyed by
+     chapterId (not a single timer) so toggles across different chapters
+     don't cancel each other's pending sync. */
+  const selectionSyncTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+
   if (!bucket) return null;
 
   const { ops, selected, unappliable } = bucket;
@@ -217,6 +250,24 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
   }
 
   const selectedCount = ops.filter((o) => selected[opKey(o.chapterId, o.id, o.op)]).length;
+
+  /* fs-58 persistence Task 13 — mirror the operator's checkbox state to the
+     server (design spec §6.5's selection PATCH) 500ms after the last toggle
+     for that chapter, so the persisted ledger stays in sync with what the
+     modal shows without a round-trip on every click. */
+  function scheduleSelectionSync(chapterId: number, currentSelected: Record<string, boolean>) {
+    clearTimeout(selectionSyncTimers.current[chapterId]);
+    selectionSyncTimers.current[chapterId] = setTimeout(() => {
+      const version = bucket?.versionByChapter[chapterId];
+      if (version === undefined) return;
+      const chapterSelected: Record<string, boolean> = {};
+      for (const op of ops) {
+        if (op.chapterId !== chapterId) continue;
+        chapterSelected[opKey(op.chapterId, op.id, op.op)] = !!currentSelected[opKey(op.chapterId, op.id, op.op)];
+      }
+      void api.patchScriptReviewSelection(bookId, { chapterId, version, selected: chapterSelected });
+    }, 500);
+  }
 
   function handleClose() {
     dispatch(scriptReviewActions.hideReview({ bookId }));
@@ -342,7 +393,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
     ) as ReviewOpWithChapter[];
     const directOps = appliable.filter(
       (o) => !(o.op === 'reattribute' && o.proposed && !o.characterId),
-    );
+    ) as ReviewOpWithChapter[];
 
     dispatchAcceptedOps(
       dispatch,
@@ -353,13 +404,30 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
           dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 })),
       },
     );
+    // fs-58 persistence Task 13 — resolve directOps server-side UNCONDITIONALLY
+    // whenever there are any, before the proposedOps early-return below. A
+    // mixed batch (some direct ops + some off-roster proposed ops) would
+    // otherwise skip past the old tail entirely and never resolve directOps.
+    if (bucket && directOps.length > 0) {
+      void resolveAppliedOps(dispatch, startBookId, bucket, directOps);
+    }
 
     if (proposedOps.length > 0) {
       setConfirm({ queue: proposedOps, index: 0, finalized: [], startBookId });
-      return; // clearReview happens after the confirm queue resolves
+      return; // the confirm queue's own cleanup (Task 14) handles this path
     }
 
-    dispatch(scriptReviewActions.clearReview({ bookId: startBookId }));
+    // fs-58 persistence Task 13 — hide the modal, don't wipe the bucket.
+    // clearReview deleted the WHOLE bucket, including any op the user left
+    // unchecked — the exact silent-data-loss bug this plan exists to fix.
+    // hideReview only flips `visible`; anything resolveOpsLocally hasn't
+    // (yet, or ever) removed stays reachable via the badge/"Review existing"
+    // path (Task 11). resolveAppliedOps above is fire-and-forget (`void`), so
+    // it may still be in flight here; once it resolves, resolveOpsLocally's
+    // own empty-bucket cleanup (Task 6) deletes the bucket if every op ended
+    // up resolved — hideReview on an already- or soon-to-be-deleted bucket is
+    // a documented no-op (Task 6's reducer guards on `if (bucket)`).
+    dispatch(scriptReviewActions.hideReview({ bookId: startBookId }));
   }
 
   // fs-58 Unit B — the active confirm-queue op (off-roster reattribute), if any.
@@ -522,9 +590,14 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                         data-testid={`class-toggle-${cls}`}
                         checked={allClassSelected}
                         accent="ink"
-                        onChange={() =>
-                          dispatch(scriptReviewActions.toggleClass({ bookId, op: cls as ReviewOpWithChapter['op'] }))
-                        }
+                        onChange={() => {
+                          dispatch(scriptReviewActions.toggleClass({ bookId, op: cls as ReviewOpWithChapter['op'] }));
+                          const nextSelected = { ...selected };
+                          for (const o of classOps) nextSelected[opKey(o.chapterId, o.id, o.op)] = !allClassSelected;
+                          for (const chapterId of new Set(classOps.map((o) => o.chapterId))) {
+                            scheduleSelectionSync(chapterId, nextSelected);
+                          }
+                        }}
                       />
                       Select all
                     </label>
@@ -551,7 +624,10 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                             data-testid={`op-toggle-${key}`}
                             checked={isSelected}
                             accent="ink"
-                            onChange={() => dispatch(scriptReviewActions.toggleOp({ bookId, key }))}
+                            onChange={() => {
+                              dispatch(scriptReviewActions.toggleOp({ bookId, key }));
+                              scheduleSelectionSync(op.chapterId, { ...selected, [key]: !selected[key] });
+                            }}
                             aria-label={`Toggle this ${op.op} suggestion`}
                           />
                         </label>
