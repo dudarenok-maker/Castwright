@@ -557,6 +557,75 @@ describe('script-review-slice — bucket merge preserves other chapters (Finding
   });
 });
 
+describe('script-review-slice — mergeHydratedBucket preserves other chapters (fs-58 follow-up #1481)', () => {
+  it('merging chapter 5 does not wipe chapter 9, already in the bucket from a concurrent sibling dispatch', () => {
+    let state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.setReview({
+        bookId: 'b1',
+        ops: [makeOp(2, 'strip_tag', 9)],
+        unappliable: [],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 9: 1 },
+      }),
+    );
+    expect(state.byBook['b1']!.ops.map((o) => o.chapterId)).toEqual([9]);
+
+    // The reattach 404 fallback re-hydrates chapter 5 from a fresh ledger
+    // snapshot that only knows about chapter 5 — mergeHydratedBucket must
+    // preserve chapter 9, unlike hydrateBucket's wholesale replace.
+    state = scriptReviewSlice.reducer(
+      state,
+      scriptReviewActions.mergeHydratedBucket({
+        bookId: 'b1',
+        ops: [makeOp(1, 'strip_tag', 5)],
+        unappliable: [],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 5: 3 },
+        selected: { '5:1:strip_tag': true },
+      }),
+    );
+
+    const bucket = state.byBook['b1']!;
+    expect(bucket.ops.map((o) => o.chapterId).sort()).toEqual([5, 9]);
+    expect(bucket.versionByChapter).toEqual({ 5: 3, 9: 1 });
+  });
+
+  it('re-merging a chapter that already had ops supersedes only that chapter, using the explicit selected map (not DEFAULT_OFF)', () => {
+    let state = scriptReviewSlice.reducer(
+      undefined,
+      scriptReviewActions.mergeHydratedBucket({
+        bookId: 'b1',
+        ops: [makeOp(1, 'reattribute', 1)],
+        unappliable: [],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 1: 1 },
+        // Explicit override — reattribute defaults OFF under setReview's
+        // DEFAULT_OFF, but mergeHydratedBucket must honor the caller's
+        // already-resolved persisted selection instead.
+        selected: { '1:1:reattribute': true },
+      }),
+    );
+    expect(state.byBook['b1']!.selected['1:1:reattribute']).toBe(true);
+
+    state = scriptReviewSlice.reducer(
+      state,
+      scriptReviewActions.mergeHydratedBucket({
+        bookId: 'b1',
+        ops: [makeOp(9, 'fix_emotion', 1)],
+        unappliable: [],
+        manuscriptId: 'ms-1',
+        versionByChapter: { 1: 2 },
+        selected: { '1:9:fix_emotion': false },
+      }),
+    );
+    const bucket = state.byBook['b1']!;
+    expect(bucket.ops.map((o) => o.id)).toEqual([9]);
+    expect(bucket.selected).toEqual({ '1:9:fix_emotion': false });
+    expect(bucket.versionByChapter).toEqual({ 1: 2 });
+  });
+});
+
 describe('script-review-slice — hydrateBucket preserves visibility (Finding 2)', () => {
   it('hydrateBucket does not force a hidden bucket back to visible on remount', () => {
     let state = scriptReviewSlice.reducer(

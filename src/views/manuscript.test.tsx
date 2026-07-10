@@ -34,17 +34,18 @@ import type { Chapter, Character, Sentence } from '../lib/types';
    (fetch-backed) implementation would fire in every test. Default resolves
    to an empty ledger so pre-existing tests that don't care about hydration
    stay inert (hydrateScriptReview's early-return on zero entries). */
-const { reviewScript, createCharacter, getScriptReviewState, discardScriptReview } = vi.hoisted(() => ({
+const { reviewScript, createCharacter, getScriptReviewState, discardScriptReview, cancelScriptReview } = vi.hoisted(() => ({
   reviewScript: vi.fn(),
   createCharacter: vi.fn(),
   getScriptReviewState: vi.fn().mockResolvedValue({ kind: 'ledger', entries: {} }),
   discardScriptReview: vi.fn().mockResolvedValue(undefined),
+  cancelScriptReview: vi.fn().mockResolvedValue({ ok: true, cancelled: false }),
 }));
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>();
   return {
     ...actual,
-    api: { ...(actual as { api: object }).api, reviewScript, createCharacter, getScriptReviewState, discardScriptReview },
+    api: { ...(actual as { api: object }).api, reviewScript, createCharacter, getScriptReviewState, discardScriptReview, cancelScriptReview },
   };
 });
 
@@ -1280,6 +1281,71 @@ describe('ManuscriptView — script-review planApply quarantine at seed', () => 
     /* Settle the mock's promise before the test ends so no dangling
        in-flight review stream outlives this test (avoids polluting the
        next test / cleanup). */
+    triggerResolve();
+    reviewScript.mockReset();
+  });
+
+  it('clicking Cancel on the progress pill calls api.cancelScriptReview with the book id', async () => {
+    const user = userEvent.setup();
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          sentences: [liveSentence] as never,
+        },
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId: 'bk-1',
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+      },
+    });
+
+    let triggerResolve!: () => void;
+    reviewScript.mockImplementation(
+      (
+        _bookId: string,
+        opts?: { onPhase?: (e: { progress: number; label?: string }) => void },
+      ) => {
+        opts?.onPhase?.({ progress: 0.3, label: 'Reviewing script' });
+        return new Promise<void>((resolve) => {
+          triggerResolve = resolve;
+        });
+      },
+    );
+
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[quarantineChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[liveSentence]}
+        />
+      </Provider>,
+    );
+
+    await user.click(screen.getByTestId('review-script-chapter'));
+    await waitFor(() => expect(screen.getByTestId('review-script-progress')).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(cancelScriptReview).toHaveBeenCalledWith('bk-1');
+
+    /* Settle the mock's promise before the test ends — same cleanup
+       discipline as the sibling "shows chapter count + ETA" test above. */
     triggerResolve();
     reviewScript.mockReset();
   });

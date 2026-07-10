@@ -536,6 +536,84 @@ scriptReviewRouter.patch(
   },
 );
 
+scriptReviewRouter.post(
+  '/:bookId/script-review/cancel',
+  async (req: Request, res: Response): Promise<void> => {
+    const { bookId } = req.params;
+    // Book-level, not chapter-scoped (design spec §4.1): aborts whichever
+    // job(s) are running for this book — the whole-book job if present,
+    // plus every single-chapter subset job. Deliberately skips
+    // findBookByBookId (unlike every other route in this file) — this
+    // only touches in-memory job maps, so an unknown bookId is
+    // indistinguishable from "nothing running for this book" and both
+    // correctly no-op.
+    const main = mainScriptReviewJobByBook.get(bookId);
+    const subsets = [...subsetScriptReviewJobByChapter.entries()].filter(([, j]) => j.bookId === bookId);
+    let cancelled = false;
+
+    // Remove every job from the registry IMMEDIATELY, synchronously — not
+    // just via runScriptReviewJob's own eventual `.finally()` cleanup,
+    // which only fires once the in-flight analyzer call actually rejects
+    // from the abort signal (a genuine LLM call may not do so instantly).
+    // Without this, a same-scope retry in that window would find the
+    // doomed job still registered and JOIN it (getting an immediate
+    // cancelled event instead of starting fresh), a cross-scope retry
+    // would 409 against a job that's already cancelled, and GET /state
+    // would keep reporting it as running — all directly undermining the
+    // "cancel, then start fresh immediately" UX this route exists for.
+    // Deleting here is always safe even for a job that turns out to
+    // already be aborted: runScriptReviewJob's own `.finally()` delete is
+    // keyed on `targetMap.get(registeredKey) === registeredJob`, so it
+    // safely no-ops once we've already removed the entry.
+    if (main) {
+      if (!main.controller.signal.aborted) {
+        main.controller.abort();
+        cancelled = true;
+      }
+      mainScriptReviewJobByBook.delete(bookId);
+    }
+    for (const [key, job] of subsets) {
+      if (!job.controller.signal.aborted) {
+        job.controller.abort();
+        cancelled = true;
+      }
+      subsetScriptReviewJobByChapter.delete(key);
+    }
+    res.status(200).json({ ok: true, cancelled });
+  },
+);
+
+scriptReviewRouter.post(
+  '/:bookId/script-review/attach',
+  async (req: Request, res: Response): Promise<void> => {
+    const { bookId } = req.params;
+    const requestedChapterId: number | undefined =
+      typeof req.body?.chapterId === 'number' ? req.body.chapterId : undefined;
+
+    // Join-only — the create route's join branch, minus the create half.
+    // No new job is ever registered here (design spec §4.2): a scope with
+    // no matching entry in either map 404s instead of falling through to
+    // create, which is what closes the reattach TOCTOU race.
+    const job =
+      requestedChapterId !== undefined
+        ? subsetScriptReviewJobByChapter.get(subsetKey(bookId, requestedChapterId))
+        : mainScriptReviewJobByBook.get(bookId);
+
+    if (!job) {
+      res.status(404).json({ error: 'No running review to attach to.' });
+      return;
+    }
+
+    setUpSse(res);
+    const sub = makeSubscriber(res);
+    attachSubscriber(job, sub);
+    res.on('close', () => {
+      job.subscribers.delete(sub);
+      clearInterval(sub.keepAlive);
+    });
+  },
+);
+
 function setUpSse(res: Response): void {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -672,6 +750,16 @@ async function runScriptReviewJob(
           send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
         }
       }
+      if (job.controller.signal.aborted) {
+        // Cancelled mid-chapter: skip the checkpoint for this one chapter
+        // entirely rather than persisting a partial result under a
+        // "reviewed" chapter id. Mirrors the existing crash-recovery
+        // invariant (a chapter only checkpoints once every one of its
+        // chunks has been reviewed) — a cancel and a crash now leave the
+        // ledger in the same shape for whichever chapter was in flight
+        // (design spec §4.1).
+        break;
+      }
       ({ actualMsTotal, actualCharsTotal } = accumulateChapterPacing({ actualMsTotal, actualCharsTotal }, chapterStartedAt, charsByChapter.get(chapterId) ?? 0));
       reviewedChapters += 1;
 
@@ -703,7 +791,9 @@ async function runScriptReviewJob(
   } finally {
     for (const sub of job.subscribers) clearInterval(sub.keepAlive);
   }
-  if (!job.controller.signal.aborted) {
+  if (job.controller.signal.aborted) {
+    send({ kind: 'error', code: 'cancelled', message: 'Review cancelled.' });
+  } else {
     send({ kind: 'phase', phaseId: 0, progress: 1, label: 'Done' });
     send({ kind: 'result', done: true, reviewedChapters, totalOps });
   }

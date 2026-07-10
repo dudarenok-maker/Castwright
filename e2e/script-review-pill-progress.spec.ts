@@ -66,4 +66,36 @@ test.describe('script-review pill progress (analysis-pill Task 10)', () => {
     /* Pill returns to idle once scriptReviewActions.clear fires in finally. */
     await expect(pill).not.toContainText('Analysing', { timeout: 3_000 });
   });
+
+  test('cancel button stops an in-flight review — pill clears, button re-enables, a fresh review can start (fs-58 follow-up #1481)', async ({
+    page,
+  }) => {
+    await page.goto('/#/books/sb/manuscript');
+    await expect(page.getByRole('heading', { name: /^Chapter \d+/i, level: 1 })).toBeVisible({
+      timeout: 10_000,
+    });
+
+    const reviewBtn = page.getByTestId('review-script-chapter');
+    await expect(reviewBtn).toBeVisible({ timeout: 5_000 });
+    await expect(reviewBtn).toBeEnabled();
+    await reviewBtn.click();
+
+    const pill = page.getByTestId('review-script-progress');
+    await expect(pill).toBeVisible({ timeout: 5_000 });
+
+    const cancelBtn = pill.getByRole('button', { name: 'Cancel' });
+    await expect(cancelBtn).toBeVisible({ timeout: 3_000 });
+    await cancelBtn.click();
+
+    /* mockReviewScript's next cancellation checkpoint after the click lands
+       ~500ms later (its wait(500) between phase ticks) — generous timeout
+       so this isn't a race against the mock's own internal timing. */
+    await expect(pill).toBeHidden({ timeout: 3_000 });
+    await expect(reviewBtn).toBeEnabled({ timeout: 3_000 });
+
+    /* A fresh review can start immediately after — the 409-shaped
+       conflict-lock this whole feature exists to release is gone. */
+    await reviewBtn.click();
+    await expect(pill).toBeVisible({ timeout: 5_000 });
+  });
 });

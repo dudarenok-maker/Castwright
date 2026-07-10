@@ -986,6 +986,237 @@ describe('sticky job registry', () => {
   });
 });
 
+describe('cancellation (fs-58 follow-up #1481)', () => {
+  it('cancel aborts a running whole-book job, sends a cancelled terminal event, and skips the in-flight chapter\'s checkpoint', async () => {
+    const { readLedger } = await import('../workspace/script-review-ledger.js');
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
+    ]);
+    let releaseChapter1: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview.mockImplementationOnce(
+      () => new Promise<ScriptReviewOutput>((resolve) => { releaseChapter1 = resolve; }),
+    );
+    runReview.mockResolvedValue({ ops: [] });
+
+    const { done } = firePost(`/api/books/${bookId}/script-review`, {});
+    done.catch(() => {});
+    await new Promise((r) => setTimeout(r, 20)); // let chapter 1's job register and reach the gated analyzer call
+
+    const cancelRes = await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
+    expect(cancelRes.status).toBe(200);
+    expect(cancelRes.body).toEqual({ ok: true, cancelled: true });
+
+    releaseChapter1?.({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+    const res = await done;
+
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.kind === 'error' && e.code === 'cancelled')).toBe(true);
+    expect(events.some((e) => e.kind === 'result')).toBe(false);
+    expect(events.some((e) => e.kind === 'checkpoint')).toBe(false);
+
+    const ledger = await readLedger(bookDir(), manuscriptId);
+    expect(ledger.entries['1']).toBeUndefined();
+  });
+
+  it('cancel is idempotent — no job running for the book returns cancelled:false', async () => {
+    const res = await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, cancelled: false });
+  });
+
+  it('cancel aborts every running subset job for a book independently of a main job', async () => {
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Chapter one.' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'Chapter two.' },
+    ]);
+    let releaseCh1: ((v: ScriptReviewOutput) => void) | undefined;
+    let releaseCh2: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview.mockImplementation(async (_m, chapterId): Promise<ScriptReviewOutput> => {
+      if (chapterId === 1) return new Promise((resolve) => { releaseCh1 = resolve; });
+      return new Promise((resolve) => { releaseCh2 = resolve; });
+    });
+
+    const ch1 = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    ch1.done.catch(() => {});
+    const ch2 = firePost(`/api/books/${bookId}/script-review`, { chapterId: 2 });
+    ch2.done.catch(() => {});
+    await new Promise((r) => setTimeout(r, 20));
+
+    const cancelRes = await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
+    expect(cancelRes.body).toEqual({ ok: true, cancelled: true });
+
+    releaseCh1?.({ ops: [] });
+    releaseCh2?.({ ops: [] });
+    const [res1, res2] = await Promise.all([ch1.done, ch2.done]);
+
+    expect(parseSse(res1.text).some((e) => e.kind === 'error' && e.code === 'cancelled')).toBe(true);
+    expect(parseSse(res2.text).some((e) => e.kind === 'error' && e.code === 'cancelled')).toBe(true);
+  });
+
+  it('a chapter fully completed before the cancel is still checkpointed and kept', async () => {
+    const { readLedger } = await import('../workspace/script-review-ledger.js');
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Chapter one.' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'Chapter two.' },
+    ]);
+    let releaseChapter2: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview
+      .mockResolvedValueOnce({ ops: [{ id: 1, op: 'strip_tag', newText: 'Chapter one fixed', rationale: 'r' }] })
+      .mockImplementationOnce(
+        () => new Promise<ScriptReviewOutput>((resolve) => { releaseChapter2 = resolve; }),
+      );
+
+    const { done } = firePost(`/api/books/${bookId}/script-review`, {});
+    done.catch(() => {});
+    await new Promise((r) => setTimeout(r, 20)); // let chapter 1 finish and chapter 2's gated call start
+
+    await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
+    releaseChapter2?.({ ops: [] });
+    await done;
+
+    const ledger = await readLedger(bookDir(), manuscriptId);
+    expect(ledger.entries['1'].ops).toHaveLength(1); // chapter 1 (finished before cancel) survives
+    expect(ledger.entries['2']).toBeUndefined(); // chapter 2 (in flight at cancel) does not
+  });
+
+  /* Regression for the code-review-workflow finding: cancel used to only
+     abort the job's controller, never removing it from the registry maps
+     — that only happened later, asynchronously, once the in-flight
+     analyzer call actually rejected from the abort (which can take a
+     real amount of time for a genuine LLM call). In that window, a
+     same-scope retry would find the doomed job still registered and JOIN
+     it instead of starting fresh, silently defeating the
+     cancel-then-restart-immediately UX this route exists for. */
+  it('cancel immediately removes the job from the registry, so a same-scope retry starts fresh instead of joining the doomed job', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let releaseFirst: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview.mockImplementationOnce(
+      () => new Promise<ScriptReviewOutput>((resolve) => { releaseFirst = resolve; }),
+    );
+    runReview.mockResolvedValue({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+
+    const { done: firstDone } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    firstDone.catch(() => {});
+    await new Promise((r) => setTimeout(r, 20)); // let the first job register and reach the gated call
+
+    const cancelRes = await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
+    expect(cancelRes.body).toEqual({ ok: true, cancelled: true });
+
+    // Retry the SAME scope immediately — WITHOUT waiting for the first
+    // (still-gated, not-yet-actually-rejected) job to settle. This is the
+    // exact race the finding describes.
+    const second = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    // A genuinely new analyzer call was made — the second request did NOT
+    // join the doomed first job.
+    expect(runReview).toHaveBeenCalledTimes(2);
+
+    releaseFirst?.({ ops: [] });
+    const secondRes = await second.done;
+    expect(secondRes.status).toBe(200);
+    expect(secondRes.text).toContain('"kind":"ops"');
+    expect(secondRes.text).not.toContain('"code":"cancelled"');
+  });
+
+  it('cancel immediately clears the conflict lock, so a cross-scope retry does not 409 against the doomed job', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let releaseFirst: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview.mockImplementationOnce(
+      () => new Promise<ScriptReviewOutput>((resolve) => { releaseFirst = resolve; }),
+    );
+    runReview.mockResolvedValue({ ops: [] });
+
+    const { done: wholeBookDone } = firePost(`/api/books/${bookId}/script-review`, {});
+    wholeBookDone.catch(() => {});
+    await new Promise((r) => setTimeout(r, 20));
+
+    await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
+
+    const chapterRes = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
+    expect(chapterRes.status).toBe(200); // not 409 — the cancelled whole-book job no longer holds the lock
+
+    releaseFirst?.({ ops: [] });
+    await wholeBookDone;
+  });
+
+  it('cancel immediately clears the job from GET /state instead of still reporting it as running', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let releaseFirst: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview.mockImplementationOnce(
+      () => new Promise<ScriptReviewOutput>((resolve) => { releaseFirst = resolve; }),
+    );
+
+    const { done } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    done.catch(() => {});
+    await new Promise((r) => setTimeout(r, 20));
+
+    await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
+
+    const state = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(state.body.kind).toBe('ledger');
+
+    releaseFirst?.({ ops: [] });
+    await done;
+  });
+});
+
+describe('reattach-only endpoint (fs-58 follow-up #1481)', () => {
+  it('attach joins a live job and replays its buffered events, without starting a second analyzer call', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let release: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview.mockImplementation(async () => new Promise<ScriptReviewOutput>((resolve) => { release = resolve; }));
+
+    const first = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const attach = firePost(`/api/books/${bookId}/script-review/attach`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    release?.({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+    const [, attachRes] = await Promise.all([first.done, attach.done]);
+
+    expect(runReview).toHaveBeenCalledTimes(1); // attach joined, did not start a second analyzer call
+    expect(attachRes.text).toContain('"kind":"ops"');
+    expect(attachRes.text).toContain('strip_tag');
+  });
+
+  it('attach 404s when no job matches the requested chapter, and leaves the actually-running chapter untouched', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    runReview.mockResolvedValue({ ops: [] });
+    const running = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const res = await request(app).post(`/api/books/${bookId}/script-review/attach`).send({ chapterId: 2 });
+    expect(res.status).toBe(404);
+
+    await running.done;
+  });
+
+  it('attach 404s when no job is running at all for the book', async () => {
+    const res = await request(app).post(`/api/books/${bookId}/script-review/attach`).send({});
+    expect(res.status).toBe(404);
+  });
+
+  it('attach to a whole-book job (no chapterId) joins it and replays events', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let release: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview.mockImplementation(async () => new Promise<ScriptReviewOutput>((resolve) => { release = resolve; }));
+
+    const first = firePost(`/api/books/${bookId}/script-review`, {});
+    await new Promise((r) => setTimeout(r, 20));
+
+    const attach = firePost(`/api/books/${bookId}/script-review/attach`, {});
+    await new Promise((r) => setTimeout(r, 20));
+
+    release?.({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+    const [, attachRes] = await Promise.all([first.done, attach.done]);
+
+    expect(attachRes.text).toContain('"kind":"ops"');
+  });
+});
+
 describe('ledger checkpointing', () => {
   it('checkpoints a chapter to the ledger as soon as it completes, even with zero subscribers attached', async () => {
     const { readLedger } = await import('../workspace/script-review-ledger.js');

@@ -3,15 +3,28 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../lib/api', () => ({
   api: {
     reviewScript: vi.fn(),
+    attachScriptReview: vi.fn(),
     getScriptReviewState: vi.fn(),
     discardScriptReview: vi.fn(),
     resolveScriptReviewOps: vi.fn(),
     patchScriptReviewSelection: vi.fn(),
   },
+  // Re-derived here (mirrors analysis-stream-middleware.test.ts's identical
+  // AnalysisError pattern) so `err instanceof ReviewScriptError` inside
+  // script-review-thunk.ts's own code resolves against the SAME class
+  // reference this mock factory exports — a plain vi.fn()-based stub
+  // couldn't satisfy an instanceof check.
+  ReviewScriptError: class ReviewScriptError extends Error {
+    code: string;
+    constructor(message: string, code: string) {
+      super(message);
+      this.code = code;
+    }
+  },
 }));
 
 import { configureStore } from '@reduxjs/toolkit';
-import { api } from '../lib/api';
+import { api, ReviewScriptError } from '../lib/api';
 import type { ReviewScriptOpts } from '../lib/api';
 import { runReviewScript, hydrateScriptReview, attachToRunningReview, discardReview } from './script-review-thunk';
 import { scriptReviewActions, scriptReviewSlice } from './script-review-slice';
@@ -79,6 +92,29 @@ describe('runReviewScript', () => {
       totalChapters: 3,
       estRemainingMs: 20_000,
     });
+  });
+
+  /* Regression for the code-review-workflow finding: a clean run that
+     finds nothing to change (zero ops, zero failures) must still dispatch
+     setReview with empty arrays — that's what drives
+     ScriptReviewDiff's "No suggestions found" empty state
+     (data-testid="script-review-empty"). An earlier draft of the
+     cancellation fix accidentally gated this dispatch on
+     appliable/unappliable being non-empty, silently suppressing it. */
+  it('a clean review with zero ops still dispatches setReview so the empty state can show', async () => {
+    vi.mocked(api.reviewScript).mockImplementation(
+      async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+        opts.onPhase?.({ progress: 1 });
+        return { reviewedChapters: 1, totalOps: 0 };
+      },
+    );
+    const dispatch = vi.fn();
+    await runReviewScript('b1', {
+      dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<string>(), manuscriptId: 'ms-1',
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.setReview({ bookId: 'b1', ops: [], unappliable: [], manuscriptId: 'ms-1', versionByChapter: {} }),
+    );
   });
 });
 
@@ -264,7 +300,7 @@ describe('hydrateScriptReview', () => {
     });
     // attachToRunningReview's join replays the running job's own chapter's
     // ops via api.reviewScript's onOps/onCheckpoint callbacks.
-    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+    vi.mocked(api.attachScriptReview).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
       opts.onCheckpoint?.({ chapterId: 7, version: 1 });
       opts.onOps?.({ chapterId: 7, ops: [{ id: 2, op: 'strip_tag', newText: 'Chapter seven fixed', rationale: 'r' }] });
       return { reviewedChapters: 1, totalOps: 1 } as never;
@@ -346,10 +382,10 @@ describe('hydrateScriptReview', () => {
       ],
       entries: {},
     });
-    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
-      // Both joins replay through the same api.reviewScript mock — key off
-      // the requested chapterId (threaded via opts) to reply with each
-      // job's own ops, so the two attaches don't cross-contaminate.
+    vi.mocked(api.attachScriptReview).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      // Both joins replay through the same api.attachScriptReview mock —
+      // key off the requested chapterId (threaded via opts) to reply with
+      // each job's own ops, so the two attaches don't cross-contaminate.
       const chapterId = opts.chapterId;
       if (chapterId === 5) {
         opts.onCheckpoint?.({ chapterId: 5, version: 1 });
@@ -413,7 +449,7 @@ describe('hydrateScriptReview', () => {
     const ninePromise = new Promise<void>((r) => {
       resolveNine = r;
     });
-    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+    vi.mocked(api.attachScriptReview).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
       if (opts.chapterId === 5) await fivePromise;
       else if (opts.chapterId === 9) await ninePromise;
       return { reviewedChapters: 1, totalOps: 0 } as never;
@@ -478,6 +514,29 @@ describe('runReviewScript — version delivery', () => {
   });
 });
 
+/* Regression for the code-review-workflow finding: a successful join that
+   resolves with zero new ops (e.g. a reattach whose remaining stream
+   contributed nothing new) must still dispatch setReview with empty
+   arrays — an earlier draft of the cancellation fix accidentally gated
+   this on appliable/unappliable being non-empty, making a genuinely
+   clean reattach indistinguishable from a silent failure. */
+describe('attachToRunningReview — empty successful join (fs-58 follow-up #1481)', () => {
+  it('a join that resolves with zero new ops still dispatches setReview', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.attachScriptReview).mockResolvedValue({ reviewedChapters: 1, totalOps: 0 } as never);
+
+    await attachToRunningReview(
+      'book-1',
+      { chapterId: 5, replay: { lastPhase: null } },
+      { dispatch, sentences: [], characterIds: new Set(), manuscriptId: 'ms-1' },
+    );
+
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.setReview({ bookId: 'book-1', ops: [], unappliable: [], manuscriptId: 'ms-1', versionByChapter: {} }),
+    );
+  });
+});
+
 // Round-5 review Findings 1/2 — attachToRunningReview used to dispatch
 // setActive on entry and clear in its own `finally`, so hydrateScriptReview's
 // Promise.all over N concurrently-running jobs for the same book dispatched
@@ -490,7 +549,7 @@ describe('runReviewScript — version delivery', () => {
 describe('attachToRunningReview', () => {
   it('does NOT dispatch setActive or clear itself — that is hydrateScriptReview\'s job now', async () => {
     const dispatch = vi.fn();
-    vi.mocked(api.reviewScript).mockResolvedValue({ reviewedChapters: 0, totalOps: 0 } as never);
+    vi.mocked(api.attachScriptReview).mockResolvedValue({ reviewedChapters: 0, totalOps: 0 } as never);
     const runningState = {
       chapterId: undefined,
       replay: { lastPhase: { progress: 0.4, label: 'Reviewing script' } },
@@ -512,7 +571,7 @@ describe('attachToRunningReview', () => {
     // buffered event through the SAME onOps/onCheckpoint callbacks a live
     // stream would use. attachToRunningReview must rely on THIS, not on
     // pre-seeding from runningState.replay, or each op would count twice.
-    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+    vi.mocked(api.attachScriptReview).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
       opts.onCheckpoint?.({ chapterId: 1, version: 5 });
       opts.onOps?.({ chapterId: 1, ops: [{ id: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }] });
       return { reviewedChapters: 1, totalOps: 1 } as never;
@@ -563,7 +622,7 @@ describe('attachToRunningReview', () => {
      in the 'hydrateScriptReview' describe block below.) */
   it('dispatches an error toast when the join POST rejects, mirroring runReviewScript\'s catch path', async () => {
     const dispatch = vi.fn();
-    vi.mocked(api.reviewScript).mockRejectedValue(new Error('join failed'));
+    vi.mocked(api.attachScriptReview).mockRejectedValue(new Error('join failed'));
     const runningState = {
       chapterId: undefined,
       replay: { lastPhase: null },
@@ -576,6 +635,298 @@ describe('attachToRunningReview', () => {
     });
     const toastCall = dispatch.mock.calls.find(([action]) => action?.type === notificationsActions.pushToast.type);
     expect(toastCall?.[0].payload).toEqual(expect.objectContaining({ kind: 'error', message: 'join failed' }));
+  });
+});
+
+describe('attachToRunningReview — reattach-race hardening (fs-58 follow-up #1481)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('on a null (404) attach result, falls back to a fresh ledger re-read via mergeHydratedBucket instead of starting a fresh review', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.attachScriptReview).mockResolvedValue(null);
+    vi.mocked(api.getScriptReviewState).mockResolvedValue({
+      kind: 'ledger',
+      entries: {
+        '5': {
+          manuscriptId: 'ms-1',
+          version: 3,
+          ops: [{ id: 1, op: 'strip_tag', newText: 'Five fixed', rationale: 'r' }],
+          selected: {},
+          completedAt: '2026-01-01',
+        },
+      },
+    });
+
+    await attachToRunningReview(
+      'book-1',
+      { chapterId: 5, replay: { lastPhase: null } },
+      {
+        dispatch,
+        sentences: [{ id: 1, chapterId: 5, text: 'Five fixed', characterId: 'c1' }],
+        characterIds: new Set(['c1']),
+        manuscriptId: 'ms-1',
+      },
+    );
+
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.mergeHydratedBucket(
+        expect.objectContaining({ bookId: 'book-1', manuscriptId: 'ms-1', versionByChapter: { 5: 3 } }),
+      ),
+    );
+    expect(dispatch.mock.calls.some((c) => c[0].type === scriptReviewActions.setReview.type)).toBe(false);
+    // Critically NOT hydrateBucket — that reducer replaces the bucket
+    // wholesale, which is exactly the race this mode:'merge' fix closes
+    // (see the regression test below for the actual race scenario).
+    expect(dispatch.mock.calls.some((c) => c[0].type === scriptReviewActions.hydrateBucket.type)).toBe(false);
+    expect(dispatch.mock.calls.some((c) => c[0].type === scriptReviewActions.clear.type)).toBe(false);
+  });
+
+  /* Regression for the code-review-workflow finding on this PR: the 404
+     fallback used to dispatch hydrateBucket, a wholesale per-book replace.
+     hydrateScriptReview's Promise.all can reattach MULTIPLE concurrently-
+     running jobs for the same book (e.g. chapters 5 and 9). If chapter 5's
+     job hits the TOCTOU race (its attach 404s) while chapter 9's job is
+     still genuinely streaming, chapter 5's fallback GET /state can return
+     a ledger snapshot that doesn't yet include chapter 9 (it hasn't
+     checkpointed yet) — and if that fallback's dispatch resolves AFTER
+     chapter 9's own setReview, a wholesale replace would silently wipe
+     chapter 9's just-set ops back out of the store, even though they're
+     safely checkpointed server-side. Drives BOTH attachToRunningReview
+     calls against a REAL store (not a dispatch spy) and asserts the final
+     state carries both chapters regardless of which settles last. */
+  it('a concurrently-reattaching sibling job\'s ops survive the 404 fallback\'s dispatch landing after it', async () => {
+    const store = configureStore({ reducer: { scriptReview: scriptReviewSlice.reducer } });
+
+    // Chapter 5 hits the TOCTOU race: its attach 404s (null), and its
+    // fallback ledger read is a snapshot taken BEFORE chapter 9 checkpoints
+    // (i.e. it only has chapter 5's own entry).
+    vi.mocked(api.attachScriptReview).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      if (opts.chapterId === 5) return null;
+      // Chapter 9's job is still genuinely streaming — resolves normally
+      // with its own ops, driving the ordinary setReview path.
+      opts.onCheckpoint?.({ chapterId: 9, version: 1 });
+      opts.onOps?.({ chapterId: 9, ops: [{ id: 2, op: 'strip_tag', newText: 'Nine fixed', rationale: 'r' }] });
+      return { reviewedChapters: 1, totalOps: 1 } as never;
+    });
+    let resolveGetState!: (v: Awaited<ReturnType<typeof api.getScriptReviewState>>) => void;
+    vi.mocked(api.getScriptReviewState).mockImplementation(
+      () => new Promise((resolve) => { resolveGetState = resolve; }),
+    );
+
+    const sentences = [
+      { id: 1, chapterId: 5, text: 'Five fixed', characterId: 'c1' },
+      { id: 2, chapterId: 9, text: 'Nine fixed', characterId: 'c1' },
+    ];
+    const opts = { dispatch: store.dispatch, sentences, characterIds: new Set(['c1']), manuscriptId: 'ms-1' };
+
+    const chapter5 = attachToRunningReview('book-1', { chapterId: 5, replay: { lastPhase: null } }, opts);
+    const chapter9 = attachToRunningReview('book-1', { chapterId: 9, replay: { lastPhase: null } }, opts);
+
+    // Let chapter 9's job settle (dispatches setReview) BEFORE chapter 5's
+    // fallback GET /state resolves — the exact ordering that used to lose
+    // chapter 9's ops under the old hydrateBucket-replace behavior.
+    await chapter9;
+    expect(store.getState().scriptReview.byBook['book-1']?.ops.map((o) => o.chapterId)).toEqual([9]);
+
+    resolveGetState({
+      kind: 'ledger',
+      entries: {
+        '5': {
+          manuscriptId: 'ms-1',
+          version: 3,
+          ops: [{ id: 1, op: 'strip_tag', newText: 'Five fixed', rationale: 'r' }],
+          selected: {},
+          completedAt: '2026-01-01',
+        },
+      },
+    });
+    await chapter5;
+
+    const finalChapterIds = store.getState().scriptReview.byBook['book-1']?.ops.map((o) => o.chapterId).sort();
+    expect(finalChapterIds).toEqual([5, 9]);
+  });
+
+  it('never dispatches clear itself, even on error — clear stays hoisted in hydrateScriptReview (round-5 fix, must not regress)', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.attachScriptReview).mockRejectedValue(new Error('boom'));
+
+    await attachToRunningReview(
+      'book-1',
+      { chapterId: 5, replay: { lastPhase: null } },
+      { dispatch, sentences: [], characterIds: new Set(), manuscriptId: 'ms-1' },
+    );
+
+    expect(dispatch.mock.calls.some((c) => c[0].type === scriptReviewActions.clear.type)).toBe(false);
+  });
+
+  it('a cancelled-coded ReviewScriptError is swallowed without a toast', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.attachScriptReview).mockRejectedValue(new ReviewScriptError('Review cancelled.', 'cancelled'));
+
+    await attachToRunningReview(
+      'book-1',
+      { chapterId: 5, replay: { lastPhase: null } },
+      { dispatch, sentences: [], characterIds: new Set(), manuscriptId: 'ms-1' },
+    );
+
+    expect(dispatch.mock.calls.some((c) => c[0].type === notificationsActions.pushToast.type)).toBe(false);
+  });
+
+  /* Regression for the code-review-workflow finding: a cancel that lands
+     AFTER this join's own chapter already finished and checkpointed must
+     not throw those away — design spec §2 explicitly promises cancelling
+     never discards a chapter that finished checkpointing before the
+     cancel. Simulates the join's replay delivering onCheckpoint/onOps
+     (the chapter genuinely finished) before the stream's final event is
+     the cancelled error (a sibling job's cancel, or this same job's own
+     terminal event racing the client's read of it). */
+  it('a cancelled-coded ReviewScriptError still dispatches setReview for whatever this join already accumulated', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.attachScriptReview).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      opts.onCheckpoint?.({ chapterId: 5, version: 3 });
+      opts.onOps?.({ chapterId: 5, ops: [{ id: 1, op: 'strip_tag', newText: 'Five fixed', rationale: 'r' }] });
+      throw new ReviewScriptError('Review cancelled.', 'cancelled');
+    });
+
+    await attachToRunningReview(
+      'book-1',
+      { chapterId: 5, replay: { lastPhase: null } },
+      {
+        dispatch,
+        sentences: [{ id: 1, chapterId: 5, text: 'Five fixed', characterId: 'c1' }],
+        characterIds: new Set(['c1']),
+        manuscriptId: 'ms-1',
+      },
+    );
+
+    expect(dispatch.mock.calls.some((c) => c[0].type === notificationsActions.pushToast.type)).toBe(false);
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.setReview(
+        expect.objectContaining({ bookId: 'book-1', manuscriptId: 'ms-1', versionByChapter: { 5: 3 } }),
+      ),
+    );
+    const setReviewCall = dispatch.mock.calls.find(([a]) => a.type === scriptReviewActions.setReview.type);
+    expect(setReviewCall?.[0].payload.ops).toHaveLength(1);
+  });
+
+  /* Regression for the code-review-workflow finding: onOps fires live per
+     completed chunk, independent of whether the whole chapter finishes —
+     but the server deliberately skips the checkpoint for a chapter still
+     IN FLIGHT when the abort lands (design spec §4.1), so that chapter
+     never gets a versionByChapter entry. Ops for such a chapter must be
+     filtered out, not surfaced as if they were safely saved — only
+     chapter 5 (checkpointed) should survive; chapter 9's partial ops
+     (streamed but never checkpointed) must not. */
+  it('a cancelled-coded ReviewScriptError filters out ops from a chapter that was still in flight (never checkpointed)', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.attachScriptReview).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      opts.onCheckpoint?.({ chapterId: 5, version: 3 });
+      opts.onOps?.({ chapterId: 5, ops: [{ id: 1, op: 'strip_tag', newText: 'Five fixed', rationale: 'r' }] });
+      // Chapter 9's chunk 1 streamed live, but the run is cancelled before
+      // chapter 9 ever gets a checkpoint — no onCheckpoint call for it.
+      opts.onOps?.({ chapterId: 9, ops: [{ id: 2, op: 'strip_tag', newText: 'Nine partial', rationale: 'r' }] });
+      throw new ReviewScriptError('Review cancelled.', 'cancelled');
+    });
+
+    await attachToRunningReview(
+      'book-1',
+      { replay: { lastPhase: null } },
+      {
+        dispatch,
+        sentences: [
+          { id: 1, chapterId: 5, text: 'Five fixed', characterId: 'c1' },
+          { id: 2, chapterId: 9, text: 'Nine partial', characterId: 'c1' },
+        ],
+        characterIds: new Set(['c1']),
+        manuscriptId: 'ms-1',
+      },
+    );
+
+    const setReviewCall = dispatch.mock.calls.find(([a]) => a.type === scriptReviewActions.setReview.type);
+    expect(setReviewCall).toBeDefined();
+    expect(setReviewCall?.[0].payload.ops.map((o: { chapterId: number }) => o.chapterId)).toEqual([5]);
+    expect(setReviewCall?.[0].payload.versionByChapter).toEqual({ 5: 3 });
+  });
+});
+
+describe('runReviewScript — cancellation (fs-58 follow-up #1481)', () => {
+  it('a cancelled-coded ReviewScriptError is swallowed without a toast, and clear still fires', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.reviewScript).mockRejectedValue(new ReviewScriptError('Review cancelled.', 'cancelled'));
+
+    await runReviewScript('book-1', {
+      dispatch, wholeBook: true, model: 'test-model', sentences: [], characterIds: new Set(), manuscriptId: 'ms-1',
+    });
+
+    expect(dispatch.mock.calls.some((c) => c[0].type === notificationsActions.pushToast.type)).toBe(false);
+    const types = dispatch.mock.calls.map((c) => c[0].type);
+    expect(types[types.length - 1]).toBe(scriptReviewActions.clear.type);
+  });
+
+  /* Regression for the code-review-workflow finding: chapters that
+     finished and checkpointed before a whole-book (or per-chapter) run
+     was cancelled must still show up, not silently vanish until reload —
+     the same guarantee attachToRunningReview's own fix (above) provides
+     for the reattach path. */
+  it('a cancelled-coded ReviewScriptError still dispatches setReview for whatever chapters already checkpointed before the cancel', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      opts.onCheckpoint?.({ chapterId: 1, version: 1 });
+      opts.onOps?.({ chapterId: 1, ops: [{ id: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }] });
+      throw new ReviewScriptError('Review cancelled.', 'cancelled');
+    });
+
+    await runReviewScript('book-1', {
+      dispatch,
+      wholeBook: true,
+      model: 'test-model',
+      sentences: [{ id: 1, chapterId: 1, text: 'Hi', characterId: 'c1' }],
+      characterIds: new Set(['c1']),
+      manuscriptId: 'ms-1',
+    });
+
+    expect(dispatch.mock.calls.some((c) => c[0].type === notificationsActions.pushToast.type)).toBe(false);
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.setReview(
+        expect.objectContaining({ bookId: 'book-1', manuscriptId: 'ms-1', versionByChapter: { 1: 1 } }),
+      ),
+    );
+    // clear still fires last, from the finally block, even on this path.
+    const types = dispatch.mock.calls.map((c) => c[0].type);
+    expect(types[types.length - 1]).toBe(scriptReviewActions.clear.type);
+  });
+
+  /* Regression for the code-review-workflow finding: chapter 3's chunk 1
+     streamed live via onOps, but the run is cancelled before chapter 3
+     ever gets a checkpoint — the server skips it entirely (design spec
+     §4.1: "nothing about the in-flight chapter survives a cancel"). Only
+     chapter 1 (checkpointed) should survive; chapter 3's partial ops
+     must not appear as if they were safely saved. */
+  it('a cancelled-coded ReviewScriptError filters out ops from a chapter that was still in flight (never checkpointed)', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      opts.onCheckpoint?.({ chapterId: 1, version: 1 });
+      opts.onOps?.({ chapterId: 1, ops: [{ id: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }] });
+      opts.onOps?.({ chapterId: 3, ops: [{ id: 2, op: 'strip_tag', newText: 'Three partial', rationale: 'r' }] });
+      throw new ReviewScriptError('Review cancelled.', 'cancelled');
+    });
+
+    await runReviewScript('book-1', {
+      dispatch,
+      wholeBook: true,
+      model: 'test-model',
+      sentences: [
+        { id: 1, chapterId: 1, text: 'Hi', characterId: 'c1' },
+        { id: 2, chapterId: 3, text: 'Three partial', characterId: 'c1' },
+      ],
+      characterIds: new Set(['c1']),
+      manuscriptId: 'ms-1',
+    });
+
+    const setReviewCall = dispatch.mock.calls.find(([a]) => a.type === scriptReviewActions.setReview.type);
+    expect(setReviewCall).toBeDefined();
+    expect(setReviewCall?.[0].payload.ops.map((o: { chapterId: number }) => o.chapterId)).toEqual([1]);
+    expect(setReviewCall?.[0].payload.versionByChapter).toEqual({ 1: 1 });
   });
 });
 

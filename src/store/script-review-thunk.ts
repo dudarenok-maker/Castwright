@@ -6,7 +6,7 @@
    and clear in finally (success and error paths alike). */
 
 import type { AppDispatch, RootState } from './index';
-import { api } from '../lib/api';
+import { api, ReviewScriptError, type LedgerEntryDTO } from '../lib/api';
 import { planApply, type ReviewOp } from '../lib/script-review-apply';
 import { scriptReviewActions, opKey, type ReviewOpWithChapter } from './script-review-slice';
 import { notificationsActions } from './notifications-slice';
@@ -43,36 +43,23 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
   const failed: Array<{ chapterId: number; message: string }> = [];
   const versionByChapter: Record<number, number> = {};
   dispatch(scriptReviewActions.setActive({ bookId, progress: 0, label: 'Reviewing script' }));
-  try {
-    await api.reviewScript(bookId, {
-      ...(wholeBook ? {} : { chapterId }),
-      model,
-      onPhase: ({ progress, label, chapterIndex, totalChapters, estRemainingMs }) =>
-        dispatch(
-          scriptReviewActions.updateProgress({
-            bookId,
-            progress,
-            label,
-            chapterIndex,
-            totalChapters,
-            estRemainingMs,
-          }),
-        ),
-      onOps: ({ chapterId: chId, ops }: { chapterId: number; ops: ReviewOp[] }) => {
-        for (const op of ops) allOps.push({ ...op, chapterId: chId });
-      },
-      onChapterFailed: (e: { chapterId: number; message: string }) => failed.push(e),
-      onCheckpoint: ({ chapterId: chId, version }: { chapterId: number; version: number }) => {
-        versionByChapter[chId] = version;
-      },
-    });
-    /* fs-58 Task 11 — run planApply at seed time so ops that can't be
-       resolved against the LIVE sentences (stale ids, missing anchors,
-       invalid merges) land in `unappliable` rather than appearing as
-       selectable no-ops in the diff modal. The Apply-time planApply in
-       the modal stays — it's the TOCTOU re-validation for any edits
-       that arrived between stream-complete and the user clicking Accept. */
-    const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
+
+  /* fs-58 Task 11 — run planApply at seed time so ops that can't be
+     resolved against the LIVE sentences (stale ids, missing anchors,
+     invalid merges) land in `unappliable` rather than appearing as
+     selectable no-ops in the diff modal. The Apply-time planApply in
+     the modal stays — it's the TOCTOU re-validation for any edits
+     that arrived between stream-complete and the user clicking Accept.
+     Shared between the success path and the cancelled-catch path below
+     (fs-58 follow-up #1481) — takes the ops to use as a parameter rather
+     than always reading `allOps` directly, because the two call sites
+     need different sets: success uses everything (a clean run with zero
+     ops must still dispatch setReview so the "No suggestions found"
+     empty state shows — matches the pre-existing unconditional-dispatch
+     behavior this must not regress), cancelled uses only ops from
+     chapters that actually got a checkpoint (see below). */
+  const dispatchAccumulatedOps = (opsToUse: ReviewOpWithChapter[]): void => {
+    const { appliable, unappliable } = planApply(opsToUse, sentences, characterIds) as {
       appliable: ReviewOpWithChapter[];
       unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
     };
@@ -97,13 +84,63 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
       }
       dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter }));
     }
+  };
+
+  try {
+    await api.reviewScript(bookId, {
+      ...(wholeBook ? {} : { chapterId }),
+      model,
+      onPhase: ({ progress, label, chapterIndex, totalChapters, estRemainingMs }) =>
+        dispatch(
+          scriptReviewActions.updateProgress({
+            bookId,
+            progress,
+            label,
+            chapterIndex,
+            totalChapters,
+            estRemainingMs,
+          }),
+        ),
+      onOps: ({ chapterId: chId, ops }: { chapterId: number; ops: ReviewOp[] }) => {
+        for (const op of ops) allOps.push({ ...op, chapterId: chId });
+      },
+      onChapterFailed: (e: { chapterId: number; message: string }) => failed.push(e),
+      onCheckpoint: ({ chapterId: chId, version }: { chapterId: number; version: number }) => {
+        versionByChapter[chId] = version;
+      },
+    });
+    dispatchAccumulatedOps(allOps);
   } catch (err) {
-    dispatch(
-      notificationsActions.pushToast({
-        kind: 'error',
-        message: err instanceof Error ? err.message : 'Script review failed.',
-      }),
-    );
+    if (err instanceof ReviewScriptError && err.code === 'cancelled') {
+      // Cancelling never discards a chapter that finished checkpointing
+      // before the cancel (design spec §2) — but ops for a chapter still
+      // IN FLIGHT at the moment of cancellation are NOT safe to surface:
+      // onOps fires live per completed chunk, independent of whether the
+      // whole chapter finishes, but the server deliberately skips the
+      // checkpoint for a chapter that was mid-flight when the abort
+      // landed (script-review.ts) — nothing about that chapter is
+      // persisted, so allOps can contain ops for a chapter that has no
+      // entry in versionByChapter at all. Filter to only chapters that
+      // genuinely got a checkpoint before showing anything; a cancel with
+      // nothing checkpointed yet shows nothing at all (dispatchAccumulatedOps
+      // itself still handles an empty result by falling through to the
+      // "nothing to show" branch, so no separate empty-check is needed
+      // here — unlike the success path, though, we skip it ENTIRELY
+      // when there's also nothing failed, to avoid a stray "0 chapters
+      // reviewed" artifact for a cancel that landed before anything
+      // happened).
+      const checkpointedOps = allOps.filter((o) => o.chapterId in versionByChapter);
+      if (checkpointedOps.length > 0 || failed.length > 0) {
+        dispatchAccumulatedOps(checkpointedOps);
+      }
+    } else {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Script review failed.',
+        }),
+      );
+    }
   } finally {
     dispatch(scriptReviewActions.clear({ bookId }));
   }
@@ -124,6 +161,64 @@ interface RunningReviewState {
   replay: {
     lastPhase: { progress: number; label: string; chapterIndex?: number; totalChapters?: number; estRemainingMs?: number } | null;
   };
+}
+
+/** Transform+dispatch a book's ledger entries into its scriptReview bucket.
+    Pure — takes the entries and an already-resolved manuscript/cast
+    snapshot as plain arguments, and does no fetching of its own. This is
+    what makes it callable from both hydrateScriptReview's top block
+    (which already has both in scope from its own GET /state +
+    waitForManuscriptAndCast calls) and attachToRunningReview's 404
+    fallback below (which has no getState/subscribe in scope, but already
+    receives sentences/characterIds/manuscriptId directly in its own opts
+    — see design spec §4.2). No-ops on an empty entries map.
+
+    `mode` controls which reducer the transformed result dispatches through:
+    - 'replace' (default, hydrateScriptReview's top-block call): the payload
+      IS the complete, authoritative current state — nothing else has
+      dispatched into this book's bucket yet in this hydration pass — so a
+      wholesale hydrateBucket replace is correct and even desirable (it
+      purges anything stale no longer in the ledger).
+    - 'merge' (attachToRunningReview's 404-fallback call, fs-58 follow-up
+      #1481): this call can race a CONCURRENTLY-reattaching sibling job's
+      own setReview dispatch (hydrateScriptReview's Promise.all over
+      multiple running jobs) — a wholesale replace landing after the
+      sibling's setReview would silently wipe its just-set chapter back
+      out of the store. mergeHydratedBucket preserves any chapter this
+      call's own snapshot didn't touch, exactly like setReview does for a
+      live run. */
+function hydrateLedgerIntoBucket(
+  bookId: string,
+  entries: Record<string, LedgerEntryDTO>,
+  snapshot: { dispatch: AppDispatch; sentences: ReviewLiveSentence[]; characterIds: Set<string>; manuscriptId: string },
+  mode: 'replace' | 'merge' = 'replace',
+): void {
+  const { dispatch, sentences, characterIds, manuscriptId } = snapshot;
+  const chapterEntries = Object.entries(entries);
+  if (chapterEntries.length === 0) return;
+
+  const allOps: ReviewOpWithChapter[] = [];
+  const versionByChapter: Record<number, number> = {};
+  const persistedSelected: Record<string, boolean> = {};
+  for (const [chapterKey, entry] of chapterEntries) {
+    const chapterId = Number(chapterKey);
+    versionByChapter[chapterId] = entry.version;
+    for (const op of entry.ops as unknown as ReviewOp[]) allOps.push({ ...op, chapterId });
+    Object.assign(persistedSelected, entry.selected);
+  }
+
+  const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
+    appliable: ReviewOpWithChapter[];
+    unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
+  };
+  const selected: Record<string, boolean> = {};
+  for (const o of appliable) {
+    const key = opKey(o.chapterId, o.id, o.op);
+    selected[key] = key in persistedSelected ? persistedSelected[key] : !DEFAULT_OFF.has(o.op);
+  }
+
+  const payload = { bookId, ops: appliable, unappliable, manuscriptId, versionByChapter, selected };
+  dispatch(mode === 'merge' ? scriptReviewActions.mergeHydratedBucket(payload) : scriptReviewActions.hydrateBucket(payload));
 }
 
 /** Reattach to a job already running server-side (design spec §4.1/§4.3) —
@@ -150,8 +245,24 @@ export async function attachToRunningReview(
   const allOps: ReviewOpWithChapter[] = [];
   const versionByChapter: Record<number, number> = {};
 
+  /* Shared between the success path and the cancelled-catch path below
+     (fs-58 follow-up #1481) — takes the ops to use as a parameter: success
+     uses everything (a join that resolves with zero new ops must still
+     dispatch setReview — matches the pre-existing unconditional-dispatch
+     behavior this must not regress, e.g. confirming a reattach found
+     nothing new rather than looking like it silently failed); cancelled
+     uses only ops from chapters that actually got a checkpoint (see the
+     catch block below). */
+  const dispatchAccumulatedOps = (opsToUse: ReviewOpWithChapter[]): void => {
+    const { appliable, unappliable } = planApply(opsToUse, sentences, characterIds) as {
+      appliable: ReviewOpWithChapter[];
+      unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
+    };
+    dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter }));
+  };
+
   try {
-    await api.reviewScript(bookId, {
+    const result = await api.attachScriptReview(bookId, {
       ...(running.chapterId !== undefined ? { chapterId: running.chapterId } : {}),
       onPhase: ({ progress, label, chapterIndex, totalChapters, estRemainingMs }) =>
         dispatch(
@@ -165,17 +276,39 @@ export async function attachToRunningReview(
         versionByChapter[chapterId] = version;
       },
     });
-    // The join-or-create route (Task 2) attaches this call as a subscriber
-    // to the SAME job (assuming it's still running — see the known TOCTOU
-    // caveat below) and Task 2's attachSubscriber replays every buffered
-    // event before any live ones, so by the time api.reviewScript resolves
-    // allOps/versionByChapter hold every chapter's ops/version exactly once.
-    const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
-      appliable: ReviewOpWithChapter[];
-      unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
-    };
-    dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter }));
+    if (result === null) {
+      // TOCTOU: the job finished between GET /state and this join — fall
+      // back to a plain ledger re-read instead of silently starting a
+      // fresh review (design spec §4.2). Uses 'merge' mode: this call can
+      // run concurrently with a SIBLING job's own attachToRunningReview
+      // (hydrateScriptReview's Promise.all over multiple running jobs) —
+      // a wholesale replace could land after the sibling's setReview and
+      // silently wipe its just-checkpointed chapter back out of the store.
+      // See hydrateLedgerIntoBucket's own comment for the full reasoning.
+      const freshState = await api.getScriptReviewState(bookId);
+      hydrateLedgerIntoBucket(bookId, freshState.entries, { dispatch, sentences, characterIds, manuscriptId }, 'merge');
+      return;
+    }
+    dispatchAccumulatedOps(allOps);
   } catch (err) {
+    // Cancellation (fs-58 follow-up #1481) is a normal, silent terminal
+    // state, not a failure — mirrors detect-emotions-button.tsx's silent
+    // AbortError handling and analysis-stream-middleware.ts's
+    // code==='aborted' handling. Deliberately NO finally/clear here — see
+    // the module-level comment above this function for why. Still surfaces
+    // whatever chapters finished checkpointing before the cancel landed
+    // (design spec §2) — same reasoning as runReviewScript's own fix,
+    // including the same in-flight-chapter filter: onOps can have fired
+    // for a chunk of a chapter the server never checkpointed (it skips
+    // the checkpoint for whichever chapter was mid-flight at the abort),
+    // so only chapters present in versionByChapter are safe to surface.
+    if (err instanceof ReviewScriptError && err.code === 'cancelled') {
+      const checkpointedOps = allOps.filter((o) => o.chapterId in versionByChapter);
+      if (checkpointedOps.length > 0) {
+        dispatchAccumulatedOps(checkpointedOps);
+      }
+      return;
+    }
     dispatch(
       notificationsActions.pushToast({
         kind: 'error',
@@ -184,22 +317,6 @@ export async function attachToRunningReview(
     );
   }
 }
-
-// Known, accepted limitation — a narrow reattach race. There's a TOCTOU
-// window between hydrateScriptReview's GET /state call (which reports
-// kind: 'running') and this function's join POST: if the job finishes in
-// that gap, Task 2's registry no longer has an entry to join, and the POST
-// falls through to *create* a fresh job — silently starting a full
-// re-review instead of attaching. This is a narrow, low-probability race
-// (the window is a network round-trip plus waitForManuscriptAndCast, not
-// the whole review duration), and its worst case is wasted analyzer time
-// on an already-mostly-complete book, not data loss — every chapter that
-// job had already checkpointed is still safely in the ledger regardless.
-// Building a dedicated attach-only endpoint to close this race entirely is
-// out of scope for this plan; call it out explicitly here rather than
-// leaving it undiscovered, matching this plan's practice elsewhere (e.g.
-// §3's accepted full-server-restart data loss) of naming known gaps
-// instead of silently absorbing them.
 
 const DEFAULT_OFF = new Set(['reattribute', 'flag_nonstory']);
 
@@ -295,33 +412,7 @@ export async function hydrateScriptReview(
   const chapterEntries = Object.entries(state.entries);
   if (chapterEntries.length > 0) {
     const { sentences, characterIds, manuscriptId } = await waitForManuscriptAndCast(getState, subscribe, bookId);
-
-    const allOps: ReviewOpWithChapter[] = [];
-    const versionByChapter: Record<number, number> = {};
-    const persistedSelected: Record<string, boolean> = {};
-    for (const [chapterKey, entry] of chapterEntries) {
-      const chapterId = Number(chapterKey);
-      versionByChapter[chapterId] = entry.version;
-      // entry.ops is the generated ScriptReviewLedgerEntry's deliberately-loose
-      // `{[key: string]: unknown}[]` (openapi.yaml keeps the per-op-kind shape
-      // permissive rather than duplicating ReviewOp's discriminated shape) —
-      // the `unknown` bounce recovers the concrete shape this code already
-      // knows the ledger actually carries.
-      for (const op of entry.ops as unknown as ReviewOp[]) allOps.push({ ...op, chapterId });
-      Object.assign(persistedSelected, entry.selected);
-    }
-
-    const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
-      appliable: ReviewOpWithChapter[];
-      unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
-    };
-    const selected: Record<string, boolean> = {};
-    for (const o of appliable) {
-      const key = opKey(o.chapterId, o.id, o.op);
-      selected[key] = key in persistedSelected ? persistedSelected[key] : !DEFAULT_OFF.has(o.op);
-    }
-
-    dispatch(scriptReviewActions.hydrateBucket({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter, selected }));
+    hydrateLedgerIntoBucket(bookId, state.entries, { dispatch, sentences, characterIds, manuscriptId });
   }
 
   if (state.kind === 'running') {

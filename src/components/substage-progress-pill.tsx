@@ -1,11 +1,10 @@
 /* Shared presentational chip for an in-flight analysis substage (fs-33/fs-57
    "Detect emotions" and fs-58 "Review script"). Both call sites render an
    identical spinner + status label + optional chapter/ETA detail + percent
-   shape; the only difference is whether a Cancel affordance is offered
-   (Detect emotions has one, Review script currently doesn't — `onCancel` is
-   optional and simply omits the button when absent). Pure presentational —
-   callers own their own progress state/dispatch and pass in already-derived
-   text. */
+   shape; `onCancel` is optional and simply omits the button when absent —
+   both call sites pass one (fs-58 follow-up #1481 wired Review Script's).
+   Pure presentational — callers own their own progress state/dispatch and
+   pass in already-derived text. */
 
 import { IconSpinner } from '../lib/icons';
 

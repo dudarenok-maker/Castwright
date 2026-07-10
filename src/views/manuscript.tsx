@@ -860,6 +860,18 @@ export function ManuscriptView({
     await startNewReview(wholeBook);
   }
 
+  function handleCancelReview() {
+    if (!bookId) return;
+    api.cancelScriptReview(bookId).catch((err) => {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Failed to cancel the review.',
+        }),
+      );
+    });
+  }
+
   function handleReviewExisting() {
     if (!bookId) return;
     dispatch(scriptReviewActions.showReview({ bookId }));
@@ -1083,6 +1095,7 @@ export function ManuscriptView({
                   status={reviewSubstage.label}
                   detailText={reviewSubstageDetailText}
                   percent={reviewSubstage.progress}
+                  onCancel={handleCancelReview}
                 />
               )}
               {onStartGenerating && (
