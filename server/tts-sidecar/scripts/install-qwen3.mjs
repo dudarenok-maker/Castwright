@@ -93,27 +93,62 @@ export function qwenPipInstallArgs(baseTxtPath) {
   return ['-m', 'pip', 'install', 'qwen-tts', '-c', baseTxtPath];
 }
 
-// Pure decision fn (no I/O) so the platform/version gate is unit-testable without
-// a venv. enabled=false short-circuits to a silent skip; the caller only invokes
-// this once --flash-attn / QWEN_INSTALL_FLASH_ATTN has opted in. FA2 is an
-// NVIDIA-only accelerator (the pinned wheel is a CUDA build); the AMD skip is
-// checked first so an AMD box never tries to install it. SDPA is the default
-// attention impl wherever FA2 isn't installed.
-export function resolveFlashAttnInstall({ enabled, platform, pyTag, profile }) {
+// Pure decision fn (no I/O) so the platform/version/already-installed gate is
+// unit-testable without a venv or real subprocess calls. enabled=false
+// short-circuits to a silent skip; the caller only invokes this once
+// --flash-attn / QWEN_INSTALL_FLASH_ATTN has opted in. alreadyImportable is
+// checked before every other branch — including AMD — so an already-working
+// flash_attn (any platform/profile, e.g. a ROCm build) is reported rather than
+// hidden behind a skip reason for a wheel it doesn't need. FA2 is otherwise an
+// NVIDIA-only accelerator (the pinned Windows wheel and the Linux pip build
+// are both CUDA-only), so AMD still skips when nothing's already installed.
+// SDPA is the default attention impl wherever FA2 isn't installed/activated —
+// this function never sets it; it only ever recommends activation.
+export function resolveFlashAttnInstall({
+  enabled,
+  platform,
+  pyTag,
+  profile,
+  alreadyImportable,
+  nvccAvailable,
+}) {
   if (!enabled) return { action: 'skip', reason: 'not requested' };
+  if (alreadyImportable)
+    return {
+      action: 'already-installed',
+      reason:
+        'flash_attn is already importable in this venv — set QWEN_ATTN_IMPL=flash_attention_2 to use it (SDPA stays the default until you opt in)',
+    };
   if (profile === 'amd')
     return {
       action: 'skip',
       reason: 'no ROCm FlashAttention-2 wheel; SDPA remains the default on AMD',
     };
-  if (platform !== 'win32')
-    return {
-      action: 'skip',
-      reason: `no pinned wheel for ${platform}; SDPA remains the default`,
-    };
-  if (pyTag !== 'cp311')
-    return { action: 'skip', reason: `pinned wheel is cp311-only; venv is ${pyTag}` };
-  return { action: 'install', url: FLASH_ATTN_WHEEL_URL };
+  if (platform === 'win32') {
+    if (pyTag !== 'cp311')
+      return { action: 'skip', reason: `pinned wheel is cp311-only; venv is ${pyTag}` };
+    return { action: 'install', url: FLASH_ATTN_WHEEL_URL };
+  }
+  if (platform === 'linux') {
+    if (!nvccAvailable)
+      return {
+        action: 'skip',
+        reason:
+          'no CUDA Toolkit (nvcc) on PATH — flash-attn cannot compile without it; see https://developer.nvidia.com/cuda-downloads. SDPA remains the default.',
+      };
+    return { action: 'install-pip', package: 'flash-attn' };
+  }
+  return { action: 'skip', reason: `no pinned wheel for ${platform}; SDPA remains the default` };
+}
+
+/** Pure helper: builds the env for the flash-attn pip install call without
+ *  mutating baseEnv (the shared object main() reuses for later pip calls —
+ *  mutating it in place would leak MAX_JOBS into calls that don't need it).
+ *  Reads MAX_JOBS from processEnv (not baseEnv, which never carries an
+ *  operator's value) so an operator's own setting is honored instead of
+ *  always being overwritten to the default cap. */
+export function flashAttnBuildEnv(processEnv, baseEnv) {
+  return { ...baseEnv, MAX_JOBS: processEnv.MAX_JOBS ?? '4' };
 }
 
 function step(msg) {
