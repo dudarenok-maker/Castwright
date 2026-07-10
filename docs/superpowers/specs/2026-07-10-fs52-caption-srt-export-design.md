@@ -1,8 +1,8 @@
 # fs-52 — Caption/SRT export design
 
 > Spec (validated design) · 2026-07-10 · fs-52 / [#975](https://github.com/dudarenok-maker/Castwright/issues/975)
-> Revised after an Opus-tier `assumption-checker` pass (2026-07-10) — see "Revision note"
-> at the end of §4 and inline notes in §2/§3 for what changed and why.
+> Revised after two Opus-tier `assumption-checker` passes (2026-07-10) — see the two
+> "Revision note" sections at the end for what changed each round and why.
 
 ## 1. Goal & scope
 
@@ -14,12 +14,25 @@ burned-in/hardsub video generation (this ships caption *files* only).
 
 ## 2. Timing sources
 
-- **Line and sentence granularity need no new data.** Since plan 70d, every rendered
-  chapter's `<slug>.segments.json` carries one segment per sentence (`ChapterSegmentsFile`,
-  `server/src/audio/finalize-chapter-write.ts`) with chapter-relative `startSec`/`endSec` +
-  `characterId`. Sentence text is joined in from the analysis cache
-  (`analysis.chapters[chapterId]`, keyed by sentence id) — the same join `generation.ts`
-  already performs at render time.
+- **Line and sentence granularity need no new data — but the sentence-text source is
+  `manuscript-edits.json`, not the analysis cache (revised).** Since plan 70d, every
+  rendered chapter's `<slug>.segments.json` carries one segment per sentence
+  (`ChapterSegmentsFile`, `server/src/audio/finalize-chapter-write.ts`) with
+  chapter-relative `startSec`/`endSec` + `characterId`. The original draft proposed
+  joining sentence text from the analysis cache (`analysis.chapters[chapterId]`), the same
+  join `generation.ts` performs at render time. The round-2 assumption-checker pass flagged
+  this as the single most dangerous assumption in the spec: that cache lives at
+  `server/handoff/cache/{manuscriptId}.json` — an install-relative path, outside the
+  per-book workspace, whose documented purpose is resumable in-flight analysis, not durable
+  post-render storage. It can be evicted, and doesn't travel with the book if the workspace
+  moves to another machine (a portability the export code already supports). **Fix:** join
+  sentence text from `manuscript-edits.json` instead (`manuscriptEditsJsonPath(bookDir)`,
+  `server/src/workspace/paths.ts` — lives under the book's own `.audiobook/` directory, so
+  it's durable and portable with the book). It already carries `{ id, chapterId,
+  characterId, text }` per sentence — the exact shape needed, and the exact file
+  `rebuildCacheFromEdits` (`server/src/store/analysis-cache-rebuild.ts`) already uses
+  elsewhere as the source of truth when the analysis cache itself is stale/absent. No
+  schema change, and no dependency on the analysis cache's lifecycle at all.
 - **Word granularity has no existing data and needs a new sidecar capability.** The
   existing `/transcribe` endpoint (Whisper, srv-31) returns only a whole-segment transcript
   + confidence signals, never per-word timestamps. `faster-whisper` (already vendored in
@@ -40,11 +53,22 @@ burned-in/hardsub video generation (this ships caption *files* only).
   chapter audio (`<slug>.<ext>`) to 16 kHz mono PCM once, and call `/transcribe` **once per
   chapter** with word timestamps requested — `WhisperEngine.transcribe` already accepts
   arbitrary-length PCM (faster-whisper internally windows long audio), so this is the same
-  call signature as today, just fed the whole chapter instead of a per-sentence trim, with
-  the same decode params (`beam_size=1`, `temperature=0.0`, `condition_on_previous_text=
-  False`, `vad_filter=True`) the QA path already uses. Returned word times are already
-  chapter-relative, so no per-segment offset math is needed; for whole-book scope, offset by
-  the chapter's cumulative start (see the offset-drift fix below).
+  call signature as today, just fed the whole chapter instead of a per-sentence trim.
+  Returned word times are already chapter-relative, so no per-segment offset math is
+  needed; for whole-book scope, offset by the chapter's cumulative start (see the
+  offset-drift fix below).
+- **Decode profile diverges from the QA path when word timestamps are requested (round-2
+  decision).** The QA path's `condition_on_previous_text=False` was a deliberate
+  anti-hallucination choice for independently-verified single sentences — but applied to a
+  whole chapter it removes cross-window context at every ~30s boundary, which measurably
+  hurts transcription coherence/punctuation exactly where captions want it most. Rather
+  than reuse the QA call unmodified, `WhisperEngine.transcribe` gains the `word_timestamps`
+  parameter as the switch for a distinct, caption-tuned decode profile: whenever
+  `word_timestamps=True`, it also passes `condition_on_previous_text=True` (kept `False`
+  only for the existing QA call, which never requests word timestamps). This is a
+  consciously separate, separately-justified profile — not a shared one — since captions
+  are a listener-facing artifact where coherence matters more than the QA gate's
+  determinism goal, and the two call sites never overlap.
 - **Title-beat handling in word mode:** the `kind: 'title'` segment has no manuscript
   sentence to align ASR output against. Any returned words whose timestamp falls before the
   first body segment's `startSec` are dropped from the word stream and replaced with a
@@ -62,10 +86,12 @@ burned-in/hardsub video generation (this ships caption *files* only).
   `probeDurationSec` (an ffprobe of the actual encoded chapter file), not
   `segments.json`'s stored `durationSec` — so whole-book caption timings never drift against
   the M4B's chapter boundaries even by rounding.
-- **Analysis-cache invalidation:** if a rendered chapter's sentence text can no longer be
-  joined from the analysis cache (evicted/invalidated since render), the export fails with a
-  clear error rather than emitting blank cues — mirroring the existing "No analysed
-  sentences cached for this book" pattern (`generation.ts`).
+- **Missing `manuscript-edits.json` (rare):** on the small chance the file is absent
+  (e.g. a book rendered before it existed, or manual workspace tampering), the export fails
+  with a clear error rather than emitting blank cues — mirroring the existing "No analysed
+  sentences cached for this book" pattern (`generation.ts`). This should be far rarer than
+  the original analysis-cache-eviction failure mode, since the file is written on every
+  successful analysis run and lives durably in the book's own workspace.
 
 ## 3. Export-job integration
 
@@ -219,7 +245,7 @@ New `server/src/export/build-captions.ts`, sibling to `build-m4b.ts` / `build-mp
 - Running word-mode ASR during synthesis — it only ever runs on-demand at export time, so
   no cost is added to every render.
 
-## Revision note (2026-07-10)
+## Revision note, round 1 (2026-07-10)
 
 An Opus-tier `assumption-checker` pass (mandatory pre-approval gate) reviewed the initial
 draft and found every load-bearing data-shape/API claim confirmed against the actual code,
@@ -231,3 +257,27 @@ across the 12 caption variants (§3, now keyed on the full caption tuple), the a
 ASR-availability telemetry surface that didn't actually exist as described (§3/§5, now
 named precisely), and the whole-book offset source needing to match `build-m4b.ts`'s
 `probeDurationSec` to avoid drift (§2).
+
+## Revision note, round 2 (2026-07-10)
+
+A second Opus-tier `assumption-checker` pass re-verified the round-1 fixes against the
+actual code and found the most dangerous assumption in the whole spec: that line/sentence
+caption text could reliably be joined from the analysis cache at export time. That cache
+is install-relative and transient-by-design (resumable-analysis scratch space, not durable
+storage), so an export run any real time after render — or on a workspace moved to another
+machine, which the export code already supports — could hard-fail the feature's two default
+granularities. Fixed by sourcing sentence text from `manuscript-edits.json` instead (§2),
+which already lives durably in the book's own workspace and already carries the exact
+shape needed — no schema change, no analysis-cache dependency at all.
+
+The pass also found four smaller but real follow-on gaps from the round-1 fixes, all
+addressed above: the QA decode params being wrong-for-purpose on a whole-chapter caption
+pass (§2, now a distinct caption-tuned profile — resolved via user decision), the
+export-job de-dupe/filename fix needing the caption fields persisted on the job record
+itself, not just the request, to survive a restart (§3), a MIME-type gap serving a
+whole-book single-file caption as `application/zip` (§3), and the `whisperPackageInstalled`
+availability signal being real but not a complete readiness guarantee (no weights-present
+signal exists for Whisper the way it does for Qwen — accepted as a known v1 gap, §3). It
+also surfaced and confirmed-sound the title-beat drop logic in word mode, and flagged two
+minor edge cases in the line-mode cap (a lone over-cap sentence, a trailing fragment cue)
+that are now explicit accepted v1 behaviour rather than unstated gaps (§4).
