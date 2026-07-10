@@ -767,7 +767,7 @@ export interface ExportQueueItem {
      row carries them. */
   bookId?: string;
   exportId?: string;
-  wireFormat?: 'mp3-zip' | 'm4b' | 'mp3-folder' | 'aac-m4a-zip' | 'opus-ogg-zip';
+  wireFormat?: 'mp3-zip' | 'm4b' | 'mp3-folder' | 'aac-m4a-zip' | 'opus-ogg-zip' | 'captions';
   wireDestination?: 'download' | 'sync-folder';
   syncPath?: string;
 }

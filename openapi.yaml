@@ -5313,7 +5313,7 @@ components:
       properties:
         format:
           type: string
-          enum: [mp3-zip, m4b, mp3-folder, aac-m4a-zip, opus-ogg-zip]
+          enum: [mp3-zip, m4b, mp3-folder, aac-m4a-zip, opus-ogg-zip, captions]
           description: |
             Container format. `mp3-zip` packages per-chapter MP3s into
             a zip — universal compatibility, no re-encode (the LAME
@@ -5336,6 +5336,36 @@ components:
             the book's `audioFormat` to match the export codec; books
             generated as mp3 can't be exported as `aac-m4a-zip`
             without re-running generation under the new format.
+            `captions` (fs-52) emits `.srt`/`.vtt` caption files from
+            the book's per-sentence render-time alignment. Requires
+            `captionFileFormat`, `captionGranularity`, and
+            `captionScope`. `whole-book` scope produces a single
+            caption file (pairs with `m4b`'s single-file model);
+            `per-chapter` produces a zip of one caption file per
+            chapter (pairs with `mp3-zip`'s model).
+        captionFileFormat:
+          type: string
+          enum: [srt, vtt]
+          description: 'Required when format is captions. Caption container syntax.'
+        captionGranularity:
+          type: string
+          enum: [line, sentence, word]
+          description: |
+            Required when format is captions. `sentence` is one cue per
+            rendered sentence. `line` folds consecutive same-speaker
+            sentences into one cue, capped at ~7s / ~200 chars (or a
+            speaker change), whichever comes first. `word` is one cue per
+            ASR-recognised word from a single whole-chapter Whisper pass
+            (requires the sidecar's Whisper model — see
+            `whisperPackageInstalled` on `GET /api/sidecar/health`).
+        captionScope:
+          type: string
+          enum: [whole-book, per-chapter]
+          description: |
+            Required when format is captions. `whole-book` produces a
+            single caption file with cumulative cross-chapter offsets;
+            `per-chapter` produces a zip of one caption file per chapter,
+            each zero-based.
         destination:
           type: string
           enum: [download, sync-folder]
@@ -5355,7 +5385,10 @@ components:
       properties:
         id: { type: string, description: 'Server-generated export id' }
         bookId: { type: string }
-        format: { type: string, enum: [mp3-zip, m4b, mp3-folder, aac-m4a-zip, opus-ogg-zip] }
+        format: { type: string, enum: [mp3-zip, m4b, mp3-folder, aac-m4a-zip, opus-ogg-zip, captions] }
+        captionFileFormat: { type: string, enum: [srt, vtt], nullable: true }
+        captionGranularity: { type: string, enum: [line, sentence, word], nullable: true }
+        captionScope: { type: string, enum: [whole-book, per-chapter], nullable: true }
         destination: { type: string, enum: [download, sync-folder] }
         status:
           type: string
@@ -5398,12 +5431,17 @@ components:
           }
         warning:
           type: string
+          nullable: true
           description: |
-            srv-28 — non-fatal disk-space advisory, present only on the POST
-            201 response body when the pre-flight disk guard is in `warn` mode
-            and free space is tight. The build still proceeds; the export modal
-            surfaces this next to the queued job. Absent when the guard was ok /
-            off, and never present on a poll (GET) response.
+            Non-fatal advisory attached to the job. Two independent sources:
+            srv-28's disk-space guard sets it only on the POST 201 response
+            body (never persisted on the job record) when free space is
+            tight in `warn` mode. fs-52 sets it as a genuinely PERSISTED
+            field once a `captions` job's build completes, when some
+            sentence/line segments predate the render-time staleness stamp
+            and so couldn't be verified as still matching the current
+            manuscript text — the export still succeeds, this just flags
+            it. Absent/null otherwise.
 
     BookShareLink:
       type: object

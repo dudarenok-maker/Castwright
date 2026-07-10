@@ -21,6 +21,9 @@ const FORMAT_TO_VIEW: Record<BookExportJob['format'], ExportQueueItem['format']>
      honest catch-all for the Opus container. */
   'aac-m4a-zip': 'm4a',
   'opus-ogg-zip': 'zip',
+  /* fs-52: caption exports map to zip (per-chapter) or single-file
+     (whole-book). Queue badge displays 'zip' for per-chapter bundles. */
+  captions: 'zip',
 };
 
 export function bookExportJobToQueueItem(job: BookExportJob): ExportQueueItem {

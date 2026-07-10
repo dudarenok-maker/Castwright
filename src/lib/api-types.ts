@@ -4041,9 +4041,40 @@ export interface components {
              *     the book's `audioFormat` to match the export codec; books
              *     generated as mp3 can't be exported as `aac-m4a-zip`
              *     without re-running generation under the new format.
+             *     `captions` (fs-52) emits `.srt`/`.vtt` caption files from
+             *     the book's per-sentence render-time alignment. Requires
+             *     `captionFileFormat`, `captionGranularity`, and
+             *     `captionScope`. `whole-book` scope produces a single
+             *     caption file (pairs with `m4b`'s single-file model);
+             *     `per-chapter` produces a zip of one caption file per
+             *     chapter (pairs with `mp3-zip`'s model).
              * @enum {string}
              */
-            format: "mp3-zip" | "m4b" | "mp3-folder" | "aac-m4a-zip" | "opus-ogg-zip";
+            format: "mp3-zip" | "m4b" | "mp3-folder" | "aac-m4a-zip" | "opus-ogg-zip" | "captions";
+            /**
+             * @description Required when format is captions. Caption container syntax.
+             * @enum {string}
+             */
+            captionFileFormat?: "srt" | "vtt";
+            /**
+             * @description Required when format is captions. `sentence` is one cue per
+             *     rendered sentence. `line` folds consecutive same-speaker
+             *     sentences into one cue, capped at ~7s / ~200 chars (or a
+             *     speaker change), whichever comes first. `word` is one cue per
+             *     ASR-recognised word from a single whole-chapter Whisper pass
+             *     (requires the sidecar's Whisper model — see
+             *     `whisperPackageInstalled` on `GET /api/sidecar/health`).
+             * @enum {string}
+             */
+            captionGranularity?: "line" | "sentence" | "word";
+            /**
+             * @description Required when format is captions. `whole-book` produces a
+             *     single caption file with cumulative cross-chapter offsets;
+             *     `per-chapter` produces a zip of one caption file per chapter,
+             *     each zero-based.
+             * @enum {string}
+             */
+            captionScope?: "whole-book" | "per-chapter";
             /**
              * @description `download` stages the file under the book's `.audiobook/exports/`
              *     for the user to pull via `downloadBookExport`. `sync-folder`
@@ -4062,7 +4093,13 @@ export interface components {
             id: string;
             bookId: string;
             /** @enum {string} */
-            format: "mp3-zip" | "m4b" | "mp3-folder" | "aac-m4a-zip" | "opus-ogg-zip";
+            format: "mp3-zip" | "m4b" | "mp3-folder" | "aac-m4a-zip" | "opus-ogg-zip" | "captions";
+            /** @enum {string|null} */
+            captionFileFormat?: "srt" | "vtt" | null;
+            /** @enum {string|null} */
+            captionGranularity?: "line" | "sentence" | "word" | null;
+            /** @enum {string|null} */
+            captionScope?: "whole-book" | "per-chapter" | null;
             /** @enum {string} */
             destination: "download" | "sync-folder";
             /** @enum {string} */
@@ -4084,13 +4121,17 @@ export interface components {
             /** @description ISO timestamp once status leaves in_progress. */
             completedAt?: string | null;
             /**
-             * @description srv-28 — non-fatal disk-space advisory, present only on the POST
-             *     201 response body when the pre-flight disk guard is in `warn` mode
-             *     and free space is tight. The build still proceeds; the export modal
-             *     surfaces this next to the queued job. Absent when the guard was ok /
-             *     off, and never present on a poll (GET) response.
+             * @description Non-fatal advisory attached to the job. Two independent sources:
+             *     srv-28's disk-space guard sets it only on the POST 201 response
+             *     body (never persisted on the job record) when free space is
+             *     tight in `warn` mode. fs-52 sets it as a genuinely PERSISTED
+             *     field once a `captions` job's build completes, when some
+             *     sentence/line segments predate the render-time staleness stamp
+             *     and so couldn't be verified as still matching the current
+             *     manuscript text — the export still succeeds, this just flags
+             *     it. Absent/null otherwise.
              */
-            warning?: string;
+            warning?: string | null;
         };
         BookShareLink: {
             /**
