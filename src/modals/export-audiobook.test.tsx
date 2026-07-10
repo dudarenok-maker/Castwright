@@ -740,14 +740,14 @@ describe('ExportAudiobookModal — Captions (fs-52)', () => {
     );
 
     fireEvent.click(screen.getByTestId('export-format-captions'));
-    await waitFor(() => expect(screen.getByTestId('captions-granularity-word')).toBeDisabled());
-    /* The Word→Sentence reset (export-audiobook.tsx's second effect, keyed on
-       whisperAvailable) commits a render AFTER the one that disables Word —
-       it doesn't land in the same commit, so it needs its own wait rather
-       than a synchronous assertion right after the toBeDisabled() above. */
-    await waitFor(() =>
-      expect(screen.getByTestId('captions-granularity-sentence').className).toContain('bg-white'),
-    );
+    /* Word-disabled and the Sentence-selected reset land in the same commit
+       (export-audiobook.tsx sets whisperAvailable and resets
+       captionGranularity together in one state update), so one waitFor
+       covering both is enough — no need for a second, separate wait. */
+    await waitFor(() => {
+      expect(screen.getByTestId('captions-granularity-word')).toBeDisabled();
+      expect(screen.getByTestId('captions-granularity-sentence').className).toContain('bg-white');
+    });
     expect(screen.getByTestId('captions-granularity-word').className).not.toContain('bg-white');
   });
 });
