@@ -486,9 +486,38 @@ git commit -m "feat(server): add Russian WER integer table, completing #1084 lan
 - Consumes: `WER_INTEGERS`, `WER_CONTRACTIONS` from `./asr-language-normalization.js` (Tasks 1-4).
 - Produces: `normalizeForWer(text: string, language?: string | null): string[]` — same signature as today; English behavior unchanged, non-English languages now spell integers and expand German contractions instead of no-op'ing.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Update the stale pre-#1084 test, then write the new failing tests**
 
-Add to `server/src/tts/segment-asr-qa.test.ts`, inside (or alongside) the existing `describe('normalizeForWer', ...)` block (add `WER_CONTRACTIONS` to the `./asr-language-normalization.js` import added in Task 3):
+**First**, replace the existing test at `segment-asr-qa.test.ts:47-52` inside the `describe('normalizeForWer', ...)` block. Its whole premise — that a non-English digit must NOT be spelled — is exactly what this task reverses; left as-is, it will fail after Step 3 with no explanation. Replace:
+
+```ts
+  it('does NOT English-spell integers for a non-English language (keeps the digit)', () => {
+    // "3" → "three" only makes sense against English audio; on a Spanish/Russian
+    // book Whisper hears "tres"/"три", so injecting "three" is a false error (#1084).
+    expect(normalizeForWer('Tengo 3 llaves.', 'es')).toEqual(['tengo', '3', 'llaves']);
+    expect(normalizeForWer('У меня 3 ключа.', 'ru')).toEqual(['у', 'меня', '3', 'ключа']);
+  });
+```
+
+with:
+
+```ts
+  it('spells integers in the target non-English language, not English (#1084)', () => {
+    // Before #1084 this was a no-op ("tres"/"три" instead of "three" would have
+    // been a false error). Now es/ru spell the digit in THEIR OWN language,
+    // matching what Whisper actually hears, instead of not spelling it at all.
+    expect(normalizeForWer('Tengo 3 llaves.', 'es')).toEqual(['tengo', 'tres', 'llaves']);
+    expect(normalizeForWer('У меня 3 ключа.', 'ru')).toEqual(['у', 'меня', 'три', 'ключа']);
+  });
+
+  it('leaves the digit as-is for a language with no WER_INTEGERS table (#1084)', () => {
+    // Preserves coverage of the `if (!table) return tokens` no-op fallback —
+    // 'pt' (Portuguese) has no entry in WER_INTEGERS.
+    expect(normalizeForWer('Tenho 3 chaves.', 'pt')).toEqual(['tenho', '3', 'chaves']);
+  });
+```
+
+**Then** add the rest of the new coverage to `server/src/tts/segment-asr-qa.test.ts` (add `WER_CONTRACTIONS` to the `./asr-language-normalization.js` import added in Task 3):
 
 ```ts
 describe('normalizeForWer non-English integer spelling (#1084)', () => {
@@ -532,8 +561,8 @@ describe('normalizeForWer no-op proof for es/fr/ru contractions (#1084)', () => 
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd server && npx vitest run src/tts/segment-asr-qa.test.ts -t "non-English integer spelling|contraction"`
-Expected: FAIL — e.g. `expected ['tenía', '31', 'años'] to equal ['tenía', 'treinta', 'y', 'uno', 'años']` (today's code leaves the digit as-is for non-English).
+Run: `cd server && npx vitest run src/tts/segment-asr-qa.test.ts -t "normalizeForWer|contraction"`
+Expected: FAIL on both the replaced test ("spells integers in the target non-English language" — old code still leaves `3` as a digit for es/ru) and the new describe blocks, e.g. `expected ['tenía', '31', 'años'] to equal ['tenía', 'treinta', 'y', 'uno', 'años']`. The one new test that should already PASS at this point is "leaves the digit as-is for a language with no WER_INTEGERS table" (`pt` has no table either way) — that's expected, not a bug.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -669,14 +698,16 @@ describe('classifyTranscript es/fr/de faithful vs. drift (#1084)', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run the new tests — this is test-AFTER, not test-first**
+
+Unlike every other task in this plan, Task 6 adds integration coverage over behavior Task 5 already implemented — there is no RED step here by design; don't expect a failure.
 
 Run: `cd server && npx vitest run src/tts/segment-asr-qa.test.ts -t "classifyTranscript es/fr/de"`
-Expected: FAIL initially only if any sentence-length/reference-word-count accidentally trips the `minChars`/`minRefWords` backstops — inspect the failure message; if it's a genuine assertion mismatch rather than a missing-feature failure, this step's "expected FAIL reason" is that the feature isn't implemented — but since Task 5 already implemented normalization, these should PASS immediately. Run this step anyway to confirm the sentences are well-formed (each expected/transcript pair should be unambiguous, no accidental homophone/compound collisions).
+Expected: PASS on first run. If anything fails, it means either a sentence accidentally trips the `minChars`/`minRefWords` backstops or contains an unintended homophone/compound collision — fix the sentence, don't chase the gate logic (Task 5 already covers that).
 
 - [ ] **Step 3: No implementation needed**
 
-This task only adds integration-level regression coverage over the Task 5 implementation — skip to running the tests.
+This task only adds integration-level regression coverage over the Task 5 implementation.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -703,7 +734,7 @@ git commit -m "test(server): classifyTranscript faithful/drift coverage for es/f
 
 - [ ] **Step 1: Write the failing test**
 
-The existing `describe('resolveAsrThresholds per-language maxWer (#1084 scaffold)', ...)` block in `server/src/tts/segment-asr-qa.test.ts` tests the `.es`/`.ru` knobs via `resolveAsrThresholds` + env var overrides (not by inspecting the registry directly) — mirror that exact pattern for `fr`/`de`. Extend the block's `afterEach` to also clean up the two new env vars, and add a new test:
+The existing `describe('resolveAsrThresholds per-language maxWer (#1084 scaffold)', ...)` block in `server/src/tts/segment-asr-qa.test.ts` tests the `.es`/`.ru` knobs via `resolveAsrThresholds` + env var overrides (not by inspecting the registry directly) — mirror that exact pattern for `fr`/`de`. **Edit this existing block in place** (extend its `afterEach`, add one new `it(...)` inside it) — do NOT create a second `describe` block with the same name:
 
 ```ts
 describe('resolveAsrThresholds per-language maxWer (#1084 scaffold)', () => {
@@ -795,10 +826,10 @@ Add a matching user-facing, brand-voice line to the in-progress version section 
 
 - [ ] **Step 3: File the calibration follow-up issue**
 
-Run (adjust title/body to match the repo's issue-template conventions if `gh issue create` prompts for a template):
+This is backlog-shaped work (planned follow-up tuning, not broken behavior), so per CONTRIBUTING.md's two-shape issue convention it gets `area:`+`type:` labels, not `bug` — `type:chore` since it's calibrating existing knobs from data rather than adding new capability. Leave `moscow:` unset for the user to set. Run (adjust title/body to match the repo's issue-template conventions if `gh issue create` prompts for a template; add whatever `area:`/`type:` label names this repo's label set actually uses if they differ from below):
 
 ```bash
-gh issue create --title "srv: on-box maxWer calibration for es/fr/de/ru (#1084 follow-up)" --label bug --body "Follow-up to #1084. The non-English normalization tables (integer-spelling, German contractions) shipped in #1084, but per-language maxWer thresholds are still unvalidated defaults (0.4, the English-tuned value). This issue tracks: (1) rendering real audio in es/ru (once the fs-61 Coalfall demo books are voice-designed), then fr/de, (2) running the ASR gate against it and inspecting the WER distribution per language, (3) setting qa.asr.maxWer.{es,fr,de,ru} from that data, (4) validating the two residual risks named in the #1084 design spec: gendered-number mismatch rate (es/fr/ru 'one', ru 'two') and Russian oblique-case declension mismatch rate, plus confirming whether Whisper's German output actually matches the single-fused-token assumption for compound numbers."
+gh issue create --title "srv: on-box maxWer calibration for es/fr/de/ru (#1084 follow-up)" --label "area:srv" --label "type:chore" --body "Follow-up to #1084. The non-English normalization tables (integer-spelling, German contractions) shipped in #1084, but per-language maxWer thresholds are still unvalidated defaults (0.4, the English-tuned value). This issue tracks: (1) rendering real audio in es/ru (once the fs-61 Coalfall demo books are voice-designed), then fr/de, (2) running the ASR gate against it and inspecting the WER distribution per language, (3) setting qa.asr.maxWer.{es,fr,de,ru} from that data, (4) validating the two residual risks named in the #1084 design spec: gendered-number mismatch rate (es/fr/ru 'one', ru 'two') and Russian oblique-case declension mismatch rate, plus confirming whether Whisper's German output actually matches the single-fused-token assumption for compound numbers."
 ```
 
 Note the returned issue number (referred to as `<FOLLOWUP-NN>` below).
