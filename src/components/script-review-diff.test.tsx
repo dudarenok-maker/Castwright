@@ -798,6 +798,39 @@ describe('fs-58 — ScriptReviewDiff', () => {
     resolveSpy.mockRestore();
   });
 
+  /* Regression #1480 — the confirm form must reset to each queue entry's OWN
+     proposed defaults. Distinct from the dedupe test above: here the two ops
+     propose DIFFERENT names, and op 2's field is read WITHOUT the operator
+     retyping anything, so a stale-state bug shows up as op 1's name leaking
+     into op 2 rather than as a silent extra createCharacter call. */
+  it('resets the confirm form fields between queue entries instead of carrying over the prior op (#1480)', async () => {
+    const store = makeProposedStore(
+      [
+        { id: 5, chapterId: 1, proposed: { name: 'Nova' } },
+        { id: 7, chapterId: 1, proposed: { name: 'Sol' } },
+      ],
+      [
+        { id: 5, chapterId: 1, text: 'Line five.', characterId: 'narr' },
+        { id: 7, chapterId: 1, text: 'Line seven.', characterId: 'narr' },
+      ],
+    );
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('apply-button'));
+    expect(screen.getByTestId('confirm-reattribute')).toBeInTheDocument();
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Nova');
+    fireEvent.click(screen.getByTestId('create-character-submit')); // confirm op 1 (Nova)
+
+    await waitFor(() => expect(screen.getByText(/2 of 2/)).toBeInTheDocument());
+    // Op 2 proposes "Sol" — the form must show op 2's own default, not the
+    // "Nova" left over from op 1.
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Sol');
+  });
+
   it('a failed create surfaces a toast, closes the confirm dialog, and keeps the review for retry (#1122)', async () => {
     createSpy.mockRejectedValueOnce(new Error('boom'));
     const store = makeProposedStore(
@@ -908,10 +941,9 @@ describe('fs-58 — ScriptReviewDiff', () => {
     fireEvent.click(screen.getByTestId('create-character-submit')); // Nova
 
     await waitFor(() => expect(screen.getByTestId('confirm-reattribute')).toBeInTheDocument());
-    // The confirm form's Name field is uncontrolled-from-props (useState(initial)
-    // with no key on the wrapper, so it doesn't reset between confirm-queue
-    // steps) — mirror what an operator actually does and retype the name for
-    // op 2 so it submits «Sol», not the stale «Nova» left over from op 1.
+    // #1480 — the form now resets to op 2's own proposed default ("Sol") on
+    // its own; retype anyway to keep this test's intent (submitting "Sol")
+    // explicit and independent of that reset behavior.
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Sol' } });
     fireEvent.click(screen.getByTestId('create-character-submit')); // Sol → rejects
 
