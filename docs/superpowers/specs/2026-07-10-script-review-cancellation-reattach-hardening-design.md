@@ -78,16 +78,27 @@ This is deliberately **book-level, not chapter-scoped**: the client's progress p
 only (`activeStreams[bookId]`), so there is no UI surface today that knows "which specific chapterId to
 cancel" when multiple subset jobs could concurrently be running for the same book (a legitimate state —
 see the persistence spec's finding on concurrent per-chapter reviews). Book-level cancel matches the one
-pill the user actually sees, and mirrors `analysis.ts`'s `POST /:id/analysis/pause`, which aborts both
-its main and subset maps for a manuscript in one idempotent call.
+pill the user actually sees, and mirrors the idempotent-abort *idiom* of `analysis.ts`'s
+`POST /:id/analysis/pause` — not a line-for-line copy: `/analysis/pause` aborts at most one main plus one
+subset job (`analysis.ts:4468–4482`), while script-review's cancel generalizes to *every* running subset
+job for the book, since — unlike analysis — more than one can legitimately be in flight at once. Unlike
+`/analysis/pause`, cancel also doesn't write a pre-abort snapshot first (`analysis.ts:4473–4478`'s
+`persistTerminalSnapshot`) — script review has no "paused" state to snapshot into; its terminal state
+flows through the SSE tail instead (below). Cancel also skips the `findBookByBookId` existence check every
+other route in this file performs: it only touches in-memory job maps, so an unknown `bookId` is
+indistinguishable from "nothing running for this book" and both correctly no-op.
 
 A pure client-side abort (mirroring `detect-emotions-button.tsx`'s `abortRef.current?.abort()`) was
 considered and rejected: `res.on('close')` deliberately never aborts the server job — that is the entire
 point of "sticky" from the persistence design. A client-only abort would stop *displaying* progress
 without stopping the job or releasing the 409 lock, which is the actual complaint in #1481.
 
-**Chapters that finished checkpointing before the cancel are kept; the chapter that was still in flight
-is not.** This distinction matters and is not free — it needs one new check, not zero. Reading
+**Chapters that finished checkpointing before the cancel are kept; any chapter not yet checkpointed at
+the moment the abort is observed is not** — in practice the one chapter that was actively being
+reviewed, though the same rule also covers the edge case of a chapter whose last chunk finishes in the
+same instant the abort flag flips, before its checkpoint runs (harmless: it's equivalent to that chapter
+never having started, matching the crash case below). This distinction matters and is not free — it
+needs one new check, not zero. Reading
 `runScriptReviewJob` (script-review.ts:611–701) shows the existing `if (job.controller.signal.aborted)
 break;` at the top of the chunk loop only breaks that inner loop; control then falls through to
 `accumulateChapterPacing`, `reviewedChapters += 1`, and — if any earlier chunk of *this same chapter*
@@ -167,12 +178,36 @@ On a 404, the client does not error out — it falls back to a plain ledger re-r
 to an existing reusable function: the ledger-hydration logic at the top of `hydrateScriptReview`
 (`src/store/script-review-thunk.ts:295–324`, roughly 30 lines — iterate ledger entries, run `planApply`,
 compute `selected` via `DEFAULT_OFF`, dispatch `hydrateBucket`) is inline in that function today, not a
-standalone helper. This spec extracts it into a small shared function, e.g. `hydrateLedgerIntoBucket(bookId,
-opts)`, called both from the top of `hydrateScriptReview` (unchanged behavior) and from
-`attachToRunningReview`'s 404 branch (new). Calling it twice in one hydration pass is safe:
-`hydrateBucket` merges per-chapter, so a second call simply picks up whichever chapter(s) finished
-checkpointing in the TOCTOU gap. No new client state, no toast — the user sees the now-complete results
-appear, the same as if they had reloaded a second later.
+standalone helper. This spec extracts it — **as a pure transform, with no fetching of its own**:
+
+```ts
+function hydrateLedgerIntoBucket(
+  bookId: string,
+  entries: Record<string, LedgerEntryDTO>,
+  snapshot: { dispatch: AppDispatch; sentences: ReviewLiveSentence[]; characterIds: Set<string>; manuscriptId: string },
+): void {
+  /* the existing chapterEntries loop → planApply → DEFAULT_OFF/selected →
+     dispatch(hydrateBucket(...)) logic, unchanged, just parameterized on
+     `entries` and `snapshot` instead of reading them from outer scope */
+}
+```
+
+The helper takes the ledger `entries` and the already-resolved `{sentences, characterIds, manuscriptId}`
+snapshot as plain arguments — it does **not** take `getState`/`subscribe` and does **not** call
+`waitForManuscriptAndCast` itself. This is what makes it callable from both sites despite their different
+scopes: `hydrateScriptReview`'s top block already has both `state.entries` (from its own `GET /state`)
+and the snapshot (from its own `waitForManuscriptAndCast(getState, subscribe, bookId)` call) in scope, so
+it passes them straight through — genuinely unchanged behavior, no second fetch. `attachToRunningReview`
+has no `getState`/`subscribe` in scope, but doesn't need them either: it already receives
+`sentences`/`characterIds`/`manuscriptId` directly in its own `opts` (`script-review-thunk.ts:147`,
+threaded down from `hydrateScriptReview`'s single shared snapshot per the round-5 fix). Its 404 branch
+only needs to do its own fresh `const freshState = await api.getScriptReviewState(bookId);` — to pick up
+whatever checkpointed in the TOCTOU gap — then call `hydrateLedgerIntoBucket(bookId, freshState.entries, {
+dispatch, sentences, characterIds, manuscriptId })` with the snapshot it already has. Calling the helper
+twice across the two sites in one hydration pass is safe: `hydrateBucket` merges per-chapter, so this
+simply layers whichever chapter(s) finished checkpointing in the TOCTOU gap on top of what the top-level
+call already hydrated. No new client state, no toast — the user sees the now-complete results appear,
+the same as if they had reloaded a second later.
 
 Two alternatives were considered and rejected:
 
@@ -210,14 +245,19 @@ routes. `openapi.yaml` gains both operations; `npm run openapi:types` regenerate
   - **Mock mode**, since `e2e` always runs against `api.mock`, never the real server
     (`playwright.config.ts`): `mockCancelScriptReview` clears the sessionStorage-backed
     `MockScriptReviewState`'s `running` field (`api.ts:3224–3260`), simulating a stopped job so a
-    subsequent mock `GET /state` reports no job running. `mockAttachScriptReview` mirrors the real
-    endpoint's shape against that same shim — returns buffered mock ops when `running` is set, `null`
-    when it isn't — so both the Cancel e2e spec and the reattach-race unit coverage below have something
-    to actually call.
+    subsequent mock `GET /state` reports no job running — this is all the mandated Cancel e2e spec (§8)
+    needs. `mockAttachScriptReview` keys `null` vs. non-null off that same `running` field for symmetry
+    with the real endpoint's shape; it does **not** need to replay buffered ops, since
+    `MockScriptReviewState` never persists `mockReviewScript`'s `opsAccum` to sessionStorage today
+    (`api.ts:3266`, a local variable) and no test in §8 exercises op-replay through the mock — the
+    reattach-race unit coverage mocks `api.attachScriptReview` directly instead of routing through this
+    shim.
 - **`src/store/script-review-thunk.ts`**
-  - New shared helper `hydrateLedgerIntoBucket` (see §4.2), extracted from the inline logic at the top of
-    `hydrateScriptReview`, called from both that original call site (unchanged behavior) and from
-    `attachToRunningReview`'s new 404 branch.
+  - New shared helper `hydrateLedgerIntoBucket` (see §4.2) — a pure transform, no fetching of its own —
+    extracted from the inline logic at the top of `hydrateScriptReview`, called from both that original
+    call site (unchanged behavior, passing through its already-fetched entries and snapshot) and from
+    `attachToRunningReview`'s new 404 branch (passing its own fresh `GET /state` entries and its own
+    already-in-scope snapshot).
   - `attachToRunningReview` calls `api.attachScriptReview` instead of `api.reviewScript`. On a `null`
     result, it calls `hydrateLedgerIntoBucket` and returns — no toast, no `setReview` dispatch (the helper
     already dispatches `hydrateBucket` itself).
