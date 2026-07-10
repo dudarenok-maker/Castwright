@@ -462,13 +462,15 @@ describe('ListenView — coming-soon affordances', () => {
        `prefill`. Plan 67 wires the streaming-link tile to
        POST /api/books/:bookId/share + the ShareLinkModal. Plan 75 wires
        the Portable bundle tile to GET /api/books/:bookId/export/portable.
-       All four Download buttons are now enabled. */
+       fs-52 wires the Captions tile to the export modal.
+       All five Download buttons are now enabled. */
     const downloads = screen.getAllByRole('button', { name: /^Download$/ });
-    expect(downloads.length).toBe(4);
+    expect(downloads.length).toBe(5);
     expect(screen.getByTestId('download-tile-m4b').querySelector('button')).toBeEnabled();
     expect(screen.getByTestId('download-tile-mp3-zip').querySelector('button')).toBeEnabled();
     expect(screen.getByTestId('download-tile-streaming').querySelector('button')).toBeEnabled();
     expect(screen.getByTestId('download-tile-portable').querySelector('button')).toBeEnabled();
+    expect(screen.getByTestId('download-tile-captions').querySelector('button')).toBeEnabled();
     const disabled = downloads.filter((b) => b.hasAttribute('disabled'));
     expect(disabled.length).toBe(0);
   });

@@ -117,7 +117,7 @@ export function ListenView({
        MP3 ZIP). Distinct from `appHint` which collapses the modal to a
        tile-specific UX; `format` keeps the generic two-tab UX with the
        picker pre-set. */
-    format?: 'm4b' | 'mp3-zip' | 'mp3-folder';
+    format?: 'm4b' | 'mp3-zip' | 'mp3-folder' | 'captions';
   } | null>(null);
   /* Plan 67 — share-link modal state. `null` is closed; an object
      with a (possibly null) `url` lets us open the modal optimistically
@@ -265,6 +265,7 @@ export function ListenView({
         onOpenAppleBooksExport={() => setExportModal({ tab: 'download', format: 'm4b' })}
         onOpenM4bExport={() => setExportModal({ tab: 'download', format: 'm4b' })}
         onOpenMp3ZipExport={() => setExportModal({ tab: 'download', format: 'mp3-zip' })}
+        onOpenCaptionsExport={() => setExportModal({ tab: 'download', format: 'captions' })}
         onOpenStreamingLink={() => {
           /* Open the modal optimistically so the user sees the
              share-link UI immediately; the mint POST resolves into
