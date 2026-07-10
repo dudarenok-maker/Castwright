@@ -34,6 +34,15 @@ check, or every install attempt on a box without the standalone CUDA
 Toolkit (the common case) silently fails and the feature ships dead. See
 Design.
 
+**What the `nvcc` preflight does and doesn't guarantee:** presence on PATH
+only rules out the *no-toolkit-at-all* doomed compile. It does not confirm
+the toolkit's CUDA version matches the torch `cu128` build already
+installed, that the GPU's compute capability satisfies flash-attn's target
+arch flags, or that the box has enough RAM/disk for the build. Those
+remain possible non-fatal failures after a real (if wasted) multi-minute
+compile — the preflight narrows the doomed-attempt window, it doesn't
+close it.
+
 ## Goals
 
 - If `flash_attn` is already importable in the sidecar venv — **on any
@@ -78,16 +87,32 @@ Design.
 ### New I/O probes
 
 Two new thin subprocess wrappers in `install-qwen3.mjs`, sibling to the
-existing `venvPyTag(python)` helper:
+existing `venvPyTag(python)` helper (`cwd: SIDECAR_DIR, windowsHide: true`
+included on both, matching `venvPyTag`'s hygiene — `flashAttnImportable`
+in particular runs on Windows too, as part of the any-platform detection,
+so it needs the same `windowsHide` console-flash guard tracked elsewhere
+in this repo, #587):
 
 - `flashAttnImportable(python)` — `spawnSync(python, ['-c', 'import
-  flash_attn'])`, returns `true` on exit code 0, else `false`.
-- `nvccAvailable()` — `spawnSync('nvcc', ['--version'])`, returns `true` on
-  exit code 0, else `false`. This is the preflight the Context section's
-  DeepSpeed precedent motivates: without it, `install-pip` below would
-  attempt (and fail) a source compile on every box lacking the standalone
-  CUDA Toolkit — the common case for a box provisioned only via `pip
-  install torch`.
+  flash_attn'], { cwd: SIDECAR_DIR, windowsHide: true })`, returns `true`
+  on exit code 0, else `false`.
+- `hasNvcc()` — `spawnSync('nvcc', ['--version'], { windowsHide: true })`,
+  returns `true` on exit code 0, else `false`. **Named distinctly from the
+  `nvccAvailable` decision-table input it feeds** (an earlier draft of this
+  spec named the probe function `nvccAvailable()` too and wrote `const
+  nvccAvailable = nvccAvailable()` — a `const`'s own initializer can't see
+  itself, so that literal line is a temporal-dead-zone `ReferenceError`.
+  Since `installFlashAttn()` is called from `main()` with no surrounding
+  try/catch (`install-qwen3.mjs:266`), that error would abort the entire
+  `install-qwen3` run — including the qwen-tts model prefetch — on the
+  first opted-in Linux box. The sibling pair avoids this correctly today
+  (`flashAttnImportable()` feeds a differently-named `alreadyImportable`);
+  this probe must follow that same never-reuse-the-name pattern). This is
+  the preflight the Context section's DeepSpeed precedent motivates:
+  without it, `install-pip` below would attempt (and fail) a source
+  compile on every box lacking the standalone CUDA Toolkit — the common
+  case for a box provisioned only via `pip install torch`. (It narrows,
+  but doesn't eliminate, doomed-compile risk — see Context.)
 
 ### `resolveFlashAttnInstall()` — extended decision table
 
@@ -139,14 +164,26 @@ Today `installFlashAttn()` is linear, not a dispatch: after the one
 `plan.action === 'skip'` early-return it falls straight into the win32
 wheel-download/SHA-verify/install block, implicitly assuming `action ===
 'install'` is the only remaining case. Adding `already-installed` and
-`install-pip` requires turning this into an explicit dispatch — inserting
-their branches *before* that block, not appending after it — otherwise
-`install-pip` falls through into code that does `step(\`  ${plan.url}\`)`
-and tries to SHA-verify-download an `undefined` URL.
+`install-pip` requires turning this into an explicit **`switch
+(plan.action)`** (not a chain of sequential `if`s with an implicit final
+fallthrough) — each case does its own work and returns, so there's no
+"whatever's left must be the win32 case" branch left for `install-pip` to
+fall into and try to SHA-verify-download an `undefined` URL. This
+structural requirement is a code-review checklist item, not just prose:
+the two prior review rounds each caught a variant of exactly this
+fallthrough risk, and it isn't covered by an automated test (see Testing).
+
+`base.txt`'s path is available the same way `main()` already computes it
+(`join(SIDECAR_DIR, 'requirements', 'base.txt')`, mirroring
+`install-qwen3.mjs:261`) — `installFlashAttn()` can construct it directly
+using the module-level `SIDECAR_DIR` constant; it isn't passed in as a new
+parameter.
 
 - Compute `alreadyImportable = flashAttnImportable(python)` before calling
-  `resolveFlashAttnInstall()`. Compute `nvccAvailable = nvccAvailable()`
-  only when `platform === 'linux'` (no need to spawn it otherwise).
+  `resolveFlashAttnInstall()`. Compute `nvccAvailable = hasNvcc()` only
+  when `platform === 'linux'` (no need to spawn it otherwise; leaving it
+  `undefined` for every other platform is safe — every other branch in the
+  decision table resolves before step 5 even looks at it).
 - `action: 'skip'` → log the reason, return (unchanged).
 - `action: 'already-installed'` → **new branch**: log the reason, return.
   No pip call.
@@ -165,18 +202,24 @@ and tries to SHA-verify-download an `undefined` URL.
      matches the qwen-tts install's existing torch-safety discipline
      (`qwenPipInstallArgs()`, "no `-U`, pinned via base.txt") — these new
      packages shouldn't be exempt from that same discipline.
-  2. Build a **local, non-mutating** env for just this next call:
-     `{ ...env, MAX_JOBS: process.env.MAX_JOBS ?? '4' }`. This must NOT
-     mutate the shared `env` object `main()` passes around (that object is
-     reused for the qwen-tts install and model-prefetch calls later in
-     `main()` — mutating it would leak `MAX_JOBS` into unrelated calls that
-     don't need it), and must check `process.env.MAX_JOBS` specifically
-     (not the local `env`, which never carries an operator's value) so an
-     operator's own `MAX_JOBS` is honored instead of always being
-     overwritten to `'4'`. `4` itself is an uncalibrated default carried
-     over from general flash-attn guidance (compiling CUDA translation
-     units in parallel is RAM-hungry) — not tuned to any known build box in
-     this repo, but always operator-overridable now that the bug above is
+  2. Build the install env via a new **pure, exported, unit-testable**
+     helper — `flashAttnBuildEnv(processEnv, baseEnv)` → `{ ...baseEnv,
+     MAX_JOBS: processEnv.MAX_JOBS ?? '4' }` — called as
+     `flashAttnBuildEnv(process.env, env)`. Pulling this one line out into
+     its own pure function (rather than inlining the merge in
+     `installFlashAttn()`) is the direct fix for the recurring bug class
+     all three review rounds kept finding in this exact spot: it must NOT
+     mutate `baseEnv` (the shared `env` object `main()` passes around and
+     reuses for the qwen-tts install and model-prefetch calls afterward —
+     mutating it in place would leak `MAX_JOBS` into calls that don't need
+     it), and must read `processEnv.MAX_JOBS` (not `baseEnv`, which never
+     carries an operator's value) so an operator's own `MAX_JOBS` is
+     honored instead of always being overwritten to `'4'`. Being pure and
+     exported, this is unit-testable with plain objects and no venv/pip —
+     see Testing. `4` itself is an uncalibrated default carried over from
+     general flash-attn guidance (compiling CUDA translation units in
+     parallel is RAM-hungry) — not tuned to any known build box in this
+     repo, but always operator-overridable now that the mutation bug is
      fixed.
   3. `pip install flash-attn --no-build-isolation -c <base.txt>`, using
      that local env. **`--no-build-isolation` is required, not optional**:
@@ -219,17 +262,39 @@ paths, not the only one.
   `action: 'skip'`, reason matching `/nvcc/`.
 - New: any platform *and any profile*, `alreadyImportable: true` →
   `already-installed` — including `win32` (short-circuits before the
-  pin-check branch) **and `profile: 'amd'`** (short-circuits before the
-  ROCm skip — this is the case the reordering above exists for).
+  pin-check branch), **`profile: 'amd'`** (short-circuits before the ROCm
+  skip — this is the case the reordering above exists for), **and
+  `darwin`** (the specific case Non-goals claims is covered — this test is
+  what makes that claim checked, not just asserted).
+- New: `platform: 'amd'`-profile equivalent — i.e. `profile: 'amd'`,
+  `alreadyImportable: false` → unchanged `action: 'skip'`, ROCm reason.
+  (Closes a pre-existing gap: no `amd`-profile case existed in this test
+  file before this change either.)
 - Existing win32/cp311, win32/cp312, not-opted-in, wheel-URL-shape tests:
   unchanged, still pass (all pass `alreadyImportable: false` implicitly or
   explicitly).
+- New, separate test block for `flashAttnBuildEnv(processEnv, baseEnv)`
+  (the pure env-merge helper from Design): asserts (a) with no
+  `MAX_JOBS` in `processEnv`, the result has `MAX_JOBS: '4'`; (b) with
+  `processEnv.MAX_JOBS` set to some other value, the result preserves it
+  unchanged; (c) `baseEnv` itself is not mutated by the call (assert its
+  reference/contents are unchanged after). This is plain-object,
+  zero-I/O, and is the regression test that closes the specific bug class
+  (silent MAX_JOBS override + shared-env mutation) all three review
+  rounds kept finding in this exact spot.
 
-No venv/CUDA-dependent test is added or needed — `flashAttnImportable()`
-and `nvccAvailable()` themselves (the I/O halves) aren't unit-tested
-directly, matching the existing precedent (`venvPyTag()` also isn't
-unit-tested — thin venv/host subprocess wrappers exercised only by
-hand/on-box, not in CI).
+No venv/CUDA-dependent test is added or needed for the two I/O probes
+(`flashAttnImportable()`, `hasNvcc()`) — matching the existing precedent
+(`venvPyTag()` also isn't unit-tested — thin venv/host subprocess wrappers
+exercised only by hand/on-box, not in CI). `installFlashAttn()`'s
+orchestration body itself (the `switch` dispatch, the pip call sequence,
+the non-fatal warn-and-continue paths) likewise has no automated test — it
+does real subprocess I/O and isn't mocked. Its correctness rests on (a) the
+explicit-`switch`-not-fallthrough structural requirement above being a
+code-review checklist item, and (b) manual on-box acceptance (see
+Acceptance) — a known, accepted gap for an opt-in, non-fatal accelerator
+path, consistent with how this repo already treats the Windows wheel's
+SHA-verify/install flow (also untested beyond the pure decision function).
 
 ## Acceptance
 
