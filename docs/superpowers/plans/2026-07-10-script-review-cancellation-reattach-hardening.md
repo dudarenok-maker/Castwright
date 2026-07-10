@@ -745,15 +745,29 @@ describe('mock-mode script-review cancellation (fs-58 follow-up #1481)', () => {
     expect(result).toBeNull();
   });
 
-  it('mockAttachScriptReview seeds onPhase from the running job\'s lastPhase and resolves non-null when a job is running', async () => {
+  it('mockAttachScriptReview delegates to the same canned timeline as mockReviewScript when a job is running, so a reload can observe it complete', async () => {
+    // Deliberately does NOT seed a custom onPhase/result here — a running
+    // job in mock mode is just "mockReviewScript's own promise, still
+    // in flight," and attach's job is to give a NEW caller (e.g. after a
+    // page reload destroyed the original caller's JS context) a way to
+    // keep observing the SAME canned timeline to completion, not a
+    // separate, shorter, hand-rolled seed. See the comment on
+    // mockAttachScriptReview's implementation (Step 8 below) for why: a
+    // version that only seeded onPhase once and returned immediately
+    // would make src/store/script-review-thunk.ts's reattach fallback
+    // (Task 5) fire almost instantly after a reload, breaking
+    // e2e/script-review-persistence.spec.ts's existing
+    // "reloading mid-review resumes progress without resetting to 0%"
+    // test, which relies on the pill staying populated with a
+    // NON-ZERO percent well past the moment of reload.
     sessionStorage.setItem(mockScriptReviewKey(cancelBookId), JSON.stringify({
-      running: { lastPhase: { progress: 0.4, label: 'Reviewing script' } },
+      running: { lastPhase: { progress: 0.25, label: 'Reviewing script' } },
       entries: {},
     }));
     const phases: Array<{ progress: number }> = [];
     const result = await mockAttachScriptReview(cancelBookId, { onPhase: (p) => phases.push(p) });
-    expect(phases).toEqual([{ progress: 0.4, label: 'Reviewing script' }]);
-    expect(result).toEqual({ reviewedChapters: 0, totalOps: 0 });
+    expect(phases.length).toBeGreaterThan(0);
+    expect(result).toEqual({ reviewedChapters: 1, totalOps: 5 });
   });
 
   it('mockReviewScript throws a cancelled-coded ReviewScriptError if mockCancelScriptReview clears the running flag mid-run', async () => {
@@ -880,14 +894,27 @@ export async function mockCancelScriptReview(bookId: string): Promise<CancelScri
   return { ok: true, cancelled };
 }
 
+/* A running job in mock mode IS mockReviewScript's own promise, still in
+   flight (there's no real detached server-side job to "join" — the mock's
+   sessionStorage state is the only thing that outlives a page reload).
+   Attaching therefore delegates straight to the SAME canned timeline,
+   forwarding this caller's own onPhase/onOps/onCheckpoint — exactly what
+   the pre-fs-58-follow-up code got for free by having attachToRunningReview
+   call api.reviewScript on reattach. A version that only seeded onPhase
+   once and returned immediately (an earlier draft of this function) would
+   make Task 5's client-side reattach fallback fire almost instantly after
+   a reload, which breaks e2e/script-review-persistence.spec.ts's existing
+   "reloading mid-review resumes progress without resetting to 0%" test —
+   that test polls the pill's percent for several seconds after reload and
+   requires it to stay non-zero, which only holds if the reattached call
+   keeps emitting fresh phase ticks until the timeline actually finishes. */
 export async function mockAttachScriptReview(
   bookId: string,
-  { onPhase }: ReviewScriptOpts = {},
+  opts: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult | null> {
   const state = readMockScriptReviewState(bookId);
   if (!state.running) return null;
-  onPhase?.(state.running.lastPhase);
-  return { reviewedChapters: 0, totalOps: 0 };
+  return mockReviewScript(bookId, opts);
 }
 ```
 
@@ -1094,7 +1121,7 @@ replace with:
     });
 ```
 
-There is also a SEPARATE, older `describe('attachToRunningReview', ...)` block (lines 490-580, right after the `describe('runReviewScript — version delivery', ...)` block and before `describe('discardReview', ...)`) predating the round-5 refactor — its 3 tests call `attachToRunningReview` directly and 2 of them mock `api.reviewScript` too. These need the identical `api.reviewScript` → `api.attachScriptReview` substitution, or Task 5 lands with 2 red tests (their `onOps`/`onCheckpoint`/rejection wiring would sit on a mock `attachToRunningReview` no longer calls).
+There is also a SEPARATE, older `describe('attachToRunningReview', ...)` block (lines 490-580, right after the `describe('runReviewScript — version delivery', ...)` block and before `describe('discardReview', ...)`) predating the round-5 refactor — all 3 of its tests call `attachToRunningReview` directly and all 3 mock `api.reviewScript` too. Update all 3 to mock `api.attachScriptReview` instead: the first (`'does NOT dispatch setActive or clear itself…'`) would actually still pass unmodified (it only asserts *absence* of certain dispatch types, and an unconfigured `api.attachScriptReview` resolving to `undefined` doesn't trigger them either) — retarget it anyway so its mock isn't a dead, misleading no-op. The other two genuinely require the retarget or Task 5 lands with 2 red tests (their `onOps`/`onCheckpoint`/rejection wiring would sit on a mock `attachToRunningReview` no longer calls).
 
 Test 4 — find (the test titled `'does NOT dispatch setActive or clear itself — that is hydrateScriptReview\'s job now'`):
 
@@ -1252,7 +1279,7 @@ import { scriptReviewActions, opKey, type ReviewOpWithChapter } from './script-r
 import { notificationsActions } from './notifications-slice';
 ```
 
-Then, immediately before the `export async function attachToRunningReview(` declaration, insert:
+Then insert the following — NOT immediately before `export async function attachToRunningReview(` itself (that declaration is directly preceded by its own 15-line `/** Reattach to a job already running server-side… */` doc comment; inserting there would visually reassign that comment to this new helper instead). Insert it one step earlier: immediately after the closing `}` of the `RunningReviewState` interface (the small interface declared just above that doc comment) and before the doc comment itself:
 
 ```ts
 /** Transform+dispatch a book's ledger entries into its scriptReview bucket.
