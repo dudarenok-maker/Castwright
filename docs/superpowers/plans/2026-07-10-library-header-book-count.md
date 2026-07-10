@@ -13,12 +13,19 @@
 - Replacement copy must be number-agnostic (per spec's Fix section and issue #1461's suggested fix) — no swapping one hardcoded book count for another.
 - `e2e/marketing/scenes.ts`'s `library-shelf` / `library-shelf-full` scenes are explicitly out of scope for this change — the user is regenerating those separately.
 - Conventional Commits format is enforced by a commit-msg hook: `<type>(<scope>): <subject>`, allowed scopes include `frontend`, `docs`, `ci`, etc. (see `CONTRIBUTING.md`).
+- Branches must be named `<type>/<scope>-<slug>` (`CONTRIBUTING.md:16`, e.g. `feat/server-batch-retry`) — `finishing-a-development-branch`'s Option 2 pushes `git push -u origin <feature-branch>` verbatim with no rename step, so the branch must already be conventionally named before that skill runs.
 
 ---
 
 ## Status: implementation already complete
 
-All work this plan would otherwise task out has already been done and committed on this worktree's branch (`worktree-fix+library-header-book-count-1461`), in a single commit `9621ef89` — "fix(frontend): make library header subhead number-agnostic (#1461)". This plan documents what shipped in that commit and defines the one remaining step: finishing the branch.
+All work this plan would otherwise task out has already been done and committed on branch `fix/frontend-library-header-book-count`, across three commits:
+
+1. `7e46f9ab` — `docs(docs): add design for library header book-count copy fix (#1461)`
+2. `9621ef89` — `fix(frontend): make library header subhead number-agnostic (#1461)`
+3. `4050165e` — `docs(docs): add library header book-count implementation plan (#1461)`
+
+The branch was originally auto-created by `EnterWorktree` as `worktree-fix+library-header-book-count-1461` (its slash-mangling naming scheme), which violates the `<type>/<scope>-<slug>` convention above — it has since been renamed in place via `git branch -m fix/frontend-library-header-book-count` (safe to run from inside the worktree; renames the currently-checked-out branch, no re-checkout needed). This plan documents what shipped and defines the one remaining step: finishing the branch.
 
 ### What's in commit `9621ef89`
 
@@ -59,14 +66,14 @@ Finalized spec: problem statement, the fix, scope (including the two screenshot 
 
 **Interfaces:** N/A
 
-- [ ] **Step 1: Confirm the working tree is clean and the commit is present**
+- [ ] **Step 1: Confirm the working tree is clean, on the renamed branch, with all three commits present**
 
-Run: `git status --porcelain && git log --oneline -1`
-Expected: no output from `git status --porcelain` (clean tree); `git log` shows `9621ef89 fix(frontend): make library header subhead number-agnostic (#1461)` as HEAD.
+Run: `git status --porcelain && git branch --show-current && git log --oneline -3`
+Expected: no output from `git status --porcelain` (clean tree); branch is `fix/frontend-library-header-book-count`; log shows `4050165e docs(docs): add library header book-count implementation plan (#1461)`, `9621ef89 fix(frontend): make library header subhead number-agnostic (#1461)`, `7e46f9ab docs(docs): add design for library header book-count copy fix (#1461)` as the top three commits.
 
 - [ ] **Step 2: Invoke the finishing-a-development-branch skill**
 
-Use `superpowers:finishing-a-development-branch` to decide how to land this branch (PR creation, merge target, etc.) and open the PR for issue #1461. Reference the spec at `docs/superpowers/specs/2026-07-10-library-header-book-count-design.md` in the PR body, and note in the PR description that `e2e/marketing/scenes.ts` regeneration is being handled separately by the user.
+Use `superpowers:finishing-a-development-branch` to decide how to land this branch (PR creation, merge target, etc.) and open the PR for issue #1461. Base branch is `main` (confirmed via `git merge-base HEAD origin/main` = `cf3ed9f7`, the branch's fork point — 3 commits ahead, 0 behind). Reference the spec at `docs/superpowers/specs/2026-07-10-library-header-book-count-design.md` in the PR body, and note in the PR description that `e2e/marketing/scenes.ts` regeneration is being handled separately by the user.
 
 ---
 
@@ -77,3 +84,5 @@ Use `superpowers:finishing-a-development-branch` to decide how to land this bran
 **Placeholder scan:** No TBD/TODO markers; all steps show exact commands and exact diffs already applied.
 
 **Type consistency:** N/A — no new functions, types, or interfaces introduced; this is a copy-only change with a single downstream consumer (the rendered `<p>` element), already verified via the component test and visual baselines.
+
+**Round-1 assumption-checker findings folded in:** the plan originally described the branch as `worktree-fix+library-header-book-count-1461` (EnterWorktree's auto-generated name) and had Task 1 Step 1 check for a clean tree that the plan doc itself would have violated. Both fixed: branch renamed in place to `fix/frontend-library-header-book-count` (matches `CONTRIBUTING.md:16`'s `<type>/<scope>-<slug>`, confirmed `finishing-a-development-branch` never renames branches itself), and the plan doc is now committed (`4050165e`) before Task 1's clean-tree check runs.
