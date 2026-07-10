@@ -64,6 +64,7 @@ describe('transcribeSegment', () => {
       avgLogprob: -0.3,
       noSpeechProb: 0.02,
       compressionRatio: 1.4,
+      words: null,
     });
     expect(captured!.url).toBe(`${URL}/transcribe`);
     expect(captured!.init.headers['x-sample-rate']).toBe('24000');
@@ -115,6 +116,48 @@ describe('transcribeSegment', () => {
     await expect(transcribeSegment(Buffer.alloc(0), 24000, { sidecarUrl: URL })).rejects.toThrow(
       /empty PCM/,
     );
+  });
+
+  it('sets X-Word-Timestamps and maps the words[] field when wordTimestamps is requested', async () => {
+    let captured: { init: { headers: Record<string, string> } } | null = null;
+    mockFetch.mockImplementation((async (_url: string, init: { headers: Record<string, string> }) => {
+      captured = { init };
+      return jsonResponse({
+        text: 'Hello world.',
+        language: 'en',
+        avg_logprob: -0.2,
+        no_speech_prob: 0.01,
+        compression_ratio: 1.2,
+        words: [
+          { word: 'Hello', start: 0, end: 0.4 },
+          { word: 'world.', start: 0.4, end: 0.9 },
+        ],
+      });
+    }) as unknown as typeof undiciFetch);
+
+    const result = await transcribeSegment(PCM, 16000, {
+      wordTimestamps: true,
+      sidecarUrl: URL,
+    });
+
+    expect(captured?.init.headers['x-word-timestamps']).toBe('1');
+    expect(result.words).toEqual([
+      { word: 'Hello', start: 0, end: 0.4 },
+      { word: 'world.', start: 0.4, end: 0.9 },
+    ]);
+  });
+
+  it('omits X-Word-Timestamps and returns words: null when not requested', async () => {
+    let captured: { init: { headers: Record<string, string> } } | null = null;
+    mockFetch.mockImplementation((async (_url: string, init: { headers: Record<string, string> }) => {
+      captured = { init };
+      return jsonResponse({ text: 'Hi.', language: 'en' });
+    }) as unknown as typeof undiciFetch);
+
+    const result = await transcribeSegment(PCM, 16000, { sidecarUrl: URL });
+
+    expect(captured?.init.headers['x-word-timestamps']).toBeUndefined();
+    expect(result.words).toBeNull();
   });
 });
 

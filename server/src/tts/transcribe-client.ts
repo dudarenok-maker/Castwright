@@ -32,6 +32,10 @@ export interface TranscribeResult {
   avgLogprob: number | null;
   noSpeechProb: number | null;
   compressionRatio: number | null;
+  /** fs-52 — per-word timestamps, present only when `wordTimestamps` was
+      requested. `null` otherwise (including on a sidecar that predates the
+      field). Chapter/clip-relative seconds, matching whatever PCM was sent. */
+  words: Array<{ word: string; start: number; end: number }> | null;
 }
 
 export interface TranscribeOptions {
@@ -41,6 +45,9 @@ export interface TranscribeOptions {
   signal?: AbortSignal;
   /** Override the sidecar URL (tests inject a fake). */
   sidecarUrl?: string;
+  /** fs-52 — request per-word alignment from Whisper. Only the caption
+      export path sets this; the QA gate never does. */
+  wordTimestamps?: boolean;
 }
 
 /* Same long-call dispatcher rationale as sidecar.ts: a transcribe is short, but
@@ -73,6 +80,7 @@ export async function transcribeSegment(
   };
   const lang = normalizeWhisperLanguage(opts.language);
   if (lang) headers['x-language'] = lang;
+  if (opts.wordTimestamps) headers['x-word-timestamps'] = '1';
 
   const release = await acquireGpuTokenIfOnGpu(asrRunsOnGpu(), costForEngine('asr'));
   try {
@@ -106,6 +114,7 @@ export async function transcribeSegment(
       avg_logprob?: unknown;
       no_speech_prob?: unknown;
       compression_ratio?: unknown;
+      words?: unknown;
     };
     return {
       text: typeof body.text === 'string' ? body.text : '',
@@ -113,6 +122,9 @@ export async function transcribeSegment(
       avgLogprob: numOrNull(body.avg_logprob),
       noSpeechProb: numOrNull(body.no_speech_prob),
       compressionRatio: numOrNull(body.compression_ratio),
+      words: Array.isArray(body.words)
+        ? (body.words as Array<{ word: string; start: number; end: number }>)
+        : null,
     };
   } finally {
     release?.();
