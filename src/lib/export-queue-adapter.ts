@@ -8,7 +8,7 @@
 
 import type { BookExportJob, ExportQueueItem } from './types';
 
-const FORMAT_TO_VIEW: Record<BookExportJob['format'], ExportQueueItem['format']> = {
+const FORMAT_TO_VIEW: Record<Exclude<BookExportJob['format'], 'captions'>, ExportQueueItem['format']> = {
   'mp3-zip': 'zip',
   m4b: 'm4b',
   /* mp3-folder artifacts are a directory tree on disk; the queue row's
@@ -21,16 +21,25 @@ const FORMAT_TO_VIEW: Record<BookExportJob['format'], ExportQueueItem['format']>
      honest catch-all for the Opus container. */
   'aac-m4a-zip': 'm4a',
   'opus-ogg-zip': 'zip',
-  /* fs-52: caption exports map to zip (per-chapter) or single-file
-     (whole-book). Queue badge displays 'zip' for per-chapter bundles. */
-  captions: 'zip',
 };
+
+/* fs-52: caption exports don't map to a single static badge — a
+   `whole-book` scope produces one `.srt`/`.vtt` file, `per-chapter`
+   produces a zip of many. Badge per-job from the caption fields rather
+   than a static table lookup. */
+function viewFormatFor(job: BookExportJob): ExportQueueItem['format'] {
+  if (job.format === 'captions') {
+    return job.captionScope === 'per-chapter' ? 'zip' : job.captionFileFormat === 'vtt' ? 'vtt' : 'srt';
+  }
+  return FORMAT_TO_VIEW[job.format] ?? 'zip';
+}
 
 export function bookExportJobToQueueItem(job: BookExportJob): ExportQueueItem {
   return {
     id: job.id,
     filename: job.filename,
-    format: FORMAT_TO_VIEW[job.format] ?? 'zip',
+    format: viewFormatFor(job),
+    warning: job.warning ?? undefined,
     size: formatSize(job.sizeBytes ?? null),
     /* queued → in_progress (the rail shows them the same); cancelled →
        failed visually, with errorReason='Cancelled by user.' carried

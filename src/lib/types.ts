@@ -749,7 +749,7 @@ export interface AnalysisPhase {
 export interface ExportQueueItem {
   id: string;
   filename: string;
-  format: 'm4b' | 'm4a' | 'mp3' | 'zip' | 'link';
+  format: 'm4b' | 'm4a' | 'mp3' | 'zip' | 'link' | 'srt' | 'vtt';
   size: string;
   status: 'done' | 'in_progress' | 'failed';
   timestamp: string;
@@ -757,6 +757,9 @@ export interface ExportQueueItem {
   progress?: number;
   url?: string;
   errorReason?: string;
+  /** Non-fatal advisory to show alongside a `done` row — e.g. captions
+      built from segments that predate render-time staleness tracking. */
+  warning?: string;
   /* Plan 82 — re-fire context carried from the wire `BookExportJob`. The
      Retry button on a `failed` row reads these to re-POST the original
      export request via the exports-middleware `retryExport` thunk; the

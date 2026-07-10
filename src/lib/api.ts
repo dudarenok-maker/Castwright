@@ -6494,9 +6494,15 @@ async function mockCreateBookExport(
     id,
     bookId,
     format: body.format,
+    captionFileFormat: body.captionFileFormat,
+    captionGranularity: body.captionGranularity,
+    captionScope: body.captionScope,
     destination: body.destination,
     status: 'in_progress',
-    filename: `Mock audiobook.${body.format === 'mp3-zip' ? 'zip' : 'm4b'}`,
+    filename:
+      body.format === 'captions'
+        ? `Mock audiobook.${body.captionGranularity}.${body.captionFileFormat}${body.captionScope === 'per-chapter' ? '.zip' : ''}`
+        : `Mock audiobook.${body.format === 'mp3-zip' ? 'zip' : 'm4b'}`,
     sizeBytes: null,
     progress: 0,
     downloadUrl: null,

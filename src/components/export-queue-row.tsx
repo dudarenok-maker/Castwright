@@ -75,6 +75,8 @@ export function ExportQueueRow({ item, onDownload, onCopyLink, onRetry, onRemove
           <span className="block text-[11px] text-rose-600 truncate mt-0.5">
             {item.errorReason}
           </span>
+        ) : item.warning ? (
+          <span className="block text-[11px] text-amber-700 truncate mt-0.5">{item.warning}</span>
         ) : (
           <span className="block text-[11px] text-ink/55 truncate mt-0.5">{item.destination}</span>
         )}
