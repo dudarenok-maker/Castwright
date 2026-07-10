@@ -162,6 +162,65 @@ export const scriptReviewSlice = createSlice({
       };
     },
 
+    /** Merge a re-hydrated ledger snapshot into an existing bucket per-chapter
+        (fs-58 follow-up #1481) — for the reattach 404 fallback, where
+        hydrateBucket's wholesale replace is unsafe: the fallback fires from
+        inside ONE of potentially several concurrently-reattaching jobs
+        (hydrateScriptReview's Promise.all), and its ledger snapshot,
+        while a superset of what THAT job's own scope needed, is not
+        necessarily a superset of a SIBLING job's still-in-flight chapter —
+        that sibling's own eventual setReview dispatch could land either
+        before or after this one. A wholesale hydrateBucket replace landing
+        after would silently wipe the sibling's just-set ops out of the
+        store even though they're safely checkpointed server-side. Mirrors
+        setReview's touchedChapterIds preserve-the-rest merge logic, but —
+        like hydrateBucket — accepts an already-computed `selected` map
+        instead of deriving it from DEFAULT_OFF, since the caller already
+        resolved persisted per-op overrides against the ledger. */
+    mergeHydratedBucket: (
+      s,
+      a: PayloadAction<{
+        bookId: string;
+        ops: ReviewOpWithChapter[];
+        unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
+        manuscriptId: string;
+        versionByChapter: Record<number, number>;
+        selected: Record<string, boolean>;
+      }>,
+    ) => {
+      const { bookId, ops, unappliable, manuscriptId, versionByChapter, selected } = a.payload;
+      const existing = s.byBook[bookId];
+      const preserveExisting = existing && (!existing.manuscriptId || existing.manuscriptId === manuscriptId);
+
+      const touchedChapterIds = new Set<number>(Object.keys(versionByChapter).map(Number));
+      for (const o of ops) touchedChapterIds.add(o.chapterId);
+      for (const u of unappliable) touchedChapterIds.add(u.op.chapterId);
+
+      const preservedOps = preserveExisting
+        ? existing!.ops.filter((o) => !touchedChapterIds.has(o.chapterId))
+        : [];
+      const preservedUnappliable = preserveExisting
+        ? existing!.unappliable.filter((u) => !touchedChapterIds.has(u.op.chapterId))
+        : [];
+      const preservedSelected: Record<string, boolean> = {};
+      if (preserveExisting) {
+        for (const o of preservedOps) {
+          const key = opKey(o.chapterId, o.id, o.op);
+          if (key in existing!.selected) preservedSelected[key] = existing!.selected[key];
+        }
+      }
+      const preservedVersionByChapter = preserveExisting ? { ...existing!.versionByChapter } : {};
+
+      s.byBook[bookId] = {
+        ops: [...preservedOps, ...ops],
+        unappliable: [...preservedUnappliable, ...unappliable],
+        selected: { ...preservedSelected, ...selected },
+        manuscriptId,
+        versionByChapter: { ...preservedVersionByChapter, ...versionByChapter },
+        visible: existing ? existing.visible : true,
+      };
+    },
+
     /** Flip the selected state of one op by key. */
     toggleOp: (s, a: PayloadAction<{ bookId: string; key: string }>) => {
       const { bookId, key } = a.payload;

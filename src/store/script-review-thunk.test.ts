@@ -595,7 +595,7 @@ describe('attachToRunningReview', () => {
 describe('attachToRunningReview — reattach-race hardening (fs-58 follow-up #1481)', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('on a null (404) attach result, falls back to a fresh ledger re-read via hydrateBucket instead of starting a fresh review', async () => {
+  it('on a null (404) attach result, falls back to a fresh ledger re-read via mergeHydratedBucket instead of starting a fresh review', async () => {
     const dispatch = vi.fn();
     vi.mocked(api.attachScriptReview).mockResolvedValue(null);
     vi.mocked(api.getScriptReviewState).mockResolvedValue({
@@ -623,12 +623,81 @@ describe('attachToRunningReview — reattach-race hardening (fs-58 follow-up #14
     );
 
     expect(dispatch).toHaveBeenCalledWith(
-      scriptReviewActions.hydrateBucket(
+      scriptReviewActions.mergeHydratedBucket(
         expect.objectContaining({ bookId: 'book-1', manuscriptId: 'ms-1', versionByChapter: { 5: 3 } }),
       ),
     );
     expect(dispatch.mock.calls.some((c) => c[0].type === scriptReviewActions.setReview.type)).toBe(false);
+    // Critically NOT hydrateBucket — that reducer replaces the bucket
+    // wholesale, which is exactly the race this mode:'merge' fix closes
+    // (see the regression test below for the actual race scenario).
+    expect(dispatch.mock.calls.some((c) => c[0].type === scriptReviewActions.hydrateBucket.type)).toBe(false);
     expect(dispatch.mock.calls.some((c) => c[0].type === scriptReviewActions.clear.type)).toBe(false);
+  });
+
+  /* Regression for the code-review-workflow finding on this PR: the 404
+     fallback used to dispatch hydrateBucket, a wholesale per-book replace.
+     hydrateScriptReview's Promise.all can reattach MULTIPLE concurrently-
+     running jobs for the same book (e.g. chapters 5 and 9). If chapter 5's
+     job hits the TOCTOU race (its attach 404s) while chapter 9's job is
+     still genuinely streaming, chapter 5's fallback GET /state can return
+     a ledger snapshot that doesn't yet include chapter 9 (it hasn't
+     checkpointed yet) — and if that fallback's dispatch resolves AFTER
+     chapter 9's own setReview, a wholesale replace would silently wipe
+     chapter 9's just-set ops back out of the store, even though they're
+     safely checkpointed server-side. Drives BOTH attachToRunningReview
+     calls against a REAL store (not a dispatch spy) and asserts the final
+     state carries both chapters regardless of which settles last. */
+  it('a concurrently-reattaching sibling job\'s ops survive the 404 fallback\'s dispatch landing after it', async () => {
+    const store = configureStore({ reducer: { scriptReview: scriptReviewSlice.reducer } });
+
+    // Chapter 5 hits the TOCTOU race: its attach 404s (null), and its
+    // fallback ledger read is a snapshot taken BEFORE chapter 9 checkpoints
+    // (i.e. it only has chapter 5's own entry).
+    vi.mocked(api.attachScriptReview).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      if (opts.chapterId === 5) return null;
+      // Chapter 9's job is still genuinely streaming — resolves normally
+      // with its own ops, driving the ordinary setReview path.
+      opts.onCheckpoint?.({ chapterId: 9, version: 1 });
+      opts.onOps?.({ chapterId: 9, ops: [{ id: 2, op: 'strip_tag', newText: 'Nine fixed', rationale: 'r' }] });
+      return { reviewedChapters: 1, totalOps: 1 } as never;
+    });
+    let resolveGetState!: (v: Awaited<ReturnType<typeof api.getScriptReviewState>>) => void;
+    vi.mocked(api.getScriptReviewState).mockImplementation(
+      () => new Promise((resolve) => { resolveGetState = resolve; }),
+    );
+
+    const sentences = [
+      { id: 1, chapterId: 5, text: 'Five fixed', characterId: 'c1' },
+      { id: 2, chapterId: 9, text: 'Nine fixed', characterId: 'c1' },
+    ];
+    const opts = { dispatch: store.dispatch, sentences, characterIds: new Set(['c1']), manuscriptId: 'ms-1' };
+
+    const chapter5 = attachToRunningReview('book-1', { chapterId: 5, replay: { lastPhase: null } }, opts);
+    const chapter9 = attachToRunningReview('book-1', { chapterId: 9, replay: { lastPhase: null } }, opts);
+
+    // Let chapter 9's job settle (dispatches setReview) BEFORE chapter 5's
+    // fallback GET /state resolves — the exact ordering that used to lose
+    // chapter 9's ops under the old hydrateBucket-replace behavior.
+    await chapter9;
+    expect(store.getState().scriptReview.byBook['book-1']?.ops.map((o) => o.chapterId)).toEqual([9]);
+
+    resolveGetState({
+      kind: 'ledger',
+      entries: {
+        '5': {
+          manuscriptId: 'ms-1',
+          version: 3,
+          ops: [{ id: 1, op: 'strip_tag', newText: 'Five fixed', rationale: 'r' }],
+          selected: {},
+          completedAt: '2026-01-01',
+        },
+      },
+    });
+    await chapter5;
+
+    const finalChapterIds = store.getState().scriptReview.byBook['book-1']?.ops.map((o) => o.chapterId).sort();
+    expect(finalChapterIds).toEqual([5, 9]);
   });
 
   it('never dispatches clear itself, even on error — clear stays hoisted in hydrateScriptReview (round-5 fix, must not regress)', async () => {

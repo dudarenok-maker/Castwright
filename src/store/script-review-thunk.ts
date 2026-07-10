@@ -136,11 +136,27 @@ interface RunningReviewState {
     waitForManuscriptAndCast calls) and attachToRunningReview's 404
     fallback below (which has no getState/subscribe in scope, but already
     receives sentences/characterIds/manuscriptId directly in its own opts
-    — see design spec §4.2). No-ops on an empty entries map. */
+    — see design spec §4.2). No-ops on an empty entries map.
+
+    `mode` controls which reducer the transformed result dispatches through:
+    - 'replace' (default, hydrateScriptReview's top-block call): the payload
+      IS the complete, authoritative current state — nothing else has
+      dispatched into this book's bucket yet in this hydration pass — so a
+      wholesale hydrateBucket replace is correct and even desirable (it
+      purges anything stale no longer in the ledger).
+    - 'merge' (attachToRunningReview's 404-fallback call, fs-58 follow-up
+      #1481): this call can race a CONCURRENTLY-reattaching sibling job's
+      own setReview dispatch (hydrateScriptReview's Promise.all over
+      multiple running jobs) — a wholesale replace landing after the
+      sibling's setReview would silently wipe its just-set chapter back
+      out of the store. mergeHydratedBucket preserves any chapter this
+      call's own snapshot didn't touch, exactly like setReview does for a
+      live run. */
 function hydrateLedgerIntoBucket(
   bookId: string,
   entries: Record<string, LedgerEntryDTO>,
   snapshot: { dispatch: AppDispatch; sentences: ReviewLiveSentence[]; characterIds: Set<string>; manuscriptId: string },
+  mode: 'replace' | 'merge' = 'replace',
 ): void {
   const { dispatch, sentences, characterIds, manuscriptId } = snapshot;
   const chapterEntries = Object.entries(entries);
@@ -166,7 +182,8 @@ function hydrateLedgerIntoBucket(
     selected[key] = key in persistedSelected ? persistedSelected[key] : !DEFAULT_OFF.has(o.op);
   }
 
-  dispatch(scriptReviewActions.hydrateBucket({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter, selected }));
+  const payload = { bookId, ops: appliable, unappliable, manuscriptId, versionByChapter, selected };
+  dispatch(mode === 'merge' ? scriptReviewActions.mergeHydratedBucket(payload) : scriptReviewActions.hydrateBucket(payload));
 }
 
 /** Reattach to a job already running server-side (design spec §4.1/§4.3) —
@@ -211,16 +228,14 @@ export async function attachToRunningReview(
     if (result === null) {
       // TOCTOU: the job finished between GET /state and this join — fall
       // back to a plain ledger re-read instead of silently starting a
-      // fresh review (design spec §4.2). Correctness here rests on the
-      // ledger being a SUPERSET of whatever was hydrated earlier (a
-      // running job's ledger only grows) — hydrateBucket replaces the
-      // bucket wholesale rather than merging per-chapter, so a fresh
-      // snapshot that isn't a strict superset would lose data. It always
-      // is one here: this fires moments after the same GET /state call
-      // that seeded the earlier snapshot, with nothing but more
-      // checkpointing able to happen in between.
+      // fresh review (design spec §4.2). Uses 'merge' mode: this call can
+      // run concurrently with a SIBLING job's own attachToRunningReview
+      // (hydrateScriptReview's Promise.all over multiple running jobs) —
+      // a wholesale replace could land after the sibling's setReview and
+      // silently wipe its just-checkpointed chapter back out of the store.
+      // See hydrateLedgerIntoBucket's own comment for the full reasoning.
       const freshState = await api.getScriptReviewState(bookId);
-      hydrateLedgerIntoBucket(bookId, freshState.entries, { dispatch, sentences, characterIds, manuscriptId });
+      hydrateLedgerIntoBucket(bookId, freshState.entries, { dispatch, sentences, characterIds, manuscriptId }, 'merge');
       return;
     }
     const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
