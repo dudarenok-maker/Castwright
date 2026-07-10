@@ -225,6 +225,18 @@ export function ExportAudiobookModal({
     };
   }, [open]);
 
+  /* fs-52 final-review fix — stale-selection hardening. If Word was
+     already selected and a re-probe (the effect above, e.g. on reopen)
+     resolves `whisperAvailable` to false, the Word pill goes disabled but
+     the already-selected value would otherwise persist, letting the user
+     submit a granularity the server will 400 on. Reset to the default
+     the moment availability flips false while 'word' is selected. */
+  useEffect(() => {
+    if (!whisperAvailable && captionGranularity === 'word') {
+      setCaptionGranularity('sentence');
+    }
+  }, [whisperAvailable, captionGranularity]);
+
   /* Reset transient UI state on close so the next open is a clean slate.
      Prefill (when set) overrides the per-open defaults — so the Voice tile
      reopening the modal lands on M4B + sync-folder regardless of what the

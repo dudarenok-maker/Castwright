@@ -773,6 +773,14 @@ export interface ExportQueueItem {
   wireFormat?: 'mp3-zip' | 'm4b' | 'mp3-folder' | 'aac-m4a-zip' | 'opus-ogg-zip' | 'captions';
   wireDestination?: 'download' | 'sync-folder';
   syncPath?: string;
+  /* fs-52 final-review fix — only set (and only meaningful) when
+     wireFormat === 'captions'. Carried so a failed captions job's Retry
+     button can re-POST these required fields; without them the server's
+     `POST /:bookId/exports` 400s (captionFileFormat/captionGranularity/
+     captionScope are mandatory whenever format === 'captions'). */
+  captionFileFormat?: 'srt' | 'vtt';
+  captionGranularity?: 'line' | 'sentence' | 'word';
+  captionScope?: 'whole-book' | 'per-chapter';
 }
 
 /* Audiobook export job + request schemas, sourced from the OpenAPI spec.

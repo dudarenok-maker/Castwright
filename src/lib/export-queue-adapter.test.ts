@@ -59,4 +59,29 @@ describe('bookExportJobToQueueItem — captions (fs-52)', () => {
     const item = bookExportJobToQueueItem(job({ format: 'mp3-zip' }));
     expect(item.warning).toBeUndefined();
   });
+
+  /* fs-52 final-review fix — a failed captions job's Retry button
+     (src/store/exports-middleware.ts retryExport) reads these three
+     fields off the queue item to re-POST a valid captions export
+     request; without them the server 400s. */
+  it('carries captionFileFormat/captionGranularity/captionScope through to the queue item', () => {
+    const item = bookExportJobToQueueItem(
+      job({
+        format: 'captions',
+        captionFileFormat: 'vtt',
+        captionGranularity: 'word',
+        captionScope: 'per-chapter',
+      }),
+    );
+    expect(item.captionFileFormat).toBe('vtt');
+    expect(item.captionGranularity).toBe('word');
+    expect(item.captionScope).toBe('per-chapter');
+  });
+
+  it('leaves the caption fields undefined for a non-captions job', () => {
+    const item = bookExportJobToQueueItem(job({ format: 'mp3-zip' }));
+    expect(item.captionFileFormat).toBeUndefined();
+    expect(item.captionGranularity).toBeUndefined();
+    expect(item.captionScope).toBeUndefined();
+  });
 });

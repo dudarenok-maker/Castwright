@@ -61,6 +61,12 @@ export function bookExportJobToQueueItem(job: BookExportJob): ExportQueueItem {
     wireFormat: job.format,
     wireDestination: job.destination,
     syncPath: job.syncPath ?? undefined,
+    /* fs-52 final-review fix — carry the caption fields so a failed
+       captions job's Retry can re-POST a valid request (see
+       retryExport in exports-middleware.ts). */
+    captionFileFormat: job.captionFileFormat ?? undefined,
+    captionGranularity: job.captionGranularity ?? undefined,
+    captionScope: job.captionScope ?? undefined,
   };
 }
 

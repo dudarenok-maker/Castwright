@@ -344,7 +344,9 @@ export function ListenView({
         onRetryExport={(item) => {
           /* Plan 82 — re-fire the original export. Reads the wire context
              that the adapter propagated onto the queue row (bookId,
-             exportId, wireFormat, wireDestination, syncPath). */
+             exportId, wireFormat, wireDestination, syncPath). fs-52
+             final-review fix — also forwards the caption fields so a
+             failed captions job's retry re-POST doesn't 400. */
           if (!item.bookId || !item.exportId || !item.wireFormat || !item.wireDestination) return;
           dispatch(
             retryExport({
@@ -353,6 +355,9 @@ export function ListenView({
               format: item.wireFormat,
               destination: item.wireDestination,
               syncPath: item.syncPath,
+              captionFileFormat: item.captionFileFormat,
+              captionGranularity: item.captionGranularity,
+              captionScope: item.captionScope,
             }),
           );
         }}
