@@ -564,6 +564,11 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                 </h3>
               </div>
               <CreateCharacterForm
+                // #1480 — keyed on the op's identity so React remounts the form
+                // (and resets its internal name/gender/ageRange state) on every
+                // confirm-queue advance, instead of reusing the same instance
+                // and carrying the prior op's typed values into this one.
+                key={opKey(confirmOp.chapterId, confirmOp.id, confirmOp.op)}
                 initial={confirmOp.proposed}
                 rosterByName={confirmRosterByName}
                 onSubmit={(f) =>
