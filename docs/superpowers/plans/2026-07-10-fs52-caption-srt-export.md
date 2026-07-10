@@ -654,7 +654,7 @@ git commit -m "feat(server): add pure SRT/VTT caption formatters"
 
 **Interfaces:**
 - Consumes: `CaptionCue` (Task 4, `./caption-format.js`), `textHashForStale` (`server/src/audio/segments-io.ts`).
-- Produces: `SegmentInput { characterId: string; sentenceIds: number[]; startSec: number; endSec: number; kind?: 'title'; textHash?: string }`; `buildSentenceCues(segments, sentenceText, speakerNames, chapterTitle): CaptionCue[]`; `buildLineCues(segments, sentenceText, speakerNames, chapterTitle): CaptionCue[]`; constants `LINE_MAX_DURATION_SEC = 7`, `LINE_MAX_CHARS = 200` (exported for the test). Both cue builders throw when a segment's `textHash` no longer matches its current manuscript text (chapter edited since last render, not re-rendered) — a plan-review finding: joining current text onto stored render-time timing is silently wrong otherwise.
+- Produces: `SegmentInput { characterId: string; sentenceIds: number[]; startSec: number; endSec: number; kind?: 'title'; textHash?: string }`; `buildSentenceCues(segments, sentenceText, speakerNames, chapterTitle): CaptionCue[]`; `buildLineCues(segments, sentenceText, speakerNames, chapterTitle): CaptionCue[]`; `hasUnverifiableTextHash(segments): boolean`; constants `LINE_MAX_DURATION_SEC = 7`, `LINE_MAX_CHARS = 200` (exported for the test). Both cue builders throw when a segment's `textHash` no longer matches its current manuscript text (chapter edited since last render, not re-rendered) — a plan-review finding: joining current text onto stored render-time timing is silently wrong otherwise. `hasUnverifiableTextHash` (round-2-of-plan-review decision) flags the separate "can't tell" case — a pre-#1105 render with no `textHash` at all — so Task 7 can attach a non-fatal warning rather than silently treating "unverifiable" the same as "verified fresh."
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -666,6 +666,7 @@ import { textHashForStale } from '../audio/segments-io.js';
 import {
   buildSentenceCues,
   buildLineCues,
+  hasUnverifiableTextHash,
   LINE_MAX_DURATION_SEC,
   LINE_MAX_CHARS,
   type SegmentInput,
@@ -732,6 +733,32 @@ describe('buildSentenceCues', () => {
       { characterId: 'narrator', sentenceIds: [1], startSec: 0, endSec: 1 },
     ];
     expect(() => buildSentenceCues(segments, { 1: 'Anything at all.' }, SPEAKERS, 'Chapter One')).not.toThrow();
+  });
+});
+
+describe('hasUnverifiableTextHash', () => {
+  it('is true when any non-title segment lacks textHash', () => {
+    const segments: SegmentInput[] = [
+      { characterId: 'narrator', sentenceIds: [1], startSec: 0, endSec: 1, textHash: 'abc' },
+      { characterId: 'narrator', sentenceIds: [2], startSec: 1, endSec: 2 },
+    ];
+    expect(hasUnverifiableTextHash(segments)).toBe(true);
+  });
+
+  it('is false when every non-title segment has textHash', () => {
+    const segments: SegmentInput[] = [
+      { characterId: 'narrator', sentenceIds: [1], startSec: 0, endSec: 1, textHash: 'abc' },
+      { characterId: 'narrator', sentenceIds: [2], startSec: 1, endSec: 2, textHash: 'def' },
+    ];
+    expect(hasUnverifiableTextHash(segments)).toBe(false);
+  });
+
+  it('ignores the title beat, which never carries textHash by design', () => {
+    const segments: SegmentInput[] = [
+      { characterId: 'narrator', sentenceIds: [], startSec: 0, endSec: 1, kind: 'title' },
+      { characterId: 'narrator', sentenceIds: [1], startSec: 1, endSec: 2, textHash: 'abc' },
+    ];
+    expect(hasUnverifiableTextHash(segments)).toBe(false);
   });
 });
 
@@ -935,6 +962,19 @@ export function buildLineCues(
   }
   flush();
   return cues;
+}
+
+/** Round-2-of-plan-review decision: a pre-#1105 render has NO `textHash`
+    anywhere, so `assertNotStale` can't verify it one way or the other —
+    "can't tell", not "confirmed fresh." Rather than silently treating that
+    the same as verified-fresh (a downloaded caption FILE is higher-stakes
+    than the frontend's soft stale-chapter badge this behaviour was
+    originally modelled on), the caller (Task 7's `buildCaptions`) uses this
+    to attach a non-fatal `warning` to the job rather than staying silent.
+    Title-beat segments are excluded (they have no `textHash` by design,
+    not by age — checking them would always report "unverifiable"). */
+export function hasUnverifiableTextHash(segments: SegmentInput[]): boolean {
+  return segments.some((s) => s.kind !== 'title' && !s.textHash);
 }
 ```
 
@@ -1142,8 +1182,8 @@ git commit -m "feat(server): add word-mode caption cue builder (whole-chapter AS
 - Create: `server/src/export/build-captions.test.ts`
 
 **Interfaces:**
-- Consumes: `findChapterAudio` (`server/src/workspace/chapter-audio-file.ts`), `probeDurationSec` (`server/src/export/build-m4b.ts`, exported by this task), `loadManuscriptSentencesByChapter` (Task 3), `buildSentenceCues`/`buildLineCues`/`buildWordCues` (Tasks 5–6), `writeSrt`/`writeVtt` (Task 4), `ExportIncompleteError`/`sanitiseForZip`/`pad2` (`server/src/export/build-mp3-zip.ts`), `castJsonPath` (`server/src/workspace/paths.ts`), `audioDir` (`server/src/workspace/paths.ts`), `readJson` (`server/src/workspace/state-io.ts`), `ChapterSegmentsFile` (`server/src/audio/finalize-chapter-write.ts`).
-- Produces: `BuildCaptionsOptions { bookDir: string; state: BookStateJson; captionFileFormat: 'srt' | 'vtt'; captionGranularity: 'line' | 'sentence' | 'word'; captionScope: 'whole-book' | 'per-chapter'; outPath: string; onProgress?: (ratio: number) => void; signal?: AbortSignal }`; `BuildCaptionsResult { sizeBytes: number }`; `buildCaptions(opts: BuildCaptionsOptions): Promise<BuildCaptionsResult>` (Task 9 calls this from `runExportJob`).
+- Consumes: `findChapterAudio` (`server/src/workspace/chapter-audio-file.ts`), `probeDurationSec` (`server/src/export/build-m4b.ts`, exported by this task), `loadManuscriptSentencesByChapter` (Task 3), `buildSentenceCues`/`buildLineCues`/`buildWordCues`/`hasUnverifiableTextHash` (Tasks 5–6), `writeSrt`/`writeVtt` (Task 4), `ExportIncompleteError`/`sanitiseForZip`/`pad2` (`server/src/export/build-mp3-zip.ts`), `castJsonPath` (`server/src/workspace/paths.ts`), `audioDir` (`server/src/workspace/paths.ts`), `readJson` (`server/src/workspace/state-io.ts`), `ChapterSegmentsFile` (`server/src/audio/finalize-chapter-write.ts`).
+- Produces: `BuildCaptionsOptions { bookDir: string; state: BookStateJson; captionFileFormat: 'srt' | 'vtt'; captionGranularity: 'line' | 'sentence' | 'word'; captionScope: 'whole-book' | 'per-chapter'; outPath: string; onProgress?: (ratio: number) => void; signal?: AbortSignal }`; `BuildCaptionsResult { sizeBytes: number; warning?: string }`; `buildCaptions(opts: BuildCaptionsOptions): Promise<BuildCaptionsResult>` (Task 9 calls this from `runExportJob`). `warning` is set (round-2-of-plan-review decision) when any chapter's sentence/line cues included a segment `hasUnverifiableTextHash` flagged — word mode never sets it, since it doesn't join manuscript text at all.
 
 - [ ] **Step 1: Export `probeDurationSec` from `build-m4b.ts`**
 
@@ -1249,6 +1289,58 @@ describeIfFfmpeg('buildCaptions', () => {
     expect(text).toContain('Narrator: It was a dark night.');
     expect(text).toContain('Mira: Who goes there?');
     expect(text).toContain('00:00:00,000 --> 00:00:01,500');
+    // The fixture's segments.json carries no textHash (pre-#1105 shape) —
+    // sentence/line granularity can't verify it's still current.
+    expect(result.warning).toMatch(/couldn't fully verify/);
+  });
+
+  it('sets no warning when every segment carries a matching textHash', async () => {
+    const { textHashForStale } = await import('../audio/segments-io.js');
+    const freshDir = mkdtempSync(join(tmpdir(), 'build-captions-fresh-'));
+    mkdirSync(join(freshDir, 'audio'), { recursive: true });
+    mkdirSync(join(freshDir, '.audiobook'), { recursive: true });
+    try {
+      writeFileSync(join(freshDir, '.audiobook', 'cast.json'), JSON.stringify({
+        characters: [{ id: 'narrator', name: 'Narrator' }],
+      }));
+      writeFileSync(join(freshDir, '.audiobook', 'manuscript-edits.json'), JSON.stringify({
+        sentences: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Fresh sentence.' }],
+      }));
+      writeFileSync(join(freshDir, 'audio', '01-chapter-one.segments.json'), JSON.stringify({
+        bookId: 'bk_fresh',
+        chapterId: 1,
+        chapterTitle: 'Chapter One',
+        durationSec: 1,
+        sampleRate: 24000,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          {
+            groupIndex: 0,
+            characterId: 'narrator',
+            sentenceIds: [1],
+            startSec: 0,
+            endSec: 1,
+            textHash: textHashForStale('Fresh sentence.'),
+          },
+        ],
+      }));
+      const pcm = silencePcm(1);
+      const mp3 = await encodePcmToAudio(pcm, 24000, { format: 'mp3', quality: 2 });
+      writeFileSync(join(freshDir, 'audio', '01-chapter-one.mp3'), mp3);
+
+      const result = await buildCaptions({
+        bookDir: freshDir,
+        state: { ...state, chapters: [state.chapters[0]] } as BookStateJson,
+        captionFileFormat: 'srt',
+        captionGranularity: 'sentence',
+        captionScope: 'whole-book',
+        outPath: join(freshDir, 'out.srt'),
+      });
+      expect(result.warning).toBeUndefined();
+    } finally {
+      rmSync(freshDir, { recursive: true, force: true });
+    }
   });
 
   it('builds a per-chapter .zip with one entry per chapter', async () => {
@@ -1330,7 +1422,13 @@ import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import { probeDurationSec } from './build-m4b.js';
 import { ExportIncompleteError, sanitiseForZip, pad2 } from './build-mp3-zip.js';
 import { loadManuscriptSentencesByChapter } from './manuscript-sentences.js';
-import { buildSentenceCues, buildLineCues, buildWordCues, type SegmentInput } from './caption-cues.js';
+import {
+  buildSentenceCues,
+  buildLineCues,
+  buildWordCues,
+  hasUnverifiableTextHash,
+  type SegmentInput,
+} from './caption-cues.js';
 import { writeSrt, writeVtt, type CaptionCue } from './caption-format.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import type { ChapterSegmentsFile } from '../audio/finalize-chapter-write.js';
@@ -1350,7 +1448,18 @@ export interface BuildCaptionsOptions {
 
 export interface BuildCaptionsResult {
   sizeBytes: number;
+  /** Round-2-of-plan-review decision: set when any sentence/line segment
+      predates the `textHash` staleness stamp (#1105) and so couldn't be
+      verified as still matching the current manuscript text — "can't
+      tell", not "confirmed fresh." The export still succeeds; this is a
+      non-fatal heads-up surfaced on the job, not a failure. Never set for
+      word mode, which doesn't join manuscript text at all. */
+  warning?: string;
 }
+
+const UNVERIFIABLE_STALENESS_WARNING =
+  "Some of this book's chapters predate render-time staleness tracking, so we couldn't fully " +
+  'verify these captions are still in sync with the audio. Re-render for a guaranteed-accurate export.';
 
 interface CastJson {
   characters?: Array<{ id: string; name?: string }>;
@@ -1425,6 +1534,7 @@ export async function buildCaptions(opts: BuildCaptionsOptions): Promise<BuildCa
 
   const perChapterCues: CaptionCue[][] = [];
   const perChapterDurations: number[] = [];
+  let anyUnverifiable = false;
   for (let i = 0; i < resolved.length; i++) {
     signal?.throwIfAborted();
     const { chapter, audioPath } = resolved[i];
@@ -1444,15 +1554,24 @@ export async function buildCaptions(opts: BuildCaptionsOptions): Promise<BuildCa
       signal,
     );
     perChapterCues.push(cues);
+    /* Round-2-of-plan-review decision: word mode never joins manuscript
+       text, so it's immune to the staleness class this flags — only check
+       for sentence/line granularity. */
+    if (captionGranularity !== 'word' && hasUnverifiableTextHash(toSegmentInputs(segFile))) {
+      anyUnverifiable = true;
+    }
     /* Plan-review fix: only probe duration for whole-book scope, which is
        the only branch that consumes perChapterDurations (the cumulative
-       cross-chapter offset). Per-chapter scope never reads it — probing
-       every chapter's duration there was pure wasted ffprobe work. */
+       cross-chapter offset, computed from the SAME encoded-file duration
+       source build-m4b.ts uses for its own chapter marks — see spec §2).
+       Per-chapter scope never reads it — probing every chapter's duration
+       there was pure wasted ffprobe work. */
     if (captionScope === 'whole-book') {
       perChapterDurations.push(await probeDurationSec(audioPath));
     }
     onProgress?.((i + 1) / resolved.length);
   }
+  const warning = anyUnverifiable ? UNVERIFIABLE_STALENESS_WARNING : undefined;
 
   if (captionScope === 'whole-book') {
     let cursorSec = 0;
@@ -1469,7 +1588,7 @@ export async function buildCaptions(opts: BuildCaptionsOptions): Promise<BuildCa
        guarantee build-m4b.ts/build-mp3-zip.ts rely on. */
     await writeFile(outPath, content, 'utf8');
     const st = await stat(outPath);
-    return { sizeBytes: st.size };
+    return { sizeBytes: st.size, warning };
   }
 
   // per-chapter: zip of one caption file per chapter, each zero-based.
@@ -1482,7 +1601,7 @@ export async function buildCaptions(opts: BuildCaptionsOptions): Promise<BuildCa
       bytes += chunk.length;
     });
     zip.outputStream.on('error', reject);
-    zip.outputStream.pipe(ws).on('finish', () => resolve({ sizeBytes: bytes }));
+    zip.outputStream.pipe(ws).on('finish', () => resolve({ sizeBytes: bytes, warning }));
 
     for (let i = 0; i < resolved.length; i++) {
       const { chapter } = resolved[i];
@@ -1618,7 +1737,23 @@ Find `BookExportJob` (currently line 5352) and widen its `format` enum + add the
         filename: { type: string, description: "e.g. 'The Northern Star.zip'" }
 ```
 
-(Leave the remaining `BookExportJob` properties — `sizeBytes`, `progress`, `downloadUrl`, `syncPath`, `errorReason`, `createdAt`, `completedAt`, `warning` — unchanged.)
+Leave the remaining `BookExportJob` properties — `sizeBytes`, `progress`, `downloadUrl`, `syncPath`, `errorReason`, `createdAt`, `completedAt` — unchanged. Update the existing `warning` property's description (it already exists on this schema for the disk-guard case) to reflect that Task 9 widens its usage:
+
+```yaml
+        warning:
+          type: string
+          nullable: true
+          description: |
+            Non-fatal advisory attached to the job. Two independent sources:
+            srv-28's disk-space guard sets it only on the POST 201 response
+            body (never persisted on the job record) when free space is
+            tight in `warn` mode. fs-52 sets it as a genuinely PERSISTED
+            field once a `captions` job's build completes, when some
+            sentence/line segments predate the render-time staleness stamp
+            and so couldn't be verified as still matching the current
+            manuscript text — the export still succeeds, this just flags
+            it. Absent/null otherwise.
+```
 
 - [ ] **Step 3: Regenerate frontend types**
 
@@ -1647,7 +1782,7 @@ git commit -m "feat(api): add captions format to BookExportRequest/BookExportJob
 
 **Interfaces:**
 - Consumes: `buildCaptions`/`ExportIncompleteError` (Task 7), `BookExportRequest`/`BookExportJob` generated types (Task 8).
-- Produces: `POST /api/books/:bookId/exports` accepts `format: 'captions'`; `runExportJob` dispatches to `buildCaptions`; `bookFilename`/`mimeForFormat`/`revokeStaleSameFormat` are caption-variant-aware.
+- Produces: `POST /api/books/:bookId/exports` accepts `format: 'captions'`; `runExportJob` dispatches to `buildCaptions`; `bookFilename`/`mimeForFormat`/`revokeStaleSameFormat` are caption-variant-aware; `BookExportJob.warning` is a real persisted field (not just a POST-response-only bolt-on like the existing disk-guard usage) so a caption job's staleness-unverifiable warning survives from build completion through the polling `GET`.
 
 - [ ] **Step 1: Write the failing integration tests**
 
@@ -1749,6 +1884,28 @@ describeIfFfmpeg('captions export', () => {
     expect(res.status).toBe(400);
   });
 
+  it('persists a warning on the job once a sentence-mode build completes with unverifiable staleness', async () => {
+    const res = await request(app)
+      .post(`/${bookId}/exports`)
+      .send({
+        format: 'captions',
+        destination: 'download',
+        captionFileFormat: 'srt',
+        captionGranularity: 'sentence',
+        captionScope: 'whole-book',
+      });
+    let job = res.body;
+    for (let i = 0; i < 50 && job.status === 'in_progress'; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      job = (await request(app).get(`/${bookId}/exports/${job.id}`)).body;
+    }
+    expect(job.status).toBe('done');
+    // The fixture's segments.json (this describe block's beforeAll) carries
+    // no textHash — round-2-of-plan-review decision: that's surfaced as a
+    // persisted job warning, not silently ignored.
+    expect(job.warning).toMatch(/couldn't fully verify/);
+  });
+
   it('does not revoke a sentence-mode export when a word-mode export of the same book completes', async () => {
     const first = await request(app)
       .post(`/${bookId}/exports`)
@@ -1820,6 +1977,14 @@ export interface BookExportJob {
   errorReason: string | null;
   createdAt: string;
   completedAt: string | null;
+  /** Round-2-of-plan-review decision (fs-52): a non-fatal, PERSISTED
+      heads-up — distinct from the disk-guard's ad-hoc POST-response-only
+      `warning` (bolted onto the 201 body via object spread, never stored
+      on `job`). This one is set on the job object itself once the async
+      build completes, so it survives into the manifest and the polling
+      `GET`. Currently only `buildCaptions` sets it (unverifiable
+      pre-#1105 staleness); `null`/absent otherwise. */
+  warning?: string | null;
 }
 
 const ALLOWED_FORMATS: ReadonlySet<BookExportJob['format']> = new Set([
@@ -2029,7 +2194,19 @@ In the single-file `else` branch's format ternary (currently `job.format === 'mp
                     onProgress,
                     signal,
                   });
+        job.sizeBytes = result.sizeBytes;
+        job.progress = 1;
+        /* Round-2-of-plan-review decision: only buildCaptions's result
+           carries `warning` — the other three builders' result shapes
+           don't have the field at all, so narrow by format rather than
+           reading `result.warning` unconditionally. */
+        if (job.format === 'captions') {
+          job.warning = (result as { warning?: string }).warning ?? null;
+        }
+        await renameWithRetry(buildPath, outPath);
 ```
+
+(The existing `job.sizeBytes = result.sizeBytes; job.progress = 1; await renameWithRetry(buildPath, outPath);` lines right after the ternary are what this replaces — insert the new `job.warning` assignment between `job.progress = 1;` and `await renameWithRetry(...)`, keeping everything else in that block unchanged.)
 
 - [ ] **Step 8: Implement — `mimeForFormat`**
 
@@ -2558,16 +2735,18 @@ git commit -m "feat(frontend): add Captions download tile to the listen view"
 
 ---
 
-## Task 13: Frontend — queue adapter, types, and mock realism
+## Task 13: Frontend — queue adapter, types, mock realism, and warning display
 
 **Files:**
 - Modify: `src/lib/types.ts`
 - Create: `src/lib/export-queue-adapter.test.ts`
 - Modify: `src/lib/export-queue-adapter.ts`
 - Modify: `src/lib/api.ts` (`mockCreateBookExport`)
+- Modify: `src/components/export-queue-row.tsx`
+- Create: `src/components/export-queue-row.test.tsx`
 
 **Interfaces:**
-- Produces: `ExportQueueItem.format` gains `'srt' | 'vtt'`; `ExportQueueItem.wireFormat` gains `'captions'`; `bookExportJobToQueueItem` maps a captions job's badge from its scope/fileFormat, not a static table lookup.
+- Produces: `ExportQueueItem.format` gains `'srt' | 'vtt'`; `ExportQueueItem.wireFormat` gains `'captions'`; `ExportQueueItem.warning?: string` (round-2-of-plan-review decision — surfaces `BookExportJob.warning`, Task 9); `bookExportJobToQueueItem` maps a captions job's badge from its scope/fileFormat, not a static table lookup, and passes `warning` through; `ExportQueueRow` shows the warning (amber caption) on a `done` row that has one, same priority slot `errorReason` uses for a `failed` row.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2618,6 +2797,23 @@ describe('bookExportJobToQueueItem — captions (fs-52)', () => {
     );
     expect(item.format).toBe('zip');
   });
+
+  it('carries the persisted warning through to the queue item', () => {
+    const item = bookExportJobToQueueItem(
+      job({
+        format: 'captions',
+        captionFileFormat: 'srt',
+        captionScope: 'whole-book',
+        warning: "Some of this book's chapters predate render-time staleness tracking...",
+      }),
+    );
+    expect(item.warning).toMatch(/predate render-time staleness/);
+  });
+
+  it('leaves warning undefined when the job has none', () => {
+    const item = bookExportJobToQueueItem(job({ format: 'mp3-zip' }));
+    expect(item.warning).toBeUndefined();
+  });
 });
 ```
 
@@ -2640,6 +2836,14 @@ and
   wireFormat?: 'mp3-zip' | 'm4b' | 'mp3-folder' | 'aac-m4a-zip' | 'opus-ogg-zip' | 'captions';
 ```
 
+and, on its own new line in the interface (round-2-of-plan-review decision — surfaces the persisted `BookExportJob.warning` from Task 9):
+
+```ts
+  /** Non-fatal advisory to show alongside a `done` row — e.g. captions
+      built from segments that predate render-time staleness tracking. */
+  warning?: string;
+```
+
 In `src/lib/export-queue-adapter.ts`, replace the static-table lookup for `format` with a function that special-cases captions:
 
 ```ts
@@ -2657,10 +2861,11 @@ Update the `FORMAT_TO_VIEW` record's type to exclude `'captions'` from its keys 
 const FORMAT_TO_VIEW: Record<Exclude<BookExportJob['format'], 'captions'>, ExportQueueItem['format']> = {
 ```
 
-And update `bookExportJobToQueueItem`'s `format:` line:
+And update `bookExportJobToQueueItem`'s return object to add `warning` alongside the existing `format:` line:
 
 ```ts
     format: viewFormatFor(job),
+    warning: job.warning ?? undefined,
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -2693,21 +2898,99 @@ Also copy the three caption fields onto the constructed `job` object so `bookExp
     ...
 ```
 
-- [ ] **Step 6: Run the full frontend suite**
+- [ ] **Step 6: `ExportQueueRow` warning display**
 
-Run: `npx vitest run src/lib/api.test.ts src/lib/export-queue-adapter.test.ts`
+Write the failing test first. Create `src/components/export-queue-row.test.tsx`:
+
+```tsx
+import { describe, it, expect } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { ExportQueueRow } from './export-queue-row';
+import type { ExportQueueItem } from '../lib/types';
+
+function item(overrides: Partial<ExportQueueItem> = {}): ExportQueueItem {
+  return {
+    id: 'exp_1',
+    filename: 'book.srt',
+    format: 'srt',
+    size: '4 KB',
+    status: 'done',
+    timestamp: 'just now',
+    destination: 'Downloaded',
+    ...overrides,
+  };
+}
+
+describe('ExportQueueRow — warning display (fs-52)', () => {
+  it('shows the warning caption on a done row that has one', () => {
+    render(<ExportQueueRow item={item({ warning: 'Could not verify staleness for some chapters.' })} />);
+    expect(screen.getByText(/Could not verify staleness/)).toBeInTheDocument();
+  });
+
+  it('falls back to the destination caption when there is no warning', () => {
+    render(<ExportQueueRow item={item({ destination: 'Downloaded' })} />);
+    expect(screen.getByText('Downloaded')).toBeInTheDocument();
+  });
+
+  it('prioritises errorReason over warning on a failed row (should never co-occur, but errorReason wins)', () => {
+    render(
+      <ExportQueueRow
+        item={item({ status: 'failed', errorReason: 'Build failed.', warning: 'Ignored.' })}
+      />,
+    );
+    expect(screen.getByText('Build failed.')).toBeInTheDocument();
+    expect(screen.queryByText('Ignored.')).not.toBeInTheDocument();
+  });
+});
+```
+
+Run: `npx vitest run src/components/export-queue-row.test.tsx`
+Expected: FAIL — the warning test finds no matching text (the row currently only ever renders `errorReason` or `destination`).
+
+Implement. In `src/components/export-queue-row.tsx`, the caption line currently reads:
+
+```tsx
+        {item.errorReason ? (
+          <span className="block text-[11px] text-rose-600 truncate mt-0.5">
+            {item.errorReason}
+          </span>
+        ) : (
+          <span className="block text-[11px] text-ink/55 truncate mt-0.5">{item.destination}</span>
+        )}
+```
+
+Add a warning branch between them:
+
+```tsx
+        {item.errorReason ? (
+          <span className="block text-[11px] text-rose-600 truncate mt-0.5">
+            {item.errorReason}
+          </span>
+        ) : item.warning ? (
+          <span className="block text-[11px] text-amber-700 truncate mt-0.5">{item.warning}</span>
+        ) : (
+          <span className="block text-[11px] text-ink/55 truncate mt-0.5">{item.destination}</span>
+        )}
+```
+
+Run: `npx vitest run src/components/export-queue-row.test.tsx`
 Expected: PASS
 
-- [ ] **Step 7: Typecheck**
+- [ ] **Step 7: Run the full frontend suite**
+
+Run: `npx vitest run src/lib/api.test.ts src/lib/export-queue-adapter.test.ts src/components/export-queue-row.test.tsx`
+Expected: PASS
+
+- [ ] **Step 8: Typecheck**
 
 Run: `npm run typecheck`
 Expected: PASS
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/lib/types.ts src/lib/export-queue-adapter.ts src/lib/export-queue-adapter.test.ts src/lib/api.ts
-git commit -m "feat(frontend): badge caption exports correctly in the queue rail + mock realism"
+git add src/lib/types.ts src/lib/export-queue-adapter.ts src/lib/export-queue-adapter.test.ts src/lib/api.ts src/components/export-queue-row.tsx src/components/export-queue-row.test.tsx
+git commit -m "feat(frontend): badge caption exports + surface the staleness-unverifiable warning in the queue rail"
 ```
 
 ---
@@ -2838,6 +3121,7 @@ owner: null
 3. Sentence text for line/sentence captions comes from `manuscript-edits.json`, never the analysis cache — `server/src/export/manuscript-sentences.ts`.
 4. `condition_on_previous_text` is `True` only when `word_timestamps=True` — `server/tts-sidecar/main.py:WhisperEngine.transcribe`.
 5. The captions de-dupe key includes `captionFileFormat`/`captionGranularity`/`captionScope`, not just `format` — `server/src/routes/export.ts:revokeStaleSameFormat`.
+6. A sentence/line segment whose `textHash` no longer matches its current manuscript text fails the export with a clear "regenerate this chapter" error; a segment with no `textHash` at all (pre-#1105 render) instead sets a non-fatal, persisted `BookExportJob.warning` rather than silently proceeding OR silently blocking — `server/src/export/caption-cues.ts:assertNotStale/hasUnverifiableTextHash`.
 
 ## Test plan
 
@@ -2845,9 +3129,9 @@ owner: null
 
 - Pytest sidecar (`server/tts-sidecar/tests/test_transcribe.py`) — word_timestamps decode profile + route header threading.
 - Vitest server (`server/src/tts/transcribe-client.test.ts`) — wire contract for `wordTimestamps`.
-- Vitest server (`server/src/export/manuscript-sentences.test.ts`, `caption-format.test.ts`, `caption-cues.test.ts`, `build-captions.test.ts`) — pure cue/format logic + orchestration.
-- Vitest server (`server/src/routes/export.test.ts`) — end-to-end job creation, MIME type, de-dupe-by-variant.
-- Vitest frontend (`src/modals/export-audiobook.test.tsx`, `src/components/listen/listen-download-section.test.tsx`, `src/lib/export-queue-adapter.test.ts`) — UI + queue badge.
+- Vitest server (`server/src/export/manuscript-sentences.test.ts`, `caption-format.test.ts`, `caption-cues.test.ts`, `build-captions.test.ts`) — pure cue/format logic + orchestration, including the staleness guard and the unverifiable-textHash warning.
+- Vitest server (`server/src/routes/export.test.ts`) — end-to-end job creation, MIME type, de-dupe-by-variant, persisted warning surfacing on a completed job.
+- Vitest frontend (`src/modals/export-audiobook.test.tsx`, `src/components/listen/listen-download-section.test.tsx`, `src/lib/export-queue-adapter.test.ts`, `src/components/export-queue-row.test.tsx`) — UI + queue badge + warning display.
 - Playwright e2e (`e2e/captions-export.spec.ts`) — tile → modal → done job → download link, mock-mode.
 
 ### Manual acceptance walkthrough
@@ -2860,6 +3144,7 @@ Run in mock mode (`VITE_USE_MOCKS=true`) unless testing word-mode against a real
 4. Pick Line + Per chapter + .vtt → job reaches `done` → downloaded `.zip` contains one `.vtt` per chapter.
 5. Against a real backend with Whisper installed: pick Word + Whole book + .srt on a real rendered book → job completes → resulting `.srt` shows one cue per word with plausible timing.
 6. Against a real backend WITHOUT Whisper installed: Word option is disabled with a tooltip; forcing the request via curl returns a clear `errorReason`, never a silent fallback to estimated timing.
+7. Against a real backend, on a book rendered before segments carried `textHash` (or a fresh fixture with the field stripped): export Sentence + Whole book → job still reaches `done`, but the queue row shows an amber "couldn't fully verify" caption instead of the normal destination text.
 
 ## Out of scope
 
