@@ -37,6 +37,8 @@ Beyond fixing lines one at a time, **Review Script** sends a chapter (or the who
   <img alt="Review Script diff — grouped strip-tag, reassign, and exclude suggestions with per-row checkboxes" src="images/manuscript-management/review-script-diff.png">
 </picture>
 
+Findings survive you — reload the page, close the tab, or come back tomorrow, and a chapter's proposed fixes are still sitting there untouched. Closing the diff view never discards them; only an explicit "Dismiss all" does. If you start a fresh review over a chapter that still has findings waiting on you, Castwright asks you to confirm first rather than quietly reviewing over the top of them.
+
 Below, Chapter 3's suggestions grouped by kind — strip a stray dialogue tag, reassign a line to a speaker outside the detected cast, or exclude a page-number artefact — with **Select all** per group and a running count of what's checked, so you accept exactly the fixes you want in one **Apply** click.
 
 ## Two more editing tools in the same header

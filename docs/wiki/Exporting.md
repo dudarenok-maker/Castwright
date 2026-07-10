@@ -30,6 +30,16 @@ Nothing here locks you in — six listener apps get one-tap tiles, each opening 
   <img alt="Send to Audiobookshelf dialog — folder path, M4B/MP3 folder toggle" src="images/exporting/03-export-listener-apps.png">
 </picture>
 
+## Captions
+
+A finished book can also leave as **captions** — `.srt` or `.vtt` files built straight from the book's own performance, no re-recording needed. The Captions tile sits alongside the download tiles, with three granularities to pick from:
+
+- **Line** — short cues (capped at 7s / 200 characters) that always break on a speaker change, good for burning subtitles onto a video clip.
+- **Sentence** — one cue per sentence, read from your current manuscript text rather than the analysis cache, so an edit you made after generating still shows up correctly.
+- **Word** — per-word timing via a dedicated Whisper pass over the chapter's audio, for tools that want tight word-level alignment.
+
+Export whole-book or per-chapter, same as the audio formats. If a chapter's audio predates Castwright's newer render-integrity tracking, the export still completes but the queue row carries an amber "unverifiable" warning instead of a hard failure — a nudge to regenerate that chapter if you want the captions guaranteed to match.
+
 ## Export queue
 
 Every export you start is tracked here — queued, running, done, or failed, filterable by status with live counts — and it survives a reload, so kicking off a long export and closing the tab doesn't lose it. Each row carries **Download**, **Copy link**, **Remove**, and **Retry** (for a failed export, without starting over from the format picker).

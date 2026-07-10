@@ -286,13 +286,19 @@ node server/tts-sidecar/scripts/install-qwen3.mjs
 
 Cross-platform Node ESM — same command on Windows / macOS / Linux. Idempotent (pip is a no-op when already satisfied; the model download is a no-op when the Hugging Face cache already has the snapshot). Fetches the Base (synth) + VoiceDesign models into `server/tts-sidecar/voices/qwen/hf`. Add `--skip-design` to skip the VoiceDesign model (saves ~1.7 GB on machines that won't host the cast-review design step); add `--cpu` to force CPU-only torch on a box without a CUDA GPU.
 
-**Optional — FlashAttention-2 wheel (Windows-only).** SDPA is the default attention impl and benchmarked at parity with FA2 on TTS-decode-bound workloads, so skipping FA2 costs nothing measurable. To install the wheel anyway (e.g. for a benchmark):
+**Optional — FlashAttention-2.** SDPA is the default attention impl and benchmarked at parity with FA2 on TTS-decode-bound workloads, so skipping FA2 costs nothing measurable. To opt in anyway (e.g. for a benchmark):
 
 ```sh
 node server/tts-sidecar/scripts/install-qwen3.mjs --flash-attn
 ```
 
-The pinned prebuilt wheel is `cp311 + torch-2.6 + cu124`-only, so the script **auto-skips on the current Python 3.12 (cp312) stack** (and on macOS / Linux) — a wheel that can't load doesn't get installed, and Qwen runs on SDPA. When a compatible wheel is installed, activate it via `QWEN_ATTN_IMPL=flash_attention_2` in `server/.env`.
+The installer checks any platform first: if `flash_attn` is already importable in the sidecar venv, it skips straight to telling you how to activate it — no reinstall attempt. Otherwise the path depends on your OS:
+
+- **Windows** installs a prebuilt wheel, but it's pinned to `cp311 + torch-2.6 + cu124` — the script **auto-skips on the current Python 3.12 (cp312) stack**, and Qwen runs on SDPA instead.
+- **Linux** attempts an unpinned `pip install flash-attn --no-build-isolation` build when the standalone NVIDIA CUDA Toolkit (`nvcc`) is on `PATH`; without the toolkit it skips cleanly rather than starting a doomed compile.
+- **macOS** always skips — no FA2 path there.
+
+When a compatible build is present (however it got there), activate it via `QWEN_ATTN_IMPL=flash_attention_2` in `server/.env`.
 
 **Switch a book to Qwen3.** Start the app and go to **Account → Defaults for new books → Voice engine** → "Local (free)" → **Voice model** → pick the Qwen3 entry. Save. For an existing book opened under Kokoro / Coqui, use the cast view's "Rebaseline the series" modal to design Qwen voices for the principal cast before regenerating.
 
