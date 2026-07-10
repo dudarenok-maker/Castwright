@@ -97,7 +97,18 @@ as-is.
   caption export, and a `.srt` + `.vtt` of the same book/granularity/scope would clobber
   each other's staged file. Fix: both the de-dupe key and the derived filename must
   include `captionFileFormat`/`captionGranularity`/`captionScope` whenever
-  `format === 'captions'`, not just `format`.
+  `format === 'captions'`, not just `format`. **Persistence requirement (round 2):** the
+  de-dupe check reads `prior` from the persisted job manifest, and jobs rehydrate from disk
+  across a server restart — so the three caption fields must be persisted on the
+  `BookExportJob` record itself (not just accepted on the request DTO), or the de-dupe key
+  can't be reconstructed after a restart.
+- **MIME type for whole-book single-file captions (round 2 fix).** The existing
+  `mimeForFormat` helper returns `audio/mp4` for `m4b`, else `application/zip` — correct
+  for every existing format (all zips or one m4b) but wrong for `captionScope:
+  'whole-book'`, which downloads a single `.srt`/`.vtt`, not an archive. Fix:
+  `mimeForFormat` returns `application/x-subrip` for a whole-book `.srt` and `text/vtt` for
+  a whole-book `.vtt`; `captionScope: 'per-chapter'` keeps `application/zip` like every
+  other per-chapter format.
 - **No silent fallback.** If `captionGranularity: 'word'` is requested and the sidecar's
   Whisper isn't available, the job fails with a clear `errorReason` naming line/sentence as
   the available alternative. It never silently degrades to an estimated/proportional
@@ -112,14 +123,30 @@ as-is.
   `SEG_ASR_ENABLED` flag (`asrEnabled()`), which gates the *automatic* ASR content-QA
   pass during generation — caption export readiness must check
   `whisperPackageInstalled`, not `asrEnabled()`, since a user may have QA-time ASR
-  switched off yet still want an on-demand word-caption export.
+  switched off yet still want an on-demand word-caption export. **Known gap, accepted for
+  v1 (round 2):** unlike Qwen, Whisper has no separate "weights present" signal —
+  `whisperPackageInstalled` only means the Python package is importable, not that the model
+  weights are cached locally. On a package-installed-but-never-loaded box, the UI enables
+  Word and `faster-whisper` downloads weights on first load — a one-time latency, not a
+  failure, in the common case. A genuine failure (no network, disk error) still surfaces
+  via the same clear `errorReason` path. Adding a real weights-present probe (mirroring
+  Qwen's `qwen_weights_present`) is a reasonable follow-up, not v1-blocking.
+- **OpenAPI/validation surface (round 2 checklist item).** Per CLAUDE.md, OpenAPI is the
+  type source of truth. Adding `format: 'captions'` must land in every place the format
+  enum is hand-synced: `export.ts`'s `ALLOWED_FORMATS`, its POST validator's 400 message,
+  the `BookExportJob.format` TypeScript union, and both the `BookExportRequest` and
+  `BookExportJob` schemas in `openapi.yaml` — a plain enumeration, not a design decision,
+  but worth calling out explicitly so it isn't missed at implementation time.
 
 ## 4. Caption generation logic
 
 New `server/src/export/build-captions.ts`, sibling to `build-m4b.ts` / `build-mp3-zip.ts`:
 
-- **Sentence mode:** one cue per segment, including the `kind: 'title'` beat (shows the
-  chapter title text).
+- **Sentence mode:** one cue per segment, including the `kind: 'title'` beat when present
+  (shows the chapter title text). The title beat is conditional, not universal — it's
+  gated on `chapterTitleNarration` being non-blank at synthesis time
+  (`synthesise-chapter.ts`); when absent, sentence/line/word mode alike simply start their
+  cues from the true first body sentence with no title cue.
 - **Line mode (bounded fold — revised):** consecutive segments sharing the same
   `characterId` are folded into one cue, but the fold is capped — a cue closes (and a new
   one starts at the next sentence) whenever it hits **~7 seconds** of combined duration or
@@ -130,7 +157,12 @@ New `server/src/export/build-captions.ts`, sibling to `build-m4b.ts` / `build-mp
   duration/character ceilings mirror common subtitle max-cue-duration convention and keep
   the "one cast member's beat" intent while guaranteeing a readable cue. This reconstruction
   happens only at export time from the already-per-sentence segments — rendering itself is
-  unaffected, no schema change to `segments.json`.
+  unaffected, no schema change to `segments.json`. **Edge cases (round 2, explicit v1
+  behaviour):** a single sentence that already exceeds the cap on its own (a long run-on
+  line) still emits as one cue — line mode doesn't split *within* a sentence, since
+  sub-sentence splitting is word mode's job, not line mode's. Closing a fold early at the
+  cap can leave a short trailing fragment as its own cue rather than merging it backward —
+  there's no minimum-cue-duration rule in v1; this is accepted, not a bug.
 - **Word mode:** one cue per ASR-recognised word (§2).
 - Two pure formatter functions, `writeSrt(cues: CaptionCue[]): string` and
   `writeVtt(cues: CaptionCue[]): string`, sharing one `CaptionCue { startSec, endSec, text,
@@ -158,19 +190,22 @@ New `server/src/export/build-captions.ts`, sibling to `build-m4b.ts` / `build-mp
 
 - **Vitest (frontend + server, pure logic):** SRT/VTT formatter output (including
   multi-line-text escaping and format-specific timestamp syntax), line-merge fold
-  correctness (same-speaker runs, the duration/character cap closing a cue early,
-  title-beat handling), whole-book cumulative-offset arithmetic (using `probeDurationSec`
-  values, not `segments.json`'s stored `durationSec`), per-chapter zero-basing, and the
-  captions-aware de-dupe/filename key (§3).
-- **Server integration test:** a fixture `segments.json` + fixture analysis-cache
-  sentences produces an exact golden-file `.srt`/`.vtt`, using The Coalfall Commission
-  canonical fixture per project convention. Include a single-narrator fixture chapter
-  specifically to exercise the line-mode cap (regression coverage for the
-  assumption-checker's degenerate-cue finding).
+  correctness (same-speaker runs, the duration/character cap closing a cue early, the
+  lone-over-cap-sentence and trailing-fragment edge cases, title-beat handling including
+  the no-title-beat path), whole-book cumulative-offset arithmetic (using
+  `probeDurationSec` values, not `segments.json`'s stored `durationSec`), per-chapter
+  zero-basing, the captions-aware de-dupe/filename key including its persistence across a
+  simulated restart (§3), and `mimeForFormat`'s whole-book-vs-per-chapter branching.
+- **Server integration test:** a fixture `segments.json` + fixture `manuscript-edits.json`
+  produces an exact golden-file `.srt`/`.vtt`, using The Coalfall Commission canonical
+  fixture per project convention. Include a single-narrator fixture chapter specifically to
+  exercise the line-mode cap (regression coverage for the assumption-checker's
+  degenerate-cue finding).
 - **Sidecar pytest:** extend `server/tts-sidecar/tests/test_transcribe.py` with a
   `word_timestamps=True` case (whole-clip, not per-sentence) asserting the `words[]`
-  shape/ordering, plus a case confirming the default (`False`) path is byte-identical to
-  pre-change behaviour.
+  shape/ordering and that `condition_on_previous_text=True` is passed only on that path,
+  plus a case confirming the default (`False`) path is byte-identical to pre-change
+  behaviour.
 - **Playwright e2e:** new spec covering the Captions tile → modal → export-queue row →
   (mock-mode) polls to `done` → download link, per the project's "UI-visible behaviour
   crossing router/redux/layout seams gets an e2e test" rule. Word-mode ASR is mocked in the
