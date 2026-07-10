@@ -38,6 +38,10 @@ interface ListenDownloadSectionProps {
       Download on the "Portable bundle" tile. The orchestrator calls
       api.exportPortable(bookId) and saves the returned Blob. */
   onPortableBundleExport?: () => void;
+  /** fs-52 — captions tile handler. Called when the user clicks Download
+      on the "Captions" tile; the orchestrator opens the export modal
+      pre-set to format='captions'. */
+  onOpenCaptionsExport?: () => void;
   onCopyExportLink: (item: ExportQueueItem) => Promise<void> | void;
   onRemoveExport: (item: ExportQueueItem) => void;
   /* Plan 82 — Retry on `failed` rows re-fires the original export via
@@ -63,6 +67,7 @@ export function ListenDownloadSection({
   onOpenMp3ZipExport,
   onOpenStreamingLink,
   onPortableBundleExport,
+  onOpenCaptionsExport,
   onCopyExportLink,
   onRemoveExport,
   onRetryExport,
@@ -125,6 +130,14 @@ export function ListenDownloadSection({
             description="Full backup (state + manuscript + audio + cover) for re-importing on another machine."
             testid="download-tile-portable"
             onDownload={onPortableBundleExport}
+          />
+          <DownloadCard
+            title="Captions"
+            format="srt / vtt"
+            size="—"
+            description="Line, sentence, or word-level captions from your book's alignment. Great for demo clips."
+            testid="download-tile-captions"
+            onDownload={onOpenCaptionsExport}
           />
         </div>
       </section>

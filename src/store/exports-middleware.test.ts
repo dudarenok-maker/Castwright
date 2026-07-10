@@ -93,6 +93,119 @@ describe('retryExport thunk', () => {
 
     expect(returned).toEqual(fresh);
   });
+
+  /* fs-52 final-review fix — a failed `format: 'captions'` job used to
+     retry with only format+destination, which the server 400s
+     (captionFileFormat/captionGranularity/captionScope are required
+     whenever format === 'captions'). This regression test fails before
+     the RetryExportArgs widening + retryExport forwarding fix (the POST
+     body wouldn't carry the three caption fields) and passes after. */
+  it('forwards the three caption fields on a captions retry so the re-POST does not 400', async () => {
+    const failed = makeJob({
+      id: 'exp_fail_captions',
+      format: 'captions',
+      destination: 'download',
+      status: 'failed',
+      errorReason: 'invalid_caption_file_format',
+      captionFileFormat: 'vtt',
+      captionGranularity: 'word',
+      captionScope: 'per-chapter',
+    });
+    const fresh = makeJob({
+      id: 'exp_new_captions',
+      format: 'captions',
+      destination: 'download',
+      status: 'in_progress',
+      captionFileFormat: 'vtt',
+      captionGranularity: 'word',
+      captionScope: 'per-chapter',
+    });
+    vi.mocked(api.createBookExport).mockResolvedValueOnce(fresh);
+
+    const store = makeStore({
+      byBookId: { [failed.bookId]: [failed] },
+      lanUrls: [],
+      lanPort: null,
+      linger: {},
+    });
+
+    const returned = await retryExport({
+      bookId: failed.bookId,
+      exportId: failed.id,
+      format: 'captions',
+      destination: 'download',
+      captionFileFormat: 'vtt',
+      captionGranularity: 'word',
+      captionScope: 'per-chapter',
+    })(store.dispatch);
+
+    expect(api.createBookExport).toHaveBeenCalledWith(failed.bookId, {
+      format: 'captions',
+      destination: 'download',
+      captionFileFormat: 'vtt',
+      captionGranularity: 'word',
+      captionScope: 'per-chapter',
+    });
+    expect(returned).toEqual(fresh);
+    const list = store.getState().exports.byBookId[failed.bookId] ?? [];
+    expect(list).toHaveLength(1);
+    expect(list[0].id).toBe('exp_new_captions');
+    expect(list[0].status).toBe('in_progress');
+  });
+
+  it('does not include caption fields on a non-captions retry, even if stray values are passed', async () => {
+    const failed = makeJob({ id: 'exp_fail', status: 'failed' });
+    const fresh = makeJob({ id: 'exp_new', status: 'in_progress' });
+    vi.mocked(api.createBookExport).mockResolvedValueOnce(fresh);
+
+    const store = makeStore({
+      byBookId: { [failed.bookId]: [failed] },
+      lanUrls: [],
+      lanPort: null,
+      linger: {},
+    });
+
+    await retryExport({
+      bookId: failed.bookId,
+      exportId: failed.id,
+      format: 'mp3-zip',
+      destination: 'download',
+      captionFileFormat: 'srt',
+      captionGranularity: 'line',
+      captionScope: 'whole-book',
+    })(store.dispatch);
+
+    expect(api.createBookExport).toHaveBeenCalledWith(failed.bookId, {
+      format: 'mp3-zip',
+      destination: 'download',
+    });
+  });
+
+  it('surfaces a toast instead of an unhandled rejection when the retry POST fails', async () => {
+    const failed = makeJob({ id: 'exp_fail', status: 'failed' });
+    vi.mocked(api.createBookExport).mockRejectedValueOnce(new Error('network down'));
+
+    const store = makeStore({
+      byBookId: { [failed.bookId]: [failed] },
+      lanUrls: [],
+      lanPort: null,
+      linger: {},
+    });
+
+    const returned = await retryExport({
+      bookId: failed.bookId,
+      exportId: failed.id,
+      format: 'mp3-zip',
+      destination: 'download',
+    })(store.dispatch);
+
+    /* No throw reaching the caller — the promise resolves (to undefined)
+       rather than rejecting uncaught. */
+    expect(returned).toBeUndefined();
+    /* The failed row was still dismissed (pre-existing dismiss-first
+       behavior, unchanged by this fix). */
+    expect(store.getState().exports.byBookId[failed.bookId] ?? []).toHaveLength(0);
+  });
 });
 
 /* Poll middleware — reuses the `makeJob` factory above (defaults to bookId

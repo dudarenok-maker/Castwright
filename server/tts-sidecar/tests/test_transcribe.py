@@ -36,6 +36,16 @@ import main  # noqa: E402
 # ── faster-whisper stub ──────────────────────────────────────────────────
 
 
+class _FakeWord:
+    """Stand-in for a faster-whisper Word — the attrs WhisperEngine reads
+    when word_timestamps is requested."""
+
+    def __init__(self, word: str, start: float, end: float) -> None:
+        self.word = word
+        self.start = start
+        self.end = end
+
+
 class _FakeSegment:
     """Stand-in for a faster-whisper segment — just the attrs WhisperEngine
     reads."""
@@ -46,11 +56,13 @@ class _FakeSegment:
         avg_logprob: float = -0.2,
         no_speech_prob: float = 0.01,
         compression_ratio: float = 1.3,
+        words: Optional[list["_FakeWord"]] = None,
     ) -> None:
         self.text = text
         self.avg_logprob = avg_logprob
         self.no_speech_prob = no_speech_prob
         self.compression_ratio = compression_ratio
+        self.words = words
 
 
 class _FakeInfo:
@@ -179,6 +191,41 @@ def test_transcribe_uses_deterministic_decode_params(fake_whisper_module) -> Non
     assert call["vad_filter"] is True
 
 
+def test_transcribe_word_timestamps_off_by_default(fake_whisper_module) -> None:
+    """Default call (QA path) never requests word timestamps and keeps the
+    deterministic no-carryover decode — unchanged behaviour."""
+    engine = main.WhisperEngine()
+    out = engine.transcribe(_pcm(), 24000)
+    call = fake_whisper_module.instances[-1].transcribe_calls[-1]
+    assert call["word_timestamps"] is False
+    assert call["condition_on_previous_text"] is False
+    assert out["words"] is None
+
+
+def test_transcribe_word_timestamps_enables_caption_decode_profile(fake_whisper_module) -> None:
+    """word_timestamps=True (the caption path) passes word_timestamps through
+    to faster-whisper AND flips condition_on_previous_text to True — a
+    distinct, separately-justified profile from the QA path's False."""
+    fake_whisper_module.next_segments = [
+        _FakeSegment(
+            " Hello world.",
+            words=[
+                _FakeWord("Hello", 0.0, 0.4),
+                _FakeWord("world.", 0.4, 0.9),
+            ],
+        ),
+    ]
+    engine = main.WhisperEngine()
+    out = engine.transcribe(_pcm(), 24000, word_timestamps=True)
+    call = fake_whisper_module.instances[-1].transcribe_calls[-1]
+    assert call["word_timestamps"] is True
+    assert call["condition_on_previous_text"] is True
+    assert out["words"] == [
+        {"word": "Hello", "start": 0.0, "end": 0.4},
+        {"word": "world.", "start": 0.4, "end": 0.9},
+    ]
+
+
 def test_transcribe_returns_text_and_intrinsic_signals(fake_whisper_module) -> None:
     fake_whisper_module.next_segments = [
         _FakeSegment(" Hello", avg_logprob=-0.3, no_speech_prob=0.02, compression_ratio=1.1),
@@ -287,6 +334,36 @@ def test_transcribe_route_fast_fails_while_recycling(asr_client, monkeypatch) ->
     r = client.post("/transcribe", content=_pcm(), headers={"X-Sample-Rate": "24000"})
     assert r.status_code == 503
     assert r.json().get("poisoned") is not True
+
+
+def test_transcribe_route_forwards_word_timestamps_header(asr_client, fake_whisper_module) -> None:
+    """The X-Word-Timestamps request header threads through to the engine
+    call and the words[] field reaches the JSON response."""
+    client, _engine = asr_client
+    fake_whisper_module.next_segments = [
+        _FakeSegment(" Hi.", words=[_FakeWord("Hi.", 0.0, 0.3)]),
+    ]
+    resp = client.post(
+        "/transcribe",
+        content=_pcm(),
+        headers={"X-Sample-Rate": "24000", "X-Word-Timestamps": "1"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["words"] == [{"word": "Hi.", "start": 0.0, "end": 0.3}]
+    call = fake_whisper_module.instances[-1].transcribe_calls[-1]
+    assert call["word_timestamps"] is True
+
+
+def test_transcribe_route_omits_word_timestamps_by_default(asr_client) -> None:
+    client, _engine = asr_client
+    resp = client.post(
+        "/transcribe",
+        content=_pcm(),
+        headers={"X-Sample-Rate": "24000"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["words"] is None
 
 
 # ── /health surfaces ASR state ───────────────────────────────────────────

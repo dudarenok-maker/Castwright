@@ -3517,14 +3517,25 @@ class WhisperEngine:
         return samples
 
     def transcribe(
-        self, pcm: bytes, sample_rate: int, language: Optional[str] = None
+        self, pcm: bytes, sample_rate: int, language: Optional[str] = None,
+        word_timestamps: bool = False,
     ) -> dict[str, Any]:
-        """Transcribe one sentence's PCM. Returns the text plus Whisper's
+        """Transcribe one clip's PCM. Returns the text plus Whisper's
         intrinsic signals — `avg_logprob` (lower = less confident),
         `no_speech_prob` (higher = more likely silence), `compression_ratio`
         (higher = repetition/loop hallucination) — aggregated worst-case across
         segments so the server can tell "audio is wrong" from "transcript is
-        untrustworthy" without re-deriving them."""
+        untrustworthy" without re-deriving them.
+
+        `word_timestamps=True` (fs-52 caption export, whole-chapter calls
+        only) requests faster-whisper's per-word alignment AND switches
+        `condition_on_previous_text` to True — a distinct, caption-tuned
+        decode profile from the QA path's deterministic-idempotent one below.
+        Captions want cross-window coherence on a long chapter; the QA path
+        wants no cross-sentence hallucination carryover on an isolated clip.
+        The two call sites never overlap (only the caption export path ever
+        sets word_timestamps), so this is additive, not a behaviour change
+        for the existing QA caller."""
         self._ensure_loaded()
         assert self._model is not None
         audio = self._pcm_to_float32_16k(pcm, sample_rate)
@@ -3535,14 +3546,22 @@ class WhisperEngine:
                 language=language,
                 beam_size=1,                     # greedy
                 temperature=0.0,                 # deterministic → idempotent verdicts
-                condition_on_previous_text=False,  # no cross-sentence carryover hallucination
+                condition_on_previous_text=word_timestamps,  # True only for captions
                 vad_filter=True,                 # drop non-speech so silence isn't "transcribed"
+                word_timestamps=word_timestamps,
             )
             segs = list(segments)
         text = " ".join((s.text or "").strip() for s in segs).strip()
         logprobs = [s.avg_logprob for s in segs if s.avg_logprob is not None]
         no_speech = [s.no_speech_prob for s in segs if s.no_speech_prob is not None]
         compression = [s.compression_ratio for s in segs if s.compression_ratio is not None]
+        words: Optional[list[dict[str, Any]]] = None
+        if word_timestamps:
+            words = [
+                {"word": w.word, "start": w.start, "end": w.end}
+                for s in segs
+                for w in (s.words or [])
+            ]
         return {
             "text": text,
             "language": getattr(info, "language", language),
@@ -3550,6 +3569,7 @@ class WhisperEngine:
             "avg_logprob": (min(logprobs) if logprobs else None),
             "no_speech_prob": (max(no_speech) if no_speech else None),
             "compression_ratio": (max(compression) if compression else None),
+            "words": words,
         }
 
     def unload(self) -> bool:
@@ -5889,9 +5909,12 @@ async def transcribe(req: Request) -> Response:
     if sample_rate <= 0:
         raise HTTPException(status_code=400, detail="X-Sample-Rate header (>0) is required.")
     language = req.headers.get("X-Language") or None
+    word_timestamps = req.headers.get("X-Word-Timestamps") is not None
 
     try:
-        result = await asyncio.to_thread(ASR.transcribe, pcm, sample_rate, language)
+        result = await asyncio.to_thread(
+            ASR.transcribe, pcm, sample_rate, language, word_timestamps
+        )
     except Exception as e:
         # Internal-only — CUDA-poison detection + server-side log, never a body.
         err_str = f"{e}"

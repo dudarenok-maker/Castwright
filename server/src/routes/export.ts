@@ -36,6 +36,7 @@ import { buildMp3Zip, ExportIncompleteError, sanitiseForZip } from '../export/bu
 import { buildM4b } from '../export/build-m4b.js';
 import { buildMp3Folder } from '../export/build-mp3-folder.js';
 import { buildCodecZip } from '../export/build-codec-zip.js';
+import { buildCaptions } from '../export/build-captions.js';
 import { writeFolderToSyncFolder, writeToSyncFolder } from '../export/sync-folder.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
@@ -55,7 +56,13 @@ export interface BookExportJob {
       contract; no ID3 retag (those containers use different metadata
       systems and the v1 wires straight from the encoded chapter
       files). */
-  format: 'mp3-zip' | 'm4b' | 'mp3-folder' | 'aac-m4a-zip' | 'opus-ogg-zip';
+  format: 'mp3-zip' | 'm4b' | 'mp3-folder' | 'aac-m4a-zip' | 'opus-ogg-zip' | 'captions';
+  /** fs-52 — only set (and only meaningful) when format === 'captions'.
+      Persisted on the job record (not just the request) so revokeStaleSameFormat's
+      de-dupe key survives a server restart via rehydrateBook. */
+  captionFileFormat?: 'srt' | 'vtt';
+  captionGranularity?: 'line' | 'sentence' | 'word';
+  captionScope?: 'whole-book' | 'per-chapter';
   destination: 'download' | 'sync-folder';
   status: 'queued' | 'in_progress' | 'done' | 'failed' | 'cancelled';
   filename: string;
@@ -66,6 +73,14 @@ export interface BookExportJob {
   errorReason: string | null;
   createdAt: string;
   completedAt: string | null;
+  /** Round-2-of-plan-review decision (fs-52): a non-fatal, PERSISTED
+      heads-up — distinct from the disk-guard's ad-hoc POST-response-only
+      `warning` (bolted onto the 201 body via object spread, never stored
+      on `job`). This one is set on the job object itself once the async
+      build completes, so it survives into the manifest and the polling
+      `GET`. Currently only `buildCaptions` sets it (unverifiable
+      pre-#1105 staleness); `null`/absent otherwise. */
+  warning?: string | null;
 }
 
 const ALLOWED_FORMATS: ReadonlySet<BookExportJob['format']> = new Set([
@@ -74,6 +89,7 @@ const ALLOWED_FORMATS: ReadonlySet<BookExportJob['format']> = new Set([
   'mp3-folder',
   'aac-m4a-zip',
   'opus-ogg-zip',
+  'captions',
 ]);
 
 export const exportRouter = Router();
@@ -149,7 +165,7 @@ function resolveArtifactPath(bookDir: string, job: BookExportJob): string {
 async function revokeStaleSameFormat(
   bookDir: string,
   bookId: string,
-  format: BookExportJob['format'],
+  job: BookExportJob,
   keepId: string,
 ): Promise<void> {
   const dir = bookExportManifestsDir(bookDir);
@@ -168,7 +184,15 @@ async function revokeStaleSameFormat(
     try {
       const raw = await readFile(path, 'utf8');
       const prior = JSON.parse(raw) as BookExportJob;
-      if (prior.bookId !== bookId || prior.format !== format) continue;
+      if (prior.bookId !== bookId || prior.format !== job.format) continue;
+      if (
+        job.format === 'captions' &&
+        (prior.captionFileFormat !== job.captionFileFormat ||
+          prior.captionGranularity !== job.captionGranularity ||
+          prior.captionScope !== job.captionScope)
+      ) {
+        continue; // different caption variant — not stale, don't revoke.
+      }
       jobs.delete(prior.id);
       await unlink(path).catch(() => {});
     } catch {
@@ -177,7 +201,15 @@ async function revokeStaleSameFormat(
   }
 }
 
-function bookFilename(state: BookStateJson, format: BookExportJob['format']): string {
+function bookFilename(
+  state: BookStateJson,
+  format: BookExportJob['format'],
+  captionOpts?: {
+    captionFileFormat?: 'srt' | 'vtt';
+    captionGranularity?: 'line' | 'sentence' | 'word';
+    captionScope?: 'whole-book' | 'per-chapter';
+  },
+): string {
   const base = slugify(state.title);
   if (format === 'mp3-zip') return `${base}.zip`;
   if (format === 'm4b') return `${base}.m4b`;
@@ -186,6 +218,11 @@ function bookFilename(state: BookStateJson, format: BookExportJob['format']): st
      without name collisions. */
   if (format === 'aac-m4a-zip') return `${base}-aac.zip`;
   if (format === 'opus-ogg-zip') return `${base}-opus.zip`;
+  if (format === 'captions') {
+    const { captionFileFormat, captionGranularity, captionScope } = captionOpts ?? {};
+    const variant = `${captionGranularity}.${captionFileFormat}`;
+    return captionScope === 'per-chapter' ? `${base}.${variant}.zip` : `${base}.${variant}`;
+  }
   /* mp3-folder: the "filename" is actually the folder name the per-chapter
      MP3s land in (under both the staging dir and the sync target). The
      download endpoint refuses this format so the lack of a single-file
@@ -194,7 +231,13 @@ function bookFilename(state: BookStateJson, format: BookExportJob['format']): st
 }
 
 exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
-  const body = (req.body ?? {}) as { format?: string; destination?: string };
+  const body = (req.body ?? {}) as {
+    format?: string;
+    destination?: string;
+    captionFileFormat?: string;
+    captionGranularity?: string;
+    captionScope?: string;
+  };
   if (
     typeof body.format !== 'string' ||
     !ALLOWED_FORMATS.has(body.format as BookExportJob['format'])
@@ -203,7 +246,7 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
       .status(400)
       .json({
         error: 'unsupported_format',
-        message: `format must be 'mp3-zip', 'm4b', or 'mp3-folder'; got ${body.format ?? '(missing)'}.`,
+        message: `format must be 'mp3-zip', 'm4b', 'mp3-folder', 'aac-m4a-zip', 'opus-ogg-zip', or 'captions'; got ${body.format ?? '(missing)'}.`,
       });
   }
   const format = body.format as BookExportJob['format'];
@@ -214,6 +257,33 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
         error: 'invalid_destination',
         message: `destination must be 'download' or 'sync-folder'.`,
       });
+  }
+  const captionFileFormat = body.captionFileFormat as 'srt' | 'vtt' | undefined;
+  const captionGranularity = body.captionGranularity as 'line' | 'sentence' | 'word' | undefined;
+  const captionScope = body.captionScope as 'whole-book' | 'per-chapter' | undefined;
+  if (format === 'captions') {
+    if (captionFileFormat !== 'srt' && captionFileFormat !== 'vtt') {
+      return res.status(400).json({
+        error: 'invalid_caption_file_format',
+        message: `captionFileFormat must be 'srt' or 'vtt'; got ${captionFileFormat ?? '(missing)'}.`,
+      });
+    }
+    if (
+      captionGranularity !== 'line' &&
+      captionGranularity !== 'sentence' &&
+      captionGranularity !== 'word'
+    ) {
+      return res.status(400).json({
+        error: 'invalid_caption_granularity',
+        message: `captionGranularity must be 'line', 'sentence', or 'word'; got ${captionGranularity ?? '(missing)'}.`,
+      });
+    }
+    if (captionScope !== 'whole-book' && captionScope !== 'per-chapter') {
+      return res.status(400).json({
+        error: 'invalid_caption_scope',
+        message: `captionScope must be 'whole-book' or 'per-chapter'; got ${captionScope ?? '(missing)'}.`,
+      });
+    }
   }
   /* Folder export only makes sense for an app that scans a folder on the
      device — the download endpoint serves a single file, so a folder +
@@ -266,7 +336,7 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
       await mkdir(exportsRootForProbe, { recursive: true });
       const verdict = await evaluateDiskGuard(
         exportsRootForProbe,
-        { estimatedBytes: estimateExportBytes(located.state, located.bookDir), basis: 'export' },
+        { estimatedBytes: estimateExportBytes(located.state, located.bookDir, format), basis: 'export' },
         { mode: diskMode },
       );
       if (verdict.status === 'block') {
@@ -281,7 +351,7 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
   }
 
   const exportId = `exp_${nanoid(10)}`;
-  const filename = bookFilename(located.state, format);
+  const filename = bookFilename(located.state, format, { captionFileFormat, captionGranularity, captionScope });
   /* Plan 79 — flat layout under the user-visible <bookDir>/exports/.
      Same-format re-exports clobber the prior artifact (newest wins).
      The matching manifest lives under .audiobook/export-manifests/. */
@@ -294,6 +364,9 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
     id: exportId,
     bookId: located.state.bookId,
     format,
+    captionFileFormat: format === 'captions' ? captionFileFormat : undefined,
+    captionGranularity: format === 'captions' ? captionGranularity : undefined,
+    captionScope: format === 'captions' ? captionScope : undefined,
     destination: body.destination,
     status: 'in_progress',
     filename,
@@ -431,7 +504,7 @@ exportRouter.get('/:bookId/exports/:exportId/download', async (req: Request, res
     path,
     {
       headers: {
-        'Content-Type': mimeForFormat(job.format),
+        'Content-Type': mimeForFormat(job),
         'Content-Disposition': `attachment; filename="${encodeURIComponent(job.filename)}"`,
         'Cache-Control': 'no-cache',
       },
@@ -459,11 +532,14 @@ exportRouter.get('/:bookId/exports/:exportId/download', async (req: Request, res
   );
 });
 
-function mimeForFormat(format: BookExportJob['format']): string {
-  if (format === 'm4b') return 'audio/mp4';
-  /* Every other format (mp3-zip / aac-m4a-zip / opus-ogg-zip) is a zip
-     archive. mp3-folder isn't downloadable (the route refuses it) so
-     this branch never fires for that format. */
+function mimeForFormat(job: BookExportJob): string {
+  if (job.format === 'm4b') return 'audio/mp4';
+  if (job.format === 'captions' && job.captionScope === 'whole-book') {
+    return job.captionFileFormat === 'vtt' ? 'text/vtt' : 'application/x-subrip';
+  }
+  /* Every other case (mp3-zip / aac-m4a-zip / opus-ogg-zip / per-chapter
+     captions) is a zip archive. mp3-folder isn't downloadable (the route
+     refuses it) so this branch never fires for that format. */
   return 'application/zip';
 }
 
@@ -473,7 +549,15 @@ function mimeForFormat(format: BookExportJob['format']): string {
    container metadata + zip framing. Best-effort: a chapter whose size can't be
    read falls back to AVG_CHAPTER_BYTES so the estimate never under-counts to
    zero. */
-function estimateExportBytes(state: BookStateJson, bookDir: string): number {
+function estimateExportBytes(state: BookStateJson, bookDir: string, format: BookExportJob['format']): number {
+  if (format === 'captions') {
+    /* Captions are plain text derived from data already on disk — a few
+       KB per chapter at most, nowhere near audio-file scale. A flat
+       per-chapter estimate keeps the disk-guard meaningful without
+       walking chapter audio sizes for a build that doesn't need them. */
+    const chapterCount = state.chapters.filter((c) => !c.excluded).length;
+    return chapterCount * 4096;
+  }
   const root = join(bookDir, 'audio');
   let total = 0;
   for (const chapter of state.chapters) {
@@ -564,16 +648,34 @@ async function runExportJob(
             ? await buildMp3Zip({ bookDir, state, outPath: buildPath, onProgress, signal })
             : job.format === 'm4b'
               ? await buildM4b({ bookDir, state, outPath: buildPath, onProgress, signal })
-              : await buildCodecZip({
-                  bookDir,
-                  state,
-                  outPath: buildPath,
-                  format: job.format === 'aac-m4a-zip' ? 'aac-m4a' : 'opus',
-                  onProgress,
-                  signal,
-                });
+              : job.format === 'captions'
+                ? await buildCaptions({
+                    bookDir,
+                    state,
+                    captionFileFormat: job.captionFileFormat!,
+                    captionGranularity: job.captionGranularity!,
+                    captionScope: job.captionScope!,
+                    outPath: buildPath,
+                    onProgress,
+                    signal,
+                  })
+                : await buildCodecZip({
+                    bookDir,
+                    state,
+                    outPath: buildPath,
+                    format: job.format === 'aac-m4a-zip' ? 'aac-m4a' : 'opus',
+                    onProgress,
+                    signal,
+                  });
         job.sizeBytes = result.sizeBytes;
         job.progress = 1;
+        /* Round-2-of-plan-review decision: only buildCaptions's result
+           carries `warning` — the other three builders' result shapes
+           don't have the field at all, so narrow by format rather than
+           reading `result.warning` unconditionally. */
+        if (job.format === 'captions') {
+          job.warning = (result as { warning?: string }).warning ?? null;
+        }
         await renameWithRetry(buildPath, outPath);
       } catch (e) {
         /* On any failure (including cancel) the partial file is dropped
@@ -599,7 +701,7 @@ async function runExportJob(
        latest build. Older artifacts on disk were already overwritten
        by this build's atomic-rename; older manifests would otherwise
        linger forever. */
-    await revokeStaleSameFormat(bookDir, job.bookId, job.format, job.id);
+    await revokeStaleSameFormat(bookDir, job.bookId, job, job.id);
   } catch (e) {
     /* Cancellation: the DELETE handler already flipped status to
        'cancelled' before signalling abort. Honour that — don't

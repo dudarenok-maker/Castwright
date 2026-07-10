@@ -288,6 +288,7 @@ describe('verifySegmentTranscript', () => {
         avgLogprob: -0.2,
         noSpeechProb: 0.01,
         compressionRatio: 1.2,
+        words: null,
       }),
     });
     expect(c.verdict).toBe('ok');
@@ -299,7 +300,14 @@ describe('verifySegmentTranscript', () => {
       language: 'ru',
       transcribeFn: async (_p, _sr, o) => {
         seenLang = o.language;
-        return { text: EXPECTED, language: 'ru', avgLogprob: -0.2, noSpeechProb: 0.01, compressionRatio: 1.2 };
+        return {
+          text: EXPECTED,
+          language: 'ru',
+          avgLogprob: -0.2,
+          noSpeechProb: 0.01,
+          compressionRatio: 1.2,
+          words: null,
+        };
       },
     });
     expect(seenLang).toBe('ru');
@@ -610,6 +618,7 @@ describe('verifySegmentTranscript vocalizationAllowlist integration (fs-57)', ()
           text: 'I did not see you walk in there.',
           language: 'en',
           ...CLEAN_SIGNALS,
+          words: null,
         }),
         vocalizationAllowlist: ['haah', 'ooh', 'ah', 'mm', 'hmm'],
       },
@@ -629,6 +638,7 @@ describe('verifySegmentTranscript vocalizationAllowlist integration (fs-57)', ()
           text: 'I did not see you walk in there.',
           language: 'en',
           ...CLEAN_SIGNALS,
+          words: null,
         }),
         // no vocalizationAllowlist
       },

@@ -20,6 +20,7 @@ import {
   mockCancelScriptReview,
   mockAttachScriptReview,
   ReviewScriptError,
+  mockGetSidecarHealth,
   type LedgerEntryDTO,
   api,
 } from './api';
@@ -552,5 +553,12 @@ describe('mock-mode script-review cancellation (fs-58 follow-up #1481)', () => {
     // Only the 85% tick (the one genuinely ahead of the seeded 50%) fires —
     // the 25% and 50% ticks are both skipped, so the pill never regresses.
     expect(phases.map((p) => p.progress)).toEqual([0.85]);
+  });
+});
+
+describe('mockGetSidecarHealth', () => {
+  it('reports whisperPackageInstalled: true', async () => {
+    const health = await mockGetSidecarHealth();
+    expect(health.whisperPackageInstalled).toBe(true);
   });
 });

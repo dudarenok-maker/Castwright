@@ -31,12 +31,6 @@ prioritized issue in its tier.
 - _Benefit:_ the most personal, gift-able feature the product can offer — and the strongest consumer hook.
 _Full detail + acceptance:_ [#624](https://github.com/dudarenok-maker/Castwright/issues/624).
 
-#### `fs-52` — Caption/SRT export (.srt/.vtt; line/sentence/word) from per-sentence alignment ([#975](https://github.com/dudarenok-maker/Castwright/issues/975))
-
-- _What:_ Emit **.srt / .vtt captions** in **line + sentence + word** modes from the per-sentence alignment we already compute during synthesis.
-- _Benefit:_ abogen's **headline feature**, near-free for us given existing alignment — AND it **feeds demo/social clips**, so it doubles as an awareness/content lever. Beta→full-product **Must** (reach & perception). _Source:_ triage of `brand/oss-gap-backlog-2026-06-20.md` (OSS gap analysis) · triage record: `docs/superpowers/specs/2026-06-21-oss-gap-backlog-triage-design.md` (2026-06-21).
-_Full detail + acceptance:_ [#975](https://github.com/dudarenok-maker/Castwright/issues/975).
-
 #### `ops-1` — Windows installer (Inno Setup or NSIS) wrapping the release zip ([#432](https://github.com/dudarenok-maker/Castwright/issues/432))
 
 - _What:_ Add an Inno Setup (or NSIS) script that wraps the `castwright-vX.Y.Z.zip` produced by the release-package pipeline (plan 49) into a signed `.exe` installer. Installer extracts to `%LocalAppData%\Castwright`, drops a Start Menu entry, checks the **runtime** prerequisites (Node 20.6+, Python 3.11, ffmpeg on PATH) with download links shown for any missing dep, then launches the app. **Model install + smoke test are NOT the installer\s job** — they are owned by the shared [`fs-21` first-run wizard](https://github.com/dudarenok-maker/Castwright/issues/474) (cross-platform, also used by the macOS `.dmg` [`ops-15`](https://github.com/dudarenok-maker/Castwright/issues/735)), so the Windows and macOS paths stay consistent. Extend `release.yml` with a follow-on job that builds the installer (on a Windows runner) and uploads it as a second release asset.

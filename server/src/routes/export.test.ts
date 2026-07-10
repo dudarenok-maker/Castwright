@@ -462,6 +462,162 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
   });
 });
 
+describeIfFfmpeg('captions export', () => {
+  beforeAll(async () => {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 1, characterId: 'narrator', text: 'Chapter one begins.' },
+          { id: 1, chapterId: 2, characterId: 'narrator', text: 'Chapter two begins.' },
+        ],
+      }),
+    );
+    for (const [slug, chapterId] of [
+      ['01-chapter-one', 1],
+      ['02-chapter-two', 2],
+    ] as const) {
+      writeFileSync(
+        join(audioRoot, `${slug}.segments.json`),
+        JSON.stringify({
+          bookId,
+          chapterId,
+          chapterTitle: chapterId === 1 ? 'Chapter One' : 'Chapter Two',
+          durationSec: 1,
+          sampleRate: 24000,
+          modelKey: 'kokoro-v1',
+          synthesizedAt: new Date().toISOString(),
+          segments: [
+            { groupIndex: 0, characterId: 'narrator', sentenceIds: [1], startSec: 0, endSec: 1 },
+          ],
+        }),
+      );
+    }
+  });
+
+  it('creates a whole-book sentence .srt export and streams it with the right MIME type', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({
+        format: 'captions',
+        destination: 'download',
+        captionFileFormat: 'srt',
+        captionGranularity: 'sentence',
+        captionScope: 'whole-book',
+      });
+    expect(res.status).toBe(201);
+    const exportId = res.body.id as string;
+
+    let job = res.body;
+    for (let i = 0; i < 50 && job.status === 'in_progress'; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      job = (await request(app).get(`/api/books/${bookId}/exports/${exportId}`)).body;
+    }
+    expect(job.status).toBe('done');
+    expect(job.filename).toMatch(/\.srt$/);
+
+    const dl = await request(app).get(`/api/books/${bookId}/exports/${exportId}/download`);
+    expect(dl.status).toBe(200);
+    expect(dl.headers['content-type']).toContain('application/x-subrip');
+    expect(dl.text).toContain('Chapter one begins.');
+    expect(dl.text).toContain('Chapter two begins.');
+  });
+
+  it('creates a per-chapter line .vtt export as a downloadable zip', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({
+        format: 'captions',
+        destination: 'download',
+        captionFileFormat: 'vtt',
+        captionGranularity: 'line',
+        captionScope: 'per-chapter',
+      });
+    expect(res.status).toBe(201);
+    const exportId = res.body.id as string;
+
+    let job = res.body;
+    for (let i = 0; i < 50 && job.status === 'in_progress'; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      job = (await request(app).get(`/api/books/${bookId}/exports/${exportId}`)).body;
+    }
+    expect(job.status).toBe('done');
+    expect(job.filename).toMatch(/\.vtt\.zip$/);
+
+    const dl = await request(app).get(`/api/books/${bookId}/exports/${exportId}/download`);
+    expect(dl.status).toBe(200);
+    expect(dl.headers['content-type']).toBe('application/zip');
+  });
+
+  it('rejects a captions request missing captionGranularity', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({ format: 'captions', destination: 'download', captionFileFormat: 'srt', captionScope: 'whole-book' });
+    expect(res.status).toBe(400);
+  });
+
+  it('persists a warning on the job once a sentence-mode build completes with unverifiable staleness', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({
+        format: 'captions',
+        destination: 'download',
+        captionFileFormat: 'srt',
+        captionGranularity: 'sentence',
+        captionScope: 'whole-book',
+      });
+    let job = res.body;
+    for (let i = 0; i < 50 && job.status === 'in_progress'; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      job = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
+    }
+    expect(job.status).toBe('done');
+    // The fixture's segments.json (this describe block's beforeAll) carries
+    // no textHash — round-2-of-plan-review decision: that's surfaced as a
+    // persisted job warning, not silently ignored.
+    expect(job.warning).toMatch(/couldn't fully verify/);
+  });
+
+  it('does not revoke a sentence-mode export when a word-mode export of the same book completes', async () => {
+    const first = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({
+        format: 'captions',
+        destination: 'download',
+        captionFileFormat: 'srt',
+        captionGranularity: 'sentence',
+        captionScope: 'whole-book',
+      });
+    let firstJob = first.body;
+    for (let i = 0; i < 50 && firstJob.status === 'in_progress'; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      firstJob = (await request(app).get(`/api/books/${bookId}/exports/${firstJob.id}`)).body;
+    }
+    expect(firstJob.status).toBe('done');
+
+    // A different scope (per-chapter) is a different variant — must not
+    // revoke the whole-book sentence job above.
+    const second = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({
+        format: 'captions',
+        destination: 'download',
+        captionFileFormat: 'srt',
+        captionGranularity: 'sentence',
+        captionScope: 'per-chapter',
+      });
+    let secondJob = second.body;
+    for (let i = 0; i < 50 && secondJob.status === 'in_progress'; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      secondJob = (await request(app).get(`/api/books/${bookId}/exports/${secondJob.id}`)).body;
+    }
+    expect(secondJob.status).toBe('done');
+
+    const stillThere = await request(app).get(`/api/books/${bookId}/exports/${firstJob.id}`);
+    expect(stillThere.status).toBe(200);
+  });
+});
+
 describe('GET /api/books/:bookId/exports (list)', () => {
   it('returns the book\'s jobs newest-first', async () => {
     const first = await request(app)
