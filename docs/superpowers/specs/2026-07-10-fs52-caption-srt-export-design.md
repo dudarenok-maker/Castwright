@@ -1,6 +1,8 @@
 # fs-52 — Caption/SRT export design
 
 > Spec (validated design) · 2026-07-10 · fs-52 / [#975](https://github.com/dudarenok-maker/Castwright/issues/975)
+> Revised after an Opus-tier `assumption-checker` pass (2026-07-10) — see "Revision note"
+> at the end of §4 and inline notes in §2/§3 for what changed and why.
 
 ## 1. Goal & scope
 
@@ -27,19 +29,43 @@ burned-in/hardsub video generation (this ships caption *files* only).
   (`segment-asr-qa.ts`) never sets the header, so its behaviour and tests are unaffected.
   `transcribeSegment` (`server/src/tts/transcribe-client.ts`) gains a `wordTimestamps?:
   boolean` option and a typed `words` field on `TranscribeResult`.
-- **Word timing procedure, at export time only:** for each sentence segment, ffmpeg-trim
-  the *finalized* chapter audio (`<slug>.<ext>`, whatever `audioFormat` the book rendered
-  under) to `[startSec, endSec]`, decode to 16 kHz mono PCM, POST to `/transcribe` with word
-  timestamps requested, then offset the returned (segment-local) word times by the
-  segment's `startSec` — and, for whole-book scope, by the chapter's cumulative start
-  offset, using the same running-cursor arithmetic `build-m4b.ts`'s `buildFfmetadata`
-  already uses for its `[CHAPTER]` markers.
+- **Word timing procedure, at export time only — one pass per CHAPTER, not per sentence
+  (revised).** The original draft proposed ffmpeg-trimming and transcribing each sentence
+  segment individually. The assumption-checker pass flagged this as both expensive (one
+  ffmpeg spawn + one serial HTTP round-trip per sentence — 300+ for a long book) and
+  accuracy-risking (trimming at exact segment boundaries can clip a word's onset/offset,
+  and denies Whisper the surrounding context that improves recognition; the existing
+  `vad_filter=True` decode setting is also more likely to shift/clip timing on an isolated
+  1-2s clip than on a full chapter). The revised procedure: decode the *whole* finalized
+  chapter audio (`<slug>.<ext>`) to 16 kHz mono PCM once, and call `/transcribe` **once per
+  chapter** with word timestamps requested — `WhisperEngine.transcribe` already accepts
+  arbitrary-length PCM (faster-whisper internally windows long audio), so this is the same
+  call signature as today, just fed the whole chapter instead of a per-sentence trim, with
+  the same decode params (`beam_size=1`, `temperature=0.0`, `condition_on_previous_text=
+  False`, `vad_filter=True`) the QA path already uses. Returned word times are already
+  chapter-relative, so no per-segment offset math is needed; for whole-book scope, offset by
+  the chapter's cumulative start (see the offset-drift fix below).
+- **Title-beat handling in word mode:** the `kind: 'title'` segment has no manuscript
+  sentence to align ASR output against. Any returned words whose timestamp falls before the
+  first body segment's `startSec` are dropped from the word stream and replaced with a
+  single fixed-timing cue showing the chapter title text (spanning the title segment's own
+  `[startSec, endSec)`) — matching how sentence/line mode already treat the title beat.
 - Word cues use Whisper's own transcribed word text at its aligned timestamp — not the
   manuscript word. This is genuine forced alignment, not an estimate: on the rare TTS
   mispronunciation, the caption shows what was actually *heard*, which is the correct
-  behaviour for a caption track.
+  behaviour for a caption track. (Whole-chapter context also reduces — though doesn't
+  eliminate — the accuracy risk of transcribing short isolated clips in non-English books.)
 - ASR always passes the book's language via `X-Language`, same as `segment-asr-qa.ts`
   already does for non-English books.
+- **Whole-book offset-drift fix:** cumulative cross-chapter offsets must be computed from
+  the *same* per-chapter duration source `build-m4b.ts` uses for its `[CHAPTER]` markers —
+  `probeDurationSec` (an ffprobe of the actual encoded chapter file), not
+  `segments.json`'s stored `durationSec` — so whole-book caption timings never drift against
+  the M4B's chapter boundaries even by rounding.
+- **Analysis-cache invalidation:** if a rendered chapter's sentence text can no longer be
+  joined from the analysis cache (evicted/invalidated since render), the export fails with a
+  clear error rather than emitting blank cues — mirroring the existing "No analysed
+  sentences cached for this book" pattern (`generation.ts`).
 
 ## 3. Export-job integration
 
@@ -62,12 +88,31 @@ as-is.
   modeled as a job (goes `queued` → `done` in one tick) so the UI/queue-rail code path is
   uniform regardless of granularity. Word jobs report per-chapter progress the same way
   the M4B encode step does today.
+- **De-dupe/filename key fix (revised).** `server/src/routes/export.ts`'s stale-job
+  de-dupe (`revokeStaleSameFormat`) and filename derivation currently key on `format`
+  alone — correct when each format has one shape, but captions have 12 variant
+  combinations (2 `captionFileFormat` × 3 `captionGranularity` × 2 `captionScope`) all
+  under `format: 'captions'`. The assumption-checker pass confirmed that, as originally
+  spec'd, requesting a new caption variant would revoke a *different* previously-completed
+  caption export, and a `.srt` + `.vtt` of the same book/granularity/scope would clobber
+  each other's staged file. Fix: both the de-dupe key and the derived filename must
+  include `captionFileFormat`/`captionGranularity`/`captionScope` whenever
+  `format === 'captions'`, not just `format`.
 - **No silent fallback.** If `captionGranularity: 'word'` is requested and the sidecar's
-  Whisper model isn't available (mirrors the existing `PRELOAD`/engine-availability
-  telemetry the frontend already reads for Coqui/Kokoro/Qwen), the job fails with a clear
-  `errorReason` naming line/sentence as the available alternative. It never silently
-  degrades to an estimated/proportional timing — that approach was considered and
-  explicitly rejected in favour of real ASR alignment.
+  Whisper isn't available, the job fails with a clear `errorReason` naming line/sentence as
+  the available alternative. It never silently degrades to an estimated/proportional
+  timing — that approach was considered and explicitly rejected in favour of real ASR
+  alignment. **Availability signal (revised):** the assumption-checker pass found that
+  Whisper is deliberately excluded from the sidecar's `ENGINES` map (it doesn't share the
+  synth-engine load/unload contract) — the spec's original "reuses existing
+  Coqui/Kokoro/Qwen telemetry" claim doesn't hold as stated. The real, already-existing
+  signal is `server/src/routes/sidecar-health.ts`'s `whisperPackageInstalled` /
+  `asrLoaded` fields (sourced from the sidecar's `/health` response,
+  `main.py`'s `whisper_package_installed` / `asr_loaded`). This is independent of the
+  `SEG_ASR_ENABLED` flag (`asrEnabled()`), which gates the *automatic* ASR content-QA
+  pass during generation — caption export readiness must check
+  `whisperPackageInstalled`, not `asrEnabled()`, since a user may have QA-time ASR
+  switched off yet still want an on-demand word-caption export.
 
 ## 4. Caption generation logic
 
@@ -75,10 +120,17 @@ New `server/src/export/build-captions.ts`, sibling to `build-m4b.ts` / `build-mp
 
 - **Sentence mode:** one cue per segment, including the `kind: 'title'` beat (shows the
   chapter title text).
-- **Line mode:** consecutive segments sharing the same `characterId` are folded into one
-  cue spanning their combined start/end. This reconstruction happens only at export time
-  from the already-per-sentence segments — rendering itself is unaffected, no schema change
-  to `segments.json`.
+- **Line mode (bounded fold — revised):** consecutive segments sharing the same
+  `characterId` are folded into one cue, but the fold is capped — a cue closes (and a new
+  one starts at the next sentence) whenever it hits **~7 seconds** of combined duration or
+  **~200 characters**, whichever comes first, in addition to always closing on a speaker
+  change. Unbounded, this degenerates badly: the assumption-checker pass pointed out that a
+  single-narrator book (the common case) has one `characterId` for the entire chapter, so
+  an unbounded fold would collapse a whole chapter into one unusable multi-minute cue. The
+  duration/character ceilings mirror common subtitle max-cue-duration convention and keep
+  the "one cast member's beat" intent while guaranteeing a readable cue. This reconstruction
+  happens only at export time from the already-per-sentence segments — rendering itself is
+  unaffected, no schema change to `segments.json`.
 - **Word mode:** one cue per ASR-recognised word (§2).
 - Two pure formatter functions, `writeSrt(cues: CaptionCue[]): string` and
   `writeVtt(cues: CaptionCue[]): string`, sharing one `CaptionCue { startSec, endSec, text,
@@ -98,22 +150,27 @@ New `server/src/export/build-captions.ts`, sibling to `build-m4b.ts` / `build-mp
   `onOpenM4bExport`/`onOpenMp3ZipExport` pattern).
 - The shared export modal gains a captions section: file-format toggle (.srt/.vtt),
   granularity radio (Line / Sentence / Word), scope radio (Whole book / Per chapter). The
-  Word option is disabled with a tooltip when the server reports Whisper/ASR unavailable —
-  reusing the existing engine-availability telemetry surfaced elsewhere in the app, not a
-  new detection mechanism.
+  Word option is disabled with a tooltip when `whisperPackageInstalled` is false on the
+  book's sidecar-health poll (§3) — a real, already-existing signal, not a new detection
+  mechanism.
 
 ## 6. Testing
 
 - **Vitest (frontend + server, pure logic):** SRT/VTT formatter output (including
   multi-line-text escaping and format-specific timestamp syntax), line-merge fold
-  correctness (same-speaker runs, title-beat handling), whole-book cumulative-offset
-  arithmetic, per-chapter zero-basing.
+  correctness (same-speaker runs, the duration/character cap closing a cue early,
+  title-beat handling), whole-book cumulative-offset arithmetic (using `probeDurationSec`
+  values, not `segments.json`'s stored `durationSec`), per-chapter zero-basing, and the
+  captions-aware de-dupe/filename key (§3).
 - **Server integration test:** a fixture `segments.json` + fixture analysis-cache
   sentences produces an exact golden-file `.srt`/`.vtt`, using The Coalfall Commission
-  canonical fixture per project convention.
+  canonical fixture per project convention. Include a single-narrator fixture chapter
+  specifically to exercise the line-mode cap (regression coverage for the
+  assumption-checker's degenerate-cue finding).
 - **Sidecar pytest:** extend `server/tts-sidecar/tests/test_transcribe.py` with a
-  `word_timestamps=True` case asserting the `words[]` shape/ordering, plus a case
-  confirming the default (`False`) path is byte-identical to pre-change behaviour.
+  `word_timestamps=True` case (whole-clip, not per-sentence) asserting the `words[]`
+  shape/ordering, plus a case confirming the default (`False`) path is byte-identical to
+  pre-change behaviour.
 - **Playwright e2e:** new spec covering the Captions tile → modal → export-queue row →
   (mock-mode) polls to `done` → download link, per the project's "UI-visible behaviour
   crossing router/redux/layout seams gets an e2e test" rule. Word-mode ASR is mocked in the
@@ -126,3 +183,16 @@ New `server/src/export/build-captions.ts`, sibling to `build-m4b.ts` / `build-mp
   separate future consumer of them.
 - Running word-mode ASR during synthesis — it only ever runs on-demand at export time, so
   no cost is added to every render.
+
+## Revision note (2026-07-10)
+
+An Opus-tier `assumption-checker` pass (mandatory pre-approval gate) reviewed the initial
+draft and found every load-bearing data-shape/API claim confirmed against the actual code,
+but flagged five design-judgment gaps, all addressed above: the line-mode fold's degenerate
+multi-minute-cue case for single-narrator books (§4, now bounded — resolved via user
+decision), the per-sentence word-mode ASR procedure's cost/accuracy risk (§2, now a
+whole-chapter pass), the export-job queue's format-only de-dupe/filename key colliding
+across the 12 caption variants (§3, now keyed on the full caption tuple), the assumed
+ASR-availability telemetry surface that didn't actually exist as described (§3/§5, now
+named precisely), and the whole-book offset source needing to match `build-m4b.ts`'s
+`probeDurationSec` to avoid drift (§2).
