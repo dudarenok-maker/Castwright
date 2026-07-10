@@ -1094,7 +1094,53 @@ replace with:
     });
 ```
 
-Finally, append these new tests at the end of the file (after the existing `describe('runReviewScript — version delivery', ...)` block's closing):
+There is also a SEPARATE, older `describe('attachToRunningReview', ...)` block (lines 490-580, right after the `describe('runReviewScript — version delivery', ...)` block and before `describe('discardReview', ...)`) predating the round-5 refactor — its 3 tests call `attachToRunningReview` directly and 2 of them mock `api.reviewScript` too. These need the identical `api.reviewScript` → `api.attachScriptReview` substitution, or Task 5 lands with 2 red tests (their `onOps`/`onCheckpoint`/rejection wiring would sit on a mock `attachToRunningReview` no longer calls).
+
+Test 4 — find (the test titled `'does NOT dispatch setActive or clear itself — that is hydrateScriptReview\'s job now'`):
+
+```ts
+    vi.mocked(api.reviewScript).mockResolvedValue({ reviewedChapters: 0, totalOps: 0 } as never);
+```
+
+replace with:
+
+```ts
+    vi.mocked(api.attachScriptReview).mockResolvedValue({ reviewedChapters: 0, totalOps: 0 } as never);
+```
+
+Test 5 — find (the test titled `'dispatches setReview with the ops/versions delivered by the join\'s own replay — not double-counted with the GET /state snapshot'`):
+
+```ts
+    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      opts.onCheckpoint?.({ chapterId: 1, version: 5 });
+      opts.onOps?.({ chapterId: 1, ops: [{ id: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }] });
+      return { reviewedChapters: 1, totalOps: 1 } as never;
+    });
+```
+
+replace with:
+
+```ts
+    vi.mocked(api.attachScriptReview).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      opts.onCheckpoint?.({ chapterId: 1, version: 5 });
+      opts.onOps?.({ chapterId: 1, ops: [{ id: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }] });
+      return { reviewedChapters: 1, totalOps: 1 } as never;
+    });
+```
+
+Test 6 — find (the test titled `'dispatches an error toast when the join POST rejects, mirroring runReviewScript\'s catch path'`):
+
+```ts
+    vi.mocked(api.reviewScript).mockRejectedValue(new Error('join failed'));
+```
+
+replace with:
+
+```ts
+    vi.mocked(api.attachScriptReview).mockRejectedValue(new Error('join failed'));
+```
+
+Finally, append these new tests immediately after this older `describe('attachToRunningReview', ...)` block's closing `});` (line 580) and before `describe('discardReview', ...)` (line 582) — keeping every `attachToRunningReview`-focused describe block adjacent, rather than at the true end of the file:
 
 ```ts
 describe('attachToRunningReview — reattach-race hardening (fs-58 follow-up #1481)', () => {
@@ -1182,7 +1228,7 @@ describe('runReviewScript — cancellation (fs-58 follow-up #1481)', () => {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run src/store/script-review-thunk.test.ts`
-Expected: FAIL — `api.attachScriptReview` doesn't exist on the mocked `api` object's consumer (`attachToRunningReview` still calls `api.reviewScript`), so the updated existing tests fail (their mock target is never hit), and the new tests fail (no `cancelled`-code handling, no `hydrateLedgerIntoBucket` fallback).
+Expected: FAIL — `attachToRunningReview` still calls `api.reviewScript`, so all 5 tests just re-targeted onto `api.attachScriptReview` (3 in `describe('hydrateScriptReview', ...)`, 2 in `describe('attachToRunningReview', ...)`) fail (their mock is never hit — `api.attachScriptReview` is an unconfigured `vi.fn()` returning `undefined`), and the new tests fail (no `cancelled`-code handling, no `hydrateLedgerIntoBucket` fallback).
 
 - [ ] **Step 3: Add the LedgerEntryDTO import and the hydrateLedgerIntoBucket helper**
 
@@ -1251,7 +1297,7 @@ function hydrateLedgerIntoBucket(
 }
 ```
 
-Note: `DEFAULT_OFF` is already a module-level `const` in this file (defined above `attachToRunningReview`) — no new declaration needed.
+Note: `DEFAULT_OFF` is already a module-level `const` in this file (defined at line 204, *below* `attachToRunningReview`'s current start at line 144 — i.e. also below where `hydrateLedgerIntoBucket` is being inserted). No new declaration is needed, and no functional issue either: `hydrateLedgerIntoBucket` is a hoisted `function` declaration that only reads `DEFAULT_OFF` when it's *called* (never at module-evaluation time), and by the time anything calls it the whole module — including `DEFAULT_OFF`'s `const` initializer — has already finished evaluating once. This is a plain forward reference inside a function body, not a temporal-dead-zone violation.
 
 - [ ] **Step 4: Update attachToRunningReview**
 
