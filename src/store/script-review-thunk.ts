@@ -6,7 +6,7 @@
    and clear in finally (success and error paths alike). */
 
 import type { AppDispatch, RootState } from './index';
-import { api } from '../lib/api';
+import { api, ReviewScriptError, type LedgerEntryDTO } from '../lib/api';
 import { planApply, type ReviewOp } from '../lib/script-review-apply';
 import { scriptReviewActions, opKey, type ReviewOpWithChapter } from './script-review-slice';
 import { notificationsActions } from './notifications-slice';
@@ -98,12 +98,14 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
       dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter }));
     }
   } catch (err) {
-    dispatch(
-      notificationsActions.pushToast({
-        kind: 'error',
-        message: err instanceof Error ? err.message : 'Script review failed.',
-      }),
-    );
+    if (!(err instanceof ReviewScriptError && err.code === 'cancelled')) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Script review failed.',
+        }),
+      );
+    }
   } finally {
     dispatch(scriptReviewActions.clear({ bookId }));
   }
@@ -124,6 +126,47 @@ interface RunningReviewState {
   replay: {
     lastPhase: { progress: number; label: string; chapterIndex?: number; totalChapters?: number; estRemainingMs?: number } | null;
   };
+}
+
+/** Transform+dispatch a book's ledger entries into its scriptReview bucket.
+    Pure — takes the entries and an already-resolved manuscript/cast
+    snapshot as plain arguments, and does no fetching of its own. This is
+    what makes it callable from both hydrateScriptReview's top block
+    (which already has both in scope from its own GET /state +
+    waitForManuscriptAndCast calls) and attachToRunningReview's 404
+    fallback below (which has no getState/subscribe in scope, but already
+    receives sentences/characterIds/manuscriptId directly in its own opts
+    — see design spec §4.2). No-ops on an empty entries map. */
+function hydrateLedgerIntoBucket(
+  bookId: string,
+  entries: Record<string, LedgerEntryDTO>,
+  snapshot: { dispatch: AppDispatch; sentences: ReviewLiveSentence[]; characterIds: Set<string>; manuscriptId: string },
+): void {
+  const { dispatch, sentences, characterIds, manuscriptId } = snapshot;
+  const chapterEntries = Object.entries(entries);
+  if (chapterEntries.length === 0) return;
+
+  const allOps: ReviewOpWithChapter[] = [];
+  const versionByChapter: Record<number, number> = {};
+  const persistedSelected: Record<string, boolean> = {};
+  for (const [chapterKey, entry] of chapterEntries) {
+    const chapterId = Number(chapterKey);
+    versionByChapter[chapterId] = entry.version;
+    for (const op of entry.ops as unknown as ReviewOp[]) allOps.push({ ...op, chapterId });
+    Object.assign(persistedSelected, entry.selected);
+  }
+
+  const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
+    appliable: ReviewOpWithChapter[];
+    unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
+  };
+  const selected: Record<string, boolean> = {};
+  for (const o of appliable) {
+    const key = opKey(o.chapterId, o.id, o.op);
+    selected[key] = key in persistedSelected ? persistedSelected[key] : !DEFAULT_OFF.has(o.op);
+  }
+
+  dispatch(scriptReviewActions.hydrateBucket({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter, selected }));
 }
 
 /** Reattach to a job already running server-side (design spec §4.1/§4.3) —
@@ -151,7 +194,7 @@ export async function attachToRunningReview(
   const versionByChapter: Record<number, number> = {};
 
   try {
-    await api.reviewScript(bookId, {
+    const result = await api.attachScriptReview(bookId, {
       ...(running.chapterId !== undefined ? { chapterId: running.chapterId } : {}),
       onPhase: ({ progress, label, chapterIndex, totalChapters, estRemainingMs }) =>
         dispatch(
@@ -165,17 +208,26 @@ export async function attachToRunningReview(
         versionByChapter[chapterId] = version;
       },
     });
-    // The join-or-create route (Task 2) attaches this call as a subscriber
-    // to the SAME job (assuming it's still running — see the known TOCTOU
-    // caveat below) and Task 2's attachSubscriber replays every buffered
-    // event before any live ones, so by the time api.reviewScript resolves
-    // allOps/versionByChapter hold every chapter's ops/version exactly once.
+    if (result === null) {
+      // TOCTOU: the job finished between GET /state and this join — fall
+      // back to a plain ledger re-read instead of silently starting a
+      // fresh review (design spec §4.2).
+      const freshState = await api.getScriptReviewState(bookId);
+      hydrateLedgerIntoBucket(bookId, freshState.entries, { dispatch, sentences, characterIds, manuscriptId });
+      return;
+    }
     const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
       appliable: ReviewOpWithChapter[];
       unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
     };
     dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter }));
   } catch (err) {
+    // Cancellation (fs-58 follow-up #1481) is a normal, silent terminal
+    // state, not a failure — mirrors detect-emotions-button.tsx's silent
+    // AbortError handling and analysis-stream-middleware.ts's
+    // code==='aborted' handling. Deliberately NO finally/clear here — see
+    // the module-level comment above this function for why.
+    if (err instanceof ReviewScriptError && err.code === 'cancelled') return;
     dispatch(
       notificationsActions.pushToast({
         kind: 'error',
@@ -184,22 +236,6 @@ export async function attachToRunningReview(
     );
   }
 }
-
-// Known, accepted limitation — a narrow reattach race. There's a TOCTOU
-// window between hydrateScriptReview's GET /state call (which reports
-// kind: 'running') and this function's join POST: if the job finishes in
-// that gap, Task 2's registry no longer has an entry to join, and the POST
-// falls through to *create* a fresh job — silently starting a full
-// re-review instead of attaching. This is a narrow, low-probability race
-// (the window is a network round-trip plus waitForManuscriptAndCast, not
-// the whole review duration), and its worst case is wasted analyzer time
-// on an already-mostly-complete book, not data loss — every chapter that
-// job had already checkpointed is still safely in the ledger regardless.
-// Building a dedicated attach-only endpoint to close this race entirely is
-// out of scope for this plan; call it out explicitly here rather than
-// leaving it undiscovered, matching this plan's practice elsewhere (e.g.
-// §3's accepted full-server-restart data loss) of naming known gaps
-// instead of silently absorbing them.
 
 const DEFAULT_OFF = new Set(['reattribute', 'flag_nonstory']);
 
@@ -295,33 +331,7 @@ export async function hydrateScriptReview(
   const chapterEntries = Object.entries(state.entries);
   if (chapterEntries.length > 0) {
     const { sentences, characterIds, manuscriptId } = await waitForManuscriptAndCast(getState, subscribe, bookId);
-
-    const allOps: ReviewOpWithChapter[] = [];
-    const versionByChapter: Record<number, number> = {};
-    const persistedSelected: Record<string, boolean> = {};
-    for (const [chapterKey, entry] of chapterEntries) {
-      const chapterId = Number(chapterKey);
-      versionByChapter[chapterId] = entry.version;
-      // entry.ops is the generated ScriptReviewLedgerEntry's deliberately-loose
-      // `{[key: string]: unknown}[]` (openapi.yaml keeps the per-op-kind shape
-      // permissive rather than duplicating ReviewOp's discriminated shape) —
-      // the `unknown` bounce recovers the concrete shape this code already
-      // knows the ledger actually carries.
-      for (const op of entry.ops as unknown as ReviewOp[]) allOps.push({ ...op, chapterId });
-      Object.assign(persistedSelected, entry.selected);
-    }
-
-    const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
-      appliable: ReviewOpWithChapter[];
-      unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
-    };
-    const selected: Record<string, boolean> = {};
-    for (const o of appliable) {
-      const key = opKey(o.chapterId, o.id, o.op);
-      selected[key] = key in persistedSelected ? persistedSelected[key] : !DEFAULT_OFF.has(o.op);
-    }
-
-    dispatch(scriptReviewActions.hydrateBucket({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter, selected }));
+    hydrateLedgerIntoBucket(bookId, state.entries, { dispatch, sentences, characterIds, manuscriptId });
   }
 
   if (state.kind === 'running') {

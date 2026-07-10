@@ -3,15 +3,28 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../lib/api', () => ({
   api: {
     reviewScript: vi.fn(),
+    attachScriptReview: vi.fn(),
     getScriptReviewState: vi.fn(),
     discardScriptReview: vi.fn(),
     resolveScriptReviewOps: vi.fn(),
     patchScriptReviewSelection: vi.fn(),
   },
+  // Re-derived here (mirrors analysis-stream-middleware.test.ts's identical
+  // AnalysisError pattern) so `err instanceof ReviewScriptError` inside
+  // script-review-thunk.ts's own code resolves against the SAME class
+  // reference this mock factory exports — a plain vi.fn()-based stub
+  // couldn't satisfy an instanceof check.
+  ReviewScriptError: class ReviewScriptError extends Error {
+    code: string;
+    constructor(message: string, code: string) {
+      super(message);
+      this.code = code;
+    }
+  },
 }));
 
 import { configureStore } from '@reduxjs/toolkit';
-import { api } from '../lib/api';
+import { api, ReviewScriptError } from '../lib/api';
 import type { ReviewScriptOpts } from '../lib/api';
 import { runReviewScript, hydrateScriptReview, attachToRunningReview, discardReview } from './script-review-thunk';
 import { scriptReviewActions, scriptReviewSlice } from './script-review-slice';
@@ -264,7 +277,7 @@ describe('hydrateScriptReview', () => {
     });
     // attachToRunningReview's join replays the running job's own chapter's
     // ops via api.reviewScript's onOps/onCheckpoint callbacks.
-    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+    vi.mocked(api.attachScriptReview).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
       opts.onCheckpoint?.({ chapterId: 7, version: 1 });
       opts.onOps?.({ chapterId: 7, ops: [{ id: 2, op: 'strip_tag', newText: 'Chapter seven fixed', rationale: 'r' }] });
       return { reviewedChapters: 1, totalOps: 1 } as never;
@@ -346,10 +359,10 @@ describe('hydrateScriptReview', () => {
       ],
       entries: {},
     });
-    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
-      // Both joins replay through the same api.reviewScript mock — key off
-      // the requested chapterId (threaded via opts) to reply with each
-      // job's own ops, so the two attaches don't cross-contaminate.
+    vi.mocked(api.attachScriptReview).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      // Both joins replay through the same api.attachScriptReview mock —
+      // key off the requested chapterId (threaded via opts) to reply with
+      // each job's own ops, so the two attaches don't cross-contaminate.
       const chapterId = opts.chapterId;
       if (chapterId === 5) {
         opts.onCheckpoint?.({ chapterId: 5, version: 1 });
@@ -413,7 +426,7 @@ describe('hydrateScriptReview', () => {
     const ninePromise = new Promise<void>((r) => {
       resolveNine = r;
     });
-    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+    vi.mocked(api.attachScriptReview).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
       if (opts.chapterId === 5) await fivePromise;
       else if (opts.chapterId === 9) await ninePromise;
       return { reviewedChapters: 1, totalOps: 0 } as never;
@@ -490,7 +503,7 @@ describe('runReviewScript — version delivery', () => {
 describe('attachToRunningReview', () => {
   it('does NOT dispatch setActive or clear itself — that is hydrateScriptReview\'s job now', async () => {
     const dispatch = vi.fn();
-    vi.mocked(api.reviewScript).mockResolvedValue({ reviewedChapters: 0, totalOps: 0 } as never);
+    vi.mocked(api.attachScriptReview).mockResolvedValue({ reviewedChapters: 0, totalOps: 0 } as never);
     const runningState = {
       chapterId: undefined,
       replay: { lastPhase: { progress: 0.4, label: 'Reviewing script' } },
@@ -512,7 +525,7 @@ describe('attachToRunningReview', () => {
     // buffered event through the SAME onOps/onCheckpoint callbacks a live
     // stream would use. attachToRunningReview must rely on THIS, not on
     // pre-seeding from runningState.replay, or each op would count twice.
-    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+    vi.mocked(api.attachScriptReview).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
       opts.onCheckpoint?.({ chapterId: 1, version: 5 });
       opts.onOps?.({ chapterId: 1, ops: [{ id: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }] });
       return { reviewedChapters: 1, totalOps: 1 } as never;
@@ -563,7 +576,7 @@ describe('attachToRunningReview', () => {
      in the 'hydrateScriptReview' describe block below.) */
   it('dispatches an error toast when the join POST rejects, mirroring runReviewScript\'s catch path', async () => {
     const dispatch = vi.fn();
-    vi.mocked(api.reviewScript).mockRejectedValue(new Error('join failed'));
+    vi.mocked(api.attachScriptReview).mockRejectedValue(new Error('join failed'));
     const runningState = {
       chapterId: undefined,
       replay: { lastPhase: null },
@@ -576,6 +589,87 @@ describe('attachToRunningReview', () => {
     });
     const toastCall = dispatch.mock.calls.find(([action]) => action?.type === notificationsActions.pushToast.type);
     expect(toastCall?.[0].payload).toEqual(expect.objectContaining({ kind: 'error', message: 'join failed' }));
+  });
+});
+
+describe('attachToRunningReview — reattach-race hardening (fs-58 follow-up #1481)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('on a null (404) attach result, falls back to a fresh ledger re-read via hydrateBucket instead of starting a fresh review', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.attachScriptReview).mockResolvedValue(null);
+    vi.mocked(api.getScriptReviewState).mockResolvedValue({
+      kind: 'ledger',
+      entries: {
+        '5': {
+          manuscriptId: 'ms-1',
+          version: 3,
+          ops: [{ id: 1, op: 'strip_tag', newText: 'Five fixed', rationale: 'r' }],
+          selected: {},
+          completedAt: '2026-01-01',
+        },
+      },
+    });
+
+    await attachToRunningReview(
+      'book-1',
+      { chapterId: 5, replay: { lastPhase: null } },
+      {
+        dispatch,
+        sentences: [{ id: 1, chapterId: 5, text: 'Five fixed', characterId: 'c1' }],
+        characterIds: new Set(['c1']),
+        manuscriptId: 'ms-1',
+      },
+    );
+
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.hydrateBucket(
+        expect.objectContaining({ bookId: 'book-1', manuscriptId: 'ms-1', versionByChapter: { 5: 3 } }),
+      ),
+    );
+    expect(dispatch.mock.calls.some((c) => c[0].type === scriptReviewActions.setReview.type)).toBe(false);
+    expect(dispatch.mock.calls.some((c) => c[0].type === scriptReviewActions.clear.type)).toBe(false);
+  });
+
+  it('never dispatches clear itself, even on error — clear stays hoisted in hydrateScriptReview (round-5 fix, must not regress)', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.attachScriptReview).mockRejectedValue(new Error('boom'));
+
+    await attachToRunningReview(
+      'book-1',
+      { chapterId: 5, replay: { lastPhase: null } },
+      { dispatch, sentences: [], characterIds: new Set(), manuscriptId: 'ms-1' },
+    );
+
+    expect(dispatch.mock.calls.some((c) => c[0].type === scriptReviewActions.clear.type)).toBe(false);
+  });
+
+  it('a cancelled-coded ReviewScriptError is swallowed without a toast', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.attachScriptReview).mockRejectedValue(new ReviewScriptError('Review cancelled.', 'cancelled'));
+
+    await attachToRunningReview(
+      'book-1',
+      { chapterId: 5, replay: { lastPhase: null } },
+      { dispatch, sentences: [], characterIds: new Set(), manuscriptId: 'ms-1' },
+    );
+
+    expect(dispatch.mock.calls.some((c) => c[0].type === notificationsActions.pushToast.type)).toBe(false);
+  });
+});
+
+describe('runReviewScript — cancellation (fs-58 follow-up #1481)', () => {
+  it('a cancelled-coded ReviewScriptError is swallowed without a toast, and clear still fires', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.reviewScript).mockRejectedValue(new ReviewScriptError('Review cancelled.', 'cancelled'));
+
+    await runReviewScript('book-1', {
+      dispatch, wholeBook: true, model: 'test-model', sentences: [], characterIds: new Set(), manuscriptId: 'ms-1',
+    });
+
+    expect(dispatch.mock.calls.some((c) => c[0].type === notificationsActions.pushToast.type)).toBe(false);
+    const types = dispatch.mock.calls.map((c) => c[0].type);
+    expect(types[types.length - 1]).toBe(scriptReviewActions.clear.type);
   });
 });
 
