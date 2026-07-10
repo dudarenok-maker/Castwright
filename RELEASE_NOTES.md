@@ -1,3 +1,7 @@
+# Castwright 1.12.1
+
+- **The one-click Pinokio install now actually finishes.** A patch on top of v1.12.0's Pinokio fix: the installer's own setup scripts were quietly working from the wrong folder, so the very first setup step failed before anything could be installed. That's fixed — click Install in Pinokio and it runs all the way through.
+
 # Castwright 1.12.0
 
 - **Your cast finally gets credit for the lines they actually said.** Castwright's speaker-attribution now double-checks itself: when the text plainly names who's speaking — a dialogue tag, a clear back-and-forth between two characters — that line gets corrected automatically, before you ever see it. And when the text genuinely doesn't say, the line shows up honestly flagged for your review, instead of quietly staying wrong. On a dialogue-heavy book this can mean hundreds of lines coming back to their rightful speaker, and a review queue that finally points you at the handful of lines worth a second look, rather than showing you nothing was wrong and leaving you to find every mistake yourself.
