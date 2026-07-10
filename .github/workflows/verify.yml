@@ -27,9 +27,20 @@ name: Verify
 # every in-scope leg instead of the MAX. Split into independent jobs — each
 # repeats checkout + `Setup Node + deps` (cheap: the composite's node_modules
 # cache means most jobs skip `npm ci` entirely on a warm hit) — so
-# lint/typecheck, frontend tests, server tests, e2e+visual, and build all run
-# concurrently; end-to-end time collapses to roughly the slowest single leg
-# (typically e2e+visual or server fast+slow) instead of their sum.
+# lint/typecheck, frontend tests, server tests, e2e, e2e-visual, and build
+# all run concurrently; end-to-end time collapses to roughly the slowest
+# single leg instead of their sum.
+#
+# E2E ITSELF IS SHARDED (2026-07-10): a live timing comparison showed the
+# functional e2e battery (~110 spec files, CI-pinned to workers=1 to avoid
+# in-job Vite dev-server contention) was the dominant leg at ~16 min, dwarfing
+# every other job. `--shard=N/4` splits it across 4 matrix jobs, each its own
+# runner/dev-server — the workers=1 anti-flake guarantee still holds PER
+# SHARD, just with 4x less work per shard. Visual baselines were pulled into
+# their own job in the same change: they used to run as a serial step after
+# test:e2e in the same job specifically to avoid racing test:e2e's dev server
+# — moot once e2e lives in separate shard jobs, so visual now runs concurrently
+# with every shard instead of waiting on them.
 #
 # `detect` runs once and fans its scope booleans out via `needs:`/`outputs:`
 # to every other job's step-level `if:` — same per-leg scoping as before,
@@ -266,11 +277,23 @@ jobs:
             npx vitest run --config vitest.config.slow.ts
           fi
 
+  # E2E functional battery (~110 spec files) is the long pole of the whole
+  # workflow — CI intentionally pins Playwright to `workers: 1` (playwright.
+  # config.ts) so parallel Chromium instances can't thundering-herd the
+  # single Vite dev server WITHIN one job. That constraint is per-job, not
+  # global: `--shard=N/4` below splits the spec list across 4 independent
+  # matrix jobs, each on its own runner with its own dev server (no shared
+  # process to contend over), while every shard still runs serially inside
+  # itself — same anti-flake guarantee, ~4x less wall-clock.
   e2e:
-    name: E2E + visual baselines (chromium)
+    name: E2E (chromium) — shard ${{ matrix.shard }}/4
     needs: detect
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -299,14 +322,51 @@ jobs:
 
       - name: E2E (chromium)
         if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true'
-        run: npm run test:e2e
+        run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
 
-      # Visual snapshots run as their own serial step (workers=1) so they can't
-      # race the parallel test:e2e battery for the Vite dev server — mirrors the
-      # local `verify` (verify-cache.mjs). CI is Ubuntu, so this validates the
-      # committed `e2e/linux/**` baselines; without it, visual regressions slip
-      # past every PR and only surface at release time (release.yml runs the full
-      # `npm run verify`, which includes this leg, on Ubuntu).
+  # Visual snapshots split out from the functional battery above (2026-07-10)
+  # — they were previously a serial step in the same job so they couldn't
+  # race test:e2e's workers for the Vite dev server; now that each e2e shard
+  # already gets its own isolated job/runner, that constraint is moot, and
+  # giving visual baselines their own job lets them run concurrently with
+  # every e2e shard instead of waiting for the (now sharded, still slower)
+  # functional battery to finish first. Stays `workers=1` for itself — this
+  # mirrors the local `verify` (verify-cache.mjs). CI is Ubuntu, so this
+  # validates the committed `e2e/linux/**` baselines; without it, visual
+  # regressions slip past every PR and only surface at release time
+  # (release.yml runs the full `npm run verify`, which includes this leg, on
+  # Ubuntu).
+  e2e-visual:
+    name: E2E visual baselines (chromium)
+    needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node + deps
+        uses: ./.github/actions/setup
+
+      # ffmpeg is needed by the e2e suite's audio paths.
+      - name: Install ffmpeg
+        if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Cache Playwright browsers
+        if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true'
+        id: playwright-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Install Playwright chromium
+        if: (needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true') && steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
       - name: E2E visual baselines (chromium)
         if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true'
         run: npm run test:e2e:visual
@@ -332,7 +392,7 @@ jobs:
   # while the real work runs concurrently in the named jobs above.
   verify:
     name: npm run verify
-    needs: [lint-and-checks, frontend-tests, server-tests, e2e, build]
+    needs: [lint-and-checks, frontend-tests, server-tests, e2e, e2e-visual, build]
     runs-on: ubuntu-latest
     if: always()
     steps:
