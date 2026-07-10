@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 ---
 
 # FA2: conditional detect + opt-in Linux install (side-21 rescope)

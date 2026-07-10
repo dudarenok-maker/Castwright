@@ -216,7 +216,7 @@ function flashAttnImportable(python) {
 // compute capability can still fail non-fatally after a real compile) — it
 // only rules out the no-toolkit-at-all case.
 function hasNvcc() {
-  const res = spawnSync('nvcc', ['--version'], { windowsHide: true });
+  const res = spawnSync('nvcc', ['--version'], { cwd: SIDECAR_DIR, windowsHide: true });
   return res.status === 0;
 }
 
@@ -244,10 +244,13 @@ function installFlashAttn(python, env) {
       step(`FlashAttention-2: ${plan.reason}.`);
       return;
     case 'install-pip':
-      installFlashAttnPip(python, env);
+      installFlashAttnPip(python, env, plan.package);
       return;
     case 'install':
       installFlashAttnWheel(python, env, plan.url);
+      return;
+    default:
+      step(`FlashAttention-2: WARN unexpected plan action "${plan.action}" — skipping.`);
       return;
   }
 }
@@ -260,7 +263,7 @@ function installFlashAttn(python, env) {
 // imports torch at build time, and default build isolation would hide this
 // venv's torch from it, reliably failing with "No module named 'torch'"
 // before ever reaching a real compile.
-function installFlashAttnPip(python, env) {
+function installFlashAttnPip(python, env, packageName) {
   step('FlashAttention-2: attempting an unpinned pip install (opt-in)...');
   step('  Requires the standalone NVIDIA CUDA Toolkit; this can be a long compile.');
   const baseTxtPath = join(SIDECAR_DIR, 'requirements', 'base.txt');
@@ -278,7 +281,7 @@ function installFlashAttnPip(python, env) {
   if (
     run(
       python,
-      ['-m', 'pip', 'install', 'flash-attn', '--no-build-isolation', '-c', baseTxtPath],
+      ['-m', 'pip', 'install', packageName, '--no-build-isolation', '-c', baseTxtPath],
       buildEnv,
     ) !== 0
   ) {
