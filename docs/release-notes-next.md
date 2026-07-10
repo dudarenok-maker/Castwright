@@ -22,9 +22,9 @@ DRAFT IN PROGRESS — v1.12.0 is accumulating (package.json is 1.11.0; not yet
 cut). Reopened 2026-07-10 (the v1.11.0 cut on 2026-07-08 never got its
 post-cut bootstrap — several PRs had been appending onto the stale v1.11.0
 draft since; those entries are folded in below). Covers what has merged since
-the v1.11.0 cut so far; extend as more lands. **Cut is blocked on FS-52
-(caption/SRT export) landing** — currently only a design spec
-(`docs/fs52-caption-export-design`), no shipped behaviour yet.
+the v1.11.0 cut so far; extend as more lands. **FS-52 (caption/SRT export)
+has landed** (see the headline section below) — the prior cut-blocker note
+is resolved.
 -->
 
 **A more honest transcript, twice over.** A new deterministic evidence pass now catches and corrects tag-proven speaker mistakes before you ever see them, replacing the analyzer's own inflated self-reported confidence with an honest, derived one — and Script Review's findings, like your cast's own state, now survive a reload instead of evaporating the moment you look away. A couple of reliability fixes round out the polish: a stuck Qwen voice design now recovers on its own, and the Pinokio one-click installer — broken by an incomplete first fix — actually installs now.
@@ -84,6 +84,15 @@ Findings from a script review used to live only in the moment — reload the pag
   existing bucket's `visible` flag. See
   [`docs/features/INDEX.md`'s fs-58 entry](features/INDEX.md) for the full
   design (#1479).
+
+### 🎬 Caption/SRT export (new) — fs-52
+Any finished book can now export `.srt`/`.vtt` captions — line, sentence, or word granularity, whole-book or per-chapter — as a new `captions` `BookExportJob` format (fs-52, #PR).
+
+- **Line and sentence captions are pure metadata reconstructions** over `segments.json` + `manuscript-edits.json` (`server/src/export/build-captions.ts`, `caption-cues.ts`, `manuscript-sentences.ts`) — no new render-time data, no synthesis-path change. Line cues cap at 7s / 200 chars and always close on a speaker change; sentence text is always read from the live manuscript edits, never the (potentially stale) analysis cache.
+- **Word captions add a new sidecar capability**: `/transcribe` accepts an `X-Word-Timestamps` header that requests faster-whisper's per-word alignment and switches on `condition_on_previous_text` for cross-window coherence — a distinct decode profile from the existing ASR content-QA caller, which never sets it, so that path is untouched. Always one whole-chapter Whisper call, run at export time only (never during synthesis).
+- **De-dupe and filenames are now caption-variant-aware**: the export queue's same-format revocation and filename derivation key on `captionFileFormat`/`captionGranularity`/`captionScope`, not just `format`, so the 12 caption variants (2 file formats × 3 granularities × 2 scopes) no longer collide.
+- **A staleness guard protects against captions drifting from the audio.** A segment whose `textHash` no longer matches its current manuscript text fails the export outright with a "regenerate this chapter" error; a segment rendered before `textHash` existed (pre-#1105) instead sets a non-fatal, persisted job `warning` surfaced as an amber caption on the export-queue row — captions still ship, but flagged as unverifiable rather than silently trusted.
+- New Captions tile on the Listen view's "Or download a file" section (`src/modals/export-audiobook.tsx`, `src/components/listen/listen-download-section.tsx`). See [plan `2026-07-10-fs52-caption-srt-export.md`](features/2026-07-10-fs52-caption-srt-export.md) (fs-52, Closes #975).
 
 ---
 
