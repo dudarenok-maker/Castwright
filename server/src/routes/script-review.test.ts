@@ -1079,6 +1079,87 @@ describe('cancellation (fs-58 follow-up #1481)', () => {
     expect(ledger.entries['1'].ops).toHaveLength(1); // chapter 1 (finished before cancel) survives
     expect(ledger.entries['2']).toBeUndefined(); // chapter 2 (in flight at cancel) does not
   });
+
+  /* Regression for the code-review-workflow finding: cancel used to only
+     abort the job's controller, never removing it from the registry maps
+     — that only happened later, asynchronously, once the in-flight
+     analyzer call actually rejected from the abort (which can take a
+     real amount of time for a genuine LLM call). In that window, a
+     same-scope retry would find the doomed job still registered and JOIN
+     it instead of starting fresh, silently defeating the
+     cancel-then-restart-immediately UX this route exists for. */
+  it('cancel immediately removes the job from the registry, so a same-scope retry starts fresh instead of joining the doomed job', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let releaseFirst: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview.mockImplementationOnce(
+      () => new Promise<ScriptReviewOutput>((resolve) => { releaseFirst = resolve; }),
+    );
+    runReview.mockResolvedValue({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+
+    const { done: firstDone } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    firstDone.catch(() => {});
+    await new Promise((r) => setTimeout(r, 20)); // let the first job register and reach the gated call
+
+    const cancelRes = await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
+    expect(cancelRes.body).toEqual({ ok: true, cancelled: true });
+
+    // Retry the SAME scope immediately — WITHOUT waiting for the first
+    // (still-gated, not-yet-actually-rejected) job to settle. This is the
+    // exact race the finding describes.
+    const second = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    // A genuinely new analyzer call was made — the second request did NOT
+    // join the doomed first job.
+    expect(runReview).toHaveBeenCalledTimes(2);
+
+    releaseFirst?.({ ops: [] });
+    const secondRes = await second.done;
+    expect(secondRes.status).toBe(200);
+    expect(secondRes.text).toContain('"kind":"ops"');
+    expect(secondRes.text).not.toContain('"code":"cancelled"');
+  });
+
+  it('cancel immediately clears the conflict lock, so a cross-scope retry does not 409 against the doomed job', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let releaseFirst: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview.mockImplementationOnce(
+      () => new Promise<ScriptReviewOutput>((resolve) => { releaseFirst = resolve; }),
+    );
+    runReview.mockResolvedValue({ ops: [] });
+
+    const { done: wholeBookDone } = firePost(`/api/books/${bookId}/script-review`, {});
+    wholeBookDone.catch(() => {});
+    await new Promise((r) => setTimeout(r, 20));
+
+    await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
+
+    const chapterRes = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
+    expect(chapterRes.status).toBe(200); // not 409 — the cancelled whole-book job no longer holds the lock
+
+    releaseFirst?.({ ops: [] });
+    await wholeBookDone;
+  });
+
+  it('cancel immediately clears the job from GET /state instead of still reporting it as running', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let releaseFirst: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview.mockImplementationOnce(
+      () => new Promise<ScriptReviewOutput>((resolve) => { releaseFirst = resolve; }),
+    );
+
+    const { done } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    done.catch(() => {});
+    await new Promise((r) => setTimeout(r, 20));
+
+    await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
+
+    const state = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(state.body.kind).toBe('ledger');
+
+    releaseFirst?.({ ops: [] });
+    await done;
+  });
 });
 
 describe('reattach-only endpoint (fs-58 follow-up #1481)', () => {

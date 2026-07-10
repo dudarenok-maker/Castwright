@@ -548,12 +548,36 @@ scriptReviewRouter.post(
     // indistinguishable from "nothing running for this book" and both
     // correctly no-op.
     const main = mainScriptReviewJobByBook.get(bookId);
-    const subsets = [...subsetScriptReviewJobByChapter.values()].filter((j) => j.bookId === bookId);
+    const subsets = [...subsetScriptReviewJobByChapter.entries()].filter(([, j]) => j.bookId === bookId);
     let cancelled = false;
-    for (const job of [main, ...subsets]) {
-      if (!job || job.controller.signal.aborted) continue;
-      job.controller.abort();
-      cancelled = true;
+
+    // Remove every job from the registry IMMEDIATELY, synchronously — not
+    // just via runScriptReviewJob's own eventual `.finally()` cleanup,
+    // which only fires once the in-flight analyzer call actually rejects
+    // from the abort signal (a genuine LLM call may not do so instantly).
+    // Without this, a same-scope retry in that window would find the
+    // doomed job still registered and JOIN it (getting an immediate
+    // cancelled event instead of starting fresh), a cross-scope retry
+    // would 409 against a job that's already cancelled, and GET /state
+    // would keep reporting it as running — all directly undermining the
+    // "cancel, then start fresh immediately" UX this route exists for.
+    // Deleting here is always safe even for a job that turns out to
+    // already be aborted: runScriptReviewJob's own `.finally()` delete is
+    // keyed on `targetMap.get(registeredKey) === registeredJob`, so it
+    // safely no-ops once we've already removed the entry.
+    if (main) {
+      if (!main.controller.signal.aborted) {
+        main.controller.abort();
+        cancelled = true;
+      }
+      mainScriptReviewJobByBook.delete(bookId);
+    }
+    for (const [key, job] of subsets) {
+      if (!job.controller.signal.aborted) {
+        job.controller.abort();
+        cancelled = true;
+      }
+      subsetScriptReviewJobByChapter.delete(key);
     }
     res.status(200).json({ ok: true, cancelled });
   },
