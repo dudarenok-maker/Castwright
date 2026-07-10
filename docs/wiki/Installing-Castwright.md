@@ -294,7 +294,7 @@ node server/tts-sidecar/scripts/install-qwen3.mjs --flash-attn
 
 The installer checks any platform first: if `flash_attn` is already importable in the sidecar venv, it skips straight to telling you how to activate it — no reinstall attempt. Otherwise the path depends on your OS:
 
-- **Windows** installs a prebuilt wheel, but it's pinned to `cp311 + torch-2.6 + cu124` — the script **auto-skips on the current Python 3.12 (cp312) stack**, and Qwen runs on SDPA instead.
+- **Windows** installs a prebuilt wheel, but that specific wheel's own build tag is `cp311 + torch-2.6 + cu124` — it can't load on the sidecar's actual **cp312 + torch 2.11 + cu128** stack, so the script **auto-skips** and Qwen runs on SDPA instead. A native wheel for the real stack is tracked separately (side-22, #1001).
 - **Linux** attempts an unpinned `pip install flash-attn --no-build-isolation` build when the standalone NVIDIA CUDA Toolkit (`nvcc`) is on `PATH`; without the toolkit it skips cleanly rather than starting a doomed compile.
 - **macOS** always skips — no FA2 path there.
 
