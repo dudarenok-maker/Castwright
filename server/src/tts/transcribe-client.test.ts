@@ -147,6 +147,32 @@ describe('transcribeSegment', () => {
     ]);
   });
 
+  it('drops malformed words[] entries (missing/non-numeric start/end, non-string word) rather than trusting the cast', async () => {
+    mockFetch.mockImplementation((async () =>
+      jsonResponse({
+        text: 'Hello world.',
+        language: 'en',
+        words: [
+          { word: 'Hello', start: 0, end: 0.4 },
+          /* missing start */ { word: 'world.', end: 0.9 },
+          /* non-numeric end */ { word: 'foo', start: 1, end: 'bar' },
+          /* non-string word */ { word: 42, start: 2, end: 2.5 },
+          /* non-finite start */ { word: 'baz', start: Number.NaN, end: 3 },
+          { word: 'qux', start: 3, end: 3.5 },
+        ],
+      })) as unknown as typeof undiciFetch);
+
+    const result = await transcribeSegment(PCM, 16000, {
+      wordTimestamps: true,
+      sidecarUrl: URL,
+    });
+
+    expect(result.words).toEqual([
+      { word: 'Hello', start: 0, end: 0.4 },
+      { word: 'qux', start: 3, end: 3.5 },
+    ]);
+  });
+
   it('omits X-Word-Timestamps and returns words: null when not requested', async () => {
     const captured: { value: { init: { headers: Record<string, string> } } | null } = { value: null };
     mockFetch.mockImplementation((async (_url: string, init: { headers: Record<string, string> }) => {

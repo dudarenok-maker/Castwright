@@ -122,9 +122,7 @@ export async function transcribeSegment(
       avgLogprob: numOrNull(body.avg_logprob),
       noSpeechProb: numOrNull(body.no_speech_prob),
       compressionRatio: numOrNull(body.compression_ratio),
-      words: Array.isArray(body.words)
-        ? (body.words as Array<{ word: string; start: number; end: number }>)
-        : null,
+      words: Array.isArray(body.words) ? body.words.filter(isWellFormedWord) : null,
     };
   } finally {
     release?.();
@@ -142,6 +140,23 @@ export function normalizeWhisperLanguage(lang?: string | null): string | undefin
 
 function numOrNull(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/** fs-52 final-review fix — a malformed sidecar `words[]` entry (missing/
+    non-numeric `start`/`end`, non-string `word`) would otherwise flow
+    uncaught into `buildWordCues`'s NaN-sensitive timing comparisons. Drop
+    malformed entries rather than trusting the `Array.isArray` cast blindly;
+    a well-formed sidecar response is unaffected. */
+function isWellFormedWord(w: unknown): w is { word: string; start: number; end: number } {
+  return (
+    typeof w === 'object' &&
+    w !== null &&
+    typeof (w as { word?: unknown }).word === 'string' &&
+    typeof (w as { start?: unknown }).start === 'number' &&
+    Number.isFinite((w as { start?: unknown }).start) &&
+    typeof (w as { end?: unknown }).end === 'number' &&
+    Number.isFinite((w as { end?: unknown }).end)
+  );
 }
 
 async function safeReadText(response: Response): Promise<string> {
