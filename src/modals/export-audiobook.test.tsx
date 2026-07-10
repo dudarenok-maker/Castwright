@@ -34,6 +34,12 @@ vi.mock('../lib/api', async () => {
          existing specs render without a probe banner; per-test override
          flips the resolved value when the failure branch needs covering. */
       testSyncFolderPath: vi.fn(async (_path: string) => ({ ok: true })),
+      /* fs-52 — hydrates whisperAvailable for the Captions granularity gate. */
+      getSidecarHealth: vi.fn(async () => ({
+        status: 'reachable',
+        url: '(mock)',
+        whisperPackageInstalled: true,
+      })),
     },
   };
 });
@@ -47,6 +53,7 @@ const mockedApi = api as unknown as {
   getExportLanUrls: ReturnType<typeof vi.fn>;
   putUserSettings: ReturnType<typeof vi.fn>;
   testSyncFolderPath: ReturnType<typeof vi.fn>;
+  getSidecarHealth: ReturnType<typeof vi.fn>;
 };
 
 function makeStore() {
@@ -605,6 +612,81 @@ describe('ExportAudiobookModal — AAC/Opus format picker (plan 72)', () => {
         expect.objectContaining({ format: 'opus-ogg-zip', destination: 'download' }),
       );
     });
+  });
+});
+
+/* fs-52 — Captions format: file-format (srt/vtt), granularity
+   (line/sentence/word), and scope (whole-book/per-chapter) toggles.
+   Word granularity is gated behind the sidecar's Whisper package via
+   `api.getSidecarHealth().whisperPackageInstalled`. */
+describe('ExportAudiobookModal — Captions (fs-52)', () => {
+  beforeEach(() => {
+    mockedApi.createBookExport.mockReset();
+  });
+
+  it('shows a Captions format option and its sub-controls when selected', async () => {
+    renderModal();
+    fireEvent.click(screen.getByTestId('export-format-captions'));
+    expect(screen.getByTestId('captions-file-format-srt')).toBeInTheDocument();
+    expect(screen.getByTestId('captions-granularity-sentence')).toBeInTheDocument();
+    expect(screen.getByTestId('captions-scope-whole-book')).toBeInTheDocument();
+  });
+
+  it('submits the selected caption sub-fields on the export request', async () => {
+    mockedApi.createBookExport.mockResolvedValue({
+      id: 'exp_1',
+      bookId: 'demo__sa__test',
+      format: 'captions',
+      captionFileFormat: 'vtt',
+      captionGranularity: 'word',
+      captionScope: 'per-chapter',
+      destination: 'download',
+      status: 'in_progress',
+      filename: 'book.word.vtt.zip',
+      sizeBytes: null,
+      progress: 0,
+      downloadUrl: null,
+      syncPath: null,
+      errorReason: null,
+      createdAt: new Date().toISOString(),
+      completedAt: null,
+    } as BookExportJob);
+
+    renderModal();
+    fireEvent.click(screen.getByTestId('export-format-captions'));
+    fireEvent.click(screen.getByTestId('captions-file-format-vtt'));
+    fireEvent.click(screen.getByTestId('captions-granularity-word'));
+    fireEvent.click(screen.getByTestId('captions-scope-per-chapter'));
+    /* Submit stays disabled until the LAN URL hydration effect resolves
+       (matches every other submit test in this file). */
+    const submit = await waitFor(() => {
+      const btn = screen.getByTestId('export-submit');
+      if ((btn as HTMLButtonElement).disabled) throw new Error('still disabled');
+      return btn;
+    });
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(mockedApi.createBookExport).toHaveBeenCalled());
+    expect(mockedApi.createBookExport).toHaveBeenCalledWith(
+      'demo__sa__test',
+      expect.objectContaining({
+        format: 'captions',
+        captionFileFormat: 'vtt',
+        captionGranularity: 'word',
+        captionScope: 'per-chapter',
+      }),
+    );
+  });
+
+  it('disables the Word granularity option when whisperPackageInstalled is false', async () => {
+    mockedApi.getSidecarHealth.mockResolvedValue({
+      status: 'reachable',
+      url: '(mock)',
+      whisperPackageInstalled: false,
+    });
+    renderModal();
+    fireEvent.click(screen.getByTestId('export-format-captions'));
+    await waitFor(() => expect(screen.getByTestId('captions-granularity-word')).toBeDisabled());
   });
 });
 

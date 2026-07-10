@@ -63,7 +63,7 @@ type TabId = 'download' | 'sync-folder';
    `audioFormat` to match (server-side gate); the picker just dispatches
    the format and surfaces the same missing-chapter banner if the book
    was generated with a different codec. */
-type FormatId = 'm4b' | 'mp3-zip' | 'mp3-folder' | 'aac-m4a-zip' | 'opus-ogg-zip';
+type FormatId = 'm4b' | 'mp3-zip' | 'mp3-folder' | 'aac-m4a-zip' | 'opus-ogg-zip' | 'captions';
 type TileHintKey = 'voice' | 'smart_audiobook' | 'bookplayer' | 'audiobookshelf';
 
 /* Per-tile specialisation. Adding a new live tile is one entry here +
@@ -173,6 +173,12 @@ export function ExportAudiobookModal({
   const tileHint = tileHintFor(prefill?.appHint);
   const [tab, setTab] = useState<TabId>(prefill?.destination ?? initialTab);
   const [format, setFormat] = useState<FormatId>(prefill?.format ?? 'm4b');
+  const [captionFileFormat, setCaptionFileFormat] = useState<'srt' | 'vtt'>('srt');
+  const [captionGranularity, setCaptionGranularity] = useState<'line' | 'sentence' | 'word'>(
+    'sentence',
+  );
+  const [captionScope, setCaptionScope] = useState<'whole-book' | 'per-chapter'>('whole-book');
+  const [whisperAvailable, setWhisperAvailable] = useState(true);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [missing, setMissing] = useState<string[] | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -198,6 +204,26 @@ export function ExportAudiobookModal({
       cancelled = true;
     };
   }, [open, lanUrls.length, dispatch]);
+
+  /* fs-52 — hydrate whether the sidecar's Whisper package is installed so
+     the Captions "Word" granularity option can be disabled when it isn't.
+     Re-probed each time the modal opens (cheap health check, no caching
+     needed like the LAN URLs above). */
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    api
+      .getSidecarHealth()
+      .then((h) => {
+        if (!cancelled) setWhisperAvailable(h.whisperPackageInstalled !== false);
+      })
+      .catch(() => {
+        /* swallow — Word stays enabled optimistically if the probe fails */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   /* Reset transient UI state on close so the next open is a clean slate.
      Prefill (when set) overrides the per-open defaults — so the Voice tile
@@ -260,6 +286,13 @@ export function ExportAudiobookModal({
       const body: BookExportRequest = {
         format,
         destination: tab === 'sync-folder' ? 'sync-folder' : 'download',
+        ...(format === 'captions'
+          ? {
+              captionFileFormat,
+              captionGranularity,
+              captionScope,
+            }
+          : {}),
       };
       const job = await api.createBookExport(bookId, body);
       dispatch(exportsActions.exportStarted(job));
@@ -410,6 +443,7 @@ export function ExportAudiobookModal({
                       { id: 'mp3-zip', label: 'MP3.ZIP' },
                       { id: 'aac-m4a-zip', label: 'AAC (M4A)' },
                       { id: 'opus-ogg-zip', label: 'Opus (Ogg)' },
+                      { id: 'captions', label: 'Captions' },
                     ] as Array<{ id: FormatId; label: string }>
                   ).map((f) => (
                     <button
@@ -427,6 +461,17 @@ export function ExportAudiobookModal({
           )}
 
           <div className="px-6 py-5 text-sm text-ink/75 leading-relaxed">
+            {format === 'captions' && (
+              <CaptionsOptions
+                fileFormat={captionFileFormat}
+                setFileFormat={setCaptionFileFormat}
+                granularity={captionGranularity}
+                setGranularity={setCaptionGranularity}
+                scope={captionScope}
+                setScope={setCaptionScope}
+                wordAvailable={whisperAvailable}
+              />
+            )}
             {tileHint ? (
               <TileBody
                 hint={tileHint}
@@ -500,7 +545,9 @@ export function ExportAudiobookModal({
                       ? 'AAC (M4A) zip: per-chapter .m4a files in a zip. Smaller than MP3 at the same quality; native on iOS / Apple Books. Requires the book to be generated with AAC output.'
                       : format === 'opus-ogg-zip'
                         ? 'Opus (Ogg) zip: per-chapter .ogg files in a zip. Smallest size at narration quality; broad support on Android / VLC. Requires the book to be generated with Opus output.'
-                        : 'MP3 folder: per-chapter tagged MP3s mirrored into your sync folder. Folder-scanning apps pick them up.'}
+                        : format === 'captions'
+                          ? 'Captions: .srt/.vtt from your book’s render-time alignment. Word mode needs the sidecar’s Whisper model.'
+                          : 'MP3 folder: per-chapter tagged MP3s mirrored into your sync folder. Folder-scanning apps pick them up.'}
             </p>
             <div className="flex items-center gap-3">
               <button onClick={onClose} className="text-sm font-medium text-ink/60 hover:text-ink">
@@ -549,6 +596,108 @@ export function ExportAudiobookModal({
         </div>
       </div>
     </>
+  );
+}
+
+/* fs-52 — Captions format sub-controls: file-format (SRT/VTT), granularity
+   (line/sentence/word), and scope (whole-book/per-chapter). Word
+   granularity is disabled when the sidecar doesn't have the Whisper
+   package installed (`wordAvailable`, hydrated from getSidecarHealth in
+   the parent). Follows the same pill-toggle pattern as the format picker
+   above — compact controls, no dedicated touch-target override, matching
+   every other toggle in this modal. */
+interface CaptionsOptionsProps {
+  fileFormat: 'srt' | 'vtt';
+  setFileFormat: (v: 'srt' | 'vtt') => void;
+  granularity: 'line' | 'sentence' | 'word';
+  setGranularity: (v: 'line' | 'sentence' | 'word') => void;
+  scope: 'whole-book' | 'per-chapter';
+  setScope: (v: 'whole-book' | 'per-chapter') => void;
+  wordAvailable: boolean;
+}
+function CaptionsOptions({
+  fileFormat,
+  setFileFormat,
+  granularity,
+  setGranularity,
+  scope,
+  setScope,
+  wordAvailable,
+}: CaptionsOptionsProps) {
+  return (
+    <div className="space-y-4 mb-4" data-testid="captions-options">
+      <div>
+        <span className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">
+          File format
+        </span>
+        <div className="mt-1 flex items-center gap-1 bg-ink/4 rounded-full p-0.5 text-xs w-fit">
+          {(['srt', 'vtt'] as const).map((f) => (
+            <button
+              key={f}
+              type="button"
+              data-testid={`captions-file-format-${f}`}
+              onClick={() => setFileFormat(f)}
+              className={`px-3 py-1.5 rounded-full font-medium transition-colors ${fileFormat === f ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}
+            >
+              {f.toUpperCase()}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <span className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">
+          Granularity
+        </span>
+        <div className="mt-1 flex items-center gap-1 bg-ink/4 rounded-full p-0.5 text-xs w-fit">
+          {(
+            [
+              { id: 'line', label: 'Line' },
+              { id: 'sentence', label: 'Sentence' },
+              { id: 'word', label: 'Word' },
+            ] as const
+          ).map((g) => (
+            <button
+              key={g.id}
+              type="button"
+              data-testid={`captions-granularity-${g.id}`}
+              disabled={g.id === 'word' && !wordAvailable}
+              title={
+                g.id === 'word' && !wordAvailable
+                  ? 'Whisper is not installed on the server.'
+                  : undefined
+              }
+              onClick={() => setGranularity(g.id)}
+              className={`px-3 py-1.5 rounded-full font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${granularity === g.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <span className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">
+          Scope
+        </span>
+        <div className="mt-1 flex items-center gap-1 bg-ink/4 rounded-full p-0.5 text-xs w-fit">
+          {(
+            [
+              { id: 'whole-book', label: 'Whole book' },
+              { id: 'per-chapter', label: 'Per chapter' },
+            ] as const
+          ).map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              data-testid={`captions-scope-${s.id}`}
+              onClick={() => setScope(s.id)}
+              className={`px-3 py-1.5 rounded-full font-medium transition-colors ${scope === s.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
