@@ -3259,7 +3259,7 @@ function writeMockScriptReviewState(bookId: string, state: MockScriptReviewState
   }
 }
 
-async function mockReviewScript(
+export async function mockReviewScript(
   bookId: string,
   { onOps, onPhase, onChapterFailed: _onChapterFailed, onCheckpoint }: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult> {
@@ -3280,10 +3280,23 @@ async function mockReviewScript(
     versionAccum[chId] = version;
     onCheckpoint?.({ chapterId: chId, version });
   };
+  /* fs-58 follow-up (#1481) — mirrors the real server's job-registry abort
+     check so the mandated e2e Cancel spec has something real to observe.
+     `notePhase` writes `running` non-null on every tick; if it now reads
+     null, something else (mockCancelScriptReview) cleared it since our own
+     last tick — nothing else writes this book's mock state concurrently.
+     Checked only BETWEEN ticks, never before the first one (which would
+     misfire on a fresh run that hasn't ticked yet). */
+  const throwIfCancelled = () => {
+    if (readMockScriptReviewState(bookId).running === null) {
+      throw new ReviewScriptError('Review cancelled.', 'cancelled');
+    }
+  };
 
   await wait(60);
   notePhase({ progress: 0.25, label: 'Reviewing script', chapterId: 1, chapterIndex: 1, totalChapters: 3 });
   await wait(500);
+  throwIfCancelled();
   notePhase({
     progress: 0.5,
     label: 'Reviewing script',
@@ -3293,6 +3306,7 @@ async function mockReviewScript(
     estRemainingMs: 20_000,
   });
   await wait(500);
+  throwIfCancelled();
   notePhase({
     progress: 0.85,
     label: 'Reviewing script',
@@ -3302,6 +3316,7 @@ async function mockReviewScript(
     estRemainingMs: 5_000,
   });
   await wait(400);
+  throwIfCancelled();
   /* fs-58 Unit A: strip_tag on sentence id:1 (chapterId:3). */
   noteOps(3, [{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' }]);
   noteCheckpoint(3, 1);
@@ -3424,6 +3439,114 @@ async function realPatchScriptReviewSelection(
   return res.json();
 }
 
+export interface CancelScriptReviewResult {
+  ok: boolean;
+  cancelled: boolean;
+}
+
+async function realCancelScriptReview(bookId: string): Promise<CancelScriptReviewResult> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/script-review/cancel`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`Failed to cancel script review (${res.status}).`);
+  return res.json();
+}
+
+/* fs-58 follow-up (#1481) — a SEPARATE function from realReviewScript, not a
+   shared call: it reuses the same fetch+reader SSE-parsing approach against
+   the new /attach URL, but realReviewScript hardcodes
+   `if (res.status === 404) throw new ReviewScriptError(...)` (line 3147),
+   which is the wrong behavior here — a 404 means "no job to join," an
+   expected, handled outcome (design spec §4.2), not a failure. */
+async function realAttachScriptReview(
+  bookId: string,
+  { chapterId, signal, onPhase, onThrottle, onOps, onChapterFailed, onCheckpoint }: ReviewScriptOpts = {},
+): Promise<ReviewScriptResult | null> {
+  const body: Record<string, unknown> = {};
+  if (chapterId !== undefined) body.chapterId = chapterId;
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/script-review/attach`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (res.status === 404) return null;
+  if (!res.ok || !res.body) throw new Error(`Script-review attach failed (${res.status}).`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let result: ReviewScriptResult | null = null;
+
+  const handle = (p: Record<string, unknown>) => {
+    switch (p.kind) {
+      case 'phase': {
+        const phaseEvent = parseSubstagePhaseEvent(p);
+        if (phaseEvent) onPhase?.(phaseEvent);
+        break;
+      }
+      case 'throttle':
+        if (typeof p.chapterIndex === 'number' && typeof p.waitMs === 'number') {
+          onThrottle?.({
+            chapterId: p.chapterIndex,
+            waitMs: p.waitMs,
+            reason: String(p.reason ?? ''),
+          });
+        }
+        break;
+      case 'ops':
+        if (typeof p.chapterId === 'number' && Array.isArray(p.ops)) {
+          onOps?.({
+            chapterId: p.chapterId,
+            ops: p.ops as import('./script-review-apply').ReviewOp[],
+          });
+        }
+        break;
+      case 'chapter-failed':
+        if (typeof p.chapterId === 'number') {
+          onChapterFailed?.({ chapterId: p.chapterId, message: typeof p.message === 'string' ? p.message : 'Chapter review failed.' });
+        }
+        break;
+      case 'checkpoint':
+        if (typeof p.chapterId === 'number' && typeof p.version === 'number') {
+          onCheckpoint?.({ chapterId: p.chapterId, version: p.version });
+        }
+        break;
+      case 'result':
+        result = {
+          reviewedChapters: typeof p.reviewedChapters === 'number' ? p.reviewedChapters : 0,
+          totalOps: typeof p.totalOps === 'number' ? p.totalOps : 0,
+        };
+        break;
+      case 'error':
+        throw new ReviewScriptError(
+          typeof p.message === 'string' ? p.message : 'Script review failed.',
+          typeof p.code === 'string' ? p.code : 'unknown',
+        );
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buf.indexOf('\n\n')) >= 0) {
+      const raw = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      const dataLines = raw
+        .split('\n')
+        .filter((l) => l.startsWith('data: '))
+        .map((l) => l.slice(6));
+      if (!dataLines.length) continue;
+      handle(JSON.parse(dataLines.join('\n')) as Record<string, unknown>);
+    }
+  }
+
+  if (!result) throw new Error('Script-review attach stream ended without a result event.');
+  return result;
+}
+
 export async function mockGetScriptReviewState(bookId: string): Promise<ScriptReviewStateDTO> {
   const state = readMockScriptReviewState(bookId);
   if (state.running) {
@@ -3478,6 +3601,36 @@ export async function mockPatchScriptReviewSelection(
   state.entries[key] = entry;
   writeMockScriptReviewState(bookId, state);
   return { ok: true };
+}
+
+export async function mockCancelScriptReview(bookId: string): Promise<CancelScriptReviewResult> {
+  const state = readMockScriptReviewState(bookId);
+  const cancelled = state.running !== null;
+  writeMockScriptReviewState(bookId, { running: null, entries: state.entries });
+  return { ok: true, cancelled };
+}
+
+/* A running job in mock mode IS mockReviewScript's own promise, still in
+   flight (there's no real detached server-side job to "join" — the mock's
+   sessionStorage state is the only thing that outlives a page reload).
+   Attaching therefore delegates straight to the SAME canned timeline,
+   forwarding this caller's own onPhase/onOps/onCheckpoint — exactly what
+   the pre-fs-58-follow-up code got for free by having attachToRunningReview
+   call api.reviewScript on reattach. A version that only seeded onPhase
+   once and returned immediately (an earlier draft of this function) would
+   make Task 5's client-side reattach fallback fire almost instantly after
+   a reload, which breaks e2e/script-review-persistence.spec.ts's existing
+   "reloading mid-review resumes progress without resetting to 0%" test —
+   that test polls the pill's percent for several seconds after reload and
+   requires it to stay non-zero, which only holds if the reattached call
+   keeps emitting fresh phase ticks until the timeline actually finishes. */
+export async function mockAttachScriptReview(
+  bookId: string,
+  opts: ReviewScriptOpts = {},
+): Promise<ReviewScriptResult | null> {
+  const state = readMockScriptReviewState(bookId);
+  if (!state.running) return null;
+  return mockReviewScript(bookId, opts);
 }
 
 /* fs-34 — drop a designed Qwen emotion variant (route deletes the slot + .pt). */
@@ -8890,6 +9043,8 @@ const real = {
   detectEmotions: realDetectEmotions,
   detectInstruct: realDetectInstruct,
   reviewScript: realReviewScript,
+  cancelScriptReview: realCancelScriptReview,
+  attachScriptReview: realAttachScriptReview,
   getScriptReviewState: realGetScriptReviewState,
   discardScriptReview: realDiscardScriptReview,
   resolveScriptReviewOps: realResolveScriptReviewOps,
@@ -9164,6 +9319,8 @@ const mock = {
   detectEmotions: mockDetectEmotions,
   detectInstruct: mockDetectInstruct,
   reviewScript: mockReviewScript,
+  cancelScriptReview: mockCancelScriptReview,
+  attachScriptReview: mockAttachScriptReview,
   getScriptReviewState: mockGetScriptReviewState,
   discardScriptReview: mockDiscardScriptReview,
   resolveScriptReviewOps: mockResolveScriptReviewOps,

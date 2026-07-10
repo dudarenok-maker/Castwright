@@ -16,6 +16,10 @@ import {
   mockResolveScriptReviewOps,
   mockPatchScriptReviewSelection,
   mockScriptReviewKey,
+  mockReviewScript,
+  mockCancelScriptReview,
+  mockAttachScriptReview,
+  ReviewScriptError,
   type LedgerEntryDTO,
   api,
 } from './api';
@@ -433,5 +437,77 @@ describe('mock-mode script-review resolve/selection persistence (fs-58 PR-review
     const state = await mockGetScriptReviewState(bookId);
     if (state.kind !== 'ledger') throw new Error('expected ledger');
     expect(state.entries['3'].selected).toEqual({ '3:1:strip_tag': true });
+  });
+});
+
+describe('mock-mode script-review cancellation (fs-58 follow-up #1481)', () => {
+  const cancelBookId = 'book-mock-cancel';
+
+  beforeEach(() => {
+    sessionStorage.clear();
+  });
+
+  it('mockCancelScriptReview clears the running flag and reports cancelled:true when a job was running', async () => {
+    sessionStorage.setItem(mockScriptReviewKey(cancelBookId), JSON.stringify({
+      running: { lastPhase: { progress: 0.5, label: 'Reviewing script' } },
+      entries: {},
+    }));
+    const result = await mockCancelScriptReview(cancelBookId);
+    expect(result).toEqual({ ok: true, cancelled: true });
+    const state = await mockGetScriptReviewState(cancelBookId);
+    expect(state.kind).toBe('ledger');
+  });
+
+  it('mockCancelScriptReview is idempotent — cancelled:false when nothing is running', async () => {
+    const result = await mockCancelScriptReview(cancelBookId);
+    expect(result).toEqual({ ok: true, cancelled: false });
+  });
+
+  it('mockAttachScriptReview resolves to null when nothing is running', async () => {
+    const result = await mockAttachScriptReview(cancelBookId, {});
+    expect(result).toBeNull();
+  });
+
+  it('mockAttachScriptReview delegates to the same canned timeline as mockReviewScript when a job is running, so a reload can observe it complete', async () => {
+    // Deliberately does NOT seed a custom onPhase/result here — a running
+    // job in mock mode is just "mockReviewScript's own promise, still
+    // in flight," and attach's job is to give a NEW caller (e.g. after a
+    // page reload destroyed the original caller's JS context) a way to
+    // keep observing the SAME canned timeline to completion, not a
+    // separate, shorter, hand-rolled seed. See the comment on
+    // mockAttachScriptReview's implementation (Step 8 below) for why: a
+    // version that only seeded onPhase once and returned immediately
+    // would make src/store/script-review-thunk.ts's reattach fallback
+    // (Task 5) fire almost instantly after a reload, breaking
+    // e2e/script-review-persistence.spec.ts's existing
+    // "reloading mid-review resumes progress without resetting to 0%"
+    // test, which relies on the pill staying populated with a
+    // NON-ZERO percent well past the moment of reload.
+    sessionStorage.setItem(mockScriptReviewKey(cancelBookId), JSON.stringify({
+      running: { lastPhase: { progress: 0.25, label: 'Reviewing script' } },
+      entries: {},
+    }));
+    const phases: Array<{ progress: number }> = [];
+    const result = await mockAttachScriptReview(cancelBookId, { onPhase: (p) => phases.push(p) });
+    expect(phases.length).toBeGreaterThan(0);
+    expect(result).toEqual({ reviewedChapters: 1, totalOps: 5 });
+  });
+
+  it('mockReviewScript throws a cancelled-coded ReviewScriptError if mockCancelScriptReview clears the running flag mid-run', async () => {
+    const runPromise = mockReviewScript(cancelBookId, {});
+    // Let the mock reach its first phase tick (60ms, sets `running` non-null)
+    // before cancelling — cancelling before the first tick would race the
+    // mock's own initial write and isn't the scenario under test.
+    await new Promise((r) => setTimeout(r, 100));
+    await mockCancelScriptReview(cancelBookId);
+
+    let caught: unknown;
+    try {
+      await runPromise;
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ReviewScriptError);
+    expect((caught as InstanceType<typeof ReviewScriptError>).code).toBe('cancelled');
   });
 });
