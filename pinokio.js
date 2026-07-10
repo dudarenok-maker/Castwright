@@ -3,16 +3,14 @@
 // Accessor shapes below match shipping Pinokio apps (TRELLIS/comfy/facefusion);
 // confirmed on-box in the regression plan acceptance matrix.
 //
-// This file lives at the repo root, under the root package.json's
-// "type": "module" — Pinokio's runtime dynamically imports it in-process, so
-// it must be genuine ESM (CommonJS globals like require/__dirname/module
-// throw a ReferenceError at import time here). pinokio/lib/menu.js stays
-// CommonJS (its own pinokio/package.json overrides type back to commonjs
-// for the scripts Pinokio spawns as subprocesses); importing it from ESM
-// picks up its `module.exports` as the default export.
-import buildMenu from './pinokio/lib/menu.js';
+// This file lives at the repo root and MUST be genuine CommonJS: Pinokio's own
+// kernel loads app scripts via a plain synchronous `require(filepath)`
+// (pinokiocomputer/pinokiod kernel/loader.js `requireJS`), which cannot load
+// an ES module. The root package.json is "type": "commonjs" for exactly this
+// reason — see docs/features/218-pinokio-installer.md.
+const buildMenu = require('./pinokio/lib/menu.js');
 
-export default {
+module.exports = {
   version: '1.0',
   title: 'Castwright',
   description: 'Any book, performed by a full cast — effortlessly.',
