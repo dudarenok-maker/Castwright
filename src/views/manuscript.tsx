@@ -860,6 +860,11 @@ export function ManuscriptView({
     await startNewReview(wholeBook);
   }
 
+  function handleCancelReview() {
+    if (!bookId) return;
+    void api.cancelScriptReview(bookId);
+  }
+
   function handleReviewExisting() {
     if (!bookId) return;
     dispatch(scriptReviewActions.showReview({ bookId }));
@@ -1083,6 +1088,7 @@ export function ManuscriptView({
                   status={reviewSubstage.label}
                   detailText={reviewSubstageDetailText}
                   percent={reviewSubstage.progress}
+                  onCancel={handleCancelReview}
                 />
               )}
               {onStartGenerating && (
