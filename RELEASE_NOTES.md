@@ -6,6 +6,7 @@
 - **The one-click Pinokio install actually installs now.** An earlier fix for it was itself broken, so the very first screen never loaded and nobody could get in. That's sorted — click Install in Pinokio and Castwright sets itself up as intended.
 - **Confirming several new speakers in one batch no longer mixes up their names.** When Script Review's off-roster review flagged more than one new speaker to confirm in the same pass, the name you'd just typed for one could linger in the box for the next — and, if you didn't catch it, get used for the wrong character. Each speaker's confirm form now always starts fresh with that speaker's own suggested name.
 - **If you've already got FlashAttention-2 set up, Castwright now notices.** The sidecar installer's optional speed-accelerator step used to only know about a Windows-specific package — everywhere else, it just gave up. It now checks whether you already have FlashAttention-2 available and tells you how to switch it on, and on Linux, if you don't have it yet, opting in now tries installing it for you (when your system has the NVIDIA CUDA developer toolkit). Nothing changes unless you ask for it — it's still off by default.
+- **The library's welcome line no longer promises exactly seven books.** It used to say your cast carries through "to book seven" — a number that made no sense whether your library held two books or twenty. It now says book after book, because that's the actual promise.
 
 # Castwright 1.11.0
 
