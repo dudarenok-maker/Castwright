@@ -16,25 +16,24 @@ The marker is what bump-version checks: if it doesn't match the version being
 cut, the bump refuses (so a stale file can't ship as the body). The
 user-facing, brand-voice notes live separately in RELEASE_NOTES.md (#/release-notes).
 
-release-notes-next-version: 1.12.1
+release-notes-next-version: 1.12.2
 
-DRAFT IN PROGRESS — v1.12.1 is a small patch release: one real installer fix,
-cut same-day as v1.12.0 once it was found during a live on-box Pinokio
-acceptance pass. Diffed against v1.12.0 (the previous public release) per
-CONTRIBUTING.md "Release notes" — no headline-features section, just the
-one themed fix. Docs-archival (#1505) and a backlog-sync tooling fix (#1507)
-also landed same-day but have no user/operator-visible effect, so they're
-left out per the "What stays out" rule.
+DRAFT IN PROGRESS — v1.12.2 is a same-day follow-on patch to v1.12.1. The
+v1.12.1 Pinokio shell-cwd fix let Install run for the first time, which
+surfaced a SECOND, distinct installer bug on Start (server ran but ignored
+server/.env). Diffed against v1.12.1 (the previous public release) per
+CONTRIBUTING.md "Release notes" — one themed fix, no headline-features
+section.
 -->
 
-**A patch release: the Pinokio one-click install actually completes now.** A structural bug in the installer's own scripts — undiscovered until today's first real on-box run got far enough to hit it — made every install step operate one directory too deep. Fixed; nothing else changed since v1.12.0.
+**A patch release: the Pinokio-installed server now reads its own settings.** v1.12.1 got the Pinokio install running for the first time — which immediately surfaced a second bug the first one had been hiding: the server started, but from the wrong directory, so it silently ignored its own configuration. Fixed; a clean Pinokio Install → Start now comes up fully configured.
 
 ---
 
 ## 🚀 Onboarding
 
-- **The Pinokio one-click install no longer fails on its very first step.** Every `pinokio/*.js` launcher script (install/start/stop/update/reset) lives one directory below the app root, but Pinokio runs each script's shell/file-removal steps from that script's own directory by default — none of ours accounted for it, so the very first `conda install` step landed in the wrong place and failed with a cryptic "directory exists, but is not a conda environment" error. This has been silently broken since the Pinokio installer first shipped (2026-06-15); every earlier on-box attempt was blocked by an unrelated bug before ever reaching this step. All five scripts now explicitly target the app root. (#1508, #1509)
+- **A Pinokio-launched server no longer boots on bare defaults.** After the v1.12.1 fix let the one-click install actually run, the very next step exposed this: the launcher started the server from the app's top folder instead of its `server/` folder, so the server couldn't find its own `.env` — the file that carries your workspace location, worker counts, GPU memory budget, and analyzer settings — and quietly fell back to defaults. It now launches from the right place (matching how the desktop app has always started it), so a Pinokio install comes up with its real settings from the first run. (#1513, #1514)
 
 ---
 
-**Full changelog:** v1.12.0...v1.12.1
+**Full changelog:** v1.12.1...v1.12.2
