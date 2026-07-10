@@ -17,6 +17,7 @@
 - No new CLI flag or env var — everything is gated by the existing `--flash-attn` / `QWEN_INSTALL_FLASH_ATTN=1` opt-in.
 - All new pip calls that install packages into the venv use `-c <base.txt>` (torch-safety constraint), matching the existing `qwenPipInstallArgs()` convention — no `-U`.
 - `installFlashAttn()`'s dispatch on `plan.action` MUST be structured so each action has its own dedicated function/branch with an explicit return — no case may fall through into another's logic. This is the single most load-bearing structural requirement in this plan (see spec Design section — three review rounds each caught a variant of a fallthrough bug here).
+- **Every "Replace lines X-Y" header in this plan cites line numbers in the file's state BEFORE Task 1's edit lands.** Task 1's replacement is longer than the code it replaces, so every line number below Task 1's edit point (all of Task 2's `installFlashAttn` region) shifts down once Task 1 is applied. Do not count lines to find the edit target — each step's "old code" block is the literal, current, unique text to match and replace (e.g. via the Edit tool's exact-string replacement), regardless of what line number it's actually sitting at by the time you get there. Task 2 Steps 1-2 (the module header and wheel-URL doc comments) sit above Task 1's edit and are unaffected by this.
 
 ---
 
@@ -269,7 +270,7 @@ git commit -m "feat(sidecar): extend FA2 install decision table for detect + Lin
 
 **Files:**
 - Modify: `server/tts-sidecar/scripts/install-qwen3.mjs:9-23` (module header comment)
-- Modify: `server/tts-sidecar/scripts/install-qwen3.mjs:81-88` (`FLASH_ATTN_WHEEL_URL` doc comment)
+- Modify: `server/tts-sidecar/scripts/install-qwen3.mjs:81-85` (`FLASH_ATTN_WHEEL_URL` doc comment — the comment only; the `export const` declaration on the following lines is untouched)
 - Modify: `server/tts-sidecar/scripts/install-qwen3.mjs:158-224` (replace `installFlashAttn` with the dispatcher + three helper functions + two new probes)
 
 **Interfaces:**
@@ -627,7 +628,7 @@ In `docs/release-notes-next.md`, under the `## 🏗️ Under the hood` heading (
   unpinned `pip install flash-attn --no-build-isolation` build; without the
   toolkit it skips cleanly instead of burning a doomed compile. The Windows
   pinned-wheel path (still cp311-only; the cp312/torch2.11/cu128 real-stack
-  fix is tracked separately) is unchanged. (side-21, #1000)
+  fix is tracked on side-22, #1001) is unchanged. (side-21, #1000)
 ```
 
 - [ ] **Step 2: Add the brand-voice release-notes entry**
