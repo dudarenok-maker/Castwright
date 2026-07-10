@@ -95,6 +95,17 @@ Findings from a script review used to live only in the moment — reload the pag
 
 - **The off-roster reattribute confirm form could leak a field across a multi-op batch.** `CreateCharacterForm`'s name/gender/ageRange fields are seeded via `useState(initial ...)`, which only runs on first mount; `ScriptReviewDiff`'s confirm-queue overlay (`src/components/script-review-diff.tsx`) rendered the same JSX element across every `confirm.index` advance with no `key`, so React reused the instance and a field typed for op N could survive into op N+1's own form — and, if unedited, reach op N+1's create/reassign call. The form is now keyed on the op's own identity (`opKey`) so it remounts, and its state resets, on every confirm-queue advance (#1480).
 - **The Pinokio one-click installer's menu was fundamentally broken, across two attempts to fix it.** First surfaced during on-box acceptance (#822): root `pinokio.js` used CommonJS syntax (`require`/`__dirname`/`module.exports`) under the root `package.json`'s `"type": "module"`, throwing a `ReferenceError` (bug #1458) — "fixed" by rewriting it as genuine ESM (`import`/`export default`), on the assumption that Pinokio's runtime dynamically `import()`s app scripts. That assumption was itself wrong (bug #1484): Pinokio's kernel (`pinokiocomputer/pinokiod`, `kernel/loader.js`, `requireJS()`) actually loads scripts with a plain synchronous `require(filepath)`, which cannot load an ES module at all — so the install screen still never loaded, for a different reason. Root `pinokio.js` is now genuine CommonJS again, matching every other `pinokio/**` script, and the root `package.json` is `"type": "commonjs"` (was `"module"`) to make that load correctly; `eslint.config.js` — the only other bare `.js` file at the repo root relying on ESM syntax — is renamed to `eslint.config.mjs` to keep working under the new default. The regression test now `require()`s the entry via `createRequire` instead of dynamically `import()`ing it, so it actually reproduces Pinokio's real loading path (#1458, #1484, #1485).
+- **FlashAttention-2 detection is no longer Windows-only, and the stale
+  Windows pin is no longer the only path.** `install-qwen3.mjs --flash-attn`
+  now checks whether `flash_attn` is already importable in the sidecar venv
+  on ANY platform/accelerator profile first — if so, it just reports how to
+  activate it (`QWEN_ATTN_IMPL=flash_attention_2`) rather than attempting a
+  reinstall. On Linux, when it isn't already present and the standalone
+  NVIDIA CUDA Toolkit (`nvcc`) is on PATH, the installer now attempts an
+  unpinned `pip install flash-attn --no-build-isolation` build; without the
+  toolkit it skips cleanly instead of burning a doomed compile. The Windows
+  pinned-wheel path (still cp311-only; the cp312/torch2.11/cu128 real-stack
+  fix is tracked on side-22, #1001) is unchanged. (side-21, #1000)
 
 ---
 
