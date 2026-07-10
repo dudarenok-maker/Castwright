@@ -741,7 +741,13 @@ describe('ExportAudiobookModal — Captions (fs-52)', () => {
 
     fireEvent.click(screen.getByTestId('export-format-captions'));
     await waitFor(() => expect(screen.getByTestId('captions-granularity-word')).toBeDisabled());
-    expect(screen.getByTestId('captions-granularity-sentence').className).toContain('bg-white');
+    /* The Word→Sentence reset (export-audiobook.tsx's second effect, keyed on
+       whisperAvailable) commits a render AFTER the one that disables Word —
+       it doesn't land in the same commit, so it needs its own wait rather
+       than a synchronous assertion right after the toBeDisabled() above. */
+    await waitFor(() =>
+      expect(screen.getByTestId('captions-granularity-sentence').className).toContain('bg-white'),
+    );
     expect(screen.getByTestId('captions-granularity-word').className).not.toContain('bg-white');
   });
 });
