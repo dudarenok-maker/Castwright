@@ -50,6 +50,23 @@ export function isArchivable(node) {
   return !labels.includes('moscow:wont');
 }
 
+// `gh project item-archive --owner <login>` resolves the owner's account type
+// (User vs Organization) via its own internal GraphQL query before archiving.
+// That resolution needs more than the `project`+`repo` scopes the CI PAT
+// carries (ADD_TO_PROJECT_PAT — see CONTRIBUTING.md) and fails with the
+// unhelpful "unknown owner type" (gh's generic fallback for a resolution it
+// can't classify) — see #1503. A raw `archiveProjectV2Item` mutation against
+// the project's node ID sidesteps owner resolution entirely and needs only
+// `project` scope, matching how listDoneItems() above already reads via raw
+// GraphQL instead of `gh project item-list --owner`.
+export function buildArchiveMutationArgs(projectId, itemId) {
+  const mutation = `
+    mutation($projectId: ID!, $itemId: ID!) {
+      archiveProjectV2Item(input: { projectId: $projectId, itemId: $itemId }) { item { id } }
+    }`;
+  return ['api', 'graphql', '-f', `query=${mutation}`, '-f', `projectId=${projectId}`, '-f', `itemId=${itemId}`];
+}
+
 function listDoneItems(config) {
   const query = `
     query($login: String!, $number: Int!, $after: String) {
@@ -114,7 +131,7 @@ async function main() {
   }
 
   for (const item of doneItems) {
-    gh(['project', 'item-archive', String(config.projectNumber), '--owner', PROJECT_OWNER, '--id', item.id]);
+    gh(buildArchiveMutationArgs(config.projectId, item.id));
     info(`  archived #${item.content.number}`);
   }
   info(`\n[OK] archived ${doneItems.length} Done item(s).`);
