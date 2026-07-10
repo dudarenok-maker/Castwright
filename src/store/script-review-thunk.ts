@@ -211,7 +211,14 @@ export async function attachToRunningReview(
     if (result === null) {
       // TOCTOU: the job finished between GET /state and this join — fall
       // back to a plain ledger re-read instead of silently starting a
-      // fresh review (design spec §4.2).
+      // fresh review (design spec §4.2). Correctness here rests on the
+      // ledger being a SUPERSET of whatever was hydrated earlier (a
+      // running job's ledger only grows) — hydrateBucket replaces the
+      // bucket wholesale rather than merging per-chapter, so a fresh
+      // snapshot that isn't a strict superset would lose data. It always
+      // is one here: this fires moments after the same GET /state call
+      // that seeded the earlier snapshot, with nothing but more
+      // checkpointing able to happen in between.
       const freshState = await api.getScriptReviewState(bookId);
       hydrateLedgerIntoBucket(bookId, freshState.entries, { dispatch, sentences, characterIds, manuscriptId });
       return;

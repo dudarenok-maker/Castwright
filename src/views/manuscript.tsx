@@ -862,7 +862,14 @@ export function ManuscriptView({
 
   function handleCancelReview() {
     if (!bookId) return;
-    void api.cancelScriptReview(bookId);
+    api.cancelScriptReview(bookId).catch((err) => {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Failed to cancel the review.',
+        }),
+      );
+    });
   }
 
   function handleReviewExisting() {
