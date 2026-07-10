@@ -301,12 +301,16 @@ async function fetchFeatureIssues(config) {
 // is forward-looking, not a changelog" convention, spec §D). moscow:wont
 // issues are the one exception: spec §D says they render "regardless of
 // board Status" — so no state/status gate applies to them at all.
-function toBacklogIssues(nodes) {
+export function toBacklogIssues(nodes) {
   const featureIssues = [];
   const wontIssues = [];
   for (const node of nodes) {
     const content = node.content;
-    if (!content) continue;
+    // A project item's content can be a PullRequest or DraftIssue, not just
+    // an Issue — the query's `... on Issue { ... }` fragment then resolves
+    // to an empty (not null) object, so content.labels is undefined rather
+    // than content itself being falsy.
+    if (!content || !content.labels) continue;
     const labels = content.labels.nodes.map((l) => l.name);
     if (!labels.includes('type:feature')) continue;
     const parsed = idAndTitleFromTitle(content.title);

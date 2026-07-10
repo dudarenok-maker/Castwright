@@ -87,12 +87,6 @@ _Full detail + acceptance:_ [#553](https://github.com/dudarenok-maker/Castwright
 - _Benefit:_ Converts merged-but-unvalidated multi-GPU safety code into a confirmed guarantee, and closes the auto-revert gap so a repeated bad GPU pin self-heals with an operator-visible toast instead of silently degrading.
 _Full detail + acceptance:_ [#1230](https://github.com/dudarenok-maker/Castwright/issues/1230).
 
-#### `srv-59` — Dialogue-structure attribution: deterministic evidence engine, derived confidence, escalation ([#1471](https://github.com/dudarenok-maker/Castwright/issues/1471))
-
-- _What:_ Pure-code dialogue-structure parser (per-language convention tables, en/ru/es/fr/de) that cross-examines stage-2 attributions: tag-proven errors auto-corrected, ambiguity flagged with **derived** (honest) confidence replacing the model's self-reported values, plus a default-on local escalation pass over unresolved conversation windows and structure-evidence annotations in the script-review inbox. Spec `docs/superpowers/specs/2026-07-09-dialogue-structure-attribution-design.md`; plan `docs/superpowers/plans/2026-07-09-dialogue-structure-attribution.md` (both adversarially reviewed; pilot-measured on the real _Ночной дозор_ analysis). **In-flight (2026-07-09):** the deterministic engine + escalation + provenance (tasks 1–9b, 11–12) are implemented and reviewed on branch `feat/server-dialogue-structure-attribution`; the script-review inbox evidence-annotation half (task 10) is deliberately sequenced after the concurrent script-review-persistence PR merges (shared `script-review.ts` call site) and lands in the same PR once that dependency clears. Regression plan: [docs/features/247-dialogue-structure-attribution.md](247-dialogue-structure-attribution.md). On-box acceptance against _Ночной дозор_ owed post-merge — see that plan's Test plan for the baseline/target numbers.
-- _Benefit:_ _(user)_ full-book attribution for Russian (and every language) becomes fixable in one triage sitting — the low-confidence navigator finally flags the genuinely ambiguous lines (today: 0 flags on 14k sentences with heaps of errors) and tag-provable mistakes are corrected before the user ever looks.
-_Full detail + acceptance:_ [#1471](https://github.com/dudarenok-maker/Castwright/issues/1471).
-
 ## Could — nice to have, low-cost win
 
 #### `fs-17` — Read-along: sentence highlight synced to audio ([#464](https://github.com/dudarenok-maker/Castwright/issues/464))
@@ -100,12 +94,6 @@ _Full detail + acceptance:_ [#1471](https://github.com/dudarenok-maker/Castwrigh
 - _What:_ Show manuscript text beside the player and highlight the current sentence as audio plays. Leverage the per-segment timing already used to drive the listen-view waveform/segments (`segments.json` via `server/src/routes/chapter-audio.ts`); widen the API to expose per-sentence start/end if not already surfaced, then map the live playhead to the active sentence.
 - _Benefit:_ Immersion / accessibility / pronunciation learning — a differentiating feature. _Owes a `docs/features/NN-*.md` regression plan (substantial)._ _Net-new from the 2026-06-02 backlog brainstorm (Listener / Reliability / Distribution / Net-new / Sharing lenses). MoSCoW `should` is a placeholder — to be re-bucketed in the upcoming whole-backlog priority pass._
 _Full detail + acceptance:_ [#464](https://github.com/dudarenok-maker/Castwright/issues/464).
-
-#### `fs-41` — Auto-detect manuscript language on ingest (filter voice library + auto-load engine) ([#666](https://github.com/dudarenok-maker/Castwright/issues/666))
-
-- _What:_ Complete the multi-language "second half": on book ingest, **auto-detect the manuscript language**, **filter the voice library** to that language, and **auto-load the right engine** (e.g. Qwen3-TTS for Russian, Kokoro for English) — keeping the existing hard invariant that a cast never crosses languages within a book. Today the language path works end-to-end (fs-2) but the user drives engine/voice selection manually.
-- _Benefit:_ Removes the most error-prone manual step for non-English books; one of the most-requested multi-language directions. Pairs with fs-2 (language engine half, shipped) and fs-14 (Russian UI localization).
-_Full detail + acceptance:_ [#666](https://github.com/dudarenok-maker/Castwright/issues/666).
 
 #### `fs-27` — Chapter recaps / previously summaries ([#481](https://github.com/dudarenok-maker/Castwright/issues/481))
 
@@ -184,12 +172,6 @@ _Full detail + acceptance:_ [#414](https://github.com/dudarenok-maker/Castwright
 - _What:_ Multi-select in the voice library with bulk actions — pin/unpin and delete across the selection (with a confirm + count). Deletion respects in-use voices (warn or block when a voice is assigned to a character in any book).
 - _Benefit:_ curating a large accumulated voice library stops being a per-voice click-fest.
 _Full detail + acceptance:_ [#420](https://github.com/dudarenok-maker/Castwright/issues/420).
-
-#### `fs-61` — Per-language sample books in the demo pack (Spanish Coalfall + future languages) ([#1027](https://github.com/dudarenok-maker/Castwright/issues/1027))
-
-- _What:_ The fs-22 bundled demo pack ships **one** sample — the English _Coalfall Commission_ — with English-designed voices. A Qwen voice is calibrated in its design language (`clearMismatchedDesignedVoices` drops a designed voice whose manifest `language` ≠ the book's, to avoid cross-language garbage), so a non-English user can't get a runnable demo from the English sample. The pack should carry **a sample book per supported language**, each with its own language-matched designed voices.
-- _Benefit:_ A non-English user gets a runnable, language-matched demo experience out of the box instead of only the English sample — proving the multi-language pipeline end-to-end for every supported language, not just English.
-_Full detail + acceptance:_ [#1027](https://github.com/dudarenok-maker/Castwright/issues/1027).
 
 #### `fs-6` — Batch voice-replace across all books ([#417](https://github.com/dudarenok-maker/Castwright/issues/417))
 
@@ -342,10 +324,6 @@ _Full detail + acceptance:_ [#1333](https://github.com/dudarenok-maker/Castwrigh
 _Full detail + acceptance:_ [#1334](https://github.com/dudarenok-maker/Castwright/issues/1334).
 
 ## Won't (this round) — explicitly parked
-
-- `side-11` — Eliminate the variable-input-shape host-memory leak (so recycling isn't needed) ([#399](https://github.com/dudarenok-maker/Castwright/issues/399)).
-
-- `ops-5` — Trim `build` / `e2e` out of the per-PR `verify.yml` ([#437](https://github.com/dudarenok-maker/Castwright/issues/437)).
 
 - `side-4` — A/B Qwen `x_vector_only_mode=True` (speed vs. fidelity) ([#438](https://github.com/dudarenok-maker/Castwright/issues/438)).
 
