@@ -119,9 +119,9 @@ describe('transcribeSegment', () => {
   });
 
   it('sets X-Word-Timestamps and maps the words[] field when wordTimestamps is requested', async () => {
-    let captured: { init: { headers: Record<string, string> } } | null = null;
+    const captured: { value: { init: { headers: Record<string, string> } } | null } = { value: null };
     mockFetch.mockImplementation((async (_url: string, init: { headers: Record<string, string> }) => {
-      captured = { init };
+      captured.value = { init };
       return jsonResponse({
         text: 'Hello world.',
         language: 'en',
@@ -140,7 +140,7 @@ describe('transcribeSegment', () => {
       sidecarUrl: URL,
     });
 
-    expect(captured?.init.headers['x-word-timestamps']).toBe('1');
+    expect(captured.value?.init.headers['x-word-timestamps']).toBe('1');
     expect(result.words).toEqual([
       { word: 'Hello', start: 0, end: 0.4 },
       { word: 'world.', start: 0.4, end: 0.9 },
@@ -148,15 +148,15 @@ describe('transcribeSegment', () => {
   });
 
   it('omits X-Word-Timestamps and returns words: null when not requested', async () => {
-    let captured: { init: { headers: Record<string, string> } } | null = null;
+    const captured: { value: { init: { headers: Record<string, string> } } | null } = { value: null };
     mockFetch.mockImplementation((async (_url: string, init: { headers: Record<string, string> }) => {
-      captured = { init };
+      captured.value = { init };
       return jsonResponse({ text: 'Hi.', language: 'en' });
     }) as unknown as typeof undiciFetch);
 
     const result = await transcribeSegment(PCM, 16000, { sidecarUrl: URL });
 
-    expect(captured?.init.headers['x-word-timestamps']).toBeUndefined();
+    expect(captured.value?.init.headers['x-word-timestamps']).toBeUndefined();
     expect(result.words).toBeNull();
   });
 });
