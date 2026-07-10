@@ -51,10 +51,11 @@ right now. All new per-language `maxWer` knobs ship at the current global
 default (`0.4`) — unvalidated, same footing as the existing `.es`/`.ru`
 scaffold. Calibration is tracked as a follow-up, filed at PR time, with #1084
 left open (`Refs #1084`, not `Closes`) to represent that remainder. The
-follow-up also inherits two specific open questions this spec deliberately
+follow-up also inherits three specific open questions this spec deliberately
 defers rather than guesses at blind (see "Known residual risks" below):
-gendered-number mismatch rates, and whether Whisper actually emits German
-compound numbers as a single token.
+gendered-number mismatch rates, Russian oblique-case declension mismatch
+rates, and whether Whisper actually emits German compound numbers as a single
+token (partially bounded either way by existing `bridgeCompounds` machinery).
 
 Per explicit user direction: don't gate shipping on proving these tables
 correct against real audio first — ship best-effort per-language normalization
@@ -194,25 +195,45 @@ they modify; a bare manuscript digit carries no gender information, so
 `WER_INTEGERS` can only emit one canonical spelling. **Decision: emit the
 masculine/default form** (`uno`, `un`, `один`, `два`) — mirroring English's
 already-ungendered simplicity — and accept that a feminine-context reading
-will substitution-mismatch against it. Two things bound the practical impact
-rather than leaving it fully unmitigated: (a) `classifyTranscript`'s existing
-short-reference backstop (`minRefWords`) already routes a lone substitution on
-a short reference to `inconclusive` rather than `drift`, which is exactly the
-shape of this mismatch on a short sentence; (b) on a longer sentence, one
-token mismatch rarely moves WER past the 0.4 cap alone. The residual risk —
-how often this actually bites in practice — is explicitly added to the
-calibration follow-up's validation list, rather than solved here by a more
-invasive fix (e.g. an allow-set of gendered alternates at match time, which
-would need real audio evidence to justify the added complexity). Spanish
-apocope (*veintiún* before a masculine noun, vs. the emitted *veintiuno*) is
-the same family of gap and gets the same treatment.
+will substitution-mismatch against it. The practical impact is bounded mainly
+by (a) on a normal-length sentence, one token mismatch rarely moves WER past
+the 0.4 cap alone; secondarily, (b) `classifyTranscript`'s existing
+short-reference backstop (`minRefWords`, default 2) additionally covers the
+narrower case of a reference that normalizes to *exactly two tokens* with a
+single substitution — it does not cover a longer gendered-compound reference
+(e.g. Spanish 31 feminine, `treinta y una`, is a 4-token reference and falls
+outside the backstop's band). The residual risk — how often this actually
+bites in practice — is explicitly added to the calibration follow-up's
+validation list, rather than solved here by a more invasive fix (e.g. an
+allow-set of gendered alternates at match time, which would need real audio
+evidence to justify the added complexity). Spanish apocope (*veintiún* before
+a masculine noun, vs. the emitted *veintiuno*) is the same family of gap and
+gets the same treatment.
+
+**Russian numeral case declension** is the same family of gap and is at least
+as consequential as gender for Russian specifically: Russian cardinals decline
+heavily in oblique contexts (*в двадцати домах* — dative *двадцати*, not
+nominative *двадцать*), which are common in ordinary prose. `WER_INTEGERS.ru`
+only spells the nominative form, so any oblique-case reading mismatches.
+German cardinals are largely indeclinable, so this doesn't generalize to `de`.
+Same treatment as gender: accepted now, named explicitly, and added to the
+calibration follow-up's validation list rather than guessed at without real
+Russian audio to check declension frequency against.
 
 **German single-token assumption.** Representing German compound numbers as
 one fused `WER_INTEGERS` token (`einundzwanzig`) assumes Whisper's German
 output actually tokenizes compound numbers this way — plausible, since
-standard German orthography writes them as one word, but **unverified**
-(no real German audio exists yet to check against). Also added to the
-calibration follow-up's validation list.
+standard German orthography writes them as one word, but **unverified** (no
+real German audio exists yet to check against). This is less risky than it
+first appears, though: even if Whisper instead splits the number into
+whitespace-separated words (`ein und zwanzig`), `bridgeCompounds`'s existing
+run-rejoining (`segment-asr-qa.ts:335`, `maxBridgeRun: 3`) already reconciles
+an adjacent 3-token run whose concatenation matches an other-stream token —
+and `ein`+`und`+`zwanzig` concatenates to exactly `einundzwanzig`. The
+genuinely unverified case narrows to Whisper emitting bare digits instead of
+words at all, which costs no more than today's no-op. Still added to the
+calibration follow-up's validation list, but the spec should not treat this as
+the primary open risk it was previously framed as.
 
 ## Fixture-test plan
 
@@ -273,9 +294,10 @@ File a new issue at PR time: on-box calibration of `maxWer` (and the other
 languages closest to having real audio available (es/ru demo books once
 voice-designed and rendered), then fr/de. In addition to the general
 threshold-tuning acceptance criteria, this follow-up explicitly validates the
-two residual risks named above: the real-world mismatch rate from gendered
-number spellings, and whether Whisper's German output actually matches the
-single-fused-token assumption. Comment on #1084 clarifying what shipped in
+three residual risks named above: the real-world mismatch rate from gendered
+number spellings, Russian oblique-case declension mismatch rate, and whether
+Whisper's German output actually matches the single-fused-token assumption.
+Comment on #1084 clarifying what shipped in
 this round (normalization + fixtures) vs. what remains (the calibration
 pass), and link the new follow-up issue. The implementing PR uses
 `Refs #1084`, not `Closes #1084`.
