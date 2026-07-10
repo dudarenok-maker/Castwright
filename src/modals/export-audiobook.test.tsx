@@ -34,6 +34,12 @@ vi.mock('../lib/api', async () => {
          existing specs render without a probe banner; per-test override
          flips the resolved value when the failure branch needs covering. */
       testSyncFolderPath: vi.fn(async (_path: string) => ({ ok: true })),
+      /* fs-52 — hydrates whisperAvailable for the Captions granularity gate. */
+      getSidecarHealth: vi.fn(async () => ({
+        status: 'reachable',
+        url: '(mock)',
+        whisperPackageInstalled: true,
+      })),
     },
   };
 });
@@ -47,6 +53,7 @@ const mockedApi = api as unknown as {
   getExportLanUrls: ReturnType<typeof vi.fn>;
   putUserSettings: ReturnType<typeof vi.fn>;
   testSyncFolderPath: ReturnType<typeof vi.fn>;
+  getSidecarHealth: ReturnType<typeof vi.fn>;
 };
 
 function makeStore() {
@@ -605,6 +612,137 @@ describe('ExportAudiobookModal — AAC/Opus format picker (plan 72)', () => {
         expect.objectContaining({ format: 'opus-ogg-zip', destination: 'download' }),
       );
     });
+  });
+});
+
+/* fs-52 — Captions format: file-format (srt/vtt), granularity
+   (line/sentence/word), and scope (whole-book/per-chapter) toggles.
+   Word granularity is gated behind the sidecar's Whisper package via
+   `api.getSidecarHealth().whisperPackageInstalled`. */
+describe('ExportAudiobookModal — Captions (fs-52)', () => {
+  beforeEach(() => {
+    mockedApi.createBookExport.mockReset();
+  });
+
+  it('shows a Captions format option and its sub-controls when selected', async () => {
+    renderModal();
+    fireEvent.click(screen.getByTestId('export-format-captions'));
+    expect(screen.getByTestId('captions-file-format-srt')).toBeInTheDocument();
+    expect(screen.getByTestId('captions-granularity-sentence')).toBeInTheDocument();
+    expect(screen.getByTestId('captions-scope-whole-book')).toBeInTheDocument();
+  });
+
+  it('submits the selected caption sub-fields on the export request', async () => {
+    mockedApi.createBookExport.mockResolvedValue({
+      id: 'exp_1',
+      bookId: 'demo__sa__test',
+      format: 'captions',
+      captionFileFormat: 'vtt',
+      captionGranularity: 'word',
+      captionScope: 'per-chapter',
+      destination: 'download',
+      status: 'in_progress',
+      filename: 'book.word.vtt.zip',
+      sizeBytes: null,
+      progress: 0,
+      downloadUrl: null,
+      syncPath: null,
+      errorReason: null,
+      createdAt: new Date().toISOString(),
+      completedAt: null,
+    } as BookExportJob);
+
+    renderModal();
+    fireEvent.click(screen.getByTestId('export-format-captions'));
+    fireEvent.click(screen.getByTestId('captions-file-format-vtt'));
+    fireEvent.click(screen.getByTestId('captions-granularity-word'));
+    fireEvent.click(screen.getByTestId('captions-scope-per-chapter'));
+    /* Submit stays disabled until the LAN URL hydration effect resolves
+       (matches every other submit test in this file). */
+    const submit = await waitFor(() => {
+      const btn = screen.getByTestId('export-submit');
+      if ((btn as HTMLButtonElement).disabled) throw new Error('still disabled');
+      return btn;
+    });
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(mockedApi.createBookExport).toHaveBeenCalled());
+    expect(mockedApi.createBookExport).toHaveBeenCalledWith(
+      'demo__sa__test',
+      expect.objectContaining({
+        format: 'captions',
+        captionFileFormat: 'vtt',
+        captionGranularity: 'word',
+        captionScope: 'per-chapter',
+      }),
+    );
+  });
+
+  it('disables the Word granularity option when whisperPackageInstalled is false', async () => {
+    mockedApi.getSidecarHealth.mockResolvedValue({
+      status: 'reachable',
+      url: '(mock)',
+      whisperPackageInstalled: false,
+    });
+    renderModal();
+    fireEvent.click(screen.getByTestId('export-format-captions'));
+    await waitFor(() => expect(screen.getByTestId('captions-granularity-word')).toBeDisabled());
+  });
+
+  /* fs-52 final-review fix — stale-selection hardening. Word is selected
+     while Whisper is available; a later re-probe (on modal reopen) then
+     reports it's no longer available. The already-selected 'word' value
+     must not silently persist (it would let the user submit a
+     granularity the server 400s on) — it should reset to the 'sentence'
+     default the moment availability flips false. */
+  it('resets an already-selected Word granularity to Sentence when a re-probe reports Whisper unavailable', async () => {
+    /* Explicit starting state — `mockResolvedValue` (not `...Once`) on
+       getSidecarHealth is sticky across tests in this file (the outer
+       `beforeEach` only calls `vi.clearAllMocks()`, which clears call
+       history but not implementations), so a prior test in this describe
+       block leaving it resolved to `false` would otherwise leak in here. */
+    mockedApi.getSidecarHealth.mockResolvedValue({
+      status: 'reachable',
+      url: '(mock)',
+      whisperPackageInstalled: true,
+    });
+    const store = makeStore();
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <Provider store={store}>
+        <ExportAudiobookModal open bookId="demo__sa__test" onClose={onClose} />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('export-format-captions'));
+    await waitFor(() => expect(screen.getByTestId('captions-granularity-word')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('captions-granularity-word'));
+    await waitFor(() =>
+      expect(screen.getByTestId('captions-granularity-word').className).toContain('bg-white'),
+    );
+
+    /* Close, flip the probe result, reopen — the whisperAvailable effect
+       only re-fires on the open false→true transition. */
+    mockedApi.getSidecarHealth.mockResolvedValue({
+      status: 'reachable',
+      url: '(mock)',
+      whisperPackageInstalled: false,
+    });
+    rerender(
+      <Provider store={store}>
+        <ExportAudiobookModal open={false} bookId="demo__sa__test" onClose={onClose} />
+      </Provider>,
+    );
+    rerender(
+      <Provider store={store}>
+        <ExportAudiobookModal open bookId="demo__sa__test" onClose={onClose} />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('export-format-captions'));
+    await waitFor(() => expect(screen.getByTestId('captions-granularity-word')).toBeDisabled());
+    expect(screen.getByTestId('captions-granularity-sentence').className).toContain('bg-white');
+    expect(screen.getByTestId('captions-granularity-word').className).not.toContain('bg-white');
   });
 });
 

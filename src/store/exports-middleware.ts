@@ -1,10 +1,17 @@
 /* Plan 82 — Retry/Download thunks for the Export queue rail.
 
    `retryExport` re-fires a failed export with the same wire params the
-   adapter stamped onto the queue row (format + destination, the only
-   fields BookExportRequest carries). Dispatches `exportDismissed` first
-   so the failed row vanishes; the new job appears at the top via
-   `exportStarted` once the server accepts the POST.
+   adapter stamped onto the queue row (format + destination, plus the
+   three caption fields when format === 'captions' — fs-52 final-review
+   fix; the server 400s a captions POST missing them). Dispatches
+   `exportDismissed` first so the failed row vanishes; the new job
+   appears at the top via `exportStarted` once the server accepts the
+   POST. This dismiss-before-POST ordering (and the lack of a .catch on
+   the original POST) predates fs-52 — see git blame on this file
+   (plan 82, commits 00744332 / f7811e94) — so it's left as-is for the
+   general case; the try/catch added below is a minimal safety net so a
+   failed retry POST surfaces a toast instead of an unhandled rejection,
+   not a redesign of the retry-UX.
 
    The download path doesn't need a thunk — the row click handler in
    src/views/listen.tsx builds the /download URL or assigns item.url
@@ -14,6 +21,7 @@ import type { Dispatch, Middleware, AnyAction } from '@reduxjs/toolkit';
 import { api } from '../lib/api';
 import type { BookExportJob, BookExportRequest } from '../lib/types';
 import { exportsActions } from './exports-slice';
+import { notificationsActions } from './notifications-slice';
 
 export interface RetryExportArgs {
   bookId: string;
@@ -23,6 +31,13 @@ export interface RetryExportArgs {
   /* Informational — surfaced in the row, NOT part of the wire request.
      The server decides the actual sync folder from user settings. */
   syncPath?: string;
+  /* fs-52 final-review fix — required by the server whenever
+     format === 'captions'; omitted from the wire body otherwise
+     (mirrors the ExportPrefill submit-payload pattern in
+     export-audiobook.tsx's handleSubmit). */
+  captionFileFormat?: 'srt' | 'vtt';
+  captionGranularity?: 'line' | 'sentence' | 'word';
+  captionScope?: 'whole-book' | 'per-chapter';
 }
 
 export function retryExport(args: RetryExportArgs) {
@@ -30,12 +45,30 @@ export function retryExport(args: RetryExportArgs) {
     dispatch(
       exportsActions.exportDismissed({ bookId: args.bookId, exportId: args.exportId }),
     );
-    const job = await api.createBookExport(args.bookId, {
-      format: args.format,
-      destination: args.destination,
-    });
-    dispatch(exportsActions.exportStarted(job));
-    return job;
+    try {
+      const job = await api.createBookExport(args.bookId, {
+        format: args.format,
+        destination: args.destination,
+        ...(args.format === 'captions'
+          ? {
+              captionFileFormat: args.captionFileFormat,
+              captionGranularity: args.captionGranularity,
+              captionScope: args.captionScope,
+            }
+          : {}),
+      });
+      dispatch(exportsActions.exportStarted(job));
+      return job;
+    } catch (e) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: `Retry failed: ${e instanceof Error ? e.message : String(e)}`,
+          dedupeKey: 'export-retry-failed',
+        }),
+      );
+      return undefined;
+    }
   };
 }
 

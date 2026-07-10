@@ -226,7 +226,7 @@ function buildConcatList(paths: string[]): string {
 
 /* ---- ffprobe / ffmpeg child-process helpers ------------------------ */
 
-function probeDurationSec(mp3Path: string): Promise<number> {
+export function probeDurationSec(mp3Path: string): Promise<number> {
   return new Promise<number>((resolve, reject) => {
     const args = [
       '-v',

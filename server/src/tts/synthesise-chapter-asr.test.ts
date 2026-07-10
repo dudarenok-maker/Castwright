@@ -20,7 +20,7 @@ import type {
 import type { TranscribeResult } from './transcribe-client.js';
 
 const TEXT = 'The quick brown fox jumped over the lazy dog in the moonlit yard.';
-const CLEAN = { language: 'en', avgLogprob: -0.2, noSpeechProb: 0.02, compressionRatio: 1.3 };
+const CLEAN = { language: 'en', avgLogprob: -0.2, noSpeechProb: 0.02, compressionRatio: 1.3, words: null };
 
 function makeProvider(): TtsProvider & { calls: SynthesizeInput[] } {
   const calls: SynthesizeInput[] = [];
@@ -111,7 +111,7 @@ describe('synthesiseChapter ASR content-QA pass', () => {
     let calls = 0;
     const fn = async (): Promise<TranscribeResult> => {
       calls += 1;
-      return { text: 'mumble', language: 'en', avgLogprob: -2.0, noSpeechProb: 0.02, compressionRatio: 1.3 };
+      return { text: 'mumble', language: 'en', avgLogprob: -2.0, noSpeechProb: 0.02, compressionRatio: 1.3, words: null };
     };
     const res = await synthesiseChapter({
       sentences: [sentence(1)],

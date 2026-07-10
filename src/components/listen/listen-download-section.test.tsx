@@ -56,6 +56,24 @@ describe('ListenDownloadSection — Portable bundle tile (plan 75)', () => {
   });
 });
 
+describe('ListenDownloadSection — Captions tile (fs-52)', () => {
+  it('renders the Captions tile alongside the existing four download tiles', () => {
+    renderSection({ onOpenCaptionsExport: vi.fn() });
+    expect(screen.getByTestId('download-tile-captions')).toBeInTheDocument();
+    const tile = screen.getByTestId('download-tile-captions');
+    expect(tile.textContent).toMatch(/Captions/i);
+  });
+
+  it('fires onOpenCaptionsExport when the tile button is clicked', () => {
+    const onOpenCaptionsExport = vi.fn();
+    renderSection({ onOpenCaptionsExport });
+    const tile = screen.getByTestId('download-tile-captions');
+    const button = tile.querySelector('button');
+    fireEvent.click(button!);
+    expect(onOpenCaptionsExport).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('ListenDownloadSection — Apple Books tile (M4B)', () => {
   it('renders Apple Books as a live tile that opens the export modal', async () => {
     const onOpenAppleBooksExport = vi.fn();

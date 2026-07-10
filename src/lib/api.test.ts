@@ -16,6 +16,7 @@ import {
   mockResolveScriptReviewOps,
   mockPatchScriptReviewSelection,
   mockScriptReviewKey,
+  mockGetSidecarHealth,
   type LedgerEntryDTO,
   api,
 } from './api';
@@ -433,5 +434,12 @@ describe('mock-mode script-review resolve/selection persistence (fs-58 PR-review
     const state = await mockGetScriptReviewState(bookId);
     if (state.kind !== 'ledger') throw new Error('expected ledger');
     expect(state.entries['3'].selected).toEqual({ '3:1:strip_tag': true });
+  });
+});
+
+describe('mockGetSidecarHealth', () => {
+  it('reports whisperPackageInstalled: true', async () => {
+    const health = await mockGetSidecarHealth();
+    expect(health.whisperPackageInstalled).toBe(true);
   });
 });

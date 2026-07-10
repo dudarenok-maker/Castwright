@@ -5736,6 +5736,9 @@ export interface SidecarHealth {
   qwenPackageInstalled?: boolean;
   qwenWeightsPresent?: boolean;
   qwenInstallState?: 'not-installed' | 'weights-missing' | 'ready' | 'loaded';
+  /* fs-52 — pip-importability only (NOT weights-present); see the
+     caption-export modal's Word-mode gate. Absent on an older server. */
+  whisperPackageInstalled?: boolean;
   /* ASR (Whisper) model-watch state (srv-31). Display-only — Whisper loads
      lazily on /transcribe and idle-evicts, so there is no Load/Stop pill, just a
      resident indicator. `asrEnabled` is the server's SEG_ASR_ENABLED (gates
@@ -6491,9 +6494,15 @@ async function mockCreateBookExport(
     id,
     bookId,
     format: body.format,
+    captionFileFormat: body.captionFileFormat,
+    captionGranularity: body.captionGranularity,
+    captionScope: body.captionScope,
     destination: body.destination,
     status: 'in_progress',
-    filename: `Mock audiobook.${body.format === 'mp3-zip' ? 'zip' : 'm4b'}`,
+    filename:
+      body.format === 'captions'
+        ? `Mock audiobook.${body.captionGranularity}.${body.captionFileFormat}${body.captionScope === 'per-chapter' ? '.zip' : ''}`
+        : `Mock audiobook.${body.format === 'mp3-zip' ? 'zip' : 'm4b'}`,
     sizeBytes: null,
     progress: 0,
     downloadUrl: null,
@@ -6899,7 +6908,7 @@ export async function mockRunSmokeTest(): Promise<SmokeTestResult> {
   };
 }
 
-async function mockGetSidecarHealth(): Promise<SidecarHealth> {
+export async function mockGetSidecarHealth(): Promise<SidecarHealth> {
   /* Mocks pretend everything's healthy — generation is local and synchronous
      under VITE_USE_MOCKS=true, so there's no real sidecar to probe. */
   await wait(80);
@@ -6919,6 +6928,7 @@ async function mockGetSidecarHealth(): Promise<SidecarHealth> {
       MOCK_SIDECAR_QWEN_LOADED ||
       MOCK_SIDECAR_QWEN_INSTALL_STATE === 'ready' ||
       MOCK_SIDECAR_QWEN_INSTALL_STATE === 'loaded',
+    whisperPackageInstalled: true,
     device:
       MOCK_SIDECAR_MODEL_LOADED || MOCK_SIDECAR_KOKORO_LOADED || MOCK_SIDECAR_QWEN_LOADED
         ? 'cuda'
