@@ -1,13 +1,26 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { textHashForStale } from '../audio/segments-io.js';
 import {
   buildSentenceCues,
   buildLineCues,
+  buildWordCues,
   hasUnverifiableTextHash,
   LINE_MAX_DURATION_SEC,
   LINE_MAX_CHARS,
   type SegmentInput,
 } from './caption-cues.js';
+import { transcribeSegment } from '../tts/transcribe-client.js';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, readFile: vi.fn(async () => Buffer.from('fake-encoded-audio')) };
+});
+vi.mock('../tts/mp3.js', () => ({
+  decodeAudioToPcm: vi.fn(async () => Buffer.from([0, 0, 1, 0])),
+}));
+vi.mock('../tts/transcribe-client.js', () => ({
+  transcribeSegment: vi.fn(),
+}));
 
 const SPEAKERS = { narrator: 'Narrator', mira: 'Mira' };
 
@@ -158,5 +171,75 @@ describe('buildLineCues', () => {
     ];
     const cues = buildLineCues(segments, { 1: 'Hi.' }, SPEAKERS, 'Chapter One');
     expect(cues[0]).toEqual({ startSec: 0, endSec: 1.5, text: 'Chapter One' });
+  });
+});
+
+describe('buildWordCues', () => {
+  it('drops words before the first body segment and emits a fixed title cue', async () => {
+    vi.mocked(transcribeSegment).mockResolvedValue({
+      text: '',
+      language: 'en',
+      avgLogprob: -0.1,
+      noSpeechProb: 0.01,
+      compressionRatio: 1.0,
+      words: [
+        { word: 'Chapter', start: 0.1, end: 0.4 }, // inside the title beat — dropped
+        { word: 'One.', start: 0.4, end: 0.9 },     // inside the title beat — dropped
+        { word: 'It', start: 1.5, end: 1.7 },
+        { word: 'begins.', start: 1.7, end: 2.1 },
+      ],
+    });
+    const segments: SegmentInput[] = [
+      { characterId: 'narrator', sentenceIds: [], startSec: 0, endSec: 1.5, kind: 'title' },
+      { characterId: 'narrator', sentenceIds: [1], startSec: 1.5, endSec: 2.1 },
+    ];
+
+    const cues = await buildWordCues('/fake/01-chapter-one.mp3', segments, 'Chapter One');
+
+    expect(cues).toEqual([
+      { startSec: 0, endSec: 1.5, text: 'Chapter One' },
+      { startSec: 1.5, endSec: 1.7, text: 'It' },
+      { startSec: 1.7, endSec: 2.1, text: 'begins.' },
+    ]);
+  });
+
+  it('requests word timestamps and passes the language hint', async () => {
+    vi.mocked(transcribeSegment).mockResolvedValue({
+      text: '',
+      language: 'ru',
+      avgLogprob: -0.1,
+      noSpeechProb: 0.01,
+      compressionRatio: 1.0,
+      words: [{ word: 'Привет.', start: 0, end: 0.5 }],
+    });
+    const segments: SegmentInput[] = [
+      { characterId: 'narrator', sentenceIds: [1], startSec: 0, endSec: 0.5 },
+    ];
+
+    await buildWordCues('/fake/01.mp3', segments, 'Chapter One', { language: 'ru' });
+
+    expect(transcribeSegment).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      16000,
+      expect.objectContaining({ wordTimestamps: true, language: 'ru' }),
+    );
+  });
+
+  it('throws a clear error when the sidecar returns no words', async () => {
+    vi.mocked(transcribeSegment).mockResolvedValue({
+      text: '',
+      language: 'en',
+      avgLogprob: null,
+      noSpeechProb: null,
+      compressionRatio: null,
+      words: null,
+    });
+    const segments: SegmentInput[] = [
+      { characterId: 'narrator', sentenceIds: [1], startSec: 0, endSec: 1 },
+    ];
+
+    await expect(buildWordCues('/fake/01.mp3', segments, 'Chapter One')).rejects.toThrow(
+      /word-level timestamps/i,
+    );
   });
 });

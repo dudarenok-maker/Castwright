@@ -4,8 +4,11 @@
    schema change. See
    docs/superpowers/specs/2026-07-10-fs52-caption-srt-export-design.md §4. */
 
+import { readFile } from 'node:fs/promises';
 import type { CaptionCue } from './caption-format.js';
 import { textHashForStale } from '../audio/segments-io.js';
+import { decodeAudioToPcm } from '../tts/mp3.js';
+import { transcribeSegment } from '../tts/transcribe-client.js';
 
 export interface SegmentInput {
   characterId: string;
@@ -137,4 +140,53 @@ export function buildLineCues(
     not by age — checking them would always report "unverifiable"). */
 export function hasUnverifiableTextHash(segments: SegmentInput[]): boolean {
   return segments.some((s) => s.kind !== 'title' && !s.textHash);
+}
+
+const WORD_ASR_SAMPLE_RATE = 16000;
+
+export interface BuildWordCuesOptions {
+  language?: string | null;
+  sidecarUrl?: string;
+  signal?: AbortSignal;
+}
+
+/** fs-52 — one whole-chapter ASR pass (not per-sentence — see spec §2 for
+    why the per-sentence draft was rejected). Words before the first body
+    segment's startSec are dropped and replaced with a single fixed-timing
+    title cue, matching how sentence/line mode already treat the title
+    beat. */
+export async function buildWordCues(
+  chapterAudioPath: string,
+  segments: SegmentInput[],
+  chapterTitle: string,
+  opts: BuildWordCuesOptions = {},
+): Promise<CaptionCue[]> {
+  const encoded = await readFile(chapterAudioPath);
+  const pcm = await decodeAudioToPcm(encoded, WORD_ASR_SAMPLE_RATE);
+  const result = await transcribeSegment(pcm, WORD_ASR_SAMPLE_RATE, {
+    wordTimestamps: true,
+    language: opts.language,
+    sidecarUrl: opts.sidecarUrl,
+    signal: opts.signal,
+  });
+  if (!result.words) {
+    throw new Error(
+      'The sidecar did not return word-level timestamps for this chapter. ' +
+        'Confirm Whisper is installed and reachable, or export line/sentence captions instead.',
+    );
+  }
+
+  const titleSeg = segments.find((s) => s.kind === 'title');
+  const firstBodySeg = segments.find((s) => s.kind !== 'title');
+  const firstBodyStartSec = firstBodySeg?.startSec ?? 0;
+
+  const cues: CaptionCue[] = [];
+  if (titleSeg) cues.push({ startSec: titleSeg.startSec, endSec: titleSeg.endSec, text: chapterTitle });
+  for (const w of result.words) {
+    if (w.start < firstBodyStartSec) continue;
+    const word = w.word.trim();
+    if (!word) continue;
+    cues.push({ startSec: w.start, endSec: w.end, text: word });
+  }
+  return cues;
 }
