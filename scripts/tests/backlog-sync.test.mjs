@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseWhatBenefit, groupByMoscow, renderBacklogMd } from '../backlog-sync.mjs';
+import { parseWhatBenefit, groupByMoscow, renderBacklogMd, toBacklogIssues } from '../backlog-sync.mjs';
 
 test('parseWhatBenefit extracts the What and Benefit bullets', () => {
   const body = [
@@ -152,4 +152,32 @@ test('renderBacklogMd lists Won\'t issues as one-liners, sorted by number', () =
   const iOps5 = md.indexOf('ops-5');
   assert.ok(iOps1 > -1 && iOps5 > -1 && iOps1 < iOps5, 'wont issues sorted by issue number');
   assert.match(md, /- `ops-1` — An earlier wont item \(\[#100\]\(https:\/\/x\/100\)\)\./);
+});
+
+test('toBacklogIssues skips a project item whose content is a PullRequest or DraftIssue', () => {
+  // Regression: a Project item's content can be a PullRequest or DraftIssue,
+  // not just an Issue. The GraphQL query's `... on Issue { ... }` fragment
+  // then resolves `content` to an empty (non-null) object, so `content.labels`
+  // is undefined rather than `content` itself being falsy — crashed the sync
+  // the first time a non-Issue card landed on the board.
+  const nodes = [
+    { status: { name: 'Todo' }, priority: null, content: {} }, // PullRequest/DraftIssue shape
+    { status: { name: 'Todo' }, priority: { number: 1 }, content: null }, // no content at all
+    {
+      status: { name: 'Todo' },
+      priority: { number: 2 },
+      content: {
+        number: 42,
+        title: 'fs-9 — Real feature issue',
+        url: 'https://github.com/dudarenok-maker/Castwright/issues/42',
+        body: '- _What:_ x\n- _Benefit:_ y',
+        state: 'OPEN',
+        labels: { nodes: [{ name: 'type:feature' }, { name: 'moscow:must' }] },
+      },
+    },
+  ];
+  const { featureIssues, wontIssues } = toBacklogIssues(nodes);
+  assert.deepEqual(wontIssues, []);
+  assert.equal(featureIssues.length, 1);
+  assert.equal(featureIssues[0].id, 'fs-9');
 });
