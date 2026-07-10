@@ -1,3 +1,7 @@
+# Castwright 1.12.2
+
+- **A Pinokio install now starts up with its real settings.** The v1.12.1 fix got the Pinokio install running for the first time — which revealed that the server was starting from the wrong folder and couldn't find its own configuration, so it quietly ran on defaults. It now launches from the right place, so a fresh Pinokio Install → Start comes up fully configured from the very first run.
+
 # Castwright 1.12.1
 
 - **The one-click Pinokio install now actually finishes.** A patch on top of v1.12.0's Pinokio fix: the installer's own setup scripts were quietly working from the wrong folder, so the very first setup step failed before anything could be installed. That's fixed — click Install in Pinokio and it runs all the way through.
