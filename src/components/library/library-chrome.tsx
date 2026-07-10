@@ -97,7 +97,7 @@ export function LibraryChrome({
           </div>
           <p className="mt-3 text-ink/60 max-w-xl">
             Pick up where you left off, or start a new book. Voices stay consistent across a series
-            — characters who appear in book one carry through to book seven.
+            — characters who appear in book one carry through, book after book.
           </p>
           {workspace && <WorkspacePathRow info={workspace} />}
         </div>

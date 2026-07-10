@@ -106,6 +106,10 @@ Findings from a script review used to live only in the moment — reload the pag
   toolkit it skips cleanly instead of burning a doomed compile. The Windows
   pinned-wheel path (still cp311-only; the cp312/torch2.11/cu128 real-stack
   fix is tracked on side-22, #1001) is unchanged. (side-21, #1000)
+- **The library welcome subhead no longer hardcodes "book seven."** `LibraryChrome`
+  (`src/components/library/library-chrome.tsx`) claimed a character "carries through
+  to book seven" regardless of how many books are actually in the library — now
+  reads "book after book," which holds true at any count (#1493, Closes #1461).
 
 ---
 
