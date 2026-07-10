@@ -107,16 +107,16 @@ class _FakeSegment:
         self.words = words
 ```
 
-Also add a route-level test at the end of the file's HTTP-surface section (find `def test_transcribe_route` or similar existing route tests and add alongside them — if none exist yet, add this near the bottom, before the poison/recycle tests):
+Also add two route-level tests alongside the existing `asr_client`-fixture route tests (`test_transcribe_route_returns_text_and_signals` etc., currently lines 255–279) — reuse that exact fixture rather than a raw `TestClient(main.app)`, since it swaps in a fresh `main.ASR` per test (avoiding order-dependent state leaking across the pytest session):
 
 ```python
-def test_transcribe_route_forwards_word_timestamps_header(fake_whisper_module) -> None:
+def test_transcribe_route_forwards_word_timestamps_header(asr_client, fake_whisper_module) -> None:
     """The X-Word-Timestamps request header threads through to the engine
     call and the words[] field reaches the JSON response."""
+    client, _engine = asr_client
     fake_whisper_module.next_segments = [
         _FakeSegment(" Hi.", words=[_FakeWord("Hi.", 0.0, 0.3)]),
     ]
-    client = TestClient(main.app)
     resp = client.post(
         "/transcribe",
         content=_pcm(),
@@ -129,8 +129,8 @@ def test_transcribe_route_forwards_word_timestamps_header(fake_whisper_module) -
     assert call["word_timestamps"] is True
 
 
-def test_transcribe_route_omits_word_timestamps_by_default(fake_whisper_module) -> None:
-    client = TestClient(main.app)
+def test_transcribe_route_omits_word_timestamps_by_default(asr_client) -> None:
+    client, _engine = asr_client
     resp = client.post(
         "/transcribe",
         content=_pcm(),
@@ -653,8 +653,8 @@ git commit -m "feat(server): add pure SRT/VTT caption formatters"
 - Create: `server/src/export/caption-cues.test.ts`
 
 **Interfaces:**
-- Consumes: `CaptionCue` (Task 4, `./caption-format.js`).
-- Produces: `SegmentInput { characterId: string; sentenceIds: number[]; startSec: number; endSec: number; kind?: 'title' }`; `buildSentenceCues(segments, sentenceText, speakerNames, chapterTitle): CaptionCue[]`; `buildLineCues(segments, sentenceText, speakerNames, chapterTitle): CaptionCue[]`; constants `LINE_MAX_DURATION_SEC = 7`, `LINE_MAX_CHARS = 200` (exported for the test).
+- Consumes: `CaptionCue` (Task 4, `./caption-format.js`), `textHashForStale` (`server/src/audio/segments-io.ts`).
+- Produces: `SegmentInput { characterId: string; sentenceIds: number[]; startSec: number; endSec: number; kind?: 'title'; textHash?: string }`; `buildSentenceCues(segments, sentenceText, speakerNames, chapterTitle): CaptionCue[]`; `buildLineCues(segments, sentenceText, speakerNames, chapterTitle): CaptionCue[]`; constants `LINE_MAX_DURATION_SEC = 7`, `LINE_MAX_CHARS = 200` (exported for the test). Both cue builders throw when a segment's `textHash` no longer matches its current manuscript text (chapter edited since last render, not re-rendered) — a plan-review finding: joining current text onto stored render-time timing is silently wrong otherwise.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -662,6 +662,7 @@ Create `server/src/export/caption-cues.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
+import { textHashForStale } from '../audio/segments-io.js';
 import {
   buildSentenceCues,
   buildLineCues,
@@ -698,6 +699,39 @@ describe('buildSentenceCues', () => {
       { characterId: 'narrator', sentenceIds: [99], startSec: 0, endSec: 1 },
     ];
     expect(() => buildSentenceCues(segments, {}, SPEAKERS, 'Chapter One')).toThrow(/sentence 99/);
+  });
+
+  it('throws when a segment textHash no longer matches the current manuscript text (edited-since-render)', () => {
+    const segments: SegmentInput[] = [
+      {
+        characterId: 'narrator',
+        sentenceIds: [1],
+        startSec: 0,
+        endSec: 1,
+        textHash: textHashForStale('The original rendered sentence.'),
+      },
+    ];
+    // Text has since been edited in the manuscript but the chapter was
+    // never re-rendered — the stored textHash no longer matches.
+    const text = { 1: 'An edited sentence the audio never actually said.' };
+    expect(() => buildSentenceCues(segments, text, SPEAKERS, 'Chapter One')).toThrow(
+      /edited after it last rendered/,
+    );
+  });
+
+  it('does not throw when textHash matches the current text', () => {
+    const original = 'It was a dark night.';
+    const segments: SegmentInput[] = [
+      { characterId: 'narrator', sentenceIds: [1], startSec: 0, endSec: 1, textHash: textHashForStale(original) },
+    ];
+    expect(() => buildSentenceCues(segments, { 1: original }, SPEAKERS, 'Chapter One')).not.toThrow();
+  });
+
+  it('does not check staleness when textHash is absent (pre-#1105 renders)', () => {
+    const segments: SegmentInput[] = [
+      { characterId: 'narrator', sentenceIds: [1], startSec: 0, endSec: 1 },
+    ];
+    expect(() => buildSentenceCues(segments, { 1: 'Anything at all.' }, SPEAKERS, 'Chapter One')).not.toThrow();
   });
 });
 
@@ -782,6 +816,7 @@ Create `server/src/export/caption-cues.ts`:
 
 import type { CaptionCue } from './caption-format.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
+import { textHashForStale } from '../audio/segments-io.js';
 
 export interface SegmentInput {
   characterId: string;
@@ -789,12 +824,38 @@ export interface SegmentInput {
   startSec: number;
   endSec: number;
   kind?: 'title';
+  /** djb2-base36 hash of this segment's RAW rendered sentence text, stamped
+      at synthesis time (`ChapterSegment.textHash`, `synthesise-chapter.ts`).
+      Absent on the title beat and on pre-#1105 renders. Used here to
+      detect a chapter whose manuscript text was edited AFTER it rendered
+      but never re-rendered — the same staleness signal the frontend
+      already uses to flag a chapter needing regeneration. */
+  textHash?: string;
 }
 
 /** Line mode's bounded-fold ceilings (spec §4) — a cue closes once it hits
     either, in addition to always closing on a speaker change. */
 export const LINE_MAX_DURATION_SEC = 7;
 export const LINE_MAX_CHARS = 200;
+
+/** Round-2-of-plan-review fix: line/sentence captions join CURRENT
+    manuscript text onto STORED render-time timing — if the text was
+    edited (or the chapter restructured) after it last rendered without a
+    re-render, that join is silently wrong. Word mode is immune (it
+    transcribes the actual audio), so this check only runs where text is
+    actually joined onto stored timing. Absent `textHash` (pre-#1105
+    renders) skips the check — "can't tell" stays permissive, matching how
+    the frontend's own stale-chapter indicator treats the same absence. */
+function assertNotStale(id: number, currentText: string, segment: SegmentInput): void {
+  if (!segment.textHash) return;
+  if (textHashForStale(currentText) !== segment.textHash) {
+    throw new Error(
+      `Sentence ${id}'s manuscript text no longer matches what this chapter's audio was ` +
+        `rendered from — the chapter was edited after it last rendered. Regenerate this ` +
+        `chapter before exporting captions.`,
+    );
+  }
+}
 
 function sentenceText(
   segment: SegmentInput,
@@ -804,6 +865,7 @@ function sentenceText(
     .map((id) => {
       const t = text[id];
       if (t === undefined) throw new Error(`No manuscript text found for sentence ${id}.`);
+      assertNotStale(id, t, segment);
       return t;
     })
     .join(' ');
@@ -1305,6 +1367,7 @@ function toSegmentInputs(file: ChapterSegmentsFile): SegmentInput[] {
     startSec: s.startSec,
     endSec: s.endSec,
     kind: s.kind,
+    textHash: s.textHash,
   }));
 }
 
@@ -1381,7 +1444,13 @@ export async function buildCaptions(opts: BuildCaptionsOptions): Promise<BuildCa
       signal,
     );
     perChapterCues.push(cues);
-    perChapterDurations.push(await probeDurationSec(audioPath));
+    /* Plan-review fix: only probe duration for whole-book scope, which is
+       the only branch that consumes perChapterDurations (the cumulative
+       cross-chapter offset). Per-chapter scope never reads it — probing
+       every chapter's duration there was pure wasted ffprobe work. */
+    if (captionScope === 'whole-book') {
+      perChapterDurations.push(await probeDurationSec(audioPath));
+    }
     onProgress?.((i + 1) / resolved.length);
   }
 
