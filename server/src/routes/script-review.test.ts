@@ -986,6 +986,101 @@ describe('sticky job registry', () => {
   });
 });
 
+describe('cancellation (fs-58 follow-up #1481)', () => {
+  it('cancel aborts a running whole-book job, sends a cancelled terminal event, and skips the in-flight chapter\'s checkpoint', async () => {
+    const { readLedger } = await import('../workspace/script-review-ledger.js');
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
+    ]);
+    let releaseChapter1: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview.mockImplementationOnce(
+      () => new Promise<ScriptReviewOutput>((resolve) => { releaseChapter1 = resolve; }),
+    );
+    runReview.mockResolvedValue({ ops: [] });
+
+    const { done } = firePost(`/api/books/${bookId}/script-review`, {});
+    done.catch(() => {});
+    await new Promise((r) => setTimeout(r, 20)); // let chapter 1's job register and reach the gated analyzer call
+
+    const cancelRes = await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
+    expect(cancelRes.status).toBe(200);
+    expect(cancelRes.body).toEqual({ ok: true, cancelled: true });
+
+    releaseChapter1?.({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+    const res = await done;
+
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.kind === 'error' && e.code === 'cancelled')).toBe(true);
+    expect(events.some((e) => e.kind === 'result')).toBe(false);
+    expect(events.some((e) => e.kind === 'checkpoint')).toBe(false);
+
+    const ledger = await readLedger(bookDir(), manuscriptId);
+    expect(ledger.entries['1']).toBeUndefined();
+  });
+
+  it('cancel is idempotent — no job running for the book returns cancelled:false', async () => {
+    const res = await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, cancelled: false });
+  });
+
+  it('cancel aborts every running subset job for a book independently of a main job', async () => {
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Chapter one.' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'Chapter two.' },
+    ]);
+    let releaseCh1: ((v: ScriptReviewOutput) => void) | undefined;
+    let releaseCh2: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview.mockImplementation(async (_m, chapterId): Promise<ScriptReviewOutput> => {
+      if (chapterId === 1) return new Promise((resolve) => { releaseCh1 = resolve; });
+      return new Promise((resolve) => { releaseCh2 = resolve; });
+    });
+
+    const ch1 = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    ch1.done.catch(() => {});
+    const ch2 = firePost(`/api/books/${bookId}/script-review`, { chapterId: 2 });
+    ch2.done.catch(() => {});
+    await new Promise((r) => setTimeout(r, 20));
+
+    const cancelRes = await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
+    expect(cancelRes.body).toEqual({ ok: true, cancelled: true });
+
+    releaseCh1?.({ ops: [] });
+    releaseCh2?.({ ops: [] });
+    const [res1, res2] = await Promise.all([ch1.done, ch2.done]);
+
+    expect(parseSse(res1.text).some((e) => e.kind === 'error' && e.code === 'cancelled')).toBe(true);
+    expect(parseSse(res2.text).some((e) => e.kind === 'error' && e.code === 'cancelled')).toBe(true);
+  });
+
+  it('a chapter fully completed before the cancel is still checkpointed and kept', async () => {
+    const { readLedger } = await import('../workspace/script-review-ledger.js');
+    writeBook([
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Chapter one.' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'Chapter two.' },
+    ]);
+    let releaseChapter2: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview
+      .mockResolvedValueOnce({ ops: [{ id: 1, op: 'strip_tag', newText: 'Chapter one fixed', rationale: 'r' }] })
+      .mockImplementationOnce(
+        () => new Promise<ScriptReviewOutput>((resolve) => { releaseChapter2 = resolve; }),
+      );
+
+    const { done } = firePost(`/api/books/${bookId}/script-review`, {});
+    done.catch(() => {});
+    await new Promise((r) => setTimeout(r, 20)); // let chapter 1 finish and chapter 2's gated call start
+
+    await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
+    releaseChapter2?.({ ops: [] });
+    await done;
+
+    const ledger = await readLedger(bookDir(), manuscriptId);
+    expect(ledger.entries['1'].ops).toHaveLength(1); // chapter 1 (finished before cancel) survives
+    expect(ledger.entries['2']).toBeUndefined(); // chapter 2 (in flight at cancel) does not
+  });
+});
+
 describe('ledger checkpointing', () => {
   it('checkpoints a chapter to the ledger as soon as it completes, even with zero subscribers attached', async () => {
     const { readLedger } = await import('../workspace/script-review-ledger.js');

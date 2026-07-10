@@ -536,6 +536,29 @@ scriptReviewRouter.patch(
   },
 );
 
+scriptReviewRouter.post(
+  '/:bookId/script-review/cancel',
+  async (req: Request, res: Response): Promise<void> => {
+    const { bookId } = req.params;
+    // Book-level, not chapter-scoped (design spec §4.1): aborts whichever
+    // job(s) are running for this book — the whole-book job if present,
+    // plus every single-chapter subset job. Deliberately skips
+    // findBookByBookId (unlike every other route in this file) — this
+    // only touches in-memory job maps, so an unknown bookId is
+    // indistinguishable from "nothing running for this book" and both
+    // correctly no-op.
+    const main = mainScriptReviewJobByBook.get(bookId);
+    const subsets = [...subsetScriptReviewJobByChapter.values()].filter((j) => j.bookId === bookId);
+    let cancelled = false;
+    for (const job of [main, ...subsets]) {
+      if (!job || job.controller.signal.aborted) continue;
+      job.controller.abort();
+      cancelled = true;
+    }
+    res.status(200).json({ ok: true, cancelled });
+  },
+);
+
 function setUpSse(res: Response): void {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -672,6 +695,16 @@ async function runScriptReviewJob(
           send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
         }
       }
+      if (job.controller.signal.aborted) {
+        // Cancelled mid-chapter: skip the checkpoint for this one chapter
+        // entirely rather than persisting a partial result under a
+        // "reviewed" chapter id. Mirrors the existing crash-recovery
+        // invariant (a chapter only checkpoints once every one of its
+        // chunks has been reviewed) — a cancel and a crash now leave the
+        // ledger in the same shape for whichever chapter was in flight
+        // (design spec §4.1).
+        break;
+      }
       ({ actualMsTotal, actualCharsTotal } = accumulateChapterPacing({ actualMsTotal, actualCharsTotal }, chapterStartedAt, charsByChapter.get(chapterId) ?? 0));
       reviewedChapters += 1;
 
@@ -703,7 +736,9 @@ async function runScriptReviewJob(
   } finally {
     for (const sub of job.subscribers) clearInterval(sub.keepAlive);
   }
-  if (!job.controller.signal.aborted) {
+  if (job.controller.signal.aborted) {
+    send({ kind: 'error', code: 'cancelled', message: 'Review cancelled.' });
+  } else {
     send({ kind: 'phase', phaseId: 0, progress: 1, label: 'Done' });
     send({ kind: 'result', done: true, reviewedChapters, totalOps });
   }
