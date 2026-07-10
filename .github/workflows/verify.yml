@@ -337,14 +337,14 @@ jobs:
     if: always()
     steps:
       - name: Check leg results
+        # Fails on 'failure' OR 'cancelled' OR 'skipped' — not just the first
+        # two — so an upstream `detect` failure (which SKIPS every leg job
+        # rather than failing it, since they `needs: detect`) still fails
+        # this aggregator instead of silently reporting green.
         run: |
-          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
-            echo "One or more verify legs failed:"
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" == "true" ]]; then
+            echo "One or more verify legs did not succeed:"
             echo '${{ toJSON(needs) }}'
-            exit 1
-          fi
-          if [[ "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
-            echo "One or more verify legs were cancelled."
             exit 1
           fi
           echo "All verify legs passed."
