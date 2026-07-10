@@ -1081,6 +1081,61 @@ describe('cancellation (fs-58 follow-up #1481)', () => {
   });
 });
 
+describe('reattach-only endpoint (fs-58 follow-up #1481)', () => {
+  it('attach joins a live job and replays its buffered events, without starting a second analyzer call', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let release: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview.mockImplementation(async () => new Promise<ScriptReviewOutput>((resolve) => { release = resolve; }));
+
+    const first = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const attach = firePost(`/api/books/${bookId}/script-review/attach`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    release?.({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+    const [, attachRes] = await Promise.all([first.done, attach.done]);
+
+    expect(runReview).toHaveBeenCalledTimes(1); // attach joined, did not start a second analyzer call
+    expect(attachRes.text).toContain('"kind":"ops"');
+    expect(attachRes.text).toContain('strip_tag');
+  });
+
+  it('attach 404s when no job matches the requested chapter, and leaves the actually-running chapter untouched', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    runReview.mockResolvedValue({ ops: [] });
+    const running = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const res = await request(app).post(`/api/books/${bookId}/script-review/attach`).send({ chapterId: 2 });
+    expect(res.status).toBe(404);
+
+    await running.done;
+  });
+
+  it('attach 404s when no job is running at all for the book', async () => {
+    const res = await request(app).post(`/api/books/${bookId}/script-review/attach`).send({});
+    expect(res.status).toBe(404);
+  });
+
+  it('attach to a whole-book job (no chapterId) joins it and replays events', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let release: ((v: ScriptReviewOutput) => void) | undefined;
+    runReview.mockImplementation(async () => new Promise<ScriptReviewOutput>((resolve) => { release = resolve; }));
+
+    const first = firePost(`/api/books/${bookId}/script-review`, {});
+    await new Promise((r) => setTimeout(r, 20));
+
+    const attach = firePost(`/api/books/${bookId}/script-review/attach`, {});
+    await new Promise((r) => setTimeout(r, 20));
+
+    release?.({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+    const [, attachRes] = await Promise.all([first.done, attach.done]);
+
+    expect(attachRes.text).toContain('"kind":"ops"');
+  });
+});
+
 describe('ledger checkpointing', () => {
   it('checkpoints a chapter to the ledger as soon as it completes, even with zero subscribers attached', async () => {
     const { readLedger } = await import('../workspace/script-review-ledger.js');

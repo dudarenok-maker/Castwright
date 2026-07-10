@@ -559,6 +559,37 @@ scriptReviewRouter.post(
   },
 );
 
+scriptReviewRouter.post(
+  '/:bookId/script-review/attach',
+  async (req: Request, res: Response): Promise<void> => {
+    const { bookId } = req.params;
+    const requestedChapterId: number | undefined =
+      typeof req.body?.chapterId === 'number' ? req.body.chapterId : undefined;
+
+    // Join-only — the create route's join branch, minus the create half.
+    // No new job is ever registered here (design spec §4.2): a scope with
+    // no matching entry in either map 404s instead of falling through to
+    // create, which is what closes the reattach TOCTOU race.
+    const job =
+      requestedChapterId !== undefined
+        ? subsetScriptReviewJobByChapter.get(subsetKey(bookId, requestedChapterId))
+        : mainScriptReviewJobByBook.get(bookId);
+
+    if (!job) {
+      res.status(404).json({ error: 'No running review to attach to.' });
+      return;
+    }
+
+    setUpSse(res);
+    const sub = makeSubscriber(res);
+    attachSubscriber(job, sub);
+    res.on('close', () => {
+      job.subscribers.delete(sub);
+      clearInterval(sub.keepAlive);
+    });
+  },
+);
+
 function setUpSse(res: Response): void {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
