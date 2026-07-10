@@ -208,14 +208,26 @@ export function ExportAudiobookModal({
   /* fs-52 — hydrate whether the sidecar's Whisper package is installed so
      the Captions "Word" granularity option can be disabled when it isn't.
      Re-probed each time the modal opens (cheap health check, no caching
-     needed like the LAN URLs above). */
+     needed like the LAN URLs above). If Word was already selected and the
+     probe resolves unavailable, reset the selection in the SAME state
+     update (not a second effect keyed off whisperAvailable) — two effects
+     would commit in separate renders, leaving a real intermediate frame
+     where the Word pill is already disabled but captionGranularity is
+     still 'word', which handleSubmit reads with no re-validation. Setting
+     both together lets React batch them into one commit, so no such frame
+     ever exists. */
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     api
       .getSidecarHealth()
       .then((h) => {
-        if (!cancelled) setWhisperAvailable(h.whisperPackageInstalled !== false);
+        if (cancelled) return;
+        const available = h.whisperPackageInstalled !== false;
+        setWhisperAvailable(available);
+        if (!available) {
+          setCaptionGranularity((g) => (g === 'word' ? 'sentence' : g));
+        }
       })
       .catch(() => {
         /* swallow — Word stays enabled optimistically if the probe fails */
@@ -224,18 +236,6 @@ export function ExportAudiobookModal({
       cancelled = true;
     };
   }, [open]);
-
-  /* fs-52 final-review fix — stale-selection hardening. If Word was
-     already selected and a re-probe (the effect above, e.g. on reopen)
-     resolves `whisperAvailable` to false, the Word pill goes disabled but
-     the already-selected value would otherwise persist, letting the user
-     submit a granularity the server will 400 on. Reset to the default
-     the moment availability flips false while 'word' is selected. */
-  useEffect(() => {
-    if (!whisperAvailable && captionGranularity === 'word') {
-      setCaptionGranularity('sentence');
-    }
-  }, [whisperAvailable, captionGranularity]);
 
   /* Reset transient UI state on close so the next open is a clean slate.
      Prefill (when set) overrides the per-open defaults — so the Voice tile
