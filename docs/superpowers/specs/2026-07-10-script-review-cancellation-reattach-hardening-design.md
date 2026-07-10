@@ -29,8 +29,11 @@ of falling through to create).
 ## 2. Goals
 
 - A user can cancel an in-flight script review from the UI, freeing analyzer compute and clearing the
-  409 conflict-lock for that book immediately.
-- Cancelling never discards already-checkpointed findings — only chapters not yet reviewed are affected.
+  409 conflict-lock for that book promptly — bounded by the current in-flight analyzer call, the same
+  signal-checked-between-tokens plumbing `/analysis/pause` already relies on, not literally instant.
+- Cancelling never discards a chapter that finished checkpointing before the cancel. A chapter that was
+  still being reviewed at the moment of cancellation is **not** checkpointed at all — see §4.1 — so the
+  ledger never ends up with a partial chapter silently marked as fully reviewed.
 - The reattach path can no longer silently start a duplicate full re-review when the TOCTOU race is hit;
   it falls back to a plain ledger re-read instead.
 - Both fixes reuse existing plumbing (`AbortController`, the SSE replay/broadcast mechanism, the ledger
@@ -83,11 +86,46 @@ considered and rejected: `res.on('close')` deliberately never aborts the server 
 point of "sticky" from the persistence design. A client-only abort would stop *displaying* progress
 without stopping the job or releasing the 409 lock, which is the actual complaint in #1481.
 
-**Already-checkpointed chapters are kept.** This requires no explicit code: cancelling only stops the
-per-chapter loop early (via the existing `if (job.controller.signal.aborted) break;` checks already
-present at both the chapter-loop and chunk-loop level in `runScriptReviewJob`), and nothing calls
-`discardChapters`. Chapters already `upsertChapterEntry`'d into the ledger before the abort simply stay
-there as ordinary unresolved findings.
+**Chapters that finished checkpointing before the cancel are kept; the chapter that was still in flight
+is not.** This distinction matters and is not free — it needs one new check, not zero. Reading
+`runScriptReviewJob` (script-review.ts:611–701) shows the existing `if (job.controller.signal.aborted)
+break;` at the top of the chunk loop only breaks that inner loop; control then falls through to
+`accumulateChapterPacing`, `reviewedChapters += 1`, and — if any earlier chunk of *this same chapter*
+already produced ops — `upsertChapterEntry` + a `checkpoint` broadcast. Left as-is, a cancel mid-chapter
+on the default local-analyzer path (chapters are routinely split into multiple chunks via
+`chunkSentencesByBudget`) would checkpoint that chapter with only its completed chunks' ops, indistinguishable
+in the ledger from a fully-reviewed chapter. This spec adds an explicit check right after the chunk loop
+so a mid-flight cancel skips the checkpoint for that one chapter entirely, instead of persisting a
+partial result:
+
+```ts
+for (let index = 0; index < chunks.length; index += 1) {
+  /* ...unchanged chunk loop... */
+}
+if (job.controller.signal.aborted) {
+  // Cancelled mid-chapter: skip the checkpoint for this one chapter
+  // entirely rather than persisting a partial result under a
+  // "reviewed" chapter id. Mirrors the existing crash-recovery
+  // invariant (a chapter only checkpoints once every one of its
+  // chunks has been reviewed) — a cancel and a crash now leave the
+  // ledger in the same shape for whichever chapter was in flight.
+  break;
+}
+({ actualMsTotal, actualCharsTotal } = accumulateChapterPacing(/* unchanged */));
+reviewedChapters += 1;
+/* ...unchanged checkpoint block... */
+```
+
+This also keeps the client consistent for free, with no client-side change needed: any `ops` events
+already broadcast live for that in-flight chapter's completed chunks are accumulated locally into
+`allOps` by `runReviewScript`/`attachToRunningReview`, but `setReview`/`hydrateBucket` is only dispatched
+*after* `api.reviewScript`/`attachScriptReview` resolves successfully — a thrown `cancelled` error skips
+straight to the catch block, so those partial ops are simply never dispatched to Redux either. Server and
+client agree: nothing about the in-flight chapter survives a cancel.
+
+**Chapters that fully completed before the cancel are kept.** This part requires no new code: they were
+already `upsertChapterEntry`'d into the ledger by an earlier, un-aborted iteration of the outer loop, and
+nothing calls `discardChapters` on cancel.
 
 **Terminal event on abort.** Today, `runScriptReviewJob`'s tail only sends a `result` event when the run
 completes un-aborted; an aborted run currently ends the stream with no terminal event at all (a latent
@@ -119,12 +157,22 @@ review to attach to.' }` instead of creating a new job.
 switches from POSTing the create route to POSTing this new one. The create route itself is untouched and
 keeps serving the "click Review Script" flow.
 
-On a 404, the client does not error out. It re-fetches `GET .../script-review/state` once and dispatches
-`hydrateBucket` again with whatever is now in the ledger — the same call `hydrateScriptReview` already
-makes at the top of the function. Calling it a second time is safe: `hydrateBucket` merges per-chapter,
-so this simply picks up whichever chapter(s) finished checkpointing in the TOCTOU gap. No new client
-state, no toast — the user sees the now-complete results appear, the same as if they had reloaded a
-second later.
+**404 vs. book-not-found are conflated on purpose.** The attach route reaches the same `findBookByBookId`
+404 as the create route if the book itself vanished, as well as the new "no job matches this scope" 404.
+The client treats any 404 from this endpoint identically (re-fetch the ledger — see below); this is safe
+because attach is only ever called moments after a `GET /state` call that already proved the book exists,
+so in practice the only 404 that can actually fire here is "no job."
+
+On a 404, the client does not error out — it falls back to a plain ledger re-read. This is **not** a call
+to an existing reusable function: the ledger-hydration logic at the top of `hydrateScriptReview`
+(`src/store/script-review-thunk.ts:295–324`, roughly 30 lines — iterate ledger entries, run `planApply`,
+compute `selected` via `DEFAULT_OFF`, dispatch `hydrateBucket`) is inline in that function today, not a
+standalone helper. This spec extracts it into a small shared function, e.g. `hydrateLedgerIntoBucket(bookId,
+opts)`, called both from the top of `hydrateScriptReview` (unchanged behavior) and from
+`attachToRunningReview`'s 404 branch (new). Calling it twice in one hydration pass is safe:
+`hydrateBucket` merges per-chapter, so a second call simply picks up whichever chapter(s) finished
+checkpointing in the TOCTOU gap. No new client state, no toast — the user sees the now-complete results
+appear, the same as if they had reloaded a second later.
 
 Two alternatives were considered and rejected:
 
@@ -153,19 +201,40 @@ routes. `openapi.yaml` gains both operations; `npm run openapi:types` regenerate
 - **`src/lib/api.ts`**
   - `api.cancelScriptReview(bookId): Promise<{ ok: boolean; cancelled: boolean }>` — plain POST, no
     streaming.
-  - `api.attachScriptReview(bookId, { chapterId? })` — shares `realReviewScript`'s existing SSE-parsing
-    loop against the new URL. A `404` resolves to `null` (a distinguishable, handled outcome) rather than
-    throwing.
+  - `api.attachScriptReview(bookId, { chapterId? }): Promise<ReviewScriptResult | null>` — a **separate**
+    function from `realReviewScript`, reusing the same SSE-parsing *approach* (the `fetch` + reader +
+    `data:` line-splitting loop) against the new URL, but with its own response handling: `realReviewScript`
+    hardcodes `if (res.status === 404) throw new ReviewScriptError('Book not found.', 'not_found')`
+    (`api.ts:3147`), which is the wrong behavior here — `attachScriptReview` instead treats a `404` as an
+    expected outcome and resolves to `null` rather than throwing.
+  - **Mock mode**, since `e2e` always runs against `api.mock`, never the real server
+    (`playwright.config.ts`): `mockCancelScriptReview` clears the sessionStorage-backed
+    `MockScriptReviewState`'s `running` field (`api.ts:3224–3260`), simulating a stopped job so a
+    subsequent mock `GET /state` reports no job running. `mockAttachScriptReview` mirrors the real
+    endpoint's shape against that same shim — returns buffered mock ops when `running` is set, `null`
+    when it isn't — so both the Cancel e2e spec and the reattach-race unit coverage below have something
+    to actually call.
 - **`src/store/script-review-thunk.ts`**
+  - New shared helper `hydrateLedgerIntoBucket` (see §4.2), extracted from the inline logic at the top of
+    `hydrateScriptReview`, called from both that original call site (unchanged behavior) and from
+    `attachToRunningReview`'s new 404 branch.
   - `attachToRunningReview` calls `api.attachScriptReview` instead of `api.reviewScript`. On a `null`
-    result, it calls `api.getScriptReviewState(bookId)` once more and dispatches `hydrateBucket` with the
-    fresh entries, then returns — no toast.
+    result, it calls `hydrateLedgerIntoBucket` and returns — no toast, no `setReview` dispatch (the helper
+    already dispatches `hydrateBucket` itself).
+  - `runReviewScript`'s existing `finally` keeps dispatching `clear({ bookId })` exactly as today — this
+    spec does not touch that. `attachToRunningReview` gains **no** `finally` and no `clear` call of its
+    own: `clear` deliberately stays hoisted into `hydrateScriptReview`'s `Promise.all(...)`-wrapping
+    `finally` (`script-review-thunk.ts:371–379`), which the round-5 PR review fix put there specifically
+    so the *last* of several concurrently-reattaching jobs — not the fastest — clears the shared
+    `activeStreams[bookId]` flag. Adding a `finally`/`clear` to `attachToRunningReview` itself would
+    reopen that exact bug; this spec must not do it.
   - Both `runReviewScript` and `attachToRunningReview`'s catch blocks special-case
     `err instanceof ReviewScriptError && err.code === 'cancelled'` to skip the error toast entirely —
     mirrors `analysis-stream-middleware.ts`'s `code === 'aborted'` handling and
-    `detect-emotions-button.tsx`'s silent `AbortError` handling. `finally` still dispatches
-    `clear({ bookId })` as today, so the pill disappears and the button re-enables identically to any
-    other terminal outcome.
+    `detect-emotions-button.tsx`'s silent `AbortError` handling. Each function's existing cleanup
+    (`runReviewScript`'s `finally`; `hydrateScriptReview`'s wrapping `finally` for the attach path) still
+    runs unchanged, so the pill disappears and the button re-enables identically to any other terminal
+    outcome.
 - **`src/views/manuscript.tsx`**
   - New `handleCancelReview`, wired to the existing `onCancel` prop on `SubstageProgressPill`
     (`substage-progress-pill.tsx` already supports it — script-review is the one call site documented as
@@ -188,6 +257,15 @@ routes. `openapi.yaml` gains both operations; `npm run openapi:types` regenerate
   both pills clear identically.
 - **Attach's post-404 re-fetch itself finds nothing new** (e.g. the job produced zero ops for its
   remaining chapters): `hydrateBucket` with an unchanged entry set is a safe no-op.
+- **Cancel lands mid-chapter, on the chapter's later chunks:** per §4.1, that one chapter is not
+  checkpointed at all, on either the server (no `upsertChapterEntry`) or the client (no `setReview`/
+  `hydrateBucket` dispatch, since the stream throws before either function reaches that call). The
+  analyzer time already spent on that chapter's completed chunks is lost — an accepted cost of the
+  simpler "cancel = crash-shaped" semantics over persisting a result a user could mistake for complete.
+- **Attach 404 for "book not found" vs. "no job for this scope":** both cases return the same 404 shape
+  and the client handles them identically (re-fetch ledger state). This is safe in practice — see §4.2 —
+  but is a deliberate simplification, not an oversight: a genuinely-vanished book would then fail loudly
+  on the client's own `GET /state` re-fetch instead of at the attach call itself.
 
 ## 8. Testing plan
 
@@ -197,17 +275,25 @@ routes. `openapi.yaml` gains both operations; `npm run openapi:types` regenerate
   - Cancel aborts all running subset jobs for a book independently of the main job.
   - Cancel is idempotent: no job running → `{ cancelled: false }`, `200`.
   - A cancelled job's subscribers receive `{ kind: 'error', code: 'cancelled' }` before the stream ends.
+  - A cancel mid-chapter does **not** checkpoint that chapter: no `upsertChapterEntry` call, no
+    `checkpoint` event, and the chapter is absent from a subsequent `GET /state`'s `entries` — this is
+    the regression test that pins §4.1's fix and would have failed against the pre-fix code.
   - Attach joins a live job and replays its buffered events.
   - Attach 404s when no job matches the requested scope (both wrong-`chapterId` and no-job-at-all cases).
 - **Client (`script-review-thunk.test.ts`):**
-  - `attachToRunningReview` on a `null`/404 result re-fetches state and dispatches `hydrateBucket`
-    instead of throwing.
+  - `attachToRunningReview` on a `null`/404 result calls `hydrateLedgerIntoBucket` instead of throwing,
+    and dispatches no `setReview` of its own.
   - A `cancelled`-coded `ReviewScriptError` suppresses the toast in both `runReviewScript` and
-    `attachToRunningReview`, and still dispatches `clear`.
-- **E2E:** one spec driving the real Cancel button mid-review — assert the pill disappears, the button
-  re-enables, and a fresh review can start immediately after. This is the one part of the fix that's
-  meaningfully hard to fake in Vitest+jsdom, since it exercises real button → SSE → store wiring
-  end-to-end.
+    `attachToRunningReview`.
+  - `attachToRunningReview` itself never dispatches `clear` — a regression test asserting this pins the
+    round-5 fix this spec must not reopen (see §6).
+  - Two concurrently-reattaching subset jobs for the same book: the faster one finishing does not clear
+    `activeStreams[bookId]` while the slower one is still running (existing round-5 coverage — re-run
+    unchanged to confirm this spec doesn't regress it).
+- **E2E:** one spec driving the real Cancel button mid-review against the new mock implementations (§6)
+  — assert the pill disappears, the button re-enables, and a fresh review can start immediately after.
+  This is the one part of the fix that's meaningfully hard to fake in Vitest+jsdom, since it exercises
+  real button → SSE → store wiring end-to-end.
 - The reattach-race window itself is unit-testable (mock the 404) but not meaningfully e2e-testable — it
   is a network-timing race that cannot be reliably reproduced against a real server in Playwright. The
   unit test on the 404-handling path is the coverage for this fix.
