@@ -152,7 +152,7 @@ server/src/parsers/__fixtures__/sample.azw3
 
 # Ad-hoc local repro / bisect scripts (and their scratch output) for one-off
 # debugging — e.g. the Russian stage-2 under-production probes. Local only,
-# never committed; also excluded from lint (see eslint.config.js).
+# never committed; also excluded from lint (see eslint.config.mjs).
 server/repro-*.mts
 server/repro-*.txt
 server/roster.json

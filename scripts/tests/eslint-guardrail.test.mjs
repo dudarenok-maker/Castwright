@@ -1,7 +1,7 @@
 // scripts/tests/eslint-guardrail.test.mjs — run via node:test (test:hooks tier)
 //
 // Planted-violation test for the W5 ESLint guardrail (plan flaky-release-hardening).
-// Proves that eslint.config.js's no-restricted-syntax rule REJECTS a file containing
+// Proves that eslint.config.mjs's no-restricted-syntax rule REJECTS a file containing
 // `it.skipIf(process.env.CI)(...)` — the canonical flake anti-pattern.
 //
 // CRITICAL: the planted file is written INSIDE the repo tree (guardrail-tmp-* dir
