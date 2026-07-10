@@ -16,11 +16,15 @@
 //      the VoiceDesign model via Qwen3TTSModel.from_pretrained, with the HF
 //      cache pointed at server/tts-sidecar/voices/qwen/hf so the weights live
 //      with the sidecar (and stay out of the release zip per its exclude list).
-//   4. With --flash-attn (opt-in): pip-install the pinned FlashAttention-2
-//      prebuilt wheel. Win_amd64 + cp311 + torch 2.6/cu124 only; any other
-//      platform/Python skips. Non-fatal — SDPA stays the default attention
-//      impl (see main.py QWEN_ATTN_IMPL); activate FA2 with
-//      QWEN_ATTN_IMPL=flash_attention_2 once installed.
+//   4. With --flash-attn (opt-in): if flash_attn is already importable in the
+//      venv (any platform/profile), reports it and stops — no reinstall. On
+//      Windows, pip-installs the pinned FlashAttention-2 prebuilt wheel
+//      (cp311 + torch 2.6/cu124 only). On Linux, if the standalone CUDA
+//      Toolkit (nvcc) is present, attempts an unpinned `pip install
+//      flash-attn --no-build-isolation` (can be a long compile). AMD and any
+//      other platform/Python combo skips. Always non-fatal — SDPA stays the
+//      default attention impl (see main.py QWEN_ATTN_IMPL); activate FA2
+//      with QWEN_ATTN_IMPL=flash_attention_2 once installed, on any path.
 //
 // Usage:
 //   node server/tts-sidecar/scripts/install-qwen3.mjs [--skip-design] [--cpu] [--flash-attn]
@@ -78,11 +82,13 @@ export function qwenPrefetchModels({ skipDesign }) {
   return ids;
 }
 
-// Pinned FlashAttention-2 prebuilt wheel. Published only for the exact stack the
-// sidecar runs (Windows AMD64 + CPython 3.11 + torch 2.6.0/cu124), so the gate
-// below refuses any other platform/Python rather than install a wheel that can't
-// load. lldacing/flash-attention-windows-wheel is the community source for
-// Windows FA2 builds (upstream flash-attn ships no Windows wheel on PyPI).
+// Pinned FlashAttention-2 prebuilt wheel for Windows. Published only for the
+// exact stack the sidecar runs (Windows AMD64 + CPython 3.11 + torch
+// 2.6.0/cu124), so the gate below refuses any other Python minor rather than
+// install a wheel that can't load. lldacing/flash-attention-windows-wheel is
+// the community source for Windows FA2 builds (upstream flash-attn ships no
+// Windows wheel on PyPI). Linux has no pinned-wheel equivalent — see
+// resolveFlashAttnInstall()'s `install-pip` branch instead.
 export const FLASH_ATTN_WHEEL_URL =
   'https://huggingface.co/lldacing/flash-attention-windows-wheel/resolve/main/' +
   'flash_attn-2.7.4+cu124torch2.6.0cxx11abiFALSE-cp311-cp311-win_amd64.whl';
@@ -190,31 +196,113 @@ function venvPyTag(python) {
   return res.stdout.toString().trim();
 }
 
+// Ask the venv python whether flash_attn is already importable — if so, FA2 is
+// already usable and no install should be attempted, on any platform/profile.
+function flashAttnImportable(python) {
+  const res = spawnSync(python, ['-c', 'import flash_attn'], {
+    cwd: SIDECAR_DIR,
+    windowsHide: true,
+  });
+  return res.status === 0;
+}
+
+// Preflight for the Linux pip-install path: flash-attn's source build needs the
+// standalone NVIDIA CUDA Toolkit (nvcc), not just the CUDA runtime bundled in
+// the PyTorch wheel — see the DeepSpeed note in requirements/nvidia-cuda.txt
+// for the identical requirement on a sibling package. Without this gate, every
+// install attempt on a box without the toolkit (the common case) would burn a
+// doomed compile before falling back to SDPA. Presence alone doesn't guarantee
+// a successful build (a CUDA-version/torch mismatch or insufficient GPU
+// compute capability can still fail non-fatally after a real compile) — it
+// only rules out the no-toolkit-at-all case.
+function hasNvcc() {
+  const res = spawnSync('nvcc', ['--version'], { windowsHide: true });
+  return res.status === 0;
+}
+
 // Opt-in FlashAttention-2 install. Platform/version-gated and fully non-fatal:
-// flash-attn is an optional accelerator, so every failure path warns and returns
-// rather than aborting the (already-succeeded) qwen-tts install.
+// flash-attn is an optional accelerator, so every failure path warns and
+// returns rather than aborting the (already-succeeded) qwen-tts install.
+// Each plan.action gets its own dedicated function below with an explicit
+// return — no case may fall through into another's logic.
 function installFlashAttn(python, env) {
+  const platform = process.platform;
   const plan = resolveFlashAttnInstall({
     enabled: true,
-    platform: process.platform,
+    platform,
     pyTag: venvPyTag(python),
     profile: process.env.CASTWRIGHT_ACCELERATOR_PROFILE ?? 'nvidia',
+    alreadyImportable: flashAttnImportable(python),
+    nvccAvailable: platform === 'linux' ? hasNvcc() : undefined,
   });
-  if (plan.action === 'skip') {
-    step(`FlashAttention-2: skipped — ${plan.reason}.`);
+
+  switch (plan.action) {
+    case 'skip':
+      step(`FlashAttention-2: skipped — ${plan.reason}.`);
+      return;
+    case 'already-installed':
+      step(`FlashAttention-2: ${plan.reason}.`);
+      return;
+    case 'install-pip':
+      installFlashAttnPip(python, env);
+      return;
+    case 'install':
+      installFlashAttnWheel(python, env, plan.url);
+      return;
+  }
+}
+
+// Linux path: attempt an unpinned `pip install flash-attn` build. The caller's
+// nvcc preflight has already confirmed the standalone CUDA Toolkit is present.
+// Needs ninja (genuinely missing from every requirements/*.txt) and
+// setuptools/wheel (not seeded by `python -m venv` on 3.12+) before the build.
+// --no-build-isolation is required, not optional: flash-attn's setup.py
+// imports torch at build time, and default build isolation would hide this
+// venv's torch from it, reliably failing with "No module named 'torch'"
+// before ever reaching a real compile.
+function installFlashAttnPip(python, env) {
+  step('FlashAttention-2: attempting an unpinned pip install (opt-in)...');
+  step('  Requires the standalone NVIDIA CUDA Toolkit; this can be a long compile.');
+  const baseTxtPath = join(SIDECAR_DIR, 'requirements', 'base.txt');
+  if (
+    run(
+      python,
+      ['-m', 'pip', 'install', 'ninja', 'packaging', 'setuptools', 'wheel', '-c', baseTxtPath],
+      env,
+    ) !== 0
+  ) {
+    step('FlashAttention-2: WARN build-dependency install failed — continuing on SDPA.');
     return;
   }
+  const buildEnv = flashAttnBuildEnv(process.env, env);
+  if (
+    run(
+      python,
+      ['-m', 'pip', 'install', 'flash-attn', '--no-build-isolation', '-c', baseTxtPath],
+      buildEnv,
+    ) !== 0
+  ) {
+    step('FlashAttention-2: WARN pip install failed — continuing on SDPA.');
+    return;
+  }
+  reportFlashAttnImportResult(python, env);
+}
+
+// Windows path: download the pinned community wheel, SHA-verify it, install
+// it. Behavior identical to before this change — only its call shape (now a
+// dedicated function reached via explicit dispatch) changed.
+function installFlashAttnWheel(python, env, url) {
   step('FlashAttention-2: installing pinned prebuilt wheel (opt-in)...');
-  step(`  ${plan.url}`);
+  step(`  ${url}`);
   const pin = flashAttnWheelPin();
-  let installTarget = plan.url;
+  let installTarget = url;
   if (pin) {
     /* ops-7 — download the wheel WITHOUT installing, verify its SHA256, then
        install the verified local file. Refuse + delete on a mismatch so a
        tampered/corrupted wheel never executes its setup with the user's
        privileges. */
     const dlDir = mkdtempSync(join(tmpdir(), 'fa2-wheel-'));
-    if (run(python, ['-m', 'pip', 'download', '--no-deps', '-d', dlDir, plan.url], env) !== 0) {
+    if (run(python, ['-m', 'pip', 'download', '--no-deps', '-d', dlDir, url], env) !== 0) {
       step('FlashAttention-2: WARN wheel download failed — continuing on SDPA.');
       return;
     }
@@ -244,6 +332,13 @@ function installFlashAttn(python, env) {
     step('  wheel URL above, or just leave QWEN_ATTN_IMPL=sdpa (the default).');
     return;
   }
+  reportFlashAttnImportResult(python, env);
+}
+
+// Shared post-install verification + activation instructions for both the
+// Windows and Linux paths. Never sets QWEN_ATTN_IMPL itself — activation
+// stays a manual operator choice on every path.
+function reportFlashAttnImportResult(python, env) {
   const imported = run(
     python,
     ['-c', 'import flash_attn;print("[install-qwen3] flash_attn",flash_attn.__version__)'],
@@ -253,8 +348,8 @@ function installFlashAttn(python, env) {
     step('FlashAttention-2: installed. Activate with QWEN_ATTN_IMPL=flash_attention_2');
     step('  in the sidecar env (SDPA stays the default until benchmarked).');
   } else {
-    step('FlashAttention-2: WARN wheel installed but `import flash_attn` failed —');
-    step('  it may not match torch/CUDA. SDPA remains the default; safe to ignore.');
+    step('FlashAttention-2: WARN installed but `import flash_attn` failed — it may not');
+    step('  match torch/CUDA. SDPA remains the default; safe to ignore.');
   }
 }
 
