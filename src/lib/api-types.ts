@@ -2165,6 +2165,60 @@ export interface paths {
         patch: operations["patchScriptReviewSelection"];
         trace?: never;
     };
+    "/api/books/{bookId}/script-review/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel any in-flight script-review job(s) for a book (fs-58 follow-up)
+         * @description Aborts whichever script-review job(s) are currently running for this
+         *     book — the whole-book job if present, plus every single-chapter
+         *     subset job — via each job's existing AbortController. Book-level,
+         *     not chapter-scoped: the client's progress pill is keyed by bookId
+         *     only. Idempotent: returns `cancelled: false` (still 200) when
+         *     nothing is running, so a double-click or a stale pill never 404s.
+         *     Chapters already checkpointed to the ledger before the cancel are
+         *     kept; the chapter that was still being reviewed at the moment of
+         *     cancellation is not checkpointed at all.
+         */
+        post: operations["cancelScriptReview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/script-review/attach": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attach to an already-running script-review job, without creating one (fs-58 follow-up)
+         * @description Joins an existing script-review job for the requested scope and
+         *     replays its buffered events, identical to the create-or-join route's
+         *     join branch — but never creates a new job. Used exclusively by the
+         *     client's reattach-on-reload path to close a TOCTOU race: if the job
+         *     finished between the client's `GET /state` call and this attach, a
+         *     404 here (instead of silently starting a fresh review) tells the
+         *     client to fall back to a plain ledger re-read.
+         */
+        post: operations["attachScriptReview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/cast/{characterId}/emotion-variant/{emotion}": {
         parameters: {
             query?: never;
@@ -7738,6 +7792,68 @@ export interface operations {
                 content?: never;
             };
             /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    cancelScriptReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancel applied (or was a no-op — nothing was running) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok: boolean;
+                        /** @description false when no job was running for this book. */
+                        cancelled: boolean;
+                    };
+                };
+            };
+        };
+    };
+    attachScriptReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Optional chapter id — when present, attaches to that chapter's single-chapter job only; when absent, attaches to the whole-book job. */
+                    chapterId?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description SSE stream of buffered-then-live ops/phase/result events, same shape as the create route. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": Record<string, never>;
+                };
+            };
+            /** @description No running review matches the requested scope. */
             404: {
                 headers: {
                     [name: string]: unknown;
