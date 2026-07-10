@@ -51,11 +51,15 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
      the modal stays — it's the TOCTOU re-validation for any edits
      that arrived between stream-complete and the user clicking Accept.
      Shared between the success path and the cancelled-catch path below
-     (fs-58 follow-up #1481) — a cancel must still surface whatever
-     chapters finished checkpointing before it landed, exactly like a
-     normal completion does; only the terminal toast differs. */
-  const dispatchAccumulatedOps = (): void => {
-    const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
+     (fs-58 follow-up #1481) — takes the ops to use as a parameter rather
+     than always reading `allOps` directly, because the two call sites
+     need different sets: success uses everything (a clean run with zero
+     ops must still dispatch setReview so the "No suggestions found"
+     empty state shows — matches the pre-existing unconditional-dispatch
+     behavior this must not regress), cancelled uses only ops from
+     chapters that actually got a checkpoint (see below). */
+  const dispatchAccumulatedOps = (opsToUse: ReviewOpWithChapter[]): void => {
+    const { appliable, unappliable } = planApply(opsToUse, sentences, characterIds) as {
       appliable: ReviewOpWithChapter[];
       unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
     };
@@ -69,7 +73,7 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
               : `${failed.length} chapters couldn't be reviewed (too large or failed).`,
         }),
       );
-    } else if (appliable.length > 0 || unappliable.length > 0) {
+    } else {
       if (failed.length > 0) {
         dispatch(
           notificationsActions.pushToast({
@@ -105,16 +109,30 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
         versionByChapter[chId] = version;
       },
     });
-    dispatchAccumulatedOps();
+    dispatchAccumulatedOps(allOps);
   } catch (err) {
     if (err instanceof ReviewScriptError && err.code === 'cancelled') {
       // Cancelling never discards a chapter that finished checkpointing
-      // before the cancel (design spec §2) — show whatever was
-      // accumulated via onOps/onCheckpoint before the cancel landed,
-      // exactly like a normal completion, just without a toast.
-      // dispatchAccumulatedOps() is itself a no-op when nothing had
-      // accumulated yet (cancel landed before any chapter finished).
-      dispatchAccumulatedOps();
+      // before the cancel (design spec §2) — but ops for a chapter still
+      // IN FLIGHT at the moment of cancellation are NOT safe to surface:
+      // onOps fires live per completed chunk, independent of whether the
+      // whole chapter finishes, but the server deliberately skips the
+      // checkpoint for a chapter that was mid-flight when the abort
+      // landed (script-review.ts) — nothing about that chapter is
+      // persisted, so allOps can contain ops for a chapter that has no
+      // entry in versionByChapter at all. Filter to only chapters that
+      // genuinely got a checkpoint before showing anything; a cancel with
+      // nothing checkpointed yet shows nothing at all (dispatchAccumulatedOps
+      // itself still handles an empty result by falling through to the
+      // "nothing to show" branch, so no separate empty-check is needed
+      // here — unlike the success path, though, we skip it ENTIRELY
+      // when there's also nothing failed, to avoid a stray "0 chapters
+      // reviewed" artifact for a cancel that landed before anything
+      // happened).
+      const checkpointedOps = allOps.filter((o) => o.chapterId in versionByChapter);
+      if (checkpointedOps.length > 0 || failed.length > 0) {
+        dispatchAccumulatedOps(checkpointedOps);
+      }
     } else {
       dispatch(
         notificationsActions.pushToast({
@@ -228,19 +246,19 @@ export async function attachToRunningReview(
   const versionByChapter: Record<number, number> = {};
 
   /* Shared between the success path and the cancelled-catch path below
-     (fs-58 follow-up #1481) — a cancel must still surface whatever
-     chapters finished checkpointing before it landed, exactly like the
-     join completing normally. No-ops when nothing accumulated (cancel
-     landed before this join's own chapter finished). */
-  const dispatchAccumulatedOps = (): void => {
-    if (allOps.length === 0 && Object.keys(versionByChapter).length === 0) return;
-    const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
+     (fs-58 follow-up #1481) — takes the ops to use as a parameter: success
+     uses everything (a join that resolves with zero new ops must still
+     dispatch setReview — matches the pre-existing unconditional-dispatch
+     behavior this must not regress, e.g. confirming a reattach found
+     nothing new rather than looking like it silently failed); cancelled
+     uses only ops from chapters that actually got a checkpoint (see the
+     catch block below). */
+  const dispatchAccumulatedOps = (opsToUse: ReviewOpWithChapter[]): void => {
+    const { appliable, unappliable } = planApply(opsToUse, sentences, characterIds) as {
       appliable: ReviewOpWithChapter[];
       unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
     };
-    if (appliable.length > 0 || unappliable.length > 0) {
-      dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter }));
-    }
+    dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter }));
   };
 
   try {
@@ -271,7 +289,7 @@ export async function attachToRunningReview(
       hydrateLedgerIntoBucket(bookId, freshState.entries, { dispatch, sentences, characterIds, manuscriptId }, 'merge');
       return;
     }
-    dispatchAccumulatedOps();
+    dispatchAccumulatedOps(allOps);
   } catch (err) {
     // Cancellation (fs-58 follow-up #1481) is a normal, silent terminal
     // state, not a failure — mirrors detect-emotions-button.tsx's silent
@@ -279,9 +297,16 @@ export async function attachToRunningReview(
     // code==='aborted' handling. Deliberately NO finally/clear here — see
     // the module-level comment above this function for why. Still surfaces
     // whatever chapters finished checkpointing before the cancel landed
-    // (design spec §2) — same reasoning as runReviewScript's own fix.
+    // (design spec §2) — same reasoning as runReviewScript's own fix,
+    // including the same in-flight-chapter filter: onOps can have fired
+    // for a chunk of a chapter the server never checkpointed (it skips
+    // the checkpoint for whichever chapter was mid-flight at the abort),
+    // so only chapters present in versionByChapter are safe to surface.
     if (err instanceof ReviewScriptError && err.code === 'cancelled') {
-      dispatchAccumulatedOps();
+      const checkpointedOps = allOps.filter((o) => o.chapterId in versionByChapter);
+      if (checkpointedOps.length > 0) {
+        dispatchAccumulatedOps(checkpointedOps);
+      }
       return;
     }
     dispatch(

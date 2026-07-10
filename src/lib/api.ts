@@ -3292,16 +3292,31 @@ export async function mockReviewScript(
      check so the mandated e2e Cancel spec has something real to observe.
      `notePhase` writes `running` non-null on every tick; if it now reads
      null, something else (mockCancelScriptReview) cleared it since our own
-     last tick — nothing else writes this book's mock state concurrently.
-     Checked only BETWEEN ticks, never before the first one (which would
-     misfire on a fresh run that hasn't ticked yet). */
+     last tick — nothing else writes this book's mock state concurrently. */
   const throwIfCancelled = () => {
     if (readMockScriptReviewState(bookId).running === null) {
       throw new ReviewScriptError('Review cancelled.', 'cancelled');
     }
   };
 
+  /* Mark this run as active IMMEDIATELY, synchronously, before the first
+     `await` yields control back to the event loop — not via notePhase
+     (which would also fire a possibly-premature onPhase callback). This
+     closes a real race a code review caught: without this, `running`
+     stays whatever it was BEFORE this call (null for a fresh run) for the
+     entire first `wait(60)` below, so a cancel landing in that window
+     writes `running: null` — indistinguishable from "hasn't started yet"
+     — and the first tick's own unconditional write then resurrects the
+     cancelled run instead of throwIfCancelled ever seeing the null. Since
+     this line runs before any `await`, no concurrently-dispatched cancel
+     can possibly interleave before it. */
+  writeMockScriptReviewState(bookId, {
+    running: { lastPhase: { progress: alreadyAt, label: 'Reviewing script' } },
+    entries: readMockScriptReviewState(bookId).entries,
+  });
+
   await wait(60);
+  throwIfCancelled();
   if (alreadyAt < 0.25) {
     notePhase({ progress: 0.25, label: 'Reviewing script', chapterId: 1, chapterIndex: 1, totalChapters: 3 });
   }

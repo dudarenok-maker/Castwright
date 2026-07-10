@@ -495,10 +495,33 @@ describe('mock-mode script-review cancellation (fs-58 follow-up #1481)', () => {
 
   it('mockReviewScript throws a cancelled-coded ReviewScriptError if mockCancelScriptReview clears the running flag mid-run', async () => {
     const runPromise = mockReviewScript(cancelBookId, {});
-    // Let the mock reach its first phase tick (60ms, sets `running` non-null)
-    // before cancelling — cancelling before the first tick would race the
-    // mock's own initial write and isn't the scenario under test.
+    // Let the mock reach its first phase tick (60ms) before cancelling —
+    // exercises the ordinary between-ticks throwIfCancelled() path.
     await new Promise((r) => setTimeout(r, 100));
+    await mockCancelScriptReview(cancelBookId);
+
+    let caught: unknown;
+    try {
+      await runPromise;
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ReviewScriptError);
+    expect((caught as InstanceType<typeof ReviewScriptError>).code).toBe('cancelled');
+  });
+
+  /* Regression for the code-review-workflow finding: a cancel landing
+     BEFORE the first phase tick (i.e. inside the initial 60ms wait) used
+     to be silently undone — the first tick's own unconditional write set
+     `running` back to non-null (mistaking the just-cancelled state for
+     "hasn't started yet"), so throwIfCancelled never saw the cancel and
+     the "cancelled" review silently ran to completion. mockReviewScript
+     now marks itself running synchronously, before any await, closing
+     the window entirely. */
+  it('a cancel landing in the initial window (before the first phase tick) is not silently undone by that tick', async () => {
+    const runPromise = mockReviewScript(cancelBookId, {});
+    // No delay — cancel as close to immediately as possible, well inside
+    // the first tick's 60ms wait.
     await mockCancelScriptReview(cancelBookId);
 
     let caught: unknown;
