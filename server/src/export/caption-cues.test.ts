@@ -242,4 +242,22 @@ describe('buildWordCues', () => {
       /word-level timestamps/i,
     );
   });
+
+  it('throws a clear error when the sidecar returns an empty word list', async () => {
+    vi.mocked(transcribeSegment).mockResolvedValue({
+      text: '',
+      language: 'en',
+      avgLogprob: 0.0,
+      noSpeechProb: 1.0,
+      compressionRatio: 1.0,
+      words: [],
+    });
+    const segments: SegmentInput[] = [
+      { characterId: 'narrator', sentenceIds: [1], startSec: 0, endSec: 1 },
+    ];
+
+    await expect(buildWordCues('/fake/01.mp3', segments, 'Chapter One')).rejects.toThrow(
+      /word-level timestamps/i,
+    );
+  });
 });

@@ -169,7 +169,7 @@ export async function buildWordCues(
     sidecarUrl: opts.sidecarUrl,
     signal: opts.signal,
   });
-  if (!result.words) {
+  if (!result.words || result.words.length === 0) {
     throw new Error(
       'The sidecar did not return word-level timestamps for this chapter. ' +
         'Confirm Whisper is installed and reachable, or export line/sentence captions instead.',
