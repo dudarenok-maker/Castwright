@@ -3265,6 +3265,14 @@ export async function mockReviewScript(
 ): Promise<ReviewScriptResult> {
   const opsAccum: Record<number, import('./script-review-apply').ReviewOp[]> = {};
   const versionAccum: Record<number, number> = {};
+  /* fs-58 follow-up (#1481) — mockAttachScriptReview delegates a resumed
+     reattach back into THIS SAME function; without this guard, resuming
+     from (say) 85% would restart the timeline at 25%, visibly regressing
+     the progress pill before it climbs again. A fresh "click Review
+     Script" call always starts with `running: null` (nothing recorded
+     yet for this book), so `alreadyAt` is 0 and every guard below is a
+     no-op — additive-only for that path. */
+  const alreadyAt = readMockScriptReviewState(bookId).running?.lastPhase.progress ?? 0;
   const notePhase = (phase: SubstagePhaseEvent) => {
     writeMockScriptReviewState(bookId, {
       running: { lastPhase: phase },
@@ -3294,27 +3302,33 @@ export async function mockReviewScript(
   };
 
   await wait(60);
-  notePhase({ progress: 0.25, label: 'Reviewing script', chapterId: 1, chapterIndex: 1, totalChapters: 3 });
+  if (alreadyAt < 0.25) {
+    notePhase({ progress: 0.25, label: 'Reviewing script', chapterId: 1, chapterIndex: 1, totalChapters: 3 });
+  }
   await wait(500);
   throwIfCancelled();
-  notePhase({
-    progress: 0.5,
-    label: 'Reviewing script',
-    chapterId: 3,
-    chapterIndex: 2,
-    totalChapters: 3,
-    estRemainingMs: 20_000,
-  });
+  if (alreadyAt < 0.5) {
+    notePhase({
+      progress: 0.5,
+      label: 'Reviewing script',
+      chapterId: 3,
+      chapterIndex: 2,
+      totalChapters: 3,
+      estRemainingMs: 20_000,
+    });
+  }
   await wait(500);
   throwIfCancelled();
-  notePhase({
-    progress: 0.85,
-    label: 'Reviewing script',
-    chapterId: 3,
-    chapterIndex: 3,
-    totalChapters: 3,
-    estRemainingMs: 5_000,
-  });
+  if (alreadyAt < 0.85) {
+    notePhase({
+      progress: 0.85,
+      label: 'Reviewing script',
+      chapterId: 3,
+      chapterIndex: 3,
+      totalChapters: 3,
+      estRemainingMs: 5_000,
+    });
+  }
   await wait(400);
   throwIfCancelled();
   /* fs-58 Unit A: strip_tag on sentence id:1 (chapterId:3). */

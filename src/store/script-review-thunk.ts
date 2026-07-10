@@ -43,6 +43,45 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
   const failed: Array<{ chapterId: number; message: string }> = [];
   const versionByChapter: Record<number, number> = {};
   dispatch(scriptReviewActions.setActive({ bookId, progress: 0, label: 'Reviewing script' }));
+
+  /* fs-58 Task 11 — run planApply at seed time so ops that can't be
+     resolved against the LIVE sentences (stale ids, missing anchors,
+     invalid merges) land in `unappliable` rather than appearing as
+     selectable no-ops in the diff modal. The Apply-time planApply in
+     the modal stays — it's the TOCTOU re-validation for any edits
+     that arrived between stream-complete and the user clicking Accept.
+     Shared between the success path and the cancelled-catch path below
+     (fs-58 follow-up #1481) — a cancel must still surface whatever
+     chapters finished checkpointing before it landed, exactly like a
+     normal completion does; only the terminal toast differs. */
+  const dispatchAccumulatedOps = (): void => {
+    const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
+      appliable: ReviewOpWithChapter[];
+      unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
+    };
+    if (appliable.length === 0 && unappliable.length === 0 && failed.length > 0) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'warn',
+          message:
+            failed.length === 1
+              ? failed[0].message
+              : `${failed.length} chapters couldn't be reviewed (too large or failed).`,
+        }),
+      );
+    } else if (appliable.length > 0 || unappliable.length > 0) {
+      if (failed.length > 0) {
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'warn',
+            message: `${failed.length} chapter(s) skipped; showing the rest.`,
+          }),
+        );
+      }
+      dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter }));
+    }
+  };
+
   try {
     await api.reviewScript(bookId, {
       ...(wholeBook ? {} : { chapterId }),
@@ -66,39 +105,17 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
         versionByChapter[chId] = version;
       },
     });
-    /* fs-58 Task 11 — run planApply at seed time so ops that can't be
-       resolved against the LIVE sentences (stale ids, missing anchors,
-       invalid merges) land in `unappliable` rather than appearing as
-       selectable no-ops in the diff modal. The Apply-time planApply in
-       the modal stays — it's the TOCTOU re-validation for any edits
-       that arrived between stream-complete and the user clicking Accept. */
-    const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
-      appliable: ReviewOpWithChapter[];
-      unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
-    };
-    if (appliable.length === 0 && unappliable.length === 0 && failed.length > 0) {
-      dispatch(
-        notificationsActions.pushToast({
-          kind: 'warn',
-          message:
-            failed.length === 1
-              ? failed[0].message
-              : `${failed.length} chapters couldn't be reviewed (too large or failed).`,
-        }),
-      );
-    } else {
-      if (failed.length > 0) {
-        dispatch(
-          notificationsActions.pushToast({
-            kind: 'warn',
-            message: `${failed.length} chapter(s) skipped; showing the rest.`,
-          }),
-        );
-      }
-      dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter }));
-    }
+    dispatchAccumulatedOps();
   } catch (err) {
-    if (!(err instanceof ReviewScriptError && err.code === 'cancelled')) {
+    if (err instanceof ReviewScriptError && err.code === 'cancelled') {
+      // Cancelling never discards a chapter that finished checkpointing
+      // before the cancel (design spec §2) — show whatever was
+      // accumulated via onOps/onCheckpoint before the cancel landed,
+      // exactly like a normal completion, just without a toast.
+      // dispatchAccumulatedOps() is itself a no-op when nothing had
+      // accumulated yet (cancel landed before any chapter finished).
+      dispatchAccumulatedOps();
+    } else {
       dispatch(
         notificationsActions.pushToast({
           kind: 'error',
@@ -210,6 +227,22 @@ export async function attachToRunningReview(
   const allOps: ReviewOpWithChapter[] = [];
   const versionByChapter: Record<number, number> = {};
 
+  /* Shared between the success path and the cancelled-catch path below
+     (fs-58 follow-up #1481) — a cancel must still surface whatever
+     chapters finished checkpointing before it landed, exactly like the
+     join completing normally. No-ops when nothing accumulated (cancel
+     landed before this join's own chapter finished). */
+  const dispatchAccumulatedOps = (): void => {
+    if (allOps.length === 0 && Object.keys(versionByChapter).length === 0) return;
+    const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
+      appliable: ReviewOpWithChapter[];
+      unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
+    };
+    if (appliable.length > 0 || unappliable.length > 0) {
+      dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter }));
+    }
+  };
+
   try {
     const result = await api.attachScriptReview(bookId, {
       ...(running.chapterId !== undefined ? { chapterId: running.chapterId } : {}),
@@ -238,18 +271,19 @@ export async function attachToRunningReview(
       hydrateLedgerIntoBucket(bookId, freshState.entries, { dispatch, sentences, characterIds, manuscriptId }, 'merge');
       return;
     }
-    const { appliable, unappliable } = planApply(allOps, sentences, characterIds) as {
-      appliable: ReviewOpWithChapter[];
-      unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
-    };
-    dispatch(scriptReviewActions.setReview({ bookId, ops: appliable, unappliable, manuscriptId, versionByChapter }));
+    dispatchAccumulatedOps();
   } catch (err) {
     // Cancellation (fs-58 follow-up #1481) is a normal, silent terminal
     // state, not a failure — mirrors detect-emotions-button.tsx's silent
     // AbortError handling and analysis-stream-middleware.ts's
     // code==='aborted' handling. Deliberately NO finally/clear here — see
-    // the module-level comment above this function for why.
-    if (err instanceof ReviewScriptError && err.code === 'cancelled') return;
+    // the module-level comment above this function for why. Still surfaces
+    // whatever chapters finished checkpointing before the cancel landed
+    // (design spec §2) — same reasoning as runReviewScript's own fix.
+    if (err instanceof ReviewScriptError && err.code === 'cancelled') {
+      dispatchAccumulatedOps();
+      return;
+    }
     dispatch(
       notificationsActions.pushToast({
         kind: 'error',

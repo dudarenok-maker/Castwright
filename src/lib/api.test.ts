@@ -510,4 +510,24 @@ describe('mock-mode script-review cancellation (fs-58 follow-up #1481)', () => {
     expect(caught).toBeInstanceOf(ReviewScriptError);
     expect((caught as InstanceType<typeof ReviewScriptError>).code).toBe('cancelled');
   });
+
+  /* Regression for the code-review-workflow finding: mockAttachScriptReview
+     delegates a resumed reattach back into mockReviewScript, which used to
+     restart its canned timeline unconditionally from the first tick (25%)
+     — so reattaching after a LATE reload (e.g. at 85%) would visibly
+     regress the pill backward to 25% before it climbed again, exactly the
+     "visibly reset" regression the reattach design explicitly says to
+     avoid. mockReviewScript now reads the already-recorded progress at
+     call time and skips re-emitting any tick at or below it. */
+  it('a resumed mockReviewScript timeline never re-emits a phase tick at or below the progress it was seeded with', async () => {
+    sessionStorage.setItem(mockScriptReviewKey(cancelBookId), JSON.stringify({
+      running: { lastPhase: { progress: 0.5, label: 'Reviewing script' } },
+      entries: {},
+    }));
+    const phases: Array<{ progress: number }> = [];
+    await mockAttachScriptReview(cancelBookId, { onPhase: (p) => phases.push(p) });
+    // Only the 85% tick (the one genuinely ahead of the seeded 50%) fires —
+    // the 25% and 50% ticks are both skipped, so the pill never regresses.
+    expect(phases.map((p) => p.progress)).toEqual([0.85]);
+  });
 });

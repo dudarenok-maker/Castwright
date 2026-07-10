@@ -725,6 +725,43 @@ describe('attachToRunningReview — reattach-race hardening (fs-58 follow-up #14
 
     expect(dispatch.mock.calls.some((c) => c[0].type === notificationsActions.pushToast.type)).toBe(false);
   });
+
+  /* Regression for the code-review-workflow finding: a cancel that lands
+     AFTER this join's own chapter already finished and checkpointed must
+     not throw those away — design spec §2 explicitly promises cancelling
+     never discards a chapter that finished checkpointing before the
+     cancel. Simulates the join's replay delivering onCheckpoint/onOps
+     (the chapter genuinely finished) before the stream's final event is
+     the cancelled error (a sibling job's cancel, or this same job's own
+     terminal event racing the client's read of it). */
+  it('a cancelled-coded ReviewScriptError still dispatches setReview for whatever this join already accumulated', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.attachScriptReview).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      opts.onCheckpoint?.({ chapterId: 5, version: 3 });
+      opts.onOps?.({ chapterId: 5, ops: [{ id: 1, op: 'strip_tag', newText: 'Five fixed', rationale: 'r' }] });
+      throw new ReviewScriptError('Review cancelled.', 'cancelled');
+    });
+
+    await attachToRunningReview(
+      'book-1',
+      { chapterId: 5, replay: { lastPhase: null } },
+      {
+        dispatch,
+        sentences: [{ id: 1, chapterId: 5, text: 'Five fixed', characterId: 'c1' }],
+        characterIds: new Set(['c1']),
+        manuscriptId: 'ms-1',
+      },
+    );
+
+    expect(dispatch.mock.calls.some((c) => c[0].type === notificationsActions.pushToast.type)).toBe(false);
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.setReview(
+        expect.objectContaining({ bookId: 'book-1', manuscriptId: 'ms-1', versionByChapter: { 5: 3 } }),
+      ),
+    );
+    const setReviewCall = dispatch.mock.calls.find(([a]) => a.type === scriptReviewActions.setReview.type);
+    expect(setReviewCall?.[0].payload.ops).toHaveLength(1);
+  });
 });
 
 describe('runReviewScript — cancellation (fs-58 follow-up #1481)', () => {
@@ -737,6 +774,39 @@ describe('runReviewScript — cancellation (fs-58 follow-up #1481)', () => {
     });
 
     expect(dispatch.mock.calls.some((c) => c[0].type === notificationsActions.pushToast.type)).toBe(false);
+    const types = dispatch.mock.calls.map((c) => c[0].type);
+    expect(types[types.length - 1]).toBe(scriptReviewActions.clear.type);
+  });
+
+  /* Regression for the code-review-workflow finding: chapters that
+     finished and checkpointed before a whole-book (or per-chapter) run
+     was cancelled must still show up, not silently vanish until reload —
+     the same guarantee attachToRunningReview's own fix (above) provides
+     for the reattach path. */
+  it('a cancelled-coded ReviewScriptError still dispatches setReview for whatever chapters already checkpointed before the cancel', async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.reviewScript).mockImplementation(async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+      opts.onCheckpoint?.({ chapterId: 1, version: 1 });
+      opts.onOps?.({ chapterId: 1, ops: [{ id: 1, op: 'strip_tag', newText: 'Hi', rationale: 'r' }] });
+      throw new ReviewScriptError('Review cancelled.', 'cancelled');
+    });
+
+    await runReviewScript('book-1', {
+      dispatch,
+      wholeBook: true,
+      model: 'test-model',
+      sentences: [{ id: 1, chapterId: 1, text: 'Hi', characterId: 'c1' }],
+      characterIds: new Set(['c1']),
+      manuscriptId: 'ms-1',
+    });
+
+    expect(dispatch.mock.calls.some((c) => c[0].type === notificationsActions.pushToast.type)).toBe(false);
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.setReview(
+        expect.objectContaining({ bookId: 'book-1', manuscriptId: 'ms-1', versionByChapter: { 1: 1 } }),
+      ),
+    );
+    // clear still fires last, from the finally block, even on this path.
     const types = dispatch.mock.calls.map((c) => c[0].type);
     expect(types[types.length - 1]).toBe(scriptReviewActions.clear.type);
   });

@@ -64,6 +64,56 @@ const initialState: ScriptReviewState = {
   activeStreams: {},
 };
 
+/** Shared per-chapter preserve-the-rest merge logic for setReview and
+    mergeHydratedBucket (fs-58 follow-up #1481 — extracted to eliminate
+    ~20 lines of verbatim duplication a code review flagged). Given the
+    existing bucket (if any) and the incoming payload's own chapters,
+    returns whichever OTHER (untouched) chapters' data should carry
+    forward unchanged. Both reducers concatenate their own new
+    ops/unappliable/selected/versionByChapter on top of what this
+    returns — the two reducers differ only in how `selected` is derived
+    (setReview computes it from DEFAULT_OFF; mergeHydratedBucket takes an
+    already-resolved map) and in the final `visible` value, so those stay
+    reducer-specific. */
+function preserveUntouchedChapters(
+  existing: ScriptReviewBucket | undefined,
+  manuscriptId: string,
+  ops: ReviewOpWithChapter[],
+  unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>,
+  versionByChapter: Record<number, number>,
+): {
+  preservedOps: ReviewOpWithChapter[];
+  preservedUnappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
+  preservedSelected: Record<string, boolean>;
+  preservedVersionByChapter: Record<number, number>;
+} {
+  // Drop a stale existing bucket entirely if it belongs to a different
+  // manuscript (reparse mid-session) — its sentence ids may no longer
+  // be valid, mirroring readLedger's own manuscriptId-pruning (spec §4.2).
+  const preserveExisting = existing && (!existing.manuscriptId || existing.manuscriptId === manuscriptId);
+
+  const touchedChapterIds = new Set<number>(Object.keys(versionByChapter).map(Number));
+  for (const o of ops) touchedChapterIds.add(o.chapterId);
+  for (const u of unappliable) touchedChapterIds.add(u.op.chapterId);
+
+  const preservedOps = preserveExisting
+    ? existing!.ops.filter((o) => !touchedChapterIds.has(o.chapterId))
+    : [];
+  const preservedUnappliable = preserveExisting
+    ? existing!.unappliable.filter((u) => !touchedChapterIds.has(u.op.chapterId))
+    : [];
+  const preservedSelected: Record<string, boolean> = {};
+  if (preserveExisting) {
+    for (const o of preservedOps) {
+      const key = opKey(o.chapterId, o.id, o.op);
+      if (key in existing!.selected) preservedSelected[key] = existing!.selected[key];
+    }
+  }
+  const preservedVersionByChapter = preserveExisting ? { ...existing!.versionByChapter } : {};
+
+  return { preservedOps, preservedUnappliable, preservedSelected, preservedVersionByChapter };
+}
+
 export const scriptReviewSlice = createSlice({
   name: 'scriptReview',
   initialState,
@@ -94,29 +144,8 @@ export const scriptReviewSlice = createSlice({
       }
 
       const existing = s.byBook[bookId];
-      // Drop a stale existing bucket entirely if it belongs to a different
-      // manuscript (reparse mid-session) — its sentence ids may no longer
-      // be valid, mirroring readLedger's own manuscriptId-pruning (spec §4.2).
-      const preserveExisting = existing && (!existing.manuscriptId || existing.manuscriptId === manuscriptId);
-
-      const touchedChapterIds = new Set<number>(Object.keys(versionByChapter).map(Number));
-      for (const o of ops) touchedChapterIds.add(o.chapterId);
-      for (const u of unappliable) touchedChapterIds.add(u.op.chapterId);
-
-      const preservedOps = preserveExisting
-        ? existing!.ops.filter((o) => !touchedChapterIds.has(o.chapterId))
-        : [];
-      const preservedUnappliable = preserveExisting
-        ? existing!.unappliable.filter((u) => !touchedChapterIds.has(u.op.chapterId))
-        : [];
-      const preservedSelected: Record<string, boolean> = {};
-      if (preserveExisting) {
-        for (const o of preservedOps) {
-          const key = opKey(o.chapterId, o.id, o.op);
-          if (key in existing!.selected) preservedSelected[key] = existing!.selected[key];
-        }
-      }
-      const preservedVersionByChapter = preserveExisting ? { ...existing!.versionByChapter } : {};
+      const { preservedOps, preservedUnappliable, preservedSelected, preservedVersionByChapter } =
+        preserveUntouchedChapters(existing, manuscriptId, ops, unappliable, versionByChapter);
 
       s.byBook[bookId] = {
         ops: [...preservedOps, ...ops],
@@ -190,26 +219,8 @@ export const scriptReviewSlice = createSlice({
     ) => {
       const { bookId, ops, unappliable, manuscriptId, versionByChapter, selected } = a.payload;
       const existing = s.byBook[bookId];
-      const preserveExisting = existing && (!existing.manuscriptId || existing.manuscriptId === manuscriptId);
-
-      const touchedChapterIds = new Set<number>(Object.keys(versionByChapter).map(Number));
-      for (const o of ops) touchedChapterIds.add(o.chapterId);
-      for (const u of unappliable) touchedChapterIds.add(u.op.chapterId);
-
-      const preservedOps = preserveExisting
-        ? existing!.ops.filter((o) => !touchedChapterIds.has(o.chapterId))
-        : [];
-      const preservedUnappliable = preserveExisting
-        ? existing!.unappliable.filter((u) => !touchedChapterIds.has(u.op.chapterId))
-        : [];
-      const preservedSelected: Record<string, boolean> = {};
-      if (preserveExisting) {
-        for (const o of preservedOps) {
-          const key = opKey(o.chapterId, o.id, o.op);
-          if (key in existing!.selected) preservedSelected[key] = existing!.selected[key];
-        }
-      }
-      const preservedVersionByChapter = preserveExisting ? { ...existing!.versionByChapter } : {};
+      const { preservedOps, preservedUnappliable, preservedSelected, preservedVersionByChapter } =
+        preserveUntouchedChapters(existing, manuscriptId, ops, unappliable, versionByChapter);
 
       s.byBook[bookId] = {
         ops: [...preservedOps, ...ops],
