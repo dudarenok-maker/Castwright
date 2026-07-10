@@ -24,10 +24,11 @@ selection at all.
 
 ## Goals
 
-- If `flash_attn` is already importable in the sidecar venv (any platform),
-  report it and how to activate it. Never attempt to (re)install over it.
+- If `flash_attn` is already importable in the sidecar venv — **on any
+  platform, including AMD/ROCm** — report it and how to activate it. Never
+  attempt to (re)install over it.
 - On Linux, when not already importable and the installer is opted in, try
-  `pip install flash-attn` (unpinned — straight from PyPI, no community
+  installing flash-attn (unpinned — straight from PyPI, no community
   wheel/supply-chain concern like the Windows wheel). Non-fatal on failure.
 - Preserve today's Windows behavior and today's runtime default (SDPA)
   exactly. Activation is always a manual, separate step via the existing
@@ -38,11 +39,27 @@ selection at all.
 ## Non-goals
 
 - The Windows stale cp311 pin / cp312-real-stack fix — separate future issue.
-- macOS support — no CUDA, a `pip install flash-attn` attempt there is pure
-  busywork (guaranteed to fail); leave it on the existing generic skip path.
+- macOS support — no CUDA, an install attempt there is pure busywork
+  (guaranteed to fail); leave it on the existing generic skip path. (The
+  already-importable detection still runs first and covers darwin too — see
+  Design.)
 - Any new CLI flag or env var. The existing `--flash-attn` /
   `QWEN_INSTALL_FLASH_ATTN=1` opt-in gates everything in this spec.
 - Auto-activating FA2 at runtime once installed/detected — stays manual.
+- A kernel-invoking smoke test (actually running a synth call to catch an
+  ABI-mismatched flash_attn that imports cleanly but faults at inference).
+  The bar stays "does `import flash_attn` succeed," matching the existing
+  Windows-path precedent, which has the same limitation today.
+- Hard version-pinning flash-attn against the venv's exact `torch==2.11.0`/
+  cu128 stack. Left to pip's resolver; re-pinning on every torch bump isn't
+  worth the maintenance cost for an opt-in accelerator with a non-fatal
+  failure path.
+- A SHA-pin/integrity gate on the Linux install path (unlike the Windows
+  wheel's `flashAttnWheelPin()` check). Accepted trade-off: it's the
+  official upstream PyPI package under pip's own resolver, not a
+  single-maintainer community-hosted binary — a compromised release would
+  be a supply-chain concern for every flash-attn consumer, not one specific
+  to this installer.
 
 ## Design
 
@@ -61,15 +78,18 @@ new input, `alreadyImportable`, and one new platform branch:
 resolveFlashAttnInstall({ enabled, platform, pyTag, profile, alreadyImportable })
 ```
 
-Decision order:
+Decision order (note: `alreadyImportable` moves to the **top**, ahead of the
+AMD check — reordered from an earlier draft that put it after AMD, which
+would have hidden an already-working ROCm-built flash_attn behind the
+"no ROCm wheel" skip message, contradicting the "any platform" goal):
 
 1. `!enabled` → `{ action: 'skip', reason: 'not requested' }` (unchanged)
-2. `profile === 'amd'` → `{ action: 'skip', reason: '...no ROCm wheel...' }` (unchanged)
-3. `alreadyImportable` → **new**: `{ action: 'already-installed', reason:
+2. `alreadyImportable` → **new**: `{ action: 'already-installed', reason:
    'flash_attn is already importable in this venv — set
    QWEN_ATTN_IMPL=flash_attention_2 to use it (SDPA stays the default until
-   you opt in)' }`. Checked before any platform branch — on any OS, if it's
-   already there, nothing else runs.
+   you opt in)' }`. Checked before the AMD/platform branches — on any OS or
+   accelerator profile, if it's already there, nothing else runs.
+3. `profile === 'amd'` → `{ action: 'skip', reason: '...no ROCm wheel...' }` (unchanged)
 4. `platform === 'win32'` → unchanged cp311-pin logic (`pyTag !== 'cp311'` →
    skip; else `{ action: 'install', url: FLASH_ATTN_WHEEL_URL }`)
 5. `platform === 'linux'` → **new**: `{ action: 'install-pip', package:
@@ -84,12 +104,30 @@ Decision order:
 - `action: 'already-installed'` → log the reason, return. No pip call.
 - `action: 'install-pip'` → log a heads-up that this is an unpinned PyPI
   install with no prebuilt CUDA wheel (can be a long compile — no time
-  estimate promised, just a clear warning), then `pip install flash-attn`
-  via the existing `run()` helper. On non-zero exit: warn and continue on
-  SDPA (same pattern as the Windows wheel-download-failure path). On
-  success: verify with `import flash_attn` (same as Windows), then print
-  the same manual-activation instruction as Windows — never set
-  `QWEN_ATTN_IMPL` itself.
+  estimate promised, just a clear warning). Then, via the existing `run()`
+  helper:
+  1. `pip install ninja packaging` — flash-attn's build needs both and
+     neither is a sidecar dependency today (confirmed: absent from every
+     `requirements/*.txt`).
+  2. `pip install flash-attn --no-build-isolation` — **`--no-build-isolation`
+     is required, not optional**: flash-attn's `setup.py` imports `torch` at
+     build time, and default PEP 517 build isolation gives the build a
+     fresh env where the venv's torch is invisible, so a bare `pip install
+     flash-attn` reliably fails with `ModuleNotFoundError: No module named
+     'torch'` before ever reaching a real compile. This is documented
+     upstream flash-attn install guidance, not project-specific.
+  3. Set `env.MAX_JOBS ??= '4'` (only if the operator hasn't already set
+     it) before the install — flash-attn compiles dozens of CUDA
+     translation units in parallel by default, each using multiple GB of
+     RAM, which can OOM-kill the build host on unbounded parallelism. This
+     mirrors flash-attn's own README guidance for constrained machines.
+
+  On non-zero exit from any of the three: warn and continue on SDPA (same
+  pattern as the Windows wheel-download-failure path). On success: verify
+  with `import flash_attn` (same as Windows — this catches an ABI mismatch
+  that fails at import, not one that only faults when a kernel actually
+  runs; see Non-goals), then print the same manual-activation instruction
+  as Windows — never set `QWEN_ATTN_IMPL` itself.
 - `action: 'install'` (win32) and `action: 'skip'` paths: untouched.
 
 ### Comment/docstring updates
@@ -108,8 +146,10 @@ paths, not the only one.
   no `package`/`url` on the result.
 - New: `linux`, `alreadyImportable: false` → `action: 'install-pip'`,
   `package: 'flash-attn'`.
-- New: any platform, `alreadyImportable: true` → `already-installed`, even
-  `win32` (already-present short-circuits before the pin-check branch).
+- New: any platform *and any profile*, `alreadyImportable: true` →
+  `already-installed` — including `win32` (short-circuits before the
+  pin-check branch) **and `profile: 'amd'`** (short-circuits before the
+  ROCm skip — this is the case the reordering above exists for).
 - Existing win32/cp311, win32/cp312, not-opted-in, wheel-URL-shape tests:
   unchanged, still pass (all pass `alreadyImportable: false` implicitly or
   explicitly).
@@ -127,9 +167,13 @@ wrapper exercised only by hand/on-box, not in CI).
 - On a Linux box with `flash_attn` already importable: installer reports it,
   attempts no install, SDPA remains the runtime default until the operator
   sets `QWEN_ATTN_IMPL=flash_attention_2` by hand.
-- On a Linux box without `flash_attn`, opted in: installer attempts `pip
-  install flash-attn`, warns about compile time, succeeds or fails
-  non-fatally, never sets the runtime knob itself.
+- On a Linux box without `flash_attn`, opted in: installer installs
+  `ninja`/`packaging`, attempts `pip install flash-attn
+  --no-build-isolation` with `MAX_JOBS` capped, warns about compile time,
+  succeeds or fails non-fatally, never sets the runtime knob itself.
+- On an AMD/ROCm box with `flash_attn` already importable: installer
+  reports it (the already-importable check now runs before the ROCm skip),
+  same as any other platform.
 - `npm run test:hooks` (or the equivalent script test runner) green with the
   updated + new cases.
 
