@@ -3,10 +3,14 @@
 // release, bootstraps the venv via the SHARED bootstrap-venv.mjs, writes .env.
 // Kokoro weights are deferred to the in-app fs-21 wizard at first run.
 //
-// conda is path-keyed (matches shipping apps); steps default to the app-root cwd
-// (Pinokio runs from the cloned repo root, where package.json lives), so no `path:`
-// override is needed for git/npm/build. Confirmed on-box in the acceptance matrix.
-const CONDA = { path: 'env', python: '3.12' }; // conda env created at <app>/env
+// Every pinokio/*.js script here lives ONE LEVEL BELOW the app root (where
+// package.json/server/ live) — Pinokio starts a shell.run's cwd at the
+// currently running script's OWN directory (pinokio/), not the app root, so
+// every step needs an explicit `path: '..'` to reach it. Confirmed on-box
+// 2026-07-11: without it, conda's relative env path resolved to
+// pinokio/env instead of <app>/env (see docs/features/218-pinokio-installer.md).
+const APP_ROOT = '..';
+const CONDA = { path: 'env', python: '3.12' }; // conda env created at <app>/env (relative to APP_ROOT)
 
 module.exports = {
   run: [
@@ -14,41 +18,50 @@ module.exports = {
     //    add `conda install -y -c conda-forge nodejs` to this message.)
     {
       method: 'shell.run',
-      params: { conda: CONDA, message: 'conda install -y -c conda-forge ffmpeg' },
+      params: { path: APP_ROOT, conda: CONDA, message: 'conda install -y -c conda-forge ffmpeg' },
     },
     // 2. Fetch + resolve + checkout the latest published release (detached HEAD),
     //    all inside resolve-release.js — no fragile cross-step variable capture.
     //    The script also guards against a pre-Pinokio release.
     {
       method: 'shell.run',
-      params: { conda: CONDA, message: 'node pinokio/lib/resolve-release.js' },
+      params: { path: APP_ROOT, conda: CONDA, message: 'node pinokio/lib/resolve-release.js' },
     },
     // 3. Node deps — --include=dev so Vite (a devDependency) installs for the build.
     {
       method: 'shell.run',
-      params: { conda: CONDA, env: { NODE_ENV: '' }, message: 'npm ci --include=dev' },
+      params: { path: APP_ROOT, conda: CONDA, env: { NODE_ENV: '' }, message: 'npm ci --include=dev' },
     },
     {
       method: 'shell.run',
-      params: { conda: CONDA, env: { NODE_ENV: '' }, message: 'npm --prefix server ci --include=dev' },
+      params: {
+        path: APP_ROOT,
+        conda: CONDA,
+        env: { NODE_ENV: '' },
+        message: 'npm --prefix server ci --include=dev',
+      },
     },
     // 4. Build dist/ + server/dist/.
     {
       method: 'shell.run',
-      params: { conda: CONDA, env: { NODE_ENV: '' }, message: 'npm run build' },
+      params: { path: APP_ROOT, conda: CONDA, env: { NODE_ENV: '' }, message: 'npm run build' },
     },
     // 5. Venv bootstrap via the SHARED chain — accelerator-profile resolver picks
     //    the overlay (nvidia-cuda/cpu/amd-rocm) + installs torch. ~2.5 GB.
     //    `python` is the conda interpreter; bootstrap-venv creates a nested .venv.
     {
       method: 'shell.run',
-      params: { conda: CONDA, message: 'node server/tts-sidecar/scripts/bootstrap-venv.mjs python' },
+      params: {
+        path: APP_ROOT,
+        conda: CONDA,
+        message: 'node server/tts-sidecar/scripts/bootstrap-venv.mjs python',
+      },
     },
     // 6. Write server/.env (idempotent) with WORKSPACE_DIR=<app>/workspace.
     //    write-env.js defaults appDir to process.cwd() (the app root).
     {
       method: 'shell.run',
-      params: { conda: CONDA, message: 'node pinokio/lib/write-env.js' },
+      params: { path: APP_ROOT, conda: CONDA, message: 'node pinokio/lib/write-env.js' },
     },
   ],
 };
