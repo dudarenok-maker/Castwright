@@ -1,11 +1,22 @@
 ---
-status: draft
+status: stable
 issue: 1447
 refs: [1446, 938, 537]
 area: srv
+shipped: 2026-07-11
+pr: 1538
 ---
 
 # Third-party front-matter roster guard (#1447)
+
+> **Ship notes (2026-07-11):** Shipped via PR #1538 (merge commit `6b784771`),
+> `Closes #1447`. Both signals landed. Implementation plan:
+> `docs/superpowers/plans/2026-07-11-third-party-front-matter-guard.md`. One
+> accepted conscious choice: the essay-title regex is intentionally unanchored
+> (anchoring would miss valid prefixed essay titles); the narrow substring case
+> is gated by conditions (b)+(c). **Owed:** live-GPU acceptance of the Signal-2
+> `runNonStoryClassification` path on a real front-matter-essay book (the
+> unit/integration tests stub the analyzer).
 
 ## Problem
 
