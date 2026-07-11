@@ -356,6 +356,29 @@ describe('OllamaAnalyzer — two-schema runStage (grammar vs validation)', () =>
   });
 });
 
+describe('OllamaAnalyzer — runNonStoryClassification (#1447 Signal 2)', () => {
+  it('parses a { nonStory: true } model response', async () => {
+    const { nonStoryClassificationSchema } = await import('../handoff/schemas.js');
+    fetchMock.mockResolvedValue(
+      okResponse(ndjsonStream(chunksOf(JSON.stringify({ nonStory: true }), 16))),
+    );
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
+
+    const out = await analyzer.runNonStoryClassification!('m_nonstory_ch3', 3, 'PROMPT', {
+      language: 'ru',
+    });
+
+    expect(out).toEqual({ nonStory: true });
+    expect(nonStoryClassificationSchema.safeParse(out).success).toBe(true);
+
+    /* routed through runStage → schema-constrained `format` for the
+       non_story_classification skill. */
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.format.required).toContain('nonStory');
+  });
+});
+
 /* fs-2 — the Ollama analyzer gets the same language preamble as Gemini (parity)
    so a local Russian run attributes correctly. */
 describe('OllamaAnalyzer — fs-2 language preamble', () => {

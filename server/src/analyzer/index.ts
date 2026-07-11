@@ -16,6 +16,7 @@ import type {
   ScriptReviewOutput,
   Stage3ChapterOutput,
   EscalationOutput,
+  NonStoryClassificationOutput,
 } from '../handoff/schemas.js';
 import { GeminiAnalyzer } from './gemini.js';
 import { OllamaAnalyzer, LocalUnreachableError, AnalysisAbortedError } from './ollama.js';
@@ -129,6 +130,16 @@ export interface Analyzer {
     prompt: string,
     call: StageCall,
   ): Promise<EscalationOutput | null>;
+  /* #1447 — chapter-level non-story classification (Signal 2). OPTIONAL so
+     analyzers that don't implement it degrade to Signal-1-only. Returns
+     { nonStory: true } when the chapter is a non-story foreword / critical
+     essay about the book or its author rather than narrative fiction. */
+  runNonStoryClassification?(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<NonStoryClassificationOutput>;
 }
 
 export interface SelectAnalyzerOptions {
@@ -336,6 +347,23 @@ export class FallbackAnalyzer implements Analyzer {
       if (err instanceof AnalysisAbortedError) throw err;
       if (err instanceof LocalUnreachableError) {
         return await this.fallback.runAttributionEscalation(manuscriptId, chapterId, prompt, call);
+      }
+      throw err;
+    }
+  }
+
+  async runNonStoryClassification(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<NonStoryClassificationOutput> {
+    try {
+      return await this.primary.runNonStoryClassification!(manuscriptId, chapterId, promptMd, call);
+    } catch (err) {
+      if (err instanceof AnalysisAbortedError) throw err;
+      if (err instanceof LocalUnreachableError) {
+        return await this.fallback.runNonStoryClassification!(manuscriptId, chapterId, promptMd, call);
       }
       throw err;
     }
