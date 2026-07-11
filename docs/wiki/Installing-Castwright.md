@@ -14,7 +14,11 @@ After install you'll have a single command (`npm run start:prod`) that brings up
 
 ## Prerequisites
 
-![The Setup Wizard's Environment step, checking OS, GPU, and accelerator profile](images/installing-castwright/01-prerequisites.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/installing-castwright/01-prerequisites-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/installing-castwright/01-prerequisites.png">
+  <img alt="The Setup Wizard's Environment step, checking OS, GPU, and accelerator profile" src="images/installing-castwright/01-prerequisites.png">
+</picture>
 
 - **Node.js 20.19 or newer** (Vite 8 needs ≥20.19 / ≥22.12; the repo targets Node 24) — <https://nodejs.org>
 - **Python 3.12** (exactly — the sidecar bootstrap probes for 3.12 and refuses other versions)
@@ -54,7 +58,11 @@ and no system prerequisites — Pinokio provisions its own Python 3.12 + ffmpeg 
 3. Click **Start**, then **Open Web UI**. The first launch runs the in-app setup wizard
    (GPU detect + one-time Kokoro voice-model download) — identical to the native installers.
 
-![The Setup Wizard overview a Pinokio install lands on after first launch](images/installing-castwright/pinokio-setup-wizard.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/installing-castwright/pinokio-setup-wizard-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/installing-castwright/pinokio-setup-wizard.png">
+  <img alt="The Setup Wizard overview a Pinokio install lands on after first launch" src="images/installing-castwright/pinokio-setup-wizard.png">
+</picture>
 
 Update anytime via the **Update** menu (rebuilds from the newest published release).
 **Stop** cleanly tears down the server + voice engine; **Reset** rebuilds from scratch
@@ -91,7 +99,11 @@ copy server\.env.example server\.env
 npm run start:prod
 ```
 
-![The Setup Wizard's Models step, installing Kokoro and setting the analyzer key](images/installing-castwright/02-install-windows.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/installing-castwright/02-install-windows-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/installing-castwright/02-install-windows.png">
+  <img alt="The Setup Wizard's Models step, installing Kokoro and setting the analyzer key" src="images/installing-castwright/02-install-windows.png">
+</picture>
 
 Browser opens `http://localhost:8080`.
 
@@ -208,7 +220,11 @@ See [Troubleshooting](Troubleshooting) for the full symptom → fix table.
 The server reads `server/.env` (copied from `server/.env.example` in the install
 steps above). All knobs have safe defaults — set only what you need.
 
-![The Setup Wizard's Defaults step — voice engine, voice model, analysis model, and theme](images/installing-castwright/03-configuration.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/installing-castwright/03-configuration-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/installing-castwright/03-configuration.png">
+  <img alt="The Setup Wizard's Defaults step — voice engine, voice model, analysis model, and theme" src="images/installing-castwright/03-configuration.png">
+</picture>
 
 **Analyzer**
 
