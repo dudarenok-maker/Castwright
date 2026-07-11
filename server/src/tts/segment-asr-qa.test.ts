@@ -82,6 +82,41 @@ describe('WER_INTEGERS.es (#1084)', () => {
   });
 });
 
+describe('WER_INTEGERS.fr (#1084)', () => {
+  it('spells 0-16 literally, 17-19 as two tokens', () => {
+    expect(WER_INTEGERS.fr[0]).toEqual(['zéro']);
+    expect(WER_INTEGERS.fr[16]).toEqual(['seize']);
+    expect(WER_INTEGERS.fr[17]).toEqual(['dix', 'sept']);
+    expect(WER_INTEGERS.fr[19]).toEqual(['dix', 'neuf']);
+  });
+  it('composes 20-69 regularly with the et/no-et split', () => {
+    expect(WER_INTEGERS.fr[21]).toEqual(['vingt', 'et', 'un']);
+    expect(WER_INTEGERS.fr[22]).toEqual(['vingt', 'deux']);
+    expect(WER_INTEGERS.fr[61]).toEqual(['soixante', 'et', 'un']);
+  });
+  it('switches to base-20 counting for 70-79, keeping et only at 71', () => {
+    expect(WER_INTEGERS.fr[70]).toEqual(['soixante', 'dix']);
+    expect(WER_INTEGERS.fr[71]).toEqual(['soixante', 'et', 'onze']);
+    expect(WER_INTEGERS.fr[72]).toEqual(['soixante', 'douze']);
+    expect(WER_INTEGERS.fr[77]).toEqual(['soixante', 'dix', 'sept']);
+    expect(WER_INTEGERS.fr[79]).toEqual(['soixante', 'dix', 'neuf']);
+  });
+  it('drops the plural -s off vingt(s) and the et at 80-89', () => {
+    expect(WER_INTEGERS.fr[80]).toEqual(['quatre', 'vingts']);
+    expect(WER_INTEGERS.fr[81]).toEqual(['quatre', 'vingt', 'un']);
+    expect(WER_INTEGERS.fr[89]).toEqual(['quatre', 'vingt', 'neuf']);
+  });
+  it('continues base-20 for 90-99, no et at 91', () => {
+    expect(WER_INTEGERS.fr[90]).toEqual(['quatre', 'vingt', 'dix']);
+    expect(WER_INTEGERS.fr[91]).toEqual(['quatre', 'vingt', 'onze']);
+    expect(WER_INTEGERS.fr[97]).toEqual(['quatre', 'vingt', 'dix', 'sept']);
+    expect(WER_INTEGERS.fr[99]).toEqual(['quatre', 'vingt', 'dix', 'neuf']);
+  });
+  it('covers exactly indices 0..99', () => {
+    expect(WER_INTEGERS.fr).toHaveLength(100);
+  });
+});
+
 describe('classifyTranscript', () => {
   it('identical text → ok, wer 0', () => {
     const c = classifyTranscript(EXPECTED, EXPECTED, CLEAN);

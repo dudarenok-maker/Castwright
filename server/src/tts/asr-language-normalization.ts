@@ -42,8 +42,57 @@ function buildSpanish(): IntegerTable {
   return out;
 }
 
+const FR_ONES = [
+  'zéro', 'un', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit', 'neuf',
+  'dix', 'onze', 'douze', 'treize', 'quatorze', 'quinze', 'seize',
+];
+/** FR_TEEN_WORDS[i] = the word for (10+i), i in 0..9 — used standalone (17-19)
+    and as the second half of the 70s/90s base-20 compounds (e.g. 72 =
+    "soixante" + FR_TEEN_WORDS[2] = "douze"). */
+const FR_TEEN_WORDS = [
+  'dix', 'onze', 'douze', 'treize', 'quatorze', 'quinze', 'seize',
+  'dix-sept', 'dix-huit', 'dix-neuf',
+];
+const FR_REGULAR_DECADES: Record<number, string> = {
+  2: 'vingt', 3: 'trente', 4: 'quarante', 5: 'cinquante', 6: 'soixante',
+};
+
+/** Tokens for the teen word (10+i), i in 0..9. dix..seize are one token;
+    dix-sept/huit/neuf split on their hyphen into two. */
+function teenTokens(i: number): string[] {
+  if (i <= 6) return [FR_TEEN_WORDS[i]];
+  const [a, b] = FR_TEEN_WORDS[i].split('-');
+  return [a, b];
+}
+
+/** French: regular decade+ones (with et/no-et) through 69, then base-20
+    counting for 70-99 (soixante+teen for 70s, quatre-vingt+ones/teen for
+    80s/90s) — enumerated per the composition rules in the design spec, not
+    derived by one generic formula, since this range is genuinely irregular. */
+function buildFrench(): IntegerTable {
+  const out: string[][] = [];
+  for (let n = 0; n <= 16; n += 1) out.push([FR_ONES[n]]);
+  for (let n = 17; n <= 19; n += 1) out.push(teenTokens(n - 10));
+  for (let d = 2; d <= 6; d += 1) {
+    const decade = FR_REGULAR_DECADES[d];
+    out.push([decade]);
+    out.push([decade, 'et', 'un']);
+    for (let ones = 2; ones <= 9; ones += 1) out.push([decade, FR_ONES[ones]]);
+  }
+  out.push(['soixante', 'dix']); // 70
+  out.push(['soixante', 'et', 'onze']); // 71 — irregular: keeps "et"
+  for (let i = 2; i <= 9; i += 1) out.push(['soixante', ...teenTokens(i)]); // 72-79
+  out.push(['quatre', 'vingts']); // 80 — plural -s, bare decade only
+  for (let ones = 1; ones <= 9; ones += 1) out.push(['quatre', 'vingt', FR_ONES[ones]]); // 81-89, no et
+  out.push(['quatre', 'vingt', 'dix']); // 90
+  out.push(['quatre', 'vingt', 'onze']); // 91 — no et
+  for (let i = 2; i <= 9; i += 1) out.push(['quatre', 'vingt', ...teenTokens(i)]); // 92-99
+  return out;
+}
+
 export const WER_INTEGERS: Readonly<Record<string, IntegerTable>> = Object.freeze({
   es: Object.freeze(buildSpanish()),
+  fr: Object.freeze(buildFrench()),
 });
 
 export const WER_CONTRACTIONS: Readonly<Record<string, Record<string, string>>> = Object.freeze({});
