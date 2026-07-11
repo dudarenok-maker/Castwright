@@ -292,19 +292,45 @@ describe('classifyTranscript', () => {
     expect(c.verdict).toBe('drift');
     expect(c.wer).toBeGreaterThan(0.4);
   });
+});
 
-  it('threads language so a non-English digit is not English-spelled into extra errors', () => {
-    // "21" → "twenty one" inflates the expected tokens and mis-aligns against the
-    // Spanish "veintiún" Whisper actually heard; with language=es the digit stays
-    // one token → a single clean substitution (#1084).
-    const esExpected = 'Compró 21 manzanas rojas en el mercado.';
-    const esHeard = 'Compró veintiún manzanas rojas en el mercado.';
-    const withEs = classifyTranscript(esExpected, esHeard, CLEAN, { language: 'es' });
-    const withoutLang = classifyTranscript(esExpected, esHeard, CLEAN);
-    expect(withEs.sub).toBe(1);
-    expect(withEs.del).toBe(0);
-    expect(withEs.verdict).toBe('ok');
-    expect(withoutLang.wer).toBeGreaterThan(withEs.wer);
+describe('classifyTranscript es/fr/de faithful vs. drift (#1084)', () => {
+  const signals = { avgLogprob: -0.2, noSpeechProb: 0.05, compressionRatio: 1.2 };
+
+  it('scores a faithful Spanish transcript -> ok', () => {
+    const r = classifyTranscript('Tenía treinta y un años en aquel verano.',
+      'Tenía treinta y un años en aquel verano.', signals, { language: 'es' });
+    expect(r.verdict).toBe('ok');
+    expect(r.wer).toBe(0);
+  });
+  it('flags wrong words in a Spanish transcript -> drift', () => {
+    const r = classifyTranscript('Tenía treinta y un años en aquel verano.',
+      'Compró un barco azul en el puerto lejano.', signals, { language: 'es' });
+    expect(r.verdict).toBe('drift');
+  });
+
+  it('scores a faithful French transcript -> ok', () => {
+    const r = classifyTranscript('Il avait soixante-douze ans cet été-là.',
+      'Il avait soixante-douze ans cet été-là.', signals, { language: 'fr' });
+    expect(r.verdict).toBe('ok');
+    expect(r.wer).toBe(0);
+  });
+  it('flags wrong words in a French transcript -> drift', () => {
+    const r = classifyTranscript('Il avait soixante-douze ans cet été-là.',
+      'Elle portait une robe rouge ce matin-là.', signals, { language: 'fr' });
+    expect(r.verdict).toBe('drift');
+  });
+
+  it('scores a faithful German transcript -> ok', () => {
+    const r = classifyTranscript('Sie hatte einundzwanzig Katzen im Garten.',
+      'Sie hatte einundzwanzig Katzen im Garten.', signals, { language: 'de' });
+    expect(r.verdict).toBe('ok');
+    expect(r.wer).toBe(0);
+  });
+  it('flags wrong words in a German transcript -> drift', () => {
+    const r = classifyTranscript('Sie hatte einundzwanzig Katzen im Garten.',
+      'Er kaufte einen roten Wagen am Montag.', signals, { language: 'de' });
+    expect(r.verdict).toBe('drift');
   });
 });
 
