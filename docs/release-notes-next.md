@@ -22,12 +22,18 @@ DRAFT IN PROGRESS — first PR of the v1.13.0 cycle (v1.12.3 shipped as the
 consolidated Pinokio-installer patch, superseding v1.12.1/v1.12.2).
 Bootstrapped per CONTRIBUTING.md "Release notes": marker bumped forward,
 stale v1.12.3 body cleared, this PR's own entry opens the fresh draft.
-Diffed against v1.12.3 (the previous public release).
+Diffed against v1.12.3 (the previous public release). Multiple PRs have
+now landed in this cycle; later PRs append to this draft rather than
+opening a new one.
 -->
 
 **Ongoing hardening.** *(placeholder theme — refine at cut time once the full v1.13.0 scope is known.)*
 
 ---
+
+## 🗣️ Quality & Accuracy
+
+- **ASR content-QA gate: non-English integer-spelling and contraction normalization for es/fr/de/ru (#1084).** Real per-language `maxWer` calibration against rendered audio remains a tracked follow-up.
 
 ## 🎙️ Voice design & casting
 

@@ -1,12 +1,12 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # 248 — srv: ASR content-QA non-English normalization (#1084)
 
-> Status: draft (design complete, implementation not started)
+> Status: active (deterministic engineering half shipped; on-box calibration follow-up #1527 open)
 > Key files: `server/src/tts/asr-language-normalization.ts` (new),
 > `server/src/tts/segment-asr-qa.ts` (`normalizeForWer`), `server/src/config/registry.ts`
 > (`qa.asr.maxWer.{fr,de}`), `server/src/tts/segment-asr-qa.test.ts`
@@ -128,7 +128,7 @@ of scope for this plan (see below) and tracked as its own issue.
 
 ## Ship notes
 
-(Empty — filled in by plan Task 8, Step 5, once the implementing PR merges.
-Per the design spec's `Refs #1084`-not-`Closes` decision, this plan's status
-stays `active`, not `stable`, until the calibration follow-up closes #1084
-itself.)
+Shipped <merge date TBD>, commit <merge commit SHA TBD>. Behaviour delta vs. spec: none —
+implemented exactly as designed. Calibration remainder tracked in #1527; this plan's
+own status stays `active` (not `stable`) until that follow-up closes, since #1084 itself stays
+open to represent it.

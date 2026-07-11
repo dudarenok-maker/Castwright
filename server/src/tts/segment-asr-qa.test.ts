@@ -22,6 +22,7 @@ import {
   editDistanceAtMost1,
   type AsrSignals,
 } from './segment-asr-qa.js';
+import { WER_INTEGERS, WER_CONTRACTIONS } from './asr-language-normalization.js';
 
 const CLEAN: AsrSignals = { avgLogprob: -0.2, noSpeechProb: 0.02, compressionRatio: 1.3 };
 const EXPECTED = 'She climbed the stairs to the old observatory at the top of the tower.';
@@ -44,11 +45,18 @@ describe('normalizeForWer', () => {
     expect(normalizeForWer('I have 3 keys.', 'en')).toEqual(['i', 'have', 'three', 'keys']);
   });
 
-  it('does NOT English-spell integers for a non-English language (keeps the digit)', () => {
-    // "3" → "three" only makes sense against English audio; on a Spanish/Russian
-    // book Whisper hears "tres"/"три", so injecting "three" is a false error (#1084).
-    expect(normalizeForWer('Tengo 3 llaves.', 'es')).toEqual(['tengo', '3', 'llaves']);
-    expect(normalizeForWer('У меня 3 ключа.', 'ru')).toEqual(['у', 'меня', '3', 'ключа']);
+  it('spells integers in the target non-English language, not English (#1084)', () => {
+    // Before #1084 this was a no-op ("tres"/"три" instead of "three" would have
+    // been a false error). Now es/ru spell the digit in THEIR OWN language,
+    // matching what Whisper actually hears, instead of not spelling it at all.
+    expect(normalizeForWer('Tengo 3 llaves.', 'es')).toEqual(['tengo', 'tres', 'llaves']);
+    expect(normalizeForWer('У меня 3 ключа.', 'ru')).toEqual(['у', 'меня', 'три', 'ключа']);
+  });
+
+  it('leaves the digit as-is for a language with no WER_INTEGERS table (#1084)', () => {
+    // Preserves coverage of the `if (!table) return tokens` no-op fallback —
+    // 'pt' (Portuguese) has no entry in WER_INTEGERS.
+    expect(normalizeForWer('Tenho 3 chaves.', 'pt')).toEqual(['tenho', '3', 'chaves']);
   });
 
   it('keeps non-Latin (Cyrillic) words instead of erasing them', () => {
@@ -57,6 +65,147 @@ describe('normalizeForWer', () => {
     expect(normalizeForWer('Она медленно шла по узкой улице.')).toEqual([
       'она', 'медленно', 'шла', 'по', 'узкой', 'улице',
     ]);
+  });
+});
+
+describe('normalizeForWer non-English integer spelling (#1084)', () => {
+  it('spells a Spanish number inline with the surrounding words', () => {
+    expect(normalizeForWer('Tenía 31 años.', 'es')).toEqual(['tenía', 'treinta', 'y', 'uno', 'años']);
+  });
+  it('spells a French base-20 number (72) correctly inline', () => {
+    expect(normalizeForWer('Il avait 72 ans.', 'fr')).toEqual(['il', 'avait', 'soixante', 'douze', 'ans']);
+  });
+  it('spells a German fused compound (21) as one token', () => {
+    expect(normalizeForWer('Sie hatte 21 Katzen.', 'de')).toEqual(['sie', 'hatte', 'einundzwanzig', 'katzen']);
+  });
+  it('spells a Russian number (21) as two tokens', () => {
+    expect(normalizeForWer('Ей было 21 год.', 'ru')).toEqual(['ей', 'было', 'двадцать', 'один', 'год']);
+  });
+  it('leaves a 3+ digit number as a digit for every non-English language, matching English', () => {
+    expect(normalizeForWer('En 1999.', 'es')).toEqual(['en', '1999']);
+  });
+});
+
+describe('normalizeForWer German contraction expansion (#1084)', () => {
+  it('expands "im" to "in dem" so it matches the uncontracted form', () => {
+    expect(normalizeForWer('im Garten', 'de')).toEqual(normalizeForWer('in dem Garten', 'de'));
+  });
+
+  it('normalizeForWer skipContractions option bypasses German contraction expansion (#1084 review fix)', () => {
+    expect(normalizeForWer('im Garten', 'de', { skipContractions: true })).toEqual(['im', 'garten']);
+    expect(normalizeForWer('im Garten', 'de')).toEqual(normalizeForWer('in dem Garten', 'de')); // default behavior unchanged
+  });
+});
+
+describe('normalizeForWer no-op proof for es/fr/ru contractions (#1084)', () => {
+  it('has no WER_CONTRACTIONS entry for es/fr/ru — mandatory contractions need no table', () => {
+    expect(WER_CONTRACTIONS.es).toBeUndefined();
+    expect(WER_CONTRACTIONS.fr).toBeUndefined();
+    expect(WER_CONTRACTIONS.ru).toBeUndefined();
+  });
+  it('French elision (qu\'il) already normalizes consistently via the generic apostrophe strip', () => {
+    expect(normalizeForWer("qu'il", 'fr')).toEqual(normalizeForWer('quil', 'fr'));
+  });
+  it('Spanish mandatory contraction (del) passes through unchanged — nothing to reconcile', () => {
+    expect(normalizeForWer('Vengo del mercado.', 'es')).toEqual(['vengo', 'del', 'mercado']);
+  });
+});
+
+describe('WER_INTEGERS.es (#1084)', () => {
+  it('spells 0-19 literally, including accented dieciséis', () => {
+    expect(WER_INTEGERS.es[0]).toEqual(['cero']);
+    expect(WER_INTEGERS.es[16]).toEqual(['dieciséis']);
+    expect(WER_INTEGERS.es[19]).toEqual(['diecinueve']);
+  });
+  it('fuses 21-29 into one accented token', () => {
+    expect(WER_INTEGERS.es[21]).toEqual(['veintiuno']);
+    expect(WER_INTEGERS.es[22]).toEqual(['veintidós']);
+    expect(WER_INTEGERS.es[26]).toEqual(['veintiséis']);
+  });
+  it('splits 30-99 into [decade, y, ones] with no irregularity past 29', () => {
+    expect(WER_INTEGERS.es[31]).toEqual(['treinta', 'y', 'uno']);
+    expect(WER_INTEGERS.es[71]).toEqual(['setenta', 'y', 'uno']);
+    expect(WER_INTEGERS.es[95]).toEqual(['noventa', 'y', 'cinco']);
+  });
+  it('covers exactly indices 0..99', () => {
+    expect(WER_INTEGERS.es).toHaveLength(100);
+  });
+});
+
+describe('WER_INTEGERS.fr (#1084)', () => {
+  it('spells 0-16 literally, 17-19 as two tokens', () => {
+    expect(WER_INTEGERS.fr[0]).toEqual(['zéro']);
+    expect(WER_INTEGERS.fr[16]).toEqual(['seize']);
+    expect(WER_INTEGERS.fr[17]).toEqual(['dix', 'sept']);
+    expect(WER_INTEGERS.fr[19]).toEqual(['dix', 'neuf']);
+  });
+  it('composes 20-69 regularly with the et/no-et split', () => {
+    expect(WER_INTEGERS.fr[21]).toEqual(['vingt', 'et', 'un']);
+    expect(WER_INTEGERS.fr[22]).toEqual(['vingt', 'deux']);
+    expect(WER_INTEGERS.fr[61]).toEqual(['soixante', 'et', 'un']);
+  });
+  it('switches to base-20 counting for 70-79, keeping et only at 71', () => {
+    expect(WER_INTEGERS.fr[70]).toEqual(['soixante', 'dix']);
+    expect(WER_INTEGERS.fr[71]).toEqual(['soixante', 'et', 'onze']);
+    expect(WER_INTEGERS.fr[72]).toEqual(['soixante', 'douze']);
+    expect(WER_INTEGERS.fr[77]).toEqual(['soixante', 'dix', 'sept']);
+    expect(WER_INTEGERS.fr[79]).toEqual(['soixante', 'dix', 'neuf']);
+  });
+  it('drops the plural -s off vingt(s) and the et at 80-89', () => {
+    expect(WER_INTEGERS.fr[80]).toEqual(['quatre', 'vingts']);
+    expect(WER_INTEGERS.fr[81]).toEqual(['quatre', 'vingt', 'un']);
+    expect(WER_INTEGERS.fr[89]).toEqual(['quatre', 'vingt', 'neuf']);
+  });
+  it('continues base-20 for 90-99, no et at 91', () => {
+    expect(WER_INTEGERS.fr[90]).toEqual(['quatre', 'vingt', 'dix']);
+    expect(WER_INTEGERS.fr[91]).toEqual(['quatre', 'vingt', 'onze']);
+    expect(WER_INTEGERS.fr[97]).toEqual(['quatre', 'vingt', 'dix', 'sept']);
+    expect(WER_INTEGERS.fr[99]).toEqual(['quatre', 'vingt', 'dix', 'neuf']);
+  });
+  it('covers exactly indices 0..99', () => {
+    expect(WER_INTEGERS.fr).toHaveLength(100);
+  });
+});
+
+describe('WER_INTEGERS.de (#1084)', () => {
+  it('spells 0-12 literally', () => {
+    expect(WER_INTEGERS.de[0]).toEqual(['null']);
+    expect(WER_INTEGERS.de[12]).toEqual(['zwölf']);
+  });
+  it('truncates the ones-root for 16/17 (sechzehn/siebzehn, not sechszehn/siebenzehn)', () => {
+    expect(WER_INTEGERS.de[16]).toEqual(['sechzehn']);
+    expect(WER_INTEGERS.de[17]).toEqual(['siebzehn']);
+    expect(WER_INTEGERS.de[13]).toEqual(['dreizehn']); // regular teens unaffected
+  });
+  it('fuses 21-99 into one reversed-order token with eins->ein', () => {
+    expect(WER_INTEGERS.de[21]).toEqual(['einundzwanzig']);
+    expect(WER_INTEGERS.de[22]).toEqual(['zweiundzwanzig']);
+  });
+  it('covers exactly indices 0..99', () => {
+    expect(WER_INTEGERS.de).toHaveLength(100);
+  });
+});
+
+describe('WER_CONTRACTIONS.de (#1084)', () => {
+  it('expands the seven documented prepositional contractions', () => {
+    expect(WER_CONTRACTIONS.de).toEqual({
+      im: 'in dem', zum: 'zu dem', beim: 'bei dem', am: 'an dem',
+      ins: 'in das', ans: 'an das', vom: 'von dem',
+    });
+  });
+});
+
+describe('WER_INTEGERS.ru (#1084)', () => {
+  it('spells 0-19 literally', () => {
+    expect(WER_INTEGERS.ru[0]).toEqual(['ноль']);
+    expect(WER_INTEGERS.ru[19]).toEqual(['девятнадцать']);
+  });
+  it('composes 21-99 as two separate tokens, no conjunction', () => {
+    expect(WER_INTEGERS.ru[21]).toEqual(['двадцать', 'один']);
+    expect(WER_INTEGERS.ru[99]).toEqual(['девяносто', 'девять']);
+  });
+  it('covers exactly indices 0..99', () => {
+    expect(WER_INTEGERS.ru).toHaveLength(100);
   });
 });
 
@@ -164,9 +313,167 @@ describe('classifyTranscript', () => {
   });
 });
 
+describe('classifyTranscript es/fr/de faithful vs. drift (#1084)', () => {
+  const signals = { avgLogprob: -0.2, noSpeechProb: 0.05, compressionRatio: 1.2 };
+
+  it('scores a faithful Spanish transcript -> ok', () => {
+    const r = classifyTranscript('Tenía treinta y un años en aquel verano.',
+      'Tenía treinta y un años en aquel verano.', signals, { language: 'es' });
+    expect(r.verdict).toBe('ok');
+    expect(r.wer).toBe(0);
+  });
+  it('flags wrong words in a Spanish transcript -> drift', () => {
+    const r = classifyTranscript('Tenía treinta y un años en aquel verano.',
+      'Compró un barco azul en el puerto lejano.', signals, { language: 'es' });
+    expect(r.verdict).toBe('drift');
+  });
+
+  it('scores a faithful French transcript -> ok', () => {
+    const r = classifyTranscript('Il avait soixante-douze ans cet été-là.',
+      'Il avait soixante-douze ans cet été-là.', signals, { language: 'fr' });
+    expect(r.verdict).toBe('ok');
+    expect(r.wer).toBe(0);
+  });
+  it('flags wrong words in a French transcript -> drift', () => {
+    const r = classifyTranscript('Il avait soixante-douze ans cet été-là.',
+      'Elle portait une robe rouge ce matin-là.', signals, { language: 'fr' });
+    expect(r.verdict).toBe('drift');
+  });
+
+  it('scores a faithful German transcript -> ok', () => {
+    const r = classifyTranscript('Sie hatte einundzwanzig Katzen im Garten.',
+      'Sie hatte einundzwanzig Katzen im Garten.', signals, { language: 'de' });
+    expect(r.verdict).toBe('ok');
+    expect(r.wer).toBe(0);
+  });
+  it('flags wrong words in a German transcript -> drift', () => {
+    const r = classifyTranscript('Sie hatte einundzwanzig Katzen im Garten.',
+      'Er kaufte einen roten Wagen am Montag.', signals, { language: 'de' });
+    expect(r.verdict).toBe('drift');
+  });
+
+  it('does not inflate WER when Whisper mishears a German contraction as a near-homophone real word (#1084 review fix)', () => {
+    const r = classifyTranscript('Bleib im Haus!', 'Bleib ihm Haus!', signals, { language: 'de' });
+    expect(r.verdict).toBe('ok');
+    expect(r.sub).toBe(1);
+    expect(r.del).toBe(0);
+  });
+
+  it('still matches when Whisper spells out the German contraction as two words (#1084 review fix)', () => {
+    const r = classifyTranscript('Bleib im Haus!', 'Bleib in dem Haus!', signals, { language: 'de' });
+    expect(r.verdict).toBe('ok');
+    expect(r.wer).toBe(0);
+  });
+
+  it('still flags genuine German content drift even with a contraction in the sentence (#1084 review fix)', () => {
+    const r = classifyTranscript(
+      'Bleib im Haus, mein Freund!',
+      'Renne im Park, mein Feind!',
+      signals,
+      { language: 'de' },
+    );
+    expect(r.verdict).toBe('drift');
+  });
+
+  it('does not let a name allowlist entry equal to a German contraction key leak expanded words into tolerance (#1084 review fix)', () => {
+    // 'Vom' as a (contrived) character name/alias — before the fix this expanded to
+    // ['von', 'dem'], silently tolerating those two very common words anywhere in
+    // the sentence. Real content drift replacing "von dem" with unrelated words
+    // (2 subs out of 4 words, wer 0.5 > the 0.4 cap) must still be flagged — a
+    // leaking allow set would zero out both subs and read as a faithful 'ok'.
+    const r = classifyTranscript('Ging sie von dem?', 'Ging sie irgendwo hin?', signals, {
+      language: 'de',
+      nameAllowlist: ['Vom'],
+    });
+    expect(r.verdict).toBe('drift');
+  });
+});
+
+describe('allowlist skipContractions scoping (#1084 review fix, bug #2)', () => {
+  it('does not apply skipContractions to an English allowlist entry equal to a CONTRACTIONS key', () => {
+    // "That's" is both a plausible (contrived) character alias AND a literal
+    // CONTRACTIONS key. Before this fix, the allowlist call passed
+    // skipContractions: true unconditionally, so this name normalised to
+    // ['that'] (possessive-strip fallback strips the apostrophe-s regardless
+    // of skipContractions) instead of the expected ['that', 'is'] — a real
+    // behavioural change for English that the
+    // "byte-for-byte unchanged" constraint should have prevented. It must
+    // tokenize identically to the un-opted 2-arg normalizeForWer call.
+    const allowlisted = normalizeForWer("That's", 'en', undefined);
+    expect(allowlisted).toEqual(['that', 'is']);
+    expect(allowlisted).toEqual(normalizeForWer("That's", 'en'));
+  });
+
+  it('does not apply skipContractions to a Spanish allowlist entry (no WER_CONTRACTIONS.es table)', () => {
+    // Spanish has no WER_CONTRACTIONS table, so hasContractionTable is false
+    // and the allowlist call must pass no skipContractions option at all —
+    // identical to the bare 2-arg call.
+    expect(normalizeForWer('Vía', 'es')).toEqual(normalizeForWer('Vía', 'es', undefined));
+  });
+
+  it('an English proper-noun allowlist still tolerates the mangled name exactly as before (regression, no leak)', () => {
+    // Re-run of the pre-existing allowlist test, pinning that fix #1 didn't
+    // regress the ordinary (non-contraction) allowlist path for English.
+    const expected = 'Wren Sparrow ran toward the gates of Tidehaven at dawn.';
+    const heard = 'Wren Faster ran toward the gates of Tidehaven at dawn.';
+    const withList = classifyTranscript(expected, heard, CLEAN, {
+      nameAllowlist: ['Wren Sparrow', 'Tidehaven'],
+    });
+    expect(withList.sub).toBe(0);
+    expect(withList.verdict).toBe('ok');
+  });
+
+  it('classifyTranscript restores full English contraction tolerance for an allowlist entry equal to a CONTRACTIONS key', () => {
+    // Drives the actual regression site (the allowlist normalization call inside
+    // classifyTranscript), not just normalizeForWer in isolation. Before fix #1,
+    // the unconditional skipContractions:true meant "That's" only tolerated
+    // ['that'] (the possessive-strip fallback) — missing 'is' — so a genuine
+    // 2-substitution drift (wer 0.5, over the 0.4 cap) would NOT have been
+    // brought under the cap by the allowlist. After the fix, "That's" tolerates
+    // both ['that','is'] again (matching pre-#1084 behaviour), correctly
+    // absorbing one of the two substitutions and reading as 'ok' (wer 0.25).
+    const r = classifyTranscript("That's true today.", 'Somewhere else today.', CLEAN, {
+      nameAllowlist: ["That's"],
+    });
+    expect(r.verdict).toBe('ok');
+    expect(r.wer).toBe(0.25);
+    expect(r.sub).toBe(1);
+
+    // Sanity: without the allowlist at all, this is genuine drift regardless —
+    // confirms the allowlist (not some other normalization quirk) is what's
+    // absorbing the extra substitution above.
+    const withoutList = classifyTranscript("That's true today.", 'Somewhere else today.', CLEAN, {});
+    expect(withoutList.verdict).toBe('drift');
+  });
+});
+
+describe('dual-variant alignment perf guard — skip when no contraction word present (#1084 review fix, bug #3)', () => {
+  it('a German sentence with no contraction key still classifies correctly (early-exit path)', () => {
+    // No "im/zum/beim/am/ins/ans/vom" token anywhere in this sentence, so the
+    // second buildAlignment call must be skipped entirely — confirm the
+    // verdict is unaffected (pure perf guard, no behaviour change).
+    const r = classifyTranscript(
+      'Sie hatte einundzwanzig Katzen im Garten.'.replace('im Garten', 'draussen'),
+      'Sie hatte einundzwanzig Katzen draussen.',
+      CLEAN,
+      { language: 'de' },
+    );
+    expect(r.verdict).toBe('ok');
+    expect(r.wer).toBe(0);
+  });
+
+  it('a German sentence WITH a contraction key still triggers the dual-variant reconciliation (unchanged from bug #2 fix)', () => {
+    const r = classifyTranscript('Bleib im Haus!', 'Bleib in dem Haus!', CLEAN, { language: 'de' });
+    expect(r.verdict).toBe('ok');
+    expect(r.wer).toBe(0);
+  });
+});
+
 describe('resolveAsrThresholds per-language maxWer (#1084 scaffold)', () => {
   afterEach(() => {
     delete process.env.SEG_ASR_MAX_WER_ES;
+    delete process.env.SEG_ASR_MAX_WER_FR;
+    delete process.env.SEG_ASR_MAX_WER_DE;
   });
 
   it('defaults every language to the global maxWer', () => {
@@ -180,6 +487,12 @@ describe('resolveAsrThresholds per-language maxWer (#1084 scaffold)', () => {
     expect(resolveAsrThresholds(undefined, 'es').maxWer).toBeCloseTo(0.55);
     expect(resolveAsrThresholds(undefined, 'ru').maxWer).toBe(0.4);
     expect(resolveAsrThresholds(undefined, 'en').maxWer).toBe(0.4);
+  });
+
+  it('honours fr/de per-language overrides the same way as es/ru', () => {
+    process.env.SEG_ASR_MAX_WER_FR = '0.5';
+    expect(resolveAsrThresholds(undefined, 'fr').maxWer).toBeCloseTo(0.5);
+    expect(resolveAsrThresholds(undefined, 'de').maxWer).toBe(0.4);
   });
 });
 

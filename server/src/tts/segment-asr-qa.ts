@@ -28,6 +28,7 @@
 import { transcribeSegment, type TranscribeResult } from './transcribe-client.js';
 import { configValue, resolveKnob } from '../config/resolver.js';
 import { allKnobs } from '../config/registry.js';
+import { WER_INTEGERS, WER_CONTRACTIONS } from './asr-language-normalization.js';
 
 export type AsrVerdict = 'ok' | 'drift' | 'inconclusive';
 
@@ -238,20 +239,38 @@ function spellInteger(n: number): string | null {
 }
 
 /** Normalise to a token array: lowercase, NFKC, smart-punctuation→ascii, and
-    — for English (or unspecified language) only — contraction expansion and
-    integer 0..99 → words. The English number-speller ("3" → "three") matches
-    Whisper's English word output; on a non-English book Whisper hears "tres" /
-    "три", so spelling the digit in English injects a false substitution, hence
-    it is gated on `language` (#1084). Full per-language number spelling is owed
-    on-box calibration. */
-export function normalizeForWer(text: string, language?: string | null): string[] {
-  const english = baseSubtag(language) === 'en' || !language;
+    contraction expansion + integer 0..99 → words, per language. English (or
+    unspecified language) uses the English-only `CONTRACTIONS`/`spellInteger`
+    path unchanged. Non-English languages consult the `WER_INTEGERS` /
+    `WER_CONTRACTIONS` tables (#1084) — matching what Whisper actually hears
+    ("3" → "tres" for Spanish, not "three") instead of leaving the digit as a
+    no-op; a language with no table entry falls back to the digit unchanged. */
+export function normalizeForWer(
+  text: string,
+  language?: string | null,
+  opts?: { skipContractions?: boolean },
+): string[] {
+  const lang = baseSubtag(language);
+  const english = lang === 'en' || !language;
   let s = (text ?? '').normalize('NFKC').toLowerCase();
   s = s.replace(SMART_QUOTES, "'").replace(SMART_DQUOTES, '"').replace(DASHES, '-');
-  // Expand contractions before stripping apostrophes (English-only forms).
-  if (english) {
-    for (const [from, to] of Object.entries(CONTRACTIONS)) {
-      s = s.replace(new RegExp(`\\b${from.replace(/'/g, "['’]")}\\b`, 'g'), to);
+  // Expand contractions before stripping apostrophes — English forms via
+  // CONTRACTIONS, other languages via their own WER_CONTRACTIONS table.
+  // Callers computing an alternate normalization (the non-expanded variant
+  // used for the min-WER comparison, or allowlist entries) pass
+  // skipContractions: true to bypass this step entirely.
+  if (!opts?.skipContractions) {
+    if (english) {
+      for (const [from, to] of Object.entries(CONTRACTIONS)) {
+        s = s.replace(new RegExp(`\\b${from.replace(/'/g, "['’]")}\\b`, 'g'), to);
+      }
+    } else {
+      const contractions = WER_CONTRACTIONS[lang];
+      if (contractions) {
+        for (const [from, to] of Object.entries(contractions)) {
+          s = s.replace(new RegExp(`\\b${from}\\b`, 'g'), to);
+        }
+      }
     }
   }
   // Drop possessive 's and any remaining apostrophes inside words.
@@ -263,13 +282,29 @@ export function normalizeForWer(text: string, language?: string | null): string[
   // (2026-06-15; mirrors the stage2-coverage.ts fix). English is unchanged.
   s = s.replace(/[^\p{L}\p{N}]+/gu, ' ');
   const tokens = s.split(/\s+/).filter(Boolean);
-  if (!english) return tokens; // skip English integer-spelling for other languages
+  if (english) {
+    const out: string[] = [];
+    for (const tok of tokens) {
+      if (/^\d+$/.test(tok)) {
+        const spelled = spellInteger(Number(tok));
+        if (spelled) {
+          out.push(...spelled.split(' '));
+          continue;
+        }
+      }
+      out.push(tok);
+    }
+    return out;
+  }
+  const table = WER_INTEGERS[lang];
+  if (!table) return tokens; // unknown/unsupported language -> unchanged no-op
   const out: string[] = [];
   for (const tok of tokens) {
     if (/^\d+$/.test(tok)) {
-      const spelled = spellInteger(Number(tok));
+      const n = Number(tok);
+      const spelled = n <= 99 ? table[n] : undefined;
       if (spelled) {
-        out.push(...spelled.split(' '));
+        out.push(...spelled);
         continue;
       }
     }
@@ -524,53 +559,106 @@ export function classifyTranscript(
     }
   }
 
-  const [expectedTokens, actualTokens] = bridgeCompounds(
-    normalizeForWer(expectedText, opts.language),
-    normalizeForWer(transcript, opts.language),
-    t.maxBridgeRun,
-  );
-  if (expectedTokens.length === 0) {
-    reasons.push('Not scored — expected text normalised to empty.');
-    return base('inconclusive');
-  }
+  // Computed once, up front, and reused for BOTH the allowlist normalization
+  // below and the dual-variant alignment decision further down — a language
+  // with no WER_CONTRACTIONS entry (English, es, fr, ru today) must never see
+  // skipContractions applied anywhere, restoring byte-identical pre-#1084
+  // behaviour for those languages (#1084 review fix).
+  const langKey = baseSubtag(opts.language);
+  const hasContractionTable = Object.keys(WER_CONTRACTIONS[langKey] ?? {}).length > 0;
 
   const allow = new Set<string>();
   for (const src of [opts.nameAllowlist, opts.vocalizationAllowlist]) {
     if (src) {
       for (const name of src) {
-        for (const tok of normalizeForWer(name, opts.language)) allow.add(tok);
+        for (const tok of normalizeForWer(
+          name,
+          opts.language,
+          hasContractionTable ? { skipContractions: true } : undefined,
+        ))
+          allow.add(tok);
       }
     }
   }
 
-  const ops = alignTokens(expectedTokens, actualTokens);
-  let sub = 0;
-  let del = 0;
-  let ins = 0;
-  let curDelRun = 0;
-  let longestDeletionRun = 0;
-  for (const op of ops) {
-    const tolerated = op.expected != null && allow.has(op.expected);
-    if (op.type === 'sub') {
-      if (!tolerated) sub += 1;
-      curDelRun = 0;
-    } else if (op.type === 'del') {
-      if (!tolerated) {
-        del += 1;
-        curDelRun += 1;
-        if (curDelRun > longestDeletionRun) longestDeletionRun = curDelRun;
+  const heardTokens = normalizeForWer(transcript, opts.language);
+
+  type Alignment = {
+    expectedTokens: string[];
+    actualTokens: string[];
+    sub: number;
+    del: number;
+    ins: number;
+    longestDeletionRun: number;
+    wer: number;
+  };
+
+  // Build the alignment (bridging, edit-distance backtrace, tolerated-token
+  // counting) for one variant of the expected-token stream. Called once for
+  // the default (contraction-expanded) variant, and — only for a language
+  // with a WER_CONTRACTIONS table (currently just German) — a second time for
+  // the non-expanded variant, so a mishearing where Whisper's word ISN'T the
+  // contraction's expansion doesn't get an artificial extra deletion (#1084
+  // review fix).
+  const buildAlignment = (expectedRaw: string[]): Alignment => {
+    const [expectedTokens, actualTokens] = bridgeCompounds(expectedRaw, heardTokens, t.maxBridgeRun);
+    const ops = alignTokens(expectedTokens, actualTokens);
+    let sub = 0;
+    let del = 0;
+    let ins = 0;
+    let curDelRun = 0;
+    let longestDeletionRun = 0;
+    for (const op of ops) {
+      const tolerated = op.expected != null && allow.has(op.expected);
+      if (op.type === 'sub') {
+        if (!tolerated) sub += 1;
+        curDelRun = 0;
+      } else if (op.type === 'del') {
+        if (!tolerated) {
+          del += 1;
+          curDelRun += 1;
+          if (curDelRun > longestDeletionRun) longestDeletionRun = curDelRun;
+        } else {
+          curDelRun = 0;
+        }
+      } else if (op.type === 'ins') {
+        ins += 1;
+        curDelRun = 0;
       } else {
         curDelRun = 0;
       }
-    } else if (op.type === 'ins') {
-      ins += 1;
-      curDelRun = 0;
-    } else {
-      curDelRun = 0;
+    }
+    const wer = expectedTokens.length === 0 ? Infinity : (sub + del + ins) / expectedTokens.length;
+    return { expectedTokens, actualTokens, sub, del, ins, longestDeletionRun, wer };
+  };
+
+  let alignment = buildAlignment(normalizeForWer(expectedText, opts.language));
+  if (alignment.expectedTokens.length === 0) {
+    reasons.push('Not scored — expected text normalised to empty.');
+    return base('inconclusive');
+  }
+
+  if (hasContractionTable) {
+    // Cheap pre-check: skip the second O(n·m) alignment pass entirely when
+    // the raw expected text contains none of this language's contraction
+    // keys as a whole word — there is nothing skipContractions could change,
+    // so the alt variant could only tie or lose. Pure perf guard, no
+    // behaviour change (#1084 review fix).
+    const contractionKeys = Object.keys(WER_CONTRACTIONS[langKey]);
+    const hasAnyContractionWord = contractionKeys.some((key) =>
+      new RegExp(`\\b${key}\\b`, 'i').test(expectedText),
+    );
+    if (hasAnyContractionWord) {
+      const altAlignment = buildAlignment(
+        normalizeForWer(expectedText, opts.language, { skipContractions: true }),
+      );
+      if (altAlignment.wer < alignment.wer) {
+        alignment = altAlignment;
+      }
     }
   }
 
-  const wer = (sub + del + ins) / expectedTokens.length;
+  const { expectedTokens, actualTokens, sub, del, ins, longestDeletionRun, wer } = alignment;
   const metrics = { wer, sub, del, ins, longestDeletionRun };
 
   // Compression-ratio drift was flagged above.
