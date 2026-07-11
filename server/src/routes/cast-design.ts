@@ -93,8 +93,57 @@ export const castDesignRouter = Router();
 export const MAX_RECYCLE_RIDEOUTS = 2;
 
 /* The error-message shapes that mean "the sidecar is down / recycling" (vs. a
-   per-character synthesis failure that should be recorded and skipped past). */
-const SIDECAR_DOWN_RE = /unreachable|did not complete within|stopped responding/i;
+   per-character synthesis failure that should be recorded and skipped past).
+   Widened to also recognize the existing drain-fence "recycling" 503
+   ("Voice engine is recycling to free memory; retry shortly.") — that
+   transient case never matched this regex before and was wrongly treated as
+   an ordinary per-character failure (found auditing every 503 shape this
+   route can return, see the design spec's review-findings section). */
+const SIDECAR_DOWN_RE = /unreachable|did not complete within|stopped responding|recycling/i;
+
+/* Bounded pause between GPU-busy ride-out retries. Deliberately short and
+   NOT test-configurable (kept simple per the spec's non-goals) — real
+   contention from another job almost always outlasts any reasonable
+   constant anyway, so this only meaningfully helps a brief, sub-second
+   blip; its main job is to not hammer the same busy resource in a tight
+   loop before giving up and halting with a clear message. */
+const GPU_BUSY_RIDEOUT_MS = 1_000;
+
+/* Abort-aware setTimeout — same idiom as ensure-sidecar-loaded.ts:217,
+   retry.ts:103, analyzer/gemini.ts:821 (each file keeps its own local copy
+   rather than a shared export, matching this codebase's existing
+   convention for this exact helper). */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('cast-design GPU-busy ride-out sleep aborted', 'AbortError'));
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/* "Sidecar is down or restarting" — a connection-level failure OR the
+   sidecar's own CUDA-poison classification (which schedules a supervised
+   restart, see server/tts-sidecar/main.py's _mark_cuda_poisoned). The
+   existing ensureSidecarEngineReady health-poll is the right wait for both:
+   it already treats a `poisoned: true` /health response as "keep waiting". */
+function isSidecarRestartClass(e: unknown, message: string): boolean {
+  return SIDECAR_DOWN_RE.test(message) || (e as { code?: string } | null)?.code === 'gpu_poisoned';
+}
+
+/* "GPU busy, no sidecar restart involved" — the Node-side GpuBusyError
+   thrown by withGpuLoad when the local Ollama analyzer is resident and busy.
+   Reusing ensureSidecarEngineReady for this would immediately re-throw
+   ANOTHER GpuBusyError (it wraps the same withGpuLoad check), not resolve
+   "ready" — so this class gets its own short explicit sleep instead. */
+function isGpuBusyClass(e: unknown): boolean {
+  return (e as { code?: string } | null)?.code === 'GPU_BUSY';
+}
 
 interface CastFile {
   characters: CastCharacter[];
@@ -401,27 +450,59 @@ async function runDesignJob(
           break;
         } catch (e) {
           const message = (e as Error).message || 'Voice design failed.';
-          if (SIDECAR_DOWN_RE.test(message)) {
-            /* Sidecar down/recycling. Ride out the respawn and retry this
-               character — unless we've exhausted the budget (genuinely dead) or
-               the job was cancelled, in which case stop the run. */
+          if (isSidecarRestartClass(e, message)) {
+            /* Sidecar down/recycling/poison-restarting. Ride out the respawn
+               and retry this character — unless we've exhausted the budget
+               (genuinely dead) or the job was cancelled, in which case stop
+               the run. */
             if (!job.controller.signal.aborted && rideouts < MAX_RECYCLE_RIDEOUTS) {
               rideouts += 1;
               broadcast(job, { type: 'heartbeat', characterId }); // keep the pill alive through the respawn
               try {
                 await ensureSidecarEngineReady('qwen', job.controller.signal);
               } catch {
-                /* aborted (pause) during the wait — stop cleanly; the outer
-                   loop's abort-check ends the job. */
-                break;
+                /* Only a genuine run-level abort is a clean stop here — the
+                   outer loop's abort-check ends the job. Anything else (e.g.
+                   ensureSidecarEngineReady's own withGpuLoad wrap throwing a
+                   GpuBusyError mid-wait) falls through to retry instead of
+                   silently dropping this character's accounting (bug found
+                   during spec review — the old code broke unconditionally on
+                   ANY throw here). rideouts is already bounded above. */
+                if (job.controller.signal.aborted) break;
               }
-              continue; // sidecar should be back — retry this character
+              continue; // retry this character
             }
             /* Exhausted ride-outs (or aborted): a still-down sidecar would fail
                every remaining character identically — stop with a catastrophic
                error instead of grinding through N timeouts. */
             clearInterval(heartbeat);
-            endJob(job, { type: 'error', code: 'sidecar_unavailable', message });
+            endJob(job, {
+              type: 'error',
+              code: 'sidecar_unavailable',
+              message: `${message} (${job.done} of ${job.total} designed before this happened.)`,
+            });
+            return;
+          }
+          if (isGpuBusyClass(e)) {
+            /* GPU busy (no restart involved) — a short bounded pause, then
+               retry; NOT the sidecar health-poll (that would just re-throw
+               the same GpuBusyError immediately, not actually wait). */
+            if (!job.controller.signal.aborted && rideouts < MAX_RECYCLE_RIDEOUTS) {
+              rideouts += 1;
+              broadcast(job, { type: 'heartbeat', characterId });
+              try {
+                await sleep(GPU_BUSY_RIDEOUT_MS, job.controller.signal);
+              } catch {
+                break; // aborted during the wait — clean stop
+              }
+              continue; // retry this character
+            }
+            clearInterval(heartbeat);
+            endJob(job, {
+              type: 'error',
+              code: 'gpu_contention',
+              message: `${message} (${job.done} of ${job.total} designed before this happened.)`,
+            });
             return;
           }
           /* Per-character synthesis failure — record it and move on. */
