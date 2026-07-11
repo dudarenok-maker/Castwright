@@ -421,6 +421,29 @@ describe('allowlist skipContractions scoping (#1084 review fix, bug #2)', () => 
     expect(withList.sub).toBe(0);
     expect(withList.verdict).toBe('ok');
   });
+
+  it('classifyTranscript restores full English contraction tolerance for an allowlist entry equal to a CONTRACTIONS key', () => {
+    // Drives the actual regression site (the allowlist normalization call inside
+    // classifyTranscript), not just normalizeForWer in isolation. Before fix #1,
+    // the unconditional skipContractions:true meant "That's" only tolerated
+    // ['thats'] (the possessive-strip fallback) — missing 'is' — so a genuine
+    // 2-substitution drift (wer 0.5, over the 0.4 cap) would NOT have been
+    // brought under the cap by the allowlist. After the fix, "That's" tolerates
+    // both ['that','is'] again (matching pre-#1084 behaviour), correctly
+    // absorbing one of the two substitutions and reading as 'ok' (wer 0.25).
+    const r = classifyTranscript("That's true today.", 'Somewhere else today.', CLEAN, {
+      nameAllowlist: ["That's"],
+    });
+    expect(r.verdict).toBe('ok');
+    expect(r.wer).toBe(0.25);
+    expect(r.sub).toBe(1);
+
+    // Sanity: without the allowlist at all, this is genuine drift regardless —
+    // confirms the allowlist (not some other normalization quirk) is what's
+    // absorbing the extra substitution above.
+    const withoutList = classifyTranscript("That's true today.", 'Somewhere else today.', CLEAN, {});
+    expect(withoutList.verdict).toBe('drift');
+  });
 });
 
 describe('dual-variant alignment perf guard — skip when no contraction word present (#1084 review fix, bug #3)', () => {
