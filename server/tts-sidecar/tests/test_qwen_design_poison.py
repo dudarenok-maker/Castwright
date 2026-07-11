@@ -10,14 +10,23 @@ from fastapi.testclient import TestClient
 import main
 
 
-def _reset_poison_guards(monkeypatch: pytest.MonkeyPatch) -> None:
+def _reset_poison_guards(monkeypatch: pytest.MonkeyPatch) -> list:
     """Mirrors test_speaker_embed.py's test_embed_load_poison_is_fenced: clear
     both guard flags so the route reaches the design call, and stub
     _mark_cuda_poisoned so the test process never schedules a real
-    threading.Timer-based os._exit."""
+    threading.Timer-based os._exit.
+
+    Returns a list that records calls to _mark_cuda_poisoned for assertion."""
     monkeypatch.setattr(main, "_process_poisoned", False, raising=False)
     monkeypatch.setattr(main, "_restart_pending", False, raising=False)
-    monkeypatch.setattr(main, "_mark_cuda_poisoned", lambda reason: None)
+
+    # Record calls to _mark_cuda_poisoned for assertion in tests
+    calls = []
+    def record_mark_cuda_poisoned(reason):
+        calls.append(reason)
+
+    monkeypatch.setattr(main, "_mark_cuda_poisoned", record_mark_cuda_poisoned)
+    return calls
 
 
 class _FakeQwenOom(main.QwenEngine):
@@ -40,7 +49,7 @@ class _FakeQwenOther(main.QwenEngine):
 
 
 def test_design_voice_oom_returns_classified_503(monkeypatch: pytest.MonkeyPatch):
-    _reset_poison_guards(monkeypatch)
+    calls = _reset_poison_guards(monkeypatch)
     monkeypatch.setitem(main.ENGINES, "qwen", _FakeQwenOom())
 
     client = TestClient(main.app)
@@ -53,9 +62,13 @@ def test_design_voice_oom_returns_classified_503(monkeypatch: pytest.MonkeyPatch
     assert "GPU is out of memory" in body["detail"]
     assert body["detail"] != "Internal error."
 
+    # Assert that _mark_cuda_poisoned was called exactly once with the right reason
+    assert len(calls) == 1
+    assert "CUDA out of memory" in calls[0]
+
 
 def test_design_voice_non_poison_exception_stays_generic_500(monkeypatch: pytest.MonkeyPatch):
-    _reset_poison_guards(monkeypatch)
+    calls = _reset_poison_guards(monkeypatch)
     monkeypatch.setitem(main.ENGINES, "qwen", _FakeQwenOther())
 
     client = TestClient(main.app)
@@ -63,6 +76,9 @@ def test_design_voice_non_poison_exception_stays_generic_500(monkeypatch: pytest
 
     assert res.status_code == 500
     assert res.json() == {"detail": "Internal error."}
+
+    # Assert that _mark_cuda_poisoned was never called (non-poison path)
+    assert len(calls) == 0
 
 
 class _FakeQwenMintOom(main.QwenEngine):
@@ -90,7 +106,7 @@ def _mint_body():
 
 
 def test_mint_variant_oom_returns_classified_503(monkeypatch: pytest.MonkeyPatch):
-    _reset_poison_guards(monkeypatch)
+    calls = _reset_poison_guards(monkeypatch)
     monkeypatch.setitem(main.ENGINES, "qwen", _FakeQwenMintOom())
 
     client = TestClient(main.app)
@@ -102,9 +118,13 @@ def test_mint_variant_oom_returns_classified_503(monkeypatch: pytest.MonkeyPatch
     assert body["poisoned"] is True
     assert "GPU is out of memory" in body["detail"]
 
+    # Assert that _mark_cuda_poisoned was called exactly once with the right reason
+    assert len(calls) == 1
+    assert "CUDA out of memory" in calls[0]
+
 
 def test_mint_variant_non_poison_exception_stays_generic_500(monkeypatch: pytest.MonkeyPatch):
-    _reset_poison_guards(monkeypatch)
+    calls = _reset_poison_guards(monkeypatch)
     monkeypatch.setitem(main.ENGINES, "qwen", _FakeQwenMintOther())
 
     client = TestClient(main.app)
@@ -112,3 +132,6 @@ def test_mint_variant_non_poison_exception_stays_generic_500(monkeypatch: pytest
 
     assert res.status_code == 500
     assert res.json() == {"detail": "Internal error."}
+
+    # Assert that _mark_cuda_poisoned was never called (non-poison path)
+    assert len(calls) == 0
