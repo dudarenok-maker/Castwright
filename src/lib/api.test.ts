@@ -10,6 +10,14 @@ import {
   _resetMockListenStats,
   readE2eUpdateOverride,
   readE2eWorkspaceRootOverride,
+  readDemoWhatsNewOverride,
+  buildMockAppInfo,
+  loadMockReleaseNotes,
+  trimUnreleasedReleaseNotes,
+  nextMinorVersion,
+  mockGetAppInfo,
+  mockDismissWhatsNew,
+  _resetMockAppInfo,
   readCastDesignStream,
   mockCreateCharacter,
   mockGetScriptReviewState,
@@ -197,6 +205,117 @@ describe('readE2eUpdateOverride (fe-27 update override)', () => {
       updateAvailable: true,
       latestVersion: '9.9.9',
     });
+  });
+});
+
+describe('buildMockAppInfo (mock chrome tracks the build)', () => {
+  it('derives every version field from buildInfo instead of a hardcoded literal', async () => {
+    const { buildInfo } = await import('./build-info');
+    const info = buildMockAppInfo('# Castwright 9.9.9\n\n- Note.\n');
+    expect(info.appVersion).toBe(buildInfo.version);
+    expect(info.sidecarVersion).toBe(buildInfo.version);
+    expect(info.lastSeenAppVersion).toBe(buildInfo.version);
+    // Regression for the frozen fixture that sat on v1.6.0 for six minors.
+    expect(info.appVersion).not.toBe('1.6.0');
+    expect(info.releaseNotes).toBe('# Castwright 9.9.9\n\n- Note.\n');
+  });
+});
+
+describe('loadMockReleaseNotes (real bundled notes, lazily loaded)', () => {
+  it('serves the real multi-version RELEASE_NOTES.md, not the old frozen one-liner', async () => {
+    const { parseReleaseNotes } = await import('./release-notes');
+    const parsed = parseReleaseNotes(await loadMockReleaseNotes());
+    /* The retired fixture ('# v1.6.0 / - In-app upgrades.') would fail both:
+       one section, and a bare 'v1.6.0' heading without the brand name. */
+    expect(parsed.length).toBeGreaterThan(1);
+    expect(parsed[0].heading).toMatch(/^Castwright \d+\.\d+\.\d+/);
+    expect(parsed[0].bullets.length).toBeGreaterThan(0);
+  });
+});
+
+describe('trimUnreleasedReleaseNotes (mid-cycle in-progress section)', () => {
+  const MD =
+    '# Castwright 1.13.0\n\n- Unreleased bullet.\n\n# Castwright 1.12.2\n\n- Shipped bullet.\n\n# Castwright 1.12.1\n\n- Older bullet.\n';
+
+  it('drops leading sections newer than the running version', () => {
+    const out = trimUnreleasedReleaseNotes(MD, '1.12.2');
+    expect(out.startsWith('# Castwright 1.12.2')).toBe(true);
+    expect(out).not.toContain('Unreleased bullet');
+    expect(out).toContain('Older bullet');
+  });
+
+  it('serves the document unchanged when the running version has no section (dev builds)', () => {
+    expect(trimUnreleasedReleaseNotes(MD, '0.0.0-dev')).toBe(MD);
+  });
+
+  it('does not match a version embedded in a longer version string', () => {
+    const md = '# Castwright 11.2.0\n\n- Big.\n\n# Castwright 1.2.0\n\n- Small.\n';
+    expect(trimUnreleasedReleaseNotes(md, '1.2.0').startsWith('# Castwright 1.2.0')).toBe(true);
+  });
+
+  it('is not defeated by an unreleased heading that merely mentions the running version', () => {
+    const md =
+      '# Castwright 1.13.0 — follow-ups to 1.12.2\n\n- Unreleased bullet.\n\n# Castwright 1.12.2\n\n- Shipped bullet.\n';
+    const out = trimUnreleasedReleaseNotes(md, '1.12.2');
+    expect(out.startsWith('# Castwright 1.12.2')).toBe(true);
+    expect(out).not.toContain('Unreleased bullet');
+  });
+
+  it('a hotfix version with no section of its own still drops newer sections', () => {
+    // package.json cut to 1.12.3 without a notes section; 1.13.0 is in progress.
+    const out = trimUnreleasedReleaseNotes(MD, '1.12.3');
+    expect(out.startsWith('# Castwright 1.12.2')).toBe(true);
+    expect(out).not.toContain('Unreleased bullet');
+  });
+
+  it('ignores H2 sub-headings mentioning older versions inside an unreleased section', () => {
+    const md =
+      '# Castwright 1.13.0\n\n## Upgrading from 1.11.0\n\n- Unreleased bullet.\n\n# Castwright 1.12.2\n\n- Shipped bullet.\n';
+    const out = trimUnreleasedReleaseNotes(md, '1.12.2');
+    expect(out.startsWith('# Castwright 1.12.2')).toBe(true);
+    expect(out).not.toContain('Unreleased bullet');
+  });
+});
+
+describe('demoWhatsNew dismiss latch (seam → dismiss → refetch)', () => {
+  beforeEach(() => {
+    _resetMockAppInfo();
+    window.history.replaceState(null, '', '/?demoWhatsNew=1');
+  });
+  afterEach(() => {
+    window.history.replaceState(null, '', '/');
+    _resetMockAppInfo();
+  });
+
+  it('the seam shows the banner, and Dismiss keeps it dismissed across a refetch', async () => {
+    expect((await mockGetAppInfo()).showWhatsNew).toBe(true);
+    await mockDismissWhatsNew();
+    /* The regression this pins: the refetch used to OR the URL override back
+       in, resurrecting the banner right after a successful dismiss. */
+    expect((await mockGetAppInfo()).showWhatsNew).toBe(false);
+  });
+});
+
+describe('nextMinorVersion (mock staged-upgrade candidate)', () => {
+  it('bumps the minor and zeroes the patch', () => {
+    expect(nextMinorVersion('1.12.2')).toBe('1.13.0');
+  });
+
+  it('falls back gracefully for a non-semver dev sentinel', () => {
+    expect(nextMinorVersion('0.0.0-dev')).toBe('0.1.0');
+    expect(nextMinorVersion('weird')).toBe('weird-next');
+  });
+});
+
+describe('readDemoWhatsNewOverride (marketing-capture banner seam)', () => {
+  it('defaults off when the param is absent or malformed', () => {
+    expect(readDemoWhatsNewOverride('')).toBe(false);
+    expect(readDemoWhatsNewOverride('?foo=bar')).toBe(false);
+    expect(readDemoWhatsNewOverride('?demoWhatsNew=0')).toBe(false);
+  });
+
+  it('honours ?demoWhatsNew=1', () => {
+    expect(readDemoWhatsNewOverride('?demoWhatsNew=1')).toBe(true);
   });
 });
 

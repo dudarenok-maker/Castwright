@@ -165,9 +165,13 @@ test.describe('responsive coverage (all views × all viewports)', () => {
 
   test('release-notes (global) view', async ({ page }) => {
     await page.goto('/#/release-notes');
-    /* The mock /api/info releaseNotes carries one bullet — its presence is the
-       hydration signal that useAppInfo resolved and the history rendered. */
-    await expect(page.getByText(/In-app upgrades/i)).toBeVisible({ timeout: 5_000 });
+    /* The mock /api/info serves the real bundled RELEASE_NOTES.md; any
+       rendered per-version section heading ("Castwright X.Y.Z…") is the
+       hydration signal that useAppInfo resolved and the history rendered —
+       version-agnostic so a release cut can't break this spec. */
+    await expect(
+      page.getByRole('heading', { name: /Castwright \d+\.\d+\.\d+/ }).first(),
+    ).toBeVisible({ timeout: 5_000 });
     await page.waitForTimeout(300);
     await expectNoHorizontalScroll(page);
   });
