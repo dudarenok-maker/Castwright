@@ -91,11 +91,6 @@ import { parseDuration } from './time';
 import stubAudioA from '../mocks/audio/stub-a.mp3?url';
 import stubAudioB from '../mocks/audio/stub-b.mp3?url';
 import { buildInfo } from './build-info';
-/* Real bundled release notes — the mock serves the same document the real
-   server returns via GET /api/info, so mock-mode chrome (version pill,
-   What's-new banner, #/release-notes) tracks the actual release instead of a
-   frozen fixture that goes stale every cut (it sat on v1.6.0 for six minors). */
-import releaseNotesMd from '../../RELEASE_NOTES.md?raw';
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
 /* Marketing screenshot capture flag (.env.marketing → `--mode marketing`).
@@ -6284,14 +6279,14 @@ async function realUpgradeState(): Promise<UpgradeStatePayload> {
    derive from the build (package.json via __APP_VERSION__) and the notes are
    the real RELEASE_NOTES.md, so mock chrome never drifts from the release.
    Pure factory, exported so the derivation is unit-tested directly. */
-export function buildMockAppInfo(): AppInfo {
+export function buildMockAppInfo(releaseNotes: string): AppInfo {
   return {
     appVersion: buildInfo.version,
     sidecarVersion: buildInfo.version,
     schemas: { state: 1, cast: 1, manuscriptEdits: 1, revisions: 1, listenProgress: 1, voices: 1 },
     lastSeenAppVersion: buildInfo.version,
     showWhatsNew: false,
-    releaseNotes: releaseNotesMd,
+    releaseNotes,
     hardware: { platform: 'win32', arch: 'x64', appleSilicon: false, label: 'Windows (x64)' },
     devices: { kokoro: 'cuda', coqui: 'cuda', qwen: 'cuda' },
     devicesState: 'ready',
@@ -6300,7 +6295,36 @@ export function buildMockAppInfo(): AppInfo {
     latestVersion: null,
   };
 }
-let mockAppInfo: AppInfo = buildMockAppInfo();
+
+/* Between cuts, RELEASE_NOTES.md tops with the NEXT version's in-progress
+   section (CONTRIBUTING.md "Release notes" bootstrap) while package.json still
+   carries the released version — serving that verbatim would head the
+   What's-new banner "What's new in v<released>" over unreleased bullets. Drop
+   any leading sections newer than the running version; a version with no
+   matching section (e.g. Vitest's 0.0.0-dev sentinel) serves the document
+   unchanged. Pure + exported so it's unit-tested directly. */
+export function trimUnreleasedReleaseNotes(md: string, version: string): string {
+  const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const versionRe = new RegExp(`(^|[^\\d.])${escaped}([^\\d.]|$)`);
+  const lines = md.split(/\r?\n/);
+  const start = lines.findIndex((l) => /^#{1,2}\s+/.test(l.trim()) && versionRe.test(l));
+  return start >= 0 ? lines.slice(start).join('\n') : md;
+}
+
+/* The real bundled RELEASE_NOTES.md, loaded lazily via dynamic import so the
+   (growing, ~40 KB) document lands in a mock-only chunk instead of the real
+   production bundle — a static `?raw` import evaluated at module scope would
+   defeat the USE_MOCKS tree-shake. Exported for the unit test that pins
+   "serves the real notes, not a frozen fixture". */
+export async function loadMockReleaseNotes(): Promise<string> {
+  const md = (await import('../../RELEASE_NOTES.md?raw')).default;
+  return trimUnreleasedReleaseNotes(md, buildInfo.version);
+}
+
+let mockAppInfo: AppInfo | null = null;
+async function mockAppInfoState(): Promise<AppInfo> {
+  return (mockAppInfo ??= buildMockAppInfo(await loadMockReleaseNotes()));
+}
 /* fe-27 — e2e seam: `?e2eUpdate=<version>` forces an "update available" mock so
    the Playwright notifier spec has a deterministic trigger (mock mode is
    in-process, so page.route can't intercept). Pure + exported so it's unit-
@@ -6323,20 +6347,22 @@ export function readE2eUpdateOverride(search: string): {
    so the pinokio-install-ready scene can pose the freshly-updated state. Pure +
    exported so it's unit-tested directly, mirroring readE2eUpdateOverride. */
 export function readDemoWhatsNewOverride(search: string): boolean {
-  try {
-    return new URLSearchParams(search).get('demoWhatsNew') === '1';
-  } catch {
-    return false;
-  }
+  return readE2eSearchParam(search, 'demoWhatsNew') === '1';
 }
+/* Dismiss must still work while the seam param sits in the URL (a live demo
+   clicking the banner's Dismiss), so the override is latched off separately
+   rather than OR-ing itself back in on the post-dismiss refetch. */
+let demoWhatsNewDismissed = false;
 
 async function mockGetAppInfo(): Promise<AppInfo> {
   await wait(40);
+  const state = await mockAppInfoState();
   const search = typeof window !== 'undefined' ? window.location.search : '';
   const ov = readE2eUpdateOverride(search);
   return {
-    ...mockAppInfo,
-    showWhatsNew: mockAppInfo.showWhatsNew || readDemoWhatsNewOverride(search),
+    ...state,
+    showWhatsNew:
+      state.showWhatsNew || (readDemoWhatsNewOverride(search) && !demoWhatsNewDismissed),
     updateAvailable: ov.updateAvailable,
     latestVersion: ov.latestVersion,
   };
@@ -6345,10 +6371,11 @@ async function mockGetAppInfo(): Promise<AppInfo> {
    card renders its steady state under VITE_USE_MOCKS=true. */
 async function mockGetUpdateStatus(): Promise<UpdateStatus> {
   await wait(20);
+  const { appVersion } = await mockAppInfoState();
   return {
     reachable: true,
-    currentVersion: mockAppInfo.appVersion,
-    latestVersion: mockAppInfo.appVersion,
+    currentVersion: appVersion,
+    latestVersion: appVersion,
     updateAvailable: false,
     url: null,
   };
@@ -6361,13 +6388,22 @@ async function mockCheckCompanionApk(): Promise<CompanionApkAvailability> {
 }
 async function mockDismissWhatsNew(): Promise<void> {
   await wait(20);
-  mockAppInfo = { ...mockAppInfo, showWhatsNew: false };
+  demoWhatsNewDismissed = true;
+  mockAppInfo = { ...(await mockAppInfoState()), showWhatsNew: false };
+}
+/* Next minor above the running version, so the staged mock candidate stays a
+   genuine upgrade over the version-tracking chrome (was frozen at
+   1.6.0 → 1.7.0, which read as a downgrade next to a v1.12.x version pill).
+   Pure + exported so it's unit-tested directly. */
+export function nextMinorVersion(version: string): string {
+  const m = /^(\d+)\.(\d+)\./.exec(version);
+  return m ? `${m[1]}.${Number(m[2]) + 1}.0` : `${version}-next`;
 }
 async function mockUpgradeStage(_file: File): Promise<UpgradeStageResult> {
   await wait(50);
   return {
-    candidateVersion: '1.7.0',
-    runningVersion: '1.6.0',
+    candidateVersion: nextMinorVersion(buildInfo.version),
+    runningVersion: buildInfo.version,
     reqHash: 'mock',
     requiresPipInstall: false,
     isDowngrade: false,
@@ -9501,7 +9537,12 @@ const mock = {
      dev Worktrees throughput table + deterioration tint are exercisable under
      VITE_USE_MOCKS. Fixed ISO timestamps (no Date.now()) keep snapshots stable. */
   getGenerationStats: async (): Promise<GenerationStatsResponse> => {
-    const recentChapters = [2.41, 2.12, 1.78, 1.5, 1.31, 1.12, 0.94].map((rtf, i) => ({
+    /* Sub-realtime overall (the top-bar Admin pill renders the rollup figure in
+       every mock capture, and the old 1.6 was routinely misread as a "v1.6.0"
+       version stamp — while also posing generation as slower than realtime),
+       with the newest two chapters still >1 so the deterioration tint stays
+       exercisable. Mirrored by getResourceTelemetry's records below. */
+    const recentChapters = [1.31, 1.12, 0.94, 0.82, 0.71, 0.62, 0.54].map((rtf, i) => ({
       chapterId: 7 - i,
       title: `Chapter ${7 - i}`,
       bookId: 'mock-book',
@@ -9515,17 +9556,16 @@ const mock = {
       // Newest-first: index 0 is the latest. 9-minute spacing, fixed base.
       at: new Date(Date.parse('2026-06-01T09:00:00Z') + (6 - i) * 9 * 60_000).toISOString(),
     }));
-    /* Window rollup deliberately sub-realtime (rtf < 1): the top-bar Admin
-       pill renders this figure in every mock capture, and the old 1.6 was
-       routinely misread as a "v1.6.0" version stamp in marketing shots (it
-       also posed generation as slower than realtime). Kept self-consistent:
-       rtf = synthSec / audioSec, xRealtime = audioSec / synthSec. */
+    /* Rollup computed FROM the rows so the summary strip can never contradict
+       the chapter table rendered beside it. */
+    const audioSec = recentChapters.reduce((s, c) => s + c.audioSec, 0);
+    const synthSec = recentChapters.reduce((s, c) => s + c.synthSec, 0);
     return {
       chapters: recentChapters.length,
-      audioSec: 4200,
-      synthSec: 3654,
-      rtf: 0.87,
-      xRealtime: 1.15,
+      audioSec,
+      synthSec,
+      rtf: Math.round((synthSec / audioSec) * 100) / 100,
+      xRealtime: Math.round((audioSec / synthSec) * 100) / 100,
       chaptersPerHour: 6.4,
       last: null,
       updatedAt: recentChapters[0].at,
@@ -9551,7 +9591,8 @@ const mock = {
       { bookId: 'mock-book-unlocked', bookTitle: 'The Floodmark' },
       { bookId: 'mock-book-unlocked', bookTitle: 'The Floodmark' },
     ];
-    const records: ResourceTelemetryRecord[] = [2.41, 2.12, 1.78, 1.5, 1.31, 1.12, 0.94].map(
+    // Same per-chapter rtf trend as getGenerationStats above — one story.
+    const records: ResourceTelemetryRecord[] = [1.31, 1.12, 0.94, 0.82, 0.71, 0.62, 0.54].map(
       (rtf, i) => ({
         at: new Date(Date.parse('2026-06-01T09:00:00Z') + (6 - i) * 9 * 60_000).toISOString(),
         bookId: books[i].bookId,

@@ -2,8 +2,10 @@
    router/redux/layout seams in a real browser: open Account, pick a release
    zip, see the confirm dialog with the version delta, apply, and see the
    full-screen upgrading overlay. Runs against the MOCK api (mockUpgradeStage
-   returns a v1.7.0 candidate; mockGetAppInfo stays on v1.6.0 so the overlay
-   persists for the assertion — no route stubs needed). */
+   stages the next minor above the running build version; mockGetAppInfo stays
+   on the running version so the overlay persists for the assertion — no route
+   stubs needed). Assertions are version-agnostic so a release cut can't break
+   this spec. */
 
 import { test, expect } from '@playwright/test';
 import { waitForRouteReady } from './helpers';
@@ -17,23 +19,23 @@ test.describe('fs-1 — in-app upgrade flow', () => {
     await expect(card).toBeVisible();
     await expect(card.getByText(/You.?re running/)).toBeVisible();
 
-    // Pick a (fake) zip — the mock api stages a v1.7.0 candidate.
+    // Pick a (fake) zip — the mock api stages a next-minor candidate.
     await card
       .locator('input[type="file"]')
       .setInputFiles({
-        name: 'audiobook-generator-v1.7.0.zip',
+        name: 'castwright-release.zip',
         mimeType: 'application/zip',
         buffer: Buffer.from('PK'),
       });
 
     const confirm = page.getByTestId('upgrade-confirm');
     await expect(confirm).toBeVisible();
-    await expect(confirm.getByText(/→ v1\.7\.0/)).toBeVisible();
+    await expect(confirm.getByText(/→ v\d+\.\d+\.\d+/)).toBeVisible();
 
     await confirm.getByRole('button', { name: 'Apply upgrade' }).click();
 
     await expect(page.getByTestId('upgrading-screen')).toBeVisible();
-    await expect(page.getByText(/Upgrading to v1\.7\.0/)).toBeVisible();
+    await expect(page.getByText(/Upgrading to v\d+\.\d+\.\d+/)).toBeVisible();
   });
 
   test('cancel on the confirm dialog returns to the picker', async ({ page }) => {

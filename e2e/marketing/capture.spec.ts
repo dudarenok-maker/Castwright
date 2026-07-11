@@ -67,14 +67,17 @@ for (const scene of SCENES) {
     /* Hydrate the library slice first — several views (e.g. the listen cover at
        routes/index.tsx:833) read book data from `s.library.books`, which is
        only populated by visiting the library. On a cold deep-link it would be
-       empty. The store persists across hash navigations, so one warm visit to
-       `#/` primes it for every scene. */
-    await page.goto('/#/');
+       empty. The store persists across hash navigations — but ONLY hash
+       navigations: a differing query string forces a full document reload that
+       wipes the in-memory store. So the warm visit carries the scene's own
+       `search` too, making the second goto a same-document hash change. */
+    const search = scene.search ?? '';
+    await page.goto('/' + search + '#/');
     await page
       .waitForSelector('[data-testid="book-cover-hollow-tide-1"]', { timeout: 30_000 })
       .catch(() => {});
 
-    await page.goto('/' + (scene.search ?? '') + scene.hash);
+    await page.goto('/' + search + scene.hash);
     if (scene.waitFor) {
       // Non-fatal by default: if a view never reaches its content selector we
       // still want a screenshot (plus a console note) rather than an aborted
