@@ -27,6 +27,10 @@ import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { detectOllamaDevice } from './ollama-health.js';
 import { setLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
+import {
+  stripThirdPartyFrontMatter,
+  type ThirdPartyGuardChapter,
+} from '../analyzer/third-party-front-matter-guard.js';
 import { mergeCharacterFields } from '../analyzer/roster-merge-fields.js';
 import { dedupeRosterByName, composeRewrites, pruneSuggestionsToRoster, type MergeSuggestion } from '../analyzer/roster-dedup.js';
 import { fillToneFromAttributes } from '../analyzer/fill-tone.js';
@@ -4189,6 +4193,39 @@ export async function runMainAnalyzerJob(
     const dd = dedupAndPrepare(stage1.characters, recovered.sentences, bookLanguage);
     stage1.characters = dd.characters;
     recovered.sentences = dd.sentences;
+    /* #1447 — strip a real third-party person named/quoted only in a non-story
+       front-matter chapter, BEFORE the fold so the proseTagged carve-out never
+       protects the bogus entry. Bodies from record.chapterHints (all chapters,
+       narrative order incl. excluded, so the front-region index is honest).
+       Signal 2 via the analyzer only when the method is implemented. */
+    const guardChapters: ThirdPartyGuardChapter[] = record.chapterHints.map((h) => ({
+      id: h.id,
+      title: h.title,
+      body: h.body,
+    }));
+    const classifyNonStory = analyzer.runNonStoryClassification
+      ? async (ch: ThirdPartyGuardChapter): Promise<boolean> => {
+          const promptMd = `Title: ${ch.title ?? '(untitled)'}\n\n${ch.body}`;
+          const out = await analyzer.runNonStoryClassification!(manuscriptId, ch.id, promptMd, {
+            language: bookLanguage,
+          });
+          return out.nonStory;
+        }
+      : undefined;
+    const guarded = await stripThirdPartyFrontMatter(
+      stage1.characters,
+      recovered.sentences,
+      guardChapters,
+      { minLines: userSettings.minorCastMinLines, classifyNonStory },
+    );
+    if (guarded.stripped.length > 0) {
+      log(
+        1,
+        `Stripped ${guarded.stripped.length} third-party front-matter cast reference(s) (${guarded.stripped.join(', ')}) — re-routed to narrator.`,
+      );
+    }
+    stage1.characters = guarded.characters;
+    recovered.sentences = guarded.sentences;
     const folded = foldMinorCast(stage1.characters, recovered.sentences, {
       minLines: userSettings.minorCastMinLines,
       language: bookLanguage,
@@ -5226,6 +5263,38 @@ export async function runSubsetAnalyzerJob(
     const dd = dedupAndPrepare(stage1.characters, recovered.sentences, bookLanguage);
     stage1.characters = dd.characters;
     recovered.sentences = dd.sentences;
+    /* #1447 — strip a real third-party person named/quoted only in a non-story
+       front-matter chapter (see the main route's same block). `userSettings`
+       is NOT in scope here, so the guard runs with its own default minLines
+       (3), matching this block's foldMinorCast call (also no minLines override). */
+    const guardChapters: ThirdPartyGuardChapter[] = record.chapterHints.map((h) => ({
+      id: h.id,
+      title: h.title,
+      body: h.body,
+    }));
+    const classifyNonStory = analyzer.runNonStoryClassification
+      ? async (ch: ThirdPartyGuardChapter): Promise<boolean> => {
+          const promptMd = `Title: ${ch.title ?? '(untitled)'}\n\n${ch.body}`;
+          const out = await analyzer.runNonStoryClassification!(manuscriptId, ch.id, promptMd, {
+            language: bookLanguage,
+          });
+          return out.nonStory;
+        }
+      : undefined;
+    const guarded = await stripThirdPartyFrontMatter(
+      stage1.characters,
+      recovered.sentences,
+      guardChapters,
+      { classifyNonStory },
+    );
+    if (guarded.stripped.length > 0) {
+      log(
+        1,
+        `Stripped ${guarded.stripped.length} third-party front-matter cast reference(s) (${guarded.stripped.join(', ')}) — re-routed to narrator.`,
+      );
+    }
+    stage1.characters = guarded.characters;
+    recovered.sentences = guarded.sentences;
     /* Re-fold the cast against the merged sentence set so the bucket
        attributions stay coherent with the new chapters' attributions. */
     const folded = foldMinorCast(stage1.characters, recovered.sentences, {
