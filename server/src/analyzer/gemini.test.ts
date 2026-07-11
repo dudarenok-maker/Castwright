@@ -827,6 +827,7 @@ describe('GeminiAnalyzer.runAttributionEscalation (srv-59 Task 9)', () => {
     const result = await analyzer.runAttributionEscalation(
       'm_escalation_gemini_ok',
       1,
+      0,
       'resolve these lines',
       {},
     );
@@ -848,6 +849,7 @@ describe('GeminiAnalyzer.runAttributionEscalation (srv-59 Task 9)', () => {
     const result = await analyzer.runAttributionEscalation(
       'm_escalation_gemini_empty',
       1,
+      0,
       'resolve these lines',
       {},
     );
@@ -866,6 +868,7 @@ describe('GeminiAnalyzer.runAttributionEscalation (srv-59 Task 9)', () => {
     const result = await analyzer.runAttributionEscalation(
       'm_escalation_gemini_malformed',
       1,
+      0,
       'resolve these lines',
       {},
     );
@@ -879,8 +882,8 @@ describe('GeminiAnalyzer.runAttributionEscalation (srv-59 Task 9)', () => {
       'm_escalation_gemini_empty',
       'm_escalation_gemini_malformed',
     ]) {
-      await rm(resolve(HANDOFF_ROOT, 'inbox', `${id}-stageescalation-ch1.md`), { force: true });
-      await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stageescalation-ch1.json`), { force: true });
+      await rm(resolve(HANDOFF_ROOT, 'inbox', `${id}-stageescalation-ch1-w0.md`), { force: true });
+      await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stageescalation-ch1-w0.json`), { force: true });
     }
   });
 });

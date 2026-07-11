@@ -19,8 +19,11 @@ const OUTBOX = join(HANDOFF_ROOT, 'outbox');
    Literal types instead of free strings so callers can't typo a key.
    `1-ch{n}` is per-chapter Phase 0a cast detection (the current flow);
    plain `1` is the legacy whole-book stage 1 (kept for back-compat).
-   `emotion-ch{n}` is the fs-33 emotion-only backfill pass. `escalation-ch{n}`
-   is the srv-59 flagged-window attribution-escalation pass (Task 9). */
+   `emotion-ch{n}` is the fs-33 emotion-only backfill pass.
+   `escalation-ch{n}-w{n}` is the srv-59 flagged-window attribution-escalation
+   pass (Task 9) — the window suffix keys each of a chapter's escalated
+   conversation windows separately, so a chapter with N queried windows
+   leaves N sets of forensics on disk instead of only the last one (#1483). */
 export type HandoffKey =
   | '1'
   | `1-ch${number}`
@@ -29,7 +32,7 @@ export type HandoffKey =
   | `emotion-ch${number}`
   | `review-ch${number}`
   | `instruct-ch${number}`
-  | `escalation-ch${number}`;
+  | `escalation-ch${number}-w${number}`;
 
 async function ensureDirs(): Promise<void> {
   await mkdir(INBOX, { recursive: true });
