@@ -45,11 +45,18 @@ describe('normalizeForWer', () => {
     expect(normalizeForWer('I have 3 keys.', 'en')).toEqual(['i', 'have', 'three', 'keys']);
   });
 
-  it('does NOT English-spell integers for a non-English language (keeps the digit)', () => {
-    // "3" → "three" only makes sense against English audio; on a Spanish/Russian
-    // book Whisper hears "tres"/"три", so injecting "three" is a false error (#1084).
-    expect(normalizeForWer('Tengo 3 llaves.', 'es')).toEqual(['tengo', '3', 'llaves']);
-    expect(normalizeForWer('У меня 3 ключа.', 'ru')).toEqual(['у', 'меня', '3', 'ключа']);
+  it('spells integers in the target non-English language, not English (#1084)', () => {
+    // Before #1084 this was a no-op ("tres"/"три" instead of "three" would have
+    // been a false error). Now es/ru spell the digit in THEIR OWN language,
+    // matching what Whisper actually hears, instead of not spelling it at all.
+    expect(normalizeForWer('Tengo 3 llaves.', 'es')).toEqual(['tengo', 'tres', 'llaves']);
+    expect(normalizeForWer('У меня 3 ключа.', 'ru')).toEqual(['у', 'меня', 'три', 'ключа']);
+  });
+
+  it('leaves the digit as-is for a language with no WER_INTEGERS table (#1084)', () => {
+    // Preserves coverage of the `if (!table) return tokens` no-op fallback —
+    // 'pt' (Portuguese) has no entry in WER_INTEGERS.
+    expect(normalizeForWer('Tenho 3 chaves.', 'pt')).toEqual(['tenho', '3', 'chaves']);
   });
 
   it('keeps non-Latin (Cyrillic) words instead of erasing them', () => {
@@ -58,6 +65,44 @@ describe('normalizeForWer', () => {
     expect(normalizeForWer('Она медленно шла по узкой улице.')).toEqual([
       'она', 'медленно', 'шла', 'по', 'узкой', 'улице',
     ]);
+  });
+});
+
+describe('normalizeForWer non-English integer spelling (#1084)', () => {
+  it('spells a Spanish number inline with the surrounding words', () => {
+    expect(normalizeForWer('Tenía 31 años.', 'es')).toEqual(['tenía', 'treinta', 'y', 'uno', 'años']);
+  });
+  it('spells a French base-20 number (72) correctly inline', () => {
+    expect(normalizeForWer('Il avait 72 ans.', 'fr')).toEqual(['il', 'avait', 'soixante', 'douze', 'ans']);
+  });
+  it('spells a German fused compound (21) as one token', () => {
+    expect(normalizeForWer('Sie hatte 21 Katzen.', 'de')).toEqual(['sie', 'hatte', 'einundzwanzig', 'katzen']);
+  });
+  it('spells a Russian number (21) as two tokens', () => {
+    expect(normalizeForWer('Ей было 21 год.', 'ru')).toEqual(['ей', 'было', 'двадцать', 'один', 'год']);
+  });
+  it('leaves a 3+ digit number as a digit for every non-English language, matching English', () => {
+    expect(normalizeForWer('En 1999.', 'es')).toEqual(['en', '1999']);
+  });
+});
+
+describe('normalizeForWer German contraction expansion (#1084)', () => {
+  it('expands "im" to "in dem" so it matches the uncontracted form', () => {
+    expect(normalizeForWer('im Garten', 'de')).toEqual(normalizeForWer('in dem Garten', 'de'));
+  });
+});
+
+describe('normalizeForWer no-op proof for es/fr/ru contractions (#1084)', () => {
+  it('has no WER_CONTRACTIONS entry for es/fr/ru — mandatory contractions need no table', () => {
+    expect(WER_CONTRACTIONS.es).toBeUndefined();
+    expect(WER_CONTRACTIONS.fr).toBeUndefined();
+    expect(WER_CONTRACTIONS.ru).toBeUndefined();
+  });
+  it('French elision (qu\'il) already normalizes consistently via the generic apostrophe strip', () => {
+    expect(normalizeForWer("qu'il", 'fr')).toEqual(normalizeForWer('quil', 'fr'));
+  });
+  it('Spanish mandatory contraction (del) passes through unchanged — nothing to reconcile', () => {
+    expect(normalizeForWer('Vengo del mercado.', 'es')).toEqual(['vengo', 'del', 'mercado']);
   });
 });
 

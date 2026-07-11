@@ -28,6 +28,7 @@
 import { transcribeSegment, type TranscribeResult } from './transcribe-client.js';
 import { configValue, resolveKnob } from '../config/resolver.js';
 import { allKnobs } from '../config/registry.js';
+import { WER_INTEGERS, WER_CONTRACTIONS } from './asr-language-normalization.js';
 
 export type AsrVerdict = 'ok' | 'drift' | 'inconclusive';
 
@@ -238,38 +239,56 @@ function spellInteger(n: number): string | null {
 }
 
 /** Normalise to a token array: lowercase, NFKC, smart-punctuation→ascii, and
-    — for English (or unspecified language) only — contraction expansion and
-    integer 0..99 → words. The English number-speller ("3" → "three") matches
-    Whisper's English word output; on a non-English book Whisper hears "tres" /
-    "три", so spelling the digit in English injects a false substitution, hence
-    it is gated on `language` (#1084). Full per-language number spelling is owed
-    on-box calibration. */
+    contraction expansion + integer 0..99 → words, per language. English (or
+    unspecified language) uses the English-only `CONTRACTIONS`/`spellInteger`
+    path unchanged. Non-English languages consult the `WER_INTEGERS` /
+    `WER_CONTRACTIONS` tables (#1084) — matching what Whisper actually hears
+    ("3" → "tres" for Spanish, not "three") instead of leaving the digit as a
+    no-op; a language with no table entry falls back to the digit unchanged. */
 export function normalizeForWer(text: string, language?: string | null): string[] {
-  const english = baseSubtag(language) === 'en' || !language;
+  const lang = baseSubtag(language);
+  const english = lang === 'en' || !language;
   let s = (text ?? '').normalize('NFKC').toLowerCase();
   s = s.replace(SMART_QUOTES, "'").replace(SMART_DQUOTES, '"').replace(DASHES, '-');
-  // Expand contractions before stripping apostrophes (English-only forms).
   if (english) {
     for (const [from, to] of Object.entries(CONTRACTIONS)) {
       s = s.replace(new RegExp(`\\b${from.replace(/'/g, "['’]")}\\b`, 'g'), to);
     }
+  } else {
+    const contractions = WER_CONTRACTIONS[lang];
+    if (contractions) {
+      for (const [from, to] of Object.entries(contractions)) {
+        s = s.replace(new RegExp(`\\b${from}\\b`, 'g'), to);
+      }
+    }
   }
   // Drop possessive 's and any remaining apostrophes inside words.
   s = s.replace(/'s\b/g, '').replace(/'/g, '');
-  // Replace every non-alphanumeric with a space, then tokenise. Letters/digits
-  // are matched script-agnostically (\p{L}\p{N}, NOT [a-z0-9]) — an ASCII-only
-  // strip erased all Cyrillic/CJK, so a non-English sentence normalised to []
-  // and the WER gate silently no-op'd ('inconclusive') on every line
-  // (2026-06-15; mirrors the stage2-coverage.ts fix). English is unchanged.
   s = s.replace(/[^\p{L}\p{N}]+/gu, ' ');
   const tokens = s.split(/\s+/).filter(Boolean);
-  if (!english) return tokens; // skip English integer-spelling for other languages
+  if (english) {
+    const out: string[] = [];
+    for (const tok of tokens) {
+      if (/^\d+$/.test(tok)) {
+        const spelled = spellInteger(Number(tok));
+        if (spelled) {
+          out.push(...spelled.split(' '));
+          continue;
+        }
+      }
+      out.push(tok);
+    }
+    return out;
+  }
+  const table = WER_INTEGERS[lang];
+  if (!table) return tokens; // unknown/unsupported language -> unchanged no-op
   const out: string[] = [];
   for (const tok of tokens) {
     if (/^\d+$/.test(tok)) {
-      const spelled = spellInteger(Number(tok));
+      const n = Number(tok);
+      const spelled = n <= 99 ? table[n] : undefined;
       if (spelled) {
-        out.push(...spelled.split(' '));
+        out.push(...spelled);
         continue;
       }
     }
