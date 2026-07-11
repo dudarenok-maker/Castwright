@@ -1607,10 +1607,17 @@ export async function synthesiseChapter(
     if (!(engines.has('qwen') && engines.has('coqui'))) {
       return synthGroupsBatched(groupList, onDone);
     }
-    const qwenGroups = groupList.filter((g) => resolveGroup(g).route.engine === 'qwen');
+    /* fs-60 — Coqui renders in its own phase AFTER Qwen is evicted; every other
+       engine (Qwen itself, plus any lightweight per-character pin such as
+       Kokoro/Gemini) renders in the pre-evict phase. Splitting on "coqui vs
+       not-coqui" — rather than "qwen vs coqui" — guarantees no group is dropped
+       when a chapter mixes a third engine alongside the qwen+coqui pair: the
+       invariant this wrapper enforces is specifically that Coqui is never
+       resident alongside Qwen, not that only two engines are ever present. */
     const coquiGroups = groupList.filter((g) => resolveGroup(g).route.engine === 'coqui');
+    const preEvictGroups = groupList.filter((g) => resolveGroup(g).route.engine !== 'coqui');
     const out = new Map<number, GroupResult>();
-    for (const [k, v] of await synthGroupsBatched(qwenGroups, onDone)) out.set(k, v);
+    for (const [k, v] of await synthGroupsBatched(preEvictGroups, onDone)) out.set(k, v);
     await evictQwenForCoquiPhase();
     for (const [k, v] of await synthGroupsBatched(coquiGroups, onDone)) out.set(k, v);
     return out;

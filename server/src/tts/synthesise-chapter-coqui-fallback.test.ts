@@ -237,4 +237,86 @@ describe('synthesiseChapter — Qwen→Coqui fallback (fs-60)', () => {
        'evict' entry at all. */
     expect(callOrder.slice(rerecordStartIndex)).toEqual(['qwen', 'evict', 'coqui']);
   });
+
+  it('renders every group when a chapter mixes qwen + coqui + a third engine (kokoro) — none dropped', async () => {
+    /* Reachability note: Pearl is pinned to Kokoro via the per-character
+       `ttsEngine` field (per-character-engine.ts's resolveCharacterEngine),
+       NOT via the Qwen→Kokoro *fallback* path (applyQwenFallback) that
+       forbidKokoroFallback gates. routeFor only calls applyQwenFallback when
+       the character's resolved route is 'qwen' with a missing/unavailable
+       voice; Pearl's route is 'kokoro' from the start, so it's untouched by
+       forbidKokoroFallback and reaches synthGroupsSerialized as a genuine
+       third engine alongside Wren's qwen->coqui fallback and Marlow's
+       designed Qwen voice. This is how the {qwen, coqui, third} group set
+       gets constructed. */
+    const cast: CastCharacter[] = [
+      { id: 'marlow', name: 'Marlow', gender: 'male', overrideTtsVoices: { qwen: { name: 'qwen-marlow' } } },
+      { id: 'wren', name: 'Wren', gender: 'female' }, // undesigned -> falls back to Coqui
+      { id: 'pearl', name: 'Pearl', gender: 'female', ttsEngine: 'kokoro' }, // explicit per-character pin
+    ];
+
+    const callOrder: string[] = [];
+    const makeTracked = (label: string): TtsProvider & { calls: SynthesizeInput[] } => {
+      const calls: SynthesizeInput[] = [];
+      return {
+        calls,
+        async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+          calls.push(input);
+          callOrder.push(label);
+          return { pcm: Buffer.alloc(4800, 0), sampleRate: 24000, mimeType: 'audio/pcm' };
+        },
+      };
+    };
+    const qwen = makeTracked('qwen');
+    const coqui = makeTracked('coqui');
+    const kokoro = makeTracked('kokoro');
+    const tracked = (e: string) => {
+      if (e === 'coqui') return { provider: coqui, modelKey: 'coqui-xtts-v2' as const };
+      if (e === 'kokoro') return { provider: kokoro, modelKey: 'kokoro-v1' as const };
+      return { provider: qwen, modelKey: 'qwen3-tts-0.6b' as const };
+    };
+
+    /* fetch is only ever hit by evictQwenForCoquiPhase in this test (fully
+       mocked providers) — track it in the same callOrder sequence so the
+       ordering assertion below can see exactly where the evict happened. */
+    vi.spyOn(global, 'fetch').mockImplementation(async () => {
+      callOrder.push('evict');
+      return new Response(null, { status: 200 });
+    });
+
+    const result = await synthesiseChapter({
+      sentences: [
+        sentence(1, 'marlow'), // anchor group — rendered standalone, before synthGroupsSerialized
+        sentence(2, 'wren'), // body: falls back qwen -> coqui
+        sentence(3, 'pearl'), // body: pinned kokoro (the previously-dropped third engine)
+        sentence(4, 'marlow'), // body: designed qwen
+      ],
+      cast,
+      provider: qwen,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      resolveForEngine: tracked,
+      forbidKokoroFallback: true,
+      coquiEligible: true,
+      bookLanguage: 'ru',
+    });
+
+    // The previously-dropped third-engine group now actually renders.
+    expect(kokoro.calls).toHaveLength(1);
+
+    // No sentence's group silently disappears — a body segment for every one.
+    const bodySegments = result.segments.filter((s) => s.kind !== 'title');
+    expect(bodySegments.map((s) => s.sentenceIds?.[0])).toEqual([1, 2, 3, 4]);
+
+    // Coqui only ever renders after the evict — never before it, never
+    // interleaved with the pre-evict (qwen + kokoro) phase.
+    const evictIndex = callOrder.indexOf('evict');
+    expect(evictIndex).toBeGreaterThan(-1);
+    expect(callOrder.slice(0, evictIndex)).not.toContain('coqui');
+    const coquiIndices = callOrder
+      .map((v, i) => (v === 'coqui' ? i : -1))
+      .filter((i) => i > -1);
+    expect(coquiIndices.length).toBeGreaterThan(0);
+    expect(coquiIndices.every((i) => i > evictIndex)).toBe(true);
+  });
 });
