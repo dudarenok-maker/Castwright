@@ -30,6 +30,15 @@ const CONDA = { path: 'env', python: '3.12' }; // path-keyed conda env at <app>/
 module.exports = {
   daemon: true,
   run: [
+    // Clear any URL captured by a PRIOR run before the new server is up. Pinokio
+    // keeps start.js's locals keyed by this script's path, and an abnormal daemon
+    // exit (crash / kill, bypassing stop.js) leaves the old url set — stop.js's own
+    // `local.set url:null` is scoped to stop.js, so it never clears start.js's.
+    // Without this reset the 1-2 min re-capture window would default Open Web UI to
+    // the stale URL (e.g. http://localhost:8080 after switching to LAN
+    // https://localhost:8443). Nulling it here makes the menu default to Terminal
+    // until the matcher below re-captures the live URL.
+    { method: 'local.set', params: { url: null } },
     {
       method: 'shell.run',
       params: {
