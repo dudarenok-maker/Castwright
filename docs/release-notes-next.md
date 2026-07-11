@@ -30,6 +30,8 @@ acceptance test passing.
 
 **A patch release: the one-click Pinokio install now works end to end.** v1.12.3 consolidates the run of installer fixes since v1.12.0 — it supersedes and replaces the v1.12.1 and v1.12.2 patches. A fresh Pinokio Download → Install → Start now goes all the way through: the Install button fires the installer, every setup step runs from the right directory, and the server starts fully configured from its own `server/.env`.
 
+> **Migration:** this release relocates the launcher directory (`pinokio/` → `pinokio-scripts/`). Pinokio's in-app **Update** cannot cross a launcher-dir rename — an existing v1.12.x install's frozen `resolve-release.js` guards the old path and aborts. **Existing Pinokio users must reinstall fresh**, not Update. (Blast radius is minimal: the app was delisted across the 1.12.x installer patches, so few installs exist; the v1.12.1/v1.12.2 releases are deleted at cut.)
+
 ---
 
 ## 🚀 Onboarding

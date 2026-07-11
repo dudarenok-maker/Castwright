@@ -1,6 +1,7 @@
 # Castwright 1.12.3
 
 - **The one-click Pinokio install now works end to end.** This patch rolls up the run of fixes that stood between a fresh Pinokio download and a working Castwright. The Install button would appear but quietly do nothing — our launcher lived in a folder named `pinokio`, a name Pinokio reserves for itself, so the button couldn't fire our installer; moving it out of that reserved name lets Install run the moment you click it. From there, the installer's own setup scripts had been running from the wrong folder, so the very first step failed before anything could install; and once past that, the server came up from the wrong place and quietly ran on default settings instead of your own. All three are fixed — click Install in Pinokio and it now runs all the way through and starts up fully configured, from the first click.
+- **Already installed through Pinokio on an earlier 1.12 patch? Reinstall fresh.** This release moves Castwright's launcher into a new folder, and Pinokio's in-app **Update** can't carry an older install across that move — it'll stop partway. Remove the old install and install fresh from Pinokio, and you're on the fixed version.
 
 # Castwright 1.12.0
 
