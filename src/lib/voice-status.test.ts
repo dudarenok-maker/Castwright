@@ -101,6 +101,15 @@ describe('resolveVoiceStatus — Qwen lifecycle', () => {
     });
   });
 
+  it('reads "Fallback (Coqui)" when the character actually rendered in Coqui', () => {
+    /* fs-60: a non-English book's undesigned character can fall back to Coqui
+       instead of Kokoro. Same render-time-fact-wins rule as the Kokoro case. */
+    expect(resolveVoiceStatus(char({}), undefined, QWEN, 'coqui').lifecycle).toEqual({
+      label: 'Fallback (Coqui)',
+      color: 'warning',
+    });
+  });
+
   it('reads "Needs voice" for a DEFAULT-engine character on a Qwen project (the Lady Thorne bug)', () => {
     /* Effective engine is the project default (Qwen) even though the character
        carries no per-character `ttsEngine`. A stale preset pill ("Matched")

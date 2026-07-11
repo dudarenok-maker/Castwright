@@ -22,7 +22,8 @@ import { ensureChapterUuids } from './chapter-uuid.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { formatDuration } from '../audio/format-duration.js';
 import { engineBreakdownFromSnapshots } from '../audio/engine-breakdown.js';
-import { normaliseBookLanguage } from '../tts/language.js';
+import { normaliseBookLanguage, resolveEligibleEngines } from '../tts/language.js';
+import { ALL_TTS_ENGINES, type TtsEngine } from '../tts/model-keys.js';
 import {
   deriveSeriesMemory,
   summarize,
@@ -356,6 +357,11 @@ export interface LibraryBook {
       `'en'` for books whose state.json predates the field) so the library
       card's language badge + filter pill have a non-optional source. */
   language: string;
+  /** fs-60 — which TTS engines are eligible for this book's language,
+      independent of install state (frontend intersects with its own
+      installed-engines list). Computed via resolveEligibleEngines against
+      the full engine set — not a live install probe. */
+  eligibleTtsEngines: TtsEngine[];
 }
 
 export interface LibrarySeries {
@@ -770,6 +776,10 @@ async function scanBook(
     /* fs-2 — surface the book language onto the wire, defaulting to 'en'
        at the seam so the card badge / filter pill never see undefined. */
     language: state ? bookStateLanguage(state) : normaliseBookLanguage(undefined),
+    eligibleTtsEngines: resolveEligibleEngines(
+      state ? bookStateLanguage(state) : normaliseBookLanguage(undefined),
+      ALL_TTS_ENGINES,
+    ),
   };
 }
 

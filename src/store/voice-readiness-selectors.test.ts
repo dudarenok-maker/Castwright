@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   selectUndesignedQwenCharacters,
   selectVoiceReadinessGateShouldFire,
-  selectIsBookNonEnglish,
+  selectHasNoFallbackEngine,
+  selectFallbackEngineName,
   voiceReadinessGateMessage,
 } from './voice-readiness-selectors';
 import type { RootState } from './index';
@@ -12,7 +13,7 @@ const mk = (opts: {
   characters?: Partial<Character>[];
   voices?: Partial<Voice>[];
   ttsModelKey?: TtsModelKey;
-  books?: { bookId: string; language?: string }[];
+  books?: { bookId: string; language?: string; eligibleTtsEngines?: string[] }[];
 }): RootState =>
   ({
     cast: { characters: (opts.characters ?? []) as Character[] },
@@ -126,21 +127,40 @@ describe('selectVoiceReadinessGateShouldFire', () => {
   });
 });
 
-describe('selectIsBookNonEnglish', () => {
-  it('is false when the book is English', () => {
-    expect(selectIsBookNonEnglish(mk({ books: [{ bookId: 'b1', language: 'en' }] }), 'b1')).toBe(
-      false,
-    );
+describe('selectHasNoFallbackEngine', () => {
+  it('is false for a Coqui-eligible non-English book (ru)', () => {
+    const s = mk({ books: [{ bookId: 'b1', language: 'ru', eligibleTtsEngines: ['qwen', 'coqui'] }] });
+    expect(selectHasNoFallbackEngine(s, 'b1')).toBe(false);
   });
 
-  it('is true for a non-English book', () => {
-    expect(selectIsBookNonEnglish(mk({ books: [{ bookId: 'b1', language: 'ru' }] }), 'b1')).toBe(
-      true,
-    );
+  it('is true for a still-unsupported non-English language (zh)', () => {
+    const s = mk({ books: [{ bookId: 'b1', language: 'zh', eligibleTtsEngines: ['qwen'] }] });
+    expect(selectHasNoFallbackEngine(s, 'b1')).toBe(true);
   });
 
-  it('defaults to English (false) when the book is missing', () => {
-    expect(selectIsBookNonEnglish(mk({ books: [] }), 'missing')).toBe(false);
+  it('is false for English', () => {
+    const s = mk({
+      books: [{ bookId: 'b1', language: 'en', eligibleTtsEngines: ['qwen', 'kokoro', 'coqui', 'gemini'] }],
+    });
+    expect(selectHasNoFallbackEngine(s, 'b1')).toBe(false);
+  });
+
+  it('defaults to false (assume every engine eligible) when the book is missing, matching the old missing-book default', () => {
+    expect(selectHasNoFallbackEngine(mk({ books: [] }), 'missing')).toBe(false);
+  });
+});
+
+describe('selectFallbackEngineName', () => {
+  it("is 'Coqui' for a Coqui-eligible non-English book (ru)", () => {
+    const s = mk({ books: [{ bookId: 'b1', language: 'ru', eligibleTtsEngines: ['qwen', 'coqui'] }] });
+    expect(selectFallbackEngineName(s, 'b1')).toBe('Coqui');
+  });
+
+  it("is 'Kokoro' for an English book", () => {
+    const s = mk({
+      books: [{ bookId: 'b1', language: 'en', eligibleTtsEngines: ['qwen', 'kokoro', 'coqui', 'gemini'] }],
+    });
+    expect(selectFallbackEngineName(s, 'b1')).toBe('Kokoro');
   });
 });
 
@@ -158,11 +178,19 @@ describe('voiceReadinessGateMessage', () => {
     expect(voiceReadinessGateMessage(s, 'b1')).toMatch(/haven't been designed yet/);
   });
 
-  it('returns the hard-block copy for a non-English book', () => {
+  it('returns the hard-block copy for a still-unsupported non-English book', () => {
     const s = mk({
       characters: [qwenChar({ id: 'a', name: 'Alice', lines: 1 })],
-      books: [{ bookId: 'b1', language: 'ru' }],
+      books: [{ bookId: 'b1', language: 'zh', eligibleTtsEngines: ['qwen'] }],
     });
     expect(voiceReadinessGateMessage(s, 'b1')).toMatch(/can't fall back to a generic voice/);
+  });
+
+  it('returns the Coqui-worded soft-gate copy for a Coqui-eligible non-English book (ru)', () => {
+    const s = mk({
+      characters: [qwenChar({ id: 'a', name: 'Alice', lines: 1 })],
+      books: [{ bookId: 'b1', language: 'ru', eligibleTtsEngines: ['qwen', 'coqui'] }],
+    });
+    expect(voiceReadinessGateMessage(s, 'b1')).toMatch(/render with a Coqui fallback voice/);
   });
 });

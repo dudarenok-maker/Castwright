@@ -25,6 +25,7 @@ const qwenChar = (over: Partial<Character> & { id: string }): Character =>
 function makeStore(opts: {
   bookId?: string;
   language?: string;
+  eligibleTtsEngines?: string[];
   characters?: Character[];
   designActive?: { bookId: string; state: string } | null;
 } = {}) {
@@ -46,7 +47,7 @@ function makeStore(opts: {
       cast: { ...castSlice.getInitialState(), characters: opts.characters ?? [] },
       library: {
         ...librarySlice.getInitialState(),
-        books: [{ bookId, language: opts.language ?? 'en' }],
+        books: [{ bookId, language: opts.language ?? 'en', eligibleTtsEngines: opts.eligibleTtsEngines }],
       } as never,
       castDesign: {
         ...castDesignSlice.getInitialState(),
@@ -87,13 +88,15 @@ describe('VoiceReadinessGateModal', () => {
       </Provider>,
     );
     expect(screen.getByText(/Proceed anyway/)).toBeInTheDocument();
+    expect(screen.getByText(/generic Kokoro fallback voices/)).toBeInTheDocument();
     expect(screen.getByText('Alice')).toBeInTheDocument();
   });
 
-  it('non-English book omits the proceed affordance entirely', () => {
+  it('a still-unsupported non-English book (zh) omits the proceed affordance entirely', () => {
     const store = makeStore({
       characters: [qwenChar({ id: 'a', name: 'Alice', lines: 3 })],
-      language: 'ru',
+      language: 'zh',
+      eligibleTtsEngines: ['qwen'],
     });
     render(
       <Provider store={store}>
@@ -102,6 +105,22 @@ describe('VoiceReadinessGateModal', () => {
     );
     expect(screen.queryByText(/Proceed anyway/)).not.toBeInTheDocument();
     expect(screen.getByText(/can't fall back to a generic voice/)).toBeInTheDocument();
+  });
+
+  it('a Coqui-eligible non-English book (ru) shows Proceed anyway with Coqui-worded copy', () => {
+    const store = makeStore({
+      characters: [qwenChar({ id: 'a', name: 'Alice', lines: 3 })],
+      language: 'ru',
+      eligibleTtsEngines: ['qwen', 'coqui'],
+    });
+    render(
+      <Provider store={store}>
+        <VoiceReadinessGateModal />
+      </Provider>,
+    );
+    expect(screen.getByText(/Proceed anyway/)).toBeInTheDocument();
+    expect(screen.getByText(/render with a Coqui fallback voice/)).toBeInTheDocument();
+    expect(screen.getByText(/generic Coqui fallback voices/)).toBeInTheDocument();
   });
 
   it('Design full cast dispatches designAllRequested with the full undesigned roster and closes the gate', () => {

@@ -613,6 +613,11 @@ export interface LibraryBook {
       but typed optional so the ~20 test fixtures + mock factories that build a
       LibraryBook don't all need updating; consumers default to 'en'. */
   language?: string;
+  /** fs-60 — which TTS engines are eligible for this book's language
+      (independent of which engines are installed on this deployment — the
+      frontend intersects this with its own installed-engines list). Optional
+      like `language`, for the same pre-existing-fixture reason. */
+  eligibleTtsEngines?: TtsEngine[];
 }
 
 export type CoverCandidate = components['schemas']['CoverCandidate'];

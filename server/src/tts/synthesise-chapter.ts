@@ -38,6 +38,7 @@ import { textHashForStale } from '../audio/segments-io.js';
 import { resamplePcm16 } from './resample-pcm16.js';
 import { withTtsRetry, isTransient } from './retry.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
+import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 
 /* How many Qwen sentences to pack into one batched `generate_voice_clone`
    call (plan 112 — true batching). Read once at module load; `=1` is an
@@ -478,6 +479,14 @@ export interface SynthesiseChapterOpts {
       (cross-language garbage). Default false (English books keep the
       graceful fallback, byte-identical to pre-fs-2). */
   forbidKokoroFallback?: boolean;
+  /** fs-60 — when true, a Qwen-routed character that needs the Kokoro
+      fallback (blocked by forbidKokoroFallback) falls back to Coqui instead
+      of throwing MissingDesignedVoiceError. Set by the three server routes
+      from `resolveEligibleEngines(bookLanguage, ...).includes('coqui')`.
+      Requires `resolveForEngine` (to obtain the Coqui provider). Default
+      false — a still-unsupported non-English language keeps today's
+      fail-loud behavior unchanged. */
+  coquiEligible?: boolean;
   /** fs-2 — the book's BCP-47 language, used only to phrase
       `MissingDesignedVoiceError`. Optional; defaults to a generic message. */
   bookLanguage?: string;
@@ -793,6 +802,35 @@ export function buildHintFromCast(c: CastCharacter): CharacterHint {
   };
 }
 
+/* fs-60 — Qwen and Coqui are both VRAM-heavy engines whose real footprints
+   can co-exceed an 8 GB card even though the abstract ENGINE_VRAM_COST budget
+   check would admit them together (see the design spec §4). Rather than
+   retuning that shared budget table (a separate, riskier change affecting
+   every existing Qwen-concurrency decision), a mixed Qwen+Coqui chapter is
+   partitioned into two serial phases with an explicit evict between them.
+   Holds the FULL gpu semaphore budget during the unload (mirrors
+   tts/persona-gpu-plan.ts's unloadResidentSidecar pattern) so a concurrent
+   synth call from another book can't race the eviction — but, unlike that
+   function, this one does NOT check activeGenerationBooks/refuse when a
+   render is active: it's deliberately called *during* an active render, as
+   part of this chapter's own sequencing. */
+async function evictQwenForCoquiPhase(): Promise<void> {
+  const release = await gpuSemaphore.acquire(gpuSemaphore.budget);
+  try {
+    const url = getResolvedSidecarUrl();
+    const res = await fetch(`${url}/unload`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ engine: 'qwen' }),
+    });
+    if (!res.ok) {
+      throw new Error(`Sidecar /unload returned ${res.status} ${res.statusText}`);
+    }
+  } finally {
+    release();
+  }
+}
+
 export async function synthesiseChapter(
   opts: SynthesiseChapterOpts,
 ): Promise<ChapterSynthesisResult> {
@@ -805,6 +843,7 @@ export async function synthesiseChapter(
     resolveForEngine,
     qwenUnavailable = false,
     forbidKokoroFallback = false,
+    coquiEligible = false,
     bookLanguage,
     onGroupStart,
     onGroupComplete,
@@ -890,9 +929,19 @@ export async function synthesiseChapter(
       route.engine === 'qwen' && (!voiceName || qwenUnavailable) && !!resolveForEngine;
     if (!needsFallback || !resolveForEngine) return { route, voiceName };
     /* fs-2 — on a non-English book the Kokoro fallback is forbidden: it would
-       read the book's language through an English-only voice. Fail loudly so
-       the user designs the missing voice instead of shipping garbage audio. */
+       read the book's language through an English-only voice. fs-60 — if
+       Coqui is eligible for this book's language, fall back there instead of
+       failing; only a still-unsupported language (coquiEligible=false) fails
+       loudly so the user designs the missing voice. */
     if (forbidKokoroFallback) {
+      if (coquiEligible && resolveForEngine) {
+        const coqui = resolveForEngine('coqui');
+        return {
+          route: { engine: 'coqui', provider: coqui.provider, modelKey: coqui.modelKey },
+          voiceName: pickVoiceForEngine('coqui', toVoiceLike(c), buildHintFromCast(c)),
+          renderedFallbackEngine: 'coqui',
+        };
+      }
       throw new MissingDesignedVoiceError(c.name ?? c.id, bookLanguage ?? 'non-English', detail);
     }
     const kokoro = resolveForEngine('kokoro');
@@ -1015,6 +1064,7 @@ export async function synthesiseChapter(
               text: normaliseForTts(titleText, langCode),
               voiceName: narratorVoice,
               modelKey: titleRoute.modelKey,
+              language: langCode,
               signal: sig,
             }),
           { signal: sig },
@@ -1219,6 +1269,7 @@ export async function synthesiseChapter(
               text: normaliseForTts(group.text, langCode),
               voiceName,
               modelKey: route.modelKey,
+              language: langCode,
               signal: sig,
             }),
           {
@@ -1529,10 +1580,53 @@ export async function synthesiseChapter(
     return out;
   }
 
+  /* fs-60 — drop-in wrapper around synthGroupsBatched that adds the Qwen/Coqui
+     serialization guarantee, for use at EVERY dispatch site in this function,
+     not just the initial body dispatch. A re-record round (segment-QA or ASR)
+     can re-synth a mixed pending set exactly as easily as the initial dispatch
+     can — partitioning only the initial call would leave Coqui resident from
+     its own second phase while a re-record round reloads Qwen, which is the
+     exact co-residency this mechanism exists to prevent. Same signature as
+     synthGroupsBatched (groupList, optional onDone) => Map<index, result>, so
+     it's a drop-in replacement at every call site. When the group list doesn't
+     actually mix qwen+coqui, this is a zero-overhead passthrough to
+     synthGroupsBatched. Cost note: if MULTIPLE re-record rounds each mix
+     engines, this evicts+reloads Qwen once per such round — a real perf cost,
+     accepted deliberately in exchange for correctness; not optimized away in
+     this task (redundant-evict avoidance is a follow-up, not a v1 requirement).
+     NOT applied to the chapter's anchor group (the very first body group,
+     rendered by a standalone synthGroup call before this function is ever
+     reached, to fix the sample-rate anchor per plan 107/113) — see this
+     task's accepted-limitations note below for why that narrow gap is
+     accepted rather than engineered around. */
+  async function synthGroupsSerialized(
+    groupList: SentenceGroup[],
+    onDone?: (group: SentenceGroup, result: GroupResult) => void,
+  ): Promise<Map<number, GroupResult>> {
+    const engines = new Set(groupList.map((g) => resolveGroup(g).route.engine));
+    if (!(engines.has('qwen') && engines.has('coqui'))) {
+      return synthGroupsBatched(groupList, onDone);
+    }
+    /* fs-60 — Coqui renders in its own phase AFTER Qwen is evicted; every other
+       engine (Qwen itself, plus any lightweight per-character pin such as
+       Kokoro/Gemini) renders in the pre-evict phase. Splitting on "coqui vs
+       not-coqui" — rather than "qwen vs coqui" — guarantees no group is dropped
+       when a chapter mixes a third engine alongside the qwen+coqui pair: the
+       invariant this wrapper enforces is specifically that Coqui is never
+       resident alongside Qwen, not that only two engines are ever present. */
+    const coquiGroups = groupList.filter((g) => resolveGroup(g).route.engine === 'coqui');
+    const preEvictGroups = groupList.filter((g) => resolveGroup(g).route.engine !== 'coqui');
+    const out = new Map<number, GroupResult>();
+    for (const [k, v] of await synthGroupsBatched(preEvictGroups, onDone)) out.set(k, v);
+    await evictQwenForCoquiPhase();
+    for (const [k, v] of await synthGroupsBatched(coquiGroups, onDone)) out.set(k, v);
+    return out;
+  }
+
   /* Initial body dispatch — synth groups[bodyStartIndex..] (the anchor already
      ran), writing each result into `results` and streaming chapter progress as
      it lands. */
-  await synthGroupsBatched(groups.slice(bodyStartIndex), (group, result) => {
+  await synthGroupsSerialized(groups.slice(bodyStartIndex), (group, result) => {
     results[group.index] = result;
     fireComplete(group);
   });
@@ -1598,7 +1692,7 @@ export async function synthesiseChapter(
           reasons: segmentQaByIndex.get(group.index)!.reasons,
         });
       }
-      const { value: fresh, ms: reMs } = await timed(() => synthGroupsBatched(pending));
+      const { value: fresh, ms: reMs } = await timed(() => synthGroupsSerialized(pending));
       rerecordMs += reMs;
       for (const group of pending) {
         const f = fresh.get(group.index);
@@ -1707,7 +1801,7 @@ export async function synthesiseChapter(
           reasons: c.reasons,
         });
       }
-      const { value: fresh, ms: asrReMs } = await timed(() => synthGroupsBatched(pending));
+      const { value: fresh, ms: asrReMs } = await timed(() => synthGroupsSerialized(pending));
       rerecordMs += asrReMs;
       for (const group of pending) {
         const f = fresh.get(group.index);

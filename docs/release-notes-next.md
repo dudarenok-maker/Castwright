@@ -33,6 +33,10 @@ Diffed against v1.12.3 (the previous public release).
 
 - **"Design full cast" no longer silently grinds through GPU contention.** If another job was using the GPU while a bulk cast design was running, every remaining character used to fail identically, one after another, with the progress pill misleadingly climbing toward 100% the whole time (even reading "0/16 · 94%" — zero characters designed, but nearly "complete"). The sidecar now recognizes this specific contention and triggers its existing self-recovery restart (matching how it already handles other transient failures); the job rides out a brief pause before halting with a clear message naming the cause and how far it got, instead of grinding through every remaining character. The progress pill's percent no longer counts failures as progress, and now shows the failure count inline while the job is still running. (#1533)
 
+## 🌐 Languages
+
+- **fs-60: Coqui XTTS becomes an eligible casting choice and automatic fallback for Russian/Spanish/French/German books**, no longer hard-locked to Qwen with no recovery path. A new `ENGINE_LANGUAGE_SUPPORT`/`resolveEligibleEngines` model (server) computes a per-book `eligibleTtsEngines` field; an undesigned or unavailable Qwen character now falls back to a generic Coqui voice instead of failing the chapter, mirrored in the cast-view banner, the voice-readiness gate ("Proceed anyway" now names the real fallback engine), the engine picker, and a new "Fallback (Coqui)" status pill. A mixed Qwen+Coqui chapter is serialized (never co-resident) to protect an 8 GB card. `PRELOAD_KOKORO`'s default also flips `true`→`false` (Coqui/Qwen already default off; Kokoro now matches). Live-GPU acceptance still owed. (#1005)
+
 ---
 
 **Full changelog:** v1.12.3...v1.13.0

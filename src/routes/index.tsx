@@ -804,6 +804,7 @@ function ReadyViewSwitch({
           sentences={manuscript.sentences}
           title={projectTitle}
           bookLanguage={activeBook?.language ?? 'en'}
+          eligibleTtsEngines={activeBook?.eligibleTtsEngines}
           onOpenProfile={(id) => dispatch(uiActions.setOpenProfileId(id))}
           onShowMatchDetail={(id) => dispatch(uiActions.setMatchDetailFor(id))}
           driftEvents={drift}

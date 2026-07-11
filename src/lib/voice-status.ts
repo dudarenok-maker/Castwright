@@ -93,11 +93,14 @@ function resolveLifecyclePill(
      matched library voice itself resolves to Qwen. */
   if (effectiveEngine === 'qwen' || voice?.ttsVoice?.provider === 'qwen') {
     /* Render-time fact wins: if this character's last render actually fell back
-       to Kokoro (no designed voice, or Qwen was unavailable), say so — it
-       outranks the design-lifecycle labels because it's what the listener
+       to Kokoro or Coqui (no designed voice, or Qwen was unavailable), say so —
+       it outranks the design-lifecycle labels because it's what the listener
        hears right now. */
     if (renderedFallbackEngine === 'kokoro') {
       return { label: 'Fallback (Kokoro)', color: 'warning' };
+    }
+    if (renderedFallbackEngine === 'coqui') {
+      return { label: 'Fallback (Coqui)', color: 'warning' };
     }
     /* "Has a voice" means a real designed voiceId resolves — the character's own
        qwen override OR a matched library Voice that actually carries a name. A
@@ -153,8 +156,8 @@ export function resolveVoiceStatus(
   /** Engine this character ACTUALLY rendered in last generation, when it
       differs from its configured engine (from the segments/characterSnapshots
       `renderedFallbackEngine`). `'kokoro'` surfaces the "Fallback (Kokoro)"
-      pill. Omit when no render metadata is available — the design-lifecycle
-      pill renders as before. */
+      pill; `'coqui'` surfaces the "Fallback (Coqui)" pill. Omit when no render
+      metadata is available — the design-lifecycle pill renders as before. */
   renderedFallbackEngine?: string | null,
 ): VoiceStatusBadges {
   const variantCount = countEmotionVariants(c);

@@ -9,7 +9,9 @@ import {
   normaliseBookLanguage,
   sidecarLanguageName,
   isNonEnglish,
+  resolveEligibleEngines,
 } from './language.js';
+import { ALL_TTS_ENGINES } from './model-keys.js';
 
 describe('normaliseBookLanguage', () => {
   it('defaults missing/empty/whitespace to en', () => {
@@ -72,5 +74,31 @@ describe('isNonEnglish', () => {
     expect(isNonEnglish('ru')).toBe(true);
     expect(isNonEnglish('ru-RU')).toBe(true);
     expect(isNonEnglish('de')).toBe(true);
+  });
+});
+
+describe('resolveEligibleEngines', () => {
+  it('returns every installed engine for English', () => {
+    expect(resolveEligibleEngines('en', ALL_TTS_ENGINES).sort()).toEqual(
+      ['coqui', 'gemini', 'kokoro', 'piper', 'qwen'].sort(),
+    );
+  });
+
+  it('returns qwen + coqui (not kokoro) for the five Coqui-eligible languages', () => {
+    for (const lang of ['ru', 'es', 'fr', 'de']) {
+      expect(resolveEligibleEngines(lang, ALL_TTS_ENGINES).sort()).toEqual(['coqui', 'qwen'].sort());
+    }
+  });
+
+  it('returns only qwen for a still-unsupported non-English language (e.g. detected-but-unsupported zh)', () => {
+    expect(resolveEligibleEngines('zh', ALL_TTS_ENGINES)).toEqual(['qwen']);
+  });
+
+  it('intersects with installedEngines — a Kokoro-only install on an English book excludes qwen/coqui', () => {
+    expect(resolveEligibleEngines('en', ['kokoro'])).toEqual(['kokoro']);
+  });
+
+  it('a supported language with neither qwen nor coqui installed resolves to empty', () => {
+    expect(resolveEligibleEngines('ru', ['kokoro', 'gemini'])).toEqual([]);
   });
 });

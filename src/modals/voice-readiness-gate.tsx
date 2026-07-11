@@ -2,9 +2,12 @@
    instead of the tier prompt when a speaking Qwen character has no designed
    voice: "Design full cast" kicks the bulk job (same payload shape as the
    cast view's "Design full cast" button, so it drives the same
-   DesignPill/progress UI); English books get a "Proceed anyway" fallback;
-   non-English books have no proceed affordance at all — every speaking
-   character needs a designed voice before that book can generate. */
+   DesignPill/progress UI); English AND Coqui-eligible non-English books (fs-60
+   — ru/es/fr/de) get a "Proceed anyway" fallback, naming whichever engine
+   would actually render (Kokoro or Coqui); only a still-unsupported language
+   (Qwen is the sole eligible engine) has no proceed affordance at all —
+   every speaking character needs a designed voice before that book can
+   generate. */
 
 import { IconClose } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
@@ -14,7 +17,8 @@ import { castDesignActions } from '../store/cast-design-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import {
   selectUndesignedQwenCharacters,
-  selectIsBookNonEnglish,
+  selectHasNoFallbackEngine,
+  selectFallbackEngineName,
   voiceReadinessGateMessage,
 } from '../store/voice-readiness-selectors';
 import { sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
@@ -34,7 +38,12 @@ export function VoiceReadinessGateModal() {
   const undesigned = useAppSelector((s) =>
     gate ? selectUndesignedQwenCharacters(s, gate.bookId) : NO_UNDESIGNED_CHARACTERS,
   );
-  const isNonEnglish = useAppSelector((s) => (gate ? selectIsBookNonEnglish(s, gate.bookId) : false));
+  const hasNoFallbackEngine = useAppSelector((s) =>
+    gate ? selectHasNoFallbackEngine(s, gate.bookId) : false,
+  );
+  const fallbackEngineName = useAppSelector((s) =>
+    gate ? selectFallbackEngineName(s, gate.bookId) : 'Kokoro',
+  );
   const message = useAppSelector((s) => (gate ? voiceReadinessGateMessage(s, gate.bookId) : null));
 
   if (!gate) return null;
@@ -120,12 +129,12 @@ export function VoiceReadinessGateModal() {
           </div>
 
           <div className="px-6 py-4 border-t border-ink/10 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3">
-            {!isNonEnglish ? (
+            {!hasNoFallbackEngine ? (
               <button
                 onClick={onProceedAnyway}
                 className="text-sm font-medium text-ink/60 hover:text-ink min-h-[44px] sm:min-h-0"
               >
-                Proceed anyway — generic Kokoro fallback voices
+                Proceed anyway — generic {fallbackEngineName} fallback voices
               </button>
             ) : (
               <button

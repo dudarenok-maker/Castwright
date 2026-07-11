@@ -79,7 +79,13 @@ async function seedNonEnglishBook(page: Page, bookId: string): Promise<void> {
         voiceCount: 0,
         lastWorkedOn: 'just now',
         coverGradient: ['#2a2520', '#14110f'],
-        language: 'ru',
+        /* fs-60 — a STILL-UNSUPPORTED non-English language (Coqui isn't in
+           eligibleTtsEngines), so there's no fallback engine and the gate
+           stays a hard block. A Coqui-eligible language (ru/es/fr/de) would
+           now get the soft-gate proceed affordance instead — that path is
+           covered by e2e/generation/coqui-fallback-non-english.spec.ts. */
+        language: 'zh',
+        eligibleTtsEngines: ['qwen'],
       },
     });
   }, bookId);
@@ -190,7 +196,7 @@ test.describe('fe-46 cast-first landing + voice-readiness gate', () => {
     await expect(gateHeading(page)).not.toBeVisible();
   });
 
-  test('non-English book: gate has no proceed affordance', async ({ page }) => {
+  test('still-unsupported non-English book: gate has no proceed affordance', async ({ page }) => {
     test.setTimeout(60_000);
     await seedQwenProject(page);
     await goToConfirm(page);

@@ -8,6 +8,8 @@
    contract migration (the field stays an open string everywhere else). */
 
 import { getLanguageEntry } from './language-registry.js';
+import { ENGINE_LANGUAGE_SUPPORT } from './voice-mapping.js';
+import type { TtsEngine } from './model-keys.js';
 
 export const DEFAULT_LANGUAGE = 'en';
 
@@ -46,4 +48,21 @@ export function sidecarLanguageName(bcp47: string): string {
     onto a designed Qwen voice and blocks the Kokoro fallback. */
 export function isNonEnglish(bcp47: string): boolean {
   return normaliseBookLanguage(bcp47) !== DEFAULT_LANGUAGE;
+}
+
+/** fs-60 — which engines from `installedEngines` are eligible to render
+    `bookLanguage`, per ENGINE_LANGUAGE_SUPPORT. Pure data-driven filter — no
+    per-language branching. Replaces the scattered isNonEnglish/forbidKokoroFallback
+    derivations at the three server enforcement sites (generation.ts,
+    chapter-splice.ts, chapter-qa-repair.ts) and backs the eligibleTtsEngines
+    API field frontend callers read. */
+export function resolveEligibleEngines(
+  bookLanguage: string,
+  installedEngines: TtsEngine[],
+): TtsEngine[] {
+  const lang = normaliseBookLanguage(bookLanguage);
+  return installedEngines.filter((engine) => {
+    const support = ENGINE_LANGUAGE_SUPPORT[engine];
+    return support === '*' || support.includes(lang);
+  });
 }

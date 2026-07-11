@@ -46,7 +46,8 @@ import {
   findBookByBookId,
   type BookStateJson,
 } from '../workspace/scan.js';
-import { isNonEnglish, sidecarLanguageName } from '../tts/language.js';
+import { isNonEnglish, sidecarLanguageName, resolveEligibleEngines } from '../tts/language.js';
+import { ALL_TTS_ENGINES } from '../tts/model-keys.js';
 import { chapterAudioExists } from '../workspace/chapter-audio-file.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
@@ -783,8 +784,18 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      call below. English books are untouched (byte-identical to pre-fs-2). */
   const bookLanguage = bookStateLanguage(state);
   const nonEnglishBook = isNonEnglish(bookLanguage);
+  const eligibleEngines = resolveEligibleEngines(bookLanguage, ALL_TTS_ENGINES);
+  const coquiEligible = eligibleEngines.includes('coqui');
   if (nonEnglishBook) {
-    for (const c of cast.characters) c.ttsEngine = 'qwen';
+    /* fs-60 — honor an already-eligible manual engine choice (e.g. a character
+       explicitly cast on Coqui via the now-unlocked picker) instead of blindly
+       overwriting it. Anything NOT already eligible (unset, or an engine this
+       book's language can't use — e.g. Kokoro) still forces to Qwen exactly as
+       before. */
+    for (const c of cast.characters) {
+      if (c.ttsEngine && eligibleEngines.includes(c.ttsEngine)) continue;
+      c.ttsEngine = 'qwen';
+    }
     /* fs-2 / fs-32c — force re-design on cross-language reuse. Shared with the
        splice re-record path: clears any designed Qwen voice whose baked
        manifest language ≠ the book's, so the forbidKokoroFallback gate blocks
@@ -874,20 +885,44 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      uninstalled / weights-missing / load-failed Qwen still lands here, and that
      downgrade must be visible, not silent. (Stale-build incident, 2026-05-29 —
      docs/features/archive/135-qwen-loud-fallback.md.) */
-  if (qwenUnavailable && nonEnglishBook) {
-    /* fs-2 — a non-English book CANNOT fall back to Kokoro (English-only), so an
-       unavailable Qwen engine is fatal, not an advisory. Abort the whole run
+  if (qwenUnavailable && nonEnglishBook && !coquiEligible) {
+    /* fs-2 — a non-English book with NO fallback engine (still-unsupported
+       language) CANNOT proceed if Qwen is unavailable. Abort the whole run
        before any chapter renders rather than emitting cross-language garbage. */
     const message =
       `This ${bookLanguage} book requires Qwen, but Qwen is unavailable ` +
-      `(install-state: ${qwenState}). English Kokoro voices cannot read ` +
-      `${bookLanguage} text, so no chapter can be generated. Start/refresh the ` +
-      `TTS sidecar and load Qwen, then regenerate.`;
+      `(install-state: ${qwenState}). This language has no fallback engine, ` +
+      `so no chapter can be generated. Start/refresh the TTS sidecar and load ` +
+      `Qwen, then regenerate.`;
     console.warn(`[generation] ${message}`);
     send({ type: 'chapter_failed', errorReason: message });
     return res.end();
   }
-  if (qwenUnavailable) {
+  if (qwenUnavailable && nonEnglishBook && coquiEligible) {
+    /* fs-60 — a Coqui-eligible non-English book (en/ru/es/fr/de) has a real
+       fallback: don't abort the whole run, let every Qwen-routed character
+       fall back to Coqui per-chapter (Task 6's applyQwenFallback branch). */
+    const message =
+      `Qwen is unavailable (install-state: ${qwenState}), so every Qwen character ` +
+      `will render in Coqui — a fallback voice, NOT the designed Qwen voice. ` +
+      `Check the TTS sidecar, then regenerate affected chapters.`;
+    console.warn(`[generation] ${message}`);
+    send({
+      type: 'warning',
+      code: 'qwen_unavailable_coqui_fallback',
+      message,
+      qwenInstallState: qwenState,
+    });
+  }
+  if (qwenUnavailable && !nonEnglishBook) {
+    /* fs-60 — this Kokoro-fallback warning only applies to English books: a
+       non-English book's own qwenUnavailable branches above (the FATAL abort
+       or the Coqui-fallback warning) already cover it, and forbidKokoroFallback
+       makes an actual Kokoro fallback impossible there regardless of Qwen
+       availability, so this message would otherwise be actively wrong once the
+       Coqui-eligible branch stopped returning early. Previously unreachable for
+       non-English books anyway (the old code always aborted before this point),
+       so this guard is a no-op for every pre-existing (English-book) case. */
     const message =
       `Qwen is unavailable (install-state: ${qwenState}), so every Qwen character ` +
       `will render in Kokoro — generic fallback voices, NOT the designed Qwen ` +
@@ -1556,6 +1591,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            language through an English voice. English books keep the graceful
            fallback (forbidKokoroFallback = false). */
         forbidKokoroFallback: nonEnglishBook,
+        coquiEligible,
         bookLanguage,
         signal: chapterSignal,
         chapterTitleNarration,
