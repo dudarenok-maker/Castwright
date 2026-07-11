@@ -555,9 +555,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'PRELOAD_KOKORO',
     group: 'tts-engine',
     label: 'Preload Kokoro at startup',
-    help: 'When true (default), the sidecar eagerly loads Kokoro v1 at startup (~1 s, ~1 GB VRAM). When false, Kokoro warms on demand on the first synth that needs it. Turn off if Qwen is your main engine and you want the ~1 GB VRAM back. Changing this requires a sidecar restart.',
+    help: 'When true, the sidecar eagerly loads Kokoro v1 at startup (~1 s, ~1 GB VRAM). When false (default), Kokoro warms on demand on the first synth that needs it — fs-60: non-English books can now use Coqui too, so an always-hot English-only engine is a less universally good default. Changing this requires a sidecar restart.',
     type: 'boolean',
-    default: true, // ← PRELOAD_KOKORO default in tts-sidecar/main.py (line 2304, _parse_bool default=True)
+    default: false, // fs-60 — was `true`; see help text above
     apply: 'restart-sidecar', risk: 'high',
   },
   {

@@ -117,4 +117,11 @@ describe('config registry', () => {
       expect(k?.risk).toBe('high');
     });
   });
+
+  it('tts.preload.kokoro defaults to false (fs-60 — non-English books are no longer forced onto a single engine, so an always-hot English-only engine is a less universally good default)', () => {
+    const k = getKnob('tts.preload.kokoro');
+    expect(k).toBeDefined();
+    expect(k?.env).toBe('PRELOAD_KOKORO');
+    expect(k?.default).toBe(false);
+  });
 });
