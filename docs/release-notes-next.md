@@ -34,6 +34,7 @@ opening a new one.
 ## 🗣️ Quality & Accuracy
 
 - **ASR content-QA gate: non-English integer-spelling and contraction normalization for es/fr/de/ru (#1084).** Real per-language `maxWer` calibration against rendered audio remains a tracked follow-up.
+- **Dialogue-structure attribution escalation: two low-priority srv-59 follow-ups.** Each escalated conversation window in a chapter now keeps its own forensics artifact on disk instead of the last window overwriting every earlier one; and the "characters present" candidate list shown to the escalation model no longer surfaces `narrator` as a suggested guess (it's still a valid answer, just noise as a candidate). (#1483)
 
 ## 🎙️ Voice design & casting
 
