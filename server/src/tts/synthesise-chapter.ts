@@ -478,6 +478,14 @@ export interface SynthesiseChapterOpts {
       (cross-language garbage). Default false (English books keep the
       graceful fallback, byte-identical to pre-fs-2). */
   forbidKokoroFallback?: boolean;
+  /** fs-60 — when true, a Qwen-routed character that needs the Kokoro
+      fallback (blocked by forbidKokoroFallback) falls back to Coqui instead
+      of throwing MissingDesignedVoiceError. Set by the three server routes
+      from `resolveEligibleEngines(bookLanguage, ...).includes('coqui')`.
+      Requires `resolveForEngine` (to obtain the Coqui provider). Default
+      false — a still-unsupported non-English language keeps today's
+      fail-loud behavior unchanged. */
+  coquiEligible?: boolean;
   /** fs-2 — the book's BCP-47 language, used only to phrase
       `MissingDesignedVoiceError`. Optional; defaults to a generic message. */
   bookLanguage?: string;
@@ -805,6 +813,7 @@ export async function synthesiseChapter(
     resolveForEngine,
     qwenUnavailable = false,
     forbidKokoroFallback = false,
+    coquiEligible = false,
     bookLanguage,
     onGroupStart,
     onGroupComplete,
@@ -890,9 +899,19 @@ export async function synthesiseChapter(
       route.engine === 'qwen' && (!voiceName || qwenUnavailable) && !!resolveForEngine;
     if (!needsFallback || !resolveForEngine) return { route, voiceName };
     /* fs-2 — on a non-English book the Kokoro fallback is forbidden: it would
-       read the book's language through an English-only voice. Fail loudly so
-       the user designs the missing voice instead of shipping garbage audio. */
+       read the book's language through an English-only voice. fs-60 — if
+       Coqui is eligible for this book's language, fall back there instead of
+       failing; only a still-unsupported language (coquiEligible=false) fails
+       loudly so the user designs the missing voice. */
     if (forbidKokoroFallback) {
+      if (coquiEligible && resolveForEngine) {
+        const coqui = resolveForEngine('coqui');
+        return {
+          route: { engine: 'coqui', provider: coqui.provider, modelKey: coqui.modelKey },
+          voiceName: pickVoiceForEngine('coqui', toVoiceLike(c), buildHintFromCast(c)),
+          renderedFallbackEngine: 'coqui',
+        };
+      }
       throw new MissingDesignedVoiceError(c.name ?? c.id, bookLanguage ?? 'non-English', detail);
     }
     const kokoro = resolveForEngine('kokoro');

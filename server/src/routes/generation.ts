@@ -1591,6 +1591,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            language through an English voice. English books keep the graceful
            fallback (forbidKokoroFallback = false). */
         forbidKokoroFallback: nonEnglishBook,
+        coquiEligible,
         bookLanguage,
         signal: chapterSignal,
         chapterTitleNarration,

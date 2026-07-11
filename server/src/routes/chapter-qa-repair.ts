@@ -304,6 +304,7 @@ chapterQaRepairRouter.post(
       const bookLanguage = bookStateLanguage(state);
       const nonEnglishBook = isNonEnglish(bookLanguage);
       const eligibleEngines = resolveEligibleEngines(bookLanguage, ALL_TTS_ENGINES);
+      const coquiEligible = eligibleEngines.includes('coqui');
       if (nonEnglishBook) {
         for (const c of cast.characters) {
           if (c.ttsEngine && eligibleEngines.includes(c.ttsEngine)) continue;
@@ -442,6 +443,7 @@ chapterQaRepairRouter.post(
               resolveForEngine,
               qwenUnavailable,
               forbidKokoroFallback: nonEnglishBook,
+              coquiEligible,
               bookLanguage,
               signal: controller.signal,
               chapterTitleNarration: undefined,
