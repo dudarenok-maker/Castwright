@@ -93,6 +93,17 @@ describe('stripThirdPartyFrontMatter', () => {
     expect(r.stripped).toEqual([]);
   });
 
+  it('keeps a character whose name (+ aliases) is too short to verify (condition b unusable)', async () => {
+    // 'Ed' is below MIN_NEEDLE_LEN (3) and has no aliases, so `needles` is
+    // empty after filtering — (b) can never be verified, so the character
+    // must be kept rather than trivially passing an unverifiable check.
+    const chars = [narrator, char('ed', 'Ed')];
+    const sents = [line(1, 0, 'ed')];
+    const chapters = [essayCh, storyCh(1, 'проза без него')];
+    const r = await stripThirdPartyFrontMatter(chars, sents, chapters, {});
+    expect(r.stripped).toEqual([]);
+  });
+
   it('is a no-op (same references) when nothing qualifies and runs Signal-1-only with no classifier', async () => {
     const chars = [narrator, char('hero', 'Hero')];
     const sents = [line(1, 1, 'hero')];

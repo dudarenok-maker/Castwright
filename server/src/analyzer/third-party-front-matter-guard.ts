@@ -94,6 +94,7 @@ export async function stripThirdPartyFrontMatter(
     const needles = [c.name, ...(c.aliases ?? [])]
       .map((n) => n.trim().toLocaleLowerCase())
       .filter((n) => n.length >= MIN_NEEDLE_LEN);
+    if (needles.length === 0) continue; // can't verify (b) for an unusable name → keep
     let foundElsewhere = false;
     for (const [chId, foldedBody] of foldedBodyById) {
       if (chId === chapterId) continue;

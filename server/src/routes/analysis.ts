@@ -4206,10 +4206,15 @@ export async function runMainAnalyzerJob(
     const classifyNonStory = analyzer.runNonStoryClassification
       ? async (ch: ThirdPartyGuardChapter): Promise<boolean> => {
           const promptMd = `Title: ${ch.title ?? '(untitled)'}\n\n${ch.body}`;
-          const out = await analyzer.runNonStoryClassification!(manuscriptId, ch.id, promptMd, {
-            language: bookLanguage,
-          });
-          return out.nonStory;
+          try {
+            const out = await analyzer.runNonStoryClassification!(manuscriptId, ch.id, promptMd, {
+              language: bookLanguage,
+            });
+            return out.nonStory;
+          } catch (err) {
+            if (err instanceof AnalysisAbortedError) throw err;
+            return false; // Signal-2 hiccup → treat as story, degrade to Signal-1-only
+          }
         }
       : undefined;
     const guarded = await stripThirdPartyFrontMatter(
@@ -5275,10 +5280,15 @@ export async function runSubsetAnalyzerJob(
     const classifyNonStory = analyzer.runNonStoryClassification
       ? async (ch: ThirdPartyGuardChapter): Promise<boolean> => {
           const promptMd = `Title: ${ch.title ?? '(untitled)'}\n\n${ch.body}`;
-          const out = await analyzer.runNonStoryClassification!(manuscriptId, ch.id, promptMd, {
-            language: bookLanguage,
-          });
-          return out.nonStory;
+          try {
+            const out = await analyzer.runNonStoryClassification!(manuscriptId, ch.id, promptMd, {
+              language: bookLanguage,
+            });
+            return out.nonStory;
+          } catch (err) {
+            if (err instanceof AnalysisAbortedError) throw err;
+            return false; // Signal-2 hiccup → treat as story, degrade to Signal-1-only
+          }
         }
       : undefined;
     const guarded = await stripThirdPartyFrontMatter(

@@ -3099,4 +3099,104 @@ describe('#1447 third-party front-matter guard — main-route integration', () =
     },
     60_000,
   );
+
+  /* Fix #1 (this PR's whole-branch-review pass): a Signal-2 analyzer failure
+     (truncation, quota, rate-limit, network) must degrade to "treat as story"
+     (Signal-1-only) rather than propagating and failing the whole analysis
+     job. Same fixture as the passing-Signal-2 test above, except
+     runNonStoryClassification REJECTS instead of resolving. */
+  function buildPhase0AnalyzerThrowing(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        return { characters: stage1Roster() };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+      async runNonStoryClassification() {
+        throw new Error('analyzer truncation / quota / rate-limit hiccup');
+      },
+    };
+  }
+
+  it(
+    'completes the job and keeps the third-party character when Signal 2 rejects (degrades to Signal-1-only)',
+    async () => {
+      const manuscriptId = `test-thirdparty-guard-throw-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      registerManuscript(manuscriptId, bookDir);
+
+      const phase0Selection = buildSelection(buildPhase0AnalyzerThrowing(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        // Must NOT throw — a Signal-2 hiccup degrades to Signal-1-only,
+        // it does not fail the whole analysis job.
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: true,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        const editsFile = JSON.parse(readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8')) as {
+          sentences: SentenceOutput[];
+        };
+        // Title alone doesn't classify and Signal 2 degraded to "story" —
+        // the guard did NOT strip Radiy, so its line is NOT re-routed to
+        // narrator (the guard's strip action). Radiy only has 1 evidence
+        // line, so it's separately (and correctly) folded into the generic
+        // background bucket by foldMinorCast (unrelated pre-existing
+        // low-line-count rule, not the guard) — the fold target is
+        // 'unknown-male', not 'narrator'.
+        const essaySentence = editsFile.sentences.find((s) => s.chapterId === 1);
+        expect(essaySentence).toBeDefined();
+        expect(essaySentence!.characterId).not.toBe('narrator');
+        expect(essaySentence!.characterId).toBe('unknown-male');
+
+        const castFile = JSON.parse(readFileSync(castJsonPath(bookDir), 'utf8')) as {
+          characters: CharacterOutput[];
+        };
+        // Radiy survives as an alias of the folded background bucket
+        // (rolled in by name, not silently discarded).
+        const bucket = castFile.characters.find((c) => c.id === 'unknown-male');
+        expect(bucket).toBeDefined();
+        expect(bucket!.aliases).toContain('Radiy');
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
 });
