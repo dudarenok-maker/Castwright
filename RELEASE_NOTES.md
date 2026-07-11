@@ -1,3 +1,7 @@
+# Castwright 1.12.3
+
+- **The one-click Pinokio install now starts the moment you click Install.** On a fresh Pinokio install, the Install button would appear but quietly do nothing — setup never kicked off, and the only way through was to run it by hand from inside the app. The culprit: our launcher lived in a folder named `pinokio`, a name Pinokio reserves for itself, so the button couldn't fire our installer. We've moved the launcher out of that reserved name, so Install now runs the setup right away on the first click.
+
 # Castwright 1.12.2
 
 - **A Pinokio install now starts up with its real settings.** The v1.12.1 fix got the Pinokio install running for the first time — which revealed that the server was starting from the wrong folder and couldn't find its own configuration, so it quietly ran on defaults. It now launches from the right place, so a fresh Pinokio Install → Start comes up fully configured from the very first run.
