@@ -6,9 +6,9 @@
 // server prints `[server] listening on http://localhost:8080` (index.ts:320) —
 // and `done: true` advances to local.set while keeping the daemon alive.
 //
-// This script lives in pinokio/, one level below the app root — `path: '..'`
+// This script lives in pinokio-scripts/, one level below the app root — `path: '..'`
 // is required so the shell (and CONDA's relative env path) resolve against
-// the app root, not pinokio/ (see install.js's header comment).
+// the app root, not pinokio-scripts/ (see install.js's header comment).
 //
 // The server's env load is CWD-RELATIVE (`process.loadEnvFile('.env')` in
 // server/src/load-env.ts) — it must run with its working directory at

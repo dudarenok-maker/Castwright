@@ -7,7 +7,7 @@ const texts = (items) => items.map((i) => i.text);
 
 test('not installed → only Install (primary, with icon)', () => {
   const items = buildMenu({ installed: false, running: false, url: null });
-  assert.deepEqual(hrefs(items), ['pinokio/install.js']);
+  assert.deepEqual(hrefs(items), ['pinokio-scripts/install.js']);
   assert.equal(items[0].text, 'Install');
   assert.equal(items[0].default, true);
   assert.match(items[0].icon, /^fa-/);
@@ -16,7 +16,7 @@ test('not installed → only Install (primary, with icon)', () => {
 test('installed + stopped → Start (primary), Update, Reset (in order)', () => {
   const items = buildMenu({ installed: true, running: false, url: null });
   assert.deepEqual(texts(items), ['Start', 'Update', 'Reset']);
-  assert.deepEqual(hrefs(items), ['pinokio/start.js', 'pinokio/update.js', 'pinokio/reset.js']);
+  assert.deepEqual(hrefs(items), ['pinokio-scripts/start.js', 'pinokio-scripts/update.js', 'pinokio-scripts/reset.js']);
   assert.equal(items[0].default, true);
 });
 
@@ -25,5 +25,5 @@ test('installed + running → Open Web UI (primary, url), Stop, Update, Reset', 
   assert.deepEqual(texts(items), ['Open Web UI', 'Stop', 'Update', 'Reset']);
   assert.equal(items[0].href, 'http://localhost:8080');
   assert.equal(items[0].default, true);
-  assert.equal(items[1].href, 'pinokio/stop.js');
+  assert.equal(items[1].href, 'pinokio-scripts/stop.js');
 });

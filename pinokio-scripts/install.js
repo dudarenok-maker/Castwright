@@ -3,12 +3,12 @@
 // release, bootstraps the venv via the SHARED bootstrap-venv.mjs, writes .env.
 // Kokoro weights are deferred to the in-app fs-21 wizard at first run.
 //
-// Every pinokio/*.js script here lives ONE LEVEL BELOW the app root (where
+// Every pinokio-scripts/*.js script here lives ONE LEVEL BELOW the app root (where
 // package.json/server/ live) — Pinokio starts a shell.run's cwd at the
-// currently running script's OWN directory (pinokio/), not the app root, so
+// currently running script's OWN directory (pinokio-scripts/), not the app root, so
 // every step needs an explicit `path: '..'` to reach it. Confirmed on-box
 // 2026-07-11: without it, conda's relative env path resolved to
-// pinokio/env instead of <app>/env (see docs/features/218-pinokio-installer.md).
+// pinokio-scripts/env instead of <app>/env (see docs/features/218-pinokio-installer.md).
 const APP_ROOT = '..';
 const CONDA = { path: 'env', python: '3.12' }; // conda env created at <app>/env (relative to APP_ROOT)
 
@@ -25,7 +25,7 @@ module.exports = {
     //    The script also guards against a pre-Pinokio release.
     {
       method: 'shell.run',
-      params: { path: APP_ROOT, conda: CONDA, message: 'node pinokio/lib/resolve-release.js' },
+      params: { path: APP_ROOT, conda: CONDA, message: 'node pinokio-scripts/lib/resolve-release.js' },
     },
     // 3. Node deps — --include=dev so Vite (a devDependency) installs for the build.
     {
@@ -61,7 +61,7 @@ module.exports = {
     //    write-env.js defaults appDir to process.cwd() (the app root).
     {
       method: 'shell.run',
-      params: { path: APP_ROOT, conda: CONDA, message: 'node pinokio/lib/write-env.js' },
+      params: { path: APP_ROOT, conda: CONDA, message: 'node pinokio-scripts/lib/write-env.js' },
     },
   ],
 };

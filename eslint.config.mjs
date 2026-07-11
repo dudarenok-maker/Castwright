@@ -231,9 +231,9 @@ export default tseslint.config(
      and `tseslint.configs.recommended` applies its rules globally (no
      `files` restriction), so the relaxation must be carried forward under
      the new rule name to keep CommonJS scripts (e.g. preflight-ffmpeg.cjs
-     and the pinokio/ subtree) lint-clean. This is the SAME relaxation, not
+     and the pinokio-scripts/ subtree) lint-clean. This is the SAME relaxation, not
      a new one. pinokio.js itself is genuine CommonJS (require() +
-     module.exports, same as the rest of the pinokio/ subtree) as of the
+     module.exports, same as the rest of the pinokio-scripts/ subtree) as of the
      fix/scripts-pinokio-cjs-entry correction to the ops-16/#1458 fix — the
      relaxation is load-bearing for it, not just a leftover. */
   {
@@ -242,7 +242,7 @@ export default tseslint.config(
       'scripts/**/*.cjs',
       'scripts/**/*.js',
       'pinokio.js',
-      'pinokio/**/*.js',
+      'pinokio-scripts/**/*.js',
     ],
     languageOptions: {
       globals: { ...globals.node },
