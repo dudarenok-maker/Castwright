@@ -5691,7 +5691,22 @@ async def qwen_mint_variant(req: Request) -> Response:
             },
             status_code=503,
         )
-    except Exception:
+    except Exception as e:
+        err_str = f"{e}"
+        if _CUDA_POISON_RE.search(err_str):
+            log.warning("/qwen/mint-variant CUDA poison (baseVoiceId=%s): %s", base_voice_id, e)
+            _mark_cuda_poisoned(err_str)
+            return JSONResponse(
+                {
+                    "detail": (
+                        "GPU is out of memory — likely another job (generation/analysis/design) "
+                        "is using it. Free up GPU memory and try again."
+                    ),
+                    "poisoned": True,
+                    "code": "gpu_poisoned",
+                },
+                status_code=503,
+            )
         log.exception("/qwen/mint-variant failed (baseVoiceId=%s)", base_voice_id)
         return JSONResponse({"detail": "Internal error."}, status_code=500)
     finally:

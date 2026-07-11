@@ -63,3 +63,52 @@ def test_design_voice_non_poison_exception_stays_generic_500(monkeypatch: pytest
 
     assert res.status_code == 500
     assert res.json() == {"detail": "Internal error."}
+
+
+class _FakeQwenMintOom(main.QwenEngine):
+    def __init__(self):
+        pass
+
+    def mint_variant(self, base_voice_id, variant_voice_id, emotion_instruct, language=None, calibration_text=None, voice_uuid=None, report_progress=None):
+        raise RuntimeError("CUDA out of memory. Tried to allocate 20.00 MiB (GPU 0; 8.00 GiB total capacity)")
+
+
+class _FakeQwenMintOther(main.QwenEngine):
+    def __init__(self):
+        pass
+
+    def mint_variant(self, base_voice_id, variant_voice_id, emotion_instruct, language=None, calibration_text=None, voice_uuid=None, report_progress=None):
+        raise RuntimeError("some unrelated, unclassified failure")
+
+
+def _mint_body():
+    return {
+        "baseVoiceId": "qwen-base",
+        "variantVoiceId": "qwen-base__angry",
+        "emotionInstruct": "Delivered angrily, with raised intensity and edge.",
+    }
+
+
+def test_mint_variant_oom_returns_classified_503(monkeypatch: pytest.MonkeyPatch):
+    _reset_poison_guards(monkeypatch)
+    monkeypatch.setitem(main.ENGINES, "qwen", _FakeQwenMintOom())
+
+    client = TestClient(main.app)
+    res = client.post("/qwen/mint-variant", json=_mint_body())
+
+    assert res.status_code == 503
+    body = res.json()
+    assert body["code"] == "gpu_poisoned"
+    assert body["poisoned"] is True
+    assert "GPU is out of memory" in body["detail"]
+
+
+def test_mint_variant_non_poison_exception_stays_generic_500(monkeypatch: pytest.MonkeyPatch):
+    _reset_poison_guards(monkeypatch)
+    monkeypatch.setitem(main.ENGINES, "qwen", _FakeQwenMintOther())
+
+    client = TestClient(main.app)
+    res = client.post("/qwen/mint-variant", json=_mint_body())
+
+    assert res.status_code == 500
+    assert res.json() == {"detail": "Internal error."}
