@@ -373,10 +373,11 @@ export class GeminiAnalyzer implements Analyzer {
   async runAttributionEscalation(
     manuscriptId: string,
     chapterId: number,
+    windowIndex: number,
     prompt: string,
     call: StageCall,
   ): Promise<EscalationOutput | null> {
-    const key = `escalation-ch${chapterId}` as const;
+    const key = `escalation-ch${chapterId}-w${windowIndex}` as const;
     await writeInbox(manuscriptId, key, prompt);
 
     let text: string;

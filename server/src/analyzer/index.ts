@@ -127,6 +127,7 @@ export interface Analyzer {
   runAttributionEscalation(
     manuscriptId: string,
     chapterId: number,
+    windowIndex: number,
     prompt: string,
     call: StageCall,
   ): Promise<EscalationOutput | null>;
@@ -338,15 +339,16 @@ export class FallbackAnalyzer implements Analyzer {
   async runAttributionEscalation(
     manuscriptId: string,
     chapterId: number,
+    windowIndex: number,
     prompt: string,
     call: StageCall,
   ): Promise<EscalationOutput | null> {
     try {
-      return await this.primary.runAttributionEscalation(manuscriptId, chapterId, prompt, call);
+      return await this.primary.runAttributionEscalation(manuscriptId, chapterId, windowIndex, prompt, call);
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
       if (err instanceof LocalUnreachableError) {
-        return await this.fallback.runAttributionEscalation(manuscriptId, chapterId, prompt, call);
+        return await this.fallback.runAttributionEscalation(manuscriptId, chapterId, windowIndex, prompt, call);
       }
       throw err;
     }
