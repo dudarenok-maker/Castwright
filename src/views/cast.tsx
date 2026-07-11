@@ -83,9 +83,10 @@ interface Props {
       needs a designed voice before it can be generated. */
   bookLanguage?: string;
   /** fs-60 — TTS engines eligible for this book's language, from the API.
-      Forwarded here so a future consumer (the profile drawer already reads
-      this straight off the library slice) can read it off cast.tsx too;
-      cast.tsx itself has no eligibility-gated rendering of its own. */
+      Drives whether the non-English banner's second sentence says
+      "undesigned characters can't be generated" (Qwen-only languages, e.g.
+      zh) or "fall back to a generic Coqui voice" (Coqui-eligible languages,
+      e.g. ru/es/fr/de) — see `qwenOnly` below. */
   eligibleTtsEngines?: TtsEngine[];
   onOpenProfile: (id: string | null) => void;
   onShowMatchDetail: (id: string) => void;
@@ -139,7 +140,7 @@ export function CastView({
   sentences,
   title,
   bookLanguage = 'en',
-  eligibleTtsEngines: _eligibleTtsEngines = ['qwen', 'kokoro', 'coqui', 'gemini', 'piper'],
+  eligibleTtsEngines = ['qwen', 'kokoro', 'coqui', 'gemini', 'piper'],
   onOpenProfile,
   onShowMatchDetail,
   driftEvents,
@@ -157,6 +158,11 @@ export function CastView({
      to load an uninstalled engine, and fully non-blocking — failures stay
      silent (the banner already tells the user what to do). */
   const isNonEnglish = bookLanguage !== 'en';
+  /* fs-60 — mirrors profile-drawer.tsx's `lockedToQwen`: true only when Qwen
+     is the SOLE eligible engine for this book's language (a still-unsupported
+     language, e.g. zh). For Coqui-eligible languages (ru/es/fr/de) this is
+     false — undesigned characters fall back to Coqui instead of failing. */
+  const qwenOnly = eligibleTtsEngines.length === 1 && eligibleTtsEngines[0] === 'qwen';
   const qwenAutoLoadFired = useRef(false);
   useEffect(() => {
     if (!isNonEnglish || qwenAutoLoadFired.current) return;
@@ -886,10 +892,13 @@ export function CastView({
           </button>
         )}
 
-        {/* fe-16 — non-English on-ramp. Russian (and any future non-English)
-            books render only through Qwen, so every speaking character needs a
-            designed voice. Surface that requirement up front; Qwen is being
-            loaded in the background (see the entry effect above). */}
+        {/* fe-16 — non-English on-ramp. Russian (and any future non-English
+            book) benefits from a designed Qwen voice per speaking character
+            for best quality; Qwen is being loaded in the background (see the
+            entry effect above). fs-60 — the second sentence is eligibility-
+            aware: Qwen-only languages (e.g. zh) still can't generate
+            undesigned characters, but Coqui-eligible languages (ru/es/fr/de)
+            fall back to a generic Coqui voice instead. */}
         {isNonEnglish && (
           <div
             role="status"
@@ -901,9 +910,10 @@ export function CastView({
             </span>
             <p className="flex-1 text-sm text-ink/80 leading-relaxed">
               <span className="font-bold text-ink">Design a Qwen voice for the narrator and every
-              speaking character.</span>{' '}
-              This book isn't in English, so it renders through Qwen — undesigned characters can't be
-              generated.
+              speaking character for best quality.</span>{' '}
+              {qwenOnly
+                ? "This book isn't in English, so it renders through Qwen — undesigned characters can't be generated."
+                : 'Undesigned characters fall back to a generic Coqui voice.'}
             </p>
           </div>
         )}

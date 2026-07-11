@@ -18,7 +18,7 @@ import { voicesSlice } from '../store/voices-slice';
 import { CastView } from './cast';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { api } from '../lib/api';
-import type { Character, Voice, TtsModelKey, Sentence, DriftEvent } from '../lib/types';
+import type { Character, Voice, TtsModelKey, Sentence, DriftEvent, TtsEngine } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -1396,7 +1396,7 @@ describe('CastView status filter', () => {
 });
 
 describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
-  function renderWithLanguage(bookLanguage: string) {
+  function renderWithLanguage(bookLanguage: string, eligibleTtsEngines?: TtsEngine[]) {
     const store = configureStore({
       reducer: {
         ui: uiSlice.reducer,
@@ -1412,6 +1412,7 @@ describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
           library={library}
           title="Северный путь"
           bookLanguage={bookLanguage}
+          eligibleTtsEngines={eligibleTtsEngines}
           onOpenProfile={() => {}}
           onShowMatchDetail={() => {}}
           driftEvents={[]}
@@ -1486,6 +1487,33 @@ describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
   it('does not filter the voice library panel for an English book', () => {
     renderWithLanguage('en');
     expect(screen.queryByRole('button', { name: /hidden/i })).not.toBeInTheDocument();
+  });
+
+  /* fs-60 addendum — the banner's second sentence is eligibility-aware:
+     Coqui-eligible languages (ru/es/fr/de) get a Coqui-fallback tail instead
+     of the old "can't be generated" claim, which is now false for them. */
+  it('shows the Coqui-fallback tail for a Coqui-eligible non-English book', () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ installed: false }) }),
+    );
+    renderWithLanguage('ru', ['qwen', 'coqui']);
+    const banner = screen.getByTestId('cast-qwen-language-banner');
+    expect(banner.textContent).toMatch(/fall back to a generic Coqui voice/);
+    expect(banner.textContent).not.toMatch(/can't be generated/);
+  });
+
+  /* fs-60 addendum — Qwen-only languages (e.g. zh, not yet Coqui-eligible)
+     keep the original "can't be generated" wording. */
+  it('shows the original "can\'t be generated" tail for a Qwen-only non-English book', () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ installed: false }) }),
+    );
+    renderWithLanguage('zh', ['qwen']);
+    const banner = screen.getByTestId('cast-qwen-language-banner');
+    expect(banner.textContent).toMatch(/can't be generated/);
+    expect(banner.textContent).not.toMatch(/fall back to a generic Coqui voice/);
   });
 });
 
