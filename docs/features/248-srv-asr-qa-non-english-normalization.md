@@ -1,12 +1,12 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # 248 — srv: ASR content-QA non-English normalization (#1084)
 
-> Status: draft (design complete, implementation not started)
+> Status: active (deterministic engineering half shipped; on-box calibration follow-up #1527 open)
 > Key files: `server/src/tts/asr-language-normalization.ts` (new),
 > `server/src/tts/segment-asr-qa.ts` (`normalizeForWer`), `server/src/config/registry.ts`
 > (`qa.asr.maxWer.{fr,de}`), `server/src/tts/segment-asr-qa.test.ts`
