@@ -166,6 +166,14 @@ export const emotionAnnotationSchema = z
   })
   .strict();
 
+/* #1447 — Signal 2 of the third-party front-matter guard. A one-field yes/no
+   chapter-level non-story classification. Strict: the model returns only
+   { nonStory: boolean }. */
+export const nonStoryClassificationSchema = z
+  .object({ nonStory: z.boolean() })
+  .strict();
+export type NonStoryClassificationOutput = z.infer<typeof nonStoryClassificationSchema>;
+
 export type Stage1Output = z.infer<typeof stage1Schema>;
 export type Stage1ChapterOutput = z.infer<typeof stage1ChapterSchema>;
 export type Stage2Output = z.infer<typeof stage2Schema>;

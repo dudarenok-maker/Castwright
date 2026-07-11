@@ -31,6 +31,7 @@ import {
   stage1GrammarSchema,
   stage1ChapterGrammarSchema,
   escalationSchema,
+  nonStoryClassificationSchema,
   type Stage1Output,
   type Stage1ChapterOutput,
   type Stage2ChapterOutput,
@@ -38,6 +39,7 @@ import {
   type ScriptReviewOutput,
   type Stage3ChapterOutput,
   type EscalationOutput,
+  type NonStoryClassificationOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
 import { AnalyzerTruncatedError } from './errors.js';
@@ -308,6 +310,24 @@ export class OllamaAnalyzer implements Analyzer {
       promptMd,
       emotionAnnotationSchema,
       emotionAnnotationSchema,
+      call,
+    );
+  }
+
+  async runNonStoryClassification(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<NonStoryClassificationOutput> {
+    const key = `nonstory-ch${chapterId}` as const;
+    return this.runStage(
+      manuscriptId,
+      key,
+      'non_story_classification',
+      promptMd,
+      nonStoryClassificationSchema,
+      nonStoryClassificationSchema,
       call,
     );
   }

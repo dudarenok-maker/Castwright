@@ -23,6 +23,7 @@ import {
   stage1GrammarSchema,
   stage1ChapterGrammarSchema,
   escalationSchema,
+  nonStoryClassificationSchema,
   type Stage1Output,
   type Stage1ChapterOutput,
   type Stage2ChapterOutput,
@@ -30,6 +31,7 @@ import {
   type ScriptReviewOutput,
   type Stage3ChapterOutput,
   type EscalationOutput,
+  type NonStoryClassificationOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
 import { isNonEnglish, normaliseBookLanguage } from '../tts/language.js';
@@ -133,6 +135,9 @@ const SKILL_FILES = {
   /* fs-57 — per-chapter instruct-annotation pass (delivery directions + vocalizations).
      Routes through the prompt-fork loader (prompt.instructAnnotation). */
   instruct_annotation: 'audiobook-instruct-annotation.md',
+  /* #1447 — chapter-level non-story classification (Signal 2). Not user-forkable
+     (omitted from SKILL_TO_PROMPT_ID) — reads straight from skills/. */
+  non_story_classification: 'audiobook-non-story-classification.md',
 } as const;
 export type SkillName = keyof typeof SKILL_FILES;
 
@@ -304,6 +309,24 @@ export class GeminiAnalyzer implements Analyzer {
       promptMd,
       emotionAnnotationSchema,
       emotionAnnotationSchema,
+      call,
+    );
+  }
+
+  async runNonStoryClassification(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<NonStoryClassificationOutput> {
+    const key = `nonstory-ch${chapterId}` as const;
+    return this.runStage(
+      manuscriptId,
+      key,
+      'non_story_classification',
+      promptMd,
+      nonStoryClassificationSchema,
+      nonStoryClassificationSchema,
       call,
     );
   }

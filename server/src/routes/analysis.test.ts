@@ -42,6 +42,7 @@ import { join } from 'node:path';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
 import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { putManuscript, removeManuscript, getManuscript, type ChapterHint } from '../store/manuscripts.js';
+import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 
 /* W2.6 — Node cross-charge/cross-evict guards: the analyzer's confirmed
    GPU/CPU placement must be cached wherever detectOllamaDevice() actually
@@ -2869,6 +2870,326 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
         // distinguishing assertion vs. the main-route test above).
         expect(provenance.scope).toBe('subset');
         expect(provenance.chaptersCovered).toBe(2);
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+});
+
+describe('#1447 third-party front-matter guard — main-route integration', () => {
+  /* Front-matter chapter (index 0, within the guard's default front-region)
+     whose title does NOT match Signal 1 (isNonStoryEssayTitle) — the guard
+     must fall back to the positional Gate 0 signal instead. A tag-anchored
+     quote attributes one line to a real third party, 'Radiy', who is never
+     mentioned in any other chapter body. The stubbed analyzer confirms
+     Signal 2 (runNonStoryClassification -> { nonStory: true }) since the
+     title alone doesn't classify. */
+  const ESSAY_CHAPTER_BODY = '“This project was a mistake from the start,” Radiy said.';
+  const STORY_CHAPTER_BODY = 'Olga nodded and looked away.';
+
+  function stage1Roster(): CharacterOutput[] {
+    return [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+      {
+        id: 'radiy',
+        name: 'Radiy',
+        role: 'minor',
+        color: '#333333',
+        evidence: [{ quote: 'Radiy said' }],
+      },
+    ];
+  }
+
+  function buildPhase0Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        return { characters: stage1Roster() };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+      async runNonStoryClassification() {
+        return { nonStory: true };
+      },
+    };
+  }
+
+  function buildPhase1Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () =>
+        Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+      async runStage2Chapter(
+        _manuscriptId: string,
+        chapterId: number,
+        _prompt: string,
+        _call: StageCall,
+      ): Promise<Stage2ChapterOutput> {
+        if (chapterId === 1) {
+          return {
+            sentences: [
+              {
+                id: 101,
+                chapterId,
+                characterId: 'radiy',
+                confidence: 0.9,
+                text: 'This project was a mistake from the start',
+              },
+            ],
+          };
+        }
+        return {
+          sentences: [
+            {
+              id: chapterId * 100 + 1,
+              chapterId,
+              characterId: 'narrator',
+              confidence: 0.9,
+              text: 'Olga nodded and looked away',
+            },
+          ],
+        };
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () =>
+        Promise.reject(new Error('no flagged windows — escalation should never be called')),
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function setPhase1Selection(sel: AnalyzerSelection): void {
+    (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = sel;
+  }
+  function clearPhase1Selection(): void {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  }
+
+  afterEach(() => {
+    clearPhase1Selection();
+  });
+
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-thirdparty-guard-test-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  function seedStateJson(bookDir: string, manuscriptId: string): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_thirdparty_guard_test',
+        manuscriptId,
+        title: 'Third Party Guard Test Book',
+        author: 'Test Author',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [
+          { id: 1, title: 'Foreword', slug: '01-foreword' },
+          { id: 2, title: 'Chapter One', slug: '02-chapter-one' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  function buildStubChapters(): ChapterHint[] {
+    return [
+      { id: 1, title: 'Foreword', body: ESSAY_CHAPTER_BODY },
+      { id: 2, title: 'Chapter One', body: STORY_CHAPTER_BODY },
+    ];
+  }
+
+  function registerManuscript(manuscriptId: string, bookDir: string): ChapterHint[] {
+    const chapterHints = buildStubChapters();
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: 'Third Party Guard Test Book',
+      wordCount: 50,
+      byteSize: 500,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+      chapterHints,
+      bookDir,
+    });
+    return chapterHints;
+  }
+
+  it(
+    'strips a third-party name confined to a front-matter chapter from the final roster and re-routes its line to narrator',
+    async () => {
+      const manuscriptId = `test-thirdparty-guard-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      registerManuscript(manuscriptId, bookDir);
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: true,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        const castFile = JSON.parse(readFileSync(castJsonPath(bookDir), 'utf8')) as {
+          characters: CharacterOutput[];
+        };
+        // Third party is gone from the final roster:
+        expect(castFile.characters.find((c) => c.name.includes('Radiy'))).toBeUndefined();
+
+        const editsFile = JSON.parse(readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8')) as {
+          sentences: SentenceOutput[];
+        };
+        // The essay's sentence survives, re-routed to narrator:
+        const essaySentence = editsFile.sentences.find((s) => s.chapterId === 1);
+        expect(essaySentence).toBeDefined();
+        expect(essaySentence!.characterId).toBe('narrator');
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+
+  /* Fix #1 (this PR's whole-branch-review pass): a Signal-2 analyzer failure
+     (truncation, quota, rate-limit, network) must degrade to "treat as story"
+     (Signal-1-only) rather than propagating and failing the whole analysis
+     job. Same fixture as the passing-Signal-2 test above, except
+     runNonStoryClassification REJECTS instead of resolving. */
+  function buildPhase0AnalyzerThrowing(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        return { characters: stage1Roster() };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+      async runNonStoryClassification() {
+        throw new Error('analyzer truncation / quota / rate-limit hiccup');
+      },
+    };
+  }
+
+  it(
+    'completes the job and keeps the third-party character when Signal 2 rejects (degrades to Signal-1-only)',
+    async () => {
+      const manuscriptId = `test-thirdparty-guard-throw-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      registerManuscript(manuscriptId, bookDir);
+
+      const phase0Selection = buildSelection(buildPhase0AnalyzerThrowing(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        // Must NOT throw — a Signal-2 hiccup degrades to Signal-1-only,
+        // it does not fail the whole analysis job.
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: true,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        const editsFile = JSON.parse(readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8')) as {
+          sentences: SentenceOutput[];
+        };
+        // Title alone doesn't classify and Signal 2 degraded to "story" —
+        // the guard did NOT strip Radiy, so its line is NOT re-routed to
+        // narrator (the guard's strip action). Radiy only has 1 evidence
+        // line, so it's separately (and correctly) folded into the generic
+        // background bucket by foldMinorCast (unrelated pre-existing
+        // low-line-count rule, not the guard) — the fold target is
+        // 'unknown-male', not 'narrator'.
+        const essaySentence = editsFile.sentences.find((s) => s.chapterId === 1);
+        expect(essaySentence).toBeDefined();
+        expect(essaySentence!.characterId).not.toBe('narrator');
+        expect(essaySentence!.characterId).toBe('unknown-male');
+
+        const castFile = JSON.parse(readFileSync(castJsonPath(bookDir), 'utf8')) as {
+          characters: CharacterOutput[];
+        };
+        // Radiy survives as an alias of the folded background bucket
+        // (rolled in by name, not silently discarded).
+        const bucket = castFile.characters.find((c) => c.id === 'unknown-male');
+        expect(bucket).toBeDefined();
+        expect(bucket!.aliases).toContain('Radiy');
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
