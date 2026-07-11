@@ -17,9 +17,11 @@ The header shows your workspace's on-disk root (with a one-click **Copy**),
 four running totals (books, total runtime, distinct voices, in-progress
 count), a search box (matches title or author), and a status filter (**All /
 In progress / Complete**). Every book also carries a **tags** array — once a
-book has tags, a chip row appears under the search box and clicking a chip
-ANDs it into the current filter; a library with no tagged books (like this
-one) simply doesn't render the row, rather than showing it empty.
+book has tags, a chip row appears under the search box (below, `series-1`)
+and clicking a chip ANDs it into the current filter; a library with no
+tagged books simply doesn't render the row, rather than showing it empty. A
+second chip row appears whenever the library spans more than one language —
+**English**, **Deutsch**, **Русский** below — and ANDs into the same filter.
 
 ## Series grouping
 
@@ -28,11 +30,12 @@ Every book belongs to a series — or, if it's a standalone, to a synthetic
 explicit: each series gets its own collapsible section (a chevron toggle plus
 a live book count and its own status/runtime/characters/voices columns), with
 a **"Standalones"** pseudo-section collecting every standalone book across
-every author into one place at the bottom. Below, a three-book series —
+every author into one place at the bottom. Below, a four-book series —
 *The Hollow Tide*, by Marin Vale — shows exactly this: each entry numbered
-(`#1`, `#2`, `#3`) with its own status (Complete, Generating, Analysing), next
-to a single standalone in its own section underneath. The card view shows the
-same grouping as a plain section heading rather than a collapsible one.
+(`#1`–`#4`) with its own status (Complete, Generating, Analysing, Cast
+confirmation), next to three standalones (English, Russian, German) in their
+own section underneath. The card view shows the same grouping as a plain
+section heading rather than a collapsible one.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/library-management/02-series-grouping-dark.png">
