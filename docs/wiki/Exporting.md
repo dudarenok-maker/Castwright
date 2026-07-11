@@ -4,7 +4,13 @@ The conversion is the product — the last mile out of Castwright shouldn't feel
 
 ## Choose a format
 
-Four top-level ways to get a finished book out: a single chaptered **M4B**, a **zip of per-chapter MP3s**, a shareable **streaming link**, or a full **portable bundle** (state, manuscript, audio, and cover together) for moving the whole project to another machine. Inside the export picker, AAC (M4A) and Opus (Ogg) are available too, for players that prefer them.
+Five top-level ways to get a finished book out: a single chaptered **M4B**, a **zip of per-chapter MP3s**, a shareable **streaming link**, a full **portable bundle** (state, manuscript, audio, and cover together) for moving the whole project to another machine, or **captions** (below). Inside the export picker, AAC (M4A) and Opus (Ogg) are available too, for players that prefer them.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/exporting/format-tile-row-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/exporting/format-tile-row.png">
+  <img alt="The download-a-file tile row — Full audiobook, MP3 ZIP, Streaming link, Portable bundle, Captions" src="images/exporting/format-tile-row.png">
+</picture>
 
 ## The Castwright Companion app
 
@@ -40,6 +46,12 @@ A finished book can also leave as **captions** — `.srt` or `.vtt` files built 
 
 Export whole-book or per-chapter, same as the audio formats. If a chapter's audio predates Castwright's newer render-integrity tracking, the export still completes but the queue row carries an amber "unverifiable" warning instead of a hard failure — a nudge to regenerate that chapter if you want the captions guaranteed to match.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/exporting/captions-options-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/exporting/captions-options.png">
+  <img alt="Export audiobook modal — Captions format, SRT/VTT, Line/Sentence/Word granularity, whole-book/per-chapter scope" src="images/exporting/captions-options.png">
+</picture>
+
 ## Export queue
 
 Every export you start is tracked here — queued, running, done, or failed, filterable by status with live counts — and it survives a reload, so kicking off a long export and closing the tab doesn't lose it. Each row carries **Download**, **Copy link**, **Remove**, and **Retry** (for a failed export, without starting over from the format picker).
@@ -61,7 +73,5 @@ Switch the export picker to "Download to phone" for a LAN URL plus a QR code —
 </picture>
 
 Below, the same export picker switched to "Download to phone": a format row (M4B, MP3.ZIP, AAC, Opus), the LAN URL, and its QR code side by side, ready to scan.
-
-> A screenshot of the top-level format-tile row (M4B / MP3 ZIP / streaming link / portable bundle) is tracked as a follow-up (Refs #1289).
 
 Next: [Reviewing Cast & Assigning Voices](Reviewing-Cast-and-Assigning-Voices).

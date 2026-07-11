@@ -34,6 +34,12 @@ Pick up to 60 seconds of a chapter and download it as a standalone MP3 — no re
 
 Drag either handle to set the start and end, and the clip-length readout updates live so you can dial in exactly 60 seconds or less before downloading.
 
-> A screenshot of the per-line re-record flow itself (once "Fix this line" is clicked) is tracked as a follow-up (Refs #1289).
+Click "Fix this line" and the Fix Audio modal opens pre-scoped to that exact chapter — **Loudness** (a quick, no re-synthesis volume boost) or **Re-record** (re-synthesise the line for a wrong tone or mispronunciation), with the affected chapter pre-checked:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/listening-and-revising/fix-line-modal-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/listening-and-revising/fix-line-modal.png">
+  <img alt="Fix Audio modal — Loudness vs Re-record, pre-scoped to the flagged chapter" src="images/listening-and-revising/fix-line-modal.png">
+</picture>
 
 Next: [Exporting](Exporting).
