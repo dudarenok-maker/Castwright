@@ -712,6 +712,50 @@ describe('Layout — Export status pill (fs-54)', () => {
   });
 });
 
+describe('Layout — Design status pill percent excludes failures (issue: "0/16 · 94%")', () => {
+  it('does not inflate percent when every processed character has failed', async () => {
+    const store = makeStore();
+    store.dispatch(
+      castDesignSlice.actions.begin({
+        bookId: 'b1',
+        total: 16,
+        currentName: 'Narrator',
+        lastTickAt: Date.parse('2026-01-01T00:00:00Z'),
+      }),
+    );
+    for (let i = 0; i < 15; i += 1) {
+      store.dispatch(
+        castDesignSlice.actions.charFailed({
+          bookId: 'b1',
+          characterId: `char_${i}`,
+          name: `Char ${i}`,
+          error: 'GPU is out of memory — likely another job is using it.',
+          lastTickAt: Date.parse('2026-01-01T00:00:00Z'),
+        }),
+      );
+    }
+
+    const { findByTestId } = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books']}>
+          <Routes>
+            <Route path="/books" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    fireEvent.click(await findByTestId('status-pill'));
+    const pill = await findByTestId('design-pill');
+    expect(pill).toHaveTextContent('0/16');
+    expect(pill).toHaveTextContent('15 failed');
+    /* The bug: this used to read "94%" (15 failures / 16 counted as
+       "progress"). Failures no longer count toward percent. */
+    expect(pill).not.toHaveTextContent('94%');
+    expect(pill).toHaveTextContent('0%');
+  });
+});
+
 describe('Layout — default-engine TTS pill reachable without an open book', () => {
   /* The default/primary engine's Load/Stop pill must be reachable on book-less
      views (Books home) so the model can be pre-loaded right after launch. The
