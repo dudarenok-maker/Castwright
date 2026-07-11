@@ -22,7 +22,7 @@ import {
   editDistanceAtMost1,
   type AsrSignals,
 } from './segment-asr-qa.js';
-import { WER_INTEGERS } from './asr-language-normalization.js';
+import { WER_INTEGERS, WER_CONTRACTIONS } from './asr-language-normalization.js';
 
 const CLEAN: AsrSignals = { avgLogprob: -0.2, noSpeechProb: 0.02, compressionRatio: 1.3 };
 const EXPECTED = 'She climbed the stairs to the old observatory at the top of the tower.';
@@ -114,6 +114,34 @@ describe('WER_INTEGERS.fr (#1084)', () => {
   });
   it('covers exactly indices 0..99', () => {
     expect(WER_INTEGERS.fr).toHaveLength(100);
+  });
+});
+
+describe('WER_INTEGERS.de (#1084)', () => {
+  it('spells 0-12 literally', () => {
+    expect(WER_INTEGERS.de[0]).toEqual(['null']);
+    expect(WER_INTEGERS.de[12]).toEqual(['zwölf']);
+  });
+  it('truncates the ones-root for 16/17 (sechzehn/siebzehn, not sechszehn/siebenzehn)', () => {
+    expect(WER_INTEGERS.de[16]).toEqual(['sechzehn']);
+    expect(WER_INTEGERS.de[17]).toEqual(['siebzehn']);
+    expect(WER_INTEGERS.de[13]).toEqual(['dreizehn']); // regular teens unaffected
+  });
+  it('fuses 21-99 into one reversed-order token with eins->ein', () => {
+    expect(WER_INTEGERS.de[21]).toEqual(['einundzwanzig']);
+    expect(WER_INTEGERS.de[22]).toEqual(['zweiundzwanzig']);
+  });
+  it('covers exactly indices 0..99', () => {
+    expect(WER_INTEGERS.de).toHaveLength(100);
+  });
+});
+
+describe('WER_CONTRACTIONS.de (#1084)', () => {
+  it('expands the seven documented prepositional contractions', () => {
+    expect(WER_CONTRACTIONS.de).toEqual({
+      im: 'in dem', zum: 'zu dem', beim: 'bei dem', am: 'an dem',
+      ins: 'in das', ans: 'an das', vom: 'von dem',
+    });
   });
 });
 

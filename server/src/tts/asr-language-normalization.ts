@@ -90,9 +90,42 @@ function buildFrench(): IntegerTable {
   return out;
 }
 
+const DE_ONES = [
+  'null', 'eins', 'zwei', 'drei', 'vier', 'fünf', 'sechs', 'sieben', 'acht', 'neun',
+  'zehn', 'elf', 'zwölf', 'dreizehn', 'vierzehn', 'fünfzehn', 'sechzehn', 'siebzehn',
+  'achtzehn', 'neunzehn',
+];
+const DE_DECADES: Record<number, string> = {
+  2: 'zwanzig', 3: 'dreißig', 4: 'vierzig', 5: 'fünfzig',
+  6: 'sechzig', 7: 'siebzig', 8: 'achtzig', 9: 'neunzig',
+};
+/** The composing form of 1-9 — 'eins' drops its final 's' to 'ein' when
+    fused into a compound ('einundzwanzig'); 2-9 are unchanged. Index 0 unused. */
+const DE_COMPOSING_ONES = ['', 'ein', 'zwei', 'drei', 'vier', 'fünf', 'sechs', 'sieben', 'acht', 'neun'];
+
+/** German: 0-19 literal (with the sechzehn/siebzehn root truncation), then
+    21-99 fuse into ONE token, reversed order, joined by "und". */
+function buildGerman(): IntegerTable {
+  const out: string[][] = [];
+  for (let n = 0; n <= 19; n += 1) out.push([DE_ONES[n]]);
+  for (let d = 2; d <= 9; d += 1) {
+    out.push([DE_DECADES[d]]);
+    for (let ones = 1; ones <= 9; ones += 1) {
+      out.push([`${DE_COMPOSING_ONES[ones]}und${DE_DECADES[d]}`]);
+    }
+  }
+  return out;
+}
+
 export const WER_INTEGERS: Readonly<Record<string, IntegerTable>> = Object.freeze({
   es: Object.freeze(buildSpanish()),
   fr: Object.freeze(buildFrench()),
+  de: Object.freeze(buildGerman()),
 });
 
-export const WER_CONTRACTIONS: Readonly<Record<string, Record<string, string>>> = Object.freeze({});
+export const WER_CONTRACTIONS: Readonly<Record<string, Record<string, string>>> = Object.freeze({
+  de: Object.freeze({
+    im: 'in dem', zum: 'zu dem', beim: 'bei dem', am: 'an dem',
+    ins: 'in das', ans: 'an das', vom: 'von dem',
+  }),
+});
