@@ -22,6 +22,7 @@ import {
   editDistanceAtMost1,
   type AsrSignals,
 } from './segment-asr-qa.js';
+import { WER_INTEGERS } from './asr-language-normalization.js';
 
 const CLEAN: AsrSignals = { avgLogprob: -0.2, noSpeechProb: 0.02, compressionRatio: 1.3 };
 const EXPECTED = 'She climbed the stairs to the old observatory at the top of the tower.';
@@ -57,6 +58,27 @@ describe('normalizeForWer', () => {
     expect(normalizeForWer('Она медленно шла по узкой улице.')).toEqual([
       'она', 'медленно', 'шла', 'по', 'узкой', 'улице',
     ]);
+  });
+});
+
+describe('WER_INTEGERS.es (#1084)', () => {
+  it('spells 0-19 literally, including accented dieciséis', () => {
+    expect(WER_INTEGERS.es[0]).toEqual(['cero']);
+    expect(WER_INTEGERS.es[16]).toEqual(['dieciséis']);
+    expect(WER_INTEGERS.es[19]).toEqual(['diecinueve']);
+  });
+  it('fuses 21-29 into one accented token', () => {
+    expect(WER_INTEGERS.es[21]).toEqual(['veintiuno']);
+    expect(WER_INTEGERS.es[22]).toEqual(['veintidós']);
+    expect(WER_INTEGERS.es[26]).toEqual(['veintiséis']);
+  });
+  it('splits 30-99 into [decade, y, ones] with no irregularity past 29', () => {
+    expect(WER_INTEGERS.es[31]).toEqual(['treinta', 'y', 'uno']);
+    expect(WER_INTEGERS.es[71]).toEqual(['setenta', 'y', 'uno']);
+    expect(WER_INTEGERS.es[95]).toEqual(['noventa', 'y', 'cinco']);
+  });
+  it('covers exactly indices 0..99', () => {
+    expect(WER_INTEGERS.es).toHaveLength(100);
   });
 });
 
