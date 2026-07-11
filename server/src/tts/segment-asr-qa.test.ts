@@ -389,6 +389,62 @@ describe('classifyTranscript es/fr/de faithful vs. drift (#1084)', () => {
   });
 });
 
+describe('allowlist skipContractions scoping (#1084 review fix, bug #2)', () => {
+  it('does not apply skipContractions to an English allowlist entry equal to a CONTRACTIONS key', () => {
+    // "That's" is both a plausible (contrived) character alias AND a literal
+    // CONTRACTIONS key. Before this fix, the allowlist call passed
+    // skipContractions: true unconditionally, so this name normalised to
+    // ['thats'] (possessive-strip fallback) instead of the expected
+    // ['that', 'is'] — a real behavioural change for English that the
+    // "byte-for-byte unchanged" constraint should have prevented. It must
+    // tokenize identically to the un-opted 2-arg normalizeForWer call.
+    const allowlisted = normalizeForWer("That's", 'en', undefined);
+    expect(allowlisted).toEqual(['that', 'is']);
+    expect(allowlisted).toEqual(normalizeForWer("That's", 'en'));
+  });
+
+  it('does not apply skipContractions to a Spanish allowlist entry (no WER_CONTRACTIONS.es table)', () => {
+    // Spanish has no WER_CONTRACTIONS table, so hasContractionTable is false
+    // and the allowlist call must pass no skipContractions option at all —
+    // identical to the bare 2-arg call.
+    expect(normalizeForWer('Vía', 'es')).toEqual(normalizeForWer('Vía', 'es', undefined));
+  });
+
+  it('an English proper-noun allowlist still tolerates the mangled name exactly as before (regression, no leak)', () => {
+    // Re-run of the pre-existing allowlist test, pinning that fix #1 didn't
+    // regress the ordinary (non-contraction) allowlist path for English.
+    const expected = 'Wren Sparrow ran toward the gates of Tidehaven at dawn.';
+    const heard = 'Wren Faster ran toward the gates of Tidehaven at dawn.';
+    const withList = classifyTranscript(expected, heard, CLEAN, {
+      nameAllowlist: ['Wren Sparrow', 'Tidehaven'],
+    });
+    expect(withList.sub).toBe(0);
+    expect(withList.verdict).toBe('ok');
+  });
+});
+
+describe('dual-variant alignment perf guard — skip when no contraction word present (#1084 review fix, bug #3)', () => {
+  it('a German sentence with no contraction key still classifies correctly (early-exit path)', () => {
+    // No "im/zum/beim/am/ins/ans/vom" token anywhere in this sentence, so the
+    // second buildAlignment call must be skipped entirely — confirm the
+    // verdict is unaffected (pure perf guard, no behaviour change).
+    const r = classifyTranscript(
+      'Sie hatte einundzwanzig Katzen im Garten.'.replace('im Garten', 'draussen'),
+      'Sie hatte einundzwanzig Katzen draussen.',
+      CLEAN,
+      { language: 'de' },
+    );
+    expect(r.verdict).toBe('ok');
+    expect(r.wer).toBe(0);
+  });
+
+  it('a German sentence WITH a contraction key still triggers the dual-variant reconciliation (unchanged from bug #2 fix)', () => {
+    const r = classifyTranscript('Bleib im Haus!', 'Bleib in dem Haus!', CLEAN, { language: 'de' });
+    expect(r.verdict).toBe('ok');
+    expect(r.wer).toBe(0);
+  });
+});
+
 describe('resolveAsrThresholds per-language maxWer (#1084 scaffold)', () => {
   afterEach(() => {
     delete process.env.SEG_ASR_MAX_WER_ES;

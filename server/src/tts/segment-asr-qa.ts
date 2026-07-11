@@ -559,11 +559,24 @@ export function classifyTranscript(
     }
   }
 
+  // Computed once, up front, and reused for BOTH the allowlist normalization
+  // below and the dual-variant alignment decision further down — a language
+  // with no WER_CONTRACTIONS entry (English, es, fr, ru today) must never see
+  // skipContractions applied anywhere, restoring byte-identical pre-#1084
+  // behaviour for those languages (#1084 review fix).
+  const langKey = baseSubtag(opts.language);
+  const hasContractionTable = Object.keys(WER_CONTRACTIONS[langKey] ?? {}).length > 0;
+
   const allow = new Set<string>();
   for (const src of [opts.nameAllowlist, opts.vocalizationAllowlist]) {
     if (src) {
       for (const name of src) {
-        for (const tok of normalizeForWer(name, opts.language, { skipContractions: true })) allow.add(tok);
+        for (const tok of normalizeForWer(
+          name,
+          opts.language,
+          hasContractionTable ? { skipContractions: true } : undefined,
+        ))
+          allow.add(tok);
       }
     }
   }
@@ -619,9 +632,6 @@ export function classifyTranscript(
     return { expectedTokens, actualTokens, sub, del, ins, longestDeletionRun, wer };
   };
 
-  const langKey = baseSubtag(opts.language);
-  const hasContractionTable = Object.keys(WER_CONTRACTIONS[langKey] ?? {}).length > 0;
-
   let alignment = buildAlignment(normalizeForWer(expectedText, opts.language));
   if (alignment.expectedTokens.length === 0) {
     reasons.push('Not scored — expected text normalised to empty.');
@@ -629,11 +639,22 @@ export function classifyTranscript(
   }
 
   if (hasContractionTable) {
-    const altAlignment = buildAlignment(
-      normalizeForWer(expectedText, opts.language, { skipContractions: true }),
+    // Cheap pre-check: skip the second O(n·m) alignment pass entirely when
+    // the raw expected text contains none of this language's contraction
+    // keys as a whole word — there is nothing skipContractions could change,
+    // so the alt variant could only tie or lose. Pure perf guard, no
+    // behaviour change (#1084 review fix).
+    const contractionKeys = Object.keys(WER_CONTRACTIONS[langKey]);
+    const hasAnyContractionWord = contractionKeys.some((key) =>
+      new RegExp(`\\b${key}\\b`, 'i').test(expectedText),
     );
-    if (altAlignment.wer < alignment.wer) {
-      alignment = altAlignment;
+    if (hasAnyContractionWord) {
+      const altAlignment = buildAlignment(
+        normalizeForWer(expectedText, opts.language, { skipContractions: true }),
+      );
+      if (altAlignment.wer < alignment.wer) {
+        alignment = altAlignment;
+      }
     }
   }
 
