@@ -292,6 +292,20 @@ describe('classifyTranscript', () => {
     expect(c.verdict).toBe('drift');
     expect(c.wer).toBeGreaterThan(0.4);
   });
+
+  it('threads language so a non-English digit is not English-spelled into extra errors', () => {
+    // "21" → "twenty one" inflates the expected tokens and mis-aligns against the
+    // Spanish "veintiún" Whisper actually heard; with language=es the digit stays
+    // one token → a single clean substitution (#1084).
+    const esExpected = 'Compró 21 manzanas rojas en el mercado.';
+    const esHeard = 'Compró veintiún manzanas rojas en el mercado.';
+    const withEs = classifyTranscript(esExpected, esHeard, CLEAN, { language: 'es' });
+    const withoutLang = classifyTranscript(esExpected, esHeard, CLEAN);
+    expect(withEs.sub).toBe(1);
+    expect(withEs.del).toBe(0);
+    expect(withEs.verdict).toBe('ok');
+    expect(withoutLang.wer).toBeGreaterThan(withEs.wer);
+  });
 });
 
 describe('classifyTranscript es/fr/de faithful vs. drift (#1084)', () => {
