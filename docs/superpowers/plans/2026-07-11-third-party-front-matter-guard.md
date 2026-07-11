@@ -36,6 +36,7 @@
 // server/src/analyzer/non-story-essay-title.test.ts
 import { describe, it, expect } from 'vitest';
 import { isNonStoryEssayTitle } from './non-story-essay-title.js';
+import { isLikelyFrontMatterTitle } from '../parsers/front-matter.js';
 
 describe('isNonStoryEssayTitle', () => {
   it('matches the Russian critical-essay class', () => {
@@ -53,6 +54,14 @@ describe('isNonStoryEssayTitle', () => {
     expect(isNonStoryEssayTitle('Глава вторая')).toBe(false);
     expect(isNonStoryEssayTitle(undefined)).toBe(false);
     expect(isNonStoryEssayTitle('')).toBe(false);
+  });
+  it('stays decoupled from the exclusion machinery (spec regression)', () => {
+    // The essay-class titles this predicate matches must NOT be front-matter
+    // titles that isLikelyFrontMatterTitle would exclude — that predicate has
+    // no essay-article class, so the two never overlap on the target case.
+    // (Import kept local to avoid coupling the module graph.)
+    expect(isLikelyFrontMatterTitle('Вступительная статья')).toBe(false);
+    expect(isNonStoryEssayTitle('Вступительная статья')).toBe(true);
   });
 });
 ```
@@ -76,8 +85,11 @@ Expected: FAIL — `isNonStoryEssayTitle` not found (module doesn't exist).
    Single multilingual regex for v1 (ru/en critical-essay forms). Extend with
    a per-language term list only when real corpus data needs it. */
 
+/* NOTE: `\p{L}` + the `u` flag is REQUIRED — JavaScript `\w` is ASCII-only and
+   matches NO Cyrillic, so `\w*` would fail on "вступительн-ая статья". `\p{L}*`
+   absorbs the Russian inflectional endings. Verified against every Task 1 case. */
 const ESSAY_TITLE_RX =
-  /вступительн\w*\s+статья|критическ\w*\s+статья|critical\s+(introduction|essay)|introductory\s+(article|essay)/i;
+  /вступительн\p{L}*\s+стать\p{L}*|критическ\p{L}*\s+стать\p{L}*|critical\s+(introduction|essay)|introductory\s+(article|essay)/iu;
 
 export function isNonStoryEssayTitle(title: string | undefined): boolean {
   if (!title) return false;
@@ -182,13 +194,25 @@ describe('stripThirdPartyFrontMatter', () => {
     expect(r.sentences).toBe(sents); // no-op identity
   });
 
-  it('keeps a character whose name appears in another chapter body (condition b), incl. Cyrillic', async () => {
+  it('keeps a character whose full name appears in another chapter body (condition b), Cyrillic', async () => {
+    // Body must contain the FULL needle ('Радий Погодин') — the algorithm uses
+    // whole-name substring, so a first-name-only mention would MISS (spec Risk #1).
     const chars = [narrator, char('pogodin', 'Радий Погодин')];
+    const sents = [line(1, 0, 'pogodin')];
+    const chapters = [essayCh, storyCh(1, 'Позже Радий Погодин вернулся домой.')];
+    const r = await stripThirdPartyFrontMatter(chars, sents, chapters, {});
+    expect(r.stripped).toEqual([]);
+    expect(r.characters).toBe(chars); // no-op identity
+  });
+
+  it('keeps a character matched elsewhere via an alias needle (condition b)', async () => {
+    // Alias 'Радий' lets a first-name-only mention elsewhere match and KEEP —
+    // documents that alias completeness widens the (b) safety net.
+    const chars = [narrator, char('pogodin', 'Радий Погодин', ['Радий'])];
     const sents = [line(1, 0, 'pogodin')];
     const chapters = [essayCh, storyCh(1, 'Позже Радий вернулся домой.')];
     const r = await stripThirdPartyFrontMatter(chars, sents, chapters, {});
     expect(r.stripped).toEqual([]);
-    expect(r.characters).toBe(chars); // no-op identity
   });
 
   it('keeps a third party quoted >= minLines in the essay (c ceiling)', async () => {
@@ -642,6 +666,19 @@ Confirm the analyzer handle name in scope at this block — use `analyzer` (`sel
 - [ ] **Step 4: Mirror the wiring in the subset re-analysis block**
 
 Apply the SAME insertion immediately before the `foldMinorCast(…)` call in the subset re-analysis block (~L5231), using that block's local characters/sentences variables that feed its `foldMinorCast` call (read the ~30 lines around L5231 to bind the exact variable names — they mirror the full block: a `stage1`/roster var and a `recovered.sentences`/reconciled-sentences var). Reuse the `guardChapters` construction from `record.chapterHints` and the same `classifyNonStory` wrapper.
+
+**IMPORTANT scope difference:** `userSettings` is **NOT in scope** in the subset job runner (it is read only in the full runner ~L4173). The subset `foldMinorCast` call passes only `{ language: bookLanguage }` — no `minLines`. So the subset guard call must **omit `minLines`**:
+
+```ts
+    const guarded = await stripThirdPartyFrontMatter(
+      /* subset roster var */,
+      /* subset sentences var */,
+      guardChapters,
+      { classifyNonStory }, // omit minLines — guard DEFAULT_MIN_LINES (3) == fold MIN_LINES_DEFAULT (3)
+    );
+```
+
+`analyzer`, `manuscriptId`, `bookLanguage`, `record.chapterHints`, and `log` are all confirmed in scope at the subset block.
 
 - [ ] **Step 5: Run the integration test + full server suite**
 
