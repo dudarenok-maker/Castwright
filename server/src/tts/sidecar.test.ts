@@ -181,6 +181,43 @@ describe('fs-57 — synthesizeBatch request body carries liveInstruct + per-item
   });
 });
 
+describe('fs-60 — synthesize request body carries language', () => {
+  it('includes language in the request body when provided', async () => {
+    const bodies: unknown[] = [];
+    stubFetch(async (_url: unknown, init: unknown) => {
+      bodies.push(JSON.parse((init as { body: string }).body));
+      const pcm = Buffer.alloc(4, 0);
+      return new Response(pcm, {
+        status: 200,
+        headers: { 'content-type': 'audio/L16;codec=pcm;rate=24000', 'x-sample-rate': '24000' },
+      });
+    });
+    await makeProvider().synthesize({
+      text: 'hi',
+      voiceName: 'Claribel Dervla',
+      modelKey: 'coqui-xtts-v2',
+      language: 'ru',
+    });
+    const body = bodies[0] as Record<string, unknown>;
+    expect(body.language).toBe('ru');
+  });
+
+  it('omits language from the body when not provided (backward-compatible for existing English callers)', async () => {
+    const bodies: unknown[] = [];
+    stubFetch(async (_url: unknown, init: unknown) => {
+      bodies.push(JSON.parse((init as { body: string }).body));
+      const pcm = Buffer.alloc(4, 0);
+      return new Response(pcm, {
+        status: 200,
+        headers: { 'content-type': 'audio/L16;codec=pcm;rate=24000', 'x-sample-rate': '24000' },
+      });
+    });
+    await makeProvider().synthesize(SYNTH_INPUT);
+    const body = bodies[0] as Record<string, unknown>;
+    expect(body).not.toHaveProperty('language');
+  });
+});
+
 describe('SidecarTtsProvider error classification', () => {
   it('annotates network failure as transient with cause=network', async () => {
     stubFetch(async () => {

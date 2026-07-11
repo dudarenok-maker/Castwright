@@ -1015,6 +1015,7 @@ export async function synthesiseChapter(
               text: normaliseForTts(titleText, langCode),
               voiceName: narratorVoice,
               modelKey: titleRoute.modelKey,
+              language: langCode,
               signal: sig,
             }),
           { signal: sig },
@@ -1219,6 +1220,7 @@ export async function synthesiseChapter(
               text: normaliseForTts(group.text, langCode),
               voiceName,
               modelKey: route.modelKey,
+              language: langCode,
               signal: sig,
             }),
           {

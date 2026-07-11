@@ -25,6 +25,11 @@ export interface SynthesizeInput {
   text: string;
   voiceName: string;
   modelKey: TtsModelKey;
+  /** fs-60 — BCP-47 primary subtag for this synth call. Only Coqui honors it
+      (threaded to the sidecar's per-request `language` field); every other
+      engine/provider ignores it. Optional — omitted means "use the sidecar's
+      boot-time COQUI_LANGUAGE default" (backward-compatible for English). */
+  language?: string;
   /** Optional abort signal — providers that can honour it should pass it
       through to their underlying HTTP/SDK call so a mid-call cancellation
       (e.g. server-side per-book mutex aborting a stale generation handler)

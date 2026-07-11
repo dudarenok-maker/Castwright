@@ -94,6 +94,7 @@ export class SidecarTtsProvider implements TtsProvider {
     text,
     voiceName,
     modelKey,
+    language,
     signal,
   }: SynthesizeInput): Promise<SynthesizeOutput> {
     const body = JSON.stringify({
@@ -101,6 +102,7 @@ export class SidecarTtsProvider implements TtsProvider {
       model: sidecarModelId(modelKey),
       voice: voiceName,
       text,
+      ...(language != null ? { language } : {}),
     });
 
     /* Per-engine serialisation — at most ONE synth call per engine in-flight.
