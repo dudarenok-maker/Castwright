@@ -10,6 +10,8 @@ import {
   _resetMockListenStats,
   readE2eUpdateOverride,
   readE2eWorkspaceRootOverride,
+  readDemoWhatsNewOverride,
+  buildMockAppInfo,
   readCastDesignStream,
   mockCreateCharacter,
   mockGetScriptReviewState,
@@ -197,6 +199,37 @@ describe('readE2eUpdateOverride (fe-27 update override)', () => {
       updateAvailable: true,
       latestVersion: '9.9.9',
     });
+  });
+});
+
+describe('buildMockAppInfo (mock chrome tracks the build)', () => {
+  it('derives every version field from buildInfo instead of a hardcoded literal', async () => {
+    const { buildInfo } = await import('./build-info');
+    const info = buildMockAppInfo();
+    expect(info.appVersion).toBe(buildInfo.version);
+    expect(info.sidecarVersion).toBe(buildInfo.version);
+    expect(info.lastSeenAppVersion).toBe(buildInfo.version);
+    // Regression for the frozen fixture that sat on v1.6.0 for six minors.
+    expect(info.appVersion).not.toBe('1.6.0');
+  });
+
+  it('serves the real bundled RELEASE_NOTES.md, newest section first', async () => {
+    const { latestReleaseNote } = await import('./release-notes');
+    const latest = latestReleaseNote(buildMockAppInfo().releaseNotes);
+    expect(latest?.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(latest?.bullets.length).toBeGreaterThan(0);
+  });
+});
+
+describe('readDemoWhatsNewOverride (marketing-capture banner seam)', () => {
+  it('defaults off when the param is absent or malformed', () => {
+    expect(readDemoWhatsNewOverride('')).toBe(false);
+    expect(readDemoWhatsNewOverride('?foo=bar')).toBe(false);
+    expect(readDemoWhatsNewOverride('?demoWhatsNew=0')).toBe(false);
+  });
+
+  it('honours ?demoWhatsNew=1', () => {
+    expect(readDemoWhatsNewOverride('?demoWhatsNew=1')).toBe(true);
   });
 });
 

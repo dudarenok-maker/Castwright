@@ -90,6 +90,12 @@ import { parseDuration } from './time';
    tone. Audibly distinct so a/b in mock mode tells a real story. */
 import stubAudioA from '../mocks/audio/stub-a.mp3?url';
 import stubAudioB from '../mocks/audio/stub-b.mp3?url';
+import { buildInfo } from './build-info';
+/* Real bundled release notes — the mock serves the same document the real
+   server returns via GET /api/info, so mock-mode chrome (version pill,
+   What's-new banner, #/release-notes) tracks the actual release instead of a
+   frozen fixture that goes stale every cut (it sat on v1.6.0 for six minors). */
+import releaseNotesMd from '../../RELEASE_NOTES.md?raw';
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
 /* Marketing screenshot capture flag (.env.marketing → `--mode marketing`).
@@ -6274,21 +6280,27 @@ async function realUpgradeState(): Promise<UpgradeStatePayload> {
 
 /* fs-1 — mock upgrade surface. The mock is "always up to date" (showWhatsNew
    off, no newer release to stage) so the mock-mode app never offers a phantom
-   upgrade; the e2e drives these via page.route stubs instead. */
-let mockAppInfo: AppInfo = {
-  appVersion: '1.6.0',
-  sidecarVersion: '1.6.0',
-  schemas: { state: 1, cast: 1, manuscriptEdits: 1, revisions: 1, listenProgress: 1, voices: 1 },
-  lastSeenAppVersion: '1.6.0',
-  showWhatsNew: false,
-  releaseNotes: '# v1.6.0\n\n- In-app upgrades.\n',
-  hardware: { platform: 'win32', arch: 'x64', appleSilicon: false, label: 'Windows (x64)' },
-  devices: { kokoro: 'cuda', coqui: 'cuda', qwen: 'cuda' },
-  devicesState: 'ready',
-  activeEngine: 'kokoro',
-  updateAvailable: false,
-  latestVersion: null,
-};
+   upgrade; the e2e drives these via page.route stubs instead. Version fields
+   derive from the build (package.json via __APP_VERSION__) and the notes are
+   the real RELEASE_NOTES.md, so mock chrome never drifts from the release.
+   Pure factory, exported so the derivation is unit-tested directly. */
+export function buildMockAppInfo(): AppInfo {
+  return {
+    appVersion: buildInfo.version,
+    sidecarVersion: buildInfo.version,
+    schemas: { state: 1, cast: 1, manuscriptEdits: 1, revisions: 1, listenProgress: 1, voices: 1 },
+    lastSeenAppVersion: buildInfo.version,
+    showWhatsNew: false,
+    releaseNotes: releaseNotesMd,
+    hardware: { platform: 'win32', arch: 'x64', appleSilicon: false, label: 'Windows (x64)' },
+    devices: { kokoro: 'cuda', coqui: 'cuda', qwen: 'cuda' },
+    devicesState: 'ready',
+    activeEngine: 'kokoro',
+    updateAvailable: false,
+    latestVersion: null,
+  };
+}
+let mockAppInfo: AppInfo = buildMockAppInfo();
 /* fe-27 — e2e seam: `?e2eUpdate=<version>` forces an "update available" mock so
    the Playwright notifier spec has a deterministic trigger (mock mode is
    in-process, so page.route can't intercept). Pure + exported so it's unit-
@@ -6306,10 +6318,28 @@ export function readE2eUpdateOverride(search: string): {
   return { updateAvailable: false, latestVersion: null };
 }
 
+/* Marketing-capture seam: `?demoWhatsNew=1` forces the What's-new banner on in
+   mock mode (the mock default keeps showWhatsNew off — see buildMockAppInfo)
+   so the pinokio-install-ready scene can pose the freshly-updated state. Pure +
+   exported so it's unit-tested directly, mirroring readE2eUpdateOverride. */
+export function readDemoWhatsNewOverride(search: string): boolean {
+  try {
+    return new URLSearchParams(search).get('demoWhatsNew') === '1';
+  } catch {
+    return false;
+  }
+}
+
 async function mockGetAppInfo(): Promise<AppInfo> {
   await wait(40);
-  const ov = readE2eUpdateOverride(typeof window !== 'undefined' ? window.location.search : '');
-  return { ...mockAppInfo, updateAvailable: ov.updateAvailable, latestVersion: ov.latestVersion };
+  const search = typeof window !== 'undefined' ? window.location.search : '';
+  const ov = readE2eUpdateOverride(search);
+  return {
+    ...mockAppInfo,
+    showWhatsNew: mockAppInfo.showWhatsNew || readDemoWhatsNewOverride(search),
+    updateAvailable: ov.updateAvailable,
+    latestVersion: ov.latestVersion,
+  };
 }
 /* Mock has no release source — report "up to date" on the running version so the
    card renders its steady state under VITE_USE_MOCKS=true. */
@@ -9485,12 +9515,17 @@ const mock = {
       // Newest-first: index 0 is the latest. 9-minute spacing, fixed base.
       at: new Date(Date.parse('2026-06-01T09:00:00Z') + (6 - i) * 9 * 60_000).toISOString(),
     }));
+    /* Window rollup deliberately sub-realtime (rtf < 1): the top-bar Admin
+       pill renders this figure in every mock capture, and the old 1.6 was
+       routinely misread as a "v1.6.0" version stamp in marketing shots (it
+       also posed generation as slower than realtime). Kept self-consistent:
+       rtf = synthSec / audioSec, xRealtime = audioSec / synthSec. */
     return {
       chapters: recentChapters.length,
       audioSec: 4200,
-      synthSec: 6700,
-      rtf: 1.6,
-      xRealtime: 0.63,
+      synthSec: 3654,
+      rtf: 0.87,
+      xRealtime: 1.15,
       chaptersPerHour: 6.4,
       last: null,
       updatedAt: recentChapters[0].at,
