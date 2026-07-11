@@ -351,6 +351,8 @@ describe('classifyTranscript es/fr/de faithful vs. drift (#1084)', () => {
 describe('resolveAsrThresholds per-language maxWer (#1084 scaffold)', () => {
   afterEach(() => {
     delete process.env.SEG_ASR_MAX_WER_ES;
+    delete process.env.SEG_ASR_MAX_WER_FR;
+    delete process.env.SEG_ASR_MAX_WER_DE;
   });
 
   it('defaults every language to the global maxWer', () => {
@@ -364,6 +366,12 @@ describe('resolveAsrThresholds per-language maxWer (#1084 scaffold)', () => {
     expect(resolveAsrThresholds(undefined, 'es').maxWer).toBeCloseTo(0.55);
     expect(resolveAsrThresholds(undefined, 'ru').maxWer).toBe(0.4);
     expect(resolveAsrThresholds(undefined, 'en').maxWer).toBe(0.4);
+  });
+
+  it('honours fr/de per-language overrides the same way as es/ru', () => {
+    process.env.SEG_ASR_MAX_WER_FR = '0.5';
+    expect(resolveAsrThresholds(undefined, 'fr').maxWer).toBeCloseTo(0.5);
+    expect(resolveAsrThresholds(undefined, 'de').maxWer).toBe(0.4);
   });
 });
 
