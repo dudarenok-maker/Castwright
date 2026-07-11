@@ -712,11 +712,68 @@ export const SCENES: Scene[] = [
     strict: true,
   },
   {
+    /* #1289/#1318 leftover — the per-line re-record flow itself, opened by
+       clicking "Fix this line" on the rerecord-kind marker (mk-2, "Mispronounced
+       name — needs a re-record" — see the fixture's LISTEN_MARKERS map). Opens
+       FixCharacterAudioModal pre-scoped to that chapter/segment. */
+    id: 'listen-fix-line-modal',
+    hash: '#/books/hollow-tide-1/listen',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="listen-marker-fix-mk-2"]',
+    action: async (page) => {
+      await page.getByTestId('listen-marker-fix-mk-2').click({ timeout: 5000 });
+    },
+    /* `fix-audio-summary` only renders once the (re-)recording job finishes
+       (allFinished) — the wrong target for "the modal just opened" state.
+       `fix-audio-backdrop` is the modal's own outer container, present as
+       soon as FixCharacterAudioModal mounts. */
+    waitForAfterAction: '[data-testid="fix-audio-backdrop"]',
+    strict: true,
+  },
+  {
     id: 'export-queue',
     hash: '#/books/hollow-tide-1/listen',
     viewports: ['desktop'],
     waitFor: '[data-testid="export-queue-rail"]',
     scrollTo: '[data-testid="export-queue-rail"]',
+    strict: true,
+  },
+  {
+    /* fs-52 follow-up — the "Or download a file" tile row (M4B / MP3 ZIP /
+       Streaming link / Portable bundle / Captions), captured in context so
+       the new Captions tile shows alongside its siblings. Fulfills the
+       screenshot docs/wiki/Exporting.md's "Choose a format" section has been
+       missing since the format-tile row was first documented text-only.
+       5 tiles wrap to a second row under the grid's `lg:grid-cols-4` cap.
+       scrollIntoView-ing the Captions tile cropped the first row's titles off
+       the top; centering on the section heading instead still cropped
+       Captions down to just its header (caught in review — the whole point
+       of this scene is showing Captions in full alongside its siblings).
+       fullPage instead, same fix as 'chapter-suspect'/'library-table' above. */
+    id: 'export-download-tiles',
+    hash: '#/books/hollow-tide-1/listen',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="download-tile-captions"]',
+    fullPage: true,
+    strict: true,
+  },
+  {
+    /* fs-52 — the Captions export modal itself: SRT/VTT file format,
+       Line/Sentence/Word granularity, and whole-book/per-chapter scope. This
+       is the shot that actually shows the feature (the tile row alone just
+       shows a label), used for the wiki "Captions" section and the Pinokio
+       v1.12.2 post's captions bullet. */
+    id: 'export-captions-options',
+    hash: '#/books/hollow-tide-1/listen',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="download-tile-captions"]',
+    action: async (page) => {
+      await page
+        .getByTestId('download-tile-captions')
+        .getByRole('button', { name: 'Download' })
+        .click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="captions-options"]',
     strict: true,
   },
   {

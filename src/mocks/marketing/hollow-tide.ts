@@ -594,7 +594,7 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               progress: 0,
               lastWorkedOn: 'Just now',
               coverGradient: ['#2B4C57', '#101D22'],
-              coverImageUrl: COVER('hollow-tide-2'),
+              coverImageUrl: COVER('hollow-tide-4'),
               coverFraming: TITLE_TOP_FRAME,
               tags: ['series-1'],
             },
@@ -681,8 +681,10 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
             {
               /* fs-1318 Tier D — non-English library entries for the
                  language-detection + non-English cast-confirmation
-                 screenshots. Reuses the Coalfall cover asset (no new
-                 image dependency), per the same convention as hollow-tide-4. */
+                 screenshots. Own localized cover art (translated title
+                 baked in), extracted from the real per-language
+                 Coalfall Commission renders in the maintainer's workspace —
+                 not a reuse of the English cover. */
               bookId: 'coalfall-commission-ru',
               title: 'Заказ Коалфолла',
               author: 'Castwright',
@@ -699,12 +701,19 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               runtime: '39m',
               lastWorkedOn: 'Last week',
               coverGradient: ['#3C194F', '#0F0E0D'],
-              coverImageUrl: COVER('coalfall-commission'),
+              coverImageUrl: COVER('coalfall-commission-ru'),
               coverFraming: TITLE_TOP_FRAME,
               tags: [],
               language: 'ru',
             },
             {
+              /* Still reuses the English Coalfall cover as a placeholder —
+                 unlike coalfall-commission-ru above, the maintainer's
+                 workspace only has a German cover for a literally-translated
+                 "Der Auftrag von Coalfall", not this book's invented title
+                 ("Der Bernsteinturm" — a distinct story, not a Coalfall
+                 translation), so that asset's baked-in title wouldn't match.
+                 Swap once a real Der-Bernsteinturm cover exists. */
               bookId: 'der-bernsteinturm',
               title: 'Der Bernsteinturm',
               author: 'Castwright',
