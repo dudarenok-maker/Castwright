@@ -34,7 +34,7 @@ case, and none has any concept of a third-party person:
 | Mechanism | Location | Catches "Вступительная статья"? | Purpose |
 |---|---|---|---|
 | `AUTHOR_NOTE_TITLE_RX` | `byline-author-guard.ts:16` | No (has предислови/послеслови/об авторе, not вступительн) | exempt byline author from drop |
-| `isLikelyFrontMatterTitle` | `parsers/front-matter.ts` | No (Russian `frontMatterKeywords` lacks it) | discard PDF outline entries |
+| `isLikelyFrontMatterTitle` | `parsers/front-matter.ts` | No (Russian `frontMatterKeywords` lacks it) | discard PDF outline entries; **also drives chapter `excluded`** |
 | `flag_nonstory` / `excludeFromSynthesis` | `schemas.ts:135` (fs-58) | LLM-decided, per-sentence, residue-only | filter sentences out of synthesis |
 
 ## Goal & scope
@@ -46,233 +46,247 @@ chapter** from surviving as an attributable cast member, while:
   article; the stripped person's quoted lines re-route to narrator), and
 - **never stripping a legitimately framed in-fiction character** (#938 — an
   in-fiction letter, a genuine framed author's-note where the author speaks in
-  character).
+  character), and **never stripping an ordinary walk-on speaker** in a real
+  story chapter.
 
-**Posture: conservative / high-precision.** All signals must agree before a
-strip. When unsure, do not strip.
+**Posture: conservative / high-precision.** Every gate must agree before a strip.
+When unsure, do not strip.
 
 Out of scope: excluding the essay from synthesis; a per-book user affordance to
-skip front matter; any change to `flag_nonstory`'s existing residue-only remit.
+skip front matter; any change to `flag_nonstory`'s residue-only remit or to the
+existing `isLikelyFrontMatterTitle` → `excluded` behaviour.
 
-## Architecture correction (why Signal 2 is an in-pipeline classifier)
+## Two architecture corrections from adversarial review
 
-An earlier draft assumed the fs-58 script-review pass "already runs per chapter"
-and could carry a chapter-level non-story flag to the analyze assembly block.
-**That is false.** Script review is a **separate, later, user-initiated SSE
-route** (`server/src/routes/script-review.ts`, mounted at `/api/books`) that
-reads `cast.json` + post-fold sentences **from disk** and streams edit-ops to the
-**frontend**. The analyze route never invokes it, and it runs *after*
-`analysis.ts` has already folded and **written `cast.json`** (`analysis.ts:4273`).
-So a script-review-produced flag can never be read at the guard's insertion
-point.
+**1. Signal 2 is an in-pipeline classifier, not a script-review flag.** An early
+draft assumed the fs-58 script-review pass runs per chapter in-pipeline. It does
+not: script review is a **separate, later, user-initiated SSE route**
+(`routes/script-review.ts`, `/api/books`) that reads `cast.json` from disk and
+streams ops to the frontend, *after* `analysis.ts` has folded and written
+`cast.json` (`analysis.ts:4273`). So Signal 2 must be a **new analyzer call made
+inside the analyze pipeline**.
 
-Therefore Signal 2 is realized as a **new, cheap, gated chapter-level
-classification call made inside the analyze pipeline** (a real, small LLM call —
-not free). It is gated so hard that on a normal book it fires **zero** times (see
-"Cost gating" below).
+**2. Signal 1 must NOT reuse `isLikelyFrontMatterTitle` / `frontMatterKeywords`.**
+That predicate directly sets chapter `excluded` (`store/manuscripts.ts:102`,
+`routes/import.ts:269/275`), and an excluded chapter is skipped from analysis and
+contributes **no sentences** (`analysis.ts` `if (h.excluded) continue`).
+Extending it with essay terms would drop the essay from the audiobook AND moot
+the guard (no sentences → nothing to strip). Signal 1 is therefore a **new,
+dedicated essay-class title predicate** in its own module, wired ONLY into this
+guard — never into the exclusion machinery.
 
-## Detection heuristic
+## Detection heuristic — chapter-first gating
 
-A character is stripped **only if ALL THREE conditions hold**. They are evaluated
-cheap-deterministic-first; the LLM (Signal 2) is only ever consulted for a
-character that has already passed (b) and (c) and whose chapter title did not
-already classify — so the expensive check rides behind two free filters.
+The strip is gated **chapter-first** so ordinary walk-on speakers in real story
+chapters are never even considered. Order:
 
-### (c) Low presence — cheap deterministic pre-filter
+### Gate 0 (chapter, cheap, structural) — is this a front-matter-suspicious chapter?
 
-The character is attributed in **exactly one chapter** and its attributed line
-count is below a small threshold (reuse the minor-cast `minLines` notion,
-default 3). Fail → keep. Cheapest check, evaluated first.
+A chapter is a **candidate** if EITHER:
+- **Signal 1 — new essay-class title predicate** matches its title
+  (`isNonStoryEssayTitle`, new module): `вступительная статья`, `критическая
+  статья`, `critical introduction`, `об авторе`-adjacent essay forms, etc.
+  Deterministic, zero cost, decoupled from `excluded`. OR
+- **Positional front-region** — the chapter's index is within the first `F`
+  chapters of the book (default `F = 5`). A bounded cost gate, not a precision
+  claim: it only decides *whether Signal 2 may be consulted*, never strips on its
+  own.
 
-### (b) Name absent from every other chapter body — cheap deterministic pre-filter
+Non-candidate chapters (the vast majority — all deep story chapters) are skipped
+entirely. A walk-on speaker in chapter 14 is never evaluated.
 
-The character's name and every alias appears in **no chapter body except the one
-chapter** it is attributed in. Fail (name found elsewhere) → keep.
+### Per-character gates, evaluated only for characters attributed in a candidate chapter
 
-**Match algorithm (specified to remove ambiguity):**
-- Search corpus = the raw body text of every OTHER chapter, sourced from
-  `record.chapterHints[].body` (NOT the `chapters`/`chapterStub` array, which
-  carries only `{id, title}`).
-- Needles = the character's `name` plus each entry of `aliases`, each trimmed and
-  case-folded (`toLocaleLowerCase`). Skip needles shorter than a floor (e.g. < 3
-  chars) — too collision-prone to trust.
-- Match = **case-folded substring** containment of a needle in the case-folded
-  body. Do **not** use `\b` word boundaries: they are unreliable for Cyrillic in
-  this codebase. Substring is deliberately the *permissive* direction — an
-  incidental match keeps the character (the safe outcome under the posture).
-- **Same-script only, no transliteration.** A Cyrillic-detected name ("Радий
-  Погодин") is searched against body text as-is; we do NOT transliterate to
-  "Radiy Pogodin". A transliteration mismatch fails-safe toward *keep*.
-- `normaliseNameKey` is NOT used here — it is a whole-string equality key
-  normaliser, not an in-body search primitive.
+**(c) Low presence.** Attributed in exactly one chapter, line count below the
+minor-cast `minLines` threshold (default 3). Fail → keep.
 
-### (a) The one chapter is a non-story front-matter chapter — the anchor
+**(b) Name absent from every other chapter body.** The character's name + every
+alias appears in no chapter body except its one chapter. Fail → keep. Match
+algorithm:
+- Corpus = raw body text of every OTHER chapter, from `record.chapterHints[].body`
+  (confirmed present for ALL chapters in BOTH the full and subset paths — the
+  record is the full parsed manuscript). NOT the `chapterStub` `{id,title}` array.
+- Needles = `name` + each `aliases` entry, trimmed, case-folded
+  (`toLocaleLowerCase`); skip needles < 3 chars (collision-prone).
+- Match = case-folded **substring** containment (NOT `\b` — unreliable for
+  Cyrillic here). Same-script, **no transliteration**.
+- `normaliseNameKey` is NOT used (it is whole-string equality, not in-body search).
 
-Only evaluated for a character that passed (b) and (c). Satisfied by **either**:
+### (a) Confirm non-story, only for a character that passed Gate 0 + (b) + (c)
 
-- **Signal 1 — extended deterministic title classifier.** Add an
-  essay/critical-article class to the shared front-matter title machinery
-  (`isLikelyFrontMatterTitle` / language-registry `frontMatterKeywords`):
-  `вступительная статья`, `критическая статья`, `critical introduction`, and the
-  like. Deterministic, zero cost. If it fires → strip; Signal 2 is not consulted.
-- **Signal 2 — new, cheap, in-pipeline chapter-level LLM classification.** Only
-  invoked when Signal 1 did **not** fire for this chapter (and a character
-  passed (b)+(c) in it). One lightweight yes/no prompt: "Is this whole chapter a
-  non-story foreword / critical article / essay *about* the book or its author,
-  as opposed to narrative fiction? Answer conservatively; when in doubt, no."
-  Classification only — it never sets `excludeFromSynthesis`; the essay stays
-  narrated. Result cached per chapter within the run so at most one call per
-  candidate chapter.
+- If **Signal 1** already classified the chapter title → strip. Signal 2 not consulted.
+- Else **Signal 2 — new, in-pipeline chapter-level LLM classification** on that
+  candidate chapter: one conservative yes/no — "Is this whole chapter a non-story
+  foreword / critical article / essay *about* the book or its author, as opposed
+  to narrative fiction? When in doubt, answer no." Result cached per chapter for
+  the run (≤ 1 call per candidate chapter). Classification only — never sets
+  `excludeFromSynthesis`; the essay stays narrated.
 
-### Why the #938 framed case is safe
+### Why the protected cases are safe
 
-(a) AND (b) AND (c) must all hold. A genuine in-fiction chapter is **not**
-title-classified as an essay, and the conservative Signal-2 prompt will answer
-"no" for narrative fiction, so **(a) fails** and the character is never stripped —
-even when (b) and (c) happen to be true for a character who only appears in one
-framed chapter.
+- **#938 framed in-fiction chapter:** even inside the front region, Signal 1
+  won't match a fiction title and the conservative Signal 2 answers "no" for
+  narrative fiction → (a) fails → not stripped.
+- **Ordinary walk-on speaker:** in a deep story chapter, Gate 0 fails → never
+  considered. In a *front-region* story chapter (e.g. a bartender in chapter 1),
+  Signal 2 answers "no" (it is a story chapter, not an essay) → not stripped;
+  the only cost is one benign classification call.
 
-## Cost gating (Signal 2 fires ~never on normal books)
+## Cost (honest, bounded — not "zero")
 
-The LLM classification is reached only when, for some character:
-`(c) single-chapter + low-lines` AND `(b) name absent from all other bodies` AND
-`Signal 1 title did not classify`. A normal novel has no character satisfying
-(b)+(c) in a title-unclassified chapter, so **zero** calls. The pathological
-book (a third-party essay under a title our regex doesn't know) pays exactly one
-call for that one chapter. This is the honest cost: bounded by the number of
-suspicious front-matter chapters, not by chapter count.
+Signal 2 fires at most once per candidate chapter (Signal-1-unclassified,
+front-region) that contains a (b)+(c) character. Bounded by `F` (default 5), and
+in practice near-zero: front-region chapters are usually title-page / dedication
+/ TOC with no (b)+(c) *named speaker*. A front-region story chapter with a
+walk-on costs one call that returns "no". The pathological target book (a
+third-party essay under an unenumerated title) pays exactly one call. This is the
+real cost — a small constant, not free.
 
 ## Architecture — components
 
+### New module — `server/src/analyzer/non-story-essay-title.ts`
+
+`export function isNonStoryEssayTitle(title: string | undefined, language?: string): boolean`.
+The Signal-1 essay-class predicate, decoupled from `isLikelyFrontMatterTitle`.
+Its own per-language term list (may share the language-registry lookup shape but
+NOT the `frontMatterKeywords` array that drives `excluded`).
+
+### New analyzer method — Signal 2
+
+Add to the `Analyzer` interface (`analyzer/index.ts:65`) a first-class
+schema-constrained method, e.g.:
+`runNonStoryClassification(manuscriptId, chapterId, promptMd, call): Promise<{ nonStory: boolean }>`.
+Implement in the Gemini and local analyzers; `FallbackAnalyzer` delegates like
+the other methods. This is what makes the analyzer-stubbed integration test
+work — the guard reaches Signal 2 through the mocked `select-analyzer` seam, not
+a raw Ollama/Gemini call.
+
 ### New module — `server/src/analyzer/third-party-front-matter-guard.ts`
 
-Pure-core with one injected async escalation. Approximate shape:
+Pure-core with one injected async escalation:
 
 ```ts
-export interface ThirdPartyGuardChapter {
-  id: number;
-  title?: string;
-  body: string; // from record.chapterHints[].body
-}
+export interface ThirdPartyGuardChapter { id: number; title?: string; body: string; }
 
 export async function stripThirdPartyFrontMatter(
   characters: CharacterOutput[],
   sentences: SentenceOutput[],
-  chapters: ThirdPartyGuardChapter[],
+  chapters: ThirdPartyGuardChapter[], // ordered; index drives the front-region gate
   opts: {
     minLines?: number;
     language?: string;
-    /** Signal 2. Injected so the core stays testable. Called at most once per
+    frontRegion?: number; // F, default 5
+    /** Signal 2, injected so the core stays testable. Called at most once per
         candidate chapter, only when Signal 1 did not classify it. Omitted in
-        unit tests → Signal-1-only (fully deterministic). */
+        unit tests → Signal-1-only, fully deterministic. */
     classifyNonStory?: (chapter: ThirdPartyGuardChapter) => Promise<boolean>;
   },
 ): Promise<{ characters: CharacterOutput[]; sentences: SentenceOutput[]; stripped: string[] }>;
 ```
 
 Behaviour:
-- Evaluate (c) then (b) then (a) as above.
-- A qualifying character is **removed from the roster** AND its sentences are
-  **re-routed to `narrator`** by this pass itself — upstream of
-  `reconcileSentenceCharacterIds`, so re-routed narrator ids are valid and never
-  enter the `attribution_drift` counter (verified: `taggedSpeakerIds` is computed
-  inside `foldMinorCast` from the passed characters/sentences, so removing the
-  entry upstream neutralises the `proseTagged` carve-out with no special-casing).
-- No-op identity: when nothing qualifies, return the input array references
-  unchanged (matches the `byline-author-guard` / `foldMinorCast` no-op
-  convention).
-- No schema/persistence change: the non-story boolean lives only in memory for
-  the duration of the run.
+- Gate 0 → (c) → (b) → (a), in that order.
+- A qualifying character is removed from the roster and its sentences re-routed
+  to `narrator` by this pass — upstream of `reconcileSentenceCharacterIds`, so
+  re-routed ids are valid and never enter the `attribution_drift` counter
+  (verified: `taggedSpeakerIds` is computed inside `foldMinorCast` from the
+  passed roster, so removing the entry upstream neutralises the `proseTagged`
+  carve-out with no special-casing).
+- No-op identity: input array references returned unchanged when nothing
+  qualifies.
+- No schema/persistence change: the non-story boolean lives only in memory.
 
 ### Insertion point in `analysis.ts`
 
-Immediately after `dedupAndPrepare` and **before `foldMinorCast`** — in both the
-full-analysis assembly block (~L4192) and the subset re-analysis block (~L5231).
-`stage1.characters` and the recovered `sentences` are in scope there; chapter
-**bodies** come from `record.chapterHints[].body` (confirmed present in both
-paths), title from the chapter-title lookup. The real `classifyNonStory` is
-wired to the analyzer handle already used by the surrounding pipeline (the exact
-handle is a plan-step detail).
+After `dedupAndPrepare`, **before `foldMinorCast`** — in both the full-analysis
+block (~L4192) and the subset re-analysis block (~L5231). Both are already
+`async`, so the awaited guard adds no control-flow hazard. Chapter bodies come
+from `record.chapterHints[].body`; the real `classifyNonStory` wraps the new
+analyzer method against the analyzer handle already in scope.
 
 ### Why a dedicated pass (not an exception inside `foldMinorCast`)
 
-`foldMinorCast` already carries several interacting carve-outs (descriptor
-names, protected roles, `proseTagged`, drifted buckets). A separate,
-single-purpose module is easier to test and reason about, and mirrors how
-`byline-author-guard` was split out of the same pipeline.
+`foldMinorCast` already carries several interacting carve-outs. A separate
+single-purpose module is easier to test and mirrors how `byline-author-guard`
+was split out.
 
 ## Testing
 
 ### Unit — `third-party-front-matter-guard.test.ts` (the real coverage)
 
-Fully deterministic — synthetic `characters` / `sentences` / `chapters`, no LLM:
-- **Strips (Signal 1)** — title classifies + name absent from all other bodies +
-  single-chapter/low-lines → character removed, its sentences re-routed to
-  narrator; `stripped` names returned.
-- **Strips (Signal 2)** — title does NOT classify; injected `classifyNonStory`
-  stub returns `true` → strips. Assert the stub was called exactly once for that
-  chapter.
-- **Signal 2 not consulted when title classifies** — stub is a spy asserted
-  **not** called (proves the cheap-first ordering / cost gating).
-- **Signal 2 not consulted when (b)/(c) fail** — a character present in another
-  body, or multi-chapter/high-lines, never reaches the stub (spy not called).
-- **Preserves #938** — framed in-fiction chapter (title not classifying),
-  `classifyNonStory` stub returns `false`, real quoted character only in that
-  chapter → **not** stripped.
-- **Preserves** — name also appears in a story chapter's body → kept (fails (b)),
-  including a Cyrillic body-text case (`Радий` occurring in a later chapter).
-- **No-op identity** — same array reference back when nothing qualifies.
-- **Async contract** — returns a Promise; omitting `classifyNonStory` yields
-  Signal-1-only behaviour with no throw.
+Deterministic, synthetic inputs, no live model:
+- **Strips (Signal 1)** — candidate via essay title + (b) + (c) → removed,
+  sentences re-routed to narrator, `stripped` returned.
+- **Strips (Signal 2)** — front-region chapter, title NOT essay, stub
+  `classifyNonStory` → true → strips; assert stub called exactly once.
+- **Gate 0 blocks walk-ons** — a (b)+(c) character in a **deep** story chapter
+  (index ≥ F, non-essay title): stub is a spy asserted **not** called, character
+  kept. (Directly locks the B2 fix.)
+- **Signal 2 not consulted when Signal 1 classifies** — spy not called.
+- **Front-region story chapter kept** — candidate by position, stub returns
+  false → kept (proves Signal 2's "no" protects walk-ons/framed fiction).
+- **Preserves #938** — framed in-fiction chapter, stub false, real quoted
+  character only there → kept.
+- **Preserves (b)** — name also in another chapter body (incl. a Cyrillic
+  `Радий` occurrence) → kept.
+- **No-op identity**, **async contract** (omitting `classifyNonStory` →
+  Signal-1-only, no throw).
 
-### Title classifier
+### Title predicate — `non-story-essay-title.test.ts`
 
-Extend `parsers/front-matter.ts` (+ its client mirror `src/lib/chapter-heuristics.ts`,
-kept in sync per that file's header) and its tests to cover "Вступительная
-статья" and the new essay-class terms across supported languages.
+"Вступительная статья" + essay-class terms across supported languages; assert it
+does NOT alter `isLikelyFrontMatterTitle` / `excluded` behaviour (regression that
+the two predicates stay decoupled).
+
+### Analyzer method
+
+Unit-test `runNonStoryClassification` schema handling on at least the local
+analyzer path (mirrors existing per-method analyzer tests); add the stub to the
+`analysis.test.ts` analyzer mock.
 
 ### Integration (analyzer-stubbed, not model-dependent)
 
-Assert the strip fires inside the `analysis.ts` assembly block using the existing
-analyzer-stub harness (`analysis.test.ts` style): feed a canned roster where a
-third-party appears only in a front-matter chapter, stub `classifyNonStory`
-true, and assert the person is absent from the final roster while the essay's
-sentences are present and narrator-attributed. **No end-to-end LLM fixture** —
-stage-1/stage-2 attribution and Signal 2 are both stubbed. (The *Юный
-дрессировщик* shape informs the canned inputs but is not run through a live
-model.)
+In the `analysis.test.ts` harness, feed a canned roster where a third-party
+appears only in a front-region chapter; stub `runNonStoryClassification` → true;
+assert the person is absent from the final roster and the essay's sentences are
+present and narrator-attributed. No live-LLM fixture. (The *Юный дрессировщик*
+shape informs the canned inputs.)
 
 ## Risks / edge cases
 
-1. **Common-name false "present" in (b)** — a short/common surname substring-
-   matching incidental body text will *keep* the person. Safe direction under
-   the conservative posture; the < 3-char needle floor trims the worst of it.
-   Note it; do not over-engineer.
-2. **Signal 2 quality** — the classifier is a small conservative yes/no; a wrong
-   "yes" on a genuinely framed chapter is the dangerous case, mitigated by the
-   prompt's "when in doubt, no" and by (b)/(c) already having narrowed to a
-   single-chapter, body-absent, low-line character. A wrong "no" simply keeps a
-   stray entry (cosmetic, per #1446).
-3. **Two call sites** — the full-analysis and subset re-analysis blocks both need
-   the guard, or the subset path leaks the bug (the same duplication the
-   byline-guard already lives with).
-4. **Async in the assembly block** — the guard is now `await`ed; confirm the
-   surrounding assembly code is already async (it is — the route is async and
-   awaits analyzer work) so this adds no new control-flow hazard.
+1. **(b) fragility to incomplete aliases / cross-script mentions.** If a REAL
+   recurring character is mentioned elsewhere only under a variant/short form or
+   a different script not in its alias set, the substring needle misses, (b)
+   reads "absent", and the character moves *toward* strip — the dangerous
+   direction. Mitigated by: Gate 0 (must be a front-matter-suspicious chapter),
+   (c) (must be a single-chapter, <3-line character), and Signal 2's conservative
+   "no" for story chapters. The corrected reasoning: substring is permissive for
+   *matches*; a *miss* is the risky side, so alias completeness matters — tests
+   name the cross-script case.
+2. **Signal 2 quality.** A wrong "yes" on a genuinely framed chapter is the
+   dangerous case, mitigated by the "when in doubt, no" prompt and the upstream
+   gates. A wrong "no" merely keeps a stray entry (cosmetic, per #1446).
+3. **Two call sites** — full and subset assembly blocks both need the guard.
+4. **`F` tuning** — `frontRegion` default 5 is a cost bound; too small could miss
+   a late foreword (rare), too large only adds benign "no" calls. Configurable
+   via `opts.frontRegion`.
 
 ## Acceptance criteria (from #1447)
 
 - A front-matter / foreword-ish chapter that names or quotes a real third-party
   person does not roster them as an attributable speaker.
 - A genuinely framed narrative chapter with a real quoted character (the #938
-  author's-note case) is unaffected.
-- Paired regression test using inputs shaped like the *Юный дрессировщик* ch3
-  case (deterministic unit + analyzer-stubbed integration; no live model).
+  case) — and an ordinary walk-on speaker in a real story chapter — are
+  unaffected.
+- Paired regression tests shaped like the *Юный дрессировщик* ch3 case
+  (deterministic unit + analyzer-stubbed integration; no live model).
 
 ## Implementation notes
 
-- Work lands on an **isolated worktree + branch** (per the user's instruction):
+- Work lands on an isolated worktree + branch:
   `feat/server-third-party-front-matter-guard`.
-- The new module mirrors `byline-author-guard.ts` but is async (one injected
-  escalation); the analysis-route wiring touches the two assembly blocks only and
-  adds no schema/persistence change.
+- New surface: `non-story-essay-title.ts`, a new `Analyzer` method (interface +
+  Gemini/local impls + Fallback delegation + test stub), and the async guard
+  module; analysis-route wiring touches the two assembly blocks only; **no
+  schema/persistence change** and **no change to `isLikelyFrontMatterTitle` /
+  `excluded`.**
