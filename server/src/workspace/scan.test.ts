@@ -34,6 +34,7 @@ function bookSkeleton(
   opts: {
     castConfirmed?: boolean;
     chapters?: Array<{ id: number; slug: string }>;
+    language?: string;
   } = {},
 ) {
   const bookId = makeBookId(AUTHOR, SERIES, title);
@@ -57,6 +58,7 @@ function bookSkeleton(
       castConfirmed: !!opts.castConfirmed,
       chapters: chapters.map((c) => ({ id: c.id, title: `Chapter ${c.id}`, slug: c.slug })),
       coverGradient: ['#000', '#fff'],
+      language: opts.language,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }),
@@ -331,6 +333,20 @@ describe('scanLibrary derived stats', () => {
     const b = books.find((x) => x.title === 'Excluded-Heavy Book')!;
     expect(b.status).toBe('cast_pending');
     expect(b.chapterCount).toBe(2);
+  });
+
+  it('includes eligibleTtsEngines on the built book, scoped by language (fs-60)', async () => {
+    bookSkeleton('Russian Eligibility Test', { language: 'ru' });
+    const books = await flatten();
+    const book = books.find((b) => b.title === 'Russian Eligibility Test');
+    expect(book?.eligibleTtsEngines?.slice().sort()).toEqual(['coqui', 'qwen']);
+  });
+
+  it('a still-unsupported language resolves to qwen-only eligibility (fs-60)', async () => {
+    bookSkeleton('Chinese Eligibility Test', { language: 'zh' });
+    const books = await flatten();
+    const book = books.find((b) => b.title === 'Chinese Eligibility Test');
+    expect(book?.eligibleTtsEngines).toEqual(['qwen']);
   });
 
   it('malformed segments.json is skipped without breaking the runtime total', async () => {

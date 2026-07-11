@@ -2864,6 +2864,20 @@ export interface components {
              */
             language?: string;
             /**
+             * @description fs-60 — which TTS engines are eligible for this book's language
+             *     (independent of which engines are actually installed on this
+             *     deployment — the frontend intersects this with its own
+             *     installed-engines list). Qwen is always eligible (the
+             *     unconditional non-English⇒Qwen invariant, fs-2); Coqui is
+             *     additionally eligible for en/ru/es/fr/de. Optional — like `tags`,
+             *     `scan.ts` always populates it in practice, but the schema keeps it
+             *     optional (NOT added to `required`) so existing test fixtures that
+             *     construct a `LibraryBook` object literal without every field don't
+             *     all need updating; every frontend consumer already defaults it
+             *     with `?? [...]` (Tasks 9/10).
+             */
+            eligibleTtsEngines?: ("qwen" | "coqui" | "kokoro" | "gemini" | "piper")[];
+            /**
              * @description fs-65 Phase 3 — prosody annotation intent flag. Absent (undefined)
              *     ⇒ ON (eager default); only an explicit `false` opts out. The
              *     client-side Task-13 trigger gate is `prosodyEnabled !== false`.
