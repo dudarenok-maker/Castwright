@@ -309,6 +309,12 @@ mismatches) — the table's risk column shows each correctly.
 
 ## 12. Dialogue-structure attribution
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/advanced-settings/12-dialogue-structure-attribution-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/advanced-settings/12-dialogue-structure-attribution.png">
+  <img alt="Dialogue-structure attribution" src="images/advanced-settings/12-dialogue-structure-attribution.png">
+</picture>
+
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
 | Structure engine | Deterministic dialogue-structure pass that corrects tag-proven attributions and derives honest confidence. Off = pre-engine behaviour. | `true` | boolean | live | medium |
