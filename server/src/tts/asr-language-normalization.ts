@@ -117,10 +117,33 @@ function buildGerman(): IntegerTable {
   return out;
 }
 
+const RU_ONES = [
+  'ноль', 'один', 'два', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять',
+  'десять', 'одиннадцать', 'двенадцать', 'тринадцать', 'четырнадцать', 'пятнадцать',
+  'шестнадцать', 'семнадцать', 'восемнадцать', 'девятнадцать',
+];
+const RU_DECADES: Record<number, string> = {
+  2: 'двадцать', 3: 'тридцать', 4: 'сорок', 5: 'пятьдесят',
+  6: 'шестьдесят', 7: 'семьдесят', 8: 'восемьдесят', 9: 'девяносто',
+};
+
+/** Russian: decade + ones as two separate tokens, no conjunction —
+    the simplest of the four languages' composition shapes. */
+function buildRussian(): IntegerTable {
+  const out: string[][] = [];
+  for (let n = 0; n <= 19; n += 1) out.push([RU_ONES[n]]);
+  for (let d = 2; d <= 9; d += 1) {
+    out.push([RU_DECADES[d]]);
+    for (let ones = 1; ones <= 9; ones += 1) out.push([RU_DECADES[d], RU_ONES[ones]]);
+  }
+  return out;
+}
+
 export const WER_INTEGERS: Readonly<Record<string, IntegerTable>> = Object.freeze({
   es: Object.freeze(buildSpanish()),
   fr: Object.freeze(buildFrench()),
   de: Object.freeze(buildGerman()),
+  ru: Object.freeze(buildRussian()),
 });
 
 export const WER_CONTRACTIONS: Readonly<Record<string, Record<string, string>>> = Object.freeze({

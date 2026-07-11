@@ -145,6 +145,20 @@ describe('WER_CONTRACTIONS.de (#1084)', () => {
   });
 });
 
+describe('WER_INTEGERS.ru (#1084)', () => {
+  it('spells 0-19 literally', () => {
+    expect(WER_INTEGERS.ru[0]).toEqual(['ноль']);
+    expect(WER_INTEGERS.ru[19]).toEqual(['девятнадцать']);
+  });
+  it('composes 21-99 as two separate tokens, no conjunction', () => {
+    expect(WER_INTEGERS.ru[21]).toEqual(['двадцать', 'один']);
+    expect(WER_INTEGERS.ru[99]).toEqual(['девяносто', 'девять']);
+  });
+  it('covers exactly indices 0..99', () => {
+    expect(WER_INTEGERS.ru).toHaveLength(100);
+  });
+});
+
 describe('classifyTranscript', () => {
   it('identical text → ok, wer 0', () => {
     const c = classifyTranscript(EXPECTED, EXPECTED, CLEAN);
