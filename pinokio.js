@@ -11,7 +11,7 @@
 const buildMenu = require('./pinokio/lib/menu.js');
 
 module.exports = {
-  version: '1.0',
+  version: '7.0',
   title: 'Castwright',
   description: 'Any book, performed by a full cast — effortlessly.',
   icon: 'public/icon-512.png',
