@@ -141,7 +141,19 @@ beforeAll(async () => {
 afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   const { rm } = await import('node:fs/promises');
-  await rm(workspaceRoot, { recursive: true, force: true });
+  /* fs-60 — the extra full-chapter-render tests added here (ru Coqui-fallback,
+     zh fatal-abort) mean more in-flight fire-and-forget disk writes (queue/state
+     persistence) racing this cleanup on Windows (ENOTEMPTY). Same best-effort
+     retry-once idiom as generation-stall-watchdog.test.ts: leaking a tmp dir is
+     harmless and must not red the suite. */
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await rm(workspaceRoot, { recursive: true, force: true });
+      return;
+    } catch {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
 });
 
 const ENTRY_ID = 'gate-entry-1';
@@ -482,12 +494,211 @@ describe('fs-2 never-cross-language generation gate', () => {
     }
   }, 10_000);
 
-  it('is FATAL (no synth, no park) when Qwen is unavailable on a Russian book', async () => {
+  it('warns and proceeds (does not abort) when Qwen is unavailable on a Coqui-eligible Russian book', async () => {
     setQwenState('not-installed');
     const body = await runRuStream();
-    expect(body).toContain('chapter_failed');
-    expect(body).toMatch(/requires Qwen/i);
+    expect(body).toContain('qwen_unavailable_coqui_fallback');
+    /* fs-60 — the old unconditional Kokoro-fallback warning must NOT also fire
+       for a non-English book: forbidKokoroFallback makes an actual Kokoro
+       fallback impossible here regardless of Qwen availability, so that
+       message would be actively wrong (contradicts the Coqui-fallback warning
+       just emitted above). */
+    expect(body).not.toContain('qwen_unavailable_kokoro_fallback');
+    expect(body).not.toContain('chapter_failed');
     expect(body).not.toContain('chapter_awaiting_fallback_confirm');
+    expect(synthCalled).toBe(true);
+  }, 10_000);
+});
+
+/* fs-60 — a language with NO fallback engine (still-unsupported, e.g. zh)
+   must keep today's fatal-abort behavior unchanged when Qwen is unavailable
+   — only Coqui-eligible languages (en/ru/es/fr/de) get the new warn-and-proceed
+   path (see the 'ru' test above). */
+describe('fs-60 whole-book abort stays fatal for a still-unsupported language', () => {
+  const ZH_TITLE = 'Chinese Fatal Abort Gate Test';
+  const ZH_MANUSCRIPT = 'm_zh_fatal_gate_test';
+  const ZH_ENTRY = 'zh-fatal-gate-entry-1';
+  let zhBookId: string;
+  /* `setQwenState` in the 'fs-2 never-cross-language generation gate' describe
+     block above is a `let` local to THAT block's closure — not visible here.
+     This block needs its own reference, via its own dynamic import.
+     `QwenInstallState` is already imported at module scope (line 18). */
+  let setQwenState: (s: QwenInstallState) => void;
+
+  beforeAll(async () => {
+    const [{ makeBookId }, cacheModule, settings] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('../store/analysis-cache.js'),
+      import('../workspace/user-settings.js'),
+    ]);
+    setQwenState = settings.setLastKnownQwenInstallState;
+    zhBookId = makeBookId(AUTHOR, SERIES, ZH_TITLE);
+    const zhDir = join(workspaceRoot, 'books', AUTHOR, SERIES, ZH_TITLE);
+    mkdirSync(join(zhDir, '.audiobook'), { recursive: true });
+    mkdirSync(join(zhDir, 'audio'), { recursive: true });
+    writeFileSync(
+      join(zhDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: zhBookId,
+        manuscriptId: ZH_MANUSCRIPT,
+        author: AUTHOR,
+        title: ZH_TITLE,
+        series: SERIES,
+        updatedAt: '2026-06-01T00:00:00.000Z',
+        schema: 1,
+        language: 'zh',
+        chapters: [{ id: 1, title: 'Chapter 1', slug: 'chapter-1' }],
+      }),
+    );
+    writeFileSync(
+      join(zhDir, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: [{ id: 'narrator', name: 'Narrator' }] }),
+    );
+    await cacheModule.saveAnalysisCache(ZH_MANUSCRIPT, {
+      chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'narrator', text: '你好。' }] },
+    });
+  });
+
+  beforeEach(async () => {
+    setQwenState('not-installed');
+    await writeQueueFile(queuePath, {
+      entries: [
+        {
+          id: ZH_ENTRY,
+          bookId: zhBookId,
+          chapterId: 1,
+          scope: 'this',
+          addedAt: '2026-06-01T00:00:00.000Z',
+          status: 'in_progress',
+          order: 0,
+        },
+      ],
+      paused: false,
+    });
+  });
+
+  afterEach(() => setQwenState('loaded'));
+
+  it('is still FATAL (no synth, no park) when Qwen is unavailable on a still-unsupported-language book', async () => {
+    const res = await fetch(`${baseUrl}/api/books/${zhBookId}/generation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        modelKey: 'gemini-2.5-flash',
+        chapterIds: [1],
+        force: true,
+        queueEntryId: ZH_ENTRY,
+      }),
+    });
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+    expect(text).toContain('chapter_failed');
+    expect(text).not.toContain('chapter_awaiting_fallback_confirm');
     expect(synthCalled).toBe(false);
+  }, 10_000);
+});
+
+/* fs-60 — the force-to-qwen loop must honor an already-eligible manual engine
+   choice (e.g. a character explicitly cast on Coqui via the picker) instead
+   of blindly overwriting it, while still forcing an unset/ineligible engine
+   to Qwen exactly as before. */
+describe('fs-60 force-engine loop honors an eligible manual Coqui assignment', () => {
+  const RU_COQUI_TITLE = 'Russian Coqui Fallback Gate Test';
+  const RU_COQUI_MANUSCRIPT = 'm_ru_coqui_gate_test';
+  const RU_COQUI_ENTRY = 'ru-coqui-gate-entry-1';
+  let ruCoquiBookId: string;
+
+  beforeAll(async () => {
+    const [{ makeBookId }, cacheModule] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('../store/analysis-cache.js'),
+    ]);
+    ruCoquiBookId = makeBookId(AUTHOR, SERIES, RU_COQUI_TITLE);
+    const ruDir = join(workspaceRoot, 'books', AUTHOR, SERIES, RU_COQUI_TITLE);
+    mkdirSync(join(ruDir, '.audiobook'), { recursive: true });
+    mkdirSync(join(ruDir, 'audio'), { recursive: true });
+    writeFileSync(
+      join(ruDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: ruCoquiBookId,
+        manuscriptId: RU_COQUI_MANUSCRIPT,
+        author: AUTHOR,
+        title: RU_COQUI_TITLE,
+        series: SERIES,
+        updatedAt: '2026-06-01T00:00:00.000Z',
+        schema: 1,
+        language: 'ru',
+        chapters: [{ id: 1, title: 'Глава 1', slug: 'glava-1' }],
+      }),
+    );
+    /* oleg is explicitly cast on Coqui (a manual picker choice); sofiya has no
+       ttsEngine set (the force loop must still route her to Qwen). */
+    writeFileSync(
+      join(ruDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'oleg', name: 'Oleg', ttsEngine: 'coqui', overrideTtsVoices: { coqui: { name: 'Damien Black' } } },
+          { id: 'sofiya', name: 'Sofiya', voiceId: 'v_sofiya', overrideTtsVoices: { qwen: { name: 'qwen-v_sofiya' } } },
+        ],
+      }),
+    );
+    await cacheModule.saveAnalysisCache(RU_COQUI_MANUSCRIPT, {
+      chapters: {
+        1: [
+          { id: 1, chapterId: 1, characterId: 'oleg', text: 'Привет от Олега.' },
+          { id: 2, chapterId: 1, characterId: 'sofiya', text: 'Привет от Софии.' },
+        ],
+      },
+    });
+  });
+
+  beforeEach(async () => {
+    await writeQueueFile(queuePath, {
+      entries: [
+        {
+          id: RU_COQUI_ENTRY,
+          bookId: ruCoquiBookId,
+          chapterId: 1,
+          scope: 'this',
+          addedAt: '2026-06-01T00:00:00.000Z',
+          status: 'in_progress',
+          order: 0,
+        },
+      ],
+      paused: false,
+    });
+  });
+
+  it('does not stomp an already-eligible Coqui assignment; still forces the unset character to Qwen', async () => {
+    const res = await fetch(`${baseUrl}/api/books/${ruCoquiBookId}/generation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        modelKey: 'gemini-2.5-flash',
+        chapterIds: [1],
+        force: true,
+        queueEntryId: RU_COQUI_ENTRY,
+      }),
+    });
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+    expect(text).not.toContain('chapter_awaiting_fallback_confirm');
+    expect(synthCalled).toBe(true);
+    const oleg = lastSynthArgs?.cast?.find((c) => c.id === 'oleg');
+    const sofiya = lastSynthArgs?.cast?.find((c) => c.id === 'sofiya');
+    expect(oleg?.ttsEngine).toBe('coqui');
+    expect(sofiya?.ttsEngine).toBe('qwen');
   }, 10_000);
 });

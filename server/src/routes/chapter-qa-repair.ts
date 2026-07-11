@@ -43,7 +43,8 @@ import {
   type AsrClassification,
 } from '../tts/segment-asr-qa.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
-import { isNonEnglish } from '../tts/language.js';
+import { isNonEnglish, resolveEligibleEngines } from '../tts/language.js';
+import { ALL_TTS_ENGINES } from '../tts/model-keys.js';
 import { getLastKnownQwenInstallState } from '../workspace/user-settings.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
@@ -302,7 +303,13 @@ chapterQaRepairRouter.post(
 
       const bookLanguage = bookStateLanguage(state);
       const nonEnglishBook = isNonEnglish(bookLanguage);
-      if (nonEnglishBook) for (const c of cast.characters) c.ttsEngine = 'qwen';
+      const eligibleEngines = resolveEligibleEngines(bookLanguage, ALL_TTS_ENGINES);
+      if (nonEnglishBook) {
+        for (const c of cast.characters) {
+          if (c.ttsEngine && eligibleEngines.includes(c.ttsEngine)) continue;
+          c.ttsEngine = 'qwen';
+        }
+      }
       const requiredEngines = new Set(cast.characters.map((c) => resolveCharacterEngine(c, engine)));
       const qwenInUse = requiredEngines.has('qwen');
       const qwenState = getLastKnownQwenInstallState();
