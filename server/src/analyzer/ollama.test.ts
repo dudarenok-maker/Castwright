@@ -681,8 +681,8 @@ describe('OllamaAnalyzer — runAttributionEscalation (srv-59 Task 9)', () => {
 
   afterEach(async () => {
     for (const id of ['m_escalation_ok', 'm_escalation_empty', 'm_escalation_malformed']) {
-      await rm(resolve(HANDOFF_ROOT, 'inbox', `${id}-stageescalation-ch1.md`), { force: true });
-      await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stageescalation-ch1.json`), { force: true });
+      await rm(resolve(HANDOFF_ROOT, 'inbox', `${id}-stageescalation-ch1-w0.md`), { force: true });
+      await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stageescalation-ch1-w0.json`), { force: true });
     }
   });
 
@@ -696,6 +696,7 @@ describe('OllamaAnalyzer — runAttributionEscalation (srv-59 Task 9)', () => {
     const result = await analyzer.runAttributionEscalation(
       'm_escalation_ok',
       1,
+      0,
       'resolve these lines',
       {},
     );
@@ -723,6 +724,7 @@ describe('OllamaAnalyzer — runAttributionEscalation (srv-59 Task 9)', () => {
     const result = await analyzer.runAttributionEscalation(
       'm_escalation_empty',
       1,
+      0,
       'resolve these lines',
       {},
     );
@@ -739,6 +741,7 @@ describe('OllamaAnalyzer — runAttributionEscalation (srv-59 Task 9)', () => {
     const result = await analyzer.runAttributionEscalation(
       'm_escalation_malformed',
       1,
+      0,
       'resolve these lines',
       {},
     );
@@ -756,16 +759,17 @@ describe('OllamaAnalyzer — runAttributionEscalation (srv-59 Task 9)', () => {
     const result = await analyzer.runAttributionEscalation(
       'm_escalation_empty_valid',
       1,
+      0,
       'resolve these lines',
       {},
     );
 
     expect(result).toEqual({ assignments: [] });
 
-    await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_escalation_empty_valid-stageescalation-ch1.md'), {
+    await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_escalation_empty_valid-stageescalation-ch1-w0.md'), {
       force: true,
     });
-    await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_escalation_empty_valid-stageescalation-ch1.json'), {
+    await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_escalation_empty_valid-stageescalation-ch1-w0.json'), {
       force: true,
     });
   });

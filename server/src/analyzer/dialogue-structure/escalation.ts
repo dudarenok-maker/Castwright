@@ -43,6 +43,11 @@ export interface EscalateFlaggedWindowsOpts {
 const ESCALATED_CONFIDENCE = 0.8;
 const MAX_WINDOW_CHARS = 1500;
 const MAX_CONTEXT_PARAS = 2;
+/** A flagged unanchored line's placeholder characterId — a legitimate
+    "assign this to the narrator" answer is still valid, so it's excluded
+    from the presented candidate list to avoid muddying it, not from the
+    roster the model can actually answer with. */
+const NARRATOR_ID = 'narrator';
 /** Mirrors windows.ts's NARRATION_BREAK_LENGTH: a narration paragraph this
     long or longer is a real digression, not "short" context. */
 const SHORT_NARRATION_MAX_LEN = 200;
@@ -146,6 +151,7 @@ function buildWindowText(
     }
   }
   for (const idx of memberIdx) participantIds.add(sentences[idx].characterId);
+  participantIds.delete(NARRATOR_ID);
 
   return { text, participantIds: [...participantIds] };
 }
@@ -205,6 +211,7 @@ export async function escalateFlaggedWindows(opts: EscalateFlaggedWindowsOpts): 
     const response = await opts.analyzer.runAttributionEscalation(
       opts.manuscriptId,
       opts.chapterId,
+      group.windowId,
       prompt,
       opts.stageCall,
     );

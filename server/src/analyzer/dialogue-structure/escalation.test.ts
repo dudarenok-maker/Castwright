@@ -142,7 +142,7 @@ function fakeAnalyzer(impl: (prompt: string) => EscalationOutput | null): Analyz
     runEmotionChapter: () => Promise.reject(new Error('not used')),
     runScriptReviewChapter: () => Promise.reject(new Error('not used')),
     runStage3Chapter: () => Promise.reject(new Error('not used')),
-    runAttributionEscalation: (_m, _c, prompt) => Promise.resolve(impl(prompt)),
+    runAttributionEscalation: (_m, _c, _w, prompt) => Promise.resolve(impl(prompt)),
   };
 }
 
@@ -227,6 +227,36 @@ describe('escalateFlaggedWindows', () => {
     expect(capturedPrompt).toContain('boris');
     expect(capturedPrompt).toContain('{"assignments":[{"line":<number>,"characterId":"<roster id>"}]}');
     expect(capturedPrompt).toContain('2 marked dialogue lines');
+  });
+
+  it('(b2) `narrator` is excluded from the presented "Characters present" candidate list, but stays on the answerable roster (#1483)', async () => {
+    const { body, paras, sentences, flags } = buildFixture();
+    let capturedPrompt = '';
+    const analyzer = fakeAnalyzer((prompt) => {
+      capturedPrompt = prompt;
+      return { assignments: [] };
+    });
+
+    await escalateFlaggedWindows({ ...baseOpts(), sentences, flags, paras, body, analyzer });
+
+    // Both flagged lines currently sit on 'narrator' (buildFixture's
+    // unanchored placeholder), so without the filter it would leak in here.
+    const presentedCandidates = capturedPrompt.split(' — full roster ids:')[0];
+    expect(presentedCandidates).toContain('anton');
+    expect(presentedCandidates).not.toContain('narrator');
+    // ...but the model can still legitimately answer 'narrator' — it's not
+    // dropped from the roster the reply is validated against.
+    expect(capturedPrompt).toContain('full roster ids: anton, olga, boris, narrator');
+  });
+
+  it('windowId is passed through to the analyzer as the escalation windowIndex (#1483)', async () => {
+    const { body, paras, sentences, flags } = buildFixture();
+    const runFn = vi.fn(() => Promise.resolve<EscalationOutput | null>({ assignments: [] }));
+    const analyzer: Analyzer = { ...fakeAnalyzer(() => null), runAttributionEscalation: runFn };
+
+    await escalateFlaggedWindows({ ...baseOpts(), sentences, flags, paras, body, analyzer });
+
+    expect(runFn).toHaveBeenCalledWith('ms-1', 1, 0, expect.any(String), STAGE_CALL);
   });
 
   it('(c) accepted only when characterId is on the roster AND the line has no tag-name evidence -> applied at 0.8, flag cleared', async () => {

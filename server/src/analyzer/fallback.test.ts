@@ -292,7 +292,7 @@ describe('FallbackAnalyzer — all three Analyzer methods share the same policy'
     const fallback = makeAnalyzer({});
     const f = new FallbackAnalyzer(primary, fallback);
 
-    const result = await f.runAttributionEscalation('m', 1, 'resolve these lines', CALL);
+    const result = await f.runAttributionEscalation('m', 1, 0, 'resolve these lines', CALL);
     expect(result).toBe(ESCALATION_RESULT);
     expect(primary.runAttributionEscalation).toHaveBeenCalledTimes(1);
     expect(fallback.runAttributionEscalation).not.toHaveBeenCalled();
@@ -303,7 +303,7 @@ describe('FallbackAnalyzer — all three Analyzer methods share the same policy'
     const fallback = makeAnalyzer({});
     const f = new FallbackAnalyzer(primary, fallback);
 
-    const result = await f.runAttributionEscalation('m', 1, 'resolve these lines', CALL);
+    const result = await f.runAttributionEscalation('m', 1, 0, 'resolve these lines', CALL);
     expect(result).toBeNull();
     expect(fallback.runAttributionEscalation).not.toHaveBeenCalled();
   });
@@ -314,7 +314,7 @@ describe('FallbackAnalyzer — all three Analyzer methods share the same policy'
     });
     const fallback = makeAnalyzer({});
     const f = new FallbackAnalyzer(primary, fallback);
-    const result = await f.runAttributionEscalation('m', 1, 'resolve these lines', CALL);
+    const result = await f.runAttributionEscalation('m', 1, 0, 'resolve these lines', CALL);
     expect(result).toBe(ESCALATION_RESULT);
     expect(primary.runAttributionEscalation).toHaveBeenCalledTimes(1);
     expect(fallback.runAttributionEscalation).toHaveBeenCalledTimes(1);
@@ -326,7 +326,7 @@ describe('FallbackAnalyzer — all three Analyzer methods share the same policy'
     });
     const fallback = makeAnalyzer({});
     const f = new FallbackAnalyzer(primary, fallback);
-    await expect(f.runAttributionEscalation('m', 1, 'resolve these lines', CALL)).rejects.toThrow(
+    await expect(f.runAttributionEscalation('m', 1, 0, 'resolve these lines', CALL)).rejects.toThrow(
       /boom/,
     );
     expect(fallback.runAttributionEscalation).not.toHaveBeenCalled();
@@ -339,7 +339,7 @@ describe('FallbackAnalyzer — all three Analyzer methods share the same policy'
     const fallback = makeAnalyzer({});
     const f = new FallbackAnalyzer(primary, fallback);
     await expect(
-      f.runAttributionEscalation('m', 1, 'resolve these lines', CALL),
+      f.runAttributionEscalation('m', 1, 0, 'resolve these lines', CALL),
     ).rejects.toBeInstanceOf(AnalysisAbortedError);
     expect(fallback.runAttributionEscalation).not.toHaveBeenCalled();
   });
