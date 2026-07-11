@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 ---
 
 # Cast design job — GPU-contention hardening and honest progress display
@@ -16,7 +16,7 @@ separate defects that compound:
    only. When a run is failing almost every character, `done` stays near 0 while `percent` still climbs
    toward 100 — the two numbers in one label tell contradictory stories.
 2. **Hardening defect (the actual bug worth fixing).** `/qwen/design-voice`
-   (`server/tts-sidecar/main.py:5514-5589`) catches *any* exception from `design_voice`, including a
+   (`server/tts-sidecar/main.py:5514-5600`) catches *any* exception from `design_voice`, including a
    `torch.cuda.OutOfMemoryError` caused by VRAM contention (e.g. another session's generation/analysis
    run holding the GPU) — and unlike four sibling sidecar routes, never checks whether that error should
    trigger the sidecar's own CUDA-poison-recovery restart. It collapses straight to
@@ -32,7 +32,7 @@ separate defects that compound:
 This spec fixes both, reusing existing plumbing rather than inventing new mechanisms. **Revised after an
 adversarial `assumption-checker` pass** (see §6) that found the original draft invented a "plain,
 non-poisoning OOM" category that contradicts this codebase's own established policy: `_CUDA_POISON_RE`
-(`main.py:498-503`) already classifies *any* `"CUDA out of memory"`-shaped message as poison, requiring
+(`main.py:498-505`) already classifies *any* `"CUDA out of memory"`-shaped message as poison, requiring
 the existing supervised-restart mechanism (`_mark_cuda_poisoned`, exit code 42) — the same four other
 call sites (`/transcribe`, `/embed`, and two more) already do this. The revised design brings
 `/qwen/design-voice` **and** `/qwen/mint-variant` (both currently missing this check entirely — a wider
@@ -96,10 +96,10 @@ the code path being extended).
 
 ### 4.1 Sidecar — bring OOM/poison handling to parity across all four `qwen.py` route handlers (`server/tts-sidecar/main.py`)
 
-`/qwen/design-voice` (~line 5573-5589) and `/qwen/mint-variant` (~line 5679-5681) are, today, the *only*
-two of the sidecar's six exception-prone routes with **no `_CUDA_POISON_RE` check at all** —
+`/qwen/design-voice` (handler spans ~5514-5600) and `/qwen/mint-variant` (~5595-5690) are, today, the
+*only* two of the sidecar's six exception-prone routes with **no `_CUDA_POISON_RE` check at all** —
 `/transcribe`, `/embed`, and two others already classify a poisoning CUDA error (which includes any
-`"CUDA out of memory"`-shaped message — see `_CUDA_POISON_RE`, `main.py:498-503`) and call
+`"CUDA out of memory"`-shaped message — see `_CUDA_POISON_RE`, `main.py:498-505`) and call
 `_mark_cuda_poisoned` to schedule the supervised exit-42 restart. Both design routes instead swallow
 *any* exception, poison included, into a bare `{"detail": "Internal error."}` 500 — so today a GPU-OOM
 during "Design full cast" doesn't even trigger the restart that would let the *next* attempt succeed
@@ -170,14 +170,18 @@ only `SIDECAR_DOWN_RE`-matching messages trigger the ride-out path. This spec re
    `ensureSidecarEngineReady` health-poll, which already treats a `poisoned: true` `/health` response as
    "keep waiting" — no new wait mechanism needed here, the existing one already does the right thing
    once §4.1 makes the sidecar actually report this class correctly.
-2. **GPU busy, no restart involved** — `code === 'GPU_BUSY'`, the Node-side `GpuBusyError` thrown by
-   `withGpuLoad` (`server/src/gpu/gpu-load.ts:10-16`) when the design call can't even get GPU room
-   because the local Ollama analyzer is resident and busy. The sidecar was never contacted and isn't
-   restarting, so polling its `/health` would resolve "ready" near-instantly — not a real wait, and not
-   what Goal 2 means by "ride out a brief contention." This class gets an explicit, bounded sleep instead
-   (new, small, matches the existing abort-aware `sleep(ms, signal)` idiom already duplicated in
-   `ensure-sidecar-loaded.ts:217`, `retry.ts:103`, `analyzer/gemini.ts:821` — one more local copy,
-   following the same established per-file convention rather than introducing a shared export).
+2. **GPU busy, no restart involved** — `code === 'GPU_BUSY'`, the `GpuBusyError` class (defined at
+   `server/src/gpu/gpu-load.ts:10-16`) thrown by `withGpuLoad` (`:28-44`) when the design call can't even
+   get GPU room because the local Ollama analyzer is resident and busy. Reusing `ensureSidecarEngineReady`
+   for this wait would not actually wait either, but not for the reason an earlier draft of this spec
+   assumed: it wraps its own poll in `withGpuLoad` too (`ensure-sidecar-loaded.ts:138`) — the exact same
+   contention check that just refused us — so it would immediately **re-throw another `GpuBusyError`**
+   rather than resolve "ready." That's not a real wait, just an instant same-condition bounce. This class
+   gets an explicit, bounded sleep instead — a plain timed pause outside any GPU-eligibility check, which
+   is what actually gives the analyzer time to free up (new, small, matches the existing abort-aware
+   `sleep(ms, signal)` idiom already duplicated in `ensure-sidecar-loaded.ts:217`, `retry.ts:103`,
+   `analyzer/gemini.ts:821` — one more local copy, following the same established per-file convention
+   rather than introducing a shared export).
 
 ```ts
 // SIDECAR_DOWN_RE (cast-design.ts:97) widens to also recognize the existing
@@ -254,7 +258,15 @@ if (isSidecarRestartClass(e, message)) {
 }
 /* Per-character failure — record it and move on. (unchanged) */
 job.failures.push({ characterId, name: character.name ?? characterId, error: message });
+broadcast(job, { type: 'character_failed', characterId, name: character.name ?? characterId, errorReason: message });
+break; // exits the for(;;) retry loop — load-bearing, must be preserved (cast-design.ts:435 today)
 ```
+
+(Implementation note: the snippet above shows only the two new/changed branches plus the tail of the
+existing fallthrough for context — the `character_failed` broadcast and the trailing `break` out of the
+`for (;;)` retry loop are today's existing code, not new, but MUST survive the restructure. An
+implementer copying this snippet literally without them would leave the retry loop unable to exit on an
+ordinary per-character failure.)
 
 Two distinct `code`s are kept on the final `endJob` — `sidecar_unavailable` (unchanged name; now also
 covers the poison-restart case, which conceptually *is* "the sidecar is down/restarting") and
@@ -375,6 +387,19 @@ mint-variant's `base17-unavailable` 503 could have been misclassified as GPU con
 mint-variant OOM path (originally a stated non-goal) is now in scope for the same fix as design-voice,
 since the review confirmed it shares the identical gap and the real screenshot that motivated this spec
 involved a scope mixing both base and variant work.
+
+**A second, independent Opus pass** re-verified the revised text against the real code end-to-end
+(`SidecarDesignError.code` parsing, `GpuBusyError` propagation through the single-design route, the
+mint-variant `except` clause ordering, the widened `SIDECAR_DOWN_RE` for false positives, the
+persona-prepass/encode steps as a possible third OOM site) and reported the design as structurally
+correct, with three sub-critical write-up issues, all fixed in place: §4.2's GPU_BUSY rationale had the
+cause and effect backwards (fixed — `ensureSidecarEngineReady` would re-throw `GpuBusyError`, not
+resolve "ready," for that class), the restructured-loop snippet omitted the load-bearing
+`character_failed` broadcast and trailing `break` from the existing fallthrough (fixed — now shown
+explicitly with an implementer note), and a few line-number citations had drifted (fixed). The
+persona-prepass/encode question was confirmed genuinely out of scope: persona generation runs through
+the separate Ollama analyzer process (no sidecar CUDA involvement) and the encode step is CPU-only
+ffmpeg.
 
 ## 7. Ship notes
 
