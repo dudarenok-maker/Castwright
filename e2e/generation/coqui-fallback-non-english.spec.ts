@@ -8,15 +8,18 @@
  * which mock-mode generation never calls: the frontend's mock generation
  * stream (src/store/generation-stream-runner.ts) just plays back canned
  * `chapter_progress`/`chapter_complete` events — it has no model of per-
- * character engine routing, so it can never produce a `renderedFallbackEngine`
- * value without fabricating new mock-generation internals (out of scope here;
- * that render-time contract is already pinned server-side by
- * `server/src/tts/synthesise-chapter-coqui-fallback.test.ts` and the
- * "Fallback (Coqui)" pill itself is unit-pinned by
- * `src/lib/voice-status.test.ts`).
+ * character engine routing, so it can never produce that fact by actually
+ * running a mock render (out of scope here; the server-side render contract
+ * is pinned by `server/src/tts/synthesise-chapter-coqui-fallback.test.ts`).
+ * What e2e CAN and does assert directly is the resulting UI: dispatching the
+ * real `cast/setRenderedFallback` reducer (src/store/cast-slice.ts) — the
+ * exact action the book-state GET's hydration path fires — and checking the
+ * "Fallback (Coqui)" status pill (src/lib/voice-status.ts) actually renders
+ * on the character's cast row, rather than only unit-pinning the resolver
+ * (`src/lib/voice-status.test.ts`).
  *
- * What mock mode CAN exercise deterministically, end-to-end, is the pair of
- * UI seams this plan actually wires ahead of a real render:
+ * This spec exercises three UI seams this plan wires ahead of / around a
+ * real render:
  *
  *   (a) Task 9 — a Coqui-eligible non-English book (ru) unlocks the
  *       profile-drawer's per-character engine picker to Qwen + Coqui,
@@ -24,11 +27,15 @@
  *   (b) Task 10 — the pre-flight voice-readiness gate offers a
  *       "Proceed anyway" escape hatch naming Coqui (not the still-
  *       unsupported-language hard block) for that same book.
+ *   (c) The "Fallback (Coqui)" status pill itself renders on a cast row once
+ *       `renderedFallbackByCharacter` carries a `'coqui'` entry for that
+ *       character — asserted via a direct redux dispatch of the real
+ *       reducer, not a mock-generation walk (see above).
  *
- * Both cross the router/redux/layout seams the e2e bar exists for, and both
- * are fully deterministic in mock mode. `library.books` is never populated
- * for a freshly analysed book in mock mode (nothing re-fetches it on this
- * walk), so — mirroring `e2e/cast-first-landing-and-voice-gate.spec.ts`'s
+ * All three cross the router/redux/layout seams the e2e bar exists for, and
+ * all are fully deterministic in mock mode. `library.books` is never
+ * populated for a freshly analysed book in mock mode (nothing re-fetches it
+ * on this walk), so — mirroring `e2e/cast-first-landing-and-voice-gate.spec.ts`'s
  * own `seedNonEnglishBook` helper — this spec seeds the active book's
  * library entry directly via a redux dispatch once the real bookId is known,
  * carrying `eligibleTtsEngines: ['qwen', 'coqui']` (the shape Task 3/4 wire
@@ -115,9 +122,8 @@ async function seedRuCoquiEligibleBook(page: Page, bookId: string): Promise<void
 /* Boot fresh, paste the canonical Russian fixture, run it through the mock
    Cyrillic-ratio language heuristic, confirm the auto-detected language is
    Russian, click through to the cast view, then seed the Coqui-eligible
-   library entry both downstream tests need. Returns the active book's id
-   (unused by callers today, but kept for parity with the source pattern). */
-async function importRuFixtureAndReachCast(page: Page): Promise<string> {
+   library entry both downstream tests need. */
+async function importRuFixtureAndReachCast(page: Page): Promise<void> {
   await seedQwenProject(page);
   await page.goto('/');
   await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
@@ -164,7 +170,24 @@ async function importRuFixtureAndReachCast(page: Page): Promise<string> {
 
   const bookId = await getBookId(page);
   await seedRuCoquiEligibleBook(page, bookId);
-  return bookId;
+}
+
+/* Directly dispatches the real `cast/setRenderedFallback` reducer
+   (src/store/cast-slice.ts) to stamp a character as having last rendered
+   through the Coqui fallback — the same render-time fact the server's
+   `applyQwenFallback` (server/src/tts/synthesise-chapter.ts) stamps for
+   real, which mock-mode generation has no way to reproduce (see header).
+   Mirrors the file's existing `window.__store__.dispatch(...)` seam used by
+   `seedRuCoquiEligibleBook` above. The reducer replaces the whole map, so
+   this dispatch is a full `{ [characterId]: engine }` map, not a merge. */
+async function seedRenderedCoquiFallback(page: Page, characterId: string): Promise<void> {
+  await page.evaluate((charId) => {
+    const store = (window as unknown as { __store__: { dispatch(a: unknown): void } }).__store__;
+    store.dispatch({
+      type: 'cast/setRenderedFallback',
+      payload: { [charId]: 'coqui' },
+    });
+  }, characterId);
 }
 
 test.describe('fs-60 — Russian book Coqui-fallback eligibility', () => {
@@ -226,10 +249,34 @@ test.describe('fs-60 — Russian book Coqui-fallback eligibility', () => {
        Coqui fallback (server/src/tts/synthesise-chapter.ts's
        applyQwenFallback), surfacing the "Fallback (Coqui)" status pill
        (src/lib/voice-status.ts) once complete — pinned server-side by
-       synthesise-chapter-coqui-fallback.test.ts and unit-pinned by
-       voice-status.test.ts; not reproducible in mock mode (see header). */
+       synthesise-chapter-coqui-fallback.test.ts. The pill's own render onto
+       a cast row is asserted directly (without running a real render) by
+       the next test, via a direct dispatch of the reducer that stamps it. */
     await expect(page.locator('span', { hasText: /^Generating$/ }).first()).toBeVisible({
       timeout: 20_000,
     });
+  });
+
+  test('a character rendered via Coqui fallback shows the "Fallback (Coqui)" status pill', async ({
+    page,
+  }) => {
+    await importRuFixtureAndReachCast(page);
+
+    const narratorRow = page.getByTestId('cast-row-narrator');
+    await expect(narratorRow).toBeVisible({ timeout: 10_000 });
+    await expect(narratorRow.getByText('Fallback (Coqui)')).toHaveCount(0);
+
+    /* The real fs-60 render-time fact, dispatched directly rather than
+       walked through a mock generation (mock generation has no per-
+       character engine-routing model — see header). This is the exact
+       action + payload shape the book-state GET's hydration path fires
+       (src/store/cast-slice.ts's `setRenderedFallback`). */
+    await seedRenderedCoquiFallback(page, 'narrator');
+
+    /* fs-60 — the "Fallback (Coqui)" status pill (src/lib/voice-status.ts)
+       renders on the Narrator's cast row once the render-time fact says the
+       last render fell back to Coqui — the brief's actual ask, beyond the
+       two pre-render UI-seam assertions above. */
+    await expect(narratorRow.getByText('Fallback (Coqui)')).toBeVisible({ timeout: 10_000 });
   });
 });
