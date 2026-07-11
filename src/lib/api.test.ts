@@ -15,6 +15,9 @@ import {
   loadMockReleaseNotes,
   trimUnreleasedReleaseNotes,
   nextMinorVersion,
+  mockGetAppInfo,
+  mockDismissWhatsNew,
+  _resetMockAppInfo,
   readCastDesignStream,
   mockCreateCharacter,
   mockGetScriptReviewState,
@@ -248,6 +251,40 @@ describe('trimUnreleasedReleaseNotes (mid-cycle in-progress section)', () => {
   it('does not match a version embedded in a longer version string', () => {
     const md = '# Castwright 11.2.0\n\n- Big.\n\n# Castwright 1.2.0\n\n- Small.\n';
     expect(trimUnreleasedReleaseNotes(md, '1.2.0').startsWith('# Castwright 1.2.0')).toBe(true);
+  });
+
+  it('is not defeated by an unreleased heading that merely mentions the running version', () => {
+    const md =
+      '# Castwright 1.13.0 — follow-ups to 1.12.2\n\n- Unreleased bullet.\n\n# Castwright 1.12.2\n\n- Shipped bullet.\n';
+    const out = trimUnreleasedReleaseNotes(md, '1.12.2');
+    expect(out.startsWith('# Castwright 1.12.2')).toBe(true);
+    expect(out).not.toContain('Unreleased bullet');
+  });
+
+  it('a hotfix version with no section of its own still drops newer sections', () => {
+    // package.json cut to 1.12.3 without a notes section; 1.13.0 is in progress.
+    const out = trimUnreleasedReleaseNotes(MD, '1.12.3');
+    expect(out.startsWith('# Castwright 1.12.2')).toBe(true);
+    expect(out).not.toContain('Unreleased bullet');
+  });
+});
+
+describe('demoWhatsNew dismiss latch (seam → dismiss → refetch)', () => {
+  beforeEach(() => {
+    _resetMockAppInfo();
+    window.history.replaceState(null, '', '/?demoWhatsNew=1');
+  });
+  afterEach(() => {
+    window.history.replaceState(null, '', '/');
+    _resetMockAppInfo();
+  });
+
+  it('the seam shows the banner, and Dismiss keeps it dismissed across a refetch', async () => {
+    expect((await mockGetAppInfo()).showWhatsNew).toBe(true);
+    await mockDismissWhatsNew();
+    /* The regression this pins: the refetch used to OR the URL override back
+       in, resurrecting the banner right after a successful dismiss. */
+    expect((await mockGetAppInfo()).showWhatsNew).toBe(false);
   });
 });
 

@@ -6299,31 +6299,59 @@ export function buildMockAppInfo(releaseNotes: string): AppInfo {
 /* Between cuts, RELEASE_NOTES.md tops with the NEXT version's in-progress
    section (CONTRIBUTING.md "Release notes" bootstrap) while package.json still
    carries the released version — serving that verbatim would head the
-   What's-new banner "What's new in v<released>" over unreleased bullets. Drop
-   any leading sections newer than the running version; a version with no
-   matching section (e.g. Vitest's 0.0.0-dev sentinel) serves the document
-   unchanged. Pure + exported so it's unit-tested directly. */
+   What's-new banner "What's new in v<released>" over unreleased bullets. Keep
+   from the first section whose OWN version (first semver in the heading, the
+   same rule parseReleaseNotes uses) is at or below the running version — not a
+   substring match, which an in-progress heading that merely mentions the
+   shipped version ("1.13.0 — follow-ups to 1.12.2") would defeat. No such
+   section (e.g. Vitest's 0.0.0-dev sentinel, or a bare document) serves the
+   document unchanged. Pure + exported so it's unit-tested directly. */
 export function trimUnreleasedReleaseNotes(md: string, version: string): string {
-  const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const versionRe = new RegExp(`(^|[^\\d.])${escaped}([^\\d.]|$)`);
+  const parse = (v: string): number[] | null => {
+    const m = /(\d+)\.(\d+)\.(\d+)/.exec(v);
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+  };
+  const running = parse(version);
+  if (!running) return md;
+  const atOrBelowRunning = (v: number[]) =>
+    v[0] !== running[0] ? v[0] < running[0] : v[1] !== running[1] ? v[1] < running[1] : v[2] <= running[2];
   const lines = md.split(/\r?\n/);
-  const start = lines.findIndex((l) => /^#{1,2}\s+/.test(l.trim()) && versionRe.test(l));
+  const start = lines.findIndex((l) => {
+    const heading = /^#{1,2}\s+(.*)$/.exec(l.trim());
+    if (!heading) return false;
+    const v = parse(heading[1]);
+    return v != null && atOrBelowRunning(v);
+  });
   return start >= 0 ? lines.slice(start).join('\n') : md;
 }
 
 /* The real bundled RELEASE_NOTES.md, loaded lazily via dynamic import so the
    (growing, ~40 KB) document lands in a mock-only chunk instead of the real
    production bundle — a static `?raw` import evaluated at module scope would
-   defeat the USE_MOCKS tree-shake. Exported for the unit test that pins
+   defeat the USE_MOCKS tree-shake. A failed chunk load degrades to a minimal
+   stub instead of rejecting: the mock /api/info path (version pill, Account,
+   the strict pinokio-install-ready capture scene) was infallible before the
+   lazy load and must stay that way. Exported for the unit test that pins
    "serves the real notes, not a frozen fixture". */
 export async function loadMockReleaseNotes(): Promise<string> {
-  const md = (await import('../../RELEASE_NOTES.md?raw')).default;
-  return trimUnreleasedReleaseNotes(md, buildInfo.version);
+  try {
+    const md = (await import('../../RELEASE_NOTES.md?raw')).default;
+    return trimUnreleasedReleaseNotes(md, buildInfo.version);
+  } catch {
+    return `# Castwright ${buildInfo.version}\n`;
+  }
 }
 
 let mockAppInfo: AppInfo | null = null;
 async function mockAppInfoState(): Promise<AppInfo> {
   return (mockAppInfo ??= buildMockAppInfo(await loadMockReleaseNotes()));
+}
+/* Test seam — clears the memoized app info AND the dismiss latch below, so
+   unit tests exercising the seam/dismiss round-trip stay order-independent
+   (same pattern as _resetMockListenStats). */
+export function _resetMockAppInfo(): void {
+  mockAppInfo = null;
+  demoWhatsNewDismissed = false;
 }
 /* fe-27 — e2e seam: `?e2eUpdate=<version>` forces an "update available" mock so
    the Playwright notifier spec has a deterministic trigger (mock mode is
@@ -6354,7 +6382,9 @@ export function readDemoWhatsNewOverride(search: string): boolean {
    rather than OR-ing itself back in on the post-dismiss refetch. */
 let demoWhatsNewDismissed = false;
 
-async function mockGetAppInfo(): Promise<AppInfo> {
+/* Exported (with mockDismissWhatsNew and _resetMockAppInfo) so the seam →
+   dismiss → refetch round-trip is unit-tested directly. */
+export async function mockGetAppInfo(): Promise<AppInfo> {
   await wait(40);
   const state = await mockAppInfoState();
   const search = typeof window !== 'undefined' ? window.location.search : '';
@@ -6371,11 +6401,12 @@ async function mockGetAppInfo(): Promise<AppInfo> {
    card renders its steady state under VITE_USE_MOCKS=true. */
 async function mockGetUpdateStatus(): Promise<UpdateStatus> {
   await wait(20);
-  const { appVersion } = await mockAppInfoState();
+  /* appVersion is buildInfo.version by construction — read it directly rather
+     than paying the lazy release-notes chunk load for a version string. */
   return {
     reachable: true,
-    currentVersion: appVersion,
-    latestVersion: appVersion,
+    currentVersion: buildInfo.version,
+    latestVersion: buildInfo.version,
     updateAvailable: false,
     url: null,
   };
@@ -6386,10 +6417,11 @@ async function mockCheckCompanionApk(): Promise<CompanionApkAvailability> {
   await wait(20);
   return { available: false, sizeBytes: null };
 }
-async function mockDismissWhatsNew(): Promise<void> {
+export async function mockDismissWhatsNew(): Promise<void> {
   await wait(20);
+  /* The latch alone carries the dismiss: buildMockAppInfo hardcodes
+     showWhatsNew:false, so there is no state write to make. */
   demoWhatsNewDismissed = true;
-  mockAppInfo = { ...(await mockAppInfoState()), showWhatsNew: false };
 }
 /* Next minor above the running version, so the staged mock candidate stays a
    genuine upgrade over the version-tracking chrome (was frozen at
@@ -9557,16 +9589,20 @@ const mock = {
       at: new Date(Date.parse('2026-06-01T09:00:00Z') + (6 - i) * 9 * 60_000).toISOString(),
     }));
     /* Rollup computed FROM the rows so the summary strip can never contradict
-       the chapter table rendered beside it. */
+       the chapter table rendered beside it — including the chapter rate, which
+       falls out of the rows' fixed timestamp spacing. */
     const audioSec = recentChapters.reduce((s, c) => s + c.audioSec, 0);
     const synthSec = recentChapters.reduce((s, c) => s + c.synthSec, 0);
+    const spanHours =
+      (Date.parse(recentChapters[0].at) - Date.parse(recentChapters[recentChapters.length - 1].at)) /
+      3_600_000;
     return {
       chapters: recentChapters.length,
       audioSec,
       synthSec,
       rtf: Math.round((synthSec / audioSec) * 100) / 100,
       xRealtime: Math.round((audioSec / synthSec) * 100) / 100,
-      chaptersPerHour: 6.4,
+      chaptersPerHour: Math.round(((recentChapters.length - 1) / spanHours) * 10) / 10,
       last: null,
       updatedAt: recentChapters[0].at,
       liveBatchRtf: null,

@@ -31,6 +31,14 @@ test.describe('fs-1 — in-app upgrade flow', () => {
     const confirm = page.getByTestId('upgrade-confirm');
     await expect(confirm).toBeVisible();
     await expect(confirm.getByText(/→ v\d+\.\d+\.\d+/)).toBeVisible();
+    /* The staged candidate must be a DIFFERENT version from the running one —
+       a regression that stages the running version itself would render a
+       no-op "vX → vX" dialog and still satisfy the bare format match above. */
+    const delta = /v(\d+\.\d+\.\d+(?:[-\w.]*)?)\s*→\s*v(\d+\.\d+\.\d+(?:[-\w.]*)?)/.exec(
+      (await confirm.textContent()) ?? '',
+    );
+    expect(delta, 'confirm dialog shows a "vX → vY" version delta').not.toBeNull();
+    expect(delta![1]).not.toBe(delta![2]);
 
     await confirm.getByRole('button', { name: 'Apply upgrade' }).click();
 
