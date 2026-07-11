@@ -3,10 +3,14 @@
    "forbidKokoroFallback" describe blocks in synthesise-chapter.test.ts — this
    is the Coqui-eligible-language counterpart to the still-unsupported-language
    fail-loud case those blocks already pin. */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { synthesiseChapter, MissingDesignedVoiceError, type CastCharacter } from './synthesise-chapter.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const COQUI_VOICE_RE = /^[A-Z][a-z]+ [A-Z][a-z]+$/; // "Claribel Dervla"-shaped catalog names
 
@@ -104,5 +108,133 @@ describe('synthesiseChapter — Qwen→Coqui fallback (fs-60)', () => {
     expect(coqui.calls).toHaveLength(0);
     const body = result.segments.find((s) => s.kind !== 'title');
     expect(body?.renderedFallbackEngine).toBeUndefined();
+  });
+
+  it('serializes a mixed Qwen+Coqui chapter: all Qwen segments render before any Coqui segment starts', async () => {
+    const cast: CastCharacter[] = [
+      { id: 'marlow', name: 'Marlow', gender: 'male', overrideTtsVoices: { qwen: { name: 'qwen-marlow' } } },
+      { id: 'wren', name: 'Wren', gender: 'female' }, // undesigned -> falls back to Coqui
+    ];
+    const { qwen, coqui } = multiEngine();
+    const callOrder: string[] = [];
+    const trackedQwen = {
+      ...qwen,
+      async synthesize(input: SynthesizeInput) {
+        callOrder.push('qwen');
+        return qwen.synthesize(input);
+      },
+    };
+    const trackedCoqui = {
+      ...coqui,
+      async synthesize(input: SynthesizeInput) {
+        callOrder.push('coqui');
+        return coqui.synthesize(input);
+      },
+    };
+    const tracked = (e: string) =>
+      e === 'coqui'
+        ? { provider: trackedCoqui, modelKey: 'coqui-xtts-v2' as const }
+        : { provider: trackedQwen, modelKey: 'qwen3-tts-0.6b' as const };
+
+    vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'marlow'), sentence(2, 'wren'), sentence(3, 'marlow')],
+      cast,
+      provider: trackedQwen,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      resolveForEngine: tracked,
+      forbidKokoroFallback: true,
+      coquiEligible: true,
+      bookLanguage: 'ru',
+    });
+
+    // All 'qwen' entries must precede all 'coqui' entries — never interleaved.
+    const firstCoqui = callOrder.indexOf('coqui');
+    const lastQwen = callOrder.lastIndexOf('qwen');
+    expect(firstCoqui).toBeGreaterThan(-1);
+    expect(lastQwen).toBeLessThan(firstCoqui);
+    // Output stays in original sentence-index order regardless of dispatch order.
+    const bodySegments = result.segments.filter((s) => s.kind !== 'title');
+    expect(bodySegments.map((s) => s.sentenceIds?.[0])).toEqual([1, 2, 3]);
+  });
+
+  it('serializes a mixed Qwen+Coqui segment-QA re-record round too, not just the initial dispatch', async () => {
+    const cast: CastCharacter[] = [
+      { id: 'marlow', name: 'Marlow', gender: 'male', overrideTtsVoices: { qwen: { name: 'qwen-marlow' } } },
+      { id: 'wren', name: 'Wren', gender: 'female' }, // undesigned -> falls back to Coqui
+    ];
+    const callOrder: string[] = [];
+    let qwenCallCount = 0;
+    const trackedQwen: TtsProvider = {
+      async synthesize(): Promise<SynthesizeOutput> {
+        qwenCallCount += 1;
+        callOrder.push('qwen');
+        /* Marlow is the chapter's anchor group (groups[0]) — its FIRST call
+           renders silence (fails segment-QA, triggers a re-record); the
+           re-record call renders real audio. */
+        const silent = qwenCallCount === 1;
+        return { pcm: Buffer.alloc(silent ? 4 : 4800, 0), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+    };
+    let coquiCallCount = 0;
+    const trackedCoqui: TtsProvider = {
+      async synthesize(): Promise<SynthesizeOutput> {
+        coquiCallCount += 1;
+        callOrder.push('coqui');
+        /* Wren is the (coqui-only) body dispatch — its FIRST call also renders
+           silence, so it's suspect too and joins the same re-record round. */
+        const silent = coquiCallCount === 1;
+        return { pcm: Buffer.alloc(silent ? 4 : 4800, 0), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+    };
+    const tracked = (e: string) =>
+      e === 'coqui'
+        ? { provider: trackedCoqui, modelKey: 'coqui-xtts-v2' as const }
+        : { provider: trackedQwen, modelKey: 'qwen3-tts-0.6b' as const };
+
+    /* fetch is only ever called by evictQwenForCoquiPhase in this test (fully
+       mocked providers, no other network path) — track it in the SAME
+       callOrder sequence so the assertion below can see exactly where the
+       evict happened relative to the qwen/coqui calls. */
+    vi.spyOn(global, 'fetch').mockImplementation(async () => {
+      callOrder.push('evict');
+      return new Response(null, { status: 200 });
+    });
+
+    /* Marks the callOrder index where the re-record round's OWN dispatch
+       begins — fires once per pending group, all BEFORE synthGroupsSerialized
+       is invoked for that round (see synthesise-chapter.ts's re-record loop),
+       so the first call gives the exact boundary. Anchoring the assertion to
+       this boundary (rather than a global ordering across the whole test)
+       avoids the anchor group's own single, un-serialized synth call — which
+       can legitimately produce a 'coqui'/'qwen' entry before the re-record
+       round even starts — from making the assertion unsatisfiable. */
+    let rerecordStartIndex = -1;
+    await synthesiseChapter({
+      sentences: [sentence(1, 'marlow'), sentence(2, 'wren')],
+      cast,
+      provider: trackedQwen,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      resolveForEngine: tracked,
+      forbidKokoroFallback: true,
+      coquiEligible: true,
+      bookLanguage: 'ru',
+      maxSegmentRerecords: 1,
+      onSegmentRerecord: () => {
+        if (rerecordStartIndex === -1) rerecordStartIndex = callOrder.length;
+      },
+    });
+
+    expect(rerecordStartIndex).toBeGreaterThan(-1);
+    /* Within the re-record round specifically: qwen renders, THEN an evict,
+       THEN coqui renders — never interleaved, never skipping the evict. This
+       is the exact sequence that only exists once the re-record loop is
+       routed through synthGroupsSerialized instead of synthGroupsBatched
+       directly; on the unfixed code this would read ['qwen', 'coqui'] with no
+       'evict' entry at all. */
+    expect(callOrder.slice(rerecordStartIndex)).toEqual(['qwen', 'evict', 'coqui']);
   });
 });
