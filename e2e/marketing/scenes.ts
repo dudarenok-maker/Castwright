@@ -744,15 +744,17 @@ export const SCENES: Scene[] = [
        the new Captions tile shows alongside its siblings. Fulfills the
        screenshot docs/wiki/Exporting.md's "Choose a format" section has been
        missing since the format-tile row was first documented text-only.
-       5 tiles wrap to a second row under the grid's `lg:grid-cols-4` cap —
-       scrollIntoView-ing just the Captions tile cropped the first row's
-       titles off the top of a fixed viewport. Centering on the section's own
-       heading instead keeps both rows in frame at the stock viewport height. */
+       5 tiles wrap to a second row under the grid's `lg:grid-cols-4` cap.
+       scrollIntoView-ing the Captions tile cropped the first row's titles off
+       the top; centering on the section heading instead still cropped
+       Captions down to just its header (caught in review — the whole point
+       of this scene is showing Captions in full alongside its siblings).
+       fullPage instead, same fix as 'chapter-suspect'/'library-table' above. */
     id: 'export-download-tiles',
     hash: '#/books/hollow-tide-1/listen',
     viewports: ['desktop'],
     waitFor: '[data-testid="download-tile-captions"]',
-    scrollTo: 'text=Or download a file',
+    fullPage: true,
     strict: true,
   },
   {
