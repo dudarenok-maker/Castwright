@@ -147,7 +147,7 @@ jobs:
           match '^(e2e/|playwright\.config\.ts$)' && e2e=true
           match '^scripts/' && scripts=true
           match '^(\.husky/|scripts/run-hooks-tests\.mjs$|scripts/validate-commit-msg\.mjs$)' && hooks=true
-          match '^(pinokio/|scripts/run-pinokio-tests\.mjs$)' && pinokio=true
+          match '^(pinokio-scripts/|scripts/run-pinokio-tests\.mjs$)' && pinokio=true
           # `shared` = a ROOT dependency manifest changed → treat as global
           # (a dep/lockfile bump can affect every leg), so run everything.
           match '^(package\.json|package-lock\.json)$' && shared=true

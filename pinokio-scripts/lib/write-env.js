@@ -2,7 +2,7 @@
 // <appDir>/workspace — but only if server/.env does not already exist
 // (idempotent, so update/re-install preserve a user's edits).
 //
-// CLI: `node pinokio/lib/write-env.js [appDir]` — invoked by pinokio/install.js.
+// CLI: `node pinokio-scripts/lib/write-env.js [appDir]` — invoked by pinokio-scripts/install.js.
 
 const { existsSync, readFileSync, writeFileSync } = require('node:fs');
 const { resolve } = require('node:path');

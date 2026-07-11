@@ -3,7 +3,7 @@
 // is a defensive sweep: stop:prod reads the pid files, tree-kills any survivors,
 // and sweeps :8080/:9000 — covering the case where a child outlived the signal.
 //
-// This script lives in pinokio/, one level below the app root — `path: '..'`
+// This script lives in pinokio-scripts/, one level below the app root — `path: '..'`
 // is required so the shell resolves against the app root (see install.js).
 const APP_ROOT = '..';
 const CONDA = { path: 'env', python: '3.12' };
