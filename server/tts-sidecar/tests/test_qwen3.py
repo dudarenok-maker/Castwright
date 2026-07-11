@@ -1928,10 +1928,19 @@ def test_mint_variant_route_503_not_installed(fake_qwen_runtime, monkeypatch):
     assert body["detail"] == "Qwen 1.7B-Base unavailable (not-installed)."
 
 
-def test_mint_variant_route_500_on_oom(fake_qwen_runtime, monkeypatch):
-    """OOM during base17 load → generic 500, not a 503 fallback signal."""
+def test_mint_variant_route_503_poisoned_on_oom(fake_qwen_runtime, monkeypatch):
+    """OOM during base17 load → classified 503/gpu_poisoned (triggers the
+    sidecar's supervised restart), NOT the base17-unavailable 503 fallback
+    signal — an OOM must never be silently treated as 'model missing/
+    corrupt, fall back to design-voice'. Updated by the cast-design-job-
+    hardening fix (docs/superpowers/specs/2026-07-11-cast-design-job-
+    hardening-design.md §4.1): this route previously swallowed OOM into a
+    generic, unclassified 500 (this test used to assert exactly that); it
+    now participates in the same CUDA-poison-detection/restart mechanism
+    /transcribe, /embed, and /qwen/design-voice already use."""
     import main
     eng = fake_qwen_runtime["engine"]
+    monkeypatch.setattr(main, "_mark_cuda_poisoned", lambda reason: None)
     # Design the base voice so the 409 path isn't hit.
     eng.design_voice("v1", "A warm narrator.", "English", None)
     monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
@@ -1943,8 +1952,10 @@ def test_mint_variant_route_500_on_oom(fake_qwen_runtime, monkeypatch):
         "variantVoiceId": "v1__angry",
         "emotionInstruct": "Delivered angrily.",
     })
-    assert r.status_code == 500
-    assert "code" not in r.json()  # NOT a fallback signal
+    assert r.status_code == 503
+    body = r.json()
+    assert body["code"] == "gpu_poisoned"
+    assert body["code"] != "base17-unavailable"  # NOT a fallback signal
 
 
 def test_mint_variant_route_500_on_postload_failure_not_corrupt(fake_qwen_runtime, monkeypatch):

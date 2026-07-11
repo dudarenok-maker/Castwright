@@ -242,6 +242,17 @@ export const HELP_TOPICS: HelpTopic[] = [
       'it up on its next scheduled library scan.',
   },
   {
+    id: 'caption-export',
+    title: 'Can I get captions or subtitles for a book?',
+    body:
+      'Yes — on the Listen view, under "Or download a file", the Captions tile writes an .srt or ' +
+      '.vtt file alongside the audio. Choose the granularity — line, sentence, or word — and the ' +
+      'scope — the whole book or a single chapter. Line and sentence captions are read straight ' +
+      "from the book's own alignment, so there's nothing to re-render; word-level timing runs the " +
+      'chapter through the local Whisper model for the finer grain a demo clip wants. The file ' +
+      "lands in the book's folder with the rest of your exports.",
+  },
+  {
     id: 'analysis-reloads-or-gpu-busy',
     title: 'Analysis keeps reloading the model, or says "GPU busy"',
     body:

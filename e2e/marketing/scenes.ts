@@ -11,6 +11,10 @@ export interface Scene {
   id: string;
   /** Hash route to navigate to (must start with `#/`). */
   hash: string;
+  /** Optional query string (must start with `?`) prepended before the hash —
+      e.g. `?demoWhatsNew=1` for the mock api's URL seams (api.ts reads
+      window.location.search, which hash navigation alone can't set). */
+  search?: string;
   /** Which viewports to capture. Defaults to ['desktop'] when omitted. */
   viewports?: Viewport[];
   /** Optional selector to await before the shot (ensures the view painted). */
@@ -260,6 +264,24 @@ export const SCENES: Scene[] = [
     id: 'setup-wizard',
     hash: '#/setup',
     viewports: ['desktop'],
+  },
+  {
+    /* Pinokio one-click-install hero (castwright.ai v1.12 blog post): the
+       first-run setup check in its fully-ready state — every row green, no
+       "needs attention" / "Fix setup" anywhere — with the What's-new banner
+       (forced on via the mock api's ?demoWhatsNew=1 seam) dating the shot to
+       the current release above the clean checklist. Same route as
+       'setup-wizard' above; kept as its own scene because the site references
+       this exact file stem and the banner is wanted here but not there. */
+    id: 'pinokio-install-ready',
+    hash: '#/setup',
+    search: '?demoWhatsNew=1',
+    viewports: ['desktop'],
+    waitFor: 'text=Everything’s ready',
+    /* No action — waitForAfterAction runs regardless, so under strict this
+       enforces the seam-driven banner too, not just the ready checklist. */
+    waitForAfterAction: '[data-testid="whats-new-banner"]',
+    strict: true,
   },
   {
     id: 'help-getting-started',

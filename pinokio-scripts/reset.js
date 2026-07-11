@@ -1,12 +1,12 @@
 // Castwright — Pinokio reset. Remove derived runtime (venv, node_modules, dist),
 // then reinstall from scratch. Does NOT touch server/.env or workspace/ (user data).
 // Native `fs.rm` is the idiomatic, cross-platform reset primitive. script.start uri
-// is sibling-relative to this script's dir (pinokio/), so 'install.js'.
+// is sibling-relative to this script's dir (pinokio-scripts/), so 'install.js'.
 //
-// This script lives in pinokio/, one level below the app root — every fs.rm
+// This script lives in pinokio-scripts/, one level below the app root — every fs.rm
 // `path` is resolved relative to THIS script's own directory (per Pinokio's
 // "distributed file URI" rule), so each target needs a `../` prefix to reach
-// the app root instead of pinokio/ (see install.js's header comment). The
+// the app root instead of pinokio-scripts/ (see install.js's header comment). The
 // script.start uri is unaffected — sibling-relative resolution is correct as-is.
 module.exports = {
   run: [

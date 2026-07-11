@@ -1,8 +1,8 @@
 // Resolve AND checkout the latest PUBLISHED Castwright release tag.
 // Pure functions (unit-tested) + a CLI (acceptance-tested) at the bottom.
 //
-// CLI (invoked by pinokio/install.js + pinokio/update.js as a SINGLE shell.run
-// step — `node pinokio/lib/resolve-release.js`): git-fetches tags, resolves the
+// CLI (invoked by pinokio-scripts/install.js + pinokio-scripts/update.js as a SINGLE shell.run
+// step — `node pinokio-scripts/lib/resolve-release.js`): git-fetches tags, resolves the
 // latest published release, `git checkout`s it, and guards that the checked-out
 // tree actually contains the pinokio scripts. Doing fetch+checkout INSIDE the
 // node process avoids fragile cross-step Pinokio variable capture and
@@ -87,10 +87,10 @@ async function main() {
   process.stderr.write(`[resolve-release] checking out ${tag}\n`);
   execFileSync('git', ['checkout', tag], { stdio: 'inherit' });
   // Guard against a release that predates Pinokio support: git checkout to such a
-  // tag would DELETE pinokio/ from the tree, breaking Start/Stop/Update.
-  if (!existsSync('pinokio/start.js')) {
+  // tag would DELETE pinokio-scripts/ from the tree, breaking Start/Stop/Update.
+  if (!existsSync('pinokio-scripts/start.js')) {
     process.stderr.write(
-      `[resolve-release] release ${tag} predates Pinokio support (pinokio/ scripts absent ` +
+      `[resolve-release] release ${tag} predates Pinokio support (pinokio-scripts/ scripts absent ` +
         `after checkout). Update Pinokio or wait for the next release that includes them.\n`,
     );
     process.exit(4);

@@ -484,6 +484,41 @@ describe('DesignPill', () => {
     expect(screen.getByTestId('design-pill')).toHaveTextContent('Designing · 3/8 · 38%');
   });
 
+  it('surfaces the failure count inline while running (not just in the terminal summary)', () => {
+    render(
+      <DesignPill
+        data={{
+          state: 'running',
+          done: 2,
+          total: 6,
+          percent: 83,
+          skipped: 3,
+          failureCount: 1,
+          onClick: vi.fn(),
+        }}
+      />,
+    );
+    expect(screen.getByTestId('design-pill')).toHaveTextContent('2/6 · 1 failed · 83%');
+  });
+
+  it('omits the failed segment when nothing has failed', () => {
+    render(
+      <DesignPill
+        data={{
+          state: 'running',
+          done: 3,
+          total: 8,
+          percent: 38,
+          skipped: 0,
+          failureCount: 0,
+          onClick: vi.fn(),
+        }}
+      />,
+    );
+    expect(screen.getByTestId('design-pill')).toHaveTextContent('3/8 · 38%');
+    expect(screen.getByTestId('design-pill')).not.toHaveTextContent('failed');
+  });
+
   it('renders the terminal summary "Designed N · M failed · K skipped"', () => {
     render(
       <DesignPill

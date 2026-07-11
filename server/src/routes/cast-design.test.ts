@@ -386,6 +386,160 @@ describe('POST /api/books/:bookId/cast/design', () => {
     designSpy.mockRestore();
   });
 
+  it('rides out the recycling drain-fence message too (widened SIDECAR_DOWN_RE)', async () => {
+    /* Pre-existing gap found during spec review: "Voice engine is recycling to
+       free memory; retry shortly." never matched the old SIDECAR_DOWN_RE, so
+       this transient case was ALSO wrongly treated as an ordinary per-character
+       failure before this fix. */
+    const ensureSpy = vi
+      .spyOn(ensureMod, 'ensureSidecarEngineReady')
+      .mockResolvedValue(undefined);
+    const designSpy = vi
+      .spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter')
+      .mockRejectedValueOnce(new Error('Voice engine is recycling to free memory; retry shortly.'))
+      .mockResolvedValue({ voiceId: 'qwen-v_aria' } as Awaited<
+        ReturnType<typeof qwenVoiceMod.designQwenVoiceForCharacter>
+      >);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+
+    const events = parseSse(res.text);
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
+    expect(events.find((e) => e.type === 'idle')).toMatchObject({ done: 1, total: 1 });
+    expect(ensureSpy).toHaveBeenCalled();
+
+    ensureSpy.mockRestore();
+    designSpy.mockRestore();
+  });
+
+  it('rides out a gpu_poisoned sidecar response via the health-poll wait, then completes', async () => {
+    const ensureSpy = vi
+      .spyOn(ensureMod, 'ensureSidecarEngineReady')
+      .mockResolvedValue(undefined); // sidecar reports ready again
+    const designSpy = vi
+      .spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter')
+      .mockRejectedValueOnce(
+        Object.assign(new Error('GPU is out of memory — likely another job is using it.'), {
+          code: 'gpu_poisoned',
+          status: 503,
+        }),
+      )
+      .mockResolvedValue({ voiceId: 'qwen-v_aria' } as Awaited<
+        ReturnType<typeof qwenVoiceMod.designQwenVoiceForCharacter>
+      >);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+
+    const events = parseSse(res.text);
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
+    expect(events.find((e) => e.type === 'idle')).toMatchObject({ done: 1, total: 1 });
+    expect(ensureSpy).toHaveBeenCalled(); // used the health-poll wait, not a raw sleep
+    expect(designSpy).toHaveBeenCalledTimes(2);
+
+    ensureSpy.mockRestore();
+    designSpy.mockRestore();
+  });
+
+  it('halts with gpu_contention (not sidecar_unavailable) after a GPU_BUSY ride-out is exhausted', async () => {
+    const ensureSpy = vi.spyOn(ensureMod, 'ensureSidecarEngineReady');
+    const designSpy = vi
+      .spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter')
+      .mockRejectedValue(
+        Object.assign(new Error('GPU busy with analysis — try again once it finishes.'), {
+          code: 'GPU_BUSY',
+        }),
+      );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria', 'brann'], modelKey: QWEN_KEY });
+
+    const events = parseSse(res.text);
+    const errorEvent = events.find((e) => e.type === 'error');
+    expect(errorEvent?.code).toBe('gpu_contention');
+    expect(errorEvent?.message).toContain('0 of 2 designed');
+    expect(events.some((e) => e.type === 'character_designed')).toBe(false);
+    expect(designSpy).toHaveBeenCalledTimes(1 + MAX_RECYCLE_RIDEOUTS);
+    /* GPU_BUSY uses the new bounded sleep, NOT the sidecar health-poll wait —
+       ensureSidecarEngineReady must never be called for this class. */
+    expect(ensureSpy).not.toHaveBeenCalled();
+
+    ensureSpy.mockRestore();
+    designSpy.mockRestore();
+  }, 10_000);
+
+  it('base17-unavailable is NOT treated as systemic — records a per-character failure and continues', async () => {
+    const ensureSpy = vi.spyOn(ensureMod, 'ensureSidecarEngineReady');
+    const designSpy = vi
+      .spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter')
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Qwen 1.7B-Base unavailable (not-installed)."), {
+          code: 'base17-unavailable',
+          status: 503,
+        }),
+      )
+      .mockResolvedValue({ voiceId: 'qwen-v_brann' } as Awaited<
+        ReturnType<typeof qwenVoiceMod.designQwenVoiceForCharacter>
+      >);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria', 'brann'], modelKey: QWEN_KEY });
+
+    const events = parseSse(res.text);
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
+    expect(events.some((e) => e.type === 'character_failed' && e.characterId === 'aria')).toBe(true);
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'brann')).toBe(true);
+    /* No ride-out attempted for a permanent condition. */
+    expect(designSpy).toHaveBeenCalledTimes(2); // one failed attempt (aria) + one success (brann)
+    expect(ensureSpy).not.toHaveBeenCalled();
+
+    ensureSpy.mockRestore();
+    designSpy.mockRestore();
+  });
+
+  it('regression: a non-abort error during the sidecar-restart wait retries instead of silently dropping the character', async () => {
+    /* Bug found during spec review: the OLD code's `catch { break }` around
+       ensureSidecarEngineReady treated ANY thrown error there as a clean
+       pause and silently exited without recording done/skipped/failures.
+       ensureSidecarEngineReady wraps withGpuLoad, which CAN throw
+       GpuBusyError (analysis contention) during the wait itself — that must
+       NOT be treated as a run-level abort. */
+    const ensureSpy = vi
+      .spyOn(ensureMod, 'ensureSidecarEngineReady')
+      .mockRejectedValueOnce(
+        Object.assign(new Error('GPU busy with analysis — try again once it finishes.'), {
+          code: 'GPU_BUSY',
+        }),
+      )
+      .mockResolvedValue(undefined); // second ride-out's wait succeeds
+    const designSpy = vi
+      .spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter')
+      .mockRejectedValueOnce(new Error('TTS sidecar (http://localhost:9000) is unreachable'))
+      .mockResolvedValue({ voiceId: 'qwen-v_aria' } as Awaited<
+        ReturnType<typeof qwenVoiceMod.designQwenVoiceForCharacter>
+      >);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+
+    const events = parseSse(res.text);
+    const idle = events.find((e) => e.type === 'idle');
+    /* The character must be accounted for — either designed here (this test's
+       retry path succeeds) or, at minimum, never silently vanish from
+       done+skipped+failures. */
+    expect(idle).toBeDefined();
+    expect((idle!.done as number) + (idle!.skipped as number) + (idle!.failures as unknown[]).length).toBe(1);
+
+    ensureSpy.mockRestore();
+    designSpy.mockRestore();
+  });
+
   it('mutual exclusion: refuses to start while analysis is busy (409)', async () => {
     designLock.markAnalysisBusy(bookDir);
     const res = await request(app)

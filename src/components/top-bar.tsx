@@ -1050,7 +1050,7 @@ export function DesignPill({ data }: { data: DesignPillData }) {
         ]
           .filter(Boolean)
           .join(' · ')
-      : `${done}/${total}${total > 0 ? ` · ${percent}%` : ''}`;
+      : `${done}/${total}${failureCount > 0 ? ` · ${failureCount} failed` : ''}${total > 0 ? ` · ${percent}%` : ''}`;
   return (
     <button
       onClick={onClick}

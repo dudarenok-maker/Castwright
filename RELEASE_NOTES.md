@@ -1,14 +1,12 @@
 # Castwright 1.13.0
 
 - **Sharper quality-checking for non-English books:** Castwright now understands numbers and common contractions when it double-checks Spanish, French, German, and Russian narration.
+- **Designing your whole cast at once no longer stalls silently on a busy GPU.** If something else was using the GPU while you designed voices for every character at once, the process used to fail on every remaining character one after another — and the progress bar kept climbing the whole time, even though nothing was actually finishing. It now gives itself a moment to recover, and if the GPU is still busy after that, it stops cleanly and tells you what happened and how far it got, instead of quietly failing its way to the end. The progress bar itself is now honest too — it only counts characters that actually finished.
 
-# Castwright 1.12.2
+# Castwright 1.12.3
 
-- **A Pinokio install now starts up with its real settings.** The v1.12.1 fix got the Pinokio install running for the first time — which revealed that the server was starting from the wrong folder and couldn't find its own configuration, so it quietly ran on defaults. It now launches from the right place, so a fresh Pinokio Install → Start comes up fully configured from the very first run.
-
-# Castwright 1.12.1
-
-- **The one-click Pinokio install now actually finishes.** A patch on top of v1.12.0's Pinokio fix: the installer's own setup scripts were quietly working from the wrong folder, so the very first setup step failed before anything could be installed. That's fixed — click Install in Pinokio and it runs all the way through.
+- **The one-click Pinokio install now works end to end.** This patch rolls up the run of fixes that stood between a fresh Pinokio download and a working Castwright. The Install button would appear but quietly do nothing — our launcher lived in a folder named `pinokio`, a name Pinokio reserves for itself, so the button couldn't fire our installer; moving it out of that reserved name lets Install run the moment you click it. From there, the installer's own setup scripts had been running from the wrong folder, so the very first step failed before anything could install; and once past that, the server came up from the wrong place and quietly ran on default settings instead of your own. All three are fixed — click Install in Pinokio and it now runs all the way through and starts up fully configured, from the first click.
+- **Already installed through Pinokio on an earlier 1.12 patch? Reinstall fresh.** This release moves Castwright's launcher into a new folder, and Pinokio's in-app **Update** can't carry an older install across that move — it'll stop partway. Remove the old install and install fresh from Pinokio, and you're on the fixed version.
 
 # Castwright 1.12.0
 

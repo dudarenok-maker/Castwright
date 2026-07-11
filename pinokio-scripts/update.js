@@ -2,7 +2,7 @@
 // rebuild, re-bootstrap the venv. We own the detached-HEAD checkout explicitly
 // rather than using Pinokio's built-in git update.
 //
-// This script lives in pinokio/, one level below the app root — `path: '..'`
+// This script lives in pinokio-scripts/, one level below the app root — `path: '..'`
 // is required so the shell resolves against the app root (see install.js).
 const APP_ROOT = '..';
 const CONDA = { path: 'env', python: '3.12' };
@@ -13,7 +13,7 @@ module.exports = {
     // resolve-release.js) — same fix as install.js, no {{input.event}} capture.
     {
       method: 'shell.run',
-      params: { path: APP_ROOT, conda: CONDA, message: 'node pinokio/lib/resolve-release.js' },
+      params: { path: APP_ROOT, conda: CONDA, message: 'node pinokio-scripts/lib/resolve-release.js' },
     },
     {
       method: 'shell.run',

@@ -1,0 +1,137 @@
+"""CUDA-poison classification for /qwen/design-voice and /qwen/mint-variant
+(issue: the bulk 'Design full cast' job silently ground through every
+character on GPU contention because these two routes never checked
+_CUDA_POISON_RE like /transcribe and /embed already do — see
+docs/superpowers/specs/2026-07-11-cast-design-job-hardening-design.md)."""
+
+import pytest
+from fastapi.testclient import TestClient
+
+import main
+
+
+def _reset_poison_guards(monkeypatch: pytest.MonkeyPatch) -> list:
+    """Mirrors test_speaker_embed.py's test_embed_load_poison_is_fenced: clear
+    both guard flags so the route reaches the design call, and stub
+    _mark_cuda_poisoned so the test process never schedules a real
+    threading.Timer-based os._exit.
+
+    Returns a list that records calls to _mark_cuda_poisoned for assertion."""
+    monkeypatch.setattr(main, "_process_poisoned", False, raising=False)
+    monkeypatch.setattr(main, "_restart_pending", False, raising=False)
+
+    # Record calls to _mark_cuda_poisoned for assertion in tests
+    calls = []
+    def record_mark_cuda_poisoned(reason):
+        calls.append(reason)
+
+    monkeypatch.setattr(main, "_mark_cuda_poisoned", record_mark_cuda_poisoned)
+    return calls
+
+
+class _FakeQwenOom(main.QwenEngine):
+    def __init__(self):
+        pass  # skip the real heavy __init__; the route only calls design_voice
+
+    def design_voice(self, voice_id, instruct, language, calibration_text, voice_uuid=None, report_progress=None, mint_method=None, fallback_for=None):
+        raise RuntimeError(
+            "CUDA out of memory. Tried to allocate 20.00 MiB (GPU 0; 8.00 GiB total capacity; "
+            "7.90 GiB already allocated)"
+        )
+
+
+class _FakeQwenOther(main.QwenEngine):
+    def __init__(self):
+        pass
+
+    def design_voice(self, voice_id, instruct, language, calibration_text, voice_uuid=None, report_progress=None, mint_method=None, fallback_for=None):
+        raise RuntimeError("some unrelated, unclassified failure")
+
+
+def test_design_voice_oom_returns_classified_503(monkeypatch: pytest.MonkeyPatch):
+    calls = _reset_poison_guards(monkeypatch)
+    monkeypatch.setitem(main.ENGINES, "qwen", _FakeQwenOom())
+
+    client = TestClient(main.app)
+    res = client.post("/qwen/design-voice", json={"voiceId": "qwen-x", "instruct": "warm"})
+
+    assert res.status_code == 503
+    body = res.json()
+    assert body["code"] == "gpu_poisoned"
+    assert body["poisoned"] is True
+    assert "GPU is out of memory" in body["detail"]
+    assert body["detail"] != "Internal error."
+
+    # Assert that _mark_cuda_poisoned was called exactly once with the right reason
+    assert len(calls) == 1
+    assert "CUDA out of memory" in calls[0]
+
+
+def test_design_voice_non_poison_exception_stays_generic_500(monkeypatch: pytest.MonkeyPatch):
+    calls = _reset_poison_guards(monkeypatch)
+    monkeypatch.setitem(main.ENGINES, "qwen", _FakeQwenOther())
+
+    client = TestClient(main.app)
+    res = client.post("/qwen/design-voice", json={"voiceId": "qwen-x", "instruct": "warm"})
+
+    assert res.status_code == 500
+    assert res.json() == {"detail": "Internal error."}
+
+    # Assert that _mark_cuda_poisoned was never called (non-poison path)
+    assert len(calls) == 0
+
+
+class _FakeQwenMintOom(main.QwenEngine):
+    def __init__(self):
+        pass
+
+    def mint_variant(self, base_voice_id, variant_voice_id, emotion_instruct, language=None, calibration_text=None, voice_uuid=None, report_progress=None):
+        raise RuntimeError("CUDA out of memory. Tried to allocate 20.00 MiB (GPU 0; 8.00 GiB total capacity)")
+
+
+class _FakeQwenMintOther(main.QwenEngine):
+    def __init__(self):
+        pass
+
+    def mint_variant(self, base_voice_id, variant_voice_id, emotion_instruct, language=None, calibration_text=None, voice_uuid=None, report_progress=None):
+        raise RuntimeError("some unrelated, unclassified failure")
+
+
+def _mint_body():
+    return {
+        "baseVoiceId": "qwen-base",
+        "variantVoiceId": "qwen-base__angry",
+        "emotionInstruct": "Delivered angrily, with raised intensity and edge.",
+    }
+
+
+def test_mint_variant_oom_returns_classified_503(monkeypatch: pytest.MonkeyPatch):
+    calls = _reset_poison_guards(monkeypatch)
+    monkeypatch.setitem(main.ENGINES, "qwen", _FakeQwenMintOom())
+
+    client = TestClient(main.app)
+    res = client.post("/qwen/mint-variant", json=_mint_body())
+
+    assert res.status_code == 503
+    body = res.json()
+    assert body["code"] == "gpu_poisoned"
+    assert body["poisoned"] is True
+    assert "GPU is out of memory" in body["detail"]
+
+    # Assert that _mark_cuda_poisoned was called exactly once with the right reason
+    assert len(calls) == 1
+    assert "CUDA out of memory" in calls[0]
+
+
+def test_mint_variant_non_poison_exception_stays_generic_500(monkeypatch: pytest.MonkeyPatch):
+    calls = _reset_poison_guards(monkeypatch)
+    monkeypatch.setitem(main.ENGINES, "qwen", _FakeQwenMintOther())
+
+    client = TestClient(main.app)
+    res = client.post("/qwen/mint-variant", json=_mint_body())
+
+    assert res.status_code == 500
+    assert res.json() == {"detail": "Internal error."}
+
+    # Assert that _mark_cuda_poisoned was never called (non-poison path)
+    assert len(calls) == 0

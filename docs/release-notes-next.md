@@ -18,14 +18,16 @@ user-facing, brand-voice notes live separately in RELEASE_NOTES.md (#/release-no
 
 release-notes-next-version: 1.13.0
 
-DRAFT IN PROGRESS — v1.13.0 reopens the draft: v1.12.2 published as a
-same-day patch on 2026-07-11, and this is the first PR of the next cycle.
-Diffed against v1.12.2 (the previous public release) per CONTRIBUTING.md
-"Release notes". Only one themed entry so far; later PRs in this cycle
-append to this draft rather than opening a new one.
+DRAFT IN PROGRESS — first PR of the v1.13.0 cycle (v1.12.3 shipped as the
+consolidated Pinokio-installer patch, superseding v1.12.1/v1.12.2).
+Bootstrapped per CONTRIBUTING.md "Release notes": marker bumped forward,
+stale v1.12.3 body cleared, this PR's own entry opens the fresh draft.
+Diffed against v1.12.3 (the previous public release). Multiple PRs have
+now landed in this cycle; later PRs append to this draft rather than
+opening a new one.
 -->
 
-**A quality-and-accuracy release, so far.** The v1.13.0 cycle opens with a sharper ASR content-QA gate for non-English books.
+**Ongoing hardening.** *(placeholder theme — refine at cut time once the full v1.13.0 scope is known.)*
 
 ---
 
@@ -33,6 +35,10 @@ append to this draft rather than opening a new one.
 
 - **ASR content-QA gate: non-English integer-spelling and contraction normalization for es/fr/de/ru (#1084).** Real per-language `maxWer` calibration against rendered audio remains a tracked follow-up.
 
+## 🎙️ Voice design & casting
+
+- **"Design full cast" no longer silently grinds through GPU contention.** If another job was using the GPU while a bulk cast design was running, every remaining character used to fail identically, one after another, with the progress pill misleadingly climbing toward 100% the whole time (even reading "0/16 · 94%" — zero characters designed, but nearly "complete"). The sidecar now recognizes this specific contention and triggers its existing self-recovery restart (matching how it already handles other transient failures); the job rides out a brief pause before halting with a clear message naming the cause and how far it got, instead of grinding through every remaining character. The progress pill's percent no longer counts failures as progress, and now shows the failure count inline while the job is still running. (#1533)
+
 ---
 
-**Full changelog:** v1.12.2...v1.13.0
+**Full changelog:** v1.12.3...v1.13.0

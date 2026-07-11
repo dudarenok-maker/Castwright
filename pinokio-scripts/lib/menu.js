@@ -6,18 +6,18 @@
 // @returns {Array<{default?:boolean, icon:string, text:string, href:string}>}
 function buildMenu(state) {
   if (!state.installed) {
-    return [{ default: true, icon: 'fa-solid fa-download', text: 'Install', href: 'pinokio/install.js' }];
+    return [{ default: true, icon: 'fa-solid fa-download', text: 'Install', href: 'pinokio-scripts/install.js' }];
   }
   const items = [];
   if (state.running) {
     // No `target` — Pinokio opens the web UI itself. state.url is the captured URL.
     items.push({ default: true, icon: 'fa-solid fa-rocket', text: 'Open Web UI', href: state.url });
-    items.push({ icon: 'fa-solid fa-stop', text: 'Stop', href: 'pinokio/stop.js' });
+    items.push({ icon: 'fa-solid fa-stop', text: 'Stop', href: 'pinokio-scripts/stop.js' });
   } else {
-    items.push({ default: true, icon: 'fa-solid fa-play', text: 'Start', href: 'pinokio/start.js' });
+    items.push({ default: true, icon: 'fa-solid fa-play', text: 'Start', href: 'pinokio-scripts/start.js' });
   }
-  items.push({ icon: 'fa-solid fa-rotate', text: 'Update', href: 'pinokio/update.js' });
-  items.push({ icon: 'fa-solid fa-trash', text: 'Reset', href: 'pinokio/reset.js' });
+  items.push({ icon: 'fa-solid fa-rotate', text: 'Update', href: 'pinokio-scripts/update.js' });
+  items.push({ icon: 'fa-solid fa-trash', text: 'Reset', href: 'pinokio-scripts/reset.js' });
   return items;
 }
 

@@ -1446,7 +1446,7 @@ export function Layout() {
   const designPill: DesignPillData | null = (() => {
     if (!designSnapshot) return null;
     const { bookId: dBookId, total, done, skipped, failures, currentName, state } = designSnapshot;
-    const completed = done + skipped + failures.length;
+    const completed = done + skipped;
     const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
     const stalled =
       state === 'running' &&
