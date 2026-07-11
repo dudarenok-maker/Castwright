@@ -34,6 +34,10 @@ section.
 
 - **A Pinokio-launched server no longer boots on bare defaults.** After the v1.12.1 fix let the one-click install actually run, the very next step exposed this: the launcher started the server from the app's top folder instead of its `server/` folder, so the server couldn't find its own `.env` — the file that carries your workspace location, worker counts, GPU memory budget, and analyzer settings — and quietly fell back to defaults. It now launches from the right place (matching how the desktop app has always started it), so a Pinokio install comes up with its real settings from the first run. (#1513, #1514)
 
+## 🗣️ Quality & Accuracy
+
+- **ASR content-QA gate: non-English integer-spelling and contraction normalization for es/fr/de/ru (#1084). Real per-language `maxWer` calibration against rendered audio remains a tracked follow-up.**
+
 ---
 
 **Full changelog:** v1.12.1...v1.12.2
