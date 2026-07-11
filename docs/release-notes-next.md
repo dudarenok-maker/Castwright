@@ -18,24 +18,26 @@ user-facing, brand-voice notes live separately in RELEASE_NOTES.md (#/release-no
 
 release-notes-next-version: 1.12.3
 
-DRAFT IN PROGRESS — v1.12.3 fixes the last thing keeping the one-click Pinokio
-Install button from firing: the launcher scripts lived in a folder named
-`pinokio/`, a name the Pinokio runtime reserves internally, so the
-download-screen Install button rendered but never auto-fired install.js on
-first activation. Diffed against v1.12.2 (the previous public release). NOTE:
-at release-cut this patch is intended to CONSOLIDATE the v1.12.1 and v1.12.2
-Pinokio patches (which will be deleted) into one final patch — that
-consolidation is gated on the fresh-install acceptance test passing.
+DRAFT IN PROGRESS — v1.12.3 is the single, consolidated Pinokio-installer
+patch. It supersedes the v1.12.1 and v1.12.2 patches, which are DELETED at
+cut (releases + tags), so the changelog base is v1.12.0 (v1.12.0...v1.12.3)
+and the body below rolls up all three fixes: reserved-folder-name + schema
+version (this release), the installer shell-cwd fix (was v1.12.1), and the
+server .env-cwd fix (was v1.12.2). Authored consolidated per CONTRIBUTING.md
+"Release notes"; the delist→relist itself is gated on the fresh-install
+acceptance test passing.
 -->
 
-**A patch release: the one-click Pinokio Install button now fires on the first click.** On a fresh install, clicking Install rendered the screen but silently never started setup — the launcher lived in a folder named `pinokio/`, a name Pinokio reserves internally. Renamed to `pinokio-scripts/` (and brought the launcher's schema version in line with every shipping Pinokio app), so Install auto-fires the installer immediately.
+**A patch release: the one-click Pinokio install now works end to end.** v1.12.3 consolidates the run of installer fixes since v1.12.0 — it supersedes and replaces the v1.12.1 and v1.12.2 patches. A fresh Pinokio Download → Install → Start now goes all the way through: the Install button fires the installer, every setup step runs from the right directory, and the server starts fully configured from its own `server/.env`.
 
 ---
 
 ## 🚀 Onboarding
 
-- **The Pinokio Install button now auto-fires the installer on first activation.** Our launcher scripts lived under a folder named `pinokio/` — a name the current Pinokio runtime reserves internally — so the download-screen Install button rendered but never triggered `install.js` (running it by hand from inside the app still worked, which is why installs completed when triggered manually but looked broken to first-time users). Renamed the launcher subtree to `pinokio-scripts/`, bumped its script schema version `1.0` → `7.0` to match every shipping Pinokio app, and added structural tests that load the real launcher and assert the folder isn't a reserved name, the schema version is current, and every menu action resolves to a real script. (#PR)
+- **The Pinokio Install button now auto-fires the installer on first activation.** The launcher scripts lived under a folder named `pinokio/` — a name the current Pinokio runtime reserves internally — so the download-screen Install button rendered but never triggered `install.js` (running it by hand from inside the app still worked, which is why installs completed when triggered manually but looked broken to first-time users). Renamed the launcher subtree to `pinokio-scripts/`, bumped its script schema version `1.0` → `7.0` to match every shipping Pinokio app, and added structural tests that load the real launcher and assert the folder isn't a reserved name, the schema version is current, and every menu action resolves to a real script. (#PR)
+- **The installer's own setup steps now run from the app root, not the launcher folder** _(was v1.12.1)._ Every `shell.run`/`fs.rm` step defaulted its working directory to the script's own launcher folder rather than the app root, so the very first setup step (the conda env) resolved one directory too deep and failed before anything installed. Each step now sets `path: '..'` to reach the app root. (#1508, #1509)
+- **A Pinokio-launched server no longer boots on bare defaults** _(was v1.12.2)._ Once install ran, Start launched the server from the app's top folder instead of its `server/` folder, so it couldn't find its own `.env` — workspace location, worker counts, GPU memory budget, analyzer settings — and quietly fell back to defaults. It now launches from `server/` (matching how the desktop app has always started it), so a Pinokio install comes up with its real settings from the first run. (#1513, #1514)
 
 ---
 
-**Full changelog:** v1.12.2...v1.12.3
+**Full changelog:** v1.12.0...v1.12.3

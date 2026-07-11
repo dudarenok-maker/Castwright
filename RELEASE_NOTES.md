@@ -1,14 +1,6 @@
 # Castwright 1.12.3
 
-- **The one-click Pinokio install now starts the moment you click Install.** On a fresh Pinokio install, the Install button would appear but quietly do nothing — setup never kicked off, and the only way through was to run it by hand from inside the app. The culprit: our launcher lived in a folder named `pinokio`, a name Pinokio reserves for itself, so the button couldn't fire our installer. We've moved the launcher out of that reserved name, so Install now runs the setup right away on the first click.
-
-# Castwright 1.12.2
-
-- **A Pinokio install now starts up with its real settings.** The v1.12.1 fix got the Pinokio install running for the first time — which revealed that the server was starting from the wrong folder and couldn't find its own configuration, so it quietly ran on defaults. It now launches from the right place, so a fresh Pinokio Install → Start comes up fully configured from the very first run.
-
-# Castwright 1.12.1
-
-- **The one-click Pinokio install now actually finishes.** A patch on top of v1.12.0's Pinokio fix: the installer's own setup scripts were quietly working from the wrong folder, so the very first setup step failed before anything could be installed. That's fixed — click Install in Pinokio and it runs all the way through.
+- **The one-click Pinokio install now works end to end.** This patch rolls up the run of fixes that stood between a fresh Pinokio download and a working Castwright. The Install button would appear but quietly do nothing — our launcher lived in a folder named `pinokio`, a name Pinokio reserves for itself, so the button couldn't fire our installer; moving it out of that reserved name lets Install run the moment you click it. From there, the installer's own setup scripts had been running from the wrong folder, so the very first step failed before anything could install; and once past that, the server came up from the wrong place and quietly ran on default settings instead of your own. All three are fixed — click Install in Pinokio and it now runs all the way through and starts up fully configured, from the first click.
 
 # Castwright 1.12.0
 
