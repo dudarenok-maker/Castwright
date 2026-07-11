@@ -14,7 +14,7 @@ import { castDesignActions } from '../store/cast-design-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import {
   selectUndesignedQwenCharacters,
-  selectIsBookNonEnglish,
+  selectHasNoFallbackEngine,
   voiceReadinessGateMessage,
 } from '../store/voice-readiness-selectors';
 import { sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
@@ -34,7 +34,9 @@ export function VoiceReadinessGateModal() {
   const undesigned = useAppSelector((s) =>
     gate ? selectUndesignedQwenCharacters(s, gate.bookId) : NO_UNDESIGNED_CHARACTERS,
   );
-  const isNonEnglish = useAppSelector((s) => (gate ? selectIsBookNonEnglish(s, gate.bookId) : false));
+  const hasNoFallbackEngine = useAppSelector((s) =>
+    gate ? selectHasNoFallbackEngine(s, gate.bookId) : false,
+  );
   const message = useAppSelector((s) => (gate ? voiceReadinessGateMessage(s, gate.bookId) : null));
 
   if (!gate) return null;
@@ -120,7 +122,7 @@ export function VoiceReadinessGateModal() {
           </div>
 
           <div className="px-6 py-4 border-t border-ink/10 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3">
-            {!isNonEnglish ? (
+            {!hasNoFallbackEngine ? (
               <button
                 onClick={onProceedAnyway}
                 className="text-sm font-medium text-ink/60 hover:text-ink min-h-[44px] sm:min-h-0"
