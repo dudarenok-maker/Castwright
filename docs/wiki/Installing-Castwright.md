@@ -10,12 +10,11 @@ This guide walks a deployer through bringing the app up on a clean Windows, macO
 
 After install you'll have a single command (`npm run start:prod`) that brings up the Node server (port 8080), the Python voice engine (port 9000), and the built frontend — all served from `http://localhost:8080`.
 
-> This page's OS-level screenshots (prerequisites, terminal install, configuration screen) are pending a re-capture from a clean install rather than a personal machine — tracked as a follow-up. The step-by-step commands below are accurate either way.
-
 ---
 
 ## Prerequisites
 
+![The Setup Wizard's Environment step, checking OS, GPU, and accelerator profile](images/installing-castwright/01-prerequisites.png)
 
 - **Node.js 20.19 or newer** (Vite 8 needs ≥20.19 / ≥22.12; the repo targets Node 24) — <https://nodejs.org>
 - **Python 3.12** (exactly — the sidecar bootstrap probes for 3.12 and refuses other versions)
@@ -55,6 +54,8 @@ and no system prerequisites — Pinokio provisions its own Python 3.12 + ffmpeg 
 3. Click **Start**, then **Open Web UI**. The first launch runs the in-app setup wizard
    (GPU detect + one-time Kokoro voice-model download) — identical to the native installers.
 
+![The Setup Wizard overview a Pinokio install lands on after first launch](images/installing-castwright/pinokio-setup-wizard.png)
+
 Update anytime via the **Update** menu (rebuilds from the newest published release).
 **Stop** cleanly tears down the server + voice engine; **Reset** rebuilds from scratch
 (your books and designed voices in the workspace are preserved).
@@ -90,6 +91,7 @@ copy server\.env.example server\.env
 npm run start:prod
 ```
 
+![The Setup Wizard's Models step, installing Kokoro and setting the analyzer key](images/installing-castwright/02-install-windows.png)
 
 Browser opens `http://localhost:8080`.
 
@@ -206,6 +208,7 @@ See [Troubleshooting](Troubleshooting) for the full symptom → fix table.
 The server reads `server/.env` (copied from `server/.env.example` in the install
 steps above). All knobs have safe defaults — set only what you need.
 
+![The Setup Wizard's Defaults step — voice engine, voice model, analysis model, and theme](images/installing-castwright/03-configuration.png)
 
 **Analyzer**
 
