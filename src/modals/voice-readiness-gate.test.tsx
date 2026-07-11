@@ -88,6 +88,7 @@ describe('VoiceReadinessGateModal', () => {
       </Provider>,
     );
     expect(screen.getByText(/Proceed anyway/)).toBeInTheDocument();
+    expect(screen.getByText(/generic Kokoro fallback voices/)).toBeInTheDocument();
     expect(screen.getByText('Alice')).toBeInTheDocument();
   });
 
@@ -119,6 +120,7 @@ describe('VoiceReadinessGateModal', () => {
     );
     expect(screen.getByText(/Proceed anyway/)).toBeInTheDocument();
     expect(screen.getByText(/render with a Coqui fallback voice/)).toBeInTheDocument();
+    expect(screen.getByText(/generic Coqui fallback voices/)).toBeInTheDocument();
   });
 
   it('Design full cast dispatches designAllRequested with the full undesigned roster and closes the gate', () => {

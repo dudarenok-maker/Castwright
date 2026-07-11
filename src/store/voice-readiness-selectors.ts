@@ -73,6 +73,24 @@ export function selectHasNoFallbackEngine(state: RootState, bookId: string): boo
   return !eligible.includes('coqui') && !eligible.includes('kokoro');
 }
 
+/** fs-60 — the display name of the fallback engine the "Proceed anyway"
+    button would actually render with, for this book: `'Coqui'` for a
+    Coqui-eligible non-English book, `'Kokoro'` otherwise (English books keep
+    the original Kokoro fallback). Mirrors the server's applyQwenFallback
+    (server/src/tts/synthesise-chapter.ts): Coqui is the fallback when the
+    book is non-English AND coqui is eligible; Kokoro otherwise. Same
+    book-lookup + eligibleTtsEngines default as `selectHasNoFallbackEngine`
+    above — don't fork the derivation. If `selectHasNoFallbackEngine` is true
+    (a still-unsupported language), the return value here is irrelevant since
+    no proceed button is shown in that case — 'Kokoro' is just the harmless
+    default. */
+export function selectFallbackEngineName(state: RootState, bookId: string): 'Coqui' | 'Kokoro' {
+  const book = state.library?.books?.find((b) => b.bookId === bookId);
+  const eligible = book?.eligibleTtsEngines ?? ['qwen', 'kokoro', 'coqui', 'gemini', 'piper'];
+  const isEnglish = (book?.language ?? 'en') === 'en';
+  return !isEnglish && eligible.includes('coqui') ? 'Coqui' : 'Kokoro';
+}
+
 /** fs-46/fs-60 — message-builder pair mirroring `analysisBusyMessage`. Three
     branches: English's existing soft-gate (Kokoro fallback), the NEW
     Coqui-eligible soft-gate (ru/es/fr/de), and the still-unsupported-language

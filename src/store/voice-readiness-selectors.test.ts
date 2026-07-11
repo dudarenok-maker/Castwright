@@ -3,6 +3,7 @@ import {
   selectUndesignedQwenCharacters,
   selectVoiceReadinessGateShouldFire,
   selectHasNoFallbackEngine,
+  selectFallbackEngineName,
   voiceReadinessGateMessage,
 } from './voice-readiness-selectors';
 import type { RootState } from './index';
@@ -146,6 +147,20 @@ describe('selectHasNoFallbackEngine', () => {
 
   it('defaults to false (assume every engine eligible) when the book is missing, matching the old missing-book default', () => {
     expect(selectHasNoFallbackEngine(mk({ books: [] }), 'missing')).toBe(false);
+  });
+});
+
+describe('selectFallbackEngineName', () => {
+  it("is 'Coqui' for a Coqui-eligible non-English book (ru)", () => {
+    const s = mk({ books: [{ bookId: 'b1', language: 'ru', eligibleTtsEngines: ['qwen', 'coqui'] }] });
+    expect(selectFallbackEngineName(s, 'b1')).toBe('Coqui');
+  });
+
+  it("is 'Kokoro' for an English book", () => {
+    const s = mk({
+      books: [{ bookId: 'b1', language: 'en', eligibleTtsEngines: ['qwen', 'kokoro', 'coqui', 'gemini'] }],
+    });
+    expect(selectFallbackEngineName(s, 'b1')).toBe('Kokoro');
   });
 });
 
