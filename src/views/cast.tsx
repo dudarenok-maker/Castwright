@@ -82,6 +82,11 @@ interface Props {
       since non-English books are Qwen-locked and every speaking character
       needs a designed voice before it can be generated. */
   bookLanguage?: string;
+  /** fs-60 — TTS engines eligible for this book's language, from the API.
+      Forwarded here so a future consumer (the profile drawer already reads
+      this straight off the library slice) can read it off cast.tsx too;
+      cast.tsx itself has no eligibility-gated rendering of its own. */
+  eligibleTtsEngines?: TtsEngine[];
   onOpenProfile: (id: string | null) => void;
   onShowMatchDetail: (id: string) => void;
   driftEvents: DriftEvent[];
@@ -134,6 +139,7 @@ export function CastView({
   sentences,
   title,
   bookLanguage = 'en',
+  eligibleTtsEngines: _eligibleTtsEngines = ['qwen', 'kokoro', 'coqui', 'gemini', 'piper'],
   onOpenProfile,
   onShowMatchDetail,
   driftEvents,

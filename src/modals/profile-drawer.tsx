@@ -234,6 +234,20 @@ export function ProfileDrawer({
   const bookLanguage = useAppSelector(
     (s) => s.library?.books?.find((b) => b.bookId === bookId)?.language ?? 'en',
   );
+  /* fs-60 — engines eligible for this book's language, as reported by the
+     server (independent of which engines are installed here). Defaults to
+     "everything" so a book with no eligibility data (or a test fixture that
+     predates fs-60) stays fully unlocked, matching pre-fs-60 behaviour. */
+  const eligibleTtsEngines = useAppSelector(
+    (s): TtsEngine[] =>
+      s.library?.books?.find((b) => b.bookId === bookId)?.eligibleTtsEngines ?? [
+        'qwen',
+        'kokoro',
+        'coqui',
+        'gemini',
+        'piper',
+      ],
+  );
   const baseVoices = useAppSelector((s) => s.voices.baseVoices);
   const baseVoicesLoaded = useAppSelector((s) => s.voices.baseVoicesLoaded);
   /* "Design full cast" — lock the single-design button while a bulk run owns
@@ -276,7 +290,11 @@ export function ProfileDrawer({
   /* fs-2 — a non-English book hard-locks every character to Qwen (Kokoro is
      English-only). Default the choice to 'qwen' regardless of any stale/reused
      ttsEngine on disk, matching the server's force-Qwen gate. */
-  const lockedToQwen = bookLanguage !== 'en';
+  /* fs-60 — lockedToQwen means "the ONLY eligible engine is Qwen" (a
+     still-unsupported non-English language), NOT "there's exactly one
+     eligible engine" — a Kokoro-only or Coqui-only install on an ENGLISH
+     book must not hard-lock to a disabled, uninstalled Qwen option. */
+  const lockedToQwen = eligibleTtsEngines.length === 1 && eligibleTtsEngines[0] === 'qwen';
   const [engineChoice, setEngineChoice] = useState<EngineChoice>(
     lockedToQwen ? 'qwen' : (character.ttsEngine ?? 'default'),
   );
@@ -1044,7 +1062,9 @@ export function ProfileDrawer({
             <VoiceEnginePicker
               value={engineChoice}
               onChange={onSelectEngine}
-              installedEngines={['kokoro', 'qwen']}
+              installedEngines={(['kokoro', 'qwen', 'coqui'] as const).filter((e) =>
+                eligibleTtsEngines.includes(e),
+              )}
               defaultEngineLabel={capitalise(ttsEngine)}
               lockedToQwen={lockedToQwen}
               persona={persona}

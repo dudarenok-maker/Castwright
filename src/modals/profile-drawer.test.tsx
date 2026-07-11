@@ -8,12 +8,13 @@ import { uiSlice } from '../store/ui-slice';
 import { voicesSlice, voicesActions } from '../store/voices-slice';
 import { castSlice, castActions } from '../store/cast-slice';
 import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
+import { librarySlice } from '../store/library-slice';
 import { ProfileDrawer, type PriorMergeCandidate } from './profile-drawer';
 import {
   playSampleWithAutoLoad,
   playBaseVoiceSampleWithAutoLoad,
 } from '../lib/play-sample-with-auto-load';
-import type { BaseVoice, Character, Voice } from '../lib/types';
+import type { BaseVoice, Character, LibraryBook, Voice } from '../lib/types';
 import type { PromoteQwenVoiceResponse } from '../lib/api';
 
 vi.mock('../lib/play-sample-with-auto-load', () => ({
@@ -83,19 +84,22 @@ vi.mock('../lib/api', () => ({
 interface StoreSetup {
   baseVoices?: BaseVoice[];
   voices?: Voice[];
+  libraryBook?: LibraryBook;
 }
 
-function makeStore({ baseVoices, voices }: StoreSetup = {}) {
+function makeStore({ baseVoices, voices, libraryBook }: StoreSetup = {}) {
   const store = configureStore({
     reducer: {
       ui: uiSlice.reducer,
       voices: voicesSlice.reducer,
       cast: castSlice.reducer,
       castDesign: castDesignSlice.reducer,
+      library: librarySlice.reducer,
     },
   });
   if (baseVoices) store.dispatch(voicesActions.hydrateBaseVoices(baseVoices));
   if (voices) store.dispatch(voicesActions.hydrate({ voices }));
+  if (libraryBook) store.dispatch(librarySlice.actions.addBook(libraryBook));
   return store;
 }
 
@@ -119,15 +123,22 @@ function renderDrawer(
     duplicateOther?: { name: string; bookTitle: string } | null;
     onReviewDuplicate?: () => void;
     renderedFallbackEngine?: string | null;
+    bookId?: string;
+    libraryBook?: LibraryBook;
   } = {},
 ) {
-  const store = makeStore({ baseVoices: extra.baseVoices, voices: extra.voices });
+  const store = makeStore({
+    baseVoices: extra.baseVoices,
+    voices: extra.voices,
+    libraryBook: extra.libraryBook,
+  });
   return {
     store,
     ...render(
       <Provider store={store}>
         <ProfileDrawer
           character={character}
+          bookId={extra.bookId}
           voice={extra.voice}
           onClose={() => {}}
           onSave={() => {}}
@@ -1756,5 +1767,41 @@ describe('ProfileDrawer cross-book duplicate chip (fe-8)', () => {
       </Provider>,
     );
     expect(screen.queryByRole('button', { name: /Possible duplicate of/i })).toBeNull();
+  });
+});
+
+describe('ProfileDrawer — fs-60 eligibility-based engine lock', () => {
+  const ruBook: LibraryBook = {
+    bookId: 'ru-book-1',
+    title: 'Russian Test Book',
+    author: 'Test Author',
+    series: 'Standalones',
+    seriesPosition: null,
+    isStandalone: true,
+    status: 'cast_pending',
+    chapterCount: 1,
+    completedChapters: 0,
+    characterCount: 1,
+    voiceCount: 0,
+    lastWorkedOn: 'today',
+    coverGradient: ['#000', '#fff'],
+    tags: [],
+    language: 'ru',
+    eligibleTtsEngines: ['qwen', 'coqui'],
+  };
+
+  it('unlocks the engine picker to Qwen + Coqui for a Coqui-eligible non-English book (ru)', () => {
+    renderDrawer(baseChar, { bookId: 'ru-book-1', libraryBook: ruBook });
+    expect(screen.queryByTestId('qwen-locked-note')).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Qwen (bespoke)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Coqui XTTS' })).toBeInTheDocument();
+  });
+
+  it('still hard-locks to Qwen for a still-unsupported non-English language (zh)', () => {
+    renderDrawer(baseChar, {
+      bookId: 'zh-book-1',
+      libraryBook: { ...ruBook, bookId: 'zh-book-1', language: 'zh', eligibleTtsEngines: ['qwen'] },
+    });
+    expect(screen.getByTestId('qwen-locked-note')).toBeInTheDocument();
   });
 });
