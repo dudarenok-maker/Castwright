@@ -17,6 +17,12 @@
    (direct Google API). */
 export type TtsEngine = 'coqui' | 'piper' | 'kokoro' | 'gemini' | 'qwen';
 
+/* Every engine the TtsEngine union names — used wherever a caller needs "all
+   engines that could possibly apply" rather than a specific installed set
+   (fs-60): the enforcement-side eligibility checks and the eligibleTtsEngines
+   API field both start from this and filter down. */
+export const ALL_TTS_ENGINES: TtsEngine[] = ['coqui', 'piper', 'kokoro', 'gemini', 'qwen'];
+
 /* UI-stable namespaced keys. The engine half drives provider selection; the
    model half is forwarded to the engine as-is. New local engines/voices slot
    in here without touching the picker logic. */

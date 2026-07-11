@@ -24,6 +24,26 @@ export function qwenStorageKey(
   return v.voiceUuid ? `qwen-${v.voiceUuid}` : `qwen-${v.voiceId ?? fallbackId}`;
 }
 
+/* fs-60 — per-engine language capability. '*' means "every language this app
+   can ever detect" (used for Qwen: the synthesis-routing invariant
+   "non-English ⇒ Qwen, fail loud" — fs-2/plan 162 — is unconditional across
+   EVERY non-English language, independent of whether the analyze pipeline's
+   quality is tuned for it; modeling Qwen as only the five analyze-supported
+   languages would silently narrow that invariant for a detected-but-unsupported
+   language like zh/ja, per server/src/tts/language-registry.ts + detect-language.ts).
+   Coqui is deliberately scoped to the five analyze-supported languages (fs-70
+   owns opening further XTTS-capable languages). Kokoro/piper/gemini reflect
+   today's de facto behavior: since the force-to-Qwen enforcement (Task 2) has
+   always overridden every non-English character regardless of prior engine,
+   none of them has ever actually rendered non-English audio in this app. */
+export const ENGINE_LANGUAGE_SUPPORT: Record<TtsEngine, string[] | '*'> = {
+  qwen: '*',
+  coqui: ['en', 'ru', 'es', 'fr', 'de'],
+  kokoro: ['en'],
+  gemini: ['en'],
+  piper: ['en'],
+};
+
 /* fs-25 — per-quote emotion variant selection. A variant is just another
    designed Qwen voiceId, so the only synth-time lever is picking a different
    voice name; the sidecar contract is untouched.
