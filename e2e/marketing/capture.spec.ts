@@ -18,8 +18,11 @@ mkdirSync(OUT, { recursive: true });
    src/** only): fail loudly on a malformed registry before capturing. */
 const ids = SCENES.map((s) => s.id);
 if (new Set(ids).size !== ids.length) throw new Error('marketing scenes: duplicate scene id');
-for (const s of SCENES)
+for (const s of SCENES) {
   if (!s.hash.startsWith('#/')) throw new Error(`marketing scene ${s.id}: hash must start with #/`);
+  if (s.search && !s.search.startsWith('?'))
+    throw new Error(`marketing scene ${s.id}: search must start with ?`);
+}
 
 const onlyScene = process.env.CAPTURE_SCENE; // optional single-scene filter
 
@@ -71,7 +74,7 @@ for (const scene of SCENES) {
       .waitForSelector('[data-testid="book-cover-hollow-tide-1"]', { timeout: 30_000 })
       .catch(() => {});
 
-    await page.goto('/' + scene.hash);
+    await page.goto('/' + (scene.search ?? '') + scene.hash);
     if (scene.waitFor) {
       // Non-fatal by default: if a view never reaches its content selector we
       // still want a screenshot (plus a console note) rather than an aborted
