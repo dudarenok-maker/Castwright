@@ -736,7 +736,8 @@ wait silently dropped a character's accounting."
 - [ ] **Step 1: Write the failing test — component level (top-bar.test.tsx)**
 
 In `src/components/top-bar.test.tsx`, inside the `describe('DesignPill', ...)` block, add right after
-the existing `'renders the running summary "Designing · done/total · percent"'` test (after line 485):
+the existing `'renders the running summary "Designing · done/total · percent"'` test (that test's
+closing `});` is at line 485 — insert the new test after it, not inside it):
 
 ```ts
   it('surfaces the failure count inline while running (not just in the terminal summary)', () => {
