@@ -394,8 +394,9 @@ describe('allowlist skipContractions scoping (#1084 review fix, bug #2)', () => 
     // "That's" is both a plausible (contrived) character alias AND a literal
     // CONTRACTIONS key. Before this fix, the allowlist call passed
     // skipContractions: true unconditionally, so this name normalised to
-    // ['thats'] (possessive-strip fallback) instead of the expected
-    // ['that', 'is'] — a real behavioural change for English that the
+    // ['that'] (possessive-strip fallback strips the apostrophe-s regardless
+    // of skipContractions) instead of the expected ['that', 'is'] — a real
+    // behavioural change for English that the
     // "byte-for-byte unchanged" constraint should have prevented. It must
     // tokenize identically to the un-opted 2-arg normalizeForWer call.
     const allowlisted = normalizeForWer("That's", 'en', undefined);
@@ -426,7 +427,7 @@ describe('allowlist skipContractions scoping (#1084 review fix, bug #2)', () => 
     // Drives the actual regression site (the allowlist normalization call inside
     // classifyTranscript), not just normalizeForWer in isolation. Before fix #1,
     // the unconditional skipContractions:true meant "That's" only tolerated
-    // ['thats'] (the possessive-strip fallback) — missing 'is' — so a genuine
+    // ['that'] (the possessive-strip fallback) — missing 'is' — so a genuine
     // 2-substitution drift (wer 0.5, over the 0.4 cap) would NOT have been
     // brought under the cap by the allowlist. After the fix, "That's" tolerates
     // both ['that','is'] again (matching pre-#1084 behaviour), correctly
