@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { BookQaReport } from '../lib/types';
 import { downloadFile } from '../lib/download-file';
 import { formatQaReportJson, formatQaReportText } from '../lib/qa-report-export';
+import { classifyHeadline, classifyVoiceMatch } from '../lib/qa-report-classify';
 import { api } from '../lib/api';
 import { Pill } from './primitives';
 
@@ -18,17 +19,20 @@ function slugify(title: string): string {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
-/* fs-51 round-2 review fix — see the matching comment in qa-report-export.ts;
-   the bold span must be a genuine line count (linesRerecorded), never a sum
-   of unlike units mislabeled "lines." `before`/`after` sandwich the bold
-   span so every case (bold-first or bold-last) still ends with a period. */
+/* the bold span must be a genuine line count (linesRerecorded), never a sum
+   of unlike units mislabeled "lines" — see qa-report-classify.ts. `before`/
+   `after` sandwich the bold span so every case (bold-first or bold-last)
+   still ends with a period. */
 function headline(report: BookQaReport): { before: string; bold: string; after: string } {
-  const hasOtherIssues = report.asr.linesFlaggedDrift > 0 || report.voiceDrift.mismatches.length > 0;
-  if (report.acoustic.linesRerecorded > 0) {
-    return { before: '', bold: String(report.acoustic.linesRerecorded), after: ' lines needed a second take.' };
+  const c = classifyHeadline(report);
+  switch (c.kind) {
+    case 'rerecorded':
+      return { before: '', bold: String(c.linesRerecorded), after: ' lines needed a second take.' };
+    case 'otherIssues':
+      return { before: 'Some lines need a ', bold: 'second look', after: '.' };
+    case 'clean':
+      return { before: 'Every line ', bold: 'held', after: '.' };
   }
-  if (hasOtherIssues) return { before: 'Some lines need a ', bold: 'second look', after: '.' };
-  return { before: 'Every line ', bold: 'held', after: '.' };
 }
 
 function AcousticRow({ report }: { report: BookQaReport }) {
@@ -71,8 +75,9 @@ function VoiceMatchRow({
   const vd = report.voiceDrift;
   const [resuming, setResuming] = useState(false);
   const [resumed, setResumed] = useState(false);
+  const classification = classifyVoiceMatch(report);
 
-  if (vd.chaptersEligible === 0) {
+  if (classification.kind === 'noEligible') {
     return (
       <div className="flex items-center justify-between py-2">
         <span className="text-sm text-ink/70">Voice match</span>
@@ -144,15 +149,10 @@ function VoiceMatchRow({
       </div>
     );
   }
-  /* fs-51 correctness fix: chaptersScored === 0 alone no longer means "the
-     gate never ran" — a fleet-wide embedding failure (the gate attempted
-     every eligible chapter, but embeddings failed for literally all of
-     them) ALSO produces chaptersScored === 0, while chaptersEmbedFailed is
-     now correctly nonzero for that case. Only show the "never ran"
-     invitation copy when chaptersEmbedFailed is ALSO 0 — otherwise fall
-     through to the eligible-chapters-scored branch below, which already
-     renders the honest "0 of N eligible chapters scored" fraction. */
-  if (vd.chaptersScored === 0 && vd.chaptersEmbedFailed === 0) {
+  /* the notRun/embedShortfall/scored classification (including the
+     fs-51 fleet-wide-embed-failure and isolated-embed-shortfall correctness
+     fixes) lives in qa-report-classify.ts, shared with qa-report-export.ts. */
+  if (classification.kind === 'notRun') {
     return (
       <div className="flex items-center justify-between py-2">
         <span className="text-sm text-ink/70">Voice match</span>
@@ -160,21 +160,13 @@ function VoiceMatchRow({
       </div>
     );
   }
-  /* fs-51 round-2 review fix: chaptersScored < chaptersEligible (an isolated
-     embed failure) must lead the row, exactly like the character-shortfall
-     case below — otherwise a full-roster book with a failed embed still
-     reads as a clean "N of N characters checked", the false-clean the
-     chaptersEmbedFailed field exists to prevent.
-     fs-51 round-3 review fix: also surface inconclusiveCount (short quotes
-     below the minimum-duration gate) on this row per the spec — it was
-     computed but only ever reached the JSON export. */
-  const inconclusiveNote = vd.inconclusiveCount > 0 ? ` · ${vd.inconclusiveCount} chapters inconclusive` : '';
-  if (vd.chaptersScored < vd.chaptersEligible) {
+  const inconclusiveNote = classification.inconclusiveCount > 0 ? ` · ${classification.inconclusiveCount} chapters inconclusive` : '';
+  if (classification.kind === 'embedShortfall') {
     return (
       <div className="flex items-center justify-between py-2">
         <span className="text-sm text-ink/70">Voice match</span>
         <span className="text-sm text-ink">
-          {vd.chaptersScored} of {vd.chaptersEligible} eligible chapters scored ({vd.chaptersEmbedFailed} couldn't be embedded), {vd.mismatches.length} mismatches{inconclusiveNote}
+          {classification.chaptersScored} of {classification.chaptersEligible} eligible chapters scored ({classification.chaptersEmbedFailed} couldn't be embedded), {classification.mismatchCount} mismatches{inconclusiveNote}
         </span>
       </div>
     );
@@ -183,7 +175,7 @@ function VoiceMatchRow({
     <div className="flex items-center justify-between py-2">
       <span className="text-sm text-ink/70">Voice match</span>
       <span className="text-sm text-ink">
-        {vd.charactersChecked} of {vd.charactersOnRoster} characters checked, {vd.mismatches.length} mismatches{inconclusiveNote}
+        {classification.charactersChecked} of {classification.charactersOnRoster} characters checked, {classification.mismatchCount} mismatches{inconclusiveNote}
       </span>
     </div>
   );
