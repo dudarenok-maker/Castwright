@@ -47,7 +47,7 @@ class _FakeEngine(main.CoquiEngine):
         self.known_speakers = known_speakers
         self.calls: list[tuple[str, str, str]] = []
 
-    def synthesize(self, model: str, voice: str, text: str) -> "main.SynthResult":
+    def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> "main.SynthResult":
         self.calls.append((model, voice, text))
         if self.sleep_sec > 0:
             # time.sleep releases the GIL — but the point of the bug fix is

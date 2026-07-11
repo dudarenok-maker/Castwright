@@ -97,7 +97,7 @@ class _FakeCoquiEngine(main.CoquiEngine):
         self._inflight = 0
         self.peak_inflight = 0
 
-    def synthesize(self, model: str, voice: str, text: str) -> "main.SynthResult":
+    def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> "main.SynthResult":
         with self._inflight_lock:
             self._inflight += 1
             if self._inflight > self.peak_inflight:
@@ -139,7 +139,7 @@ class _FakeKokoroEngine(main.KokoroEngine):
         self._inflight = 0
         self.peak_inflight = 0
 
-    def synthesize(self, model: str, voice: str, text: str) -> "main.SynthResult":
+    def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> "main.SynthResult":
         with self._inflight_lock:
             self._inflight += 1
             if self._inflight > self.peak_inflight:
@@ -391,8 +391,8 @@ def test_concurrent_sample_rate_header_matches_per_response(kokoro_client: TestC
     fake.sleep_sec = 0.05
 
     original = fake.synthesize
-    def _variable_rate_synth(model: str, voice: str, text: str) -> "main.SynthResult":
-        res = original(model, voice, text)
+    def _variable_rate_synth(model: str, voice: str, text: str, language: Optional[str] = None) -> "main.SynthResult":
+        res = original(model, voice, text, language)
         # 16000 + 1000 × len(text) keeps rates legal-ish and per-text-unique.
         return main.SynthResult(
             pcm=res.pcm,

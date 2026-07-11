@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Optional
 
 import pytest
 from fastapi.testclient import TestClient
@@ -170,7 +171,7 @@ def test_synthesize_returns_500_when_engine_raises(monkeypatch) -> None:
     (CodeQL py/stack-trace-exposure)."""
 
     class _ExplodingEngine(_FakeEngine):
-        def synthesize(self, model: str, voice: str, text: str):
+        def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None):
             raise RuntimeError("model load went sideways")
 
     monkeypatch.setitem(main.ENGINES, "coqui", _ExplodingEngine())
@@ -208,7 +209,7 @@ def test_synthesize_schedules_process_exit_on_cuda_assert(monkeypatch) -> None:
     monkeypatch.setattr(main.threading, "Timer", _FakeTimer)
 
     class _CudaPoisonedEngine(_FakeEngine):
-        def synthesize(self, model: str, voice: str, text: str):
+        def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None):
             raise RuntimeError("CUDA error: device-side assert triggered")
 
     engine = _CudaPoisonedEngine()
@@ -244,7 +245,7 @@ def test_synthesize_does_not_double_schedule_exit_on_concurrent_poison(monkeypat
     monkeypatch.setattr(main.threading, "Timer", _FakeTimer)
 
     class _CudaPoisonedEngine(_FakeEngine):
-        def synthesize(self, model: str, voice: str, text: str):
+        def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None):
             raise RuntimeError("CUDA error: device-side assert triggered")
 
     engine = _CudaPoisonedEngine()
@@ -279,7 +280,7 @@ def test_synthesize_flags_engine_as_poisoned_on_cuda_assert(monkeypatch) -> None
     CUDA-poison reason lives in the internal `_process_poison_reason`."""
 
     class _CudaPoisonedEngine(_FakeEngine):
-        def synthesize(self, model: str, voice: str, text: str):
+        def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None):
             raise RuntimeError(
                 "CUDA error: device-side assert triggered\n"
                 "CUDA kernel errors might be asynchronously reported…"
@@ -317,7 +318,7 @@ def test_synthesize_fast_fails_503_when_engine_already_poisoned(monkeypatch) -> 
             super().__init__()
             self.call_count = 0
 
-        def synthesize(self, model: str, voice: str, text: str):
+        def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None):
             self.call_count += 1
             return super().synthesize(model, voice, text)
 
@@ -382,7 +383,7 @@ def test_synthesize_poison_fence_fires_for_non_coqui_engine(monkeypatch) -> None
     monkeypatch.setattr(main.threading, "Timer", _FakeTimer)
 
     class _CudaQwen(_FakeEngine):
-        def synthesize(self, model: str, voice: str, text: str):
+        def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None):
             # The exact error seen in the wild — note: NOT "device-side assert".
             raise RuntimeError("CUDA error: unknown error")
 

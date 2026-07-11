@@ -834,7 +834,7 @@ class Engine:
 
     name: str
 
-    def synthesize(self, model: str, voice: str, text: str) -> SynthResult:
+    def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
         raise NotImplementedError
 
 
@@ -1051,9 +1051,10 @@ class CoquiEngine(Engine):
                 log.warning("torch.cuda.empty_cache() failed (%s) — model is dropped, VRAM will free on GC.", e)
         log.info("Coqui model unloaded.")
 
-    def synthesize(self, model: str, voice: str, text: str) -> SynthResult:
+    def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
         self._ensure_loaded(model)
         assert self._tts is not None
+        effective_language = language or self._language
 
         # Pre-flight validation. If the caller's `voice` isn't in this model's
         # manifest, substitute the fallback rather than letting XTTS fail with
@@ -1092,13 +1093,13 @@ class CoquiEngine(Engine):
                 audio = self._tts.tts(
                     text=text,
                     speaker=actual_voice,
-                    language=self._language,
+                    language=effective_language,
                 )
         else:
             audio = self._tts.tts(
                 text=text,
                 speaker=actual_voice,
-                language=self._language,
+                language=effective_language,
             )
         sample_rate = int(getattr(self._tts.synthesizer, "output_sample_rate", 24000))
         pcm = _float_audio_to_int16_le(audio)
@@ -1361,7 +1362,7 @@ class KokoroEngine(Engine):
         self._voices = []
         log.info("Kokoro model unloaded.")
 
-    def synthesize(self, model: str, voice: str, text: str) -> SynthResult:
+    def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
         # Resident-VRAM exclusion: never let this Kokoro forward overlap a
         # VoiceDesign forward (the three-way 8 GB spill). Held around load+create
         # so a design can't evict Kokoro out from under an in-flight synth.
@@ -3173,7 +3174,7 @@ class QwenEngine(Engine):
         log.info("Derived 1.7B-native prompt for voice '%s' (saved %s).", voice, pt_path)
         return prompt, lang, False
 
-    def synthesize(self, model: str, voice: str, text: str) -> SynthResult:
+    def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
         """`voice` is a designed voiceId. Loads its cached clone prompt and
         reuses it — identical identity across the book. Fails fast (no
         catalog fallback) if the voice hasn't been designed.
@@ -5758,6 +5759,7 @@ async def synthesize(req: Request) -> Response:
     model = body.get("model")
     voice = body.get("voice")
     text = body.get("text")
+    language = body.get("language")  # fs-60 — optional per-request language (Coqui only honors it)
 
     if not isinstance(engine_id, str) or engine_id not in ENGINES:
         return JSONResponse(
@@ -5827,7 +5829,7 @@ async def synthesize(req: Request) -> Response:
         # asyncio.to_thread runs the sync call on a worker thread and yields
         # control back to the event loop, so /health stays sub-50ms during
         # synthesis. This is the single biggest UX fix in the sidecar.
-        result = await asyncio.to_thread(engine.synthesize, model, voice, text)
+        result = await asyncio.to_thread(engine.synthesize, model, voice, text, language)
     except VoiceNotDesignedError as exc:
         # #1063 — the requested voice/variant has no cached embedding on disk.
         # That's a bad-input condition (design the voice/variant first), not an
