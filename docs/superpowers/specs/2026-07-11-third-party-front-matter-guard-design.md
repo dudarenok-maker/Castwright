@@ -153,13 +153,23 @@ NOT the `frontMatterKeywords` array that drives `excluded`).
 
 ### New analyzer method — Signal 2
 
-Add to the `Analyzer` interface (`analyzer/index.ts:65`) a first-class
-schema-constrained method, e.g.:
-`runNonStoryClassification(manuscriptId, chapterId, promptMd, call): Promise<{ nonStory: boolean }>`.
+Add to the `Analyzer` interface (`analyzer/index.ts:65`) a schema-constrained
+method, declared **optional** to bound the blast radius:
+`runNonStoryClassification?(manuscriptId, chapterId, promptMd, call): Promise<{ nonStory: boolean }>`.
 Implement in the Gemini and local analyzers; `FallbackAnalyzer` delegates like
-the other methods. This is what makes the analyzer-stubbed integration test
-work — the guard reaches Signal 2 through the mocked `select-analyzer` seam, not
-a raw Ollama/Gemini call.
+the other methods. Making it optional means the ~10 existing full-`Analyzer`
+test literals (`script-review.test.ts`, `annotate-emotion.test.ts`,
+`instruct-annotation.test.ts`, `analysis-pipelining.test.ts`,
+`analysis.structure-engine.test.ts`, `analysis.phase-model.test.ts`,
+`analysis.structure-fixture.test.ts`, `escalation.test.ts`, and `makeAnalyzer`
+in `fallback.test.ts`) keep type-checking unchanged; only the 3 real impls, the
+guard call-site wrapper, and the new tests are touched. The route call-site
+treats an analyzer that lacks the method as "Signal 2 unavailable" → Signal-1-only
+for that run (graceful degradation, same shape as the injected-optional core).
+`buildCloudEscalationAnalyzer` (`analysis.ts:1563`) needs no change — it returns
+a `GeminiAnalyzer` instance, covered by the Gemini impl. This is what makes the
+analyzer-stubbed integration test work — the guard reaches Signal 2 through the
+mocked `select-analyzer` seam, not a raw Ollama/Gemini call.
 
 ### New module — `server/src/analyzer/third-party-front-matter-guard.ts`
 
@@ -202,7 +212,14 @@ After `dedupAndPrepare`, **before `foldMinorCast`** — in both the full-analysi
 block (~L4192) and the subset re-analysis block (~L5231). Both are already
 `async`, so the awaited guard adds no control-flow hazard. Chapter bodies come
 from `record.chapterHints[].body`; the real `classifyNonStory` wraps the new
-analyzer method against the analyzer handle already in scope.
+analyzer method against the analyzer handle already in scope (and is simply
+omitted when that handle lacks `runNonStoryClassification`).
+
+**Index derivation (pin):** a character's chapter index for Gate 0 is the
+position of its chapter within `record.chapterHints` **including excluded
+entries**, so the front-region window `F` reflects true narrative position (a
+dropped copyright page still occupies its slot). Pass `chapters` to the guard in
+that order; do not renumber against a filtered list.
 
 ### Why a dedicated pass (not an exception inside `foldMinorCast`)
 
@@ -229,6 +246,9 @@ Deterministic, synthetic inputs, no live model:
   character only there → kept.
 - **Preserves (b)** — name also in another chapter body (incl. a Cyrillic
   `Радий` occurrence) → kept.
+- **(c) ceiling boundary** — a third party quoted **≥ minLines (3)** in the
+  essay is KEPT (documents the conservative boundary as an explicit assertion,
+  not a surprise).
 - **No-op identity**, **async contract** (omitting `classifyNonStory` →
   Signal-1-only, no throw).
 
