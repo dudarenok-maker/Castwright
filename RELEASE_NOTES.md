@@ -1,3 +1,7 @@
+# Castwright 1.13.0
+
+- **Sharper quality-checking for non-English books:** Castwright now understands numbers and common contractions when it double-checks Spanish, French, German, and Russian narration.
+
 # Castwright 1.12.2
 
 - **A Pinokio install now starts up with its real settings.** The v1.12.1 fix got the Pinokio install running for the first time — which revealed that the server was starting from the wrong folder and couldn't find its own configuration, so it quietly ran on defaults. It now launches from the right place, so a fresh Pinokio Install → Start comes up fully configured from the very first run.

@@ -250,6 +250,8 @@ export function normalizeForWer(text: string, language?: string | null): string[
   const english = lang === 'en' || !language;
   let s = (text ?? '').normalize('NFKC').toLowerCase();
   s = s.replace(SMART_QUOTES, "'").replace(SMART_DQUOTES, '"').replace(DASHES, '-');
+  // Expand contractions before stripping apostrophes — English forms via
+  // CONTRACTIONS, other languages via their own WER_CONTRACTIONS table.
   if (english) {
     for (const [from, to] of Object.entries(CONTRACTIONS)) {
       s = s.replace(new RegExp(`\\b${from.replace(/'/g, "['’]")}\\b`, 'g'), to);
@@ -264,6 +266,11 @@ export function normalizeForWer(text: string, language?: string | null): string[
   }
   // Drop possessive 's and any remaining apostrophes inside words.
   s = s.replace(/'s\b/g, '').replace(/'/g, '');
+  // Replace every non-alphanumeric with a space, then tokenise. Letters/digits
+  // are matched script-agnostically (\p{L}\p{N}, NOT [a-z0-9]) — an ASCII-only
+  // strip erased all Cyrillic/CJK, so a non-English sentence normalised to []
+  // and the WER gate silently no-op'd ('inconclusive') on every line
+  // (2026-06-15; mirrors the stage2-coverage.ts fix). English is unchanged.
   s = s.replace(/[^\p{L}\p{N}]+/gu, ' ');
   const tokens = s.split(/\s+/).filter(Boolean);
   if (english) {

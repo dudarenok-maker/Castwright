@@ -16,28 +16,23 @@ The marker is what bump-version checks: if it doesn't match the version being
 cut, the bump refuses (so a stale file can't ship as the body). The
 user-facing, brand-voice notes live separately in RELEASE_NOTES.md (#/release-notes).
 
-release-notes-next-version: 1.12.2
+release-notes-next-version: 1.13.0
 
-DRAFT IN PROGRESS — v1.12.2 is a same-day follow-on patch to v1.12.1. The
-v1.12.1 Pinokio shell-cwd fix let Install run for the first time, which
-surfaced a SECOND, distinct installer bug on Start (server ran but ignored
-server/.env). Diffed against v1.12.1 (the previous public release) per
-CONTRIBUTING.md "Release notes" — one themed fix, no headline-features
-section.
+DRAFT IN PROGRESS — v1.13.0 reopens the draft: v1.12.2 published as a
+same-day patch on 2026-07-11, and this is the first PR of the next cycle.
+Diffed against v1.12.2 (the previous public release) per CONTRIBUTING.md
+"Release notes". Only one themed entry so far; later PRs in this cycle
+append to this draft rather than opening a new one.
 -->
 
-**A patch release: the Pinokio-installed server now reads its own settings.** v1.12.1 got the Pinokio install running for the first time — which immediately surfaced a second bug the first one had been hiding: the server started, but from the wrong directory, so it silently ignored its own configuration. Fixed; a clean Pinokio Install → Start now comes up fully configured.
+**A quality-and-accuracy release, so far.** The v1.13.0 cycle opens with a sharper ASR content-QA gate for non-English books.
 
 ---
-
-## 🚀 Onboarding
-
-- **A Pinokio-launched server no longer boots on bare defaults.** After the v1.12.1 fix let the one-click install actually run, the very next step exposed this: the launcher started the server from the app's top folder instead of its `server/` folder, so the server couldn't find its own `.env` — the file that carries your workspace location, worker counts, GPU memory budget, and analyzer settings — and quietly fell back to defaults. It now launches from the right place (matching how the desktop app has always started it), so a Pinokio install comes up with its real settings from the first run. (#1513, #1514)
 
 ## 🗣️ Quality & Accuracy
 
-- **ASR content-QA gate: non-English integer-spelling and contraction normalization for es/fr/de/ru (#1084). Real per-language `maxWer` calibration against rendered audio remains a tracked follow-up.**
+- **ASR content-QA gate: non-English integer-spelling and contraction normalization for es/fr/de/ru (#1084).** Real per-language `maxWer` calibration against rendered audio remains a tracked follow-up.
 
 ---
 
-**Full changelog:** v1.12.1...v1.12.2
+**Full changelog:** v1.12.2...v1.13.0
