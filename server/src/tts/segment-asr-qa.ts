@@ -245,22 +245,31 @@ function spellInteger(n: number): string | null {
     `WER_CONTRACTIONS` tables (#1084) — matching what Whisper actually hears
     ("3" → "tres" for Spanish, not "three") instead of leaving the digit as a
     no-op; a language with no table entry falls back to the digit unchanged. */
-export function normalizeForWer(text: string, language?: string | null): string[] {
+export function normalizeForWer(
+  text: string,
+  language?: string | null,
+  opts?: { skipContractions?: boolean },
+): string[] {
   const lang = baseSubtag(language);
   const english = lang === 'en' || !language;
   let s = (text ?? '').normalize('NFKC').toLowerCase();
   s = s.replace(SMART_QUOTES, "'").replace(SMART_DQUOTES, '"').replace(DASHES, '-');
   // Expand contractions before stripping apostrophes — English forms via
   // CONTRACTIONS, other languages via their own WER_CONTRACTIONS table.
-  if (english) {
-    for (const [from, to] of Object.entries(CONTRACTIONS)) {
-      s = s.replace(new RegExp(`\\b${from.replace(/'/g, "['’]")}\\b`, 'g'), to);
-    }
-  } else {
-    const contractions = WER_CONTRACTIONS[lang];
-    if (contractions) {
-      for (const [from, to] of Object.entries(contractions)) {
-        s = s.replace(new RegExp(`\\b${from}\\b`, 'g'), to);
+  // Callers computing an alternate normalization (the non-expanded variant
+  // used for the min-WER comparison, or allowlist entries) pass
+  // skipContractions: true to bypass this step entirely.
+  if (!opts?.skipContractions) {
+    if (english) {
+      for (const [from, to] of Object.entries(CONTRACTIONS)) {
+        s = s.replace(new RegExp(`\\b${from.replace(/'/g, "['’]")}\\b`, 'g'), to);
+      }
+    } else {
+      const contractions = WER_CONTRACTIONS[lang];
+      if (contractions) {
+        for (const [from, to] of Object.entries(contractions)) {
+          s = s.replace(new RegExp(`\\b${from}\\b`, 'g'), to);
+        }
       }
     }
   }
@@ -550,53 +559,85 @@ export function classifyTranscript(
     }
   }
 
-  const [expectedTokens, actualTokens] = bridgeCompounds(
-    normalizeForWer(expectedText, opts.language),
-    normalizeForWer(transcript, opts.language),
-    t.maxBridgeRun,
-  );
-  if (expectedTokens.length === 0) {
-    reasons.push('Not scored — expected text normalised to empty.');
-    return base('inconclusive');
-  }
-
   const allow = new Set<string>();
   for (const src of [opts.nameAllowlist, opts.vocalizationAllowlist]) {
     if (src) {
       for (const name of src) {
-        for (const tok of normalizeForWer(name, opts.language)) allow.add(tok);
+        for (const tok of normalizeForWer(name, opts.language, { skipContractions: true })) allow.add(tok);
       }
     }
   }
 
-  const ops = alignTokens(expectedTokens, actualTokens);
-  let sub = 0;
-  let del = 0;
-  let ins = 0;
-  let curDelRun = 0;
-  let longestDeletionRun = 0;
-  for (const op of ops) {
-    const tolerated = op.expected != null && allow.has(op.expected);
-    if (op.type === 'sub') {
-      if (!tolerated) sub += 1;
-      curDelRun = 0;
-    } else if (op.type === 'del') {
-      if (!tolerated) {
-        del += 1;
-        curDelRun += 1;
-        if (curDelRun > longestDeletionRun) longestDeletionRun = curDelRun;
+  const heardTokens = normalizeForWer(transcript, opts.language);
+
+  type Alignment = {
+    expectedTokens: string[];
+    actualTokens: string[];
+    sub: number;
+    del: number;
+    ins: number;
+    longestDeletionRun: number;
+    wer: number;
+  };
+
+  // Build the alignment (bridging, edit-distance backtrace, tolerated-token
+  // counting) for one variant of the expected-token stream. Called once for
+  // the default (contraction-expanded) variant, and — only for a language
+  // with a WER_CONTRACTIONS table (currently just German) — a second time for
+  // the non-expanded variant, so a mishearing where Whisper's word ISN'T the
+  // contraction's expansion doesn't get an artificial extra deletion (#1084
+  // review fix).
+  const buildAlignment = (expectedRaw: string[]): Alignment => {
+    const [expectedTokens, actualTokens] = bridgeCompounds(expectedRaw, heardTokens, t.maxBridgeRun);
+    const ops = alignTokens(expectedTokens, actualTokens);
+    let sub = 0;
+    let del = 0;
+    let ins = 0;
+    let curDelRun = 0;
+    let longestDeletionRun = 0;
+    for (const op of ops) {
+      const tolerated = op.expected != null && allow.has(op.expected);
+      if (op.type === 'sub') {
+        if (!tolerated) sub += 1;
+        curDelRun = 0;
+      } else if (op.type === 'del') {
+        if (!tolerated) {
+          del += 1;
+          curDelRun += 1;
+          if (curDelRun > longestDeletionRun) longestDeletionRun = curDelRun;
+        } else {
+          curDelRun = 0;
+        }
+      } else if (op.type === 'ins') {
+        ins += 1;
+        curDelRun = 0;
       } else {
         curDelRun = 0;
       }
-    } else if (op.type === 'ins') {
-      ins += 1;
-      curDelRun = 0;
-    } else {
-      curDelRun = 0;
+    }
+    const wer = expectedTokens.length === 0 ? Infinity : (sub + del + ins) / expectedTokens.length;
+    return { expectedTokens, actualTokens, sub, del, ins, longestDeletionRun, wer };
+  };
+
+  const langKey = baseSubtag(opts.language);
+  const hasContractionTable = Object.keys(WER_CONTRACTIONS[langKey] ?? {}).length > 0;
+
+  let alignment = buildAlignment(normalizeForWer(expectedText, opts.language));
+  if (alignment.expectedTokens.length === 0) {
+    reasons.push('Not scored — expected text normalised to empty.');
+    return base('inconclusive');
+  }
+
+  if (hasContractionTable) {
+    const altAlignment = buildAlignment(
+      normalizeForWer(expectedText, opts.language, { skipContractions: true }),
+    );
+    if (altAlignment.wer < alignment.wer) {
+      alignment = altAlignment;
     }
   }
 
-  const wer = (sub + del + ins) / expectedTokens.length;
+  const { expectedTokens, actualTokens, sub, del, ins, longestDeletionRun, wer } = alignment;
   const metrics = { wer, sub, del, ins, longestDeletionRun };
 
   // Compression-ratio drift was flagged above.

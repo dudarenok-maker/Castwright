@@ -90,6 +90,11 @@ describe('normalizeForWer German contraction expansion (#1084)', () => {
   it('expands "im" to "in dem" so it matches the uncontracted form', () => {
     expect(normalizeForWer('im Garten', 'de')).toEqual(normalizeForWer('in dem Garten', 'de'));
   });
+
+  it('normalizeForWer skipContractions option bypasses German contraction expansion (#1084 review fix)', () => {
+    expect(normalizeForWer('im Garten', 'de', { skipContractions: true })).toEqual(['im', 'garten']);
+    expect(normalizeForWer('im Garten', 'de')).toEqual(normalizeForWer('in dem Garten', 'de')); // default behavior unchanged
+  });
 });
 
 describe('normalizeForWer no-op proof for es/fr/ru contractions (#1084)', () => {
@@ -344,6 +349,42 @@ describe('classifyTranscript es/fr/de faithful vs. drift (#1084)', () => {
   it('flags wrong words in a German transcript -> drift', () => {
     const r = classifyTranscript('Sie hatte einundzwanzig Katzen im Garten.',
       'Er kaufte einen roten Wagen am Montag.', signals, { language: 'de' });
+    expect(r.verdict).toBe('drift');
+  });
+
+  it('does not inflate WER when Whisper mishears a German contraction as a near-homophone real word (#1084 review fix)', () => {
+    const r = classifyTranscript('Bleib im Haus!', 'Bleib ihm Haus!', signals, { language: 'de' });
+    expect(r.verdict).toBe('ok');
+    expect(r.sub).toBe(1);
+    expect(r.del).toBe(0);
+  });
+
+  it('still matches when Whisper spells out the German contraction as two words (#1084 review fix)', () => {
+    const r = classifyTranscript('Bleib im Haus!', 'Bleib in dem Haus!', signals, { language: 'de' });
+    expect(r.verdict).toBe('ok');
+    expect(r.wer).toBe(0);
+  });
+
+  it('still flags genuine German content drift even with a contraction in the sentence (#1084 review fix)', () => {
+    const r = classifyTranscript(
+      'Bleib im Haus, mein Freund!',
+      'Renne im Park, mein Feind!',
+      signals,
+      { language: 'de' },
+    );
+    expect(r.verdict).toBe('drift');
+  });
+
+  it('does not let a name allowlist entry equal to a German contraction key leak expanded words into tolerance (#1084 review fix)', () => {
+    // 'Vom' as a (contrived) character name/alias — before the fix this expanded to
+    // ['von', 'dem'], silently tolerating those two very common words anywhere in
+    // the sentence. Real content drift replacing "von dem" with unrelated words
+    // (2 subs out of 4 words, wer 0.5 > the 0.4 cap) must still be flagged — a
+    // leaking allow set would zero out both subs and read as a faithful 'ok'.
+    const r = classifyTranscript('Ging sie von dem?', 'Ging sie irgendwo hin?', signals, {
+      language: 'de',
+      nameAllowlist: ['Vom'],
+    });
     expect(r.verdict).toBe('drift');
   });
 });
