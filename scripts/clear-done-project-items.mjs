@@ -50,11 +50,35 @@ export function isArchivable(node) {
   return !labels.includes('moscow:wont');
 }
 
+// `gh project item-archive --owner <login>` resolves the owner's account type
+// (User vs Organization) via its own internal GraphQL query before archiving.
+// That resolution needs more than the `project`+`repo` scopes the CI PAT
+// carries (ADD_TO_PROJECT_PAT — see CONTRIBUTING.md) and fails with the
+// unhelpful "unknown owner type" (gh's generic fallback for a resolution it
+// can't classify) — see #1503. A raw `archiveProjectV2Item` mutation against
+// the project's node ID sidesteps owner resolution entirely and needs only
+// `project` scope, matching how listDoneItems() above already reads via raw
+// GraphQL instead of `gh project item-list --owner`.
+export function buildArchiveMutationArgs(projectId, itemId) {
+  const mutation = `
+    mutation($projectId: ID!, $itemId: ID!) {
+      archiveProjectV2Item(input: { projectId: $projectId, itemId: $itemId }) { item { id } }
+    }`;
+  return ['api', 'graphql', '-f', `query=${mutation}`, '-f', `projectId=${projectId}`, '-f', `itemId=${itemId}`];
+}
+
+// Returns { projectId, items } — projectId comes from THIS query (the same
+// board projectNumber+PROJECT_OWNER resolve to), not the config file's
+// separately-recorded projectId. Deriving it here rather than trusting
+// config.projectId as a second source of truth means a stale/hand-edited
+// config value can't send the archive mutation below at a different project
+// than the one Done items were actually listed from.
 function listDoneItems(config) {
   const query = `
     query($login: String!, $number: Int!, $after: String) {
       user(login: $login) {
         projectV2(number: $number) {
+          id
           items(first: 100, after: $after) {
             pageInfo { hasNextPage endCursor }
             nodes {
@@ -72,17 +96,19 @@ function listDoneItems(config) {
   // once the board grows past 100 total items (85 issues + initiative
   // parents + whatever accumulates in Done between releases).
   const results = [];
+  let projectId = null;
   let after = null;
   for (;;) {
     const args = ['api', 'graphql', '-f', `query=${query}`, '-f', `login=${PROJECT_OWNER}`, '-F', `number=${config.projectNumber}`];
     if (after) args.push('-f', `after=${after}`);
     const raw = gh(args);
-    const data = JSON.parse(raw).data.user.projectV2.items;
-    results.push(...data.nodes);
-    if (!data.pageInfo.hasNextPage) break;
-    after = data.pageInfo.endCursor;
+    const projectV2 = JSON.parse(raw).data.user.projectV2;
+    projectId = projectV2.id;
+    results.push(...projectV2.items.nodes);
+    if (!projectV2.items.pageInfo.hasNextPage) break;
+    after = projectV2.items.pageInfo.endCursor;
   }
-  return results.filter(isArchivable);
+  return { projectId, items: results.filter(isArchivable) };
 }
 
 function parseArgs(argv) {
@@ -103,7 +129,7 @@ async function main() {
   if (!ghAvailable()) die('`gh` not found. Install the GitHub CLI + `gh auth login`.');
 
   const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
-  const doneItems = listDoneItems(config);
+  const { projectId, items: doneItems } = listDoneItems(config);
 
   info(`${doneItems.length} Done item(s):`);
   for (const item of doneItems) info(`  #${item.content.number} ${item.content.title}`);
@@ -114,7 +140,7 @@ async function main() {
   }
 
   for (const item of doneItems) {
-    gh(['project', 'item-archive', String(config.projectNumber), '--owner', PROJECT_OWNER, '--id', item.id]);
+    gh(buildArchiveMutationArgs(projectId, item.id));
     info(`  archived #${item.content.number}`);
   }
   info(`\n[OK] archived ${doneItems.length} Done item(s).`);
