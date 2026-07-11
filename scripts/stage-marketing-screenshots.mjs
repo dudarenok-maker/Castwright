@@ -62,6 +62,10 @@ export const MANIFEST = [
   { output: 'cast-pin-higher-quality', scene: 'cast-pin-higher-quality', viewport: 'desktop' },
   { output: 'series-memory-reveal', scene: 'series-memory-reveal', viewport: 'desktop' },
   { output: 'series-share-card', scene: 'series-share-card', viewport: 'desktop' },
+  // --- fs-52 captions export (this pass) ---
+  { output: 'captions-options', scene: 'export-captions-options', viewport: 'desktop' },
+  { output: 'export-format-tiles', scene: 'export-download-tiles', viewport: 'desktop' },
+  { output: 'fix-line-modal', scene: 'listen-fix-line-modal', viewport: 'desktop' },
 ];
 
 // Pure — no filesystem access — so the test can exercise it without real files.
