@@ -17,7 +17,10 @@ test.describe('fs-1 — in-app upgrade flow', () => {
 
     const card = page.getByTestId('upgrade-card');
     await expect(card).toBeVisible();
-    await expect(card.getByText(/You.?re running/)).toBeVisible();
+    /* Wait for the RESOLVED running version, not just the sentence — the card
+       renders "v…" until /api/info settles, and staging the zip before that
+       would put the placeholder into the confirm dialog's version delta. */
+    await expect(card.getByText(/You.?re running v\d+\.\d+\.\d+/)).toBeVisible();
 
     // Pick a (fake) zip — the mock api stages a next-minor candidate.
     await card
@@ -34,7 +37,7 @@ test.describe('fs-1 — in-app upgrade flow', () => {
     /* The staged candidate must be a DIFFERENT version from the running one —
        a regression that stages the running version itself would render a
        no-op "vX → vX" dialog and still satisfy the bare format match above. */
-    const delta = /v(\d+\.\d+\.\d+(?:[-\w.]*)?)\s*→\s*v(\d+\.\d+\.\d+(?:[-\w.]*)?)/.exec(
+    const delta = /v(\d+\.\d+\.\d+)\s*→\s*v(\d+\.\d+\.\d+)/.exec(
       (await confirm.textContent()) ?? '',
     );
     expect(delta, 'confirm dialog shows a "vX → vY" version delta').not.toBeNull();

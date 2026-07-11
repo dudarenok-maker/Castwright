@@ -91,6 +91,7 @@ import { parseDuration } from './time';
 import stubAudioA from '../mocks/audio/stub-a.mp3?url';
 import stubAudioB from '../mocks/audio/stub-b.mp3?url';
 import { buildInfo } from './build-info';
+import { firstVersionIn } from './release-notes';
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
 /* Marketing screenshot capture flag (.env.marketing → `--mode marketing`).
@@ -6307,19 +6308,26 @@ export function buildMockAppInfo(releaseNotes: string): AppInfo {
    section (e.g. Vitest's 0.0.0-dev sentinel, or a bare document) serves the
    document unchanged. Pure + exported so it's unit-tested directly. */
 export function trimUnreleasedReleaseNotes(md: string, version: string): string {
-  const parse = (v: string): number[] | null => {
+  const toTuple = (v: string | null): number[] | null => {
+    if (v == null) return null;
     const m = /(\d+)\.(\d+)\.(\d+)/.exec(v);
     return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
   };
-  const running = parse(version);
+  const running = toTuple(version);
   if (!running) return md;
   const atOrBelowRunning = (v: number[]) =>
     v[0] !== running[0] ? v[0] < running[0] : v[1] !== running[1] ? v[1] < running[1] : v[2] <= running[2];
   const lines = md.split(/\r?\n/);
   const start = lines.findIndex((l) => {
-    const heading = /^#{1,2}\s+(.*)$/.exec(l.trim());
+    /* H1 only, deliberately narrower than parseReleaseNotes' h1/h2 grammar:
+       release sections in this repo's RELEASE_NOTES.md are always H1, and an
+       H2 like "## Upgrading from 1.11.0" INSIDE an unreleased section must
+       never become the cut point (it would serve unreleased bullets under a
+       nonsense heading). Version extraction itself is shared via
+       firstVersionIn so the two parsers can't drift on that rule. */
+    const heading = /^#\s+(.*)$/.exec(l.trim());
     if (!heading) return false;
-    const v = parse(heading[1]);
+    const v = toTuple(firstVersionIn(heading[1]));
     return v != null && atOrBelowRunning(v);
   });
   return start >= 0 ? lines.slice(start).join('\n') : md;
@@ -6328,23 +6336,26 @@ export function trimUnreleasedReleaseNotes(md: string, version: string): string 
 /* The real bundled RELEASE_NOTES.md, loaded lazily via dynamic import so the
    (growing, ~40 KB) document lands in a mock-only chunk instead of the real
    production bundle — a static `?raw` import evaluated at module scope would
-   defeat the USE_MOCKS tree-shake. A failed chunk load degrades to a minimal
-   stub instead of rejecting: the mock /api/info path (version pill, Account,
-   the strict pinokio-install-ready capture scene) was infallible before the
-   lazy load and must stay that way. Exported for the unit test that pins
+   defeat the USE_MOCKS tree-shake. Exported for the unit test that pins
    "serves the real notes, not a frozen fixture". */
 export async function loadMockReleaseNotes(): Promise<string> {
-  try {
-    const md = (await import('../../RELEASE_NOTES.md?raw')).default;
-    return trimUnreleasedReleaseNotes(md, buildInfo.version);
-  } catch {
-    return `# Castwright ${buildInfo.version}\n`;
-  }
+  const md = (await import('../../RELEASE_NOTES.md?raw')).default;
+  return trimUnreleasedReleaseNotes(md, buildInfo.version);
 }
 
 let mockAppInfo: AppInfo | null = null;
 async function mockAppInfoState(): Promise<AppInfo> {
-  return (mockAppInfo ??= buildMockAppInfo(await loadMockReleaseNotes()));
+  if (mockAppInfo) return mockAppInfo;
+  try {
+    return (mockAppInfo = buildMockAppInfo(await loadMockReleaseNotes()));
+  } catch {
+    /* A transiently failed chunk load (dev-server restart, redeploy
+       invalidating the hashed chunk) degrades to a stub WITHOUT memoizing it,
+       so the mock /api/info path (version pill, Account, the strict
+       pinokio-install-ready capture scene) never rejects AND the next call
+       retries the real document instead of serving the stub forever. */
+    return buildMockAppInfo(`# Castwright ${buildInfo.version}\n`);
+  }
 }
 /* Test seam — clears the memoized app info AND the dismiss latch below, so
    unit tests exercising the seam/dismiss round-trip stay order-independent

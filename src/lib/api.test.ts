@@ -267,6 +267,14 @@ describe('trimUnreleasedReleaseNotes (mid-cycle in-progress section)', () => {
     expect(out.startsWith('# Castwright 1.12.2')).toBe(true);
     expect(out).not.toContain('Unreleased bullet');
   });
+
+  it('ignores H2 sub-headings mentioning older versions inside an unreleased section', () => {
+    const md =
+      '# Castwright 1.13.0\n\n## Upgrading from 1.11.0\n\n- Unreleased bullet.\n\n# Castwright 1.12.2\n\n- Shipped bullet.\n';
+    const out = trimUnreleasedReleaseNotes(md, '1.12.2');
+    expect(out.startsWith('# Castwright 1.12.2')).toBe(true);
+    expect(out).not.toContain('Unreleased bullet');
+  });
 });
 
 describe('demoWhatsNew dismiss latch (seam → dismiss → refetch)', () => {

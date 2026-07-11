@@ -23,6 +23,13 @@ export interface ReleaseNote {
 
 const VERSION_RE = /(\d+\.\d+\.\d+)/;
 
+/** First semver found in heading/text, or null — the single version-extraction
+ *  rule shared by this parser and the mock's release-notes trimmer (api.ts
+ *  trimUnreleasedReleaseNotes), so the two can't drift. */
+export function firstVersionIn(text: string): string | null {
+  return VERSION_RE.exec(text)?.[1] ?? null;
+}
+
 export function parseReleaseNotes(md: string): ReleaseNote[] {
   const notes: ReleaseNote[] = [];
   let current: ReleaseNote | null = null;
@@ -31,7 +38,7 @@ export function parseReleaseNotes(md: string): ReleaseNote[] {
     const heading = /^#{1,2}\s+(.*)$/.exec(line);
     if (heading) {
       const text = heading[1].trim();
-      current = { heading: text, version: VERSION_RE.exec(text)?.[1] ?? null, bullets: [] };
+      current = { heading: text, version: firstVersionIn(text), bullets: [] };
       notes.push(current);
       continue;
     }
