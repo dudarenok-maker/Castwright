@@ -29,6 +29,8 @@
 
 ### Release Notes
 - [All releases](Release-Notes)
+- [v1.12](Release-Notes-v1.12)
+- [v1.11.0](Release-Notes-v1.11.0)
 - [v1.10.0](Release-Notes-v1.10.0)
 - [v1.9.0](Release-Notes-v1.9.0)
 - [v1.8.0](Release-Notes-v1.8.0)
