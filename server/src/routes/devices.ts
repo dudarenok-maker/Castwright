@@ -18,6 +18,7 @@ import { createDevice, listDevices, revokeDevice, clampTtlDays } from '../worksp
 import { createPairingSession } from '../workspace/pairing-sessions.js';
 import { isLanTokenEnforced, isLoopbackRequest } from '../lan-auth.js';
 import { enumerateLanUrls } from './export-lan.js';
+import { getLanRuntime } from '../lan-runtime.js';
 import { configValue } from '../config/resolver.js';
 
 export const devicesRouter = Router();
@@ -52,7 +53,14 @@ devicesRouter.post('/devices/pair-session', (req: Request, res: Response) => {
     res.status(409).json({ error: 'lan-auth-not-enforced' });
     return;
   }
-  const port = Number(process.env.LAN_HTTPS_PORT ?? 8443);
+  // Use the ACTUAL bound runtime (like pairing.ts / GET /lan), not a hardcoded 8443:
+  // a cert-less box degraded to loopback HTTP would otherwise hand out a dead
+  // https://<ip>:8443 pairing URL.
+  const { httpsActive, port } = getLanRuntime();
+  if (!httpsActive) {
+    res.status(409).json({ error: 'not-lan-https' });
+    return;
+  }
   const { urls } = enumerateLanUrls(port, 'https');
   const host = urls[0]?.replace(/^https:\/\//, '');
   if (!host) {

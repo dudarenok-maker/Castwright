@@ -45,10 +45,15 @@ vi.mock('./export-lan.js', async (orig) => {
   const real = await orig<typeof import('./export-lan.js')>();
   return {
     ...real,
-    isLanHttpsEnabled: () => true,
     enumerateLanUrls: () => ({ urls: ['https://192.168.1.5:8443'], port: 8443, protocol: 'https' as const }),
   };
 });
+// The /session route gates on the ACTUAL bound runtime, not the requested flag.
+// A vi.fn so a test can flip httpsActive to exercise the not-lan-https 409 branch.
+vi.mock('../lan-runtime.js', () => ({
+  getLanRuntime: vi.fn(() => ({ httpsActive: true, port: 8443 })),
+  setLanRuntime: () => {},
+}));
 vi.mock('./cert-root.js', () => ({ resolveRootCaPath: () => ({ path: 'FAKE', source: 'default' as const }) }));
 vi.mock('../config/resolver.js', () => ({ configValue: (_key: string) => 30 }));
 vi.mock('node:fs', async (orig) => {
@@ -73,6 +78,7 @@ vi.mock('../workspace/device-tokens.js', () => ({
 import { pairSessionRouter, pairRedeemRouter, redeemLimiter } from './pairing.js';
 import { _resetPairingSessionsForTests, createPairingSession } from '../workspace/pairing-sessions.js';
 import { isLoopbackRequest, isLanTokenEnforced, isPrivateNetworkRequest } from '../lan-auth.js';
+import { getLanRuntime } from '../lan-runtime.js';
 
 function appWith(router: express.Router) {
   const app = express();
@@ -97,6 +103,13 @@ describe('pairing routes', () => {
       `https://www.castwright.ai/pair?h=192.168.1.5%3A8443&c=${res.body.code}&f=5CEE77RAKV3EN9JXTB2C9QD4JW`,
     );
     expect(res.body.expiresAt).toBeGreaterThan(0);
+  });
+
+  it('POST /session 409s not-lan-https when HTTPS is not actually bound (cert-less degrade)', async () => {
+    vi.mocked(getLanRuntime).mockReturnValueOnce({ httpsActive: false, port: 8080 });
+    const res = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('not-lan-https');
   });
 
   it('POST /redeem mints a token for a fresh code, then 410 on reuse', async () => {

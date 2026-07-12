@@ -1,17 +1,27 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { serverLoopbackBaseUrl } from './loopback-url.js';
+import { setLanRuntime } from '../lan-runtime.js';
 
 describe('serverLoopbackBaseUrl', () => {
-  it('uses plain http on PORT by default', () => {
-    expect(serverLoopbackBaseUrl({ PORT: '8080' })).toBe('http://127.0.0.1:8080');
+  afterEach(() => {
+    setLanRuntime({ httpsActive: false, port: 8080 }); // module default
   });
-  it('uses https on LAN_HTTPS_PORT when LAN_HTTPS is set', () => {
-    expect(serverLoopbackBaseUrl({ LAN_HTTPS: '1', LAN_HTTPS_PORT: '8443' })).toBe(
-      'https://127.0.0.1:8443',
-    );
+
+  it('uses plain http on the bound port when HTTPS is not active', () => {
+    setLanRuntime({ httpsActive: false, port: 8080 });
+    expect(serverLoopbackBaseUrl()).toBe('http://127.0.0.1:8080');
   });
-  it('falls back to default ports', () => {
-    expect(serverLoopbackBaseUrl({})).toBe('http://127.0.0.1:8080');
-    expect(serverLoopbackBaseUrl({ LAN_HTTPS: 'true' })).toBe('https://127.0.0.1:8443');
+
+  it('uses https on the bound LAN port when HTTPS is active', () => {
+    setLanRuntime({ httpsActive: true, port: 8443 });
+    expect(serverLoopbackBaseUrl()).toBe('https://127.0.0.1:8443');
+  });
+
+  it('the regression: LAN requested but degraded to HTTP → callback targets the ACTUAL http port, not :8443', () => {
+    // LAN_HTTPS=1 requested, but certs were missing so the server bound loopback HTTP
+    process.env.LAN_HTTPS = '1';
+    setLanRuntime({ httpsActive: false, port: 8080 });
+    expect(serverLoopbackBaseUrl()).toBe('http://127.0.0.1:8080');
+    delete process.env.LAN_HTTPS;
   });
 });

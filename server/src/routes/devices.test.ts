@@ -17,6 +17,13 @@ vi.mock('./export-lan.js', async (orig) => ({
   enumerateLanUrls: () => ({ urls: ['https://192.168.1.7:8443'], port: 8443, protocol: 'https' }),
 }));
 
+// pair-session reads the ACTUAL bound runtime; mock it (vi.fn so a test can flip
+// httpsActive to exercise the not-lan-https degrade branch). Survives vi.resetModules().
+vi.mock('../lan-runtime.js', () => ({
+  getLanRuntime: vi.fn(() => ({ httpsActive: true, port: 8443 })),
+  setLanRuntime: () => {},
+}));
+
 /* Spread the real lan-auth module and override only the two gate functions with
    vi.fn so we can mock them per-test. requireLanToken is exposed as a forwarding
    wrapper so it always calls through to the freshly-imported REAL requireLanToken
@@ -208,6 +215,16 @@ describe('devices route (srv-33)', () => {
     const res = await request(app).post('/api/devices/pair-session').send({ label: 'Mike phone' });
     expect(res.status).toBe(200);
     expect(res.body.friendlyUrl).toBeUndefined();
+  });
+
+  it('pair-session 409s not-lan-https when HTTPS is not actually bound (cert-less degrade)', async () => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'secret';
+    const { getLanRuntime } = await import('../lan-runtime.js');
+    vi.mocked(getLanRuntime).mockReturnValueOnce({ httpsActive: false, port: 8080 });
+    const res = await request(app).post('/api/devices/pair-session').send({ label: 'x' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('not-lan-https');
   });
 
   it('pair-session 409s when LAN auth is not enforced', async () => {

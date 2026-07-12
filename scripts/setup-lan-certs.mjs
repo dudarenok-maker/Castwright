@@ -35,16 +35,20 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
-const certDir = resolve(repoRoot, '.run', 'certs');
+/* Write certs where the SERVER reads them: it uses resolveRunDir(repoRoot), which
+   honours APP_RUN_DIR so a versioned-dir install (fs-1) parks .run in a shared
+   sibling OUTSIDE releases/vX.Y.Z/. Mirror that here or a versioned install would
+   generate certs the server never finds (they'd land in the release dir's .run). */
+const runDir = process.env.APP_RUN_DIR ? resolve(process.env.APP_RUN_DIR) : resolve(repoRoot, '.run');
+const certDir = resolve(runDir, 'certs');
 const certFile = resolve(certDir, 'lan-cert.pem');
 const keyFile = resolve(certDir, 'lan-key.pem');
 
 function info(msg) {
   process.stdout.write(`[setup-lan-certs] ${msg}\n`);
 }
-function fail(msg) {
-  process.stderr.write(`[setup-lan-certs] [FAIL] ${msg}\n`);
-  process.exit(1);
+function warn(msg, silent) {
+  if (!silent) process.stderr.write(`[setup-lan-certs] [FAIL] ${msg}\n`);
 }
 
 function tryMkcertVersion() {
@@ -104,15 +108,22 @@ export function buildCertHosts(ips) {
   return ['localhost', '127.0.0.1', 'castwright.local', 'castwright.dev.local', ...ips];
 }
 
+/** Generate the LAN mkcert cert/key. NON-FATAL: returns the {certFile, keyFile,
+ *  lanIps} descriptor on success, or `null` on any failure (mkcert not on PATH,
+ *  `-install` failed, generation failed) so automated callers (prod-boot
+ *  auto-provision, install scripts) degrade gracefully to HTTP instead of
+ *  crashing. Set `silent` to suppress the guidance/FAIL output. */
 export async function setupLanCerts({ silent = false } = {}) {
   const log = silent ? () => {} : info;
   const version = tryMkcertVersion();
   if (!version) {
-    process.stderr.write('\n[setup-lan-certs] mkcert is not on PATH.\n\n');
-    process.stderr.write('Install it once with one of:\n');
-    process.stderr.write(`${mkcertInstallInstructions()}\n\n`);
-    process.stderr.write('Then re-run this script.\n');
-    process.exit(1);
+    if (!silent) {
+      process.stderr.write('\n[setup-lan-certs] mkcert is not on PATH.\n\n');
+      process.stderr.write('Install it once with one of:\n');
+      process.stderr.write(`${mkcertInstallInstructions()}\n\n`);
+      process.stderr.write('Then re-run this script (or restart the app).\n');
+    }
+    return null;
   }
   log(`mkcert detected: ${version}`);
 
@@ -123,7 +134,8 @@ export async function setupLanCerts({ silent = false } = {}) {
       windowsHide: true,
     });
   } catch (err) {
-    fail(`mkcert -install failed: ${err?.message ?? err}`);
+    warn(`mkcert -install failed: ${err?.message ?? err}`, silent);
+    return null;
   }
 
   mkdirSync(certDir, { recursive: true });
@@ -139,18 +151,26 @@ export async function setupLanCerts({ silent = false } = {}) {
       windowsHide: true,
     });
   } catch (err) {
-    fail(`mkcert cert generation failed: ${err?.message ?? err}`);
+    warn(`mkcert cert generation failed: ${err?.message ?? err}`, silent);
+    return null;
   }
 
   if (!existsSync(certFile) || !existsSync(keyFile)) {
-    fail(`mkcert reported success but cert files are missing at ${certDir}`);
+    warn(`mkcert reported success but cert files are missing at ${certDir}`, silent);
+    return null;
   }
   log(`cert: ${certFile}`);
   log(`key:  ${keyFile}`);
   return { certFile, keyFile, lanIps: ips };
 }
 
-// CLI entrypoint — when invoked directly, run setup + exit.
+// CLI entrypoint. Exits NON-ZERO on failure by default so callers that infer
+// success from the exit code (server/src/routes/lan-cert.ts's regenerate route,
+// which spawns this script) keep working. Pass --best-effort for install flows
+// (Pinokio install.js) where a missing mkcert must NOT abort the install — there
+// it exits 0 and the server simply falls back to loopback HTTP.
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('setup-lan-certs.mjs')) {
-  await setupLanCerts();
+  const bestEffort = process.argv.includes('--best-effort');
+  const result = await setupLanCerts();
+  if (!result && !bestEffort) process.exit(1);
 }

@@ -1,6 +1,9 @@
 /* srv-20 — LAN shared-secret token guard. Unit-tests the middleware
    against mocked req/res so no HTTP server is needed. */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 vi.mock('./workspace/device-tokens.js', () => ({
   isValidDeviceToken: (t: string) => t === 'goodtoken',
@@ -11,6 +14,7 @@ import {
   isLanTokenEnforced,
   extractToken,
   getLanAuthToken,
+  ensureLanAuthToken,
 } from './lan-auth.js';
 
 interface ReqOpts {
@@ -162,5 +166,76 @@ describe('lan-auth (srv-20)', () => {
     requireLanToken(req, res as never, next);
     expect(next).not.toHaveBeenCalled();
     expect(res._res.statusCode).toBe(401);
+  });
+});
+
+describe('ensureLanAuthToken (auto-provisioned LAN secret)', () => {
+  const saved = {
+    lan: process.env.LAN_HTTPS,
+    tok: process.env.LAN_AUTH_TOKEN,
+    env: process.env.NODE_ENV,
+  };
+  let dir: string;
+  let tokenFile: string;
+  beforeEach(() => {
+    delete process.env.LAN_AUTH_TOKEN;
+    process.env.NODE_ENV = 'production';
+    process.env.LAN_HTTPS = '1';
+    dir = mkdtempSync(join(tmpdir(), 'cw-lan-'));
+    tokenFile = join(dir, 'lan-auth.token');
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    for (const [k, v] of [
+      ['LAN_HTTPS', saved.lan],
+      ['LAN_AUTH_TOKEN', saved.tok],
+      ['NODE_ENV', saved.env],
+    ] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it('no-ops (undefined, no file) when LAN is off', () => {
+    process.env.LAN_HTTPS = '0';
+    expect(ensureLanAuthToken(tokenFile)).toBeUndefined();
+    expect(existsSync(tokenFile)).toBe(false);
+    expect(process.env.LAN_AUTH_TOKEN).toBeUndefined();
+  });
+
+  it('mints a 256-bit hex token and writes it to the shared file', () => {
+    const tok = ensureLanAuthToken(tokenFile);
+    expect(tok).toMatch(/^[0-9a-f]{64}$/);
+    expect(process.env.LAN_AUTH_TOKEN).toBe(tok);
+    expect(readFileSync(tokenFile, 'utf8').trim()).toBe(tok);
+  });
+
+  it('adopts an existing token file without re-minting (survives restart/upgrade)', () => {
+    const first = ensureLanAuthToken(tokenFile);
+    delete process.env.LAN_AUTH_TOKEN; // simulate a fresh process whose .env has no token
+    const second = ensureLanAuthToken(tokenFile);
+    expect(second).toBe(first);
+    expect(process.env.LAN_AUTH_TOKEN).toBe(first);
+  });
+
+  it('self-heals an empty/corrupt token file: mints, writes a real token to disk', () => {
+    writeFileSync(tokenFile, ''); // interrupted first write / external truncate
+    const tok = ensureLanAuthToken(tokenFile);
+    expect(tok).toMatch(/^[0-9a-f]{64}$/);
+    expect(readFileSync(tokenFile, 'utf8').trim()).toBe(tok); // in-memory == disk
+  });
+
+  it('an explicit LAN_AUTH_TOKEN env value wins over the file (never persisted)', () => {
+    process.env.LAN_AUTH_TOKEN = 'preset-token';
+    expect(ensureLanAuthToken(tokenFile)).toBe('preset-token');
+    expect(existsSync(tokenFile)).toBe(false);
+  });
+
+  it('still guards the API in-process when the token file can not be persisted', () => {
+    const blocker = join(dir, 'blocker');
+    writeFileSync(blocker, 'x'); // parent-as-file → mkdir/write both fail
+    const tok = ensureLanAuthToken(join(blocker, 'lan-auth.token'));
+    expect(tok).toMatch(/^[0-9a-f]{64}$/);
+    expect(process.env.LAN_AUTH_TOKEN).toBe(tok);
   });
 });

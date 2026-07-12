@@ -29,6 +29,7 @@ import { X509Certificate } from 'node:crypto';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { resolveRootCaPath } from './cert-root.js';
+import { getLanRuntime } from '../lan-runtime.js';
 
 export const exportLanRouter = Router();
 
@@ -47,8 +48,20 @@ export interface ExportLanInfo {
   caFingerprint?: string;
 }
 
+/* LAN HTTPS defaults ON in production (native installers, Pinokio, start:prod) so
+   phone/tablet listening + pairing work out of the box; OFF in dev/test so
+   `npm run dev`, `npm start`, and the whole test suite keep their plain-HTTP
+   localhost flow untouched. An explicit `LAN_HTTPS=0`/`1` always wins. This is the
+   REQUESTED flag only — the server binds HTTPS solely when certs are ALSO present
+   (see index.ts's effective-LAN check); otherwise it falls back to loopback HTTP,
+   so a cert-less production box still boots. */
 export function isLanHttpsEnabled(): boolean {
-  return process.env.LAN_HTTPS === '1';
+  const v = process.env.LAN_HTTPS;
+  // Unset → production default on. Any EXPLICIT value must be exactly '1' to enable;
+  // anything else (`0`, `false`, `off`, …) disables — so a truthy-looking negation
+  // like LAN_HTTPS=false can never be silently reinterpreted as ON.
+  if (v === undefined) return process.env.NODE_ENV === 'production';
+  return v === '1';
 }
 
 export function enumerateLanUrls(port: number, protocol: 'http' | 'https' = 'http'): ExportLanInfo {
@@ -87,11 +100,11 @@ export function lanCaFingerprint(): string | undefined {
 }
 
 exportLanRouter.get('/lan', (_req: Request, res: Response) => {
-  const httpsMode = isLanHttpsEnabled();
-  const port = httpsMode
-    ? Number(process.env.LAN_HTTPS_PORT ?? 8443)
-    : Number(process.env.PORT ?? 8080);
-  const protocol: 'http' | 'https' = httpsMode ? 'https' : 'http';
+  // Advertise what the server ACTUALLY bound, not the requested flag: if LAN was
+  // requested but certs were missing, the server degraded to loopback HTTP and
+  // handing out https://<ip>:8443 URLs would be dead links.
+  const { httpsActive, port } = getLanRuntime();
+  const protocol: 'http' | 'https' = httpsActive ? 'https' : 'http';
   const token = lanAuthToken();
   const caFingerprint = lanCaFingerprint();
   res.json({

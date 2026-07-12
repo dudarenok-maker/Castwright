@@ -44,6 +44,14 @@ module.exports = {
       params: {
         path: APP_ROOT,
         conda: CONDA,
+        // NODE_ENV=production is what every OTHER prod launcher sets
+        // (start-app-prod.mjs) but Pinokio runs `node dist/index.js` directly, so
+        // set it here. Without it the server never enters production mode, so the
+        // LAN-HTTPS-by-default flip (isLanHttpsEnabled → NODE_ENV==='production')
+        // never fires and phone/tablet pairing silently stays off despite install.js
+        // provisioning certs. (dist/ static serving already works either way — it's
+        // gated on NODE_ENV OR dist existing.)
+        env: { NODE_ENV: 'production' },
         // `cd server &&` (not `path: 'server'`) so CONDA's relative env path
         // still resolves against APP_ROOT — only the node process's own cwd
         // moves to server/, so its cwd-relative server/.env load works.

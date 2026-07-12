@@ -32,6 +32,8 @@ import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { app } from './app.js';
 import { lanExposureWarning } from './lan-safety.js';
+import { ensureLanAuthToken } from './lan-auth.js';
+import { setLanRuntime } from './lan-runtime.js';
 import { enumerateLanUrls, isLanHttpsEnabled } from './routes/export-lan.js';
 import { allowSleep } from './system/prevent-sleep.js';
 import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
@@ -169,9 +171,38 @@ async function main(): Promise<void> {
      BIND_HOST=0.0.0.0 (or HOST=…) to restore all-interface HTTP. The HTTPS path
      is opt-in only via npm run start:lan (LAN_HTTPS=1) and keeps binding all
      interfaces — it's the deliberately-reachable mobile flow. */
-  const lanHttps = isLanHttpsEnabled();
-  const bindHost = selectBindHost(lanHttps);
+  /* "Requested" vs "effective" LAN HTTPS. isLanHttpsEnabled() is the REQUESTED
+     flag (default-on in production since the LAN-default change), but we can only
+     actually bind HTTPS when the mkcert certs exist. A cert-less production box —
+     a fresh install before mkcert provisioning, or a native installer without
+     certs — must still BOOT: it degrades to loopback HTTP with a loud warning
+     rather than exiting (the pre-2026-07 behaviour was process.exit(1), which
+     bricked any box where LAN was on but certs were missing). */
   const { certFile: LAN_CERT_FILE, keyFile: LAN_KEY_FILE } = resolveLanCertPaths(repoRoot);
+  const lanRequested = isLanHttpsEnabled();
+  const certsPresent = existsSync(LAN_CERT_FILE) && existsSync(LAN_KEY_FILE);
+  const lanHttps = lanRequested && certsPresent;
+  if (lanRequested && !certsPresent) {
+    console.warn(
+      `[server] LAN HTTPS is enabled but mkcert certs are missing — serving plain HTTP ` +
+        `on loopback :${PORT} instead. Phones/tablets can't reach this until certs exist.\n` +
+        `[server] Expected: ${LAN_CERT_FILE}\n[server]           ${LAN_KEY_FILE}\n` +
+        `[server] Run 'npm run install:cert-mobile' (or reinstall) to enable LAN HTTPS.`,
+    );
+  }
+  /* Close the unauthenticated-LAN-API hole: whenever LAN is requested, ensure a
+     LAN_AUTH_TOKEN exists (mint + persist to server/.env on first boot). Without a
+     token requireLanToken is a no-op and the whole /api is open on the LAN. Minting
+     it here keeps loopback (desktop) bypassing, device pairings working, and the
+     pairing QR carrying the token. No-op when LAN is off or a token already exists. */
+  // Persist the token to the SHARED run dir (resolveRunDir honours APP_RUN_DIR), NOT
+  // the per-release server/.env — a versioned upgrade must keep the same token so
+  // paired devices stay paired.
+  ensureLanAuthToken(resolve(resolveRunDir(repoRoot), 'lan-auth.token'));
+  // Record what we ACTUALLY bound so GET /lan + pairing advertise the real protocol/
+  // port, not the requested flag (a cert-less box degrades to loopback HTTP here).
+  setLanRuntime({ httpsActive: lanHttps, port: lanHttps ? LAN_HTTPS_PORT : PORT });
+  const bindHost = selectBindHost(lanHttps);
 
   const listenerCallback = () => {
     const protocol: 'http' | 'https' = lanHttps ? 'https' : 'http';
@@ -370,15 +401,9 @@ async function main(): Promise<void> {
   if (warn) console.warn(warn);
 
   if (lanHttps) {
-    if (!existsSync(LAN_CERT_FILE) || !existsSync(LAN_KEY_FILE)) {
-      console.error(
-        `[server] LAN_HTTPS=1 set but cert files are missing.\n` +
-          `[server] Expected: ${LAN_CERT_FILE}\n` +
-          `[server]           ${LAN_KEY_FILE}\n` +
-          `[server] Run 'npm run install:cert-mobile' first to bootstrap mkcert and generate per-LAN-IP certs.`,
-      );
-      process.exit(1);
-    }
+    // lanHttps already implies certsPresent (see the effective-LAN check above),
+    // so cert files are guaranteed here — a missing cert degraded to HTTP, it did
+    // not reach this branch.
     const key = readFileSync(LAN_KEY_FILE);
     const cert = readFileSync(LAN_CERT_FILE);
     const server = createHttpsServer({ key, cert }, app).listen(

@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { enumerateLanUrls, exportLanRouter, isLanHttpsEnabled } from './export-lan.js';
+import { setLanRuntime } from '../lan-runtime.js';
 
 function makeApp(): Express {
   const app = express();
@@ -40,67 +41,81 @@ describe('enumerateLanUrls', () => {
 });
 
 describe('isLanHttpsEnabled', () => {
+  const savedNodeEnv = process.env.NODE_ENV;
   beforeEach(() => {
     delete process.env.LAN_HTTPS;
   });
   afterEach(() => {
     delete process.env.LAN_HTTPS;
+    if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = savedNodeEnv;
   });
 
-  it('is false when env unset', () => {
+  it('defaults OFF outside production when env unset (dev/test keep plain HTTP)', () => {
+    process.env.NODE_ENV = 'development';
     expect(isLanHttpsEnabled()).toBe(false);
   });
-  it('is true when LAN_HTTPS=1', () => {
+  it('defaults ON in production when env unset (installers get LAN by default)', () => {
+    process.env.NODE_ENV = 'production';
+    expect(isLanHttpsEnabled()).toBe(true);
+  });
+  it('explicit LAN_HTTPS=1 wins even outside production', () => {
+    process.env.NODE_ENV = 'development';
     process.env.LAN_HTTPS = '1';
     expect(isLanHttpsEnabled()).toBe(true);
   });
-  it('is false for any other LAN_HTTPS value', () => {
-    process.env.LAN_HTTPS = 'true';
+  it('explicit LAN_HTTPS=0 wins even in production', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.LAN_HTTPS = '0';
     expect(isLanHttpsEnabled()).toBe(false);
-    process.env.LAN_HTTPS = 'yes';
-    expect(isLanHttpsEnabled()).toBe(false);
+  });
+  it('any EXPLICIT non-1 value disables, even in production (LAN_HTTPS=false is not "on")', () => {
+    process.env.NODE_ENV = 'production';
+    for (const v of ['true', 'false', 'no', 'off', 'yes', '2']) {
+      process.env.LAN_HTTPS = v;
+      expect(isLanHttpsEnabled(), `LAN_HTTPS=${v}`).toBe(false);
+    }
   });
 });
 
-describe('GET /api/export/lan — protocol switching', () => {
-  const originalPort = process.env.PORT;
-  const originalLanHttps = process.env.LAN_HTTPS;
-  const originalLanHttpsPort = process.env.LAN_HTTPS_PORT;
-
+describe('GET /api/export/lan — reflects the ACTUAL bound runtime, not the requested flag', () => {
   afterEach(() => {
-    process.env.PORT = originalPort;
-    if (originalLanHttps === undefined) delete process.env.LAN_HTTPS;
-    else process.env.LAN_HTTPS = originalLanHttps;
-    if (originalLanHttpsPort === undefined) delete process.env.LAN_HTTPS_PORT;
-    else process.env.LAN_HTTPS_PORT = originalLanHttpsPort;
+    // reset to the module default (loopback HTTP)
+    setLanRuntime({ httpsActive: false, port: 8080 });
   });
 
-  it('returns http URLs on PORT (default 8080) when LAN_HTTPS is unset', async () => {
-    delete process.env.LAN_HTTPS;
-    delete process.env.LAN_HTTPS_PORT;
-    process.env.PORT = '8080';
+  it('returns http URLs on the bound port when the server degraded to loopback HTTP', async () => {
+    setLanRuntime({ httpsActive: false, port: 8080 });
     const res = await request(makeApp()).get('/api/export/lan');
     expect(res.status).toBe(200);
     expect(res.body.protocol).toBe('http');
     expect(res.body.port).toBe(8080);
   });
 
-  it('returns https URLs on LAN_HTTPS_PORT (default 8443) when LAN_HTTPS=1', async () => {
-    process.env.LAN_HTTPS = '1';
-    delete process.env.LAN_HTTPS_PORT; // use default 8443
+  it('returns https URLs on the bound LAN port when HTTPS is actually active', async () => {
+    setLanRuntime({ httpsActive: true, port: 8443 });
     const res = await request(makeApp()).get('/api/export/lan');
     expect(res.status).toBe(200);
     expect(res.body.protocol).toBe('https');
     expect(res.body.port).toBe(8443);
   });
 
-  it('honours LAN_HTTPS_PORT override', async () => {
-    process.env.LAN_HTTPS = '1';
-    process.env.LAN_HTTPS_PORT = '9443';
+  it('honours a non-default bound LAN port', async () => {
+    setLanRuntime({ httpsActive: true, port: 9443 });
     const res = await request(makeApp()).get('/api/export/lan');
     expect(res.status).toBe(200);
     expect(res.body.protocol).toBe('https');
     expect(res.body.port).toBe(9443);
+  });
+
+  it('the CRITICAL regression: LAN requested but certs missing → HTTP, never advertises https:8443', async () => {
+    // requested flag on, but the server bound loopback HTTP because certs were absent
+    process.env.LAN_HTTPS = '1';
+    setLanRuntime({ httpsActive: false, port: 8080 });
+    const res = await request(makeApp()).get('/api/export/lan');
+    expect(res.body.protocol).toBe('http');
+    expect(res.body.port).toBe(8080);
+    delete process.env.LAN_HTTPS;
   });
 });
 
