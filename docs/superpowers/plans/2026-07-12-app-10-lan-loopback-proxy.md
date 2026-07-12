@@ -124,7 +124,8 @@ void main() {
   });
 
   test('cancel aborts only this request; a sibling on the same client survives', () async {
-    // A slow server that streams a byte, waits, then finishes — so we can cancel mid-stream.
+    // A slow server that streams a byte, waits, then finishes — so we can cancel
+    // request `a` mid-stream (after it has actually started reading).
     final slow = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     slow.listen((req) async {
       final res = req.response;
@@ -140,12 +141,23 @@ void main() {
     final a = await streamRange(client, slowUrl, bearer: 't');
     final b = await streamRange(client, slowUrl, bearer: 't');
 
-    // Start draining b fully; cancel a immediately.
+    // ACTIVELY read `a` up to its first chunk so a real socket read is in flight
+    // on the shared client — otherwise cancel() would be a no-op and prove nothing.
+    final aStarted = Completer<void>();
+    final aSub = a.body.listen((_) {
+      if (!aStarted.isCompleted) aStarted.complete();
+    });
+    await aStarted.future.timeout(const Duration(seconds: 2));
+
+    // Drain b fully in parallel, then cancel a mid-stream.
     final bDone = b.body.fold<List<int>>(<int>[], (acc, c) => acc..addAll(c));
     await a.cancel();
+    await aSub.cancel();
 
+    // The sibling completes despite a's mid-stream cancel — cancel tore down only
+    // a's socket, not the shared client's pool.
     final bBytes = await bDone.timeout(const Duration(seconds: 2));
-    expect(bBytes, [9, 9]); // sibling completed despite a's cancel
+    expect(bBytes, [9, 9]);
     client.close(force: true);
     await slow.close(force: true);
   });
@@ -215,23 +227,28 @@ Future<PinnedStreamResponse> streamRange(HttpClient client, Uri url,
   res.headers.forEach((name, values) => headers[name] = values.join(','));
 
   final out = StreamController<List<int>>();
-  StreamSubscription<List<int>>? sub;
-  out.onListen = () {
-    sub = res.listen(
-      out.add,
-      onError: out.addError,
-      onDone: () {
-        if (!out.isClosed) out.close();
-      },
-      cancelOnError: true,
-    );
-  };
-  out.onPause = () => sub?.pause();
-  out.onResume = () => sub?.resume();
-  out.onCancel = () async => sub?.cancel();
+  // Subscribe EAGERLY (then pause) — not lazily in onListen — so `cancel()` can
+  // always tear down the real socket, even on a HEAD / non-2xx path where the
+  // body is never drained (`addStream` never fires onListen). A lazy subscription
+  // would leave the HttpClientResponse dangling on every HEAD probe and every
+  // 401/404/5xx upstream. dart:io delivers events async, so the pause below can't
+  // race a synchronous first event.
+  final sub = res.listen(
+    out.add,
+    onError: out.addError,
+    onDone: () {
+      if (!out.isClosed) out.close();
+    },
+    cancelOnError: true,
+  );
+  sub.pause();
+  out.onListen = () => sub.resume();
+  out.onPause = () => sub.pause();
+  out.onResume = () => sub.resume();
+  out.onCancel = () => sub.cancel();
 
   Future<void> cancel() async {
-    await sub?.cancel();
+    await sub.cancel(); // abort THIS socket only — never client.close()
     if (!out.isClosed) await out.close();
   }
 
@@ -280,7 +297,6 @@ Create `apps/android/test/data/loopback_proxy_test.dart`:
 
 ```dart
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
@@ -696,10 +712,12 @@ In `apps/android/test/data/player_controller_test.dart`, extend `FakeAudioEngine
 
 Add `await _errorCtl.close();` inside `FakeAudioEngine.dispose()`.
 
-- [ ] **Step 2: Run the suite to verify it fails to compile**
+- [ ] **Step 2: Run analyze to verify it fails**
 
-Run: `cd apps/android && flutter test test/data/player_controller_test.dart`
-Expected: FAIL — the other `AudioEngine` fakes/impls don't yet implement `errorStream` (analyzer/compile error).
+Run `flutter analyze` (NOT a single-file `flutter test` — that compiles only that file's transitive imports, where the local `FakeAudioEngine` already has `errorStream`, so it would pass and hide the gap).
+
+Run: `cd apps/android && flutter analyze`
+Expected: FAIL — `just_audio_engine.dart`, `demo_audio_engine.dart`, and the other three test fakes are missing the `errorStream` override (`missing_concrete_implementation` / non-abstract-class errors).
 
 - [ ] **Step 3: Implement across every `AudioEngine`**
 
@@ -1011,17 +1029,16 @@ Then the tests:
 
 ```dart
   group('app-10 streaming', () {
-    StreamingConfig cfg(
+    Future<StreamingConfig> cfg(
       FakeProxy proxy, {
       required bool streamOn,
       required bool onLan,
       Set<String> downloaded = const {},
       void Function()? onRepair,
-    }) {
+    }) async {
       final fs = InMemoryFileStore();
       for (final p in downloaded) {
-        // seed as "exists"
-        fs.writeBytes(p, const [0]);
+        await fs.writeBytes(p, const [0]); // seed as "exists"
       }
       return StreamingConfig(
         fileStore: fs,
@@ -1045,7 +1062,7 @@ Then the tests:
         playbackStore: MemPlaybackStore(),
         playlistLoader: (_) async => list,
         clock: () => DateTime.utc(2026, 6, 6),
-        streaming: cfg(proxy, streamOn: true, onLan: true, downloaded: {'/b1/u1/audio.mp3'}),
+        streaming: await cfg(proxy, streamOn: true, onLan: true, downloaded: {'/b1/u1/audio.mp3'}),
       );
       await pc.openBook('b1');
       expect(engine.calls, contains('set:/b1/u1/audio.mp3'));
@@ -1060,7 +1077,7 @@ Then the tests:
         playbackStore: MemPlaybackStore(),
         playlistLoader: (_) async => list,
         clock: () => DateTime.utc(2026, 6, 6),
-        streaming: cfg(proxy, streamOn: true, onLan: true),
+        streaming: await cfg(proxy, streamOn: true, onLan: true),
       );
       await pc.openBook('b1');
       expect(proxy.starts, 1);
@@ -1071,8 +1088,8 @@ Then the tests:
 
     test('toggle off / off-Wi-Fi -> needs download, proxy never starts', () async {
       for (final c in [
-        cfg(FakeProxy(), streamOn: false, onLan: true),
-        cfg(FakeProxy(), streamOn: true, onLan: false),
+        await cfg(FakeProxy(), streamOn: false, onLan: true),
+        await cfg(FakeProxy(), streamOn: true, onLan: false),
       ]) {
         final engine = FakeAudioEngine();
         final pc = PlayerController(
@@ -1100,7 +1117,7 @@ Then the tests:
         playbackStore: MemPlaybackStore(),
         playlistLoader: (_) async => list,
         clock: () => DateTime.utc(2026, 6, 6),
-        streaming: cfg(proxy, streamOn: true, onLan: true, onRepair: () => repaired++),
+        streaming: await cfg(proxy, streamOn: true, onLan: true, onRepair: () => repaired++),
       );
       final emitted = <String>[];
       pc.needsDownloadStream.listen(emitted.add);
@@ -1121,7 +1138,7 @@ Then the tests:
         playbackStore: MemPlaybackStore(),
         playlistLoader: (_) async => list,
         clock: () => DateTime.utc(2026, 6, 6),
-        streaming: cfg(proxy, streamOn: true, onLan: true, onRepair: () => repaired++),
+        streaming: await cfg(proxy, streamOn: true, onLan: true, onRepair: () => repaired++),
       );
       final emitted = <String>[];
       pc.needsDownloadStream.listen(emitted.add);
@@ -1132,6 +1149,34 @@ Then the tests:
       expect(emitted, isEmpty);
     });
 
+    test('auto-advance into a needs-download chapter halts quietly (no play/stream)', () async {
+      // ch1 downloaded, ch2 not; streaming OFF so ch2 resolves to needsDownload.
+      final engine = FakeAudioEngine();
+      final proxy = FakeProxy();
+      const two = [
+        PlayableChapter(uuid: 'u1', path: '/b1/u1.mp3', audioUrl: '/api/books/b1/chapters/1/audio.mp3'),
+        PlayableChapter(uuid: 'u2', path: '/b1/u2.mp3', audioUrl: '/api/books/b1/chapters/2/audio.mp3'),
+      ];
+      final pc = PlayerController(
+        audioEngine: engine,
+        playbackStore: MemPlaybackStore(),
+        playlistLoader: (_) async => two,
+        clock: () => DateTime.utc(2026, 6, 6),
+        streaming: await cfg(proxy, streamOn: false, onLan: true, downloaded: {'/b1/u1.mp3'}),
+      );
+      await pc.openBook('b1'); // loads u1 (downloaded local file)
+      await pc.play();
+      engine.calls.clear();
+      engine.emitCompletion(); // end of u1 -> _advance into u2 (needsDownload)
+      await Future<void>.delayed(Duration.zero);
+      // No new source loaded and no play() on the quiet-halt path.
+      expect(
+        engine.calls.where((x) =>
+            x.startsWith('set:') || x.startsWith('stream:') || x == 'play'),
+        isEmpty,
+      );
+    });
+
     test('dispose disposes the proxy', () async {
       final proxy = FakeProxy();
       final pc = PlayerController(
@@ -1139,7 +1184,7 @@ Then the tests:
         playbackStore: MemPlaybackStore(),
         playlistLoader: (_) async => list,
         clock: () => DateTime.utc(2026, 6, 6),
-        streaming: cfg(proxy, streamOn: true, onLan: true),
+        streaming: await cfg(proxy, streamOn: true, onLan: true),
       );
       await pc.dispose();
       expect(proxy.disposed, isTrue);
@@ -1209,43 +1254,54 @@ In the constructor body (after `_playingSub = …`):
 
 ```dart
     if (_streaming != null) {
-      _errorSub = _engine.errorStream.listen((_) {
-        // Mid-stream failure channel (§6). Only route when the live source is a
-        // stream — a local-file playback error must not trigger download/re-pair.
-        if (_currentIsStream) _handleStreamFailure();
-      });
+      // Mid-stream failure channel (§6). `_handleStreamFailure` self-guards on
+      // `_currentIsStream`, so a local-file playback error no-ops and a single
+      // failure can't be routed twice (this errorStream event AND the initial-load
+      // `catch` in `_loadSource` can both fire — the guard makes it idempotent).
+      _errorSub = _engine.errorStream.listen((_) => _handleStreamFailure());
     }
 ```
 
-> Constructor-signature note: `_streaming` is a positional optional trailing field alongside `_statsDb/_sessionId/_localDate`. Because those are positional-optional (`this._statsDb,` etc. inside the `{ }`? — they are named-optional in the current constructor), add `StreamingConfig? streaming` as a **named** optional param and assign `_streaming = streaming` in the initializer list, mirroring how `_statsDb` is wired. Keep it named so call sites read `streaming: …`.
+> Constructor-signature note: add `this._streaming,` as an **initializing formal** inside the existing named-optional `{ }` block, exactly like the current `this._statsDb,` / `this._sessionId,` / `this._localDate,` (which ARE named-optional initializing formals — confirmed against the live `companion_runtime.dart:161-174` call site that passes `statsDb:` / `sessionId:` / `localDate:`). Do NOT also declare a separate `StreamingConfig? streaming` param or a manual `_streaming = streaming` initializer — an initializing formal and a manual initializer for the same field is a compile error. The underscore is auto-stripped, so call sites read `streaming: …`.
 
-Replace the single `await _engine.setFilePath(c.path);` line in `_loadIndex` (currently `player_controller.dart:280`) with a call to the new resolver, and thread `userInitiated`:
-
-```dart
-  Future<void> _loadIndex(int index, {int seekMs = 0, bool userInitiated = false}) async {
-```
-
-(inside, where `setFilePath` was:)
+Change `_loadIndex` to return whether a source actually loaded, thread `userInitiated`, and gate the post-load engine calls (speed/boost/seek) on a real load so a `needsDownload` resolution doesn't mutate the PREVIOUS still-loaded source. Signature + early return:
 
 ```dart
-    await _loadSource(c, userInitiated: userInitiated);
+  Future<bool> _loadIndex(int index, {int seekMs = 0, bool userInitiated = false}) async {
+    if (index < 0 || index >= _playlist.length) return false;
 ```
 
-Update the three callers to pass `userInitiated`:
-- `openBook` → `await _loadIndex(index, seekMs: saved?.positionMs ?? 0, userInitiated: true);`
-- `playChapter` → `await _loadIndex(i, userInitiated: true);`
-- `skip`'s `ChapterStep` branch → `await _loadIndex(next, userInitiated: true);`
-- `_advance` stays `await _loadIndex(_index + 1);` (default `userInitiated: false`).
+Replace the single `await _engine.setFilePath(c.path);` line (currently `player_controller.dart:280`) and the speed/boost/seek block that follows it with:
+
+```dart
+    final loaded = await _loadSource(c, userInitiated: userInitiated);
+    if (loaded) {
+      if (_speed != 1.0) await _engine.setSpeed(_speed); // persist across chapters
+      if (_boostDb > 0) await _engine.setVolumeBoost(_boostDb);
+      if (seekMs > 0) await _engine.seek(Duration(milliseconds: seekMs));
+    }
+```
+
+At the end of `_loadIndex` (after the `_bookReplayed` emit), `return loaded;`.
+
+Update the callers to pass `userInitiated` and gate `play()` on the load result (so an auto-advance or a user tap into a `needsDownload` chapter halts quietly instead of replaying the prior chapter):
+- `openBook` → `await _loadIndex(index, seekMs: saved?.positionMs ?? 0, userInitiated: true);` (openBook does not auto-play; return ignored).
+- `playChapter` → `final loaded = await _loadIndex(i, userInitiated: true); if (loaded) await play();`
+- `skip`'s `ChapterStep` branch → `await _loadIndex(next, userInitiated: true);` (skip never calls `play()`; return ignored).
+- `_advance` → `final loaded = await _loadIndex(_index + 1); if (loaded) await play();` (default `userInitiated: false`).
 
 Add the resolver + failure router:
 
 ```dart
-  Future<void> _loadSource(PlayableChapter c, {required bool userInitiated}) async {
+  /// Loads the chapter's playback source. Returns true iff a source was actually
+  /// set on the engine (local file or a live stream); false for `needsDownload`,
+  /// a null `audioUrl`, or a failed stream — callers skip `play()` on false.
+  Future<bool> _loadSource(PlayableChapter c, {required bool userInitiated}) async {
     final cfg = _streaming;
     if (cfg == null) {
       _currentIsStream = false;
       await _engine.setFilePath(c.path); // legacy: offline-first only
-      return;
+      return true;
     }
     final src = resolvePlaybackSource(
       localFileExists: await cfg.fileStore.exists(c.path),
@@ -1256,12 +1312,13 @@ Add the resolver + failure router:
       case PlaybackSource.localFile:
         _currentIsStream = false;
         await _engine.setFilePath(c.path);
+        return true;
       case PlaybackSource.lanStream:
         final audioUrl = c.audioUrl;
         if (audioUrl == null) {
           _currentIsStream = false;
           if (userInitiated) _notifyDownloadToPlay();
-          return;
+          return false;
         }
         await cfg.proxy.start(); // first bind, on demand
         final loopback = cfg.proxy.register(upstream: cfg.urlResolver(audioUrl));
@@ -1269,25 +1326,31 @@ Add the resolver + failure router:
         try {
           // The player only ever sees http://127.0.0.1/… and NO headers.
           await _engine.setStreamUrl(loopback.toString());
+          return true;
         } catch (_) {
           _handleStreamFailure(); // initial-load throw channel (§6/§7)
+          return false;
         }
       case PlaybackSource.needsDownload:
         _currentIsStream = false;
         if (userInitiated) _notifyDownloadToPlay(); // else auto-advance: halt quietly
+        return false;
     }
   }
 
   /// The single §7 failure router (shared by the initial-load throw and the
-  /// mid-stream errorStream event). Reads the proxy's upstream-status
-  /// side-channel, clears the mapping, and either re-pairs (fresh 401/403) or
-  /// surfaces "download to play" (everything else, incl. null). No auto-retry.
+  /// mid-stream errorStream event). Self-guards on `_currentIsStream` so it is
+  /// idempotent per stream load AND no-ops on a local-file error: reads the
+  /// proxy's upstream-status side-channel, clears the mapping, and either re-pairs
+  /// (fresh 401/403) or surfaces "download to play" (everything else, incl. null).
+  /// No auto-retry.
   void _handleStreamFailure() {
     final cfg = _streaming;
     if (cfg == null) return;
+    if (!_currentIsStream) return; // not streaming, or already handled
+    _currentIsStream = false;
     final status = cfg.proxy.lastUpstreamStatus;
     cfg.proxy.clearMapping();
-    _currentIsStream = false;
     if (status == 401 || status == 403) {
       cfg.onRepairNeeded();
     } else {
@@ -1494,3 +1557,14 @@ git commit -m "docs(docs): reconcile app-10 to the loopback proxy + release note
 **Type consistency** — `PinnedStreamResponse` (Task 1) is consumed by `UpstreamFetch`/`LoopbackProxy` (Task 2) and `ApiClient.pinnedRangeStream` (Tasks 1, 8). `LoopbackProxy` surface (`start`/`register({upstream})`/`lastUpstreamStatus`/`clearMapping`/`dispose`) is used identically by the `FakeProxy` (Task 7) and the runtime (Task 8). `StreamingConfig` fields (Task 7) are constructed with the same names in Task 8. `AudioEngine.errorStream` (Task 4) is subscribed in Task 7. `PlayableChapter.audioUrl` (Task 6) is read in Task 7's `_loadSource`. `Reachability.onHomeLan` (Task 5) is used in Task 8's config.
 
 **Placeholder scan** — no TBD/TODO; every code step carries full code. The one soft spot (Task 6 Step 1's "reuse the file's existing detail-seeding pattern") is called out explicitly with the exact assertion, because `sync_controller_test.dart`'s existing harness should drive the seeding rather than a fabricated helper.
+
+**Adversarial assumption-check (Premium/Opus) — folded 2026-07-12.** The mandatory plan-review gate ran and returned *ready-with-fixes*; all findings were folded before approval:
+- **[Major] Real-socket leak on HEAD / non-2xx** — `streamRange` created its response subscription lazily in `onListen`, so `cancel()` on a never-drained body was a no-op and leaked the `HttpClientResponse`. Fixed: subscribe eagerly then `pause()`; `cancel()` now always aborts the real socket (Task 1 Step 3).
+- **[Major] Placebo cancel test** — the concurrency test never listened to `a.body`, so `a.cancel()` proved nothing. Fixed: actively read `a` to its first chunk, cancel mid-stream, assert the sibling still completes (Task 1 Step 1, test 2) — this is the spec's core §2 trap, now genuinely verified.
+- **[Major] Contradictory constructor instructions** — the note told the engineer to add BOTH `this._streaming` (initializing formal) AND a manual `_streaming = streaming` initializer (a compile error). Fixed: keep only `this._streaming,`, matching the live `this._statsDb` pattern (Task 7 Step 3).
+- **[Minor] Task 4 "expected FAIL"** used a single-file `flutter test` that would pass; switched to `flutter analyze`.
+- **[Minor] Unused imports** (`dart:convert` in the proxy test) scrubbed to keep `flutter analyze` green.
+- **[Minor] Auto-advance quiet-halt** — `_advance` unconditionally called `play()` after a `needsDownload` load; `_loadSource`/`_loadIndex` now return whether a source loaded and callers gate `play()` on it (+ a new auto-advance-halts test).
+- **[Minor] Double-route guard** — `_handleStreamFailure` is now idempotent (`if (!_currentIsStream) return`), so the initial-load `catch` and the mid-stream `errorStream` event can't both emit.
+- **[Minor] Unawaited seed** — the test `cfg` builder now `await`s `fileStore.writeBytes`.
+- **On-device checklist (not plan defects):** the two load-bearing just_audio assumptions — `setAudioSource` rejecting on initial-load failure, and mid-stream errors arriving via `playbackEventStream.listen(onError:)` — plus the §6 `_completionSub`-not-torn-down check, are called out for the on-device acceptance pass (Task 9 walkthrough).
