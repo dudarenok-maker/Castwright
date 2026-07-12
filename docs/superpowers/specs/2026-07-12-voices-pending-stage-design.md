@@ -142,6 +142,25 @@ voices_pending: {
 No `progress` value (nothing generated), so the card shows no progress bar —
 consistent with `cast_pending`.
 
+**Defensive fallback** (`library-grid.tsx:167`): `realGetLibrary`
+(`src/lib/api.ts:1830`) casts the server JSON straight to `LibraryResponse`
+with no runtime enum validation, and `library-grid.tsx:167` reads
+`STATUS_UI[book.status].color/.label` unconditionally. A server/client version
+skew (server ships a status the bundled `STATUS_UI` map lacks) would make the
+lookup `undefined` and **crash every card in the grid**, not just the affected
+book. Harden the read so an unknown status degrades to a neutral pill instead
+of crashing:
+
+```ts
+const meta = STATUS_UI[book.status] ?? {
+  color: 'library', label: book.status, icon: <IconCircle className="w-3.5 h-3.5" />,
+};
+```
+
+This is defence-in-depth for the enum living in **three hand-synced places**
+(`server/src/workspace/scan.ts`, `src/lib/types.ts`, generated
+`src/lib/api-types.ts`) with no shared type across the server boundary.
+
 ## Propagation sites (don't miss a consumer)
 
 | Site | Change |
@@ -154,6 +173,21 @@ consistent with `cast_pending`.
 | `src/components/library/library-status-ui.tsx` `STATUS_UI` | new entry |
 | `src/views/book-library.tsx` `IN_PROGRESS_STATUSES` | add status |
 | `src/mocks/library.ts`, `src/data/books.ts` | add a `voices_pending` sample so mock/dev mode renders the state |
+| `src/components/library/library-grid.tsx:167` | defensive `STATUS_UI[status] ?? neutral` fallback (see above) |
+| `src/components/layout.tsx:991-1003` (`bgBookIds` poll) | **reviewed — no change.** Negative-list filter; `voices_pending` books already passed it as `generating`, so inclusion is unchanged |
+
+**Atomicity requirement:** the three enum-union edits (`scan.ts`, `types.ts`,
+regenerated `api-types.ts`) and the `STATUS_UI` map entry must land in the same
+change — a bundle where the server emits `voices_pending` but the client map
+lacks it would rely solely on the defensive fallback above.
+
+**Positive-vs-negative-list rule (audit invariant):** the hazard when splitting
+a status off `generating` is *positive-list* checks (`status === 'generating'`)
+— they now silently miss the split-off books. *Negative-list* checks
+(`status !== 'analysing' && …`) are safe (the book stays included). Every
+positive-list consumer was enumerated: `isConfirmed` (fixed), `IN_PROGRESS_STATUSES`
+(fixed), `library-grid.tsx:353` progress bar (correctly *excludes* `voices_pending`).
+No positive-list consumer is missed.
 
 ## Testing
 
@@ -162,8 +196,10 @@ consistent with `cast_pending`.
   ≥1 failed) → `generating`; castConfirmed + all rendered → `complete`.
 - **`ui-slice` test**: `openBook({status:'voices_pending'})` → `ready` stage on
   `cast` view.
-- **`library-status-ui.test.ts`**: the existing 1:1 round-trip stays green with
-  the new key.
+- **`library-status-ui.test.ts`**: this test iterates a **hardcoded**
+  `ALL_STATUSES` array (not the map), so add `'voices_pending'` to it — the
+  `Record<LibraryBookStatus, StatusMeta>` type already forces the map entry at
+  compile time, but the test must list the new key to actually exercise it.
 - **`book-library` filter test**: a `voices_pending` book counts under
   "In progress".
 - **e2e**: extend `e2e/cast-first-landing-and-voice-gate.spec.ts` — a
