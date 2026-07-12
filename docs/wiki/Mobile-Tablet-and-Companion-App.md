@@ -8,11 +8,17 @@ built responsive-first.
 
 ## LAN access
 
-The desktop app doesn't listen on plain HTTP for other devices — it needs
-**LAN HTTPS mode** (`npm run dev:lan` or `npm run start:lan`) plus a locally
-trusted certificate, so a phone's browser doesn't show a security warning.
-**Admin → LAN access** is where you authorize a browser device once that
-mode is running — see the LAN access card on the [Admin](Admin) page.
+Other devices reach the app over **LAN HTTPS** plus a locally trusted certificate, so a
+phone's browser doesn't show a security warning. **As of v1.13.0 this is the default** —
+any production start (`npm run start:prod`, the native installers, or Pinokio) serves
+HTTPS on `:8443` across your LAN and auto-generates the pairing token, so you no longer
+have to run `npm run start:lan` by hand. (It still exists for the explicit profile that
+also advertises `castwright.local` + the `:443` forwarder; `npm run dev:lan` is the LAN
+variant for local HMR development, which is otherwise plain-HTTP.) The one prerequisite is
+`mkcert` — Pinokio installs it for you; native installs auto-provision the certificate on
+first start once you've installed `mkcert` once (if it's absent the app falls back to
+loopback HTTP rather than failing). **Admin → LAN access** is where you authorize a
+browser device once the server is up — see the LAN access card on the [Admin](Admin) page.
 
 **The friendly `castwright.local` / `castwright.dev.local` hostnames still
 need pairing.** These addresses (and any raw LAN IP) always go through the

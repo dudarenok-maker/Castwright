@@ -230,19 +230,24 @@ Open Models (Admin → Model Manager). Each engine now shows its real state — 
 
 ### My phone can't reach the app (LAN / HTTPS)
 
-Real devices need the LAN HTTPS mode: run `npm run dev:lan` (or `npm run start:lan` for the production build) and open the printed address — it now reads `https://castwright.local` (or `castwright.dev.local` while developing) instead of a raw IP that changes every time your router hands out a new one. Each device must trust the local certificate once — run `npm run install:cert-mobile` and follow the per-OS steps it prints. Both devices must be on the same network.
+As of v1.13.0, a production start (`npm run start:prod` / native installer / Pinokio) already serves LAN HTTPS on `:8443` — you don't need `npm run start:lan`. If your phone still can't reach it, work down this list:
+
+- **Is it actually on HTTPS?** If the desktop opens on `http://localhost:8080`, the LAN certificate wasn't provisioned (usually `mkcert` isn't installed). Install `mkcert` (`scoop`/`brew`/`apt install mkcert`, then `mkcert -install`) and restart — the app auto-provisions the cert on the next start and comes up on `:8443`. Pinokio installs `mkcert` for you.
+- **Trust the certificate on the device once** — from **Admin → LAN access** (or `npm run install:cert-mobile`), open the root-CA link/QR and install it (iOS: Settings → Profile → Install → trust; Android: Settings → Security → Install certificate).
+- **Same network:** phone and desktop must be on the same LAN. Pair via the QR at the LAN-IP address (`https://<lan-ip>:8443`).
+- **Want the friendly `https://castwright.local` name** (and the `:443` forwarder so you can drop the port)? Run `npm run start:lan` — those extras are opt-in and not part of the bare default.
 
 ### The app loads at castwright.local but the library won't — "Missing or invalid LAN access token"
 
 **What you saw:** `https://castwright.local` (or the raw LAN IP, with or without `:8443`) loads the app shell fine, but the library panel shows "Couldn't load your library — Library scan failed (401): Missing or invalid LAN access token."
 
-**Why:** if you've set `LAN_AUTH_TOKEN` in `server/.env`, every non-loopback request is required to pair first — this applies to the friendly `castwright.local`/`castwright.dev.local` hostnames and any raw LAN IP exactly the same as a phone or tablet, **even when you're typing that address into a browser on the desktop machine itself.** Only `https://localhost:8443` is exempt (it's recognised as loopback and skips pairing).
+**Why:** LAN access is guarded by a `LAN_AUTH_TOKEN`, so every non-loopback request is required to pair first — this applies to the friendly `castwright.local`/`castwright.dev.local` hostnames and any raw LAN IP exactly the same as a phone or tablet, **even when you're typing that address into a browser on the desktop machine itself.** As of v1.13.0 that token is **auto-generated on first boot** whenever LAN is on (which is the production default), so this pairing requirement is expected, not a sign you misconfigured anything. Only `https://localhost:8443` is exempt (it's recognised as loopback and skips pairing).
 
 **What to do:**
 
 - **Fastest, same machine only:** open `https://localhost:8443/#/` instead — no pairing needed, same server and data.
 - **To authorize an actual phone/tablet:** from a tab that's already loopback-authorized (`localhost`), go to **Admin → LAN access**, name the device, and click **Authorize a device** — this shows a pairing QR. Scan it with that device's camera and it authorizes itself. For testing from a different desktop browser tab on the same machine, the LAN Access card also displays a one-click link — "Open pairing link on castwright.local" — right next to the QR whenever the friendly hostname is confirmed reachable; clicking it opens a new tab and skips straight to the "Authorize this browser?" confirmation without needing a camera. This link only appears once the server confirms the mDNS responder and the `:443` forwarder are both up and working (falling back to QR-only if they're not yet reachable, such as under `dev:lan` where this link is unavailable). `localhost` remains the quickest same-machine option and doesn't require any of this setup.
-- If `LAN_AUTH_TOKEN` isn't something you deliberately configured, you can also just remove it from `server/.env` and restart — the guard is opt-in and off by default (see [Mobile, Tablet & Companion App](Mobile-Tablet-and-Companion-App) for the full LAN-access flow).
+- **Don't need LAN access at all?** Set `LAN_HTTPS=0` in `server/.env` and restart — the server drops back to plain `http://localhost:8080` on the local machine only, with no token and no pairing. (Removing just the auto-generated `LAN_AUTH_TOKEN` won't help — with LAN on, the server mints a fresh one on the next boot. Since v1.13.0 the guard is **on by default in production**, not opt-in; see [Mobile, Tablet & Companion App](Mobile-Tablet-and-Companion-App) for the full LAN-access flow.)
 
 ### Where are my books and audio on disk?
 
