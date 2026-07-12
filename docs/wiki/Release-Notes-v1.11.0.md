@@ -37,66 +37,25 @@ flat, unthemed accretion) — see CONTRIBUTING.md "Release notes".
 ### 🎭 Cast-first landing + a pre-flight voice-readiness gate (new) — fe-46
 Confirming a cast now takes you straight to your characters, and starting a render checks every one of them has a voice before committing to a generic stand-in.
 
-- **`confirmCast` now lands on the Cast view, not Manuscript** — the flow
-  becomes confirm → Cast → Manuscript → Generate, with a new "Continue to
-  manuscript" CTA on the Cast view's header action row (#1278).
-- **A pre-flight voice-readiness gate** opens instead of the tier prompt when
-  `startGenerationFlow` finds a speaking Qwen character with no designed
-  voice: lists them in talk-time order, offers "Design full cast" as the
-  primary action and "Proceed anyway — generic Kokoro fallback voices" for
-  English books, and hard-blocks with no proceed affordance for non-English
-  books (#1278).
-- **New reusable selectors** — `src/store/voice-readiness-selectors.ts`
-  (`selectUndesignedQwenCharacters`, sharing the cast view's exact
-  `needsVoiceIds` semantics via `resolveVoiceStatus`) and `src/lib/cast-sort.ts`
-  (`compareCastRows`, extracted out of `views/cast.tsx`).
-  `EnqueueInput`/`QueueEntry` gain an optional per-entry `fallbackConfirmed`
-  flag, stamped at enqueue by the proceed-anyway path so the per-chapter
-  `awaiting_fallback_confirm` gate doesn't re-prompt for that run's fresh
-  chapters — later enqueues still get the per-chapter backstop (#1278).
+- **`confirmCast` now lands on the Cast view, not Manuscript** — the flow becomes confirm → Cast → Manuscript → Generate, with a new "Continue to manuscript" CTA on the Cast view's header action row (#1278).
+- **A pre-flight voice-readiness gate** opens instead of the tier prompt when `startGenerationFlow` finds a speaking Qwen character with no designed voice: lists them in talk-time order, offers "Design full cast" as the primary action and "Proceed anyway — generic Kokoro fallback voices" for English books, and hard-blocks with no proceed affordance for non-English books (#1278).
+- **New reusable selectors** — `src/store/voice-readiness-selectors.ts` (`selectUndesignedQwenCharacters`, sharing the cast view's exact `needsVoiceIds` semantics via `resolveVoiceStatus`) and `src/lib/cast-sort.ts` (`compareCastRows`, extracted out of `views/cast.tsx`). `EnqueueInput`/`QueueEntry` gain an optional per-entry `fallbackConfirmed` flag, stamped at enqueue by the proceed-anyway path so the per-chapter `awaiting_fallback_confirm` gate doesn't re-prompt for that run's fresh chapters — later enqueues still get the per-chapter backstop (#1278).
 
 ### 🛡️ Per-book quality gate report (new) — fs-51
 Every book now ships a visible, exportable "quality gate" receipt — the acoustic, transcript, voice-match, and cast-continuity checks the pipeline already runs, aggregated into one honest card instead of buried in per-chapter detail.
 
-- **New `GET /api/books/{bookId}/qa-report`** composes the existing signal-QA,
-  ASR content-QA, srv-36 voice-drift, and cast-config-drift signals into one
-  `BookQaReport`, computed fresh on every call (nothing new persisted) —
-  display and the text/JSON export can never diverge from each other, since
-  both read the same endpoint (#1433, Closes #973).
-- **A new `QaReportCard`** on both the Listen view (post-generation) and the
-  Generation view (live, refetching on chapter/run completion) — built around
-  a "never show a false pass" rule: a check that never ran, had nothing to
-  check, or was checked incompletely never renders as clean.
-  `chaptersEligible`/`chaptersScored`/`chaptersEmbedFailed` distinguish "gate
-  off" from "nothing to check" from "an isolated embed failure," computed
-  independently of `scoreBook`'s own control flow so the three states can
-  never be confused (#1433).
-- **Fixed a real, pre-existing correctness gap surfaced while building
-  this**: a chapter re-recorded via manual splice or QA-repair was spreading
-  its stale pre-re-record `qa`/`suspect`/`asr` verdict forward instead of
-  writing the fresh one — a repair that genuinely failed to fix a bad
-  sentence could have its `suspect: true` silently cleared to `undefined`.
-  Both `chapter-splice.ts` and `chapter-qa-repair.ts` now write a fresh
-  verdict from the actual re-recorded audio (#1433).
-- **Text and JSON export**, reusing the same aggregated data the card shows —
-  a clean book reads `"Every line held."`, a partial-coverage book states its
-  coverage fractions plainly rather than hiding them.
+- **New `GET /api/books/{bookId}/qa-report`** composes the existing signal-QA, ASR content-QA, srv-36 voice-drift, and cast-config-drift signals into one `BookQaReport`, computed fresh on every call (nothing new persisted) — display and the text/JSON export can never diverge from each other, since both read the same endpoint (#1433, Closes #973).
+- **A new `QaReportCard`** on both the Listen view (post-generation) and the Generation view (live, refetching on chapter/run completion) — built around a "never show a false pass" rule: a check that never ran, had nothing to check, or was checked incompletely never renders as clean. `chaptersEligible`/`chaptersScored`/`chaptersEmbedFailed` distinguish "gate off" from "nothing to check" from "an isolated embed failure," computed independently of `scoreBook`'s own control flow so the three states can never be confused (#1433).
+- **Fixed a real, pre-existing correctness gap surfaced while building this**: a chapter re-recorded via manual splice or QA-repair was spreading its stale pre-re-record `qa`/`suspect`/`asr` verdict forward instead of writing the fresh one — a repair that genuinely failed to fix a bad sentence could have its `suspect: true` silently cleared to `undefined`. Both `chapter-splice.ts` and `chapter-qa-repair.ts` now write a fresh verdict from the actual re-recorded audio (#1433).
+- **Text and JSON export**, reusing the same aggregated data the card shows — a clean book reads `"Every line held."`, a partial-coverage book states its coverage fractions plainly rather than hiding them.
 
 ### 🩺 Live voice-match progress + a manual resume for a stuck check (new) — fs-72
 The voice-match check used to batch every character's result until the whole book's cast was done — a book with many minor characters could sit at "0 of N scored" for the entire generation with zero indication it was actually working, and a killed check on an already-rendered book had no way to pick back up.
 
-- **Each character's voice-match result now saves the moment it's ready**,
-  cheapest characters first — no more waiting on your book's rarest voices
-  before you see anything at all (Closes #1449).
-- **A live "Checking character voices — X of Y done" readout** on the
-  Quality Gate card, plus a matching Activity feed entry, while the check
-  runs in the background during generation.
-- **A "Resume scoring" button** appears if a check gets interrupted (e.g. a
-  restart) on a book that's already finished rendering, with nothing left to
-  automatically pick it back up.
-- **A transient hiccup checking a character's voice now genuinely retries**
-  (up to 3 times) instead of being permanently marked "can't be checked" —
-  only a character whose voice truly can't be built settles into that state.
+- **Each character's voice-match result now saves the moment it's ready**, cheapest characters first — no more waiting on your book's rarest voices before you see anything at all (Closes #1449).
+- **A live "Checking character voices — X of Y done" readout** on the Quality Gate card, plus a matching Activity feed entry, while the check runs in the background during generation.
+- **A "Resume scoring" button** appears if a check gets interrupted (e.g. a restart) on a book that's already finished rendering, with nothing left to automatically pick it back up.
+- **A transient hiccup checking a character's voice now genuinely retries** (up to 3 times) instead of being permanently marked "can't be checked" — only a character whose voice truly can't be built settles into that state.
 
 ---
 
