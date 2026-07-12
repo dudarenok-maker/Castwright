@@ -147,15 +147,43 @@ class _MetaTensorRaisingInner:
         )
 
 
+class _CleanInner:
+    """A healthy inner nn.Module: `.to(device)` succeeds and records the target
+    device (the shape a from_pretrained produces when NO submodule landed on
+    meta) — used to model the in-process retry that finally loads cleanly."""
+
+    def __init__(self) -> None:
+        self.device: Any = None
+        self.config = types.SimpleNamespace(_attn_implementation="sdpa")
+
+    def to(self, device: Any) -> "Any":
+        self.device = device
+        return self
+
+
 class _MetaTensorFakeQwen:
-    def __init__(self, model_id: str) -> None:
+    """from_pretrained yields a model whose `.to(device)` raises the meta-tensor
+    NotImplementedError for the first `_fail_loads` loads, then a clean model.
+
+    `_fail_loads is None` (default) fails EVERY load — the persistent fault that
+    exhausts the in-process retries and must still fall back to the recycle.
+    `_fail_loads = 1` fails only the first load — the observed intermittent
+    fault that a same-process retry clears. Both reset per-test via the fixture."""
+
+    _loads = 0
+    _fail_loads: Any = None
+
+    def __init__(self, model_id: str, inner: Any) -> None:
         self.model_id = model_id
-        self.model = _MetaTensorRaisingInner()
+        self.model = inner
         self.device: Any = None
 
     @classmethod
     def from_pretrained(cls, model_id: str, **_kwargs: Any) -> "_MetaTensorFakeQwen":
-        return cls(model_id)
+        cls._loads += 1
+        still_faulting = cls._fail_loads is None or cls._loads <= cls._fail_loads
+        inner = _MetaTensorRaisingInner() if still_faulting else _CleanInner()
+        return cls(model_id, inner)
 
 
 @pytest.fixture
@@ -163,6 +191,8 @@ def qwen_meta_tensor_failure_runtime(monkeypatch):
     """Same stubbed qwen_tts/torch runtime as `qwen_load_failure_runtime`, but
     the `.to(device)` failure is the meta-tensor NotImplementedError rather
     than a CUDA OOM."""
+    _MetaTensorFakeQwen._loads = 0
+    _MetaTensorFakeQwen._fail_loads = None  # persistent fault by default
     fake_qwen = types.ModuleType("qwen_tts")
     fake_qwen.Qwen3TTSModel = _MetaTensorFakeQwen  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "qwen_tts", fake_qwen)
@@ -184,13 +214,16 @@ def qwen_meta_tensor_failure_runtime(monkeypatch):
     yield engine
     engine._base = None
     engine._design = None
+    _MetaTensorFakeQwen._loads = 0
+    _MetaTensorFakeQwen._fail_loads = None
 
 
 def test_meta_tensor_load_failure_schedules_a_fault_restart(qwen_meta_tensor_failure_runtime, monkeypatch) -> None:
-    """The known-only-a-fresh-process-clears-it fault must schedule a self-
-    recycle (distinct exit code from the memory-watchdog path — see
-    _MODEL_LOAD_FAULT_EXIT_CODE) AND still propagate the 500 to the caller
-    unchanged, so the current request gets a real error."""
+    """A meta-tensor fault that persists across ALL in-process retries must fall
+    back to the self-recycle (distinct exit code from the memory-watchdog path —
+    see _MODEL_LOAD_FAULT_EXIT_CODE) AND still propagate the 500 to the caller
+    unchanged. The load is attempted _QWEN_META_LOAD_ATTEMPTS times FIRST, and
+    the recycle is scheduled exactly ONCE, only after the last attempt."""
     engine = qwen_meta_tensor_failure_runtime
     scheduled: list[tuple[Any, ...]] = []
     monkeypatch.setattr(
@@ -199,8 +232,29 @@ def test_meta_tensor_load_failure_schedules_a_fault_restart(qwen_meta_tensor_fai
     )
     with pytest.raises(NotImplementedError, match="meta tensor"):
         engine._load_qwen_model(engine.VOICEDESIGN_MODEL)
+    assert _MetaTensorFakeQwen._loads == main._QWEN_META_LOAD_ATTEMPTS, (
+        "the load must be retried in-process before falling back to the recycle"
+    )
     assert scheduled == [(engine.VOICEDESIGN_MODEL, scheduled[0][1])]
     assert "meta tensor" in scheduled[0][1].lower()
+
+
+def test_meta_tensor_fault_recovers_on_in_process_retry(qwen_meta_tensor_failure_runtime, monkeypatch) -> None:
+    """The observed intermittent case (logs 2026-07-12 18:35): the first load
+    hits the meta-tensor fault, but a fresh from_pretrained in the SAME process
+    loads cleanly. `_load_qwen_model` must return the clean model WITHOUT
+    scheduling any sidecar recycle — the whole point of the in-process retry."""
+    engine = qwen_meta_tensor_failure_runtime
+    _MetaTensorFakeQwen._fail_loads = 1  # fault once, then recover
+    scheduled: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        main, "_schedule_model_load_fault_restart",
+        lambda *a: scheduled.append(a),
+    )
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+    assert _MetaTensorFakeQwen._loads == 2, "one fault, then a clean retry"
+    assert scheduled == [], "a fault cleared in-process must NOT recycle the sidecar"
+    assert getattr(model.model, "device", None) == engine._device
 
 
 def test_schedule_model_load_fault_restart_is_idempotent_and_uses_its_own_exit_code(monkeypatch) -> None:

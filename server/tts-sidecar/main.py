@@ -456,6 +456,35 @@ def _apply_codec_chunk_size(
     )
 
 
+def _log_meta_device_params(model: Any) -> None:
+    """Best-effort diagnostic for the intermittent 'Cannot copy out of meta
+    tensor' `.to(device)` fault: enumerate which of the just-loaded model's
+    params/buffers remain on the `meta` device (the submodule the checkpoint
+    doesn't cover — the thing that has been a mystery since 2026-05-26). Logged
+    so a real fault finally names the culprit submodule instead of only a
+    stack trace. Purely diagnostic and defensive — never raises: a wrapper-API
+    drift or a stubbed test model simply yields nothing to report."""
+    try:
+        inner = getattr(model, "model", None) or model
+        offenders: list[str] = []
+        for accessor in ("named_parameters", "named_buffers"):
+            enum = getattr(inner, accessor, None)
+            if enum is None:
+                continue
+            for name, tensor in enum():
+                dev = getattr(getattr(tensor, "device", None), "type", None)
+                if dev == "meta" or getattr(tensor, "is_meta", False):
+                    offenders.append(f"{name}{list(getattr(tensor, 'shape', ()))}")
+        if offenders:
+            shown = ", ".join(offenders[:12])
+            log.warning(
+                "Qwen meta-tensor fault: %d param/buffer(s) still on the meta device: %s%s",
+                len(offenders), shown, " …" if len(offenders) > 12 else "",
+            )
+    except Exception:  # pragma: no cover - diagnostic must never mask the real fault
+        pass
+
+
 app = FastAPI(title="audiobook-generator local TTS sidecar")
 
 
@@ -527,6 +556,18 @@ _RESTART_EXIT_CODE = 43
 # VRAM-sizing one — so it gets its own code and falls through to the generic
 # backoff-respawn path instead.
 _MODEL_LOAD_FAULT_EXIT_CODE = 44
+
+# Total attempts for a Qwen model load when it hits the intermittent meta-tensor
+# `.to(device)` fault (see _load_qwen_model / _schedule_model_load_fault_restart).
+# The fault does NOT reproduce on every load: a fresh from_pretrained in the SAME
+# process has been observed to load cleanly moments after a fault (logs/tts.err.log
+# 2026-07-12 18:35 — fault, then a clean "Qwen Base loaded" ~8s later, same pid;
+# the aggregate is ~90 fault lines vs 2 recycles over a week). So we retry the
+# load in-process BEFORE falling back to the far more disruptive self-recycle
+# (which drops every resident model and re-preloads Kokoro). Only when all
+# attempts hit the fault do we recycle — no worse than the pre-retry behaviour.
+# Override via QWEN_META_LOAD_ATTEMPTS for tuning; floored at 1 (no retry).
+_QWEN_META_LOAD_ATTEMPTS = max(1, int(os.environ.get("QWEN_META_LOAD_ATTEMPTS", "3")))
 
 # How long to wait after flagging poison before we actually exit. The 503
 # JSON response is small (~120 bytes) and uvicorn's HTTP/1.1 keep-alive
@@ -1989,8 +2030,11 @@ class QwenEngine(Engine):
              code_predictor / encoder sub-modules built from default configs)
              leaves some params on the `meta` device and then 500s moving them
              ("Cannot copy out of meta tensor"). We avoid device_map entirely
-             and force `low_cpu_mem_usage=False` so every weight materialises as
-             a real tensor that `.to()` can move.
+             and force `low_cpu_mem_usage=False` so checkpoint-covered weights
+             materialise as real tensors that `.to()` can move. A residual,
+             intermittent meta fault on an uncovered submodule still slips
+             through (~90 fault lines over a week); the retry loop below clears
+             it in-process rather than recycling the whole sidecar.
 
         Attention impl defaults to sdpa (PyTorch-native, no extra dep, the right
         default for the autoregressive decode loop); QWEN_ATTN_IMPL overrides it
@@ -2021,8 +2065,11 @@ class QwenEngine(Engine):
                 )
                 codec_device = None
         attn_impl = os.environ.get("QWEN_ATTN_IMPL", "sdpa")
-        # low_cpu_mem_usage=False: full CPU materialisation, no meta-device
-        # skeleton, so the move below can never hit "copy out of meta tensor".
+        # low_cpu_mem_usage=False forces full CPU materialisation of every weight
+        # the checkpoint covers — no meta-device skeleton for those. It does NOT,
+        # however, eliminate the "copy out of meta tensor" fault entirely: a
+        # composite submodule the checkpoint doesn't cover can still land on meta
+        # intermittently, which the retry loop below recovers in-process.
         common = {"dtype": torch.bfloat16, "low_cpu_mem_usage": False}
         # Reclaim-on-failure (side-11 / 2026-05-31): a load that raises AFTER it
         # has materialised weights — most commonly `inner.to(device)` hitting a
@@ -2035,68 +2082,108 @@ class QwenEngine(Engine):
         # CUDA-allocated with `base_loaded=false`). Mirror unload(): drop the
         # partial and run the gc+empty_cache reclaim before re-raising, so a
         # failed (re)load leaves the allocator where it started.
-        model: Any = None
-        try:
-            try:
-                with _suppress_code_predictor_log():
-                    model = Qwen3TTSModel.from_pretrained(
-                        model_id, attn_implementation=attn_impl, **common
-                    )
-            except (ValueError, TypeError) as e:
-                # Only an old transformers/qwen_tts build that doesn't know the
-                # kwarg lands here — retry with library-default attention. (A
-                # device_map fallback is deliberately NOT used: it is the path that
-                # 500s with the meta-tensor NotImplementedError on this stack.)
-                log.warning(
-                    "Qwen load: attn_implementation=%r rejected (%s); retrying without it.",
-                    attn_impl, e,
-                )
-                with _suppress_code_predictor_log():
-                    model = Qwen3TTSModel.from_pretrained(model_id, **common)
-            # Move the inner nn.Module to the device and resync the wrapper's cached
-            # device (the wrapper has no `.to()` — see docstring point 1).
-            inner = getattr(model, "model", None)
-            if inner is not None and hasattr(inner, "to"):
-                inner.to(self._device)
-            else:  # defensive: wrapper-API drift moved the module — move the object.
-                model.to(self._device)
-            try:
-                model.device = torch.device(self._device)
-            except Exception:
-                pass
-            if codec_device is not None:
-                _move_codec_to_device(model, codec_device, torch)
-            _apply_codec_chunk_size(
-                model,
-                _read_int_env("QWEN_CODEC_CHUNK_SIZE"),
-                _read_int_env("QWEN_CODEC_LEFT_CONTEXT_SIZE"),
-            )
-            # Surface the impl that actually took effect (getattr-guarded — the
-            # nested attribute path can drift across qwen_tts/transformers versions).
-            resolved = getattr(getattr(model, "model", None), "config", None)
-            resolved_impl = getattr(resolved, "_attn_implementation", "unknown")
-            log.info(
-                "Qwen model=%s attn_implementation=%s device=%s",
-                model_id, resolved_impl, self._device,
-            )
-            return model
-        except Exception as e:
+        # The intermittent meta-tensor `.to(device)` fault does NOT reproduce on
+        # every load — a fresh from_pretrained in THIS SAME process has been seen
+        # to load cleanly right after a fault (see _QWEN_META_LOAD_ATTEMPTS), so
+        # retry the whole load in-process on that fault class before falling back
+        # to the self-recycle. Any OTHER failure (CUDA OOM &c.) re-raises on the
+        # first hit — unchanged — because retrying it in a tight loop would just
+        # thrash a pressured card, and its recovery lever is "try again later once
+        # VRAM frees," not "reload now."
+        last_meta_exc: Optional[BaseException] = None
+        for attempt in range(1, _QWEN_META_LOAD_ATTEMPTS + 1):
             model = None
-            _reclaim_host_and_vram()
-            # The intermittent meta-tensor `.to(device)` fault (see
-            # _schedule_model_load_fault_restart) never clears by retrying in
-            # this same process — only a fresh sidecar has been observed to
-            # load cleanly. Schedule a self-recycle so the NEXT attempt (this
-            # request still gets its normal 500 below) hits a clean process
-            # instead of failing identically forever.
-            # Matched on two independent phrases from PyTorch's exact message
-            # ("Cannot copy out of meta tensor; no data! ... use
-            # torch.nn.Module.to_empty() ...") so a partial future rewording
-            # that keeps either one still fires this path.
-            _msg = str(e).lower()  # exc-text-safe: fault-type classification only, never returned
-            if isinstance(e, NotImplementedError) and ("meta tensor" in _msg or "to_empty" in _msg):
+            try:
+                try:
+                    with _suppress_code_predictor_log():
+                        model = Qwen3TTSModel.from_pretrained(
+                            model_id, attn_implementation=attn_impl, **common
+                        )
+                except (ValueError, TypeError) as e:
+                    # Only an old transformers/qwen_tts build that doesn't know the
+                    # kwarg lands here — retry with library-default attention. (A
+                    # device_map fallback is deliberately NOT used: it is the path that
+                    # 500s with the meta-tensor NotImplementedError on this stack.)
+                    log.warning(
+                        "Qwen load: attn_implementation=%r rejected (%s); retrying without it.",
+                        attn_impl, e,
+                    )
+                    with _suppress_code_predictor_log():
+                        model = Qwen3TTSModel.from_pretrained(model_id, **common)
+                # Move the inner nn.Module to the device and resync the wrapper's cached
+                # device (the wrapper has no `.to()` — see docstring point 1).
+                inner = getattr(model, "model", None)
+                if inner is not None and hasattr(inner, "to"):
+                    inner.to(self._device)
+                else:  # defensive: wrapper-API drift moved the module — move the object.
+                    model.to(self._device)
+                try:
+                    model.device = torch.device(self._device)
+                except Exception:
+                    pass
+                if codec_device is not None:
+                    _move_codec_to_device(model, codec_device, torch)
+                _apply_codec_chunk_size(
+                    model,
+                    _read_int_env("QWEN_CODEC_CHUNK_SIZE"),
+                    _read_int_env("QWEN_CODEC_LEFT_CONTEXT_SIZE"),
+                )
+                # Surface the impl that actually took effect (getattr-guarded — the
+                # nested attribute path can drift across qwen_tts/transformers versions).
+                resolved = getattr(getattr(model, "model", None), "config", None)
+                resolved_impl = getattr(resolved, "_attn_implementation", "unknown")
+                if attempt > 1:
+                    log.info(
+                        "Qwen model=%s recovered on in-process retry (attempt %d/%d) — "
+                        "no sidecar recycle needed.",
+                        model_id, attempt, _QWEN_META_LOAD_ATTEMPTS,
+                    )
+                log.info(
+                    "Qwen model=%s attn_implementation=%s device=%s",
+                    model_id, resolved_impl, self._device,
+                )
+                return model
+            except Exception as e:
+                # Classify BEFORE dropping the model so the meta-fault diagnostic can
+                # still introspect which submodule landed on the meta device.
+                # Matched on two independent phrases from PyTorch's exact message
+                # ("Cannot copy out of meta tensor; no data! ... use
+                # torch.nn.Module.to_empty() ...") so a partial future rewording
+                # that keeps either one still fires this path.
+                _msg = str(e).lower()  # exc-text-safe: fault-type classification only, never returned
+                is_meta_fault = isinstance(e, NotImplementedError) and (
+                    "meta tensor" in _msg or "to_empty" in _msg
+                )
+                if is_meta_fault:
+                    _log_meta_device_params(model)
+                # Reclaim-on-failure (side-11 / 2026-05-31): a load that raises AFTER
+                # it has materialised weights leaves a partially-built model whose
+                # nn.Module reference CYCLES keep its tensors alive past this frame.
+                # Drop the partial and run the gc+empty_cache reclaim before we retry
+                # or re-raise, so a failed (re)load leaves the allocator where it
+                # started (the measured ~9.9 GB orphaned-VRAM leak otherwise).
+                model = None
+                _reclaim_host_and_vram()
+                if not is_meta_fault:
+                    raise
+                last_meta_exc = e
+                if attempt < _QWEN_META_LOAD_ATTEMPTS:
+                    log.warning(
+                        "Qwen model=%s hit the meta-tensor load fault (attempt %d/%d) — "
+                        "reclaimed VRAM and retrying the load in-process.",
+                        model_id, attempt, _QWEN_META_LOAD_ATTEMPTS,
+                    )
+                    continue
+                # In-process retries exhausted — only NOW fall back to the
+                # self-recycle a fresh process is known to clear. This request
+                # still gets its normal 500 via the re-raise below.
                 _schedule_model_load_fault_restart(model_id, str(e))
-            raise
+                raise
+        # Loop always returns (success) or raises (non-meta fault, or meta fault on
+        # the final attempt). This is only reached if _QWEN_META_LOAD_ATTEMPTS were
+        # somehow all meta faults without re-raising — keep the contract explicit.
+        assert last_meta_exc is not None  # pragma: no cover - defensive
+        raise last_meta_exc
 
     def _ensure_device_resolved(self) -> None:
         """Resolve a 'auto' device preference to a concrete torch device once
@@ -4444,13 +4531,14 @@ def _schedule_restart_exit(
 
 
 def _schedule_model_load_fault_restart(model_id: str, detail: str) -> None:
-    """Schedule a self-exit after a Qwen model-load fault that only a fresh
-    process is known to clear — the intermittent "Cannot copy out of meta
+    """Schedule a self-exit after a Qwen model-load fault that in-process
+    retries could NOT clear — the intermittent "Cannot copy out of meta
     tensor; no data!" `.to(device)` failure in `_load_qwen_model` (recurring
-    since 2026-05-26, ~86 occurrences: some submodule the checkpoint doesn't
-    cover lands on the meta device despite `low_cpu_mem_usage=False`, and
-    every RELOAD in the same process keeps failing identically — only a fresh
-    process has been observed to load the model cleanly). Shares
+    since 2026-05-26: some submodule the checkpoint doesn't cover lands on the
+    meta device despite `low_cpu_mem_usage=False`). `_load_qwen_model` now
+    retries the load in-process first (`_QWEN_META_LOAD_ATTEMPTS`) because a
+    fresh from_pretrained in the same process usually clears it; this recycle
+    is the LAST resort, reached only when every attempt hit the fault. Shares
     `_schedule_recycle_exit`'s idempotent-schedule + drain + hard-exit flow
     with `_schedule_restart_exit` (so at most one restart is ever in flight
     regardless of trigger), but uses `_MODEL_LOAD_FAULT_EXIT_CODE` instead of
@@ -4459,8 +4547,9 @@ def _schedule_model_load_fault_restart(model_id: str, detail: str) -> None:
     _schedule_recycle_exit(
         _MODEL_LOAD_FAULT_EXIT_CODE,
         (
-            f"Qwen model={model_id} failed to load ({detail}) — this is the known "
-            "intermittent meta-tensor load fault that only a fresh process clears. "
+            f"Qwen model={model_id} failed to load ({detail}) — the known "
+            "intermittent meta-tensor load fault persisted across all in-process "
+            f"retries ({_QWEN_META_LOAD_ATTEMPTS}); a fresh process is known to clear it. "
             f"Draining {_inflight_synth} in-flight synth (grace {_drain_grace_ms()}ms) "
             f"then self-exiting (code {_MODEL_LOAD_FAULT_EXIT_CODE}) so the server "
             "respawns a clean sidecar."
