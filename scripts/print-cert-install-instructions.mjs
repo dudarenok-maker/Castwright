@@ -37,7 +37,15 @@ async function asciiQr(text) {
   return qrcode.toString(text, { type: 'terminal', small: true });
 }
 
-const { lanIps } = await setupLanCerts();
+const certs = await setupLanCerts();
+if (certs === null) {
+  // setupLanCerts already printed the mkcert install guidance / failure reason.
+  process.stderr.write(
+    '\n[cert-mobile] LAN certs were not created — install mkcert (see above) and re-run `npm run install:cert-mobile`.\n',
+  );
+  process.exit(1);
+}
+const { lanIps } = certs;
 
 if (lanIps.length === 0) {
   line('');

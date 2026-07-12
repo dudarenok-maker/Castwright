@@ -9,7 +9,9 @@
    Mounted on `/api` + `/workspace`. `/cert/root.crt` (the public mkcert CA
    the companion fetches over the untrusted bootstrap channel *before* it
    can pin + present a token) and `/audio` are deliberately NOT guarded. */
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, randomBytes } from 'node:crypto';
+import { existsSync, readFileSync, appendFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { parse as parseCookie } from 'cookie';
 import type { Request, Response, NextFunction } from './http.js';
 import { isLanHttpsEnabled } from './routes/export-lan.js';
@@ -19,6 +21,42 @@ import { isValidDeviceToken } from './workspace/device-tokens.js';
 export function getLanAuthToken(): string | undefined {
   const t = process.env.LAN_AUTH_TOKEN;
   return typeof t === 'string' && t.length > 0 ? t : undefined;
+}
+
+/* Default persistence: append LAN_AUTH_TOKEN=<token> to the .env file so it
+   survives restarts (device pairings keyed to it stay valid). We only reach here
+   when the file has NO LAN_AUTH_TOKEN line (getLanAuthToken() returned undefined),
+   so a plain append can't produce a duplicate key. Injectable for tests. */
+function appendTokenToEnv(envPath: string, line: string): void {
+  const needsNl = existsSync(envPath) && !readFileSync(envPath, 'utf8').endsWith('\n');
+  appendFileSync(envPath, `${needsNl ? '\n' : ''}${line}\n`, 'utf8');
+}
+
+/** When LAN HTTPS is REQUESTED but no `LAN_AUTH_TOKEN` is configured, mint a random
+ *  256-bit token, set it on `process.env`, and persist it to `envPath` so it's
+ *  stable across restarts. This closes the hole where LAN-on-without-a-token leaves
+ *  `requireLanToken` a no-op and the whole `/api` reachable UNAUTHENTICATED from the
+ *  LAN. No-op when LAN is off (dev/test, or explicit `LAN_HTTPS=0`) or a token
+ *  already exists. Returns the effective token, or undefined when LAN is off.
+ *  `persist` is injectable so tests don't touch the real .env. */
+export function ensureLanAuthToken(
+  envPath: string = resolve(process.cwd(), '.env'),
+  persist: (envPath: string, line: string) => void = appendTokenToEnv,
+): string | undefined {
+  if (!isLanHttpsEnabled()) return undefined;
+  const existing = getLanAuthToken();
+  if (existing !== undefined) return existing;
+  const token = randomBytes(32).toString('hex');
+  process.env.LAN_AUTH_TOKEN = token;
+  try {
+    persist(envPath, `LAN_AUTH_TOKEN=${token}`);
+  } catch (err) {
+    console.warn(
+      `[server] could not persist LAN_AUTH_TOKEN to ${envPath}: ${(err as Error).message} — ` +
+        `it will regenerate next boot (paired devices would need to re-pair).`,
+    );
+  }
+  return token;
 }
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);

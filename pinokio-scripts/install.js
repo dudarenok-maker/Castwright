@@ -14,11 +14,14 @@ const CONDA = { path: 'env', python: '3.12' }; // conda env created at <app>/env
 
 module.exports = {
   run: [
-    // 1. conda env: Python 3.12 + ffmpeg. (If Pinokio's bundled node < 20.19,
-    //    add `conda install -y -c conda-forge nodejs` to this message.)
+    // 1. conda env: Python 3.12 + ffmpeg + mkcert. mkcert is here so the LAN-HTTPS
+    //    default (phone/tablet listening + pairing) can auto-provision certs in
+    //    step 7 — Pinokio runs `node dist/index.js` directly and never goes through
+    //    start-app-prod.mjs's boot auto-provision, so the install must do it.
+    //    (If Pinokio's bundled node < 20.19, add `nodejs` to this message too.)
     {
       method: 'shell.run',
-      params: { path: APP_ROOT, conda: CONDA, message: 'conda install -y -c conda-forge ffmpeg' },
+      params: { path: APP_ROOT, conda: CONDA, message: 'conda install -y -c conda-forge ffmpeg mkcert' },
     },
     // 2. Fetch + resolve + checkout the latest published release (detached HEAD),
     //    all inside resolve-release.js — no fragile cross-step variable capture.
@@ -62,6 +65,15 @@ module.exports = {
     {
       method: 'shell.run',
       params: { path: APP_ROOT, conda: CONDA, message: 'node pinokio-scripts/lib/write-env.js' },
+    },
+    // 7. Provision mkcert LAN certs so the first Start serves HTTPS on :8443 and
+    //    phones/tablets can pair. Best-effort + non-fatal: setup-lan-certs.mjs
+    //    exits 0 even if mkcert is unavailable (server falls back to loopback HTTP).
+    //    conda: CONDA puts the step-1 mkcert on PATH. Each device still installs the
+    //    mkcert root CA once (the pairing QR carries the CA fingerprint to pin).
+    {
+      method: 'shell.run',
+      params: { path: APP_ROOT, conda: CONDA, message: 'node scripts/setup-lan-certs.mjs' },
     },
   ],
 };

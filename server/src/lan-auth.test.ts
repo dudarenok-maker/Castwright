@@ -11,6 +11,7 @@ import {
   isLanTokenEnforced,
   extractToken,
   getLanAuthToken,
+  ensureLanAuthToken,
 } from './lan-auth.js';
 
 interface ReqOpts {
@@ -162,5 +163,60 @@ describe('lan-auth (srv-20)', () => {
     requireLanToken(req, res as never, next);
     expect(next).not.toHaveBeenCalled();
     expect(res._res.statusCode).toBe(401);
+  });
+});
+
+describe('ensureLanAuthToken (auto-provisioned LAN secret)', () => {
+  const saved = {
+    lan: process.env.LAN_HTTPS,
+    tok: process.env.LAN_AUTH_TOKEN,
+    env: process.env.NODE_ENV,
+  };
+  beforeEach(() => {
+    delete process.env.LAN_AUTH_TOKEN;
+    process.env.NODE_ENV = 'production';
+    process.env.LAN_HTTPS = '1';
+  });
+  afterEach(() => {
+    for (const [k, v] of [
+      ['LAN_HTTPS', saved.lan],
+      ['LAN_AUTH_TOKEN', saved.tok],
+      ['NODE_ENV', saved.env],
+    ] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it('no-ops (undefined, no persist) when LAN is off', () => {
+    process.env.LAN_HTTPS = '0';
+    const persist = vi.fn();
+    expect(ensureLanAuthToken('/tmp/.env', persist)).toBeUndefined();
+    expect(persist).not.toHaveBeenCalled();
+    expect(process.env.LAN_AUTH_TOKEN).toBeUndefined();
+  });
+
+  it('mints a 256-bit hex token and persists it when LAN on and none set', () => {
+    const persist = vi.fn();
+    const tok = ensureLanAuthToken('/tmp/.env', persist);
+    expect(tok).toMatch(/^[0-9a-f]{64}$/);
+    expect(process.env.LAN_AUTH_TOKEN).toBe(tok);
+    expect(persist).toHaveBeenCalledWith('/tmp/.env', `LAN_AUTH_TOKEN=${tok}`);
+  });
+
+  it('returns the existing token without re-persisting (idempotent across restarts)', () => {
+    process.env.LAN_AUTH_TOKEN = 'preset-token';
+    const persist = vi.fn();
+    expect(ensureLanAuthToken('/tmp/.env', persist)).toBe('preset-token');
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it('still sets the token in-process even if persistence throws', () => {
+    const persist = vi.fn(() => {
+      throw new Error('EACCES');
+    });
+    const tok = ensureLanAuthToken('/tmp/.env', persist);
+    expect(tok).toMatch(/^[0-9a-f]{64}$/);
+    expect(process.env.LAN_AUTH_TOKEN).toBe(tok);
   });
 });

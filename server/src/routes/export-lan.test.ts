@@ -40,25 +40,40 @@ describe('enumerateLanUrls', () => {
 });
 
 describe('isLanHttpsEnabled', () => {
+  const savedNodeEnv = process.env.NODE_ENV;
   beforeEach(() => {
     delete process.env.LAN_HTTPS;
   });
   afterEach(() => {
     delete process.env.LAN_HTTPS;
+    if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = savedNodeEnv;
   });
 
-  it('is false when env unset', () => {
+  it('defaults OFF outside production when env unset (dev/test keep plain HTTP)', () => {
+    process.env.NODE_ENV = 'development';
     expect(isLanHttpsEnabled()).toBe(false);
   });
-  it('is true when LAN_HTTPS=1', () => {
+  it('defaults ON in production when env unset (installers get LAN by default)', () => {
+    process.env.NODE_ENV = 'production';
+    expect(isLanHttpsEnabled()).toBe(true);
+  });
+  it('explicit LAN_HTTPS=1 wins even outside production', () => {
+    process.env.NODE_ENV = 'development';
     process.env.LAN_HTTPS = '1';
     expect(isLanHttpsEnabled()).toBe(true);
   });
-  it('is false for any other LAN_HTTPS value', () => {
+  it('explicit LAN_HTTPS=0 wins even in production', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.LAN_HTTPS = '0';
+    expect(isLanHttpsEnabled()).toBe(false);
+  });
+  it('a non-0/1 value falls back to the NODE_ENV default', () => {
     process.env.LAN_HTTPS = 'true';
+    process.env.NODE_ENV = 'development';
     expect(isLanHttpsEnabled()).toBe(false);
-    process.env.LAN_HTTPS = 'yes';
-    expect(isLanHttpsEnabled()).toBe(false);
+    process.env.NODE_ENV = 'production';
+    expect(isLanHttpsEnabled()).toBe(true);
   });
 });
 

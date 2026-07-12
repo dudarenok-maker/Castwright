@@ -80,8 +80,14 @@ const HEALTH_TIMEOUT_MS = 60_000;
    server/src/index.ts (PORT ?? 8080, LAN_HTTPS_PORT ?? 8443) and
    routes/export-lan.ts isLanHttpsEnabled() (LAN_HTTPS === '1'). Exported so
    scripts/tests/start-app-prod.test.mjs can pin the contract without spawning. */
-export function resolveLaunchTarget(env = process.env) {
-  const lanHttps = env.LAN_HTTPS === '1';
+export function resolveLaunchTarget(env = process.env, certsPresent = true) {
+  /* The launcher always spawns the server with NODE_ENV=production, so LAN HTTPS is
+     REQUESTED unless explicitly disabled (LAN_HTTPS=0) — mirroring the server's
+     isLanHttpsEnabled() production default. It only takes EFFECT when the mkcert
+     certs exist; otherwise the server degrades to loopback HTTP (index.ts), so the
+     launcher must health-check :8080, not :8443. */
+  const lanRequested = env.LAN_HTTPS !== '0';
+  const lanHttps = lanRequested && certsPresent;
   const httpPort = Number(env.PORT ?? 8080);
   const lanPort = Number(env.LAN_HTTPS_PORT ?? 8443);
   return {
@@ -89,6 +95,27 @@ export function resolveLaunchTarget(env = process.env) {
     port: lanHttps ? lanPort : httpPort,
     protocol: lanHttps ? 'https' : 'http',
   };
+}
+
+/* Best-effort mkcert cert provisioning for the production LAN-HTTPS default. Runs
+   on first launch of any install path that uses this launcher; no-op when LAN is
+   explicitly disabled or certs already exist. Never throws — a missing mkcert
+   degrades to loopback HTTP, it does not block startup. */
+async function maybeProvisionLanCerts(certPath, keyPath) {
+  if (process.env.LAN_HTTPS === '0') return; // explicit opt-out
+  if (existsSync(certPath) && existsSync(keyPath)) return; // already provisioned
+  try {
+    const { setupLanCerts } = await import('./setup-lan-certs.mjs');
+    const res = await setupLanCerts({ silent: false });
+    info(
+      res
+        ? '[cert] LAN certs provisioned via mkcert — serving HTTPS for phone/tablet access.'
+        : '[cert] LAN certs not provisioned (mkcert unavailable) — serving loopback HTTP. ' +
+            'Install mkcert + run "npm run install:cert-mobile" to enable phone/tablet access.',
+    );
+  } catch (err) {
+    info(`[cert] LAN cert provisioning skipped: ${err?.message ?? err}`);
+  }
 }
 
 /* Load server/.env into process.env so the launcher sees the SAME LAN_HTTPS /
@@ -207,7 +234,22 @@ async function main() {
   mkdirSync(logDir, { recursive: true });
 
   loadServerEnv();
-  const { lanHttps, port, protocol } = resolveLaunchTarget(process.env);
+  /* Mirror the server's effective-LAN check (index.ts): certs live at
+     <runDir>/certs/lan-{cert,key}.pem (app-dirs.ts resolveLanCertPaths). If LAN is
+     requested but they're missing, the server serves loopback HTTP, so health-check
+     the port that will actually bind. */
+  const certsDir = resolve(runDir, 'certs');
+  const certPath = resolve(certsDir, 'lan-cert.pem');
+  const keyPath = resolve(certsDir, 'lan-key.pem');
+  /* LAN HTTPS is the production default, so auto-provision mkcert certs on first
+     launch — this is the UNIVERSAL hook every non-Pinokio prod start goes through
+     (native installer, manual `npm run start:prod`, versioned-install restart), so
+     phone/tablet listening + pairing work out of the box, not just under Pinokio.
+     Best-effort + non-fatal: mkcert missing → setupLanCerts() returns null and the
+     server serves loopback HTTP with a one-command fix hint. */
+  await maybeProvisionLanCerts(certPath, keyPath);
+  const certsPresent = existsSync(certPath) && existsSync(keyPath);
+  const { lanHttps, port, protocol } = resolveLaunchTarget(process.env, certsPresent);
   const url = `${protocol}://localhost:${port}/`;
 
   if (!existsSync(distIndex)) {

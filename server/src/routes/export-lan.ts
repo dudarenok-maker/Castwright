@@ -47,8 +47,18 @@ export interface ExportLanInfo {
   caFingerprint?: string;
 }
 
+/* LAN HTTPS defaults ON in production (native installers, Pinokio, start:prod) so
+   phone/tablet listening + pairing work out of the box; OFF in dev/test so
+   `npm run dev`, `npm start`, and the whole test suite keep their plain-HTTP
+   localhost flow untouched. An explicit `LAN_HTTPS=0`/`1` always wins. This is the
+   REQUESTED flag only — the server binds HTTPS solely when certs are ALSO present
+   (see index.ts's effective-LAN check); otherwise it falls back to loopback HTTP,
+   so a cert-less production box still boots. */
 export function isLanHttpsEnabled(): boolean {
-  return process.env.LAN_HTTPS === '1';
+  const v = process.env.LAN_HTTPS;
+  if (v === '1') return true;
+  if (v === '0') return false;
+  return process.env.NODE_ENV === 'production';
 }
 
 export function enumerateLanUrls(port: number, protocol: 'http' | 'https' = 'http'): ExportLanInfo {
