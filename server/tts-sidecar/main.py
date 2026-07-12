@@ -566,17 +566,14 @@ _MODEL_LOAD_FAULT_EXIT_CODE = 44
 # load in-process BEFORE falling back to the far more disruptive self-recycle
 # (which drops every resident model and re-preloads Kokoro). On the COMMON
 # (intermittent) fault this recovers in one extra reload with no recycle at all.
-# The trade is on the RARE genuinely-persistent fault: we now run up to N full
-# reloads (holding the single-flight base-load lock, ~N× the pre-retry wait)
+# The trade is on the RARE genuinely-persistent fault: we run up to this many full
+# reloads (holding the single-flight base-load lock, ~3× the pre-retry wait)
 # before scheduling the recycle — a bounded cost we accept because that path is
-# rare (~2/week) and the recycle it precedes is itself ~15-20s.
-# Override via QWEN_META_LOAD_ATTEMPTS for tuning; floored at 1 (no retry).
-# Parsed tolerantly (via _read_int_env) so an empty/garbage override falls back
-# to the default rather than raising at import and taking the whole sidecar down.
-_meta_load_attempts_override = _read_int_env("QWEN_META_LOAD_ATTEMPTS")
-_QWEN_META_LOAD_ATTEMPTS = max(
-    1, _meta_load_attempts_override if _meta_load_attempts_override is not None else 3
-)
+# rare (~2/week) and the recycle it precedes is itself ~15-20s. A fixed constant,
+# not an env knob: the retry count isn't something an operator needs to tune, and
+# leaving it fixed rules out both an unbounded-loop footgun and an import-time
+# parse fault.
+_QWEN_META_LOAD_ATTEMPTS = 3
 
 # How long to wait after flagging poison before we actually exit. The 503
 # JSON response is small (~120 bytes) and uvicorn's HTTP/1.1 keep-alive
@@ -2099,7 +2096,11 @@ class QwenEngine(Engine):
         # first hit — unchanged — because retrying it in a tight loop would just
         # thrash a pressured card, and its recovery lever is "try again later once
         # VRAM frees," not "reload now."
-        last_meta_exc: Optional[BaseException] = None
+        # Only the meta fault's message STRING is carried across attempts — never
+        # the exception object, whose traceback would pin the failed attempt's
+        # partially-materialised model past the reclaim (side-11). None until a
+        # meta fault fires.
+        meta_fault_detail: Optional[str] = None
         for attempt in range(1, _QWEN_META_LOAD_ATTEMPTS + 1):
             model = None
             try:
@@ -2163,40 +2164,51 @@ class QwenEngine(Engine):
                 is_meta_fault = isinstance(e, NotImplementedError) and (
                     "meta tensor" in _msg or "to_empty" in _msg
                 )
+                # Introspect WHICH submodule landed on meta while the model is still
+                # in scope, then drop EVERY reference to the partial before reclaim.
                 if is_meta_fault:
                     _log_meta_device_params(model)
+                detail = str(e)
                 # Reclaim-on-failure (side-11 / 2026-05-31): a load that raises AFTER
-                # it has materialised weights leaves a partially-built model whose
-                # nn.Module reference CYCLES keep its tensors alive past this frame.
-                # Drop the partial and run the gc+empty_cache reclaim before we retry
-                # or re-raise, so a failed (re)load leaves the allocator where it
-                # started (the measured ~9.9 GB orphaned-VRAM leak otherwise).
+                # it has materialised weights leaves a partially-built model alive.
+                # Drop the `model` AND `inner` locals so the gc+empty_cache reclaim
+                # can actually free the partial. We keep only `detail` (a string) —
+                # never the exception object, whose traceback would pin the partial's
+                # `.to()` frames and defeat the reclaim across a retry.
                 model = None
-                _reclaim_host_and_vram()
+                inner = None
                 if not is_meta_fault:
+                    _reclaim_host_and_vram()
                     # A non-meta fault (CUDA OOM &c.). If a meta fault ALREADY fired
                     # on an earlier attempt of THIS load, the process is in the
                     # known-bad state only a fresh sidecar clears — preserve the
-                    # pre-retry guarantee (a meta fault always schedules the recycle)
-                    # by scheduling it here, keyed on the meta fault that is the real
-                    # trigger, before re-raising. A non-meta fault with NO prior meta
-                    # fault is the ordinary OOM path: reclaim + re-raise, no recycle.
-                    if last_meta_exc is not None:
-                        _schedule_model_load_fault_restart(model_id, str(last_meta_exc))
+                    # pre-retry guarantee (a meta fault always schedules the recycle),
+                    # keyed on the meta fault that is the real trigger, before
+                    # re-raising. A non-meta fault with NO prior meta fault is the
+                    # ordinary OOM path: reclaim + re-raise, no recycle.
+                    if meta_fault_detail is not None:
+                        _schedule_model_load_fault_restart(model_id, meta_fault_detail)
                     raise
-                last_meta_exc = e
-                if attempt < _QWEN_META_LOAD_ATTEMPTS:
-                    log.warning(
-                        "Qwen model=%s hit the meta-tensor load fault (attempt %d/%d) — "
-                        "reclaimed VRAM and retrying the load in-process.",
-                        model_id, attempt, _QWEN_META_LOAD_ATTEMPTS,
-                    )
-                    continue
-                # In-process retries exhausted — only NOW fall back to the
-                # self-recycle a fresh process is known to clear. This request
-                # still gets its normal 500 via the re-raise below.
-                _schedule_model_load_fault_restart(model_id, str(e))
-                raise
+                meta_fault_detail = detail
+                if attempt >= _QWEN_META_LOAD_ATTEMPTS:
+                    _reclaim_host_and_vram()
+                    # In-process retries exhausted — only NOW fall back to the
+                    # self-recycle a fresh process is known to clear. This request
+                    # still gets its normal 500 via the re-raise below.
+                    _schedule_model_load_fault_restart(model_id, detail)
+                    raise
+                # About to retry: null the traceback so it stops pinning the failed
+                # attempt's frames (and the partial model they hold), so the reclaim
+                # below frees that VRAM before the next from_pretrained rather than
+                # letting the two partials co-reside (the side-11 OOM).
+                e.__traceback__ = None
+                _reclaim_host_and_vram()
+                log.warning(
+                    "Qwen model=%s hit the meta-tensor load fault (attempt %d/%d) — "
+                    "reclaimed VRAM and retrying the load in-process.",
+                    model_id, attempt, _QWEN_META_LOAD_ATTEMPTS,
+                )
+                continue
 
     def _ensure_device_resolved(self) -> None:
         """Resolve a 'auto' device preference to a concrete torch device once

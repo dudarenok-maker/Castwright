@@ -246,6 +246,11 @@ def test_meta_tensor_fault_recovers_on_in_process_retry(qwen_meta_tensor_failure
     scheduling any sidecar recycle — the whole point of the in-process retry."""
     engine = qwen_meta_tensor_failure_runtime
     _MetaTensorFakeQwen._fail_loads = 1  # fault once, then recover
+    reclaims = {"n": 0}
+    monkeypatch.setattr(
+        main, "_reclaim_host_and_vram",
+        lambda: reclaims.__setitem__("n", reclaims["n"] + 1),
+    )
     scheduled: list[tuple[Any, ...]] = []
     monkeypatch.setattr(
         main, "_schedule_model_load_fault_restart",
@@ -253,6 +258,7 @@ def test_meta_tensor_fault_recovers_on_in_process_retry(qwen_meta_tensor_failure
     )
     model = engine._load_qwen_model(engine.BASE_MODEL)
     assert _MetaTensorFakeQwen._loads == 2, "one fault, then a clean retry"
+    assert reclaims["n"] == 1, "the failed first attempt must reclaim VRAM before the retry"
     assert scheduled == [], "a fault cleared in-process must NOT recycle the sidecar"
     assert getattr(model.model, "device", None) == engine._device
 
@@ -296,21 +302,6 @@ def test_meta_fault_then_nonmeta_retry_still_schedules_recycle(qwen_meta_tensor_
     assert _MetaThenOomQwen._loads == 2, "meta fault on attempt 1, OOM on the retry"
     assert len(scheduled) == 1, "the earlier meta fault must still schedule the recycle"
     assert "meta tensor" in scheduled[0][1].lower(), "recycle keyed on the meta fault, not the OOM"
-
-
-def test_meta_load_attempts_env_parsed_tolerantly(monkeypatch) -> None:
-    """Regression (code-review high, 2026-07-12): a malformed/empty
-    QWEN_META_LOAD_ATTEMPTS must NOT crash sidecar import — the constant parses it
-    via _read_int_env (falls back to the default), never a bare int() that raises
-    at import and takes all TTS down. Pins the tolerant-parse contract it relies on
-    and that the live default is a sane floored int."""
-    monkeypatch.setenv("QWEN_META_LOAD_ATTEMPTS", "")
-    assert main._read_int_env("QWEN_META_LOAD_ATTEMPTS") is None
-    monkeypatch.setenv("QWEN_META_LOAD_ATTEMPTS", "three")
-    assert main._read_int_env("QWEN_META_LOAD_ATTEMPTS") is None
-    monkeypatch.setenv("QWEN_META_LOAD_ATTEMPTS", "5")
-    assert main._read_int_env("QWEN_META_LOAD_ATTEMPTS") == 5
-    assert isinstance(main._QWEN_META_LOAD_ATTEMPTS, int) and main._QWEN_META_LOAD_ATTEMPTS >= 1
 
 
 def test_schedule_model_load_fault_restart_is_idempotent_and_uses_its_own_exit_code(monkeypatch) -> None:
