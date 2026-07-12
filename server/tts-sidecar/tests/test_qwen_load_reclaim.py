@@ -257,6 +257,62 @@ def test_meta_tensor_fault_recovers_on_in_process_retry(qwen_meta_tensor_failure
     assert getattr(model.model, "device", None) == engine._device
 
 
+class _MetaThenOomQwen:
+    """Attempt 1's `.to(device)` raises the meta-tensor fault; attempt 2's raises
+    a CUDA OOM (the reclaim-didn't-fully-free retry path). Models the case the
+    retry loop must NOT silently drop the recycle on."""
+
+    _loads = 0
+
+    def __init__(self, model_id: str, inner: Any) -> None:
+        self.model_id = model_id
+        self.model = inner
+        self.device: Any = None
+
+    @classmethod
+    def from_pretrained(cls, model_id: str, **_kwargs: Any) -> "_MetaThenOomQwen":
+        cls._loads += 1
+        inner = _MetaTensorRaisingInner() if cls._loads == 1 else _RaisingInner()
+        return cls(model_id, inner)
+
+
+def test_meta_fault_then_nonmeta_retry_still_schedules_recycle(qwen_meta_tensor_failure_runtime, monkeypatch) -> None:
+    """Regression (code-review high, 2026-07-12): a meta fault on attempt 1
+    followed by a NON-meta fault (CUDA OOM) on the retry must STILL schedule the
+    self-recycle — the process already hit the meta fault, so it needs the fresh
+    sidecar. Without this the retry loop drops the recycle the pre-retry code
+    always issued on a meta fault, wedging the sidecar on bare 500s. The recycle
+    is keyed on the meta fault (its detail), not the OOM."""
+    engine = qwen_meta_tensor_failure_runtime
+    _MetaThenOomQwen._loads = 0
+    monkeypatch.setattr(sys.modules["qwen_tts"], "Qwen3TTSModel", _MetaThenOomQwen)
+    scheduled: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        main, "_schedule_model_load_fault_restart",
+        lambda *a: scheduled.append(a),
+    )
+    with pytest.raises(RuntimeError, match="out of memory"):
+        engine._load_qwen_model(engine.BASE_MODEL)
+    assert _MetaThenOomQwen._loads == 2, "meta fault on attempt 1, OOM on the retry"
+    assert len(scheduled) == 1, "the earlier meta fault must still schedule the recycle"
+    assert "meta tensor" in scheduled[0][1].lower(), "recycle keyed on the meta fault, not the OOM"
+
+
+def test_meta_load_attempts_env_parsed_tolerantly(monkeypatch) -> None:
+    """Regression (code-review high, 2026-07-12): a malformed/empty
+    QWEN_META_LOAD_ATTEMPTS must NOT crash sidecar import — the constant parses it
+    via _read_int_env (falls back to the default), never a bare int() that raises
+    at import and takes all TTS down. Pins the tolerant-parse contract it relies on
+    and that the live default is a sane floored int."""
+    monkeypatch.setenv("QWEN_META_LOAD_ATTEMPTS", "")
+    assert main._read_int_env("QWEN_META_LOAD_ATTEMPTS") is None
+    monkeypatch.setenv("QWEN_META_LOAD_ATTEMPTS", "three")
+    assert main._read_int_env("QWEN_META_LOAD_ATTEMPTS") is None
+    monkeypatch.setenv("QWEN_META_LOAD_ATTEMPTS", "5")
+    assert main._read_int_env("QWEN_META_LOAD_ATTEMPTS") == 5
+    assert isinstance(main._QWEN_META_LOAD_ATTEMPTS, int) and main._QWEN_META_LOAD_ATTEMPTS >= 1
+
+
 def test_schedule_model_load_fault_restart_is_idempotent_and_uses_its_own_exit_code(monkeypatch) -> None:
     """Mirrors test_schedule_restart_is_idempotent, but for the load-fault
     trigger: two faults schedule exactly ONE exit, and it fires with

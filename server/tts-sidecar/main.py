@@ -564,10 +564,19 @@ _MODEL_LOAD_FAULT_EXIT_CODE = 44
 # 2026-07-12 18:35 — fault, then a clean "Qwen Base loaded" ~8s later, same pid;
 # the aggregate is ~90 fault lines vs 2 recycles over a week). So we retry the
 # load in-process BEFORE falling back to the far more disruptive self-recycle
-# (which drops every resident model and re-preloads Kokoro). Only when all
-# attempts hit the fault do we recycle — no worse than the pre-retry behaviour.
+# (which drops every resident model and re-preloads Kokoro). On the COMMON
+# (intermittent) fault this recovers in one extra reload with no recycle at all.
+# The trade is on the RARE genuinely-persistent fault: we now run up to N full
+# reloads (holding the single-flight base-load lock, ~N× the pre-retry wait)
+# before scheduling the recycle — a bounded cost we accept because that path is
+# rare (~2/week) and the recycle it precedes is itself ~15-20s.
 # Override via QWEN_META_LOAD_ATTEMPTS for tuning; floored at 1 (no retry).
-_QWEN_META_LOAD_ATTEMPTS = max(1, int(os.environ.get("QWEN_META_LOAD_ATTEMPTS", "3")))
+# Parsed tolerantly (via _read_int_env) so an empty/garbage override falls back
+# to the default rather than raising at import and taking the whole sidecar down.
+_meta_load_attempts_override = _read_int_env("QWEN_META_LOAD_ATTEMPTS")
+_QWEN_META_LOAD_ATTEMPTS = max(
+    1, _meta_load_attempts_override if _meta_load_attempts_override is not None else 3
+)
 
 # How long to wait after flagging poison before we actually exit. The 503
 # JSON response is small (~120 bytes) and uvicorn's HTTP/1.1 keep-alive
@@ -2165,6 +2174,15 @@ class QwenEngine(Engine):
                 model = None
                 _reclaim_host_and_vram()
                 if not is_meta_fault:
+                    # A non-meta fault (CUDA OOM &c.). If a meta fault ALREADY fired
+                    # on an earlier attempt of THIS load, the process is in the
+                    # known-bad state only a fresh sidecar clears — preserve the
+                    # pre-retry guarantee (a meta fault always schedules the recycle)
+                    # by scheduling it here, keyed on the meta fault that is the real
+                    # trigger, before re-raising. A non-meta fault with NO prior meta
+                    # fault is the ordinary OOM path: reclaim + re-raise, no recycle.
+                    if last_meta_exc is not None:
+                        _schedule_model_load_fault_restart(model_id, str(last_meta_exc))
                     raise
                 last_meta_exc = e
                 if attempt < _QWEN_META_LOAD_ATTEMPTS:
@@ -2179,11 +2197,6 @@ class QwenEngine(Engine):
                 # still gets its normal 500 via the re-raise below.
                 _schedule_model_load_fault_restart(model_id, str(e))
                 raise
-        # Loop always returns (success) or raises (non-meta fault, or meta fault on
-        # the final attempt). This is only reached if _QWEN_META_LOAD_ATTEMPTS were
-        # somehow all meta faults without re-raising — keep the contract explicit.
-        assert last_meta_exc is not None  # pragma: no cover - defensive
-        raise last_meta_exc
 
     def _ensure_device_resolved(self) -> None:
         """Resolve a 'auto' device preference to a concrete torch device once
