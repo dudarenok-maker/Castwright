@@ -91,7 +91,8 @@ class LoopbackProxy {
   Future<void> start();                     // idempotent; binds 127.0.0.1:0
   Uri register({required Uri upstream,      // https://<lan>:8443/api/books/…/audio.mp3
                 required Map<String, String> headers});  // {Authorization: Bearer …}
-  Future<void> dispose();                   // closes server, clears mappings
+  int? get lastUpstreamStatus;              // side-channel: the last non-2xx upstream code
+  Future<void> dispose();                   // close(force: true), clears mappings
 }
 ```
 
@@ -107,7 +108,13 @@ class LoopbackProxy {
      `Content-Length`, `Content-Range`, `Accept-Ranges`; then **pipe the upstream
      body straight through** (no full-file buffering), flushing as bytes arrive.
      `HEAD` relays headers only.
-  4. **Client disconnect (seek/stop) → cancel the upstream fetch** so sockets
+  4. On a **non-2xx upstream** (or fetch throw), record it in `lastUpstreamStatus`
+     (`0` for a connection/timeout failure) and return an error status to the
+     player. This is the **failure side-channel** the controller reads when the
+     engine reports an error (component 6) — the platform player collapses upstream
+     codes into one opaque error, so the real `401/403` vs `404/5xx` distinction
+     can only come from the proxy, not the engine.
+  5. **Client disconnect (seek/stop) → cancel the upstream fetch** so sockets
      don't leak.
 - **One active mapping at a time** (single-player app): registering a new chapter
   evicts the prior id, so any stale loopback URL cleanly `404`s. This is safe
@@ -138,12 +145,15 @@ class PinnedStreamResponse {
   is native — the proxy receives the undrained response and pipes it. No new
   buffering, no new dependency.
 - `4xx/5xx` propagate as status codes for the proxy/controller to act on.
-- **Implementation trap (must honor):** `pinnedRangeFetch` reuses **one pooled
-  `HttpClient`**. `cancel()` MUST abort only *this* request — cancel the
-  `HttpClientResponse` stream subscription / detach the socket — and MUST NOT call
-  `client.close(force: true)`, which would kill every concurrent range fetch and
-  the shared pool. The buffered `pinnedRangeFetch` (downloader hot path) is
-  otherwise **untouched**; the two share only the private factory.
+- **Implementation trap (must honor):** `cancel()` MUST abort only *this* request
+  by holding the `StreamSubscription` from `response.listen(...)` and calling
+  `subscription.cancel()` (dart:io tears down that one socket). It MUST NOT call
+  `client.close(force: true)` — a `pinnedRangeStream` client is per-call, so
+  closing it wouldn't hurt the downloader, but it **would** kill sibling concurrent
+  range fetches within the same playback session. Corollary: the proxy must
+  manually `.listen()`-and-forward, **not** `response.pipe(httpResponse)` (which
+  gives no subscription handle to cancel). The buffered `pinnedRangeFetch`
+  (downloader hot path) is **untouched**; the two share only the private factory.
 
 ### 3. Android cleartext-to-loopback (new — `apps/android/android/app/src/main/res/xml/network_security_config.xml` + manifest wiring)
 
@@ -179,29 +189,34 @@ exception.
 This is **more than a single seam** — the current types don't carry what the
 streaming branch needs, so three things move together:
 
-**(a) Widen `PlayableChapter` to carry upstream identity.** Today
-`PlayableChapter` (`player_controller.dart:16-27`) has only
-`uuid/path/title/durationSec` — no `bookId`/`chapterId`/`urlSuffix` to build
-`/api/books/:bookId/chapters/:chapterId/audio.mp3`, and no `isDownloaded`. Add the
-upstream-identity fields (source: `SyncManifestChapter`, `sync_manifest.dart:104-117`),
-and stop dropping them in the `playlistFor` projection
-(`sync_controller.dart:186-199`), which already emits undownloaded-but-rendered
-chapters (`c.hasAudio`) with a *local* `path` that may not exist on disk.
+**(a) Widen `PlayableChapter` to carry `audioUrl`.** Today `PlayableChapter`
+(`player_controller.dart:16-27`) has only `uuid/path/title/durationSec` and no
+`isDownloaded`. `SyncManifestChapter` (`lib/src/domain/sync_manifest.dart:90-131`)
+already holds `audioUrl` — the **full server path** (`/api/books/$bookId/chapters/
+$id/$urlSuffix`, built server-side, used verbatim at `sync_controller.dart:105`).
+So the widening is just: carry `audioUrl` on `PlayableChapter` and stop dropping it
+in the `playlistFor` projection (`sync_controller.dart:186-199`), which already
+emits undownloaded-but-rendered chapters (`c.hasAudio`) with a *local* `path` that
+may not exist on disk. `_resolveUpstream(c)` is then `_resolveUrl(c.audioUrl)` — no
+`bookId`+`chapterId`+`urlSuffix` re-assembly needed.
 
 **(b) "Downloaded?" is a file-existence check on `c.path`**, not a non-existent
 `isDownloaded` flag.
 
 **(c) Expand the `PlayerController` constructor.** It currently injects none of
-the streaming deps; add `settings` (for `streamOverLan`), a reachability source
+the streaming deps; add `fileStore` (for the `exists()` check — `file_store.dart`,
+not currently injected), `settings` (for `streamOverLan`), a reachability source
 (component 5), the connection/token (`ApiClient` or the paired-server token), and
 the `LoopbackProxy`. Every existing `PlayerController` test gains fakes for these.
 
-The decision point in `_loadIndex` (`player_controller.dart:280`) then becomes:
+The decision point in `_loadIndex` (`player_controller.dart:280`) then becomes
+(note: `_loadIndex` is already `async`, so awaiting the file-existence and
+reachability checks is free):
 
 ```dart
 final src = resolvePlaybackSource(
   localFileExists:  await _fileStore.exists(c.path),
-  onHomeLan:        _reachability.onHomeLan,        // component 5
+  onHomeLan:        await _reachability.onHomeLan(),  // component 5 (async, cheap)
   streamingEnabled: _settings.streamOverLan,
 );
 switch (src) {
@@ -210,12 +225,13 @@ switch (src) {
   case PlaybackSource.lanStream:
     await _proxy.start();                            // FIRST bind, on demand
     final loopback = _proxy.register(
-      upstream: _resolveUpstream(c),                 // needs bookId+chapterId+urlSuffix from (a)
+      upstream: _resolveUrl(c.audioUrl),             // audioUrl carried through (a)
       headers: {'Authorization': 'Bearer ${_conn.token}'},
     );
     await _engine.setStreamUrl(loopback.toString()); // player sees only 127.0.0.1, no headers
   case PlaybackSource.needsDownload:
-    _notifyDownloadToPlay();                         // no silent no-op
+    if (userInitiated) _notifyDownloadToPlay();      // prompt only on explicit play
+    // else (auto-advance): halt the run quietly — no unprompted download nag
 }
 ```
 
@@ -224,48 +240,81 @@ Consequences:
 - `PlaybackSource.lanStream` gets its **first and only production consumer**; the
   `settings_screen.dart` "Stream over LAN" toggle **stops being inert**.
 - `_loadIndex` is also reached via `openBook`, `playChapter`, `_advance`
-  (auto-advance) and `skip`'s `ChapterStep` — so **auto-advancing into an
-  undownloaded chapter streams it too**. That is the desired behavior (seamless
-  LAN listening), not a bug; tests cover the auto-advance path.
+  (auto-advance) and `skip`'s `ChapterStep`. **Auto-advancing into an
+  undownloaded chapter over LAN streams it** (desired — seamless listening); but an
+  auto-advance into `needsDownload` (off-LAN / toggle off) must **halt quietly**,
+  not pop a download prompt mid-listen. The `needsDownload` prompt fires only for a
+  **user-initiated** load; tests cover both the auto-advance-streams and
+  auto-advance-halts-quietly paths.
 - `setStreamUrl` is called with the loopback URL and **no `headers`** (confirmed:
   `just_audio_engine.dart:47` passes `headers: null` → `AudioSource.uri`), so the
   Bearer never reaches the player.
 - Controller `dispose()` also disposes the proxy — no lingering socket.
 - **Dropped from v1:** gating stats-accrual on `processingState == ready` (the
-  `player_controller.dart:352-355` caveat) — `AudioEngine` doesn't expose
-  `processingState`, and adding that seam isn't worth it for an ephemeral preview.
+  `player_controller.dart:352-355` caveat). We add a minimal *error-only* engine
+  seam (§6) for fallback, but **not** the full `processingState` surface — the
+  accrual over-count on a buffer stall isn't worth that for an ephemeral preview.
   See Risks.
 
 ### 5. Reachability signal (`onHomeLan`)
 
 Reuse the existing app-8 network probe (`network_info.dart`, currently
 unconnected). Its enum is `{offline, mobile, wifiMetered, wifiUnmetered}`
-(`sync_gate.dart:7`). The correct attempt-gate is:
+(`sync_gate.dart:7`); `currentNetwork()` returns a `Future<NetworkType>` (a cheap
+`connectivity_plus.checkConnectivity()` — **not** the ~2 s server probe). The
+reachability source exposes:
 
 ```dart
-onHomeLan = network == NetworkType.wifiUnmetered || network == NetworkType.wifiMetered;
+Future<bool> onHomeLan() async {
+  final n = await _networkInfo.currentNetwork();
+  return n == NetworkType.wifiUnmetered || n == NetworkType.wifiMetered;
+}
 ```
 
 **Not** `network != mobile` — that is *true when `offline`*, which would route an
 offline tap to `lanStream` and only discover the failure via a doomed upstream
-fetch. Being on Wi-Fi is a cheap gate; whether the paired server is actually on
-*this* Wi-Fi is settled by the streaming attempt itself (the failure path below).
-No mandatory pre-probe (adds ~2 s and duplicates what the first request proves).
+fetch. (`network_info.dart` today only ever returns `wifiUnmetered`/`mobile`/
+`offline`, so the `wifiMetered` disjunct is presently dead but harmless.) It is
+`await`-ed per load inside the already-async `_loadIndex`; no cached subscription,
+no mandatory pre-probe. Whether the paired server is actually on *this* Wi-Fi is
+settled by the streaming attempt itself (the failure path below).
 
-### 6. Failure / fallback behavior — no silent stalls
+### 6. Engine error seam (`AudioEngine` + `JustAudioEngine`)
 
-The proxy's first upstream request **is** the real reachability test. The engine
-error stream drives fallback (no infinite buffer spinner):
+**New — the fallback in §7 cannot be built without this.** `AudioEngine`
+(`audio_engine.dart:4-38`) exposes `position`/`playing`/`duration`/`completion`
+but **no error stream**, and `JustAudioEngine` doesn't surface just_audio's
+`playbackEventStream`/`processingStateStream`. A failed loopback fetch surfaces in
+just_audio as a player error that today goes nowhere. Add a minimal seam:
 
-| Failure | Where caught | User-visible result |
+```dart
+Stream<Object> get errorStream;   // AudioEngine interface
+```
+
+`JustAudioEngine` maps `_player.playbackEventStream`'s error events (and/or
+`processingStateStream` idle-after-load) onto it; the demo/fake engines emit
+nothing. The `PlayerController` subscribes and drives §7. This is the seam the
+dropped `processingState==ready` idea would also have needed — we add the smaller
+error-only version, not the full processing-state surface.
+
+### 7. Failure / fallback behavior — no silent stalls
+
+The proxy's first upstream request **is** the real reachability test. Fallback is
+driven by the **engine error seam (§6)** — the platform player collapses upstream
+HTTP codes into one opaque error, so on an engine error the controller reads the
+proxy's **`lastUpstreamStatus` side-channel (§1)** to recover the real code and
+route accordingly (no infinite buffer spinner):
+
+| Failure | How the controller learns it | User-visible result |
 |---|---|---|
-| Server unreachable / timeout (wrong Wi-Fi, server off) | proxy → `502/504` → engine error | Stop; message *"Couldn't stream over LAN — download to play"*; chapter stays needs-download |
-| `401/403` (device token expired/revoked) | proxy relays status → controller | Reuse ApiClient's existing **re-pair** path (`api_client.dart:55`) |
-| `404/5xx` from server | proxy relays status → engine error | Same "couldn't stream — download" message |
-| Toggle off / off-Wi-Fi / offline / local file missing | `resolvePlaybackSource → needsDownload` | *"Download this chapter to play"* — never a silent no-op |
+| Server unreachable / timeout (wrong Wi-Fi, server off) | engine error + `lastUpstreamStatus == 0` | Stop; *"Couldn't stream over LAN — download to play"*; chapter stays needs-download |
+| `401/403` (device token expired/revoked) | engine error + `lastUpstreamStatus ∈ {401,403}` | Trigger the existing **re-pair** flow (same UX as `api_client.dart:55`) |
+| `404/5xx` from server | engine error + `lastUpstreamStatus ∈ {404,5xx}` | Same "couldn't stream — download" message |
+| Toggle off / off-Wi-Fi / offline / local file missing | `resolvePlaybackSource → needsDownload` | user-initiated: *"Download this chapter to play"*; auto-advance: halt quietly |
 
-Streaming is best-effort; any failure degrades gracefully to the offline-first
-download flow with a clear one-line message. **No auto-retry.**
+On any stream error the controller also **clears the proxy mapping** (so the stale
+loopback id `404`s) and stops. Streaming is best-effort; every failure degrades to
+the offline-first download flow with a clear one-line message. **No auto-retry.**
 
 ## Testing strategy
 
@@ -285,18 +334,22 @@ automated gate for `apps/android/`.
    second concurrent fetch on the shared pool keeps working after one is
    cancelled). CA-pinning stays covered by the existing `cert_pinning`/`api_client`
    tests — same factory reused.
-3. **Data plumbing** — `PlayableChapter`/`playlistFor` carry `bookId`/`chapterId`/
-   `urlSuffix` through the projection; `_resolveUpstream` builds the correct
-   `/api/books/…/audio.mp3` URL.
-4. **`PlayerController` wiring** (fake engine/proxy/reachability/settings/fileStore):
+3. **Data plumbing** — `PlayableChapter`/`playlistFor` carry `audioUrl` through the
+   projection; `_resolveUrl(c.audioUrl)` yields the correct absolute upstream URL.
+4. **Engine error seam** — `JustAudioEngine` maps a just_audio player-error event
+   onto `errorStream`; the fake engine can emit a synthetic error for controller
+   tests.
+5. **`PlayerController` wiring** (fake engine/proxy/reachability/settings/fileStore):
    downloaded (file exists) → `setFilePath`; undownloaded+on+Wi-Fi →
    `start()`+`register`+`setStreamUrl(loopback)` with **no headers to the engine**;
    **lazy invariant** — `proxy.start()` never called in `localFile`/`needsDownload`
-   branches; toggle off / off-Wi-Fi / offline → `needsDownload` + no proxy start;
-   auto-advance into an undownloaded chapter streams; stream engine-error →
-   fallback message + mapping cleared + **no auto-retry**; `dispose()` disposes the
+   branches; toggle off / off-Wi-Fi / offline → `needsDownload` (user-initiated
+   prompts, auto-advance halts quietly) + no proxy start; auto-advance into an
+   undownloaded chapter streams; **failure routing** — engine error with
+   `lastUpstreamStatus` of `0`/`404`/`5xx` → download message, `401/403` → re-pair
+   flow, each clearing the mapping with **no auto-retry**; `dispose()` disposes the
    proxy.
-5. **`resolvePlaybackSource`** — extend the existing truth-table test; add the
+6. **`resolvePlaybackSource`** — extend the existing truth-table test; add the
    `NetworkType → onHomeLan` mapping (offline ⇒ false).
 
 **Not unit-testable (on-device / declarative):** the `network_security_config.xml`
