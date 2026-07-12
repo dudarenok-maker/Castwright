@@ -8,12 +8,16 @@ describe('shouldSpawnPortForwarder', () => {
     expect(shouldSpawnPortForwarder(false, { NODE_ENV: 'production' })).toBe(false);
   });
 
-  it('is true for the start:lan shape: lanHttps=true AND NODE_ENV=production', () => {
-    expect(shouldSpawnPortForwarder(true, { NODE_ENV: 'production' })).toBe(true);
+  it('is true only for the EXPLICIT start:lan shape: lanHttps AND production AND LAN_HTTPS=1', () => {
+    expect(shouldSpawnPortForwarder(true, { NODE_ENV: 'production', LAN_HTTPS: '1' })).toBe(true);
+  });
+
+  it('is false on the bare production LAN-default (LAN_HTTPS unset) — no privileged :443 bind by default', () => {
+    expect(shouldSpawnPortForwarder(true, { NODE_ENV: 'production' })).toBe(false);
   });
 
   it('is false for the dev:lan server-leg shape: lanHttps=true but NODE_ENV unset', () => {
-    expect(shouldSpawnPortForwarder(true, {})).toBe(false);
+    expect(shouldSpawnPortForwarder(true, { LAN_HTTPS: '1' })).toBe(false);
   });
 
   it('is false when NODE_ENV is set but not production', () => {

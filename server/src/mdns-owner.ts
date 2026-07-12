@@ -40,15 +40,19 @@ export interface MdnsResponderHandle {
   isAlive: () => boolean;
 }
 
-/** True only for the start:lan shape (lanHttps AND NODE_ENV=production) —
-    false for dev:lan's server leg (lanHttps but NODE_ENV unset/dev), which
-    already gets its own castwright.dev.local responder via the concurrently
-    leg in package.json and must not also get a server-spawned one. */
+/** True only for the EXPLICIT start:lan shape (LAN_HTTPS=1 AND lanHttps actually
+    active AND NODE_ENV=production). Requires the explicit `LAN_HTTPS=1` opt-in, NOT
+    the production LAN-default: broadcasting castwright.local over mDNS (and the
+    privileged :443 forwarder) is a network-visible action the bare default
+    (Pinokio/native without LAN_HTTPS set) must not take — those installs still pair
+    fine via the IP-based QR. Also false for dev:lan's server leg (LAN_HTTPS=1 but
+    NODE_ENV=dev), which gets its own castwright.dev.local responder via the
+    concurrently leg in package.json. */
 export function shouldSpawnMdnsResponder(
   lanHttps: boolean,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return lanHttps && env.NODE_ENV === 'production';
+  return lanHttps && env.NODE_ENV === 'production' && env.LAN_HTTPS === '1';
 }
 
 /** Spawn scripts/mdns-responder.mjs as a child process advertising `hostname`.

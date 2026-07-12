@@ -57,6 +57,17 @@ The first implementation passed unit tests but a high-effort review found 9 real
 - **cert-regenerate false success.** `setup-lan-certs.mjs`'s CLI exits non-zero on failure again (restoring the `lan-cert.ts` regenerate route's exit-code contract); install flows pass `--best-effort` to stay non-fatal.
 - **Accepted as-is:** the `:443` port-forwarder being default-on can log an `EADDRINUSE` warning behind an existing reverse proxy — it's non-fatal (handled at `lan-port-forwarder.ts`), and default LAN reachability is the intent. Cert-path resolution is duplicated across `app-dirs.ts` (TS) and the two `.mjs` scripts because the ESM scripts can't import the compiled server module; kept cross-referenced.
 
+## Review fixes round 2 (2026-07-12)
+
+A second high-effort review confirmed round-1 fixes held but found the default-flip rippling into more consumers of the old `LAN_HTTPS` signal. Fixed:
+
+- **`loopback-url.ts` sent sidecar callbacks to the wrong port** (checked `LAN_HTTPS` env, not the bind) → design-progress silently stalled. Now reads `getLanRuntime()` (effective protocol+port) — correct for both default-on and cert-degrade.
+- **`LAN_HTTPS=false` read as ON.** `isLanHttpsEnabled()` (and `resolveLaunchTarget`) now: unset → prod default; any explicit value must be exactly `'1'` — so `false`/`off`/`no` disable.
+- **mDNS + `:443` forwarder fired on every prod boot.** Narrowed `shouldSpawnMdnsResponder`/`shouldSpawnPortForwarder` to the EXPLICIT `LAN_HTTPS=1` opt-in (`start:lan`) — the bare production default gives LAN HTTPS on `:8443` and pairs via the IP QR; `castwright.local` + the privileged `:443` forwarder stay opt-in (no unrequested broadcast, no non-root bind failures).
+- **Empty/corrupt token file wedged persistence** (`wx` refused to overwrite → in-memory token every boot → re-pair). Now self-heals: on `wx` EEXIST, re-read (adopt a racing writer's token) else overwrite the unusable file.
+- **Launcher spawned a duplicate server** when certs appeared after an HTTP-first start. `start-app-prod.mjs` now also probes the alternate port for a live Castwright server before spawning.
+- Stale `lan-cert.ts` comment updated (setup-lan-certs is now `APP_RUN_DIR`-aware). `lanExposureWarning()` is now effectively unreachable (ensureLanAuthToken always mints) but kept as a defensive net.
+
 ## Ship notes
 
 _(fill on merge: date + SHA)_

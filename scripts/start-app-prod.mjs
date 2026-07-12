@@ -86,7 +86,10 @@ export function resolveLaunchTarget(env = process.env, certsPresent = true) {
      isLanHttpsEnabled() production default. It only takes EFFECT when the mkcert
      certs exist; otherwise the server degrades to loopback HTTP (index.ts), so the
      launcher must health-check :8080, not :8443. */
-  const lanRequested = env.LAN_HTTPS !== '0';
+  // Unset → prod default on (the launcher always spawns NODE_ENV=production); an
+  // explicit value must be exactly '1' (mirrors the server's isLanHttpsEnabled, so
+  // LAN_HTTPS=false disables rather than being read as ON).
+  const lanRequested = env.LAN_HTTPS === undefined || env.LAN_HTTPS === '1';
   const lanHttps = lanRequested && certsPresent;
   const httpPort = Number(env.PORT ?? 8080);
   const lanPort = Number(env.LAN_HTTPS_PORT ?? 8443);
@@ -283,6 +286,25 @@ async function main() {
     info(`[SKIP] server already listening on :${port} — leaving it alone`);
     info(`[READY] ${url}`);
     process.exit(0);
+  }
+
+  /* A prior launch may have bound the OTHER port — e.g. it started loopback HTTP
+     :8080 because certs were absent, and now certs exist so our target is :8443.
+     Probing only the target would miss that running server and spawn a duplicate
+     (two servers, one stale pid file). Detect a live Castwright server on the
+     alternate port and leave it alone. */
+  const altPort = port === Number(process.env.LAN_HTTPS_PORT ?? 8443)
+    ? Number(process.env.PORT ?? 8080)
+    : Number(process.env.LAN_HTTPS_PORT ?? 8443);
+  if (altPort !== port && (await probePort(altPort))) {
+    const servedAlt = await probeServed(altPort, altPort === Number(process.env.LAN_HTTPS_PORT ?? 8443));
+    if (servedAlt) {
+      info(
+        `[SKIP] a Castwright server is already listening on :${altPort} — leaving it alone. ` +
+          `Run "npm run stop:prod" first to relaunch on :${port}.`,
+      );
+      process.exit(0);
+    }
   }
 
   const outLog = openSync(resolve(logDir, 'server.log'), 'a');

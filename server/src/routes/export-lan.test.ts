@@ -69,12 +69,12 @@ describe('isLanHttpsEnabled', () => {
     process.env.LAN_HTTPS = '0';
     expect(isLanHttpsEnabled()).toBe(false);
   });
-  it('a non-0/1 value falls back to the NODE_ENV default', () => {
-    process.env.LAN_HTTPS = 'true';
-    process.env.NODE_ENV = 'development';
-    expect(isLanHttpsEnabled()).toBe(false);
+  it('any EXPLICIT non-1 value disables, even in production (LAN_HTTPS=false is not "on")', () => {
     process.env.NODE_ENV = 'production';
-    expect(isLanHttpsEnabled()).toBe(true);
+    for (const v of ['true', 'false', 'no', 'off', 'yes', '2']) {
+      process.env.LAN_HTTPS = v;
+      expect(isLanHttpsEnabled(), `LAN_HTTPS=${v}`).toBe(false);
+    }
   });
 });
 

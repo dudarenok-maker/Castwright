@@ -63,19 +63,28 @@ export function ensureLanAuthToken(
     process.env.LAN_AUTH_TOKEN = token;
     return token;
   } catch {
-    // wx failed — another boot wrote it first (or the dir is unwritable). Prefer theirs.
+    // wx failed — the file already exists. Either another boot wrote a real token
+    // (race: adopt theirs), or the existing file is empty/corrupt (an interrupted
+    // first write, an external truncate) — in that case wx would wedge us into a
+    // fresh in-memory token every boot, so SELF-HEAL by overwriting it.
     const raced = readTokenFile(tokenFile);
     if (raced !== undefined) {
       process.env.LAN_AUTH_TOKEN = raced;
       return raced;
     }
-    // Couldn't write OR read — still guard the API this run with an in-memory token.
-    process.env.LAN_AUTH_TOKEN = token;
-    console.warn(
-      `[server] could not persist the LAN auth token to ${tokenFile} — it will regenerate ` +
-        `next boot (paired devices would need to re-pair).`,
-    );
-    return token;
+    try {
+      writeFileSync(tokenFile, `${token}\n`, { encoding: 'utf8', flag: 'w' });
+      process.env.LAN_AUTH_TOKEN = token;
+      return token;
+    } catch {
+      // Truly unwritable — still guard the API this run with an in-memory token.
+      process.env.LAN_AUTH_TOKEN = token;
+      console.warn(
+        `[server] could not persist the LAN auth token to ${tokenFile} — it will regenerate ` +
+          `next boot (paired devices would need to re-pair).`,
+      );
+      return token;
+    }
   }
 }
 

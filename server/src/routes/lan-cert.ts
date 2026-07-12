@@ -24,17 +24,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..', '..', '..');
 const scriptPath = resolve(repoRoot, 'scripts', 'setup-lan-certs.mjs');
 
-/* Known, currently-inert gap (plan review): scripts/setup-lan-certs.mjs
-   hardcodes its cert output to `<repoRoot>/.run/certs`, NOT resolveRunDir()'s
-   APP_RUN_DIR override — so in a hypothetical future versioned-dir install
-   with APP_RUN_DIR set, this route (and index.ts's served LAN_CERT_FILE,
-   which IS resolveRunDir-based) would look in the wrong place and the
-   hot-swap would silently no-op. Inert today because setup-lan-certs.mjs
-   isn't shipped in the release manifest at all (see mdns-owner.ts's own
-   comment — a packaged install can't generate LAN certs regardless), and in
-   a dev checkout APP_RUN_DIR is unset so both paths already agree. Not fixed
-   here — out of scope for this plan, which doesn't touch setup-lan-certs.mjs
-   — but documented rather than silently left for someone to discover later. */
+/* Cert-output location parity (was a known gap; closed 2026-07-12 by plan 250):
+   scripts/setup-lan-certs.mjs now derives its cert dir from
+   `APP_RUN_DIR ? resolve(APP_RUN_DIR) : <repoRoot>/.run` + `/certs`, mirroring
+   resolveRunDir()/resolveLanCertPaths(), so a versioned-dir install with APP_RUN_DIR
+   set writes certs where this route (and index.ts's served LAN_CERT_FILE) reads
+   them. Keep the two in sync if resolveRunDir's semantics change — the .mjs script
+   can't import the compiled server module, so the derivation is duplicated by
+   necessity (cross-referenced in both files). */
 let { certFile, keyFile } = resolveLanCertPaths(repoRoot);
 
 /** Test-only seam — lets lan-cert.test.ts point at a temp dir instead of the

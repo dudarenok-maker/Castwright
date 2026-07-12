@@ -57,9 +57,11 @@ export interface ExportLanInfo {
    so a cert-less production box still boots. */
 export function isLanHttpsEnabled(): boolean {
   const v = process.env.LAN_HTTPS;
-  if (v === '1') return true;
-  if (v === '0') return false;
-  return process.env.NODE_ENV === 'production';
+  // Unset → production default on. Any EXPLICIT value must be exactly '1' to enable;
+  // anything else (`0`, `false`, `off`, …) disables — so a truthy-looking negation
+  // like LAN_HTTPS=false can never be silently reinterpreted as ON.
+  if (v === undefined) return process.env.NODE_ENV === 'production';
+  return v === '1';
 }
 
 export function enumerateLanUrls(port: number, protocol: 'http' | 'https' = 'http'): ExportLanInfo {
