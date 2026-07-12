@@ -2103,19 +2103,6 @@ class QwenEngine(Engine):
         # meta fault fires.
         meta_fault_detail: Optional[str] = None
         for attempt in range(1, _QWEN_META_LOAD_ATTEMPTS + 1):
-            if _restart_pending:
-                # A sidecar recycle is already scheduled — by an earlier loader's
-                # meta fault (this call or another thread queued on the single-flight
-                # load lock), or the memory watchdog. The process is about to exit,
-                # so running a full load attempt (let alone the whole retry loop)
-                # just stalls this queued request behind the lock for ~seconds before
-                # it fails anyway. Fail fast; the caller retries against the fresh
-                # process. Without this, N queued chapters each re-run the loop and
-                # 500 serially — re-creating the "crashing continuously" wall this
-                # change set out to reduce.
-                raise RuntimeError(
-                    "Qwen load aborted: a sidecar recycle is already pending."
-                )
             model = None
             try:
                 try:
@@ -2182,60 +2169,59 @@ class QwenEngine(Engine):
                 # in scope, then drop EVERY reference to the partial before reclaim.
                 if is_meta_fault:
                     _log_meta_device_params(model)
-                detail = str(e)
-                # Reclaim-on-failure (side-11 / 2026-05-31): a load that raises AFTER
-                # it has materialised weights leaves a partially-built model alive.
+                    meta_fault_detail = str(e)
                 # Drop the `model` AND `inner` locals so the gc+empty_cache reclaim
-                # can actually free the partial. We keep only `detail` (a string) —
-                # never the exception object, whose traceback would pin the partial's
-                # `.to()` frames and defeat the reclaim across a retry.
+                # (side-11) can free the partially-built model. `e` (a string message
+                # aside) pins that partial only through its traceback frames.
                 model = None
                 inner = None
-                if not is_meta_fault:
+
+                # An ordinary fault with NO meta fault anywhere in this load (e.g. a
+                # plain CUDA OOM) is unchanged: reclaim and re-raise the true error so
+                # the caller classifies it per its own contract (design route poison
+                # latch, base17-mint OOM->500). Keep its traceback for debugging.
+                if not is_meta_fault and meta_fault_detail is None:
                     _reclaim_host_and_vram()
-                    if meta_fault_detail is not None:
-                        # A meta fault ALREADY fired on an earlier attempt of THIS
-                        # load; the retry then hit an unrelated fault (e.g. a real
-                        # CUDA OOM from reloading under pressure). The meta fault is
-                        # WHY we recycle, so schedule it (keyed on the meta detail) —
-                        # but re-raise the ACTUAL exception below, NOT a synthetic
-                        # meta one. Each caller classifies the TRUE error per its own
-                        # contract: the design route's _CUDA_POISON_RE fires its 503
-                        # gpu_poisoned + poison latch on a genuine OOM (fast-failing
-                        # concurrent jobs), and _ensure_base17_for_mint maps a genuine
-                        # OOM to its intended 500. Masking the OOM as the meta fault
-                        # would silently break both of those.
-                        log.warning(
-                            "Qwen model=%s retry after a meta-tensor fault hit a "
-                            "secondary fault (%s) — scheduling the recycle on the "
-                            "meta fault and surfacing the actual error to the caller.",
-                            model_id, detail,
-                        )
-                        _schedule_model_load_fault_restart(model_id, meta_fault_detail)
-                    # No prior meta fault: the ordinary OOM path (reclaim + re-raise,
-                    # no recycle). Either way, re-raise the actual exception so the
-                    # caller sees the true error.
                     raise
-                meta_fault_detail = detail
-                if attempt >= _QWEN_META_LOAD_ATTEMPTS:
-                    _reclaim_host_and_vram()
-                    # In-process retries exhausted — only NOW fall back to the
-                    # self-recycle a fresh process is known to clear. This request
-                    # still gets its normal 500 via the re-raise below.
-                    _schedule_model_load_fault_restart(model_id, detail)
-                    raise
-                # About to retry: null the traceback so it stops pinning the failed
-                # attempt's frames (and the partial model they hold), so the reclaim
-                # below frees that VRAM before the next from_pretrained rather than
-                # letting the two partials co-reside (the side-11 OOM).
+
+                # A meta fault is involved (this attempt, or an earlier one). Null the
+                # traceback so it stops pinning the partial, then reclaim so the freed
+                # VRAM can't co-reside with the next attempt (side-11).
                 e.__traceback__ = None
                 _reclaim_host_and_vram()
-                log.warning(
-                    "Qwen model=%s hit the meta-tensor load fault (attempt %d/%d) — "
-                    "reclaimed VRAM and retrying the load in-process.",
-                    model_id, attempt, _QWEN_META_LOAD_ATTEMPTS,
-                )
-                continue
+
+                # Retry only while it's still a meta fault, attempts remain, AND no
+                # recycle is already pending. The `_restart_pending` check keeps a
+                # loader that arrives after another thread already scheduled the
+                # recycle from burning a second doomed reload — without rejecting a
+                # healthy, unrelated load (which never reaches this meta path) the way
+                # a blanket loop-entry guard would.
+                if is_meta_fault and attempt < _QWEN_META_LOAD_ATTEMPTS and not _restart_pending:
+                    log.warning(
+                        "Qwen model=%s hit the meta-tensor load fault (attempt %d/%d) — "
+                        "reclaimed VRAM and retrying the load in-process.",
+                        model_id, attempt, _QWEN_META_LOAD_ATTEMPTS,
+                    )
+                    continue
+
+                # Terminal meta path — retries exhausted, a recycle already pending, or
+                # a retry after the meta fault hit a secondary fault. Behave EXACTLY as
+                # the pre-retry code did on a meta fault: schedule the single code-44
+                # recycle and raise the meta NotImplementedError. This transparency is
+                # deliberate — re-raising a retry-induced OOM instead would (a) let the
+                # design route's CUDA-poison exit fire a SECOND, racing exit path
+                # alongside the code-44 recycle, and (b) diverge from how every caller
+                # already classifies a first-shot meta fault. The recycle is what a
+                # fresh process clears; the meta fault, not the retry's side effect, is
+                # the signal. Fresh exception + `from None`: the reclaimed partial's
+                # traceback is already gone, so nothing re-pins it.
+                if not is_meta_fault:
+                    log.warning(
+                        "Qwen model=%s retry after a meta-tensor fault hit a secondary "
+                        "fault (%s) — recycling on the meta fault.", model_id, _msg,
+                    )
+                _schedule_model_load_fault_restart(model_id, meta_fault_detail)
+                raise NotImplementedError(meta_fault_detail) from None
 
     def _ensure_device_resolved(self) -> None:
         """Resolve a 'auto' device preference to a concrete torch device once
