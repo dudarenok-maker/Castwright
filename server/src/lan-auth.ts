@@ -74,8 +74,13 @@ export function ensureLanAuthToken(
     }
     try {
       writeFileSync(tokenFile, `${token}\n`, { encoding: 'utf8', flag: 'w' });
-      process.env.LAN_AUTH_TOKEN = token;
-      return token;
+      // Re-read after the non-exclusive overwrite: if two boots both healed an empty
+      // file concurrently, adopt whatever landed on disk so every process converges
+      // on ONE token (never in-memory-diverges from the file a paired device trusts).
+      const settled = readTokenFile(tokenFile);
+      const effective = settled ?? token;
+      process.env.LAN_AUTH_TOKEN = effective;
+      return effective;
     } catch {
       // Truly unwritable — still guard the API this run with an in-memory token.
       process.env.LAN_AUTH_TOKEN = token;

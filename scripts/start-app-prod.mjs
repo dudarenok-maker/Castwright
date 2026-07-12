@@ -105,7 +105,10 @@ export function resolveLaunchTarget(env = process.env, certsPresent = true) {
    explicitly disabled or certs already exist. Never throws — a missing mkcert
    degrades to loopback HTTP, it does not block startup. */
 async function maybeProvisionLanCerts(certPath, keyPath) {
-  if (process.env.LAN_HTTPS === '0') return; // explicit opt-out
+  // Skip when LAN is not requested — unset means the prod default (provision), but any
+  // EXPLICIT value other than '1' (0/false/off) is an opt-out, so don't run mkcert
+  // (which would modify the system trust store) for a feature the operator disabled.
+  if (process.env.LAN_HTTPS !== undefined && process.env.LAN_HTTPS !== '1') return;
   if (existsSync(certPath) && existsSync(keyPath)) return; // already provisioned
   try {
     const { setupLanCerts } = await import('./setup-lan-certs.mjs');

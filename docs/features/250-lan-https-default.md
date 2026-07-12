@@ -68,6 +68,16 @@ A second high-effort review confirmed round-1 fixes held but found the default-f
 - **Launcher spawned a duplicate server** when certs appeared after an HTTP-first start. `start-app-prod.mjs` now also probes the alternate port for a live Castwright server before spawning.
 - Stale `lan-cert.ts` comment updated (setup-lan-certs is now `APP_RUN_DIR`-aware). `lanExposureWarning()` is now effectively unreachable (ensureLanAuthToken always mints) but kept as a defensive net.
 
+## Review fixes round 3 (2026-07-12, convergence)
+
+Third review found the LAST remaining consumer of the old pattern + bounded launcher/token edges. The complete set of LAN-URL emitters is now confirmed to be exactly three (`export-lan` GET /lan, `pairing.ts`, `devices.ts`) — all three now read `getLanRuntime()`.
+
+- **`devices.ts` (browser-pairing route)** still hardcoded `:8443` + gated on the requested flag → dead pairing URL on a cert-less degrade. Now reads `getLanRuntime()` (the last emitter migrated).
+- **`maybeProvisionLanCerts` opt-out** now matches the flag semantics — an explicit non-`1` value (`false`/`off`) skips mkcert (no trust-store change for a disabled feature).
+- **Token self-heal race**: after the non-exclusive overwrite of an empty/corrupt file, re-read and adopt the on-disk value so concurrent healers converge on one token.
+- **`lanExposureWarning()`** documented as a now-unreachable defensive backstop (ensureLanAuthToken mints first).
+- **Accepted:** the launcher's alternate-port probe means a box that first bound HTTP (certs absent) prints an explicit "run stop:prod to relaunch on :8443" rather than silently spawning a duplicate — an operator stop/restart is required to switch ports (rare, since installs provision certs before first start).
+
 ## Ship notes
 
 _(fill on merge: date + SHA)_
