@@ -72,28 +72,42 @@ test('Books view has no horizontal overflow at phone width with a long workspace
   ).toBeLessThanOrEqual(1);
 });
 
-test('Books view Cards/Table toggle stays right-anchored, wrapped or not (#1325)', async ({
+test('Books view Cards/Table toggle: hidden on phone, right-anchored when shown (#1325, #1543)', async ({
   page,
 }) => {
-  async function toggleRightGap(width: number) {
+  const TOGGLE = '[data-testid="library-view-mode-toggle"]';
+  async function gotoBooks(width: number) {
     await page.setViewportSize({ width, height: 844 });
     await page.goto('/');
     await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
       timeout: 10_000,
     });
-    return page.evaluate(() => {
+  }
+  async function toggleRightGap() {
+    return page.evaluate((sel) => {
       const doc = document.documentElement;
-      const toggle = document.querySelector('[data-testid="library-view-mode-toggle"]');
-      return doc.clientWidth - toggle!.getBoundingClientRect().right;
-    });
+      const toggle = document.querySelector(sel);
+      if (!toggle) return null;
+      return doc.clientWidth - toggle.getBoundingClientRect().right;
+    }, TOGGLE);
   }
 
-  /* 390px: narrow enough that the toggle wraps onto its own line below the
-     filter pills. 1280px: wide enough that it shares the line with them.
-     Both should sit flush to the page's right padding (16px at `px-4`,
-     24px at `sm:px-6`), not drift to the left edge. */
-  const narrowGap = await toggleRightGap(390);
-  const wideGap = await toggleRightGap(1280);
-  expect(narrowGap, 'toggle→viewport-edge gap at 390px').toBeLessThanOrEqual(20);
-  expect(wideGap, 'toggle→viewport-edge gap at 1280px').toBeLessThanOrEqual(30);
+  /* Phone (<640px): the toggle is intentionally NOT rendered — below 640 the
+     view is force-collapsed to cards, so a visible toggle would flip its
+     aria-pressed yet never change the view (a dead control, #1543). Assert
+     it's absent rather than checking its position. */
+  await gotoBooks(390);
+  await expect(page.locator(TOGGLE)).toHaveCount(0);
+
+  /* Tablet (≥640px, narrow enough that the toggle wraps onto its own line
+     below the filter pills) and desktop: it shows and stays flush to the
+     page's right padding (`sm:px-6` = 24px), not drifting to the left edge. */
+  await gotoBooks(700);
+  const narrowGap = await toggleRightGap();
+  expect(narrowGap, 'toggle present at 700px').not.toBeNull();
+  expect(narrowGap!, 'toggle→viewport-edge gap at 700px').toBeLessThanOrEqual(30);
+
+  await gotoBooks(1280);
+  const wideGap = await toggleRightGap();
+  expect(wideGap!, 'toggle→viewport-edge gap at 1280px').toBeLessThanOrEqual(30);
 });

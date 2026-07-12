@@ -136,7 +136,7 @@ export function Checkbox({
       {label ? (
         <label
           htmlFor={inputId}
-          className={`flex items-start gap-3 select-none min-h-[44px] sm:min-h-0 ${
+          className={`flex items-start gap-3 select-none min-h-[44px] fine-pointer:min-h-0 ${
             disabled ? 'cursor-not-allowed' : 'cursor-pointer'
           }`}
         >

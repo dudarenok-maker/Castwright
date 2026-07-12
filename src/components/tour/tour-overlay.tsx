@@ -120,13 +120,13 @@ export function TourOverlay() {
             ))}
           </div>
           <button type="button" onClick={() => dispatch(tourActions.endTour())}
-            className="ml-auto text-xs text-canvas/60 min-h-[44px] sm:min-h-0">Skip</button>
+            className="ml-auto text-xs text-canvas/60 min-h-[44px] fine-pointer:min-h-0">Skip</button>
           {!isFirst && (
             <button type="button" onClick={() => dispatch(prevStep())}
-              className="text-xs font-semibold text-canvas/80 min-h-[44px] sm:min-h-0">Back</button>
+              className="text-xs font-semibold text-canvas/80 min-h-[44px] fine-pointer:min-h-0">Back</button>
           )}
           <button type="button" onClick={() => dispatch(nextStep())}
-            className="text-xs font-bold bg-peach text-ink rounded-lg px-3 py-1.5 min-h-[44px] sm:min-h-0">
+            className="text-xs font-bold bg-peach text-ink rounded-lg px-3 py-1.5 min-h-[44px] fine-pointer:min-h-0">
             {isLast ? 'Done' : <>Next <span aria-hidden="true">→</span></>}
           </button>
         </div>

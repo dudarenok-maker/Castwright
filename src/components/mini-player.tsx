@@ -922,7 +922,7 @@ export function MiniPlayer({
                 aria-expanded={volumeMenuOpen}
                 aria-haspopup="menu"
                 title={`Volume ${Math.round(playerVolume * 100)}%`}
-                className={`p-2 rounded-full hover:bg-canvas/10 hidden md:grid place-items-center min-h-[44px] sm:min-h-0 ${
+                className={`p-2 rounded-full hover:bg-canvas/10 hidden md:grid place-items-center min-h-[44px] fine-pointer:min-h-0 ${
                   playerVolume === 0 ? 'text-canvas/40' : 'text-canvas/80'
                 }`}
               >

@@ -91,7 +91,7 @@ export function DesignScopePicker({
         <span className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">
           What should I design?
         </span>
-        <button type="button" onClick={onClose} aria-label="Close" className="text-ink/40 hover:text-ink p-1 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 grid place-items-center">
+        <button type="button" onClick={onClose} aria-label="Close" className="text-ink/40 hover:text-ink p-1 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 grid place-items-center">
           <IconClose className="w-3.5 h-3.5" />
         </button>
       </div>

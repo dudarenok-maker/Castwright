@@ -29,7 +29,7 @@ export function UpdateNotifierBanner() {
           <button
             type="button"
             onClick={() => dismissUpdate(latest)}
-            className="min-h-[44px] sm:min-h-0 shrink-0 rounded-lg px-3 py-1 text-xs font-medium text-ink/70 hover:bg-white/60"
+            className="min-h-[44px] fine-pointer:min-h-0 shrink-0 rounded-lg px-3 py-1 text-xs font-medium text-ink/70 hover:bg-white/60"
           >
             Dismiss
           </button>

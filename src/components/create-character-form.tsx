@@ -24,7 +24,7 @@ export function CreateCharacterForm({
   const disabled = key.length === 0;
 
   const selectClass =
-    'mt-1 w-full min-h-[44px] sm:min-h-0 rounded-xl border border-ink/15 px-3 text-sm bg-canvas text-ink';
+    'mt-1 w-full min-h-[44px] fine-pointer:min-h-0 rounded-xl border border-ink/15 px-3 text-sm bg-canvas text-ink';
 
   return (
     <div className="space-y-3" data-testid="create-character-form">
@@ -34,7 +34,7 @@ export function CreateCharacterForm({
           aria-label="Name"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="mt-1 w-full min-h-[44px] sm:min-h-0 rounded-xl border border-ink/15 px-3 text-sm bg-canvas text-ink"
+          className="mt-1 w-full min-h-[44px] fine-pointer:min-h-0 rounded-xl border border-ink/15 px-3 text-sm bg-canvas text-ink"
         />
       </label>
 
@@ -87,11 +87,11 @@ export function CreateCharacterForm({
                   ageRange: ageRange || undefined,
                 })
           }
-          className="px-4 min-h-[44px] sm:min-h-0 rounded-full bg-ink text-canvas text-sm font-semibold disabled:opacity-40"
+          className="px-4 min-h-[44px] fine-pointer:min-h-0 rounded-full bg-ink text-canvas text-sm font-semibold disabled:opacity-40"
         >
           {existing ? `Reattribute to «${existing.name}»` : 'Create character'}
         </button>
-        <button type="button" onClick={onCancel} className="px-4 min-h-[44px] sm:min-h-0 text-sm text-ink/50">
+        <button type="button" onClick={onCancel} className="px-4 min-h-[44px] fine-pointer:min-h-0 text-sm text-ink/50">
           Cancel
         </button>
       </div>

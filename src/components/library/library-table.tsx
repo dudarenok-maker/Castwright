@@ -152,7 +152,7 @@ export function LibraryTable({
                 onClick={() => setCollapsed((m) => ({ ...m, [group.id]: !isCollapsed }))}
                 aria-expanded={!isCollapsed}
                 aria-controls={`library-table-body-${group.id}`}
-                className="flex-1 min-w-0 flex items-center justify-between gap-3 px-1 py-1 rounded-lg hover:bg-ink/3 transition-colors"
+                className="flex-1 min-w-0 flex items-center justify-between gap-3 px-1 py-1 coarse-pointer:min-h-[44px] rounded-lg hover:bg-ink/3 transition-colors"
               >
                 <span className="inline-flex items-center gap-2 min-w-0">
                   {isCollapsed ? (
@@ -371,7 +371,7 @@ function BookRow({
               e.stopPropagation();
               setMenuOpen((o) => !o);
             }}
-            className="w-7 h-7 grid place-items-center rounded-full text-ink/55 hover:text-ink hover:bg-ink/6 transition-colors"
+            className="w-7 h-7 coarse-pointer:w-11 coarse-pointer:h-11 grid place-items-center rounded-full text-ink/55 hover:text-ink hover:bg-ink/6 transition-colors"
           >
             <IconMore className="w-4 h-4" />
           </button>

@@ -231,7 +231,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices, inputR
     'px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink ' +
     'focus:outline-hidden focus:ring-2 focus:ring-magenta/30 ' +
     'disabled:bg-ink/3 disabled:text-ink/50 disabled:cursor-not-allowed ' +
-    'min-h-[44px] sm:min-h-0';
+    'min-h-[44px] fine-pointer:min-h-0';
 
   if (descriptor.type === 'boolean') {
     return (
@@ -439,7 +439,7 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices 
               data-config-action
               onMouseDown={() => beginConfigAction(inputRef.current)}
               onClick={onRevert}
-              className="px-2.5 py-1 rounded-lg border border-ink/15 bg-white text-xs text-ink/70 hover:bg-ink/4 min-h-[44px] sm:min-h-0"
+              className="px-2.5 py-1 rounded-lg border border-ink/15 bg-white text-xs text-ink/70 hover:bg-ink/4 min-h-[44px] fine-pointer:min-h-0"
             >
               Revert
             </button>

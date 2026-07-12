@@ -448,7 +448,7 @@ export function AccountView() {
               type="button"
               onClick={() => dispatch(uiActions.openModelManager())}
               data-testid="account-model-manager-pointer"
-              className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
+              className="shrink-0 min-h-[44px] fine-pointer:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
             >
               Open Model Manager →
             </button>
@@ -468,7 +468,7 @@ export function AccountView() {
               type="button"
               onClick={() => dispatch(uiActions.openAdvanced())}
               data-testid="account-advanced-pointer"
-              className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
+              className="shrink-0 min-h-[44px] fine-pointer:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
             >
               Open Advanced settings →
             </button>
@@ -487,7 +487,7 @@ export function AccountView() {
             <a
               href="#/help"
               data-testid="account-help-pointer"
-              className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft inline-flex items-center"
+              className="shrink-0 min-h-[44px] fine-pointer:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft inline-flex items-center"
             >
               Open Help →
             </a>
@@ -506,7 +506,7 @@ export function AccountView() {
             <a
               href="#/stats"
               data-testid="account-stats-pointer"
-              className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft inline-flex items-center"
+              className="shrink-0 min-h-[44px] fine-pointer:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft inline-flex items-center"
             >
               Open Listening stats →
             </a>
@@ -527,7 +527,7 @@ export function AccountView() {
               type="button"
               onClick={() => dispatch(uiActions.openSetup())}
               data-testid="account-rerun-setup"
-              className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
+              className="shrink-0 min-h-[44px] fine-pointer:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
             >
               Re-run setup →
             </button>
@@ -682,7 +682,7 @@ function BackupRestoreSection() {
                   type="button"
                   onClick={() => onRestore(s.file)}
                   disabled={busy}
-                  className="shrink-0 min-h-[44px] sm:min-h-0 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/4 disabled:opacity-50"
+                  className="shrink-0 min-h-[44px] fine-pointer:min-h-0 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/4 disabled:opacity-50"
                 >
                   Restore
                 </button>

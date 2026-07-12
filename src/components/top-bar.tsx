@@ -325,7 +325,7 @@ export function TopBar({
      generation-pill / tab button — no dual-render breakage).
 
      Touch-target compliance: every interactive pill/button picks up
-     `min-h-[44px] sm:min-h-0` so phones get WCAG 2.5.5 touch targets
+     `min-h-[44px] fine-pointer:min-h-0` so phones get WCAG 2.5.5 touch targets
      without changing the desktop sizing. */
   return (
     <header className="sticky top-0 z-40 bg-canvas/85 backdrop-blur-md border-b border-ink/10">
@@ -377,7 +377,7 @@ export function TopBar({
                 <button
                   key={t.id}
                   onClick={() => setView(t.id)}
-                  className={`px-4 py-1.5 min-h-[44px] sm:min-h-0 rounded-full text-sm font-medium transition-colors ${view === t.id ? 'bg-white text-ink shadow-card' : 'text-ink/60 hover:text-ink'}`}
+                  className={`px-4 py-1.5 min-h-[44px] fine-pointer:min-h-0 rounded-full text-sm font-medium transition-colors ${view === t.id ? 'bg-white text-ink shadow-card' : 'text-ink/60 hover:text-ink'}`}
                 >
                   {t.label}
                 </button>
@@ -390,7 +390,7 @@ export function TopBar({
                 <button
                   key={t.id}
                   onClick={() => onGlobal(t.id)}
-                  className={`px-4 py-1.5 min-h-[44px] sm:min-h-0 rounded-full text-sm font-medium transition-colors ${stage === t.id ? 'bg-white text-ink shadow-card' : 'text-ink/60 hover:text-ink'}`}
+                  className={`px-4 py-1.5 min-h-[44px] fine-pointer:min-h-0 rounded-full text-sm font-medium transition-colors ${stage === t.id ? 'bg-white text-ink shadow-card' : 'text-ink/60 hover:text-ink'}`}
                 >
                   {t.label}
                 </button>
@@ -424,7 +424,7 @@ export function TopBar({
               aria-label={`Generation queue — ${queueCount} pending`}
               title="Generation queue"
               data-testid="topbar-queue-chip"
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-peach/15 hover:bg-peach/25 text-magenta text-xs font-semibold min-h-[44px] sm:min-h-0"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-peach/15 hover:bg-peach/25 text-magenta text-xs font-semibold min-h-[44px] fine-pointer:min-h-0"
             >
               Queue · {queueCount}
             </button>
@@ -441,7 +441,7 @@ export function TopBar({
             type="button"
             onClick={onOpenAccount}
             aria-label={`Account — ${userDisplayName || 'unnamed user'}`}
-            className={`rounded-full transition-transform hover:scale-105 focus:outline-hidden focus:ring-2 focus:ring-magenta/40 ${stage === 'account' ? 'ring-2 ring-magenta/60' : ''}`}
+            className={`inline-flex items-center justify-center min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full transition-transform hover:scale-105 focus:outline-hidden focus:ring-2 focus:ring-magenta/40 ${stage === 'account' ? 'ring-2 ring-magenta/60' : ''}`}
           >
             <Avatar name={userDisplayName || 'You'} color="halloran" size={32} />
           </button>
@@ -667,7 +667,7 @@ function HelpMenu({ stage, view }: { stage: Stage['kind']; view: View | null }) 
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((s) => !s)}
-        className={`inline-flex items-center justify-center w-9 h-9 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 rounded-full text-sm font-semibold transition-colors ${
+        className={`inline-flex items-center justify-center w-9 h-9 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full text-sm font-semibold transition-colors ${
           stage === 'help' ? 'bg-ink text-canvas' : 'text-ink/70 hover:bg-ink/10'
         }`}
       >
@@ -692,7 +692,7 @@ function HelpMenu({ stage, view }: { stage: Stage['kind']; view: View | null }) 
             href="#/help"
             role="menuitem"
             onClick={() => setOpen(false)}
-            className="flex items-center px-4 py-2.5 min-h-[44px] sm:min-h-0 text-sm text-ink hover:bg-ink/5 transition-colors"
+            className="flex items-center px-4 py-2.5 min-h-[44px] fine-pointer:min-h-0 text-sm text-ink hover:bg-ink/5 transition-colors"
           >
             Help
           </a>
@@ -700,7 +700,7 @@ function HelpMenu({ stage, view }: { stage: Stage['kind']; view: View | null }) 
             type="button"
             role="menuitem"
             onClick={() => { dispatch(startLinearTour()); setOpen(false); }}
-            className="flex items-center w-full px-4 py-2.5 min-h-[44px] sm:min-h-0 text-sm text-ink hover:bg-ink/5 transition-colors text-left"
+            className="flex items-center w-full px-4 py-2.5 min-h-[44px] fine-pointer:min-h-0 text-sm text-ink hover:bg-ink/5 transition-colors text-left"
           >
             Take the tour
           </button>
@@ -709,7 +709,7 @@ function HelpMenu({ stage, view }: { stage: Stage['kind']; view: View | null }) 
             role="menuitem"
             disabled={!screen}
             onClick={() => { if (screen) { dispatch(startScreenTour(screen)); setOpen(false); } }}
-            className="flex items-center w-full px-4 py-2.5 min-h-[44px] sm:min-h-0 text-sm text-ink hover:bg-ink/5 transition-colors text-left disabled:opacity-40 disabled:cursor-default"
+            className="flex items-center w-full px-4 py-2.5 min-h-[44px] fine-pointer:min-h-0 text-sm text-ink hover:bg-ink/5 transition-colors text-left disabled:opacity-40 disabled:cursor-default"
           >
             Show me this screen
           </button>
@@ -764,7 +764,7 @@ function VersionPill({ onClick }: { onClick: () => void }) {
       title={title}
       aria-label={`Version v${version}${showDot ? ' — update available' : ''} — open Account`}
       data-testid="version-pill"
-      className="relative hidden sm:inline-flex items-center rounded-full border border-ink/10 px-2.5 py-1 text-xs font-medium text-ink/60 hover:bg-ink/5 focus:outline-hidden focus:ring-2 focus:ring-magenta/40"
+      className="relative hidden sm:inline-flex items-center justify-center min-h-[44px] fine-pointer:min-h-0 rounded-full border border-ink/10 px-2.5 py-1 text-xs font-medium text-ink/60 hover:bg-ink/5 focus:outline-hidden focus:ring-2 focus:ring-magenta/40"
     >
       v{version}
       {showDot && (
@@ -850,7 +850,7 @@ function StatusPill({ summary, detail }: { summary: StatusSummary; detail: Statu
         aria-haspopup="true"
         aria-expanded={open}
         aria-label={`Status — ${summary.label}${summary.detail ? ` ${summary.detail}` : ''}`}
-        className={`inline-flex items-center gap-2 px-3 py-1.5 min-h-[44px] sm:min-h-0 rounded-full text-xs font-semibold transition-colors ${STATUS_TONE_CLASS[summary.tone]}`}
+        className={`inline-flex items-center gap-2 px-3 py-1.5 min-h-[44px] fine-pointer:min-h-0 rounded-full text-xs font-semibold transition-colors ${STATUS_TONE_CLASS[summary.tone]}`}
         onPointerEnter={openHover}
         onPointerLeave={scheduleHoverClose}
         onFocus={() => setFocusOpen(true)}

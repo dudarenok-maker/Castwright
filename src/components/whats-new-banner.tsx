@@ -40,7 +40,7 @@ export function WhatsNewBanner() {
           type="button"
           onClick={onDismiss}
           disabled={dismissing}
-          className="min-h-[44px] sm:min-h-0 shrink-0 rounded-lg px-3 py-1 text-xs font-medium text-ink/70 hover:bg-white/60 disabled:opacity-50"
+          className="min-h-[44px] fine-pointer:min-h-0 shrink-0 rounded-lg px-3 py-1 text-xs font-medium text-ink/70 hover:bg-white/60 disabled:opacity-50"
         >
           {dismissing ? 'Dismissing…' : 'Dismiss'}
         </button>

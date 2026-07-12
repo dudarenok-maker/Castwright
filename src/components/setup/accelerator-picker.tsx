@@ -49,7 +49,7 @@ export function AcceleratorPicker() {
         value={value}
         onChange={(e) => void onSelect(e.target.value)}
         disabled={saving}
-        className="mt-2 w-full rounded-lg border border-ink/20 bg-white px-3 py-2 text-sm text-ink min-h-[44px] sm:min-h-0"
+        className="mt-2 w-full rounded-lg border border-ink/20 bg-white px-3 py-2 text-sm text-ink min-h-[44px] fine-pointer:min-h-0"
       >
         {OPTIONS.map((o) => (
           <option key={o.value} value={o.value}>

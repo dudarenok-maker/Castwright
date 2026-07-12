@@ -270,7 +270,7 @@ export function VoiceCompareModal({
                 onClick={regenerate}
                 disabled={personaBusy}
                 data-testid="voice-compare-regenerate"
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-peach/15 text-magenta hover:bg-peach/25 disabled:opacity-50 disabled:cursor-wait min-h-[32px] sm:min-h-0"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-peach/15 text-magenta hover:bg-peach/25 disabled:opacity-50 disabled:cursor-wait min-h-[32px] fine-pointer:min-h-0"
               >
                 {personaBusy ? <IconSpinner className="w-3 h-3" /> : <IconRefresh className="w-3 h-3" />}
                 <span>{personaBusy ? 'Generating…' : 'Regenerate'}</span>
@@ -291,7 +291,7 @@ export function VoiceCompareModal({
             onClick={redesign}
             disabled={redesignBusy || persona.trim().length === 0}
             data-testid="voice-compare-redesign"
-            className={`w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-semibold transition-colors min-h-[44px] sm:min-h-0 ${
+            className={`w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${
               redesignBusy
                 ? 'bg-magenta/10 text-magenta cursor-wait'
                 : 'bg-magenta/10 text-magenta hover:bg-magenta/20 disabled:opacity-50 disabled:cursor-not-allowed'
@@ -329,7 +329,7 @@ export function VoiceCompareModal({
           <button
             onClick={handleClose}
             data-testid="voice-compare-cancel"
-            className="px-4 py-2 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink min-h-[44px] sm:min-h-0"
+            className="px-4 py-2 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink min-h-[44px] fine-pointer:min-h-0"
           >
             Cancel
           </button>
@@ -337,7 +337,7 @@ export function VoiceCompareModal({
             onClick={() => void approve()}
             disabled={redesignBusy || approveBusy}
             data-testid="voice-compare-approve"
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink-soft disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink-soft disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px] fine-pointer:min-h-0"
           >
             {approveBusy ? <IconSpinner className="w-4 h-4" /> : <IconCheck className="w-4 h-4" />}
             {approveBusy ? 'Keeping…' : 'Use proposed voice'}
@@ -405,7 +405,7 @@ function PlayButton({
       disabled={disabled || row.loading}
       data-testid={testId}
       aria-label={playing ? `Stop ${label}` : label}
-      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0 ${
+      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px] fine-pointer:min-h-0 ${
         row.loading
           ? 'bg-magenta/10 text-magenta cursor-wait'
           : playing

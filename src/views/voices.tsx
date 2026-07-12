@@ -1029,7 +1029,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               onClick={() => dispatch(uiActions.openRebaselineModal({ bookId: currentBookId }))}
               data-testid="open-rebaseline"
               title="Move the principal cast onto bespoke Qwen voices across the whole series"
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-magenta text-white text-sm font-semibold hover:bg-magenta/90 transition-colors min-h-[44px] sm:min-h-0"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-magenta text-white text-sm font-semibold hover:bg-magenta/90 transition-colors min-h-[44px] fine-pointer:min-h-0"
             >
               <IconSparkle className="w-4 h-4" /> Rebaseline the series
             </button>
@@ -1097,7 +1097,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                       type="button"
                       onClick={() => openBulkReview(seriesKey)}
                       data-testid={`bulk-review-${seriesName}`}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-100 text-amber-800 text-xs font-semibold hover:bg-amber-200 transition-colors min-h-[44px] sm:min-h-0"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-100 text-amber-800 text-xs font-semibold hover:bg-amber-200 transition-colors min-h-[44px] fine-pointer:min-h-0"
                     >
                       Review all duplicates in {seriesName} ({list.length})
                     </button>
@@ -1117,7 +1117,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               type="button"
               onClick={() => setShowIgnored((v) => !v)}
               data-testid="toggle-ignored-duplicates"
-              className="self-start inline-flex items-center gap-1.5 text-xs font-medium text-ink/55 hover:text-ink min-h-[44px] sm:min-h-0"
+              className="self-start inline-flex items-center gap-1.5 text-xs font-medium text-ink/55 hover:text-ink min-h-[44px] fine-pointer:min-h-0"
             >
               {showIgnored ? '▾' : '▸'} {showIgnored ? 'Hide' : 'Show'} ignored duplicate suggestions
             </button>
@@ -1154,7 +1154,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                             onClick={() => void unmarkIgnoredPair(pair)}
                             disabled={unmarkBusyKey !== null}
                             data-testid={`unmark-${key}`}
-                            className="shrink-0 px-3 py-1.5 rounded-full bg-ink/5 text-ink text-xs font-semibold hover:bg-ink/10 disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
+                            className="shrink-0 px-3 py-1.5 rounded-full bg-ink/5 text-ink text-xs font-semibold hover:bg-ink/10 disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] fine-pointer:min-h-0"
                           >
                             {unmarkBusyKey === key ? 'Unmarking…' : 'Unmark'}
                           </button>
@@ -1191,7 +1191,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                     type="button"
                     onClick={() => setLanguageFilter(code)}
                     aria-pressed={active}
-                    className={`min-h-[44px] sm:min-h-0 inline-flex items-center px-3 py-2 sm:py-1.5 rounded-full text-sm font-medium transition-colors ${
+                    className={`min-h-[44px] fine-pointer:min-h-0 inline-flex items-center px-3 py-2 sm:py-1.5 rounded-full text-sm font-medium transition-colors ${
                       active
                         ? 'bg-ink text-canvas'
                         : 'border border-ink/10 bg-canvas text-ink/70 hover:text-ink hover:bg-ink/4'
@@ -1220,7 +1220,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                     type="button"
                     onClick={() => setVariantFilter(key)}
                     aria-pressed={active}
-                    className={`min-h-[44px] sm:min-h-0 inline-flex items-center px-3 py-2 sm:py-1.5 rounded-full text-sm font-medium transition-colors ${
+                    className={`min-h-[44px] fine-pointer:min-h-0 inline-flex items-center px-3 py-2 sm:py-1.5 rounded-full text-sm font-medium transition-colors ${
                       active
                         ? 'bg-ink text-canvas'
                         : 'border border-ink/10 bg-white text-ink/70 hover:text-ink hover:bg-ink/4'
@@ -1793,7 +1793,7 @@ function VoiceFamilySection({
                       onClick={() => onRebaselineSeries(repBookId)}
                       data-testid={`rebaseline-series-${sg.series}`}
                       title="Move the principal cast onto bespoke Qwen voices across this series"
-                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta text-white text-[11px] font-semibold hover:bg-magenta/90 transition-colors min-h-[44px] sm:min-h-0"
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta text-white text-[11px] font-semibold hover:bg-magenta/90 transition-colors min-h-[44px] fine-pointer:min-h-0"
                     >
                       <IconSparkle className="w-3.5 h-3.5" /> Rebaseline the series
                     </button>
@@ -1905,7 +1905,7 @@ function QwenStatusSection({
                       onClick={() => onRebaselineSeries(repBookId)}
                       data-testid={`rebaseline-series-${sg.series}`}
                       title="Move the principal cast onto bespoke Qwen voices across this series"
-                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta text-white text-[11px] font-semibold hover:bg-magenta/90 transition-colors min-h-[44px] sm:min-h-0"
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta text-white text-[11px] font-semibold hover:bg-magenta/90 transition-colors min-h-[44px] fine-pointer:min-h-0"
                     >
                       <IconSparkle className="w-3.5 h-3.5" /> Rebaseline the series
                     </button>

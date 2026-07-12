@@ -942,14 +942,14 @@ export function ManuscriptView({
                 <button
                   data-testid="review-script-confirm-review-existing"
                   onClick={handleReviewExisting}
-                  className="px-4 min-h-[44px] sm:min-h-0 py-2 rounded-full bg-ink text-canvas text-sm font-semibold"
+                  className="px-4 min-h-[44px] fine-pointer:min-h-0 py-2 rounded-full bg-ink text-canvas text-sm font-semibold"
                 >
                   Review existing
                 </button>
                 <button
                   data-testid="review-script-confirm-discard"
                   onClick={() => void handleDiscardAndStartNew()}
-                  className="px-4 min-h-[44px] sm:min-h-0 py-2 rounded-full border border-ink/20 text-ink text-sm font-semibold"
+                  className="px-4 min-h-[44px] fine-pointer:min-h-0 py-2 rounded-full border border-ink/20 text-ink text-sm font-semibold"
                 >
                   Discard and start new
                 </button>
@@ -1035,7 +1035,7 @@ export function ManuscriptView({
                   data-testid="review-script-chapter"
                   onClick={() => void handleReviewScript(false)}
                   disabled={reviewLoading || !bookId || analysisBusy || scriptReviewHydrating}
-                  className="inline-flex items-center gap-2 px-4 min-h-[44px] sm:min-h-0 py-2 rounded-l-full border border-ink/20 bg-white text-ink text-sm font-semibold hover:bg-ink/5 disabled:opacity-50"
+                  className="inline-flex items-center gap-2 px-4 min-h-[44px] fine-pointer:min-h-0 py-2 rounded-l-full border border-ink/20 bg-white text-ink text-sm font-semibold hover:bg-ink/5 disabled:opacity-50"
                 >
                   {reviewLoading
                     ? 'Reviewing…'
@@ -1049,7 +1049,7 @@ export function ManuscriptView({
                   disabled={reviewLoading || !bookId || analysisBusy || scriptReviewHydrating}
                   aria-label="Script review options"
                   aria-expanded={reviewMenuOpen}
-                  className="inline-flex items-center justify-center px-2 min-h-[44px] sm:min-h-0 py-2 rounded-r-full border border-l-0 border-ink/20 bg-white text-ink/60 hover:bg-ink/5 hover:text-ink disabled:opacity-50"
+                  className="inline-flex items-center justify-center px-2 min-h-[44px] fine-pointer:min-h-0 py-2 rounded-r-full border border-l-0 border-ink/20 bg-white text-ink/60 hover:bg-ink/5 hover:text-ink disabled:opacity-50"
                 >
                   <IconArrowDn className="w-4 h-4" />
                 </button>
@@ -1062,7 +1062,7 @@ export function ManuscriptView({
                       data-testid="review-script-wholebook"
                       onClick={() => void handleReviewScript(true)}
                       disabled={reviewLoading || !bookId || analysisBusy || scriptReviewHydrating}
-                      className="w-full text-left px-3 min-h-[44px] sm:min-h-0 py-2 rounded-xl hover:bg-ink/5 text-sm font-medium text-ink disabled:opacity-50"
+                      className="w-full text-left px-3 min-h-[44px] fine-pointer:min-h-0 py-2 rounded-xl hover:bg-ink/5 text-sm font-medium text-ink disabled:opacity-50"
                     >
                       Review whole book
                       {wholeBookUnresolvedCount > 0 && (
@@ -1794,7 +1794,7 @@ function SegmentRow({
                       dispatch(manuscriptActions.setSentenceExcluded({ chapterId: s.chapterId, sentenceId: s.id, excluded: false }));
                       markStale({ id: s.characterId, name: char?.name ?? s.characterId });
                     }}
-                    className="ml-1 align-baseline text-[10px] min-h-[44px] sm:min-h-0 text-ink/45 hover:text-ink underline"
+                    className="ml-1 align-baseline text-[10px] min-h-[44px] fine-pointer:min-h-0 text-ink/45 hover:text-ink underline"
                   >
                     include
                   </button>

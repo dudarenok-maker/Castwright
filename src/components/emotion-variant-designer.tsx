@@ -170,7 +170,7 @@ export function EmotionVariantDesigner({
             type="button"
             onClick={designAll}
             disabled={Object.values(busy).some(Boolean)}
-            className="text-[11px] text-magenta hover:underline disabled:opacity-40 min-h-[44px] sm:min-h-0"
+            className="text-[11px] text-magenta hover:underline disabled:opacity-40 min-h-[44px] fine-pointer:min-h-0"
           >
             Design all remaining
           </button>
@@ -186,7 +186,7 @@ export function EmotionVariantDesigner({
           return (
             <div
               key={value}
-              className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg border border-ink/10 text-xs min-h-[44px] sm:min-h-0"
+              className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg border border-ink/10 text-xs min-h-[44px] fine-pointer:min-h-0"
             >
               <span className="text-ink/80">{label}</span>
               {designed ? (

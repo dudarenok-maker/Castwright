@@ -157,7 +157,7 @@ function ModelManagerLink() {
         type="button"
         onClick={() => dispatch(uiActions.openModelManager())}
         data-testid="admin-open-model-manager"
-        className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
+        className="shrink-0 min-h-[44px] fine-pointer:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
       >
         Open Model Manager →
       </button>
@@ -180,7 +180,7 @@ function AboutLink() {
         type="button"
         onClick={() => dispatch(uiActions.openAbout())}
         data-testid="admin-open-about"
-        className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
+        className="shrink-0 min-h-[44px] fine-pointer:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
       >
         About Castwright →
       </button>
@@ -203,7 +203,7 @@ function AdvancedConfigLink() {
         type="button"
         onClick={() => dispatch(uiActions.openAdvanced())}
         data-testid="admin-open-advanced"
-        className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
+        className="shrink-0 min-h-[44px] fine-pointer:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
       >
         Open Advanced settings →
       </button>

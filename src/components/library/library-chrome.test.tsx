@@ -22,6 +22,7 @@ function renderChrome(
     ],
     viewMode: 'card',
     setViewMode: vi.fn(),
+    showViewToggle: true,
     onStartNew: vi.fn(),
     search: '',
     setSearch: vi.fn(),

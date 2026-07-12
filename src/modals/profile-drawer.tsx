@@ -877,13 +877,13 @@ export function ProfileDrawer({
                       setNameError(null);
                     }
                   }}
-                  className="flex-1 min-w-0 px-2 py-1 rounded-lg border border-ink/20 bg-white text-base font-bold text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[44px] sm:min-h-0"
+                  className="flex-1 min-w-0 px-2 py-1 rounded-lg border border-ink/20 bg-white text-base font-bold text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[44px] fine-pointer:min-h-0"
                 />
                 <button
                   aria-label="Save name"
                   disabled={!nameDraft.trim()}
                   onClick={() => runRename(nameDraft)}
-                  className="shrink-0 px-2.5 py-1 rounded-lg text-xs font-semibold bg-magenta text-white hover:bg-magenta/90 disabled:bg-ink/15 disabled:text-ink/40 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
+                  className="shrink-0 px-2.5 py-1 rounded-lg text-xs font-semibold bg-magenta text-white hover:bg-magenta/90 disabled:bg-ink/15 disabled:text-ink/40 disabled:cursor-not-allowed min-h-[44px] fine-pointer:min-h-0"
                 >
                   Save
                 </button>
@@ -953,7 +953,7 @@ export function ProfileDrawer({
                 type="button"
                 onClick={onReviewDuplicate}
                 title={`"${character.name}" and "${duplicateOther.name}" (${duplicateOther.bookTitle}) share this base voice across books in the same series — review and link, or mark as an intentional variant.`}
-                className="mb-4 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-100 text-amber-800 text-xs font-semibold hover:bg-amber-200 transition-colors min-h-[44px] sm:min-h-0"
+                className="mb-4 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-100 text-amber-800 text-xs font-semibold hover:bg-amber-200 transition-colors min-h-[44px] fine-pointer:min-h-0"
               >
                 ⚠ Possible duplicate of &ldquo;{duplicateOther.name}&rdquo; ({duplicateOther.bookTitle}) →
               </button>
@@ -1366,7 +1366,7 @@ export function ProfileDrawer({
                   {(character.aliases ?? []).map((a) => (
                     <span
                       key={a}
-                      className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full text-[11px] font-medium bg-magenta/12 text-ink min-h-[28px] sm:min-h-0"
+                      className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full text-[11px] font-medium bg-magenta/12 text-ink min-h-[28px] fine-pointer:min-h-0"
                     >
                       <span>{a}</span>
                       {onRename && !isBucket && (
@@ -1415,7 +1415,7 @@ export function ProfileDrawer({
                             }
                           }}
                           placeholder="alias name"
-                          className="px-2 py-0.5 rounded-full border border-ink/20 bg-white text-[11px] text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[28px] sm:min-h-0"
+                          className="px-2 py-0.5 rounded-full border border-ink/20 bg-white text-[11px] text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[28px] fine-pointer:min-h-0"
                         />
                         <button
                           aria-label="Save alias"
@@ -1433,7 +1433,7 @@ export function ProfileDrawer({
                           setShowAddAlias(true);
                           setAliasError(null);
                         }}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-dashed border-ink/20 text-ink/55 hover:border-peach hover:text-peach min-h-[28px] sm:min-h-0"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-dashed border-ink/20 text-ink/55 hover:border-peach hover:text-peach min-h-[28px] fine-pointer:min-h-0"
                       >
                         <IconPlus className="w-3 h-3" />
                         Add alias
@@ -1524,7 +1524,7 @@ export function ProfileDrawer({
                     aria-expanded={mergeTargetPickerOpen}
                     disabled={mergeBusy}
                     onClick={() => setMergeTargetPickerOpen((v) => !v)}
-                    className="w-full inline-flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink hover:border-ink/30 focus:outline-hidden focus:ring-2 focus:ring-magenta/30 disabled:opacity-60 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
+                    className="w-full inline-flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink hover:border-ink/30 focus:outline-hidden focus:ring-2 focus:ring-magenta/30 disabled:opacity-60 disabled:cursor-not-allowed min-h-[44px] fine-pointer:min-h-0"
                   >
                     <span
                       className={`truncate text-left flex-1 ${mergeTargetId ? '' : 'text-ink/50'}`}

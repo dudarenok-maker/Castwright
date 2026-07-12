@@ -177,7 +177,7 @@ export function BulkDuplicateReviewModal({
           <button
             type="button"
             onClick={advance}
-            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 min-h-[44px] sm:min-h-0"
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 min-h-[44px] fine-pointer:min-h-0"
           >
             {index + 1 >= total ? 'Skip & finish' : 'Skip → Next'}
           </button>

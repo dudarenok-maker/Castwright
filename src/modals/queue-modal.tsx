@@ -170,7 +170,7 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
             {canClear && (
               <button
                 onClick={openClearConfirm}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-ink/5 hover:bg-red-50 hover:text-red-700 text-sm font-medium text-ink min-h-[44px] sm:min-h-0"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-ink/5 hover:bg-red-50 hover:text-red-700 text-sm font-medium text-ink min-h-[44px] fine-pointer:min-h-0"
                 data-testid="queue-modal-clear"
               >
                 <IconTrash className="w-4 h-4" /> Clear queue
@@ -179,7 +179,7 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
             {count > 0 && (
               <button
                 onClick={togglePause}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-ink/5 hover:bg-ink/10 text-sm font-medium text-ink min-h-[44px] sm:min-h-0"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-ink/5 hover:bg-ink/10 text-sm font-medium text-ink min-h-[44px] fine-pointer:min-h-0"
                 data-testid="queue-modal-pause"
               >
                 {paused ? (
@@ -195,7 +195,7 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
             )}
             <button
               onClick={onClose}
-              className="p-2 rounded-full hover:bg-ink/5 text-ink/60 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0"
+              className="p-2 rounded-full hover:bg-ink/5 text-ink/60 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0"
               aria-label="Close queue"
             >
               <IconClose className="w-4 h-4" />
@@ -557,7 +557,7 @@ function BookGroup({
                     onClick={() => onConfirmFallback(entry.id)}
                     aria-label="Render anyway in Kokoro"
                     title="Render anyway (Kokoro fallback)"
-                    className="px-2 py-1 rounded-full text-xs font-semibold bg-magenta/10 text-magenta hover:bg-magenta/20 min-h-[44px] sm:min-h-0"
+                    className="px-2 py-1 rounded-full text-xs font-semibold bg-magenta/10 text-magenta hover:bg-magenta/20 min-h-[44px] fine-pointer:min-h-0"
                     data-testid={`queue-entry-${entry.id}-confirm-fallback`}
                   >
                     Render anyway
@@ -566,7 +566,7 @@ function BookGroup({
                     onClick={() => onSkipFallback(entry.id)}
                     aria-label="Skip this chapter"
                     title="Skip this chapter"
-                    className="px-2 py-1 rounded-full text-xs font-semibold bg-ink/5 text-ink/60 hover:bg-ink/10 min-h-[44px] sm:min-h-0"
+                    className="px-2 py-1 rounded-full text-xs font-semibold bg-ink/5 text-ink/60 hover:bg-ink/10 min-h-[44px] fine-pointer:min-h-0"
                     data-testid={`queue-entry-${entry.id}-skip-fallback`}
                   >
                     Skip
@@ -582,7 +582,7 @@ function BookGroup({
                   onClick={() => onRetry(entry.id)}
                   aria-label="Retry entry"
                   title="Retry"
-                  className="p-2 rounded-full hover:bg-magenta/10 text-ink/60 hover:text-magenta min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0"
+                  className="p-2 rounded-full hover:bg-magenta/10 text-ink/60 hover:text-magenta min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0"
                   data-testid={`queue-entry-${entry.id}-retry`}
                 >
                   <IconRefresh className="w-4 h-4" />
@@ -594,7 +594,7 @@ function BookGroup({
                     onClick={() => moveUp(idx)}
                     disabled={idx === 0}
                     aria-label="Move up"
-                    className="p-2 rounded-full hover:bg-ink/5 text-ink/60 disabled:opacity-30 disabled:cursor-not-allowed min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0"
+                    className="p-2 rounded-full hover:bg-ink/5 text-ink/60 disabled:opacity-30 disabled:cursor-not-allowed min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0"
                     data-testid={`queue-entry-${entry.id}-up`}
                   >
                     ↑
@@ -603,7 +603,7 @@ function BookGroup({
                     onClick={() => moveDown(idx)}
                     disabled={idx === entries.length - 1}
                     aria-label="Move down"
-                    className="p-2 rounded-full hover:bg-ink/5 text-ink/60 disabled:opacity-30 disabled:cursor-not-allowed min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0"
+                    className="p-2 rounded-full hover:bg-ink/5 text-ink/60 disabled:opacity-30 disabled:cursor-not-allowed min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0"
                     data-testid={`queue-entry-${entry.id}-down`}
                   >
                     ↓
@@ -611,7 +611,7 @@ function BookGroup({
                   <button
                     onClick={() => onCancel(entry.id)}
                     aria-label="Cancel entry"
-                    className="p-2 rounded-full hover:bg-red-50 text-ink/60 hover:text-red-700 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0"
+                    className="p-2 rounded-full hover:bg-red-50 text-ink/60 hover:text-red-700 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0"
                     data-testid={`queue-entry-${entry.id}-cancel`}
                   >
                     <IconTrash className="w-4 h-4" />
@@ -628,7 +628,7 @@ function BookGroup({
                   onClick={() => onForceRemove(entry.id)}
                   aria-label="Remove stuck entry"
                   title="Remove stuck entry"
-                  className="p-2 rounded-full hover:bg-red-50 text-ink/60 hover:text-red-700 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0"
+                  className="p-2 rounded-full hover:bg-red-50 text-ink/60 hover:text-red-700 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0"
                   data-testid={`queue-entry-${entry.id}-force-remove`}
                 >
                   <IconTrash className="w-4 h-4" />

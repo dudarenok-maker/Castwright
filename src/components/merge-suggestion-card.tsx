@@ -42,7 +42,7 @@ export function MergeSuggestionCard({
           type="button"
           data-testid="merge-suggestion-merge"
           onClick={() => void onMerge()}
-          className="min-h-[44px] sm:min-h-0 px-3 py-1.5 rounded-full bg-amber-700 hover:bg-amber-800 text-white text-xs font-semibold transition-colors"
+          className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-700 hover:bg-amber-800 text-white text-xs font-semibold transition-colors"
         >
           Merge
         </button>
@@ -50,7 +50,7 @@ export function MergeSuggestionCard({
           type="button"
           data-testid="merge-suggestion-dismiss"
           onClick={() => void onDismiss()}
-          className="min-h-[44px] sm:min-h-0 px-3 py-1.5 rounded-full border border-ink/15 bg-white hover:bg-ink/5 text-ink/70 text-xs font-medium transition-colors"
+          className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full border border-ink/15 bg-white hover:bg-ink/5 text-ink/70 text-xs font-medium transition-colors"
         >
           Dismiss
         </button>

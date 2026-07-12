@@ -602,14 +602,14 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                 <button
                   data-testid="dismiss-confirm-yes"
                   onClick={() => void confirmDismissAll()}
-                  className="px-4 min-h-[44px] sm:min-h-0 py-2 rounded-full bg-ink text-canvas text-sm font-semibold"
+                  className="px-4 min-h-[44px] fine-pointer:min-h-0 py-2 rounded-full bg-ink text-canvas text-sm font-semibold"
                 >
                   Discard
                 </button>
                 <button
                   data-testid="dismiss-confirm-cancel"
                   onClick={() => setConfirmDismiss(false)}
-                  className="px-4 min-h-[44px] sm:min-h-0 py-2 rounded-full border border-ink/20 text-ink text-sm font-semibold"
+                  className="px-4 min-h-[44px] fine-pointer:min-h-0 py-2 rounded-full border border-ink/20 text-ink text-sm font-semibold"
                 >
                   Cancel
                 </button>
@@ -645,7 +645,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
             <button
               data-testid="close-button"
               onClick={handleClose}
-              className="p-2 rounded-full hover:bg-ink/5 text-ink/60 min-h-[44px] sm:min-h-0 min-w-[44px] sm:min-w-0 flex items-center justify-center"
+              className="p-2 rounded-full hover:bg-ink/5 text-ink/60 min-h-[44px] fine-pointer:min-h-0 min-w-[44px] fine-pointer:min-w-0 flex items-center justify-center"
               aria-label="Close"
             >
               <IconClose className="w-4 h-4" />
@@ -693,7 +693,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                     </h4>
                     <label
                       htmlFor={`class-toggle-${cls}`}
-                      className="flex items-center gap-1.5 text-xs text-ink/55 cursor-pointer select-none min-h-[44px] sm:min-h-0"
+                      className="flex items-center gap-1.5 text-xs text-ink/55 cursor-pointer select-none min-h-[44px] fine-pointer:min-h-0"
                     >
                       <Checkbox
                         id={`class-toggle-${cls}`}
@@ -727,7 +727,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                       >
                         <label
                           htmlFor={`op-toggle-${key}`}
-                          className="flex items-center min-h-[44px] sm:min-h-0 cursor-pointer"
+                          className="flex items-center min-h-[44px] fine-pointer:min-h-0 cursor-pointer"
                         >
                           <Checkbox
                             id={`op-toggle-${key}`}
@@ -772,14 +772,14 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
               data-testid="apply-button"
               onClick={handleApply}
               disabled={selectedCount === 0}
-              className="shrink-0 inline-flex items-center gap-2 px-5 min-h-[44px] sm:min-h-0 py-2 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink/90 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="shrink-0 inline-flex items-center gap-2 px-5 min-h-[44px] fine-pointer:min-h-0 py-2 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink/90 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Apply {selectedCount} selected
             </button>
             <button
               data-testid="dismiss-button"
               onClick={handleDismiss}
-              className="text-sm font-medium text-ink/50 hover:text-ink/80 min-h-[44px] sm:min-h-0"
+              className="text-sm font-medium text-ink/50 hover:text-ink/80 min-h-[44px] fine-pointer:min-h-0"
             >
               Dismiss all
             </button>

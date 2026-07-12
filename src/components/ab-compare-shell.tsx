@@ -89,7 +89,7 @@ export function AbCompareShell({
               <button
                 onClick={onRunAuto}
                 disabled={autoDisabled}
-                className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0 ${
+                className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px] fine-pointer:min-h-0 ${
                   autoRunning
                     ? 'bg-magenta text-white hover:bg-magenta/90'
                     : 'bg-peach text-ink hover:bg-peach/90'
