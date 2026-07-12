@@ -8,7 +8,9 @@ condensed quickstart.
 
 This guide walks a deployer through bringing the app up on a clean Windows, macOS, or Linux machine after extracting `castwright-vX.Y.Z.zip` from a [GitHub release](https://github.com/dudarenok-maker/Castwright/releases).
 
-After install you'll have a single command (`npm run start:prod`) that brings up the Node server (port 8080), the Python voice engine (port 9000), and the built frontend — all served from `http://localhost:8080`.
+After install you'll have a single command (`npm run start:prod`) that brings up the Node server, the Python voice engine (port 9000), and the built frontend.
+
+> **New in v1.13.0 — LAN HTTPS is on by default.** A production start now serves over **HTTPS on `:8443`, bound to every interface**, so phones, tablets, and the Android companion work out of the box — no more discovering `npm run start:lan` by hand. On first launch the app provisions a local `mkcert` certificate automatically (Pinokio installs `mkcert` for you; native installs use the copy you install once, below). If no certificate can be made, it **falls back cleanly to `http://localhost:8080` on the local machine only** — it never fails to start. A `LAN_AUTH_TOKEN` is auto-generated so the LAN API is authenticated (devices still pair) from the first boot. To opt back out, set `LAN_HTTPS=0` in `server/.env`. Full details in [Mobile + tablet access over LAN HTTPS](#mobile--tablet-access-over-lan-https) below.
 
 ---
 
@@ -54,9 +56,22 @@ and no system prerequisites — Pinokio provisions its own Python 3.12 + ffmpeg 
 1. Open the Pinokio browser and paste the Castwright repo URL:
    `https://github.com/dudarenok-maker/Castwright`.
 2. Click **Install**. Pinokio builds the latest published release, provisions the
-   Python voice engine (~2.5 GB PyTorch), and configures the app — one click, ~10–20 min.
-3. Click **Start**, then **Open Web UI**. The first launch runs the in-app setup wizard
-   (GPU detect + one-time Kokoro voice-model download) — identical to the native installers.
+   Python voice engine (~2.5 GB PyTorch) plus `ffmpeg` and `mkcert`, generates the
+   local LAN certificate, and configures the app — one click, ~10–20 min.
+3. Click **Start**. During the ~1–2 minute warmup the menu shows a **Terminal** tab so
+   you can watch progress; once the server is up it flips to **Open Web UI** and selects
+   it automatically. The first launch runs the in-app setup wizard (GPU detect + one-time
+   Kokoro voice-model download) — identical to the native installers.
+
+> **Phone & tablet work out of the box under Pinokio (v1.13.0+).** Because the
+> installer provisions `mkcert` and the LAN certificate for you, Start comes up on
+> **HTTPS `:8443`** and pairs devices automatically — no extra steps. The **Open Web UI**
+> tab opens `https://localhost:8443` on the desktop; scan the pairing QR from a phone to
+> add it (install the mkcert root CA on the phone once — see
+> [Mobile + tablet access](#mobile--tablet-access-over-lan-https)). If `mkcert` can't be
+> provisioned, Start still comes up on loopback `http://localhost:8080` rather than
+> failing. The friendly `castwright.local` hostname stays opt-in (`npm run start:lan`);
+> the Pinokio default pairs via the LAN-IP QR.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/installing-castwright/pinokio-setup-wizard-dark.png">
@@ -105,7 +120,7 @@ npm run start:prod
   <img alt="The Setup Wizard's Models step, installing Kokoro and setting the analyzer key" src="images/installing-castwright/02-install-windows.png">
 </picture>
 
-Browser opens `http://localhost:8080`.
+Browser opens `https://localhost:8443` (the v1.13.0 LAN-HTTPS default; falls back to `http://localhost:8080` if no LAN certificate is present — see [Mobile + tablet access](#mobile--tablet-access-over-lan-https)).
 
 To stop: `npm run stop:prod` in the same folder.
 
@@ -143,7 +158,7 @@ npm run start:prod
 > the GPU (`mps`) and falls back to CPU. To force a specific device, set
 > `QWEN_DEVICE=cpu` (or `mps`) in `server/.env`.
 
-Browser opens `http://localhost:8080`.
+Browser opens `https://localhost:8443` (the v1.13.0 LAN-HTTPS default; falls back to `http://localhost:8080` if no LAN certificate is present — see [Mobile + tablet access](#mobile--tablet-access-over-lan-https)).
 
 To stop: `npm run stop:prod`.
 
@@ -179,7 +194,7 @@ cp server/.env.example server/.env
 npm run start:prod
 ```
 
-Browser: `http://localhost:8080`.
+Browser: `https://localhost:8443` (the v1.13.0 LAN-HTTPS default; falls back to `http://localhost:8080` if no LAN certificate is present — see [Mobile + tablet access](#mobile--tablet-access-over-lan-https)).
 
 To stop: `npm run stop:prod`.
 
@@ -250,15 +265,24 @@ steps above). All knobs have safe defaults — set only what you need.
 - `AUDIO_LOUDNORM_ENABLED` — `true` (default; two-pass EBU R128 at
   -16 LUFS / 11 LU / -1.5 dBTP) or `false` to opt out.
 
-**LAN / companion access**
+**LAN / companion access** _(defaults changed in v1.13.0)_
 
-- `LAN_HTTPS` — `1` serves over mkcert-backed HTTPS on `:8443`, bound on all
-  interfaces (phone/tablet web + the Android companion). Off by default;
-  `npm run start:lan` sets it. Requires the LAN cert
-  (`npm run install:cert-mobile`); with `LAN_HTTPS=1` the server refuses to start
-  if the cert is missing.
-- `LAN_AUTH_TOKEN` — the shared pairing secret for the companion (and the LAN
-  access guard on `/api` + `/workspace`). Required for the companion app.
+- `LAN_HTTPS` — serves over mkcert-backed HTTPS on `:8443`, bound on all interfaces
+  (phone/tablet web + the Android companion). **On by default in production** (any
+  `npm run start:prod` / native installer / Pinokio) — set `LAN_HTTPS=0` to opt out and
+  serve plain `http://localhost:8080` instead. `1` forces it on (e.g. under `npm run dev`,
+  which is otherwise plain-HTTP). If the LAN certificate is missing the server **degrades
+  to loopback HTTP with a one-command-fix hint** — it no longer refuses to start (the old
+  `LAN_HTTPS=1` "won't start without a cert" behaviour is gone).
+- `LAN_AUTH_TOKEN` — the shared pairing secret guarding `/api` + `/workspace` (and used by
+  the companion). **You no longer need to set this by hand:** when LAN is on and no token
+  is set, the server auto-generates one on first boot and persists it outside the release
+  folder, so it survives upgrades and devices don't re-pair. Set it explicitly only if you
+  want a known fixed value (e.g. for scripted setups); an explicit value always wins.
+- `npm run start:lan` — still available for the **explicit** LAN profile: it additionally
+  advertises the friendly `castwright.local` mDNS hostname and runs the privileged `:443`
+  port-forwarder. The bare production default gives HTTPS `:8443` + IP-based pairing QR
+  without those extras.
 
 ## Setting up the analyzer
 
@@ -359,13 +383,18 @@ Loudness normalization (EBU R128, two-pass, targeting -16 LUFS / 11 LU / -1.5 dB
 
 ## Mobile + tablet access over LAN HTTPS
 
-The app drives on phone + tablet via LAN HTTPS using `mkcert` so iOS / Android trust the cert without browser warnings. One-time setup per dev box:
+The app drives on phone + tablet via LAN HTTPS using `mkcert` so iOS / Android trust the cert without browser warnings.
 
-1. Install `mkcert` — `scoop install mkcert` (Windows), `brew install mkcert` (macOS), or `apt install mkcert` (Linux). Then `mkcert -install`.
-2. `npm run install:cert-mobile` — prints LAN URL + QR code + per-OS root-cert install steps.
-3. Install the root CA on each mobile device once (iOS: Settings → Profile downloaded → Install → trust; Android: Settings → Security → Install certificate).
-4. Run the server in LAN mode: `npm run start:lan` for the production bundle on `https://0.0.0.0:8443`, or `npm run dev:lan` for HMR-capable Vite + Node on `https://0.0.0.0:5173`/`:8443`.
-5. Open the printed LAN URL on the device — lock icon, no warning.
+**As of v1.13.0 this is the default** — a production start already serves HTTPS on `:8443` across your LAN and auto-generates the pairing token, so you don't need `npm run start:lan`. What still needs a human, once per setup:
+
+1. **Install `mkcert`** — `scoop install mkcert` (Windows), `brew install mkcert` (macOS), or `apt install mkcert` (Linux), then `mkcert -install`. **Pinokio does this for you**; native/manual installs need it present so the app can auto-provision the LAN certificate on first `npm run start:prod`. (If it's missing, the app runs on loopback HTTP instead of failing — install `mkcert` and restart to enable LAN.)
+2. **Install the root CA on each mobile device once** (iOS: Settings → Profile downloaded → Install → trust; Android: Settings → Security → Install certificate). Grab the QR/URL from the running app's **Admin → LAN access** card, or run `npm run install:cert-mobile` to print the LAN URL + a terminal QR + per-OS steps. _(The companion app pins the CA itself and skips this — see below.)_
+3. **Open the LAN URL on the device** and pair via the QR — lock icon, no warning.
+
+> Prefer the friendly `https://castwright.local:8443` address (mDNS) and the `:443`
+> port-forwarder? Run `npm run start:lan` instead of the bare default — that profile
+> advertises them. For local HMR development, `npm run dev:lan` serves Vite + Node on
+> `https://0.0.0.0:5173`/`:8443`.
 
 ---
 
@@ -373,16 +402,14 @@ The app drives on phone + tablet via LAN HTTPS using `mkcert` so iOS / Android t
 
 The native Flutter **Castwright** pairs to the server over the LAN and delta-syncs only the chapters that changed, for offline playback with background / lock-screen / Bluetooth / Android-Auto controls. It's a separate Flutter build from this server zip, but **each [GitHub Release](https://github.com/dudarenok-maker/Castwright/releases) attaches a ready-to-sideload `castwright-vX.Y.Z.apk`** (+ `.sha256`). To use it:
 
-1. Do the LAN-HTTPS setup above (mkcert + `npm run install:cert-mobile`).
-2. Set **both** in `server/.env`, then restart in LAN mode:
-
-   ```
-   LAN_HTTPS=1
-   LAN_AUTH_TOKEN=<a-strong-secret>
-   ```
-
-   `LAN_AUTH_TOKEN` is the **pairing token**. With `LAN_HTTPS=1` set, the server **won't start if the LAN cert is missing** — run step 1 first.
-3. The pairing values are served at `GET /api/export/lan` (`{ urls, protocol: "https", token, caFingerprint }`).
+1. Have `mkcert` installed so the LAN certificate is provisioned (Pinokio does this
+   automatically; native/manual — see the LAN-HTTPS step above).
+2. **Just start the app** — `npm run start:prod` (or Start in Pinokio). As of v1.13.0,
+   LAN HTTPS on `:8443` and the `LAN_AUTH_TOKEN` are both **on by default and
+   auto-generated**, so there's nothing to edit in `server/.env`. _(You can still pin a
+   fixed `LAN_AUTH_TOKEN` there for scripted setups, or set `LAN_HTTPS=0` to turn LAN off;
+   an explicit token always wins over the auto-generated one.)_
+3. The pairing values are served at `GET /api/export/lan` (`{ urls, protocol: "https", token, caFingerprint }`) — this is what the pairing QR encodes.
 4. In the app: **Pair a device** → scan the pairing QR or enter the server URL (`https://<lan-ip>:8443`), access token, and CA fingerprint. The app pins the CA itself, so — unlike the mobile *web* UI — **you do not install the root CA on the phone**.
 
 Build/sideload instructions for the app live in [`apps/android/README.md`](https://github.com/dudarenok-maker/Castwright/blob/main/apps/android/README.md); the full design is [`docs/features/188-android-companion-app.md`](https://github.com/dudarenok-maker/Castwright/blob/main/docs/features/188-android-companion-app.md).
