@@ -142,6 +142,22 @@ describe('VoiceOverridePicker', () => {
     expect(playBaseVoiceSampleWithAutoLoad).not.toHaveBeenCalled();
   });
 
+  it('activates the row Play button via keyboard (Enter) without picking the row', async () => {
+    /* The ▶ is a focusable span role=button (not a native <button> — that
+       would nest a button inside the row's option button). Enter/Space must
+       still audition, and must not bubble to pick the row. */
+    render(<VoiceOverridePicker {...defaultProps({ onChange })} />);
+    fireEvent.click(screen.getByRole('button', { name: /Model voice override/i }));
+    fireEvent.keyDown(screen.getByRole('button', { name: /Play sample for Asya Anara/i }), {
+      key: 'Enter',
+    });
+    await waitFor(() => expect(playBaseVoiceSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(playBaseVoiceSampleWithAutoLoad).mock.calls[0][0].args.speakerName).toBe(
+      'Asya Anara',
+    );
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('uses the attribute-driven label when the tab differs from the auto-resolved engine', () => {
     render(
       <VoiceOverridePicker

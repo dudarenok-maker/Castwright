@@ -63,8 +63,13 @@ function capitalise(s: string) {
    VoicePreviewButton's state machine (idle/loading/playing) and a11y
    label convention, but icon-only + hover/focus-revealed so it fits a
    compact picker row instead of the roomy candidate-preview list.
-   `stopPropagation` on click keeps auditioning from also picking the
-   row — the row itself is the SearchablePicker option button. */
+
+   Rendered as a focusable `<span role="button">` rather than a native
+   `<button>`: the SearchablePicker option row is ITSELF a `<button>`, and
+   a button-in-button is invalid HTML (React's validateDOMNesting warns).
+   The span keeps keyboard activation via an explicit Enter/Space handler.
+   `stopPropagation` on both click AND keydown keeps auditioning from also
+   picking the row. */
 function RowPreviewButton({
   voice,
   modelKey,
@@ -80,8 +85,8 @@ function RowPreviewButton({
   const previewUrlPrefix = `/audio/voices/${encodeURIComponent(`raw-${voice.engine}-${voice.name}`)}-${modelKey}`;
   const isPlayingThis = playback.isPlaying && !!playback.currentUrl?.startsWith(previewUrlPrefix);
 
-  async function onClick(e: React.MouseEvent) {
-    e.stopPropagation();
+  async function activate() {
+    if (isLoading) return;
     if (isPlayingThis) {
       playback.stop();
       return;
@@ -103,13 +108,28 @@ function RowPreviewButton({
   }
 
   return (
-    <button
-      type="button"
+    <span
+      role="button"
+      tabIndex={0}
       onMouseDown={(e) => e.stopPropagation()}
-      onClick={onClick}
-      disabled={isLoading}
+      onClick={(e) => {
+        e.stopPropagation();
+        void activate();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          void activate();
+        }
+      }}
       aria-label={isPlayingThis ? `Stop sample for ${voice.name}` : `Play sample for ${voice.name}`}
-      className="shrink-0 grid place-items-center w-6 h-6 rounded-full text-ink/50 opacity-0 group-hover:opacity-100 coarse-pointer:opacity-60 focus-visible:opacity-100 coarse-pointer:min-h-[44px] coarse-pointer:min-w-[44px] hover:bg-ink/8 hover:text-ink disabled:opacity-100 disabled:cursor-wait"
+      aria-disabled={isLoading || undefined}
+      className={`shrink-0 grid place-items-center w-6 h-6 rounded-full text-ink/50 coarse-pointer:min-h-[44px] coarse-pointer:min-w-[44px] hover:bg-ink/8 hover:text-ink ${
+        isLoading
+          ? 'opacity-100 cursor-wait'
+          : 'opacity-0 group-hover:opacity-100 coarse-pointer:opacity-60 focus-visible:opacity-100 cursor-pointer'
+      }`}
     >
       {isLoading ? (
         <IconSpinner className="w-3.5 h-3.5" />
@@ -118,7 +138,7 @@ function RowPreviewButton({
       ) : (
         <IconPlay className="w-3.5 h-3.5" />
       )}
-    </button>
+    </span>
   );
 }
 
