@@ -49,13 +49,15 @@ per CLAUDE.md; this doc is what they hang off.
 | `app-14` | #582 (merge `e5b5da9`, closed #550) | home shelf + multi-book switching: pure `home_shelf` (`buildContinueListening` = in-progress books most-recently-played first; `buildRecentlyUpdated` newest-first capped) + presentational `HomeScreen` (Continue-listening rail + recently-updated rail; tap → `onOpenBook`, host wires to the player's `switchBook` for seamless per-book resume). 6 paired Dart tests. **Live device acceptance owed.** **MVP app block (app-1..8,13,14) complete.** |
 | `app-11` | #586 (merge `0563f05`, closed #554) | distribution: Gradle release signing via git-ignored `android/key.properties` (real upload keystore) with a **debug-signed fallback** so `flutter build apk --release` always produces an installable sideload APK; `key.properties.example` + `.gitignore` for the secrets; CI publishes a `companion-release-apk` artifact per build. Build-config (no Dart tests); release APK verified locally (65.6 MB). |
 | `app-9` | #588 (merge `e05753d`, closed #552) | in-car (Android Auto + CarPlay): pure `media_browse_tree` (root→books→chapters `MediaNode` + `bookMediaId`/`chapterMediaId` codec + `childrenOf`) wired into `CompanionAudioHandler.getChildren`/`playFromMediaId` (audio_service `MediaBrowser`); Android Auto descriptor (`automotive_app_desc.xml` + manifest meta-data). 6 paired Dart tests. **Live device/head-unit acceptance owed.** |
-| `app-10` | #589 (merge `c51f71e`, closed #553) | stream-over-LAN instant play: pure `resolvePlaybackSource` (downloaded → local file; else streaming-on + on-LAN → LAN stream; else needs-download — offline-first) + `AppSettings.streamOverLan` toggle (default off) + `AudioEngine.setStreamUrl` (just_audio `AudioSource.uri` with auth headers) + a settings switch. 4 paired Dart tests. **Live device acceptance owed.** |
+| `app-10` | #589 (merge `c51f71e`) — **scaffolding only; #553 REOPENED (blocked)** | stream-over-LAN instant play. **Shipped inert 2026-06:** the pure pieces exist and are unit-tested (`resolvePlaybackSource`, `AppSettings.streamOverLan` default-off toggle, `AudioEngine.setStreamUrl`, the settings switch — 4 tests) but **nothing in production consumes `lanStream`**, and the feature can't be wired under the companion's app-pinned-CA model: `just_audio` streams via the native platform player (OS trust store), which rejects the mkcert CA at `https://<lan>:8443`. **Unblock designed 2026-07-12** — an in-app **loopback proxy** re-serves CA-pinned HTTPS bytes as plaintext to the player over `127.0.0.1`: spec [`2026-07-12-app-10-lan-loopback-proxy-design.md`](../superpowers/specs/2026-07-12-app-10-lan-loopback-proxy-design.md), plan [`2026-07-12-app-10-lan-loopback-proxy.md`](../superpowers/plans/2026-07-12-app-10-lan-loopback-proxy.md). **Implementation pending; #553 closes on that PR.** |
 | `srv-33` | _this PR_ (closed #551) | per-device tokens + revoke, layered on srv-20 (server): `workspace/device-tokens.ts` (pure `findValidDevice`/`hashToken`/`redactDevice` + cache-backed mint/list/revoke, sha-256-only at rest) + `routes/devices.ts` (`GET`/`POST`/`DELETE /api/devices` behind the LAN guard) + `lan-auth.ts` now accepts the shared secret **OR** a non-revoked device token (still sync). Backward-compatible. 18 server tests; openapi `/api/devices` + `Device` schema. **App-side adoption (mint+use a per-device token at pairing) is an optional small follow-up — the shipped app keeps working on the shared token.** |
 
 ### Build track complete
 
-**Every `app-*` item through `app-10`, plus the `srv-33` server follow-up, is built, tested,
-and merged.** The only remaining work is the **batched live-device/head-unit acceptance pass**
+**Every `app-*` item through `app-9`, plus the `srv-33` server follow-up, is built, tested,
+and merged** — **`app-10` is the exception: its scaffolding merged but the feature is BLOCKED
+(#553 reopened), with an unblock now designed + planned (in-app loopback proxy — see the
+`app-10` row/section).** The other remaining work is the **batched live-device/head-unit acceptance pass**
 (per the user's directive — run the whole feature set on the Pixel 10 Pro / a physical device +
 a head unit against the real GPU server). Parked: **`app-12`** (iOS release — the codebase is
 iOS-ready: app-pinned TLS, dual-platform plugins, the unsigned-iOS CI compile is green on every
@@ -488,6 +490,22 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
   on the home network. Deprioritized — the user emphasized offline.
 - **Benefit (user):** zero-wait preview before committing a download. **Depends on:**
   `app-2`, `app-5`.
+- **Status (2026-07-12): scaffolding merged but BLOCKED (#553 reopened).** The native
+  platform player (`just_audio` → ExoPlayer/AVPlayer) streams over the OS trust store, which
+  rejects the app-pinned mkcert CA, so `https://<lan>:8443` audio fails TLS and nothing
+  consumes `lanStream`. **Unblock designed + planned** via an in-app loopback proxy that
+  re-serves CA-pinned HTTPS bytes as plaintext to the player over `127.0.0.1` (no OS cert
+  install, token never leaves the app): spec
+  [`2026-07-12-app-10-lan-loopback-proxy-design.md`](../superpowers/specs/2026-07-12-app-10-lan-loopback-proxy-design.md),
+  plan [`2026-07-12-app-10-lan-loopback-proxy.md`](../superpowers/plans/2026-07-12-app-10-lan-loopback-proxy.md).
+  Implementation is a separate thread; #553 closes on that PR.
+- **On-device acceptance (owed post-implementation):** real Android phone on home Wi-Fi,
+  undownloaded chapter, "Stream over LAN" on → tap play → instant start; seek mid-chapter;
+  lock-screen transport controls; background survival via the media foreground service;
+  confirm NO OS cert-install prompt. Then toggle off / leave Wi-Fi → tap the same chapter →
+  "download to play" message (no stall). Also confirm just_audio surfaces initial-load
+  failure (rejected `setAudioSource`) and mid-stream failure (`playbackEventStream` error)
+  so the fallback fires, and the completion subscription isn't torn down by a stream error.
 
 #### `app-11` — Distribution: signed release APK + alpha channel
 
@@ -851,17 +869,20 @@ top for the running status):
   (audio_service `MediaBrowser`, Android Auto + CarPlay) + Android Auto descriptor
   (`automotive_app_desc.xml` + manifest meta-data). 6 paired Dart tests; clean + APK builds.
   **Live device/head-unit acceptance owed.**
-- `app-10` — stream-over-LAN instant play (closed #553): pure `resolvePlaybackSource`
-  (offline-first: downloaded → local; else streaming-on + on-LAN → stream; else download) +
-  `AppSettings.streamOverLan` toggle (default off) + `AudioEngine.setStreamUrl` (just_audio
-  `AudioSource.uri` + auth headers) + a settings switch. 4 paired Dart tests; clean + APK
-  builds. **Live device acceptance owed.**
+- `app-10` — stream-over-LAN instant play (**#553 REOPENED — blocked; scaffolding only**):
+  the pure pieces exist and are unit-tested (`resolvePlaybackSource`, `AppSettings.streamOverLan`
+  default-off toggle, `AudioEngine.setStreamUrl`, the settings switch — 4 tests) but nothing
+  consumes `lanStream` and it can't be wired under the app-pinned-CA model (the native player
+  uses the OS trust store, which rejects the mkcert CA). **Unblock designed 2026-07-12** via an
+  in-app loopback proxy (see the `app-10` section below for spec + plan links); implementation
+  pending, #553 closes on that PR.
 
-**The `app-*` build track (through `app-10`) is code-complete** — all items built, tested
-(167 Dart tests), and merged; `flutter analyze` clean and the debug + release APKs build, with
-CI (android + unsigned-iOS + verify) green on every PR. The remaining work is the **batched
-live-device/head-unit acceptance pass** on the user's real GPU server. Parked follow-ups:
-`srv-33`, `app-12` (iOS release).
+**The `app-*` build track (through `app-9`) is code-complete** — all items built, tested,
+and merged; `flutter analyze` clean and the debug + release APKs build, with CI (android +
+unsigned-iOS + verify) green on every PR. **`app-10` is the one exception: scaffolding merged
+but the feature is BLOCKED (#553 reopened); the unblock is designed + planned (loopback proxy)
+and awaits implementation.** The other remaining work is the **batched live-device/head-unit
+acceptance pass** on the user's real GPU server. Parked follow-ups: `srv-33`, `app-12` (iOS release).
 
 - 2026-06-13 — `app-15` (iOS `AppIcon` set rendered square + opaque from
   `brand/castwright-icon.svg`, replacing the default Flutter logo) + `app-16`
