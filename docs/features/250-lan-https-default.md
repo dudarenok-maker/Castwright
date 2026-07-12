@@ -78,6 +78,10 @@ Third review found the LAST remaining consumer of the old pattern + bounded laun
 - **`lanExposureWarning()`** documented as a now-unreachable defensive backstop (ensureLanAuthToken mints first).
 - **Accepted:** the launcher's alternate-port probe means a box that first bound HTTP (certs absent) prints an explicit "run stop:prod to relaunch on :8443" rather than silently spawning a duplicate — an operator stop/restart is required to switch ports (rare, since installs provision certs before first start).
 
+## Review fixes round 4 (2026-07-12, converged)
+
+Fourth review converged to a SINGLE defect (the consumer-ripple class was fully closed; the pinokio matcher concern was refuted): the round-3 empty-file self-heal used a non-exclusive `'w'` overwrite that could let two concurrent boots diverge in-memory vs on-disk. Replaced with an **exclusive-create (`wx`) retry loop**: the exclusive winner keeps its token, every loser re-reads and adopts the winner's, and an empty/corrupt file is removed + re-created exclusively rather than overwritten — so self-heal never introduces divergence. Test added for the empty-file case.
+
 ## Ship notes
 
-_(fill on merge: date + SHA)_
+Shipped: 2026-07-12. Four adversarial review rounds (23 findings total, all resolved). On-box pairing acceptance still owed (see acceptance list above). Fill SHA on merge.

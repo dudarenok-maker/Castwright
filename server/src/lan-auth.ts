@@ -10,7 +10,7 @@
    the companion fetches over the untrusted bootstrap channel *before* it
    can pin + present a token) and `/audio` are deliberately NOT guarded. */
 import { timingSafeEqual, randomBytes } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { parse as parseCookie } from 'cookie';
 import type { Request, Response, NextFunction } from './http.js';
@@ -56,41 +56,48 @@ export function ensureLanAuthToken(
     process.env.LAN_AUTH_TOKEN = fromFile;
     return fromFile;
   }
-  const token = randomBytes(32).toString('hex');
+  // Mint + persist. Always via EXCLUSIVE create (flag 'wx') so concurrent boots
+  // converge on ONE token instead of the last-writer-wins divergence a plain 'w'
+  // overwrite causes (an earlier writer could adopt its own token in-memory, then a
+  // later writer clobbers the disk → paired devices 401 on the next restart). The
+  // exclusive winner keeps its token; every loser RE-READS and adopts the winner's.
+  // An empty/corrupt file (external truncate/`touch`) is removed and re-created
+  // exclusively rather than overwritten, so self-heal never introduces divergence.
   try {
     mkdirSync(dirname(tokenFile), { recursive: true });
-    writeFileSync(tokenFile, `${token}\n`, { encoding: 'utf8', flag: 'wx' });
-    process.env.LAN_AUTH_TOKEN = token;
-    return token;
   } catch {
-    // wx failed — the file already exists. Either another boot wrote a real token
-    // (race: adopt theirs), or the existing file is empty/corrupt (an interrupted
-    // first write, an external truncate) — in that case wx would wedge us into a
-    // fresh in-memory token every boot, so SELF-HEAL by overwriting it.
-    const raced = readTokenFile(tokenFile);
-    if (raced !== undefined) {
-      process.env.LAN_AUTH_TOKEN = raced;
-      return raced;
-    }
+    /* fall through — the write attempts below surface the real failure */
+  }
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const token = randomBytes(32).toString('hex');
     try {
-      writeFileSync(tokenFile, `${token}\n`, { encoding: 'utf8', flag: 'w' });
-      // Re-read after the non-exclusive overwrite: if two boots both healed an empty
-      // file concurrently, adopt whatever landed on disk so every process converges
-      // on ONE token (never in-memory-diverges from the file a paired device trusts).
-      const settled = readTokenFile(tokenFile);
-      const effective = settled ?? token;
-      process.env.LAN_AUTH_TOKEN = effective;
-      return effective;
-    } catch {
-      // Truly unwritable — still guard the API this run with an in-memory token.
-      process.env.LAN_AUTH_TOKEN = token;
-      console.warn(
-        `[server] could not persist the LAN auth token to ${tokenFile} — it will regenerate ` +
-          `next boot (paired devices would need to re-pair).`,
-      );
+      writeFileSync(tokenFile, `${token}\n`, { encoding: 'utf8', flag: 'wx' });
+      process.env.LAN_AUTH_TOKEN = token; // we exclusively created it — it is ours
       return token;
+    } catch {
+      // The file already exists. A valid token there is the convergence point —
+      // adopt it. An empty/corrupt file gets removed so the next iteration can
+      // re-create it exclusively.
+      const existing = readTokenFile(tokenFile);
+      if (existing !== undefined) {
+        process.env.LAN_AUTH_TOKEN = existing;
+        return existing;
+      }
+      try {
+        rmSync(tokenFile, { force: true });
+      } catch {
+        /* another boot may have removed it already — retry the exclusive create */
+      }
     }
   }
+  // Persistently unwritable/contended — still guard the API this run in-memory.
+  const fallback = randomBytes(32).toString('hex');
+  process.env.LAN_AUTH_TOKEN = fallback;
+  console.warn(
+    `[server] could not persist the LAN auth token to ${tokenFile} — it will regenerate ` +
+      `next boot (paired devices would need to re-pair).`,
+  );
+  return fallback;
 }
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);

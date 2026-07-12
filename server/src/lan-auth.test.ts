@@ -218,6 +218,13 @@ describe('ensureLanAuthToken (auto-provisioned LAN secret)', () => {
     expect(process.env.LAN_AUTH_TOKEN).toBe(first);
   });
 
+  it('self-heals an empty/corrupt token file: mints, writes a real token to disk', () => {
+    writeFileSync(tokenFile, ''); // interrupted first write / external truncate
+    const tok = ensureLanAuthToken(tokenFile);
+    expect(tok).toMatch(/^[0-9a-f]{64}$/);
+    expect(readFileSync(tokenFile, 'utf8').trim()).toBe(tok); // in-memory == disk
+  });
+
   it('an explicit LAN_AUTH_TOKEN env value wins over the file (never persisted)', () => {
     process.env.LAN_AUTH_TOKEN = 'preset-token';
     expect(ensureLanAuthToken(tokenFile)).toBe('preset-token');
