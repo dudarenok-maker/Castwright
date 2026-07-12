@@ -124,8 +124,11 @@ export const MOCK_LIBRARY: LibraryResponse = {
               chapterCount: 9,
               completedChapters: 0,
               characterCount: 5,
-              voiceCount: 0,
-              voiceIds: [],
+              /* Cast is confirmed, so characters carry voice ids (voices may
+                 still need designing — voices_pending is about generation not
+                 having started, not about design). */
+              voiceCount: 5,
+              voiceIds: ['narrator', 'v-carrick', 'v-mara', 'v-tane', 'v-brenna'],
               lastWorkedOn: 'Just now',
               coverGradient: ['#243B4A', '#0F0E0D'],
               tags: [],

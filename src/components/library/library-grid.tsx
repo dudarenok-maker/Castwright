@@ -23,7 +23,6 @@ import {
   IconUpload,
   IconPencil,
   IconImage,
-  IconCheckCircle,
 } from '../../lib/icons';
 import { Pill } from '../primitives';
 import { Stat } from '../stat-tiles';
@@ -165,14 +164,7 @@ function BookCard({
 }) {
   const [from, to] = book.coverGradient;
   const grad = `linear-gradient(135deg, ${from}, ${to})`;
-  /* Defensive fallback: realGetLibrary casts server JSON straight to
-     LibraryResponse with no runtime enum validation, so a server/client
-     version skew (server ships a status the bundled STATUS_UI lacks) would
-     make this lookup undefined and crash every card. Degrade to a neutral
-     pill instead. */
-  const meta =
-    STATUS_UI[book.status] ??
-    ({ color: 'library', label: book.status, icon: <IconCheckCircle className="w-3.5 h-3.5" /> } as const);
+  const meta = STATUS_UI[book.status];
   /* Paused/halted snapshot from the cold-boot active-analyses scan.
      Drives the "Paused — resume?" / "Halted — review?" badge. Only
      rendered when the card is NOT the currently-open book — when it

@@ -35,8 +35,8 @@ Plan: [docs/superpowers/plans/2026-07-12-voices-pending-stage.md](../superpowers
 4. `openBook` (`src/store/ui-slice.ts`) routes `voices_pending` → `{ kind: 'ready', view: 'cast' }` (via the `else`/`'cast'` fall-through).
 5. `STATUS_UI.voices_pending` (`src/components/library/library-status-ui.tsx`) = `{ color: 'library', label: 'Cast ready', icon: <IconCheckCircle/> }`.
 6. `IN_PROGRESS_STATUSES` (`src/views/book-library.tsx`) includes `voices_pending` (counts under "In progress").
-7. `library-grid.tsx` reads `STATUS_UI[book.status] ?? <neutral fallback>` — a server status the bundled map lacks must never crash the grid.
-8. **Positive-vs-negative-list rule:** `status === 'generating'` positive-list checks are the hazard when splitting a status off `generating`; negative-list checks (`status !== …`) are safe. `layout.tsx:991-1003`'s background-revisions poll is a negative-list filter — `voices_pending` books already passed it as `generating`, so it is reviewed/no-change.
+7. `layout.tsx` `bgBookIds` background-revisions poll **excludes** `voices_pending` (alongside `cast_pending`/`analysing`/`not_analysed`/`unreadable`/`orphaned`) — a `voices_pending` book has zero rendered audio, so there is nothing to drift-poll.
+8. **Positive-vs-negative-list rule:** `status === 'generating'` positive-list checks are the hazard when splitting a status off `generating`; negative-list checks (`status !== …`) are safe. The one negative-list filter that needed the new value added is `layout.tsx` `bgBookIds` (invariant 7) — a `voices_pending` book (0 audio) should not be polled, whereas it slipped through as `generating` before.
 
 ## Test plan
 
@@ -60,6 +60,29 @@ Run in mock mode (`VITE_USE_MOCKS=true`).
 
 - Making voice design mandatory — the fe-46 voice-readiness gate ("Proceed anyway → generic fallback") is unchanged; `voices_pending` is a routing/landing decision, not a hard gate.
 - The transient first-chapter window (0 rendered / 0 failed while the first chapter is mid-render briefly reports `voices_pending`) is accepted, not closed — see the design doc's Detection section.
+
+## Known limitations (accepted)
+
+Both follow from deriving `generationStarted` from disk artifacts with no
+positive in-progress signal. Accepted 2026-07-12 over adding a durable
+`generationStartedAt` flag (simplicity-first; see the design doc's Detection
+section):
+
+1. **Transient first-chapter window (self-healing).** While the first chapter
+   is mid-render (0 rendered, 0 failed), a cold library scan briefly reports
+   `voices_pending`, so a reopen in that window lands on Cast rather than
+   Generate and the card shows "Cast ready" instead of a progress bar. It
+   heals on the next completed-or-failed chapter.
+2. **Hard-crash-before-any-artifact (does NOT self-heal).** If the process is
+   killed at the OS level (OOM-kill, power loss, `kill`) during the first
+   chapter — before any audio lands **and** before the durable
+   `generationState: 'failed'` marker is written by the generation route's
+   `catch` — the book stays `voices_pending` indefinitely: "Cast ready" badge,
+   reopens to Cast. It is still recoverable (start generation again from the
+   Cast view), but the badge/routing do not reflect the interrupted attempt.
+   Only OS-level kills escape the failure marker (every handled failure writes
+   it → `generating`), so the case is rare. Closing it would require the
+   durable-flag approach; revisit if it proves to bite in practice.
 
 ## Ship notes
 
