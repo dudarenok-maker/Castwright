@@ -567,6 +567,7 @@ export type LibraryBookStatus =
   | 'not_analysed'
   | 'analysing'
   | 'cast_pending'
+  | 'voices_pending'
   | 'generating'
   | 'complete'
   | 'unreadable'

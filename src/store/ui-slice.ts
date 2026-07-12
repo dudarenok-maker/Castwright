@@ -244,6 +244,9 @@ export const uiSlice = createSlice({
       else {
         const view: View =
           status === 'complete' ? 'listen' : status === 'generating' ? 'generate' : 'cast';
+        /* 'cast' also covers voices_pending (cast confirmed, generation not yet
+           started) — a reopened book lands on voice design, not Generate.
+           Asserted in ui-slice.test.ts. */
         s.stage = { kind: 'ready', bookId: id, view, ...READY_DEFAULTS };
       }
     },

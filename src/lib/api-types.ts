@@ -2816,7 +2816,7 @@ export interface components {
             seriesPosition?: number | null;
             isStandalone: boolean;
             /** @enum {string} */
-            status: "not_analysed" | "analysing" | "cast_pending" | "generating" | "complete" | "unreadable" | "orphaned";
+            status: "not_analysed" | "analysing" | "cast_pending" | "voices_pending" | "generating" | "complete" | "unreadable" | "orphaned";
             manuscriptId?: string;
             chapterCount: number;
             completedChapters: number;
