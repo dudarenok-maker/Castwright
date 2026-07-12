@@ -54,7 +54,7 @@ These are the knobs that change the numbers. **Record any non-default value in t
 
 Load-time (code, not env): `dtype=bfloat16` + `low_cpu_mem_usage=False` (real-tensor load — see [plan 112 post-ship fix #2](features/archive/112-qwen-synth-quick-wins.md)). `_apply_torch_perf_flags` (main.py) also enables TF32 once per process in each torch load path — `torch.backends.cuda.matmul.allow_tf32` / `cudnn.allow_tf32` / `set_float32_matmul_precision("high")`. These only affect **fp32** matmuls, so the win is near-zero for bf16 Qwen and lands mostly on Coqui's fp32 residuals — *not* a mover of the dispatch-bound Qwen floor. `cudnn.benchmark` is deliberately left OFF: variable audiobook input lengths make its per-shape autotune re-fire on every new shape, a net loss.
 
-**Preload — cold-start vs. resident VRAM:** `PRELOAD_KOKORO` (on; ~1 GB eager), `PRELOAD_QWEN` (off; warms on first `/load`/synth), `PRELOAD_COQUI` / `PRELOAD_COQUI_MODEL` (off / `xtts_v2`).
+**Preload — cold-start vs. resident VRAM:** `PRELOAD_KOKORO` (off, fs-60; warms on demand on first synth — opt in for ~1 GB eager), `PRELOAD_QWEN` (off; warms on first `/load`/synth), `PRELOAD_COQUI` / `PRELOAD_COQUI_MODEL` (off / `xtts_v2`).
 
 **Other engines:** Coqui — `COQUI_DEVICE` (`auto`), `COQUI_HALF` / `COQUI_DEEPSPEED` (on for cuda, off for cpu), `COQUI_LANGUAGE` (`en`); Kokoro — `KOKORO_MODEL_PATH` / `KOKORO_VOICES_PATH`, `KOKORO_LANGUAGE` (`en-us`).
 
