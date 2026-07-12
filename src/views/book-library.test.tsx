@@ -798,6 +798,17 @@ describe('BookLibraryView — loading affordance', () => {
       expect(localStorage.getItem('library.viewMode')).toBe('table');
     });
 
+    it('hides the card/table toggle when the viewport forces card mode (no dead toggle)', () => {
+      /* Defect A: below 640px the toggle used to still render and flip its
+         aria-pressed on tap, but effectiveViewMode forced card — so the
+         control looked live yet did nothing ("table mode doesn't work on
+         touch"). When card is forced, the toggle must not render at all. */
+      localStorage.setItem('library.viewMode', 'card');
+      stubMatchMedia(true);
+      renderView({ loaded: true, authors: [oneAuthor] });
+      expect(screen.queryByTestId('library-view-mode-toggle')).not.toBeInTheDocument();
+    });
+
     it('honours stored table preference on tablet/desktop (matchMedia false)', () => {
       localStorage.setItem('library.viewMode', 'table');
       stubMatchMedia(false);

@@ -25,7 +25,7 @@ export function RestartSidecarBanner({
         type="button"
         onClick={onRestart}
         disabled={restarting}
-        className="shrink-0 px-4 py-2 rounded-xl border border-amber-300 bg-amber-100 text-sm font-semibold text-amber-900 hover:bg-amber-200 disabled:opacity-60 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
+        className="shrink-0 px-4 py-2 rounded-xl border border-amber-300 bg-amber-100 text-sm font-semibold text-amber-900 hover:bg-amber-200 disabled:opacity-60 disabled:cursor-not-allowed min-h-[44px] fine-pointer:min-h-0"
       >
         {restarting ? 'Restarting…' : 'Restart sidecar'}
       </button>

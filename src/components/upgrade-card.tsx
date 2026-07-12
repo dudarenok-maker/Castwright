@@ -115,8 +115,8 @@ export function UpgradeCard() {
         disabled={upgrade.status === 'staging' || upgrade.status === 'applying'}
         className={
           updateAvailable
-            ? 'mt-3 min-h-[44px] sm:min-h-0 rounded-xl bg-magenta px-4 py-2 text-sm font-medium text-white hover:bg-magenta/90 disabled:opacity-50'
-            : 'mt-3 min-h-[44px] sm:min-h-0 rounded-xl border border-ink/15 px-4 py-2 text-sm font-medium text-ink/70 hover:bg-ink/5 disabled:opacity-50'
+            ? 'mt-3 min-h-[44px] fine-pointer:min-h-0 rounded-xl bg-magenta px-4 py-2 text-sm font-medium text-white hover:bg-magenta/90 disabled:opacity-50'
+            : 'mt-3 min-h-[44px] fine-pointer:min-h-0 rounded-xl border border-ink/15 px-4 py-2 text-sm font-medium text-ink/70 hover:bg-ink/5 disabled:opacity-50'
         }
       >
         {upgrade.status === 'staging'
@@ -189,14 +189,14 @@ function UpgradeConfirm({
           type="button"
           onClick={onApply}
           disabled={candidate.isDowngrade}
-          className="min-h-[44px] sm:min-h-0 rounded-xl bg-magenta px-4 py-2 text-sm font-medium text-white hover:bg-magenta/90 disabled:opacity-50"
+          className="min-h-[44px] fine-pointer:min-h-0 rounded-xl bg-magenta px-4 py-2 text-sm font-medium text-white hover:bg-magenta/90 disabled:opacity-50"
         >
           Apply upgrade
         </button>
         <button
           type="button"
           onClick={onCancel}
-          className="min-h-[44px] sm:min-h-0 rounded-xl border border-ink/15 px-4 py-2 text-sm font-medium text-ink/70 hover:bg-ink/5"
+          className="min-h-[44px] fine-pointer:min-h-0 rounded-xl border border-ink/15 px-4 py-2 text-sm font-medium text-ink/70 hover:bg-ink/5"
         >
           Cancel
         </button>

@@ -105,7 +105,7 @@ export function VoiceReadinessGateModal() {
             </div>
             <button
               onClick={onClose}
-              className="p-2 rounded-full hover:bg-ink/5 text-ink/60 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 grid place-items-center"
+              className="p-2 rounded-full hover:bg-ink/5 text-ink/60 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 grid place-items-center"
               aria-label="Close"
             >
               <IconClose className="w-4 h-4" />
@@ -132,14 +132,14 @@ export function VoiceReadinessGateModal() {
             {!hasNoFallbackEngine ? (
               <button
                 onClick={onProceedAnyway}
-                className="text-sm font-medium text-ink/60 hover:text-ink min-h-[44px] sm:min-h-0"
+                className="text-sm font-medium text-ink/60 hover:text-ink min-h-[44px] fine-pointer:min-h-0"
               >
                 Proceed anyway — generic {fallbackEngineName} fallback voices
               </button>
             ) : (
               <button
                 onClick={onClose}
-                className="text-sm font-medium text-ink/60 hover:text-ink min-h-[44px] sm:min-h-0"
+                className="text-sm font-medium text-ink/60 hover:text-ink min-h-[44px] fine-pointer:min-h-0"
               >
                 Cancel
               </button>

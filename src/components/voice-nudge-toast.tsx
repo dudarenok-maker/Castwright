@@ -52,7 +52,7 @@ export function VoiceNudgeToast({ toast }: { toast: Toast }) {
           type="button"
           disabled={designRunning}
           onClick={onDesign}
-          className="px-3 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded-full bg-ink text-canvas text-sm font-semibold disabled:opacity-40"
+          className="px-3 min-h-[44px] fine-pointer:min-h-0 sm:py-1.5 rounded-full bg-ink text-canvas text-sm font-semibold disabled:opacity-40"
         >
           {label}
         </button>

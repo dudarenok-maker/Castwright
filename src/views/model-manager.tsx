@@ -333,7 +333,7 @@ function ConfirmRemoveModal({
           <button
             type="button"
             onClick={onClose}
-            className="min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/5"
+            className="min-h-[44px] fine-pointer:min-h-0 px-4 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/5"
           >
             Cancel
           </button>
@@ -342,7 +342,7 @@ function ConfirmRemoveModal({
             onClick={confirm}
             disabled={busy || blockedReason !== null}
             data-testid="model-remove-confirm-button"
-            className="min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium hover:bg-rose-700 disabled:opacity-50 disabled:hover:bg-rose-600"
+            className="min-h-[44px] fine-pointer:min-h-0 px-4 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium hover:bg-rose-700 disabled:opacity-50 disabled:hover:bg-rose-600"
           >
             {busy ? 'Removing…' : 'Remove'}
           </button>
@@ -533,7 +533,7 @@ function ModelRow({
               onClick={() => setInstallerOpen((o) => !o)}
               data-testid={`model-install-toggle-${item.id}`}
               aria-expanded={installerOpen}
-              className="min-h-[44px] sm:min-h-0 px-3 py-1 rounded-full border border-ink/15 bg-white text-[11px] font-semibold text-ink/70 hover:bg-ink/5"
+              className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1 rounded-full border border-ink/15 bg-white text-[11px] font-semibold text-ink/70 hover:bg-ink/5"
             >
               {isPackageMissing ? 'Repair' : item.present ? 'Update' : 'Install'}{' '}
               {installerOpen ? '▴' : '▾'}
@@ -544,7 +544,7 @@ function ModelRow({
               type="button"
               onClick={onRemove}
               data-testid={`model-remove-${item.id}`}
-              className="min-h-[44px] sm:min-h-0 px-3 py-1 rounded-full border border-rose-200 bg-white text-[11px] font-semibold text-rose-700 hover:bg-rose-50"
+              className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1 rounded-full border border-rose-200 bg-white text-[11px] font-semibold text-rose-700 hover:bg-rose-50"
             >
               Remove
             </button>

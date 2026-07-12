@@ -120,7 +120,7 @@ export function VoiceEnginePicker({
         value={lockedToQwen ? 'qwen' : value}
         disabled={lockedToQwen}
         onChange={(e) => onChange(e.target.value as EngineChoice)}
-        className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[44px] sm:min-h-0 disabled:opacity-70 disabled:cursor-not-allowed"
+        className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[44px] fine-pointer:min-h-0 disabled:opacity-70 disabled:cursor-not-allowed"
       >
         {lockedToQwen ? (
           <option value="qwen">{ENGINE_LABELS.qwen}</option>
@@ -173,7 +173,7 @@ export function VoiceEnginePicker({
                 onClick={onRegeneratePersona}
                 disabled={personaBusy}
                 data-testid="qwen-regenerate-persona"
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-peach/15 text-magenta hover:bg-peach/25 disabled:opacity-50 disabled:cursor-wait min-h-[32px] sm:min-h-0"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-peach/15 text-magenta hover:bg-peach/25 disabled:opacity-50 disabled:cursor-wait min-h-[32px] fine-pointer:min-h-0"
               >
                 {personaBusy ? (
                   <IconSpinner className="w-3 h-3" />
@@ -207,7 +207,7 @@ export function VoiceEnginePicker({
                 type="button"
                 disabled
                 data-testid="qwen-design-voice"
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-semibold bg-magenta/10 text-magenta cursor-wait min-h-[44px] sm:min-h-0"
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-semibold bg-magenta/10 text-magenta cursor-wait min-h-[44px] fine-pointer:min-h-0"
               >
                 <IconSpinner className="w-4 h-4" />
                 <span>Designing voice…</span>
@@ -223,7 +223,7 @@ export function VoiceEnginePicker({
               onClick={onDesignVoice}
               disabled={persona.trim().length === 0}
               data-testid="qwen-design-voice"
-              className={`w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-semibold transition-colors min-h-[44px] sm:min-h-0 ${
+              className={`w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${
                 designPlaying
                   ? 'bg-magenta text-white hover:bg-magenta/90'
                   : 'bg-magenta/10 text-magenta hover:bg-magenta/20 disabled:opacity-50 disabled:cursor-not-allowed'

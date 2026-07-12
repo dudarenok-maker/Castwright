@@ -545,7 +545,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
             <button
               onClick={close}
               aria-label="Close"
-              className="p-2 rounded-full hover:bg-ink/5 text-ink/60 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 grid place-items-center"
+              className="p-2 rounded-full hover:bg-ink/5 text-ink/60 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 grid place-items-center"
             >
               <IconClose className="w-4 h-4" />
             </button>
@@ -607,7 +607,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
                   onClick={() => void runPropose()}
                   disabled={orderedSelected.length === 0}
                   data-testid="rebaseline-propose"
-                  className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink-soft disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
+                  className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink-soft disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] fine-pointer:min-h-0"
                 >
                   <IconSparkle className="w-4 h-4" /> Propose voices
                 </button>
@@ -636,7 +636,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
                 </span>
                 <button
                   onClick={close}
-                  className="ml-auto px-4 py-2 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink min-h-[44px] sm:min-h-0"
+                  className="ml-auto px-4 py-2 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink min-h-[44px] fine-pointer:min-h-0"
                 >
                   Cancel
                 </button>
@@ -644,7 +644,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
                   onClick={() => void runApprove()}
                   disabled={proposeBusy || designing || includedCount === 0}
                   data-testid="rebaseline-approve"
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-magenta text-white text-sm font-semibold hover:bg-magenta/90 disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-magenta text-white text-sm font-semibold hover:bg-magenta/90 disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] fine-pointer:min-h-0"
                 >
                   {approveBusy ? (
                     <IconSpinner className="w-4 h-4" />
@@ -666,7 +666,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
                   onClick={close}
                   disabled={status === 'approving'}
                   data-testid="rebaseline-done"
-                  className="ml-auto px-4 py-2 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink-soft disabled:opacity-40 min-h-[44px] sm:min-h-0"
+                  className="ml-auto px-4 py-2 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink-soft disabled:opacity-40 min-h-[44px] fine-pointer:min-h-0"
                 >
                   Done
                 </button>

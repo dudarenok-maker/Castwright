@@ -157,7 +157,7 @@ function PromptRow({ descriptor }: PromptRowProps) {
             type="button"
             onClick={handleEdit}
             disabled={busy || !prompt}
-            className="px-3 py-1.5 rounded-lg border border-ink/15 bg-white text-xs text-ink hover:bg-ink/4 min-h-[44px] sm:min-h-0 disabled:opacity-50"
+            className="px-3 py-1.5 rounded-lg border border-ink/15 bg-white text-xs text-ink hover:bg-ink/4 min-h-[44px] fine-pointer:min-h-0 disabled:opacity-50"
           >
             Edit
           </button>
@@ -166,7 +166,7 @@ function PromptRow({ descriptor }: PromptRowProps) {
               type="button"
               onClick={handleRevert}
               disabled={busy}
-              className="px-3 py-1.5 rounded-lg border border-rose-200 bg-white text-xs text-rose-700 hover:bg-rose-50 min-h-[44px] sm:min-h-0 disabled:opacity-50"
+              className="px-3 py-1.5 rounded-lg border border-rose-200 bg-white text-xs text-rose-700 hover:bg-rose-50 min-h-[44px] fine-pointer:min-h-0 disabled:opacity-50"
             >
               {busy ? 'Reverting…' : 'Revert to default'}
             </button>
@@ -186,7 +186,7 @@ function PromptRow({ descriptor }: PromptRowProps) {
               type="button"
               onClick={handleSave}
               disabled={busy}
-              className="px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft min-h-[44px] sm:min-h-0 disabled:opacity-50"
+              className="px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft min-h-[44px] fine-pointer:min-h-0 disabled:opacity-50"
             >
               {busy ? 'Saving…' : 'Save'}
             </button>
@@ -194,7 +194,7 @@ function PromptRow({ descriptor }: PromptRowProps) {
               type="button"
               onClick={() => setEditing(false)}
               disabled={busy}
-              className="px-4 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/5 min-h-[44px] sm:min-h-0 disabled:opacity-50"
+              className="px-4 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/5 min-h-[44px] fine-pointer:min-h-0 disabled:opacity-50"
             >
               Cancel
             </button>
@@ -342,7 +342,7 @@ export function AdvancedView() {
               data-config-action
               onMouseDown={() => beginConfigAction()}
               onClick={handleResetAll}
-              className="px-4 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/5 min-h-[44px] sm:min-h-0"
+              className="px-4 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/5 min-h-[44px] fine-pointer:min-h-0"
             >
               Reset all
             </button>

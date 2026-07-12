@@ -39,6 +39,12 @@ interface Props {
   filters: Array<{ id: Filter; label: string }>;
   viewMode: LibraryViewMode;
   setViewMode: (m: LibraryViewMode) => void;
+  /** Whether to render the card↔table toggle. The orchestrator passes
+      `false` on phone viewports (<640px), where the table view is force-
+      collapsed to cards — rendering the toggle there gives a control that
+      flips its `aria-pressed` but can never change the view ("table mode
+      doesn't work on touch"). Hiding it removes the dead affordance. */
+  showViewToggle: boolean;
   onStartNew: () => void;
   /** Plan 75 — when present, renders an "Import portable bundle" button
       alongside the "Start a new book" CTA. The button opens a file
@@ -72,6 +78,7 @@ export function LibraryChrome({
   filters,
   viewMode,
   setViewMode,
+  showViewToggle,
   onStartNew,
   onImportPortable,
   search,
@@ -122,7 +129,7 @@ export function LibraryChrome({
                 type="button"
                 onClick={() => importInputRef.current?.click()}
                 data-testid="library-import-portable-button"
-                className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors bg-white border border-ink/15 text-ink hover:bg-ink/4"
+                className="inline-flex items-center gap-2 rounded-full px-4 py-2 coarse-pointer:min-h-[44px] text-sm font-semibold transition-colors bg-white border border-ink/15 text-ink hover:bg-ink/4"
                 title="Import a .portable.zip bundle exported from another machine"
               >
                 <IconDownload className="w-4 h-4" />
@@ -154,13 +161,13 @@ export function LibraryChrome({
           aria-label="Search books"
           placeholder="Search by title or author…"
           data-testid="library-search-input"
-          className="flex-1 min-w-[240px] max-w-md px-4 py-2 rounded-full bg-canvas border border-ink/10 text-sm text-ink placeholder:text-ink/40 focus:outline-hidden focus:border-ink/30"
+          className="flex-1 min-w-[240px] max-w-md px-4 py-2 coarse-pointer:min-h-[44px] rounded-full bg-canvas border border-ink/10 text-sm text-ink placeholder:text-ink/40 focus:outline-hidden focus:border-ink/30"
         />
         {hasActiveFilter && (
           <button
             onClick={clearFilters}
             data-testid="library-clear-filters"
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium text-ink/60 hover:text-ink hover:bg-ink/4"
+            className="inline-flex items-center justify-center gap-1 px-3 py-1.5 coarse-pointer:min-h-[44px] coarse-pointer:px-4 rounded-full text-xs font-medium text-ink/60 hover:text-ink hover:bg-ink/4"
           >
             <IconClose className="w-3 h-3" />
             Clear filters
@@ -181,7 +188,7 @@ export function LibraryChrome({
                 onClick={() => toggleTag(tag)}
                 data-testid={`tag-filter-chip-${tag}`}
                 aria-pressed={active}
-                className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                className={`inline-flex items-center justify-center px-3 py-1 coarse-pointer:min-h-[44px] coarse-pointer:px-4 rounded-full text-xs font-medium border transition-colors ${
                   active
                     ? 'bg-purple-deep text-white border-purple-deep'
                     : 'bg-white text-ink/70 border-ink/10 hover:bg-ink/4'
@@ -209,7 +216,7 @@ export function LibraryChrome({
                 onClick={() => toggleLanguage(lang)}
                 data-testid={`language-filter-chip-${lang}`}
                 aria-pressed={active}
-                className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                className={`inline-flex items-center justify-center px-3 py-1 coarse-pointer:min-h-[44px] coarse-pointer:px-4 rounded-full text-xs font-medium border transition-colors ${
                   active
                     ? 'bg-purple-deep text-white border-purple-deep'
                     : 'bg-white text-ink/70 border-ink/10 hover:bg-ink/4'
@@ -231,37 +238,39 @@ export function LibraryChrome({
             <button
               key={f.id}
               onClick={() => setFilter(f.id)}
-              className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${filter === f.id ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/4'}`}
+              className={`inline-flex items-center justify-center px-4 py-2 coarse-pointer:min-h-[44px] rounded-full text-sm font-medium transition-colors ${filter === f.id ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/4'}`}
             >
               {f.label}
             </button>
           ))}
         </div>
-        <div
-          data-testid="library-view-mode-toggle"
-          role="group"
-          aria-label="Library view mode"
-          className="ml-auto inline-flex items-center gap-0.5 p-0.5 rounded-full bg-ink/4 border border-ink/10"
-        >
-          <button
-            type="button"
-            onClick={() => setViewMode('card')}
-            aria-pressed={viewMode === 'card'}
-            data-testid="library-view-mode-card"
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${viewMode === 'card' ? 'bg-white text-ink shadow-xs' : 'text-ink/55 hover:text-ink'}`}
+        {showViewToggle && (
+          <div
+            data-testid="library-view-mode-toggle"
+            role="group"
+            aria-label="Library view mode"
+            className="ml-auto inline-flex items-center gap-0.5 p-0.5 rounded-full bg-ink/4 border border-ink/10"
           >
-            Cards
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('table')}
-            aria-pressed={viewMode === 'table'}
-            data-testid="library-view-mode-table"
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${viewMode === 'table' ? 'bg-white text-ink shadow-xs' : 'text-ink/55 hover:text-ink'}`}
-          >
-            Table
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={() => setViewMode('card')}
+              aria-pressed={viewMode === 'card'}
+              data-testid="library-view-mode-card"
+              className={`inline-flex items-center justify-center px-3 py-1 coarse-pointer:min-h-[44px] coarse-pointer:px-5 rounded-full text-xs font-medium transition-colors ${viewMode === 'card' ? 'bg-white text-ink shadow-xs' : 'text-ink/55 hover:text-ink'}`}
+            >
+              Cards
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              aria-pressed={viewMode === 'table'}
+              data-testid="library-view-mode-table"
+              className={`inline-flex items-center justify-center px-3 py-1 coarse-pointer:min-h-[44px] coarse-pointer:px-5 rounded-full text-xs font-medium transition-colors ${viewMode === 'table' ? 'bg-white text-ink shadow-xs' : 'text-ink/55 hover:text-ink'}`}
+            >
+              Table
+            </button>
+          </div>
+        )}
       </div>
     </>
   );

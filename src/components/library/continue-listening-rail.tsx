@@ -142,7 +142,7 @@ function ContinueCard({
           e.stopPropagation();
           setMenuOpen((o) => !o);
         }}
-        className="absolute top-1.5 right-1.5 grid place-items-center min-h-[44px] min-w-[44px] sm:min-h-[32px] sm:min-w-[32px] rounded-full bg-ink/40 hover:bg-ink/60 text-white opacity-0 group-hover:opacity-100 coarse-pointer:opacity-70 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-peach transition-opacity"
+        className="absolute top-1.5 right-1.5 grid place-items-center min-h-[44px] min-w-[44px] fine-pointer:min-h-[32px] fine-pointer:min-w-[32px] rounded-full bg-ink/40 hover:bg-ink/60 text-white opacity-0 group-hover:opacity-100 coarse-pointer:opacity-70 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-peach transition-opacity"
       >
         <IconMore className="w-4 h-4" />
       </button>
@@ -252,7 +252,7 @@ function CardMenu({
         type="button"
         role="menuitem"
         onClick={onFinish}
-        className="flex w-full items-center gap-2 px-3 py-2 min-h-[44px] sm:min-h-0 text-left text-sm text-ink hover:bg-ink/5 focus-visible:outline-none focus-visible:bg-ink/5"
+        className="flex w-full items-center gap-2 px-3 py-2 min-h-[44px] fine-pointer:min-h-0 text-left text-sm text-ink hover:bg-ink/5 focus-visible:outline-none focus-visible:bg-ink/5"
       >
         <IconCheck className="w-4 h-4 text-ink/60" />
         Mark as finished
@@ -261,7 +261,7 @@ function CardMenu({
         type="button"
         role="menuitem"
         onClick={onHide}
-        className="flex w-full items-center gap-2 px-3 py-2 min-h-[44px] sm:min-h-0 text-left text-sm text-ink hover:bg-ink/5 focus-visible:outline-none focus-visible:bg-ink/5"
+        className="flex w-full items-center gap-2 px-3 py-2 min-h-[44px] fine-pointer:min-h-0 text-left text-sm text-ink hover:bg-ink/5 focus-visible:outline-none focus-visible:bg-ink/5"
       >
         <IconClose className="w-4 h-4 text-ink/60" />
         Hide from shelf
