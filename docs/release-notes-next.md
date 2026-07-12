@@ -45,6 +45,10 @@ opening a new one.
 
 - **fs-60: Coqui XTTS becomes an eligible casting choice and automatic fallback for Russian/Spanish/French/German books**, no longer hard-locked to Qwen with no recovery path. A new `ENGINE_LANGUAGE_SUPPORT`/`resolveEligibleEngines` model (server) computes a per-book `eligibleTtsEngines` field; an undesigned or unavailable Qwen character now falls back to a generic Coqui voice instead of failing the chapter, mirrored in the cast-view banner, the voice-readiness gate ("Proceed anyway" now names the real fallback engine), the engine picker, and a new "Fallback (Coqui)" status pill. A mixed Qwen+Coqui chapter is serialized (never co-resident) to protect an 8 GB card. `PRELOAD_KOKORO`'s default also flips `true`→`false` (Coqui/Qwen already default off; Kokoro now matches). Live-GPU acceptance still owed. (#1005)
 
+## 🚀 One-click install (Pinokio)
+
+- **The Pinokio launcher now surfaces a proper way into the app during the 1–2 min startup, works under LAN sharing, and confirms Reset.** Three launcher-UX fixes, matching the conventions of every shipping Pinokio app (comfy/flux-webui/dia/Kokoro-TTS): (1) while the server is warming up (`local.url` not yet captured) the menu now defaults to a live **Terminal** tab and auto-flips to **Open Web UI** the instant the server is ready — previously it rendered `Open Web UI` with a `null` href, so Pinokio fell back to a bare terminal and first-time users saw no way to open the app; (2) `start.js` now **captures** the URL the server actually prints (`/(https?:\/\/localhost:[0-9]+)/` → `input.event[1]`) instead of hardcoding `http://localhost:8080`, so **LAN sharing** (`LAN_HTTPS=1`, server binds `https://localhost:8443`) surfaces a working Open-Web-UI tab too; (3) the **Reset** menu item now carries a `confirm:` before it wipes `node_modules`/venv/`dist` and reinstalls. `menu.test.js` (both running states + the Reset-confirm guard) and `structure.test.js` (adds the `running/url:null` startup window) pin all three. (Refs #822)
+
 ---
 
 **Full changelog:** v1.12.3...v1.13.0
