@@ -16,8 +16,10 @@ describe('MOCK_LIBRARY voice totals', () => {
     // Mirrors book-library.tsx: new Set(flatMap(voiceIds)).size.
     const distinct = new Set(allBooks.flatMap((b) => b.voiceIds ?? [])).size;
     // 5 in Solway Bay + 1 new in The Northern Star (narrator/Carrick/Mara reused;
-    // Carrick's Compass reuses only existing ids) = 6.
-    expect(distinct).toBe(6);
+    // Carrick's Compass reuses only existing ids) + 1 new in The Tidewatcher
+    // (the voices_pending standalone reuses narrator/Carrick/Mara/Tane, adds
+    // v-brenna) = 7.
+    expect(distinct).toBe(7);
     // Strictly fewer than the naive sum, proving reuse is collapsed.
     const summed = allBooks.reduce((s, b) => s + b.voiceCount, 0);
     expect(distinct).toBeLessThan(summed);

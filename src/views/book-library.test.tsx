@@ -937,4 +937,17 @@ describe('applyLibraryFilters', () => {
     expect(out[0].series[0].books).toHaveLength(1);
     expect(out[0].series[0].seriesMemory).toEqual(summary);
   });
+
+  it('counts a voices_pending book under the in_progress filter', () => {
+    const authors: LibraryAuthor[] = [
+      {
+        name: 'Marin Vale',
+        series: [
+          { name: 'Standalones', books: [makeLibBook({ bookId: 'tw', title: 'The Tidewatcher', status: 'voices_pending' })] },
+        ],
+      },
+    ];
+    const out = applyLibraryFilters(authors, { filter: 'in_progress', search: '', tags: [], languages: [] });
+    expect(out.flatMap((a) => a.series.flatMap((s) => s.books))).toHaveLength(1);
+  });
 });

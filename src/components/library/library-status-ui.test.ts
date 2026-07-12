@@ -11,6 +11,7 @@ const ALL_STATUSES: LibraryBookStatus[] = [
   'not_analysed',
   'analysing',
   'cast_pending',
+  'voices_pending',
   'generating',
   'complete',
   'unreadable',

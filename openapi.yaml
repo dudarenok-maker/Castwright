@@ -3646,7 +3646,7 @@ components:
         isStandalone: { type: boolean }
         status:
           type: string
-          enum: [not_analysed, analysing, cast_pending, generating, complete, unreadable, orphaned]
+          enum: [not_analysed, analysing, cast_pending, voices_pending, generating, complete, unreadable, orphaned]
         manuscriptId: { type: string }
         chapterCount: { type: integer }
         completedChapters: { type: integer }
