@@ -284,17 +284,18 @@ class _MetaThenOomQwen:
         return cls(model_id, inner)
 
 
-def test_meta_fault_then_nonmeta_retry_recycles_and_surfaces_meta_signal(
+def test_meta_fault_then_nonmeta_retry_surfaces_true_error_and_does_not_recycle(
     qwen_meta_tensor_failure_runtime, monkeypatch
 ) -> None:
     """Regression (code-review high, 2026-07-12): a meta fault on attempt 1
-    followed by a NON-meta fault (CUDA OOM) on the retry must behave exactly as the
-    pre-retry code did on the meta fault — schedule ONE code-44 recycle and raise
-    the meta NotImplementedError. It must NOT re-raise the retry-induced OOM: that
-    would let the design route's CUDA-poison exit fire a SECOND, racing exit path
-    alongside the recycle, and diverge from how callers classify a first-shot meta
-    fault. The retry is transparent; the meta fault, not its side effect, is the
-    signal. The recycle is keyed on the meta detail."""
+    followed by a NON-meta fault (CUDA OOM) on the retry must re-raise the ACTUAL
+    error and schedule NO recycle. Masking it as the meta fault (and recycling)
+    would (a) endlessly recycle if that second fault were deterministic — a fresh
+    process would reproduce the exact meta-then-real-error sequence and never
+    surface it — and (b) let a code-44 recycle race the design route's CUDA-poison
+    exit. Only a PERSISTENT meta fault (every attempt meta) warrants the recycle;
+    the true error's own handler (poison latch / base17-mint 500) takes it from
+    here."""
     engine = qwen_meta_tensor_failure_runtime
     _MetaThenOomQwen._loads = 0
     monkeypatch.setattr(sys.modules["qwen_tts"], "Qwen3TTSModel", _MetaThenOomQwen)
@@ -303,11 +304,10 @@ def test_meta_fault_then_nonmeta_retry_recycles_and_surfaces_meta_signal(
         main, "_schedule_model_load_fault_restart",
         lambda *a: scheduled.append(a),
     )
-    with pytest.raises(NotImplementedError, match="meta tensor"):
+    with pytest.raises(RuntimeError, match="out of memory"):
         engine._load_qwen_model(engine.BASE_MODEL)
     assert _MetaThenOomQwen._loads == 2, "meta fault on attempt 1, OOM on the retry"
-    assert len(scheduled) == 1, "exactly one recycle scheduled — no racing poison exit"
-    assert "meta tensor" in scheduled[0][1].lower(), "recycle keyed on the meta fault"
+    assert scheduled == [], "a non-meta retry fault surfaces the true error, no recycle"
 
 
 def test_meta_fault_does_not_retry_when_recycle_already_pending(

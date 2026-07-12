@@ -2093,15 +2093,10 @@ class QwenEngine(Engine):
         # every load — a fresh from_pretrained in THIS SAME process has been seen
         # to load cleanly right after a fault (see _QWEN_META_LOAD_ATTEMPTS), so
         # retry the whole load in-process on that fault class before falling back
-        # to the self-recycle. Any OTHER failure (CUDA OOM &c.) re-raises on the
-        # first hit — unchanged — because retrying it in a tight loop would just
-        # thrash a pressured card, and its recovery lever is "try again later once
-        # VRAM frees," not "reload now."
-        # Only the meta fault's message STRING is carried across attempts — never
-        # the exception object, whose traceback would pin the failed attempt's
-        # partially-materialised model past the reclaim (side-11). None until a
-        # meta fault fires.
-        meta_fault_detail: Optional[str] = None
+        # to the self-recycle. ANY non-meta failure (CUDA OOM &c.) re-raises the
+        # true error with NO recycle — whether it's the first attempt or a retry
+        # after a meta fault — so a fresh process is only ever spun up for a
+        # PERSISTENT meta fault (every attempt meta), never masking a real error.
         for attempt in range(1, _QWEN_META_LOAD_ATTEMPTS + 1):
             model = None
             try:
@@ -2165,38 +2160,34 @@ class QwenEngine(Engine):
                 is_meta_fault = isinstance(e, NotImplementedError) and (
                     "meta tensor" in _msg or "to_empty" in _msg
                 )
-                # Introspect WHICH submodule landed on meta while the model is still
-                # in scope, then drop EVERY reference to the partial before reclaim.
+                # Introspect WHICH submodule landed on meta while the model is still in
+                # scope, then drop every reference to the partial — the `model`/`inner`
+                # locals AND the exception traceback, whose `.to()` frames pin it just
+                # as surely — so the gc+empty_cache reclaim (side-11) can actually free
+                # it. Only the message string survives.
                 if is_meta_fault:
                     _log_meta_device_params(model)
-                    meta_fault_detail = str(e)
-                # Drop the `model` AND `inner` locals so the gc+empty_cache reclaim
-                # (side-11) can free the partially-built model. `e` (a string message
-                # aside) pins that partial only through its traceback frames.
+                detail = str(e)
                 model = None
                 inner = None
-
-                # An ordinary fault with NO meta fault anywhere in this load (e.g. a
-                # plain CUDA OOM) is unchanged: reclaim and re-raise the true error so
-                # the caller classifies it per its own contract (design route poison
-                # latch, base17-mint OOM->500). Keep its traceback for debugging.
-                if not is_meta_fault and meta_fault_detail is None:
-                    _reclaim_host_and_vram()
-                    raise
-
-                # A meta fault is involved (this attempt, or an earlier one). Null the
-                # traceback so it stops pinning the partial, then reclaim so the freed
-                # VRAM can't co-reside with the next attempt (side-11).
                 e.__traceback__ = None
                 _reclaim_host_and_vram()
 
-                # Retry only while it's still a meta fault, attempts remain, AND no
-                # recycle is already pending. The `_restart_pending` check keeps a
-                # loader that arrives after another thread already scheduled the
-                # recycle from burning a second doomed reload — without rejecting a
-                # healthy, unrelated load (which never reaches this meta path) the way
-                # a blanket loop-entry guard would.
-                if is_meta_fault and attempt < _QWEN_META_LOAD_ATTEMPTS and not _restart_pending:
+                # ANY non-meta fault re-raises the TRUE error and schedules NO recycle
+                # — a plain CUDA OOM, OR a retry (after an earlier meta fault) that hit
+                # a different, possibly DETERMINISTIC error. Masking it as the meta
+                # fault would endlessly recycle on an error a fresh process can't clear,
+                # and a code-44 recycle would race the design route's CUDA-poison exit.
+                # Design-route poison latch / base17-mint OOM->500 all fire on the true
+                # error exactly as before this change.
+                if not is_meta_fault:
+                    raise
+
+                # Meta fault. Retry while attempts remain and no recycle is already
+                # pending (the pending check keeps a loader that arrived after another
+                # thread scheduled the recycle from burning a second doomed reload,
+                # without touching healthy unrelated loads — they never reach here).
+                if attempt < _QWEN_META_LOAD_ATTEMPTS and not _restart_pending:
                     log.warning(
                         "Qwen model=%s hit the meta-tensor load fault (attempt %d/%d) — "
                         "reclaimed VRAM and retrying the load in-process.",
@@ -2204,24 +2195,14 @@ class QwenEngine(Engine):
                     )
                     continue
 
-                # Terminal meta path — retries exhausted, a recycle already pending, or
-                # a retry after the meta fault hit a secondary fault. Behave EXACTLY as
-                # the pre-retry code did on a meta fault: schedule the single code-44
-                # recycle and raise the meta NotImplementedError. This transparency is
-                # deliberate — re-raising a retry-induced OOM instead would (a) let the
-                # design route's CUDA-poison exit fire a SECOND, racing exit path
-                # alongside the code-44 recycle, and (b) diverge from how every caller
-                # already classifies a first-shot meta fault. The recycle is what a
-                # fresh process clears; the meta fault, not the retry's side effect, is
-                # the signal. Fresh exception + `from None`: the reclaimed partial's
-                # traceback is already gone, so nothing re-pins it.
-                if not is_meta_fault:
-                    log.warning(
-                        "Qwen model=%s retry after a meta-tensor fault hit a secondary "
-                        "fault (%s) — recycling on the meta fault.", model_id, _msg,
-                    )
-                _schedule_model_load_fault_restart(model_id, meta_fault_detail)
-                raise NotImplementedError(meta_fault_detail) from None
+                # Every attempt hit the meta fault (persistent) — behave EXACTLY as the
+                # pre-retry code did: schedule the single code-44 recycle a fresh
+                # process is known to clear, and raise the meta NotImplementedError.
+                # One exit path, classified identically to a first-shot meta fault;
+                # fresh exception (traceback already nulled) so nothing re-pins the
+                # partial.
+                _schedule_model_load_fault_restart(model_id, detail)
+                raise NotImplementedError(detail) from None
 
     def _ensure_device_resolved(self) -> None:
         """Resolve a 'auto' device preference to a concrete torch device once
