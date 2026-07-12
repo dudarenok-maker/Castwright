@@ -37,6 +37,11 @@ export const STATUS_UI: Record<LibraryBookStatus, StatusMeta> = {
     label: 'Cast confirmation',
     icon: <IconCheckCircle className="w-3.5 h-3.5" />,
   },
+  voices_pending: {
+    color: 'library',
+    label: 'Cast ready',
+    icon: <IconCheckCircle className="w-3.5 h-3.5" />,
+  },
   generating: {
     color: 'peach',
     label: 'Generating',

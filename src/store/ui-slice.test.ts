@@ -75,6 +75,14 @@ describe('uiSlice — openBook status→stage routing', () => {
     expect(next.stage).toMatchObject({ kind: 'ready', bookId: 'ns', view: 'generate' });
   });
 
+  it('voices_pending → ready stage on cast view', () => {
+    const next = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.openBook({ id: 'ns', status: 'voices_pending' }),
+    );
+    expect(next.stage).toMatchObject({ kind: 'ready', bookId: 'ns', view: 'cast' });
+  });
+
   it('unknown status falls back to cast view', () => {
     const next = uiSlice.reducer(
       baseState({ kind: 'books' }),

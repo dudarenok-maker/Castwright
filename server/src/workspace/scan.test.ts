@@ -33,7 +33,7 @@ function bookSkeleton(
   title: string,
   opts: {
     castConfirmed?: boolean;
-    chapters?: Array<{ id: number; slug: string }>;
+    chapters?: Array<{ id: number; slug: string; generationState?: 'failed' }>;
     language?: string;
   } = {},
 ) {
@@ -56,7 +56,12 @@ function bookSkeleton(
       isStandalone: true,
       manuscriptFile: 'manuscript.txt',
       castConfirmed: !!opts.castConfirmed,
-      chapters: chapters.map((c) => ({ id: c.id, title: `Chapter ${c.id}`, slug: c.slug })),
+      chapters: chapters.map((c) => ({
+        id: c.id,
+        title: `Chapter ${c.id}`,
+        slug: c.slug,
+        ...(c.generationState ? { generationState: c.generationState } : {}),
+      })),
       coverGradient: ['#000', '#fff'],
       language: opts.language,
       createdAt: new Date().toISOString(),
@@ -549,5 +554,57 @@ describe('scanLibrary backfills audioModelKey from segments.json', () => {
 
     const after = JSON.parse(await fs.readFile(statePath, 'utf-8'));
     expect(after.chapters[0].duration).toBe('11:14');
+  });
+});
+
+describe('voices_pending status', () => {
+  it('castConfirmed + 0 rendered + 0 failed → voices_pending', async () => {
+    const { bookDir, bookId } = bookSkeleton('Cast Ready Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'cr-1' }, { id: 2, slug: 'cr-2' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    // no audio, no failure → generation not started
+    const b = (await flatten()).find((x) => x.title === 'Cast Ready Book')!;
+    expect(b.status).toBe('voices_pending');
+    expect(b.progress).toBeUndefined();
+  });
+
+  it('castConfirmed + 1 rendered → generating (not voices_pending)', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Started Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'sb-1' }, { id: 2, slug: 'sb-2' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeSegments(audioRoot, 'sb-1', 30 * 60);
+    writeFileSync(join(audioRoot, 'sb-1.mp3'), '');
+    const b = (await flatten()).find((x) => x.title === 'Started Book')!;
+    expect(b.status).toBe('generating');
+  });
+
+  it('castConfirmed + 0 rendered but a chapter failed → generating (not voices_pending)', async () => {
+    const { bookDir, bookId } = bookSkeleton('Failed First Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'ff-1', generationState: 'failed' }, { id: 2, slug: 'ff-2' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    const b = (await flatten()).find((x) => x.title === 'Failed First Book')!;
+    expect(b.status).toBe('generating');
+  });
+
+  it('castConfirmed + all rendered → complete (not voices_pending)', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Done Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'db-1' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeSegments(audioRoot, 'db-1', 20 * 60);
+    writeFileSync(join(audioRoot, 'db-1.mp3'), '');
+    const b = (await flatten()).find((x) => x.title === 'Done Book')!;
+    expect(b.status).toBe('complete');
   });
 });

@@ -38,6 +38,7 @@ export type LibraryBookStatus =
   | 'not_analysed'
   | 'analysing'
   | 'cast_pending'
+  | 'voices_pending'
   | 'generating'
   | 'complete'
   | 'unreadable'
@@ -437,9 +438,11 @@ function listFiles(path: string): string[] {
 
 const PRINCIPAL_LINE_FLOOR = 5;
 
-/** A confirmed cast means `generating` or `complete` (LibraryBook has no `castConfirmed`
-    field — only `status` — so this is the correct mapping). */
-const isConfirmed = (b: LibraryBook) => b.status === 'generating' || b.status === 'complete';
+/** A confirmed cast means `voices_pending`, `generating`, or `complete`
+    (LibraryBook has no `castConfirmed` field — only `status` — so this is the
+    correct mapping). */
+const isConfirmed = (b: LibraryBook) =>
+  b.status === 'voices_pending' || b.status === 'generating' || b.status === 'complete';
 
 interface CastCharForMemory {
   id: string;
@@ -725,12 +728,22 @@ async function scanBook(
   }
   const analysisComplete = chapterCount === 0 || analysedChapterCount >= chapterCount;
 
+  /* voices_pending — cast confirmed but generation not started. "Started" is
+     derived from disk: any audio rendered, or any chapter carrying a durable
+     failure marker. No persisted flag (see the design doc's Detection section).
+     The single transient window (first chapter mid-render, 0 done / 0 failed)
+     self-heals on the next completed-or-failed chapter. */
+  const generationStarted =
+    completedChapters > 0 || activeChapters.some((c) => c.generationState === 'failed');
+
   let status: LibraryBookStatus;
   if (unreadable) status = 'unreadable';
   else if (hasState && !manuscriptFile) status = 'orphaned';
   else if (!hasState && manuscriptFile) status = 'not_analysed';
   else if (state && (!hasUsableCast || !analysisComplete)) status = 'analysing';
   else if (state && !state.castConfirmed) status = 'cast_pending';
+  else if (state && state.castConfirmed && !generationStarted && completedChapters < chapterCount)
+    status = 'voices_pending';
   else if (state && state.castConfirmed && completedChapters < chapterCount) status = 'generating';
   else status = 'complete';
 

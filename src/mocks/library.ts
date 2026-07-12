@@ -110,6 +110,29 @@ export const MOCK_LIBRARY: LibraryResponse = {
                  >1 language and the En/Русский filter pills render under mocks. */
               language: 'ru',
             },
+            {
+              /* voices_pending — cast confirmed, generation not started. Reopens
+                 on the Cast view (voice design), shows the "Cast ready" badge.
+                 The e2e cast-first-landing spec opens this card. */
+              bookId: 'tw',
+              title: 'The Tidewatcher',
+              author: 'Marin Vale',
+              series: 'Standalones',
+              seriesPosition: null,
+              isStandalone: true,
+              status: 'voices_pending',
+              chapterCount: 9,
+              completedChapters: 0,
+              characterCount: 5,
+              /* Cast is confirmed, so characters carry voice ids (voices may
+                 still need designing — voices_pending is about generation not
+                 having started, not about design). */
+              voiceCount: 5,
+              voiceIds: ['narrator', 'v-carrick', 'v-mara', 'v-tane', 'v-brenna'],
+              lastWorkedOn: 'Just now',
+              coverGradient: ['#243B4A', '#0F0E0D'],
+              tags: [],
+            },
           ],
         },
       ],

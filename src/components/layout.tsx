@@ -995,6 +995,7 @@ export function Layout() {
           b.status !== 'not_analysed' &&
           b.status !== 'analysing' &&
           b.status !== 'cast_pending' &&
+          b.status !== 'voices_pending' &&
           b.status !== 'unreadable' &&
           b.status !== 'orphaned' &&
           b.bookId !== bookId,

@@ -95,6 +95,7 @@ interface Props {
 const IN_PROGRESS_STATUSES = new Set<LibraryBookStatus>([
   'analysing',
   'cast_pending',
+  'voices_pending',
   'generating',
   'not_analysed',
 ]);

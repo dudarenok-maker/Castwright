@@ -217,3 +217,20 @@ test.describe('fe-46 cast-first landing + voice-readiness gate', () => {
     await expect(gateHeading(page)).toBeHidden();
   });
 });
+
+/* voices_pending — a cast-confirmed book whose generation hasn't started
+   reopens on the Cast view (voice design), NOT the Generate tab. MOCK_LIBRARY
+   seeds 'tw' (The Tidewatcher) in that state with a "Cast ready" badge. */
+test.describe('voices_pending library reopen lands on Cast', () => {
+  test('opening a Cast ready book from the library lands on the Cast view', async ({ page }) => {
+    await page.goto('/');
+    /* The card wears the "Cast ready" badge for the voices_pending state. */
+    await expect(page.getByText('Cast ready').first()).toBeVisible({ timeout: 10_000 });
+    /* The mock book has no cover image, so the card renders its title heading
+       (not the book-cover-<id> img); the whole <article> is the click target,
+       so clicking the title bubbles to its onOpen handler. */
+    await page.getByRole('heading', { name: 'The Tidewatcher' }).click();
+    /* Lands on Cast (voice design), not #/books/tw/generate. */
+    await expect(page).toHaveURL(/#\/books\/tw\/cast/, { timeout: 5_000 });
+  });
+});

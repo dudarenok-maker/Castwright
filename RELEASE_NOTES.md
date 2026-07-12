@@ -1,3 +1,7 @@
+# Castwright 1.14.0
+
+- **A book you've cast but haven't started narrating now opens straight to voice design — and wears a "Cast ready" badge in your library.** Once you approve a cast, that book used to jump you to the Generate screen the next time you opened it, skipping right past designing your characters' voices. Now it lands on the Cast view where voice design lives, and its library card shows a clear "Cast ready" badge so you can tell at a glance which books are waiting for you to design voices and press go. Books that are already generating still open to Generate, exactly as before.
+
 # Castwright 1.13.0
 
 - **Listening on your phone or tablet now works right after you install — no setup ritual.** Reaching Castwright from another device on your home network used to mean digging up a special command and hand-generating certificates first. Now every install starts up ready for your phone and tablet automatically: it serves a secure connection and keeps it locked to your own devices — you pair a phone by scanning the on-screen code. The one thing each phone still needs, once, is to trust Castwright's local certificate, and the pairing screen walks you through it. And if certificates can't be set up on a given machine, Castwright quietly stays on the local-only connection instead of refusing to start.
