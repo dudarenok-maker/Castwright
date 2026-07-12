@@ -298,7 +298,7 @@ export function StatusPopover({
           <button
             type="button"
             onClick={onOpenRevisions}
-            className="inline-flex items-center gap-2 px-3 py-1.5 min-h-[44px] sm:min-h-0 rounded-full bg-peach/15 hover:bg-peach/25 text-magenta text-xs font-semibold transition-colors"
+            className="inline-flex items-center gap-2 px-3 py-1.5 min-h-[44px] fine-pointer:min-h-0 rounded-full bg-peach/15 hover:bg-peach/25 text-magenta text-xs font-semibold transition-colors"
           >
             {pendingRevisionsCount} revision{pendingRevisionsCount === 1 ? '' : 's'} pending · Open
           </button>

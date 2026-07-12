@@ -372,6 +372,7 @@ export function BookLibraryView({
         filters={filters}
         viewMode={viewMode}
         setViewMode={setViewMode}
+        showViewToggle={!isMobileViewport}
         onStartNew={onStartNew}
         onImportPortable={onImportPortable}
         search={search}

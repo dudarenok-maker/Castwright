@@ -130,7 +130,7 @@ function GuidedWizard({
         <button
           type="button"
           onClick={onExit}
-          className="inline-flex items-center gap-1 min-h-[44px] sm:min-h-0 text-sm font-medium text-ink/60 hover:text-ink"
+          className="inline-flex items-center gap-1 min-h-[44px] fine-pointer:min-h-0 text-sm font-medium text-ink/60 hover:text-ink"
         >
           &lsaquo; Setup overview
         </button>
@@ -163,7 +163,7 @@ function GuidedWizard({
           type="button"
           onClick={() => onStepChange(stepIndex - 1)}
           disabled={isFirst}
-          className="min-h-[44px] sm:min-h-0 px-4 py-2 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/70 hover:bg-ink/5 disabled:opacity-40 disabled:hover:bg-white disabled:cursor-not-allowed"
+          className="min-h-[44px] fine-pointer:min-h-0 px-4 py-2 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink/70 hover:bg-ink/5 disabled:opacity-40 disabled:hover:bg-white disabled:cursor-not-allowed"
         >
           Back
         </button>
@@ -174,7 +174,7 @@ function GuidedWizard({
           <button
             type="button"
             onClick={() => onStepChange(stepIndex + 1)}
-            className="min-h-[44px] sm:min-h-0 px-5 py-2 rounded-full bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
+            className="min-h-[44px] fine-pointer:min-h-0 px-5 py-2 rounded-full bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
           >
             Next
           </button>
@@ -312,7 +312,7 @@ function SetupSummary({
         <button
           type="button"
           onClick={onRefetch}
-          className="shrink-0 min-h-[44px] sm:min-h-0 px-3 py-1.5 rounded-full border border-ink/20 bg-white text-xs font-medium text-ink hover:bg-ink/5"
+          className="shrink-0 min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full border border-ink/20 bg-white text-xs font-medium text-ink hover:bg-ink/5"
         >
           Re-check
         </button>

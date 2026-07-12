@@ -90,7 +90,7 @@ export function SentenceInstructControl({
         className={
           current
             ? `mx-0.5 inline-flex items-center min-h-[20px] px-1.5 rounded-full text-[10px] font-medium ${inaudible ? 'opacity-50 text-ink/40 bg-ink/5' : 'text-purple-deep/70 bg-purple-deep/5'}`
-            : 'mx-0.5 inline-flex items-center justify-center min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 sm:w-4 sm:h-4 rounded-full text-ink/30 opacity-0 group-hover:opacity-100 focus:opacity-100 coarse-pointer:opacity-40 align-middle transition-opacity'
+            : 'mx-0.5 inline-flex items-center justify-center min-w-[44px] min-h-[44px] fine-pointer:min-w-0 fine-pointer:min-h-0 sm:w-4 sm:h-4 rounded-full text-ink/30 opacity-0 group-hover:opacity-100 focus:opacity-100 coarse-pointer:opacity-40 align-middle transition-opacity'
         }
       >
         {preview ?? <span className="text-xs leading-none" aria-hidden>🎬</span>}
@@ -123,10 +123,10 @@ export function SentenceInstructControl({
             </span>
           )}
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => commit('')} className="px-2 py-1 text-xs text-ink/60 hover:text-magenta min-h-[44px] sm:min-h-0">
+            <button type="button" onClick={() => commit('')} className="px-2 py-1 text-xs text-ink/60 hover:text-magenta min-h-[44px] fine-pointer:min-h-0">
               Clear
             </button>
-            <button type="button" onClick={() => commit(draft)} className="px-2 py-1 text-xs font-semibold text-ink hover:text-magenta min-h-[44px] sm:min-h-0">
+            <button type="button" onClick={() => commit(draft)} className="px-2 py-1 text-xs font-semibold text-ink hover:text-magenta min-h-[44px] fine-pointer:min-h-0">
               Save
             </button>
           </div>

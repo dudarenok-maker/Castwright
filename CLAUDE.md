@@ -370,7 +370,7 @@ The app drives on phone + tablet over LAN HTTPS (plan 81 archive: `docs/features
 - Manuscript paragraph boundary: PointerEvent handler covers mouse + touch + pen in one path (`src/views/manuscript.tsx`).
 - Hover-reveal labels: `coarse-pointer:opacity-60` keeps them faintly visible on touch devices (`src/views/manuscript.tsx` boundary handle).
 
-**Touch targets:** every interactive control ≥44×44 px on phone per WCAG 2.5.5. Use `min-h-[44px] sm:min-h-0` so phones get the touch target without changing desktop sizing.
+**Touch targets:** every interactive control ≥44×44 px on **any touch device** per WCAG 2.5.5. Use `min-h-[44px] fine-pointer:min-h-0` (and `min-w-[44px] fine-pointer:min-w-0` for icon-only buttons) so phones **and tablets** get the target while mouse (fine-pointer) devices stay compact. The `coarse-pointer`/`fine-pointer` variants are defined in `src/styles.css` (`@media (pointer: coarse|fine)`); for a control with no base size, add `coarse-pointer:min-h-[44px]` instead. This superseded the old `min-h-[44px] sm:min-h-0` phone-only pattern (2026-07-12 touch-bug sweep) — `sm:` removed the target at ≥640px, i.e. exactly the tablet range, so tablet toggles/pills read as unresponsive to touch.
 
 **LAN access for real-device testing:**
 

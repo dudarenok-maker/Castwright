@@ -108,7 +108,7 @@ export function AdminPill({
       aria-label={label}
       title={label}
       data-testid="topbar-admin-link"
-      className={`text-xs font-mono px-2 py-1 rounded-md transition-colors hover:bg-ink/5 inline-flex items-center gap-1.5 ${active ? 'bg-ink/10 ring-1 ring-ink/20' : 'text-ink/50'}`}
+      className={`text-xs font-mono px-2 py-1 min-h-[44px] fine-pointer:min-h-0 rounded-md transition-colors hover:bg-ink/5 inline-flex items-center gap-1.5 ${active ? 'bg-ink/10 ring-1 ring-ink/20' : 'text-ink/50'}`}
     >
       <span
         className={`inline-block w-2 h-2 rounded-full ${DOT_CLASS[health]}`}

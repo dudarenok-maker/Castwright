@@ -784,7 +784,7 @@ export function CastView({
                 <button
                   data-testid="pin-higher-quality"
                   onClick={() => setPinDialogOpen(true)}
-                  className="min-h-[44px] sm:min-h-0 px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
+                  className="min-h-[44px] fine-pointer:min-h-0 px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
                   title="Render all Qwen cast members at the 1.7B quality tier (expressive prosody)"
                 >
                   Pin higher quality
@@ -792,7 +792,7 @@ export function CastView({
                 <button
                   data-testid="reset-tier"
                   onClick={() => setResetDialogOpen(true)}
-                  className="min-h-[44px] sm:min-h-0 px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
+                  className="min-h-[44px] fine-pointer:min-h-0 px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
                   title="Reset all Qwen cast members to the 0.6B default tier"
                 >
                   Reset tier
@@ -853,7 +853,7 @@ export function CastView({
             <button
               type="button"
               onClick={handleTurnOnProsody}
-              className="shrink-0 min-h-[44px] sm:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 text-amber-900 text-xs font-semibold"
+              className="shrink-0 min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 text-amber-900 text-xs font-semibold"
             >
               Turn on
             </button>
@@ -971,7 +971,7 @@ export function CastView({
                   key={b.key}
                   onClick={() => toggleStatusFilter(b.key)}
                   aria-pressed={active}
-                  className={`min-h-[44px] sm:min-h-0 inline-flex items-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-full text-sm font-medium transition-colors ${
+                  className={`min-h-[44px] fine-pointer:min-h-0 inline-flex items-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-full text-sm font-medium transition-colors ${
                     active
                       ? 'bg-ink text-canvas'
                       : 'border border-ink/10 bg-white text-ink/70 hover:text-ink hover:bg-ink/4'
@@ -987,7 +987,7 @@ export function CastView({
             {statusFilters.length > 0 && (
               <button
                 onClick={() => setStatusFilters([])}
-                className="min-h-[44px] sm:min-h-0 inline-flex items-center gap-1 px-3 py-2 sm:py-1.5 rounded-full text-sm font-medium text-ink/60 hover:text-ink"
+                className="min-h-[44px] fine-pointer:min-h-0 inline-flex items-center gap-1 px-3 py-2 sm:py-1.5 rounded-full text-sm font-medium text-ink/60 hover:text-ink"
               >
                 <IconClose className="w-3.5 h-3.5" />
                 Clear

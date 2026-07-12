@@ -121,7 +121,7 @@ export function SettingsSection({
             data-config-action
             onMouseDown={() => beginConfigAction()}
             onClick={onResetSection}
-            className="shrink-0 px-2.5 py-1 rounded-lg border border-ink/15 bg-white text-xs text-ink/60 hover:bg-ink/4 min-h-[44px] sm:min-h-0"
+            className="shrink-0 px-2.5 py-1 rounded-lg border border-ink/15 bg-white text-xs text-ink/60 hover:bg-ink/4 min-h-[44px] fine-pointer:min-h-0"
           >
             Reset section
           </button>
@@ -262,7 +262,7 @@ function SettingsAccordionWithNav({
                     type="button"
                     onClick={() => requestOpen(s.id)}
                     className={[
-                      'w-full text-left text-sm py-1.5 border-l-2 transition-colors min-h-[44px] sm:min-h-0',
+                      'w-full text-left text-sm py-1.5 border-l-2 transition-colors min-h-[44px] fine-pointer:min-h-0',
                       'flex items-center gap-2',
                       isActive
                         ? 'border-magenta pl-3 text-magenta font-semibold'

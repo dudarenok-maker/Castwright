@@ -96,7 +96,7 @@ function JumpLink({
         el?.scrollIntoView?.({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
         el?.focus?.({ preventScroll: true });
       }}
-      className={`inline-flex items-center min-h-[44px] sm:min-h-0 text-sm font-medium text-ink/70 hover:text-magenta transition-colors ${className}`}
+      className={`inline-flex items-center min-h-[44px] fine-pointer:min-h-0 text-sm font-medium text-ink/70 hover:text-magenta transition-colors ${className}`}
     >
       {label}
     </a>
@@ -174,7 +174,7 @@ export function HelpView() {
             <button
               type="button"
               onClick={() => dispatch(startLinearTour())}
-              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-ink text-canvas px-4 py-2 text-sm font-semibold min-h-[44px] sm:min-h-0"
+              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-ink text-canvas px-4 py-2 text-sm font-semibold min-h-[44px] fine-pointer:min-h-0"
             >
               Take the tour
             </button>
@@ -221,7 +221,7 @@ export function HelpView() {
               {shortcuts.map((s) => (
                 <div
                   key={s.label}
-                  className="flex items-center justify-between gap-4 px-4 py-3 min-h-[44px] sm:min-h-0"
+                  className="flex items-center justify-between gap-4 px-4 py-3 min-h-[44px] fine-pointer:min-h-0"
                 >
                   <dt className="text-sm text-ink/80">{s.label}</dt>
                   <dd>

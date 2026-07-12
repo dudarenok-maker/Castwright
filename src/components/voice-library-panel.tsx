@@ -168,7 +168,7 @@ export function VoiceLibraryPanel({
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search voices"
             aria-label="Search voices"
-            className="w-full min-h-[44px] sm:min-h-0 pl-9 pr-3 py-2 rounded-full bg-ink/4 border border-ink/10 text-xs focus:outline-hidden focus:border-ink/30"
+            className="w-full min-h-[44px] fine-pointer:min-h-0 pl-9 pr-3 py-2 rounded-full bg-ink/4 border border-ink/10 text-xs focus:outline-hidden focus:border-ink/30"
           />
         </div>
       </div>
@@ -205,7 +205,7 @@ export function VoiceLibraryPanel({
           <button
             type="button"
             onClick={() => setShowAll(true)}
-            className="w-full text-center text-xs text-ink/50 hover:text-ink py-2 min-h-[44px] sm:min-h-0"
+            className="w-full text-center text-xs text-ink/50 hover:text-ink py-2 min-h-[44px] fine-pointer:min-h-0"
           >
             {hiddenCount} hidden · can&apos;t read {languageLabel} ·{' '}
             <span className="underline">show all</span>

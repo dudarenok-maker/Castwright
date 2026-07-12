@@ -239,7 +239,7 @@ export function ConfirmCastView({
         <div className="mt-10 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3">
           <button
             onClick={onReanalyse}
-            className="text-sm font-medium text-ink/60 hover:text-ink min-h-[44px] sm:min-h-0 self-center sm:self-auto"
+            className="text-sm font-medium text-ink/60 hover:text-ink min-h-[44px] fine-pointer:min-h-0 self-center sm:self-auto"
           >
             Re-analyse manuscript
           </button>
@@ -552,7 +552,7 @@ function ConfirmCharacterCard({
                every viewport. Min-h on phone is a belt-and-braces guard
                for shorter book titles. */
             <label
-              className="flex items-start gap-3 text-xs text-ink/60 pl-9 cursor-pointer select-none min-h-[44px] sm:min-h-0"
+              className="flex items-start gap-3 text-xs text-ink/60 pl-9 cursor-pointer select-none min-h-[44px] fine-pointer:min-h-0"
               onKeyDown={(e) => {
                 if (e.key === ' ' || e.key === 'Enter') e.stopPropagation();
               }}
