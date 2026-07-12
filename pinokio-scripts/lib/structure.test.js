@@ -34,6 +34,7 @@ const LIFECYCLE_SCRIPTS = ['install', 'start', 'stop', 'update', 'reset'];
 const STATES = [
   { installed: false, running: false, url: null },
   { installed: true, running: false, url: null },
+  { installed: true, running: true, url: null }, // startup window: running, URL not captured yet
   { installed: true, running: true, url: 'http://localhost:8080' },
 ];
 const stubInfo = (s) => ({
