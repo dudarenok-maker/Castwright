@@ -3,8 +3,10 @@ import { AUDIO_TAGS, stripAudioTags } from './audio-tags';
 
 describe('audio-tags (frontend mirror)', () => {
   it('vocabulary matches the server closed set (drift guard)', () => {
-    /* MUST equal server/src/parsers/audio-tags.ts AUDIO_TAGS. If the server adds a
-       tag, add it here too or the staleness diff stops stripping it. */
+    /* MUST equal server/src/parsers/audio-tags.ts AUDIO_TAGS. The server side pins the
+       SAME literal (server/src/parsers/audio-tags.test.ts), so a tag added on one side
+       only breaks a test on that side — forcing the mirror before the staleness diff can
+       silently stop stripping the new tag. Keep the two literals identical. */
     expect([...AUDIO_TAGS]).toEqual([
       'emphatic',
       'shouting',

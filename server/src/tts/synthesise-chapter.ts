@@ -305,8 +305,8 @@ export interface ChapterSegment {
   startSec: number;
   /** Exclusive end time in the chapter audio, in seconds. */
   endSec: number;
-  /** #1105 — djb2-base36 hash of this group's SPOKEN sentence text (inline audio
-      tags stripped, matching the frontend staleness diff), stamped so the frontend
+  /** #1105 — djb2-base36 hash of this group's TAG-STRIPPED sentence text (inline
+      audio tags removed, matching the frontend staleness diff), stamped so the frontend
       can flag a chapter whose text was edited after it rendered (synth is keyed on
       text → stale on every engine). Absent on the title beat (no manuscript sentence)
       and on pre-#1105 renders. See audio/segments-io.ts textHashForStale. */
@@ -1898,12 +1898,14 @@ export async function synthesiseChapter(
       groupIndex: group.index,
       characterId: group.characterId,
       sentenceIds: group.sentenceIds.slice(),
-      /* Stamp the hash over the SPOKEN (tag-stripped) text so it matches what the
-         frontend staleness diff hashes (isChapterTextEditedSinceRender also strips).
-         Inline audio tags never reach the engine, so a `[emphatic] Ende.` sentence
-         rendered as `Ende.` must not read as edited. group.text is usually already
-         tag-stripped upstream (emotion-from-tags at analysis-persist); stripping here
-         is idempotent and pins the contract for any un-migrated book too. */
+      /* Stamp the hash over the TAG-STRIPPED text so it matches what the frontend
+         staleness diff hashes (isChapterTextEditedSinceRender also strips). Inline audio
+         tags never reach the engine, so a `[emphatic] Ende.` sentence rendered as `Ende.`
+         must not read as edited. Only the tag is stripped for the hash — the further
+         normaliseForTts transforms (dashes/all-caps/numbers) are ephemeral and NOT hashed,
+         so both sides hash the identically tag-stripped text. group.text is usually already
+         tag-stripped upstream (emotion-from-tags at analysis-persist); stripping here is
+         idempotent and pins the contract for any un-migrated book too. */
       textHash: textHashForStale(stripAudioTags(group.text)),
       instructHash,
       startSec,

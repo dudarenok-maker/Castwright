@@ -82,12 +82,15 @@ export function isChapterReassignedSinceRender(
 
    djb2 base-36, byte-identical to server/src/audio/segments-io.ts textHashForStale
    (the cross-package contract is pinned by a shared vector in both test files).
-   The hash is over the SPOKEN text — inline audio tags (`[emphatic]`, `[shouting]`,
-   …) are stripped on BOTH sides before hashing (server: synthesise-chapter stamps
-   `textHashForStale(stripAudioTags(group.text))`; here: `isChapterTextEditedSinceRender`
-   strips before hashing). The tag never reaches the engine, so it must not count as a
-   text change — the manuscript keeps it for display, but hashing it raw would leave a
-   tagged sentence permanently, un-clearably "stale". */
+   The hash is over the TAG-STRIPPED text — inline audio tags (`[emphatic]`,
+   `[shouting]`, …) are stripped on BOTH sides before hashing (server: synthesise-chapter
+   stamps `textHashForStale(stripAudioTags(group.text))`; here:
+   `isChapterTextEditedSinceRender` strips before hashing). The tag never reaches the
+   engine, so it must not count as a text change — the manuscript keeps it for display,
+   but hashing it raw would leave a tagged sentence permanently, un-clearably "stale".
+   (Only the tag is reconciled here; the further TTS normalisation `normaliseForTts`
+   applies at the synth boundary — dashes, all-caps, number expansion — is ephemeral and
+   not part of the stamped hash, so both sides hash the identically tag-stripped text.) */
 export function textHashForStale(s: string): string {
   let h = 5381;
   for (let i = 0; i < s.length; i += 1) h = ((h << 5) + h + s.charCodeAt(i)) | 0;

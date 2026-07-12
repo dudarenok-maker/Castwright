@@ -2,12 +2,35 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  AUDIO_TAGS,
   tagShoutingDialog,
   tagExcitedDialog,
   tagHesitantDialog,
   tagMarkdownEmphasis,
   tagHtmlEmphasis,
 } from './audio-tags.js';
+
+describe('AUDIO_TAGS (cross-package drift guard)', () => {
+  it('matches the frontend mirror literal (src/lib/audio-tags.ts)', () => {
+    /* The staleness diff strips these tags on BOTH sides before hashing
+       (server: synthesise-chapter stamps textHashForStale(stripAudioTags(group.text));
+       frontend: isChapterTextEditedSinceRender hashes stripAudioTags(liveText)). If a
+       tag is added here but not mirrored to src/lib/audio-tags.ts, the frontend stops
+       stripping it and the "Sentences reassigned" false positive resurfaces for the new
+       tag — silently, since each side pins only its own list. Pinning BOTH lists to the
+       SAME literal (this test + src/lib/audio-tags.test.ts) makes a one-sided change
+       break a test, forcing the mirror. Keep the two literals identical. */
+    expect([...AUDIO_TAGS]).toEqual([
+      'emphatic',
+      'shouting',
+      'whispers',
+      'laughs',
+      'sighs',
+      'excited',
+      'hesitant',
+    ]);
+  });
+});
 
 describe('tagShoutingDialog', () => {
   it('tags long all-caps dialogue and title-cases the run', () => {

@@ -11,9 +11,10 @@
    tagged sentence's live text never matches its render-time hash and the
    chapter reads permanently — and un-clearably — "stale". */
 
-/* MUST equal server/src/parsers/audio-tags.ts AUDIO_TAGS. A shared strip vector
-   is pinned in this file's test AND text-normalize.test.ts so a drift on either
-   side fails loudly. */
+/* MUST equal server/src/parsers/audio-tags.ts AUDIO_TAGS. Both lists are pinned to
+   the same literal (src/lib/audio-tags.test.ts + server/src/parsers/audio-tags.test.ts)
+   and a shared strip vector is pinned in this file's test AND text-normalize.test.ts,
+   so a one-sided drift breaks a test on that side. */
 export const AUDIO_TAGS = [
   'emphatic',
   'shouting',
