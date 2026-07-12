@@ -567,9 +567,10 @@ _MODEL_LOAD_FAULT_EXIT_CODE = 44
 # (which drops every resident model and re-preloads Kokoro). On the COMMON
 # (intermittent) fault this recovers in one extra reload with no recycle at all.
 # The trade is on the RARE genuinely-persistent fault: we run up to this many full
-# reloads (holding the single-flight base-load lock, ~3× the pre-retry wait)
-# before scheduling the recycle — a bounded cost we accept because that path is
-# rare (~2/week) and the recycle it precedes is itself ~15-20s. A fixed constant,
+# reloads (holding the single-flight base-load lock, ~3× the pre-retry wait, on the
+# order of ~24-30s — within the server's 60s /api/sidecar/load budget) before
+# scheduling the recycle — a bounded cost we accept because that path is rare
+# (~2/week) and the recycle it precedes is itself ~15-20s. A fixed constant,
 # not an env knob: the retry count isn't something an operator needs to tune, and
 # leaving it fixed rules out both an unbounded-loop footgun and an import-time
 # parse fault.
@@ -2179,15 +2180,28 @@ class QwenEngine(Engine):
                 inner = None
                 if not is_meta_fault:
                     _reclaim_host_and_vram()
-                    # A non-meta fault (CUDA OOM &c.). If a meta fault ALREADY fired
-                    # on an earlier attempt of THIS load, the process is in the
-                    # known-bad state only a fresh sidecar clears — preserve the
-                    # pre-retry guarantee (a meta fault always schedules the recycle),
-                    # keyed on the meta fault that is the real trigger, before
-                    # re-raising. A non-meta fault with NO prior meta fault is the
-                    # ordinary OOM path: reclaim + re-raise, no recycle.
                     if meta_fault_detail is not None:
+                        # A meta fault ALREADY fired on an earlier attempt of THIS
+                        # load; the retry then hit an unrelated fault (e.g. a CUDA
+                        # OOM from reloading under pressure). The meta fault is the
+                        # real trigger, so preserve the pre-retry contract: schedule
+                        # the recycle AND surface the META signal, not the retry's
+                        # fault. Callers classify on the exception (e.g.
+                        # _ensure_base17_for_mint maps the meta NotImplementedError to
+                        # its 503 'corrupt' fallback but an OOM to a generic 500), so
+                        # re-raising the OOM here would silently flip that signal.
+                        # `from None`: don't chain the secondary exception (its
+                        # traceback would re-pin the partial we just reclaimed).
+                        log.warning(
+                            "Qwen model=%s retry after a meta-tensor fault hit a "
+                            "secondary fault (%s) — recycling on the meta fault and "
+                            "surfacing it as the signal.",
+                            model_id, detail,
+                        )
                         _schedule_model_load_fault_restart(model_id, meta_fault_detail)
+                        raise NotImplementedError(meta_fault_detail) from None
+                    # A non-meta fault with NO prior meta fault is the ordinary OOM
+                    # path: reclaim + re-raise, no recycle (unchanged).
                     raise
                 meta_fault_detail = detail
                 if attempt >= _QWEN_META_LOAD_ATTEMPTS:

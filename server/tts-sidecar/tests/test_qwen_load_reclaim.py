@@ -282,13 +282,17 @@ class _MetaThenOomQwen:
         return cls(model_id, inner)
 
 
-def test_meta_fault_then_nonmeta_retry_still_schedules_recycle(qwen_meta_tensor_failure_runtime, monkeypatch) -> None:
+def test_meta_fault_then_nonmeta_retry_schedules_recycle_and_surfaces_meta_signal(
+    qwen_meta_tensor_failure_runtime, monkeypatch
+) -> None:
     """Regression (code-review high, 2026-07-12): a meta fault on attempt 1
-    followed by a NON-meta fault (CUDA OOM) on the retry must STILL schedule the
-    self-recycle — the process already hit the meta fault, so it needs the fresh
-    sidecar. Without this the retry loop drops the recycle the pre-retry code
-    always issued on a meta fault, wedging the sidecar on bare 500s. The recycle
-    is keyed on the meta fault (its detail), not the OOM."""
+    followed by a NON-meta fault (CUDA OOM) on the retry must (a) STILL schedule
+    the self-recycle — the process already hit the meta fault, so it needs the
+    fresh sidecar — and (b) re-raise the META signal (NotImplementedError), NOT
+    the retry's OOM. Callers classify on the exception type (e.g.
+    _ensure_base17_for_mint maps the meta fault to its 503 'corrupt' fallback but
+    an OOM to a generic 500), so surfacing the OOM here would silently flip that
+    signal. The recycle is keyed on the meta fault detail."""
     engine = qwen_meta_tensor_failure_runtime
     _MetaThenOomQwen._loads = 0
     monkeypatch.setattr(sys.modules["qwen_tts"], "Qwen3TTSModel", _MetaThenOomQwen)
@@ -297,7 +301,7 @@ def test_meta_fault_then_nonmeta_retry_still_schedules_recycle(qwen_meta_tensor_
         main, "_schedule_model_load_fault_restart",
         lambda *a: scheduled.append(a),
     )
-    with pytest.raises(RuntimeError, match="out of memory"):
+    with pytest.raises(NotImplementedError, match="meta tensor"):
         engine._load_qwen_model(engine.BASE_MODEL)
     assert _MetaThenOomQwen._loads == 2, "meta fault on attempt 1, OOM on the retry"
     assert len(scheduled) == 1, "the earlier meta fault must still schedule the recycle"
