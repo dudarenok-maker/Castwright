@@ -63,12 +63,6 @@ _Full detail + acceptance:_ [#396](https://github.com/dudarenok-maker/Castwright
 - _Benefit:_ _(user / strategic):_ Castwright becomes drivable by whatever agent the user already lives in — "produce this book overnight and tell me when it's exported" becomes a one-line prompt instead of an evening of clicking. Aligns the product with the agent-first direction of every major harness, and the MCP e2e doubles as the missing whole-pipeline integration test.
 _Full detail + acceptance:_ [#721](https://github.com/dudarenok-maker/Castwright/issues/721).
 
-#### `fe-7` — Per-voice row sample-preview button inside `<VoiceOverridePicker>` ([#416](https://github.com/dudarenok-maker/Castwright/issues/416))
-
-- _What:_ Add a per-row Play button that routes through `playSampleWithAutoLoad` (same helper the existing "Preview voice" / cast-row swatch use). Hover/focus reveals the icon on pointer devices; `coarse-pointer:opacity-60` keeps it faintly visible on touch. Sample text comes from the same drawer-level `previewText` the candidate-preview block uses. Single-row in-flight gate (the helper already coalesces concurrent clicks).
-- _Benefit:_ shortens the "scrolled past 40 Kokoro voices, want to hear three before committing" flow from "pick → close → preview from drawer → pick another" to "▶ in-row, ▶ in-row, pick the one I like." Pairs with the autocomplete added in this bundle — search narrows the list, in-row preview judges the few remaining options.
-_Full detail + acceptance:_ [#416](https://github.com/dudarenok-maker/Castwright/issues/416).
-
 #### `fs-35` — per-chapter Detect-emotions trigger (fs-33 follow-up) ([#592](https://github.com/dudarenok-maker/Castwright/issues/592))
 
 - _What:_ Follow-up to fs-33 (#510), shipped whole-book only. Add a per-chapter "Detect emotions" option (the emotion-only backfill pass scoped to the current chapter) alongside the whole-book trigger in the manuscript header.
@@ -118,13 +112,6 @@ _Full detail + acceptance:_ [#1004](https://github.com/dudarenok-maker/Castwrigh
 - _What:_ The new title segment in `segments.json` (kind: `'title'`, empty `sentenceIds[]`) is currently filtered out at the `ChapterAudio` API boundary in `server/src/routes/chapter-audio.ts` because the wire contract types `sentenceId` as a required integer. To surface the title on the listen-view timeline (a labelled "TITLE" pill anchored at the start of the chapter, ~3 s wide including silence), widen the API segment shape so `sentenceId` is optional and add an optional `kind?: 'title' | 'sentence'` discriminator, regenerate `src/lib/api-types.ts`, then teach `src/components/listen/listen-player-region.tsx` to render title-kind segments differently from sentence-kind segments.
 - _Benefit:_ visual cue that matches the audible cue — listener sees "you're hearing the title now" before the body segments start. Today the title beat is audible-only.
 _Full detail + acceptance:_ [#412](https://github.com/dudarenok-maker/Castwright/issues/412).
-
-#### `fs-60` — Coqui XTTS per-language engine eligibility (gap-fill beyond Qwen) ([#1005](https://github.com/dudarenok-maker/Castwright/issues/1005))
-
-- _What:_ Per-language **engine eligibility** for Coqui XTTS on the five languages Qwen already fully supports (en/ru/es/fr/de, per fs-41/fs-50) — lets a non-English book use Coqui voices instead of being hard-forced to a designed Qwen voice with no recovery path when Qwen is unavailable/undesigned/erroring. Primary driver is **resilience** (a fallback path for non-English books, mirroring English's existing Kokoro fallback), plus this is the plumbing fs-38 (voice cloning) needs to let a cloned voice speak a non-English book at all. **Narrowed on design (2026-07-04)** — see `docs/superpowers/specs/2026-07-04-fs60-xtts-language-eligibility-design.md`. The original ask bundled Kokoro non-English support and a broader language set into this issue; design work found those are much larger, differently-shaped problems and split them out: Kokoro non-English (G2P backend + voice packs — real new-dependency work) → `fs-69` (#1302) XTTS languages beyond this five (zh-cn, ja, ko, ar, hi, nl, pl, tr, cs, hu, it, pt — real analyze-side scope) → `fs-70` (#1303) Cross-book/cross-language voice-identity check (no real trigger until a multi-language series or fs-38 exists) → `fs-71` (#1304)
-- _Status:_ **Code + automated tests shipped** — implementation plan [`docs/features/249-fs60-xtts-language-eligibility.md`](features/249-fs60-xtts-language-eligibility.md) (`status: active`). **Live-GPU acceptance is the remaining owed item** before this is fully shipped (the real render-time Coqui fallback + Qwen/Coqui evict-and-reload sequencing on an 8 GB box has not been exercised — the landed e2e coverage is mock-mode UI-seam + pill assertions only). Row stays until that walkthrough runs and the plan flips to `stable`.
-- _Benefit:_ Resilience for non-English generation (no hard-fail when Qwen is unavailable); unblocks fs-38 voice cloning's XTTS path for non-English books. Lowest strategic priority.
-_Full detail + acceptance:_ [#1005](https://github.com/dudarenok-maker/Castwright/issues/1005).
 
 #### `fs-9` — Configurable chapter-title silence durations ([#411](https://github.com/dudarenok-maker/Castwright/issues/411))
 
