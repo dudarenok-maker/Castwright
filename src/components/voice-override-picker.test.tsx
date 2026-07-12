@@ -5,9 +5,24 @@
    pick passes null to onChange. */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { VoiceOverridePicker } from './voice-override-picker';
+import { playBaseVoiceSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import type { BaseVoice } from '../lib/types';
+
+vi.mock('../lib/play-sample-with-auto-load', () => ({
+  playBaseVoiceSampleWithAutoLoad: vi.fn().mockResolvedValue({ analyzerEvicted: false }),
+}));
+
+vi.mock('../lib/use-sample-playback', () => ({
+  useSamplePlayback: () => ({
+    isPlaying: false,
+    currentUrl: null,
+    play: vi.fn(),
+    stop: vi.fn(),
+    pause: vi.fn(),
+  }),
+}));
 
 const baseCatalog: BaseVoice[] = [
   { engine: 'coqui', name: 'Asya Anara' },
@@ -29,6 +44,8 @@ function defaultProps(overrides: Partial<React.ComponentProps<typeof VoiceOverri
     selectedValue: 'auto',
     baseVoicesLoaded: true,
     onChange: vi.fn<OnChange>(),
+    previewText: 'Hello, this is a sample.',
+    previewModelKey: 'kokoro-v1' as const,
     ...overrides,
   };
 }
@@ -37,6 +54,8 @@ describe('VoiceOverridePicker', () => {
   let onChange: ReturnType<typeof vi.fn<OnChange>>;
   beforeEach(() => {
     onChange = vi.fn<OnChange>();
+    vi.mocked(playBaseVoiceSampleWithAutoLoad).mockClear();
+    vi.mocked(playBaseVoiceSampleWithAutoLoad).mockResolvedValue({ analyzerEvicted: false });
   });
 
   it('shows the Auto resolved-voice label on the trigger when selectedValue is auto', () => {
@@ -81,6 +100,46 @@ describe('VoiceOverridePicker', () => {
     fireEvent.click(screen.getByRole('button', { name: /Model voice override/i }));
     fireEvent.click(screen.getByRole('option', { name: /Asya Anara/ }));
     expect(onChange).toHaveBeenCalledWith({ engine: 'coqui', name: 'Asya Anara' });
+  });
+
+  it('shows a per-row Play button on voice rows but not the Auto row', () => {
+    render(<VoiceOverridePicker {...defaultProps({ onChange })} />);
+    fireEvent.click(screen.getByRole('button', { name: /Model voice override/i }));
+    expect(screen.getByRole('button', { name: /Play sample for Asya Anara/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Play sample for Damien Black/i })).toBeTruthy();
+    /* The Auto row's option name starts with "Auto" — assert no Play
+       button carries that as its accessible name. */
+    expect(
+      screen.queryByRole('button', { name: /^Play sample for Auto/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('clicking a row Play button auditions that voice without picking it', async () => {
+    render(
+      <VoiceOverridePicker
+        {...defaultProps({ onChange, previewText: 'Custom sample line.' })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Model voice override/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Play sample for Asya Anara/i }));
+
+    await waitFor(() => expect(playBaseVoiceSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    const call = vi.mocked(playBaseVoiceSampleWithAutoLoad).mock.calls[0][0];
+    expect(call.args).toEqual({
+      engine: 'coqui',
+      speakerName: 'Asya Anara',
+      modelKey: 'kokoro-v1',
+      text: 'Custom sample line.',
+    });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('picking the row (not the Play button) still commits the override', () => {
+    render(<VoiceOverridePicker {...defaultProps({ onChange })} />);
+    fireEvent.click(screen.getByRole('button', { name: /Model voice override/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Asya Anara/ }));
+    expect(onChange).toHaveBeenCalledWith({ engine: 'coqui', name: 'Asya Anara' });
+    expect(playBaseVoiceSampleWithAutoLoad).not.toHaveBeenCalled();
   });
 
   it('uses the attribute-driven label when the tab differs from the auto-resolved engine', () => {

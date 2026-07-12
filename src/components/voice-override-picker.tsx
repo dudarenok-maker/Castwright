@@ -12,8 +12,13 @@
      voice catalog…" (same UX as the legacy `<select disabled>`). */
 
 import { useRef, useState } from 'react';
-import { IconCheck, IconChevD } from '../lib/icons';
-import type { BaseVoice, TtsEngine } from '../lib/types';
+import { IconCheck, IconChevD, IconPause, IconPlay, IconSpinner } from '../lib/icons';
+import type { BaseVoice, TtsEngine, TtsModelKey } from '../lib/types';
+import { useSamplePlayback } from '../lib/use-sample-playback';
+import {
+  playBaseVoiceSampleWithAutoLoad,
+  type SampleStatus,
+} from '../lib/play-sample-with-auto-load';
 import { SearchablePicker, type PickerGroup, type PickerItem } from './searchable-picker';
 
 type Choice = { kind: 'auto' } | { kind: 'voice'; voice: BaseVoice };
@@ -40,12 +45,81 @@ interface VoiceOverridePickerProps {
       trigger is disabled and shows a loading label. */
   baseVoicesLoaded: boolean;
   onChange: (next: { engine: TtsEngine; name: string } | null) => void;
+  /** Sample line the per-row Play button speaks — same drawer-level
+      value the candidate-preview block below the picker uses (fe-7). */
+  previewText: string;
+  /** Project-active model key forwarded to the auto-load helper so the
+      sidecar re-maps to a compatible model when needed. */
+  previewModelKey: TtsModelKey;
 }
 
 const AUTO_VALUE = 'auto';
 
 function capitalise(s: string) {
   return s.length > 0 ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
+/* Per-row "audition without committing" affordance (fe-7). Mirrors
+   VoicePreviewButton's state machine (idle/loading/playing) and a11y
+   label convention, but icon-only + hover/focus-revealed so it fits a
+   compact picker row instead of the roomy candidate-preview list.
+   `stopPropagation` on click keeps auditioning from also picking the
+   row — the row itself is the SearchablePicker option button. */
+function RowPreviewButton({
+  voice,
+  modelKey,
+  text,
+}: {
+  voice: BaseVoice;
+  modelKey: TtsModelKey;
+  text: string;
+}) {
+  const playback = useSamplePlayback();
+  const [status, setStatus] = useState<SampleStatus | 'idle'>('idle');
+  const isLoading = status !== 'idle';
+  const previewUrlPrefix = `/audio/voices/${encodeURIComponent(`raw-${voice.engine}-${voice.name}`)}-${modelKey}`;
+  const isPlayingThis = playback.isPlaying && !!playback.currentUrl?.startsWith(previewUrlPrefix);
+
+  async function onClick(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (isPlayingThis) {
+      playback.stop();
+      return;
+    }
+    setStatus('synthesizing');
+    try {
+      await playBaseVoiceSampleWithAutoLoad({
+        args: { engine: voice.engine, speakerName: voice.name, modelKey, text },
+        playback,
+        onStatus: (next) => setStatus(next),
+      });
+    } catch {
+      /* Swallowed — the roomy candidate-preview list below the picker
+         surfaces load/synth errors inline; this compact row affordance
+         just resets to idle so the icon is clickable again. */
+    } finally {
+      setStatus('idle');
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={onClick}
+      disabled={isLoading}
+      aria-label={isPlayingThis ? `Stop sample for ${voice.name}` : `Play sample for ${voice.name}`}
+      className="shrink-0 grid place-items-center w-6 h-6 rounded-full text-ink/50 opacity-0 group-hover:opacity-100 coarse-pointer:opacity-60 focus-visible:opacity-100 coarse-pointer:min-h-[44px] coarse-pointer:min-w-[44px] hover:bg-ink/8 hover:text-ink disabled:opacity-100 disabled:cursor-wait"
+    >
+      {isLoading ? (
+        <IconSpinner className="w-3.5 h-3.5" />
+      ) : isPlayingThis ? (
+        <IconPause className="w-3.5 h-3.5" />
+      ) : (
+        <IconPlay className="w-3.5 h-3.5" />
+      )}
+    </button>
+  );
 }
 
 export function VoiceOverridePicker({
@@ -57,6 +131,8 @@ export function VoiceOverridePicker({
   selectedValue,
   baseVoicesLoaded,
   onChange,
+  previewText,
+  previewModelKey,
 }: VoiceOverridePickerProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -123,12 +199,15 @@ export function VoiceOverridePicker({
           groups={groups}
           activeId={selectedValue}
           renderItem={(choice, ctx) => (
-            <>
+            <div className="group flex flex-1 min-w-0 items-center gap-2">
               <span className="flex-1 truncate">
                 {choice.kind === 'auto' ? autoLabel : choice.voice.name}
               </span>
+              {choice.kind === 'voice' && (
+                <RowPreviewButton voice={choice.voice} modelKey={previewModelKey} text={previewText} />
+              )}
               {ctx.active && <IconCheck className="w-3.5 h-3.5 text-ink/60" />}
-            </>
+            </div>
           )}
           onPick={handlePick}
           onClose={() => setOpen(false)}

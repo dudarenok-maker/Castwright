@@ -2040,6 +2040,8 @@ function ModelVoiceOverridePicker({
         selectedValue={selectedValue}
         baseVoicesLoaded={baseVoicesLoaded}
         onChange={(next) => void onChange(next)}
+        previewText={previewText}
+        previewModelKey={previewModelKey}
       />
       {error && <p className="mt-2 text-[11px] text-red-600/90 font-medium">⚠ {error}</p>}
       <p className="mt-2 text-[11px] text-ink/50">
