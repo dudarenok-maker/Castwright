@@ -7,6 +7,7 @@
 
 import { useAppDispatch, useAppSelectorShallow } from '../store';
 import { uiActions } from '../store/ui-slice';
+import { stripAudioTags } from './audio-tags';
 import type { Chapter, ChangeLogEvent } from './types';
 
 export function renderedChaptersForCharacter(characterId: string, chapters: Chapter[]): number[] {
@@ -81,8 +82,15 @@ export function isChapterReassignedSinceRender(
 
    djb2 base-36, byte-identical to server/src/audio/segments-io.ts textHashForStale
    (the cross-package contract is pinned by a shared vector in both test files).
-   Hash the RAW sentence text — the server stamps the raw group text, and this side
-   hashes the live raw `sent.text`, so a normalisation mismatch can't desync them. */
+   The hash is over the TAG-STRIPPED text — inline audio tags (`[emphatic]`,
+   `[shouting]`, …) are stripped on BOTH sides before hashing (server: synthesise-chapter
+   stamps `textHashForStale(stripAudioTags(group.text))`; here:
+   `isChapterTextEditedSinceRender` strips before hashing). The tag never reaches the
+   engine, so it must not count as a text change — the manuscript keeps it for display,
+   but hashing it raw would leave a tagged sentence permanently, un-clearably "stale".
+   (Only the tag is reconciled here; the further TTS normalisation `normaliseForTts`
+   applies at the synth boundary — dashes, all-caps, number expansion — is ephemeral and
+   not part of the stamped hash, so both sides hash the identically tag-stripped text.) */
 export function textHashForStale(s: string): string {
   let h = 5381;
   for (let i = 0; i < s.length; i += 1) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
@@ -94,7 +102,12 @@ export function textHashForStale(s: string): string {
     isChapterReassignedSinceRender: a current sentence that was never rendered (a
     structural/empty line, or one added after render) isn't a key, so it can't trip a
     false positive. Returns false when no render text map exists (pre-#1105 render),
-    letting the caller fall back to the time-based heuristic. */
+    letting the caller fall back to the time-based heuristic.
+
+    Strip inline audio tags before hashing (mirrors the server, which stamps the hash
+    over the tag-stripped synth text): the tag is display-only and never reaches the
+    engine, so a tag-only difference is NOT a text change. Without this a sentence like
+    `[emphatic] Ende.` (rendered as `Ende.`) reads permanently, un-clearably stale. */
 export function isChapterTextEditedSinceRender(
   renderedTextHashes: Record<number, string> | undefined,
   currentSentences: Array<{ id: number; text: string }>,
@@ -106,7 +119,7 @@ export function isChapterTextEditedSinceRender(
     const sid = Number(sidStr);
     const liveText = current.get(sid);
     if (liveText === undefined) return true; // rendered sentence now gone
-    if (textHashForStale(liveText) !== renderedTextHashes[sid]) return true;
+    if (textHashForStale(stripAudioTags(liveText)) !== renderedTextHashes[sid]) return true;
   }
   return false;
 }

@@ -13,6 +13,7 @@ import {
   denormaliseAllCaps,
   softenDashes,
   stripUnsafeForTts,
+  stripAudioTags,
   normaliseForTts,
 } from './text-normalize.js';
 
@@ -176,6 +177,16 @@ describe('normaliseForTts (composed)', () => {
     expect(normaliseForTts('Stay still, [whispers] he murmured.')).toBe(
       'Stay still, he murmured.',
     );
+  });
+
+  it('stripAudioTags contract vector — MUST equal src/lib/audio-tags.ts stripAudioTags', () => {
+    /* The render stamps textHash over stripAudioTags(group.text) and the frontend
+       staleness diff hashes stripAudioTags(liveText); a drift between the two strip
+       implementations resurfaces the un-clearable "Sentences reassigned" flag. Pin the
+       same vector both sides (mirrored in src/lib/audio-tags.test.ts). */
+    expect(stripAudioTags('She said [emphatic] hello.')).toBe('She said hello.');
+    expect(stripAudioTags('[emphatic] Ende.')).toBe('Ende.');
+    expect(stripAudioTags('See [Citation Needed] later.')).toBe('See [Citation Needed] later.');
   });
 
   it('preserves arbitrary bracketed prose that is NOT in the audio-tag vocabulary', () => {

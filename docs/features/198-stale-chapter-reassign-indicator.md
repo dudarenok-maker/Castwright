@@ -139,12 +139,48 @@ Coverage: `isChapterTextEditedSinceRender` + `textHashForStale` units
 (`segments-io.test.ts`); the GET field (`book-state.test.ts`); the Generate-row badge
 on a text edit with speakers unchanged (`generation.test.tsx`).
 
+## Inline audio-tag false positive (fix — strip tags before hashing both sides)
+
+The #1105 text diff assumed "the server stamps the RAW group text and the client
+hashes the RAW `sent.text`, so they can't desync." That was false for any sentence
+carrying an inline audio tag (`[emphatic]`, `[shouting]`, … — the closed `AUDIO_TAGS`
+vocabulary). The synth path strips those tags before synthesis (`text-normalize.ts`
+`stripAudioTags` / `emotion-from-tags.ts`), so the render stamps the hash over the
+**spoken** text (`[emphatic] Ende.` → `Ende.`), while the manuscript deliberately
+keeps the tag for display. The two hashes never match → the chapter reads permanently
+`⚠ Sentences reassigned · regenerate to refresh`, and **regenerating cannot clear it**
+(the next render re-strips and re-stamps the stripped hash while the manuscript keeps
+the tag).
+
+**Fix:** strip audio tags on BOTH sides before hashing, so the compared text is the
+spoken text the audio was actually keyed on.
+- Server: `synthesise-chapter.ts` stamps `textHashForStale(stripAudioTags(group.text))`
+  (idempotent — `group.text` is usually already stripped upstream; this pins the
+  contract for an un-migrated book whose analysis cache still holds the tag).
+- Frontend: `isChapterTextEditedSinceRender` hashes `stripAudioTags(liveText)`, via a
+  new `src/lib/audio-tags.ts` mirror of the server `AUDIO_TAGS` + `stripAudioTags`
+  (the mirror the server `parsers/audio-tags.ts` header already referenced).
+- **Cross-package strip contract:** the two `stripAudioTags` implementations are pinned
+  by a shared vector (`'She said [emphatic] hello.'` → `'She said hello.'`) in
+  `src/lib/audio-tags.test.ts` AND `server/src/tts/text-normalize.test.ts`, mirroring
+  the existing `textHashForStale` vector, so a drift on either side fails loudly.
+- A tag-only difference now reads NOT stale; a REAL edit to the spoken words of a
+  tagged sentence still reads stale.
+
+Fixes the false positive on existing renders with no re-render needed (the frontend
+diff recomputes from the live manuscript). Covered by
+`src/lib/stale-chapters.test.ts` (regression: tag-only → not stale; spoken-word edit
+→ stale), `src/lib/audio-tags.test.ts`, and the server strip vector.
+
 ## Out of scope
 
 - The `setStaleAudio` banner is intentionally NOT fired on text edits (see above).
 - Backfilling text hashes onto books rendered before #1105 — they fall back to the
   time-based `boundary_move` heuristic until their next render (decision: new renders
   only, no migration).
+- The shared "Sentences reassigned" caption still labels a text/exclude/instruct edit
+  as "reassigned" (it covers the whole 5-clause OR-gate). That wording is a separate,
+  pre-existing cosmetic issue, tracked apart from this correctness fix.
 
 ## Ship notes
 

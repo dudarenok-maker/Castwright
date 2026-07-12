@@ -238,6 +238,31 @@ describe('isChapterTextEditedSinceRender (#1105 precise text diff)', () => {
     expect(isChapterTextEditedSinceRender(undefined, [{ id: 1, text: 'x' }])).toBe(false);
     expect(isChapterTextEditedSinceRender({}, [{ id: 1, text: 'x' }])).toBe(false);
   });
+
+  /* Regression: the render strips inline audio tags ([emphatic]/[shouting]/…) before
+     synthesis and stamps the hash over the SPOKEN text ("Ende."), while the manuscript
+     keeps the tag for display ("[emphatic] Ende."). Hashing the raw live text would
+     never match → a permanent, un-clearable "Sentences reassigned" flag. The diff must
+     strip audio tags first, so a tag-only difference reads NOT stale. */
+  it('NO false positive when the live text differs from render ONLY by an inline audio tag', () => {
+    const renderedStripped = { 1: h('Ende.') };
+    expect(isChapterTextEditedSinceRender(renderedStripped, [{ id: 1, text: '[emphatic] Ende.' }])).toBe(
+      false,
+    );
+    // mid-sentence tag, too — "She said [emphatic] hello." rendered as "She said hello."
+    const rendered2 = { 1: h('She said hello.') };
+    expect(
+      isChapterTextEditedSinceRender(rendered2, [{ id: 1, text: 'She said [emphatic] hello.' }]),
+    ).toBe(false);
+  });
+
+  it('still stale when a tagged sentence has a REAL edit to the spoken words', () => {
+    const renderedStripped = { 1: h('Ende.') };
+    // the spoken word changed (Ende → Schluss), not just the tag
+    expect(
+      isChapterTextEditedSinceRender(renderedStripped, [{ id: 1, text: '[emphatic] Schluss.' }]),
+    ).toBe(true);
+  });
 });
 
 describe('isChapterInstructEditedSinceRender (fs-58 precise instruct diff)', () => {

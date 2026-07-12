@@ -36,4 +36,10 @@ this cycle append to this draft rather than opening a new one.
 
 ---
 
+## 🐛 Fixes
+
+- **A rendered chapter no longer reads permanently, un-clearably stale when a sentence carries an inline audio tag (`[emphatic]`, `[shouting]`, … — `AUDIO_TAGS`).** The #1105 text-staleness diff assumed the server stamps the RAW `group.text` and the client hashes the RAW `sent.text`, so they can't desync. False for a tagged sentence: the synth path strips the tag before synthesis (`stripAudioTags` / `emotion-from-tags`), so the render stamps `textHash` over the SPOKEN text (`[emphatic] Ende.` → `Ende.`) while the manuscript keeps the tag for display — the hashes never match, so the chapter shows `⚠ Sentences reassigned · regenerate to refresh` forever (regenerating re-strips + re-stamps the stripped hash, so it can't clear). Fixed by stripping audio tags on BOTH sides before hashing: `synthesise-chapter.ts` now stamps `textHashForStale(stripAudioTags(group.text))` (idempotent; pins the contract for an un-migrated book too), and `isChapterTextEditedSinceRender` hashes `stripAudioTags(liveText)` via a new `src/lib/audio-tags.ts` mirror of the server `AUDIO_TAGS` + `stripAudioTags`. The two strip implementations are pinned by a shared vector (`'She said [emphatic] hello.'` → `'She said hello.'`) in both test files, mirroring the existing `textHashForStale` vector. A tag-only difference now reads not-stale; a real edit to a tagged sentence's spoken words still reads stale. Fixes existing renders with no re-render needed. (#1564)
+
+---
+
 **Full changelog:** v1.13.0...v1.14.0
