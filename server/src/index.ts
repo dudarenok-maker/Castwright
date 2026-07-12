@@ -33,6 +33,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { app } from './app.js';
 import { lanExposureWarning } from './lan-safety.js';
 import { ensureLanAuthToken } from './lan-auth.js';
+import { setLanRuntime } from './lan-runtime.js';
 import { enumerateLanUrls, isLanHttpsEnabled } from './routes/export-lan.js';
 import { allowSleep } from './system/prevent-sleep.js';
 import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
@@ -194,7 +195,13 @@ async function main(): Promise<void> {
      token requireLanToken is a no-op and the whole /api is open on the LAN. Minting
      it here keeps loopback (desktop) bypassing, device pairings working, and the
      pairing QR carrying the token. No-op when LAN is off or a token already exists. */
-  ensureLanAuthToken();
+  // Persist the token to the SHARED run dir (resolveRunDir honours APP_RUN_DIR), NOT
+  // the per-release server/.env — a versioned upgrade must keep the same token so
+  // paired devices stay paired.
+  ensureLanAuthToken(resolve(resolveRunDir(repoRoot), 'lan-auth.token'));
+  // Record what we ACTUALLY bound so GET /lan + pairing advertise the real protocol/
+  // port, not the requested flag (a cert-less box degrades to loopback HTTP here).
+  setLanRuntime({ httpsActive: lanHttps, port: lanHttps ? LAN_HTTPS_PORT : PORT });
   const bindHost = selectBindHost(lanHttps);
 
   const listenerCallback = () => {

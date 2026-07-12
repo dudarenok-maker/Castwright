@@ -10,8 +10,8 @@
    the companion fetches over the untrusted bootstrap channel *before* it
    can pin + present a token) and `/audio` are deliberately NOT guarded. */
 import { timingSafeEqual, randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, appendFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { parse as parseCookie } from 'cookie';
 import type { Request, Response, NextFunction } from './http.js';
 import { isLanHttpsEnabled } from './routes/export-lan.js';
@@ -23,40 +23,60 @@ export function getLanAuthToken(): string | undefined {
   return typeof t === 'string' && t.length > 0 ? t : undefined;
 }
 
-/* Default persistence: append LAN_AUTH_TOKEN=<token> to the .env file so it
-   survives restarts (device pairings keyed to it stay valid). We only reach here
-   when the file has NO LAN_AUTH_TOKEN line (getLanAuthToken() returned undefined),
-   so a plain append can't produce a duplicate key. Injectable for tests. */
-function appendTokenToEnv(envPath: string, line: string): void {
-  const needsNl = existsSync(envPath) && !readFileSync(envPath, 'utf8').endsWith('\n');
-  appendFileSync(envPath, `${needsNl ? '\n' : ''}${line}\n`, 'utf8');
+/* Read a token from the shared token file, or undefined if absent/empty/unreadable. */
+function readTokenFile(tokenFile: string): string | undefined {
+  try {
+    const t = readFileSync(tokenFile, 'utf8').trim();
+    return t.length > 0 ? t : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** When LAN HTTPS is REQUESTED but no `LAN_AUTH_TOKEN` is configured, mint a random
- *  256-bit token, set it on `process.env`, and persist it to `envPath` so it's
- *  stable across restarts. This closes the hole where LAN-on-without-a-token leaves
- *  `requireLanToken` a no-op and the whole `/api` reachable UNAUTHENTICATED from the
- *  LAN. No-op when LAN is off (dev/test, or explicit `LAN_HTTPS=0`) or a token
- *  already exists. Returns the effective token, or undefined when LAN is off.
- *  `persist` is injectable so tests don't touch the real .env. */
+ *  256-bit token, set it on `process.env`, and persist it to `tokenFile` so it's
+ *  stable. This closes the hole where LAN-on-without-a-token leaves `requireLanToken`
+ *  a no-op and the whole `/api` reachable UNAUTHENTICATED from the LAN.
+ *
+ *  `tokenFile` MUST be a cross-release location (index.ts passes the shared run dir,
+ *  which honours APP_RUN_DIR) — NOT the per-release `server/.env`, or a versioned
+ *  upgrade would re-mint and force every paired device to re-pair. Precedence:
+ *  (1) an explicit `LAN_AUTH_TOKEN` env value always wins; (2) an existing token
+ *  file is adopted; (3) otherwise mint + write the file with an EXCLUSIVE create so
+ *  a concurrent boot can't clobber it — if another process won the race we re-read
+ *  and adopt theirs, so both converge on one token. No-op (undefined) when LAN is off. */
 export function ensureLanAuthToken(
-  envPath: string = resolve(process.cwd(), '.env'),
-  persist: (envPath: string, line: string) => void = appendTokenToEnv,
+  tokenFile: string = resolve(process.cwd(), '.lan-auth-token'),
 ): string | undefined {
   if (!isLanHttpsEnabled()) return undefined;
-  const existing = getLanAuthToken();
-  if (existing !== undefined) return existing;
-  const token = randomBytes(32).toString('hex');
-  process.env.LAN_AUTH_TOKEN = token;
-  try {
-    persist(envPath, `LAN_AUTH_TOKEN=${token}`);
-  } catch (err) {
-    console.warn(
-      `[server] could not persist LAN_AUTH_TOKEN to ${envPath}: ${(err as Error).message} — ` +
-        `it will regenerate next boot (paired devices would need to re-pair).`,
-    );
+  const fromEnv = getLanAuthToken();
+  if (fromEnv !== undefined) return fromEnv;
+  const fromFile = readTokenFile(tokenFile);
+  if (fromFile !== undefined) {
+    process.env.LAN_AUTH_TOKEN = fromFile;
+    return fromFile;
   }
-  return token;
+  const token = randomBytes(32).toString('hex');
+  try {
+    mkdirSync(dirname(tokenFile), { recursive: true });
+    writeFileSync(tokenFile, `${token}\n`, { encoding: 'utf8', flag: 'wx' });
+    process.env.LAN_AUTH_TOKEN = token;
+    return token;
+  } catch {
+    // wx failed — another boot wrote it first (or the dir is unwritable). Prefer theirs.
+    const raced = readTokenFile(tokenFile);
+    if (raced !== undefined) {
+      process.env.LAN_AUTH_TOKEN = raced;
+      return raced;
+    }
+    // Couldn't write OR read — still guard the API this run with an in-memory token.
+    process.env.LAN_AUTH_TOKEN = token;
+    console.warn(
+      `[server] could not persist the LAN auth token to ${tokenFile} — it will regenerate ` +
+        `next boot (paired devices would need to re-pair).`,
+    );
+    return token;
+  }
 }
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);

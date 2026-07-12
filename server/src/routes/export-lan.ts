@@ -29,6 +29,7 @@ import { X509Certificate } from 'node:crypto';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { resolveRootCaPath } from './cert-root.js';
+import { getLanRuntime } from '../lan-runtime.js';
 
 export const exportLanRouter = Router();
 
@@ -97,11 +98,11 @@ export function lanCaFingerprint(): string | undefined {
 }
 
 exportLanRouter.get('/lan', (_req: Request, res: Response) => {
-  const httpsMode = isLanHttpsEnabled();
-  const port = httpsMode
-    ? Number(process.env.LAN_HTTPS_PORT ?? 8443)
-    : Number(process.env.PORT ?? 8080);
-  const protocol: 'http' | 'https' = httpsMode ? 'https' : 'http';
+  // Advertise what the server ACTUALLY bound, not the requested flag: if LAN was
+  // requested but certs were missing, the server degraded to loopback HTTP and
+  // handing out https://<ip>:8443 URLs would be dead links.
+  const { httpsActive, port } = getLanRuntime();
+  const protocol: 'http' | 'https' = httpsActive ? 'https' : 'http';
   const token = lanAuthToken();
   const caFingerprint = lanCaFingerprint();
   res.json({

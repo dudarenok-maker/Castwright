@@ -1,6 +1,9 @@
 /* srv-20 — LAN shared-secret token guard. Unit-tests the middleware
    against mocked req/res so no HTTP server is needed. */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 vi.mock('./workspace/device-tokens.js', () => ({
   isValidDeviceToken: (t: string) => t === 'goodtoken',
@@ -172,12 +175,17 @@ describe('ensureLanAuthToken (auto-provisioned LAN secret)', () => {
     tok: process.env.LAN_AUTH_TOKEN,
     env: process.env.NODE_ENV,
   };
+  let dir: string;
+  let tokenFile: string;
   beforeEach(() => {
     delete process.env.LAN_AUTH_TOKEN;
     process.env.NODE_ENV = 'production';
     process.env.LAN_HTTPS = '1';
+    dir = mkdtempSync(join(tmpdir(), 'cw-lan-'));
+    tokenFile = join(dir, 'lan-auth.token');
   });
   afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
     for (const [k, v] of [
       ['LAN_HTTPS', saved.lan],
       ['LAN_AUTH_TOKEN', saved.tok],
@@ -188,34 +196,38 @@ describe('ensureLanAuthToken (auto-provisioned LAN secret)', () => {
     }
   });
 
-  it('no-ops (undefined, no persist) when LAN is off', () => {
+  it('no-ops (undefined, no file) when LAN is off', () => {
     process.env.LAN_HTTPS = '0';
-    const persist = vi.fn();
-    expect(ensureLanAuthToken('/tmp/.env', persist)).toBeUndefined();
-    expect(persist).not.toHaveBeenCalled();
+    expect(ensureLanAuthToken(tokenFile)).toBeUndefined();
+    expect(existsSync(tokenFile)).toBe(false);
     expect(process.env.LAN_AUTH_TOKEN).toBeUndefined();
   });
 
-  it('mints a 256-bit hex token and persists it when LAN on and none set', () => {
-    const persist = vi.fn();
-    const tok = ensureLanAuthToken('/tmp/.env', persist);
+  it('mints a 256-bit hex token and writes it to the shared file', () => {
+    const tok = ensureLanAuthToken(tokenFile);
     expect(tok).toMatch(/^[0-9a-f]{64}$/);
     expect(process.env.LAN_AUTH_TOKEN).toBe(tok);
-    expect(persist).toHaveBeenCalledWith('/tmp/.env', `LAN_AUTH_TOKEN=${tok}`);
+    expect(readFileSync(tokenFile, 'utf8').trim()).toBe(tok);
   });
 
-  it('returns the existing token without re-persisting (idempotent across restarts)', () => {
+  it('adopts an existing token file without re-minting (survives restart/upgrade)', () => {
+    const first = ensureLanAuthToken(tokenFile);
+    delete process.env.LAN_AUTH_TOKEN; // simulate a fresh process whose .env has no token
+    const second = ensureLanAuthToken(tokenFile);
+    expect(second).toBe(first);
+    expect(process.env.LAN_AUTH_TOKEN).toBe(first);
+  });
+
+  it('an explicit LAN_AUTH_TOKEN env value wins over the file (never persisted)', () => {
     process.env.LAN_AUTH_TOKEN = 'preset-token';
-    const persist = vi.fn();
-    expect(ensureLanAuthToken('/tmp/.env', persist)).toBe('preset-token');
-    expect(persist).not.toHaveBeenCalled();
+    expect(ensureLanAuthToken(tokenFile)).toBe('preset-token');
+    expect(existsSync(tokenFile)).toBe(false);
   });
 
-  it('still sets the token in-process even if persistence throws', () => {
-    const persist = vi.fn(() => {
-      throw new Error('EACCES');
-    });
-    const tok = ensureLanAuthToken('/tmp/.env', persist);
+  it('still guards the API in-process when the token file can not be persisted', () => {
+    const blocker = join(dir, 'blocker');
+    writeFileSync(blocker, 'x'); // parent-as-file → mkdir/write both fail
+    const tok = ensureLanAuthToken(join(blocker, 'lan-auth.token'));
     expect(tok).toMatch(/^[0-9a-f]{64}$/);
     expect(process.env.LAN_AUTH_TOKEN).toBe(tok);
   });

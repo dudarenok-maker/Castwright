@@ -49,6 +49,11 @@ vi.mock('./export-lan.js', async (orig) => {
     enumerateLanUrls: () => ({ urls: ['https://192.168.1.5:8443'], port: 8443, protocol: 'https' as const }),
   };
 });
+// The /session route gates on the ACTUAL bound runtime, not the requested flag.
+vi.mock('../lan-runtime.js', () => ({
+  getLanRuntime: () => ({ httpsActive: true, port: 8443 }),
+  setLanRuntime: () => {},
+}));
 vi.mock('./cert-root.js', () => ({ resolveRootCaPath: () => ({ path: 'FAKE', source: 'default' as const }) }));
 vi.mock('../config/resolver.js', () => ({ configValue: (_key: string) => 30 }));
 vi.mock('node:fs', async (orig) => {

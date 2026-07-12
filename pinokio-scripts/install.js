@@ -73,7 +73,7 @@ module.exports = {
     //    mkcert root CA once (the pairing QR carries the CA fingerprint to pin).
     {
       method: 'shell.run',
-      params: { path: APP_ROOT, conda: CONDA, message: 'node scripts/setup-lan-certs.mjs' },
+      params: { path: APP_ROOT, conda: CONDA, message: 'node scripts/setup-lan-certs.mjs --best-effort' },
     },
   ],
 };

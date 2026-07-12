@@ -15,8 +15,9 @@ import { Router } from 'express';
 import express from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import type { Request, Response } from '../http.js';
-import { isLanHttpsEnabled, enumerateLanUrls } from './export-lan.js';
+import { enumerateLanUrls } from './export-lan.js';
 import { resolveRootCaPath } from './cert-root.js';
+import { getLanRuntime } from '../lan-runtime.js';
 import { crockfordBase32 } from '../lib/crockford-base32.js';
 import { createPairingSession, redeemPairingSession } from '../workspace/pairing-sessions.js';
 import { createDevice, clampTtlDays } from '../workspace/device-tokens.js';
@@ -46,11 +47,15 @@ pairSessionRouter.post('/session', (req: Request, res: Response) => {
     res.status(403).json({ error: 'Pairing sessions can only be created from the host UI.' });
     return;
   }
-  if (!isLanHttpsEnabled()) {
+  // Gate on what the server ACTUALLY bound, not the requested flag: a cert-less box
+  // degraded to loopback HTTP, so a pairing QR pointing at https://<ip>:8443 would
+  // be unscannable/dead. httpsActive true implies the LAN HTTPS port is bound.
+  const { httpsActive, port: lanPort } = getLanRuntime();
+  if (!httpsActive) {
     res.status(409).json({ error: 'not-lan-https' });
     return;
   }
-  const { urls, port } = enumerateLanUrls(Number(process.env.LAN_HTTPS_PORT ?? 8443), 'https');
+  const { urls, port } = enumerateLanUrls(lanPort, 'https');
   const host = urls[0]?.replace(/^https:\/\//, '');
   const fpTag = caFingerprintTag();
   if (!host || !fpTag) {

@@ -164,9 +164,13 @@ export async function setupLanCerts({ silent = false } = {}) {
   return { certFile, keyFile, lanIps: ips };
 }
 
-// CLI entrypoint — best-effort provisioning used by installers (Pinokio install.js).
-// setupLanCerts() is non-fatal (returns null on mkcert-missing/failure), so this
-// exits 0 either way and never aborts an install; the server falls back to HTTP.
+// CLI entrypoint. Exits NON-ZERO on failure by default so callers that infer
+// success from the exit code (server/src/routes/lan-cert.ts's regenerate route,
+// which spawns this script) keep working. Pass --best-effort for install flows
+// (Pinokio install.js) where a missing mkcert must NOT abort the install — there
+// it exits 0 and the server simply falls back to loopback HTTP.
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('setup-lan-certs.mjs')) {
-  await setupLanCerts();
+  const bestEffort = process.argv.includes('--best-effort');
+  const result = await setupLanCerts();
+  if (!result && !bestEffort) process.exit(1);
 }

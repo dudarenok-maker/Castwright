@@ -19,7 +19,7 @@ owner: null
 
 1. **`isLanHttpsEnabled()` default flip.** Was `LAN_HTTPS === '1'` (opt-in). Now: `'1'`→on, `'0'`→off, unset → **`NODE_ENV === 'production'`**. So native installers / Pinokio / `start:prod` get LAN by default; `npm run dev`, `npm start`, and the whole test suite (non-production) keep plain-HTTP localhost untouched.
 2. **Boot never crashes on missing certs.** `index.ts` computes `lanRequested` (the flag) vs `lanHttps` (effective = requested **and** certs present). Requested-but-cert-less → serve loopback HTTP + a loud one-command-fix warning, instead of the old `process.exit(1)`. The former `exit(1)` branch is gone.
-3. **`ensureLanAuthToken()` (lan-auth.ts).** When LAN is requested and no `LAN_AUTH_TOKEN` is set, mint `randomBytes(32)` hex, set `process.env`, and append it to `server/.env` so it's stable across restarts. Closes the hole where LAN-on-without-a-token makes `requireLanToken` a no-op → whole `/api` open on the LAN. Device tokens are still accepted; loopback still bypasses; the pairing QR carries the token.
+3. **`ensureLanAuthToken()` (lan-auth.ts).** When LAN is requested and no `LAN_AUTH_TOKEN` is set, mint `randomBytes(32)` hex, set `process.env`, and persist it to a **shared cross-release token file** (`<runDir>/lan-auth.token`, `APP_RUN_DIR`-aware — NOT the per-release `server/.env`, which a versioned upgrade would reset, re-pairing every device). Exclusive-create (`wx`) so a concurrent boot adopts the winner's token. Precedence: explicit `LAN_AUTH_TOKEN` env > existing token file > mint. Closes the hole where LAN-on-without-a-token makes `requireLanToken` a no-op → whole `/api` open on the LAN. Device tokens are still accepted; loopback still bypasses; the pairing QR carries the token.
 4. **Universal cert provisioning.**
    - `scripts/setup-lan-certs.mjs` is now **non-fatal** (returns `null` on mkcert-missing/failure instead of `process.exit(1)`) and writes to the **`APP_RUN_DIR`-honouring** run dir (so versioned installs generate certs where the server reads them).
    - `scripts/start-app-prod.mjs` **auto-provisions certs on first launch** (best-effort) — the universal hook every non-Pinokio prod start uses (native installer, manual `start:prod`, versioned restart). Its `resolveLaunchTarget(env, certsPresent)` health-checks the port the server will actually bind.
@@ -46,6 +46,16 @@ owner: null
 2. Desktop Open-Web-UI tab loads `https://localhost:8443` with no warning (needs #1540 for the Pinokio tab).
 3. Phone: install the mkcert root CA once (pairing QR / fingerprint pin), browse `https://castwright.local:8443`, complete pairing, listen.
 4. Force `LAN_HTTPS=0` → back to loopback HTTP :8080. Delete certs, set `LAN_HTTPS=1` → server boots HTTP with the missing-cert warning (no crash).
+
+## Review fixes (2026-07-12, high-effort code-review round)
+
+The first implementation passed unit tests but a high-effort review found 9 real defects. Fixed before merge:
+
+- **Dead under Pinokio (critical).** Pinokio's `start.js` runs `node dist/index.js` with no `NODE_ENV`, so the production default never fired. Fix: `start.js` now sets `env: { NODE_ENV: 'production' }`. (dist/ static serving was already `NODE_ENV`-OR-dist-exists, so unaffected.)
+- **Token in per-release `server/.env` (critical).** Persistence moved to the shared `<runDir>/lan-auth.token` (invariant 3) so upgrades don't re-pair every device; also fixes the blank-`LAN_AUTH_TOKEN=` duplicate-key and the concurrent-boot dup-line races (dedicated file + `wx` exclusive create).
+- **`GET /lan` + `/pair/session` advertised the requested flag, not the bind (critical).** New `server/src/lan-runtime.ts` (`get/setLanRuntime`) records the ACTUAL bound protocol/port at boot; both consumers read it, so a cert-less HTTP degrade never hands out dead `https://…:8443` URLs / QR codes.
+- **cert-regenerate false success.** `setup-lan-certs.mjs`'s CLI exits non-zero on failure again (restoring the `lan-cert.ts` regenerate route's exit-code contract); install flows pass `--best-effort` to stay non-fatal.
+- **Accepted as-is:** the `:443` port-forwarder being default-on can log an `EADDRINUSE` warning behind an existing reverse proxy — it's non-fatal (handled at `lan-port-forwarder.ts`), and default LAN reachability is the intent. Cert-path resolution is duplicated across `app-dirs.ts` (TS) and the two `.mjs` scripts because the ESM scripts can't import the compiled server module; kept cross-referenced.
 
 ## Ship notes
 
