@@ -172,7 +172,7 @@ This is defence-in-depth for the enum living in **three hand-synced places**
 | `src/store/ui-slice.ts` `openBook` | routing assertion (above) |
 | `src/components/library/library-status-ui.tsx` `STATUS_UI` | new entry |
 | `src/views/book-library.tsx` `IN_PROGRESS_STATUSES` | add status |
-| `src/mocks/library.ts`, `src/data/books.ts` | add a `voices_pending` sample so mock/dev mode renders the state |
+| `src/mocks/library.ts` | add a `voices_pending` book to the inline library array so mock/dev mode renders the state. **Not** `src/data/books.ts` — that is the separate legacy `Book` type (its own status union) feeding a different seed; widening it is out of scope (YAGNI) |
 | `src/components/library/library-grid.tsx:167` | defensive `STATUS_UI[status] ?? neutral` fallback (see above) |
 | `src/components/layout.tsx:991-1003` (`bgBookIds` poll) | **reviewed — no change.** Negative-list filter; `voices_pending` books already passed it as `generating`, so inclusion is unchanged |
 
