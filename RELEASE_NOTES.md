@@ -1,6 +1,7 @@
 # Castwright 1.14.0
 
 - **A book you've cast but haven't started narrating now opens straight to voice design — and wears a "Cast ready" badge in your library.** Once you approve a cast, that book used to jump you to the Generate screen the next time you opened it, skipping right past designing your characters' voices. Now it lands on the Cast view where voice design lives, and its library card shows a clear "Cast ready" badge so you can tell at a glance which books are waiting for you to design voices and press go. Books that are already generating still open to Generate, exactly as before.
+- **Designing voices no longer restarts the performance engine partway through a session.** During a big voice-design run, the engine could occasionally hit a one-off loading hiccup and react by fully restarting itself — dropping every loaded voice and warming back up, which looked like a crash mid-session and slowed the run down. It now simply retries the load on the spot, which clears the hiccup nearly every time, and only falls back to a full restart if that genuinely doesn't work — so your design run keeps rolling.
 
 # Castwright 1.13.0
 
