@@ -28,53 +28,80 @@
 - Consumes: existing `computeBookStatus`/scan internals — `state.castConfirmed`, `activeChapters` (`state.chapters.filter(c => !c.excluded)`), `completedChapters` (audio files on disk), `chapterCount`, per-chapter `generationState?: 'failed'`.
 - Produces: `LibraryBookStatus` now includes `'voices_pending'`; the scan result's `status` field can be `'voices_pending'`. `isConfirmed(b)` returns true for `voices_pending` in addition to `generating`/`complete`.
 
+- [ ] **Step 0 (prerequisite): teach `bookSkeleton` to persist `generationState`**
+
+The existing `bookSkeleton` helper (`scan.test.ts:32`) maps chapters to `{ id, title, slug }` **only** — it drops any `generationState`. The failed-chapter case below needs it, so extend that one `.map`:
+
+```ts
+chapters: chapters.map((c) => ({
+  id: c.id,
+  title: `Chapter ${c.id}`,
+  slug: c.slug,
+  ...(c.generationState ? { generationState: c.generationState } : {}),
+})),
+```
+
+and widen the helper's `chapters` param type to allow `generationState?: 'failed'`.
+
 - [ ] **Step 1: Write the failing tests**
 
-Add to `server/src/workspace/scan.test.ts` (follow the file's existing fixture-builder pattern — a temp workspace with a `state.json` + audio dir; mirror the nearest existing "status" test). The four cases:
+Use the file's REAL fixture helpers (verified against `scan.test.ts`): `bookSkeleton(title, opts)` → `{ bookId, bookDir, audioRoot }`; `writeCast(bookDir, characters)`; `seedAnalysisCache(\`m_${bookId}\`, chapterIds)`; `writeSegments(audioRoot, slug, sec)` + an empty `<slug>.mp3`; `flatten()` for the flat book list. **Critical:** a `voices_pending` book must ALSO seed the cast (`writeCast`) AND a complete analysis cache (`seedAnalysisCache`) — without both, `scanBook` classifies it `'analysing'` (`scan.ts:732` `!hasUsableCast || !analysisComplete`), never reaching the confirmed branches. Add to `scan.test.ts`, mirroring the existing "Partial Book" status test:
 
 ```ts
 describe('voices_pending status', () => {
   it('castConfirmed + 0 rendered + 0 failed → voices_pending', async () => {
-    const dir = await makeBook({
+    const { bookDir, bookId } = bookSkeleton('Cast Ready Book', {
       castConfirmed: true,
-      chapters: [{ id: 1, slug: 'ch-1' }, { id: 2, slug: 'ch-2' }],
-      audioSlugs: [],            // nothing rendered
+      chapters: [{ id: 1, slug: 'cr-1' }, { id: 2, slug: 'cr-2' }],
     });
-    const book = await scanOneBook(dir);
-    expect(book.status).toBe('voices_pending');
-    expect(book.progress).toBeUndefined();
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    // no audio, no failure → generation not started
+    const b = (await flatten()).find((x) => x.title === 'Cast Ready Book')!;
+    expect(b.status).toBe('voices_pending');
+    expect(b.progress).toBeUndefined();
   });
 
   it('castConfirmed + 1 rendered → generating (not voices_pending)', async () => {
-    const dir = await makeBook({
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Started Book', {
       castConfirmed: true,
-      chapters: [{ id: 1, slug: 'ch-1' }, { id: 2, slug: 'ch-2' }],
-      audioSlugs: ['ch-1'],
+      chapters: [{ id: 1, slug: 'sb-1' }, { id: 2, slug: 'sb-2' }],
     });
-    expect((await scanOneBook(dir)).status).toBe('generating');
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeSegments(audioRoot, 'sb-1', 30 * 60);
+    writeFileSync(join(audioRoot, 'sb-1.mp3'), '');
+    const b = (await flatten()).find((x) => x.title === 'Started Book')!;
+    expect(b.status).toBe('generating');
   });
 
   it('castConfirmed + 0 rendered but a chapter failed → generating (not voices_pending)', async () => {
-    const dir = await makeBook({
+    const { bookDir, bookId } = bookSkeleton('Failed First Book', {
       castConfirmed: true,
-      chapters: [{ id: 1, slug: 'ch-1', generationState: 'failed' }, { id: 2, slug: 'ch-2' }],
-      audioSlugs: [],
+      chapters: [{ id: 1, slug: 'ff-1', generationState: 'failed' }, { id: 2, slug: 'ff-2' }],
     });
-    expect((await scanOneBook(dir)).status).toBe('generating');
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    const b = (await flatten()).find((x) => x.title === 'Failed First Book')!;
+    expect(b.status).toBe('generating');
   });
 
   it('castConfirmed + all rendered → complete (not voices_pending)', async () => {
-    const dir = await makeBook({
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Done Book', {
       castConfirmed: true,
-      chapters: [{ id: 1, slug: 'ch-1' }, { id: 2, slug: 'ch-2' }],
-      audioSlugs: ['ch-1', 'ch-2'],
+      chapters: [{ id: 1, slug: 'db-1' }],
     });
-    expect((await scanOneBook(dir)).status).toBe('complete');
+    await seedAnalysisCache(`m_${bookId}`, [1]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeSegments(audioRoot, 'db-1', 20 * 60);
+    writeFileSync(join(audioRoot, 'db-1.mp3'), '');
+    const b = (await flatten()).find((x) => x.title === 'Done Book')!;
+    expect(b.status).toBe('complete');
   });
 });
 ```
 
-> If the test file has no reusable `makeBook`/`scanOneBook` helpers, adapt to whatever the existing status tests use (grep the file for `status).toBe('generating'` and copy that setup verbatim). Do not invent a new harness — reuse the file's.
+> `writeFileSync` and `join` are already imported at the top of `scan.test.ts` (used by the existing runtime tests) — no new imports needed.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -186,7 +213,7 @@ const ALL_STATUSES: LibraryBookStatus[] = [
 ];
 ```
 
-Add a routing test. First grep for the existing `openBook` reducer test (`grep -rn "openBook" src/store/*.test.ts`); append there, else create `src/store/ui-slice.test.ts` following the slice-test pattern in the repo:
+Add a routing test to `src/store/ui-slice.test.ts` (the file already exists and has `openBook` tests — append there; match the file's existing import of the reducer/actions):
 
 ```ts
 it('openBook routes a voices_pending book to the cast view', () => {
@@ -195,15 +222,27 @@ it('openBook routes a voices_pending book to the cast view', () => {
 });
 ```
 
-Add a filter test to `src/views/book-library.test.tsx` (reuse `applyLibraryFilters` — it is exported):
+Add a filter test to `src/views/book-library.test.tsx` using the file's REAL builder `makeLibBook` (verified at `book-library.test.tsx:893`) wrapped in the `LibraryAuthor[]` shape the existing `applyLibraryFilters` tests use:
 
 ```ts
 it("counts a voices_pending book under the 'in_progress' filter", () => {
-  const authors = makeAuthors([{ bookId: 'b1', status: 'voices_pending' }]); // reuse the file's builder
-  const result = applyLibraryFilters(authors, { filter: 'in_progress', search: '', tags: [], languages: [] });
-  expect(result.flatMap((a) => a.series.flatMap((s) => s.books))).toHaveLength(1);
+  const authors: LibraryAuthor[] = [
+    {
+      name: 'Marin Vale',
+      series: [
+        {
+          name: 'Northern Coast Trilogy',
+          books: [makeLibBook({ bookId: 'b1', title: 'Cast Ready', status: 'voices_pending' })],
+        },
+      ],
+    },
+  ];
+  const out = applyLibraryFilters(authors, { filter: 'in_progress', search: '', tags: [], languages: [] });
+  expect(out.flatMap((a) => a.series.flatMap((s) => s.books))).toHaveLength(1);
 });
 ```
+
+> `applyLibraryFilters`, `makeLibBook`, and the `LibraryAuthor` type are all already in scope in `book-library.test.tsx` — no new imports.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -336,25 +375,26 @@ git commit -m "feat(frontend): route voices_pending books to the Cast view"
 - Consumes: the `voices_pending` mock book from Task 2 (`src/mocks/library.ts`, bookId `vp`) rendered by Vite in mock mode.
 - Produces: a browser-level assertion that opening a `voices_pending` card lands on the Cast view.
 
-- [ ] **Step 1: Read the existing spec to match its harness**
+- [ ] **Step 1: Read the existing spec + helpers to match the harness**
 
-Run: `sed -n '1,80p' e2e/cast-first-landing-and-voice-gate.spec.ts`
-Note how it boots mock mode, opens a library card, and asserts the active view (selector / hash). Reuse those exact helpers.
+Run: `sed -n '1,60p' e2e/cast-first-landing-and-voice-gate.spec.ts` and `grep -n "export" e2e/helpers.ts`
+The spec imports from `./helpers` (`goToConfirm`, `confirmCastAndReachManuscript`, `waitForRouteReady`, …) and runs `test.describe.configure({ mode: 'serial' })`. There is no library-card-open helper here, so borrow the library-open path from a library spec (e.g. `grep -rn "getByText\|card\|#/books/" e2e/library-*.spec.ts` for the click-to-open pattern) rather than inventing a page-object.
 
 - [ ] **Step 2: Add the failing e2e case**
 
-Append a test that opens the `vp` card from the library and asserts the Cast view is active. Use the file's existing view-assertion helper; illustrative shape:
+The `vp` mock book (Task 2) lands in the library grid. The ready-stage hash grammar is `#/books/<id>/<view>` (plural "books" — verified in `src/lib/router.ts:65`), so a `voices_pending` reopen must land on `#/books/vp/cast`. Illustrative shape — wire the boot + card-open to the real helpers found in Step 1:
 
 ```ts
 test('reopening a cast-ready (voices_pending) book lands on the Cast view', async ({ page }) => {
-  await gotoLibrary(page);                 // reuse the spec's existing boot helper
-  await openBookCard(page, 'The Tidewatcher');
-  await expect(page).toHaveURL(/#\/book\/vp\/cast/);   // match the spec's URL/selector convention
+  await page.goto('/');                                   // mock-mode library (match sibling specs' base)
+  await waitForRouteReady(page);
+  await page.getByText('The Tidewatcher').click();        // open the vp card (use the library spec's exact selector)
+  await expect(page).toHaveURL(/#\/books\/vp\/cast/);
   await expect(page.getByRole('heading', { name: /cast/i })).toBeVisible();
 });
 ```
 
-> Replace `gotoLibrary`/`openBookCard`/the URL regex with the spec's actual helpers and hash grammar (`stageToHash` → `#/book/<id>/cast`). Do not introduce a new page-object.
+> Correct the base-URL/goto and the card selector to whatever the library e2e specs actually use; keep the `#/books/vp/cast` (plural) URL assertion — that is the verified hash grammar.
 
 - [ ] **Step 3: Run the e2e spec**
 
