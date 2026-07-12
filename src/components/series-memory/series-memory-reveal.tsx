@@ -117,7 +117,7 @@ export function SeriesMemoryReveal({
       <div
         // h-full on phone (full-screen sheet), height-capped + internally
         // scrollable on desktop — matches the house modal pattern (queue /
-        // rebaseline). The old `min-h-screen fine-pointer:min-h-0 overflow-auto` had NO
+        // rebaseline). The old `min-h-screen sm:min-h-0 overflow-auto` had NO
         // max-height, so a large carried cast grew the panel past the viewport
         // and pushed the footer (Share / Export) off-screen — unusable.
         className="bg-[#1b1714] text-cream w-full sm:max-w-2xl sm:rounded-2xl p-7 h-full sm:h-auto sm:max-h-[90vh] overflow-y-auto scrollbar-thin"
