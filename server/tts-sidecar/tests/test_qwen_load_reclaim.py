@@ -206,6 +206,8 @@ def qwen_meta_tensor_failure_runtime(monkeypatch):
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.setattr(main, "_apply_torch_perf_flags", lambda _t: None)
     monkeypatch.setattr(main, "_reclaim_host_and_vram", lambda: None)
+    # No recycle is pending by default, so the loop's fast-fail guard stays inert.
+    monkeypatch.setattr(main, "_restart_pending", False)
 
     engine = main.ENGINES["qwen"]
     assert isinstance(engine, main.QwenEngine)
@@ -282,17 +284,17 @@ class _MetaThenOomQwen:
         return cls(model_id, inner)
 
 
-def test_meta_fault_then_nonmeta_retry_schedules_recycle_and_surfaces_meta_signal(
+def test_meta_fault_then_nonmeta_retry_schedules_recycle_and_surfaces_true_error(
     qwen_meta_tensor_failure_runtime, monkeypatch
 ) -> None:
     """Regression (code-review high, 2026-07-12): a meta fault on attempt 1
     followed by a NON-meta fault (CUDA OOM) on the retry must (a) STILL schedule
-    the self-recycle — the process already hit the meta fault, so it needs the
-    fresh sidecar — and (b) re-raise the META signal (NotImplementedError), NOT
-    the retry's OOM. Callers classify on the exception type (e.g.
-    _ensure_base17_for_mint maps the meta fault to its 503 'corrupt' fallback but
-    an OOM to a generic 500), so surfacing the OOM here would silently flip that
-    signal. The recycle is keyed on the meta fault detail."""
+    the self-recycle keyed on the meta fault — the process already hit it, so it
+    needs the fresh sidecar — and (b) re-raise the ACTUAL error (the OOM), NOT a
+    synthetic meta one. Each caller classifies the true error per its own
+    contract: the design route's CUDA-poison latch fires its 503 on a genuine OOM,
+    and _ensure_base17_for_mint maps a genuine OOM to its intended 500. Masking the
+    OOM as the meta fault would silently break both."""
     engine = qwen_meta_tensor_failure_runtime
     _MetaThenOomQwen._loads = 0
     monkeypatch.setattr(sys.modules["qwen_tts"], "Qwen3TTSModel", _MetaThenOomQwen)
@@ -301,11 +303,25 @@ def test_meta_fault_then_nonmeta_retry_schedules_recycle_and_surfaces_meta_signa
         main, "_schedule_model_load_fault_restart",
         lambda *a: scheduled.append(a),
     )
-    with pytest.raises(NotImplementedError, match="meta tensor"):
+    with pytest.raises(RuntimeError, match="out of memory"):
         engine._load_qwen_model(engine.BASE_MODEL)
     assert _MetaThenOomQwen._loads == 2, "meta fault on attempt 1, OOM on the retry"
     assert len(scheduled) == 1, "the earlier meta fault must still schedule the recycle"
     assert "meta tensor" in scheduled[0][1].lower(), "recycle keyed on the meta fault, not the OOM"
+
+
+def test_load_fast_fails_when_recycle_already_pending(qwen_meta_tensor_failure_runtime, monkeypatch) -> None:
+    """Regression (code-review high, 2026-07-12): once a sidecar recycle is
+    scheduled, a loader queued behind the single-flight lock must fail fast rather
+    than run the whole retry loop — otherwise every queued chapter stalls ~seconds
+    and 500s serially, re-creating the 'crashing continuously' wall. No load
+    attempt should even start."""
+    engine = qwen_meta_tensor_failure_runtime
+    _MetaTensorFakeQwen._loads = 0
+    monkeypatch.setattr(main, "_restart_pending", True)
+    with pytest.raises(RuntimeError, match="recycle is already pending"):
+        engine._load_qwen_model(engine.BASE_MODEL)
+    assert _MetaTensorFakeQwen._loads == 0, "no load attempt should run once a recycle is pending"
 
 
 def test_schedule_model_load_fault_restart_is_idempotent_and_uses_its_own_exit_code(monkeypatch) -> None:
