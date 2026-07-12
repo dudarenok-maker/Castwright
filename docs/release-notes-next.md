@@ -40,6 +40,7 @@ opening a new one.
 ## 🎙️ Voice design & casting
 
 - **"Design full cast" no longer silently grinds through GPU contention.** If another job was using the GPU while a bulk cast design was running, every remaining character used to fail identically, one after another, with the progress pill misleadingly climbing toward 100% the whole time (even reading "0/16 · 94%" — zero characters designed, but nearly "complete"). The sidecar now recognizes this specific contention and triggers its existing self-recovery restart (matching how it already handles other transient failures); the job rides out a brief pause before halting with a clear message naming the cause and how far it got, instead of grinding through every remaining character. The progress pill's percent no longer counts failures as progress, and now shows the failure count inline while the job is still running. (#1533)
+- **fe-7: per-row voice sample-preview button in the model-voice override picker (#416).** Each base-voice row in the Profile Drawer's override picker now carries a hover/focus-revealed ▶ (faintly visible on touch via `coarse-pointer:opacity-60`) that auditions that voice through the shared `playBaseVoiceSampleWithAutoLoad` single-flight helper using the drawer's `previewText`, without committing the override; picking the row still commits. `stopPropagation` separates audition from selection, and the button carries `coarse-pointer` 44px touch sizing. New wrapper tests in `voice-override-picker.test.tsx`.
 
 ## 🌐 Languages
 
