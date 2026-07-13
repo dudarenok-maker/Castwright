@@ -476,10 +476,10 @@ class PlayerController {
     // Re-broadcast first so the UI/media session update even when no accumulator
     // is wired (the early-return below is stats-only).
     if (!_playing.isClosed) _playing.add(isPlaying);
-    // Accrual is gated on play/pause intent only. Safe because playback is always
-    // from local downloaded files (setFilePath), so there are no sustained buffer
-    // stalls. If streaming (setStreamUrl) is ever wired into the player flow,
-    // additionally gate accrual on processingState == ready (spec fs-16 m7).
+    // Accrual is gated on play/pause intent only. With app-10 LAN streaming
+    // (setStreamUrl), a network stall can leave `playing` true while buffering,
+    // slightly over-counting listen time — accepted as negligible for brief
+    // LAN stalls (spec fs-16 m7).
     final acc = _accumulator;
     if (acc == null) return;
     if (isPlaying) {

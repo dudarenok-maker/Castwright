@@ -16,6 +16,12 @@ class FakeAudioEngine implements AudioEngine {
   Duration _position = Duration.zero;
   String? loadedPath;
 
+  /// When true, [setStreamUrl] throws instead of succeeding — simulates the
+  /// initial-load throw channel (app-10 §6/§7) that the real `just_audio`
+  /// adapter can hit (e.g. a bad loopback connect) before any error-stream
+  /// event fires.
+  bool throwOnStream = false;
+
   // Mutable duration so tests can inject a known chapter length.
   Duration? _duration;
   final StreamController<Duration?> _durationCtl =
@@ -58,6 +64,9 @@ class FakeAudioEngine implements AudioEngine {
 
   @override
   Future<void> setStreamUrl(String url, {Map<String, String>? headers}) async {
+    if (throwOnStream) {
+      throw Exception('stream load failed');
+    }
     loadedPath = url;
     _position = Duration.zero;
     calls.add('stream:$url');
@@ -880,6 +889,76 @@ void main() {
       pc.needsDownloadStream.listen(emitted.add);
       await pc.playChapter('u1');
       engine.emitError('boom');
+      await Future<void>.delayed(Duration.zero);
+      expect(repaired, 1);
+      expect(emitted, isEmpty);
+    });
+
+    test(
+        'initial-load throw (non-auth) routes to needs-download once, '
+        'and a later errorStream for the same load is a no-op (idempotency)',
+        () async {
+      final engine = FakeAudioEngine();
+      // lastUpstreamStatus left at its default (null) — a non-401/403 outcome.
+      final proxy = FakeProxy();
+      var repaired = 0;
+      final pc = PlayerController(
+        audioEngine: engine,
+        playbackStore: MemPlaybackStore(),
+        playlistLoader: (_) async => list,
+        clock: () => DateTime.utc(2026, 6, 6),
+        streaming: await cfg(proxy, streamOn: true, onLan: true, onRepair: () => repaired++),
+      );
+      // openBook's own initial load must succeed quietly (throwOnStream is still
+      // false here) — otherwise it would ALSO route through the failure channel,
+      // confounding the single-route assertion below.
+      await pc.openBook('b1');
+      final emitted = <String>[];
+      pc.needsDownloadStream.listen(emitted.add);
+
+      // Now arm the throw and reload the same chapter — this is the initial-load
+      // `catch` branch in _loadSource (not the errorStream branch).
+      engine.throwOnStream = true;
+      await pc.playChapter('u1');
+      await Future<void>.delayed(Duration.zero);
+      expect(emitted, ['u1'],
+          reason: 'initial-load throw must route to needs-download exactly once');
+      expect(proxy.clears, 1);
+      expect(repaired, 0, reason: 'non-auth failure must not trigger repair');
+
+      // Double-fire idempotency (the load-bearing property): a subsequent
+      // errorStream event for the SAME failed load must be a no-op, because
+      // _handleStreamFailure already flipped _currentIsStream to false. Without
+      // the guard, this would route a second time (emitted == ['u1', 'u1']).
+      engine.emitError('late');
+      await Future<void>.delayed(Duration.zero);
+      expect(emitted, ['u1'],
+          reason: 'a late errorStream for an already-routed failure must not '
+              'double-fire needs-download');
+      expect(proxy.clears, 1,
+          reason: 'clearMapping must not be called a second time for the same failure');
+    });
+
+    test(
+        'initial-load throw with lastUpstreamStatus 401 -> onRepairNeeded once, no download prompt',
+        () async {
+      final engine = FakeAudioEngine();
+      final proxy = FakeProxy()..lastUpstreamStatus = 401;
+      var repaired = 0;
+      final pc = PlayerController(
+        audioEngine: engine,
+        playbackStore: MemPlaybackStore(),
+        playlistLoader: (_) async => list,
+        clock: () => DateTime.utc(2026, 6, 6),
+        streaming: await cfg(proxy, streamOn: true, onLan: true, onRepair: () => repaired++),
+      );
+      // openBook's own initial load must succeed quietly first (see the sibling
+      // test above for why).
+      await pc.openBook('b1');
+      final emitted = <String>[];
+      pc.needsDownloadStream.listen(emitted.add);
+      engine.throwOnStream = true;
+      await pc.playChapter('u1');
       await Future<void>.delayed(Duration.zero);
       expect(repaired, 1);
       expect(emitted, isEmpty);
