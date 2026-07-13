@@ -48,8 +48,30 @@ const ALL_STANDALONE = [
 /* Numbered-section number: Arabic digit, Roman numeral, or English/non-English word
    form (with optional compound for 21–99: "twenty-one", "thirty two", …). */
 const NUMBER_PART = `(?:[ivxlcdm\\d]+|(?:${ALL_NUMBER_WORDS})(?:[-\\s](?:${ALL_NUMBER_WORDS}))?)`;
+
+/* CJK (zh/ja) chapter headings are the CIRCUMFIX `第<number>章` — keyword
+   *after* the number, no whitespace between them, and kanji/fullwidth
+   numerals that NUMBER_PART doesn't cover. The Latin `KEYWORD \s NUMBER`
+   shape above can never match this, so it needs its own alternative.
+
+   MUST be whole-line anchored: the number+ender must be followed by
+   end-of-line or a separator, never arbitrary prose. A naive prefix match
+   (`^第[…]+[章話…]`) also matches mid-sentence text like `第三章で述べたよう
+   に…` ("as stated in chapter 3…") and compounds like `第二部隊が丘を…`
+   (第N部隊 = "the Nth squad") — and parseText deletes a matched line as the
+   chapter title, silently eating prose. The lookahead below caps the whole
+   line at CJK_HEADING_MAX_LEN chars (a real CJK heading is short) and the
+   trailing group only allows a separator or end-of-string right after the
+   ender character, so a continuation like `で`/`が`/`隊` fails the match. */
+const CJK_HEADING_MAX_LEN = 20;
+const CJK_NUMBER = '[0-9０-９〇一二三四五六七八九十百千]+';
+const CJK_ENDER = '[章話回節部幕巻]'; // 章話回節部幕巻
+const CJK_SEP = '(?:[\\s：:—-]|$)'; // whitespace, fullwidth/halfwidth colon, em-dash, hyphen, or end-of-line
+const CJK_STANDALONE = '序章|終章|プロローグ|エピローグ'; // 序章|終章|プロローグ|エピローグ
+const CJK_HEADING_ALT = `(?=.{1,${CJK_HEADING_MAX_LEN}}$)(?:第${CJK_NUMBER}${CJK_ENDER}${CJK_SEP}|(?:${CJK_STANDALONE})${CJK_SEP})`; // 第<number><ender>
+
 const CHAPTER_HEADING_RE = new RegExp(
-  `^(?:#{1,2}\\s+\\S|(?:${ALL_HEADING_KEYWORDS})\\s+${NUMBER_PART}\\b|(?:${ALL_STANDALONE})\\b)`,
+  `^(?:#{1,2}\\s+\\S|(?:${ALL_HEADING_KEYWORDS})\\s+${NUMBER_PART}\\b|(?:${ALL_STANDALONE})\\b|${CJK_HEADING_ALT})`,
   'iu',
 );
 
