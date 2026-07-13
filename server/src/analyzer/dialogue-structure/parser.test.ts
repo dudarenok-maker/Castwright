@@ -130,8 +130,7 @@ describe('parser — ja quote conventions (CJK, fs-59 W3)', () => {
   // never splits contiguous CJK text with no inter-word spacing — the whole
   // "と田中は言った" reads as ONE token, never matching the roster's "田中"
   // stem. This case is the driver for Task 3.5 (CJK roster-name tag anchoring).
-  it.skip('ja quotes: roster NAME tag anchors 「わかった」と田中は言った。 → 田中', () => {
-    // un-skip in Task 3.5 (CJK roster-name tag anchoring)
+  it('ja quotes: roster NAME tag anchors 「わかった」と田中は言った。 → 田中', () => {
     const paras = parseChapterStructure('「わかった」と田中は言った。', jaIdx);
     const spans = paras[0].spans;
     expect(spans.map((s) => s.kind)).toEqual(['speech', 'tag']);
