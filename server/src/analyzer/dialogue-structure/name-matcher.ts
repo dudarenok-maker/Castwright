@@ -39,6 +39,13 @@ export function findRosterName(text: string, index: NameIndex): string | null {
     let bestId: string | null = null;
     let bestLen = 0;
     for (const [stem, id] of index.stems) {
+      // `stem.length < 2` is UTF-16 code units, not codepoints: a lone
+      // supplementary-plane Han char (CJK Ext-B+, U+20000+) is one glyph but
+      // length 2, so it slips this guard. Accepted — obscure beyond-BMP names
+      // are out of the contemporary zh/ja fiction scope (fs-59 W3).
+      // `!CJK_RE.test(stem)` skips Latin/Cyrillic stems: in a mixed clause with
+      // a stray Han glyph we enter this branch, and substring-matching a short
+      // romanized stem here would be a cross-script false positive.
       if (stem.length < 2 || !CJK_RE.test(stem)) continue;
       if (stem.length > bestLen && text.includes(stem)) {
         bestId = id;
