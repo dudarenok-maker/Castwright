@@ -1,9 +1,12 @@
 import 'dart:async';
 
 import '../domain/listen_stats_accumulator.dart';
+import '../domain/playback_source.dart';
 import '../domain/skip_behavior.dart';
 import 'audio_engine.dart';
+import 'file_store.dart';
 import 'library_database.dart';
+import 'loopback_proxy.dart';
 import 'playback_store.dart';
 
 /// A book/chapter counts as finished once playback enters this window before
@@ -30,6 +33,28 @@ class PlayableChapter {
   /// `/api/books/<id>/chapters/<n>/audio.mp3`. Null when the chapter has no
   /// rendered audio (never added to a playlist in that case).
   final String? audioUrl;
+}
+
+/// The `app-10` streaming dependencies, bundled so [PlayerController]'s
+/// constructor stays backward-compatible: when this is null the controller keeps
+/// its exact offline-first behaviour (always `setFilePath`). All-or-nothing —
+/// the runtime always supplies every field together.
+class StreamingConfig {
+  const StreamingConfig({
+    required this.fileStore,
+    required this.streamOverLan,
+    required this.onHomeLan,
+    required this.urlResolver,
+    required this.proxy,
+    required this.onRepairNeeded,
+  });
+
+  final FileStore fileStore;
+  final bool Function() streamOverLan; // live toggle (re-read per load)
+  final Future<bool> Function() onHomeLan;
+  final Uri Function(String path) urlResolver;
+  final LoopbackProxy proxy;
+  final void Function() onRepairNeeded;
 }
 
 /// Pure now-playing snapshot; the audio-service handler maps it to a MediaItem
@@ -72,6 +97,7 @@ class PlayerController {
     this._statsDb,
     this._sessionId,
     this._localDate,
+    this._streaming,
   })  : _engine = audioEngine,
         _store = playbackStore,
         _loadPlaylist = playlistLoader,
@@ -98,6 +124,13 @@ class PlayerController {
     });
     // Subscribe to playing state to drive the accumulator.
     _playingSub = _engine.playingStream.listen(_onPlayingChanged);
+    if (_streaming != null) {
+      // Mid-stream failure channel (§6). `_handleStreamFailure` self-guards on
+      // `_currentIsStream`, so a local-file playback error no-ops and a single
+      // failure can't be routed twice (this errorStream event AND the initial-load
+      // `catch` in `_loadSource` can both fire — the guard makes it idempotent).
+      _errorSub = _engine.errorStream.listen((_) => _handleStreamFailure());
+    }
   }
 
   final AudioEngine _engine;
@@ -111,6 +144,19 @@ class PlayerController {
   final String? _sessionId;
   final String Function()? _localDate;
   StatsAccumulator? _accumulator;
+
+  // app-10: optional LAN-streaming wiring — null keeps the legacy offline-first
+  // behaviour (see [StreamingConfig]).
+  final StreamingConfig? _streaming;
+  StreamSubscription<Object>? _errorSub;
+  bool _currentIsStream = false;
+
+  final StreamController<String> _downloadToPlay =
+      StreamController<String>.broadcast();
+  /// Emits the chapter uuid the user tried to play that must be downloaded first
+  /// (or whose LAN stream failed for a non-auth reason). The UI shows the
+  /// one-line "download to play" message.
+  Stream<String> get needsDownloadStream => _downloadToPlay.stream;
 
   /// Skip-button behaviour + seek amounts (driven by `app-13`); mutable so
   /// settings can change them at runtime.
@@ -193,8 +239,8 @@ class PlayerController {
   /// Auto-advance to the next chapter when the current one ends.
   Future<void> _advance() async {
     if (_index >= 0 && _index + 1 < _playlist.length) {
-      await _loadIndex(_index + 1);
-      await play();
+      final loaded = await _loadIndex(_index + 1);
+      if (loaded) await play();
     }
   }
 
@@ -213,8 +259,8 @@ class PlayerController {
   Future<void> playChapter(String uuid) async {
     final i = _playlist.indexWhere((c) => c.uuid == uuid);
     if (i < 0) return;
-    await _loadIndex(i);
-    await play();
+    final loaded = await _loadIndex(i, userInitiated: true);
+    if (loaded) await play();
   }
 
   /// Prepare a book for playback: load its playlist, restore the saved resume
@@ -258,11 +304,11 @@ class PlayerController {
     // starts fresh — _loadIndex's own reset only fires on non-last chapters,
     // which misses single-chapter books where index 0 == length-1 always.
     _bookFinishEmitted = false;
-    await _loadIndex(index, seekMs: saved?.positionMs ?? 0);
+    await _loadIndex(index, seekMs: saved?.positionMs ?? 0, userInitiated: true);
   }
 
-  Future<void> _loadIndex(int index, {int seekMs = 0}) async {
-    if (index < 0 || index >= _playlist.length) return;
+  Future<bool> _loadIndex(int index, {int seekMs = 0, bool userInitiated = false}) async {
+    if (index < 0 || index >= _playlist.length) return false;
     // Capture prior index BEFORE reassigning — used for the backward-nav replay signal.
     final prev = _index;
     _index = index;
@@ -283,10 +329,12 @@ class PlayerController {
           ? Duration(milliseconds: (c.durationSec! * 1000).round())
           : null,
     ));
-    await _engine.setFilePath(c.path);
-    if (_speed != 1.0) await _engine.setSpeed(_speed); // persist speed across chapters
-    if (_boostDb > 0) await _engine.setVolumeBoost(_boostDb); // persist boost too
-    if (seekMs > 0) await _engine.seek(Duration(milliseconds: seekMs));
+    final loaded = await _loadSource(c, userInitiated: userInitiated);
+    if (loaded) {
+      if (_speed != 1.0) await _engine.setSpeed(_speed); // persist across chapters
+      if (_boostDb > 0) await _engine.setVolumeBoost(_boostDb);
+      if (seekMs > 0) await _engine.seek(Duration(milliseconds: seekMs));
+    }
     // Measure the autosave interval from load time, so we don't persist on the
     // very first position tick.
     _lastSave = _now();
@@ -296,6 +344,77 @@ class PlayerController {
     if (prev >= 0 && index < prev && _bookId != null) {
       _bookReplayed.add(_bookId!);
     }
+    return loaded;
+  }
+
+  /// Loads the chapter's playback source. Returns true iff a source was actually
+  /// set on the engine (local file or a live stream); false for `needsDownload`,
+  /// a null `audioUrl`, or a failed stream — callers skip `play()` on false.
+  Future<bool> _loadSource(PlayableChapter c, {required bool userInitiated}) async {
+    final cfg = _streaming;
+    if (cfg == null) {
+      _currentIsStream = false;
+      await _engine.setFilePath(c.path); // legacy: offline-first only
+      return true;
+    }
+    final src = resolvePlaybackSource(
+      localFileExists: await cfg.fileStore.exists(c.path),
+      onHomeLan: await cfg.onHomeLan(),
+      streamingEnabled: cfg.streamOverLan(),
+    );
+    switch (src) {
+      case PlaybackSource.localFile:
+        _currentIsStream = false;
+        await _engine.setFilePath(c.path);
+        return true;
+      case PlaybackSource.lanStream:
+        final audioUrl = c.audioUrl;
+        if (audioUrl == null) {
+          _currentIsStream = false;
+          if (userInitiated) _notifyDownloadToPlay();
+          return false;
+        }
+        await cfg.proxy.start(); // first bind, on demand
+        final loopback = cfg.proxy.register(upstream: cfg.urlResolver(audioUrl));
+        _currentIsStream = true;
+        try {
+          // The player only ever sees http://127.0.0.1/… and NO headers.
+          await _engine.setStreamUrl(loopback.toString());
+          return true;
+        } catch (_) {
+          _handleStreamFailure(); // initial-load throw channel (§6/§7)
+          return false;
+        }
+      case PlaybackSource.needsDownload:
+        _currentIsStream = false;
+        if (userInitiated) _notifyDownloadToPlay(); // else auto-advance: halt quietly
+        return false;
+    }
+  }
+
+  /// The single §7 failure router (shared by the initial-load throw and the
+  /// mid-stream errorStream event). Self-guards on `_currentIsStream` so it is
+  /// idempotent per stream load AND no-ops on a local-file error: reads the
+  /// proxy's upstream-status side-channel, clears the mapping, and either re-pairs
+  /// (fresh 401/403) or surfaces "download to play" (everything else, incl. null).
+  /// No auto-retry.
+  void _handleStreamFailure() {
+    final cfg = _streaming;
+    if (cfg == null) return;
+    if (!_currentIsStream) return; // not streaming, or already handled
+    _currentIsStream = false;
+    final status = cfg.proxy.lastUpstreamStatus;
+    cfg.proxy.clearMapping();
+    if (status == 401 || status == 403) {
+      cfg.onRepairNeeded();
+    } else {
+      _notifyDownloadToPlay();
+    }
+  }
+
+  void _notifyDownloadToPlay() {
+    final uuid = currentChapterUuid;
+    if (uuid != null && !_downloadToPlay.isClosed) _downloadToPlay.add(uuid);
   }
 
   Future<void> seekTo(Duration position) =>
@@ -346,7 +465,9 @@ class PlayerController {
         await _engine.seek(target);
       case ChapterStep(:final direction):
         final next = _index + direction;
-        if (next >= 0 && next < _playlist.length) await _loadIndex(next);
+        if (next >= 0 && next < _playlist.length) {
+          await _loadIndex(next, userInitiated: true);
+        }
     }
   }
 
@@ -449,6 +570,9 @@ class PlayerController {
     await _chapterCompleted.close();
     await _bookCompleted.close();
     await _bookReplayed.close();
+    await _errorSub?.cancel();
+    await _downloadToPlay.close();
+    await _streaming?.proxy.dispose();
     await _engine.dispose();
   }
 }
