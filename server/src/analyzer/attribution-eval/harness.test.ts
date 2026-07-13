@@ -24,7 +24,10 @@ function loadFixture() {
 describe('attribution-eval harness — coalfall-ch1.en.labelled.json', () => {
   it('parses cleanly via parseLabelledChapter (proves 1.1 + the fixture are valid)', () => {
     const truth = loadFixture();
-    expect(truth.lines.length).toBeGreaterThan(50);
+    // Exact tripwire: the fixture's line count is load-bearing — the
+    // mis-attribution test's expected precision is (length-3)/length — so an
+    // accidental fixture edit must fail loudly rather than pass a loose bound.
+    expect(truth.lines.length).toBe(58);
     expect(truth.chapterText.length).toBeGreaterThan(0);
   });
 
