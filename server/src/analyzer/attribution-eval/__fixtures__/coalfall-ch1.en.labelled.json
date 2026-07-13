@@ -1,0 +1,88 @@
+{
+  "chapterText": "The forge had gone the colour of a banked sunset, and Wren was scraping the last of the clinker when the knocking started.\n\n\"Leave it,\" said Master Oduvan, without looking up. Seventy winters had worn his voice down to gravel and patience. \"Whoever it is can knock.\"\n\n\"It might be a customer.\"\n\n\"At this hour it's either a drunk or a debt. Neither pays better for being let in quickly.\"\n\nThe door opened anyway. Maerin the reeve put her head in, and the cold came with her. \"Oduvan. Bar the shutters and douse the coals.\" Her words were clipped, the way they always were when she had run. \"There's a dragon on the Coalfall road. Big as a barn. It's coming down the lane.\"\n\nWren's scraper stopped. \"A real one?\"\n\n\"No, child, a painted one.\" Maerin did not smile. \"Real. And making straight for the only lit window in the valley, which is yours. Douse the fire.\"\n\n\"If I douse the fire,\" Oduvan said, \"I lose the weld I've been nursing since noon. A dragon can wait the length of a weld or it can't, and either way I'd rather meet it warm.\" He set down his tongs. \"Sparrow. Open the big door.\"\n\nWren — Sparrow only to him, and only when he had forgotten to be stern — went to the great door and hauled it wide.\n\nThe dragon filled the dark beyond it the way water fills a cup. One eye, gold and slow, came level with the doorway and stopped there, considering the small heat of the place.\n\nFrom somewhere down the lane, a voice cracked out of the dark: \"Run, you fools — it'll have the lot of you!\"\n\nNobody ran.\n\n\"I have come a long way,\" the dragon said. Its voice was not loud. It was the sound a mountain might make if a mountain were tired, and each word arrived a moment after you expected it. \"The villages call me Coalfall. That is not my name, but it will do. I am told the best smith in the valley keeps this forge.\"\n\n\"You're told wrong,\" said Oduvan. \"The best smith in the valley died nine years back. You'll have to make do with the second.\"\n\n\"Modesty, or a sales tactic?\"\n\n\"At my age, the same thing.\"\n\nThe gold eye moved to Wren, and she felt it the way you feel sun through a window. \"And the small one?\"\n\n\"My apprentice. She's thirteen and she thinks I can't hear her sighing. She'll be better than me before she's twenty, which is the only reason I keep her.\"\n\n\"I never sigh,\" said Wren, who sighed.\n\nThe dragon lowered itself until its breath stirred the coals, and they brightened without being asked. \"I do not want a sword,\" it said. \"Everyone wants me dead, and a sword would only encourage them. I want a bell. Small enough to hang from a claw. I am the last of mine, and when I go there will be no one to mark it. I should like to mark it myself, in advance — while there is still someone who knows how to cast a true note.\"\n\nFor a while the only sound was the fire.\n\nThen Oduvan picked up his tongs again. \"A bell,\" he said, as if dragons asked for them every Tuesday. \"Bronze, then, not iron. Sparrow — the good tin, the crucible, and stop crying on the moulding sand, it will spoil the cast.\"\n\n\"I'm not crying.\"\n\n\"Of course not.\" He squinted at the dragon, measuring it the way he measured everything. \"It'll take till morning. You'll have to keep the fire company while we work.\"\n\nThe dragon settled into the doorway, one eye half-closed against the warmth, and said, in the voice of a tired mountain that had not, for a very long time, been asked to wait somewhere kind:\n\n\"I have nothing but time. Begin.\"",
+  "lines": [
+    { "text": "The forge had gone the colour of a banked sunset, and Wren was scraping the last of the clinker when the knocking started.", "speakerId": "narrator" },
+
+    { "text": "\"Leave it,\"", "speakerId": "oduvan" },
+    { "text": "said Master Oduvan, without looking up.", "speakerId": "narrator" },
+    { "text": "Seventy winters had worn his voice down to gravel and patience.", "speakerId": "narrator" },
+    { "text": "\"Whoever it is can knock.\"", "speakerId": "oduvan" },
+
+    { "text": "\"It might be a customer.\"", "speakerId": "wren" },
+
+    { "text": "\"At this hour it's either a drunk or a debt. Neither pays better for being let in quickly.\"", "speakerId": "oduvan" },
+
+    { "text": "The door opened anyway.", "speakerId": "narrator" },
+    { "text": "Maerin the reeve put her head in, and the cold came with her.", "speakerId": "narrator" },
+    { "text": "\"Oduvan. Bar the shutters and douse the coals.\"", "speakerId": "maerin" },
+    { "text": "Her words were clipped, the way they always were when she had run.", "speakerId": "narrator" },
+    { "text": "\"There's a dragon on the Coalfall road. Big as a barn. It's coming down the lane.\"", "speakerId": "maerin" },
+
+    { "text": "Wren's scraper stopped.", "speakerId": "narrator" },
+    { "text": "\"A real one?\"", "speakerId": "wren" },
+
+    { "text": "\"No, child, a painted one.\"", "speakerId": "maerin" },
+    { "text": "Maerin did not smile.", "speakerId": "narrator" },
+    { "text": "\"Real. And making straight for the only lit window in the valley, which is yours. Douse the fire.\"", "speakerId": "maerin" },
+
+    { "text": "\"If I douse the fire,\"", "speakerId": "oduvan" },
+    { "text": "Oduvan said,", "speakerId": "narrator" },
+    { "text": "\"I lose the weld I've been nursing since noon. A dragon can wait the length of a weld or it can't, and either way I'd rather meet it warm.\"", "speakerId": "oduvan" },
+    { "text": "He set down his tongs.", "speakerId": "narrator" },
+    { "text": "\"Sparrow. Open the big door.\"", "speakerId": "oduvan" },
+
+    { "text": "Wren — Sparrow only to him, and only when he had forgotten to be stern — went to the great door and hauled it wide.", "speakerId": "narrator" },
+
+    { "text": "The dragon filled the dark beyond it the way water fills a cup.", "speakerId": "narrator" },
+    { "text": "One eye, gold and slow, came level with the doorway and stopped there, considering the small heat of the place.", "speakerId": "narrator" },
+
+    { "text": "From somewhere down the lane, a voice cracked out of the dark:", "speakerId": "narrator" },
+    { "text": "\"Run, you fools — it'll have the lot of you!\"", "speakerId": "voice" },
+
+    { "text": "Nobody ran.", "speakerId": "narrator" },
+
+    { "text": "\"I have come a long way,\"", "speakerId": "dragon" },
+    { "text": "the dragon said.", "speakerId": "narrator" },
+    { "text": "Its voice was not loud.", "speakerId": "narrator" },
+    { "text": "It was the sound a mountain might make if a mountain were tired, and each word arrived a moment after you expected it.", "speakerId": "narrator" },
+    { "text": "\"The villages call me Coalfall. That is not my name, but it will do. I am told the best smith in the valley keeps this forge.\"", "speakerId": "dragon" },
+
+    { "text": "\"You're told wrong,\"", "speakerId": "oduvan" },
+    { "text": "said Oduvan.", "speakerId": "narrator" },
+    { "text": "\"The best smith in the valley died nine years back. You'll have to make do with the second.\"", "speakerId": "oduvan" },
+
+    { "text": "\"Modesty, or a sales tactic?\"", "speakerId": "dragon" },
+
+    { "text": "\"At my age, the same thing.\"", "speakerId": "oduvan" },
+
+    { "text": "The gold eye moved to Wren, and she felt it the way you feel sun through a window.", "speakerId": "narrator" },
+    { "text": "\"And the small one?\"", "speakerId": "dragon" },
+
+    { "text": "\"My apprentice. She's thirteen and she thinks I can't hear her sighing. She'll be better than me before she's twenty, which is the only reason I keep her.\"", "speakerId": "oduvan" },
+
+    { "text": "\"I never sigh,\"", "speakerId": "wren" },
+    { "text": "said Wren, who sighed.", "speakerId": "narrator" },
+
+    { "text": "The dragon lowered itself until its breath stirred the coals, and they brightened without being asked.", "speakerId": "narrator" },
+    { "text": "\"I do not want a sword,\"", "speakerId": "dragon" },
+    { "text": "it said.", "speakerId": "narrator" },
+    { "text": "\"Everyone wants me dead, and a sword would only encourage them. I want a bell. Small enough to hang from a claw. I am the last of mine, and when I go there will be no one to mark it. I should like to mark it myself, in advance — while there is still someone who knows how to cast a true note.\"", "speakerId": "dragon" },
+
+    { "text": "For a while the only sound was the fire.", "speakerId": "narrator" },
+
+    { "text": "Then Oduvan picked up his tongs again.", "speakerId": "narrator" },
+    { "text": "\"A bell,\"", "speakerId": "oduvan" },
+    { "text": "he said, as if dragons asked for them every Tuesday.", "speakerId": "narrator" },
+    { "text": "\"Bronze, then, not iron. Sparrow — the good tin, the crucible, and stop crying on the moulding sand, it will spoil the cast.\"", "speakerId": "oduvan" },
+
+    { "text": "\"I'm not crying.\"", "speakerId": "wren" },
+
+    { "text": "\"Of course not.\"", "speakerId": "oduvan" },
+    { "text": "He squinted at the dragon, measuring it the way he measured everything.", "speakerId": "narrator" },
+    { "text": "\"It'll take till morning. You'll have to keep the fire company while we work.\"", "speakerId": "oduvan" },
+
+    { "text": "The dragon settled into the doorway, one eye half-closed against the warmth, and said, in the voice of a tired mountain that had not, for a very long time, been asked to wait somewhere kind:", "speakerId": "narrator" },
+
+    { "text": "\"I have nothing but time. Begin.\"", "speakerId": "dragon" }
+  ]
+}
