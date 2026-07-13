@@ -119,6 +119,11 @@ class _PlayerPaneState extends State<PlayerPane> {
           _scrollToCurrent(animate: false);
         });
       }
+      // If the pane was disposed during the awaits above (e.g. a fast two-pane
+      // book switch re-keys and tears this pane down mid-_prepare), bail before
+      // subscribing — otherwise these subs land on a disposed state's _subs list
+      // that dispose() already drained, and leak until the runtime streams close.
+      if (!mounted) return;
       // Track the real engine playing state so the transport reflects out-of-band
       // stops (headset/Android Auto disconnect, audio-focus loss) — not a local
       // flag that only flips on tap (which caused the "tap twice to restart" bug).
@@ -152,8 +157,16 @@ class _PlayerPaneState extends State<PlayerPane> {
     // (idempotent) so a compact-host pop still flushes resume promptly.
     final rt = widget.runtime;
     if (rt != null) {
-      rt.player
-          .pause()
+      // Only pause if THIS pane's book is still the engine's active book. On a
+      // two-pane switch, activateBook has already loaded the NEXT book before
+      // this pane disposes, so an unguarded pause() would hit the just-selected
+      // book. (Benign today — openBook doesn't auto-play — but guarded so it
+      // stays correct if that ever changes.) The resume push still targets THIS
+      // pane's outgoing book, whose position switchBook already saved locally.
+      final flush = rt.player.currentBookId == widget.bookId
+          ? rt.player.pause()
+          : Future<void>.value();
+      flush
           .then((_) => rt.resumeSync.syncBook(widget.bookId!))
           .catchError((_) => ResumeAction.noop);
     }

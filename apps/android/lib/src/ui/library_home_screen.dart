@@ -54,6 +54,12 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
     _refresh();
   }
 
+  @override
+  void dispose() {
+    _activeBook.dispose();
+    super.dispose();
+  }
+
   /// Local-first: paint the downloaded library immediately, then reconcile with
   /// the server in the background. A connection failure never blocks the user —
   /// they stay on the local library with an "Offline" retry chip. The state
@@ -200,27 +206,28 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
     }
   }
 
-  /// Layout-aware selection (app-21): always activates the book (engine +
-  /// persistence + reconcile) via [CompanionRuntime.activateBook]. In
-  /// two-pane the shell fills the persistent [PlayerPane] in place — no route
-  /// push, the engine stays live. In single-pane/medium, push [PlayerScreen]
-  /// as before (`activateBook` here is idempotent with the pane's own
-  /// self-activation in [PlayerPane]).
-  Future<void> _onSelect(String bookId, String title) async {
-    await widget.runtime.activateBook(bookId, title: title);
-    if (!mounted) return;
+  /// Layout-aware selection (app-21). The freshly-keyed [PlayerPane] self-activates
+  /// its book (engine + persistence + reconcile) in its own `initState`, so selection
+  /// here only updates [ActiveBook] and, in single-pane/medium, pushes [PlayerScreen].
+  /// Not gating on `activateBook` means the two-pane detail pane appears immediately
+  /// (with its loading spinner) instead of after a possibly-slow server reconcile.
+  void _onSelect(String bookId, String title) {
     _activeBook.select(bookId, title: title);
     final twoPane = libraryLayoutFor(
             windowSizeClassFor(MediaQuery.of(context).size.width)) ==
         LibraryLayout.twoPane;
     if (!twoPane) {
-      await Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) =>
-            PlayerScreen(runtime: widget.runtime, bookId: bookId, title: title),
-      ));
-      // Returning from the player: the book was just played (markPlayed), so
-      // refresh to surface it in the "Continue listening" rail + update progress.
-      if (mounted) await _refresh();
+      Navigator.of(context)
+          .push(MaterialPageRoute(
+            builder: (_) => PlayerScreen(
+                runtime: widget.runtime, bookId: bookId, title: title),
+          ))
+          .then((_) {
+        // Returning from the player: the book was just played (markPlayed), so
+        // refresh to surface it in the "Continue listening" rail + update progress.
+        // (Two-pane has no such return moment; its rail self-heals on next sync.)
+        if (mounted) _refresh();
+      });
     }
   }
 
