@@ -1,0 +1,1916 @@
+{
+  "sentences": [
+    {
+      "id": 1,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Глава первая — Стук",
+      "confidence": 0.99
+    },
+    {
+      "id": 2,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Горн остыл до цвета подёрнутого пеплом заката, и Рен выскребала последнюю окалину, когда раздался стук.",
+      "confidence": 0.98
+    },
+    {
+      "id": 3,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "«Оставь,",
+      "confidence": 0.95
+    },
+    {
+      "id": 4,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "— сказал мастер Одуван, не поднимая глаз.",
+      "confidence": 0.97
+    },
+    {
+      "id": 5,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Семьдесят зим стёрли его голос до гравия и терпения.",
+      "confidence": 0.96
+    },
+    {
+      "id": 6,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "— Кто бы это ни был, пусть стучит».",
+      "confidence": 0.94
+    },
+    {
+      "id": 7,
+      "chapterId": 2,
+      "characterId": "ren",
+      "text": "«Может, заказчик».",
+      "confidence": 0.9
+    },
+    {
+      "id": 8,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "«В такой час это либо пьяный, либо долг.",
+      "confidence": 0.92
+    },
+    {
+      "id": 9,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "Ни тот ни другой не заплатит больше оттого, что его впустят быстрее».",
+      "confidence": 0.5
+    },
+    {
+      "id": 10,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Дверь всё равно отворилась.",
+      "confidence": 0.99
+    },
+    {
+      "id": 11,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Мэйрин, староста, просунула голову внутрь, и вместе с ней вошёл холод.",
+      "confidence": 0.98
+    },
+    {
+      "id": 12,
+      "chapterId": 2,
+      "characterId": "mairin",
+      "text": "«Одуван.",
+      "confidence": 0.95
+    },
+    {
+      "id": 13,
+      "chapterId": 2,
+      "characterId": "mairin",
+      "text": "Запри ставни и залей угли».",
+      "confidence": 0.5
+    },
+    {
+      "id": 14,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Слова её были отрывисты, как всегда, когда она бежала.",
+      "confidence": 0.97
+    },
+    {
+      "id": 15,
+      "chapterId": 2,
+      "characterId": "mairin",
+      "text": "«На коалфоллской дороге дракон.",
+      "confidence": 0.96
+    },
+    {
+      "id": 16,
+      "chapterId": 2,
+      "characterId": "mairin",
+      "text": "Огромный, с амбар.",
+      "confidence": 0.5
+    },
+    {
+      "id": 17,
+      "chapterId": 2,
+      "characterId": "mairin",
+      "text": "Идёт прямо по переулку».",
+      "confidence": 0.95
+    },
+    {
+      "id": 18,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Скребок Рен замер.",
+      "confidence": 0.99
+    },
+    {
+      "id": 19,
+      "chapterId": 2,
+      "characterId": "ren",
+      "text": "«Настоящий?»",
+      "confidence": 0.92
+    },
+    {
+      "id": 20,
+      "chapterId": 2,
+      "characterId": "mairin",
+      "text": "«Нет, дитя, нарисованный.",
+      "confidence": 0.9
+    },
+    {
+      "id": 21,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "— Мэйрин не улыбнулась.",
+      "confidence": 0.95
+    },
+    {
+      "id": 22,
+      "chapterId": 2,
+      "characterId": "mairin",
+      "text": "— Настоящий.",
+      "confidence": 0.88
+    },
+    {
+      "id": 23,
+      "chapterId": 2,
+      "characterId": "mairin",
+      "text": "И направляется прямо к единственному освещённому окну в долине, то есть к вашему.",
+      "confidence": 0.5
+    },
+    {
+      "id": 24,
+      "chapterId": 2,
+      "characterId": "mairin",
+      "text": "Гасите огонь».",
+      "confidence": 0.9
+    },
+    {
+      "id": 25,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "«Если я залью огонь,",
+      "confidence": 0.9
+    },
+    {
+      "id": 26,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "— сказал Одуван, —",
+      "confidence": 0.95
+    },
+    {
+      "id": 27,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "то потеряю сварку, которую нянчу с полудня.",
+      "confidence": 0.5
+    },
+    {
+      "id": 28,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "Дракон либо подождёт, пока я доварю, либо нет, и в любом случае я предпочёл бы встретить его в тепле».",
+      "confidence": 0.9
+    },
+    {
+      "id": 29,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Он отложил клещи.",
+      "confidence": 0.98
+    },
+    {
+      "id": 30,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "«Воробушек.",
+      "confidence": 0.93
+    },
+    {
+      "id": 31,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Открой большую дверь».",
+      "confidence": 0.5
+    },
+    {
+      "id": 32,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Рен — Воробушком он звал её только тогда, когда забывал быть строгим, — подошла к огромной двери и распахнула её настежь.",
+      "confidence": 0.98
+    },
+    {
+      "id": 33,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Дракон заполнил тьму за ней так, как вода заполняет чашу.",
+      "confidence": 0.98
+    },
+    {
+      "id": 34,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Один глаз, золотой и медленный, поравнялся с проёмом и остановился, разглядывая малое тепло этого места.",
+      "confidence": 0.97
+    },
+    {
+      "id": 35,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Откуда-то из переулка во тьме сорвался голос:",
+      "confidence": 0.95
+    },
+    {
+      "id": 36,
+      "chapterId": 2,
+      "characterId": "pell-hollis",
+      "text": "«Бегите, глупцы, — он сожрёт вас всех!»",
+      "confidence": 0.95,
+      "emotion": "excited"
+    },
+    {
+      "id": 37,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Никто не побежал.",
+      "confidence": 0.99
+    },
+    {
+      "id": 38,
+      "chapterId": 2,
+      "characterId": "coalfall-dragon",
+      "text": "«Я прошёл долгий путь,",
+      "confidence": 0.96
+    },
+    {
+      "id": 39,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "— сказал дракон.",
+      "confidence": 0.98
+    },
+    {
+      "id": 40,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Голос его не был громок.",
+      "confidence": 0.95
+    },
+    {
+      "id": 41,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Так звучала бы гора, будь гора усталой, и каждое слово приходило мгновением позже, чем ты его ждал.",
+      "confidence": 0.95
+    },
+    {
+      "id": 42,
+      "chapterId": 2,
+      "characterId": "coalfall-dragon",
+      "text": "— В деревнях меня зовут Коалфолл.",
+      "confidence": 0.95
+    },
+    {
+      "id": 43,
+      "chapterId": 2,
+      "characterId": "coalfall-dragon",
+      "text": "Это не моё имя, но сойдёт.",
+      "confidence": 0.5
+    },
+    {
+      "id": 44,
+      "chapterId": 2,
+      "characterId": "coalfall-dragon",
+      "text": "Мне сказали, что лучший кузнец долины держит этот горн».",
+      "confidence": 0.95
+    },
+    {
+      "id": 45,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "«Сказали неверно,",
+      "confidence": 0.96
+    },
+    {
+      "id": 46,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "— отозвался Одуван. —",
+      "confidence": 0.98
+    },
+    {
+      "id": 47,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "Лучший кузнец долины умер девять лет назад.",
+      "confidence": 0.5
+    },
+    {
+      "id": 48,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "Придётся довольствоваться вторым».",
+      "confidence": 0.95
+    },
+    {
+      "id": 49,
+      "chapterId": 2,
+      "characterId": "coalfall-dragon",
+      "text": "«Скромность или торговая уловка?»",
+      "confidence": 0.94
+    },
+    {
+      "id": 50,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "«В моём возрасте это одно и то же».",
+      "confidence": 0.95
+    },
+    {
+      "id": 51,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Золотой глаз перешёл на Рен, и она ощутила его, как ощущаешь солнце сквозь окно.",
+      "confidence": 0.98
+    },
+    {
+      "id": 52,
+      "chapterId": 2,
+      "characterId": "coalfall-dragon",
+      "text": "«А малая?»",
+      "confidence": 0.92
+    },
+    {
+      "id": 53,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "«Моя ученица.",
+      "confidence": 0.95
+    },
+    {
+      "id": 54,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "Ей тринадцать, и она думает, что я не слышу, как она вздыхает.",
+      "confidence": 0.5
+    },
+    {
+      "id": 55,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "Она станет лучше меня прежде, чем ей исполнится двадцать, — единственная причина, по которой я её держу».",
+      "confidence": 0.95
+    },
+    {
+      "id": 56,
+      "chapterId": 2,
+      "characterId": "ren",
+      "text": "«Я никогда не вздыхаю»,",
+      "confidence": 0.93
+    },
+    {
+      "id": 57,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "— сказала Рен, которая вздохнула.",
+      "confidence": 0.98
+    },
+    {
+      "id": 58,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Дракон опустился так низко, что его дыхание шевельнуло угли, и они разгорелись, хоть их и не просили.",
+      "confidence": 0.98
+    },
+    {
+      "id": 59,
+      "chapterId": 2,
+      "characterId": "coalfall-dragon",
+      "text": "«Мне не нужен меч,",
+      "confidence": 0.95
+    },
+    {
+      "id": 60,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "— сказал он. —",
+      "confidence": 0.98
+    },
+    {
+      "id": 61,
+      "chapterId": 2,
+      "characterId": "coalfall-dragon",
+      "text": "Все хотят моей смерти, а меч их только подстегнёт.",
+      "confidence": 0.5
+    },
+    {
+      "id": 62,
+      "chapterId": 2,
+      "characterId": "coalfall-dragon",
+      "text": "Мне нужен колокол.",
+      "confidence": 0.95
+    },
+    {
+      "id": 63,
+      "chapterId": 2,
+      "characterId": "coalfall-dragon",
+      "text": "Достаточно малый, чтобы свисать с когтя.",
+      "confidence": 0.95
+    },
+    {
+      "id": 64,
+      "chapterId": 2,
+      "characterId": "coalfall-dragon",
+      "text": "Я последний из своих, и когда я уйду, некому будет это отметить.",
+      "confidence": 0.95
+    },
+    {
+      "id": 65,
+      "chapterId": 2,
+      "characterId": "coalfall-dragon",
+      "text": "Я хотел бы отметить это сам, заранее, — пока ещё есть тот, кто умеет отлить верную ноту».",
+      "confidence": 0.95
+    },
+    {
+      "id": 66,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Какое-то время единственным звуком был огонь.",
+      "confidence": 0.99
+    },
+    {
+      "id": 67,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Потом Одуван снова взял клещи.",
+      "confidence": 0.98
+    },
+    {
+      "id": 68,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "«Колокол,",
+      "confidence": 0.94
+    },
+    {
+      "id": 69,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "— сказал он так, будто драконы просят их каждый вторник. —",
+      "confidence": 0.98
+    },
+    {
+      "id": 70,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "Тогда бронза, не железо.",
+      "confidence": 0.5
+    },
+    {
+      "id": 71,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "Воробушек — хорошее олово, тигель, и перестань плакать на формовочный песок, испортишь отливку».",
+      "confidence": 0.95
+    },
+    {
+      "id": 72,
+      "chapterId": 2,
+      "characterId": "ren",
+      "text": "«Я не плачу».",
+      "confidence": 0.95
+    },
+    {
+      "id": 73,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "«Разумеется, нет».",
+      "confidence": 0.95
+    },
+    {
+      "id": 74,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Он прищурился на дракона, оценивая его, как оценивал всё.",
+      "confidence": 0.98
+    },
+    {
+      "id": 75,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "«Уйдёт до утра.",
+      "confidence": 0.95
+    },
+    {
+      "id": 76,
+      "chapterId": 2,
+      "characterId": "oduvan",
+      "text": "Придётся тебе составить огню компанию, пока мы работаем».",
+      "confidence": 0.5
+    },
+    {
+      "id": 77,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Дракон устроился в дверном проёме, прикрыв один глаз от тепла, и сказал голосом усталой горы, которую очень, очень давно не просили подождать где-нибудь по-доброму:",
+      "confidence": 0.97
+    },
+    {
+      "id": 78,
+      "chapterId": 2,
+      "characterId": "coalfall-dragon",
+      "text": "«У меня нет ничего, кроме времени.",
+      "confidence": 0.95
+    },
+    {
+      "id": 79,
+      "chapterId": 2,
+      "characterId": "narrator",
+      "text": "Начинайте».",
+      "confidence": 0.5
+    },
+    {
+      "id": 1,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Глава вторая — Отливка",
+      "confidence": 1
+    },
+    {
+      "id": 2,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Новости расходятся по долине двумя путями: медленно — по дороге, и разом — по запаху затопленного после темноты горна.",
+      "confidence": 1
+    },
+    {
+      "id": 3,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Рен достала хорошее олово из тряпицы и взвешивала его так, будто оно могло заспорить.",
+      "confidence": 1
+    },
+    {
+      "id": 4,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Одуван постоял мгновение над клинком, который варил с полудня, — работой, которую отказался потерять, — взглянул на него один раз и опустил недоваренным в закалочный чан.",
+      "confidence": 1
+    },
+    {
+      "id": 5,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "За колокол кое-чем платят.",
+      "confidence": 0.95
+    },
+    {
+      "id": 6,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Глаз дракона проследил за этим движением и ничего об этом не сказал, что было своего рода благодарностью.",
+      "confidence": 1
+    },
+    {
+      "id": 7,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Первый пришёл прежде, чем тигель успел нагреться.",
+      "confidence": 1
+    },
+    {
+      "id": 8,
+      "chapterId": 3,
+      "characterId": "pell-hollis",
+      "text": "«Это я кричал,",
+      "confidence": 0.95,
+      "emotion": "excited"
+    },
+    {
+      "id": 9,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "— сказал человек в дверях, который явно бежал сюда и явно жалел об этом.",
+      "confidence": 1
+    },
+    {
+      "id": 10,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Лет тридцати с лишним, сплошные локти, с перьями на куртке, по которым выходило, что куры возражали против раннего запирания. — По переулку. Беготня, глупцы, всё это. Я бы крикнул снова».",
+      "confidence": 0.5,
+      "emotion": "excited"
+    },
+    {
+      "id": 11,
+      "chapterId": 3,
+      "characterId": "mairin",
+      "text": "«Пелл Холлис,",
+      "confidence": 0.95
+    },
+    {
+      "id": 12,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "— сказала Мэйрин, которая так и не ушла, —",
+      "confidence": 1
+    },
+    {
+      "id": 13,
+      "chapterId": 3,
+      "characterId": "mairin",
+      "text": "ты поднял полдолины из-за телеги с сеном в темноте на прошлый Ламмас».",
+      "confidence": 0.5
+    },
+    {
+      "id": 14,
+      "chapterId": 3,
+      "characterId": "pell-hollis",
+      "text": "«Телега в темноте движется неправильно — вот и скажешь».",
+      "confidence": 0.85
+    },
+    {
+      "id": 15,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Пелл протиснулся внутрь, держа наковальню между собой и проёмом.",
+      "confidence": 1
+    },
+    {
+      "id": 16,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Проём смотрел на него одним золотым глазом.",
+      "confidence": 1
+    },
+    {
+      "id": 17,
+      "chapterId": 3,
+      "characterId": "pell-hollis",
+      "text": "«Я просто… постою тут. У молотов. На всякий случай».",
+      "confidence": 0.9
+    },
+    {
+      "id": 18,
+      "chapterId": 3,
+      "characterId": "ren",
+      "text": "«На какой такой случай?» — спросила Рен.",
+      "confidence": 0.95
+    },
+    {
+      "id": 19,
+      "chapterId": 3,
+      "characterId": "pell-hollis",
+      "text": "«Узнаю, когда случится».",
+      "confidence": 0.9
+    },
+    {
+      "id": 20,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Дракон выдохнул, медленно, и угли разгорелись.",
+      "confidence": 1
+    },
+    {
+      "id": 21,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Пелл сделался цвета формовочного песка, а потом, когда ничего больше не произошло, цвета более обыкновенного.",
+      "confidence": 1
+    },
+    {
+      "id": 22,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "К тому времени, как олово отправилось в тигель, он придвинулся на два шага ближе и высказывал мнения о жаре.",
+      "confidence": 1
+    },
+    {
+      "id": 23,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Вдова Каспер пришла следующей, потому что её домишко делил стену с переулком, а её любопытство не делило стены ни с чем.",
+      "confidence": 1
+    },
+    {
+      "id": 24,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Ей было за восемьдесят, и сложена она была как вопросительный знак, и оглядела дракона так, как оглядывают тележку коробейника.",
+      "confidence": 1
+    },
+    {
+      "id": 25,
+      "chapterId": 3,
+      "characterId": "widow-kasper",
+      "text": "«Меньше, чем в сказках», — сказала она.",
+      "confidence": 0.95
+    },
+    {
+      "id": 26,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "«Сказки были про мою бабку», — сказал дракон.",
+      "confidence": 0.95
+    },
+    {
+      "id": 27,
+      "chapterId": 3,
+      "characterId": "widow-kasper",
+      "text": "«И мои тоже».",
+      "confidence": 0.9
+    },
+    {
+      "id": 28,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Вдова опустилась на скамью у стены, без приглашения, удобно.",
+      "confidence": 1
+    },
+    {
+      "id": 29,
+      "chapterId": 3,
+      "characterId": "widow-kasper",
+      "text": "«Моя бабка говорила, что небо над каменоломней темнело в полдень от ваших крыльев. Врала она почти в любую погоду, но плакала, когда это рассказывала, так что этому я поверила».",
+      "confidence": 0.85
+    },
+    {
+      "id": 30,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "«Поверь», — сказал Коалфолл,",
+      "confidence": 0.95
+    },
+    {
+      "id": 31,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "и какое-то время после этого было тихо.",
+      "confidence": 1
+    },
+    {
+      "id": 32,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Близнецы пришли вместе, как делали всё, и споря, как делали всё.",
+      "confidence": 1
+    },
+    {
+      "id": 33,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Бранн и Беррин Уир кололи камень наверху в каменоломне, и сорок пять лет бок о бок стёрли их до того, что они походили друг на друга, как два больших пальца, — те же плечи, та же седая щетина, та же манера заполнять собой дверной проём.",
+      "confidence": 1
+    },
+    {
+      "id": 34,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Долина различала их по слуху.",
+      "confidence": 1
+    },
+    {
+      "id": 35,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Бранн говорил вопросами.",
+      "confidence": 1
+    },
+    {
+      "id": 36,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Беррин ни одного не встретил, которого не сумел бы расплющить в утверждение.",
+      "confidence": 1
+    },
+    {
+      "id": 37,
+      "chapterId": 3,
+      "characterId": "brann-weir",
+      "text": "«Так это, стало быть, дракон?»",
+      "confidence": 0.9
+    },
+    {
+      "id": 38,
+      "chapterId": 3,
+      "characterId": "berrin-weir",
+      "text": "«Это дракон».",
+      "confidence": 0.9
+    },
+    {
+      "id": 39,
+      "chapterId": 3,
+      "characterId": "brann-weir",
+      "text": "«И мы льём ему колокол? Из чего, из церковной крыши?»",
+      "confidence": 0.85
+    },
+    {
+      "id": 40,
+      "chapterId": 3,
+      "characterId": "berrin-weir",
+      "text": "«Из бронзы. У кузнеца есть бронза».",
+      "confidence": 0.85
+    },
+    {
+      "id": 41,
+      "chapterId": 3,
+      "characterId": "brann-weir",
+      "text": "«С каких пор у кузнеца колокольная бронза просто так валяется?»",
+      "confidence": 0.85
+    },
+    {
+      "id": 42,
+      "chapterId": 3,
+      "characterId": "berrin-weir",
+      "text": "«С тех пор, как валяется. Глянь на тигель».",
+      "confidence": 0.85
+    },
+    {
+      "id": 43,
+      "chapterId": 3,
+      "characterId": "brann-weir",
+      "text": "«Я гляжу на тигель. Мне что, и спросить про тигель нельзя?»",
+      "confidence": 0.85
+    },
+    {
+      "id": 44,
+      "chapterId": 3,
+      "characterId": "berrin-weir",
+      "text": "«Можно. Ты просто громкий».",
+      "confidence": 0.85
+    },
+    {
+      "id": 45,
+      "chapterId": 3,
+      "characterId": "brann-weir",
+      "text": "«Громкий, значит, я —»",
+      "confidence": 0.8
+    },
+    {
+      "id": 46,
+      "chapterId": 3,
+      "characterId": "oduvan",
+      "text": "«Господа,",
+      "confidence": 0.95
+    },
+    {
+      "id": 47,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "— сказал Одуван голосом, который берёг для треснувшего железа, —",
+      "confidence": 1
+    },
+    {
+      "id": 48,
+      "chapterId": 3,
+      "characterId": "oduvan",
+      "text": "это малый колокол. Ему нужна малая публика».",
+      "confidence": 0.5
+    },
+    {
+      "id": 49,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Близнецы умолкли в один голос, что было другим способом отличить их от всех прочих.",
+      "confidence": 1
+    },
+    {
+      "id": 50,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Отец Лессом возник на пороге, держа шляпу в руках, что для Лессома было полной церемонией.",
+      "confidence": 1
+    },
+    {
+      "id": 51,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Ему было за шестьдесят, говорил он тихо, и он явно отрепетировал что-то по дороге и потерял у двери, потому что вышло, вполголоса, вот что:",
+      "confidence": 1
+    },
+    {
+      "id": 52,
+      "chapterId": 3,
+      "characterId": "father-lessom",
+      "text": "«А правильно ли это, как по-вашему? Колокола — для душ. Я не знаю, как тут положено насчёт…",
+      "confidence": 0.8,
+      "emotion": "whisper"
+    },
+    {
+      "id": 53,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "— он повёл рукой на проём, на всё это, —",
+      "confidence": 1
+    },
+    {
+      "id": 54,
+      "chapterId": 3,
+      "characterId": "father-lessom",
+      "text": "…этого».",
+      "confidence": 0.5
+    },
+    {
+      "id": 55,
+      "chapterId": 3,
+      "characterId": "widow-kasper",
+      "text": "«Так выдумайте, — сказала вдова Каспер. — Это то, чем ваш брат и занимается, а нынче ночью это нужно».",
+      "confidence": 0.95
+    },
+    {
+      "id": 56,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Лессом вошёл.",
+      "confidence": 1
+    },
+    {
+      "id": 57,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Он держался вдоль стены, и губы его время от времени шевелились, и молитва ли это была или репетиция фраз получше, никто не спросил.",
+      "confidence": 1
+    },
+    {
+      "id": 58,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Но когда дыхание дракона раздуло огонь, он начертил над ним малое знамение — быстро, как человек, сующий монету нищему и делающий вид, что не совал, — и после этого стоял спокойнее.",
+      "confidence": 1
+    },
+    {
+      "id": 59,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Коробейник Иво ночевал в амбаре Мэйрин из-за потерянной подковы и вошёл уже говоря, в той своей вывернутой манере, которую никто в долине не мог поместить на карту.",
+      "confidence": 0.98
+    },
+    {
+      "id": 60,
+      "chapterId": 3,
+      "characterId": "ivo",
+      "text": "«Колокол он хочет. Себе, колокол. У меня на родине для мёртвых сажают дерево — но дерево на когте не унесёшь, и потому: колокол. Разумно».",
+      "confidence": 0.99
+    },
+    {
+      "id": 61,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Он опустил свой тюк с видом человека, открывающего лавку.",
+      "confidence": 0.98
+    },
+    {
+      "id": 62,
+      "chapterId": 3,
+      "characterId": "ivo",
+      "text": "«Есть верёвка, если нужна верёвка. И воск тоже. Даром, нынче ночью. Завтра — цены».",
+      "confidence": 0.99
+    },
+    {
+      "id": 63,
+      "chapterId": 3,
+      "characterId": "oduvan",
+      "text": "«Вот вам мораль торговли, — сказал Одуван, — в одном вздохе».",
+      "confidence": 0.99
+    },
+    {
+      "id": 64,
+      "chapterId": 3,
+      "characterId": "ivo",
+      "text": "«У меня на родине это зовётся вторником».",
+      "confidence": 0.95
+    },
+    {
+      "id": 65,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Было уже где-то за середину ночи, когда Мэйрин обнаружила свою дочь.",
+      "confidence": 0.98
+    },
+    {
+      "id": 66,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Селе было восемь, и пришла она так, как приходят восьмилетние, — незримо, в тени кого-то повыше, а потом вдруг посреди комнаты, будто её туда доставили.",
+      "confidence": 0.98
+    },
+    {
+      "id": 67,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Она стояла перед проёмом.",
+      "confidence": 0.98
+    },
+    {
+      "id": 68,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Перед глазом.",
+      "confidence": 0.98
+    },
+    {
+      "id": 69,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Комната смолкла так, как смолкает затаённое дыхание.",
+      "confidence": 0.98
+    },
+    {
+      "id": 70,
+      "chapterId": 3,
+      "characterId": "mairin",
+      "text": "«Села, — сказала Мэйрин, очень ровно, очень медленно, — иди сюда, ко мне».",
+      "confidence": 0.99
+    },
+    {
+      "id": 71,
+      "chapterId": 3,
+      "characterId": "sela",
+      "text": "«Через минутку», — сказала Села, и это был собственный голос Мэйрин в уменьшении, и вдова рассмеялась прежде, чем смогла удержаться.",
+      "confidence": 0.99
+    },
+    {
+      "id": 72,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Огромный глаз опустился.",
+      "confidence": 0.98
+    },
+    {
+      "id": 73,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Он опускался и опускался, пока не поравнялся с ребёнком, и золото его осветило ей лицо, как лампа.",
+      "confidence": 0.98
+    },
+    {
+      "id": 74,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Шёпот пробежал по горну клочками:",
+      "confidence": 0.98
+    },
+    {
+      "id": 75,
+      "chapterId": 3,
+      "characterId": "pell-hollis",
+      "text": "«Тихо…» — сказал Пелл.",
+      "confidence": 0.99,
+      "emotion": "whisper"
+    },
+    {
+      "id": 76,
+      "chapterId": 3,
+      "characterId": "widow-kasper",
+      "text": "«Оставьте её», — сказала вдова Каспер.",
+      "confidence": 0.99
+    },
+    {
+      "id": 77,
+      "chapterId": 3,
+      "characterId": "brann-weir",
+      "text": "«Мэйрин…» — сказал Бранн.",
+      "confidence": 0.99,
+      "emotion": "whisper"
+    },
+    {
+      "id": 78,
+      "chapterId": 3,
+      "characterId": "berrin-weir",
+      "text": "«С ней всё хорошо», — сказал Беррин, ровно, как полка, и, как обычно, был прав.",
+      "confidence": 0.99
+    },
+    {
+      "id": 79,
+      "chapterId": 3,
+      "characterId": "sela",
+      "text": "«Ты последний», — сказала Села.",
+      "confidence": 0.99
+    },
+    {
+      "id": 80,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Не вопрос.",
+      "confidence": 0.98
+    },
+    {
+      "id": 81,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Дети их не тратят.",
+      "confidence": 0.98
+    },
+    {
+      "id": 82,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "«Да», — сказал дракон.",
+      "confidence": 0.99
+    },
+    {
+      "id": 83,
+      "chapterId": 3,
+      "characterId": "sela",
+      "text": "«И колокол — на то, когда ты умрёшь».",
+      "confidence": 0.99
+    },
+    {
+      "id": 84,
+      "chapterId": 3,
+      "characterId": "mairin",
+      "text": "«Села!» — голос Мэйрин надломился посередине.",
+      "confidence": 0.99,
+      "emotion": "excited"
+    },
+    {
+      "id": 85,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "«Это честный вопрос, — сказал дракон, — и нынче честный вечер».",
+      "confidence": 0.99
+    },
+    {
+      "id": 86,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Глаз моргнул, медленно, как затворяющаяся дверь.",
+      "confidence": 0.98
+    },
+    {
+      "id": 87,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "«Да. Колокол — на тот случай».",
+      "confidence": 0.99
+    },
+    {
+      "id": 88,
+      "chapterId": 3,
+      "characterId": "sela",
+      "text": "«Но если ты последний, — сказала она, — кто позвонит в него по тебе? После».",
+      "confidence": 0.99
+    },
+    {
+      "id": 89,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Огонь плюнул искрой.",
+      "confidence": 0.98
+    },
+    {
+      "id": 90,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Никто не шевельнулся.",
+      "confidence": 0.98
+    },
+    {
+      "id": 91,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Даже у близнецов ничего не нашлось, и Рен, которая очень старательно делала вид, что занята воском, перестала притворяться.",
+      "confidence": 0.98
+    },
+    {
+      "id": 92,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Когда дракон наконец ответил, слова выходили дальше друг от друга, чем обычно, — так камни лежат дальше друг от друга ближе к вершине горы.",
+      "confidence": 0.98
+    },
+    {
+      "id": 93,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "«Я не загадывал, — сказал он, — так далеко».",
+      "confidence": 0.99
+    },
+    {
+      "id": 94,
+      "chapterId": 3,
+      "characterId": "sela",
+      "text": "«Я позвоню, — сказала Села. — Я собираюсь жить очень долго».",
+      "confidence": 0.99
+    },
+    {
+      "id": 95,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Есть вещи, сказанные посреди ночи детьми, что сгибают вокруг себя всю остальную жизнь, и каждый в горне понял, что только что услышал одну из них.",
+      "confidence": 0.98
+    },
+    {
+      "id": 96,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Дракон долго смотрел на маленькую девочку.",
+      "confidence": 0.98
+    },
+    {
+      "id": 97,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "«Тогда он твой, когда я с ним покончу, — сказал он наконец. — Храни его где-нибудь повыше».",
+      "confidence": 0.99
+    },
+    {
+      "id": 98,
+      "chapterId": 3,
+      "characterId": "sela",
+      "text": "«Мама держит хорошие чашки на верхней полке».",
+      "confidence": 0.99
+    },
+    {
+      "id": 99,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "«Сойдёт».",
+      "confidence": 0.95
+    },
+    {
+      "id": 100,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Мэйрин подхватила дочь и прижала к себе, и не доверилась себе добавить что-либо ещё.",
+      "confidence": 0.98
+    },
+    {
+      "id": 101,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Харт-угольщик — который явился в какой-то момент так, что никто не заметил, как является стена, и уже час молча подкармливал огонь из собственных мешков, — поднял глаза.",
+      "confidence": 0.98
+    },
+    {
+      "id": 102,
+      "chapterId": 3,
+      "characterId": "hart",
+      "text": "«Огонь просит корма, — сказал он, едва громче углей. — Если уж мы это делаем».",
+      "confidence": 0.99
+    },
+    {
+      "id": 103,
+      "chapterId": 3,
+      "characterId": "oduvan",
+      "text": "«Мы это делаем», — сказал Одуван.",
+      "confidence": 0.99
+    },
+    {
+      "id": 104,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "То, что было дальше, горн делал большей частью в молчании, и расскажет об этом рассказчик, потому что те, кто был внутри, были слишком заняты.",
+      "confidence": 0.98
+    },
+    {
+      "id": 105,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Форма была из песка, глины и старого колокольного калибра, которого Одуван не касался девять лет — с тех пор, как человек, научивший его этому калибру, перестал нуждаться в инструментах.",
+      "confidence": 0.98
+    },
+    {
+      "id": 106,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Рен прорезала каналы.",
+      "confidence": 0.98
+    },
+    {
+      "id": 107,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Пелл бегал туда-сюда и оказался, ко всеобщему удивлению, включая собственное, полезен.",
+      "confidence": 0.98
+    },
+    {
+      "id": 108,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Вдова советовала, точно и без пощады.",
+      "confidence": 0.98
+    },
+    {
+      "id": 109,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Близнецы держали люльку тигля как единое существо о четырёх руках — не остаётся спора в двух мужчинах, поднимающих то, что нельзя опустить, — и воск Иво и верёвка Иво оказались ровно тем, что было нужно, даром, нынче ночью.",
+      "confidence": 0.98
+    },
+    {
+      "id": 110,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Отливка, когда она пошла, была цвета утра, ещё не наступившего.",
+      "confidence": 0.98
+    },
+    {
+      "id": 111,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Бронза стекла по каналу со звуком, похожим на длинное слово в языке шириной в один слог.",
+      "confidence": 0.98
+    },
+    {
+      "id": 112,
+      "chapterId": 3,
+      "characterId": "oduvan",
+      "text": "«Тихо — тихо — вот так».",
+      "confidence": 0.99
+    },
+    {
+      "id": 113,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Рука Одувана на плече Рен, когда та слишком сильно наклонилась над паром.",
+      "confidence": 0.98
+    },
+    {
+      "id": 114,
+      "chapterId": 3,
+      "characterId": "oduvan",
+      "text": "«Воробушек. Назад».",
+      "confidence": 0.99
+    },
+    {
+      "id": 115,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Она отступила.",
+      "confidence": 0.98
+    },
+    {
+      "id": 116,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Он не называл её так дважды за один сезон, и она знала, что лучше не смотреть ему при этом в лицо, так что оба вместо этого смотрели на форму.",
+      "confidence": 0.98
+    },
+    {
+      "id": 117,
+      "chapterId": 3,
+      "characterId": "sela",
+      "text": "«Почему ей достаётся птичье имя?» — спросила Села из-под материнской руки.",
+      "confidence": 0.99
+    },
+    {
+      "id": 118,
+      "chapterId": 3,
+      "characterId": "ren",
+      "text": "«Потому что он забывает быть строгим», — сказала Рен.",
+      "confidence": 0.99
+    },
+    {
+      "id": 119,
+      "chapterId": 3,
+      "characterId": "sela",
+      "text": "«А мне можно быть птицей?»",
+      "confidence": 0.99
+    },
+    {
+      "id": 120,
+      "chapterId": 3,
+      "characterId": "ren",
+      "text": "«Нет, — сказала Рен. — Воробушек занят».",
+      "confidence": 0.99
+    },
+    {
+      "id": 121,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Час между отливкой и выбивкой — самый долгий в кузнечном ремесле, и его не поторопить, и потому горн наполнился тем особым разговором людей, которые сделали что-то вместе и ждут, чтобы узнать, вышло ли.",
+      "confidence": 1
+    },
+    {
+      "id": 122,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Харт медленно сводил огонь на нет, как остужают коня.",
+      "confidence": 1
+    },
+    {
+      "id": 123,
+      "chapterId": 3,
+      "characterId": "hart",
+      "text": "«Остынет неправильно, если торопить, —",
+      "confidence": 0.98
+    },
+    {
+      "id": 124,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "сказал он, скорее углям, чем кому-либо.",
+      "confidence": 1
+    },
+    {
+      "id": 125,
+      "chapterId": 3,
+      "characterId": "hart",
+      "text": "— Колокол — что каравай. Нутро должно поладить с коркой».",
+      "confidence": 0.95
+    },
+    {
+      "id": 126,
+      "chapterId": 3,
+      "characterId": "brann-weir",
+      "text": "«А ты-то откуда знаешь?» —",
+      "confidence": 0.98
+    },
+    {
+      "id": 127,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "спросил Бранн, который не мог удержаться.",
+      "confidence": 1
+    },
+    {
+      "id": 128,
+      "chapterId": 3,
+      "characterId": "hart",
+      "text": "«Тридцать лет жёг уголь, —",
+      "confidence": 0.95
+    },
+    {
+      "id": 129,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "сказал Харт.",
+      "confidence": 1
+    },
+    {
+      "id": 130,
+      "chapterId": 3,
+      "characterId": "hart",
+      "text": "— Всё — каравай».",
+      "confidence": 0.92
+    },
+    {
+      "id": 131,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Отец Лессом наконец нашёл свои фразы.",
+      "confidence": 0.98
+    },
+    {
+      "id": 132,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Он подошёл к форме настолько близко, насколько позволял жар, и встал, всё ещё держа шляпу в руках.",
+      "confidence": 0.98
+    },
+    {
+      "id": 133,
+      "chapterId": 3,
+      "characterId": "father-lessom",
+      "text": "«Я выдумал,",
+      "confidence": 0.95
+    },
+    {
+      "id": 134,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "— сказал он вдове, почти с вызовом.",
+      "confidence": 0.99
+    },
+    {
+      "id": 135,
+      "chapterId": 3,
+      "characterId": "father-lessom",
+      "text": "— Положение».",
+      "confidence": 0.95
+    },
+    {
+      "id": 136,
+      "chapterId": 3,
+      "characterId": "widow-kasper",
+      "text": "«И?»",
+      "confidence": 0.85
+    },
+    {
+      "id": 137,
+      "chapterId": 3,
+      "characterId": "father-lessom",
+      "text": "«Колокол, в который звонят по последнему чего бы то ни было, звонит по всему, что было».",
+      "confidence": 0.92
+    },
+    {
+      "id": 138,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Он сказал это своим амвонным голосом, потом смутился и снова надел шляпу.",
+      "confidence": 0.98
+    },
+    {
+      "id": 139,
+      "chapterId": 3,
+      "characterId": "father-lessom",
+      "text": "«В воскресенье скажу как следует».",
+      "confidence": 0.95
+    },
+    {
+      "id": 140,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "«Скажите так,",
+      "confidence": 0.95
+    },
+    {
+      "id": 141,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "— сказал дракон из проёма.",
+      "confidence": 0.99
+    },
+    {
+      "id": 142,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "— От обращения лучше не станет».",
+      "confidence": 0.95
+    },
+    {
+      "id": 143,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Рен подошла к большой двери, воск всё ещё был под ногтями.",
+      "confidence": 0.98
+    },
+    {
+      "id": 144,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Вблизи дракон пах дождём по горячему камню.",
+      "confidence": 0.98
+    },
+    {
+      "id": 145,
+      "chapterId": 3,
+      "characterId": "ren",
+      "text": "«Ты правда пересёк весь мир?",
+      "confidence": 0.95
+    },
+    {
+      "id": 146,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "— спросила она.",
+      "confidence": 0.99
+    },
+    {
+      "id": 147,
+      "chapterId": 3,
+      "characterId": "ren",
+      "text": "— Ради этого?»",
+      "confidence": 0.95
+    },
+    {
+      "id": 148,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "«Ради верной ноты.",
+      "confidence": 0.95
+    },
+    {
+      "id": 149,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Твой мастер — четвёртый кузнец, которого я просил».",
+      "confidence": 0.5
+    },
+    {
+      "id": 150,
+      "chapterId": 3,
+      "characterId": "ren",
+      "text": "«Что сталось с остальными тремя?»",
+      "confidence": 0.95
+    },
+    {
+      "id": 151,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "«Ничего,",
+      "confidence": 0.95
+    },
+    {
+      "id": 152,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "— сказал Коалфолл.",
+      "confidence": 0.99
+    },
+    {
+      "id": 153,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "— Они сказали нет.",
+      "confidence": 0.95
+    },
+    {
+      "id": 154,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Люди воображают, будто мои разочарования драматичны.",
+      "confidence": 0.5
+    },
+    {
+      "id": 155,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Чаще всего они такие же, как у всех».",
+      "confidence": 0.95
+    },
+    {
+      "id": 156,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Глаз скользнул к ней вбок, и было в нём что-то, что на лице поменьше можно было бы назвать лукавством.",
+      "confidence": 0.98
+    },
+    {
+      "id": 157,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "«Он сказал да прежде, чем я договорил.",
+      "confidence": 0.95
+    },
+    {
+      "id": 158,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Тебе стоит знать это о нём, Воробушек».",
+      "confidence": 0.5
+    },
+    {
+      "id": 159,
+      "chapterId": 3,
+      "characterId": "ren",
+      "text": "«Меня зовут Рен,",
+      "confidence": 0.95
+    },
+    {
+      "id": 160,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "— сказала Рен, краснея,",
+      "confidence": 0.99
+    },
+    {
+      "id": 161,
+      "chapterId": 3,
+      "characterId": "ren",
+      "text": "— для всех, кроме него».",
+      "confidence": 0.95
+    },
+    {
+      "id": 162,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "«Я знаю,",
+      "confidence": 0.95
+    },
+    {
+      "id": 163,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "— сказал дракон.",
+      "confidence": 0.99
+    },
+    {
+      "id": 164,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "— Я хотел услышать, как ты это отрицаешь».",
+      "confidence": 0.95
+    },
+    {
+      "id": 165,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Вдова Каспер подала голос со своей скамьи.",
+      "confidence": 0.98
+    },
+    {
+      "id": 166,
+      "chapterId": 3,
+      "characterId": "widow-kasper",
+      "text": "«Моя бабка мне не поверила бы, знаете ли.",
+      "confidence": 0.95
+    },
+    {
+      "id": 167,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Что я провела ночь с одним из вас, и единственный огонь был в очаге».",
+      "confidence": 0.5
+    },
+    {
+      "id": 168,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "«Тогда рассказывайте так, как рассказывала она,",
+      "confidence": 0.95
+    },
+    {
+      "id": 169,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "— сказал Коалфолл.",
+      "confidence": 0.99
+    },
+    {
+      "id": 170,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "— Плохо и часто».",
+      "confidence": 0.95
+    },
+    {
+      "id": 171,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Это вызвало смех, который ночь приберегала, — даже у Мэйрин, даже у Лессома, — и Пелл смеялся громче всех, а потом огляделся, проверяя, дозволен ли смех.",
+      "confidence": 0.98
+    },
+    {
+      "id": 172,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Они выбили форму, когда небо сменилось с угольного на пепельное.",
+      "confidence": 0.98
+    },
+    {
+      "id": 173,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Колокол вышел из песка так, как дракон вышел из тьмы, — разом, и меньше, чем в сказках, и точно нужного размера.",
+      "confidence": 0.98
+    },
+    {
+      "id": 174,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Достаточно малый, чтобы свисать с когтя.",
+      "confidence": 0.98
+    },
+    {
+      "id": 175,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Одуван подпилил край, ударил по нему раз костяшкой, послушал с закрытыми глазами и подпилил снова.",
+      "confidence": 0.98
+    },
+    {
+      "id": 176,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "На третий раз он не потянулся за напильником.",
+      "confidence": 0.98
+    },
+    {
+      "id": 177,
+      "chapterId": 3,
+      "characterId": "oduvan",
+      "text": "«Вот вам верная нота,",
+      "confidence": 0.95
+    },
+    {
+      "id": 178,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "— сказал он.",
+      "confidence": 0.99
+    },
+    {
+      "id": 179,
+      "chapterId": 3,
+      "characterId": "oduvan",
+      "text": "— Какую делает второй по мастерству кузнец».",
+      "confidence": 0.95
+    },
+    {
+      "id": 180,
+      "chapterId": 3,
+      "characterId": "pell-hollis",
+      "text": "«Он лучший в долине,",
+      "confidence": 0.92
+    },
+    {
+      "id": 181,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "— сказал Пелл, который где-то в темноте решил, что это и его приключение тоже,",
+      "confidence": 0.99
+    },
+    {
+      "id": 182,
+      "chapterId": 3,
+      "characterId": "pell-hollis",
+      "text": "— и я перекричу любого, кто скажет иначе.",
+      "confidence": 0.92
+    },
+    {
+      "id": 183,
+      "chapterId": 3,
+      "characterId": "pell-hollis",
+      "text": "Я этим известен.",
+      "confidence": 0.5
+    },
+    {
+      "id": 184,
+      "chapterId": 3,
+      "characterId": "pell-hollis",
+      "text": "Криком».",
+      "confidence": 0.92
+    },
+    {
+      "id": 185,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Они подвесили его на коготь дракона на верёвке Иво, там, в большом дверном проёме, под взглядом целой долины собранных за ночь лиц.",
+      "confidence": 0.98
+    },
+    {
+      "id": 186,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Коалфолл поднял коготь, осторожно, как человек, несущий полные чаши, и повернул его, и долго смотрел на маленькую яркую вещь, ради уверенности в которой пересёк мир.",
+      "confidence": 0.98
+    },
+    {
+      "id": 187,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Потом он щёлкнул по колоколу, раз, кончиком одного чёрного когтя.",
+      "confidence": 0.98
+    },
+    {
+      "id": 188,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Нота вышла за дверь, поднялась по переулку и прошла над крышами, беспристрастная, неспешная, того рода звук, что не спрашивает разрешения.",
+      "confidence": 0.98
+    },
+    {
+      "id": 189,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Куры проснулись.",
+      "confidence": 0.98
+    },
+    {
+      "id": 190,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Собака отозвалась, ошиблась и сдалась.",
+      "confidence": 0.98
+    },
+    {
+      "id": 191,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "И в дверном проёме горна, в первой серости утра, колокол качнулся, делаясь всё меньше и меньше, и произнёс единственное слово, которому его учили всю ночь, — единственное слово, какое знает верный колокол:",
+      "confidence": 0.98
+    },
+    {
+      "id": 192,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "«Помни».",
+      "confidence": 0.95
+    },
+    {
+      "id": 193,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Конец.",
+      "confidence": 0.98
+    }
+  ],
+  "mergedAwayKeys": []
+}

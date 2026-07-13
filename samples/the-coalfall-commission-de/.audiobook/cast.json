@@ -1,0 +1,501 @@
+{
+  "characters": [
+    {
+      "id": "oduvan",
+      "name": "Meister Oduvan",
+      "role": "Schmied",
+      "color": "halloran",
+      "tone": {
+        "warmth": 50,
+        "pace": 35,
+        "authority": 75,
+        "emotion": 40
+      },
+      "description": "Ein alter Schmied mit einer Stimme, die durch harte Arbeit und Zeit abgeschliffen wurde.",
+      "evidence": [
+        {
+          "quote": "„Man sagt Euch falsch\", sagte Oduvan. „Der beste Schmied im Tal ist vor neun Jahren gestorben. Ihr müsst Euch mit dem zweitbesten begnügen.\"",
+          "note": "Direkter Dialog."
+        },
+        {
+          "quote": "„Lass es\", sagte Meister Oduvan, ohne aufzusehen.",
+          "note": "Direkter Dialog."
+        },
+        {
+          "quote": "\"Wir tun das\", sagte Oduvan.",
+          "note": "Bestätigung der Arbeit."
+        }
+      ],
+      "lines": 19,
+      "scenes": 2,
+      "ttsEngine": "qwen",
+      "voiceStyle": "An elderly man in his seventies, his low-pitch voice features a dry, reedier rasp and a subtle, rhythmic tremor; he speaks at a measured, deliberate pace with a steady, grounded resonance for expressive character dialogue.",
+      "voiceUuid": "4sURhnDHD6bc_SnUomCQD",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-4sURhnDHD6bc_SnUomCQD"
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "maerin",
+      "name": "Maerin die Vögtin",
+      "role": "Vögtin",
+      "color": "eliza",
+      "tone": {
+        "warmth": 10,
+        "pace": 65,
+        "authority": 75,
+        "emotion": 25
+      },
+      "description": "Eine Vögtin, deren Worte knapp und direkt sind.",
+      "evidence": [
+        {
+          "quote": "Ihre Worte waren knapp, wie sie es immer waren, wenn sie gelaufen war.",
+          "note": "Narrative Beschreibung der Art zu sprechen."
+        },
+        {
+          "quote": "„Oduvan. Verriegle die Läden und lösch die Kohlen.\"",
+          "note": "Direkter Dialog."
+        }
+      ],
+      "lines": 5,
+      "scenes": 2,
+      "voiceStyle": "A middle-aged woman's voice, medium pitch and steady, featuring a crisp, resonant timbre and a cool, clinical cadence that maintains sharp, unwavering precision, for expressive character dialogue.",
+      "voiceUuid": "tUYwAc7_6NjGE17dR0KBV",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-tUYwAc7_6NjGE17dR0KBV"
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsEngine": "qwen",
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "wren",
+      "name": "Wren",
+      "role": "Lehrling",
+      "color": "marcus",
+      "tone": {
+        "warmth": 45,
+        "pace": 40,
+        "authority": 65,
+        "emotion": 30
+      },
+      "description": "Die Lehrlingin im Schmiede.",
+      "evidence": [
+        {
+          "quote": "„Ich seufze nie\", sagte Wren, die seufzte.",
+          "note": "Direkter Dialog."
+        },
+        {
+          "quote": "„Ein echter?\"",
+          "note": "Direkter Dialog."
+        }
+      ],
+      "lines": 11,
+      "scenes": 2,
+      "voiceStyle": "A young woman in her twenties with a medium pitch and clear, resonant timbre; her speech is steady and mid-paced, projecting a calm, grounded competence for expressive character dialogue.",
+      "voiceUuid": "nzWSauw1fwp8bD5cjUvyp",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-nzWSauw1fwp8bD5cjUvyp",
+          "variants": {
+            "whisper": {
+              "name": "qwen-nzWSauw1fwp8bD5cjUvyp__whisper"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsEngine": "qwen",
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "drache",
+      "name": "Drache",
+      "role": "Unbekannter Wesen",
+      "color": "slot-4",
+      "tone": {
+        "warmth": 30,
+        "pace": 25,
+        "authority": 85,
+        "emotion": 15
+      },
+      "description": "Ein Wesen aus der Dunkelheit mit einer tiefen, langsamen Stimme.",
+      "evidence": [
+        {
+          "quote": "\"Die Geschichten handelten von meiner Großmutter\", sagte der Drache.\"",
+          "note": "Antwort auf die Witwe Casper."
+        },
+        {
+          "quote": "„[excited] Flieht, ihr Narren — er wird euch alle verschlingen!\"",
+          "note": "Direkter Dialog."
+        },
+        {
+          "quote": "„Ich bin von weit her gekommen\", sagte der Drache.",
+          "note": "Direkter Dialog."
+        }
+      ],
+      "lines": 20,
+      "scenes": 2,
+      "voiceStyle": "A middle-aged being with a resonant, low-pitched, and steady voice, delivered at a calculated, languid pace with a dark, smooth, and chillingly detached timbre, for expressive character dialogue.",
+      "voiceUuid": "PIURlXnEQWDp7i_AYRDTD",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-PIURlXnEQWDp7i_AYRDTD",
+          "variants": {
+            "excited": {
+              "name": "qwen-PIURlXnEQWDp7i_AYRDTD__excited"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsEngine": "qwen",
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "narrator",
+      "name": "Narrator",
+      "role": "Dritter Beobachter",
+      "color": "narrator",
+      "tone": {
+        "warmth": 50,
+        "pace": 30,
+        "authority": 60,
+        "emotion": 25
+      },
+      "description": "Ein beobachtender Erzähler, der die Ereignisse des Schmiedes beschreibt.",
+      "evidence": [
+        {
+          "quote": "Nachrichten reisen auf zwei Wegen durch ein Tal: langsam, über die Straße, und auf einmal, über den Geruch einer nach Einbruch der Dunkelheit entzündeten Schmiede.",
+          "note": "Einleitender Absatz."
+        },
+        {
+          "quote": "Was folgte, tat die Schmiede zumeist schweigend, und der Erzähler wird es erzählen, weil die darin zu beschäftigt waren.",
+          "note": "Abschließende Beobachtung des Prozesses."
+        }
+      ],
+      "lines": 172,
+      "scenes": 2,
+      "ttsEngine": "qwen",
+      "voiceStyle": "A middle-aged man in his forties with a steady, medium-low pitch and a rich, resonant timbre; spoken at a slow, measured pace with neutral warmth and poised authority, suitable for audiobook narration.",
+      "voiceUuid": "fDtxqBAQEy9Os1LA5yVUo",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-fDtxqBAQEy9Os1LA5yVUo",
+          "variants": {
+            "sad": {
+              "name": "qwen-fDtxqBAQEy9Os1LA5yVUo__sad"
+            },
+            "whisper": {
+              "name": "qwen-fDtxqBAQEy9Os1LA5yVUo__whisper"
+            },
+            "excited": {
+              "name": "qwen-fDtxqBAQEy9Os1LA5yVUo__excited"
+            },
+            "angry": {
+              "name": "qwen-fDtxqBAQEy9Os1LA5yVUo__angry"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "pell-hollis",
+      "name": "Pell Hollis",
+      "role": "Unbekannter Besucher",
+      "color": "slot-5",
+      "tone": {
+        "warmth": 60,
+        "pace": 50,
+        "authority": 70,
+        "emotion": 45
+      },
+      "description": "Ein Mann mit Federn am Mantel, der in die Schmiede kommt.",
+      "evidence": [
+        {
+          "quote": "\"Das war ich, der geschrien hat\", sagte der Mann in der Tür, der offensichtlich dorthin gerannt war und sich offensichtlich wünschte, er hätte es nicht getan.\"",
+          "note": "Erster Satz des Mannes."
+        },
+        {
+          "quote": "\"Ich bleibe nur — ich stelle mich hierher. Bei den Hämmern. Für den Fall.\""
+        }
+      ],
+      "lines": 6,
+      "scenes": 1,
+      "ttsEngine": "qwen",
+      "voiceStyle": "A man in his forties with a medium pitch and resonant, steady timbre; he speaks at a measured, mid-paced tempo with a neutral, grounded tone, for expressive character dialogue.",
+      "voiceUuid": "QnzRQt4c0yhqw2BNzFxpk",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-QnzRQt4c0yhqw2BNzFxpk",
+          "variants": {
+            "angry": {
+              "name": "qwen-QnzRQt4c0yhqw2BNzFxpk__angry"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "witwe-casper",
+      "name": "Witwe Casper",
+      "role": "Besucherin",
+      "color": "narrator",
+      "tone": {
+        "warmth": 50,
+        "pace": 35,
+        "authority": 40,
+        "emotion": 35
+      },
+      "description": "Eine ältere Frau, die neugierig auf den Drachen ist.",
+      "evidence": [
+        {
+          "quote": "\"Dann denkt Euch eine aus\", sagte Witwe Casper. \"Das ist es, was Euresgleichen tut, und heute Nacht wird sie gebraucht.\""
+        },
+        {
+          "quote": "\"Kleiner als in den Geschichten\", sagte sie.\""
+        }
+      ],
+      "lines": 6,
+      "scenes": 1,
+      "voiceStyle": "An elderly woman in her late seventies with a medium-low, reedy pitch and a dry, frayed rasp; she speaks at a measured, deliberate pace with a steady, inquisitive timbre for expressive character dialogue.",
+      "voiceUuid": "w0VfFaWSK9oWaBhkoS_wU",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-w0VfFaWSK9oWaBhkoS_wU"
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsEngine": "qwen",
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "coalfall",
+      "name": "Coalfall",
+      "role": "Unbekannter Charakter",
+      "color": "slot-6",
+      "tone": {
+        "warmth": 55,
+        "pace": 30,
+        "authority": 60,
+        "emotion": 40
+      },
+      "description": "Ein Name, der in Bezug auf die Glocke genannt wird.",
+      "evidence": [
+        {
+          "quote": "\"Glaub es\", sagte Coalfall, und danach war es eine Weile still.\""
+        }
+      ],
+      "lines": 6,
+      "scenes": 1,
+      "voiceStyle": "A middle-aged man’s voice, medium pitch and measured pace, possessing a steady, resonant timbre with neutral warmth and a firm, authoritative clarity, for expressive character dialogue.",
+      "voiceUuid": "FEhNG1vJEZ38gzo0iyxRm",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-FEhNG1vJEZ38gzo0iyxRm"
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsEngine": "qwen",
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "brann-weir",
+      "name": "Brann Weir",
+      "role": "Zwilling",
+      "color": "narrator",
+      "tone": {
+        "warmth": 40,
+        "pace": 35,
+        "authority": 50,
+        "emotion": 25
+      },
+      "description": "Einer der Zwillinge.",
+      "evidence": [
+        {
+          "quote": "\"Das ist also der Drache?\""
+        },
+        {
+          "quote": "\"Maerin —\" sagte Brann.\""
+        }
+      ],
+      "lines": 7,
+      "scenes": 1,
+      "ttsEngine": "qwen",
+      "voiceStyle": "A middle-aged man in his forties, with a steady, medium-pitched, resonant timbre and a clear, composed delivery, exhibiting neutral warmth and measured pacing for expressive character dialogue.",
+      "voiceUuid": "YjYuh8Nd9rn5iBQqeeWO0",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-YjYuh8Nd9rn5iBQqeeWO0"
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "berrin-weir",
+      "name": "Berrin Weir",
+      "role": "Zwilling",
+      "color": "narrator",
+      "tone": {
+        "warmth": 40,
+        "pace": 35,
+        "authority": 50,
+        "emotion": 25
+      },
+      "description": "Der andere Zwilling.",
+      "evidence": [
+        {
+          "quote": "\"Ihr geht es gut\", sagte Berrin, flach wie ein Regal, und hatte, wie üblich, recht.\""
+        },
+        {
+          "quote": "\"Es ist der Drache.\""
+        }
+      ],
+      "lines": 1,
+      "scenes": 1,
+      "ttsEngine": "qwen",
+      "voiceStyle": "A middle-aged man in his forties with a steady, medium pitch and a balanced, crisp timbre, speaking at a measured and neutral pace to project composed reliability, for expressive character dialogue.",
+      "voiceUuid": "WGuAxmeqUyf68pM8kxFsN",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-WGuAxmeqUyf68pM8kxFsN"
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "pater-lessom",
+      "name": "Pater Lessom",
+      "role": "Kleriker",
+      "color": "narrator",
+      "tone": {
+        "warmth": 50,
+        "pace": 25,
+        "authority": 70,
+        "emotion": 30
+      },
+      "description": "Ein älterer Mann mit Hut, der Zeremonie folgt.",
+      "evidence": [
+        {
+          "quote": "\"Ist es recht, meint Ihr? Glocken sind für Seelen. Ich kenne die Regel nicht für —\" er deutete auf die Schwelle, auf das alles, \"— dies.\""
+        },
+        {
+          "quote": "\"Ich habe mir eine ausgedacht\", sagte er zur Witwe, fast trotzig. \"Die Regel.\""
+        }
+      ],
+      "lines": 4,
+      "scenes": 1,
+      "voiceStyle": "An elderly man in his seventies with a medium-low pitch and a thin, reedy timbre, marked by a gravelly rasp and a steady, slow pace, for expressive character dialogue.",
+      "voiceUuid": "ruHKWQkQHcYUe9C2fTzqZ",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-ruHKWQkQHcYUe9C2fTzqZ"
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsEngine": "qwen",
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "ivo",
+      "name": "Ivo",
+      "role": "Händler",
+      "color": "slot-7",
+      "tone": {
+        "warmth": 60,
+        "pace": 45,
+        "authority": 75,
+        "emotion": 35
+      },
+      "description": "Ein Hausierer mit einem Geschäftssinn.",
+      "evidence": [
+        {
+          "quote": "\"Eine Glocke will er. Für sich, die Glocke. In meinem Land pflanzen wir für die Toten einen Baum — aber einen Baum an einer Klaue kann man nicht tragen, und also: eine Glocke. Vernünftig.\""
+        },
+        {
+          "quote": "\"Ich habe Seil, wenn Seil gewünscht wird. Auch Wachs. Für nichts, heute Nacht. Morgen, Preise.\""
+        }
+      ],
+      "lines": 3,
+      "scenes": 1,
+      "ttsEngine": "qwen",
+      "voiceStyle": "A middle-aged man in his forties with a medium, resonant pitch, possessing a steady and smooth timbre; the delivery is deliberate and mid-paced, projecting a calculated, measured authority for expressive character dialogue.",
+      "voiceUuid": "TQUcTq5Pbr6GrssmKF9Oi",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-TQUcTq5Pbr6GrssmKF9Oi"
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "sela",
+      "name": "Sela",
+      "role": "Kind",
+      "color": "narrator",
+      "tone": {
+        "warmth": 70,
+        "pace": 35,
+        "authority": 20,
+        "emotion": 60
+      },
+      "description": "Das achtjährige Mädchen.",
+      "evidence": [
+        {
+          "quote": "\"Gleich\", sagte Sela, was Maerins eigene Stimme im Kleinen war, und die Witwe lachte, ehe sie sich beherrschen konnte.\""
+        }
+      ],
+      "lines": 6,
+      "scenes": 1,
+      "ttsEngine": "qwen",
+      "voiceStyle": "A bright girl of about eight with a medium-high, light pitch and a clear, melodic timbre, speaking at a measured, rhythmic pace with an engaging, earnest quality for expressive character dialogue.",
+      "voiceUuid": "f8W8MSpQ0ENOnKlNrvoLS",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-f8W8MSpQ0ENOnKlNrvoLS"
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    }
+  ]
+}

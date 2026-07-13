@@ -1,0 +1,11 @@
+{
+  "voiceId": "qwen-axAxRhfqVaZCVE1enMpJC__excited",
+  "voiceUuid": "axAxRhfqVaZCVE1enMpJC",
+  "instruct": "Delivered with bright, happy, upbeat excitement, cheerful and thrilled, full of joyful, positive energy.",
+  "language": "Spanish",
+  "refText": "El veloz murciélago hindú comía feliz cardillo y kiwi, y se preguntaba qué traería el mañana.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+  "anchoredTo": "qwen-axAxRhfqVaZCVE1enMpJC",
+  "mintMethod": "anchored-icl-instruct"
+}

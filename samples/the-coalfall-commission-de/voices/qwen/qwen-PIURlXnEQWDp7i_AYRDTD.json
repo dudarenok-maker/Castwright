@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-PIURlXnEQWDp7i_AYRDTD",
+  "voiceUuid": "PIURlXnEQWDp7i_AYRDTD",
+  "instruct": "A middle-aged being with a resonant, low-pitched, and steady voice, delivered at a calculated, languid pace with a dark, smooth, and chillingly detached timbre, for expressive character dialogue.",
+  "language": "German",
+  "refText": "Zwölf Boxkämpfer jagen Viktor quer über den großen Sylter Deich, und sie fragte sich, was der morgige Tag bringen würde.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}

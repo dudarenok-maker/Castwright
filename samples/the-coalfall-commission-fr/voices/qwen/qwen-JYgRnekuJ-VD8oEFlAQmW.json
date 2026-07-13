@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-JYgRnekuJ-VD8oEFlAQmW",
+  "voiceUuid": "JYgRnekuJ-VD8oEFlAQmW",
+  "instruct": "Mid-30th adult female voice with a standard British accent. The voice has a warm, clear, and expressive timbre, a bit on the slower side. She speaks with a captivating, narrative rhythm, blending youthful curiosity with emotional depth. The tone is earnest, wondrous, and highly articulate, perfectly suited for reading a young adult magical fantasy.",
+  "language": "French",
+  "refText": "Portez ce vieux whisky au juge blond qui fume, et demandez-vous ce que demain réserve.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}

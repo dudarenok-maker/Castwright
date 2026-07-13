@@ -1,0 +1,11 @@
+{
+  "voiceId": "qwen-sa-UCs61Sxipme-G9skJF__excited",
+  "voiceUuid": "sa-UCs61Sxipme-G9skJF",
+  "instruct": "Delivered with bright, happy, upbeat excitement, cheerful and thrilled, full of joyful, positive energy.",
+  "language": "French",
+  "refText": "Portez ce vieux whisky au juge blond qui fume, et demandez-vous ce que demain réserve.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+  "anchoredTo": "qwen-sa-UCs61Sxipme-G9skJF",
+  "mintMethod": "anchored-icl-instruct"
+}

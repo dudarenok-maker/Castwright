@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-XUxobKj1rs4kuFQB6kabY",
+  "voiceUuid": "XUxobKj1rs4kuFQB6kabY",
+  "instruct": "A female elderly voice with a low, raspy pitch and measured, deliberate pace, possessing a brittle, clinical timbre and a detached, authoritative register, for expressive character dialogue.",
+  "language": "French",
+  "refText": "Portez ce vieux whisky au juge blond qui fume, et demandez-vous ce que demain réserve.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}

@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-WTfH1JqW4rgOTJamLMjGU",
+  "voiceUuid": "WTfH1JqW4rgOTJamLMjGU",
+  "instruct": "A mature male voice with a medium-low pitch and brisk, rhythmic pacing, featuring a grainy, earthy timbre and a dry, observational emotional register, for expressive character dialogue.",
+  "language": "Spanish",
+  "refText": "El veloz murciélago hindú comía feliz cardillo y kiwi, y se preguntaba qué traería el mañana.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}

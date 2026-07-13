@@ -1,0 +1,11 @@
+{
+  "voiceId": "qwen-14KZfNt2RXojvFwljXNpD__whisper",
+  "voiceUuid": "14KZfNt2RXojvFwljXNpD",
+  "instruct": "Delivered as a barely-there whisper, almost silent, pure soft breath with no vocal tone at all, hushed and intimate, faint enough that you strain to hear it.",
+  "language": "Russian",
+  "refText": "Съешь же ещё этих мягких французских булок да выпей чаю, и она подумала, что принесёт завтрашний день.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+  "anchoredTo": "qwen-14KZfNt2RXojvFwljXNpD",
+  "mintMethod": "anchored-icl-instruct"
+}

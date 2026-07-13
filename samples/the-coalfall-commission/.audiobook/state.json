@@ -29,44 +29,42 @@
       "id": 3,
       "title": "Chapter One — The Knock",
       "slug": "03-chapter-one-the-knock",
-      "duration": "03:59",
+      "duration": "04:03",
       "uuid": "1017f4fa-5728-431e-8c60-a784def0fa3e",
-      "audioModelKey": "qwen3-tts-0.6b",
+      "audioModelKey": "qwen3-tts-1.7b",
       "audioEngines": {
         "qwen": 6
       },
-      "audioRenderedAt": "2026-06-16T02:50:36.261Z",
+      "audioRenderedAt": "2026-07-07T02:47:22.513Z",
       "audioQa": {
         "status": "ok",
         "reasons": [],
-        "measuredLufs": -16.15,
+        "measuredLufs": -16.2,
         "truePeakDb": -1.5,
-        "durationSec": 238.920125,
-        "expectedSec": 237.5,
-        "checkedAt": "2026-06-16T02:50:36.260Z"
+        "durationSec": 243.4,
+        "expectedSec": 237.64285714285714,
+        "checkedAt": "2026-07-07T02:47:22.512Z"
       }
     },
     {
       "id": 4,
       "title": "Chapter Two — The Pour",
       "slug": "04-chapter-two-the-pour",
-      "duration": "13:47",
+      "duration": "13:41",
       "uuid": "4934a15c-411e-4d16-a073-7d27eaca15ce",
-      "audioModelKey": "qwen3-tts-0.6b",
+      "audioModelKey": "qwen3-tts-1.7b",
       "audioEngines": {
         "qwen": 13
       },
-      "audioRenderedAt": "2026-06-16T03:18:48.799Z",
+      "audioRenderedAt": "2026-07-07T03:09:22.664Z",
       "audioQa": {
-        "status": "suspect",
-        "reasons": [
-          "2 sentence(s) still flagged after re-recording (e.g. Suspiciously long — 1.1s rendered vs ~0.4s expected (possible runaway synthesis).)."
-        ],
-        "measuredLufs": -16.03,
+        "status": "ok",
+        "reasons": [],
+        "measuredLufs": -16.05,
         "truePeakDb": -1.5,
-        "durationSec": 827.32025,
+        "durationSec": 820.840125,
         "expectedSec": 831.4285714285714,
-        "checkedAt": "2026-06-16T03:18:48.799Z"
+        "checkedAt": "2026-07-07T03:09:22.664Z"
       }
     }
   ],
@@ -75,7 +73,7 @@
     "#0F0E0D"
   ],
   "createdAt": "2026-06-09T00:43:33.392Z",
-  "updatedAt": "2026-06-16T03:18:48.877Z",
+  "updatedAt": "2026-07-07T03:09:22.777Z",
   "chapterTitleParserVersion": 2,
   "language": "en",
   "schema": 1,

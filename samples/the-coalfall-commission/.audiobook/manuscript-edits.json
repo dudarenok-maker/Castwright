@@ -95,7 +95,8 @@
       "chapterId": 3,
       "characterId": "maerin",
       "text": "“Oduvan. Bar the shutters and douse the coals.”",
-      "confidence": 0.94
+      "confidence": 0.94,
+      "emotion": "whisper"
     },
     {
       "id": 11,
@@ -109,7 +110,8 @@
       "chapterId": 3,
       "characterId": "maerin",
       "text": "“There’s a dragon on the Coalfall road. Big as a barn. It’s coming down the lane.”",
-      "confidence": 0.95
+      "confidence": 0.95,
+      "emotion": "excited"
     },
     {
       "id": 13,
@@ -137,7 +139,8 @@
       "chapterId": 3,
       "characterId": "maerin",
       "text": "“Real. And making straight for the only lit window in the valley, which is yours. Douse the fire.”",
-      "confidence": 0.94
+      "confidence": 0.94,
+      "emotion": "angry"
     },
     {
       "id": 17,
@@ -313,14 +316,16 @@
       "chapterId": 3,
       "characterId": "wren",
       "text": "“I never sigh,”",
-      "confidence": 0.85
+      "confidence": 0.85,
+      "emotion": "whisper"
     },
     {
       "id": 42,
       "chapterId": 3,
       "characterId": "narrator",
-      "text": "said Wren, who sighed.",
-      "confidence": 0.96
+      "text": "I never sigh… said Wren.",
+      "confidence": 0.96,
+      "vocalization": true
     },
     {
       "id": 43,
@@ -348,7 +353,8 @@
       "chapterId": 3,
       "characterId": "coalfall-dragon",
       "text": "“Everyone wants me dead, and a sword would only encourage them. I want a bell. Small enough to hang from a claw. I am the last of mine, and when I go there will be no one to mark it. I should like to mark it myself, in advance — while there is still someone who knows how to cast a true note.”",
-      "confidence": 0.93
+      "confidence": 0.93,
+      "emotion": "sad"
     },
     {
       "id": 47,
@@ -383,7 +389,8 @@
       "chapterId": 3,
       "characterId": "master-oduvan",
       "text": "“Bronze, then, not iron. Sparrow — the good tin, the crucible, and stop crying on the moulding sand, it will spoil the cast.”",
-      "confidence": 0.89
+      "confidence": 0.89,
+      "instruct": "firmly, with a hint of exasperation"
     },
     {
       "id": 52,
@@ -913,7 +920,8 @@
       "chapterId": 4,
       "characterId": "ivo",
       "text": "Sensible.”",
-      "confidence": 0.85
+      "confidence": 0.85,
+      "emotion": "excited"
     },
     {
       "id": 70,
@@ -948,7 +956,8 @@
       "chapterId": 4,
       "characterId": "ivo",
       "text": "Tomorrow, prices.”",
-      "confidence": 0.85
+      "confidence": 0.85,
+      "emotion": "angry"
     },
     {
       "id": 75,
@@ -1172,7 +1181,8 @@
       "chapterId": 4,
       "characterId": "sela",
       "text": "“And the bell’s for when you die.”",
-      "confidence": 0.95
+      "confidence": 0.95,
+      "emotion": "sad"
     },
     {
       "id": 107,
@@ -1187,7 +1197,8 @@
       "chapterId": 4,
       "characterId": "narrator",
       "text": "Maerin’s voice cracked in the middle.",
-      "confidence": 0.98
+      "confidence": 0.98,
+      "instruct": "voice cracks in the middle"
     },
     {
       "id": 109,
@@ -1327,14 +1338,16 @@
       "chapterId": 4,
       "characterId": "sela",
       "text": "“I’m going to live for ages.”",
-      "confidence": 0.95
+      "confidence": 0.95,
+      "emotion": "sad"
     },
     {
       "id": 129,
       "chapterId": 4,
       "characterId": "narrator",
       "text": "There are things said in the middle of the night by children that bend the rest of a life around them, and everyone in the forge knew they had just heard one.",
-      "confidence": 0.98
+      "confidence": 0.98,
+      "instruct": "a reflective, quiet tone"
     },
     {
       "id": 130,
@@ -2080,5 +2093,6 @@
       "text": "The End.",
       "confidence": 0.98
     }
-  ]
+  ],
+  "mergedAwayKeys": []
 }

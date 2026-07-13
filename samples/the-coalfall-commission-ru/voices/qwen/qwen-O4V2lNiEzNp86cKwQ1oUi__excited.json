@@ -1,0 +1,11 @@
+{
+  "voiceId": "qwen-O4V2lNiEzNp86cKwQ1oUi__excited",
+  "voiceUuid": "O4V2lNiEzNp86cKwQ1oUi",
+  "instruct": "Delivered with bright, happy, upbeat excitement, cheerful and thrilled, full of joyful, positive energy.",
+  "language": "Russian",
+  "refText": "Съешь же ещё этих мягких французских булок да выпей чаю, и она подумала, что принесёт завтрашний день.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+  "anchoredTo": "qwen-O4V2lNiEzNp86cKwQ1oUi",
+  "mintMethod": "anchored-icl-instruct"
+}

@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-TP3sfCclL5WIPEhaZ9-Jd",
+  "voiceUuid": "TP3sfCclL5WIPEhaZ9-Jd",
+  "instruct": "A mature female voice with a medium-low pitch and brisk, clipped pacing, featuring a crisp, resonant timbre and a cool, authoritative register, for expressive character dialogue.",
+  "language": "Russian",
+  "refText": "Съешь же ещё этих мягких французских булок да выпей чаю, и она подумала, что принесёт завтрашний день.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}

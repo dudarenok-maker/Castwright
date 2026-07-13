@@ -1,0 +1,79 @@
+{
+  "bookId": "castwright__standalones__заказ-коалфолла",
+  "manuscriptId": "mns_af35ec3ced",
+  "title": "Заказ Коалфолла",
+  "author": "Castwright",
+  "series": "Standalones",
+  "seriesPosition": null,
+  "isStandalone": true,
+  "manuscriptFile": "manuscript.epub",
+  "castConfirmed": true,
+  "chapters": [
+    {
+      "id": 1,
+      "title": "Заказ Коалфолла",
+      "slug": "01-заказ-коалфолла",
+      "duration": "00:00",
+      "excluded": true,
+      "uuid": "6d3b25fc-0e09-4e71-99fa-9b0e79aa43ec"
+    },
+    {
+      "id": 2,
+      "title": "Глава первая — Стук",
+      "slug": "02-глава-первая-стук",
+      "duration": "04:26",
+      "uuid": "6f0e9cf0-1569-4219-8633-af3f1e5d5e57",
+      "audioModelKey": "qwen3-tts-1.7b",
+      "audioEngines": {
+        "qwen": 6
+      },
+      "audioRenderedAt": "2026-07-07T13:38:08.451Z",
+      "audioQa": {
+        "status": "ok",
+        "reasons": [],
+        "measuredLufs": -16.19,
+        "truePeakDb": -1.5,
+        "durationSec": 266.20008333333334,
+        "expectedSec": 232.5,
+        "checkedAt": "2026-07-07T13:38:08.450Z"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Глава вторая — Отливка",
+      "slug": "03-глава-вторая-отливка",
+      "duration": "14:03",
+      "uuid": "6034860c-32c2-455c-bf40-77fc0cdf83b8",
+      "audioModelKey": "qwen3-tts-1.7b",
+      "audioEngines": {
+        "qwen": 13
+      },
+      "audioRenderedAt": "2026-07-07T14:19:53.589Z",
+      "audioQa": {
+        "status": "ok",
+        "reasons": [],
+        "measuredLufs": -16.09,
+        "truePeakDb": -1.5,
+        "durationSec": 843.1600833333333,
+        "expectedSec": 824.3571428571429,
+        "checkedAt": "2026-07-07T14:19:53.588Z"
+      }
+    }
+  ],
+  "coverGradient": [
+    "#3C194F",
+    "#0F0E0D"
+  ],
+  "createdAt": "2026-06-25T05:16:20.501Z",
+  "updatedAt": "2026-07-07T14:19:53.656Z",
+  "chapterTitleParserVersion": 2,
+  "language": "ru",
+  "schema": 1,
+  "narratorCredit": null,
+  "genre": null,
+  "publicationDate": null,
+  "description": null,
+  "notes": null,
+  "tags": [],
+  "liveInstruct": false
+}
