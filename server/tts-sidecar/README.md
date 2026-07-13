@@ -12,8 +12,8 @@ torch dependency tree doesn't leak into Node tooling.
 | **PyTorch** | **`torch==2.11.0` + `torchaudio==2.11.0`** (matched pair, pinned in `requirements/nvidia-cuda.txt`) | needed by Coqui + Qwen (Kokoro doesn't use torch); the sidecar does all audio I/O via soundfile + ffmpeg and never calls `torchaudio.load`, so torchaudio's 2.9 backend removal doesn't affect it (no torchcodec) |
 | → NVIDIA GPU | PyPI default = CUDA-bundled wheel; or pre-install `--index-url https://download.pytorch.org/whl/cu128` for **CUDA 12.8** | ~2.5 GB |
 | → CPU / macOS | PyPI default = CPU / MPS build | |
-| coqui-tts | `>=0.24.0` (resolves ~0.27.x), **no `[codec]` extra** | 0.27.5 dropped its transitive torch (torch now explicit); `[codec]` dropped → no torchcodec |
-| **torchcodec** | **not installed** | the sidecar does all audio I/O via soundfile + ffmpeg and never calls `torchaudio.load`, so torchaudio's 2.9 backend removal doesn't affect it — no torchcodec needed |
+| coqui-tts | `>=0.24.0` (resolves ~0.27.x), **no `[codec]` extra** | 0.27.5 dropped its transitive torch (torch now explicit). `[codec]` is avoided in the manifest, but torchcodec is still installed by `install-coqui.mjs` (next row) |
+| **torchcodec** | **not in the manifest; installed by `install-coqui.mjs`** (opt-in Coqui only, `--no-deps`) | coqui-tts 0.27.5 presence-checks torchcodec at **import** on torch≥2.9 (`find_spec`, not a functional import) and raises `ImportError` without it. It need only be PRESENT: the sidecar never calls `torchaudio.load` and XTTS inference uses manifest-speaker latents, so torchcodec's FFmpeg decode path (which can't load its shared libs against a static FFmpeg 8 build) is never reached. Standard engines (Kokoro/Qwen) don't get it. See #1586 |
 | kokoro-onnx | `>=0.4.0,<0.5.0` (plain, **no `[gpu]`**) | overlay lands core `onnxruntime` (CPU); `install-ort.mjs` swaps in `onnxruntime-gpu` on the nvidia profile. `[gpu]` is avoided — it coexists with the core dep and can silently leave CPU onnxruntime winning. No torch |
 | transformers | `>=4.45,<5.0` | coqui-tts compat cap |
 
@@ -76,7 +76,8 @@ py -3.12 -m venv .venv
 # pinned to the matched 2.11.0 pair (recent coqui-tts no longer pulls torch
 # transitively; the sidecar does all audio I/O via soundfile + ffmpeg and never
 # calls torchaudio.load, so torchaudio's 2.9 backend removal doesn't affect it —
-# no torchcodec needed). On Windows / Linux x86_64 PyPI gives the CUDA-bundled wheel; on macOS
+# no torchcodec in this base install; opt-in Coqui installs it separately, see the
+# deps table above). On Windows / Linux x86_64 PyPI gives the CUDA-bundled wheel; on macOS
 # the CPU/MPS build. No separate torch step is needed for the common case.
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```

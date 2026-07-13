@@ -9,9 +9,15 @@
 # explicit line is required — see test_requirements.py.) Pinned to 2.11.0:
 # clears CVE-2025-2999 (unpack_sequence) + CVE-2025-3001 (lstm_cell); highest
 # line with a cu128 wheel (2.12 is cu130-only → driver bump). torchaudio 2.9
-# removed the in-core soundfile backend (load/save now need torchcodec) — this
-# is fine because the sidecar NEVER calls torchaudio.load: audio I/O is
-# soundfile + ffmpeg, and Coqui uses manifest speakers, not speaker_wav.
+# removed the in-core soundfile backend (load/save now dispatch to torchcodec).
+# The base/overlay stays torchcodec-free: the sidecar NEVER calls torchaudio.load
+# (audio I/O is soundfile + ffmpeg, Coqui uses manifest speakers, not speaker_wav)
+# and a plain torch/torchaudio==2.11.0 pulls no torchcodec. EXCEPTION: opt-in Coqui
+# — coqui-tts 0.27.5 presence-checks torchcodec at IMPORT on torch>=2.9 (find_spec,
+# not a functional import), so install-coqui.mjs installs it there (NOT here); it
+# need only be present, never functional. See test_no_torchcodec + #1586. CJK-on-Coqui
+# additionally needs the XTTS text frontends coqui-tts doesn't pull — pypinyin (zh) and
+# cutlet + unidic-lite (ja MeCab dict) — also installed by install-coqui.mjs, not here.
 #
 # These plain pins do NOT carry a CUDA build by themselves: PyPI's default torch
 # wheel is CPU-only on Windows. bootstrap-venv pre-installs torch/torchaudio from
