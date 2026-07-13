@@ -115,7 +115,16 @@ export const VARIANT_EMOTIONS = EMOTIONS.filter((e) => e !== 'neutral') as Exclu
 /* Emotion delivery clause sent to /qwen/mint-variant as `emotionInstruct`.
    The base persona is already baked into the base voice identity; this clause
    adds only the delivery modifier on top. Phrasings calibrated for the
-   anchored-mint approach (Task 6): stronger contrast vs. base voice. */
+   anchored-mint approach (Task 6): stronger contrast vs. base voice.
+
+   fs-59 CJK (Task 4a.2): deliberately NOT localized per book language. This
+   is a `Record<Exclude<Emotion,'neutral'>, string>` keyed purely by emotion —
+   `p.language` (zh/ja included) never participates in the lookup, so it's
+   safe by construction: no undefined, no crash, for any book language.
+   Adding zh/ja-native phrasing is out of scope — Qwen VoiceDesign persona
+   stays English regardless of book language (a documented won't-fix, see
+   reference_qwen_voicedesign_persona_english), so an English delivery clause
+   is the correct/consistent behaviour here too, not a gap. */
 const EMOTION_INSTRUCT: Record<Exclude<Emotion, 'neutral'>, string> = {
   whisper:
     'Delivered as a barely-there whisper, almost silent, pure soft breath with no vocal tone at all, hushed and intimate, faint enough that you strain to hear it.',

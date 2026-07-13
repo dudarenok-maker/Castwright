@@ -376,6 +376,52 @@ describe('voice-sample router', () => {
     });
   });
 
+  describe('fs-59 W4b — language threading', () => {
+    it('forwards a supplied language to provider.synthesize', async () => {
+      const res = await request(app)
+        .post('/api/voices/v_zh/sample')
+        .send({
+          modelKey: 'coqui-xtts-v2',
+          voice: { id: 'v_zh', character: 'Zhou', attributes: ['Male'] },
+          text: 'Hello.',
+          language: 'zh',
+        });
+
+      expect(res.status).toBe(200);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+      const args = synthesize.mock.calls[0][0] as { language?: string };
+      expect(args.language).toBe('zh');
+    });
+
+    it('omits language when not supplied (backward-compatible)', async () => {
+      const res = await request(app)
+        .post('/api/voices/v_en/sample')
+        .send({
+          modelKey: 'coqui-xtts-v2',
+          voice: { id: 'v_en', character: 'Ellen', attributes: ['Female'] },
+          text: 'Hello.',
+        });
+
+      expect(res.status).toBe(200);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+      const args = synthesize.mock.calls[0][0] as { language?: string };
+      expect(args.language).toBeUndefined();
+    });
+
+    it('forwards language on the raw-speaker bypass path too', async () => {
+      const res = await request(app).post('/api/voices/v_raw/sample').send({
+        modelKey: 'coqui-xtts-v2',
+        rawEngine: 'coqui',
+        rawSpeaker: 'Asya Anara',
+        language: 'ja',
+      });
+
+      expect(res.status).toBe(200);
+      const args = synthesize.mock.calls[0][0] as { language?: string };
+      expect(args.language).toBe('ja');
+    });
+  });
+
   describe('provider errors', () => {
     it('503 sidecar_down when the sidecar is unreachable', async () => {
       synthesize.mockRejectedValueOnce(new Error('sidecar not reachable at http://localhost:9000'));

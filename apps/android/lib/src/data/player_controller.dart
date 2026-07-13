@@ -125,11 +125,14 @@ class PlayerController {
     // Subscribe to playing state to drive the accumulator.
     _playingSub = _engine.playingStream.listen(_onPlayingChanged);
     if (_streaming != null) {
-      // Mid-stream failure channel (§6). `_handleStreamFailure` self-guards on
-      // `_currentIsStream`, so a local-file playback error no-ops and a single
-      // failure can't be routed twice (this errorStream event AND the initial-load
-      // `catch` in `_loadSource` can both fire — the guard makes it idempotent).
-      _errorSub = _engine.errorStream.listen((_) => _handleStreamFailure());
+      // Mid-stream failure channel (§6). The handler is keyed on the CONFIRMED
+      // stream generation (`_streamingGen`): a local-file playback error carries
+      // a null gen and no-ops, a late error from an OUTGOING stream (arriving
+      // while the incoming one is still loading) is superseded and ignored, and a
+      // single failure can't be routed twice — nulling `_streamingGen` on the
+      // first route makes the errorStream event and the initial-load `catch` in
+      // `_loadSource` idempotent (#1579).
+      _errorSub = _engine.errorStream.listen((_) => _handleStreamFailure(_streamingGen));
     }
   }
 
@@ -149,7 +152,15 @@ class PlayerController {
   // behaviour (see [StreamingConfig]).
   final StreamingConfig? _streaming;
   StreamSubscription<Object>? _errorSub;
-  bool _currentIsStream = false;
+
+  // app-10 stream-load generations (#1579). `_streamGen` bumps on every source
+  // load; `_streamingGen` holds the generation of the CONFIRMED-current stream
+  // (null when the loaded source is a local file / needs-download, while a new
+  // stream is still loading, or once a failure has been routed). Keying the
+  // failure router on these lets a late error from a superseded stream be
+  // ignored instead of misattributed to the incoming chapter.
+  int _streamGen = 0;
+  int? _streamingGen;
 
   final StreamController<String> _downloadToPlay =
       StreamController<String>.broadcast();
@@ -351,9 +362,15 @@ class PlayerController {
   /// set on the engine (local file or a live stream); false for `needsDownload`,
   /// a null `audioUrl`, or a failed stream — callers skip `play()` on false.
   Future<bool> _loadSource(PlayableChapter c, {required bool userInitiated}) async {
+    // Every load opens a new stream generation and provisionally clears the
+    // confirmed-stream marker: a LATE error from the OUTGOING stream (arriving
+    // while this source loads) then reads a null/superseded gen and is ignored,
+    // rather than misrouted as this load's failure (#1579). It's re-set only once
+    // THIS stream load actually confirms.
+    final gen = ++_streamGen;
+    _streamingGen = null;
     final cfg = _streaming;
     if (cfg == null) {
-      _currentIsStream = false;
       await _engine.setFilePath(c.path); // legacy: offline-first only
       return true;
     }
@@ -364,45 +381,48 @@ class PlayerController {
     );
     switch (src) {
       case PlaybackSource.localFile:
-        _currentIsStream = false;
         await _engine.setFilePath(c.path);
         return true;
       case PlaybackSource.lanStream:
         final audioUrl = c.audioUrl;
         if (audioUrl == null) {
-          _currentIsStream = false;
           if (userInitiated) _notifyDownloadToPlay();
           return false;
         }
         await cfg.proxy.start(); // first bind, on demand
         final loopback = cfg.proxy.register(upstream: cfg.urlResolver(audioUrl));
-        _currentIsStream = true;
         try {
           // The player only ever sees http://127.0.0.1/… and NO headers.
           await _engine.setStreamUrl(loopback.toString());
+          // Confirm as the current stream only if no newer load superseded us
+          // during the await.
+          if (gen == _streamGen) _streamingGen = gen;
           return true;
         } catch (_) {
-          _handleStreamFailure(); // initial-load throw channel (§6/§7)
+          _handleStreamFailure(gen); // initial-load throw channel (§6/§7)
           return false;
         }
       case PlaybackSource.needsDownload:
-        _currentIsStream = false;
         if (userInitiated) _notifyDownloadToPlay(); // else auto-advance: halt quietly
         return false;
     }
   }
 
-  /// The single §7 failure router (shared by the initial-load throw and the
-  /// mid-stream errorStream event). Self-guards on `_currentIsStream` so it is
-  /// idempotent per stream load AND no-ops on a local-file error: reads the
-  /// proxy's upstream-status side-channel, clears the mapping, and either re-pairs
-  /// (fresh 401/403) or surfaces "download to play" (everything else, incl. null).
-  /// No auto-retry.
-  void _handleStreamFailure() {
+  /// The single §7 failure router, shared by the initial-load throw (which passes
+  /// its own load [gen]) and the mid-stream errorStream event (which passes the
+  /// confirmed [_streamingGen]). Ignores the call when [gen] is null (not a live
+  /// stream load — e.g. a local-file playback error) or has been superseded by a
+  /// newer load (`gen != _streamGen`) — the latter is what stops a LATE error
+  /// from an OUTGOING stream being misattributed to the incoming chapter (#1579).
+  /// Nulling [_streamingGen] makes it idempotent: a second error for the same
+  /// load reads null and no-ops. Reads the proxy's upstream-status side-channel,
+  /// clears the mapping, and either re-pairs (fresh 401/403) or surfaces "download
+  /// to play" (everything else, incl. null). No auto-retry.
+  void _handleStreamFailure(int? gen) {
     final cfg = _streaming;
     if (cfg == null) return;
-    if (!_currentIsStream) return; // not streaming, or already handled
-    _currentIsStream = false;
+    if (gen == null || gen != _streamGen) return; // not current, or superseded
+    _streamingGen = null;
     final status = cfg.proxy.lastUpstreamStatus;
     cfg.proxy.clearMapping();
     if (status == 401 || status == 403) {

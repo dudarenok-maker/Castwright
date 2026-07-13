@@ -5,6 +5,9 @@
 -r base.txt
 
 # Coqui XTTS is now opt-in — install it from the Model Manager (it pip-installs coqui-tts under base.txt's pins).
+# The AMD profile stays on ROCm torch 2.8 (< 2.9), so coqui-tts does NOT need torchcodec here (its import
+# guard is gated on torch>=2.9). install-coqui.mjs installs torchcodec with --no-deps regardless — inert on
+# this profile (never imported, and --no-deps can't touch the ROCm torch). See nvidia-cuda.txt's note + #1586.
 
 # Qwen3-TTS — per-character bespoke voices; weights fetched by install-qwen3.mjs.
 # Pinned to 0.1.1: the raw model.generate() bypass in _icl_instruct_synth (fs-55)
