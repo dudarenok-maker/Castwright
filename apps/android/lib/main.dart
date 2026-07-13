@@ -450,11 +450,63 @@ class _HomePageState extends State<HomePage> {
         ),
       );
     }
-    return LibraryHomeScreen(
+    return LifecycleResumePusher(
       runtime: _runtime!,
-      server: _paired!,
-      onUnpair: _demoMode ? _exitDemo : _unpair,
-      demoMode: _demoMode,
+      child: LibraryHomeScreen(
+        runtime: _runtime!,
+        server: _paired!,
+        onUnpair: _demoMode ? _exitDemo : _unpair,
+        demoMode: _demoMode,
+      ),
     );
   }
+}
+
+/// Flushes resume on app pause (app-21). In two-pane there is no per-book
+/// `PlayerPane.dispose` to push the server sync (the pane stays resident
+/// across selections) — this is the app-lifecycle equivalent, covering
+/// backgrounding regardless of layout. Best-effort + idempotent: overlaps
+/// `activateBook`'s save→push→switch handoff and `AutoSyncService`'s
+/// connectivity-triggered flush, but `srv-34`'s guarded compare-and-set
+/// tolerates the redundant PUT.
+class LifecycleResumePusher extends StatefulWidget {
+  const LifecycleResumePusher({super.key, required this.runtime, required this.child});
+
+  /// `CompanionRuntime` in production; a duck-typed spy in tests (only
+  /// `player.{currentBookId,saveNow}` and `resumeSync.syncBook` are used).
+  final dynamic runtime;
+  final Widget child;
+
+  @override
+  State<LifecycleResumePusher> createState() => _LifecycleResumePusherState();
+}
+
+class _LifecycleResumePusherState extends State<LifecycleResumePusher>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  Future<void> didChangeAppLifecycleState(AppLifecycleState state) async {
+    if (state != AppLifecycleState.paused) return;
+    await widget.runtime.player.saveNow();
+    final id = widget.runtime.player.currentBookId;
+    if (id != null) {
+      try {
+        await widget.runtime.resumeSync.syncBook(id);
+      } catch (_) {/* offline / no server record */}
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

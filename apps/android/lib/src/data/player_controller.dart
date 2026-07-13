@@ -468,8 +468,10 @@ class PlayerController {
   }
 
   /// Save the active book's position, then restore another book at its own
-  /// resume point — per-book state is preserved across switches.
-  Future<void> switchBook(String bookId) async {
+  /// resume point — per-book state is preserved across switches. [bookTitle]/
+  /// [artPath] flow to the media session so the lock-screen/car metadata
+  /// updates on every switch (app-21).
+  Future<void> switchBook(String bookId, {String bookTitle = '', String? artPath}) async {
     await saveNow();
     // fs-16: flush the prior book's accumulated stats before retargeting.
     final acc = _accumulator;
@@ -477,7 +479,7 @@ class PlayerController {
       final handoff = acc.switchBook(bookId);
       await _persistStatsHandoff(handoff);
     }
-    await openBook(bookId);
+    await openBook(bookId, bookTitle: bookTitle, artPath: artPath);
   }
 
   Future<void> skip({required bool forward}) async {

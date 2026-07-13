@@ -15,9 +15,11 @@ import 'package:castwright/src/data/sync_controller.dart';
 import 'package:castwright/src/demo/demo_audio_engine.dart';
 import 'package:castwright/src/demo/demo_http_send.dart';
 import 'package:castwright/src/domain/app_settings.dart';
+import 'package:castwright/src/domain/library_tree.dart';
 import 'package:castwright/src/domain/paired_server.dart';
 import 'package:castwright/src/domain/sleep_timer.dart';
 import 'package:castwright/src/ui/library_home_screen.dart';
+import 'package:castwright/src/ui/library_pane.dart';
 import 'package:castwright/src/data/pairing_service.dart' show Connection;
 
 // ---------------------------------------------------------------------------
@@ -270,5 +272,49 @@ void main() {
     expect(find.byKey(const Key('continue-active')), findsOneWidget);
 
     await library.close();
+  });
+
+  testWidgets('wide surface renders cover grid tiles', (tester) async {
+    tester.view.physicalSize = const Size(1000, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const books = [
+      LibraryBook(
+        bookId: 'b1',
+        title: 'Book One',
+        author: 'Author A',
+        series: '',
+        seriesPosition: null,
+        downloadState: BookDownloadState.downloaded,
+      ),
+    ];
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: LibraryPane(
+          books: books,
+          continueBooks: const [],
+          covers: const {},
+          progress: const {},
+          totalSec: const {},
+          listened: const {},
+          collapsedKeys: const {},
+          query: '',
+          loading: false,
+          error: null,
+          currentBookId: null,
+          onQueryChanged: (_) {},
+          onToggleCollapse: (_) {},
+          onSelect: (_, _) {},
+          onDownload: (_) async {},
+          onRemoveDownload: (_) async {},
+          onRemoveFromShelf: (_) async {},
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('library-grid')), findsOneWidget);
   });
 }

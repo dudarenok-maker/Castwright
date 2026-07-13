@@ -21,7 +21,14 @@ void main() {
     expect(find.text('Library'), findsOneWidget);
     expect(find.text('Not paired yet'), findsNothing);
     // A seeded book tile is shown (by key — the title also appears in the
-    // Continue rail, so a text matcher would find two).
+    // Continue rail, so a text matcher would find two). The default test
+    // surface (800dp logical) is `medium` (app-21), which renders the
+    // cover-forward grid (taller tiles than the old ListTile rows) — scroll
+    // it into view first so this still finds an on-screen widget rather than
+    // one merely built-but-clipped below the fold.
+    await tester.ensureVisible(
+        find.byKey(const Key('book-hollow-tide-1'), skipOffstage: false));
+    await tester.pumpAndSettle();
     expect(find.byKey(const Key('book-hollow-tide-1')), findsOneWidget);
   });
 }
