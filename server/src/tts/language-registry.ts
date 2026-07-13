@@ -10,7 +10,8 @@
    `es` flipped `supported:true` 2026-06-23 after canary validation + operator
    acceptance (fs-41/fs-50 Spanish rollout). `fr` and `de` flipped `supported:true`
    2026-06-25 after operator audio acceptance of designed FR/DE Coalfall samples
-   (plan 229). zh/ja stay out of the registry until fs-59. */
+   (plan 229). zh/ja were added `supported:false` in fs-59 W2 — registered but
+   not yet validated; flipping to `supported:true` is a later fs-59 wave. */
 
 export interface LanguageEntry {
   /** BCP-47 primary subtag, lower-cased (e.g. 'en', 'ru', 'es'). */
@@ -20,7 +21,7 @@ export interface LanguageEntry {
   /** True only once the language has passed its validation gate. */
   supported: boolean;
   /** Detection routing: the script class + the franc ISO-639-3 code for this language. */
-  detect: { script: 'latin' | 'cyrillic'; iso6393: string };
+  detect: { script: 'latin' | 'cyrillic' | 'cjk'; iso6393: string };
   /** Non-English chapter-heading lexicon (used to build the language-agnostic
       split regex; English stays inline in parsers/text.ts). Absent on `en`. */
   headingLexicon?: { keywords: string[]; numberWords: string[]; standalone: string[] };
@@ -30,6 +31,9 @@ export interface LanguageEntry {
   /** Localized narrator display name for this language. Absent on `en`
       (call sites default to "Narrator"). */
   narratorName?: string;
+  /** Language-specific few-shot examples for the analyzer roster/attribution
+      prompts (fs-59 W3). Unset until a wave populates it. */
+  promptExamples?: { roster: string; attribution: string };
 }
 
 const ENTRIES: readonly LanguageEntry[] = [
@@ -85,6 +89,20 @@ const ENTRIES: readonly LanguageEntry[] = [
       'epigraph'],
     narratorName: 'Erzähler',
   },
+  // zh/ja: registered fs-59 W2, supported:false — script routing + lexicons only.
+  // headingLexicon.keywords do NOT split CJK chapters yet (Latin-shape regex in
+  // parsers/text.ts expects `keyword <whitespace> number`; CJK is the circumfix
+  // "第<number>章" with no whitespace — that's Task 2.6). frontMatterKeywords DO
+  // feed FRONT_MATTER_RX as substrings today. Terms are a starting set — adjust
+  // with a native reviewer before flipping `supported:true` at W5.
+  { code: 'zh', sidecarName: 'Chinese',  supported: false, detect: { script: 'cjk', iso6393: 'cmn' },
+    headingLexicon: { keywords: ['章', '部', '巻', '節', '幕'], numberWords: [],
+      standalone: ['序章', '終章', '序', '跋', 'プロローグ', 'エピローグ'] },
+    frontMatterKeywords: ['目录', '版权', '致谢', '序言', '后记', '附录', '关于作者'] },
+  { code: 'ja', sidecarName: 'Japanese', supported: false, detect: { script: 'cjk', iso6393: 'jpn' },
+    headingLexicon: { keywords: ['章', '部', '巻', '節', '話', '幕'], numberWords: [],
+      standalone: ['序章', '終章', 'プロローグ', 'エピローグ', 'あとがき', '前書き'] },
+    frontMatterKeywords: ['目次', '著作権', '献辞', '謝辞', 'まえがき', 'あとがき', '付録', '著者について'] },
 ];
 
 const BY_CODE: ReadonlyMap<string, LanguageEntry> = new Map(
