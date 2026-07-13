@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../domain/home_shelf.dart';
 import '../domain/library_tree.dart';
 import '../domain/listen_progress.dart';
+import '../domain/window_size.dart';
 
 /// Single source of truth for which book the detail pane shows (app-21).
 class ActiveBook extends ChangeNotifier {
@@ -253,7 +254,7 @@ class LibraryPane extends StatelessWidget {
   List<Widget> _seriesSection(
       BuildContext context, String author, SeriesGroup series) {
     if (series.series.isEmpty) {
-      return [for (final book in series.books) _bookTile(context, book)];
+      return [_books(context, series.books)];
     }
     final sKey = 'series:$author/${series.series}';
     final sCollapsed = collapsedKeys.contains(sKey);
@@ -267,8 +268,26 @@ class LibraryPane extends StatelessWidget {
         style: Theme.of(context).textTheme.labelLarge,
         trailing: '${series.books.length}',
       ),
-      if (!sCollapsed) for (final book in series.books) _bookTile(context, book),
+      if (!sCollapsed) _books(context, series.books),
     ];
+  }
+
+  /// A series' books as the compact `ListTile` tree, or (medium/expanded) a
+  /// cover-forward grid of larger tiles (app-21 Component 6). Presentational
+  /// branch only — `library_tree.dart`'s grouping domain is untouched.
+  Widget _books(BuildContext context, List<LibraryBook> books) {
+    final compact =
+        windowSizeClassFor(MediaQuery.of(context).size.width) ==
+            WindowSizeClass.compact;
+    if (compact) {
+      return Column(children: [for (final book in books) _bookTile(context, book)]);
+    }
+    return Wrap(
+      key: const Key('library-grid'),
+      spacing: 12,
+      runSpacing: 12,
+      children: [for (final book in books) _bookGridTile(context, book)],
+    );
   }
 
   Widget _bookTile(BuildContext context, LibraryBook book) {
@@ -287,6 +306,61 @@ class LibraryPane extends StatelessWidget {
           ? _progressWidget(book.bookId)
           : _action(context, book),
     );
+  }
+
+  /// A larger cover-forward tile for the medium/expanded grid — same tap
+  /// target, download/menu action, and `Key('book-<id>')` as [_bookTile].
+  Widget _bookGridTile(BuildContext context, LibraryBook book) {
+    final downloading = progress.containsKey(book.bookId);
+    return SizedBox(
+      key: Key('book-${book.bookId}'),
+      width: 140,
+      child: InkWell(
+        onTap: (book.downloadState == BookDownloadState.downloaded ||
+                book.downloadState == BookDownloadState.updateAvailable)
+            ? () => onSelect(book.bookId, book.title)
+            : null,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: AspectRatio(
+                aspectRatio: 2 / 3,
+                child: _coverGrid(context, book.bookId),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(book.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodyMedium),
+            Text(_statusLabel(book.downloadState),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: downloading
+                  ? _progressWidget(book.bookId)
+                  : _action(context, book),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _coverGrid(BuildContext context, String bookId) {
+    final path = covers[bookId];
+    return path != null
+        ? Image.file(File(path),
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => const Icon(Icons.menu_book, size: 40))
+        : ColoredBox(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: const Icon(Icons.menu_book, size: 40));
   }
 
   Widget _cover(BuildContext context, String bookId) {
