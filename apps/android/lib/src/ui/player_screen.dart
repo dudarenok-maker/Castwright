@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -33,6 +34,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _ready = false;
   bool _playing = false;
   String? _error;
+  String? _coverArtPath;
   List<SyncManifestChapter> _chapters = const [];
   Set<String> _finished = {};
   final List<StreamSubscription<Object?>> _subs = [];
@@ -104,6 +106,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _chapters = chapters;
           _finished = finished;
           _ready = true;
+          _coverArtPath = art;
           _playing = widget.runtime.player.playing; // seed from real state
         });
         _ensureCurrentPeaks();
@@ -210,6 +213,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       appBar: AppBar(title: Text(widget.title)),
       body: Column(
         children: [
+          if (_coverArtPath != null) _coverHeader(),
           Expanded(
             child: ListView.builder(
               controller: _scroll,
@@ -256,6 +260,37 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
           const Divider(height: 1),
           _transport(player),
+        ],
+      ),
+    );
+  }
+
+  /// Cover art + book title above the chapter list, so the player reads as
+  /// "now playing this book" rather than a bare chapter picker.
+  Widget _coverHeader() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Row(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: SizedBox(
+              width: 64,
+              height: 64,
+              child: Image.file(File(_coverArtPath!),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => const Icon(Icons.menu_book)),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              widget.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+          ),
         ],
       ),
     );

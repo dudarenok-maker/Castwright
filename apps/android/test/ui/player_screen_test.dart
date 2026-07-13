@@ -75,4 +75,26 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('player-current-chapter')), findsOneWidget);
   });
+
+  testWidgets('player renders a cover-art header when the book has cover art',
+      (tester) async {
+    // Seed a cover so boot resolves a non-null art path. resizeJpegToWidth
+    // returns the source bytes unchanged when they aren't decodable, so a stub
+    // is fine — the header renders off the path (Image.file falls back to its
+    // menu_book icon for the undecodable bytes, which is irrelevant here).
+    final fs = InMemoryFileStore();
+    await fs.writeBytes('covers/hollow-tide-1.png', const [0, 1, 2, 3]);
+    final rt = await buildDemoRuntime(fs: fs, coversDir: 'covers', root: '/demo');
+
+    await tester.pumpWidget(MaterialApp(
+      home: PlayerScreen(
+          runtime: rt, bookId: 'hollow-tide-1', title: 'The Drowning Bell'),
+    ));
+    await tester.pumpAndSettle();
+
+    // With cover art, the book title appears twice: in the AppBar title and in
+    // the new cover header above the chapter list. Without the header (no art)
+    // it appears once — so this pins the header's presence.
+    expect(find.text('The Drowning Bell'), findsNWidgets(2));
+  });
 }
