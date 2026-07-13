@@ -738,19 +738,24 @@ qwenVoiceRouter.post(
 
     /* A redesign replaces the base embedding in place, so every emotion variant
        minted from the OLD embedding is now stale (each was anchored to a PT that
-       no longer exists). Invalidate them all: delete each variant's `.pt`/`.json`
-       + evict it from the sidecar, then drop the whole `variants` map from
-       cast.json in one write. The character's tagged emotions then re-register as
-       missing demand, so the cast's "Design full cast → Emotion variants" scope
-       re-mints the ones the user still wants from the new base. */
+       no longer exists). Invalidate them: drop the whole `variants` map from
+       cast.json FIRST — so a mid-teardown failure can never leave cast.json
+       referencing a `.pt` we've already deleted — then delete each variant's
+       `.pt`/`.json` + evict it from the sidecar, addressing each by its stored
+       `name` (the authoritative on-disk id) rather than reconstructing it. The
+       character's tagged emotions then re-register as missing demand, so the
+       cast's "Design full cast → Emotion variants" scope re-mints the ones the
+       user still wants from the new base. */
     const qwenSlot = character.overrideTtsVoices?.qwen;
-    const staleEmotions = Object.keys(qwenSlot?.variants ?? {});
-    if (qwenSlot?.variants && staleEmotions.length > 0) {
-      for (const emotion of staleEmotions) {
-        await tearDownEmotionVariant(`${realVoiceId}__${emotion}`);
-      }
+    if (qwenSlot?.variants && Object.keys(qwenSlot.variants).length > 0) {
+      const staleVariantIds = Object.values(qwenSlot.variants)
+        .map((v) => v?.name)
+        .filter((n): n is string => !!n);
       delete qwenSlot.variants;
       await writeJsonAtomic(castJsonPath(located.bookDir), cast);
+      for (const variantId of staleVariantIds) {
+        await tearDownEmotionVariant(variantId);
+      }
     }
 
     /* srv-43 — return voiceUuid so the drawer can stamp it locally; the

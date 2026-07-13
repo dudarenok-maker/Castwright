@@ -1129,6 +1129,15 @@ export function ProfileDrawer({
                         voiceStyle: approvedPersona,
                       }),
                     );
+                    /* The promoted preview is a fresh base embedding, so any
+                       emotion variants (minted from the OLD one) were just torn
+                       off cast.json + disk by promote-voice. Mirror that in redux
+                       so the save-path spreads don't re-persist the stale slots
+                       and the cast's "Emotion variants" demand re-surfaces them.
+                       No-op on a first design (no variants existed). */
+                    dispatch(
+                      castActions.clearCharacterEmotionVariants({ characterId: character.id }),
+                    );
                     setVoiceCompareInitial(null);
                     /* Resolving the compare ends the single-design lifecycle —
                        clear the slice so the Design pill / ready-to-compare state
