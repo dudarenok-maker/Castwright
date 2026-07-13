@@ -457,3 +457,54 @@ describe('POST /api/import — language detection (fs-41/fs-50)', () => {
     ]);
   });
 });
+
+/* fs-59 W2 task 2.7 — CJK-aware word count so a spaceless CJK chapter isn't
+   pre-ticked for front-matter exclusion (countWords splits on \s+, which
+   yields ~1 "word" per CJK paragraph). */
+describe('POST /api/import — CJK-aware word count (fs-59 W2)', () => {
+  it('does not flag a spaceless ~2000-char CJK chapter as front matter and reports a plausible (hundreds, not ~40) word count', async () => {
+    const sentence = '这是一个用来测试字数统计功能是否正确无误的句子';
+    const body = sentence.repeat(Math.ceil(2000 / sentence.length));
+    const text = ['第一章', '', body].join('\n');
+    const res = await request(app).post('/api/import').send({ text }).expect(200);
+    const ch1 = res.body.candidate.chapters.find((c: any) => c.title === '第一章');
+    expect(ch1).toBeTruthy();
+    expect(ch1.isLikelyFrontMatter).toBe(false);
+    expect(ch1.wordCount).toBeGreaterThan(300);
+    expect(ch1.wordCount).toBeLessThan(2000);
+  });
+
+  it('still flags a short CJK chapter (word-equivalent count <= 150) as front matter, threshold unaffected', async () => {
+    const sentence = '这是一个用来测试字数统计功能是否正确无误的句子';
+    const longBody = sentence.repeat(Math.ceil(2000 / sentence.length));
+    const text = ['序章', '', '这是一段很短的引子。', '', '第一章', '', longBody].join('\n');
+    const res = await request(app).post('/api/import').send({ text }).expect(200);
+    const prologue = res.body.candidate.chapters.find((c: any) => c.title === '序章');
+    const ch1 = res.body.candidate.chapters.find((c: any) => c.title === '第一章');
+    expect(prologue).toBeTruthy();
+    expect(ch1).toBeTruthy();
+    expect(prologue.isLikelyFrontMatter).toBe(true);
+    expect(ch1.isLikelyFrontMatter).toBe(false);
+  });
+
+  it('keeps the Latin whitespace-token path byte-identical for non-CJK text', async () => {
+    const text = ['Chapter One', '', 'word '.repeat(400)].join('\n');
+    const res = await request(app).post('/api/import').send({ text }).expect(200);
+    const ch1 = res.body.candidate.chapters.find((c: any) => c.title === 'Chapter One');
+    expect(ch1).toBeTruthy();
+    expect(ch1.wordCount).toBe(400);
+  });
+
+  it('does not double-count mixed Latin + CJK text', async () => {
+    /* "hello world" (2 Latin whitespace-tokens) + "你好世界" (4 Han chars,
+       no separating whitespace from the CJK char-equivalent count) —
+       2 + round(4 / 1.7) = 2 + 2 = 4. A naive implementation that counts
+       the CJK run as a Latin whitespace-token (1) AND separately as a
+       char-equivalent (2) would over-count to 5. */
+    const text = ['第一章', '', 'hello world 你好世界'].join('\n');
+    const res = await request(app).post('/api/import').send({ text }).expect(200);
+    const ch1 = res.body.candidate.chapters.find((c: any) => c.title === '第一章');
+    expect(ch1).toBeTruthy();
+    expect(ch1.wordCount).toBe(4);
+  });
+});

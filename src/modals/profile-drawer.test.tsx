@@ -1272,6 +1272,60 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     expect(store.getState().castDesign.active).toBeNull();
   });
 
+  it('approving a redesign clears the character’s stale emotion variants from redux (regression: Save would re-persist them, clobbering the server teardown)', async () => {
+    /* promote-voice tears the variants off cast.json + disk on approve. If the
+       drawer kept them in redux, onSave → cast/setCharacters → persistence
+       middleware would re-write the deleted slots back into cast.json (pointing
+       at .pt files that no longer exist). Approve must mirror the server
+       teardown by clearing them locally. */
+    promoteQwenVoice.mockClear();
+    const { store, dispatchSpy } = renderWithBook({
+      ...baseChar,
+      ttsEngine: 'qwen',
+      voiceId: 'v_hal',
+      voiceUuid: 'v_hal',
+      overrideTtsVoices: {
+        qwen: { name: 'qwen-v_hal', variants: { angry: { name: 'qwen-v_hal__angry' } } },
+      },
+      voiceStyle: 'a steady adult voice',
+    });
+    selectQwen();
+    fireEvent.click(screen.getByTestId('qwen-design-voice'));
+    act(() => {
+      store.dispatch(
+        castDesignActions.beginSingle({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          name: 'Captain Halloran',
+          mode: 'redesign',
+          lastTickAt: 1,
+        }),
+      );
+      store.dispatch(
+        castDesignActions.previewReady({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          previewVoiceId: 'qwen-halloran-preview',
+          previewUrl: '/audio/voices/char-halloran-preview.mp3',
+          persona: 'a steady adult voice',
+          lastTickAt: 2,
+        }),
+      );
+    });
+    await waitFor(() => expect(screen.getByTestId('voice-compare-overlay')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('voice-compare-approve'));
+    await waitFor(() => expect(promoteQwenVoice).toHaveBeenCalledTimes(1));
+
+    /* Approve dispatched the redux mirror of the server teardown… */
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      castActions.clearCharacterEmotionVariants({ characterId: 'halloran' }),
+    );
+    /* …and the variants are actually gone from the slice. */
+    const hal = store.getState().cast.characters.find((c) => c.id === 'halloran');
+    expect(hal?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
+
   it('persists the freshly-approved voiceUuid on Save (regression: srv-43 uuid was staged in-drawer only, dropped on Save)', async () => {
     /* A character whose row has NO voiceUuid yet (e.g. designed before srv-43,
        or never stamped) redesigns via the A/B compare and approves — approve

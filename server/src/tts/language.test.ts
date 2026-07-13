@@ -49,9 +49,20 @@ describe('sidecarLanguageName', () => {
     expect(() => sidecarLanguageName('xy')).toThrow(/xy/);
   });
 
-  it('throws for a language not in the registry (e.g. Japanese)', () => {
-    expect(() => sidecarLanguageName('ja')).toThrow(/unsupported language/);
-    expect(() => sidecarLanguageName('ja-JP')).toThrow(/unsupported language/);
+  it('throws for a language not in the registry (e.g. Korean)', () => {
+    // Korean is explicitly out of fs-59 (→ fs-70), so it stays unregistered and
+    // must still fail loud. (Japanese used to be the example here — fs-59 W2
+    // registered zh/ja, so they resolve now; see the next test.)
+    expect(() => sidecarLanguageName('ko')).toThrow(/unsupported language/);
+    expect(() => sidecarLanguageName('ko-KR')).toThrow(/unsupported language/);
+  });
+
+  it('resolves zh/ja now that fs-59 W2 registered them (even though supported:false)', () => {
+    // Registering zh/ja means sidecarLanguageName no longer throws for them — the
+    // old fail-loud net is replaced by the supported:false confirm gate (fs-59 F9).
+    expect(sidecarLanguageName('ja')).toBe('Japanese');
+    expect(sidecarLanguageName('ja-JP')).toBe('Japanese');
+    expect(sidecarLanguageName('zh')).toBe('Chinese');
   });
 
   it('throw message includes the bcp47 tag and the primary subtag', () => {

@@ -870,9 +870,17 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
    the Cyrillic fraction of the actual text and interpolate the divisor between
    4 (all-Latin) and 2.5 (all-Cyrillic). Reconciled against
    `usageMetadata.promptTokenCount` once the call returns, so the blend only has
-   to be close, not exact. */
+   to be close, not exact.
+
+   fs-59 — CJK (Han ideographs + Kana) is denser still (~1.2 chars/token), so
+   a CJK-dense prompt under-counted even worse than Cyrillic did. We measure
+   the Han/Kana fraction the same way as `countCyrillic` and fold it into the
+   same additive interpolation — Cyrillic and CJK never overlap in the same
+   codepoint, so each fraction pulls the divisor down from the Latin baseline
+   independently. */
 const LATIN_CHARS_PER_TOKEN = 4;
 const CYRILLIC_CHARS_PER_TOKEN = 2.5;
+const HAN_KANA_CHARS_PER_TOKEN = 1.2;
 
 export function estimateInputTokens(
   systemInstruction: string,
@@ -880,21 +888,30 @@ export function estimateInputTokens(
 ): number {
   let chars = systemInstruction.length;
   let cyrillic = 0;
+  let hanKana = 0;
   const countCyrillic = (s: string): number => {
     const m = s.match(/[Ѐ-ӿ]/g);
     return m ? m.length : 0;
   };
+  const countHanKana = (s: string): number => {
+    const m = s.match(/[぀-ヿ㐀-䶿一-鿿]/g);
+    return m ? m.length : 0;
+  };
   cyrillic += countCyrillic(systemInstruction);
+  hanKana += countHanKana(systemInstruction);
   for (const turn of contents) {
     for (const part of turn.parts) {
       chars += part.text.length;
       cyrillic += countCyrillic(part.text);
+      hanKana += countHanKana(part.text);
     }
   }
   const cyrillicFraction = chars > 0 ? cyrillic / chars : 0;
+  const hanKanaFraction = chars > 0 ? hanKana / chars : 0;
   const divisor =
     LATIN_CHARS_PER_TOKEN -
-    cyrillicFraction * (LATIN_CHARS_PER_TOKEN - CYRILLIC_CHARS_PER_TOKEN);
+    cyrillicFraction * (LATIN_CHARS_PER_TOKEN - CYRILLIC_CHARS_PER_TOKEN) -
+    hanKanaFraction * (LATIN_CHARS_PER_TOKEN - HAN_KANA_CHARS_PER_TOKEN);
   return Math.ceil(chars / divisor) + 1_000;
 }
 

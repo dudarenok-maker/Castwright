@@ -181,6 +181,31 @@ describe('mergeAnalysisResultWithExistingCast', () => {
   });
 });
 
+describe('mergeAnalysisResultWithExistingCast — narrator name', () => {
+  it('carries forward a user-renamed narrator across reparse', () => {
+    const existing = [{ id: 'narrator', name: 'The Bard', voiceStyle: 'crisp herald' }];
+    const fresh = [{ id: 'narrator', name: 'Erzähler', role: 'narrator', color: 'narrator' }];
+    const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
+    const n = merged.find((c) => c.id === 'narrator')!;
+    expect(n.name).toBe('The Bard');
+    expect((n as { voiceStyle?: string }).voiceStyle).toBe('crisp herald');
+  });
+
+  it('takes the fresh name when the prior narrator name was a language default (re-localizes)', () => {
+    const existing = [{ id: 'narrator', name: 'Erzähler', voiceStyle: 'crisp herald' }];
+    const fresh = [{ id: 'narrator', name: 'Narrateur', role: 'narrator', color: 'narrator' }];
+    const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged.find((c) => c.id === 'narrator')!.name).toBe('Narrateur');
+  });
+
+  it('does NOT carry forward a non-narrator character name (still recomputed from fresh)', () => {
+    const existing = [{ id: 'wren', name: 'Old Wren', voiceId: 'v1' }];
+    const fresh = [{ id: 'wren', name: 'Wren', role: 'protagonist', color: 'eliza' }];
+    const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged.find((c) => c.id === 'wren')!.name).toBe('Wren');
+  });
+});
+
 describe('seedReuseGuardsFromPriorCast', () => {
   it('seeds notLinkedTo and matchedFrom onto the fresh roster in place', () => {
     const existing: C[] = [
