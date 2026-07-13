@@ -20,6 +20,7 @@
     "install:cert-mobile": "node scripts/print-cert-install-instructions.mjs",
     "tts:sidecar": "node scripts/launch-sidecar.mjs",
     "apk:companion": "node scripts/build-companion-apk.mjs",
+    "build:demo-covers": "node scripts/build-demo-covers.mjs",
     "wiki:sync": "node scripts/sync-wiki.mjs",
     "wiki:release-notes": "node scripts/generate-release-notes-wiki.mjs",
     "prebuild": "node scripts/sync-docs-to-public.mjs",

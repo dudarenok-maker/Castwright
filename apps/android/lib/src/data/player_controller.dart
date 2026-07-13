@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../domain/listen_stats_accumulator.dart';
 import '../domain/playback_source.dart';
 import '../domain/skip_behavior.dart';
@@ -137,6 +139,11 @@ class PlayerController {
   }
 
   final AudioEngine _engine;
+
+  /// The injected engine — exposed for tests that assert demo-engine wiring.
+  @visibleForTesting
+  AudioEngine get audioEngine => _engine;
+
   final PlaybackStore _store;
   final PlaylistLoader _loadPlaylist;
   final DateTime Function() _now;
