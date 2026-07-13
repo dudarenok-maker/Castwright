@@ -118,11 +118,42 @@ export function splitBodyIntoChunks(body: string, charBudget: number): string[] 
     insensitive) and this path only fires as a recovery from a hard failure.
     Returns `[para]` unchanged when it fits, or when there is no sentence
     boundary to split on (a single huge sentence still surfaces the truncation
-    loudly rather than being cut mid-sentence). */
+    loudly rather than being cut mid-sentence).
+
+    CJK fallback (fs-59 W2): CJK prose has no inter-word whitespace, so the
+    Latin regex above finds no boundary and returns `[para]` unsplit even
+    though the paragraph is packed with sentence-ending 。！？ punctuation. If
+    the paragraph contains Han/Kana AND the Latin split above yielded ≤1 unit,
+    re-split using `Intl.Segmenter`'s sentence granularity (ICU-backed, no new
+    dependency) — `'ja'` when Kana is present (mixed kanji+kana is Japanese),
+    else `'zh'`. Repacked chunks are joined with an EMPTY string, not a space:
+    injecting ASCII spaces into CJK prose is lossy prose corruption, unlike the
+    Latin path where a space is the correct inter-sentence separator. */
 export function splitParagraphIntoSentences(para: string, charBudget: number): string[] {
   if (para.length <= charBudget) return [para];
   const sentences = para.split(/(?<=[.!?]["')\]]?)\s+/).filter(Boolean);
-  if (sentences.length <= 1) return [para]; // no boundary — nothing to split
+  if (sentences.length <= 1) {
+    if (/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(para)) {
+      const lang = /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(para) ? 'ja' : 'zh';
+      const segmenter = new Intl.Segmenter(lang, { granularity: 'sentence' });
+      const cjkSentences = Array.from(segmenter.segment(para), (s) => s.segment).filter(Boolean);
+      if (cjkSentences.length > 1) {
+        const cjkChunks: string[] = [];
+        let cjkCur = '';
+        for (const s of cjkSentences) {
+          if (cjkCur && cjkCur.length + s.length > charBudget) {
+            cjkChunks.push(cjkCur);
+            cjkCur = s;
+          } else {
+            cjkCur += s;
+          }
+        }
+        if (cjkCur) cjkChunks.push(cjkCur);
+        return cjkChunks.length > 0 ? cjkChunks : [para];
+      }
+    }
+    return [para]; // no boundary — nothing to split
+  }
   const chunks: string[] = [];
   let cur = '';
   for (const s of sentences) {

@@ -91,6 +91,14 @@ describe('splitParagraphIntoSentences', () => {
     const blob = 'word '.repeat(40).trim(); // no terminal punctuation
     expect(splitParagraphIntoSentences(blob, 10)).toEqual([blob]);
   });
+
+  it('splits a spaceless CJK paragraph on 。 boundaries, lossless with no injected spaces', () => {
+    const para = '彼は歩いた。彼女は走った。二人は止まった。';
+    const chunks = splitParagraphIntoSentences(para, 14); // packs ~2 segments/chunk → exercises the joiner
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join('')).toBe(para); // no ASCII space injected (would fail with the Latin space-join)
+    expect(chunks.join('')).not.toContain(' '); // belt-and-suspenders
+  });
 });
 
 describe('stage2ChunkBudgetForEngine (num_ctx-aware budget sizing)', () => {
