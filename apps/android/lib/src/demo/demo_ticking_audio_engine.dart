@@ -9,13 +9,15 @@ import '../data/audio_engine.dart';
 /// the timer so no emission outlives an exit-demo teardown.
 class DemoTickingAudioEngine implements AudioEngine {
   DemoTickingAudioEngine({
-    Duration duration = const Duration(minutes: 23, seconds: 40),
-    Duration tick = const Duration(milliseconds: 500),
-  })  : _duration = duration,
-        _tick = tick;
+    this.duration = const Duration(minutes: 23, seconds: 40),
+    this.tick = const Duration(milliseconds: 500),
+  });
 
-  final Duration _duration;
-  final Duration _tick;
+  @override
+  final Duration duration;
+
+  /// Simulated playback time advanced per timer tick.
+  final Duration tick;
 
   Duration _position = Duration.zero;
   bool _playing = false;
@@ -36,8 +38,6 @@ class DemoTickingAudioEngine implements AudioEngine {
   @override
   Stream<bool> get playingStream => _playingCtl.stream;
   @override
-  Duration? get duration => _duration;
-  @override
   Stream<Duration?> get durationStream => _durationCtl.stream;
   @override
   Stream<void> get completionStream => _completionCtl.stream;
@@ -48,10 +48,10 @@ class DemoTickingAudioEngine implements AudioEngine {
     _timer?.cancel();
     _timer = null;
     if (v) {
-      _timer = Timer.periodic(_tick, (_) {
-        final next = _position + _tick * _speed;
-        if (next >= _duration) {
-          _position = _duration;
+      _timer = Timer.periodic(tick, (_) {
+        final next = _position + tick * _speed;
+        if (next >= duration) {
+          _position = duration;
           _positionCtl.add(_position);
           _setPlaying(false);
           _completionCtl.add(null);
@@ -65,12 +65,12 @@ class DemoTickingAudioEngine implements AudioEngine {
 
   @override
   Future<void> setFilePath(String path) async {
-    if (!_durationCtl.isClosed) _durationCtl.add(_duration);
+    if (!_durationCtl.isClosed) _durationCtl.add(duration);
   }
 
   @override
   Future<void> setStreamUrl(String url, {Map<String, String>? headers}) async {
-    if (!_durationCtl.isClosed) _durationCtl.add(_duration);
+    if (!_durationCtl.isClosed) _durationCtl.add(duration);
   }
 
   @override
@@ -82,7 +82,7 @@ class DemoTickingAudioEngine implements AudioEngine {
   Future<void> seek(Duration position) async {
     _position = position < Duration.zero
         ? Duration.zero
-        : (position > _duration ? _duration : position);
+        : (position > duration ? duration : position);
     if (!_positionCtl.isClosed) _positionCtl.add(_position);
   }
 
