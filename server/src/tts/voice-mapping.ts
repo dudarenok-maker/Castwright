@@ -31,14 +31,17 @@ export function qwenStorageKey(
    quality is tuned for it; modeling Qwen as only the five analyze-supported
    languages would silently narrow that invariant for a detected-but-unsupported
    language like zh/ja, per server/src/tts/language-registry.ts + detect-language.ts).
-   Coqui is deliberately scoped to the five analyze-supported languages (fs-70
-   owns opening further XTTS-capable languages). Kokoro/piper/gemini reflect
-   today's de facto behavior: since the force-to-Qwen enforcement (Task 2) has
-   always overridden every non-English character regardless of prior engine,
-   none of them has ever actually rendered non-English audio in this app. */
+   Coqui was originally scoped to the five analyze-supported languages; fs-59
+   W4b added 'zh','ja' on top (coqui-tts/XTTS v2's language list includes
+   zh-cn and ja — Task 4b.0 confirmed the install), so Coqui is now eligible
+   for the CJK pair alongside Qwen. fs-70 owns opening further XTTS-capable
+   languages beyond that. Kokoro/piper/gemini reflect today's de facto
+   behavior: since the force-to-Qwen enforcement (Task 2) has always
+   overridden every non-English character regardless of prior engine, none of
+   them has ever actually rendered non-English audio in this app. */
 export const ENGINE_LANGUAGE_SUPPORT: Record<TtsEngine, string[] | '*'> = {
   qwen: '*',
-  coqui: ['en', 'ru', 'es', 'fr', 'de'],
+  coqui: ['en', 'ru', 'es', 'fr', 'de', 'zh', 'ja'],
   kokoro: ['en'],
   gemini: ['en'],
   piper: ['en'],

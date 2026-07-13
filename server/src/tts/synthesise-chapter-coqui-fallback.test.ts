@@ -78,7 +78,11 @@ describe('synthesiseChapter — Qwen→Coqui fallback (fs-60)', () => {
         resolveForEngine,
         forbidKokoroFallback: true,
         coquiEligible: false,
-        bookLanguage: 'zh',
+        // 'ko' (not 'zh') — fs-59 W4b made zh Coqui-eligible, so it's no longer
+        // a valid "still-unsupported language" example here; Korean stays
+        // genuinely unsupported. coquiEligible is passed directly (not derived
+        // from resolveEligibleEngines), so this pins the flag-handling path.
+        bookLanguage: 'ko',
       }),
     ).rejects.toBeInstanceOf(MissingDesignedVoiceError);
 
