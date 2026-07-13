@@ -6,6 +6,8 @@ import '../domain/library_load.dart';
 import '../domain/library_tree.dart';
 import '../domain/listen_progress.dart';
 import '../domain/paired_server.dart';
+import '../domain/window_size.dart';
+import 'adaptive_library_shell.dart';
 import 'app_settings_screen.dart';
 import 'library_pane.dart';
 import 'player_screen.dart';
@@ -198,18 +200,28 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
     }
   }
 
-  /// Task 6 temporary routing: always push PlayerScreen (current behaviour).
-  /// Task 7 replaces this with layout-aware routing (two-pane fills the pane
-  /// in place; single-pane keeps this push).
+  /// Layout-aware selection (app-21): always activates the book (engine +
+  /// persistence + reconcile) via [CompanionRuntime.activateBook]. In
+  /// two-pane the shell fills the persistent [PlayerPane] in place — no route
+  /// push, the engine stays live. In single-pane/medium, push [PlayerScreen]
+  /// as before (`activateBook` here is idempotent with the pane's own
+  /// self-activation in [PlayerPane]).
   Future<void> _onSelect(String bookId, String title) async {
+    await widget.runtime.activateBook(bookId, title: title);
+    if (!mounted) return;
     _activeBook.select(bookId, title: title);
-    await Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) =>
-          PlayerScreen(runtime: widget.runtime, bookId: bookId, title: title),
-    ));
-    // Returning from the player: the book was just played (markPlayed), so
-    // refresh to surface it in the "Continue listening" rail + update progress.
-    if (mounted) await _refresh();
+    final twoPane = libraryLayoutFor(
+            windowSizeClassFor(MediaQuery.of(context).size.width)) ==
+        LibraryLayout.twoPane;
+    if (!twoPane) {
+      await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) =>
+            PlayerScreen(runtime: widget.runtime, bookId: bookId, title: title),
+      ));
+      // Returning from the player: the book was just played (markPlayed), so
+      // refresh to surface it in the "Continue listening" rail + update progress.
+      if (mounted) await _refresh();
+    }
   }
 
   Future<void> _handleRemoveFromShelf(ShelfBook b) async {
@@ -272,24 +284,28 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
           ),
         ],
       ),
-      body: LibraryPane(
-        books: _books,
-        continueBooks: _continue,
-        covers: _covers,
-        progress: _progress,
-        totalSec: _totalSec,
-        listened: _listened,
-        collapsedKeys: _collapsed,
-        query: _query,
-        loading: _loading,
-        error: _error,
-        currentBookId: widget.runtime.player.currentBookId,
-        onQueryChanged: (v) => setState(() => _query = v),
-        onToggleCollapse: _toggle,
-        onSelect: (bookId, title) => _onSelect(bookId, title),
-        onDownload: _download,
-        onRemoveDownload: _handleRemoveDownload,
-        onRemoveFromShelf: _handleRemoveFromShelf,
+      body: AdaptiveLibraryShell(
+        runtime: widget.runtime,
+        activeBook: _activeBook,
+        libraryPane: LibraryPane(
+          books: _books,
+          continueBooks: _continue,
+          covers: _covers,
+          progress: _progress,
+          totalSec: _totalSec,
+          listened: _listened,
+          collapsedKeys: _collapsed,
+          query: _query,
+          loading: _loading,
+          error: _error,
+          currentBookId: widget.runtime.player.currentBookId,
+          onQueryChanged: (v) => setState(() => _query = v),
+          onToggleCollapse: _toggle,
+          onSelect: (bookId, title) => _onSelect(bookId, title),
+          onDownload: _download,
+          onRemoveDownload: _handleRemoveDownload,
+          onRemoveFromShelf: _handleRemoveFromShelf,
+        ),
       ),
     );
   }
