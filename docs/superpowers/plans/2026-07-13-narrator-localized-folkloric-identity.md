@@ -105,9 +105,9 @@ export function isDefaultNarratorName(name: string | undefined | null): boolean 
 }
 ```
 
-- [ ] **Step 4: Update the existing full-object registry expectations**
+- [ ] **Step 4: Update the one full-object registry expectation that breaks**
 
-The `getLanguageEntry` tests assert the entire entry with `toEqual<LanguageEntry>`. Add `narratorName` to the ru/es/fr/de expected objects (the en test stays as-is). For each of those `expect(...).toEqual<LanguageEntry>({ ... })` blocks add the matching line, e.g. in the ru block:
+Only the **`ru`** test uses a full-object `toEqual<LanguageEntry>({...})` (language-registry.test.ts:29-43); adding `narratorName` to the `ru` ENTRY makes that `toEqual` fail until the expected object includes it. Add the line to the `ru` expected object:
 
 ```ts
       code: 'ru',
@@ -116,7 +116,7 @@ The `getLanguageEntry` tests assert the entire entry with `toEqual<LanguageEntry
       narratorName: 'Рассказчик',
 ```
 
-Do the same for `es` (`'Narrador'`), `fr` (`'Narrateur'`), `de` (`'Erzähler'`). (If a language's full-object assertion doesn't exist in the file, skip it — only the four that do.)
+(The `en` full-object assertion needs no change — en has no `narratorName`. The `es`/`fr`/`de` tests use field-level checks, not full-object `toEqual`, so they don't break and need no edit; the new `narratorName` describe block from Step 1 covers de/es/fr/ru.)
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -383,27 +383,38 @@ with:
 
 (`enriched` feeds the subset merge at ~line 5462.)
 
-- [ ] **Step 4: Write the wiring assertion test**
+- [ ] **Step 4: Add the wiring assertions to the existing provenance tests**
 
-In `server/src/routes/analysis.test.ts`, reuse the existing job harness in the `describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persistence ...')` block (starts ~line 2529) as the template — it already sets up a book dir, mocks the analyzer, runs `runMainAnalyzerJob(job, recordRef as never, phase0Selection, {...})`, and reads `cast.json` via `castPath(dir)`. Add a sibling test that:
-1. Sets the book's on-disk `state.json` `language` to `'de'` in the harness setup (so `resolveBookLanguageForManuscript` returns `'de'`).
-2. Ensures the mocked Phase-1 roster includes a narrator `{ id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' }`.
-3. After the job, reads `cast.json` and asserts:
+> **Why not assert the localized name here?** `resolveBookLanguageForManuscript` resolves language via `findBookByManuscriptId` (walks `BOOKS_ROOT`); the provenance harness writes its book to a `tmpdir`, so language deterministically falls back to `'en'` (see the harness comment at analysis.test.ts:2537-2538). Forcing `'de'` would require a file-wide `vi.mock('../workspace/scan.js')`, which is unsafe in this large shared test file (other tests use the real `scan`). So the **wiring** (the seam runs, in both jobs) is proven here at `'en'` via the seeded alias + folkloric `voiceStyle` — fields the raw `stage1Roster()` narrator does NOT have, so their presence in the persisted cast proves `applyNarratorIdentity` ran on the persisted path. **Localization-per-language** is already covered by Task 2 (`applyNarratorIdentity` unit tests) and the resolver→`bookLanguage` threading by `analysis-language.test.ts` — together that is the full chain.
+
+In `server/src/routes/analysis.test.ts`, inside the `describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persistence ...')` block (starts ~line 2529), add a `readCast` helper next to the existing `readState` helper (~line 2695):
 
 ```ts
-    const persisted = await readJson<{ characters: Array<{ id: string; name: string; voiceStyle?: string; aliases?: string[] }> }>(castPath(dir));
-    const narr = persisted!.characters.find((c) => c.id === 'narrator')!;
-    expect(narr.name).toBe('Erzähler');
-    expect(narr.aliases).toContain('Narrator');
-    expect(narr.voiceStyle).toContain('folkloric warmth');
+  function readCast(bookDir: string): {
+    characters: Array<{ id: string; name: string; aliases?: string[]; voiceStyle?: string }>;
+  } {
+    return JSON.parse(readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'));
+  }
 ```
 
-Mirror the same assertions for a `runSubsetAnalyzerJob` case in the same block (it already exercises the subset job at ~line 2843).
+Then, in **both** existing provenance `it(...)` tests — the main-job one (assertions end ~line 2770) and the subset-job one (assertions end ~line 2870) — add these three assertions right after the existing `provenance` assertions and **before** the `finally` block:
+
+```ts
+        // Narrator identity is seeded into the persisted cast (both jobs). The
+        // raw stage1Roster narrator has no aliases/voiceStyle, so their presence
+        // proves applyNarratorIdentity ran on the persist path. Language resolves
+        // to 'en' here (tmpdir book), so the name stays the English default;
+        // per-language localization is unit-covered in narrator-identity.test.ts.
+        const narr = readCast(bookDir).characters.find((c) => c.id === 'narrator')!;
+        expect(narr.name).toBe('Narrator');
+        expect(narr.aliases).toContain('Narrator');
+        expect(narr.voiceStyle).toContain('folkloric warmth');
+```
 
 - [ ] **Step 5: Run the analyzer suite**
 
 Run: `cd server && npx vitest run src/routes/analysis.test.ts`
-Expected: PASS — the new de-language assertions pass and every pre-existing analysis test stays green (proves the 2-line wraps didn't regress the jobs).
+Expected: PASS — the new cast assertions pass in both provenance tests and every pre-existing analysis test stays green (proves the 2-line wraps didn't regress the jobs).
 
 - [ ] **Step 6: Commit**
 
@@ -426,11 +437,9 @@ git commit -m "feat(server): seed narrator identity in both analyzer jobs"
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `server/src/store/merge-analysis-cast.test.ts` (match the file's existing import/describe style):
+Add to `server/src/store/merge-analysis-cast.test.ts` (match the file's existing import/describe style — reuse the file's existing `mergeAnalysisResultWithExistingCast` import; do NOT add a new import, the tests below reference only that function):
 
 ```ts
-import { isDefaultNarratorName } from '../tts/language-registry.js';
-
 describe('mergeAnalysisResultWithExistingCast — narrator name', () => {
   it('carries forward a user-renamed narrator across reparse', () => {
     const existing = [{ id: 'narrator', name: 'The Bard', voiceStyle: 'crisp herald' }];
@@ -554,5 +563,5 @@ git commit -m "docs(server): regression plan + release notes for narrator identi
 ## Self-Review
 
 - **Spec coverage:** localized name (Task 1 names + Task 2 apply + Task 3 wiring); `"Narrator"` alias (Task 2); fixed folkloric persona + designed voice (Task 2 seed + Task 3 wiring; voice-style/cast-design unchanged per spec); both analyzer jobs (Task 3); merge name carry-forward + `isDefaultNarratorName` (Task 1 + Task 4); voiceStyle/aliases already durable (no task needed — asserted in Task 4/existing); no migration (Task 3 applies at analysis only; docs Task 5); captions/detection non-issues (documented in spec, no code). Covered.
-- **Placeholder scan:** the only deferred value is the PR number `#NNNN` (unknowable until the PR exists) and the reuse of the existing analysis.test harness in Task 3 Step 4 (template cited by line, assertions given in full) — acceptable.
+- **Placeholder scan:** the only deferred value is the PR number `#NNNN` (unknowable until the PR exists). Task 3's wiring assertions fold into the existing provenance tests with full code; localization-per-language is covered by Task 2 + `analysis-language.test.ts` (documented rationale in Task 3 Step 4, not a gap).
 - **Type consistency:** `applyNarratorIdentity(CharacterOutput[], string): CharacterOutput[]`, `isDefaultNarratorName(string|undefined|null): boolean`, `FOLKLORIC_NARRATOR` fields, and narrator ids `'narrator'`/`'char-narrator'` are used identically across Tasks 2, 3, and 4.
