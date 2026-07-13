@@ -331,6 +331,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _startDemo() async {
+    if (_loading) return; // guard against a double-tap orphaning a runtime
     setState(() => _loading = true);
     final root = await (widget.demoRootResolver ?? _defaultDemoRoot)();
     final fs = widget.demoFileStore ?? const DiskFileStore();

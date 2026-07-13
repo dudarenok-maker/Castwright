@@ -23,6 +23,7 @@ class DemoTickingAudioEngine implements AudioEngine {
   bool _playing = false;
   double _speed = 1.0;
   Timer? _timer;
+  bool _closed = false;
 
   final _positionCtl = StreamController<Duration>.broadcast();
   final _playingCtl = StreamController<bool>.broadcast();
@@ -44,7 +45,7 @@ class DemoTickingAudioEngine implements AudioEngine {
 
   void _setPlaying(bool v) {
     _playing = v;
-    if (!_positionCtl.isClosed) _playingCtl.add(v);
+    if (!_closed) _playingCtl.add(v);
     _timer?.cancel();
     _timer = null;
     if (v) {
@@ -65,12 +66,12 @@ class DemoTickingAudioEngine implements AudioEngine {
 
   @override
   Future<void> setFilePath(String path) async {
-    if (!_durationCtl.isClosed) _durationCtl.add(duration);
+    if (!_closed) _durationCtl.add(duration);
   }
 
   @override
   Future<void> setStreamUrl(String url, {Map<String, String>? headers}) async {
-    if (!_durationCtl.isClosed) _durationCtl.add(duration);
+    if (!_closed) _durationCtl.add(duration);
   }
 
   @override
@@ -83,7 +84,7 @@ class DemoTickingAudioEngine implements AudioEngine {
     _position = position < Duration.zero
         ? Duration.zero
         : (position > duration ? duration : position);
-    if (!_positionCtl.isClosed) _positionCtl.add(_position);
+    if (!_closed) _positionCtl.add(_position);
   }
 
   @override
@@ -93,6 +94,7 @@ class DemoTickingAudioEngine implements AudioEngine {
 
   @override
   Future<void> dispose() async {
+    _closed = true;
     _timer?.cancel();
     _timer = null;
     await _positionCtl.close();
