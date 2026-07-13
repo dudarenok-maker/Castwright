@@ -19,17 +19,29 @@ const CONSTRAINTS = '/tmp/base-constraints.txt';
 describe('coquiPipInstallSteps', () => {
   const steps = coquiPipInstallSteps(CONSTRAINTS);
 
-  it('installs coqui-tts then torchcodec, in that order', () => {
+  it('installs coqui-tts, then torchcodec, then the CJK phonemizers, in that order', () => {
     const pkgs = steps.map((s: { args: string[] }) => {
       const i = s.args.indexOf('install');
       return s.args[i + 1];
     });
-    expect(pkgs).toEqual(['coqui-tts', 'torchcodec']);
+    // First package named per step; the phonemizer step names pypinyin first.
+    expect(pkgs).toEqual(['coqui-tts', 'torchcodec', 'pypinyin']);
   });
 
   it('installs torchcodec (without it, import TTS raises on torch>=2.9)', () => {
     const codec = steps.find((s: { args: string[] }) => s.args.includes('torchcodec'));
     expect(codec, 'torchcodec step must exist').toBeTruthy();
+  });
+
+  it('installs the XTTS CJK phonemizers (zh needs pypinyin; ja needs cutlet + unidic-lite dict)', () => {
+    const cjk = steps.find((s: { args: string[] }) => s.args.includes('pypinyin'));
+    expect(cjk, 'CJK phonemizer step must exist').toBeTruthy();
+    // unidic-lite must be named explicitly — cutlet doesn't depend on it.
+    expect(cjk!.args).toEqual(
+      expect.arrayContaining(['pypinyin', 'cutlet', 'unidic-lite']),
+    );
+    // NOT --no-deps here: cutlet's transitive deps (fugashi/jaconv/mojimoji) are wanted.
+    expect(cjk!.args).not.toContain('--no-deps');
   });
 
   it('never passes -U / --upgrade (must not perturb the pinned torch/coqui)', () => {

@@ -82,6 +82,19 @@ function run(python, pyArgs, env) {
  * static FFmpeg 8 build — is never reached. `--no-deps` installs just the wheel so
  * torchcodec can never perturb the pinned torch (protects the ROCm-2.8 profile,
  * where torch<2.9 doesn't even need torchcodec).
+ *
+ * Why the CJK phonemizers (pypinyin / cutlet / unidic-lite): XTTS v2 needs
+ * language-specific text frontends that coqui-tts doesn't pull. Chinese (zh-cn)
+ * needs `pypinyin` (TTS/tts/layers/xtts/tokenizer.py::chinese_transliterate raises
+ * `ImportError: Chinese requires: pypinyin` on the first zh line otherwise). Japanese
+ * (ja) needs `cutlet` (romanizer), which needs `fugashi` (MeCab) + a MeCab dict —
+ * `unidic-lite` is the ~48 MB bundled dict fugashi auto-discovers; without a dict
+ * cutlet raises at construction. cutlet transitively pulls fugashi/jaconv/mojimoji,
+ * but `unidic-lite` must be named explicitly (cutlet doesn't depend on it). These are
+ * runtime-SYNTH deps (not needed for the weights prefetch), and fs-59 makes zh/ja
+ * Coqui render paths — so the opt-in install must provide them. They carry no torch
+ * pin, so a normal `-c constraints` install is safe (no --no-deps: cutlet's
+ * transitive deps are wanted).
  */
 export function coquiPipInstallSteps(constraints) {
   return [
@@ -95,6 +108,12 @@ export function coquiPipInstallSteps(constraints) {
       args: ['-m', 'pip', 'install', 'torchcodec', '--no-deps'],
       failMsg:
         'FAIL: pip install torchcodec failed. coqui-tts import needs it present on torch>=2.9.',
+    },
+    {
+      label: 'Installing XTTS CJK phonemizers (pypinyin/cutlet/unidic-lite)...',
+      args: ['-m', 'pip', 'install', 'pypinyin', 'cutlet', 'unidic-lite', '-c', constraints],
+      failMsg:
+        'FAIL: pip install XTTS CJK phonemizers failed. zh needs pypinyin; ja needs cutlet + a MeCab dict (unidic-lite).',
     },
   ];
 }
@@ -126,8 +145,8 @@ function main() {
   const baseTxt = join(SIDECAR_DIR, 'requirements', 'base.txt');
   const constraints = writeSanitizedConstraintsFile(baseTxt);
   // No -U: base.txt already pins compatible versions; upgrading on every run could
-  // pull a broken coqui-tts release. torchcodec is required too (see
-  // coquiPipInstallSteps' rationale) — installed here, NOT in the base overlay.
+  // pull a broken coqui-tts release. torchcodec + the CJK phonemizers are required
+  // too (see coquiPipInstallSteps' rationale) — installed here, NOT the base overlay.
   for (const { label, args, failMsg } of coquiPipInstallSteps(constraints)) {
     step(label);
     if (run(python, args, env) !== 0) {

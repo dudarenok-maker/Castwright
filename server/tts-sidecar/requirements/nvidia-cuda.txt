@@ -15,7 +15,9 @@
 # and a plain torch/torchaudio==2.11.0 pulls no torchcodec. EXCEPTION: opt-in Coqui
 # — coqui-tts 0.27.5 presence-checks torchcodec at IMPORT on torch>=2.9 (find_spec,
 # not a functional import), so install-coqui.mjs installs it there (NOT here); it
-# need only be present, never functional. See test_no_torchcodec + #1586.
+# need only be present, never functional. See test_no_torchcodec + #1586. CJK-on-Coqui
+# additionally needs the XTTS text frontends coqui-tts doesn't pull — pypinyin (zh) and
+# cutlet + unidic-lite (ja MeCab dict) — also installed by install-coqui.mjs, not here.
 #
 # These plain pins do NOT carry a CUDA build by themselves: PyPI's default torch
 # wheel is CPU-only on Windows. bootstrap-venv pre-installs torch/torchaudio from
