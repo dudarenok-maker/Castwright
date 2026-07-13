@@ -6,16 +6,29 @@ import 'package:app_links/app_links.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:path_provider/path_provider.dart';
 
 import 'src/data/cert_pinning.dart';
 import 'src/data/companion_audio_handler.dart';
 import 'src/data/companion_runtime.dart';
+import 'src/data/file_store.dart';
 import 'src/data/pairing_service.dart';
 import 'src/data/pairing_store.dart';
+import 'src/demo/demo_runtime.dart';
+import 'src/demo/demo_ticking_audio_engine.dart';
 import 'src/domain/paired_server.dart';
 import 'src/domain/pairing_qr.dart';
 import 'src/ui/library_home_screen.dart';
 import 'src/ui/pairing_screen.dart';
+
+/// Default demo root — app-private, deleted on exit. Overridden in host tests.
+Future<String> _defaultDemoRoot() async =>
+    '${(await getApplicationDocumentsDirectory()).path}/demo-runtime';
+
+/// Default cover-asset loader — reads a bundled PNG. Overridden in host tests.
+Future<List<int>> _defaultDemoAsset(String key) async =>
+    (await rootBundle.load(key)).buffer.asUint8List();
 
 /// Castwright — the native listening client (plan 188). app-1 shell +
 /// app-2 pairing + the app-3..14 library / sync / player wired on top, with
@@ -49,7 +62,10 @@ class AudiobookCompanionApp extends StatelessWidget {
       this.audioHandler,
       this.deepLinks,
       this.runtimeOverride,
-      this.themeMode = ThemeMode.system});
+      this.themeMode = ThemeMode.system,
+      this.demoRootResolver,
+      this.demoFileStore,
+      this.demoAssetLoader});
 
   final PairingStore store;
 
@@ -69,6 +85,10 @@ class AudiobookCompanionApp extends StatelessWidget {
   /// Light/dark selection. Defaults to following the system; the capture harness
   /// forces a value per pass.
   final ThemeMode themeMode;
+
+  final Future<String> Function()? demoRootResolver;
+  final FileStore? demoFileStore;
+  final Future<List<int>> Function(String)? demoAssetLoader;
 
   @override
   Widget build(BuildContext context) {
@@ -90,7 +110,10 @@ class AudiobookCompanionApp extends StatelessWidget {
           service: service ?? PairingService(),
           audioHandler: audioHandler,
           deepLinks: deepLinks,
-          runtimeOverride: runtimeOverride),
+          runtimeOverride: runtimeOverride,
+          demoRootResolver: demoRootResolver,
+          demoFileStore: demoFileStore,
+          demoAssetLoader: demoAssetLoader),
     );
   }
 }
@@ -102,7 +125,10 @@ class HomePage extends StatefulWidget {
       required this.service,
       this.audioHandler,
       this.deepLinks,
-      this.runtimeOverride});
+      this.runtimeOverride,
+      this.demoRootResolver,
+      this.demoFileStore,
+      this.demoAssetLoader});
 
   final PairingStore store;
   final PairingService service;
@@ -113,6 +139,10 @@ class HomePage extends StatefulWidget {
 
   /// Injectable pre-built runtime (capture/tests). Null in production.
   final CompanionRuntime? runtimeOverride;
+
+  final Future<String> Function()? demoRootResolver;
+  final FileStore? demoFileStore;
+  final Future<List<int>> Function(String)? demoAssetLoader;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -128,6 +158,15 @@ class _HomePageState extends State<HomePage> {
   String? _bootstrapError;
 
   bool _pairingOpen = false;
+
+  bool _demoMode = false;
+  String? _demoRoot;
+
+  static const _demoServer = PairedServer(
+      url: 'https://demo.castwright.local',
+      token: 'demo',
+      caFingerprint: 'demo',
+      pairedAt: null);
 
   StreamSubscription<Uri>? _deepLinkSub;
 
@@ -291,6 +330,63 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> _startDemo() async {
+    setState(() => _loading = true);
+    final root = await (widget.demoRootResolver ?? _defaultDemoRoot)();
+    final fs = widget.demoFileStore ?? const DiskFileStore();
+    final loadAsset = widget.demoAssetLoader ?? _defaultDemoAsset;
+    const coverIds = [
+      'hollow-tide-1',
+      'hollow-tide-2',
+      'hollow-tide-3',
+      'coalfall-commission',
+    ];
+    final coversDir = '$root/covers';
+    for (final id in coverIds) {
+      try {
+        final bytes = await loadAsset('assets/demo-covers/$id.png');
+        await fs.writeBytes('$coversDir/$id.png', bytes);
+      } catch (_) {
+        // A cover is polish; a missing one degrades to the placeholder tile.
+      }
+    }
+    final runtime = await buildDemoRuntime(
+      fs: fs,
+      coversDir: coversDir,
+      root: root,
+      offline: false,
+      engine: DemoTickingAudioEngine(),
+    );
+    if (!mounted) return;
+    setState(() {
+      _demoMode = true;
+      _demoRoot = root;
+      _paired = _demoServer;
+      _runtime = runtime;
+      _loading = false;
+    });
+  }
+
+  Future<void> _exitDemo() async {
+    final rt = _runtime;
+    final root = _demoRoot;
+    final fs = widget.demoFileStore ?? const DiskFileStore();
+    if (mounted) {
+      setState(() {
+        _demoMode = false;
+        _demoRoot = null;
+        _runtime = null;
+        _paired = null;
+      });
+    }
+    await rt?.dispose();
+    if (root != null) {
+      try {
+        await fs.deleteDir(root);
+      } catch (_) {}
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -307,6 +403,11 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(height: 16),
               FilledButton(
                   onPressed: () => _openPairing(), child: const Text('Pair a device')),
+              const SizedBox(height: 12),
+              OutlinedButton(
+                  key: const Key('try-demo'),
+                  onPressed: _startDemo,
+                  child: const Text('Try the demo')),
             ],
           ),
         ),
@@ -350,7 +451,8 @@ class _HomePageState extends State<HomePage> {
     return LibraryHomeScreen(
       runtime: _runtime!,
       server: _paired!,
-      onUnpair: _unpair,
+      onUnpair: _demoMode ? _exitDemo : _unpair,
+      demoMode: _demoMode,
     );
   }
 }
