@@ -22,6 +22,23 @@ class HttpResult {
 typedef HttpSend = Future<HttpResult> Function(
     String method, Uri url, Map<String, String> headers);
 
+/// A streamed, CA-pinned range response for the loopback proxy (`app-10`). The
+/// [body] is a single-subscription stream that preserves backpressure; [cancel]
+/// aborts THIS request's socket via the held subscription — it never closes the
+/// shared streaming client, so sibling concurrent range fetches keep running.
+class PinnedStreamResponse {
+  const PinnedStreamResponse({
+    required this.statusCode,
+    required this.headers,
+    required this.body,
+    required this.cancel,
+  });
+  final int statusCode;
+  final Map<String, String> headers; // lower-cased header names
+  final Stream<List<int>> body;
+  final Future<void> Function() cancel;
+}
+
 class ApiException implements Exception {
   const ApiException(this.statusCode, this.message);
   final int statusCode;
@@ -251,6 +268,18 @@ class ApiClient {
       return RangeResponse(statusCode: res.statusCode, body: res);
     };
   }
+
+  HttpClient? _streamClient;
+
+  /// A range-capable, CA-pinned, streamed byte fetcher for `app-10` LAN preview.
+  /// Reuses ONE pinned client across concurrent range fetches in a playback
+  /// session (connection reuse); each response's [PinnedStreamResponse.cancel]
+  /// aborts only its own socket. The Bearer is injected here, so the loopback
+  /// proxy never sees the token.
+  Future<PinnedStreamResponse> pinnedRangeStream(Uri url, {String? range}) {
+    final client = _streamClient ??= _pinnedHttpClient(connection);
+    return streamRange(client, url, bearer: connection.server.token, range: range);
+  }
 }
 
 /// Wraps [ApiClient] as the engine-facing [ManifestApi].
@@ -325,4 +354,53 @@ HttpSend _pinnedSend(Connection connection) {
     final body = await res.transform(utf8.decoder).join();
     return HttpResult(res.statusCode, body);
   };
+}
+
+/// Transport core for [ApiClient.pinnedRangeStream], split out so the streaming +
+/// cancel behaviour is unit-testable against a real plaintext `HttpServer`
+/// (production passes the CA-pinned client). Holds the response subscription so
+/// [PinnedStreamResponse.cancel] tears down ONLY this socket.
+@visibleForTesting
+Future<PinnedStreamResponse> streamRange(HttpClient client, Uri url,
+    {required String bearer, String? range}) async {
+  final req = await client.getUrl(url);
+  req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $bearer');
+  if (range != null) req.headers.set(HttpHeaders.rangeHeader, range);
+  final res = await req.close();
+
+  final headers = <String, String>{};
+  res.headers.forEach((name, values) => headers[name] = values.join(','));
+
+  final out = StreamController<List<int>>();
+  // Subscribe EAGERLY (then pause) — not lazily in onListen — so `cancel()` can
+  // always tear down the real socket, even on a HEAD / non-2xx path where the
+  // body is never drained (`addStream` never fires onListen). A lazy subscription
+  // would leave the HttpClientResponse dangling on every HEAD probe and every
+  // 401/404/5xx upstream. dart:io delivers events async, so the pause below can't
+  // race a synchronous first event.
+  final sub = res.listen(
+    out.add,
+    onError: out.addError,
+    onDone: () {
+      if (!out.isClosed) out.close();
+    },
+    cancelOnError: true,
+  );
+  sub.pause();
+  out.onListen = () => sub.resume();
+  out.onPause = () => sub.pause();
+  out.onResume = () => sub.resume();
+  out.onCancel = () => sub.cancel();
+
+  Future<void> cancel() async {
+    await sub.cancel(); // abort THIS socket only — never client.close()
+    if (!out.isClosed) await out.close();
+  }
+
+  return PinnedStreamResponse(
+    statusCode: res.statusCode,
+    headers: headers,
+    body: out.stream,
+    cancel: cancel,
+  );
 }
