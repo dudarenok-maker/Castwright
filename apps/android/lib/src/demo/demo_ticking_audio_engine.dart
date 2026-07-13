@@ -42,6 +42,8 @@ class DemoTickingAudioEngine implements AudioEngine {
   Stream<Duration?> get durationStream => _durationCtl.stream;
   @override
   Stream<void> get completionStream => _completionCtl.stream;
+  @override
+  Stream<Object> get errorStream => const Stream<Object>.empty();
 
   void _setPlaying(bool v) {
     _playing = v;
