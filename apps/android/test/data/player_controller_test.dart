@@ -236,6 +236,24 @@ void main() {
       await pc.dispose();
     });
 
+    test('switchBook forwards bookTitle + artPath to openBook (media metadata)', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore();
+      final pc = make(engine, store, playlists: {
+        'A': const [PlayableChapter(uuid: 'A-c1', path: '/x/A-c1.mp3')],
+        'B': const [PlayableChapter(uuid: 'B-c1', path: '/x/B-c1.mp3')],
+      });
+      await pc.openBook('A', bookTitle: 'Book A', artPath: '/art/a.jpg');
+      NowPlaying? np;
+      final sub = pc.nowPlayingStream.listen((n) => np = n);
+      await pc.switchBook('B', bookTitle: 'Book B', artPath: '/art/b.jpg');
+      await Future<void>.delayed(Duration.zero);
+      expect(np?.album, 'Book B');
+      expect(np?.artPath, '/art/b.jpg');
+      await sub.cancel();
+      await pc.dispose();
+    });
+
     test('autosave persists at most once per interval', () async {
       final engine = FakeAudioEngine();
       final store = MemPlaybackStore();
