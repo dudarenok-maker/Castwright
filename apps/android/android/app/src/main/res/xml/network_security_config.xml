@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- app-10: permit cleartext ONLY for the in-app loopback proxy (127.0.0.1).
+     Everything else stays HTTPS-only, preserving the LAN-HTTPS invariant. The
+     proxy re-serves CA-pinned HTTPS chapter bytes as plaintext to the native
+     player over loopback; ExoPlayer's NetworkSecurityPolicy would otherwise
+     throw on the http://127.0.0.1 load. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>
