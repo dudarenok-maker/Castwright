@@ -11,6 +11,7 @@ import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { safeBookId } from '../util/safe-id.js';
 import { runStage1ChapterChunked, resolveStage1ChunkCharBudget } from '../analyzer/stage1-chunk.js';
 import { applyNarratorDefault } from '../analyzer/narrator-default.js';
+import { applyNarratorIdentity } from '../analyzer/narrator-identity.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
 import {
@@ -4256,9 +4257,9 @@ export async function runMainAnalyzerJob(
       );
     }
 
-    const characters = attachLinesAndScenes(
-      assignPaletteColors(folded.characters),
-      folded.sentences,
+    const characters = applyNarratorIdentity(
+      attachLinesAndScenes(assignPaletteColors(folded.characters), folded.sentences),
+      bookLanguage,
     );
 
     /* Phase 1 character-id reconciliation (see reconcileSentenceCharacterIds
@@ -5320,7 +5321,10 @@ export async function runSubsetAnalyzerJob(
         `Dropped ${folded.summary.droppedSilent} non-speaking character${folded.summary.droppedSilent === 1 ? '' : 's'} from the cast (${sample}${more}) — no attributed dialogue, narrator covers them.`,
       );
     }
-    const enriched = attachLinesAndScenes(assignPaletteColors(folded.characters), folded.sentences);
+    const enriched = applyNarratorIdentity(
+      attachLinesAndScenes(assignPaletteColors(folded.characters), folded.sentences),
+      bookLanguage,
+    );
 
     /* Plan 126 Facet A on the chapter-retry path (srv-13) — a book completed
        solely via this path never ran the link pass and persisted an unlinked
