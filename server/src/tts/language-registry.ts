@@ -98,11 +98,13 @@ const ENTRIES: readonly LanguageEntry[] = [
   { code: 'zh', sidecarName: 'Chinese',  supported: false, detect: { script: 'cjk', iso6393: 'cmn' },
     headingLexicon: { keywords: ['章', '部', '巻', '節', '幕'], numberWords: [],
       standalone: ['序章', '終章', '序', '跋', 'プロローグ', 'エピローグ'] },
-    frontMatterKeywords: ['目录', '版权', '致谢', '序言', '后记', '附录', '关于作者'] },
+    frontMatterKeywords: ['目录', '版权', '致谢', '序言', '后记', '附录', '关于作者'],
+    narratorName: '旁白' },
   { code: 'ja', sidecarName: 'Japanese', supported: false, detect: { script: 'cjk', iso6393: 'jpn' },
     headingLexicon: { keywords: ['章', '部', '巻', '節', '話', '幕'], numberWords: [],
       standalone: ['序章', '終章', 'プロローグ', 'エピローグ', 'あとがき', '前書き'] },
-    frontMatterKeywords: ['目次', '著作権', '献辞', '謝辞', 'まえがき', 'あとがき', '付録', '著者について'] },
+    frontMatterKeywords: ['目次', '著作権', '献辞', '謝辞', 'まえがき', 'あとがき', '付録', '著者について'],
+    narratorName: '語り手' },
 ];
 
 const BY_CODE: ReadonlyMap<string, LanguageEntry> = new Map(

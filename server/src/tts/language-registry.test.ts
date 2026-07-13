@@ -63,6 +63,7 @@ describe('getLanguageEntry', () => {
         standalone: ['序章', '終章', '序', '跋', 'プロローグ', 'エピローグ'],
       },
       frontMatterKeywords: ['目录', '版权', '致谢', '序言', '后记', '附录', '关于作者'],
+      narratorName: '旁白',
     });
   });
 
@@ -79,6 +80,7 @@ describe('getLanguageEntry', () => {
         standalone: ['序章', '終章', 'プロローグ', 'エピローグ', 'あとがき', '前書き'],
       },
       frontMatterKeywords: ['目次', '著作権', '献辞', '謝辞', 'まえがき', 'あとがき', '付録', '著者について'],
+      narratorName: '語り手',
     });
   });
 });
@@ -216,11 +218,18 @@ describe('narratorName', () => {
   it('omits narratorName on en (defaults to "Narrator" at the call site)', () => {
     expect(getLanguageEntry('en')?.narratorName).toBeUndefined();
   });
+
+  it('exposes localized narrator names for zh/ja (fs-59, still supported:false)', () => {
+    // Seeded now so a CJK book's narrator localizes the moment zh/ja flip to
+    // supported at W5 — the seed reads getLanguageEntry(lang)?.narratorName.
+    expect(getLanguageEntry('zh')?.narratorName).toBe('旁白');
+    expect(getLanguageEntry('ja')?.narratorName).toBe('語り手');
+  });
 });
 
 describe('isDefaultNarratorName', () => {
   it('is true for the English default and every localized default, case-insensitively', () => {
-    for (const n of ['Narrator', 'narrator', ' NARRATOR ', 'Erzähler', 'Рассказчик', 'Narrador', 'Narrateur']) {
+    for (const n of ['Narrator', 'narrator', ' NARRATOR ', 'Erzähler', 'Рассказчик', 'Narrador', 'Narrateur', '旁白', '語り手']) {
       expect(isDefaultNarratorName(n)).toBe(true);
     }
   });
