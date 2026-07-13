@@ -19,11 +19,17 @@ class PlayableChapter {
     required this.path,
     this.title = '',
     this.durationSec,
+    this.audioUrl,
   });
   final String uuid;
   final String path;
   final String title;
   final double? durationSec;
+
+  /// Full server path for LAN streaming (`app-10`), e.g.
+  /// `/api/books/<id>/chapters/<n>/audio.mp3`. Null when the chapter has no
+  /// rendered audio (never added to a playlist in that case).
+  final String? audioUrl;
 }
 
 /// Pure now-playing snapshot; the audio-service handler maps it to a MediaItem
