@@ -49,12 +49,17 @@ void main() {
     final r1 = await fetch(Uri.parse('${conn().server.url}/x'), const {});
     await r1.body.drain<void>();
 
+    // A second pinnedRangeFetch must reuse the ONE held client (memoisation),
+    // not build a fresh one — otherwise dispose couldn't close it.
+    api.pinnedRangeFetch();
+
     final r2 = await api // LAN-stream client
         .pinnedRangeStream(Uri.parse('${conn().server.url}/y'));
     await r2.body.drain<void>();
 
     expect(made.length, 3,
-        reason: 'send + range + stream clients, each built once and reused');
+        reason: 'send + range + stream clients, each built once and reused '
+            '(the 2nd pinnedRangeFetch reuses the held range client)');
 
     await api.dispose();
 
