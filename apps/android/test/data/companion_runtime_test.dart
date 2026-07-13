@@ -38,6 +38,8 @@ class _FakeAudioEngine implements AudioEngine {
   @override
   Stream<void> get completionStream => _completion.stream;
   @override
+  Stream<Object> get errorStream => const Stream.empty();
+  @override
   bool get playing => _playing;
   @override
   Stream<bool> get playingStream => _playingCtl.stream;

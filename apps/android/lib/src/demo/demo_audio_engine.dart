@@ -29,6 +29,9 @@ class DemoAudioEngine implements AudioEngine {
   Stream<void> get completionStream => const Stream<void>.empty();
 
   @override
+  Stream<Object> get errorStream => const Stream<Object>.empty();
+
+  @override
   Future<void> setFilePath(String path) async {}
   @override
   Future<void> setStreamUrl(String url, {Map<String, String>? headers}) async {}

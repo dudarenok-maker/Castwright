@@ -42,6 +42,11 @@ class FakeAudioEngine implements AudioEngine {
   Stream<void> get completionStream => _completionCtl.stream;
   void emitCompletion() => _completionCtl.add(null);
 
+  final _errorCtl = StreamController<Object>.broadcast();
+  @override
+  Stream<Object> get errorStream => _errorCtl.stream;
+  void emitError(Object e) => _errorCtl.add(e);
+
   @override
   Future<void> setFilePath(String path) async {
     loadedPath = path;
@@ -91,6 +96,7 @@ class FakeAudioEngine implements AudioEngine {
     await _playingCtl.close();
     await _completionCtl.close();
     await _durationCtl.close();
+    await _errorCtl.close();
   }
 
   void emit(Duration p) {
