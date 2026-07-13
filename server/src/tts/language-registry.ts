@@ -27,6 +27,9 @@ export interface LanguageEntry {
   /** Non-English front/back-matter title terms (used to build the language-agnostic
       FRONT_MATTER_RX; English stays inline in parsers/front-matter.ts). Absent on en. */
   frontMatterKeywords?: string[];
+  /** Localized narrator display name for this language. Absent on `en`
+      (call sites default to "Narrator"). */
+  narratorName?: string;
 }
 
 const ENTRIES: readonly LanguageEntry[] = [
@@ -41,6 +44,7 @@ const ENTRIES: readonly LanguageEntry[] = [
     frontMatterKeywords: ['посвящение', 'авторские права', 'благодарности', 'содержание', 'оглавление',
       'об авторе', 'предисловие', 'послесловие', 'приложение', 'глоссарий', 'библиография', 'указатель',
       'примечания', 'выходные данные', 'эпиграф'],
+    narratorName: 'Рассказчик',
   },
   // es/fr/de: canary-validated + operator-accepted (es 2026-06-23; fr/de 2026-06-25,
   // audio acceptance of designed Coalfall samples, plan 229). All three are Latin Qwen.
@@ -55,6 +59,7 @@ const ENTRIES: readonly LanguageEntry[] = [
     frontMatterKeywords: ['dedicatoria', 'derechos de autor', 'agradecimientos', 'índice', 'sobre el autor',
       'prefacio', 'apéndice', 'glosario', 'bibliografía', 'epígrafe', 'colofón', 'nota del autor',
       'nota del traductor'],
+    narratorName: 'Narrador',
   },
   { code: 'fr', sidecarName: 'French',  supported: true,  detect: { script: 'latin',    iso6393: 'fra' },
     headingLexicon: {
@@ -66,6 +71,7 @@ const ENTRIES: readonly LanguageEntry[] = [
     frontMatterKeywords: ['dédicace', 'remerciements', 'table des matières', 'sommaire',
       'à propos de l\'auteur', 'préface', 'avant-propos', 'postface', 'annexe', 'glossaire', 'bibliographie',
       'note de l\'auteur', 'note du traducteur', 'colophon', 'épigraphe'],
+    narratorName: 'Narrateur',
   },
   { code: 'de', sidecarName: 'German',  supported: true,  detect: { script: 'latin',    iso6393: 'deu' },
     headingLexicon: {
@@ -77,6 +83,7 @@ const ENTRIES: readonly LanguageEntry[] = [
     frontMatterKeywords: ['widmung', 'urheberrecht', 'danksagung', 'inhaltsverzeichnis', 'über den autor',
       'vorwort', 'nachwort', 'anhang', 'glossar', 'bibliografie', 'register', 'anmerkungen', 'impressum',
       'epigraph'],
+    narratorName: 'Erzähler',
   },
 ];
 
@@ -130,4 +137,15 @@ export function nonEnglishFrontMatterKeywords(): string[] {
 /** Reverse of `sidecarName` — the BCP-47 code for a sidecar/manifest language word. */
 export function codeForSidecarName(word: string): string | undefined {
   return ENTRIES.find((e) => e.sidecarName === word)?.code;
+}
+
+/** True when `name` is a built-in narrator default — the English "Narrator" or
+    any language's localized narrator name. Distinguishes a replaceable default
+    from a user rename (which must survive reparse). Case-insensitive; trims. */
+export function isDefaultNarratorName(name: string | undefined | null): boolean {
+  if (typeof name !== 'string') return false;
+  const key = name.trim().toLowerCase();
+  if (!key) return false;
+  if (key === 'narrator') return true;
+  return ENTRIES.some((e) => e.narratorName?.toLowerCase() === key);
 }

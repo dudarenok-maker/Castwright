@@ -11,6 +11,7 @@ import {
   nonEnglishHeadingLexicon,
   nonEnglishFrontMatterKeywords,
   codeForSidecarName,
+  isDefaultNarratorName,
 } from './language-registry.js';
 
 describe('getLanguageEntry', () => {
@@ -40,6 +41,7 @@ describe('getLanguageEntry', () => {
       frontMatterKeywords: ['посвящение', 'авторские права', 'благодарности', 'содержание', 'оглавление',
         'об авторе', 'предисловие', 'послесловие', 'приложение', 'глоссарий', 'библиография', 'указатель',
         'примечания', 'выходные данные', 'эпиграф'],
+      narratorName: 'Рассказчик',
     });
   });
 
@@ -159,5 +161,32 @@ describe('codeForSidecarName', () => {
     expect(codeForSidecarName('German')).toBe('de');
     expect(codeForSidecarName('English')).toBe('en');
     expect(codeForSidecarName('Klingon')).toBeUndefined();
+  });
+});
+
+describe('narratorName', () => {
+  it('exposes localized narrator names for the four non-English supported languages', () => {
+    expect(getLanguageEntry('de')?.narratorName).toBe('Erzähler');
+    expect(getLanguageEntry('ru')?.narratorName).toBe('Рассказчик');
+    expect(getLanguageEntry('es')?.narratorName).toBe('Narrador');
+    expect(getLanguageEntry('fr')?.narratorName).toBe('Narrateur');
+  });
+
+  it('omits narratorName on en (defaults to "Narrator" at the call site)', () => {
+    expect(getLanguageEntry('en')?.narratorName).toBeUndefined();
+  });
+});
+
+describe('isDefaultNarratorName', () => {
+  it('is true for the English default and every localized default, case-insensitively', () => {
+    for (const n of ['Narrator', 'narrator', ' NARRATOR ', 'Erzähler', 'Рассказчик', 'Narrador', 'Narrateur']) {
+      expect(isDefaultNarratorName(n)).toBe(true);
+    }
+  });
+  it('is false for a user rename and for empty/nullish', () => {
+    expect(isDefaultNarratorName('The Bard')).toBe(false);
+    expect(isDefaultNarratorName('')).toBe(false);
+    expect(isDefaultNarratorName(undefined)).toBe(false);
+    expect(isDefaultNarratorName(null)).toBe(false);
   });
 });
