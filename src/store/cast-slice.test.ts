@@ -1012,6 +1012,50 @@ describe('castSlice — removeCharacterEmotionVariant (fs-34)', () => {
   });
 });
 
+describe('castSlice — clearCharacterEmotionVariants (redesign invalidation)', () => {
+  const withVariants = () =>
+    baseState([
+      makeChar('maerin', {
+        overrideTtsVoices: {
+          qwen: {
+            name: 'qwen-v_maerin',
+            variants: {
+              angry: { name: 'qwen-v_maerin__angry' },
+              sad: { name: 'qwen-v_maerin__sad' },
+            },
+          },
+        },
+      }),
+    ]);
+
+  it('drops the whole variants map, leaving the base name intact', () => {
+    const next = castSlice.reducer(
+      withVariants(),
+      castActions.clearCharacterEmotionVariants({ characterId: 'maerin' }),
+    );
+    const qwen = next.characters[0].overrideTtsVoices!.qwen!;
+    expect(qwen.variants).toBeUndefined();
+    expect(qwen.name).toBe('qwen-v_maerin');
+  });
+
+  it('is a no-op for an unknown character or a character with no variants', () => {
+    const unknown = castSlice.reducer(
+      withVariants(),
+      castActions.clearCharacterEmotionVariants({ characterId: 'ghost' }),
+    );
+    expect(Object.keys(unknown.characters[0].overrideTtsVoices!.qwen!.variants!)).toHaveLength(2);
+
+    const noVariants = baseState([
+      makeChar('solo', { overrideTtsVoices: { qwen: { name: 'qwen-v_solo' } } }),
+    ]);
+    const after = castSlice.reducer(
+      noVariants,
+      castActions.clearCharacterEmotionVariants({ characterId: 'solo' }),
+    );
+    expect(after.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-v_solo');
+  });
+});
+
 describe('selectCastTierByCharacterId (#1308)', () => {
   it('maps characterId to its pinned ttsModelKey', () => {
     const s = {

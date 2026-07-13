@@ -655,6 +655,60 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
     expect(JSON.parse(evictCall![1].body).voiceId).toBe('qwen-v_maerin');
   });
 
+  it('promote-voice invalidates the redesigned character’s stale emotion variants (slots + .pt/.json + sidecar evict)', async () => {
+    /* A redesign replaces the base embedding, so every variant minted from the
+       OLD embedding is now stale. Seed maerin with a live base + two designed
+       variants, stage a new preview, and promote it: all variants must be torn
+       down (cast.json slots + .pt/.json + sidecar eviction), base preserved. */
+    stagedPreviewArtifacts('qwen-v_maerin-preview');
+    for (const id of ['qwen-v_maerin__angry', 'qwen-v_maerin__sad']) {
+      writeFileSync(join(qwenDir(), `${id}.pt`), 'STALE');
+      writeFileSync(join(qwenDir(), `${id}.json`), JSON.stringify({ voiceId: id }));
+    }
+    const withVariants = characters.map((c) =>
+      c.id === 'maerin'
+        ? {
+            ...c,
+            overrideTtsVoices: {
+              qwen: {
+                name: 'qwen-v_maerin',
+                variants: {
+                  angry: { name: 'qwen-v_maerin__angry' },
+                  sad: { name: 'qwen-v_maerin__sad' },
+                },
+              },
+            },
+          }
+        : c,
+    );
+    writeFileSync(
+      join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: withVariants }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
+      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    /* Variant map wiped from cast.json (badge clears); base promoted intact. */
+    const maerin = readCast().characters.find((c) => c.id === 'maerin')!;
+    const qwen = maerin.overrideTtsVoices as { qwen: { name: string; variants?: unknown } };
+    expect(qwen.qwen.variants).toBeUndefined();
+    expect(qwen.qwen.name).toBe('qwen-v_maerin');
+    /* Variant embeddings gone from disk. */
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.pt'))).toBe(false);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.json'))).toBe(false);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__sad.pt'))).toBe(false);
+    /* Each variant id evicted from the sidecar cache (alongside the base). */
+    const evicted = fetchMock.mock.calls
+      .filter(([u]) => String(u).endsWith('/qwen/evict-voice'))
+      .map(([, init]) => JSON.parse((init as { body: string }).body).voiceId);
+    expect(evicted).toContain('qwen-v_maerin');
+    expect(evicted).toContain('qwen-v_maerin__angry');
+    expect(evicted).toContain('qwen-v_maerin__sad');
+  });
+
   it('promote-voice 409s when nothing was staged', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/promote-voice`)

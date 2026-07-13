@@ -140,6 +140,17 @@ export const castSlice = createSlice({
       delete variants[emotion as keyof typeof variants];
       if (Object.keys(variants).length === 0) delete c!.overrideTtsVoices!.qwen!.variants;
     },
+    /* Redesign invalidation — clear ALL of a character's designed Qwen emotion
+       variants from redux when a redesign is approved. The promote-voice route
+       already tore them off cast.json + disk (they were minted from the base
+       embedding the redesign replaces); this mirrors that so the save-path
+       spreads don't re-persist the stale slots and the cast's "Emotion variants"
+       demand re-surfaces them live. Local-only, mirroring
+       removeCharacterEmotionVariant. No-op for an unknown character / no variants. */
+    clearCharacterEmotionVariants: (s, a: PayloadAction<{ characterId: string }>) => {
+      const c = s.characters.find((x) => x.id === a.payload.characterId);
+      if (c?.overrideTtsVoices?.qwen?.variants) delete c.overrideTtsVoices.qwen.variants;
+    },
     /* From POST /api/manuscripts/:id/analysis response. The analyser schema
        leaves voiceState optional, but freshly-analysed characters have, by
        definition, just had a voice generated for them — default the field
