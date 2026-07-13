@@ -52,11 +52,30 @@ class ApiException implements Exception {
 /// carries the Bearer token. The transport is injectable for tests.
 class ApiClient {
   ApiClient(this.connection,
-      {HttpSend? send, this.requestTimeout = const Duration(seconds: 4)})
-      : _send = send ?? _pinnedSend(connection);
+      {HttpSend? send,
+      this.requestTimeout = const Duration(seconds: 4),
+      HttpClient Function(Connection)? httpClientFactory})
+      : _makeClient = httpClientFactory ?? _pinnedHttpClient {
+    if (send != null) {
+      _send = send; // test transport: no owned client to close
+    } else {
+      final client = _makeClient(connection);
+      _ownedSendClient = client;
+      _send = _sendVia(client);
+    }
+  }
 
   final Connection connection;
-  final HttpSend _send;
+
+  /// Builds a CA-pinned client for the long-lived owned transports (JSON send,
+  /// range download, LAN stream). Overridable in tests via `httpClientFactory`.
+  final HttpClient Function(Connection) _makeClient;
+
+  late final HttpSend _send;
+
+  /// The client backing the JSON [_send] transport when it wasn't injected —
+  /// held so [dispose] can force-close it. Null when a test injects `send`.
+  HttpClient? _ownedSendClient;
 
   /// Upper bound on a single JSON request. Offline, the connect fails fast via
   /// [_connectTimeout]; this is the backstop for a connection that opens but
@@ -257,8 +276,12 @@ class ApiClient {
   /// downloads — the engine's [RangeFetch] seam. Streams the response body so
   /// large chapters never buffer fully in memory; the `Range` header (set by the
   /// downloader on a resume) is forwarded verbatim.
+  HttpClient? _rangeClient;
+
   RangeFetch pinnedRangeFetch() {
-    final client = _pinnedHttpClient(connection);
+    // Reuse ONE pinned client across the download session's range fetches
+    // (connection reuse), held so [dispose] can force-close it.
+    final client = _rangeClient ??= _makeClient(connection);
     final token = connection.server.token;
     return (Uri url, Map<String, String> headers) async {
       final req = await client.getUrl(url);
@@ -277,8 +300,23 @@ class ApiClient {
   /// aborts only its own socket. The Bearer is injected here, so the loopback
   /// proxy never sees the token.
   Future<PinnedStreamResponse> pinnedRangeStream(Uri url, {String? range}) {
-    final client = _streamClient ??= _pinnedHttpClient(connection);
+    final client = _streamClient ??= _makeClient(connection);
     return streamRange(client, url, bearer: connection.server.token, range: range);
+  }
+
+  /// Force-close every owned pinned client (JSON send, range download, LAN
+  /// stream). Called from [CompanionRuntime.dispose] so a re-pair (new runtime →
+  /// new [ApiClient]) doesn't orphan the old connection pools. The per-call
+  /// clients in [putListenProgress]/[setShelfStatus]/[putListenStats] close
+  /// themselves in their own `finally`, so they aren't tracked here. Idempotent —
+  /// fields are nulled, so a second call is a no-op. (#1579)
+  Future<void> dispose() async {
+    _ownedSendClient?.close(force: true);
+    _rangeClient?.close(force: true);
+    _streamClient?.close(force: true);
+    _ownedSendClient = null;
+    _rangeClient = null;
+    _streamClient = null;
   }
 }
 
@@ -343,10 +381,10 @@ HttpClient _pinnedHttpClient(Connection connection) {
   return HttpClient(context: ctx)..connectionTimeout = _connectTimeout;
 }
 
-/// Real transport: a `dart:io` HttpClient that trusts ONLY the pinned CA and
-/// reuses one connection pool for the paired server's lifetime.
-HttpSend _pinnedSend(Connection connection) {
-  final client = _pinnedHttpClient(connection);
+/// Real transport: sends over the given (CA-pinned) [client], reusing its one
+/// connection pool for the paired server's lifetime. The client is owned by the
+/// [ApiClient] (held as `_ownedSendClient`) so it can be force-closed on dispose.
+HttpSend _sendVia(HttpClient client) {
   return (method, url, headers) async {
     final req = await client.openUrl(method, url);
     headers.forEach(req.headers.set);
