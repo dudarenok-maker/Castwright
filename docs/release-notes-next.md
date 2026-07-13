@@ -36,10 +36,14 @@ this cycle append to this draft rather than opening a new one.
 
 ---
 
+## 🐛 Fixes
+
+- **A rendered chapter no longer reads permanently, un-clearably stale when a sentence carries an inline audio tag (`[emphatic]`, `[shouting]`, … — `AUDIO_TAGS`).** The #1105 text-staleness diff assumed the server stamps the RAW `group.text` and the client hashes the RAW `sent.text`, so they can't desync. False for a tagged sentence: the synth path strips the tag before synthesis (`stripAudioTags` / `emotion-from-tags`), so the render stamps `textHash` over the SPOKEN text (`[emphatic] Ende.` → `Ende.`) while the manuscript keeps the tag for display — the hashes never match, so the chapter shows `⚠ Sentences reassigned · regenerate to refresh` forever (regenerating re-strips + re-stamps the stripped hash, so it can't clear). Fixed by stripping audio tags on BOTH sides before hashing: `synthesise-chapter.ts` now stamps `textHashForStale(stripAudioTags(group.text))` (idempotent; pins the contract for an un-migrated book too), and `isChapterTextEditedSinceRender` hashes `stripAudioTags(liveText)` via a new `src/lib/audio-tags.ts` mirror of the server `AUDIO_TAGS` + `stripAudioTags`. The two strip implementations are pinned by a shared vector (`'She said [emphatic] hello.'` → `'She said hello.'`) in both test files, mirroring the existing `textHashForStale` vector. A tag-only difference now reads not-stale; a real edit to a tagged sentence's spoken words still reads stale. Fixes existing renders with no re-render needed. (#1564)
+
+---
+
 ## ⚙️ Engine & performance
 
 - **Kokoro no longer eager-loads at sidecar startup by default — the ~1 GB it held resident is now free unless you opt in.** fs-60 flipped the registry default `tts.preload.kokoro` to `false`, but the sidecar's own Python fallback in `_preload_default_engines` (`main.py`) was still hardcoded `True`, and `buildSidecarEnv` deliberately omits a knob that's at its registry default — so `PRELOAD_KOKORO` never reached the sidecar and it eager-loaded anyway, silently defeating the flip for every user who hadn't manually toggled the setting off. The Python fallback is now `False`, matching the registry default (and matching Coqui/Qwen, which already agreed on both sides). Kokoro warms on demand on the first synth that needs it (or via `POST /load`); opt back into the always-hot ~1 GB engine with `PRELOAD_KOKORO=1` (Advanced Settings → "Preload Kokoro at startup"). Regression test flipped in `test_kokoro.py` (`test_preload_skips_kokoro_when_unset`).
-
----
 
 **Full changelog:** v1.13.0...v1.14.0
