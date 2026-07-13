@@ -46,6 +46,7 @@
     "capture:marketing": "playwright test --config=playwright.marketing.config.ts --project=desktop",
     "stage:marketing-screenshots": "node scripts/stage-marketing-screenshots.mjs",
     "capture:companion": "node scripts/capture-companion.mjs",
+    "frame:play": "node scripts/frame-play-screenshots.mjs",
     "test:a11y": "vitest run src/test/a11y.test.tsx",
     "test:fast": "npm run test:hooks && npm run test && npm run test:server",
     "test:pinokio": "node scripts/run-pinokio-tests.mjs",

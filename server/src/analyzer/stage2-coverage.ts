@@ -115,7 +115,8 @@ function findDuplicatedBlock(
   const repeats: Array<{ i: number; offset: number }> = [];
   sentences.forEach((s, i) => {
     const key = words(s.text).join(' ');
-    if (key.length < 8) return; // ignore very short sentences ("No.", "What?")
+    const hasCjk = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(key);
+    if (key.length < (hasCjk ? 2 : 8)) return; // ignore very short sentences ("No.", "What?"); 2-char CJK is meaningful
     if (firstSeen.has(key)) repeats.push({ i, offset: i - firstSeen.get(key)! });
     else firstSeen.set(key, i);
   });

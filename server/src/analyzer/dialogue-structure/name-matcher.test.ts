@@ -48,3 +48,29 @@ describe('name-matcher (ru)', () => {
     expect(findRosterName('он позвал Марса', marsIdx)).toBe('mars');
   });
 });
+
+describe('name-matcher (ja, CJK substring containment — fs-59 W3, Task 3.5)', () => {
+  const ja = conventionsFor('ja')!;
+  it('matches a roster name with no inter-word spacing around it (the tokenizer-gap case)', () => {
+    const idx = buildNameIndex([{ id: 'tanaka', name: '田中' }], ja);
+    expect(findRosterName('と田中は言った', idx)).toBe('tanaka');
+  });
+  it('prefers the longest matching stem (田中太郎 over 田中)', () => {
+    const idx = buildNameIndex(
+      [
+        { id: 'tanaka', name: '田中' },
+        { id: 'tanaka-taro', name: '田中太郎' },
+      ],
+      ja,
+    );
+    expect(findRosterName('と田中太郎は言った', idx)).toBe('tanaka-taro');
+  });
+  it('ignores 1-char roster stems (guard against false-positive substring hits)', () => {
+    const idx = buildNameIndex([{ id: 'ta', name: '田' }], ja);
+    expect(findRosterName('と田中は言った', idx)).toBeNull();
+  });
+  it('returns null when no roster stem is contained in the clause', () => {
+    const idx = buildNameIndex([{ id: 'tanaka', name: '田中' }], ja);
+    expect(findRosterName('と鈴木は言った', idx)).toBeNull();
+  });
+});

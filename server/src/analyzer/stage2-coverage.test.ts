@@ -131,6 +131,24 @@ describe('validateStage2Coverage', () => {
     expect(v.endingPresent).toBe(false);
   });
 
+  it('flags a CJK short-dialogue repeat-loop the <8 key floor used to miss', () => {
+    const line = (t: string) => ({ text: t });
+    const base = ['「そうだ」', '「本当に」', '「行こう」', '「まだだ」'].map(line);
+    const sentences = [...base, ...base]; // a 4-run repeat at constant offset
+    const v = validateStage2Coverage('', sentences, DEFAULT_STAGE2_COVERAGE_THRESHOLDS);
+    expect(v.duplicatedBlock).not.toBeNull();
+  });
+
+  it('does NOT false-positive a faithful CJK dialogue attribution (short but unique lines)', () => {
+    // Guard test: ensure the CJK floor of 2 doesn't flag legitimate unique short CJK text
+    const line = (t: string) => ({ text: t });
+    const sentences = ['「そうだ」', '「本当に」', '「行こう」', '「まだだ」', '「違うな」'].map(line);
+    const body = sentences.map((s) => s.text).join('');
+    const v = validateStage2Coverage(body, sentences, DEFAULT_STAGE2_COVERAGE_THRESHOLDS);
+    expect(v.ok).toBe(true);
+    expect(v.duplicatedBlock).toBeNull();
+  });
+
   it('does NOT flag a word-free source (e.g. a *** scene break) as truncated', () => {
     // Regression (2026-06-19 Ночной дозор ch7): a lone scene-break paragraph
     // ("***") normalises to ZERO words, so the ratio was forced to 0.00 and the

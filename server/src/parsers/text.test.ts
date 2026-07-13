@@ -351,6 +351,37 @@ describe('parseText — non-English chapter splitting (seam 3a)', () => {
   });
 });
 
+describe('parseText — CJK chapter splitting (fs-59 W2, acceptance-critical)', () => {
+  it('splits CJK headings but does not eat 第N-prefixed prose', () => {
+    const body = [
+      '第一章', '', '彼は歩いた。第三章で述べたように、彼は振り返らなかった。', '',
+      '第２章', '', '第二部隊が丘を越えて進軍した。二人は止まった。', '',
+      '第十二話', '', '終わり。',
+    ].join('\n');
+    const { chapters } = parseText(body, { format: 'plaintext' });
+    expect(chapters.length).toBe(3); // 第一章 / 第２章 / 第十二話
+    expect(chapters.map((c) => c.body).join('')).toContain('第三章で述べた'); // prose NOT deleted
+    expect(chapters.map((c) => c.body).join('')).toContain('第二部隊が丘'); // compound NOT a title
+  });
+
+  it('splits a standalone 序章 heading as its own chapter', () => {
+    const body = ['序章', '', '静かな朝だった。', '', '第一章', '', '物語が始まる。'].join('\n');
+    const { chapters } = parseText(body, { format: 'plaintext' });
+    expect(chapters.length).toBe(2);
+    expect(chapters[0].title).toBe('序章');
+    expect(chapters[0].body).toContain('静かな朝だった');
+  });
+
+  it('does NOT split a heading-like prefix followed by a particle (第五章のこと)', () => {
+    const body = ['第一章', '', '第五章のことを思い出した。彼は笑った。', '', '第二章', '', '終わり。'].join(
+      '\n',
+    );
+    const { chapters } = parseText(body, { format: 'plaintext' });
+    expect(chapters.length).toBe(2); // only 第一章 / 第二章 — 第五章のこと is NOT a 3rd chapter
+    expect(chapters.map((c) => c.body).join('')).toContain('第五章のことを思い出した');
+  });
+});
+
 describe('parseText — audio-tag passthrough', () => {
   it('applies tagShoutingDialog to chapter bodies', () => {
     const out = parseText('Chapter 1\nShe yelled "GET OUT NOW".', { format: 'plaintext' });

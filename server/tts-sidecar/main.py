@@ -1902,6 +1902,18 @@ class QwenEngine(Engine):
             "Съешь же ещё этих мягких французских булок да выпей чаю, "
             "и она подумала, что принесёт завтрашний день."
         ),
+        # fs-59 (W4a) — CJK rows. No Latin pangram convention applies here, so
+        # these are phonetically varied, natural sentences instead (tones +
+        # a broad initial/final spread for Chinese; a mix of kanji, hiragana,
+        # and katakana for Japanese). A native reviewer refines the exact
+        # reference sentences at W5.
+        "Chinese": (
+            "春天的清晨，她走在熙熙攘攘的街道上，好奇明天会带来什么惊喜。"
+        ),
+        "Japanese": (
+            "春の朝、彼女は賑やかな街を歩きながら、明日は何が起こるだろうと"
+            "静かにワクワクしていた。"
+        ),
     }
 
     # C2 gate (fs-57, Task 5): canonical no-op instruct value for sentences

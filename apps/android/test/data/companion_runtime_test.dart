@@ -8,6 +8,7 @@ import 'package:castwright/src/data/companion_runtime.dart';
 import 'package:castwright/src/data/drift_local_library.dart';
 import 'package:castwright/src/data/file_store.dart';
 import 'package:castwright/src/data/library_database.dart';
+import 'package:castwright/src/data/loopback_proxy.dart';
 import 'package:castwright/src/data/pairing_service.dart' show Connection;
 import 'package:castwright/src/data/playback_store.dart';
 import 'package:castwright/src/data/player_controller.dart';
@@ -37,6 +38,8 @@ class _FakeAudioEngine implements AudioEngine {
   Stream<Duration?> get durationStream => _dur.stream;
   @override
   Stream<void> get completionStream => _completion.stream;
+  @override
+  Stream<Object> get errorStream => const Stream.empty();
   @override
   bool get playing => _playing;
   @override
@@ -503,6 +506,83 @@ void main() {
       expect(fakeApi.shelfStatusCalls.single.bookId, 'bx');
       expect(fakeApi.shelfStatusCalls.single.finished, isTrue);
       expect(fakeApi.shelfStatusCalls.single.hidden, isNull);
+
+      // ── Cleanup ────────────────────────────────────────────────────────────
+      for (final s in subs) {
+        await s.cancel();
+      }
+      await player.dispose();
+      await library.close();
+    });
+
+    // ── Task 8 smoke test: a StreamingConfig on the player must not interfere
+    // ── with finished-tracking for an already-downloaded (local-file) chapter.
+    // `CompanionRuntime.forConnection` itself stays device-glue (path_provider,
+    // real sockets, connectivity) and is exercised on-device, not here.
+    test(
+        'wireFinishedTracking still fires when the player is built with a StreamingConfig',
+        () async {
+      // ── Arrange ────────────────────────────────────────────────────────────
+      final db = LibraryDatabase(NativeDatabase.memory());
+      final library = DriftLocalLibrary(db, InMemoryFileStore(), root: '/t');
+
+      await library.upsertBookMeta(
+          bookId: 'bx',
+          title: 'X',
+          author: 'A',
+          series: '',
+          seriesPosition: null);
+      await library.recordChapterMeta(
+          bookId: 'bx',
+          uuid: 'ux',
+          chapterId: 1,
+          title: 'One',
+          fingerprint: 'fp',
+          urlSuffix: 'audio.mp3',
+          durationSec: 60);
+
+      // The chapter's file already exists locally, so resolvePlaybackSource
+      // takes the localFile branch regardless of streamOverLan/onHomeLan —
+      // the proxy is never started/registered in this test.
+      final streamFileStore = InMemoryFileStore();
+      await streamFileStore.writeBytes('/bx/ux/audio.mp3', const [0]);
+
+      final engine = _FakeAudioEngine();
+      final player = PlayerController(
+        audioEngine: engine,
+        playbackStore: _MemPlaybackStore(),
+        playlistLoader: (_) async =>
+            [const PlayableChapter(uuid: 'ux', path: '/bx/ux/audio.mp3')],
+        clock: () => DateTime.utc(2026, 6, 20),
+        streaming: StreamingConfig(
+          fileStore: streamFileStore,
+          streamOverLan: () => false,
+          onHomeLan: () async => false,
+          urlResolver: (path) => Uri.parse('https://server.example$path'),
+          proxy: LoopbackProxy((_, {range}) async =>
+              throw UnimplementedError('proxy must not be used for a local file')),
+          onRepairNeeded: () {},
+        ),
+      );
+
+      final fakeApi = _FakeApiClient();
+      final subs = wireFinishedTracking(player, library, fakeApi);
+
+      // ── Act: drive the single (last) chapter to near-end while playing ────
+      await player.openBook('bx');
+      await player.playChapter('ux');
+      await engine.play();
+      engine.emitDuration(const Duration(seconds: 60));
+      engine.emitPosition(const Duration(seconds: 55));
+      await Future<void>.delayed(Duration.zero);
+
+      // ── Assert: finished-tracking still POSTs finished:true ────────────────
+      expect(fakeApi.shelfStatusCalls, hasLength(1),
+          reason:
+              'setShelfStatus must be called once on book completion, even '
+              'with a StreamingConfig present');
+      expect(fakeApi.shelfStatusCalls.single.bookId, 'bx');
+      expect(fakeApi.shelfStatusCalls.single.finished, isTrue);
 
       // ── Cleanup ────────────────────────────────────────────────────────────
       for (final s in subs) {

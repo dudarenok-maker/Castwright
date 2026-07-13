@@ -4,8 +4,10 @@ import { en } from './en.js';
 import { es } from './es.js';
 import { fr } from './fr.js';
 import { de } from './de.js';
+import { zh } from './zh.js';
+import { ja } from './ja.js';
 
-const TABLES: Record<string, LanguageConventions> = { ru, en, es, fr, de };
+const TABLES: Record<string, LanguageConventions> = { ru, en, es, fr, de, zh, ja };
 
 /** Normalizes 'ru-RU' → 'ru'. Returns null when the language has no table —
     callers treat null as "engine disabled, current behaviour". */

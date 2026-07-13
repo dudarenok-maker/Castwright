@@ -67,4 +67,12 @@ describe('stripFrontMatterBoilerplate', () => {
     expect(out).not.toMatch(/Rechte vorbehalten/i);
     expect(out).toMatch(/El horno se había enfriado/); // narrative kept
   });
+
+  it('a CJK narrative line closes the front-matter region so a later author echo is NOT stripped', () => {
+    // 献辞 (dedication) → narrative line → then a line equal to the author name
+    const body = '献辞\n\n彼は古い石段の上で足を止め、霧に沈んだ谷を見下ろした。\n\n田中太郎';
+    const out = stripFrontMatterBoilerplate(body, { author: '田中太郎' });
+    expect(out).toContain('彼は古い石段'); // narrative kept
+    expect(out).toContain('田中太郎'); // author echo AFTER a real narrative line is NOT front-matter
+  });
 });

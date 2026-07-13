@@ -239,7 +239,8 @@ class _HomePageState extends State<HomePage> {
     try {
       final runtime = await CompanionRuntime.forConnection(
           Connection(server: server, caPem: caPem),
-          handler: widget.audioHandler);
+          handler: widget.audioHandler,
+          onRepairNeeded: () => _openPairing());
       if (mounted) {
         setState(() {
           _runtime = runtime;
@@ -281,8 +282,8 @@ class _HomePageState extends State<HomePage> {
       }
       await widget.store.saveCaPem(caPem);
       final conn = Connection(server: server, caPem: caPem);
-      final runtime =
-          await CompanionRuntime.forConnection(conn, handler: widget.audioHandler);
+      final runtime = await CompanionRuntime.forConnection(conn,
+          handler: widget.audioHandler, onRepairNeeded: () => _openPairing());
       if (mounted) {
         setState(() {
           _runtime = runtime;

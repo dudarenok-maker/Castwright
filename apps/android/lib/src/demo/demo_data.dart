@@ -71,9 +71,33 @@ class DemoBook {
 // Each book's chapters carry UNIQUE uuids (uuid is the Drift Chapters primary
 // key — sharing a list across books would collide and steal rows).
 const _ht1Chapters = [
-  DemoChapter(uuid: 'ht1-c1', id: 1, title: 'The Tide Comes In', durationSec: 1420),
+  DemoChapter(
+    uuid: 'ht1-c1',
+    id: 1,
+    title: 'The Tide Comes In',
+    durationSec: 1420,
+  ),
   DemoChapter(uuid: 'ht1-c2', id: 2, title: 'Bells Beneath', durationSec: 1675),
-  DemoChapter(uuid: 'ht1-c3', id: 3, title: 'The Drowned Quarter', durationSec: 1510),
+  DemoChapter(
+    uuid: 'ht1-c3',
+    id: 3,
+    title: 'The Drowned Quarter',
+    durationSec: 1510,
+  ),
+  DemoChapter(uuid: 'ht1-c4', id: 4, title: 'Saltmarsh', durationSec: 1390),
+  DemoChapter(
+    uuid: 'ht1-c5',
+    id: 5,
+    title: 'What the Water Keeps',
+    durationSec: 1580,
+  ),
+  DemoChapter(
+    uuid: 'ht1-c6',
+    id: 6,
+    title: "The Bellfounder's Daughter",
+    durationSec: 1720,
+  ),
+  DemoChapter(uuid: 'ht1-c7', id: 7, title: 'Ebb', durationSec: 1465),
 ];
 
 const _ht2Chapters = [
@@ -83,14 +107,53 @@ const _ht2Chapters = [
 ];
 
 const _ht3Chapters = [
-  DemoChapter(uuid: 'ht3-c1', id: 1, title: 'The Grave Tide', durationSec: 1450),
+  DemoChapter(
+    uuid: 'ht3-c1',
+    id: 1,
+    title: 'The Grave Tide',
+    durationSec: 1450,
+  ),
   DemoChapter(uuid: 'ht3-c2', id: 2, title: 'Underforth', durationSec: 1700),
   DemoChapter(uuid: 'ht3-c3', id: 3, title: 'The Last Bell', durationSec: 1525),
 ];
 
 const _coalfallChapters = [
-  DemoChapter(uuid: 'cf-c3', id: 3, title: 'Chapter One — The Knock', durationSec: 1980),
-  DemoChapter(uuid: 'cf-c4', id: 4, title: 'Chapter Two — The Pour', durationSec: 2120),
+  DemoChapter(
+    uuid: 'cf-c3',
+    id: 3,
+    title: 'Chapter One — The Knock',
+    durationSec: 1980,
+  ),
+  DemoChapter(
+    uuid: 'cf-c4',
+    id: 4,
+    title: 'Chapter Two — The Pour',
+    durationSec: 2120,
+  ),
+  DemoChapter(
+    uuid: 'cf-c5',
+    id: 5,
+    title: 'Chapter Three — The Ledger',
+    durationSec: 1890,
+  ),
+  DemoChapter(
+    uuid: 'cf-c6',
+    id: 6,
+    title: 'Chapter Four — The Seam',
+    durationSec: 2040,
+  ),
+  DemoChapter(
+    uuid: 'cf-c7',
+    id: 7,
+    title: 'Chapter Five — Firedamp',
+    durationSec: 1960,
+  ),
+  DemoChapter(
+    uuid: 'cf-c8',
+    id: 8,
+    title: 'Chapter Six — The Commission',
+    durationSec: 2210,
+  ),
 ];
 
 /// The demo library. States are mixed on purpose so the library shot shows the
@@ -106,7 +169,10 @@ const demoBooks = <DemoBook>[
     chapters: _ht1Chapters,
     downloaded: true,
     resume: DemoResume(
-        chapterUuid: 'ht1-c2', positionMs: 540000, lastPlayedAt: '2026-06-10T20:00:00Z'),
+      chapterUuid: 'ht1-c2',
+      positionMs: 540000,
+      lastPlayedAt: '2026-06-10T20:00:00Z',
+    ),
   ),
   DemoBook(
     bookId: 'hollow-tide-2',
@@ -139,7 +205,10 @@ const demoBooks = <DemoBook>[
     chapters: _coalfallChapters,
     downloaded: true,
     resume: DemoResume(
-        chapterUuid: 'cf-c3', positionMs: 300000, lastPlayedAt: '2026-06-11T09:00:00Z'),
+      chapterUuid: 'cf-c3',
+      positionMs: 300000,
+      lastPlayedAt: '2026-06-11T09:00:00Z',
+    ),
   ),
 ];
 
@@ -154,21 +223,21 @@ final List<double> demoPeaks = List<double>.generate(240, (i) {
 
 /// The fake-server INDEX body.
 Map<String, dynamic> demoIndexJson() => {
-      'schemaVersion': 1,
-      'books': [
-        for (final b in demoBooks)
-          {
-            'bookId': b.bookId,
-            'updatedAt': b.updatedAt,
-            'title': b.title,
-            'author': b.author,
-            'series': b.series,
-            'seriesPosition': b.seriesPosition,
-            'chapterCount': b.chapters.length,
-          },
-      ],
-      'activeBookIds': [for (final b in demoBooks) b.bookId],
-    };
+  'schemaVersion': 1,
+  'books': [
+    for (final b in demoBooks)
+      {
+        'bookId': b.bookId,
+        'updatedAt': b.updatedAt,
+        'title': b.title,
+        'author': b.author,
+        'series': b.series,
+        'seriesPosition': b.seriesPosition,
+        'chapterCount': b.chapters.length,
+      },
+  ],
+  'activeBookIds': [for (final b in demoBooks) b.bookId],
+};
 
 /// The fake-server DETAIL body for [bookId].
 Map<String, dynamic> demoDetailJson(String bookId) {
@@ -185,7 +254,8 @@ Map<String, dynamic> demoDetailJson(String bookId) {
           'title': c.title,
           'fingerprint': c.fingerprint,
           'urlSuffix': c.urlSuffix,
-          'audioUrl': '/api/books/${book.bookId}/chapters/${c.id}/${c.urlSuffix}',
+          'audioUrl':
+              '/api/books/${book.bookId}/chapters/${c.id}/${c.urlSuffix}',
           'durationSec': c.durationSec,
         },
     ],

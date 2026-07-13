@@ -27,6 +27,7 @@
        from cast.json, so only analyzer-dropped characters get rescued. */
 
 import { normaliseForMatch } from '../util/text-match.js';
+import { isDefaultNarratorName } from '../tts/language-registry.js';
 
 /** Per-character fields owned by voice design / reuse, not by the analyzer. */
 export const PRESERVED_VOICE_FIELDS = [
@@ -146,6 +147,17 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
     }
     const aliases = unionAliases(old.aliases, (f as Record<string, unknown>).aliases);
     if (aliases) merged.aliases = aliases;
+    // Narrator name is a code-seeded default/override, not model-derived. The
+    // merge recomputes name from the fresh roster for real characters, but for
+    // the narrator that would drop a user RENAME. Carry forward a non-default
+    // prior name; a default prior name lets the fresh (re-localized) name win.
+    if (
+      (f.id === 'narrator' || f.id === 'char-narrator') &&
+      typeof old.name === 'string' &&
+      !isDefaultNarratorName(old.name)
+    ) {
+      merged.name = old.name;
+    }
     return merged as T;
   });
 

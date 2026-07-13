@@ -116,8 +116,9 @@ describe('attributeChapterStage2 — structure engine wiring (srv-59)', () => {
     expect(result.structureReport).toBeUndefined();
   });
 
-  it("(e): unsupported language ('ja') is identical to the engine-OFF/applyNarratorDefault path", async () => {
-    const result = await attributeChapterStage2(baseOpts('ja', mockSentences()));
+  it("(e): unsupported language ('xx') is identical to the engine-OFF/applyNarratorDefault path", async () => {
+    // 'ja' now has a conventions table (fs-59 W3) — use a genuinely unsupported code.
+    const result = await attributeChapterStage2(baseOpts('xx', mockSentences()));
 
     const expected = applyNarratorDefault(mockSentences());
     expect(result.sentences).toEqual(expected);

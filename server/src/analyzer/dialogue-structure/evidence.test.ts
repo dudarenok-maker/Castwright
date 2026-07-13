@@ -24,7 +24,8 @@ describe('buildStructureEvidence', () => {
   it('(unsupported language) returns an empty map', () => {
     const body = '"Hello," Marlow said.';
     const sentences = [mkSentence(1, 'marlow', 'Hello')];
-    const out = buildStructureEvidence(body, sentences, [{ id: 'marlow', name: 'Marlow' }], 'ja');
+    // 'ja' now has a conventions table (fs-59 W3) — use a genuinely unsupported code.
+    const out = buildStructureEvidence(body, sentences, [{ id: 'marlow', name: 'Marlow' }], 'xx');
     expect(out.size).toBe(0);
   });
 

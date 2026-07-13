@@ -388,6 +388,16 @@ describe('fs-2 — languagePreamble + estimateInputTokens', () => {
     expect(mixedEst).toBeGreaterThan(latinEst);
     expect(mixedEst).toBeLessThan(cyrEst);
   });
+
+  it('estimateInputTokens: CJK uses ~1.2 chars/token', async () => {
+    const { estimateInputTokens } = await import('./gemini.js');
+    const cjk = '彼は歩いた'.repeat(200); // 1000 CJK chars ≈ ~833 tokens at 1.2
+    const wrap = (text: string) => [{ role: 'user' as const, parts: [{ text }] }];
+    const est = estimateInputTokens('', wrap(cjk));
+    // NOTE (independent-review): current code = ceil(1000/4) + 1000 flat margin (gemini.ts:898) = 1250,
+    // so the bound MUST exceed 1250 to actually fail before the fix (post-fix ≈ 833 + 1000 = 1833).
+    expect(est).toBeGreaterThan(1500);
+  });
 });
 
 describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {

@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:castwright/src/data/audio_engine.dart';
+import 'package:castwright/src/data/file_store.dart';
 import 'package:castwright/src/data/library_database.dart';
+import 'package:castwright/src/data/loopback_proxy.dart';
 import 'package:castwright/src/data/player_controller.dart';
 import 'package:castwright/src/data/playback_store.dart';
 import 'package:castwright/src/domain/skip_behavior.dart';
@@ -13,6 +15,12 @@ class FakeAudioEngine implements AudioEngine {
   final StreamController<Duration> _pos = StreamController<Duration>.broadcast();
   Duration _position = Duration.zero;
   String? loadedPath;
+
+  /// When true, [setStreamUrl] throws instead of succeeding — simulates the
+  /// initial-load throw channel (app-10 §6/§7) that the real `just_audio`
+  /// adapter can hit (e.g. a bad loopback connect) before any error-stream
+  /// event fires.
+  bool throwOnStream = false;
 
   // Mutable duration so tests can inject a known chapter length.
   Duration? _duration;
@@ -42,6 +50,11 @@ class FakeAudioEngine implements AudioEngine {
   Stream<void> get completionStream => _completionCtl.stream;
   void emitCompletion() => _completionCtl.add(null);
 
+  final _errorCtl = StreamController<Object>.broadcast();
+  @override
+  Stream<Object> get errorStream => _errorCtl.stream;
+  void emitError(Object e) => _errorCtl.add(e);
+
   @override
   Future<void> setFilePath(String path) async {
     loadedPath = path;
@@ -49,8 +62,18 @@ class FakeAudioEngine implements AudioEngine {
     calls.add('set:$path');
   }
 
+  /// When set, [setStreamUrl] suspends on this gate before it confirms — lets a
+  /// test fire a late error from the OUTGOING stream *while* the incoming stream
+  /// is still loading (the app-10 misattribution window, #1579).
+  Completer<void>? streamGate;
+
   @override
   Future<void> setStreamUrl(String url, {Map<String, String>? headers}) async {
+    if (throwOnStream) {
+      throw Exception('stream load failed');
+    }
+    final gate = streamGate;
+    if (gate != null) await gate.future;
     loadedPath = url;
     _position = Duration.zero;
     calls.add('stream:$url');
@@ -91,12 +114,34 @@ class FakeAudioEngine implements AudioEngine {
     await _playingCtl.close();
     await _completionCtl.close();
     await _durationCtl.close();
+    await _errorCtl.close();
   }
 
   void emit(Duration p) {
     _position = p;
     _pos.add(p);
   }
+}
+
+class FakeProxy implements LoopbackProxy {
+  int starts = 0;
+  final List<Uri> registered = [];
+  @override
+  int? lastUpstreamStatus;
+  int clears = 0;
+  bool disposed = false;
+
+  @override
+  Future<void> start() async => starts++;
+  @override
+  Uri register({required Uri upstream}) {
+    registered.add(upstream);
+    return Uri.parse('http://127.0.0.1:9/s/id');
+  }
+  @override
+  void clearMapping() => clears++;
+  @override
+  Future<void> dispose() async => disposed = true;
 }
 
 class MemPlaybackStore implements PlaybackStore {
@@ -721,6 +766,303 @@ void main() {
 
       await pc.dispose();
       await db.close();
+    });
+  });
+
+  // ── app-10: LAN streaming + failure fallback ──────────────────────────────
+
+  group('app-10 streaming', () {
+    Future<StreamingConfig> cfg(
+      FakeProxy proxy, {
+      required bool streamOn,
+      required bool onLan,
+      Set<String> downloaded = const {},
+      void Function()? onRepair,
+    }) async {
+      final fs = InMemoryFileStore();
+      for (final p in downloaded) {
+        await fs.writeBytes(p, const [0]); // seed as "exists"
+      }
+      return StreamingConfig(
+        fileStore: fs,
+        streamOverLan: () => streamOn,
+        onHomeLan: () async => onLan,
+        urlResolver: (path) => Uri.parse('https://lan:8443$path'),
+        proxy: proxy,
+        onRepairNeeded: onRepair ?? () {},
+      );
+    }
+
+    List<PlayableChapter> list = const [
+      PlayableChapter(uuid: 'u1', path: '/b1/u1/audio.mp3', audioUrl: '/api/books/b1/chapters/1/audio.mp3'),
+    ];
+
+    test('downloaded chapter plays the local file (proxy never starts)', () async {
+      final engine = FakeAudioEngine();
+      final proxy = FakeProxy();
+      final pc = PlayerController(
+        audioEngine: engine,
+        playbackStore: MemPlaybackStore(),
+        playlistLoader: (_) async => list,
+        clock: () => DateTime.utc(2026, 6, 6),
+        streaming: await cfg(proxy, streamOn: true, onLan: true, downloaded: {'/b1/u1/audio.mp3'}),
+      );
+      await pc.openBook('b1');
+      expect(engine.calls, contains('set:/b1/u1/audio.mp3'));
+      expect(proxy.starts, 0);
+    });
+
+    test('undownloaded + streaming + on Wi-Fi -> proxy start + register + stream (no headers)', () async {
+      final engine = FakeAudioEngine();
+      final proxy = FakeProxy();
+      final pc = PlayerController(
+        audioEngine: engine,
+        playbackStore: MemPlaybackStore(),
+        playlistLoader: (_) async => list,
+        clock: () => DateTime.utc(2026, 6, 6),
+        streaming: await cfg(proxy, streamOn: true, onLan: true),
+      );
+      await pc.openBook('b1');
+      expect(proxy.starts, 1);
+      expect(proxy.registered.single.toString(),
+          'https://lan:8443/api/books/b1/chapters/1/audio.mp3');
+      expect(engine.calls, contains('stream:http://127.0.0.1:9/s/id'));
+    });
+
+    test('toggle off / off-Wi-Fi -> needs download, proxy never starts', () async {
+      for (final c in [
+        await cfg(FakeProxy(), streamOn: false, onLan: true),
+        await cfg(FakeProxy(), streamOn: true, onLan: false),
+      ]) {
+        final engine = FakeAudioEngine();
+        final pc = PlayerController(
+          audioEngine: engine,
+          playbackStore: MemPlaybackStore(),
+          playlistLoader: (_) async => list,
+          clock: () => DateTime.utc(2026, 6, 6),
+          streaming: c,
+        );
+        // Load the playlist first (openBook) — playChapter looks up the uuid in
+        // the already-loaded playlist, it doesn't load one on demand.
+        await pc.openBook('b1');
+        final emitted = <String>[];
+        pc.needsDownloadStream.listen(emitted.add);
+        await pc.playChapter('u1'); // user-initiated
+        await Future<void>.delayed(Duration.zero);
+        expect(engine.calls.where((x) => x.startsWith('stream:')), isEmpty);
+        expect(emitted, ['u1']); // user-initiated prompt
+      }
+    });
+
+    test('errorStream with lastUpstreamStatus 404 -> needs-download, clears mapping, no re-pair', () async {
+      final engine = FakeAudioEngine();
+      final proxy = FakeProxy()..lastUpstreamStatus = 404;
+      var repaired = 0;
+      final pc = PlayerController(
+        audioEngine: engine,
+        playbackStore: MemPlaybackStore(),
+        playlistLoader: (_) async => list,
+        clock: () => DateTime.utc(2026, 6, 6),
+        streaming: await cfg(proxy, streamOn: true, onLan: true, onRepair: () => repaired++),
+      );
+      // Load the playlist first (openBook) — playChapter looks up the uuid in
+      // the already-loaded playlist, it doesn't load one on demand.
+      await pc.openBook('b1');
+      final emitted = <String>[];
+      pc.needsDownloadStream.listen(emitted.add);
+      await pc.playChapter('u1'); // streams
+      engine.emitError('boom');
+      await Future<void>.delayed(Duration.zero);
+      expect(emitted, ['u1']);
+      expect(proxy.clears, greaterThanOrEqualTo(1));
+      expect(repaired, 0);
+    });
+
+    test('errorStream with lastUpstreamStatus 401 -> onRepairNeeded, no download prompt', () async {
+      final engine = FakeAudioEngine();
+      final proxy = FakeProxy()..lastUpstreamStatus = 401;
+      var repaired = 0;
+      final pc = PlayerController(
+        audioEngine: engine,
+        playbackStore: MemPlaybackStore(),
+        playlistLoader: (_) async => list,
+        clock: () => DateTime.utc(2026, 6, 6),
+        streaming: await cfg(proxy, streamOn: true, onLan: true, onRepair: () => repaired++),
+      );
+      // Load the playlist first (openBook) — playChapter looks up the uuid in
+      // the already-loaded playlist, it doesn't load one on demand.
+      await pc.openBook('b1');
+      final emitted = <String>[];
+      pc.needsDownloadStream.listen(emitted.add);
+      await pc.playChapter('u1');
+      engine.emitError('boom');
+      await Future<void>.delayed(Duration.zero);
+      expect(repaired, 1);
+      expect(emitted, isEmpty);
+    });
+
+    test(
+        'initial-load throw (non-auth) routes to needs-download once, '
+        'and a later errorStream for the same load is a no-op (idempotency)',
+        () async {
+      final engine = FakeAudioEngine();
+      // lastUpstreamStatus left at its default (null) — a non-401/403 outcome.
+      final proxy = FakeProxy();
+      var repaired = 0;
+      final pc = PlayerController(
+        audioEngine: engine,
+        playbackStore: MemPlaybackStore(),
+        playlistLoader: (_) async => list,
+        clock: () => DateTime.utc(2026, 6, 6),
+        streaming: await cfg(proxy, streamOn: true, onLan: true, onRepair: () => repaired++),
+      );
+      // openBook's own initial load must succeed quietly (throwOnStream is still
+      // false here) — otherwise it would ALSO route through the failure channel,
+      // confounding the single-route assertion below.
+      await pc.openBook('b1');
+      final emitted = <String>[];
+      pc.needsDownloadStream.listen(emitted.add);
+
+      // Now arm the throw and reload the same chapter — this is the initial-load
+      // `catch` branch in _loadSource (not the errorStream branch).
+      engine.throwOnStream = true;
+      await pc.playChapter('u1');
+      await Future<void>.delayed(Duration.zero);
+      expect(emitted, ['u1'],
+          reason: 'initial-load throw must route to needs-download exactly once');
+      expect(proxy.clears, 1);
+      expect(repaired, 0, reason: 'non-auth failure must not trigger repair');
+
+      // Double-fire idempotency (the load-bearing property): a subsequent
+      // errorStream event for the SAME failed load must be a no-op, because
+      // _handleStreamFailure already nulled _streamingGen (so the errorStream
+      // closure now passes a null gen). Without the guard, this would route a
+      // second time (emitted == ['u1', 'u1']).
+      engine.emitError('late');
+      await Future<void>.delayed(Duration.zero);
+      expect(emitted, ['u1'],
+          reason: 'a late errorStream for an already-routed failure must not '
+              'double-fire needs-download');
+      expect(proxy.clears, 1,
+          reason: 'clearMapping must not be called a second time for the same failure');
+    });
+
+    test(
+        'initial-load throw with lastUpstreamStatus 401 -> onRepairNeeded once, no download prompt',
+        () async {
+      final engine = FakeAudioEngine();
+      final proxy = FakeProxy()..lastUpstreamStatus = 401;
+      var repaired = 0;
+      final pc = PlayerController(
+        audioEngine: engine,
+        playbackStore: MemPlaybackStore(),
+        playlistLoader: (_) async => list,
+        clock: () => DateTime.utc(2026, 6, 6),
+        streaming: await cfg(proxy, streamOn: true, onLan: true, onRepair: () => repaired++),
+      );
+      // openBook's own initial load must succeed quietly first (see the sibling
+      // test above for why).
+      await pc.openBook('b1');
+      final emitted = <String>[];
+      pc.needsDownloadStream.listen(emitted.add);
+      engine.throwOnStream = true;
+      await pc.playChapter('u1');
+      await Future<void>.delayed(Duration.zero);
+      expect(repaired, 1);
+      expect(emitted, isEmpty);
+    });
+
+    test('auto-advance into a needs-download chapter halts quietly (no play/stream)', () async {
+      // ch1 downloaded, ch2 not; streaming OFF so ch2 resolves to needsDownload.
+      final engine = FakeAudioEngine();
+      final proxy = FakeProxy();
+      const two = [
+        PlayableChapter(uuid: 'u1', path: '/b1/u1.mp3', audioUrl: '/api/books/b1/chapters/1/audio.mp3'),
+        PlayableChapter(uuid: 'u2', path: '/b1/u2.mp3', audioUrl: '/api/books/b1/chapters/2/audio.mp3'),
+      ];
+      final pc = PlayerController(
+        audioEngine: engine,
+        playbackStore: MemPlaybackStore(),
+        playlistLoader: (_) async => two,
+        clock: () => DateTime.utc(2026, 6, 6),
+        streaming: await cfg(proxy, streamOn: false, onLan: true, downloaded: {'/b1/u1.mp3'}),
+      );
+      await pc.openBook('b1'); // loads u1 (downloaded local file)
+      await pc.play();
+      engine.calls.clear();
+      engine.emitCompletion(); // end of u1 -> _advance into u2 (needsDownload)
+      await Future<void>.delayed(Duration.zero);
+      // No new source loaded and no play() on the quiet-halt path.
+      expect(
+        engine.calls.where((x) =>
+            x.startsWith('set:') || x.startsWith('stream:') || x == 'play'),
+        isEmpty,
+      );
+    });
+
+    test(
+        'a late error from the OUTGOING stream is ignored while switching to a '
+        'new stream (no misattributed failure for the incoming chapter) (#1579)',
+        () async {
+      final engine = FakeAudioEngine();
+      final proxy = FakeProxy();
+      const two = [
+        PlayableChapter(uuid: 'u1', path: '/b1/u1.mp3', audioUrl: '/api/books/b1/chapters/1/audio.mp3'),
+        PlayableChapter(uuid: 'u2', path: '/b1/u2.mp3', audioUrl: '/api/books/b1/chapters/2/audio.mp3'),
+      ];
+      var repaired = 0;
+      final pc = PlayerController(
+        audioEngine: engine,
+        playbackStore: MemPlaybackStore(),
+        playlistLoader: (_) async => two,
+        clock: () => DateTime.utc(2026, 6, 6),
+        streaming: await cfg(proxy, streamOn: true, onLan: true, onRepair: () => repaired++),
+      );
+      await pc.openBook('b1'); // u1 streams and confirms
+      final emitted = <String>[];
+      pc.needsDownloadStream.listen(emitted.add);
+      final clearsBefore = proxy.clears;
+
+      // Begin switching to u2 (also a stream) but hold its load mid-flight so the
+      // incoming stream is NOT yet confirmed when the stale error arrives.
+      engine.streamGate = Completer<void>();
+      final switching = pc.playChapter('u2');
+      await Future<void>.delayed(Duration.zero);
+
+      // A late teardown error from the OUTGOING u1 stream lands during u2's load.
+      proxy.lastUpstreamStatus = 404; // as if it were u1's failing status
+      engine.emitError('u1 late teardown');
+      await Future<void>.delayed(Duration.zero);
+
+      // It must NOT be routed as u2's failure.
+      expect(emitted, isEmpty,
+          reason: 'a superseded stream error must not download-to-play the incoming chapter');
+      expect(repaired, 0);
+      expect(proxy.clears, clearsBefore,
+          reason: 'the incoming stream mapping must not be cleared by a stale error');
+
+      // u2 finishes loading and becomes the confirmed stream.
+      engine.streamGate!.complete();
+      await switching;
+      expect(engine.calls, contains('stream:http://127.0.0.1:9/s/id'));
+
+      // Sanity: a genuine mid-stream error for u2 now DOES route.
+      engine.emitError('u2 real failure');
+      await Future<void>.delayed(Duration.zero);
+      expect(emitted, ['u2']);
+    });
+
+    test('dispose disposes the proxy', () async {
+      final proxy = FakeProxy();
+      final pc = PlayerController(
+        audioEngine: FakeAudioEngine(),
+        playbackStore: MemPlaybackStore(),
+        playlistLoader: (_) async => list,
+        clock: () => DateTime.utc(2026, 6, 6),
+        streaming: await cfg(proxy, streamOn: true, onLan: true),
+      );
+      await pc.dispose();
+      expect(proxy.disposed, isTrue);
     });
   });
 }

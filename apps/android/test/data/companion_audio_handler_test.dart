@@ -21,6 +21,8 @@ class FakeAudioEngine implements AudioEngine {
   Stream<Duration?> get durationStream => const Stream.empty();
   @override
   Stream<void> get completionStream => const Stream.empty();
+  @override
+  Stream<Object> get errorStream => const Stream.empty();
 
   @override
   Future<void> setFilePath(String path) async => _position = Duration.zero;

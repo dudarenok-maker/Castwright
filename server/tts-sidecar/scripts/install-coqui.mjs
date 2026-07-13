@@ -66,6 +66,59 @@ function run(python, pyArgs, env) {
   return res.status ?? 1;
 }
 
+/**
+ * The ordered pip-install steps the installer runs, before the XTTS prefetch.
+ * Exported (pure) so the sequence — coqui-tts, then torchcodec, then the CJK
+ * phonemizers, none with -U — is unit-testable without a real venv (see
+ * install-coqui-steps.test.ts).
+ *
+ * Why torchcodec: coqui-tts 0.27.5's TTS/__init__.py raises ImportError at
+ * package import when torch>=2.9 and torchcodec is absent — it presence-checks it
+ * via transformers' is_torchcodec_available() (a bare `find_spec("torchcodec")`,
+ * NOT a functional import). The sidecar venv pins torch 2.11 (CVE bump), so
+ * without this `import TTS` (and the prefetch below) fails and Coqui can't load.
+ * torchcodec only needs to be PRESENT, never functional: the sidecar never calls
+ * torchaudio.load and XTTS inference uses precomputed manifest-speaker latents, so
+ * torchcodec's FFmpeg decode path — which can't even load its shared libs against a
+ * static FFmpeg 8 build — is never reached. `--no-deps` installs just the wheel so
+ * torchcodec can never perturb the pinned torch (protects the ROCm-2.8 profile,
+ * where torch<2.9 doesn't even need torchcodec).
+ *
+ * Why the CJK phonemizers (pypinyin / cutlet / unidic-lite): XTTS v2 needs
+ * language-specific text frontends that coqui-tts doesn't pull. Chinese (zh-cn)
+ * needs `pypinyin` (TTS/tts/layers/xtts/tokenizer.py::chinese_transliterate raises
+ * `ImportError: Chinese requires: pypinyin` on the first zh line otherwise). Japanese
+ * (ja) needs `cutlet` (romanizer), which needs `fugashi` (MeCab) + a MeCab dict —
+ * `unidic-lite` is the ~48 MB bundled dict fugashi auto-discovers; without a dict
+ * cutlet raises at construction. cutlet transitively pulls fugashi/jaconv/mojimoji,
+ * but `unidic-lite` must be named explicitly (cutlet doesn't depend on it). These are
+ * runtime-SYNTH deps (not needed for the weights prefetch), and fs-59 makes zh/ja
+ * Coqui render paths — so the opt-in install must provide them. They carry no torch
+ * pin, so a normal `-c constraints` install is safe (no --no-deps: cutlet's
+ * transitive deps are wanted).
+ */
+export function coquiPipInstallSteps(constraints) {
+  return [
+    {
+      label: 'Installing coqui-tts (opt-in)...',
+      args: ['-m', 'pip', 'install', 'coqui-tts', '-c', constraints],
+      failMsg: 'FAIL: pip install coqui-tts failed. Check network + sidecar venv.',
+    },
+    {
+      label: 'Installing torchcodec (coqui-tts presence-checks it at import on torch>=2.9)...',
+      args: ['-m', 'pip', 'install', 'torchcodec', '--no-deps'],
+      failMsg:
+        'FAIL: pip install torchcodec failed. coqui-tts import needs it present on torch>=2.9.',
+    },
+    {
+      label: 'Installing XTTS CJK phonemizers (pypinyin/cutlet/unidic-lite)...',
+      args: ['-m', 'pip', 'install', 'pypinyin', 'cutlet', 'unidic-lite', '-c', constraints],
+      failMsg:
+        'FAIL: pip install XTTS CJK phonemizers failed. zh needs pypinyin; ja needs cutlet + a MeCab dict (unidic-lite).',
+    },
+  ];
+}
+
 function main() {
   const python = findVenvPython();
   if (!python) {
@@ -92,11 +145,15 @@ function main() {
   // a constraints file ("ERROR: Constraints cannot have extras").
   const baseTxt = join(SIDECAR_DIR, 'requirements', 'base.txt');
   const constraints = writeSanitizedConstraintsFile(baseTxt);
-  // No -U: base.txt already pins compatible versions; upgrading on every run could pull a broken coqui-tts release.
-  step('Installing coqui-tts (opt-in)...');
-  if (run(python, ['-m', 'pip', 'install', 'coqui-tts', '-c', constraints], env) !== 0) {
-    step('FAIL: pip install coqui-tts failed. Check network + sidecar venv.');
-    process.exit(1);
+  // No -U: base.txt already pins compatible versions; upgrading on every run could
+  // pull a broken coqui-tts release. torchcodec + the CJK phonemizers are required
+  // too (see coquiPipInstallSteps' rationale) — installed here, NOT the base overlay.
+  for (const { label, args, failMsg } of coquiPipInstallSteps(constraints)) {
+    step(label);
+    if (run(python, args, env) !== 0) {
+      step(failMsg);
+      process.exit(1);
+    }
   }
 
   step('Pre-fetching XTTS v2 into the default TTS cache (~1.8 GB; expect 2-5 min on a fast link)...');

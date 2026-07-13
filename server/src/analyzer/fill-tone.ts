@@ -4,7 +4,16 @@ import type { CharacterOutput } from '../handoff/schemas.js';
 type Axis = 'warmth' | 'pace' | 'authority' | 'emotion';
 
 /* Keyword → axis deltas off a neutral 50 baseline. Keys are normaliseNameKey'd
-   (script-exact, case-insensitive) EN + RU descriptors. Extend from corpus. */
+   (script-exact, case-insensitive) EN + RU descriptors. Extend from corpus.
+
+   fs-59 CJK (Task 4a.2): deliberately NOT extended with zh/ja descriptor
+   keywords yet — that's a later fs-59 wave once a native reviewer supplies a
+   real corpus, not a v1 requirement. The fallback for a zh/ja attribute is
+   already safe: `NUDGES[key]` misses (undefined) for any keyword not in this
+   table, `fillToneFromAttributes` skips it via `if (!nudge) continue;`, and
+   every axis still clamps to a defined 0–100 number (neutral 50 when nothing
+   matched). So a CJK book's characters get neutral tone derivation, never a
+   crash or an undefined tone field — see fill-tone.test.ts. */
 const NUDGES: Record<string, Partial<Record<Axis, number>>> = {
   [normaliseNameKey('weary')]: { pace: -15, emotion: -10 },
   [normaliseNameKey('tired')]: { pace: -15, emotion: -10 },

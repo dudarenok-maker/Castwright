@@ -347,10 +347,17 @@ describe('scanLibrary derived stats', () => {
     expect(book?.eligibleTtsEngines?.slice().sort()).toEqual(['coqui', 'qwen']);
   });
 
-  it('a still-unsupported language resolves to qwen-only eligibility (fs-60)', async () => {
+  it('zh resolves to coqui + qwen via the scan pipeline now that fs-59 W4b opened Coqui for zh/ja (fs-60)', async () => {
     bookSkeleton('Chinese Eligibility Test', { language: 'zh' });
     const books = await flatten();
     const book = books.find((b) => b.title === 'Chinese Eligibility Test');
+    expect(book?.eligibleTtsEngines?.slice().sort()).toEqual(['coqui', 'qwen']);
+  });
+
+  it('a genuinely still-unsupported language resolves to qwen-only eligibility (fs-60)', async () => {
+    bookSkeleton('Korean Eligibility Test', { language: 'ko' });
+    const books = await flatten();
+    const book = books.find((b) => b.title === 'Korean Eligibility Test');
     expect(book?.eligibleTtsEngines).toEqual(['qwen']);
   });
 

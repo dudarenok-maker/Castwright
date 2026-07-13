@@ -26,10 +26,12 @@ class _NoopProgressApi implements ListenProgressApi {
   @override
   Future<RemoteProgress?> getListenProgress(String bookId) async => null;
   @override
-  Future<void> putListenProgress(String bookId,
-      {required int chapterId,
-      required double currentSec,
-      required String listenedAt}) async {}
+  Future<void> putListenProgress(
+    String bookId, {
+    required int chapterId,
+    required double currentSec,
+    required String listenedAt,
+  }) async {}
 }
 
 /// Build a fully-posed [CompanionRuntime] for marketing capture: a fake-HTTP
@@ -51,13 +53,19 @@ Future<CompanionRuntime> buildDemoRuntime({
 
   const connection = Connection(
     server: PairedServer(
-        url: 'https://studio.local:8443', token: 'demo-token', caFingerprint: 'f'),
+      url: 'https://studio.local:8443',
+      token: 'demo-token',
+      caFingerprint: 'f',
+    ),
     caPem: 'demo-placeholder-ca-pem',
   );
   final api = ApiClient(connection, send: demoHttpSend(offline: offline));
 
-  final library = DriftLocalLibrary(LibraryDatabase(NativeDatabase.memory()), fileStore,
-      root: root);
+  final library = DriftLocalLibrary(
+    LibraryDatabase(NativeDatabase.memory()),
+    fileStore,
+    root: root,
+  );
 
   // Seed ONLY downloaded books into Drift. A not-downloaded book lives solely in
   // the manifest — so online it shows "Not downloaded", and it is correctly
@@ -85,14 +93,24 @@ Future<CompanionRuntime> buildDemoRuntime({
         urlSuffix: c.urlSuffix,
         durationSec: c.durationSec,
       );
+      // Seed waveform peaks locally so the player renders the WaveformBar
+      // deterministically (peaksFor is local-first; without this it falls back
+      // to an async server fetch that may not resolve before takeScreenshot).
+      await library.savePeaks(c.uuid, demoPeaks);
     }
     // Stamp the synced updatedAt: equal to the manifest = "downloaded";
     // older = "update available".
     await library.setBookUpdatedAt(
-        b.bookId, b.updateAvailable ? '2000-01-01T00:00:00Z' : b.updatedAt);
+      b.bookId,
+      b.updateAvailable ? '2000-01-01T00:00:00Z' : b.updatedAt,
+    );
     if (b.resume != null) {
-      await library.savePlayback(b.bookId, b.resume!.chapterUuid,
-          b.resume!.positionMs, b.resume!.lastPlayedAt);
+      await library.savePlayback(
+        b.bookId,
+        b.resume!.chapterUuid,
+        b.resume!.positionMs,
+        b.resume!.lastPlayedAt,
+      );
       await library.markPlayed(b.bookId, b.resume!.lastPlayedAt);
     }
   }

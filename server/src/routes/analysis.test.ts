@@ -2696,6 +2696,12 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
     return JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
   }
 
+  function readCast(bookDir: string): {
+    characters: Array<{ id: string; name: string; aliases?: string[]; voiceStyle?: string }>;
+  } {
+    return JSON.parse(readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'));
+  }
+
   const EXPECTED_REPORT = {
     alignedPct: 100,
     confirmed: 2,
@@ -2768,6 +2774,15 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
         // marks its own report distinctly from a subset retry's.
         expect(provenance.scope).toBe('book');
         expect(provenance.chaptersCovered).toBe(2);
+        // Narrator identity is seeded into the persisted cast (both jobs). The
+        // raw stage1Roster narrator has no aliases/voiceStyle, so their presence
+        // proves applyNarratorIdentity ran on the persist path. Language resolves
+        // to 'en' here (tmpdir book), so the name stays the English default;
+        // per-language localization is unit-covered in narrator-identity.test.ts.
+        const narr = readCast(bookDir).characters.find((c) => c.id === 'narrator')!;
+        expect(narr.name).toBe('Narrator');
+        expect(narr.aliases).toContain('Narrator');
+        expect(narr.voiceStyle).toContain('folkloric warmth');
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
@@ -2870,6 +2885,15 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
         // distinguishing assertion vs. the main-route test above).
         expect(provenance.scope).toBe('subset');
         expect(provenance.chaptersCovered).toBe(2);
+        // Narrator identity is seeded into the persisted cast (both jobs). The
+        // raw stage1Roster narrator has no aliases/voiceStyle, so their presence
+        // proves applyNarratorIdentity ran on the persist path. Language resolves
+        // to 'en' here (tmpdir book), so the name stays the English default;
+        // per-language localization is unit-covered in narrator-identity.test.ts.
+        const narr = readCast(bookDir).characters.find((c) => c.id === 'narrator')!;
+        expect(narr.name).toBe('Narrator');
+        expect(narr.aliases).toContain('Narrator');
+        expect(narr.voiceStyle).toContain('folkloric warmth');
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);

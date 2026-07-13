@@ -11,10 +11,21 @@ class JustAudioEngine implements AudioEngine {
   JustAudioEngine._(this._loudness)
       : _player = AudioPlayer(
           audioPipeline: AudioPipeline(androidAudioEffects: [_loudness]),
-        );
+        ) {
+    // just_audio surfaces load/playback failures on playbackEventStream's error
+    // channel (a PlayerException). Route them to errorStream for the app-10
+    // streaming fallback. The listener never cancels — it lives with the engine.
+    _player.playbackEventStream.listen(
+      (_) {},
+      onError: (Object e, StackTrace _) {
+        if (!_errors.isClosed) _errors.add(e);
+      },
+    );
+  }
 
   final AndroidLoudnessEnhancer _loudness;
   final AudioPlayer _player;
+  final _errors = StreamController<Object>.broadcast();
 
   @override
   Duration get position => _player.position;
@@ -37,6 +48,9 @@ class JustAudioEngine implements AudioEngine {
   @override
   Stream<void> get completionStream => _player.processingStateStream
       .where((s) => s == ProcessingState.completed);
+
+  @override
+  Stream<Object> get errorStream => _errors.stream;
 
   @override
   Future<void> setFilePath(String path) async {
@@ -73,5 +87,8 @@ class JustAudioEngine implements AudioEngine {
   }
 
   @override
-  Future<void> dispose() => _player.dispose();
+  Future<void> dispose() async {
+    await _errors.close();
+    await _player.dispose();
+  }
 }

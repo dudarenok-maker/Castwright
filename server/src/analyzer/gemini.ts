@@ -210,7 +210,7 @@ export function languagePreamble(language?: string): string {
   const ru = primary === 'ru';
   const entry = getLanguageEntry(primary);
   const where = entry
-    ? `${entry.sidecarName}${entry.detect.script === 'cyrillic' ? ' (Cyrillic script)' : ''}`
+    ? `${entry.sidecarName}${entry.detect.script === 'cyrillic' ? ' (Cyrillic script)' : entry.detect.script === 'cjk' ? ' (Chinese/Japanese script)' : ''}`
     : `${language} (a non-English language)`;
   /* Per-language dialogue conventions for the Latin tranche (Russian keeps its own
      tuned string below). The German caution is load-bearing: every German noun is
@@ -220,9 +220,27 @@ export function languagePreamble(language?: string): string {
     fr: ' Dialogue is marked with « … » (with spaces) or an em-dash —, not English "quotes".',
     de: ' Dialogue is marked with „…" (low/high quotes) or «…». NOTE: every German noun is capitalised, so a capitalised word is NOT necessarily a character name.',
   };
+  /* CJK dialogue conventions (fs-59 W3, Task 3.3). Chinese and Japanese mark
+     dialogue with corner brackets 「…」/『…』 (nested quotes) or, for Chinese,
+     fullwidth "…" — never a dash-dialogue line like Russian/French. The
+     tag-is-narrator note targets the §2.1 hard case: when a single spoken turn
+     is split by a narrator tag (e.g. 她说 / 彼女は言った), BOTH halves belong to
+     the speaker — the tag itself is the narrator, but the second spoken half
+     after the tag is NOT the narrator's; it continues the same speaker's line. */
+  const CJK_CONVENTIONS =
+    ' Dialogue is marked with corner brackets 「…」 or 『…』 (Japanese/nested), or fullwidth quotes "…" (Chinese) — not a dash-dialogue line. IMPORTANT: when a spoken turn is split by a narrative tag naming who spoke (e.g. 她说 / 彼女は言った), that tag is the narrator, NOT the speaker — but the SECOND spoken half after the tag still belongs to the same speaker, not the narrator.';
   const conventions = ru
     ? ' Dialogue is often marked with guillemets «…» or an em-dash —, not English "quotes". Characters may be named by first name, patronymic, surname, or diminutive (e.g. "Соня" for "Софья") — treat these as the same person. IMPORTANT: a dashed line that is a narrative TAG describing who spoke or what they did — e.g. «— сказал юноша.», «— тихо произнесла девушка.», «— Девушка улыбнулась.» (verbs like сказал/произнёс(ла)/воскликнул(а)/спросил(а)/засмеялся/улыбнулась/нахмурился) — is the narrator, NOT the speaker. Only the actually-spoken words belong to the speaker.'
-    : (LATIN_CONVENTIONS[primary] ?? '');
+    : entry?.detect.script === 'cjk'
+      ? CJK_CONVENTIONS
+      : (LATIN_CONVENTIONS[primary] ?? '');
+  /* In-language few-shot roster + attribution examples (fs-59 W3, Task 3.3).
+     Registered on the language-registry entry per-language (unset for languages
+     without an example yet), written IN the target language/script so the model
+     sees a worked example rather than only an English rule statement. */
+  const examples = entry?.promptExamples
+    ? ` Roster example: ${entry.promptExamples.roster} Attribution example: ${entry.promptExamples.attribution}`
+    : '';
   /* Cast-field guards for any non-English manuscript (validated on Russian +
      gemma4-e4b, 2026-06-19: without these the local model emits gender/age
      100% but `tone` 0% and writes role/description in mixed English/target
@@ -230,7 +248,7 @@ export function languagePreamble(language?: string): string {
      stage-2 attribution pass (which lists sentences, not characters). Field
      NAMES + enum values stay English as the line above already mandates. */
   const castFields = ` When you output a character, ALWAYS include the \`tone\` object (integers 0–100 for warmth, pace, authority, emotion) estimated from how they speak — never omit it. Write the human-readable text — \`role\`, \`description\`, and each \`attributes\` tag, for every character INCLUDING the narrator — in ${where} (the manuscript's language), and always include a \`description\`.`;
-  return `\n\nIMPORTANT: the manuscript text is in ${where}. Quote evidence VERBATIM from the manuscript (do not translate or transliterate it). Keep all JSON field names and enum values in English exactly as the schema shows.${castFields}${conventions}`;
+  return `\n\nIMPORTANT: the manuscript text is in ${where}. Quote evidence VERBATIM from the manuscript (do not translate or transliterate it). Keep all JSON field names and enum values in English exactly as the schema shows.${castFields}${conventions}${examples}`;
 }
 
 interface GeminiOptions {
@@ -870,9 +888,17 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
    the Cyrillic fraction of the actual text and interpolate the divisor between
    4 (all-Latin) and 2.5 (all-Cyrillic). Reconciled against
    `usageMetadata.promptTokenCount` once the call returns, so the blend only has
-   to be close, not exact. */
+   to be close, not exact.
+
+   fs-59 — CJK (Han ideographs + Kana) is denser still (~1.2 chars/token), so
+   a CJK-dense prompt under-counted even worse than Cyrillic did. We measure
+   the Han/Kana fraction the same way as `countCyrillic` and fold it into the
+   same additive interpolation — Cyrillic and CJK never overlap in the same
+   codepoint, so each fraction pulls the divisor down from the Latin baseline
+   independently. */
 const LATIN_CHARS_PER_TOKEN = 4;
 const CYRILLIC_CHARS_PER_TOKEN = 2.5;
+const HAN_KANA_CHARS_PER_TOKEN = 1.2;
 
 export function estimateInputTokens(
   systemInstruction: string,
@@ -880,21 +906,30 @@ export function estimateInputTokens(
 ): number {
   let chars = systemInstruction.length;
   let cyrillic = 0;
+  let hanKana = 0;
   const countCyrillic = (s: string): number => {
     const m = s.match(/[Ѐ-ӿ]/g);
     return m ? m.length : 0;
   };
+  const countHanKana = (s: string): number => {
+    const m = s.match(/[぀-ヿ㐀-䶿一-鿿]/g);
+    return m ? m.length : 0;
+  };
   cyrillic += countCyrillic(systemInstruction);
+  hanKana += countHanKana(systemInstruction);
   for (const turn of contents) {
     for (const part of turn.parts) {
       chars += part.text.length;
       cyrillic += countCyrillic(part.text);
+      hanKana += countHanKana(part.text);
     }
   }
   const cyrillicFraction = chars > 0 ? cyrillic / chars : 0;
+  const hanKanaFraction = chars > 0 ? hanKana / chars : 0;
   const divisor =
     LATIN_CHARS_PER_TOKEN -
-    cyrillicFraction * (LATIN_CHARS_PER_TOKEN - CYRILLIC_CHARS_PER_TOKEN);
+    cyrillicFraction * (LATIN_CHARS_PER_TOKEN - CYRILLIC_CHARS_PER_TOKEN) -
+    hanKanaFraction * (LATIN_CHARS_PER_TOKEN - HAN_KANA_CHARS_PER_TOKEN);
   return Math.ceil(chars / divisor) + 1_000;
 }
 

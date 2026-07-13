@@ -49,9 +49,20 @@ describe('sidecarLanguageName', () => {
     expect(() => sidecarLanguageName('xy')).toThrow(/xy/);
   });
 
-  it('throws for a language not in the registry (e.g. Japanese)', () => {
-    expect(() => sidecarLanguageName('ja')).toThrow(/unsupported language/);
-    expect(() => sidecarLanguageName('ja-JP')).toThrow(/unsupported language/);
+  it('throws for a language not in the registry (e.g. Korean)', () => {
+    // Korean is explicitly out of fs-59 (→ fs-70), so it stays unregistered and
+    // must still fail loud. (Japanese used to be the example here — fs-59 W2
+    // registered zh/ja, so they resolve now; see the next test.)
+    expect(() => sidecarLanguageName('ko')).toThrow(/unsupported language/);
+    expect(() => sidecarLanguageName('ko-KR')).toThrow(/unsupported language/);
+  });
+
+  it('resolves zh/ja now that fs-59 W2 registered them (even though supported:false)', () => {
+    // Registering zh/ja means sidecarLanguageName no longer throws for them — the
+    // old fail-loud net is replaced by the supported:false confirm gate (fs-59 F9).
+    expect(sidecarLanguageName('ja')).toBe('Japanese');
+    expect(sidecarLanguageName('ja-JP')).toBe('Japanese');
+    expect(sidecarLanguageName('zh')).toBe('Chinese');
   });
 
   it('throw message includes the bcp47 tag and the primary subtag', () => {
@@ -90,8 +101,21 @@ describe('resolveEligibleEngines', () => {
     }
   });
 
-  it('returns only qwen for a still-unsupported non-English language (e.g. detected-but-unsupported zh)', () => {
-    expect(resolveEligibleEngines('zh', ALL_TTS_ENGINES)).toEqual(['qwen']);
+  it('zh used to be qwen-only here pre-fs-59-W4b; Coqui now covers it too (see next test)', () => {
+    // Pinned zh as qwen-only (Coqui had no zh support). fs-59 W4b added 'zh','ja'
+    // to ENGINE_LANGUAGE_SUPPORT.coqui, so it now resolves to qwen + coqui.
+    expect(resolveEligibleEngines('zh', ALL_TTS_ENGINES).sort()).toEqual(['coqui', 'qwen']);
+  });
+
+  it('zh/ja are eligible on qwen + coqui (fs-59 W4b)', () => {
+    expect(resolveEligibleEngines('zh', ALL_TTS_ENGINES).sort()).toEqual(['coqui', 'qwen']);
+    expect(resolveEligibleEngines('ja', ALL_TTS_ENGINES).sort()).toEqual(['coqui', 'qwen']);
+  });
+
+  it('returns only qwen for a genuinely still-unsupported non-English language (e.g. Korean)', () => {
+    // Korean stays out of Coqui's language list (fs-59 W4b only opened zh/ja) —
+    // this keeps the qwen-only fallback path covered now that zh moved off it.
+    expect(resolveEligibleEngines('ko', ALL_TTS_ENGINES)).toEqual(['qwen']);
   });
 
   it('intersects with installedEngines — a Kokoro-only install on an English book excludes qwen/coqui', () => {

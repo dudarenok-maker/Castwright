@@ -510,12 +510,22 @@ describe('fs-2 never-cross-language generation gate', () => {
   }, 10_000);
 });
 
-/* fs-60 — a language with NO fallback engine (still-unsupported, e.g. zh)
-   must keep today's fatal-abort behavior unchanged when Qwen is unavailable
-   — only Coqui-eligible languages (en/ru/es/fr/de) get the new warn-and-proceed
-   path (see the 'ru' test above). */
-describe('fs-60 whole-book abort stays fatal for a still-unsupported language', () => {
-  const ZH_TITLE = 'Chinese Fatal Abort Gate Test';
+/* fs-60/fs-59 W4b — zh used to be this suite's "no fallback engine, stays
+   fatal" example (Coqui had no zh support). fs-59 W4b added zh/ja to
+   ENGINE_LANGUAGE_SUPPORT.coqui, so zh now takes the SAME warn-and-proceed
+   path as ru/es/fr/de (see the 'ru' test above) instead of the fatal abort
+   at generation.ts's `qwenUnavailable && nonEnglishBook && !coquiEligible`
+   branch. That route-level fatal branch's LOGIC is unchanged, but it now has
+   NO direct test: every currently-registered language (en/ru/es/fr/de/zh/ja)
+   is Coqui-eligible, so nothing drives the `!coquiEligible` route path, and an
+   unregistered code like 'ko' hits the earlier sidecarLanguageName throw
+   (line ~805) first. (The unit test 'still throws MissingDesignedVoiceError
+   when coquiEligible is false' in synthesise-chapter-coqui-fallback.test.ts
+   pins a RELATED but DISTINCT path — synthesiseChapter's throw, not this route
+   handler's chapter_failed + res.end() abort.) The route branch stays dormant
+   until a non-Coqui registered language exists (fs-70). */
+describe('fs-60 whole-book Qwen-unavailable path for zh (Coqui-eligible since fs-59 W4b)', () => {
+  const ZH_TITLE = 'Chinese Coqui Fallback Gate Test';
   const ZH_MANUSCRIPT = 'm_zh_fatal_gate_test';
   const ZH_ENTRY = 'zh-fatal-gate-entry-1';
   let zhBookId: string;
@@ -579,7 +589,7 @@ describe('fs-60 whole-book abort stays fatal for a still-unsupported language', 
 
   afterEach(() => setQwenState('loaded'));
 
-  it('is still FATAL (no synth, no park) when Qwen is unavailable on a still-unsupported-language book', async () => {
+  it('warns and proceeds (does not abort) when Qwen is unavailable on the now-Coqui-eligible zh book', async () => {
     const res = await fetch(`${baseUrl}/api/books/${zhBookId}/generation`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -598,9 +608,10 @@ describe('fs-60 whole-book abort stays fatal for a still-unsupported language', 
       if (done) break;
       text += decoder.decode(value, { stream: true });
     }
-    expect(text).toContain('chapter_failed');
+    expect(text).toContain('qwen_unavailable_coqui_fallback');
+    expect(text).not.toContain('chapter_failed');
     expect(text).not.toContain('chapter_awaiting_fallback_confirm');
-    expect(synthCalled).toBe(false);
+    expect(synthCalled).toBe(true);
   }, 10_000);
 });
 

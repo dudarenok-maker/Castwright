@@ -21,3 +21,20 @@ NetworkType networkTypeFromConnectivity(List<ConnectivityResult> results) {
 /// `currentNetwork` seam.
 Future<NetworkType> currentNetwork() async =>
     networkTypeFromConnectivity(await Connectivity().checkConnectivity());
+
+/// The current-network resolver seam (injectable for tests).
+typedef CurrentNetwork = Future<NetworkType> Function();
+
+/// Answers "is the paired server plausibly reachable on THIS network?" for the
+/// `app-10` streaming decision. True on any Wi-Fi/Ethernet (metered or not),
+/// false on mobile AND offline. Deliberately NOT `network != mobile` — that is
+/// true when offline, which would route an offline tap to a doomed LAN stream.
+class Reachability {
+  const Reachability(this._currentNetwork);
+  final CurrentNetwork _currentNetwork;
+
+  Future<bool> onHomeLan() async {
+    final n = await _currentNetwork();
+    return n == NetworkType.wifiUnmetered || n == NetworkType.wifiMetered;
+  }
+}

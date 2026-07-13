@@ -10,8 +10,12 @@ describe('conventionsFor', () => {
     }
   });
   it('returns null for unsupported/absent language (engine no-op path)', () => {
-    expect(conventionsFor('ja')).toBeNull();
+    expect(conventionsFor('zz')).toBeNull();
     expect(conventionsFor(undefined)).toBeNull();
+  });
+  it('registers zh/ja conventions', () => {
+    expect(conventionsFor('ja')?.quotePairs).toContainEqual(['「', '」']);
+    expect(conventionsFor('zh')?.quotePairs).toContainEqual(['“', '”']);
   });
   it('ru stemmer strips case endings so Антона/Антону/Антоном share a stem', () => {
     const ru = conventionsFor('ru')!;

@@ -40,5 +40,15 @@ void main() {
         PlaybackSource.needsDownload,
       );
     });
+
+    group('onHomeLan feeds resolvePlaybackSource', () {
+      test('offline (onHomeLan false) + streaming on -> needs download', () {
+        expect(
+          resolvePlaybackSource(
+              localFileExists: false, onHomeLan: false, streamingEnabled: true),
+          PlaybackSource.needsDownload,
+        );
+      });
+    });
   });
 }

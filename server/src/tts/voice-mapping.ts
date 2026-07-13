@@ -31,18 +31,34 @@ export function qwenStorageKey(
    quality is tuned for it; modeling Qwen as only the five analyze-supported
    languages would silently narrow that invariant for a detected-but-unsupported
    language like zh/ja, per server/src/tts/language-registry.ts + detect-language.ts).
-   Coqui is deliberately scoped to the five analyze-supported languages (fs-70
-   owns opening further XTTS-capable languages). Kokoro/piper/gemini reflect
-   today's de facto behavior: since the force-to-Qwen enforcement (Task 2) has
-   always overridden every non-English character regardless of prior engine,
-   none of them has ever actually rendered non-English audio in this app. */
+   Coqui was originally scoped to the five analyze-supported languages; fs-59
+   W4b added 'zh','ja' on top (coqui-tts/XTTS v2's language list includes
+   zh-cn and ja — Task 4b.0 confirmed the install), so Coqui is now eligible
+   for the CJK pair alongside Qwen. fs-70 owns opening further XTTS-capable
+   languages beyond that. Kokoro/piper/gemini reflect today's de facto
+   behavior: since the force-to-Qwen enforcement (Task 2) has always
+   overridden every non-English character regardless of prior engine, none of
+   them has ever actually rendered non-English audio in this app. */
 export const ENGINE_LANGUAGE_SUPPORT: Record<TtsEngine, string[] | '*'> = {
   qwen: '*',
-  coqui: ['en', 'ru', 'es', 'fr', 'de'],
+  coqui: ['en', 'ru', 'es', 'fr', 'de', 'zh', 'ja'],
   kokoro: ['en'],
   gemini: ['en'],
   piper: ['en'],
 };
+
+/* fs-59 W4b — Coqui/XTTS v2's own language-code table diverges from this
+   app's registry code for Chinese: the registry (and every other engine)
+   uses the BCP-47 primary subtag `zh`, but XTTS's `languages` list only
+   contains `zh-cn` (Task 4b.0 confirmed against the installed coqui-tts
+   0.27.5: `XttsConfig().languages` includes 'zh-cn', not 'zh'; Japanese is
+   already `ja` in both places). Identity for every other code, including
+   `ja`. This is Coqui's OWN wire-format quirk — callers must apply it only
+   at the sidecar-request boundary for the Coqui engine, never to the shared
+   `langCode` that feeds `expandForSpeech`/the language registry. */
+export function coquiLanguageCode(bcp47: string): string {
+  return bcp47 === 'zh' ? 'zh-cn' : bcp47;
+}
 
 /* fs-25 — per-quote emotion variant selection. A variant is just another
    designed Qwen voiceId, so the only synth-time lever is picking a different

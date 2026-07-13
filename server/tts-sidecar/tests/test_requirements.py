@@ -109,12 +109,20 @@ def test_torch_and_torchaudio_are_a_matched_pair():
 def test_no_torchcodec():
     """torchcodec must NOT be a manifest requirement. NOTE: this inspects the
     requirements-manifest TEXT (_lines()), not the installed venv — it guards
-    against re-adding `coqui-tts[codec]` or a bare `torchcodec` line. The runtime
-    guarantee that torchcodec is absent comes separately from torchaudio 2.11's
-    empty Requires-Dist (a plain `pip install torchaudio==2.11.0` pulls no
-    torchcodec). torchcodec ships cores for FFmpeg 4–7 only (fails against the
-    FFmpeg 8 on PATH) and is reached only if you call torchaudio.load — we never
-    do (see test_audio_io_invariant.py)."""
+    against re-adding `coqui-tts[codec]` or a bare `torchcodec` line to the base/
+    overlays. A plain `pip install torchaudio==2.11.0` pulls no torchcodec, so the
+    STANDARD engines (Kokoro, Qwen) never get it.
+
+    torchcodec is NOT categorically absent from a Coqui venv, though: opt-in Coqui
+    needs it. coqui-tts 0.27.5 presence-checks torchcodec at IMPORT on torch>=2.9
+    (`is_torchcodec_available()` → `find_spec("torchcodec")`, NOT a functional
+    import), and raises ImportError without it — so install-coqui.mjs installs it
+    (#1586). It need only be PRESENT, never functional: the sidecar never calls
+    torchaudio.load (test_audio_io_invariant.py) and XTTS inference uses precomputed
+    manifest-speaker latents, so torchcodec's FFmpeg decode path — which on a static
+    FFmpeg build can't even load its shared libs — is never reached. That runtime
+    install is the OPT-IN installer's job, never the manifest's; hence this stays a
+    manifest-only guard."""
     assert not any(_pkg(l) == "torchcodec" for l in _lines()), \
         "torchcodec must not be a requirement (dropped with the [codec] extra)"
     assert not any("coqui-tts[codec]" in l for l in _lines()), \

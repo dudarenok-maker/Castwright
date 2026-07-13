@@ -3,9 +3,12 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../domain/listen_stats_accumulator.dart';
+import '../domain/playback_source.dart';
 import '../domain/skip_behavior.dart';
 import 'audio_engine.dart';
+import 'file_store.dart';
 import 'library_database.dart';
+import 'loopback_proxy.dart';
 import 'playback_store.dart';
 
 /// A book/chapter counts as finished once playback enters this window before
@@ -21,11 +24,39 @@ class PlayableChapter {
     required this.path,
     this.title = '',
     this.durationSec,
+    this.audioUrl,
   });
   final String uuid;
   final String path;
   final String title;
   final double? durationSec;
+
+  /// Full server path for LAN streaming (`app-10`), e.g.
+  /// `/api/books/<id>/chapters/<n>/audio.mp3`. Null when the chapter has no
+  /// rendered audio (never added to a playlist in that case).
+  final String? audioUrl;
+}
+
+/// The `app-10` streaming dependencies, bundled so [PlayerController]'s
+/// constructor stays backward-compatible: when this is null the controller keeps
+/// its exact offline-first behaviour (always `setFilePath`). All-or-nothing —
+/// the runtime always supplies every field together.
+class StreamingConfig {
+  const StreamingConfig({
+    required this.fileStore,
+    required this.streamOverLan,
+    required this.onHomeLan,
+    required this.urlResolver,
+    required this.proxy,
+    required this.onRepairNeeded,
+  });
+
+  final FileStore fileStore;
+  final bool Function() streamOverLan; // live toggle (re-read per load)
+  final Future<bool> Function() onHomeLan;
+  final Uri Function(String path) urlResolver;
+  final LoopbackProxy proxy;
+  final void Function() onRepairNeeded;
 }
 
 /// Pure now-playing snapshot; the audio-service handler maps it to a MediaItem
@@ -68,6 +99,7 @@ class PlayerController {
     this._statsDb,
     this._sessionId,
     this._localDate,
+    this._streaming,
   })  : _engine = audioEngine,
         _store = playbackStore,
         _loadPlaylist = playlistLoader,
@@ -94,6 +126,16 @@ class PlayerController {
     });
     // Subscribe to playing state to drive the accumulator.
     _playingSub = _engine.playingStream.listen(_onPlayingChanged);
+    if (_streaming != null) {
+      // Mid-stream failure channel (§6). The handler is keyed on the CONFIRMED
+      // stream generation (`_streamingGen`): a local-file playback error carries
+      // a null gen and no-ops, a late error from an OUTGOING stream (arriving
+      // while the incoming one is still loading) is superseded and ignored, and a
+      // single failure can't be routed twice — nulling `_streamingGen` on the
+      // first route makes the errorStream event and the initial-load `catch` in
+      // `_loadSource` idempotent (#1579).
+      _errorSub = _engine.errorStream.listen((_) => _handleStreamFailure(_streamingGen));
+    }
   }
 
   final AudioEngine _engine;
@@ -112,6 +154,27 @@ class PlayerController {
   final String? _sessionId;
   final String Function()? _localDate;
   StatsAccumulator? _accumulator;
+
+  // app-10: optional LAN-streaming wiring — null keeps the legacy offline-first
+  // behaviour (see [StreamingConfig]).
+  final StreamingConfig? _streaming;
+  StreamSubscription<Object>? _errorSub;
+
+  // app-10 stream-load generations (#1579). `_streamGen` bumps on every source
+  // load; `_streamingGen` holds the generation of the CONFIRMED-current stream
+  // (null when the loaded source is a local file / needs-download, while a new
+  // stream is still loading, or once a failure has been routed). Keying the
+  // failure router on these lets a late error from a superseded stream be
+  // ignored instead of misattributed to the incoming chapter.
+  int _streamGen = 0;
+  int? _streamingGen;
+
+  final StreamController<String> _downloadToPlay =
+      StreamController<String>.broadcast();
+  /// Emits the chapter uuid the user tried to play that must be downloaded first
+  /// (or whose LAN stream failed for a non-auth reason). The UI shows the
+  /// one-line "download to play" message.
+  Stream<String> get needsDownloadStream => _downloadToPlay.stream;
 
   /// Skip-button behaviour + seek amounts (driven by `app-13`); mutable so
   /// settings can change them at runtime.
@@ -194,8 +257,8 @@ class PlayerController {
   /// Auto-advance to the next chapter when the current one ends.
   Future<void> _advance() async {
     if (_index >= 0 && _index + 1 < _playlist.length) {
-      await _loadIndex(_index + 1);
-      await play();
+      final loaded = await _loadIndex(_index + 1);
+      if (loaded) await play();
     }
   }
 
@@ -214,8 +277,8 @@ class PlayerController {
   Future<void> playChapter(String uuid) async {
     final i = _playlist.indexWhere((c) => c.uuid == uuid);
     if (i < 0) return;
-    await _loadIndex(i);
-    await play();
+    final loaded = await _loadIndex(i, userInitiated: true);
+    if (loaded) await play();
   }
 
   /// Prepare a book for playback: load its playlist, restore the saved resume
@@ -259,11 +322,11 @@ class PlayerController {
     // starts fresh — _loadIndex's own reset only fires on non-last chapters,
     // which misses single-chapter books where index 0 == length-1 always.
     _bookFinishEmitted = false;
-    await _loadIndex(index, seekMs: saved?.positionMs ?? 0);
+    await _loadIndex(index, seekMs: saved?.positionMs ?? 0, userInitiated: true);
   }
 
-  Future<void> _loadIndex(int index, {int seekMs = 0}) async {
-    if (index < 0 || index >= _playlist.length) return;
+  Future<bool> _loadIndex(int index, {int seekMs = 0, bool userInitiated = false}) async {
+    if (index < 0 || index >= _playlist.length) return false;
     // Capture prior index BEFORE reassigning — used for the backward-nav replay signal.
     final prev = _index;
     _index = index;
@@ -284,10 +347,12 @@ class PlayerController {
           ? Duration(milliseconds: (c.durationSec! * 1000).round())
           : null,
     ));
-    await _engine.setFilePath(c.path);
-    if (_speed != 1.0) await _engine.setSpeed(_speed); // persist speed across chapters
-    if (_boostDb > 0) await _engine.setVolumeBoost(_boostDb); // persist boost too
-    if (seekMs > 0) await _engine.seek(Duration(milliseconds: seekMs));
+    final loaded = await _loadSource(c, userInitiated: userInitiated);
+    if (loaded) {
+      if (_speed != 1.0) await _engine.setSpeed(_speed); // persist across chapters
+      if (_boostDb > 0) await _engine.setVolumeBoost(_boostDb);
+      if (seekMs > 0) await _engine.seek(Duration(milliseconds: seekMs));
+    }
     // Measure the autosave interval from load time, so we don't persist on the
     // very first position tick.
     _lastSave = _now();
@@ -297,6 +362,86 @@ class PlayerController {
     if (prev >= 0 && index < prev && _bookId != null) {
       _bookReplayed.add(_bookId!);
     }
+    return loaded;
+  }
+
+  /// Loads the chapter's playback source. Returns true iff a source was actually
+  /// set on the engine (local file or a live stream); false for `needsDownload`,
+  /// a null `audioUrl`, or a failed stream — callers skip `play()` on false.
+  Future<bool> _loadSource(PlayableChapter c, {required bool userInitiated}) async {
+    // Every load opens a new stream generation and provisionally clears the
+    // confirmed-stream marker: a LATE error from the OUTGOING stream (arriving
+    // while this source loads) then reads a null/superseded gen and is ignored,
+    // rather than misrouted as this load's failure (#1579). It's re-set only once
+    // THIS stream load actually confirms.
+    final gen = ++_streamGen;
+    _streamingGen = null;
+    final cfg = _streaming;
+    if (cfg == null) {
+      await _engine.setFilePath(c.path); // legacy: offline-first only
+      return true;
+    }
+    final src = resolvePlaybackSource(
+      localFileExists: await cfg.fileStore.exists(c.path),
+      onHomeLan: await cfg.onHomeLan(),
+      streamingEnabled: cfg.streamOverLan(),
+    );
+    switch (src) {
+      case PlaybackSource.localFile:
+        await _engine.setFilePath(c.path);
+        return true;
+      case PlaybackSource.lanStream:
+        final audioUrl = c.audioUrl;
+        if (audioUrl == null) {
+          if (userInitiated) _notifyDownloadToPlay();
+          return false;
+        }
+        await cfg.proxy.start(); // first bind, on demand
+        final loopback = cfg.proxy.register(upstream: cfg.urlResolver(audioUrl));
+        try {
+          // The player only ever sees http://127.0.0.1/… and NO headers.
+          await _engine.setStreamUrl(loopback.toString());
+          // Confirm as the current stream only if no newer load superseded us
+          // during the await.
+          if (gen == _streamGen) _streamingGen = gen;
+          return true;
+        } catch (_) {
+          _handleStreamFailure(gen); // initial-load throw channel (§6/§7)
+          return false;
+        }
+      case PlaybackSource.needsDownload:
+        if (userInitiated) _notifyDownloadToPlay(); // else auto-advance: halt quietly
+        return false;
+    }
+  }
+
+  /// The single §7 failure router, shared by the initial-load throw (which passes
+  /// its own load [gen]) and the mid-stream errorStream event (which passes the
+  /// confirmed [_streamingGen]). Ignores the call when [gen] is null (not a live
+  /// stream load — e.g. a local-file playback error) or has been superseded by a
+  /// newer load (`gen != _streamGen`) — the latter is what stops a LATE error
+  /// from an OUTGOING stream being misattributed to the incoming chapter (#1579).
+  /// Nulling [_streamingGen] makes it idempotent: a second error for the same
+  /// load reads null and no-ops. Reads the proxy's upstream-status side-channel,
+  /// clears the mapping, and either re-pairs (fresh 401/403) or surfaces "download
+  /// to play" (everything else, incl. null). No auto-retry.
+  void _handleStreamFailure(int? gen) {
+    final cfg = _streaming;
+    if (cfg == null) return;
+    if (gen == null || gen != _streamGen) return; // not current, or superseded
+    _streamingGen = null;
+    final status = cfg.proxy.lastUpstreamStatus;
+    cfg.proxy.clearMapping();
+    if (status == 401 || status == 403) {
+      cfg.onRepairNeeded();
+    } else {
+      _notifyDownloadToPlay();
+    }
+  }
+
+  void _notifyDownloadToPlay() {
+    final uuid = currentChapterUuid;
+    if (uuid != null && !_downloadToPlay.isClosed) _downloadToPlay.add(uuid);
   }
 
   Future<void> seekTo(Duration position) =>
@@ -347,7 +492,9 @@ class PlayerController {
         await _engine.seek(target);
       case ChapterStep(:final direction):
         final next = _index + direction;
-        if (next >= 0 && next < _playlist.length) await _loadIndex(next);
+        if (next >= 0 && next < _playlist.length) {
+          await _loadIndex(next, userInitiated: true);
+        }
     }
   }
 
@@ -356,10 +503,10 @@ class PlayerController {
     // Re-broadcast first so the UI/media session update even when no accumulator
     // is wired (the early-return below is stats-only).
     if (!_playing.isClosed) _playing.add(isPlaying);
-    // Accrual is gated on play/pause intent only. Safe because playback is always
-    // from local downloaded files (setFilePath), so there are no sustained buffer
-    // stalls. If streaming (setStreamUrl) is ever wired into the player flow,
-    // additionally gate accrual on processingState == ready (spec fs-16 m7).
+    // Accrual is gated on play/pause intent only. With app-10 LAN streaming
+    // (setStreamUrl), a network stall can leave `playing` true while buffering,
+    // slightly over-counting listen time — accepted as negligible for brief
+    // LAN stalls (spec fs-16 m7).
     final acc = _accumulator;
     if (acc == null) return;
     if (isPlaying) {
@@ -450,6 +597,9 @@ class PlayerController {
     await _chapterCompleted.close();
     await _bookCompleted.close();
     await _bookReplayed.close();
+    await _errorSub?.cancel();
+    await _downloadToPlay.close();
+    await _streaming?.proxy.dispose();
     await _engine.dispose();
   }
 }
