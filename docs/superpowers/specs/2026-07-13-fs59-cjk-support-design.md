@@ -28,12 +28,19 @@ both engines + attribution FP/FN from a new eval harness).
 The fs-50 tranche (es/fr/de) **shipped** and left CJK a small delta on top of a
 proven framework. Verified against the current tree:
 
-- **Detection is done.** `server/src/tts/detect-language.ts` already runs an
-  authoritative script pre-pass: Cyrillic→`ru`, then `(han + kana)/letters ≥ 0.3`
+- **Detection routing is done, but the `supported` flag is NOT read-through.**
+  `server/src/tts/detect-language.ts` already runs an authoritative script
+  pre-pass: Cyrillic→`ru`, then `(han + kana)/letters ≥ 0.3`
   → `{ language: kana > han ? 'ja' : 'zh', supported: false }` (front-matter
   stripped first, 20 k-char sample). The Han-vs-Kana disambiguation and the
-  `detected-but-unsupported` return are already in place. **Adding registry rows
-  flips detection to `supported` automatically — no detection code changes.**
+  `detected-but-unsupported` return are already in place.
+  **CORRECTION (independent plan review):** the earlier claim "adding registry
+  rows flips detection automatically — no detection code changes" is FALSE. That
+  CJK branch (`:49-52`) returns a **literal** `supported: false`, bypassing the
+  `result(code)` registry read the ru/latin branches use — so a W5 registry flip
+  would be a no-op end-to-end. The branch MUST be changed to
+  `return result(kana > han ? 'ja' : 'zh')` (plan Task 2.1). This is the ONE
+  detection code change fs-59 needs.
 - **Fail-loud block is in place.** `sidecarLanguageName()`
   (`server/src/tts/language.ts:34`) throws for any code not in the registry, so
   CJK cannot bake an English manifest today. This stays as the safety net.
@@ -161,6 +168,22 @@ wave that owns it (§5).
   (第一章 / 第1話 / 序章 / 終章 …) and `frontMatterKeywords` (目次 / 著作権 /
   献辞 · 目录 / 版权 / 致谢). Number-word lexicons are largely N/A for CJK
   (digits are used directly) — document, don't force.
+
+**Seams the plan's independent review added to §3.1 (not in the original sweep):**
+- **CJK chapter-heading split** — the `headingLexicon` does NOT split CJK
+  chapters: `parsers/text.ts` `CHAPTER_HEADING_RE` expects `keyword→whitespace→
+  number` (Latin), but CJK is the circumfix `第<number>章` (no whitespace, kanji +
+  fullwidth numerals). Needs a dedicated, **whole-line-anchored** CJK pattern (a
+  naive prefix regex matches `第三章で述べた…`/`第二部隊…` and `parseText` deletes
+  that prose as a title). Plan Task 2.6 — acceptance-critical.
+- **Import word-count / front-matter miscount** — `routes/import.ts` `countWords`
+  splits on whitespace, so a spaceless CJK chapter counts ~40 "words" and is
+  pre-ticked `isLikelyFrontMatter` (≤150) → every CJK chapter auto-excluded at
+  confirm. Needs a script-aware count. Plan Task 2.7.
+- **CJK roster-name tag anchoring** — `dialogue-structure/name-matcher.ts`
+  `findRosterName` tokenises on `[^\p{L}]+`, so a CJK tag clause is one token and
+  never matches the roster; `tag-name` (highest-precedence) evidence never fires
+  for CJK. Needs substring-containment matching. Plan Task 3.5.
 
 ### 3.2 Dialogue conventions + prompts (Wave 3 — engine-independent)
 
