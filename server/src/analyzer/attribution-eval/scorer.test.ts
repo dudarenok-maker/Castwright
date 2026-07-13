@@ -22,6 +22,16 @@ describe('scoreAttribution', () => {
     const s = scoreAttribution(truth, pred, new Map([['char_7', 'mairin']]));
     expect(s.precision).toBe(1);
   });
+  it('a dropped truth line is an FN and gets a perLine entry with predicted null', () => {
+    const pred = [{ text: '"Careful."', characterId: 'mairin' }];
+    const s = scoreAttribution(truth, pred);
+    expect(s.falseNegative).toBe(1); // "She said." was omitted entirely
+    const dropped = s.perLine.find((l) => l.text === 'She said.');
+    expect(dropped).toBeDefined();
+    expect(dropped!.predicted).toBeNull();
+    expect(dropped!.truth).toBe('narrator');
+    expect(dropped!.correct).toBe(false);
+  });
   it('repeated identical text with different speakers is not collapsed', () => {
     const dup = { chapterText: '', lines: [
       { text: '「はい」', speakerId: 'a' }, { text: '「はい」', speakerId: 'b' },

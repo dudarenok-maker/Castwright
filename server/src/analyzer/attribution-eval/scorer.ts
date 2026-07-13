@@ -40,11 +40,13 @@ export function scoreAttribution(
   // Group truth lines by normalised text into per-key FIFO queues, preserving
   // order — NOT a plain Map<normalisedText, speakerId>, which would collapse
   // repeated identical lines spoken by different speakers (last-write-wins).
-  const truthQueues = new Map<string, string[]>();
+  // Each occurrence carries its resolved id AND original text so the trailing
+  // pure-miss reconciliation can emit a perLine row.
+  const truthQueues = new Map<string, Array<{ id: string; text: string }>>();
   for (const line of truth.lines) {
     const key = normalise(line.text);
     const queue = truthQueues.get(key) ?? [];
-    queue.push(resolveId(line.speakerId, aliasMap));
+    queue.push({ id: resolveId(line.speakerId, aliasMap), text: line.text });
     truthQueues.set(key, queue);
   }
 
@@ -67,7 +69,7 @@ export function scoreAttribution(
       continue;
     }
 
-    const truthId = queue.shift()!;
+    const truthId = queue.shift()!.id;
     if (truthId === predictedId) {
       truePositive++;
       perLine.push({ text: line.text, truth: truthId, predicted: predictedId, correct: true });
@@ -78,9 +80,14 @@ export function scoreAttribution(
     }
   }
 
-  // Any truth occurrence never consumed by a predicted line is a miss.
+  // Any truth occurrence never consumed by a predicted line is a pure miss —
+  // the analyzer dropped the line entirely. Count it as an FN AND surface it in
+  // perLine (predicted: null) so Task 1.3's report shows dropped CJK quotes.
   for (const queue of truthQueues.values()) {
-    falseNegative += queue.length;
+    for (const occurrence of queue) {
+      falseNegative++;
+      perLine.push({ text: occurrence.text, truth: occurrence.id, predicted: null, correct: false });
+    }
   }
 
   const precision = truePositive + falsePositive > 0 ? truePositive / (truePositive + falsePositive) : 1;
