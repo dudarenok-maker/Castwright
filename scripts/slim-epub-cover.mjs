@@ -16,22 +16,31 @@ import { join } from 'node:path';
 import { unzipSync } from 'fflate';
 import { findCover, slimEpubBuffer } from './lib/slim-epub-cover.mjs';
 
-function argVal(flag, dflt) {
-  const i = process.argv.indexOf(flag);
-  return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : dflt;
-}
-
-const positionals = process.argv.slice(2).filter((a) => !a.startsWith('--'));
-// Drop values that belong to --width / --quality from the positional list.
-const flagVals = new Set([argVal('--width', null), argVal('--quality', null)].filter(Boolean));
-const [inPath, outMaybe] = positionals.filter((p) => !flagVals.has(p));
-if (!inPath) {
-  console.error('Usage: node scripts/slim-epub-cover.mjs <in.epub> [out.epub] [--width N] [--quality N]');
+function die(msg) {
+  console.error(msg);
   process.exit(1);
 }
+
+// Index-based parse: --width/--quality consume the next token, so a positional
+// path that happens to equal a flag value is never mistaken for the flag.
+const argv = process.argv.slice(2);
+const positionals = [];
+let width = 1000;
+let quality = 3;
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i];
+  if (a === '--width') width = Number(argv[++i]);
+  else if (a === '--quality') quality = Number(argv[++i]);
+  else if (a.startsWith('--')) die(`Unknown flag: ${a}`);
+  else positionals.push(a);
+}
+const [inPath, outMaybe] = positionals;
+if (!inPath) {
+  die('Usage: node scripts/slim-epub-cover.mjs <in.epub> [out.epub] [--width N] [--quality N]');
+}
+if (!Number.isFinite(width) || width <= 0) die('--width must be a positive number');
+if (!Number.isFinite(quality) || quality <= 0) die('--quality must be a positive number');
 const outPath = outMaybe || inPath;
-const width = Number(argVal('--width', 1000));
-const quality = Number(argVal('--quality', 3));
 
 const buf = readFileSync(inPath);
 const before = buf.length;

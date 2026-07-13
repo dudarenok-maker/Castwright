@@ -21,7 +21,12 @@ function samplesByLanguage(): Map<string, string[]> {
     if (!entry.isDirectory()) continue;
     const statePath = join(SAMPLES_ROOT, entry.name, '.audiobook', 'state.json');
     if (!existsSync(statePath)) continue;
-    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    let state: { language?: string };
+    try {
+      state = JSON.parse(readFileSync(statePath, 'utf8'));
+    } catch (e) {
+      throw new Error(`sample "${entry.name}": unreadable state.json — ${(e as Error).message}`);
+    }
     const lang = state.language;
     if (!lang) continue;
     (byLang.get(lang) ?? byLang.set(lang, []).get(lang)!).push(entry.name);
@@ -32,6 +37,12 @@ function samplesByLanguage(): Map<string, string[]> {
 describe('supported-language sample coverage (fs-61)', () => {
   const byLang = samplesByLanguage();
   const supported = allLanguageEntries().filter((e) => e.supported);
+
+  // Guard the guard: an empty supported list would make it.each register zero
+  // cases and pass green, silently defeating the coverage guarantee.
+  it('has at least one supported language to check', () => {
+    expect(supported.length).toBeGreaterThan(0);
+  });
 
   it.each(supported.map((e) => [e.code, e.sidecarName] as const))(
     'ships a runnable sample book for supported language %s (%s)',
@@ -48,6 +59,7 @@ describe('supported-language sample coverage (fs-61)', () => {
       const slug = slugs![0];
       const dir = join(SAMPLES_ROOT, slug);
       const state = JSON.parse(readFileSync(join(dir, '.audiobook', 'state.json'), 'utf8'));
+      expect(state.manuscriptFile, `${slug}: state.json has no manuscriptFile`).toBeTruthy();
       expect(existsSync(join(dir, state.manuscriptFile)), `${slug}: manuscript missing`).toBe(true);
       expect(existsSync(join(dir, '.audiobook', 'cast.json')), `${slug}: cast.json missing`).toBe(true);
     },

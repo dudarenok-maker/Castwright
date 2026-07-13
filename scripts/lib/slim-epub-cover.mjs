@@ -41,9 +41,11 @@ export function findCover(entries) {
   if (!entries[opfPath]) throw new Error(`epub: opf missing at ${opfPath}`);
   const opf = strFromU8(entries[opfPath]);
 
-  const meta = opf.match(/<meta\b[^>]*\bname="cover"[^>]*\bcontent="([^"]+)"/);
-  if (!meta) throw new Error('epub: no <meta name="cover"> in opf');
-  const coverId = meta[1];
+  // Attribute order isn't fixed by the spec — find the tag by name="cover",
+  // then read content= from within it regardless of order.
+  const metaTag = opf.match(/<meta\b[^>]*\bname="cover"[^>]*>/);
+  const coverId = metaTag && metaTag[0].match(/\bcontent="([^"]+)"/)?.[1];
+  if (!coverId) throw new Error('epub: no <meta name="cover"> in opf');
 
   const item = opf.match(new RegExp(`<item\\b[^>]*\\bid="${escapeRe(coverId)}"[^>]*?/?>`));
   if (!item) throw new Error(`epub: no manifest <item id="${coverId}">`);
@@ -74,12 +76,16 @@ export function slimEpubBuffer(inputBuf, coverJpgBytes) {
   const newCoverPath = coverPath.replace(/[^/]+$/, (base) => base.replace(/\.[^.]+$/, '') + '.jpg');
   const coverBase = coverHref.replace(/^.*\//, '');
   const newBase = coverBase.replace(/\.[^.]+$/, '') + '.jpg';
+  // Match the cover basename only as a whole filename token — not as a
+  // substring of a longer name (backcover.png, discover.png). Function
+  // replacements below avoid `$` in the new name being read as a backref.
+  const coverRefRe = new RegExp('(?<![\\w.-])' + escapeRe(coverBase) + '(?![\\w.-])', 'g');
 
   // opf: retarget the cover item's href + media-type in one surgical edit.
   const newItem = coverItem
-    .replace(/\bhref="[^"]+"/, `href="${newHref}"`)
-    .replace(/\bmedia-type="[^"]+"/, 'media-type="image/jpeg"');
-  const newOpf = opf.replace(coverItem, newItem);
+    .replace(/\bhref="[^"]+"/, () => `href="${newHref}"`)
+    .replace(/\bmedia-type="[^"]+"/, () => 'media-type="image/jpeg"');
+  const newOpf = opf.replace(coverItem, () => newItem);
 
   const rebuilt = {};
   for (const [name, data] of Object.entries(entries)) {
@@ -87,11 +93,10 @@ export function slimEpubBuffer(inputBuf, coverJpgBytes) {
       rebuilt[newCoverPath] = coverJpgBytes; // drop the .png, add the .jpg
     } else if (name === opfPath) {
       rebuilt[name] = strToU8(newOpf);
-    } else if (/\.(x?html|svg)$/i.test(name)) {
+    } else if (/\.(x?html|svg|css|ncx)$/i.test(name)) {
       const text = strFromU8(data);
-      rebuilt[name] = text.includes(coverBase)
-        ? strToU8(text.split(coverBase).join(newBase))
-        : data;
+      const rewritten = text.replace(coverRefRe, () => newBase);
+      rebuilt[name] = rewritten === text ? data : strToU8(rewritten);
     } else {
       rebuilt[name] = data;
     }

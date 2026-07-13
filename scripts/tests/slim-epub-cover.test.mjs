@@ -102,3 +102,47 @@ test('works when the opf lives in a subdirectory (OEBPS/)', () => {
 test('slimEpubBuffer rejects empty cover bytes', () => {
   assert.throws(() => slimEpubBuffer(buildEpub(), new Uint8Array()), /coverJpgBytes is required/);
 });
+
+// Build a minimal epub with a caller-supplied opf + titlepage, reusing the
+// standard container/content/cover so edge cases can be exercised precisely.
+function epubWith({ opf, titlepage }) {
+  const container =
+    '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">' +
+    '<rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>';
+  return zipSync({
+    mimetype: [strToU8('application/epub+zip'), { level: 0 }],
+    'META-INF/container.xml': strToU8(container),
+    'content.opf': strToU8(opf),
+    'titlepage.xhtml': strToU8(titlepage),
+    'index_split_000.html': strToU8(CONTENT_HTML),
+    'cover.png': new Uint8Array(4096).fill(7),
+    'backcover.png': new Uint8Array(2048).fill(9),
+  });
+}
+
+const OPF_STD =
+  '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0">' +
+  '<metadata><meta name="cover" content="cover"/></metadata>' +
+  '<manifest><item id="cover" href="cover.png" media-type="image/png"/>' +
+  '<item id="bc" href="backcover.png" media-type="image/png"/>' +
+  '<item id="t" href="titlepage.xhtml" media-type="application/xhtml+xml"/></manifest>' +
+  '<spine><itemref idref="t"/></spine></package>';
+
+test('slim does NOT rewrite a sibling whose name merely contains the cover basename', () => {
+  const tp =
+    '<html xmlns="http://www.w3.org/1999/xhtml"><body>' +
+    '<img src="cover.png"/><img src="backcover.png"/></body></html>';
+  const out = unzipSync(slimEpubBuffer(epubWith({ opf: OPF_STD, titlepage: tp }), FAKE_JPG));
+  const html = strFromU8(out['titlepage.xhtml']);
+  assert.ok(html.includes('src="cover.jpg"'), 'cover rewritten');
+  assert.ok(html.includes('src="backcover.png"'), 'backcover left intact');
+  assert.ok(out['backcover.png'], 'backcover.png entry untouched');
+});
+
+test('findCover tolerates reversed meta attribute order (content before name)', () => {
+  const opf = OPF_STD.replace('<meta name="cover" content="cover"/>', '<meta content="cover" name="cover"/>');
+  const tp = '<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="cover.png"/></body></html>';
+  const out = unzipSync(slimEpubBuffer(epubWith({ opf, titlepage: tp }), FAKE_JPG));
+  assert.ok(out['cover.jpg'], 'cover.jpg present despite reversed attr order');
+  assert.ok(!out['cover.png'], 'cover.png dropped');
+});
