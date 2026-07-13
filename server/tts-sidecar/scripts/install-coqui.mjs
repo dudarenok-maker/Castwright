@@ -68,8 +68,9 @@ function run(python, pyArgs, env) {
 
 /**
  * The ordered pip-install steps the installer runs, before the XTTS prefetch.
- * Exported (pure) so the sequence — coqui-tts THEN torchcodec, neither with -U —
- * is unit-testable without a real venv (see install-coqui-steps.test.ts).
+ * Exported (pure) so the sequence — coqui-tts, then torchcodec, then the CJK
+ * phonemizers, none with -U — is unit-testable without a real venv (see
+ * install-coqui-steps.test.ts).
  *
  * Why torchcodec: coqui-tts 0.27.5's TTS/__init__.py raises ImportError at
  * package import when torch>=2.9 and torchcodec is absent — it presence-checks it
