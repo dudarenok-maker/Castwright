@@ -56,9 +56,9 @@ must never overwrite that edit.
   untouched.
 - **No new engine routing.** The narrator already renders on the book's default
   engine (`getSynthEngine` = `character.ttsEngine ?? projectDefaultEngine`,
-  which is Qwen). "Kokoro preset" is only the *fallback when no voice is
-  designed*; seeding a persona so the narrator gets designed is the entire
-  mechanism — we do not add a per-character engine field or a new palette.
+  Qwen on a Qwen-default book). "Kokoro preset" is only the *fallback when no
+  voice is designed*; seeding a persona so the narrator gets designed is the
+  entire mechanism — we do not add a per-character engine field or a new palette.
 - **No prompt-driven naming.** The name and persona are code constants, not
   model output — determinism is the whole point (model output cannot be
   consistent across books).
@@ -82,21 +82,52 @@ Pure, dependency-light, mirroring the existing `narrator-default.ts` shape.
      localized default; any other name is a user rename and is left alone.
   3. **Voice identity (gated on `voiceStyle` presence).** The folkloric
      `voiceStyle`, `gender`, `ageRange`, `tone`, and `attributes` are seeded as
-     a single unit **only when the narrator has no `voiceStyle` yet**. A
-     narrator that already carries a `voiceStyle` — our prior seed preserved
-     across a reparse, or the user's own re-designed persona — keeps all five
-     fields untouched. `voiceStyle` presence is the one unambiguous "has this
-     narrator's voice been established?" signal (the model always emits some
-     `tone`/`attributes`, so those cannot themselves distinguish default from
-     customized).
+     a single unit **only when the narrator has no `voiceStyle` yet**.
+     `voiceStyle` presence is the one unambiguous "has this narrator's voice
+     been established?" signal (the model always emits some `tone`/`attributes`,
+     so those cannot themselves distinguish default from customized).
   4. Preserve `id`, `color: 'narrator'`, `description`, evidence, lines, and all
      other fields. (The book-specific `description` the model writes is left as
      is — the fixed `voiceStyle` is what drives voice design, not the blurb.)
   Returns a new array; never mutates the input.
 
-This makes the function idempotent and edit-safe: re-analysing a fresh book
-re-seeds the identical defaults; re-analysing a book whose narrator the user
-renamed or re-designed is a no-op on those fields.
+**Where the guards actually bite (important — corrects a naive reading).**
+`applyNarratorIdentity` runs on the **fresh** analyzer roster, which the model
+always emits with the English default `name: "Narrator"` and **no**
+`voiceStyle`. So on the fresh roster both guards are effectively defensive: the
+name is always re-localized and the voice is always seeded from the constant.
+The thing that actually preserves a user's override across a reparse is the
+**cast merge** (next subsection), not the in-function guard. The guards still
+matter for pure idempotency and for the (rare) caller that hands the function an
+already-seeded roster; they never fight the merge.
+
+### Preserving user overrides across reparse: the cast merge
+
+Two of the three fields are **already durable** in
+`server/src/store/merge-analysis-cast.ts`:
+
+- `voiceStyle` is in `PRESERVED_VOICE_FIELDS`, so a user's re-designed narrator
+  voice already survives reparse (`mergeAnalysisResultWithExistingCast` overlays
+  it onto the fresh roster). No change needed.
+- `aliases` are already **unioned** (old ∪ fresh), so the `"Narrator"` alias,
+  once added, survives reparse. No change needed.
+
+Only `name` is dropped: the merge deliberately recomputes `name` from the fresh
+roster for every character (correct for real characters, whose names a
+re-analysis legitimately re-derives). Because `applyNarratorIdentity` runs on the
+fresh roster *before* the merge, the fresh narrator name is already the localized
+default (e.g. `Erzähler`) — but a user who renamed the narrator to e.g.
+"The Bard" would still lose it, since the merge takes the fresh name.
+
+**Change:** extend the merge so that **for the narrator only**
+(`id === 'narrator'`/`'char-narrator'`) it carries forward the prior `name`
+**when that prior name is a user rename** — i.e. not any language's default and
+not `"Narrator"`. A shared `isDefaultNarratorName(name)` helper (exported from
+`narrator-identity.ts`, checking membership in the set of registry
+`narratorName` values ∪ `"Narrator"`) decides. This gives all three outcomes:
+a user rename survives; a never-renamed narrator takes the fresh localized name
+(so a later *language change* re-localizes it correctly); and an untouched
+reparse is idempotent. Real-character name-recompute is untouched.
 
 ### Registry: `narratorName` on `LanguageEntry`
 
@@ -116,19 +147,40 @@ unsupported language safely falls back to `"Narrator"`.
 
 ### Wiring into the analyzer
 
-`applyNarratorIdentity` runs in `routes/analysis.ts` at the same
-post-processing seam that already normalizes the roster (alongside
-`assignPaletteColors` / the narrator color pass), threading the
-`bookLanguage` value already resolved there
-(`resolveBookLanguageForManuscript`, default `'en'`). Because the function is
-idempotent, placement only needs to be after the roster is assembled and it is
-safe on every reparse.
+There are **two** analyzer job functions in `routes/analysis.ts`, each with its
+own final post-processing seam (next to `assignPaletteColors`) and its own
+`cast.json` persist, and both must apply the identity:
+
+- `runMainAnalyzerJob` — full analysis (the common path).
+- `runSubsetAnalyzerJob` — the reparse-subset path.
+
+In each, call `applyNarratorIdentity(roster, bookLanguage)` on the fresh roster
+**before** it is (a) streamed to the confirm screen as `response.characters` and
+(b) merged→persisted, threading the `bookLanguage` already resolved there
+(`resolveBookLanguageForManuscript`, default `'en'`). Applying before the stream
+means the confirm screen shows the localized name immediately; applying before
+the merge means the persisted `cast.json` is localized, and the merge then layers
+the preserved override fields on top (`voiceStyle` and the unioned `aliases`
+already; a narrator user-rename per the merge change above).
+
+**Interim live-preview previews are intentionally left alone.** The mid-run
+`cast-update` SSE snapshots (`previewFoldForLiveView`) and running-snapshot
+writes show the model's English `"Narrator"` until the run completes, then flip
+to the localized name in the final roster. This transient flicker is cosmetic
+and matches the existing pattern where a character's `voiceId`/design state also
+only settles at completion — not worth threading the identity through every
+interim path. (An interrupted run that is later resumed re-runs the final seam,
+so the persisted result still ends up localized.)
 
 `routes/voice-style.ts` is **unchanged**: it deliberately skips the narrator in
 persona generation, which is exactly what we want now that the persona is
 pre-seeded — the Gemini generator must not overwrite the fixed folkloric string.
-The narrator flows through `routes/cast-design.ts` (which has no narrator skip)
-and gets a designed Qwen voice because it now carries a `voiceStyle`.
+The narrator then flows through `routes/cast-design.ts` (which has no narrator
+skip; the client sends it in the design request because a narrator with a
+`voiceStyle` but no designed Qwen voice resolves to "Needs voice") and gets a
+designed Qwen voice. Note this only produces a designed narrator on
+**Qwen-default books**; a Kokoro-default book keeps the narrator on its preset,
+which is the intended behavior.
 
 ### Detection safety
 
@@ -141,6 +193,18 @@ first (`routes/voices.ts:isNarratorId`, `routes/voice-style.ts:isNarrator`,
 matter when the id is *not* `'narrator'`. Since the id is preserved, changing
 the display name breaks nothing. The `"Narrator"` alias additionally keeps any
 English text/search lookups resolving.
+
+Two confirmed non-issues from review: **series-memory reuse** matches the
+narrator by stable key (`voiceId ?? id`, `series-reuse-link.ts`), not by name,
+so a localized name cannot undercount it; and the **export narrator credit**
+(`export/narrator-credit.ts`) uses the `state.narratorCredit` book field
+(author/"Castwright"), not the cast character name, so it is unaffected.
+
+One intended, minor behavior change: **captions** (`export/build-captions.ts`
+maps `speakerNames[c.id] = c.name`) will label narration cues with the localized
+name ("Erzähler"/"Рассказчик"/…) for new non-English books. This is desirable
+(the cue matches the book's language) and, per "no migration", does not touch
+existing books or the shipped English-cast samples.
 
 ## Testing
 
@@ -164,12 +228,22 @@ New `server/src/analyzer/narrator-identity.test.ts`:
 Registry: extend the existing registry expectations to cover `narratorName` for
 the four non-English supported languages.
 
+Cast merge (`merge-analysis-cast.test.ts`): a reparse where the prior narrator
+had a **user rename** ("The Bard") keeps that name on the merged roster; a
+reparse where the prior narrator name was a **language default** ("Erzähler")
+takes the fresh roster's name (so a language change re-localizes); the designed
+`voiceStyle` survives in both; and a **real character's** name is still
+recomputed from the fresh roster (guard against over-preserving). Plus a unit
+test for `isDefaultNarratorName` across the registry defaults + `"Narrator"`.
+
 Analyzer pipeline: one assertion that a de (and ru) analysis yields the
-localized name with the folkloric persona seeded, proving the wiring.
+localized name with the folkloric persona seeded, in **both** `runMainAnalyzerJob`
+and `runSubsetAnalyzerJob`, proving the wiring.
 
 ## Rollout
 
 Ships behind no flag — it is a deterministic default applied at analysis time.
 Existing books are unaffected (no migration). A user who wants a different
-narrator name or voice re-designs it in the UI as today; the idempotent guard
-protects that edit across reparses.
+narrator name or voice re-designs it in the UI as today; a re-designed voice
+(`voiceStyle`) and unioned `aliases` already survive reparse, and the merge's
+new narrator-`name` carry-forward protects a rename too.
