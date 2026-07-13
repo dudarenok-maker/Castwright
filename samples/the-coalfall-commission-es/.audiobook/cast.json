@@ -40,7 +40,7 @@
       ],
       "lines": 142,
       "scenes": 2,
-      "voiceStyle": "Mid-30th adult female voice with a standard British accent. The voice has a warm, clear, and expressive timbre, a bit on the slower side. She speaks with a captivating, narrative rhythm, blending youthful curiosity with emotional depth. The tone is earnest, wondrous, and highly articulate, perfectly suited for reading a young adult magical fantasy.",
+      "voiceStyle": "A middle-aged voice, neutral in gender, with a medium pitch and steady, mid-paced delivery; the timbre is rich, grounded, and resonant, carrying a measured, folkloric warmth suitable for audiobook narration.",
       "ttsEngine": "qwen",
       "voiceUuid": "5AEYMKguzml-igpE5nM_K",
       "overrideTtsVoices": {
@@ -56,7 +56,11 @@
           "name": "am_michael"
         }
       },
-      "ttsModelKey": "qwen3-tts-1.7b"
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "aliases": [
+        "Narrator"
+      ],
+      "voiceState": "tuned"
     },
     {
       "id": "wren",
@@ -110,7 +114,10 @@
           "name": "af_aoede"
         }
       },
-      "ttsModelKey": "qwen3-tts-1.7b"
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "aliases": [
+        "Gorrión"
+      ]
     },
     {
       "id": "oduvan",
@@ -618,7 +625,8 @@
           "name": "af_sarah"
         }
       },
-      "ttsModelKey": "qwen3-tts-1.7b"
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "scenes": 1
     }
   ]
 }

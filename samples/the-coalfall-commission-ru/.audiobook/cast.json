@@ -2,7 +2,7 @@
   "characters": [
     {
       "id": "narrator",
-      "name": "Narrator",
+      "name": "Рассказчик",
       "role": "Third-person observer",
       "color": "narrator",
       "attributes": [
@@ -56,7 +56,10 @@
           "name": "am_michael"
         }
       },
-      "ttsModelKey": "qwen3-tts-1.7b"
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "aliases": [
+        "Narrator"
+      ]
     },
     {
       "id": "oduvan",
@@ -165,7 +168,10 @@
           "name": "af_nicole"
         }
       },
-      "ttsModelKey": "qwen3-tts-1.7b"
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "aliases": [
+        "Воробушек"
+      ]
     },
     {
       "id": "mairin",
@@ -306,7 +312,7 @@
         }
       ],
       "lines": 10,
-      "scenes": 1,
+      "scenes": 2,
       "voiceStyle": "A male adult voice with a medium-low pitch and erratic, fast-paced cadence, featuring a gravelly, restless timbre and a jittery, high-intensity emotional register for expressive character dialogue.",
       "ttsEngine": "qwen",
       "voiceUuid": "3W6SS1Q4vvK1hWrzOhi_l",

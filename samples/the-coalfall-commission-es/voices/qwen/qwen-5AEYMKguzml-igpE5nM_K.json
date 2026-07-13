@@ -1,7 +1,7 @@
 {
-  "voiceId": "qwen-5AEYMKguzml-igpE5nM_K",
+  "voiceId": "qwen-5AEYMKguzml-igpE5nM_K-preview",
   "voiceUuid": "5AEYMKguzml-igpE5nM_K",
-  "instruct": "Mid-30th adult female voice with a standard British accent. The voice has a warm, clear, and expressive timbre, a bit on the slower side. She speaks with a captivating, narrative rhythm, blending youthful curiosity with emotional depth. The tone is earnest, wondrous, and highly articulate, perfectly suited for reading a young adult magical fantasy.",
+  "instruct": "A middle-aged voice, neutral in gender, with a medium pitch and steady, mid-paced delivery; the timbre is rich, grounded, and resonant, carrying a measured, folkloric warmth suitable for audiobook narration.",
   "language": "Spanish",
   "refText": "El veloz murciélago hindú comía feliz cardillo y kiwi, y se preguntaba qué traería el mañana.",
   "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",

@@ -1,2131 +1,2133 @@
 {
-  "sentences": [
-    {
-      "id": 1,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Die Schmiede hatte die Farbe eines gedämpften Sonnenuntergangs angenommen, und Wren kratzte die letzten Schlackenreste ab, als das Klopfen an der Tür begann.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 2,
-      "chapterId": 2,
-      "characterId": "oduvan",
-      "text": "„Lass es\"",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 3,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": ", sagte Meister Oduvan, ohne aufzusehen.",
-      "confidence": 0.98,
-      "emotion": "neutral"
-    },
-    {
-      "id": 4,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Siebzig Winter hatten seine Stimme zu Kies und Geduld abgeschliffen.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 5,
-      "chapterId": 2,
-      "characterId": "oduvan",
-      "text": "„Wer immer es ist, der mag weiterklopfen.\"",
-      "confidence": 0.94,
-      "emotion": "neutral"
-    },
-    {
-      "id": 6,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "„Es könnte ein Kunde sein.\"",
-      "confidence": 0.85,
-      "emotion": "neutral"
-    },
-    {
-      "id": 7,
-      "chapterId": 2,
-      "characterId": "oduvan",
-      "text": "„Um diese Stunde ist es entweder ein Betrunkener oder eine Schuld.",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 8,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Keiner von beiden zahlt besser dafür, dass man ihn schnell hereinlässt.\"",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 9,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Die Tür ging trotzdem auf.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 10,
-      "chapterId": 2,
-      "characterId": "maerin",
-      "text": "„Oduvan. Verriegle die Läden und lösch die Kohlen.\"",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 11,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Ihre Worte waren knapp, wie sie es immer waren, wenn sie gelaufen war.",
-      "confidence": 0.94,
-      "emotion": "neutral"
-    },
-    {
-      "id": 12,
-      "chapterId": 2,
-      "characterId": "maerin",
-      "text": "„Auf der Straße nach Coalfall ist ein Drache.",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 13,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": " Groß wie eine Scheune.",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 14,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Er kommt den Weg herunter.\"",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 15,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Wrens Kratzer hielt inne.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 16,
-      "chapterId": 2,
-      "characterId": "wren",
-      "text": "„Ein echter?\"",
-      "confidence": 0.85,
-      "emotion": "neutral",
-      "instruct": "a questioning, sharp tone"
-    },
-    {
-      "id": 17,
-      "chapterId": 2,
-      "characterId": "maerin",
-      "text": "„Nein, Kind, ein gemalter.\"",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 18,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Maerin lächelte nicht.",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 19,
-      "chapterId": 2,
-      "characterId": "maerin",
-      "text": "„Ein echter.",
-      "confidence": 0.85,
-      "emotion": "neutral"
-    },
-    {
-      "id": 20,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Und er kommt geradewegs auf das einzige erleuchtete Fenster im Tal zu, und das ist eures.",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 21,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Lösch das Feuer.\"",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 22,
-      "chapterId": 2,
-      "characterId": "oduvan",
-      "text": "„Wenn ich das Feuer lösche\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 23,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": ", sagte Oduvan,",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 24,
-      "chapterId": 2,
-      "characterId": "oduvan",
-      "text": "„verliere ich die Schweißnaht, die ich seit Mittag hege.",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 25,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Ein Drache kann die Länge einer Schweißnaht warten oder er kann es nicht, und so oder so empfange ich ihn lieber in der Wärme.\"",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 26,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Er legte seine Zange ab.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 27,
-      "chapterId": 2,
-      "characterId": "oduvan",
-      "text": "„Spatz. Mach das große Tor auf.\"",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 28,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Wren — Spatz nur für ihn, und nur, wenn er vergaß, streng zu sein — ging zum großen Tor und stieß es weit auf.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 29,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Der Drache füllte die Dunkelheit dahinter, wie Wasser einen Becher füllt.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 30,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Ein Auge, golden und langsam, kam auf Höhe der Schwelle und hielt dort inne, die kleine Wärme des Ortes abwägend.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 31,
-      "chapterId": 2,
-      "characterId": "drache",
-      "text": "„Flieht, ihr Narren — er wird euch alle verschlingen!\"",
-      "confidence": 0.85,
-      "emotion": "excited"
-    },
-    {
-      "id": 32,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Niemand floh.",
-      "confidence": 0.98,
-      "emotion": "neutral"
-    },
-    {
-      "id": 33,
-      "chapterId": 2,
-      "characterId": "drache",
-      "text": "„Ich bin von weit her gekommen\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 34,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": ", sagte der Drache.",
-      "confidence": 0.98,
-      "emotion": "neutral"
-    },
-    {
-      "id": 35,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Seine Stimme war nicht laut.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 36,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Es war der Klang, den ein Berg machen würde, wenn ein Berg müde wäre, und jedes Wort traf einen Augenblick später ein, als man es erwartete.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 37,
-      "chapterId": 2,
-      "characterId": "drache",
-      "text": "„Die Dörfer nennen mich Coalfall.",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 38,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Das ist nicht mein Name, aber er genügt.",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 39,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Man sagt mir, der beste Schmied im Tal halte diese Schmiede.\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 40,
-      "chapterId": 2,
-      "characterId": "oduvan",
-      "text": "„Man sagt Euch falsch\"",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 41,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": ". Der beste Schmied im Tal ist vor neun Jahren gestorben.",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 42,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Ihr müsst Euch mit dem zweitbesten begnügen.\"",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 43,
-      "chapterId": 2,
-      "characterId": "drache",
-      "text": "„Bescheidenheit oder Verkaufstaktik?\"",
-      "confidence": 0.85,
-      "emotion": "neutral"
-    },
-    {
-      "id": 44,
-      "chapterId": 2,
-      "characterId": "oduvan",
-      "text": "„In meinem Alter dasselbe.\"",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 45,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Das goldene Auge wanderte zu Wren, und sie spürte es, wie man die Sonne durch ein Fenster spürt.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 46,
-      "chapterId": 2,
-      "characterId": "drache",
-      "text": "„Und die Kleine?\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 47,
-      "chapterId": 2,
-      "characterId": "oduvan",
-      "text": "„Mein Lehrling.",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 48,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Sie ist dreizehn und glaubt, ich höre sie nicht seufzen.",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 49,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Sie wird besser sein als ich, ehe sie zwanzig ist, und das ist der einzige Grund, warum ich sie behalte.\"",
-      "confidence": 0.94,
-      "emotion": "neutral"
-    },
-    {
-      "id": 50,
-      "chapterId": 2,
-      "characterId": "wren",
-      "text": "Ich seufze nie",
-      "confidence": 0.85,
-      "emotion": "neutral",
-      "vocalization": true
-    },
-    {
-      "id": 51,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": ", sagte Wren, die seufzte.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 52,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Der Drache senkte sich, bis sein Atem die Kohlen bewegte, und sie glühten auf, ohne darum gebeten worden zu sein.",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 53,
-      "chapterId": 2,
-      "characterId": "drache",
-      "text": "„Ich will kein Schwert\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 54,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": ", sagte er.",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 55,
-      "chapterId": 2,
-      "characterId": "drache",
-      "text": "„Alle wollen mich tot, und ein Schwert würde sie nur ermutigen.",
-      "confidence": 0.94,
-      "emotion": "neutral"
-    },
-    {
-      "id": 56,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Ich will eine Glocke.",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 57,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Klein genug, um an einer Klaue zu hängen.",
-      "confidence": 0.94,
-      "emotion": "neutral"
-    },
-    {
-      "id": 58,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Ich bin der Letzte meiner Art, und wenn ich gehe, wird niemand da sein, der es vermerkt.",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 59,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Ich möchte es selbst vermerken, im Voraus — solange es noch jemanden gibt, der einen wahren Ton zu gießen weiß.\"",
-      "confidence": 0.94,
-      "emotion": "neutral"
-    },
-    {
-      "id": 60,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Eine Weile war das Feuer das einzige Geräusch.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 61,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Dann nahm Oduvan seine Zange wieder auf.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 62,
-      "chapterId": 2,
-      "characterId": "oduvan",
-      "text": "„Eine Glocke\"",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 63,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": ", sagte er, als bestellten Drachen sie jeden Dienstag.",
-      "confidence": 0.98,
-      "emotion": "neutral"
-    },
-    {
-      "id": 64,
-      "chapterId": 2,
-      "characterId": "oduvan",
-      "text": "„Bronze also, kein Eisen.",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 65,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Spatz — das gute Zinn, den Tiegel, und hör auf, auf den Formsand zu weinen, das verdirbt den Guss.\"",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 66,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "„Ich weine nicht.\"",
-      "confidence": 0.85,
-      "emotion": "neutral"
-    },
-    {
-      "id": 67,
-      "chapterId": 2,
-      "characterId": "oduvan",
-      "text": "„Natürlich nicht.\"",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 68,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Er kniff die Augen zusammen und betrachtete den Drachen, maß ihn, wie er alles maß.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 69,
-      "chapterId": 2,
-      "characterId": "narrator",
-      "text": "Der Drache ließ sich in der Türöffnung nieder, ein Auge gegen die Wärme halb geschlossen, und sagte mit der Stimme eines müden Berges, den man seit sehr langer Zeit nicht gebeten hatte, an einem freundlichen Ort zu warten:",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 70,
-      "chapterId": 2,
-      "characterId": "drache",
-      "text": "„Ich habe nichts als Zeit. Fangt an.\"",
-      "confidence": 0.93,
-      "emotion": "neutral"
-    },
-    {
-      "id": 1,
-      "chapterId": 3,
-      "characterId": "pell-hollis",
-      "text": "„Ein Wagen bewegt sich falsch im Dunkeln, dann sagt man es.\"",
-      "confidence": 0.92,
-      "emotion": "neutral",
-      "vocalization": true
-    },
-    {
-      "id": 2,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Pell schob sich hinein und hielt den Amboss zwischen sich und der Schwelle.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 3,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Die Schwelle beobachtete ihn mit einem goldenen Auge.",
-      "confidence": 0.98,
-      "emotion": "neutral"
-    },
-    {
-      "id": 4,
-      "chapterId": 3,
-      "characterId": "pell-hollis",
-      "text": "„Ich bleibe nur — ich stelle mich hierher.",
-      "confidence": 0.9,
-      "emotion": "neutral",
-      "instruct": "firmly, a statement of intent"
-    },
-    {
-      "id": 5,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Bei den Hämmern.",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 6,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Für den Fall.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 7,
-      "chapterId": 3,
-      "characterId": "wren",
-      "text": "„Für welchen Fall?\"",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 8,
-      "chapterId": 3,
-      "characterId": "pell-hollis",
-      "text": "„Ich werde es wissen, wenn es passiert.\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 9,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Der Drache atmete langsam aus, und die Kohlen glühten auf.",
-      "confidence": 0.96,
-      "emotion": "neutral",
-      "instruct": "slow and deliberate, building tension"
-    },
-    {
-      "id": 10,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Pell nahm die Farbe des Formsands an und dann, als nichts weiter geschah, eine gewöhnlichere Farbe.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 11,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Bis das Zinn in den Tiegel kam, war er zwei Schritte näher gerückt und gab Meinungen über die Hitze ab.",
-      "confidence": 0.94,
-      "emotion": "neutral"
-    },
-    {
-      "id": 12,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Witwe Casper kam als Nächste, weil ihre Kate eine Wand mit dem Weg teilte und ihre Neugier mit nichts.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 13,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Sie war um die achtzig und gebaut wie ein Fragezeichen, und sie musterte den Drachen, wie man den Karren eines Hausierers mustert.",
-      "confidence": 0.96,
-      "emotion": "neutral",
-      "instruct": "with an assessing, critical gaze implied in the delivery"
-    },
-    {
-      "id": 14,
-      "chapterId": 3,
-      "characterId": "witwe-casper",
-      "text": "„Kleiner als in den Geschichten\"",
-      "confidence": 0.91,
-      "emotion": "neutral",
-      "instruct": "softly, a quiet observation"
-    },
-    {
-      "id": 15,
-      "chapterId": 3,
-      "characterId": "drache",
-      "text": "„Die Geschichten handelten von meiner Großmutter\"",
-      "confidence": 0.94,
-      "emotion": "neutral"
-    },
-    {
-      "id": 16,
-      "chapterId": 3,
-      "characterId": "witwe-casper",
-      "text": "„Meine auch.\"",
-      "confidence": 0.92,
-      "emotion": "neutral",
-      "instruct": "a simple, knowing affirmation"
-    },
-    {
-      "id": 17,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Die Witwe ließ sich auf die Bank an der Wand nieder, ungebeten, behaglich.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 18,
-      "chapterId": 3,
-      "characterId": "witwe-casper",
-      "text": "„Meine Großmutter sagte, der Himmel über dem Steinbruch sei mittags dunkel geworden von euren Flügeln.",
-      "confidence": 0.91,
-      "emotion": "neutral",
-      "instruct": "with a tone of remembered wonder, slightly wistful"
-    },
-    {
-      "id": 19,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Sie log bei fast jedem Wetter, aber sie weinte, als sie es erzählte, also habe ich das eine geglaubt.\"",
-      "confidence": 0.5,
-      "emotion": "sad",
-      "instruct": "softly, with an undercurrent of sadness in the voice"
-    },
-    {
-      "id": 20,
-      "chapterId": 3,
-      "characterId": "coalfall",
-      "text": "„Glaub es\"",
-      "confidence": 0.92,
-      "emotion": "neutral",
-      "instruct": "a simple, firm declaration"
-    },
-    {
-      "id": 21,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte Coalfall, und danach war es eine Weile still.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 22,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Die Zwillinge kamen zusammen, wie sie alles taten, und im Streit, wie sie alles taten.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 23,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Brann und Berrin Weir brachen oben im Steinbruch Stein, und fünfundvierzig Jahre nebeneinander hatten sie einander so ähnlich geschliffen wie zwei Daumen — dieselben Schultern, derselbe graue Stoppelbart, dieselbe Art, eine Tür auszufüllen.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 24,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Das Tal unterschied sie nach dem Gehör.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 25,
-      "chapterId": 3,
-      "characterId": "brann-weir",
-      "text": "„Das ist also der Drache?\"",
-      "confidence": 0.92,
-      "emotion": "neutral"
-    },
-    {
-      "id": 26,
-      "chapterId": 3,
-      "characterId": "drache",
-      "text": "„Es ist der Drache.\"",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 27,
-      "chapterId": 3,
-      "characterId": "brann-weir",
-      "text": "„Und wir gießen ihm eine Glocke? Woraus, dem Kirchendach?\"",
-      "confidence": 0.92,
-      "emotion": "neutral"
-    },
-    {
-      "id": 28,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„Aus Bronze. Der Schmied hat Bronze.\"",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 29,
-      "chapterId": 3,
-      "characterId": "brann-weir",
-      "text": "„Seit wann hat der Schmied Glockenbronze einfach so herumliegen?\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 30,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„Seit er sie hat. Sieh dir den Tiegel an.\"",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 31,
-      "chapterId": 3,
-      "characterId": "brann-weir",
-      "text": "„Ich sehe mir den Tiegel an. Darf ich nicht nach dem Tiegel fragen?\"",
-      "confidence": 0.92,
-      "emotion": "neutral"
-    },
-    {
-      "id": 32,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„Du darfst. Du bist nur laut.\"",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 33,
-      "chapterId": 3,
-      "characterId": "brann-weir",
-      "text": "„Laut, ich —\"",
-      "confidence": 0.85,
-      "emotion": "neutral",
-      "instruct": "a sharp interruption, challenging"
-    },
-    {
-      "id": 34,
-      "chapterId": 3,
-      "characterId": "oduvan",
-      "text": "„Meine Herren\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 35,
-      "chapterId": 3,
-      "characterId": "oduvan",
-      "text": ", sagte Oduvan mit der Stimme, die er für gerissenes Eisen aufsparte, „es ist eine kleine Glocke. Sie braucht ein kleines Publikum.\"",
-      "confidence": 0.94,
-      "emotion": "neutral",
-      "instruct": "with a voice that sounds strained, like grinding metal, emphasizing the effort in his speech"
-    },
-    {
-      "id": 36,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Die Zwillinge verstummten im Gleichklang, was die andere Art war, sie von allen anderen zu unterscheiden.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 37,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Pater Lessom erschien an der Schwelle, den Hut in den Händen, was für Lessom volle Zeremonie war.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 38,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„Ist es recht, meint Ihr? Glocken sind für Seelen. Ich kenne die Regel nicht für —\"",
-      "confidence": 0.93,
-      "emotion": "whisper",
-      "vocalization": true
-    },
-    {
-      "id": 39,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "er deutete auf die Schwelle, auf das alles, „— dies.\"",
-      "confidence": 0.94,
-      "emotion": "neutral"
-    },
-    {
-      "id": 40,
-      "chapterId": 3,
-      "characterId": "witwe-casper",
-      "text": "„Dann denkt Euch eine aus\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 41,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte Witwe Casper. „Das ist es, was Euresgleichen tut, und heute Nacht wird sie gebraucht.\"",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 42,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Lessom trat ein.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 43,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Er hielt sich an der Wand, und seine Lippen bewegten sich hin und wieder, und ob es Gebet war oder das Einüben besserer Sätze, fragte niemand.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 44,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Aber als der Atem des Drachen das Feuer bewegte, machte er ein kleines Zeichen darüber — schnell, wie ein Mann, der einem Bettler eine Münze zusteckt und dabei tut, als hätte er es nicht — und danach stand er gelassener da.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 45,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Der Hausierer Ivo hatte wegen eines verlorenen Hufeisens in Maerins Scheune geschlafen und kam schon redend herein, auf jene verdrehte Art, die ihm eigen war und die niemand im Tal auf einer Karte verorten konnte.",
-      "confidence": 0.94,
-      "emotion": "neutral"
-    },
-    {
-      "id": 46,
-      "chapterId": 3,
-      "characterId": "ivo",
-      "text": "„Eine Glocke will er.",
-      "confidence": 0.91,
-      "emotion": "neutral",
-      "instruct": "a low, definitive statement"
-    },
-    {
-      "id": 47,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Für sich, die Glocke.",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 48,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "In meinem Land pflanzen wir für die Toten einen Baum — aber einen Baum an einer Klaue kann man nicht tragen, und also: eine Glocke.",
-      "confidence": 0.92,
-      "emotion": "neutral"
-    },
-    {
-      "id": 49,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Vernünftig.\"",
-      "confidence": 0.85,
-      "emotion": "neutral",
-      "instruct": "concise and practical"
-    },
-    {
-      "id": 50,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Er setzte sein Bündel ab mit der Miene eines Mannes, der einen Laden eröffnet.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 51,
-      "chapterId": 3,
-      "characterId": "ivo",
-      "text": "„Ich habe Seil, wenn Seil gewünscht wird.",
-      "confidence": 0.91,
-      "emotion": "neutral",
-      "instruct": "offering a service with simple practicality"
-    },
-    {
-      "id": 52,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Auch Wachs.",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 53,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Für nichts, heute Nacht.",
-      "confidence": 0.92,
-      "emotion": "neutral"
-    },
-    {
-      "id": 54,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Morgen, Preise.\"",
-      "confidence": 0.85,
-      "emotion": "neutral"
-    },
-    {
-      "id": 55,
-      "chapterId": 3,
-      "characterId": "oduvan",
-      "text": "„Da ist die Moral des Handels\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 56,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte Oduvan, „in einem Atemzug.\"",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 57,
-      "chapterId": 3,
-      "characterId": "ivo",
-      "text": "„In meinem Land nennen wir das Dienstag.\"",
-      "confidence": 0.92,
-      "emotion": "neutral",
-      "instruct": "a cultural assertion, delivered confidently"
-    },
-    {
-      "id": 58,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Es war irgendwann nach Mitternacht, als Maerin ihre Tochter entdeckte.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 59,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Sela war acht, und sie war gekommen, wie Achtjährige kommen — unsichtbar, im Schatten von jemand Größerem, und dann plötzlich mitten im Raum, als wäre sie dorthin geliefert worden.",
-      "confidence": 0.95,
-      "emotion": "neutral",
-      "instruct": "describing an almost supernatural arrival — hushed and sudden"
-    },
-    {
-      "id": 60,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Sie stand vor der Schwelle.",
-      "confidence": 0.98,
-      "emotion": "neutral"
-    },
-    {
-      "id": 61,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Vor dem Auge.",
-      "confidence": 0.98,
-      "emotion": "neutral"
-    },
-    {
-      "id": 62,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Der Raum wurde still, wie ein angehaltener Atem still ist.",
-      "confidence": 0.95,
-      "emotion": "neutral",
-      "instruct": "a profound stillness, as if the air itself has stopped moving"
-    },
-    {
-      "id": 63,
-      "chapterId": 3,
-      "characterId": "maerin",
-      "text": "„Sela\"",
-      "confidence": 0.85,
-      "emotion": "neutral"
-    },
-    {
-      "id": 64,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte Maerin, sehr gleichmäßig, sehr langsam, „komm her zu mir.\"",
-      "confidence": 0.94,
-      "emotion": "neutral",
-      "instruct": "very measured and slow, each word deliberately placed"
-    },
-    {
-      "id": 65,
-      "chapterId": 3,
-      "characterId": "sela",
-      "text": "„Gleich\"",
-      "confidence": 0.85,
-      "emotion": "neutral"
-    },
-    {
-      "id": 66,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte Sela, was Maerins eigene Stimme im Kleinen war, und die Witwe lachte, ehe sie sich beherrschen konnte.",
-      "confidence": 0.92,
-      "emotion": "neutral",
-      "instruct": "a soft, almost breathy laugh that quickly catches itself"
-    },
-    {
-      "id": 67,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Das große Auge senkte sich.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 68,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Es kam herab und herab, bis es auf Höhe des Kindes war, und sein Gold erhellte ihr Gesicht wie eine Lampe.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 69,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Das Murmeln lief in Stücken um die Schmiede:",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 70,
-      "chapterId": 3,
-      "characterId": "pell-hollis",
-      "text": "„Ruhig —\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 71,
-      "chapterId": 3,
-      "characterId": "witwe-casper",
-      "text": "„Lasst sie\"",
-      "confidence": 0.92,
-      "emotion": "neutral"
-    },
-    {
-      "id": 72,
-      "chapterId": 3,
-      "characterId": "brann-weir",
-      "text": "„Maerin —\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 73,
-      "chapterId": 3,
-      "characterId": "berrin-weir",
-      "text": "„Ihr geht es gut\"",
-      "confidence": 0.94,
-      "emotion": "neutral"
-    },
-    {
-      "id": 74,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte Berrin, flach wie ein Regal, und hatte, wie üblich, recht.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 75,
-      "chapterId": 3,
-      "characterId": "sela",
-      "text": "„Du bist der Letzte\"",
-      "confidence": 0.92,
-      "emotion": "neutral"
-    },
-    {
-      "id": 76,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ". Keine Frage.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 77,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Kinder verschwenden keine.",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 78,
-      "chapterId": 3,
-      "characterId": "drache",
-      "text": "„Ja\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 79,
-      "chapterId": 3,
-      "characterId": "sela",
-      "text": "„Und die Glocke ist für, wenn du stirbst.\"",
-      "confidence": 0.92,
-      "emotion": "neutral",
-      "instruct": "with a solemn weight to the words"
-    },
-    {
-      "id": 80,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„Sela!\"",
-      "confidence": 0.85,
-      "emotion": "excited",
-      "vocalization": true
-    },
-    {
-      "id": 81,
-      "chapterId": 3,
-      "characterId": "drache",
-      "text": "„Es ist eine ehrliche Frage\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 82,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte der Drache, „und es ist ein ehrlicher Abend.\"",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 83,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Das Auge blinzelte, langsam wie eine sich schließende Tür.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 84,
-      "chapterId": 3,
-      "characterId": "drache",
-      "text": "„Ja. Die Glocke ist für dann.\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 85,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Sela bedachte dies mit dem vollen Ernst von acht Jahren.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 86,
-      "chapterId": 3,
-      "characterId": "sela",
-      "text": "„Aber wenn du der Letzte bist\"",
-      "confidence": 0.92,
-      "emotion": "neutral"
-    },
-    {
-      "id": 87,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte sie, „wer wird sie für dich läuten? Danach.\"",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 88,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Das Feuer spuckte.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 89,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Niemand rührte sich.",
-      "confidence": 0.98,
-      "emotion": "neutral"
-    },
-    {
-      "id": 90,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Selbst die Zwillinge hatten nichts, und Wren, die sehr angestrengt vorgegeben hatte, mit dem Wachs beschäftigt zu sein, hörte auf vorzugeben.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 91,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Als der Drache schließlich antwortete, kamen die Worte weiter auseinander als sonst, wie Steine nahe dem Gipfel eines Berges weiter auseinanderliegen.",
-      "confidence": 0.94,
-      "emotion": "neutral"
-    },
-    {
-      "id": 92,
-      "chapterId": 3,
-      "characterId": "drache",
-      "text": "„Ich hatte\"",
-      "confidence": 0.92,
-      "emotion": "neutral",
-      "instruct": "a brief, almost reluctant acknowledgment"
-    },
-    {
-      "id": 93,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte er, „nicht so weit gedacht.\"",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 94,
-      "chapterId": 3,
-      "characterId": "sela",
-      "text": "„Ich werde es tun\"",
-      "confidence": 0.92,
-      "emotion": "neutral"
-    },
-    {
-      "id": 95,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ". Ich werde ewig leben.\"",
-      "confidence": 0.5,
-      "emotion": "excited"
-    },
-    {
-      "id": 96,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Es gibt Dinge, die mitten in der Nacht von Kindern gesagt werden und den Rest eines Lebens um sich biegen, und jeder in der Schmiede wusste, dass er gerade eines gehört hatte.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 97,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Der Drache sah das kleine Mädchen lange an.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 98,
-      "chapterId": 3,
-      "characterId": "drache",
-      "text": "„Dann gehört sie dir, wenn ich mit ihr fertig bin\"",
-      "confidence": 0.91,
-      "emotion": "neutral",
-      "instruct": "with a sense of finality and ownership"
-    },
-    {
-      "id": 99,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte er schließlich. „Bewahre sie irgendwo hoch oben auf.\"",
-      "confidence": 0.5,
-      "emotion": "neutral",
-      "instruct": "a gentle instruction, spoken with care"
-    },
-    {
-      "id": 100,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„Mama bewahrt die guten Tassen im obersten Regal auf.\"",
-      "confidence": 0.92,
-      "emotion": "neutral"
-    },
-    {
-      "id": 101,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„Das wird genügen.\"",
-      "confidence": 0.94,
-      "emotion": "neutral"
-    },
-    {
-      "id": 102,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Maerin nahm ihre Tochter in die Arme und hielt sie fest und traute sich nicht, etwas hinzuzufügen.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 103,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Hart der Köhler — der irgendwann gekommen war, ohne dass jemand es bemerkt hatte, wie eine Wand kommt, und seit einer Stunde still das Feuer aus seinen eigenen Säcken nährte — blickte auf.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 104,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„Das Feuer will gefüttert werden\"",
-      "confidence": 0.92,
-      "emotion": "neutral",
-      "instruct": "barely audible, matching the quietness of the coals"
-    },
-    {
-      "id": 105,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte er, kaum lauter als die Kohlen. „Wenn wir das tun.\"",
-      "confidence": 0.94,
-      "emotion": "neutral"
-    },
-    {
-      "id": 106,
-      "chapterId": 3,
-      "characterId": "oduvan",
-      "text": "„Wir tun das\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 107,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Was folgte, tat die Schmiede zumeist schweigend, und der Erzähler wird es erzählen, weil die darin zu beschäftigt waren.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 108,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Die Form war aus Sand und Ton und einem alten Glockenmaß, das Oduvan seit neun Jahren nicht angerührt hatte, seit der Mann, der ihn das Maß gelehrt hatte, keine Werkzeuge mehr brauchte.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 109,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Wren schnitt die Kanäle.",
-      "confidence": 0.97,
-      "emotion": "neutral"
-    },
-    {
-      "id": 110,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Pell holte und brachte und erwies sich, zur allgemeinen Überraschung einschließlich seiner eigenen, als nützlich.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 111,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Die Witwe beriet, genau und ohne Gnade.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 112,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Die Zwillinge hielten die Tiegelwiege wie ein einziges Geschöpf mit vier Armen — bei zwei Männern, die etwas heben, das nicht abgesetzt werden kann, bleibt kein Streit übrig — und Ivos Wachs und Ivos Seil erwiesen sich als genau das, was gebraucht wurde, für nichts, heute Nacht.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 113,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Der Guss, als er kam, hatte die Farbe des Morgens, der noch nicht angebrochen war.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 114,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Bronze floss den Kanal hinab mit einem Laut wie ein langes Wort in einer Sprache, eine Silbe breit.",
-      "confidence": 0.95,
-      "emotion": "neutral"
-    },
-    {
-      "id": 115,
-      "chapterId": 3,
-      "characterId": "oduvan",
-      "text": "„Ruhig — ruhig — so.\"",
-      "confidence": 0.91,
-      "emotion": "neutral",
-      "instruct": "a low, steadying murmur"
-    },
-    {
-      "id": 116,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Oduvans Hand auf Wrens Schulter, als sie sich zu weit über den Dampf beugte.",
-      "confidence": 0.96,
-      "emotion": "neutral"
-    },
-    {
-      "id": 117,
-      "chapterId": 3,
-      "characterId": "oduvan",
-      "text": "„Spatz. Zurück.\"",
-      "confidence": 0.92,
-      "emotion": "neutral",
-      "instruct": "sharp and commanding, but not aggressive"
-    },
-    {
-      "id": 118,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Sie trat zurück.",
-      "confidence": 0.98
-    },
-    {
-      "id": 119,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Er hatte sie nicht zweimal in einer Saison so genannt, und sie wusste es besser, als ihm dabei ins Gesicht zu sehen, also sahen beide stattdessen auf die Form.",
-      "confidence": 0.95
-    },
-    {
-      "id": 120,
-      "chapterId": 3,
-      "characterId": "sela",
-      "text": "„Warum kriegt sie einen Vogelnamen?\"",
-      "confidence": 0.85,
-      "emotion": "neutral"
-    },
-    {
-      "id": 121,
-      "chapterId": 3,
-      "characterId": "wren",
-      "text": "„Weil er vergisst, streng zu sein\"",
-      "confidence": 0.92,
-      "emotion": "neutral"
-    },
-    {
-      "id": 122,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte Wren.",
-      "confidence": 0.78
-    },
-    {
-      "id": 123,
-      "chapterId": 3,
-      "characterId": "wren",
-      "text": "„Kann ich ein Vogel sein?\"",
-      "confidence": 0.91,
-      "emotion": "whisper"
-    },
-    {
-      "id": 124,
-      "chapterId": 3,
-      "characterId": "wren",
-      "text": "„Nein\"",
-      "confidence": 0.85,
-      "emotion": "neutral"
-    },
-    {
-      "id": 125,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte Wren.",
-      "confidence": 0.75
-    },
-    {
-      "id": 126,
-      "chapterId": 3,
-      "characterId": "wren",
-      "text": "„Spatz ist vergeben.\"",
-      "confidence": 0.82
-    },
-    {
-      "id": 127,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Die Stunde zwischen dem Guss und dem Aufbrechen ist die längste im Schmiedehandwerk, und sie lässt sich nicht beschleunigen, und so füllte sich die Schmiede mit dem eigentümlichen Gespräch von Menschen, die etwas zusammen getan haben und darauf warten zu erfahren, ob es gelungen ist.",
-      "confidence": 0.97
-    },
-    {
-      "id": 128,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Hart ließ das Feuer langsam herunterbrennen, wie man ein Pferd abkühlen lässt.",
-      "confidence": 0.96
-    },
-    {
-      "id": 129,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„Es kühlt falsch ab, wenn man es eilig hat\", sagte er, mehr zu den Kohlen als zu irgendwem.",
-      "confidence": 0.94,
-      "emotion": "neutral",
-      "instruct": "matter-of-factly, focused more on the process than the listener"
-    },
-    {
-      "id": 130,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„Eine Glocke ist wie ein Laib Brot.",
-      "confidence": 0.92
-    },
-    {
-      "id": 131,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Das Innere muss sich mit dem Äußeren einig sein.\"",
-      "confidence": 0.85
-    },
-    {
-      "id": 132,
-      "chapterId": 3,
-      "characterId": "brann-weir",
-      "text": "„Woher willst du das wissen?\"",
-      "confidence": 0.79,
-      "emotion": "neutral"
-    },
-    {
-      "id": 133,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "fragte Brann, der nicht anders konnte.",
-      "confidence": 0.95
-    },
-    {
-      "id": 134,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„Dreißig Jahre Kohle gebrannt\"",
-      "confidence": 0.88,
-      "emotion": "neutral"
-    },
-    {
-      "id": 135,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte Hart.",
-      "confidence": 0.75
-    },
-    {
-      "id": 136,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„Alles ist ein Laib Brot.\"",
-      "confidence": 0.82,
-      "emotion": "neutral"
-    },
-    {
-      "id": 137,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Pater Lessom hatte endlich seine Sätze gefunden.",
-      "confidence": 0.96
-    },
-    {
-      "id": 138,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Er kam der Form so nahe, wie die Hitze es erlaubte, und stand da, den Hut noch in den Händen.",
-      "confidence": 0.94
-    },
-    {
-      "id": 139,
-      "chapterId": 3,
-      "characterId": "pater-lessom",
-      "text": "„Ich habe mir eine ausgedacht\"",
-      "confidence": 0.85,
-      "emotion": "neutral",
-      "instruct": "a quiet declaration of a new idea"
-    },
-    {
-      "id": 140,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte er zur Witwe, fast trotzig.",
-      "confidence": 0.81,
-      "emotion": "angry"
-    },
-    {
-      "id": 141,
-      "chapterId": 3,
-      "characterId": "pater-lessom",
-      "text": "„Die Regel.\"",
-      "confidence": 0.9,
-      "emotion": "neutral"
-    },
-    {
-      "id": 142,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„Und?\"",
-      "confidence": 0.84
-    },
-    {
-      "id": 143,
-      "chapterId": 3,
-      "characterId": "pater-lessom",
-      "text": "„Eine Glocke, geläutet für den Letzten von irgendetwas, ist für alles davon geläutet.\"",
-      "confidence": 0.91,
-      "emotion": "neutral",
-      "instruct": "delivered with great conviction, almost like a religious pronouncement"
-    },
-    {
-      "id": 144,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Er sagte es mit seiner Kanzelstimme, dann wirkte er verlegen und setzte den Hut wieder auf.",
-      "confidence": 0.95
-    },
-    {
-      "id": 145,
-      "chapterId": 3,
-      "characterId": "pater-lessom",
-      "text": "„Am Sonntag sage ich es richtig.\"",
-      "confidence": 0.88,
-      "emotion": "neutral"
-    },
-    {
-      "id": 146,
-      "chapterId": 3,
-      "characterId": "drache",
-      "text": "„Sagt es so\"",
-      "confidence": 0.78,
-      "emotion": "neutral",
-      "instruct": "a simple agreement, spoken from the threshold"
-    },
-    {
-      "id": 147,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte der Drache von der Schwelle her.",
-      "confidence": 0.85
-    },
-    {
-      "id": 148,
-      "chapterId": 3,
-      "characterId": "drache",
-      "text": "„Es wird durch Anfassen nicht besser.\"",
-      "confidence": 0.9,
-      "emotion": "neutral",
-      "instruct": "firmly stating an immutable truth"
-    },
-    {
-      "id": 149,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Wren war zum großen Tor gewandert, das Wachs noch unter den Nägeln.",
-      "confidence": 0.96
-    },
-    {
-      "id": 150,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Aus der Nähe roch der Drache wie Regen auf heißem Stein.",
-      "confidence": 0.98
-    },
-    {
-      "id": 151,
-      "chapterId": 3,
-      "characterId": "wren",
-      "text": "„Hast du wirklich die ganze Welt durchquert?\"",
-      "confidence": 0.85,
-      "emotion": "neutral",
-      "instruct": "with a tone of genuine curiosity and slight wonder"
-    },
-    {
-      "id": 152,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "fragte sie.",
-      "confidence": 0.79
-    },
-    {
-      "id": 153,
-      "chapterId": 3,
-      "characterId": "wren",
-      "text": "„Dafür?\"",
-      "confidence": 0.82,
-      "emotion": "neutral"
-    },
-    {
-      "id": 154,
-      "chapterId": 3,
-      "characterId": "drache",
-      "text": "„Für einen wahren Ton.",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 155,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Dein Meister ist der vierte Schmied, den ich gefragt habe.\"",
-      "confidence": 0.94
-    },
-    {
-      "id": 156,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„Was ist mit den anderen dreien geschehen?\"",
-      "confidence": 0.85,
-      "instruct": "a questioning tone laced with mild impatience"
-    },
-    {
-      "id": 157,
-      "chapterId": 3,
-      "characterId": "coalfall",
-      "text": "„Nichts\"",
-      "confidence": 0.92,
-      "emotion": "neutral"
-    },
-    {
-      "id": 158,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte Coalfall.",
-      "confidence": 0.78
-    },
-    {
-      "id": 159,
-      "chapterId": 3,
-      "characterId": "coalfall",
-      "text": "„Sie sagten nein.",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 160,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Die Leute stellen sich vor, meine Enttäuschungen seien dramatisch.",
-      "confidence": 0.95
-    },
-    {
-      "id": 161,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Meist sind sie wie die aller anderen.\"",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 162,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Das Auge glitt seitwärts zu ihr, und es lag etwas darin, das man auf einem kleineren Gesicht Schalk genannt hätte.",
-      "confidence": 0.96
-    },
-    {
-      "id": 163,
-      "chapterId": 3,
-      "characterId": "coalfall",
-      "text": "„Er sagte ja, ehe ich zu Ende gefragt hatte.\"",
-      "confidence": 0.85,
-      "emotion": "neutral"
-    },
-    {
-      "id": 164,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Das solltest du über ihn wissen, Spatz.\"",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 165,
-      "chapterId": 3,
-      "characterId": "wren",
-      "text": "„Ich heiße Wren\"",
-      "confidence": 0.91,
-      "emotion": "neutral"
-    },
-    {
-      "id": 166,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte Wren und wurde rot,",
-      "confidence": 0.81
-    },
-    {
-      "id": 167,
-      "chapterId": 3,
-      "characterId": "wren",
-      "text": "„für alle außer ihm.\"",
-      "confidence": 0.79,
-      "emotion": "neutral"
-    },
-    {
-      "id": 168,
-      "chapterId": 3,
-      "characterId": "drache",
-      "text": "„Ich weiß\"",
-      "confidence": 0.88,
-      "emotion": "neutral"
-    },
-    {
-      "id": 169,
-      "chapterId": 3,
-      "characterId": "drache",
-      "text": "„Ich wollte hören, wie du es abstreitest.\"",
-      "confidence": 0.91,
-      "emotion": "neutral",
-      "instruct": "a challenging tone, implying a desire to hear the defense"
-    },
-    {
-      "id": 170,
-      "chapterId": 3,
-      "characterId": "witwe-casper",
-      "text": "„Meine Großmutter würde mir nicht glauben, wisst Ihr.",
-      "confidence": 0.82,
-      "emotion": "neutral"
-    },
-    {
-      "id": 171,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Dass ich eine Nacht mit einem der Euren verbracht habe und das einzige Feuer im Herd war.\"",
-      "confidence": 0.5,
-      "emotion": "neutral"
-    },
-    {
-      "id": 172,
-      "chapterId": 3,
-      "characterId": "coalfall",
-      "text": "„Dann erzählt es so, wie sie die ihren erzählte\"",
-      "confidence": 0.82,
-      "emotion": "neutral",
-      "instruct": "mimicking the storytelling style of her grandmother, gentle and anecdotal"
-    },
-    {
-      "id": 173,
-      "chapterId": 3,
-      "characterId": "coalfall",
-      "text": "„Schlecht, und oft.\"",
-      "confidence": 0.85,
-      "emotion": "neutral"
-    },
-    {
-      "id": 174,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Das entlockte das Lachen, das die Nacht aufgespart hatte — sogar Maerins, sogar Lessoms — und Pell lachte am lautesten von allen und sah sich dann um, um zu prüfen, ob Lachen erlaubt war.",
-      "confidence": 0.95
-    },
-    {
-      "id": 175,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Sie brachen die Form auf, als der Himmel von Kohle zu Asche wurde.",
-      "confidence": 0.97
-    },
-    {
-      "id": 176,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Die Glocke kam aus dem Sand, wie der Drache aus der Dunkelheit gekommen war — auf einmal, und kleiner als in den Geschichten, und genau in der richtigen Größe.",
-      "confidence": 0.96
-    },
-    {
-      "id": 177,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Klein genug, um an einer Klaue zu hängen.",
-      "confidence": 0.98
-    },
-    {
-      "id": 178,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Oduvan feilte den Rand, schlug sie einmal mit einem Knöchel an, lauschte mit geschlossenen Augen und feilte erneut.",
-      "confidence": 0.5
-    },
-    {
-      "id": 179,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Beim dritten Mal griff er nicht nach der Feile.",
-      "confidence": 0.97
-    },
-    {
-      "id": 180,
-      "chapterId": 3,
-      "characterId": "oduvan",
-      "text": "„Da ist Euer wahrer Ton\"",
-      "confidence": 0.85,
-      "emotion": "neutral",
-      "instruct": "a proud declaration of quality"
-    },
-    {
-      "id": 181,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte er.",
-      "confidence": 0.5
-    },
-    {
-      "id": 182,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„So, wie ihn der zweitbeste Schmied macht.\"",
-      "confidence": 0.82
-    },
-    {
-      "id": 183,
-      "chapterId": 3,
-      "characterId": "pell-hollis",
-      "text": "„Er ist der beste im Tal\"",
-      "confidence": 0.91,
-      "emotion": "angry",
-      "instruct": "boastfully, with absolute certainty"
-    },
-    {
-      "id": 184,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": ", sagte Pell, der irgendwann im Dunkeln beschlossen hatte, dass dies auch sein Abenteuer war,",
-      "confidence": 0.5
-    },
-    {
-      "id": 185,
-      "chapterId": 3,
-      "characterId": "pell-hollis",
-      "text": "„und ich schreie jeden nieder, der etwas anderes behauptet.",
-      "confidence": 0.92,
-      "emotion": "angry"
-    },
-    {
-      "id": 186,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Ich bin dafür bekannt.",
-      "confidence": 0.5,
-      "emotion": "angry"
-    },
-    {
-      "id": 187,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Sie hängten sie mit Ivos Seil an die Klaue des Drachen, dort im großen Tor, während ein ganzes Tal voll in der Nacht versammelter Gesichter zusah.",
-      "confidence": 0.96
-    },
-    {
-      "id": 188,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Coalfall hob die Klaue, vorsichtig wie ein Mann, der volle Becher trägt,",
-      "confidence": 0.94
-    },
-    {
-      "id": 189,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "und drehte sie und betrachtete lange das kleine helle Ding, dessen er sich um die halbe Welt gewiss geworden war.",
-      "confidence": 0.95
-    },
-    {
-      "id": 190,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Dann schnippte er die Glocke, einmal, mit der Spitze einer schwarzen Kralle.",
-      "confidence": 0.98
-    },
-    {
-      "id": 191,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Der Ton ging zur Tür hinaus und den Weg hinauf und über die Dächer, unparteiisch, ohne Eile, von der Art Klang, der nicht um Erlaubnis bittet.",
-      "confidence": 0.97
-    },
-    {
-      "id": 192,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Hühner erwachten.",
-      "confidence": 0.98
-    },
-    {
-      "id": 193,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Ein Hund antwortete, irrte sich und gab auf.",
-      "confidence": 0.95
-    },
-    {
-      "id": 194,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "Und in der Türöffnung der Schmiede, im ersten Grau des Morgens, schwang die Glocke sich kleiner und kleiner und sprach das eine Wort, das man ihr die ganze Nacht beigebracht hatte, das einzige Wort, das eine wahre Glocke kennt:",
-      "confidence": 0.96
-    },
-    {
-      "id": 195,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "„Erinnere dich.\"",
-      "confidence": 0.91,
-      "emotion": "excited"
-    },
-    {
-      "id": 196,
-      "chapterId": 3,
-      "characterId": "narrator",
-      "text": "[emphatic] Ende.",
-      "confidence": 0.98
-    }
-  ],
-  "mergedAwayKeys": []
+ "sentences": [
+  {
+   "id": 1,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Die Schmiede hatte die Farbe eines gedämpften Sonnenuntergangs angenommen, und Wren kratzte die letzten Schlackenreste ab, als das Klopfen an der Tür begann.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 2,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "„Lass es\"",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 3,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": ", sagte Meister Oduvan, ohne aufzusehen.",
+   "confidence": 0.98,
+   "emotion": "neutral"
+  },
+  {
+   "id": 4,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Siebzig Winter hatten seine Stimme zu Kies und Geduld abgeschliffen.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 5,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "„Wer immer es ist, der mag weiterklopfen.\"",
+   "confidence": 0.94,
+   "emotion": "neutral"
+  },
+  {
+   "id": 6,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "„Es könnte ein Kunde sein.\"",
+   "confidence": 0.85,
+   "emotion": "neutral"
+  },
+  {
+   "id": 7,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "„Um diese Stunde ist es entweder ein Betrunkener oder eine Schuld.",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 8,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Keiner von beiden zahlt besser dafür, dass man ihn schnell hereinlässt.\"",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 9,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Die Tür ging trotzdem auf.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 10,
+   "chapterId": 2,
+   "characterId": "maerin",
+   "text": "„Oduvan. Verriegle die Läden und lösch die Kohlen.\"",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 11,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Ihre Worte waren knapp, wie sie es immer waren, wenn sie gelaufen war.",
+   "confidence": 0.94,
+   "emotion": "neutral"
+  },
+  {
+   "id": 12,
+   "chapterId": 2,
+   "characterId": "maerin",
+   "text": "„Auf der Straße nach Coalfall ist ein Drache.",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 13,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": " Groß wie eine Scheune.",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 14,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Er kommt den Weg herunter.\"",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 15,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Wrens Kratzer hielt inne.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 16,
+   "chapterId": 2,
+   "characterId": "wren",
+   "text": "„Ein echter?\"",
+   "confidence": 0.85,
+   "emotion": "neutral",
+   "instruct": "a questioning, sharp tone"
+  },
+  {
+   "id": 17,
+   "chapterId": 2,
+   "characterId": "maerin",
+   "text": "„Nein, Kind, ein gemalter.\"",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 18,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Maerin lächelte nicht.",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 19,
+   "chapterId": 2,
+   "characterId": "maerin",
+   "text": "„Ein echter.",
+   "confidence": 0.85,
+   "emotion": "neutral"
+  },
+  {
+   "id": 20,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Und er kommt geradewegs auf das einzige erleuchtete Fenster im Tal zu, und das ist eures.",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 21,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Lösch das Feuer.\"",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 22,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "„Wenn ich das Feuer lösche\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 23,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": ", sagte Oduvan,",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 24,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "„verliere ich die Schweißnaht, die ich seit Mittag hege.",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 25,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Ein Drache kann die Länge einer Schweißnaht warten oder er kann es nicht, und so oder so empfange ich ihn lieber in der Wärme.\"",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 26,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Er legte seine Zange ab.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 27,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "„Spatz. Mach das große Tor auf.\"",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 28,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Wren — Spatz nur für ihn, und nur, wenn er vergaß, streng zu sein — ging zum großen Tor und stieß es weit auf.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 29,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Der Drache füllte die Dunkelheit dahinter, wie Wasser einen Becher füllt.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 30,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Ein Auge, golden und langsam, kam auf Höhe der Schwelle und hielt dort inne, die kleine Wärme des Ortes abwägend.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 31,
+   "chapterId": 2,
+   "characterId": "drache",
+   "text": "„Flieht, ihr Narren — er wird euch alle verschlingen!\"",
+   "confidence": 0.85,
+   "emotion": "excited"
+  },
+  {
+   "id": 32,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Niemand floh.",
+   "confidence": 0.98,
+   "emotion": "neutral"
+  },
+  {
+   "id": 33,
+   "chapterId": 2,
+   "characterId": "drache",
+   "text": "„Ich bin von weit her gekommen\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 34,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": ", sagte der Drache.",
+   "confidence": 0.98,
+   "emotion": "neutral"
+  },
+  {
+   "id": 35,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Seine Stimme war nicht laut.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 36,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Es war der Klang, den ein Berg machen würde, wenn ein Berg müde wäre, und jedes Wort traf einen Augenblick später ein, als man es erwartete.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 37,
+   "chapterId": 2,
+   "characterId": "drache",
+   "text": "„Die Dörfer nennen mich Coalfall.",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 38,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Das ist nicht mein Name, aber er genügt.",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 39,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Man sagt mir, der beste Schmied im Tal halte diese Schmiede.\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 40,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "„Man sagt Euch falsch\"",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 41,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": ". Der beste Schmied im Tal ist vor neun Jahren gestorben.",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 42,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Ihr müsst Euch mit dem zweitbesten begnügen.\"",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 43,
+   "chapterId": 2,
+   "characterId": "drache",
+   "text": "„Bescheidenheit oder Verkaufstaktik?\"",
+   "confidence": 0.85,
+   "emotion": "neutral"
+  },
+  {
+   "id": 44,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "„In meinem Alter dasselbe.\"",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 45,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Das goldene Auge wanderte zu Wren, und sie spürte es, wie man die Sonne durch ein Fenster spürt.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 46,
+   "chapterId": 2,
+   "characterId": "drache",
+   "text": "„Und die Kleine?\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 47,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "„Mein Lehrling.",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 48,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Sie ist dreizehn und glaubt, ich höre sie nicht seufzen.",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 49,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Sie wird besser sein als ich, ehe sie zwanzig ist, und das ist der einzige Grund, warum ich sie behalte.\"",
+   "confidence": 0.94,
+   "emotion": "neutral"
+  },
+  {
+   "id": 50,
+   "chapterId": 2,
+   "characterId": "wren",
+   "text": "Ich seufze nie",
+   "confidence": 0.85,
+   "emotion": "neutral",
+   "vocalization": true
+  },
+  {
+   "id": 51,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": ", sagte Wren, die seufzte.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 52,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Der Drache senkte sich, bis sein Atem die Kohlen bewegte, und sie glühten auf, ohne darum gebeten worden zu sein.",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 53,
+   "chapterId": 2,
+   "characterId": "drache",
+   "text": "„Ich will kein Schwert\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 54,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": ", sagte er.",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 55,
+   "chapterId": 2,
+   "characterId": "drache",
+   "text": "„Alle wollen mich tot, und ein Schwert würde sie nur ermutigen.",
+   "confidence": 0.94,
+   "emotion": "neutral"
+  },
+  {
+   "id": 56,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Ich will eine Glocke.",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 57,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Klein genug, um an einer Klaue zu hängen.",
+   "confidence": 0.94,
+   "emotion": "neutral"
+  },
+  {
+   "id": 58,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Ich bin der Letzte meiner Art, und wenn ich gehe, wird niemand da sein, der es vermerkt.",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 59,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Ich möchte es selbst vermerken, im Voraus — solange es noch jemanden gibt, der einen wahren Ton zu gießen weiß.\"",
+   "confidence": 0.94,
+   "emotion": "neutral"
+  },
+  {
+   "id": 60,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Eine Weile war das Feuer das einzige Geräusch.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 61,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Dann nahm Oduvan seine Zange wieder auf.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 62,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "„Eine Glocke\"",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 63,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": ", sagte er, als bestellten Drachen sie jeden Dienstag.",
+   "confidence": 0.98,
+   "emotion": "neutral"
+  },
+  {
+   "id": 64,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "„Bronze also, kein Eisen.",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 65,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Spatz — das gute Zinn, den Tiegel, und hör auf, auf den Formsand zu weinen, das verdirbt den Guss.\"",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 66,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "„Ich weine nicht.\"",
+   "confidence": 0.85,
+   "emotion": "neutral"
+  },
+  {
+   "id": 67,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "„Natürlich nicht.\"",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 68,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Er kniff die Augen zusammen und betrachtete den Drachen, maß ihn, wie er alles maß.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 69,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Der Drache ließ sich in der Türöffnung nieder, ein Auge gegen die Wärme halb geschlossen, und sagte mit der Stimme eines müden Berges, den man seit sehr langer Zeit nicht gebeten hatte, an einem freundlichen Ort zu warten:",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 70,
+   "chapterId": 2,
+   "characterId": "drache",
+   "text": "„Ich habe nichts als Zeit. Fangt an.\"",
+   "confidence": 0.93,
+   "emotion": "neutral"
+  },
+  {
+   "id": 1,
+   "chapterId": 3,
+   "characterId": "pell-hollis",
+   "text": "„Ein Wagen bewegt sich falsch im Dunkeln, dann sagt man es.\"",
+   "confidence": 0.92,
+   "emotion": "neutral",
+   "vocalization": true
+  },
+  {
+   "id": 2,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Pell schob sich hinein und hielt den Amboss zwischen sich und der Schwelle.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 3,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Die Schwelle beobachtete ihn mit einem goldenen Auge.",
+   "confidence": 0.98,
+   "emotion": "neutral"
+  },
+  {
+   "id": 4,
+   "chapterId": 3,
+   "characterId": "pell-hollis",
+   "text": "„Ich bleibe nur — ich stelle mich hierher.",
+   "confidence": 0.9,
+   "emotion": "neutral",
+   "instruct": "firmly, a statement of intent"
+  },
+  {
+   "id": 5,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Bei den Hämmern.",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 6,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Für den Fall.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 7,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "„Für welchen Fall?\"",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 8,
+   "chapterId": 3,
+   "characterId": "pell-hollis",
+   "text": "„Ich werde es wissen, wenn es passiert.\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 9,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Der Drache atmete langsam aus, und die Kohlen glühten auf.",
+   "confidence": 0.96,
+   "emotion": "neutral",
+   "instruct": "slow and deliberate, building tension"
+  },
+  {
+   "id": 10,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Pell nahm die Farbe des Formsands an und dann, als nichts weiter geschah, eine gewöhnlichere Farbe.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 11,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Bis das Zinn in den Tiegel kam, war er zwei Schritte näher gerückt und gab Meinungen über die Hitze ab.",
+   "confidence": 0.94,
+   "emotion": "neutral"
+  },
+  {
+   "id": 12,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Witwe Casper kam als Nächste, weil ihre Kate eine Wand mit dem Weg teilte und ihre Neugier mit nichts.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 13,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Sie war um die achtzig und gebaut wie ein Fragezeichen, und sie musterte den Drachen, wie man den Karren eines Hausierers mustert.",
+   "confidence": 0.96,
+   "emotion": "neutral",
+   "instruct": "with an assessing, critical gaze implied in the delivery"
+  },
+  {
+   "id": 14,
+   "chapterId": 3,
+   "characterId": "witwe-casper",
+   "text": "„Kleiner als in den Geschichten\"",
+   "confidence": 0.91,
+   "emotion": "neutral",
+   "instruct": "softly, a quiet observation"
+  },
+  {
+   "id": 15,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Die Geschichten handelten von meiner Großmutter\"",
+   "confidence": 0.94,
+   "emotion": "neutral"
+  },
+  {
+   "id": 16,
+   "chapterId": 3,
+   "characterId": "witwe-casper",
+   "text": "„Meine auch.\"",
+   "confidence": 0.92,
+   "emotion": "neutral",
+   "instruct": "a simple, knowing affirmation"
+  },
+  {
+   "id": 17,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Die Witwe ließ sich auf die Bank an der Wand nieder, ungebeten, behaglich.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 18,
+   "chapterId": 3,
+   "characterId": "witwe-casper",
+   "text": "„Meine Großmutter sagte, der Himmel über dem Steinbruch sei mittags dunkel geworden von euren Flügeln.",
+   "confidence": 0.91,
+   "emotion": "neutral",
+   "instruct": "with a tone of remembered wonder, slightly wistful"
+  },
+  {
+   "id": 19,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Sie log bei fast jedem Wetter, aber sie weinte, als sie es erzählte, also habe ich das eine geglaubt.\"",
+   "confidence": 0.5,
+   "emotion": "sad",
+   "instruct": "softly, with an undercurrent of sadness in the voice"
+  },
+  {
+   "id": 20,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Glaub es\"",
+   "confidence": 0.92,
+   "emotion": "neutral",
+   "instruct": "a simple, firm declaration"
+  },
+  {
+   "id": 21,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte Coalfall, und danach war es eine Weile still.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 22,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Die Zwillinge kamen zusammen, wie sie alles taten, und im Streit, wie sie alles taten.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 23,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Brann und Berrin Weir brachen oben im Steinbruch Stein, und fünfundvierzig Jahre nebeneinander hatten sie einander so ähnlich geschliffen wie zwei Daumen — dieselben Schultern, derselbe graue Stoppelbart, dieselbe Art, eine Tür auszufüllen.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 24,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Das Tal unterschied sie nach dem Gehör.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 25,
+   "chapterId": 3,
+   "characterId": "brann-weir",
+   "text": "„Das ist also der Drache?\"",
+   "confidence": 0.92,
+   "emotion": "neutral"
+  },
+  {
+   "id": 26,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Es ist der Drache.\"",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 27,
+   "chapterId": 3,
+   "characterId": "brann-weir",
+   "text": "„Und wir gießen ihm eine Glocke? Woraus, dem Kirchendach?\"",
+   "confidence": 0.92,
+   "emotion": "neutral"
+  },
+  {
+   "id": 28,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "„Aus Bronze. Der Schmied hat Bronze.\"",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 29,
+   "chapterId": 3,
+   "characterId": "brann-weir",
+   "text": "„Seit wann hat der Schmied Glockenbronze einfach so herumliegen?\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 30,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "„Seit er sie hat. Sieh dir den Tiegel an.\"",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 31,
+   "chapterId": 3,
+   "characterId": "brann-weir",
+   "text": "„Ich sehe mir den Tiegel an. Darf ich nicht nach dem Tiegel fragen?\"",
+   "confidence": 0.92,
+   "emotion": "neutral"
+  },
+  {
+   "id": 32,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "„Du darfst. Du bist nur laut.\"",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 33,
+   "chapterId": 3,
+   "characterId": "brann-weir",
+   "text": "„Laut, ich —\"",
+   "confidence": 0.85,
+   "emotion": "neutral",
+   "instruct": "a sharp interruption, challenging"
+  },
+  {
+   "id": 34,
+   "chapterId": 3,
+   "characterId": "oduvan",
+   "text": "„Meine Herren\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 35,
+   "chapterId": 3,
+   "characterId": "oduvan",
+   "text": ", sagte Oduvan mit der Stimme, die er für gerissenes Eisen aufsparte, „es ist eine kleine Glocke. Sie braucht ein kleines Publikum.\"",
+   "confidence": 0.94,
+   "emotion": "neutral",
+   "instruct": "with a voice that sounds strained, like grinding metal, emphasizing the effort in his speech"
+  },
+  {
+   "id": 36,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Die Zwillinge verstummten im Gleichklang, was die andere Art war, sie von allen anderen zu unterscheiden.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 37,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Pater Lessom erschien an der Schwelle, den Hut in den Händen, was für Lessom volle Zeremonie war.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 38,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "„Ist es recht, meint Ihr? Glocken sind für Seelen. Ich kenne die Regel nicht für —\"",
+   "confidence": 0.93,
+   "emotion": "whisper",
+   "vocalization": true
+  },
+  {
+   "id": 39,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "er deutete auf die Schwelle, auf das alles, „— dies.\"",
+   "confidence": 0.94,
+   "emotion": "neutral"
+  },
+  {
+   "id": 40,
+   "chapterId": 3,
+   "characterId": "witwe-casper",
+   "text": "„Dann denkt Euch eine aus\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 41,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte Witwe Casper. „Das ist es, was Euresgleichen tut, und heute Nacht wird sie gebraucht.\"",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 42,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Lessom trat ein.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 43,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Er hielt sich an der Wand, und seine Lippen bewegten sich hin und wieder, und ob es Gebet war oder das Einüben besserer Sätze, fragte niemand.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 44,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Aber als der Atem des Drachen das Feuer bewegte, machte er ein kleines Zeichen darüber — schnell, wie ein Mann, der einem Bettler eine Münze zusteckt und dabei tut, als hätte er es nicht — und danach stand er gelassener da.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 45,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Der Hausierer Ivo hatte wegen eines verlorenen Hufeisens in Maerins Scheune geschlafen und kam schon redend herein, auf jene verdrehte Art, die ihm eigen war und die niemand im Tal auf einer Karte verorten konnte.",
+   "confidence": 0.94,
+   "emotion": "neutral"
+  },
+  {
+   "id": 46,
+   "chapterId": 3,
+   "characterId": "ivo",
+   "text": "„Eine Glocke will er.",
+   "confidence": 0.91,
+   "emotion": "neutral",
+   "instruct": "a low, definitive statement"
+  },
+  {
+   "id": 47,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Für sich, die Glocke.",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 48,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "In meinem Land pflanzen wir für die Toten einen Baum — aber einen Baum an einer Klaue kann man nicht tragen, und also: eine Glocke.",
+   "confidence": 0.92,
+   "emotion": "neutral"
+  },
+  {
+   "id": 49,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Vernünftig.\"",
+   "confidence": 0.85,
+   "emotion": "neutral",
+   "instruct": "concise and practical"
+  },
+  {
+   "id": 50,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Er setzte sein Bündel ab mit der Miene eines Mannes, der einen Laden eröffnet.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 51,
+   "chapterId": 3,
+   "characterId": "ivo",
+   "text": "„Ich habe Seil, wenn Seil gewünscht wird.",
+   "confidence": 0.91,
+   "emotion": "neutral",
+   "instruct": "offering a service with simple practicality"
+  },
+  {
+   "id": 52,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Auch Wachs.",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 53,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Für nichts, heute Nacht.",
+   "confidence": 0.92,
+   "emotion": "neutral"
+  },
+  {
+   "id": 54,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Morgen, Preise.\"",
+   "confidence": 0.85,
+   "emotion": "neutral"
+  },
+  {
+   "id": 55,
+   "chapterId": 3,
+   "characterId": "oduvan",
+   "text": "„Da ist die Moral des Handels\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 56,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte Oduvan, „in einem Atemzug.\"",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 57,
+   "chapterId": 3,
+   "characterId": "ivo",
+   "text": "„In meinem Land nennen wir das Dienstag.\"",
+   "confidence": 0.92,
+   "emotion": "neutral",
+   "instruct": "a cultural assertion, delivered confidently"
+  },
+  {
+   "id": 58,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Es war irgendwann nach Mitternacht, als Maerin ihre Tochter entdeckte.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 59,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Sela war acht, und sie war gekommen, wie Achtjährige kommen — unsichtbar, im Schatten von jemand Größerem, und dann plötzlich mitten im Raum, als wäre sie dorthin geliefert worden.",
+   "confidence": 0.95,
+   "emotion": "neutral",
+   "instruct": "describing an almost supernatural arrival — hushed and sudden"
+  },
+  {
+   "id": 60,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Sie stand vor der Schwelle.",
+   "confidence": 0.98,
+   "emotion": "neutral"
+  },
+  {
+   "id": 61,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Vor dem Auge.",
+   "confidence": 0.98,
+   "emotion": "neutral"
+  },
+  {
+   "id": 62,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Der Raum wurde still, wie ein angehaltener Atem still ist.",
+   "confidence": 0.95,
+   "emotion": "neutral",
+   "instruct": "a profound stillness, as if the air itself has stopped moving"
+  },
+  {
+   "id": 63,
+   "chapterId": 3,
+   "characterId": "maerin",
+   "text": "„Sela\"",
+   "confidence": 0.85,
+   "emotion": "neutral"
+  },
+  {
+   "id": 64,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte Maerin, sehr gleichmäßig, sehr langsam, „komm her zu mir.\"",
+   "confidence": 0.94,
+   "emotion": "neutral",
+   "instruct": "very measured and slow, each word deliberately placed"
+  },
+  {
+   "id": 65,
+   "chapterId": 3,
+   "characterId": "sela",
+   "text": "„Gleich\"",
+   "confidence": 0.85,
+   "emotion": "neutral"
+  },
+  {
+   "id": 66,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte Sela, was Maerins eigene Stimme im Kleinen war, und die Witwe lachte, ehe sie sich beherrschen konnte.",
+   "confidence": 0.92,
+   "emotion": "neutral",
+   "instruct": "a soft, almost breathy laugh that quickly catches itself"
+  },
+  {
+   "id": 67,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Das große Auge senkte sich.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 68,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Es kam herab und herab, bis es auf Höhe des Kindes war, und sein Gold erhellte ihr Gesicht wie eine Lampe.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 69,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Das Murmeln lief in Stücken um die Schmiede:",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 70,
+   "chapterId": 3,
+   "characterId": "pell-hollis",
+   "text": "„Ruhig —\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 71,
+   "chapterId": 3,
+   "characterId": "witwe-casper",
+   "text": "„Lasst sie\"",
+   "confidence": 0.92,
+   "emotion": "neutral"
+  },
+  {
+   "id": 72,
+   "chapterId": 3,
+   "characterId": "brann-weir",
+   "text": "„Maerin —\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 73,
+   "chapterId": 3,
+   "characterId": "berrin-weir",
+   "text": "„Ihr geht es gut\"",
+   "confidence": 0.94,
+   "emotion": "neutral"
+  },
+  {
+   "id": 74,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte Berrin, flach wie ein Regal, und hatte, wie üblich, recht.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 75,
+   "chapterId": 3,
+   "characterId": "sela",
+   "text": "„Du bist der Letzte\"",
+   "confidence": 0.92,
+   "emotion": "neutral"
+  },
+  {
+   "id": 76,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ". Keine Frage.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 77,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Kinder verschwenden keine.",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 78,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Ja\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 79,
+   "chapterId": 3,
+   "characterId": "sela",
+   "text": "„Und die Glocke ist für, wenn du stirbst.\"",
+   "confidence": 0.92,
+   "emotion": "neutral",
+   "instruct": "with a solemn weight to the words"
+  },
+  {
+   "id": 80,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "„Sela!\"",
+   "confidence": 0.85,
+   "emotion": "excited",
+   "vocalization": true
+  },
+  {
+   "id": 81,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Es ist eine ehrliche Frage\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 82,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte der Drache, „und es ist ein ehrlicher Abend.\"",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 83,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Das Auge blinzelte, langsam wie eine sich schließende Tür.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 84,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Ja. Die Glocke ist für dann.\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 85,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Sela bedachte dies mit dem vollen Ernst von acht Jahren.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 86,
+   "chapterId": 3,
+   "characterId": "sela",
+   "text": "„Aber wenn du der Letzte bist\"",
+   "confidence": 0.92,
+   "emotion": "neutral"
+  },
+  {
+   "id": 87,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte sie, „wer wird sie für dich läuten? Danach.\"",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 88,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Das Feuer spuckte.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 89,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Niemand rührte sich.",
+   "confidence": 0.98,
+   "emotion": "neutral"
+  },
+  {
+   "id": 90,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Selbst die Zwillinge hatten nichts, und Wren, die sehr angestrengt vorgegeben hatte, mit dem Wachs beschäftigt zu sein, hörte auf vorzugeben.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 91,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Als der Drache schließlich antwortete, kamen die Worte weiter auseinander als sonst, wie Steine nahe dem Gipfel eines Berges weiter auseinanderliegen.",
+   "confidence": 0.94,
+   "emotion": "neutral"
+  },
+  {
+   "id": 92,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Ich hatte\"",
+   "confidence": 0.92,
+   "emotion": "neutral",
+   "instruct": "a brief, almost reluctant acknowledgment"
+  },
+  {
+   "id": 93,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte er, „nicht so weit gedacht.\"",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 94,
+   "chapterId": 3,
+   "characterId": "sela",
+   "text": "„Ich werde es tun\"",
+   "confidence": 0.92,
+   "emotion": "neutral"
+  },
+  {
+   "id": 95,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ". Ich werde ewig leben.\"",
+   "confidence": 0.5,
+   "emotion": "excited"
+  },
+  {
+   "id": 96,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Es gibt Dinge, die mitten in der Nacht von Kindern gesagt werden und den Rest eines Lebens um sich biegen, und jeder in der Schmiede wusste, dass er gerade eines gehört hatte.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 97,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Der Drache sah das kleine Mädchen lange an.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 98,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Dann gehört sie dir, wenn ich mit ihr fertig bin\"",
+   "confidence": 0.91,
+   "emotion": "neutral",
+   "instruct": "with a sense of finality and ownership"
+  },
+  {
+   "id": 99,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte er schließlich. „Bewahre sie irgendwo hoch oben auf.\"",
+   "confidence": 0.5,
+   "emotion": "neutral",
+   "instruct": "a gentle instruction, spoken with care"
+  },
+  {
+   "id": 100,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "„Mama bewahrt die guten Tassen im obersten Regal auf.\"",
+   "confidence": 0.92,
+   "emotion": "neutral"
+  },
+  {
+   "id": 101,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "„Das wird genügen.\"",
+   "confidence": 0.94,
+   "emotion": "neutral"
+  },
+  {
+   "id": 102,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Maerin nahm ihre Tochter in die Arme und hielt sie fest und traute sich nicht, etwas hinzuzufügen.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 103,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Hart der Köhler — der irgendwann gekommen war, ohne dass jemand es bemerkt hatte, wie eine Wand kommt, und seit einer Stunde still das Feuer aus seinen eigenen Säcken nährte — blickte auf.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 104,
+   "chapterId": 3,
+   "characterId": "hart",
+   "text": "„Das Feuer will gefüttert werden\"",
+   "confidence": 0.92,
+   "emotion": "neutral",
+   "instruct": "barely audible, matching the quietness of the coals"
+  },
+  {
+   "id": 105,
+   "chapterId": 3,
+   "characterId": "hart",
+   "text": ", sagte er, kaum lauter als die Kohlen. „Wenn wir das tun.\"",
+   "confidence": 0.94,
+   "emotion": "neutral"
+  },
+  {
+   "id": 106,
+   "chapterId": 3,
+   "characterId": "oduvan",
+   "text": "„Wir tun das\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 107,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Was folgte, tat die Schmiede zumeist schweigend, und der Erzähler wird es erzählen, weil die darin zu beschäftigt waren.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 108,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Die Form war aus Sand und Ton und einem alten Glockenmaß, das Oduvan seit neun Jahren nicht angerührt hatte, seit der Mann, der ihn das Maß gelehrt hatte, keine Werkzeuge mehr brauchte.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 109,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Wren schnitt die Kanäle.",
+   "confidence": 0.97,
+   "emotion": "neutral"
+  },
+  {
+   "id": 110,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Pell holte und brachte und erwies sich, zur allgemeinen Überraschung einschließlich seiner eigenen, als nützlich.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 111,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Die Witwe beriet, genau und ohne Gnade.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 112,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Die Zwillinge hielten die Tiegelwiege wie ein einziges Geschöpf mit vier Armen — bei zwei Männern, die etwas heben, das nicht abgesetzt werden kann, bleibt kein Streit übrig — und Ivos Wachs und Ivos Seil erwiesen sich als genau das, was gebraucht wurde, für nichts, heute Nacht.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 113,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Der Guss, als er kam, hatte die Farbe des Morgens, der noch nicht angebrochen war.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 114,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Bronze floss den Kanal hinab mit einem Laut wie ein langes Wort in einer Sprache, eine Silbe breit.",
+   "confidence": 0.95,
+   "emotion": "neutral"
+  },
+  {
+   "id": 115,
+   "chapterId": 3,
+   "characterId": "oduvan",
+   "text": "„Ruhig — ruhig — so.\"",
+   "confidence": 0.91,
+   "emotion": "neutral",
+   "instruct": "a low, steadying murmur"
+  },
+  {
+   "id": 116,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Oduvans Hand auf Wrens Schulter, als sie sich zu weit über den Dampf beugte.",
+   "confidence": 0.96,
+   "emotion": "neutral"
+  },
+  {
+   "id": 117,
+   "chapterId": 3,
+   "characterId": "oduvan",
+   "text": "„Spatz. Zurück.\"",
+   "confidence": 0.92,
+   "emotion": "neutral",
+   "instruct": "sharp and commanding, but not aggressive"
+  },
+  {
+   "id": 118,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Sie trat zurück.",
+   "confidence": 0.98
+  },
+  {
+   "id": 119,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Er hatte sie nicht zweimal in einer Saison so genannt, und sie wusste es besser, als ihm dabei ins Gesicht zu sehen, also sahen beide stattdessen auf die Form.",
+   "confidence": 0.95
+  },
+  {
+   "id": 120,
+   "chapterId": 3,
+   "characterId": "sela",
+   "text": "„Warum kriegt sie einen Vogelnamen?\"",
+   "confidence": 0.85,
+   "emotion": "neutral"
+  },
+  {
+   "id": 121,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "„Weil er vergisst, streng zu sein\"",
+   "confidence": 0.92,
+   "emotion": "neutral"
+  },
+  {
+   "id": 122,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte Wren.",
+   "confidence": 0.78
+  },
+  {
+   "id": 123,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "„Kann ich ein Vogel sein?\"",
+   "confidence": 0.91,
+   "emotion": "whisper"
+  },
+  {
+   "id": 124,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "„Nein\"",
+   "confidence": 0.85,
+   "emotion": "neutral"
+  },
+  {
+   "id": 125,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte Wren.",
+   "confidence": 0.75
+  },
+  {
+   "id": 126,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "„Spatz ist vergeben.\"",
+   "confidence": 0.82
+  },
+  {
+   "id": 127,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Die Stunde zwischen dem Guss und dem Aufbrechen ist die längste im Schmiedehandwerk, und sie lässt sich nicht beschleunigen, und so füllte sich die Schmiede mit dem eigentümlichen Gespräch von Menschen, die etwas zusammen getan haben und darauf warten zu erfahren, ob es gelungen ist.",
+   "confidence": 0.97
+  },
+  {
+   "id": 128,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Hart ließ das Feuer langsam herunterbrennen, wie man ein Pferd abkühlen lässt.",
+   "confidence": 0.96
+  },
+  {
+   "id": 129,
+   "chapterId": 3,
+   "characterId": "hart",
+   "text": "„Es kühlt falsch ab, wenn man es eilig hat\", sagte er, mehr zu den Kohlen als zu irgendwem.",
+   "confidence": 0.94,
+   "emotion": "neutral",
+   "instruct": "matter-of-factly, focused more on the process than the listener"
+  },
+  {
+   "id": 130,
+   "chapterId": 3,
+   "characterId": "hart",
+   "text": "„Eine Glocke ist wie ein Laib Brot.",
+   "confidence": 0.92
+  },
+  {
+   "id": 131,
+   "chapterId": 3,
+   "characterId": "hart",
+   "text": "Das Innere muss sich mit dem Äußeren einig sein.\"",
+   "confidence": 0.85
+  },
+  {
+   "id": 132,
+   "chapterId": 3,
+   "characterId": "brann-weir",
+   "text": "„Woher willst du das wissen?\"",
+   "confidence": 0.79,
+   "emotion": "neutral"
+  },
+  {
+   "id": 133,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "fragte Brann, der nicht anders konnte.",
+   "confidence": 0.95
+  },
+  {
+   "id": 134,
+   "chapterId": 3,
+   "characterId": "hart",
+   "text": "„Dreißig Jahre Kohle gebrannt\"",
+   "confidence": 0.88,
+   "emotion": "neutral"
+  },
+  {
+   "id": 135,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte Hart.",
+   "confidence": 0.75
+  },
+  {
+   "id": 136,
+   "chapterId": 3,
+   "characterId": "hart",
+   "text": "„Alles ist ein Laib Brot.\"",
+   "confidence": 0.82,
+   "emotion": "neutral"
+  },
+  {
+   "id": 137,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Pater Lessom hatte endlich seine Sätze gefunden.",
+   "confidence": 0.96
+  },
+  {
+   "id": 138,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Er kam der Form so nahe, wie die Hitze es erlaubte, und stand da, den Hut noch in den Händen.",
+   "confidence": 0.94
+  },
+  {
+   "id": 139,
+   "chapterId": 3,
+   "characterId": "pater-lessom",
+   "text": "„Ich habe mir eine ausgedacht\"",
+   "confidence": 0.85,
+   "emotion": "neutral",
+   "instruct": "a quiet declaration of a new idea"
+  },
+  {
+   "id": 140,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte er zur Witwe, fast trotzig.",
+   "confidence": 0.81,
+   "emotion": "angry"
+  },
+  {
+   "id": 141,
+   "chapterId": 3,
+   "characterId": "pater-lessom",
+   "text": "„Die Regel.\"",
+   "confidence": 0.9,
+   "emotion": "neutral"
+  },
+  {
+   "id": 142,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "„Und?\"",
+   "confidence": 0.84
+  },
+  {
+   "id": 143,
+   "chapterId": 3,
+   "characterId": "pater-lessom",
+   "text": "„Eine Glocke, geläutet für den Letzten von irgendetwas, ist für alles davon geläutet.\"",
+   "confidence": 0.91,
+   "emotion": "neutral",
+   "instruct": "delivered with great conviction, almost like a religious pronouncement"
+  },
+  {
+   "id": 144,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Er sagte es mit seiner Kanzelstimme, dann wirkte er verlegen und setzte den Hut wieder auf.",
+   "confidence": 0.95
+  },
+  {
+   "id": 145,
+   "chapterId": 3,
+   "characterId": "pater-lessom",
+   "text": "„Am Sonntag sage ich es richtig.\"",
+   "confidence": 0.88,
+   "emotion": "neutral"
+  },
+  {
+   "id": 146,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Sagt es so\"",
+   "confidence": 0.78,
+   "emotion": "neutral",
+   "instruct": "a simple agreement, spoken from the threshold"
+  },
+  {
+   "id": 147,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte der Drache von der Schwelle her.",
+   "confidence": 0.85
+  },
+  {
+   "id": 148,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Es wird durch Anfassen nicht besser.\"",
+   "confidence": 0.9,
+   "emotion": "neutral",
+   "instruct": "firmly stating an immutable truth"
+  },
+  {
+   "id": 149,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Wren war zum großen Tor gewandert, das Wachs noch unter den Nägeln.",
+   "confidence": 0.96
+  },
+  {
+   "id": 150,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Aus der Nähe roch der Drache wie Regen auf heißem Stein.",
+   "confidence": 0.98
+  },
+  {
+   "id": 151,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "„Hast du wirklich die ganze Welt durchquert?\"",
+   "confidence": 0.85,
+   "emotion": "neutral",
+   "instruct": "with a tone of genuine curiosity and slight wonder"
+  },
+  {
+   "id": 152,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "fragte sie.",
+   "confidence": 0.79
+  },
+  {
+   "id": 153,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "„Dafür?\"",
+   "confidence": 0.82,
+   "emotion": "neutral"
+  },
+  {
+   "id": 154,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Für einen wahren Ton.",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 155,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Dein Meister ist der vierte Schmied, den ich gefragt habe.\"",
+   "confidence": 0.94
+  },
+  {
+   "id": 156,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "„Was ist mit den anderen dreien geschehen?\"",
+   "confidence": 0.85,
+   "instruct": "a questioning tone laced with mild impatience"
+  },
+  {
+   "id": 157,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Nichts\"",
+   "confidence": 0.92,
+   "emotion": "neutral"
+  },
+  {
+   "id": 158,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte Coalfall.",
+   "confidence": 0.78
+  },
+  {
+   "id": 159,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Sie sagten nein.",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 160,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Die Leute stellen sich vor, meine Enttäuschungen seien dramatisch.",
+   "confidence": 0.95
+  },
+  {
+   "id": 161,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Meist sind sie wie die aller anderen.\"",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 162,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Das Auge glitt seitwärts zu ihr, und es lag etwas darin, das man auf einem kleineren Gesicht Schalk genannt hätte.",
+   "confidence": 0.96
+  },
+  {
+   "id": 163,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Er sagte ja, ehe ich zu Ende gefragt hatte.\"",
+   "confidence": 0.85,
+   "emotion": "neutral"
+  },
+  {
+   "id": 164,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Das solltest du über ihn wissen, Spatz.\"",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 165,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "„Ich heiße Wren\"",
+   "confidence": 0.91,
+   "emotion": "neutral"
+  },
+  {
+   "id": 166,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte Wren und wurde rot,",
+   "confidence": 0.81
+  },
+  {
+   "id": 167,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "„für alle außer ihm.\"",
+   "confidence": 0.79,
+   "emotion": "neutral"
+  },
+  {
+   "id": 168,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Ich weiß\"",
+   "confidence": 0.88,
+   "emotion": "neutral"
+  },
+  {
+   "id": 169,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Ich wollte hören, wie du es abstreitest.\"",
+   "confidence": 0.91,
+   "emotion": "neutral",
+   "instruct": "a challenging tone, implying a desire to hear the defense"
+  },
+  {
+   "id": 170,
+   "chapterId": 3,
+   "characterId": "witwe-casper",
+   "text": "„Meine Großmutter würde mir nicht glauben, wisst Ihr.",
+   "confidence": 0.82,
+   "emotion": "neutral"
+  },
+  {
+   "id": 171,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Dass ich eine Nacht mit einem der Euren verbracht habe und das einzige Feuer im Herd war.\"",
+   "confidence": 0.5,
+   "emotion": "neutral"
+  },
+  {
+   "id": 172,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Dann erzählt es so, wie sie die ihren erzählte\"",
+   "confidence": 0.82,
+   "emotion": "neutral",
+   "instruct": "mimicking the storytelling style of her grandmother, gentle and anecdotal"
+  },
+  {
+   "id": 173,
+   "chapterId": 3,
+   "characterId": "drache",
+   "text": "„Schlecht, und oft.\"",
+   "confidence": 0.85,
+   "emotion": "neutral"
+  },
+  {
+   "id": 174,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Das entlockte das Lachen, das die Nacht aufgespart hatte — sogar Maerins, sogar Lessoms — und Pell lachte am lautesten von allen und sah sich dann um, um zu prüfen, ob Lachen erlaubt war.",
+   "confidence": 0.95
+  },
+  {
+   "id": 175,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Sie brachen die Form auf, als der Himmel von Kohle zu Asche wurde.",
+   "confidence": 0.97
+  },
+  {
+   "id": 176,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Die Glocke kam aus dem Sand, wie der Drache aus der Dunkelheit gekommen war — auf einmal, und kleiner als in den Geschichten, und genau in der richtigen Größe.",
+   "confidence": 0.96
+  },
+  {
+   "id": 177,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Klein genug, um an einer Klaue zu hängen.",
+   "confidence": 0.98
+  },
+  {
+   "id": 178,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Oduvan feilte den Rand, schlug sie einmal mit einem Knöchel an, lauschte mit geschlossenen Augen und feilte erneut.",
+   "confidence": 0.5
+  },
+  {
+   "id": 179,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Beim dritten Mal griff er nicht nach der Feile.",
+   "confidence": 0.97
+  },
+  {
+   "id": 180,
+   "chapterId": 3,
+   "characterId": "oduvan",
+   "text": "„Da ist Euer wahrer Ton\"",
+   "confidence": 0.85,
+   "emotion": "neutral",
+   "instruct": "a proud declaration of quality"
+  },
+  {
+   "id": 181,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte er.",
+   "confidence": 0.5
+  },
+  {
+   "id": 182,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "„So, wie ihn der zweitbeste Schmied macht.\"",
+   "confidence": 0.82
+  },
+  {
+   "id": 183,
+   "chapterId": 3,
+   "characterId": "pell-hollis",
+   "text": "„Er ist der beste im Tal\"",
+   "confidence": 0.91,
+   "emotion": "angry",
+   "instruct": "boastfully, with absolute certainty"
+  },
+  {
+   "id": 184,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", sagte Pell, der irgendwann im Dunkeln beschlossen hatte, dass dies auch sein Abenteuer war,",
+   "confidence": 0.5
+  },
+  {
+   "id": 185,
+   "chapterId": 3,
+   "characterId": "pell-hollis",
+   "text": "„und ich schreie jeden nieder, der etwas anderes behauptet.",
+   "confidence": 0.92,
+   "emotion": "angry"
+  },
+  {
+   "id": 186,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Ich bin dafür bekannt.",
+   "confidence": 0.5,
+   "emotion": "angry"
+  },
+  {
+   "id": 187,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Sie hängten sie mit Ivos Seil an die Klaue des Drachen, dort im großen Tor, während ein ganzes Tal voll in der Nacht versammelter Gesichter zusah.",
+   "confidence": 0.96
+  },
+  {
+   "id": 188,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Coalfall hob die Klaue, vorsichtig wie ein Mann, der volle Becher trägt,",
+   "confidence": 0.94
+  },
+  {
+   "id": 189,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "und drehte sie und betrachtete lange das kleine helle Ding, dessen er sich um die halbe Welt gewiss geworden war.",
+   "confidence": 0.95
+  },
+  {
+   "id": 190,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Dann schnippte er die Glocke, einmal, mit der Spitze einer schwarzen Kralle.",
+   "confidence": 0.98
+  },
+  {
+   "id": 191,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Der Ton ging zur Tür hinaus und den Weg hinauf und über die Dächer, unparteiisch, ohne Eile, von der Art Klang, der nicht um Erlaubnis bittet.",
+   "confidence": 0.97
+  },
+  {
+   "id": 192,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Hühner erwachten.",
+   "confidence": 0.98
+  },
+  {
+   "id": 193,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Ein Hund antwortete, irrte sich und gab auf.",
+   "confidence": 0.95
+  },
+  {
+   "id": 194,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Und in der Türöffnung der Schmiede, im ersten Grau des Morgens, schwang die Glocke sich kleiner und kleiner und sprach das eine Wort, das man ihr die ganze Nacht beigebracht hatte, das einzige Wort, das eine wahre Glocke kennt:",
+   "confidence": 0.96
+  },
+  {
+   "id": 195,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "„Erinnere dich.\"",
+   "confidence": 0.91,
+   "emotion": "excited"
+  },
+  {
+   "id": 196,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "[emphatic] Ende.",
+   "confidence": 0.98
+  }
+ ],
+ "mergedAwayKeys": [
+  "coalfall"
+ ]
 }

@@ -29,21 +29,21 @@
       "id": 3,
       "title": "Chapter One — The Knock",
       "slug": "03-chapter-one-the-knock",
-      "duration": "04:03",
+      "duration": "03:51",
       "uuid": "1017f4fa-5728-431e-8c60-a784def0fa3e",
       "audioModelKey": "qwen3-tts-1.7b",
       "audioEngines": {
         "qwen": 6
       },
-      "audioRenderedAt": "2026-07-07T02:47:22.513Z",
+      "audioRenderedAt": "2026-07-13T00:28:19.468Z",
       "audioQa": {
         "status": "ok",
         "reasons": [],
-        "measuredLufs": -16.2,
+        "measuredLufs": -16.23,
         "truePeakDb": -1.5,
-        "durationSec": 243.4,
+        "durationSec": 230.92008333333334,
         "expectedSec": 237.64285714285714,
-        "checkedAt": "2026-07-07T02:47:22.512Z"
+        "checkedAt": "2026-07-13T00:28:19.468Z"
       }
     },
     {
@@ -73,7 +73,7 @@
     "#0F0E0D"
   ],
   "createdAt": "2026-06-09T00:43:33.392Z",
-  "updatedAt": "2026-07-07T03:09:22.777Z",
+  "updatedAt": "2026-07-13T00:28:19.500Z",
   "chapterTitleParserVersion": 2,
   "language": "en",
   "schema": 1,

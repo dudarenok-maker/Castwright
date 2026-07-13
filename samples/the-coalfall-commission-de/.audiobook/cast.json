@@ -43,7 +43,7 @@
     },
     {
       "id": "maerin",
-      "name": "Maerin die Vögtin",
+      "name": "Maerin",
       "role": "Vögtin",
       "color": "eliza",
       "tone": {
@@ -118,7 +118,10 @@
         }
       },
       "ttsEngine": "qwen",
-      "ttsModelKey": "qwen3-tts-1.7b"
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "aliases": [
+        "Spatz"
+      ]
     },
     {
       "id": "drache",
@@ -146,7 +149,7 @@
           "note": "Direkter Dialog."
         }
       ],
-      "lines": 20,
+      "lines": 26,
       "scenes": 2,
       "voiceStyle": "A middle-aged being with a resonant, low-pitched, and steady voice, delivered at a calculated, languid pace with a dark, smooth, and chillingly detached timbre, for expressive character dialogue.",
       "voiceUuid": "PIURlXnEQWDp7i_AYRDTD",
@@ -164,18 +167,21 @@
         }
       },
       "ttsEngine": "qwen",
-      "ttsModelKey": "qwen3-tts-1.7b"
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "aliases": [
+        "Coalfall"
+      ]
     },
     {
       "id": "narrator",
-      "name": "Narrator",
+      "name": "Erzähler",
       "role": "Dritter Beobachter",
       "color": "narrator",
       "tone": {
-        "warmth": 50,
-        "pace": 30,
+        "warmth": 40,
+        "pace": 50,
         "authority": 60,
-        "emotion": 25
+        "emotion": 40
       },
       "description": "Ein beobachtender Erzähler, der die Ereignisse des Schmiedes beschreibt.",
       "evidence": [
@@ -188,26 +194,26 @@
           "note": "Abschließende Beobachtung des Prozesses."
         }
       ],
-      "lines": 172,
+      "lines": 165,
       "scenes": 2,
       "ttsEngine": "qwen",
-      "voiceStyle": "A middle-aged man in his forties with a steady, medium-low pitch and a rich, resonant timbre; spoken at a slow, measured pace with neutral warmth and poised authority, suitable for audiobook narration.",
+      "voiceStyle": "A middle-aged voice, neutral in gender, with a medium pitch and steady, mid-paced delivery; the timbre is rich, grounded, and resonant, carrying a measured, folkloric warmth suitable for audiobook narration.",
       "voiceUuid": "fDtxqBAQEy9Os1LA5yVUo",
       "overrideTtsVoices": {
         "qwen": {
           "name": "qwen-fDtxqBAQEy9Os1LA5yVUo",
           "variants": {
-            "sad": {
-              "name": "qwen-fDtxqBAQEy9Os1LA5yVUo__sad"
-            },
             "whisper": {
               "name": "qwen-fDtxqBAQEy9Os1LA5yVUo__whisper"
+            },
+            "angry": {
+              "name": "qwen-fDtxqBAQEy9Os1LA5yVUo__angry"
             },
             "excited": {
               "name": "qwen-fDtxqBAQEy9Os1LA5yVUo__excited"
             },
-            "angry": {
-              "name": "qwen-fDtxqBAQEy9Os1LA5yVUo__angry"
+            "sad": {
+              "name": "qwen-fDtxqBAQEy9Os1LA5yVUo__sad"
             }
           }
         },
@@ -215,7 +221,19 @@
           "name": "am_michael"
         }
       },
-      "ttsModelKey": "qwen3-tts-1.7b"
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "aliases": [
+        "Narrator"
+      ],
+      "gender": "neutral",
+      "ageRange": "adult",
+      "attributes": [
+        "formal",
+        "observational",
+        "measured",
+        "rhythmic"
+      ],
+      "voiceState": "tuned"
     },
     {
       "id": "pell-hollis",
@@ -288,38 +306,6 @@
         },
         "kokoro": {
           "name": "am_michael"
-        }
-      },
-      "ttsEngine": "qwen",
-      "ttsModelKey": "qwen3-tts-1.7b"
-    },
-    {
-      "id": "coalfall",
-      "name": "Coalfall",
-      "role": "Unbekannter Charakter",
-      "color": "slot-6",
-      "tone": {
-        "warmth": 55,
-        "pace": 30,
-        "authority": 60,
-        "emotion": 40
-      },
-      "description": "Ein Name, der in Bezug auf die Glocke genannt wird.",
-      "evidence": [
-        {
-          "quote": "\"Glaub es\", sagte Coalfall, und danach war es eine Weile still.\""
-        }
-      ],
-      "lines": 6,
-      "scenes": 1,
-      "voiceStyle": "A middle-aged man’s voice, medium pitch and measured pace, possessing a steady, resonant timbre with neutral warmth and a firm, authoritative clarity, for expressive character dialogue.",
-      "voiceUuid": "FEhNG1vJEZ38gzo0iyxRm",
-      "overrideTtsVoices": {
-        "qwen": {
-          "name": "qwen-FEhNG1vJEZ38gzo0iyxRm"
-        },
-        "kokoro": {
-          "name": "am_adam"
         }
       },
       "ttsEngine": "qwen",
@@ -495,6 +481,50 @@
           "name": "am_michael"
         }
       },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "hart",
+      "name": "Hart",
+      "role": "Köhler",
+      "color": "slot-8",
+      "attributes": [
+        "quiet",
+        "grounded"
+      ],
+      "tone": {
+        "warmth": 40,
+        "pace": 30,
+        "authority": 50,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "Ein stiller Köhler, der es gewohnt ist, mit Feuer zu arbeiten.",
+      "evidence": [
+        {
+          "quote": "Dreißig Jahre Kohle gebrannt. Alles ist ein Laib Brot.",
+          "note": "Bodenständig und metaphorisch."
+        },
+        {
+          "quote": "Das Feuer will gefüttert werden. Wenn wir das tun.",
+          "note": "Ruhig und pragmatisch."
+        }
+      ],
+      "voiceStyle": "A mature male voice with a low, gravelly timbre and slow, measured cadence, featuring a steady, grounded projection and earthy texture for expressive character dialogue.",
+      "lines": 7,
+      "scenes": 1,
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-q06nfaEFtuKVTou6RnYmi"
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "voiceUuid": "q06nfaEFtuKVTou6RnYmi",
+      "voiceState": "tuned",
+      "ttsEngine": "qwen",
       "ttsModelKey": "qwen3-tts-1.7b"
     }
   ]

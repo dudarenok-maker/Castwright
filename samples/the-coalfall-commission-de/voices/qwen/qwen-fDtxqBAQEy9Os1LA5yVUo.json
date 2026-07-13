@@ -1,7 +1,7 @@
 {
-  "voiceId": "qwen-fDtxqBAQEy9Os1LA5yVUo",
+  "voiceId": "qwen-fDtxqBAQEy9Os1LA5yVUo-preview",
   "voiceUuid": "fDtxqBAQEy9Os1LA5yVUo",
-  "instruct": "A middle-aged man in his forties with a steady, medium-low pitch and a rich, resonant timbre; spoken at a slow, measured pace with neutral warmth and poised authority, suitable for audiobook narration.",
+  "instruct": "A middle-aged voice, neutral in gender, with a medium pitch and steady, mid-paced delivery; the timbre is rich, grounded, and resonant, carrying a measured, folkloric warmth suitable for audiobook narration.",
   "language": "German",
   "refText": "Zwölf Boxkämpfer jagen Viktor quer über den großen Sylter Deich, und sie fragte sich, was der morgige Tag bringen würde.",
   "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
