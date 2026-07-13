@@ -682,13 +682,16 @@ def test_health_after_kokoro_load_unload_cycle(kokoro_unloaded_client) -> None:
 
 # ── Eager-preload opt-out (PRELOAD_KOKORO) ───────────────────────────────
 #
-# The sidecar eager-loads Kokoro at startup by default (PRELOAD_KOKORO unset
-# or =1) — cheap (~1 GB / ~1 s) and matches the kokoro-v1 engine default.
-# Qwen-primary users set PRELOAD_KOKORO=0 (propagated by the Node server from
-# Advanced Settings' "Preload Kokoro at startup" knob) so the eager load
-# is skipped and Kokoro warms on demand on first synth, freeing ~1 GB VRAM.
-# These tests pin the gate by calling the startup hook directly with a spy
-# engine and asserting whether _ensure_loaded ran.
+# The sidecar does NOT eager-load Kokoro at startup by default (fs-60:
+# PRELOAD_KOKORO unset → lazy) — this matches the registry default
+# tts.preload.kokoro=false, which buildSidecarEnv omits from the child env
+# precisely because it's the default, leaving the sidecar to apply its own
+# Python default. Those two defaults must agree, so the Python fallback is
+# also False. A user who wants the ~1 GB / ~1 s always-hot English engine
+# opts in via PRELOAD_KOKORO=1 (Advanced Settings' "Preload Kokoro at
+# startup" knob, propagated by the Node server). These tests pin the gate by
+# calling the startup hook directly with a spy engine and asserting whether
+# _ensure_loaded ran.
 
 
 def _run_preload_capturing_kokoro(monkeypatch) -> list[str]:
@@ -716,12 +719,16 @@ def test_preload_skips_kokoro_when_disabled(monkeypatch) -> None:
     )
 
 
-def test_preload_loads_kokoro_when_unset(monkeypatch) -> None:
-    """Default (PRELOAD_KOKORO unset) preserves today's behaviour: the
-    startup hook eager-loads Kokoro v1."""
+def test_preload_skips_kokoro_when_unset(monkeypatch) -> None:
+    """Default (PRELOAD_KOKORO unset) → the startup hook must NOT eager-load
+    Kokoro (fs-60). The sidecar's Python fallback is False so it agrees with
+    the registry default tts.preload.kokoro=false, which the Node server omits
+    from the child env when at its default. Kokoro warms on demand on first
+    synth instead."""
     monkeypatch.delenv("PRELOAD_KOKORO", raising=False)
-    assert _run_preload_capturing_kokoro(monkeypatch) == ["v1"], (
-        "Kokoro not eager-loaded with PRELOAD_KOKORO unset"
+    assert _run_preload_capturing_kokoro(monkeypatch) == [], (
+        "Kokoro eager-loaded with PRELOAD_KOKORO unset — Python default drifted "
+        "from the registry's tts.preload.kokoro=false"
     )
 
 
