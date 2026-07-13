@@ -623,6 +623,26 @@ qwenVoiceRouter.post(
   },
 );
 
+/* Tear down a designed emotion variant: delete its `.pt`/`.json` embedding +
+   persona sidecar and evict it from the sidecar's in-memory prompt cache.
+   Best-effort throughout — a missing file or unreachable sidecar is non-fatal.
+   Does NOT touch cast.json; the caller owns the slot mutation + atomic write so
+   it can batch multiple removals into a single write. Shared by the per-emotion
+   DELETE route and the redesign-invalidation in promote-voice. */
+async function tearDownEmotionVariant(designedId: string): Promise<void> {
+  await rm(qwenVoicePtPath(designedId), { force: true }).catch(() => {});
+  await rm(qwenVoiceSidecarPath(designedId), { force: true }).catch(() => {});
+  try {
+    await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ voiceId: designedId }),
+    });
+  } catch {
+    /* sidecar unreachable — non-fatal */
+  }
+}
+
 /* POST /api/books/:bookId/cast/:characterId/promote-voice
 
    Plan 161 — commit a previewed design (from the drawer's A/B "Design &
@@ -714,6 +734,23 @@ qwenVoiceRouter.post(
       });
     } catch {
       /* sidecar unreachable — non-fatal */
+    }
+
+    /* A redesign replaces the base embedding in place, so every emotion variant
+       minted from the OLD embedding is now stale (each was anchored to a PT that
+       no longer exists). Invalidate them all: delete each variant's `.pt`/`.json`
+       + evict it from the sidecar, then drop the whole `variants` map from
+       cast.json in one write. The character's tagged emotions then re-register as
+       missing demand, so the cast's "Design full cast → Emotion variants" scope
+       re-mints the ones the user still wants from the new base. */
+    const qwenSlot = character.overrideTtsVoices?.qwen;
+    const staleEmotions = Object.keys(qwenSlot?.variants ?? {});
+    if (qwenSlot?.variants && staleEmotions.length > 0) {
+      for (const emotion of staleEmotions) {
+        await tearDownEmotionVariant(`${realVoiceId}__${emotion}`);
+      }
+      delete qwenSlot.variants;
+      await writeJsonAtomic(castJsonPath(located.bookDir), cast);
     }
 
     /* srv-43 — return voiceUuid so the drawer can stamp it locally; the
@@ -808,21 +845,8 @@ qwenVoiceRouter.delete(
       await writeJsonAtomic(castJsonPath(located.bookDir), cast);
     }
 
-    /* Delete the designed embedding + its persona sidecar (best-effort). */
-    const designedId = `${qwenStorageKey(character, characterId)}__${emotion}`;
-    await rm(qwenVoicePtPath(designedId), { force: true }).catch(() => {});
-    await rm(qwenVoiceSidecarPath(designedId), { force: true }).catch(() => {});
-
-    /* Evict from the sidecar's in-memory prompt cache (best-effort). */
-    try {
-      await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ voiceId: designedId }),
-      });
-    } catch {
-      /* sidecar unreachable — non-fatal */
-    }
+    /* Delete the designed embedding + persona sidecar and evict it (best-effort). */
+    await tearDownEmotionVariant(`${qwenStorageKey(character, characterId)}__${emotion}`);
 
     return res.status(200).json({ ok: true, removed: emotion });
   },
