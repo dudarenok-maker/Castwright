@@ -34,6 +34,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { writeSanitizedConstraintsFile } from './pip-constraints.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SIDECAR_DIR = resolve(__dirname, '..');
@@ -86,11 +87,14 @@ function main() {
   const env = { COQUI_TOS_AGREED: '1', HF_HUB_DISABLE_SYMLINKS_WARNING: '1' };
 
   // coqui-tts is opt-in (not in base.txt), so pip-install it now, constrained by
-  // base.txt to keep shared deps (numpy, transformers) in lockstep.
+  // base.txt to keep shared deps (numpy, transformers) in lockstep. Sanitise
+  // first: base.txt carries extras (e.g. uvicorn[standard]) that pip rejects in
+  // a constraints file ("ERROR: Constraints cannot have extras").
   const baseTxt = join(SIDECAR_DIR, 'requirements', 'base.txt');
+  const constraints = writeSanitizedConstraintsFile(baseTxt);
   // No -U: base.txt already pins compatible versions; upgrading on every run could pull a broken coqui-tts release.
   step('Installing coqui-tts (opt-in)...');
-  if (run(python, ['-m', 'pip', 'install', 'coqui-tts', '-c', baseTxt], env) !== 0) {
+  if (run(python, ['-m', 'pip', 'install', 'coqui-tts', '-c', constraints], env) !== 0) {
     step('FAIL: pip install coqui-tts failed. Check network + sidecar venv.');
     process.exit(1);
   }
