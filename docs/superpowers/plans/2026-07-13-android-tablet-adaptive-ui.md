@@ -29,14 +29,16 @@
 **Create:**
 - `apps/android/lib/src/domain/window_size.dart` — pure size-class + layout decision.
 - `apps/android/lib/src/domain/pane_split.dart` — pure foldable-aware pane split.
-- `apps/android/lib/src/ui/player_pane.dart` — reusable player body (chapter list + cover header + transport), keyed by active book.
-- `apps/android/lib/src/ui/library_pane.dart` — extracted library content (search + continue rail + grouped tree/grid + actions).
+- `apps/android/lib/src/domain/activate_book.dart` — pure `runActivateBook` orchestration.
+- `apps/android/lib/src/ui/player_pane.dart` — reusable player body (chapter list + cover header + transport), keyed by active book, self-activating.
+- `apps/android/lib/src/ui/library_pane.dart` — extracted library content (search + continue rail + grouped tree/grid + actions) + `ActiveBook`.
 - `apps/android/lib/src/ui/adaptive_library_shell.dart` — single-pane vs two-pane switch.
 - `apps/android/test/domain/window_size_test.dart`
 - `apps/android/test/domain/pane_split_test.dart`
-- `apps/android/test/data/activate_book_test.dart`
+- `apps/android/test/domain/activate_book_test.dart`
 - `apps/android/test/ui/player_pane_test.dart`
 - `apps/android/test/ui/adaptive_library_shell_test.dart`
+- `apps/android/test/ui/lifecycle_resume_test.dart`
 
 **Modify:**
 - `apps/android/lib/src/data/player_controller.dart` — `switchBook` gains `bookTitle`/`artPath`.
@@ -61,7 +63,7 @@
 ```dart
 // apps/android/test/domain/window_size_test.dart
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/domain/window_size.dart';
+import 'package:castwright/src/domain/window_size.dart';
 
 void main() {
   group('windowSizeClassFor', () {
@@ -144,7 +146,7 @@ git commit -m "feat(app): window size class helper for adaptive layout (app-21)"
 import 'dart:ui';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/domain/pane_split.dart';
+import 'package:castwright/src/domain/pane_split.dart';
 
 DisplayFeature _vHinge(Rect bounds) => DisplayFeature(
       bounds: bounds,
@@ -249,18 +251,20 @@ git commit -m "feat(app): foldable-aware pane split helper (app-21)"
 ## Task 3: `PlayerController.switchBook` carries title + art
 
 **Files:**
-- Modify: `apps/android/lib/src/data/player_controller.dart` (`switchBook`, ~line 320)
+- Modify: `apps/android/lib/src/data/player_controller.dart` (`switchBook`, **line ~445**, whose `openBook` call is at ~453)
 - Test: `apps/android/test/data/player_controller_test.dart`
 
 **Interfaces:**
 - Produces: `Future<void> switchBook(String bookId, {String bookTitle = '', String? artPath})` — threads both into its `openBook` call so the media-session metadata survives a switch.
 
+> The two existing `switchBook('b2')` callers in this test file (≈ lines 229, 753) keep compiling — the new params are optional.
+
 - [ ] **Step 1: Write the failing test** (append to the existing test file's `main`)
 
 ```dart
   test('switchBook forwards bookTitle + artPath to openBook (media metadata)', () async {
-    final engine = FakeAudioEngine();       // existing test fake in this file
-    final store = FakePlaybackStore();       // existing test fake
+    final engine = FakeAudioEngine();       // existing fake in this file
+    final store = MemPlaybackStore();        // existing fake (NOT "FakePlaybackStore")
     final controller = PlayerController(
       audioEngine: engine,
       playbackStore: store,
@@ -318,120 +322,185 @@ git commit -m "fix(app): switchBook forwards title+art to media session (app-21)
 
 ---
 
-## Task 4: `CompanionRuntime.activateBook` (audio orchestration)
+## Task 4: `runActivateBook` pure orchestration + `CompanionRuntime.activateBook` binding
+
+**Why pure:** `CompanionRuntime.activateBook` can't be cleanly unit-tested (the `forDemo`
+factory wires **concrete** `SyncController`/`DriftLocalLibrary`/`ResumeSyncService`/
+`PlayerController`, none of which record a call log; `buildDemoRuntime` in
+`demo_runtime.dart` is a real helper taking `{offline, fs, coversDir, root}`, no spy hook).
+So the orchestration ordering + idempotency lives in a **pure free function** with injected
+callables — matching this codebase's convention (`sync_plan`, `storage_policy`, etc.) —
+and the runtime method is a thin binding.
 
 **Files:**
-- Modify: `apps/android/lib/src/data/companion_runtime.dart` (add method to the class)
-- Test: `apps/android/test/data/activate_book_test.dart`
+- Create: `apps/android/lib/src/domain/activate_book.dart`
+- Modify: `apps/android/lib/src/data/companion_runtime.dart` (add the binding method)
+- Test: `apps/android/test/domain/activate_book_test.dart`
 
 **Interfaces:**
-- Consumes: `sync.ensureDetail`, `library.coverThumbPath`, `library.markPlayed`, `player.currentBookId`, `player.saveNow`, `player.openBook`, `player.switchBook` (Task 3), `resumeSync.syncBook`.
-- Produces: `Future<void> activateBook(String bookId, {required String title, String? artPath})`.
+- Produces (pure):
+  ```dart
+  Future<void> runActivateBook({
+    required String bookId,
+    required String title,
+    String? artPath,
+    required String? currentBookId,
+    required Future<void> Function(String bookId) ensureDetail,
+    required Future<String?> Function(String bookId) coverThumbPath,
+    required Future<void> Function() saveNow,
+    required Future<void> Function(String bookId) syncBook,
+    required Future<void> Function(String bookId, String title, String? art) switchBook,
+    required Future<void> Function(String bookId, String title, String? art) openBook,
+    required Future<void> Function(String bookId) markPlayed,
+  });
+  ```
+- Produces (binding): `Future<void> CompanionRuntime.activateBook(String bookId, {required String title, String? artPath})`.
 
-- [ ] **Step 1: Write the failing test**
-
-Build a runtime via the `@visibleForTesting` `CompanionRuntime.forDemo(...)` factory with spy fakes, then assert ordering + idempotency. Model the fakes on the existing runtime/controller test fakes.
+- [ ] **Step 1: Write the failing test** (pure — logging lambdas, no runtime)
 
 ```dart
-// apps/android/test/data/activate_book_test.dart
+// apps/android/test/domain/activate_book_test.dart
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/data/companion_runtime.dart';
-// ... imports for the fakes: ApiClient/SyncController/DriftLocalLibrary/PlayerController/
-//     ThumbnailCache/SettingsStore/AppSettings/ResumeSyncService/SleepTimer.
-// Use lightweight fakes/spies recording call order into a shared List<String> log.
+import 'package:castwright/src/domain/activate_book.dart';
 
 void main() {
-  test('first activation opens the book, marks played, reconciles', () async {
+  ({List<String> log, Future<void> Function(String, {required String title, String? artPath, String? currentBookId}) run}) harness() {
     final log = <String>[];
-    final rt = buildDemoRuntime(log); // helper below constructs forDemo(...) with spies
-    await rt.activateBook('A', title: 'Book A', artPath: '/art/a.jpg');
-    expect(log, [
-      'ensureDetail:A',
-      'openBook:A:Book A:/art/a.jpg',
-      'markPlayed:A',
-      'syncBook:A',
+    Future<void> run(String bookId, {required String title, String? artPath, String? currentBookId}) {
+      return runActivateBook(
+        bookId: bookId, title: title, artPath: artPath, currentBookId: currentBookId,
+        ensureDetail: (b) async => log.add('ensureDetail:$b'),
+        coverThumbPath: (b) async { log.add('coverThumbPath:$b'); return '/art/$b.jpg'; },
+        saveNow: () async => log.add('saveNow'),
+        syncBook: (b) async => log.add('syncBook:$b'),
+        switchBook: (b, t, a) async => log.add('switchBook:$b:$t:$a'),
+        openBook: (b, t, a) async => log.add('openBook:$b:$t:$a'),
+        markPlayed: (b) async => log.add('markPlayed:$b'),
+      );
+    }
+    return (log: log, run: run);
+  }
+
+  test('first activation: ensureDetail → openBook → markPlayed → reconcile', () async {
+    final h = harness();
+    await h.run('A', title: 'Book A', artPath: '/art/a.jpg', currentBookId: null);
+    expect(h.log, ['ensureDetail:A', 'openBook:A:Book A:/art/a.jpg', 'markPlayed:A', 'syncBook:A']);
+  });
+
+  test('switch: saveNow → push outgoing → switch (fresh position), then reconcile', () async {
+    final h = harness();
+    await h.run('B', title: 'Book B', artPath: '/art/b.jpg', currentBookId: 'A');
+    expect(h.log, [
+      'ensureDetail:B', 'saveNow', 'syncBook:A',
+      'switchBook:B:Book B:/art/b.jpg', 'markPlayed:B', 'syncBook:B',
     ]);
   });
 
-  test('switching a different active book: saveNow → push outgoing → switch', () async {
-    final log = <String>[];
-    final rt = buildDemoRuntime(log, currentBookId: 'A');
-    await rt.activateBook('B', title: 'Book B', artPath: '/art/b.jpg');
-    expect(log, [
-      'ensureDetail:B',
-      'saveNow',
-      'syncBook:A',           // outgoing pushed BEFORE switch (fresh position)
-      'switchBook:B:Book B:/art/b.jpg',
-      'markPlayed:B',
-      'syncBook:B',
-    ]);
+  test('resolves cover when artPath omitted', () async {
+    final h = harness();
+    await h.run('A', title: 'Book A', currentBookId: null);
+    expect(h.log, ['ensureDetail:A', 'coverThumbPath:A', 'openBook:A:Book A:/art/A.jpg', 'markPlayed:A', 'syncBook:A']);
   });
 
-  test('re-activating the already-open book is a no-op', () async {
-    final log = <String>[];
-    final rt = buildDemoRuntime(log, currentBookId: 'A');
-    await rt.activateBook('A', title: 'Book A');
-    expect(log, isEmpty); // early guard: no markPlayed, no syncBook, no reopen
+  test('re-activating the already-open book is a true no-op', () async {
+    final h = harness();
+    await h.run('A', title: 'Book A', currentBookId: 'A');
+    expect(h.log, isEmpty);
   });
 }
 ```
 
-> Write `buildDemoRuntime` in the test file: construct `CompanionRuntime.forDemo(...)` passing spy fakes whose methods append to `log`. Give the fake `PlayerController` a settable `currentBookId` and record `saveNow`/`openBook`/`switchBook`. If `forDemo` requires a concrete `PlayerController` (not an interface), wrap a real `PlayerController` over a spy `AudioEngine`/`PlaybackStore` and assert via the engine/store spies instead — mirror `player_controller_test.dart`'s harness.
-
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `flutter test test/data/activate_book_test.dart`
-Expected: FAIL — `activateBook` not defined.
+Run: `flutter test test/domain/activate_book_test.dart`
+Expected: FAIL — `activate_book.dart` / `runActivateBook` not found.
 
-- [ ] **Step 3: Write minimal implementation** (add to `CompanionRuntime`)
+- [ ] **Step 3: Write the pure function**
 
 ```dart
-  /// Book-level audio orchestration for selecting/opening a book (app-21). The
-  /// per-book *view* state (chapter list, finished ticks, cover header, peaks,
-  /// scroll) is owned by PlayerPane, which reloads on the ActiveBook change — this
-  /// method only drives the engine + persistence + server reconcile.
-  Future<void> activateBook(String bookId, {required String title, String? artPath}) async {
-    // 0. Early idempotency guard: re-selecting the open book is a true no-op.
-    if (player.currentBookId == bookId) return;
+// apps/android/lib/src/domain/activate_book.dart
 
-    // 1. Ensure detail so PlayerPane can read sync.chaptersOf.
-    await sync.ensureDetail(bookId);
+/// Book-level audio orchestration for selecting/opening a book (app-21), as a pure
+/// function over injected callables so it unit-tests without a real runtime. The
+/// per-book *view* state (chapter list, finished ticks, cover header, peaks, scroll)
+/// is owned by PlayerPane — this only drives engine + persistence + server reconcile.
+Future<void> runActivateBook({
+  required String bookId,
+  required String title,
+  String? artPath,
+  required String? currentBookId,
+  required Future<void> Function(String bookId) ensureDetail,
+  required Future<String?> Function(String bookId) coverThumbPath,
+  required Future<void> Function() saveNow,
+  required Future<void> Function(String bookId) syncBook,
+  required Future<void> Function(String bookId, String title, String? art) switchBook,
+  required Future<void> Function(String bookId, String title, String? art) openBook,
+  required Future<void> Function(String bookId) markPlayed,
+}) async {
+  // 0. Early idempotency guard: re-selecting the open book is a true no-op.
+  if (currentBookId == bookId) return;
 
-    // 2. Resolve cover art if not supplied.
-    final art = artPath ?? await library.coverThumbPath(bookId);
+  // 1. Ensure detail so PlayerPane can read sync.chaptersOf.
+  await ensureDetail(bookId);
 
-    // 3. Hand off / open.
-    final outgoing = player.currentBookId;
-    if (outgoing != null) {
-      await player.saveNow();                              // persist LIVE outgoing pos
-      try {
-        await resumeSync.syncBook(outgoing);               // push fresh outgoing
-      } catch (_) {/* offline / no record */}
-      await player.switchBook(bookId, bookTitle: title, artPath: art);
-    } else {
-      await player.openBook(bookId, bookTitle: title, artPath: art);
-    }
+  // 2. Resolve cover art if not supplied.
+  final art = artPath ?? await coverThumbPath(bookId);
 
-    // 4. Continue-listening + LRU eviction ordering.
-    await library.markPlayed(bookId, DateTime.now().toIso8601String());
-
-    // 5. Reconcile the newly-active book (bidirectional; offline-safe).
-    try {
-      await resumeSync.syncBook(bookId);
-    } catch (_) {/* offline / no record */}
+  // 3. Hand off (fresh outgoing position) or open.
+  if (currentBookId != null) {
+    await saveNow();                       // persist LIVE outgoing position
+    try { await syncBook(currentBookId); } catch (_) {/* offline */}
+    await switchBook(bookId, title, art);
+  } else {
+    await openBook(bookId, title, art);
   }
+
+  // 4. Continue-listening + LRU eviction ordering.
+  await markPlayed(bookId);
+
+  // 5. Reconcile the newly-active book (bidirectional; offline-safe).
+  try { await syncBook(bookId); } catch (_) {/* offline */}
+}
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `flutter test test/data/activate_book_test.dart`
+Run: `flutter test test/domain/activate_book_test.dart`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Add the runtime binding** in `companion_runtime.dart`:
+
+```dart
+  /// Bind [runActivateBook] to this runtime's live collaborators (app-21).
+  Future<void> activateBook(String bookId, {required String title, String? artPath}) {
+    return runActivateBook(
+      bookId: bookId,
+      title: title,
+      artPath: artPath,
+      currentBookId: player.currentBookId,
+      ensureDetail: sync.ensureDetail,
+      coverThumbPath: library.coverThumbPath,
+      saveNow: player.saveNow,
+      syncBook: resumeSync.syncBook,
+      switchBook: (b, t, a) => player.switchBook(b, bookTitle: t, artPath: a),
+      openBook: (b, t, a) => player.openBook(b, bookTitle: t, artPath: a),
+      markPlayed: (b) => library.markPlayed(b, DateTime.now().toIso8601String()),
+    );
+  }
+```
+
+> Add `import '../domain/activate_book.dart';` to `companion_runtime.dart`. Verify the real method names on the collaborators before wiring: `sync.ensureDetail(String)`, `library.coverThumbPath(String)→Future<String?>`, `library.markPlayed(String, String)`, `player.saveNow()`, `player.currentBookId`, `resumeSync.syncBook(String)`. If any differ, adapt the lambda, not the pure function.
+
+- [ ] **Step 6: Run analyze + the pure test**
+
+Run: `flutter analyze` then `flutter test test/domain/activate_book_test.dart`
+Expected: analyze clean; PASS.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add apps/android/lib/src/data/companion_runtime.dart apps/android/test/data/activate_book_test.dart
-git commit -m "feat(app): CompanionRuntime.activateBook orchestration (app-21)"
+git add apps/android/lib/src/domain/activate_book.dart apps/android/lib/src/data/companion_runtime.dart apps/android/test/domain/activate_book_test.dart
+git commit -m "feat(app): pure runActivateBook + runtime binding (app-21)"
 ```
 
 ---
@@ -444,9 +513,11 @@ git commit -m "feat(app): CompanionRuntime.activateBook orchestration (app-21)"
 - Test: `apps/android/test/ui/player_pane_test.dart` (+ existing `player_screen_test.dart` stays green)
 
 **Interfaces:**
-- Produces: `class PlayerPane extends StatefulWidget { const PlayerPane({super.key, required this.runtime, required this.bookId, required this.title}); }` — same trio `PlayerScreen` takes today. It renders the chapter list + cover header + transport, loads per-book view state in `initState`, and shows an empty state when `bookId` is null (two-pane only). Callers pass `key: ValueKey(bookId)`.
+- Produces: `class PlayerPane extends StatefulWidget { const PlayerPane({super.key, required this.runtime, required this.bookId, required this.title}); final CompanionRuntime? runtime; final String? bookId; final String title; }` — same trio `PlayerScreen` takes today, but `runtime`/`bookId` **nullable** for the two-pane empty state. It renders the chapter list + cover header + transport, **self-activates its book** and loads per-book view state in `initState`, and shows an empty state when `bookId`/`runtime` is null. Callers pass `key: ValueKey(bookId)`.
 
-**Extraction rule:** move the body of `_PlayerScreenState` into `_PlayerPaneState` **verbatim**, with the four deltas below. Keep every widget `Key` unchanged.
+**Extraction rule:** move the body of `_PlayerScreenState` into `_PlayerPaneState` **verbatim**, with the deltas below. Keep every widget `Key` unchanged.
+
+**Why self-activation matters (plan-review fix):** the existing `player_screen_test` constructs `PlayerScreen` **directly** and asserts resume-derived state (e.g. the transport names `Ch. 2 · Bells Beneath`, which only renders when the book was opened and `currentChapterUuid == hollow-tide-1`'s ch2). Since `activateBook` now owns `openBook`, the pane must ensure its own book is active in `initState` — otherwise a directly-constructed pane shows an unopened book and those tests go red. Self-activation is idempotent (the Task-4 guard), so it's a no-op when `_onSelect` already activated in two-pane.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -454,8 +525,10 @@ git commit -m "feat(app): CompanionRuntime.activateBook orchestration (app-21)"
 // apps/android/test/ui/player_pane_test.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/ui/player_pane.dart';
-// Reuse the demo runtime harness that player_screen_test.dart uses.
+import 'package:castwright/src/ui/player_pane.dart';
+// Copy the demo-runtime setup VERBATIM from player_screen_test.dart (it builds a
+// CompanionRuntime via the demo path with `fs: InMemoryFileStore()`), exposed here
+// as `buildDemoRuntime()`.
 
 void main() {
   testWidgets('empty state when no active book', (tester) async {
@@ -466,13 +539,13 @@ void main() {
   });
 
   testWidgets('renders chapters for the active book', (tester) async {
-    final runtime = await buildDemoRuntime(); // same helper style as player_screen_test
+    final runtime = await buildDemoRuntime(); // fs: InMemoryFileStore(), demo data
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
         body: PlayerPane(
-            key: const ValueKey('the-drowning-bell'),
+            key: const ValueKey('hollow-tide-1'),   // demo book ID (title: The Drowning Bell)
             runtime: runtime,
-            bookId: 'the-drowning-bell',
+            bookId: 'hollow-tide-1',
             title: 'The Drowning Bell'),
       ),
     ));
@@ -482,7 +555,7 @@ void main() {
 }
 ```
 
-> Make `runtime`/`bookId` nullable on `PlayerPane` so the empty-state path needs no runtime. Copy `buildDemoRuntime` from `player_screen_test.dart`'s setup (demo `runtimeOverride`).
+> `hollow-tide-1` is the demo book **id** (`demo_data.dart`); "The Drowning Bell" is its title — do not swap them. Copy `buildDemoRuntime` from `player_screen_test.dart` verbatim (same `fs: InMemoryFileStore()`).
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -494,7 +567,14 @@ Expected: FAIL — `player_pane.dart` not found.
 Create `player_pane.dart` with `PlayerPane` (nullable `runtime`/`bookId`) and `_PlayerPaneState`. Move these members **verbatim** from `_PlayerScreenState` (player_screen.dart): fields `_ready,_playing,_error,_coverArtPath,_chapters,_finished,_subs,_peaks,_scroll,_kRowHeight`; methods `_ensurePeaks,_ensureCurrentPeaks,_scrollToCurrent,_prepare,_playChapter,_togglePlay,_isFinished,_currentChapterLabel,_fmt,_coverHeader,_currentProgressBar,_transport,_openBoostSheet,_cycleSpeed`; the `_speeds` list. Then apply the **four deltas**:
 
 ```dart
-// DELTA 1 — empty state: guard build() at the top.
+// DELTA 1 — null/empty-state guards at BOTH initState and build.
+@override
+void initState() {
+  super.initState();
+  if (widget.runtime == null || widget.bookId == null) return; // empty state; no load
+  _prepare();
+}
+
 @override
 Widget build(BuildContext context) {
   if (widget.bookId == null || widget.runtime == null) {
@@ -506,24 +586,30 @@ Widget build(BuildContext context) {
   //   if (_coverArtPath != null) _coverHeader(),
 }
 
-// DELTA 2 — do NOT call player.openBook here. activateBook (Task 4) already
-// opened/switched the book before this pane was (re)built. _prepare keeps only the
-// VIEW loads: ensureDetail (idempotent), chaptersOf, finishedChapterUuids,
-// coverThumbPath→_coverArtPath, stream subscriptions, _ensureCurrentPeaks,
-// post-frame _scrollToCurrent, and `_playing = runtime.player.playing`.
-// Remove from _prepare: the resumeSync.syncBook pull, markPlayed, and
-// player.openBook calls (now in activateBook).
+// DELTA 2 — _prepare SELF-ACTIVATES, then loads VIEW state only.
+// First line of _prepare (after the try{):
+//   final rt = widget.runtime!;
+//   if (rt.player.currentBookId != widget.bookId) {
+//     await rt.activateBook(widget.bookId!, title: widget.title); // idempotent
+//   }
+// Then KEEP the view loads: rt.sync.ensureDetail (idempotent), sync.chaptersOf,
+// library.finishedChapterUuids, library.coverThumbPath→_coverArtPath, the three
+// stream subscriptions, _ensureCurrentPeaks, post-frame _scrollToCurrent, and
+// `_playing = rt.player.playing`.
+// REMOVE from _prepare the now-duplicated raw calls that activateBook owns:
+// resumeSync.syncBook(pull), library.markPlayed, and player.openBook — they are
+// subsumed by the activateBook call above. (ensureDetail stays; it's idempotent and
+// the view load needs it regardless.)
 
 // DELTA 3 — seed the speed label from the engine, not a hardcoded 1.0.
-double _speed = 1.0; // becomes:
-// in initState (after runtime is available):
-//   _speed = widget.runtime!.player.speed;
+double _speed = 1.0; // in _prepare/initState, after rt is available:
+//   _speed = rt.player.speed;
 
-// DELTA 4 — dispose keeps the local save + best-effort push (idempotent), but the
-// pane no longer OWNS book lifecycle; guard on runtime != null.
+// DELTA 4 — dispose keeps the local save + best-effort push (idempotent) but the
+// pane no longer OWNS book lifecycle; wrap it in `if (widget.runtime != null)`.
 ```
 
-Reference `bookId`/`title` via `widget.bookId!`/`widget.title` where the old code used `widget.bookId`/`widget.title`.
+Reference `bookId`/`title` via `widget.bookId!`/`widget.title` where the old code used `widget.bookId`/`widget.title`. **Existing `player_screen_test` stays green** precisely because a directly-constructed pane self-activates (DELTA 2) and thus opens the book before asserting resume state.
 
 - [ ] **Step 4: Rewrite `PlayerScreen` as a thin host**
 
@@ -579,7 +665,7 @@ git commit -m "refactor(app): extract PlayerPane; PlayerScreen becomes thin host
 **Files:**
 - Create: `apps/android/lib/src/ui/library_pane.dart`
 - Modify: `apps/android/lib/src/ui/library_home_screen.dart`
-- Test: existing `test/ui/library_screen_test.dart` + `home_screen_test.dart` stay green.
+- Test (regression net): **`test/ui/library_home_screen_test.dart`** — this is the file that actually constructs `LibraryHomeScreen(...)` (≈ lines 145/200/259) and must stay green. (Note: `library_screen_test.dart` tests a *different* presentational `LibraryScreen` widget and is NOT the guard here.)
 
 **Interfaces:**
 - Produces: `class ActiveBook extends ChangeNotifier { String? get bookId; String get title; void select(String? id, {String title}); }`; `class LibraryPane extends StatelessWidget` rendering the current library body (search, continue rail, grouped tree, actions) from props/callbacks, with a `void Function(String bookId, String title) onSelect`.
@@ -622,8 +708,8 @@ void _onSelect(String bookId, String title) {
 
 - [ ] **Step 4: Run tests**
 
-Run: `flutter test test/ui/library_screen_test.dart test/ui/home_screen_test.dart` then `flutter analyze`.
-Expected: PASS, no new analyze warnings. (Behaviour identical — this is a move.)
+Run: `flutter test test/ui/library_home_screen_test.dart` then `flutter analyze`.
+Expected: PASS, no new analyze warnings. (Behaviour identical — this is a move.) Note that in the real screen, book selection today happens via **three** paths — the row-tap `onTap` (`_open`), the popup-menu `'play'` item, and the shelf card `_openBook` — route **all three** through `onSelect` so none is missed.
 
 - [ ] **Step 5: Commit**
 
@@ -651,7 +737,7 @@ git commit -m "refactor(app): extract LibraryPane + ActiveBook (no behaviour cha
 // apps/android/test/ui/adaptive_library_shell_test.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/ui/adaptive_library_shell.dart';
+import 'package:castwright/src/ui/adaptive_library_shell.dart';
 // build a demo runtime + a small fake LibraryPane child with a tappable Key('book-x').
 
 void main() {
@@ -765,9 +851,11 @@ Future<void> _onSelect(String bookId, String title) async {
 
 And render `AdaptiveLibraryShell(runtime: widget.runtime, activeBook: _activeBook, libraryPane: <the LibraryPane>)` as the `Scaffold` body.
 
+> **State propagation:** `LibraryHomeScreen.build()` constructs the shell — and a fresh `LibraryPane(...)` with the latest data — on every build, so `setState`/`_refresh` naturally flows updated covers/progress into the pane. The two-pane `PlayerPane` is keyed `ValueKey(activeBook.bookId)`, which is unchanged by a library `_refresh`, so Flutter preserves the player pane's `State` across those parent rebuilds (no reload, audio undisturbed). `activateBook` in `_onSelect` is awaited before the pushed route in compact and is idempotent with `PlayerPane`'s own self-activation (Task 5).
+
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `flutter test test/ui/adaptive_library_shell_test.dart test/ui/library_screen_test.dart` then `flutter analyze`.
+Run: `flutter test test/ui/adaptive_library_shell_test.dart test/ui/library_home_screen_test.dart` then `flutter analyze`.
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
@@ -783,7 +871,7 @@ git commit -m "feat(app): AdaptiveLibraryShell two-pane list-detail on large scr
 
 **Files:**
 - Modify: `apps/android/lib/src/ui/library_pane.dart`
-- Test: `apps/android/test/ui/library_screen_test.dart` (add a wide-surface case)
+- Test: `apps/android/test/ui/library_home_screen_test.dart` (add a wide-surface case that pumps `LibraryHomeScreen`/`LibraryPane` at ≥600 dp and finds `Key('library-grid')`) — NOT `library_screen_test.dart`.
 
 **Interfaces:**
 - Consumes: `windowSizeClassFor` (Task 1).
@@ -805,7 +893,7 @@ git commit -m "feat(app): AdaptiveLibraryShell two-pane list-detail on large scr
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `flutter test test/ui/library_screen_test.dart -r expanded`
+Run: `flutter test test/ui/library_home_screen_test.dart -r expanded`
 Expected: FAIL — no `library-grid` key.
 
 - [ ] **Step 3: Implement the grid branch.** In `LibraryPane.build`, compute `final compact = windowSizeClassFor(MediaQuery.of(context).size.width) == WindowSizeClass.compact;`. When not compact, render each series' books as a `GridView`/`Wrap` (`Key('library-grid')`) of larger cover tiles (reuse the cached `_covers[bookId]` thumbnails; tile keeps `Key('book-<id>')` + tap → `onSelect`). When compact, keep the existing `_bookTile` `ListTile` list unchanged.
@@ -826,13 +914,13 @@ Widget _books(SeriesGroup series) {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `flutter test test/ui/library_screen_test.dart` then `flutter analyze`.
+Run: `flutter test test/ui/library_home_screen_test.dart` then `flutter analyze`.
 Expected: PASS (compact tests still green — the grid is only on wide surfaces).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/android/lib/src/ui/library_pane.dart apps/android/test/ui/library_screen_test.dart
+git add apps/android/lib/src/ui/library_pane.dart apps/android/test/ui/library_home_screen_test.dart
 git commit -m "feat(app): cover-forward library grid on tablet/foldable (app-21)"
 ```
 
