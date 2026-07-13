@@ -32,4 +32,26 @@ describe('fillToneFromAttributes', () => {
     const out = fillToneFromAttributes(c({}));
     expect(out.tone).toEqual({ warmth: 50, pace: 50, authority: 50, emotion: 50 });
   });
+
+  it('fs-59 CJK: zh/ja descriptor words fall back to neutral 50s — no crash, no undefined axis', () => {
+    /* NUDGES only has EN + RU keys today (CJK descriptor phrasing is a
+       documented later-wave deferral — see the NUDGES comment). A zh/ja
+       attribute word must miss the lookup safely, not throw or leave a
+       tone axis undefined. */
+    const out = fillToneFromAttributes(c({ attributes: ['疲惫', '寡黙', 'wise'] }));
+    expect(out.tone).toBeDefined();
+    // 'wise' (EN, present in NUDGES) still nudges — proves the zh/ja misses
+    // didn't corrupt derivation for the one keyword that DOES match.
+    expect(out.tone!.authority).toBeGreaterThan(50);
+    expect(out.tone!.warmth).toBeGreaterThan(50);
+    // The two CJK words contributed nothing — pace/emotion stay at the
+    // untouched neutral baseline.
+    expect(out.tone!.pace).toBe(50);
+    expect(out.tone!.emotion).toBe(50);
+    [out.tone!.warmth, out.tone!.pace, out.tone!.authority, out.tone!.emotion].forEach((v) => {
+      expect(v).not.toBeUndefined();
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(100);
+    });
+  });
 });

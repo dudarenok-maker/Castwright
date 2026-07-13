@@ -899,8 +899,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     return res.end();
   }
   if (qwenUnavailable && nonEnglishBook && coquiEligible) {
-    /* fs-60 — a Coqui-eligible non-English book (en/ru/es/fr/de) has a real
-       fallback: don't abort the whole run, let every Qwen-routed character
+    /* fs-60 — a Coqui-eligible non-English book (en/ru/es/fr/de, plus zh/ja
+       since fs-59 W4b) has a real fallback: don't abort the whole run, let
+       every Qwen-routed character
        fall back to Coqui per-chapter (Task 6's applyQwenFallback branch). */
     const message =
       `Qwen is unavailable (install-state: ${qwenState}), so every Qwen character ` +
