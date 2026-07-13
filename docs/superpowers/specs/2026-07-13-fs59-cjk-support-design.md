@@ -64,7 +64,7 @@ proven framework. Verified against the current tree:
 
 | # | Decision | Rationale |
 |---|---|---|
-| D1 | **Segmenter = `Intl.Segmenter`** (zero-dep, Node/ICU built-in) | Two load-bearing uses (§3.1): `granularity:'sentence'` for the CJK sentence-split in `stage2-chunk`, and `granularity:'word'` in the coverage guard to restore defect-detection sensitivity (§2.1 measured false negatives without it). Both self-detect script, so no book-language threading. No new dependency (matches the "one dep = franc" precedent). Confirmed available: `node >=20.19.0`, `.nvmrc` 24, full-ICU default. |
+| D1 | **Segmenter = `Intl.Segmenter`** (zero-dep, Node/ICU built-in) | One load-bearing use (§3.1): `granularity:'sentence'` for the CJK sentence-split in `stage2-chunk`. (Word-granularity is NOT used for the coverage guard — §2.1 verified it doesn't move the ratio; the coverage fix is a dup-key floor.) Self-detects script, so no book-language threading. No new dependency (matches the "one dep = franc" precedent). Confirmed available: `node >=20.19.0`, `.nvmrc` 24, full-ICU default. |
 | D2 | **ZH + JA flip independently** (per-language gate); expected to ship together but not coupled | The `supported` flip is per-language: a JA audio-gate miss does **not** block ZH's flip. Foundations still land once and one operator/labeler session covers both, so in practice they ship together — but atomicity is not an invariant. (Resolves the earlier D2/Risk-1 tension.) |
 | D3 | **Build the full §4.8 attribution eval harness**, as **Wave 1 / its own PR**, language-agnostic | The Latin tranche skipped it and flipped `supported` on operator-audio alone. It is infrastructure every future language needs; building it first, proven on an existing language, de-risks the CJK waves and retro-enables an es/fr/de gate. |
 | D4 | **CJK renders on both Qwen and Coqui XTTS** | Qwen natively supports zh/ja; XTTS v2 natively supports `zh-cn`/`ja`; the sidecar has no language allowlist; fs-60's machinery is generic. Honors "it should also work for Coqui." |
@@ -75,22 +75,27 @@ proven framework. Verified against the current tree:
 Two of the assumption-checker's load-bearing risks were settled by running real
 CJK text through the actual code + a real Gemini pass (no local VRAM):
 
-- **The coverage guard does NOT infinite-retry on CJK — but it is DEGRADED at
-  catching CJK defects (false negatives).** Two spikes on verbatim `words()` /
-  `validateStage2Coverage`:
+- **The coverage guard does NOT infinite-retry on CJK; it has ONE narrow
+  CJK-specific gap.** Spikes on verbatim `words()` / `validateStage2Coverage`:
   - *Healthy text:* a faithful attribution of a 5-paragraph JA/ZH chapter scores
     **ratio 1.000 → PASS**; confirmed end-to-end with a live
     `gemini-3.1-flash-lite` stage-2 pass (both ratio 1.0). So the issue's
     "infinite retry" premise is **false** — healthy CJK does not false-positive.
-  - *Defect detection (dialogue-heavy JA, 40 sentences):* a real **repeat-loop**
-    scores `ratio 1.15, dup=false → PASS` and a **30% truncation** scores
-    `ratio 0.70 → PASS` — **both false negatives.** Cause: coarse clause-level
-    tokens make the [0.6, 1.6] band far too slack against a small denominator,
-    and `findDuplicatedBlock`'s `key.length < 8` skip blinds it to CJK dialogue
-    (measured: **80% of dialogue "sentences" have <8-char keys**). A silent
-    loop/truncation to synthesis is worse than a wasted retry — so the coverage
-    fix is **in W2 scope** (§3.1), reframed from "fix infinite retry" (nonexistent)
-    to "restore defect-detection sensitivity."
+  - *The one genuine CJK bug (dialogue-heavy JA, 40 sentences):* a real
+    **repeat-loop** scores `ratio 1.15, dup=false → PASS`. The ratio band can't
+    catch a mild loop (English wouldn't either), but English is saved by
+    `findDuplicatedBlock`; CJK is **not**, because that detector skips keys
+    `key.length < 8` and ~80% of CJK dialogue "sentences" are shorter. **Fix (W2):
+    a CJK-aware dup-key floor — that, and only that, is the CJK coverage bug.**
+  - *Ruled OUT as CJK bugs (verified, so the plan doesn't chase them):* (a) a 30%
+    **truncation** passing at `ratio 0.70` is the guard's *designed* tolerance
+    (floor 0.6 admits healthy 0.65–1.0 compression) and is **language-agnostic** —
+    English behaves identically; not a CJK defect. (b) `Intl.Segmenter` **word**-
+    counting does **not** move the ratio: measured clause-vs-word counts are
+    1.150 vs 1.155 (loop) and 0.700 vs 0.670 (truncation) — ratio is
+    scale-invariant, so finer tokens change no verdict. Word-granularity is
+    therefore **not** part of the coverage fix; it stays load-bearing only for the
+    `stage2-chunk` sentence split.
 - **The real CJK hard problem is attribution correctness on interrupted quotes.**
   The same live Gemini pass, with the *current* (non-CJK) prompt, attributed JA
   「」 dialogue correctly but **mis-attributed Chinese** where a spoken turn is
@@ -110,21 +115,19 @@ wave that owns it (§5).
 
 ### 3.1 Analysis foundations (Wave 2 — engine-independent)
 
-- **Coverage guard** — `server/src/analyzer/stage2-coverage.ts`, `words()`
-  (`~:88-97`) + `findDuplicatedBlock` (`~:117`). The issue's "infinite retry" is
-  false (§2.1) — but the guard is **degraded at catching CJK defects** and that
-  IS in scope. Two Latin assumptions break for CJK: (1) `words()` splits on the
-  `[^\p{L}\p{N}]+ → space` normalisation, which on CJK yields coarse *clause*
-  tokens, not words — so the [0.6, 1.6] ratio band is far too slack (measured: a
-  real repeat-loop passes at 1.15, a 30% truncation at 0.70); (2)
-  `findDuplicatedBlock` skips keys `key.length < 8`, and ~80% of CJK dialogue
-  "sentences" are shorter — so loop-detection is blind on dialogue. **Fix (W2):**
-  count words via `Intl.Segmenter({granularity:'word'})` for a meaningful
-  denominator, and replace the fixed `<8` key floor with a CJK-aware one
-  (script-self-detecting, so **no book-language threading needed** — `words()`
-  keys off Han/Kana presence in the text, like the `isNarrativeLine` fix). Goal:
-  a real CJK loop/truncation FAILS, a faithful CJK attribution still PASSES. The
-  `\p{L}\p{N}` letter-class work (Russian) is preserved.
+- **Coverage guard** — `server/src/analyzer/stage2-coverage.ts`,
+  `findDuplicatedBlock` (`~:117`). The issue's "infinite retry" is false (§2.1),
+  and — verified — the ratio band and `Intl.Segmenter` word-counting are **not**
+  the fix (ratio is scale-invariant; a 30% truncation passing at 0.70 is the
+  guard's designed, language-agnostic tolerance). The **one** CJK-specific bug is
+  `findDuplicatedBlock`'s `key.length < 8` skip: ~80% of CJK dialogue "sentences"
+  have shorter keys, so a CJK repeat-loop evades the dup-detector (measured:
+  passes at ratio 1.15, dup=false). **Fix (W2):** a CJK-aware dup-key floor
+  (char-based or a lower CJK threshold), script-self-detecting on Han/Kana
+  presence — **no book-language threading needed** (like the `isNarrativeLine`
+  fix). Goal: a CJK short-dialogue repeat-loop FAILS; a faithful CJK attribution
+  still PASSES. `words()` itself needs no change (its `\p{L}\p{N}` normalisation
+  already tokenises CJK into clauses correctly for the ratio).
 - **Sentence splitting** — `server/src/analyzer/stage2-chunk.ts`,
   `splitParagraphIntoSentences()` (`:122`, split on `/(?<=[.!?]["')\]]?)\s+/`).
   **This is the genuinely-broken CJK seam:** CJK has no whitespace and ends
@@ -266,15 +269,14 @@ desk/synthetic-verifiable.
 1. **Wave 1 — Attribution eval harness** (language-agnostic, own PR). §3.4.
    *Benefit (architectural): the supported-flip gate every future language needs.*
 2. **Wave 2 — CJK analyze foundations** (server). §3.1. Synthetic ZH/JA fixtures.
-   Registry rows land here (`supported:false`). Two load-bearing fixes: the
-   `stage2-chunk` CJK sentence-split (`Intl.Segmenter` sentence granularity) and
-   the **coverage-guard sensitivity fix** (`Intl.Segmenter` word count + CJK-aware
-   dup-key floor — §2.1 measured false negatives on loop/truncation without it),
-   plus `isNarrativeLine` + token divisor. All self-detect script (no language
+   Registry rows land here (`supported:false`). Fixes: the `stage2-chunk` CJK
+   sentence-split (`Intl.Segmenter` sentence granularity), the **coverage-guard
+   dup-key floor** (CJK-aware, closing the short-dialogue loop blind spot — §2.1),
+   `isNarrativeLine`, and the token divisor. All self-detect script (no language
    threading).
    *Benefit (technical): CJK chapters split + segment correctly; over-budget CJK
-   paragraphs re-split instead of truncating; a looped/truncated CJK chapter is
-   caught instead of shipped silently to synthesis.*
+   paragraphs re-split instead of truncating; a CJK dialogue repeat-loop is caught
+   instead of shipped silently to synthesis.*
 3. **Wave 3 — CJK conventions + prompts** (server). §3.2. Targets the §2.1
    interrupted-quote defect directly.
    *Benefit (user): CJK dialogue (「」/“”) — including a spoken turn split by a
@@ -308,12 +310,13 @@ coverage):
   labelled English fixture; a deliberately-wrong analyzer output asserts non-zero
   FP/FN.
 - **W2:** synthetic ZH + JA fixtures — `splitParagraphIntoSentences` splits a CJK
-  paragraph on `。！？`; **coverage-guard sensitivity regression** (the two §2.1
-  false-negative cases — a dialogue-heavy CJK repeat-loop and a 30% truncation —
-  must FAIL after the fix; a faithful CJK attribution must still PASS); the
-  dup-detector flags a short-quote CJK loop (the `<8`-key blind spot closed);
-  `isNarrativeLine` accepts a real CJK narrative line and rejects a short heading;
-  `estimateInputTokens` uses ~1.2 for CJK-dense input; registry lookups for zh/ja.
+  paragraph on `。！？`; **dup-detector regression** (a CJK short-dialogue
+  repeat-loop — the §2.1 `<8`-key blind spot — must FAIL after the CJK-aware
+  dup-key floor; a faithful CJK attribution must still PASS; and a characterisation
+  test pinning that healthy CJK sits at ratio ≈ 1.0 so the floor change doesn't
+  regress it); `isNarrativeLine` accepts a real CJK narrative line and rejects a
+  short heading; `estimateInputTokens` uses ~1.2 for CJK-dense input; registry
+  lookups for zh/ja.
 - **W3:** `dialogue-structure` recognises 「」 dialogue as spoken and attributes a
   tagged CJK line to its speaker, not the narrator (the issue's core acceptance);
   audio-tag + roster quote-set coverage; `languagePreamble('zh'|'ja')` contains
@@ -332,12 +335,11 @@ under fs-61), mirroring the existing en/de/es/fr/ru samples.
 - [ ] ZH and JA each: detection routes correctly (already true; flips to
       `supported` on registry rows — W2); a CJK book splits into chapters and
       segments into sentences, over-budget CJK paragraphs re-split via
-      `Intl.Segmenter` rather than truncating, AND the coverage guard **catches a
-      looped/truncated CJK chapter** (the §2.1 false-negatives now FAIL) while a
-      faithful CJK attribution still passes (W2). *(Re §2.1: the issue's
-      "infinite retry" does not reproduce, but the guard was measurably degraded
-      at CJK defect detection — this criterion covers the sensitivity fix, not an
-      infinite-retry fix.)*
+      `Intl.Segmenter` rather than truncating, AND the dup-detector **catches a
+      CJK short-dialogue repeat-loop** (the §2.1 blind spot now FAILS) while a
+      faithful CJK attribution still passes (W2). *(Re §2.1: the issue's "infinite
+      retry" does not reproduce; the sole CJK coverage bug is the dup-key floor —
+      mild truncation passing is by-design and language-agnostic, not chased.)*
 - [ ] CJK dialogue (「」/“”) is attributed to the speaker — including a spoken
       turn interrupted by a tag (the §2.1 defect) — not demoted to narrator (W3),
       measured by the W1 eval harness.
@@ -355,9 +357,17 @@ under fs-61), mirroring the existing en/de/es/fr/ru samples.
 XTTS**, the attribution eval harness, zh + ja → `supported`.
 
 **Out:**
+- **Korean (`ko`)** — nominally "CJK", but deliberately **excluded**. Hangul is a
+  **spaced** script, so Korean shares *none* of the spaceless-script foundations
+  this spec is built on (no segmenter, no sentence-split rewrite, coverage guard
+  works as-is, whitespace tokenisation is valid). It also uses a distinct script
+  (`\p{Script=Hangul}`, not Han/Kana, so a new detection branch) and Qwen's
+  Korean quality is unverified. Korean is a Russian/Latin-shaped "add-a-language"
+  job, not CJK-foundation work — it belongs to **fs-70** (#1303), which already
+  lists it. (This spec is really "CJ" — Chinese + Japanese, the spaceless pair.)
 - **Kokoro-CJK** — Kokoro is English-only with no CJK G2P (misaki[ja,zh]); that is
   fs-69 (#1302) / §11.2, not here. CJK is Qwen+Coqui only in v1.
-- **The other 10 XTTS languages** (ko/ar/hi/nl/pl/tr/cs/hu/it/pt) — fs-70 (#1303).
+- **The other XTTS languages** (ko/ar/hi/nl/pl/tr/cs/hu/it/pt) — fs-70 (#1303).
 - **Cross-book voice identity check** — fs-71 (#1304).
 - **UI localization** — fs-14. **TTS text normalization** (no
   `normalize/lang/{zh,ja}.ts`) — fs-53.
@@ -375,14 +385,12 @@ XTTS**, the attribution eval harness, zh + ja → `supported`.
 3. **Fluent ZH/JA translator + labeler availability** — gates W5 (fixtures +
    labelled chapters). W1–W4 land regardless; the harness is proven on English
    first.
-4. **`Intl.Segmenter` fidelity — both uses load-bearing.** (a)
-   `granularity:'sentence'` in `stage2-chunk`: a missed boundary truncates loudly
-   (existing single-huge-sentence fallback), not silently. (b)
-   `granularity:'word'` in the coverage guard: must produce enough tokens that a
-   real loop/truncation crosses the ratio band — validate against the §2.1
-   false-negative fixtures, since char-count is a *fallback* but may not restore
-   the same sensitivity. A native-dep segmenter (jieba/fugashi) stays out of scope
-   either way.
+4. **`Intl.Segmenter` sentence-boundary fidelity** — the one load-bearing use
+   (`granularity:'sentence'` in `stage2-chunk`) must segment CJK `。！？「」`
+   correctly; a missed boundary truncates loudly (existing single-huge-sentence
+   fallback), not silently. (Word-granularity is not used — §2.1 verified it
+   doesn't move the coverage ratio.) A native-dep segmenter (jieba/fugashi) stays
+   out of scope.
 5. **The §2.1 spike is indicative, not exhaustive.** Clean 5-paragraph synthetics
    with dense fullwidth punctuation; real CJK EPUBs mix ASCII punctuation, ruby/
    furigana, U+3000 ideographic spaces, and dashless dialogue. W2's fixtures
