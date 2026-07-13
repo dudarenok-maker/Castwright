@@ -80,4 +80,15 @@ void main() {
     client.close(force: true);
     await slow.close(force: true);
   });
+
+  test('cancel completes even when body is never listened to (no hang)', () async {
+    final client = HttpClient();
+    final r = await streamRange(client, url(), bearer: 't');
+    // Never touch r.body — mirrors the HEAD / non-2xx-relay paths where the
+    // response stream has no listener. A regression here would hang forever
+    // awaiting the single-subscription StreamController's close() future, so
+    // the timeout is the failure signal.
+    await r.cancel().timeout(const Duration(seconds: 2));
+    client.close(force: true);
+  });
 }
