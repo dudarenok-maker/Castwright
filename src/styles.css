@@ -457,6 +457,7 @@
    (-300 / -400) so the text reads against the dark canvas. */
 [data-theme='dark'] .text-rose-900,
 [data-theme='dark'] .text-rose-900\/85,
+[data-theme='dark'] .text-rose-900\/80,
 [data-theme='dark'] .text-rose-900\/70 {
   color: #fca5a5;
 }
