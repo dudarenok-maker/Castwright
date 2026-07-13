@@ -1,6 +1,7 @@
 import 'package:drift/native.dart';
 
 import '../data/api_client.dart';
+import '../data/audio_engine.dart';
 import '../data/chapter_downloader.dart';
 import '../data/companion_runtime.dart';
 import '../data/cover_thumbnails.dart';
@@ -44,6 +45,7 @@ Future<CompanionRuntime> buildDemoRuntime({
   FileStore? fs,
   String coversDir = '',
   String root = '/demo',
+  AudioEngine? engine,
 }) async {
   final fileStore = fs ?? const DiskFileStore();
 
@@ -110,7 +112,7 @@ Future<CompanionRuntime> buildDemoRuntime({
   );
 
   final player = PlayerController(
-    audioEngine: DemoAudioEngine(),
+    audioEngine: engine ?? DemoAudioEngine(),
     playbackStore: library,
     playlistLoader: (bookId) async => sync.playlistFor(bookId),
     clock: () => DateTime.fromMillisecondsSinceEpoch(0),
@@ -138,9 +140,8 @@ Future<CompanionRuntime> buildDemoRuntime({
 
   final sleepTimer = SleepTimer(onExpire: () {});
 
-  // forDemo is @visibleForTesting to keep it out of real production paths; this
-  // demo-only builder is its one sanctioned non-test caller.
-  // ignore: invalid_use_of_visible_for_testing_member
+  // forDemo is a sanctioned production path (app-20 on-device demo); this
+  // builder is its non-test caller.
   return CompanionRuntime.forDemo(
     api: api,
     library: library,

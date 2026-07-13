@@ -102,7 +102,6 @@ Future<CompanionRuntime> _buildTestRuntime(DriftLocalLibrary library,
 
   final sleepTimer = SleepTimer(onExpire: () {});
 
-  // ignore: invalid_use_of_visible_for_testing_member
   return CompanionRuntime.forDemo(
     api: api,
     library: library,
