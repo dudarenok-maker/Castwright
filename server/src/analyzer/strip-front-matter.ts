@@ -28,8 +28,19 @@ function isGlobalBoilerplate(line: string): boolean {
 
 /* A line that reads as narrative prose: reasonably long, contains sentence
    punctuation AND a lowercase letter. All-caps headings ("ПРОЛОГ", "ИСТОРИЯ
-   ПЕРВАЯ") and bare bylines are short / have no lowercase → not narrative. */
+   ПЕРВАЯ") and bare bylines are short / have no lowercase → not narrative.
+
+   CJK (Han/Kana) has no case distinction, so `/\p{Ll}/u` never matches, and
+   CJK prose is denser than Latin so the 60-char threshold is too high. For a
+   line containing Han/Kana, use a lower length threshold (~15) plus a CJK
+   sentence-ending punctuation mark instead of the lowercase-letter test. */
+const CJK_CHAR = /[぀-ヿ㐀-䶿一-鿿]/;
+const CJK_SENTENCE_END = /[。！？…]/;
+
 function isNarrativeLine(line: string): boolean {
+  if (CJK_CHAR.test(line)) {
+    return line.length >= 15 && CJK_SENTENCE_END.test(line);
+  }
   if (line.length < 60) return false;
   return /[.!?…]/.test(line) && /\p{Ll}/u.test(line);
 }
