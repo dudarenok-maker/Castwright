@@ -515,13 +515,15 @@ describe('fs-2 never-cross-language generation gate', () => {
    ENGINE_LANGUAGE_SUPPORT.coqui, so zh now takes the SAME warn-and-proceed
    path as ru/es/fr/de (see the 'ru' test above) instead of the fatal abort
    at generation.ts's `qwenUnavailable && nonEnglishBook && !coquiEligible`
-   branch. That fatal branch itself is unchanged (still pinned at the unit
-   level by 'still throws MissingDesignedVoiceError when coquiEligible is
-   false' in synthesise-chapter-coqui-fallback.test.ts) — it just no longer
-   has a live REGISTERED-language example to drive it through this full HTTP
-   integration test, since every currently-registered language (en/ru/es/fr/
-   de/zh/ja) is now Coqui-eligible; an unregistered code like 'ko' would hit
-   the earlier sidecarLanguageName throw (line ~805) instead of this branch. */
+   branch. That route-level fatal branch's LOGIC is unchanged, but it now has
+   NO direct test: every currently-registered language (en/ru/es/fr/de/zh/ja)
+   is Coqui-eligible, so nothing drives the `!coquiEligible` route path, and an
+   unregistered code like 'ko' hits the earlier sidecarLanguageName throw
+   (line ~805) first. (The unit test 'still throws MissingDesignedVoiceError
+   when coquiEligible is false' in synthesise-chapter-coqui-fallback.test.ts
+   pins a RELATED but DISTINCT path — synthesiseChapter's throw, not this route
+   handler's chapter_failed + res.end() abort.) The route branch stays dormant
+   until a non-Coqui registered language exists (fs-70). */
 describe('fs-60 whole-book Qwen-unavailable path for zh (Coqui-eligible since fs-59 W4b)', () => {
   const ZH_TITLE = 'Chinese Coqui Fallback Gate Test';
   const ZH_MANUSCRIPT = 'm_zh_fatal_gate_test';
