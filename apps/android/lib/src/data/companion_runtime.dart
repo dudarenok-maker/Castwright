@@ -4,6 +4,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../domain/activate_book.dart';
 import '../domain/app_settings.dart';
 import '../domain/sleep_timer.dart';
 import '../domain/storage_policy.dart';
@@ -288,6 +289,23 @@ class CompanionRuntime {
         [connectivitySub, ...finishedSubs]);
     runtimeRef = runtime;
     return runtime;
+  }
+
+  /// Bind [runActivateBook] to this runtime's live collaborators (app-21).
+  Future<void> activateBook(String bookId, {required String title, String? artPath}) {
+    return runActivateBook(
+      bookId: bookId,
+      title: title,
+      artPath: artPath,
+      currentBookId: player.currentBookId,
+      ensureDetail: sync.ensureDetail,
+      coverThumbPath: library.coverThumbPath,
+      saveNow: player.saveNow,
+      syncBook: resumeSync.syncBook,
+      switchBook: (b, t, a) => player.switchBook(b, bookTitle: t, artPath: a),
+      openBook: (b, t, a) => player.openBook(b, bookTitle: t, artPath: a),
+      markPlayed: (b) => library.markPlayed(b, DateTime.now().toIso8601String()),
+    );
   }
 
   /// app-4: enforce the storage cap (auto-delete finished + LRU book eviction).
