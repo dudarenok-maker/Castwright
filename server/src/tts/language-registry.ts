@@ -99,12 +99,29 @@ const ENTRIES: readonly LanguageEntry[] = [
     headingLexicon: { keywords: ['章', '部', '巻', '節', '幕'], numberWords: [],
       standalone: ['序章', '終章', '序', '跋', 'プロローグ', 'エピローグ'] },
     frontMatterKeywords: ['目录', '版权', '致谢', '序言', '后记', '附录', '关于作者'],
-    narratorName: '旁白' },
+    narratorName: '旁白',
+    // In-language few-shot for the analyzer preamble (fs-59 W3, Task 3.3). Starting
+    // set — a native reviewer refines before the W5 supported:true flip. The
+    // attribution example demonstrates the interrupted-quote rule: a spoken turn
+    // split by a narrator tag ("她说") — the SECOND spoken half belongs to the
+    // speaker, not the narrator.
+    promptExamples: {
+      roster: '例如："林芳"（女主角，二十多岁，语气温柔）、"陈警官"（旁白之外的配角，说话直接）。',
+      attribution: '例："“我们该走了，”她说，“天要黑了。”" — 引号内的两段话都是这个角色说的；"她说"是旁白的叙述标签，不是说话人，"天要黑了"这后半句仍然属于说话的角色，不是旁白。',
+    } },
   { code: 'ja', sidecarName: 'Japanese', supported: false, detect: { script: 'cjk', iso6393: 'jpn' },
     headingLexicon: { keywords: ['章', '部', '巻', '節', '話', '幕'], numberWords: [],
       standalone: ['序章', '終章', 'プロローグ', 'エピローグ', 'あとがき', '前書き'] },
     frontMatterKeywords: ['目次', '著作権', '献辞', '謝辞', 'まえがき', 'あとがき', '付録', '著者について'],
-    narratorName: '語り手' },
+    narratorName: '語り手',
+    // In-language few-shot (fs-59 W3, Task 3.3) — starting set, refined by a native
+    // reviewer before W5. The attribution example demonstrates the interrupted-quote
+    // rule: a spoken turn split by a narrator tag ("彼女は言った") — the SECOND spoken
+    // half belongs to the speaker, not the narrator (the tag is narrator, not speaker).
+    promptExamples: {
+      roster: '例：「美咲」（主人公、二十代、口調は穏やか）、「田中刑事」（脇役、話し方は率直）。',
+      attribution: '例：「もう行かないと」彼女は言った。「日が暮れる前に」 — 「」内の二つの発言はどちらもこの人物のセリフである。「彼女は言った」は語り手のタグであり話者ではない。後半の「日が暮れる前に」もタグの後に続く同じ話者のセリフであり、語り手のものではない。',
+    } },
 ];
 
 const BY_CODE: ReadonlyMap<string, LanguageEntry> = new Map(

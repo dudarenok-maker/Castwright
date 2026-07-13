@@ -14,13 +14,22 @@ export const AUDIO_TAGS = [
 ] as const;
 export type AudioTag = (typeof AUDIO_TAGS)[number];
 
-/* Dialogue-wrapping quotes across English + Latin-script + Cyrillic books.
-   A monolingual manuscript contains only its own pair, so the union is safe.
-   Opens: “ (straight) “ (smart) « (ES/FR/RU guillemet) „ (DE low-9).
+/* Dialogue-wrapping quotes across English + Latin-script + Cyrillic + CJK
+   books. A monolingual manuscript contains only its own pair, so the union
+   is safe.
+   Opens: “ (straight) “ (smart) « (ES/FR/RU guillemet) „ (DE low-9)
+   「 (zh/ja corner bracket) 『 (zh/ja double corner bracket, nested/emphasis).
    Closes: “ (straight) “ (smart) » (guillemet) “ (DE high-6 = also EN open;
-   safe for monolingual — the scanner closes on the first closer after an open). */
-const QUOTE_OPENS = '"“«„';
-const QUOTE_CLOSES = '"”»“';
+   safe for monolingual — the scanner closes on the first closer after an
+   open) 」 (zh/ja corner bracket close) 』 (zh/ja double corner bracket
+   close).
+   NOTE (fs-59 W3 scope): this only makes a tag/cue INSIDE 「…」/『…』 findable
+   by the quote-span scanner. It does NOT add fullwidth-punctuation triggers
+   (！？。…) to the detectors below — tagExcitedDialog/tagShoutingDialog/
+   tagHesitantDialog still key off ASCII `!`/caps/`…`/`..`. Fullwidth-cue
+   detection is a deferred nice-to-have, not an fs-59 acceptance item. */
+const QUOTE_OPENS = '"“«„「『';
+const QUOTE_CLOSES = '"”»“」』';
 
 /* Already-tagged-at-the-start check. Lets every detector be idempotent and
    keeps later detectors from stacking a second tag onto something an

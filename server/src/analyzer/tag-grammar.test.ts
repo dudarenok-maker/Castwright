@@ -143,6 +143,10 @@ describe('fr/de grammar rows (#1051)', () => {
   it('unmapped languages stay gated', () => {
     expect(grammarFor('pt')).toBeNull();
   });
+  it('CJK languages (zh/ja) stay gated — case-based roster guard inapplicable', () => {
+    expect(grammarFor('zh')).toBeNull();
+    expect(grammarFor('ja')).toBeNull();
+  });
 });
 
 describe('QUOTE_GLYPHS recognises German low-opening quote (R2-3)', () => {
