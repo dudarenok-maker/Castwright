@@ -7,6 +7,7 @@
 - **Installing the optional Coqui voice engine works again.** Adding Coqui XTTS v2 from the Model Manager — or repairing it — could fail instantly with a cryptic "Constraints cannot have extras" message and never get past it, no matter how many times you tried. That's fixed: Coqui installs and repairs cleanly again, and the same fix covers the Qwen engine's installer too.
 - **And when a model install does fail, you can finally read why — in dark mode.** The red error text under a failed add-on install was painting dark-on-dark in dark mode, leaving the explanation unreadable. It now shows in a legible light red, so you can actually see what went wrong and what to try next.
 - **The built-in sample book now comes in your language.** Castwright ships with a short demo book, _The Coalfall Commission_, so you can try the whole pipeline without uploading anything — but until now it was English-only, and its ready-made voices only worked for English. There are now Spanish, French, German, and Russian editions too, each with its own cast of voices tuned to that language, so whatever language you work in, you can press generate on a real book straight away. (The download is barely any larger — we shrank each sample's cover art so all five editions together add only a few megabytes.)
+- **Play instantly at home.** Start any chapter you haven't downloaded yet the moment you tap it — as long as you're on your home Wi-Fi with your library server running. Off the home network, we'll nudge you to download it first.
 
 # Castwright 1.13.0
 
