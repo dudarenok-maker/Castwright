@@ -66,11 +66,11 @@ describe('parseLabelledChapter', () => {
 
 **Interfaces:**
 - Consumes: `LabelledChapter` (Task 1.1); analyzer output shaped as `Array<{ text: string; characterId: string }>` (the stage-2 sentence shape).
-- Produces: `interface AttributionScore { truePositive: number; falsePositive: number; falseNegative: number; precision: number; recall: number; perLine: Array<{ text: string; truth: string; predicted: string | null; correct: boolean }> }`; `function scoreAttribution(truth: LabelledChapter, predicted: Array<{ text: string; characterId: string }>, aliasMap?: Map<string,string>): AttributionScore`.
+- Produces: `interface AttributionScore { truePositive: number; falsePositive: number; falseNegative: number; segMismatch: number; precision: number; recall: number; perLine: Array<{ text: string; truth: string | null; predicted: string | null; correct: boolean }> }`; `function scoreAttribution(truth: LabelledChapter, predicted: Array<{ text: string; characterId: string }>, aliasMap?: Map<string,string>): AttributionScore`. (`segMismatch` = predicted lines whose normalised text has no truth match — a segmentation-drift signal, kept separate from attribution FP.)
 
-**Design notes (from spec §3.4):** align by `text` after the same normalisation `stage2-coverage.ts` `words()` uses (so smart quotes / spacing don't misalign). `aliasMap` collapses truth↔predicted id differences (alias-merge / id-stability): apply it to BOTH ids before comparing. A predicted line whose normalised text isn't in truth is an FP; a truth line with no matching prediction is an FN; a match with the wrong (alias-resolved) id is both an FP and an FN for that line.
+**Design notes (from spec §3.4):** align by `text` after the same normalisation `stage2-coverage.ts` `words()` uses (so smart quotes / spacing don't misalign). `aliasMap` collapses truth↔predicted id differences (alias-merge / id-stability): apply it to BOTH ids before comparing. A predicted line whose normalised text isn't in truth is a **`segMismatch`** (segmentation drift — a separate metric, NOT an attribution FP); a truth line with no matching prediction is an FN; a match with the wrong (alias-resolved) id is both an FP and an FN for that line.
 
-**Load-bearing alignment assumption (must hold):** the scorer aligns lines by text, so it REQUIRES that truth and predicted share the same sentence segmentation. If the analyzer splits `「気をつけて」と彼女は言った。` into two lines and the labeller kept it as one (or vice-versa), text-alignment cascades into garbage FP/FN. **Therefore labelled chapters are built ON the analyzer's own segmentation** (Task 1.3 / 5.2): run the analyzer once, then a human corrects only the `speakerId` on its emitted lines — text is never re-segmented by hand. The scorer additionally asserts `predicted.length === truth.length` and flags a segmentation-mismatch error loudly rather than scoring a misaligned pair (so a granularity drift surfaces as an explicit failure, not a silent bad number).
+**Alignment must tolerate segmentation drift (stage-2 is stochastic).** Do NOT align by index or assert `predicted.length === truth.length` — a fresh analyzer run can segment differently than when the fixture was labelled, so a hard length check would flake on exactly the non-determinism the coverage guard exists for. Instead **align by a normalised-text map**: build `Map<normalisedText, speakerId>` from truth; for each predicted line, look up its normalised text — matched+right id = TP, matched+wrong id = FP&FN, **predicted text not in truth = segmentation-mismatch (report as a separate `segMismatch` count, not silently an FP)**, truth line never matched = FN. Emit `segMismatch` as its own metric so drift is visible without hard-failing. Best practice to keep drift low (Task 1.3 / 5.2): build labelled chapters ON the analyzer's own segmentation — run it once, correct only `speakerId`, never re-segment by hand — so `segMismatch` stays near zero and FP/FN reflects attribution, not segmentation.
 
 - [ ] **Step 1: Write the failing test** — perfect match scores precision=recall=1.0; a single mis-attribution produces FP=FN=1; an alias map rescues an id rename.
 
@@ -276,22 +276,24 @@ it('estimateInputTokens: CJK uses ~1.2 chars/token', async () => {
 
 **Why this is its own task (adversarial finding):** "a CJK book splits into chapters" is a #1004 acceptance criterion. The existing `CHAPTER_HEADING_RE` is `^(?:…|(KEYWORD)\s+(NUMBER)\b|(STANDALONE)\b)` — it requires `keyword → whitespace → number` (verified `parsers/text.ts:48-52`). CJK headings are the **circumfix** `第<number>章` — keyword *after* the number, **no whitespace**, and **kanji numerals** (一二三…十百) that `NUMBER_PART` (`[ivxlcdm\d]+`) doesn't match. So the heading lexicon (Task 2.1) cannot split CJK chapters; a dedicated pattern is required, or CJK books collapse to one chapter.
 
-**Design note:** add a CJK alternative to the heading regex: `第[0-9〇一二三四五六七八九十百千]+[章話回節部幕]` (Arabic OR kanji numerals; the common circumfix enders). Also make the STANDALONE match `\p{Script=Han}`/Katakana-aware for `序章`/`終章`/`プロローグ` (the trailing `\b` is unreliable after CJK — anchor on line end / punctuation instead). Self-detecting (the pattern only fires on CJK glyphs); no book-language threading.
+**Entry point (verified):** the splitter is `parseText(text, { format })` (`parsers/text.ts:231`), which tests `normaliseHeading(line)` against `CHAPTER_HEADING_RE` (`:51`, applied `:271`) and flushes a chapter per match. `normaliseHeading` (`:127`) only strips edge non-`\p{L}\p{N}` chars, so `第一章`/`第2章` survive intact (all Han/digit); `MAX_HEADING_LEN` (120) is fine for short CJK headings. **So the ONLY change is `CHAPTER_HEADING_RE` — no `normaliseHeading` change needed.**
 
-- [ ] **Step 1: Write the failing test** — a body with `第一章`, `第2章`, `第十二話` headings splits into the right number of chapters; a mid-paragraph `章` does not misfire.
+**Design note:** add a CJK alternative to `CHAPTER_HEADING_RE`: `第[0-9〇一二三四五六七八九十百千]+[章話回節部幕]` (Arabic OR kanji numerals; the common circumfix enders). Also make the STANDALONE match `\p{Script=Han}`/Katakana-aware for `序章`/`終章`/`プロローグ` (the trailing `\b` is unreliable after CJK — anchor on line end / punctuation instead). Self-detecting (the pattern only fires on CJK glyphs); no book-language threading.
+
+- [ ] **Step 1: Write the failing test** — a body with `第一章`, `第2章`, `第十二話` headings splits into 3 chapters; a mid-paragraph `章` does not misfire.
 
 ```ts
+import { parseText } from './text.js';
+
 it('splits a CJK book on 第N章 / 第N話 circumfix headings', () => {
   const body = '第一章\n\n彼は歩いた。\n\n第2章\n\n彼女は走った。\n\n第十二話\n\n終わり。';
-  const chapters = splitIntoChapters(body); // the parser's chapter splitter
+  const { chapters } = parseText(body, { format: 'plaintext' });
   expect(chapters.length).toBe(3);
 });
 ```
 
-(Use the actual chapter-split entry point in `parsers/text.ts` — confirm its exported name when implementing.)
-
-- [ ] **Step 2: Run to verify it fails** (today: 1 chapter — the circumfix never matches).
-- [ ] **Step 3: Implement** the CJK heading alternative + kanji-numeral class + CJK-aware standalone anchoring.
+- [ ] **Step 2: Run to verify it fails** (`cd server && npx vitest run src/parsers/text.test.ts` — today: 1 chapter, the circumfix never matches).
+- [ ] **Step 3: Implement** the CJK alternative in `CHAPTER_HEADING_RE` + kanji-numeral class + CJK-aware standalone anchoring.
 - [ ] **Step 4: Run to verify it passes;** confirm English/ES/RU heading tests stay green (the new alternative only fires on CJK glyphs).
 - [ ] **Step 5: Commit** — `fix(server): CJK 第N章 chapter-heading split (fs-59 W2)`.
 
