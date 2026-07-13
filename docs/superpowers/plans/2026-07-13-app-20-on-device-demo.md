@@ -34,6 +34,15 @@ Build-time `sharp` downscale of the git-ignored `brand/book-covers/{bookId}.png`
 **Interfaces:**
 - Produces: `coverTargets(srcDir, outDir) → [{id, src, out}]` and `const COVER_WIDTH` (consumed only by the colocated test); the committed asset files `assets/demo-covers/{bookId}.png` (consumed at runtime by Task 5's `_startDemo`).
 
+- [ ] **Step 0: Add the `sharp` build-time devDependency**
+
+`sharp` is NOT currently in the repo (the brand scripts render via `@playwright/test` chromium, not sharp). Add it as a build-only dep:
+
+Run (from repo root): `npm install --save-dev sharp`
+Expected: `package.json` `devDependencies` gains `sharp`, `package-lock.json` updates, install succeeds (prebuilt binary).
+
+The script (Step 3) also imports `sharp` **lazily inside `main()`** so the pure-helper test (Step 1) loads without needing sharp resolved.
+
 - [ ] **Step 1: Write the failing test**
 
 Create `scripts/tests/build-demo-covers.test.mjs`:
@@ -77,7 +86,6 @@ Create `scripts/build-demo-covers.mjs`:
 // on-device demo. Mirrors the brand/ -> public/ generated-PNG pattern. Run:
 //   node scripts/build-demo-covers.mjs           (reads brand/book-covers/)
 //   DEMO_COVERS_SRC=/path node scripts/build-demo-covers.mjs
-import sharp from 'sharp';
 import { mkdirSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -97,6 +105,7 @@ export function coverTargets(srcDir, outDir) {
 }
 
 async function main() {
+  const { default: sharp } = await import('sharp'); // lazy: keeps the pure-helper test import-light
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const srcDir = process.env.DEMO_COVERS_SRC || resolve(root, 'brand/book-covers');
   const outDir = resolve(root, 'apps/android/assets/demo-covers');
@@ -112,7 +121,7 @@ async function main() {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -151,7 +160,7 @@ In `package.json`, add to `"scripts"`:
 - [ ] **Step 7: Commit**
 
 ```bash
-git add scripts/build-demo-covers.mjs scripts/tests/build-demo-covers.test.mjs package.json apps/android/pubspec.yaml apps/android/assets/demo-covers
+git add scripts/build-demo-covers.mjs scripts/tests/build-demo-covers.test.mjs package.json package-lock.json apps/android/pubspec.yaml apps/android/assets/demo-covers
 git commit -m "build(scripts): committed demo-cover asset pipeline for app-20"
 ```
 
@@ -551,7 +560,9 @@ void main() {
           onLibraryCleared: () {}),
     ));
     await tester.pumpAndSettle();
-    expect(find.text('Server'), findsOneWidget);
+    // 'Server' renders twice (section label + ListTile title); assert the
+    // unique URL instead so the presence check is unambiguous.
+    expect(find.text('https://demo.local'), findsOneWidget);
     expect(find.text('Unpair device'), findsOneWidget);
     await rt.dispose();
   });
@@ -738,6 +749,12 @@ Future<List<int>> _fakeAsset(String key) async => const <int>[1, 2, 3];
 void main() {
   testWidgets('Try the demo launches the four-book library offline; store untouched',
       (tester) async {
+    // Book tiles live in a lazy ListView; enlarge the surface so all four
+    // (incl. hollow-tide-3, which renders ~700px down) mount and are findable.
+    tester.view.physicalSize = const Size(1200, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
     final store = _SpyStore();
     await tester.pumpWidget(AudiobookCompanionApp(
       store: store,
