@@ -2167,7 +2167,7 @@ class QwenEngine(Engine):
                 # it. Only the message string survives.
                 if is_meta_fault:
                     _log_meta_device_params(model)
-                detail = str(e)
+                detail = str(e)  # exc-text-safe: re-raised for the supervisor's meta-fault classification + restart-log diagnostic; sidecar routes never serialize exception text into a response body
                 model = None
                 inner = None
                 e.__traceback__ = None
