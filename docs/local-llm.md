@@ -122,7 +122,7 @@ speaker-embedding model (`SPK`) are standalone singletons outside that map
 | Engine                      | Resident size    | Preload default                              | Idle eviction                              |
 | ---------------------------- | ---------------- | --------------------------------------------- | -------------------------------------------- |
 | Coqui XTTS v2                 | ~3.5 GB (fp16)    | `PRELOAD_COQUI=false` — button-driven          | none; explicit `/unload` only                |
-| Kokoro v1                     | ~1 GB             | `PRELOAD_KOKORO=true` — eager at sidecar start | none; always resident                        |
+| Kokoro v1                     | ~1 GB             | `PRELOAD_KOKORO=false` (fs-60) — warms on demand; opt in to eager | on-demand; warms on first synth or `/load`   |
 | Qwen 0.6B-Base                | ~1.2 GB           | `PRELOAD_QWEN=false` — button-driven           | none; explicit `/unload` only                |
 | Qwen 1.7B-Base                | ~3.4 GB           | `PRELOAD_QWEN_BASE17=false`                    | `QWEN_BASE17_IDLE_TTL` (default 120s)         |
 | Qwen 1.7B-VoiceDesign          | ~4–5 GB           | never preloaded; always transient              | `QWEN_DESIGN_IDLE_TTL` (default 120s), or freed immediately at the next real `/synthesize` |

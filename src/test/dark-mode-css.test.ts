@@ -47,6 +47,13 @@ describe('dark-mode CSS overrides (styles.css)', () => {
        that opened this round. */
     { selector: '.text-rose-800', label: 'rose-800 pill text' },
     { selector: '.text-rose-600', label: 'rose-600 muted text' },
+    /* Model-install error body (`coqui-install.tsx`, `qwen-install.tsx`,
+       `kokoro-install.tsx`, `whisper-install.tsx`, `venv-bootstrap.tsx` all
+       paint the failure detail as `text-rose-900/80`). The bare `.text-rose-900`
+       and its `/85` / `/70` alphas had dark overrides but `/80` was missed, so
+       the pip-install error read dark-maroon-on-dark-maroon in dark mode — the
+       exact "Coqui install failed" illegibility this fix closes. */
+    { selector: '.text-rose-900\\/80', label: 'rose-900 /80 install-error body text' },
     { selector: '.text-red-800', label: 'red-800 error body text' },
     { selector: '.text-red-900', label: 'red-900 error header text' },
     { selector: '.text-red-600', label: 'red-600 modal-action text' },

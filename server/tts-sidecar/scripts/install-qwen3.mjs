@@ -38,6 +38,7 @@ import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { writeSanitizedConstraintsFile } from './pip-constraints.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SIDECAR_DIR = resolve(__dirname, '..');
@@ -266,11 +267,13 @@ function installFlashAttn(python, env) {
 function installFlashAttnPip(python, env, packageName) {
   step('FlashAttention-2: attempting an unpinned pip install (opt-in)...');
   step('  Requires the standalone NVIDIA CUDA Toolkit; this can be a long compile.');
-  const baseTxtPath = join(SIDECAR_DIR, 'requirements', 'base.txt');
+  // Sanitise base.txt into a constraints-safe temp file: pip rejects extras
+  // (e.g. uvicorn[standard]) in a `-c` file with "Constraints cannot have extras".
+  const constraints = writeSanitizedConstraintsFile(join(SIDECAR_DIR, 'requirements', 'base.txt'));
   if (
     run(
       python,
-      ['-m', 'pip', 'install', 'ninja', 'packaging', 'setuptools', 'wheel', '-c', baseTxtPath],
+      ['-m', 'pip', 'install', 'ninja', 'packaging', 'setuptools', 'wheel', '-c', constraints],
       env,
     ) !== 0
   ) {
@@ -281,7 +284,7 @@ function installFlashAttnPip(python, env, packageName) {
   if (
     run(
       python,
-      ['-m', 'pip', 'install', packageName, '--no-build-isolation', '-c', baseTxtPath],
+      ['-m', 'pip', 'install', packageName, '--no-build-isolation', '-c', constraints],
       buildEnv,
     ) !== 0
   ) {
@@ -391,7 +394,9 @@ function main() {
   // so this step is primarily weights-prefetch + repair. Drop -U to avoid
   // bumping torch/transformers out of the pinned stack; pin via base.txt instead.
   step('Installing qwen-tts (idempotent, torch-safe — pinned via base.txt)...');
-  if (run(python, qwenPipInstallArgs(join(SIDECAR_DIR, 'requirements', 'base.txt')), env) !== 0) {
+  // Sanitise base.txt: pip forbids extras (uvicorn[standard]) in a `-c` file.
+  const constraints = writeSanitizedConstraintsFile(join(SIDECAR_DIR, 'requirements', 'base.txt'));
+  if (run(python, qwenPipInstallArgs(constraints), env) !== 0) {
     step('FAIL: pip install qwen-tts failed. Check network + sidecar venv.');
     process.exit(1);
   }
