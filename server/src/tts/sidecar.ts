@@ -29,6 +29,7 @@ import { gpuSemaphore, GpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from './engine-vram-cost.js';
 import { engineDeviceIsGpu } from '../gpu/engine-device.js';
 import { acquireGpuTokenIfOnGpu } from '../gpu/gpu-semaphore-gate.js';
+import { coquiLanguageCode } from './voice-mapping.js';
 
 /* Per-engine serialisation: at most ONE synth call per engine in-flight at a
    time, mirroring the sidecar's own _synth_lock.  With a VRAM budget > 1, two
@@ -97,12 +98,19 @@ export class SidecarTtsProvider implements TtsProvider {
     language,
     signal,
   }: SynthesizeInput): Promise<SynthesizeOutput> {
+    /* fs-59 W4b — XTTS's own language table uses `zh-cn` where every other
+       engine/the registry uses `zh` (Task 4b.0). Map ONLY at this
+       sidecar-request boundary, and ONLY for the Coqui engine — the caller's
+       `language` (and the shared `langCode` upstream that feeds
+       `expandForSpeech`) must never see the mapped code. */
+    const wireLanguage =
+      language != null && this.engine === 'coqui' ? coquiLanguageCode(language) : language;
     const body = JSON.stringify({
       engine: this.engine,
       model: sidecarModelId(modelKey),
       voice: voiceName,
       text,
-      ...(language != null ? { language } : {}),
+      ...(wireLanguage != null ? { language: wireLanguage } : {}),
     });
 
     /* Per-engine serialisation — at most ONE synth call per engine in-flight.

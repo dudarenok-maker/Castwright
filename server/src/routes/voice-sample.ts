@@ -66,6 +66,12 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     characterHint?: CharacterHint;
     rawEngine?: unknown;
     rawSpeaker?: unknown;
+    /** fs-59 W4b — book/character BCP-47 language, e.g. 'zh'. Optional;
+        absent means "use the sidecar's boot-time default" (unchanged,
+        backward-compatible for English). Threaded straight through to
+        provider.synthesize — SidecarTtsProvider applies the Coqui-only
+        zh→zh-cn wire-format map, never here. */
+    language?: string;
   };
 
   if (!isTtsModelKey(body.modelKey)) {
@@ -146,6 +152,7 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
       text,
       voiceName,
       modelKey: effectiveModelKey,
+      ...(typeof body.language === 'string' && body.language ? { language: body.language } : {}),
     });
     /* Compute duration from raw PCM before encode — MP3 frame counting would
        force a probe step. PCM bytes/sec is exact for 16-bit mono. */

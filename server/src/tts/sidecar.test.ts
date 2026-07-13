@@ -218,6 +218,62 @@ describe('fs-60 — synthesize request body carries language', () => {
   });
 });
 
+describe('fs-59 W4b — coquiLanguageCode zh→zh-cn map (Coqui-only seam)', () => {
+  function makeQwenProvider() {
+    return new SidecarTtsProvider({ url: 'http://localhost:9000/', engine: 'qwen' });
+  }
+
+  function capturingFetch(bodies: unknown[]) {
+    return async (_url: unknown, init: unknown) => {
+      bodies.push(JSON.parse((init as { body: string }).body));
+      const pcm = Buffer.alloc(4, 0);
+      return new Response(pcm, {
+        status: 200,
+        headers: { 'content-type': 'audio/L16;codec=pcm;rate=24000', 'x-sample-rate': '24000' },
+      });
+    };
+  }
+
+  it('maps zh → zh-cn in the request body for the Coqui engine (verified 4b.0 string)', async () => {
+    const bodies: unknown[] = [];
+    stubFetch(capturingFetch(bodies));
+    await makeProvider().synthesize({
+      text: 'hi',
+      voiceName: 'Claribel Dervla',
+      modelKey: 'coqui-xtts-v2',
+      language: 'zh',
+    });
+    const body = bodies[0] as Record<string, unknown>;
+    expect(body.language).toBe('zh-cn');
+  });
+
+  it('leaves ja unchanged for the Coqui engine', async () => {
+    const bodies: unknown[] = [];
+    stubFetch(capturingFetch(bodies));
+    await makeProvider().synthesize({
+      text: 'hi',
+      voiceName: 'Claribel Dervla',
+      modelKey: 'coqui-xtts-v2',
+      language: 'ja',
+    });
+    const body = bodies[0] as Record<string, unknown>;
+    expect(body.language).toBe('ja');
+  });
+
+  it('does NOT leak zh-cn onto a non-Coqui engine — Qwen sees plain zh unchanged', async () => {
+    const bodies: unknown[] = [];
+    stubFetch(capturingFetch(bodies));
+    await makeQwenProvider().synthesize({
+      text: 'hi',
+      voiceName: 'qwen-v1',
+      modelKey: 'qwen3-tts-0.6b',
+      language: 'zh',
+    });
+    const body = bodies[0] as Record<string, unknown>;
+    expect(body.language).toBe('zh');
+  });
+});
+
 describe('SidecarTtsProvider error classification', () => {
   it('annotates network failure as transient with cause=network', async () => {
     stubFetch(async () => {
