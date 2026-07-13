@@ -187,4 +187,18 @@ describe('audio-tags — non-English quotes + Unicode case (seam 3c)', () => {
   it('leaves English smart-quote behaviour unchanged', () => {
     expect(tagShoutingDialog('She yelled "GET OUT".')).toBe('She yelled "[shouting] Get Out".');
   });
+
+  it('tags excited dialogue inside CJK corner-bracket 「…」 quotes (fs-59 W3)', () => {
+    // 「Watch out!」 — corner brackets wrap the ASCII-cue dialogue the way
+    // 「」 wrap dialogue in zh/ja manuscripts. Without 「』 in QUOTE_OPENS/
+    // QUOTE_CLOSES the scanner never treats this as a quote span, so the
+    // `!` cue inside is never seen and no [excited] tag is added.
+    const out = tagExcitedDialog('「Watch out!」');
+    expect(out).toBe('「[excited] Watch out!」');
+  });
+
+  it('tags shouting dialogue inside CJK double corner-bracket 『…』 quotes (fs-59 W3)', () => {
+    const out = tagShoutingDialog('『GET OUT!』');
+    expect(out).toBe('『[shouting] Get Out!』');
+  });
 });
