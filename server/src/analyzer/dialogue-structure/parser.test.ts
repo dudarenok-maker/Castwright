@@ -114,6 +114,31 @@ describe('parser — quote conventions', () => {
   });
 });
 
+describe('parser — ja quote conventions (CJK, fs-59 W3)', () => {
+  const jaIdx = buildNameIndex([{ id: 'tanaka', name: '田中' }], conventionsFor('ja')!);
+  it('ja quotes: 「気をつけて」と彼女は言った。 — quote run anchors as speech, "と…言った" reclassifies to tag, pronoun 彼女 sets pendingPronoun (speaker resolution is windows.ts\'s job, not the parser\'s — same contract as the ru pronoun-only-tag case above)', () => {
+    const paras = parseChapterStructure('「気をつけて」と彼女は言った。', jaIdx);
+    const spans = paras[0].spans;
+    expect(spans.map((s) => s.kind)).toEqual(['speech', 'tag']);
+    expect(spans[0].speaker).toBeUndefined();
+    expect((spans[0] as SpanEvidence & { pendingPronoun?: string }).pendingPronoun).toBe('female');
+  });
+
+  // NOTE (independent-review, §2.1): 彼女 is a *pronoun* — it resolves via the
+  // pronoun regex above and masks the fact that NAME-tag anchoring is broken
+  // for CJK. findRosterName (name-matcher.ts) tokenizes on `[^\p{L}]+`, which
+  // never splits contiguous CJK text with no inter-word spacing — the whole
+  // "と田中は言った" reads as ONE token, never matching the roster's "田中"
+  // stem. This case is the driver for Task 3.5 (CJK roster-name tag anchoring).
+  it.skip('ja quotes: roster NAME tag anchors 「わかった」と田中は言った。 → 田中', () => {
+    // un-skip in Task 3.5 (CJK roster-name tag anchoring)
+    const paras = parseChapterStructure('「わかった」と田中は言った。', jaIdx);
+    const spans = paras[0].spans;
+    expect(spans.map((s) => s.kind)).toEqual(['speech', 'tag']);
+    expect(spans[0].speaker).toEqual({ characterId: 'tanaka', source: 'tag-name' });
+  });
+});
+
 describe('anchorSpansFromTags — anchoring contract (Finding 3)', () => {
   it('a leading tag with no preceding speech never reaches forward past its own following-window to steal a later, legitimate tag\'s speech span (regression: the old lastSpeech-fallback tracker, removed in the anchorSpansFromTags extraction, would have let it)', () => {
     // Hand-built spans array (not derived from real text) so the shape is
