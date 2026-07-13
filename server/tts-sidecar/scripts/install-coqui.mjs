@@ -66,6 +66,39 @@ function run(python, pyArgs, env) {
   return res.status ?? 1;
 }
 
+/**
+ * The ordered pip-install steps the installer runs, before the XTTS prefetch.
+ * Exported (pure) so the sequence — coqui-tts THEN torchcodec, neither with -U —
+ * is unit-testable without a real venv (see install-coqui-steps.test.ts).
+ *
+ * Why torchcodec: coqui-tts 0.27.5's TTS/__init__.py raises ImportError at
+ * package import when torch>=2.9 and torchcodec is absent — it presence-checks it
+ * via transformers' is_torchcodec_available() (a bare `find_spec("torchcodec")`,
+ * NOT a functional import). The sidecar venv pins torch 2.11 (CVE bump), so
+ * without this `import TTS` (and the prefetch below) fails and Coqui can't load.
+ * torchcodec only needs to be PRESENT, never functional: the sidecar never calls
+ * torchaudio.load and XTTS inference uses precomputed manifest-speaker latents, so
+ * torchcodec's FFmpeg decode path — which can't even load its shared libs against a
+ * static FFmpeg 8 build — is never reached. `--no-deps` installs just the wheel so
+ * torchcodec can never perturb the pinned torch (protects the ROCm-2.8 profile,
+ * where torch<2.9 doesn't even need torchcodec).
+ */
+export function coquiPipInstallSteps(constraints) {
+  return [
+    {
+      label: 'Installing coqui-tts (opt-in)...',
+      args: ['-m', 'pip', 'install', 'coqui-tts', '-c', constraints],
+      failMsg: 'FAIL: pip install coqui-tts failed. Check network + sidecar venv.',
+    },
+    {
+      label: 'Installing torchcodec (coqui-tts presence-checks it at import on torch>=2.9)...',
+      args: ['-m', 'pip', 'install', 'torchcodec', '--no-deps'],
+      failMsg:
+        'FAIL: pip install torchcodec failed. coqui-tts import needs it present on torch>=2.9.',
+    },
+  ];
+}
+
 function main() {
   const python = findVenvPython();
   if (!python) {
@@ -92,11 +125,15 @@ function main() {
   // a constraints file ("ERROR: Constraints cannot have extras").
   const baseTxt = join(SIDECAR_DIR, 'requirements', 'base.txt');
   const constraints = writeSanitizedConstraintsFile(baseTxt);
-  // No -U: base.txt already pins compatible versions; upgrading on every run could pull a broken coqui-tts release.
-  step('Installing coqui-tts (opt-in)...');
-  if (run(python, ['-m', 'pip', 'install', 'coqui-tts', '-c', constraints], env) !== 0) {
-    step('FAIL: pip install coqui-tts failed. Check network + sidecar venv.');
-    process.exit(1);
+  // No -U: base.txt already pins compatible versions; upgrading on every run could
+  // pull a broken coqui-tts release. torchcodec is required too (see
+  // coquiPipInstallSteps' rationale) — installed here, NOT in the base overlay.
+  for (const { label, args, failMsg } of coquiPipInstallSteps(constraints)) {
+    step(label);
+    if (run(python, args, env) !== 0) {
+      step(failMsg);
+      process.exit(1);
+    }
   }
 
   step('Pre-fetching XTTS v2 into the default TTS cache (~1.8 GB; expect 2-5 min on a fast link)...');

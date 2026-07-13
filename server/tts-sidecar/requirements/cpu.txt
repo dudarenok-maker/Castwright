@@ -12,6 +12,9 @@
 # never imports it: the Model Manager opt-installs Coqui via
 # `pip install coqui-tts -c base.txt` (PLAIN, no [cpu] extra), which pulls NO
 # torch — so the CPU profile must pre-pin torch for opt-in Coqui to import.
+# (install-coqui.mjs also installs torchcodec, which coqui-tts presence-checks at
+# import on torch>=2.9 — see nvidia-cuda.txt's note + #1586. Not pinned here: it's
+# installed by the opt-in installer, never the manifest.)
 # No index here: install-torch.mjs (cpu profile) installs from whl/cpu.
 torch==2.11.0
 torchaudio==2.11.0
