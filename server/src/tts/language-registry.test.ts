@@ -50,9 +50,9 @@ describe('getLanguageEntry', () => {
     expect(getLanguageEntry('')).toBeUndefined();
   });
 
-  it('returns the zh entry, not yet supported (fs-59 W2)', () => {
+  it('returns the zh entry, not yet supported (fs-59 W2; promptExamples added W3)', () => {
     const zh = getLanguageEntry('zh');
-    expect(zh).toEqual<LanguageEntry>({
+    expect(zh).toMatchObject<Partial<LanguageEntry>>({
       code: 'zh',
       sidecarName: 'Chinese',
       supported: false,
@@ -65,11 +65,16 @@ describe('getLanguageEntry', () => {
       frontMatterKeywords: ['目录', '版权', '致谢', '序言', '后记', '附录', '关于作者'],
       narratorName: '旁白',
     });
+    // promptExamples populated (fs-59 W3, Task 3.3): a roster + attribution few-shot
+    // written in Chinese. Verbatim content is exercised via languagePreamble in
+    // analyzer/language-preamble.test.ts — here just confirm the fields are present.
+    expect(zh?.promptExamples?.roster).toBeTruthy();
+    expect(zh?.promptExamples?.attribution).toBeTruthy();
   });
 
-  it('returns the ja entry, not yet supported (fs-59 W2)', () => {
+  it('returns the ja entry, not yet supported (fs-59 W2; promptExamples added W3)', () => {
     const ja = getLanguageEntry('ja');
-    expect(ja).toEqual<LanguageEntry>({
+    expect(ja).toMatchObject<Partial<LanguageEntry>>({
       code: 'ja',
       sidecarName: 'Japanese',
       supported: false,
@@ -82,6 +87,8 @@ describe('getLanguageEntry', () => {
       frontMatterKeywords: ['目次', '著作権', '献辞', '謝辞', 'まえがき', 'あとがき', '付録', '著者について'],
       narratorName: '語り手',
     });
+    expect(ja?.promptExamples?.roster).toBeTruthy();
+    expect(ja?.promptExamples?.attribution).toBeTruthy();
   });
 });
 
