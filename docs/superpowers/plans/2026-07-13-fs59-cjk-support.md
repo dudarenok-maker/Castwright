@@ -70,6 +70,8 @@ describe('parseLabelledChapter', () => {
 
 **Design notes (from spec §3.4):** align by `text` after the same normalisation `stage2-coverage.ts` `words()` uses (so smart quotes / spacing don't misalign). `aliasMap` collapses truth↔predicted id differences (alias-merge / id-stability): apply it to BOTH ids before comparing. A predicted line whose normalised text isn't in truth is an FP; a truth line with no matching prediction is an FN; a match with the wrong (alias-resolved) id is both an FP and an FN for that line.
 
+**Load-bearing alignment assumption (must hold):** the scorer aligns lines by text, so it REQUIRES that truth and predicted share the same sentence segmentation. If the analyzer splits `「気をつけて」と彼女は言った。` into two lines and the labeller kept it as one (or vice-versa), text-alignment cascades into garbage FP/FN. **Therefore labelled chapters are built ON the analyzer's own segmentation** (Task 1.3 / 5.2): run the analyzer once, then a human corrects only the `speakerId` on its emitted lines — text is never re-segmented by hand. The scorer additionally asserts `predicted.length === truth.length` and flags a segmentation-mismatch error loudly rather than scoring a misaligned pair (so a granularity drift surfaces as an explicit failure, not a silent bad number).
+
 - [ ] **Step 1: Write the failing test** — perfect match scores precision=recall=1.0; a single mis-attribution produces FP=FN=1; an alias map rescues an id rename.
 
 ```ts
@@ -114,7 +116,7 @@ describe('scoreAttribution', () => {
 **Interfaces:**
 - Consumes: `parseLabelledChapter` (1.1), `scoreAttribution` (1.2).
 
-- [ ] **Step 1: Hand-label** ~30 lines of `server/src/__fixtures__/the-coalfall-commission.md` Chapter One into the schema (spoken lines → character ids matching the canned roster; narration/beats → `narrator`). Include at least one interrupted-quote turn (spoken—tag—spoken) so the harness exercises the hard case (mirrors the W5 CJK requirement).
+- [ ] **Step 1: Build the labelled fixture ON the analyzer's segmentation** — run stage-2 attribution over `server/src/__fixtures__/the-coalfall-commission.md` Chapter One, take its emitted `{text, characterId}` lines, and hand-correct ONLY the `speakerId` (never re-split the text) so truth and future predictions share segmentation (see Task 1.2 alignment assumption). Ensure the chapter contains ≥1 interrupted-quote turn (spoken—tag—spoken) so the harness exercises the hard case (mirrors the W5 CJK requirement).
 - [ ] **Step 2: Write the test** — load the fixture, feed it a **deliberately-wrong** predicted set (mis-attribute 3 lines), assert the scorer reports exactly those 3 as FP/FN; feed the correct set, assert precision=recall=1.0.
 - [ ] **Step 3: Run** `cd server && npx vitest run src/analyzer/attribution-eval/harness.test.ts` → PASS.
 - [ ] **Step 4: Commit** — `test(server): attribution-eval English proving fixture (fs-59 W1)`.
@@ -159,6 +161,11 @@ it('zh/ja are registered but not yet supported', () => {
     frontMatterKeywords: ['目次', '著作権', '献辞', '謝辞', 'まえがき', 'あとがき', '付録', '著者について'] },
   ```
   (Adjust the exact heading/front-matter terms with a native reviewer at W5 — these are the starting set.)
+  **NOTE:** the `headingLexicon.keywords` alone do NOT split CJK chapters — the
+  `parsers/text.ts` regex expects `keyword → whitespace → number` (Latin shape),
+  but CJK is the circumfix `第<number>章` with no whitespace and kanji numerals.
+  Chapter splitting is handled by **Task 2.6**, not by this lexicon. Keep the
+  `frontMatterKeywords` here (those DO feed `FRONT_MATTER_RX` as substrings).
 - [ ] **Step 4: Run to verify it passes.** Also confirm `detect-language.test.ts` still green (detection already routed zh/ja; now `supported` reads through).
 - [ ] **Step 5: Commit** — `feat(server): register zh/ja (supported:false) (fs-59 W2)`.
 
@@ -261,6 +268,33 @@ it('estimateInputTokens: CJK uses ~1.2 chars/token', async () => {
 - [ ] **Step 4: Run to verify it passes;** existing Latin/Cyrillic assertions stay green.
 - [ ] **Step 5: Commit** — `feat(server): CJK token-estimate divisor (fs-59 W2)`.
 
+### Task 2.6: CJK chapter-heading split (acceptance-critical)
+
+**Files:**
+- Modify: `server/src/parsers/text.ts` (chapter-heading regex construction, `:20-52`)
+- Test: `server/src/parsers/text.test.ts`
+
+**Why this is its own task (adversarial finding):** "a CJK book splits into chapters" is a #1004 acceptance criterion. The existing `CHAPTER_HEADING_RE` is `^(?:…|(KEYWORD)\s+(NUMBER)\b|(STANDALONE)\b)` — it requires `keyword → whitespace → number` (verified `parsers/text.ts:48-52`). CJK headings are the **circumfix** `第<number>章` — keyword *after* the number, **no whitespace**, and **kanji numerals** (一二三…十百) that `NUMBER_PART` (`[ivxlcdm\d]+`) doesn't match. So the heading lexicon (Task 2.1) cannot split CJK chapters; a dedicated pattern is required, or CJK books collapse to one chapter.
+
+**Design note:** add a CJK alternative to the heading regex: `第[0-9〇一二三四五六七八九十百千]+[章話回節部幕]` (Arabic OR kanji numerals; the common circumfix enders). Also make the STANDALONE match `\p{Script=Han}`/Katakana-aware for `序章`/`終章`/`プロローグ` (the trailing `\b` is unreliable after CJK — anchor on line end / punctuation instead). Self-detecting (the pattern only fires on CJK glyphs); no book-language threading.
+
+- [ ] **Step 1: Write the failing test** — a body with `第一章`, `第2章`, `第十二話` headings splits into the right number of chapters; a mid-paragraph `章` does not misfire.
+
+```ts
+it('splits a CJK book on 第N章 / 第N話 circumfix headings', () => {
+  const body = '第一章\n\n彼は歩いた。\n\n第2章\n\n彼女は走った。\n\n第十二話\n\n終わり。';
+  const chapters = splitIntoChapters(body); // the parser's chapter splitter
+  expect(chapters.length).toBe(3);
+});
+```
+
+(Use the actual chapter-split entry point in `parsers/text.ts` — confirm its exported name when implementing.)
+
+- [ ] **Step 2: Run to verify it fails** (today: 1 chapter — the circumfix never matches).
+- [ ] **Step 3: Implement** the CJK heading alternative + kanji-numeral class + CJK-aware standalone anchoring.
+- [ ] **Step 4: Run to verify it passes;** confirm English/ES/RU heading tests stay green (the new alternative only fires on CJK glyphs).
+- [ ] **Step 5: Commit** — `fix(server): CJK 第N章 chapter-heading split (fs-59 W2)`.
+
 ---
 
 ## Wave 3 — CJK dialogue conventions + prompts (server)
@@ -310,7 +344,7 @@ it('registers zh/ja conventions', () => {
 - Modify: `server/src/tts/language-registry.ts` (populate `promptExamples` on zh/ja — field added in 2.1)
 - Test: `server/src/analyzer/language-preamble.test.ts`
 
-**Design note:** add a CJK conventions clause (「」/`“”` quote marking, no dash-dialogue, tag-is-narrator note) and inject the registry's in-language `promptExamples` (a short roster + an attribution example written in ZH/JA) into the preamble. Target the §2.1 interrupted-quote error with an in-language few-shot showing the second spoken half attributed to the speaker.
+**Design note:** add a CJK conventions clause (「」/`“”` quote marking, no dash-dialogue, tag-is-narrator note) and inject the registry's in-language `promptExamples` (a short roster + an attribution example written in ZH/JA) into the preamble. Target the §2.1 interrupted-quote error with an in-language few-shot showing the second spoken half attributed to the speaker. Also extend the script-annotation at `gemini.ts:213` (`… === 'cyrillic' ? ' (Cyrillic script)' : ''`) to name the CJK script (e.g. `' (Chinese/Japanese script)'`) so the model is told the writing system, mirroring the Cyrillic branch.
 
 - [ ] **Step 1: Write the failing test** — `languagePreamble('zh')` / `('ja')` contain the CJK convention text and the in-language example.
 
@@ -424,7 +458,7 @@ Not desk-verifiable — needs the GPU box, real weights, the operator's ears, an
 
 ### Task 5.2: Labelled ZH + JA chapters (harness input)
 
-- [ ] Hand-label (fluent speaker) a ZH and a JA chapter into the W1 schema. **Requirement:** each MUST include (a) interrupted-quote turns (spoken—tag—spoken across a fullwidth comma — the §2.1 defect) and (b) roster-false-positive constructions (a name-like token that is not a speaker tag — the case tag-grammar gate-off no longer guards). A clean easy-case chapter hides exactly the errors this validates.
+- [ ] Hand-label (fluent speaker) a ZH and a JA chapter into the W1 schema, **built on the analyzer's own segmentation** (Task 1.2 assumption: run the analyzer, correct only `speakerId`, never re-split text). **Requirement:** each MUST include (a) interrupted-quote turns (spoken—tag—spoken across a fullwidth comma — the §2.1 defect) and (b) roster-false-positive constructions (a name-like token that is not a speaker tag — the case tag-grammar gate-off no longer guards). A clean easy-case chapter hides exactly the errors this validates.
 
 ### Task 5.3: Run the W1 harness → record attribution FP/FN
 
@@ -450,6 +484,7 @@ Not desk-verifiable — needs the GPU box, real weights, the operator's ears, an
 ## Self-Review — spec coverage
 
 - Registry rows / detection flip → 2.1 ✓
+- **CJK chapter splitting (第N章 circumfix) → 2.6 ✓ (acceptance-critical; NOT the heading lexicon)**
 - Coverage guard (dup-key floor only; word-count ruled out) → 2.3 ✓
 - Sentence split → 2.2 ✓; isNarrativeLine → 2.4 ✓; token divisor → 2.5 ✓
 - Dialogue conventions zh/ja → 3.1 ✓; quote glyphs → 3.2 ✓; prompt few-shot + `promptExamples` field → 3.3 (field added 2.1) ✓; tag-grammar gate-off → 3.4 ✓
@@ -463,6 +498,9 @@ Not desk-verifiable — needs the GPU box, real weights, the operator's ears, an
 ## Notes for the implementer
 
 - Read spec §2.1 before Task 2.3 — the coverage fix is the dup-key floor ONLY; do not add word-level counting (verified irrelevant: ratio is scale-invariant).
-- The heading/front-matter/speech-verb/calibration term lists in W2–W4 are starting sets; a native ZH/JA reviewer refines them at W5.
+- **Task 2.6 is acceptance-critical** — CJK chapter splitting is a #1004 requirement and does NOT come from the heading lexicon (wrong regex shape). Verify the `parsers/text.ts` chapter-split entry-point name when implementing.
+- **The eval-harness scorer (1.2) assumes truth and predictions share segmentation** — always build labelled chapters on the analyzer's own output and correct only ids; the scorer flags a length/segmentation mismatch loudly rather than scoring misaligned pairs.
+- The heading/front-matter/speech-verb/calibration term lists in W2–W4 are starting sets; a native ZH/JA reviewer refines them at W5. Include **kanji numerals** (一二三…十百) in the 2.6 heading number class, not just Arabic digits.
+- Known-accepted v1 limits (do not over-engineer): the `ja` male-pronoun `/彼(?!女)/` still matches 彼ら/彼氏; a 1-char CJK dup key (`「え」`) is below the floor-2 dup-detector and can evade a pure 1-char-line loop. Both pathological; leave them.
 - W4b.0 is a hard gate: verify XTTS's Chinese code before writing the map.
 - W1 is a standalone PR; W2/W3 are server-only and can each be 1–2 PRs; W4/W5 are the operator-gated tail.
