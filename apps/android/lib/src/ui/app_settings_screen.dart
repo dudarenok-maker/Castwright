@@ -15,12 +15,14 @@ class AppSettingsScreen extends StatefulWidget {
     required this.server,
     required this.onUnpair,
     required this.onLibraryCleared,
+    this.demoMode = false,
   });
 
   final CompanionRuntime runtime;
   final PairedServer server;
   final Future<void> Function() onUnpair;
   final VoidCallback onLibraryCleared;
+  final bool demoMode;
 
   @override
   State<AppSettingsScreen> createState() => _AppSettingsScreenState();
@@ -114,6 +116,11 @@ class _AppSettingsScreenState extends State<AppSettingsScreen> {
     if (mounted) Navigator.of(context).pop();
   }
 
+  Future<void> _exitDemo() async {
+    await widget.onUnpair();
+    if (mounted) Navigator.of(context).pop();
+  }
+
   String _pairedSince() {
     final raw = widget.server.pairedAt;
     if (raw == null) return 'unknown';
@@ -199,39 +206,46 @@ class _AppSettingsScreenState extends State<AppSettingsScreen> {
             onChanged: (v) => _update(_s.copyWith(autoDownloadInProgress: v)),
           ),
           const Divider(),
-          _sectionLabel('Server'),
-          ListTile(
-            leading: const Icon(Icons.dns_outlined),
-            title: const Text('Server'),
-            subtitle: Text(widget.server.url),
-          ),
-          ListTile(
-            leading: const Icon(Icons.verified_user_outlined),
-            title: const Text('Certificate (SHA-256)'),
-            subtitle: Text(widget.server.caFingerprint,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 11)),
-          ),
-          ListTile(
-            leading: const Icon(Icons.schedule),
-            title: const Text('Paired since'),
-            subtitle: Text(_pairedSince()),
-          ),
-          const Divider(),
-          _sectionLabel('Manage'),
-          ListTile(
-            key: const Key('delete-library'),
-            leading: Icon(Icons.delete_sweep_outlined, color: scheme.error),
-            title: Text('Delete downloaded library',
-                style: TextStyle(color: scheme.error)),
-            subtitle: const Text('Free up space; keep the pairing'),
-            onTap: _deleteLibrary,
-          ),
+          if (!widget.demoMode) ...[
+            _sectionLabel('Server'),
+            ListTile(
+              leading: const Icon(Icons.dns_outlined),
+              title: const Text('Server'),
+              subtitle: Text(widget.server.url),
+            ),
+            ListTile(
+              leading: const Icon(Icons.verified_user_outlined),
+              title: const Text('Certificate (SHA-256)'),
+              subtitle: Text(widget.server.caFingerprint,
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 11)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.schedule),
+              title: const Text('Paired since'),
+              subtitle: Text(_pairedSince()),
+            ),
+            const Divider(),
+          ],
+          _sectionLabel(widget.demoMode ? 'Demo' : 'Manage'),
+          if (!widget.demoMode)
+            ListTile(
+              key: const Key('delete-library'),
+              leading: Icon(Icons.delete_sweep_outlined, color: scheme.error),
+              title: Text('Delete downloaded library',
+                  style: TextStyle(color: scheme.error)),
+              subtitle: const Text('Free up space; keep the pairing'),
+              onTap: _deleteLibrary,
+            ),
           ListTile(
             key: const Key('unpair'),
-            leading: Icon(Icons.link_off, color: scheme.error),
-            title: Text('Unpair device', style: TextStyle(color: scheme.error)),
-            subtitle: const Text('Disconnect + forget this server'),
-            onTap: _unpair,
+            leading: Icon(widget.demoMode ? Icons.logout : Icons.link_off,
+                color: scheme.error),
+            title: Text(widget.demoMode ? 'Exit demo' : 'Unpair device',
+                style: TextStyle(color: scheme.error)),
+            subtitle: Text(widget.demoMode
+                ? 'Leave the demo and return to pairing'
+                : 'Disconnect + forget this server'),
+            onTap: widget.demoMode ? _exitDemo : _unpair,
           ),
         ],
       ),

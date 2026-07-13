@@ -20,11 +20,13 @@ class LibraryHomeScreen extends StatefulWidget {
     required this.runtime,
     required this.server,
     required this.onUnpair,
+    this.demoMode = false,
   });
 
   final CompanionRuntime runtime;
   final PairedServer server;
   final Future<void> Function() onUnpair;
+  final bool demoMode;
 
   @override
   State<LibraryHomeScreen> createState() => _LibraryHomeScreenState();
@@ -299,6 +301,15 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
       appBar: AppBar(
         title: const Text('Library'),
         actions: [
+          if (widget.demoMode)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+              child: Chip(
+                key: Key('demo-badge'),
+                label: Text('Demo'),
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
           if (_offline)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
@@ -330,6 +341,7 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
                 server: widget.server,
                 onUnpair: widget.onUnpair,
                 onLibraryCleared: _refresh,
+                demoMode: widget.demoMode,
               ),
             )),
           ),
