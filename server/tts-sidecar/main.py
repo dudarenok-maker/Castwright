@@ -576,6 +576,59 @@ _MODEL_LOAD_FAULT_EXIT_CODE = 44
 # fixed rules out both an unbounded-loop footgun and an import-time parse fault.
 _QWEN_META_LOAD_ATTEMPTS = 2
 
+# --- Qwen output-degeneracy guard (SILENT variant of the meta-tensor bad-load) ---
+# Under 8GB VRAM churn (repeated 1.7B VoiceDesign cycling / model evictions) the
+# Base model has been observed to enter a DEGENERATE-LOAD state: the forward runs
+# WITHOUT error but emits near-empty audio — it generates ~zero speech tokens and
+# hits EOS almost immediately, shipping a broken/near-silent sentence to the user.
+# It is the same #1558 fault class as the load-time "Cannot copy out of meta
+# tensor" failure, but here the load "succeeds", so the load-time guard in
+# `_load_qwen_model` can't see it. Live signature (logs/tts.err.log): rtf >> 6 with
+# audio_ms of only a few hundred ms REGARDLESS of how long the text is —
+# `text_len=18 ... audio_ms=160`, `text_len=20 ... audio_ms=480`. Language-agnostic
+# (observed on EN/de/es voices), so this is NOT a CJK bug. We therefore inspect the
+# OUTPUT: flag a synth as degenerate when the input text is long enough that even
+# the fastest speech could not be this short AND the audio is below a per-character
+# floor no healthy render undercuts.
+#
+# Thresholds chosen to be CONSERVATIVE — err toward NOT flagging, so a legitimately
+# short utterance can never trip the guard:
+#  - Only SUBSTANTIAL text is checked. A single character, a punctuation-only
+#    fragment, or a short interjection ("Oh!", "Go.") can legitimately render to a
+#    fraction of a second, so text shorter than this is NEVER flagged.
+_QWEN_DEGEN_MIN_TEXT_LEN = 10
+#  - Healthy Qwen renders run ~40-60 ms of audio per character (natural speech is
+#    ~12-15 chars/sec, PLUS leading/trailing padding that inflates ms/char for
+#    short lines); the degenerate outputs above measure <~10 ms/char. The floor
+#    sits at 20 ms/char — 2x above the observed degenerate ceiling and 2x below the
+#    healthy floor — so only a genuine near-empty output trips it, and short-but-
+#    real lines (whose padding pushes ms/char well ABOVE the floor) never do.
+_QWEN_DEGEN_MS_PER_CHAR = 20.0
+
+# Total attempts (i.e. one reload+retry) for a degenerate Base synth before we
+# escalate to the supervised self-recycle. Mirrors `_QWEN_META_LOAD_ATTEMPTS`: a
+# single in-process Base reload clears the transient degenerate-load in ~all cases;
+# a still-degenerate retry means the state is persistent and only a fresh process
+# clears it, so we escalate down the SAME code-44 self-recycle path
+# (`_schedule_model_load_fault_restart`) the persistent meta fault uses — this is
+# the same fault class, so it is classified/logged identically. A fixed constant,
+# not an env knob (same rationale as the meta-fault constants above).
+_QWEN_DEGEN_SYNTH_ATTEMPTS = 2
+
+
+def _qwen_synth_is_degenerate(text: str, audio_ms: float) -> bool:
+    """True when a Qwen Base synth returned implausibly little audio for its input
+    — the silent degenerate-load signature (see the constants above). Only flags
+    SUBSTANTIAL text (`>= _QWEN_DEGEN_MIN_TEXT_LEN`) whose audio falls below the
+    `len(text) * _QWEN_DEGEN_MS_PER_CHAR` floor, so legitimately short utterances
+    (single chars, punctuation, interjections) can never false-positive. Pure
+    function of the two measured scalars — GPU-free and directly unit-testable."""
+    n = len(text)
+    if n < _QWEN_DEGEN_MIN_TEXT_LEN:
+        return False
+    return audio_ms < n * _QWEN_DEGEN_MS_PER_CHAR
+
+
 # How long to wait after flagging poison before we actually exit. The 503
 # JSON response is small (~120 bytes) and uvicorn's HTTP/1.1 keep-alive
 # socket buffers flush within a couple of ms, but we give a generous
@@ -669,6 +722,18 @@ def _parse_bool(value: Optional[str], default: bool) -> bool:
     if s in ("0", "false", "no", "off"):
         return False
     return default
+
+
+# Master switch for the Qwen output-degeneracy guard (see the constants + helper
+# near `_QWEN_DEGEN_MS_PER_CHAR`). Default ON so the live box gets the protection
+# without any operator action — the fault is already shipping near-silent audio.
+# This is NOT a tuning knob (the thresholds stay fixed); it exists so the guard —
+# which inspects real synth-output length — can be turned OFF for the unit suite,
+# whose minimal fakes emit non-realistic audio that would otherwise read as
+# degenerate. `tests/conftest.py` sets `QWEN_DEGEN_GUARD=0` suite-wide (mirroring
+# its `PRELOAD_COQUI=0`); the degeneracy regression test re-enables it explicitly.
+# Env-only (like PRELOAD_COQUI / ASR_DEVICE / SEG_ASR_ENABLED) — no registry key.
+_QWEN_DEGEN_GUARD_ENABLED = _parse_bool(os.environ.get("QWEN_DEGEN_GUARD"), True)
 
 
 # --- Process-memory instrumentation + reclaim (host-RAM leak guard) ---
@@ -3292,6 +3357,91 @@ class QwenEngine(Engine):
         log.info("Derived 1.7B-native prompt for voice '%s' (saved %s).", voice, pt_path)
         return prompt, lang, False
 
+    def _guarded_base_synth(
+        self,
+        base_attr: str,
+        ensure_loaded: Callable[[], None],
+        model_name: str,
+        text: str,
+        lang: str,
+        prompt: Any,
+    ) -> tuple[Any, Any, float, float]:
+        """Run a single-utterance Base forward with the output-degeneracy guard.
+
+        Wraps `generate_voice_clone` so the SILENT #1558 degenerate-load — a
+        forward that returns near-empty audio for substantial text (see
+        `_qwen_synth_is_degenerate`) — is caught rather than shipped: on detection,
+        drop and RELOAD the Base model in-process and retry ONCE; if it is STILL
+        degenerate, escalate to the SAME supervised code-44 self-recycle the
+        persistent meta fault uses and raise, so this request fails loud instead of
+        shipping a broken/near-silent sentence.
+
+        `base_attr` is the model member name (``'_base'`` / ``'_base17'``),
+        `ensure_loaded` its `_ensure_*_loaded` method, `model_name` the HF id used
+        in the recycle log. Follows synthesize()'s lock discipline exactly:
+        re-ensure the model UNDER `_synth_lock` so a concurrent `/unload` can't null
+        it mid-forward, and drop the degenerate model under the same lock before the
+        reclaim+reload. Returns `(audio, sr, gen_ms, audio_ms)` for the caller's
+        perf log + result assembly."""
+        for attempt in range(1, _QWEN_DEGEN_SYNTH_ATTEMPTS + 1):
+            gen_start = time.perf_counter()
+            with self._synth_lock:
+                # Re-ensure under the lock: a concurrent /unload (analyzer/XTTS
+                # evict) holds `_synth_lock` to null the model, so one ensured
+                # before the lock can be gone in the gap. No-op on the warm path.
+                ensure_loaded()
+                wavs, sr = getattr(self, base_attr).generate_voice_clone(
+                    text=[text], language=[lang], voice_clone_prompt=prompt
+                )
+            gen_ms = (time.perf_counter() - gen_start) * 1000.0
+            audio = wavs[0]
+            audio_ms = _audio_duration_ms(audio, int(sr))
+            # Guard disabled OR output healthy → return the forward's result as-is
+            # (disabled short-circuits on the first pass — behaviour identical to
+            # the pre-guard single forward).
+            if not _QWEN_DEGEN_GUARD_ENABLED or not _qwen_synth_is_degenerate(text, audio_ms):
+                return audio, sr, gen_ms, audio_ms
+
+            if attempt < _QWEN_DEGEN_SYNTH_ATTEMPTS:
+                log.warning(
+                    "qwen synth degenerate (attempt %d/%d): model=%s text_len=%d "
+                    "audio_ms=%.0f — near-empty audio (silent meta-load variant); "
+                    "reloading Base model in-process and retrying once.",
+                    attempt, _QWEN_DEGEN_SYNTH_ATTEMPTS, model_name, len(text), audio_ms,
+                )
+                # Drop the degenerate model under `_synth_lock` (mirrors unload():
+                # a concurrent forward must not see a half-freed model), reclaim its
+                # VRAM, then the next `ensure_loaded()` cold-loads a fresh copy.
+                with self._synth_lock:
+                    setattr(self, base_attr, None)
+                _reclaim_host_and_vram()
+                ensure_loaded()
+                continue
+
+            # Persistent across the reload+retry — behave as the persistent meta
+            # fault does: schedule the single code-44 recycle a fresh process is
+            # known to clear (classified/logged identically), then fail this request
+            # loud rather than shipping the near-empty audio.
+            log.warning(
+                "qwen synth STILL degenerate after an in-process Base reload: "
+                "model=%s text_len=%d audio_ms=%.0f — escalating to the supervised "
+                "self-recycle (code %d) so a fresh process clears it.",
+                model_name, len(text), audio_ms, _MODEL_LOAD_FAULT_EXIT_CODE,
+            )
+            _schedule_model_load_fault_restart(
+                model_name,
+                f"Base synth emitted near-empty audio ({audio_ms:.0f}ms for "
+                f"{len(text)} chars) that an in-process reload+retry did not clear",
+            )
+            raise RuntimeError(
+                f"Qwen Base synth degenerate (near-empty audio: {audio_ms:.0f}ms "
+                f"for {len(text)} chars) persisted across an in-process reload+"
+                "retry; scheduled a supervised recycle so a fresh process clears it."
+            )
+        # Unreachable (the final attempt always returns or raises above); present so
+        # a static analyzer sees a definite return on every path.
+        raise AssertionError("unreachable: degeneracy loop exited without returning")
+
     def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
         """`voice` is a designed voiceId. Loads its cached clone prompt and
         reuses it — identical identity across the book. Fails fast (no
@@ -3321,17 +3471,13 @@ class QwenEngine(Engine):
                 prompt, lang, cache_hit = self._load_voice_prompt_17b(voice)
                 load_ms = (time.perf_counter() - load_start) * 1000.0
 
-                gen_start = time.perf_counter()
-                with self._synth_lock:
-                    # Re-ensure under the lock (same rationale as the 0.6B path).
-                    self._ensure_base17_loaded()
-                    wavs, sr = self._base17.generate_voice_clone(
-                        text=[text], language=[lang], voice_clone_prompt=prompt
-                    )
-                gen_ms = (time.perf_counter() - gen_start) * 1000.0
+                # Guarded forward (re-ensures under `_synth_lock`; reloads+retries
+                # once, then self-recycles, on a silent degenerate-load).
+                audio, sr, gen_ms, audio_ms = self._guarded_base_synth(
+                    "_base17", self._ensure_base17_loaded, self.BASE17_MODEL,
+                    text, lang, prompt,
+                )
 
-            audio = wavs[0]
-            audio_ms = _audio_duration_ms(audio, int(sr))
             log.info(
                 "qwen synth (1.7b): voice=%s text_len=%d cache=%s load_ms=%.1f "
                 "gen_ms=%.0f audio_ms=%.0f rtf=%.2f",
@@ -3348,20 +3494,11 @@ class QwenEngine(Engine):
         load_ms = (time.perf_counter() - load_start) * 1000.0
 
         self._ensure_base_loaded()
-        gen_start = time.perf_counter()
-        # Serialise the forward — see `_synth_lock` in __init__.
-        with self._synth_lock:
-            # Re-ensure under the lock: a concurrent /unload (analyzer/XTTS evict)
-            # holds `_synth_lock` to null `_base`, so a model ensured before the
-            # lock can be gone in the gap. No-op on the warm path.
-            self._ensure_base_loaded()
-            wavs, sr = self._base.generate_voice_clone(
-                text=[text], language=[lang], voice_clone_prompt=prompt
-            )
-        gen_ms = (time.perf_counter() - gen_start) * 1000.0
-
-        audio = wavs[0]
-        audio_ms = _audio_duration_ms(audio, int(sr))
+        # Guarded forward (serialises + re-ensures under `_synth_lock`; reloads and
+        # retries once, then self-recycles, on a silent degenerate-load).
+        audio, sr, gen_ms, audio_ms = self._guarded_base_synth(
+            "_base", self._ensure_base_loaded, self.BASE_MODEL, text, lang, prompt,
+        )
         log.info(
             "qwen synth: voice=%s text_len=%d cache=%s load_ms=%.1f "
             "gen_ms=%.0f audio_ms=%.0f rtf=%.2f",
