@@ -297,7 +297,7 @@ this spec and on the plan (Premium), `flutter analyze` + `flutter test` green, t
 
 ## Follow-up items (filed as separate tickets, not in this PR)
 
-- **`app-NN` — Tablet/foldable marketing scenes for the store listing.** This PR keeps
+- **`app-22` ([#1589](https://github.com/dudarenok-maker/Castwright/issues/1589)) — Tablet/foldable marketing scenes for the store listing.** This PR keeps
   the *existing* marketing capture green (a regression obligation), but the Play Store
   listing needs **new large-screen promotional screenshots** — the two-pane library, the
   persistent player pane, and a foldable-unfolded shot, in light + dark. Google Play has

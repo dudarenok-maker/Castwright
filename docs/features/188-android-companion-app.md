@@ -540,8 +540,8 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
   server changes.** Pure-framework so it doubles as the iPad UI (principle #6).
 - **Spec/plan:** [`../superpowers/specs/2026-07-13-android-tablet-adaptive-ui-design.md`](../superpowers/specs/2026-07-13-android-tablet-adaptive-ui-design.md)
   · [`../superpowers/plans/2026-07-13-android-tablet-adaptive-ui.md`](../superpowers/plans/2026-07-13-android-tablet-adaptive-ui.md).
-- **Follow-up:** `app-NN` — tablet/foldable marketing scenes for the Play Store listing
-  (extends #1581's screenshot harness with tablet surfaces + dimensions).
+- **Follow-up:** `app-22` (#1589) — tablet/foldable marketing scenes for the Play Store
+  listing (extends #1581's screenshot harness with tablet surfaces + dimensions).
 - **Benefit (user):** the app feels native on tablets/foldables. **Depends on:** the MVP app block.
 
 ### Relationships to existing items (reconcile, don't absorb)
