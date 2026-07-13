@@ -394,7 +394,18 @@ Future<PinnedStreamResponse> streamRange(HttpClient client, Uri url,
 
   Future<void> cancel() async {
     await sub.cancel(); // abort THIS socket only — never client.close()
-    if (!out.isClosed) await out.close();
+    if (!out.isClosed) {
+      // A single-subscription StreamController's close() future only resolves
+      // once a listener has drained the "done" event — on a HEAD request or a
+      // non-2xx upstream relay the body is never listened to, so awaiting an
+      // unconditional close() here would hang forever. Await only when there's
+      // actually a listener to deliver the done event to.
+      if (out.hasListener) {
+        await out.close();
+      } else {
+        out.close();
+      }
+    }
   }
 
   return PinnedStreamResponse(
