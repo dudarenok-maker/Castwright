@@ -82,6 +82,11 @@ const EN_NAME = "[A-Z][A-Za-z’'-]+";
 // Unicode name token (es/ru): a capital letter + letters/apostrophes/hyphens.
 const UNI_NAME = "\\p{Lu}[\\p{L}’'-]+";
 
+/* CJK GATE-OFF (fs-59): zh/ja are deliberately NOT in TAG_GRAMMARS. The roster-false-positive
+   guard relies on case-based nameCapture, which is structurally inapplicable to caseless CJK.
+   CJK attribution is instead carried by dialogue-structure conventions (server/src/lang/{zh,ja}.ts)
+   + the fs-59 Wave 1 attribution-eval harness. The caller stays gated and applies no tag
+   scanning for CJK languages. */
 const TAG_GRAMMARS: Record<string, TagGrammar> = {
   en: { verbs: DIALOGUE_VERBS, orders: ['name-verb'], nameCapture: EN_NAME, flipStrategy: 'preceding' },
   es: { verbs: ES_VERBS, orders: ['verb-name', 'name-verb'], nameCapture: UNI_NAME, flipStrategy: 'adjacent', stopwords: ES_STOPWORDS },
