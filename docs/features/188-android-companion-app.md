@@ -204,6 +204,15 @@ differentiator vs. the existing listener-app handoffs (`fe-3`/`fs-7`/`fs-8`).
    `urlSuffix` and, on iOS, surfaces a clear "format not supported on iOS" state for an
    `.ogg` chapter rather than failing silently. (v1 is Android, where all three play — this
    is a forward constraint for `app-12`, captured per the 5th review.)
+6. **Adaptive UI is pure-framework, so the tablet UI *is* the iPad UI (`app-21`).** The
+   large-screen/tablet/foldable layer uses only Flutter framework APIs — `MediaQuery` size
+   + `MediaQuery.displayFeatures` and Material 3 widgets — with **no** Android-only plugins
+   (no Jetpack WindowManager bindings, no `flutter_displaymode`, no `dual_screen`). Window
+   size classes are logical-dp (they classify an iPad identically); `displayFeatures` is
+   empty on iOS so the foldable-split code is inert there; back handling is `PopScope`;
+   touch targets ≥48 dp (satisfies the iOS 44 pt HIG). So when `app-12` wakes, the tablet
+   two-pane UI serves iPad with no fork. See
+   [`../superpowers/specs/2026-07-13-android-tablet-adaptive-ui-design.md`](../superpowers/specs/2026-07-13-android-tablet-adaptive-ui-design.md).
 
 ### Secondary review (2026-06-06) — incorporated
 
@@ -517,6 +526,23 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
   guards iOS *compileability* on every `apps/android/**` change. When app-12 ships, add
   a **signed `.ipa`** release job here — **but even then weigh the macOS minutes**: a
   manual or occasional signed build is likely the better trade than one on every tag.
+
+#### `app-21` — Tablet & large-screen adaptive UI
+
+- **What:** a two-pane list-detail layout (library + **persistent player pane**) on
+  tablets/foldables (`≥840` dp), a cover-forward grid at medium widths, correct
+  rotation/foldable behaviour, and a persistent live player that survives layout changes —
+  phone (compact) behaviour unchanged. Homegrown adaptive shell (`window_size.dart` +
+  `pane_split.dart`, pure/tested), a pure `runActivateBook` orchestration + `activateBook`
+  binding, `PlayerPane` (keyed by active book, self-activating) extracted from
+  `PlayerScreen`, `LibraryPane` + `ActiveBook` extracted from `LibraryHomeScreen`,
+  `AdaptiveLibraryShell`, and a `switchBook` media-metadata fix. **No new dependencies; no
+  server changes.** Pure-framework so it doubles as the iPad UI (principle #6).
+- **Spec/plan:** [`../superpowers/specs/2026-07-13-android-tablet-adaptive-ui-design.md`](../superpowers/specs/2026-07-13-android-tablet-adaptive-ui-design.md)
+  · [`../superpowers/plans/2026-07-13-android-tablet-adaptive-ui.md`](../superpowers/plans/2026-07-13-android-tablet-adaptive-ui.md).
+- **Follow-up:** `app-NN` — tablet/foldable marketing scenes for the Play Store listing
+  (extends #1581's screenshot harness with tablet surfaces + dimensions).
+- **Benefit (user):** the app feels native on tablets/foldables. **Depends on:** the MVP app block.
 
 ### Relationships to existing items (reconcile, don't absorb)
 

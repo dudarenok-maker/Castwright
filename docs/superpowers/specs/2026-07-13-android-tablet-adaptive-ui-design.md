@@ -1,9 +1,10 @@
 # app-21 — Tablet & large-screen adaptive UI for the companion app
 
-**Status:** design approved (2026-07-13), revised after adversarial assumption-check
-(persistent-pane view-state reload, `switchBook` metadata fix, save→push→switch order,
-early idempotency guard; reconciled with PR #1581's player cover header + Play
-screenshot harness)
+**Status:** active — implemented 2026-07-13 on `feat/app-tablet-adaptive-ui` (10-task plan,
+417/417 Dart tests green). Design approved 2026-07-13, revised after adversarial
+assumption-check (persistent-pane view-state reload, `switchBook` metadata fix,
+save→push→switch order, early idempotency guard) and reconciled with PR #1581's player
+cover header + Play screenshot harness.
 **Issue:** _to be filed at backlog-landing_ (`app-21`; see ID note below)
 **Umbrella:** [plan 188 — Android companion app](../../features/188-android-companion-app.md)
 **Scope:** `apps/android/` (Flutter companion) only. **No server changes, no OpenAPI changes.**
