@@ -52,7 +52,7 @@ describe('getLanguageEntry', () => {
 
   it('returns the zh entry, not yet supported (fs-59 W2; promptExamples added W3)', () => {
     const zh = getLanguageEntry('zh');
-    expect(zh).toMatchObject<Partial<LanguageEntry>>({
+    expect(zh).toEqual<LanguageEntry>({
       code: 'zh',
       sidecarName: 'Chinese',
       supported: false,
@@ -64,17 +64,16 @@ describe('getLanguageEntry', () => {
       },
       frontMatterKeywords: ['目录', '版权', '致谢', '序言', '后记', '附录', '关于作者'],
       narratorName: '旁白',
+      promptExamples: {
+        roster: '例如："林芳"（女主角，二十多岁，语气温柔）、"陈警官"（旁白之外的配角，说话直接）。',
+        attribution: '例："“我们该走了，”她说，“天要黑了。”" — 引号内的两段话都是这个角色说的；"她说"是旁白的叙述标签，不是说话人，"天要黑了"这后半句仍然属于说话的角色，不是旁白。',
+      },
     });
-    // promptExamples populated (fs-59 W3, Task 3.3): a roster + attribution few-shot
-    // written in Chinese. Verbatim content is exercised via languagePreamble in
-    // analyzer/language-preamble.test.ts — here just confirm the fields are present.
-    expect(zh?.promptExamples?.roster).toBeTruthy();
-    expect(zh?.promptExamples?.attribution).toBeTruthy();
   });
 
   it('returns the ja entry, not yet supported (fs-59 W2; promptExamples added W3)', () => {
     const ja = getLanguageEntry('ja');
-    expect(ja).toMatchObject<Partial<LanguageEntry>>({
+    expect(ja).toEqual<LanguageEntry>({
       code: 'ja',
       sidecarName: 'Japanese',
       supported: false,
@@ -86,9 +85,11 @@ describe('getLanguageEntry', () => {
       },
       frontMatterKeywords: ['目次', '著作権', '献辞', '謝辞', 'まえがき', 'あとがき', '付録', '著者について'],
       narratorName: '語り手',
+      promptExamples: {
+        roster: '例：「美咲」（主人公、二十代、口調は穏やか）、「田中刑事」（脇役、話し方は率直）。',
+        attribution: '例：「もう行かないと」彼女は言った。「日が暮れる前に」 — 「」内の二つの発言はどちらもこの人物のセリフである。「彼女は言った」は語り手のタグであり話者ではない。後半の「日が暮れる前に」もタグの後に続く同じ話者のセリフであり、語り手のものではない。',
+      },
     });
-    expect(ja?.promptExamples?.roster).toBeTruthy();
-    expect(ja?.promptExamples?.attribution).toBeTruthy();
   });
 });
 
