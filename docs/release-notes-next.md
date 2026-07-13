@@ -44,6 +44,12 @@ this cycle append to this draft rather than opening a new one.
 
 ---
 
+## 📱 Companion app
+
+- **Companion: on-device demo / guest mode.** A "Try the demo" entry on the pairing screen runs the whole app against a self-contained sample library with no server and no network (airplane-mode safe) — unblocking the Google Play "Sign-in details" review for the Open-testing promotion. Refs #1575.
+
+---
+
 ## 🐛 Fixes
 
 - **Installing/repairing Coqui XTTS v2 (and Qwen) from the Model Manager no longer aborts with `ERROR: Constraints cannot have extras`.** `install-coqui.mjs` pins its opt-in install against `requirements/base.txt` via `pip install coqui-tts -c base.txt`, but `base.txt` is a *requirements* file that legitimately carries extras (`uvicorn[standard]`) — which pip forbids in a `-c` **constraints** file, aborting the whole install before it starts (three more latent `-c base.txt` sites lived in `install-qwen3.mjs`: `qwenPipInstallArgs` + both flash-attn installs). Extras are meaningless as a constraint (a constraint only pins a version), so a new shared `server/tts-sidecar/scripts/pip-constraints.mjs` strips `[extras]` from each line into a temp constraints file and all four call sites route through it; `base.txt` stays the single source of truth. Verified end-to-end against the real sidecar venv (`-c base.txt` reproduces the error, `-c <sanitized>` parses cleanly); unit-tested in `server/src/tts/pip-constraints.test.ts`. (#1567)
