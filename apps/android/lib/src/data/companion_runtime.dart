@@ -20,6 +20,7 @@ import 'drift_local_library.dart';
 import 'file_store.dart';
 import 'just_audio_engine.dart';
 import 'library_database.dart';
+import 'loopback_proxy.dart';
 import 'pairing_service.dart' show Connection;
 import 'player_controller.dart';
 import 'resume_sync_service.dart';
@@ -133,6 +134,7 @@ class CompanionRuntime {
   static Future<CompanionRuntime> forConnection(
     Connection connection, {
     CompanionAudioHandler? handler,
+    void Function()? onRepairNeeded,
   }) async {
     final docs = await getApplicationDocumentsDirectory();
     final root = '${docs.path}/companion';
@@ -158,6 +160,16 @@ class CompanionRuntime {
     final sessionId =
         DateTime.now().millisecondsSinceEpoch.toRadixString(36).toUpperCase();
 
+    // Settings are loaded here (moved up from below the player build) so the
+    // `streamOverLan` closure below can read the live value; `runtimeRef` is
+    // assigned once the runtime is constructed at the end of this method, so
+    // a later `updateSettings` call takes effect on the next chapter load.
+    final settingsStore = SettingsStore(fs, path: '$root/settings.json');
+    final settings = await settingsStore.load();
+
+    final proxy = LoopbackProxy(api.pinnedRangeStream);
+    late final CompanionRuntime runtimeRef;
+
     final player = PlayerController(
       audioEngine: JustAudioEngine(),
       playbackStore: library,
@@ -171,6 +183,14 @@ class CompanionRuntime {
             '${n.month.toString().padLeft(2, '0')}-'
             '${n.day.toString().padLeft(2, '0')}';
       },
+      streaming: StreamingConfig(
+        fileStore: fs,
+        streamOverLan: () => runtimeRef.settings.streamOverLan,
+        onHomeLan: const Reachability(currentNetwork).onHomeLan,
+        urlResolver: resolve,
+        proxy: proxy,
+        onRepairNeeded: onRepairNeeded ?? () {},
+      ),
     );
 
     final thumbnails = ThumbnailCache(
@@ -180,8 +200,6 @@ class CompanionRuntime {
       root: root,
     );
 
-    final settingsStore = SettingsStore(fs, path: '$root/settings.json');
-    final settings = await settingsStore.load();
     await player.setSpeed(settings.defaultSpeed);
     await player.setVolumeBoost(settings.volumeBoostDb);
     player.skipBehavior_ = settings.skipButtonBehavior;
@@ -265,9 +283,11 @@ class CompanionRuntime {
     // error) and once every chapter has peaks.
     unawaited(sync.backfillMissingPeaks());
 
-    return CompanionRuntime._(api, library, sync, player, thumbnails,
+    final runtime = CompanionRuntime._(api, library, sync, player, thumbnails,
         settingsStore, settings, resumeSync, sleepTimer, handler,
         [connectivitySub, ...finishedSubs]);
+    runtimeRef = runtime;
+    return runtime;
   }
 
   /// app-4: enforce the storage cap (auto-delete finished + LRU book eviction).
