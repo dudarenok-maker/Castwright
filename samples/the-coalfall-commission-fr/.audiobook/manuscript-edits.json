@@ -1,0 +1,1718 @@
+{
+ "sentences": [
+  {
+   "id": 1,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Chapitre Un — Le Coup à la porte",
+   "confidence": 1
+  },
+  {
+   "id": 2,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "La forge avait pris la couleur d'un couchant assoupi, et Wren raclait les derniers résidus de scorie lorsque les coups à la porte commencèrent.",
+   "confidence": 1
+  },
+  {
+   "id": 3,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "« Laisse »",
+   "confidence": 0.95
+  },
+  {
+   "id": 4,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": ", dit maître Oduvan, sans lever les yeux.",
+   "confidence": 0.98
+  },
+  {
+   "id": 5,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Soixante-dix hivers avaient usé sa voix jusqu'au gravier et à la patience.",
+   "confidence": 1
+  },
+  {
+   "id": 6,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "« Qui que ce soit, qu'il continue de frapper. »",
+   "confidence": 0.92
+  },
+  {
+   "id": 7,
+   "chapterId": 2,
+   "characterId": "wren",
+   "text": "« Ça pourrait être un client. »",
+   "confidence": 0.88
+  },
+  {
+   "id": 8,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "« À cette heure, c'est soit un ivrogne, soit une dette. Ni l'un ni l'autre ne paie mieux pour qu'on le fasse entrer vite. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 9,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "La porte s'ouvrit malgré tout.",
+   "confidence": 1
+  },
+  {
+   "id": 10,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Maerin la prévôte passa la tête, et le froid entra avec elle.",
+   "confidence": 1
+  },
+  {
+   "id": 11,
+   "chapterId": 2,
+   "characterId": "maerin",
+   "text": "« Oduvan. Barre les volets et étouffe les braises. »",
+   "confidence": 0.95
+  },
+  {
+   "id": 12,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Ses mots étaient secs, comme ils l'étaient toujours quand elle avait couru.",
+   "confidence": 1
+  },
+  {
+   "id": 13,
+   "chapterId": 2,
+   "characterId": "maerin",
+   "text": "« Il y a un dragon sur la route de Coalfall. Grand comme une grange. Il descend le chemin. »",
+   "confidence": 0.95
+  },
+  {
+   "id": 14,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Le racloir de Wren s'arrêta.",
+   "confidence": 1
+  },
+  {
+   "id": 15,
+   "chapterId": 2,
+   "characterId": "wren",
+   "text": "« Un vrai ? »",
+   "confidence": 0.9
+  },
+  {
+   "id": 16,
+   "chapterId": 2,
+   "characterId": "maerin",
+   "text": "« Non, mon enfant, un peint. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 17,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Maerin ne sourit pas.",
+   "confidence": 1
+  },
+  {
+   "id": 18,
+   "chapterId": 2,
+   "characterId": "maerin",
+   "text": "« Un vrai. Et il vient droit vers la seule fenêtre éclairée de la vallée, qui est la vôtre. Éteins le feu. »",
+   "confidence": 0.95
+  },
+  {
+   "id": 19,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "« Si j'éteins le feu »,",
+   "confidence": 0.9
+  },
+  {
+   "id": 20,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "dit Oduvan,",
+   "confidence": 1
+  },
+  {
+   "id": 21,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "« je perds la soudure que je couve depuis midi. Un dragon peut attendre le temps d'une soudure ou il ne le peut pas, et dans les deux cas je préfère le recevoir au chaud. »",
+   "confidence": 0.85
+  },
+  {
+   "id": 22,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Il posa ses tenailles.",
+   "confidence": 1
+  },
+  {
+   "id": 23,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "« Moineau. Ouvre la grande porte. »",
+   "confidence": 0.95
+  },
+  {
+   "id": 24,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Wren — Moineau seulement pour lui, et seulement quand il oubliait d'être sévère — alla jusqu'à la grande porte et l'ouvrit en grand.",
+   "confidence": 1
+  },
+  {
+   "id": 25,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Le dragon emplit l'obscurité au-delà comme l'eau emplit une coupe. Un œil, doré et lent, arriva à la hauteur du seuil et s'y arrêta, soupesant la petite chaleur du lieu.",
+   "confidence": 1
+  },
+  {
+   "id": 26,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "De quelque part sur le chemin, une voix jaillit de l'obscurité :",
+   "confidence": 1
+  },
+  {
+   "id": 27,
+   "chapterId": 2,
+   "characterId": "pell",
+   "text": "« Fuyez, pauvres fous — il va tous vous dévorer ! »",
+   "confidence": 0.65,
+   "emotion": "excited"
+  },
+  {
+   "id": 28,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Personne ne fuit.",
+   "confidence": 1
+  },
+  {
+   "id": 29,
+   "chapterId": 2,
+   "characterId": "dragon",
+   "text": "« Je viens de très loin »",
+   "confidence": 0.95
+  },
+  {
+   "id": 30,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": ", dit le dragon.",
+   "confidence": 1
+  },
+  {
+   "id": 31,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Sa voix n'était pas forte. C'était le son qu'une montagne ferait si une montagne était fatiguée, et chaque mot arrivait un instant après qu'on l'attendait.",
+   "confidence": 1
+  },
+  {
+   "id": 32,
+   "chapterId": 2,
+   "characterId": "dragon",
+   "text": "« Les villages m'appellent Coalfall. Ce n'est pas mon nom, mais il fera l'affaire. On me dit que le meilleur forgeron de la vallée tient cette forge. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 33,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "« On vous dit mal »,",
+   "confidence": 0.9
+  },
+  {
+   "id": 34,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "dit Oduvan.",
+   "confidence": 1
+  },
+  {
+   "id": 35,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "« Le meilleur forgeron de la vallée est mort il y a neuf ans. Vous devrez vous contenter du second. »",
+   "confidence": 0.85
+  },
+  {
+   "id": 36,
+   "chapterId": 2,
+   "characterId": "dragon",
+   "text": "« Modestie, ou tactique de vente ? »",
+   "confidence": 0.9
+  },
+  {
+   "id": 37,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "« À mon âge, c'est la même chose. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 38,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "L'œil doré se porta sur Wren, et elle le sentit comme on sent le soleil à travers une vitre.",
+   "confidence": 1
+  },
+  {
+   "id": 39,
+   "chapterId": 2,
+   "characterId": "dragon",
+   "text": "« Et la petite ? »",
+   "confidence": 0.9
+  },
+  {
+   "id": 40,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "« Mon apprentie. Elle a treize ans et elle croit que je ne l'entends pas soupirer. Elle sera meilleure que moi avant ses vingt ans, ce qui est la seule raison pour laquelle je la garde. »",
+   "confidence": 0.85
+  },
+  {
+   "id": 41,
+   "chapterId": 2,
+   "characterId": "wren",
+   "text": "« Je ne soupire jamais »,",
+   "confidence": 0.9
+  },
+  {
+   "id": 42,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "dit Wren, qui soupira.",
+   "confidence": 1
+  },
+  {
+   "id": 43,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Le dragon s'abaissa jusqu'à ce que son souffle agite les braises, et elles s'avivèrent sans qu'on le leur demande.",
+   "confidence": 1
+  },
+  {
+   "id": 44,
+   "chapterId": 2,
+   "characterId": "dragon",
+   "text": "« Je ne veux pas d'épée »",
+   "confidence": 0.95
+  },
+  {
+   "id": 45,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": ", dit-il.",
+   "confidence": 1
+  },
+  {
+   "id": 46,
+   "chapterId": 2,
+   "characterId": "dragon",
+   "text": "« Tout le monde me veut mort, et une épée ne ferait que les encourager. Je veux une cloche. Assez petite pour pendre à une griffe. Je suis le dernier des miens, et quand je partirai il n'y aura personne pour le marquer. J'aimerais le marquer moi-même, d'avance — tant qu'il reste encore quelqu'un qui sache fondre une note juste. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 47,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Pendant un moment le seul son fut celui du feu.",
+   "confidence": 1
+  },
+  {
+   "id": 48,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Puis Oduvan reprit ses tenailles.",
+   "confidence": 1
+  },
+  {
+   "id": 49,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "« Une cloche »",
+   "confidence": 0.9
+  },
+  {
+   "id": 50,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": ", dit-il, comme si les dragons en commandaient chaque mardi.",
+   "confidence": 1
+  },
+  {
+   "id": 51,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "« Du bronze, alors, pas du fer. Moineau — le bon étain, le creuset, et arrête de pleurer sur le sable de moulage, ça gâchera la coulée. »",
+   "confidence": 0.85
+  },
+  {
+   "id": 52,
+   "chapterId": 2,
+   "characterId": "wren",
+   "text": "« Je ne pleure pas. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 53,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "« Bien sûr que non. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 54,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Il plissa les yeux vers le dragon, le mesurant comme il mesurait tout.",
+   "confidence": 1
+  },
+  {
+   "id": 55,
+   "chapterId": 2,
+   "characterId": "oduvan",
+   "text": "« Ça prendra jusqu'au matin. Vous devrez tenir compagnie au feu pendant qu'on travaille. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 56,
+   "chapterId": 2,
+   "characterId": "narrator",
+   "text": "Le dragon s'installa dans l'embrasure, un œil mi-clos contre la chaleur, et dit, de la voix d'une montagne fatiguée à qui l'on n'avait pas demandé, depuis très longtemps, d'attendre dans un lieu accueillant :",
+   "confidence": 1
+  },
+  {
+   "id": 57,
+   "chapterId": 2,
+   "characterId": "dragon",
+   "text": "« Je n'ai rien d'autre que du temps. Commencez. »",
+   "confidence": 0.95
+  },
+  {
+   "id": 1,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Chapitre Deux — La Coulée",
+   "confidence": 1
+  },
+  {
+   "id": 2,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Les nouvelles voyagent de deux façons dans une vallée : lentement, par la route, et d'un coup, par l'odeur d'une forge allumée après la tombée de la nuit.",
+   "confidence": 0.98
+  },
+  {
+   "id": 3,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Wren avait sorti le bon étain de son linge et le pesait comme s'il pouvait protester.",
+   "confidence": 0.95
+  },
+  {
+   "id": 4,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Oduvan resta un instant au-dessus de la lame qu'il soudait depuis midi — le travail qu'il avait refusé de perdre — la regarda une fois, et la plongea dans le bac de trempe, inachevée.",
+   "confidence": 0.95
+  },
+  {
+   "id": 5,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Il y a des choses qu'on paie pour une cloche.",
+   "confidence": 0.85
+  },
+  {
+   "id": 6,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "L'œil du dragon suivit le geste et n'en dit rien, ce qui était, en soi, une forme de remerciement.",
+   "confidence": 0.95
+  },
+  {
+   "id": 7,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Le premier arrivant se présenta avant que le creuset ne soit chaud.",
+   "confidence": 0.98
+  },
+  {
+   "id": 8,
+   "chapterId": 3,
+   "characterId": "pell",
+   "text": "« C'était moi qui criais »",
+   "confidence": 0.95,
+   "emotion": "excited"
+  },
+  {
+   "id": 9,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": ", dit l'homme sur le seuil, qui avait manifestement couru jusque-là et regrettait manifestement de l'avoir fait.",
+   "confidence": 0.95
+  },
+  {
+   "id": 10,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Il avait dans les trente-cinq ans, tout en coudes, avec des plumes sur son manteau qui laissaient entendre que les poules avaient protesté d'être enfermées tôt.",
+   "confidence": 0.95
+  },
+  {
+   "id": 11,
+   "chapterId": 3,
+   "characterId": "pell",
+   "text": "« Sur le chemin. Les cris, les fous, tout ça. Je le crierais encore. »",
+   "confidence": 0.9,
+   "emotion": "excited"
+  },
+  {
+   "id": 12,
+   "chapterId": 3,
+   "characterId": "maerin",
+   "text": "« Pell Hollis », dit Maerin, qui n'était jamais partie, « tu as réveillé la moitié de la vallée pour une charrette de foin dans le noir à la dernière Lammas. »",
+   "confidence": 0.95
+  },
+  {
+   "id": 13,
+   "chapterId": 3,
+   "characterId": "pell",
+   "text": "« Une charrette bouge mal dans le noir, tu le dis. »",
+   "confidence": 0.85
+  },
+  {
+   "id": 14,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Pell se glissa à l'intérieur, gardant l'enclume entre lui et le seuil.",
+   "confidence": 0.95
+  },
+  {
+   "id": 15,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Le seuil l'observait d'un œil doré.",
+   "confidence": 0.95
+  },
+  {
+   "id": 16,
+   "chapterId": 3,
+   "characterId": "pell",
+   "text": "« Je vais juste — je vais rester là. Près des marteaux. Au cas où. »",
+   "confidence": 0.85
+  },
+  {
+   "id": 17,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "« Au cas où quoi ? » demanda Wren.",
+   "confidence": 0.95
+  },
+  {
+   "id": 18,
+   "chapterId": 3,
+   "characterId": "pell",
+   "text": "« Je le saurai quand ça arrivera. »",
+   "confidence": 0.85
+  },
+  {
+   "id": 19,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Le dragon expira, lentement, et les braises s'avivèrent.",
+   "confidence": 0.95
+  },
+  {
+   "id": 20,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Pell prit la couleur du sable de moulage puis, quand rien d'autre ne se produisit, une couleur plus ordinaire.",
+   "confidence": 0.95
+  },
+  {
+   "id": 21,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Le temps que l'étain entre dans le creuset, il s'était rapproché de deux pas et donnait des avis sur la chaleur.",
+   "confidence": 0.95
+  },
+  {
+   "id": 22,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "La veuve Casper vint ensuite, parce que sa chaumière partageait un mur avec le chemin et sa curiosité ne partageait de mur avec rien.",
+   "confidence": 0.95
+  },
+  {
+   "id": 23,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Elle avait quatre-vingts ans et des poussières et était bâtie comme un point d'interrogation, et elle examina le dragon comme on examine la charrette d'un colporteur.",
+   "confidence": 0.95
+  },
+  {
+   "id": 24,
+   "chapterId": 3,
+   "characterId": "veuve-casper",
+   "text": "« Plus petit que dans les histoires », dit-elle.",
+   "confidence": 0.95
+  },
+  {
+   "id": 25,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Les histoires parlaient de ma grand-mère », dit le dragon.",
+   "confidence": 0.95
+  },
+  {
+   "id": 26,
+   "chapterId": 3,
+   "characterId": "veuve-casper",
+   "text": "« Les miennes aussi. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 27,
+   "chapterId": 3,
+   "characterId": "veuve-casper",
+   "text": "« Ma grand-mère disait que le ciel au-dessus de la carrière s'assombrissait à midi sous vos ailes. Elle mentait par presque tous les temps, mais elle pleurait en le racontant, alors celle-là, je l'ai crue. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 28,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Croyez-la », dit Coalfall, et le silence régna un moment après cela.",
+   "confidence": 0.95
+  },
+  {
+   "id": 29,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Les jumeaux arrivèrent ensemble, comme ils faisaient tout, et en se disputant, comme ils faisaient tout.",
+   "confidence": 0.95
+  },
+  {
+   "id": 30,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Brann et Berrin Weir taillaient la pierre là-haut à la carrière, et quarante-cinq ans passés côte à côte les avaient usés jusqu'à se ressembler comme deux pouces — mêmes épaules, même barbe grise de trois jours, même façon de remplir une porte.",
+   "confidence": 0.95
+  },
+  {
+   "id": 31,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "La vallée les distinguait à l'oreille.",
+   "confidence": 0.95
+  },
+  {
+   "id": 32,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Brann parlait par questions.",
+   "confidence": 0.95
+  },
+  {
+   "id": 33,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Berrin n'en avait jamais rencontré une qu'il ne pût aplatir en affirmation.",
+   "confidence": 0.95
+  },
+  {
+   "id": 34,
+   "chapterId": 3,
+   "characterId": "brann-weir",
+   "text": "« C'est donc le dragon ? »",
+   "confidence": 0.9
+  },
+  {
+   "id": 35,
+   "chapterId": 3,
+   "characterId": "berrin-weir",
+   "text": "« C'est le dragon. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 36,
+   "chapterId": 3,
+   "characterId": "brann-weir",
+   "text": "« Et on lui coule une cloche ? Avec quoi, le toit de l'église ? »",
+   "confidence": 0.9
+  },
+  {
+   "id": 37,
+   "chapterId": 3,
+   "characterId": "berrin-weir",
+   "text": "« Avec du bronze. Le forgeron a du bronze. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 38,
+   "chapterId": 3,
+   "characterId": "brann-weir",
+   "text": "« Depuis quand le forgeron a-t-il du bronze à cloche qui traîne ? »",
+   "confidence": 0.9
+  },
+  {
+   "id": 39,
+   "chapterId": 3,
+   "characterId": "berrin-weir",
+   "text": "« Depuis qu'il en a. Regarde le creuset. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 40,
+   "chapterId": 3,
+   "characterId": "brann-weir",
+   "text": "« Je regarde le creuset. N'ai-je pas le droit de poser des questions sur le creuset ? »",
+   "confidence": 0.9
+  },
+  {
+   "id": 41,
+   "chapterId": 3,
+   "characterId": "berrin-weir",
+   "text": "« Tu as le droit. Tu es juste bruyant. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 42,
+   "chapterId": 3,
+   "characterId": "brann-weir",
+   "text": "« Bruyant, moi — »",
+   "confidence": 0.85,
+   "emotion": "excited"
+  },
+  {
+   "id": 43,
+   "chapterId": 3,
+   "characterId": "oduvan",
+   "text": "« Messieurs », dit Oduvan, de la voix qu'il gardait pour le fer fêlé, « c'est une petite cloche. Il lui faut un petit public. »",
+   "confidence": 0.95
+  },
+  {
+   "id": 44,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Les jumeaux se turent à l'unisson, ce qui était l'autre façon de les distinguer de tout le monde.",
+   "confidence": 0.95
+  },
+  {
+   "id": 45,
+   "chapterId": 3,
+   "characterId": "lessom",
+   "text": "« Est-ce bien, croyez-vous ? Les cloches sont pour les âmes. Je ne connais pas la règle pour — »",
+   "confidence": 0.85
+  },
+  {
+   "id": 46,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "il fit un geste vers le seuil, vers tout cela,",
+   "confidence": 0.95
+  },
+  {
+   "id": 47,
+   "chapterId": 3,
+   "characterId": "lessom",
+   "text": "« — ceci. »",
+   "confidence": 0.8
+  },
+  {
+   "id": 48,
+   "chapterId": 3,
+   "characterId": "veuve-casper",
+   "text": "« Eh bien, inventez-en une », dit la veuve Casper. « C'est ce que font les gens de votre espèce, et ce soir on en a besoin. »",
+   "confidence": 0.95
+  },
+  {
+   "id": 49,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Lessom entra.",
+   "confidence": 0.99
+  },
+  {
+   "id": 50,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Il longea le mur, et ses lèvres remuaient de temps en temps, et si c'était une prière ou la répétition de meilleures phrases, personne ne le demanda.",
+   "confidence": 0.98
+  },
+  {
+   "id": 51,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Mais quand le souffle du dragon raviva le feu, il traça un petit signe au-dessus — vite, comme un homme qui glisse une pièce à un mendiant en feignant de ne pas l'avoir fait — et après cela il se tint plus à l'aise.",
+   "confidence": 0.97
+  },
+  {
+   "id": 52,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Le colporteur Ivo dormait dans la grange de Maerin à cause d'un fer perdu, et entra déjà en train de parler, de cette manière à l'envers qui était la sienne et que personne dans la vallée ne savait situer sur une carte.",
+   "confidence": 0.96
+  },
+  {
+   "id": 53,
+   "chapterId": 3,
+   "characterId": "ivo",
+   "text": "« Une cloche, qu'il veut. Pour lui, la cloche. Dans mon pays, pour les morts on plante un arbre — mais un arbre sur une griffe on ne peut pas le porter, et donc : une cloche. Sensé. »",
+   "confidence": 0.95
+  },
+  {
+   "id": 54,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Il posa son ballot de l'air d'un homme qui ouvre boutique.",
+   "confidence": 0.98
+  },
+  {
+   "id": 55,
+   "chapterId": 3,
+   "characterId": "ivo",
+   "text": "« J'ai de la corde, si l'on veut de la corde. De la cire aussi. Pour rien, ce soir. Demain, les prix. »",
+   "confidence": 0.94
+  },
+  {
+   "id": 56,
+   "chapterId": 3,
+   "characterId": "oduvan",
+   "text": "« Voilà la morale du commerce », dit Oduvan, « en un seul souffle. »",
+   "confidence": 0.99
+  },
+  {
+   "id": 57,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "dit Oduvan,",
+   "confidence": 0.99
+  },
+  {
+   "id": 58,
+   "chapterId": 3,
+   "characterId": "ivo",
+   "text": "« Dans mon pays, on appelle ça mardi. »",
+   "confidence": 0.92
+  },
+  {
+   "id": 59,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Il était quelque part passé le milieu de la nuit quand Maerin découvrit sa fille.",
+   "confidence": 0.99
+  },
+  {
+   "id": 60,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Sela avait huit ans, et elle était venue comme viennent les enfants de huit ans — invisible, dans l'ombre de quelqu'un de plus grand, et puis soudain au milieu de la pièce comme si on l'y avait déposée.",
+   "confidence": 0.98
+  },
+  {
+   "id": 61,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Elle se tenait devant le seuil.",
+   "confidence": 0.99
+  },
+  {
+   "id": 62,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Devant l'œil.",
+   "confidence": 0.97
+  },
+  {
+   "id": 63,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "La pièce devint silencieuse comme l'est un souffle retenu.",
+   "confidence": 0.99
+  },
+  {
+   "id": 64,
+   "chapterId": 3,
+   "characterId": "maerin",
+   "text": "« Sela », dit Maerin, très posément, très lentement, « viens ici près de moi. »",
+   "confidence": 0.99
+  },
+  {
+   "id": 65,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "dit Maerin, très posément, très lentement,",
+   "confidence": 0.99
+  },
+  {
+   "id": 66,
+   "chapterId": 3,
+   "characterId": "sela",
+   "text": "« Dans un moment », dit Sela, qui était la propre voix de Maerin en miniature, et la veuve rit avant de pouvoir s'en empêcher.",
+   "confidence": 0.98
+  },
+  {
+   "id": 67,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Le grand œil s'abaissa.",
+   "confidence": 0.99
+  },
+  {
+   "id": 68,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Il descendit, descendit jusqu'à être à la hauteur de l'enfant, et son or lui éclaira le visage comme une lampe.",
+   "confidence": 0.98
+  },
+  {
+   "id": 69,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Le murmure courut autour de la forge par bribes :",
+   "confidence": 0.99
+  },
+  {
+   "id": 70,
+   "chapterId": 3,
+   "characterId": "pell",
+   "text": "« Doucement — » dit Pell.",
+   "confidence": 0.99
+  },
+  {
+   "id": 71,
+   "chapterId": 3,
+   "characterId": "veuve-casper",
+   "text": "« Laissez-la », dit la veuve Casper.",
+   "confidence": 0.99
+  },
+  {
+   "id": 72,
+   "chapterId": 3,
+   "characterId": "brann-weir",
+   "text": "« Maerin — » dit Brann.",
+   "confidence": 0.99
+  },
+  {
+   "id": 73,
+   "chapterId": 3,
+   "characterId": "berrin-weir",
+   "text": "« Elle ne risque rien », dit Berrin, plat comme une étagère, et il avait, comme d'habitude, raison.",
+   "confidence": 0.99
+  },
+  {
+   "id": 74,
+   "chapterId": 3,
+   "characterId": "sela",
+   "text": "« Tu es le dernier », dit Sela.",
+   "confidence": 0.98
+  },
+  {
+   "id": 75,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Pas une question.",
+   "confidence": 0.99
+  },
+  {
+   "id": 76,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Les enfants n'en gaspillent pas.",
+   "confidence": 0.99
+  },
+  {
+   "id": 77,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Oui », dit le dragon.",
+   "confidence": 0.99
+  },
+  {
+   "id": 78,
+   "chapterId": 3,
+   "characterId": "sela",
+   "text": "« Et la cloche, c'est pour quand tu mourras. »",
+   "confidence": 0.94
+  },
+  {
+   "id": 79,
+   "chapterId": 3,
+   "characterId": "maerin",
+   "text": "« Sela ! »",
+   "confidence": 0.98,
+   "emotion": "excited"
+  },
+  {
+   "id": 80,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "La voix de Maerin se brisa par le milieu.",
+   "confidence": 0.99
+  },
+  {
+   "id": 81,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« C'est une question honnête », dit le dragon, « et c'est une soirée honnête. »",
+   "confidence": 0.99
+  },
+  {
+   "id": 82,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "L'œil cligna, lent comme une porte qui se ferme.",
+   "confidence": 0.98
+  },
+  {
+   "id": 83,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Oui. La cloche, c'est pour ce moment-là. »",
+   "confidence": 0.95
+  },
+  {
+   "id": 84,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Sela soupesa cela avec toute la gravité de ses huit ans.",
+   "confidence": 0.99
+  },
+  {
+   "id": 85,
+   "chapterId": 3,
+   "characterId": "sela",
+   "text": "« Mais si tu es le dernier », dit-elle, « qui la sonnera pour toi ? Après. »",
+   "confidence": 0.98
+  },
+  {
+   "id": 86,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Le feu cracha.",
+   "confidence": 0.99
+  },
+  {
+   "id": 87,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Personne ne bougea.",
+   "confidence": 0.99
+  },
+  {
+   "id": 88,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Même les jumeaux n'avaient rien, et Wren, qui s'était donné beaucoup de mal pour faire semblant d'être occupée avec la cire, cessa de faire semblant.",
+   "confidence": 0.98
+  },
+  {
+   "id": 89,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Quand le dragon répondit enfin, les mots venaient plus espacés que d'habitude, comme les pierres s'espacent près du sommet d'une montagne.",
+   "confidence": 0.99
+  },
+  {
+   "id": 90,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Je n'avais pas », dit-il, « pensé aussi loin. »",
+   "confidence": 0.98
+  },
+  {
+   "id": 91,
+   "chapterId": 3,
+   "characterId": "sela",
+   "text": "« Je le ferai », dit Sela. « Je vais vivre très longtemps. »",
+   "confidence": 0.97
+  },
+  {
+   "id": 92,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Il y a des choses dites au milieu de la nuit par des enfants qui plient le reste d'une vie autour d'elles, et tout le monde dans la forge sut qu'on venait d'en entendre une.",
+   "confidence": 0.99
+  },
+  {
+   "id": 93,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Le dragon regarda la petite fille un long moment.",
+   "confidence": 0.99
+  },
+  {
+   "id": 94,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Alors elle est à toi quand j'en aurai fini avec elle », dit-il enfin. « Garde-la quelque part en hauteur. »",
+   "confidence": 0.98
+  },
+  {
+   "id": 95,
+   "chapterId": 3,
+   "characterId": "sela",
+   "text": "« Maman garde les belles tasses sur l'étagère du haut. »",
+   "confidence": 0.95
+  },
+  {
+   "id": 96,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Cela ira. »",
+   "confidence": 0.92
+  },
+  {
+   "id": 97,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Maerin recueillit sa fille dans ses bras et la tint serrée, et ne se fia pas à elle-même pour ajouter quoi que ce soit.",
+   "confidence": 0.99
+  },
+  {
+   "id": 98,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Hart le charbonnier — qui était arrivé à un moment quelconque sans que personne le remarque, comme arrive un mur, et qui depuis une heure nourrissait le feu en silence avec ses propres sacs — leva les yeux.",
+   "confidence": 0.98
+  },
+  {
+   "id": 99,
+   "chapterId": 3,
+   "characterId": "hart",
+   "text": "« Le feu réclame à manger », dit-il, à peine au-dessus des braises. « Si on fait ça. »",
+   "confidence": 0.96
+  },
+  {
+   "id": 100,
+   "chapterId": 3,
+   "characterId": "oduvan",
+   "text": "« On fait ça », dit Oduvan.",
+   "confidence": 0.99
+  },
+  {
+   "id": 101,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Ce qui suivit, la forge le fit surtout en silence, et le narrateur le racontera, parce que ceux qui s'y trouvaient étaient trop occupés pour le faire.",
+   "confidence": 0.99
+  },
+  {
+   "id": 102,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Le moule était de sable et d'argile et d'un vieux calibre à cloches qu'Oduvan n'avait pas touché depuis neuf ans, depuis que l'homme qui lui avait appris le calibre avait cessé d'avoir besoin d'outils.",
+   "confidence": 0.98
+  },
+  {
+   "id": 103,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Wren tailla les canaux.",
+   "confidence": 0.98
+  },
+  {
+   "id": 104,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Pell alla et vint et se révéla, à la surprise générale y compris la sienne, utile.",
+   "confidence": 0.95
+  },
+  {
+   "id": 105,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "La veuve conseilla, avec précision et sans pitié.",
+   "confidence": 0.95
+  },
+  {
+   "id": 106,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Les jumeaux tinrent le berceau du creuset comme une seule créature à quatre bras — il ne reste aucune dispute chez deux hommes qui soulèvent une chose qu'on ne peut pas reposer — et la cire d'Ivo et la corde d'Ivo se révélèrent être exactement ce qu'il fallait, pour rien, ce soir.",
+   "confidence": 0.96
+  },
+  {
+   "id": 107,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "La coulée, quand elle vint, avait la couleur du matin qui n'était pas encore arrivé.",
+   "confidence": 0.98
+  },
+  {
+   "id": 108,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Le bronze descendit le canal avec un son comme un long mot dans une langue large d'une seule syllabe.",
+   "confidence": 0.98
+  },
+  {
+   "id": 109,
+   "chapterId": 3,
+   "characterId": "oduvan",
+   "text": "« Doucement — doucement — là. »",
+   "confidence": 0.95
+  },
+  {
+   "id": 110,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "La main d'Oduvan sur l'épaule de Wren comme elle se penchait trop au-dessus de la vapeur.",
+   "confidence": 0.96
+  },
+  {
+   "id": 111,
+   "chapterId": 3,
+   "characterId": "oduvan",
+   "text": "« Moineau. Recule. »",
+   "confidence": 0.95
+  },
+  {
+   "id": 112,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Elle recula.",
+   "confidence": 0.98
+  },
+  {
+   "id": 113,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Il ne l'avait pas appelée ainsi deux fois dans une même saison, et elle savait qu'il valait mieux ne pas le regarder en face à ce sujet, alors tous deux regardèrent le moule à la place.",
+   "confidence": 0.98
+  },
+  {
+   "id": 114,
+   "chapterId": 3,
+   "characterId": "sela",
+   "text": "« Pourquoi elle a un nom d'oiseau ? »",
+   "confidence": 0.92
+  },
+  {
+   "id": 115,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "demanda Sela, depuis le bras de sa mère.",
+   "confidence": 0.96
+  },
+  {
+   "id": 116,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "« Parce qu'il oublie d'être sévère »,",
+   "confidence": 0.94
+  },
+  {
+   "id": 117,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "dit Wren.",
+   "confidence": 0.96
+  },
+  {
+   "id": 118,
+   "chapterId": 3,
+   "characterId": "sela",
+   "text": "« Est-ce que je peux être un oiseau ? »",
+   "confidence": 0.92
+  },
+  {
+   "id": 119,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "« Non »,",
+   "confidence": 0.92
+  },
+  {
+   "id": 120,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "dit Wren.",
+   "confidence": 0.96
+  },
+  {
+   "id": 121,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "« Moineau est pris. »",
+   "confidence": 0.94
+  },
+  {
+   "id": 122,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "L'heure entre la coulée et le démoulage est la plus longue du métier de forgeron, et elle ne peut être hâtée, et ainsi la forge s'emplit de la conversation particulière de gens qui ont fait une chose ensemble et attendent de savoir si elle a réussi.",
+   "confidence": 0.98
+  },
+  {
+   "id": 123,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Hart laissa le feu retomber lentement, comme on laisse refroidir un cheval.",
+   "confidence": 0.98
+  },
+  {
+   "id": 124,
+   "chapterId": 3,
+   "characterId": "hart",
+   "text": "« Ça refroidit mal si on se presse »,",
+   "confidence": 0.94
+  },
+  {
+   "id": 125,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "dit-il, aux braises plus qu'à quiconque.",
+   "confidence": 0.96
+  },
+  {
+   "id": 126,
+   "chapterId": 3,
+   "characterId": "hart",
+   "text": "« Une cloche, c'est comme un pain. L'intérieur doit s'accorder avec l'extérieur. »",
+   "confidence": 0.94
+  },
+  {
+   "id": 127,
+   "chapterId": 3,
+   "characterId": "brann-weir",
+   "text": "« Qu'est-ce que tu en sais ? »",
+   "confidence": 0.88
+  },
+  {
+   "id": 128,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "demanda Brann, qui ne pouvait s'en empêcher.",
+   "confidence": 0.96
+  },
+  {
+   "id": 129,
+   "chapterId": 3,
+   "characterId": "hart",
+   "text": "« Trente ans à brûler du charbon »,",
+   "confidence": 0.88
+  },
+  {
+   "id": 130,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "dit Hart.",
+   "confidence": 0.96
+  },
+  {
+   "id": 131,
+   "chapterId": 3,
+   "characterId": "hart",
+   "text": "« Tout est un pain. »",
+   "confidence": 0.88
+  },
+  {
+   "id": 132,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Le père Lessom avait enfin trouvé ses phrases.",
+   "confidence": 0.98
+  },
+  {
+   "id": 133,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Il s'approcha du moule autant que la chaleur le permettait et resta là, le chapeau encore à la main.",
+   "confidence": 0.98
+  },
+  {
+   "id": 134,
+   "chapterId": 3,
+   "characterId": "lessom",
+   "text": "« J'en ai inventé une »,",
+   "confidence": 0.92
+  },
+  {
+   "id": 135,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "dit-il à la veuve, presque avec défi.",
+   "confidence": 0.96
+  },
+  {
+   "id": 136,
+   "chapterId": 3,
+   "characterId": "lessom",
+   "text": "« La règle. »",
+   "confidence": 0.92
+  },
+  {
+   "id": 137,
+   "chapterId": 3,
+   "characterId": "veuve-casper",
+   "text": "« Et alors ? »",
+   "confidence": 0.88
+  },
+  {
+   "id": 138,
+   "chapterId": 3,
+   "characterId": "lessom",
+   "text": "« Une cloche sonnée pour le dernier de quoi que ce soit est sonnée pour tout ce qui fut. »",
+   "confidence": 0.92
+  },
+  {
+   "id": 139,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Il le dit de sa voix de chaire, puis parut gêné et remit son chapeau.",
+   "confidence": 0.98
+  },
+  {
+   "id": 140,
+   "chapterId": 3,
+   "characterId": "lessom",
+   "text": "« Je le dirai comme il faut dimanche. »",
+   "confidence": 0.92
+  },
+  {
+   "id": 141,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Dites-le comme ça »,",
+   "confidence": 0.85
+  },
+  {
+   "id": 142,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "dit le dragon, depuis le seuil.",
+   "confidence": 0.96
+  },
+  {
+   "id": 143,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Ça ne s'améliorera pas à le manier. »",
+   "confidence": 0.85
+  },
+  {
+   "id": 144,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Wren s'était approchée de la grande porte, la cire encore sous les ongles.",
+   "confidence": 0.98
+  },
+  {
+   "id": 145,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "De près, le dragon sentait la pluie sur la pierre chaude.",
+   "confidence": 0.98
+  },
+  {
+   "id": 146,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "« Tu as vraiment traversé le monde entier ? »",
+   "confidence": 0.94
+  },
+  {
+   "id": 147,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "demanda-t-elle.",
+   "confidence": 0.96
+  },
+  {
+   "id": 148,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "« Pour ça ? »",
+   "confidence": 0.94
+  },
+  {
+   "id": 149,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Pour une note juste. Ton maître est le quatrième forgeron à qui je l'ai demandé. »",
+   "confidence": 0.95
+  },
+  {
+   "id": 150,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "« Qu'est-il arrivé aux trois autres ? »",
+   "confidence": 0.94
+  },
+  {
+   "id": 151,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Rien »,",
+   "confidence": 0.92
+  },
+  {
+   "id": 152,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "dit Coalfall.",
+   "confidence": 0.96
+  },
+  {
+   "id": 153,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Ils ont dit non. Les gens imaginent que mes déceptions sont dramatiques. La plupart du temps elles sont comme celles de tout le monde. »",
+   "confidence": 0.92
+  },
+  {
+   "id": 154,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "L'œil glissa vers elle de côté, et il y avait là quelque chose qui, sur un visage plus petit, aurait pu s'appeler malice.",
+   "confidence": 0.98
+  },
+  {
+   "id": 155,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Il a dit oui avant que j'aie fini de demander. Tu devrais savoir cela de lui, Moineau. »",
+   "confidence": 0.92
+  },
+  {
+   "id": 156,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "« C'est Wren »,",
+   "confidence": 0.94
+  },
+  {
+   "id": 157,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "dit Wren, rougissant,",
+   "confidence": 0.96
+  },
+  {
+   "id": 158,
+   "chapterId": 3,
+   "characterId": "wren",
+   "text": "« pour tout le monde sauf lui. »",
+   "confidence": 0.94
+  },
+  {
+   "id": 159,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Je sais »,",
+   "confidence": 0.92
+  },
+  {
+   "id": 160,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "dit le dragon.",
+   "confidence": 0.96
+  },
+  {
+   "id": 161,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Je voulais l'entendre refuser. »",
+   "confidence": 0.92
+  },
+  {
+   "id": 162,
+   "chapterId": 3,
+   "characterId": "veuve-casper",
+   "text": "« Ma grand-mère ne me croirait pas, vous savez. Que j'ai passé une nuit avec l'un des vôtres et que le seul feu était celui de l'âtre. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 163,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "La veuve Casper prit la parole depuis son banc.",
+   "confidence": 0.96
+  },
+  {
+   "id": 164,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Alors racontez-le comme elle racontait les siens »,",
+   "confidence": 0.92
+  },
+  {
+   "id": 165,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "dit Coalfall.",
+   "confidence": 0.96
+  },
+  {
+   "id": 166,
+   "chapterId": 3,
+   "characterId": "dragon",
+   "text": "« Mal, et souvent. »",
+   "confidence": 0.92
+  },
+  {
+   "id": 167,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Cela arracha le rire que la nuit avait gardé en réserve — même celui de Maerin, même celui de Lessom — et Pell rit le plus fort de tous puis regarda autour de lui pour vérifier si rire était permis.",
+   "confidence": 0.98
+  },
+  {
+   "id": 168,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Ils brisèrent le moule alors que le ciel passait du charbon à la cendre.",
+   "confidence": 0.98
+  },
+  {
+   "id": 169,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "La cloche sortit du sable comme le dragon était sorti de l'obscurité — d'un coup, plus petite que dans les histoires, et exactement de la bonne taille.",
+   "confidence": 0.98
+  },
+  {
+   "id": 170,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Assez petite pour pendre à une griffe.",
+   "confidence": 0.98
+  },
+  {
+   "id": 171,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Oduvan lima la lèvre, la frappa une fois d'une jointure, écouta les yeux fermés, et lima de nouveau.",
+   "confidence": 0.98
+  },
+  {
+   "id": 172,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "La troisième fois, il ne tendit pas la main vers la lime.",
+   "confidence": 0.98
+  },
+  {
+   "id": 173,
+   "chapterId": 3,
+   "characterId": "oduvan",
+   "text": "« Voilà votre note juste »,",
+   "confidence": 0.94
+  },
+  {
+   "id": 174,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "dit-il.",
+   "confidence": 0.96
+  },
+  {
+   "id": 175,
+   "chapterId": 3,
+   "characterId": "oduvan",
+   "text": "« Telle que la fait le deuxième meilleur forgeron. »",
+   "confidence": 0.94
+  },
+  {
+   "id": 176,
+   "chapterId": 3,
+   "characterId": "pell",
+   "text": "« C'est le meilleur de la vallée »,",
+   "confidence": 0.9
+  },
+  {
+   "id": 177,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "dit Pell, qui avait décidé quelque part dans le noir que c'était aussi son aventure,",
+   "confidence": 0.96
+  },
+  {
+   "id": 178,
+   "chapterId": 3,
+   "characterId": "pell",
+   "text": "« et je crierai plus fort que quiconque dira le contraire. Je suis connu pour ça. Pour crier. »",
+   "confidence": 0.9
+  },
+  {
+   "id": 179,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Ils la pendirent à la griffe du dragon avec la corde d'Ivo, là dans la grande embrasure, avec toute la valeur d'une nuit de visages rassemblés qui regardaient.",
+   "confidence": 0.98
+  },
+  {
+   "id": 180,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Coalfall leva la griffe, prudent comme un homme portant des coupes pleines, et la tourna, et contempla longtemps la petite chose brillante qu'il avait traversé le monde pour s'assurer.",
+   "confidence": 0.98
+  },
+  {
+   "id": 181,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Puis il fit tinter la cloche, une fois, du bout d'un noir ergot.",
+   "confidence": 0.98
+  },
+  {
+   "id": 182,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "La note sortit par la porte, monta le chemin et passa par-dessus les toits, impartiale, sans hâte, le genre de son qui ne demande pas la permission.",
+   "confidence": 0.98
+  },
+  {
+   "id": 183,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Les poules s'éveillèrent.",
+   "confidence": 0.98
+  },
+  {
+   "id": 184,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Un chien répondit, se trompa, et renonça.",
+   "confidence": 0.98
+  },
+  {
+   "id": 185,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Et dans l'embrasure de la forge, dans le premier gris du matin, la cloche se balança de plus en plus petite et dit le seul mot qu'on lui avait appris toute la nuit, qui est le seul mot qu'une cloche juste connaît :",
+   "confidence": 0.98
+  },
+  {
+   "id": 186,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "« Souviens-toi. »",
+   "confidence": 0.98,
+   "emotion": "neutral"
+  },
+  {
+   "id": 187,
+   "chapterId": 3,
+   "characterId": "narrator",
+   "text": "Fin.",
+   "confidence": 0.98
+  }
+ ]
+}

@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-vbPMMSTdapw-8sNv8CxvE",
+  "voiceUuid": "vbPMMSTdapw-8sNv8CxvE",
+  "instruct": "A female teenager with a medium pitch and steady, mid-paced cadence, possessing a clear, breathy timbre and an earnest emotional register for expressive character dialogue.",
+  "language": "French",
+  "refText": "Portez ce vieux whisky au juge blond qui fume, et demandez-vous ce que demain réserve.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}

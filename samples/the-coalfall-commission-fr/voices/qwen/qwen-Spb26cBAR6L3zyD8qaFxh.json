@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-Spb26cBAR6L3zyD8qaFxh",
+  "voiceUuid": "Spb26cBAR6L3zyD8qaFxh",
+  "instruct": "A mature female voice with a medium-low pitch and brisk, clipped pacing, featuring a crisp, resonant timbre and a cool, authoritative register, for expressive character dialogue.",
+  "language": "French",
+  "refText": "Portez ce vieux whisky au juge blond qui fume, et demandez-vous ce que demain réserve.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}

@@ -1,6 +1,6 @@
 {
   "voiceId": "qwen-1333d776ef3b4e72acaa1__whisper",
-  "voiceUuid": null,
+  "voiceUuid": "1333d776ef3b4e72acaa1",
   "instruct": "Delivered as a barely-there whisper, almost silent, pure soft breath with no vocal tone at all, hushed and intimate, faint enough that you strain to hear it.",
   "language": "English",
   "refText": "The quick brown fox jumps over the lazy dog, and she wondered what tomorrow would bring.",

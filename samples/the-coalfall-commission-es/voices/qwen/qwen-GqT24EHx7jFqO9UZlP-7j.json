@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-GqT24EHx7jFqO9UZlP-7j",
+  "voiceUuid": "GqT24EHx7jFqO9UZlP-7j",
+  "instruct": "A gender-neutral, elderly voice with an ultra-low, resonant pitch and deliberate, sluggish pacing; the timbre is gravelly, metallic, and immense, projecting unshakable authority, for expressive character dialogue.",
+  "language": "Spanish",
+  "refText": "El veloz murciélago hindú comía feliz cardillo y kiwi, y se preguntaba qué traería el mañana.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}

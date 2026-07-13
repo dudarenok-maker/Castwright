@@ -1,0 +1,78 @@
+{
+  "bookId": "castwright__standalones__la-commande-de-coalfall",
+  "manuscriptId": "mns_7070411de8",
+  "title": "La Commande de Coalfall",
+  "author": "Castwright",
+  "series": "Standalones",
+  "seriesPosition": null,
+  "isStandalone": true,
+  "manuscriptFile": "manuscript.epub",
+  "castConfirmed": true,
+  "chapters": [
+    {
+      "id": 1,
+      "title": "La Commande de Coalfall",
+      "slug": "01-la-commande-de-coalfall",
+      "duration": "00:00",
+      "excluded": true,
+      "uuid": "760021b4-aa5a-4ae4-9ff4-00afed283460"
+    },
+    {
+      "id": 2,
+      "title": "Chapitre Un — Le Coup à la porte",
+      "slug": "02-chapitre-un-le-coup-a-la-porte",
+      "duration": "03:58",
+      "uuid": "7e93cd3a-449d-41ff-88d8-ca266f3ca5c4",
+      "audioModelKey": "qwen3-tts-1.7b",
+      "audioEngines": {
+        "qwen": 6
+      },
+      "audioRenderedAt": "2026-07-12T23:02:06.305Z",
+      "audioQa": {
+        "status": "ok",
+        "reasons": [],
+        "measuredLufs": -16.08,
+        "truePeakDb": -1.5,
+        "durationSec": 238.36025,
+        "expectedSec": 273.57142857142856,
+        "checkedAt": "2026-07-12T23:02:06.305Z"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Chapitre Deux — La Coulée",
+      "slug": "03-chapitre-deux-la-coulee",
+      "duration": "12:53",
+      "uuid": "af230aeb-4e22-429e-b48b-8a17f0a152dd",
+      "audioModelKey": "qwen3-tts-1.7b",
+      "audioEngines": {
+        "qwen": 13
+      },
+      "audioRenderedAt": "2026-07-12T23:14:39.560Z",
+      "audioQa": {
+        "status": "ok",
+        "reasons": [],
+        "measuredLufs": -16.03,
+        "truePeakDb": -1.5,
+        "durationSec": 773.160625,
+        "expectedSec": 943.5,
+        "checkedAt": "2026-07-12T23:14:39.560Z"
+      }
+    }
+  ],
+  "coverGradient": [
+    "#3C194F",
+    "#0F0E0D"
+  ],
+  "createdAt": "2026-06-25T05:16:20.491Z",
+  "updatedAt": "2026-07-12T23:14:39.626Z",
+  "chapterTitleParserVersion": 2,
+  "language": "fr",
+  "schema": 1,
+  "narratorCredit": null,
+  "genre": null,
+  "publicationDate": null,
+  "description": null,
+  "notes": null,
+  "tags": []
+}

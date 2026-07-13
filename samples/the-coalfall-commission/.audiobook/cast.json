@@ -52,22 +52,18 @@
       ],
       "lines": 153,
       "scenes": 4,
-      "voiceState": "generated",
+      "ttsEngine": "qwen",
+      "voiceStyle": "A middle-aged voice, neutral in gender, with a medium pitch and steady, mid-paced delivery; the timbre is rich, grounded, and resonant, carrying a measured, folkloric warmth suitable for audiobook narration.",
+      "voiceUuid": "8434989a52184d08be265",
       "overrideTtsVoices": {
         "qwen": {
           "name": "qwen-8434989a52184d08be265",
           "variants": {
-            "whisper": {
-              "name": "qwen-8434989a52184d08be265__whisper"
-            },
-            "angry": {
-              "name": "qwen-8434989a52184d08be265__angry"
-            },
-            "sad": {
-              "name": "qwen-8434989a52184d08be265__sad"
-            },
             "excited": {
               "name": "qwen-8434989a52184d08be265__excited"
+            },
+            "whisper": {
+              "name": "qwen-8434989a52184d08be265__whisper"
             }
           }
         },
@@ -75,9 +71,8 @@
           "name": "am_michael"
         }
       },
-      "ttsEngine": "qwen",
-      "voiceStyle": "Mid-30th adult female voice with a standard British accent. The voice has a warm, clear, and expressive timbre, a bit on the slower side. She speaks with a captivating, narrative rhythm, blending youthful curiosity with emotional depth. The tone is earnest, wondrous, and highly articulate, perfectly suited for reading a young adult magical fantasy.",
-      "voiceUuid": "8434989a52184d08be265"
+      "voiceState": "tuned",
+      "ttsModelKey": "qwen3-tts-1.7b"
     },
     {
       "id": "master-oduvan",
@@ -137,7 +132,8 @@
       },
       "ttsEngine": "qwen",
       "voiceStyle": "An elderly man's voice in his seventies, low-to-medium in pitch and gravelly, with a dry rasp and a faint tremor at the edges; slow, deliberate and unhurried, carrying the worn, unshakable authority of a lifelong craftsman — for expressive character dialogue.",
-      "voiceUuid": "71bc8eac778240ca9637c"
+      "voiceUuid": "71bc8eac778240ca9637c",
+      "ttsModelKey": "qwen3-tts-1.7b"
     },
     {
       "id": "wren",
@@ -179,7 +175,12 @@
       "voiceState": "generated",
       "overrideTtsVoices": {
         "qwen": {
-          "name": "qwen-dcf959bc701d4e90acd84"
+          "name": "qwen-dcf959bc701d4e90acd84",
+          "variants": {
+            "whisper": {
+              "name": "qwen-dcf959bc701d4e90acd84__whisper"
+            }
+          }
         },
         "kokoro": {
           "name": "af_aoede"
@@ -187,7 +188,11 @@
       },
       "ttsEngine": "qwen",
       "voiceStyle": "A female teenager with a medium pitch and steady, mid-paced cadence, possessing a clear, breathy timbre and an earnest emotional register for expressive character dialogue.",
-      "voiceUuid": "dcf959bc701d4e90acd84"
+      "voiceUuid": "dcf959bc701d4e90acd84",
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "aliases": [
+        "Sparrow"
+      ]
     },
     {
       "id": "maerin",
@@ -226,7 +231,18 @@
       "voiceState": "generated",
       "overrideTtsVoices": {
         "qwen": {
-          "name": "qwen-c52cec715f5642f7af0c8"
+          "name": "qwen-c52cec715f5642f7af0c8",
+          "variants": {
+            "whisper": {
+              "name": "qwen-c52cec715f5642f7af0c8__whisper"
+            },
+            "excited": {
+              "name": "qwen-c52cec715f5642f7af0c8__excited"
+            },
+            "angry": {
+              "name": "qwen-c52cec715f5642f7af0c8__angry"
+            }
+          }
         },
         "kokoro": {
           "name": "af_jessica"
@@ -234,7 +250,8 @@
       },
       "ttsEngine": "qwen",
       "voiceStyle": "A mature female voice with a medium-low pitch and brisk, clipped pacing, featuring a crisp, resonant timbre and a cool, authoritative register, for expressive character dialogue.",
-      "voiceUuid": "c52cec715f5642f7af0c8"
+      "voiceUuid": "c52cec715f5642f7af0c8",
+      "ttsModelKey": "qwen3-tts-1.7b"
     },
     {
       "id": "coalfall-dragon",
@@ -274,7 +291,12 @@
       "scenes": 2,
       "overrideTtsVoices": {
         "qwen": {
-          "name": "qwen-6f3dcb392e804d8d9c9a6"
+          "name": "qwen-6f3dcb392e804d8d9c9a6",
+          "variants": {
+            "sad": {
+              "name": "qwen-6f3dcb392e804d8d9c9a6__sad"
+            }
+          }
         },
         "kokoro": {
           "name": "bm_george"
@@ -283,7 +305,8 @@
       "ttsEngine": "qwen",
       "voiceStyle": "A gender-neutral, elderly voice with an ultra-low, resonant pitch and deliberate, sluggish pacing; the timbre is gravelly, metallic, and immense, projecting unshakable authority, for expressive character dialogue.",
       "voiceState": "generated",
-      "voiceUuid": "6f3dcb392e804d8d9c9a6"
+      "voiceUuid": "6f3dcb392e804d8d9c9a6",
+      "ttsModelKey": "qwen3-tts-1.7b"
     },
     {
       "id": "tam-hollis",
@@ -336,7 +359,8 @@
         }
       },
       "ttsEngine": "qwen",
-      "voiceUuid": "4334e74258ae41239764d"
+      "voiceUuid": "4334e74258ae41239764d",
+      "ttsModelKey": "qwen3-tts-1.7b"
     },
     {
       "id": "widow-casper",
@@ -380,7 +404,8 @@
         }
       },
       "ttsEngine": "qwen",
-      "voiceUuid": "f1e9c2132e3148b39d886"
+      "voiceUuid": "f1e9c2132e3148b39d886",
+      "ttsModelKey": "qwen3-tts-1.7b"
     },
     {
       "id": "brann-weir",
@@ -412,8 +437,9 @@
       ],
       "lines": 7,
       "scenes": 1,
-      "voiceState": "generated",
       "voiceStyle": "A male adult voice with a medium-low pitch and a steady, rhythmic pace, featuring a resonant, gravelly timbre and a curious, rising inflection for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "646185bc06f9437db88bc",
       "overrideTtsVoices": {
         "qwen": {
           "name": "qwen-646185bc06f9437db88bc"
@@ -421,9 +447,7 @@
         "kokoro": {
           "name": "am_michael"
         }
-      },
-      "ttsEngine": "qwen",
-      "voiceUuid": "646185bc06f9437db88bc"
+      }
     },
     {
       "id": "berrin-weir",
@@ -455,8 +479,9 @@
       ],
       "lines": 5,
       "scenes": 1,
-      "voiceState": "generated",
       "voiceStyle": "A mature male voice with a low, gravelly timbre and steady, mid-paced delivery, characterized by a flat, uninflected monotone and dry, utilitarian precision, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "5fc748d516a24bf7b54a1",
       "overrideTtsVoices": {
         "qwen": {
           "name": "qwen-5fc748d516a24bf7b54a1"
@@ -464,9 +489,7 @@
         "kokoro": {
           "name": "am_adam"
         }
-      },
-      "ttsEngine": "qwen",
-      "voiceUuid": "5fc748d516a24bf7b54a1"
+      }
     },
     {
       "id": "father-lessom",
@@ -495,8 +518,9 @@
       ],
       "lines": 6,
       "scenes": 1,
-      "voiceState": "generated",
       "voiceStyle": "A mature male voice with a medium-low pitch and steady, measured pacing, featuring a resonant, dry timbre that conveys a calm, professional authority for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "1333d776ef3b4e72acaa1",
       "overrideTtsVoices": {
         "qwen": {
           "name": "qwen-1333d776ef3b4e72acaa1",
@@ -509,9 +533,7 @@
         "kokoro": {
           "name": "am_adam"
         }
-      },
-      "ttsEngine": "qwen",
-      "voiceUuid": "1333d776ef3b4e72acaa1"
+      }
     },
     {
       "id": "ivo",
@@ -544,18 +566,25 @@
       ],
       "lines": 9,
       "scenes": 1,
-      "voiceState": "generated",
       "voiceStyle": "A mature male voice with a medium-low pitch and brisk, rhythmic pacing, featuring a grainy, earthy timbre and a dry, observational emotional register, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "42ea409af5594a2f8d564",
       "overrideTtsVoices": {
         "qwen": {
-          "name": "qwen-42ea409af5594a2f8d564"
+          "name": "qwen-42ea409af5594a2f8d564",
+          "variants": {
+            "excited": {
+              "name": "qwen-42ea409af5594a2f8d564__excited"
+            },
+            "angry": {
+              "name": "qwen-42ea409af5594a2f8d564__angry"
+            }
+          }
         },
         "kokoro": {
           "name": "am_adam"
         }
-      },
-      "ttsEngine": "qwen",
-      "voiceUuid": "42ea409af5594a2f8d564"
+      }
     },
     {
       "id": "sela",
@@ -588,12 +617,16 @@
       ],
       "lines": 12,
       "scenes": 1,
-      "voiceState": "generated",
       "voiceStyle": "A youthful female voice with a medium-high pitch, steady moderate pace, and a clear, resonant timbre, blending bright innocence with a surprisingly firm, unwavering steadiness for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "141ff105686148c4ab882",
       "overrideTtsVoices": {
         "qwen": {
           "name": "qwen-141ff105686148c4ab882",
           "variants": {
+            "sad": {
+              "name": "qwen-141ff105686148c4ab882__sad"
+            },
             "excited": {
               "name": "qwen-141ff105686148c4ab882__excited"
             }
@@ -602,9 +635,7 @@
         "kokoro": {
           "name": "af_nicole"
         }
-      },
-      "ttsEngine": "qwen",
-      "voiceUuid": "141ff105686148c4ab882"
+      }
     },
     {
       "id": "hart",
@@ -636,8 +667,9 @@
       ],
       "lines": 6,
       "scenes": 1,
-      "voiceState": "generated",
       "voiceStyle": "A mature male voice with a low, gravelly timbre and slow, measured cadence, featuring a steady, grounded projection and earthy texture for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "0cdcb8401a114e6992265",
       "overrideTtsVoices": {
         "qwen": {
           "name": "qwen-0cdcb8401a114e6992265"
@@ -645,9 +677,7 @@
         "kokoro": {
           "name": "am_michael"
         }
-      },
-      "ttsEngine": "qwen",
-      "voiceUuid": "0cdcb8401a114e6992265"
+      }
     }
   ]
 }

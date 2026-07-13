@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-SII18qPPmYgxlJJgf4i1S",
+  "voiceUuid": "SII18qPPmYgxlJJgf4i1S",
+  "instruct": "A mature male voice with a low, gravelly timbre and steady, mid-paced delivery, characterized by a flat, uninflected monotone and dry, utilitarian precision, for expressive character dialogue.",
+  "language": "French",
+  "refText": "Portez ce vieux whisky au juge blond qui fume, et demandez-vous ce que demain réserve.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}

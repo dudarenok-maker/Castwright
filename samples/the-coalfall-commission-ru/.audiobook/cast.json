@@ -1,0 +1,653 @@
+{
+  "characters": [
+    {
+      "id": "narrator",
+      "name": "Рассказчик",
+      "role": "Third-person observer",
+      "color": "narrator",
+      "attributes": [
+        "formal",
+        "observational",
+        "measured",
+        "rhythmic"
+      ],
+      "tone": {
+        "warmth": 40,
+        "pace": 50,
+        "authority": 60,
+        "emotion": 40
+      },
+      "gender": "neutral",
+      "ageRange": "adult",
+      "description": "A grounded, steady narrator who observes the forge life with a touch of folkloric warmth.",
+      "evidence": [
+        {
+          "quote": "То, что было дальше, горн делал большей частью в молчании, и расскажет об этом рассказчик, потому что те, кто был внутри, были слишком заняты.",
+          "note": "Мета-повествовательное обращение к читателю."
+        },
+        {
+          "quote": "Новости расходятся по долине двумя путями: медленно — по дороге, и разом — по запаху затопленного после темноты горна.",
+          "note": "Экспозиционное повествование."
+        },
+        {
+          "quote": "Горн остыл до цвета подёрнутого пеплом заката, и Рен выскребала последнюю окалину, когда раздался стук.",
+          "note": "Экспозиционное начало главы."
+        },
+        {
+          "quote": "Никто не побежал.",
+          "note": "Краткое, резкое повествовательное утверждение."
+        }
+      ],
+      "lines": 135,
+      "scenes": 2,
+      "voiceStyle": "A middle-aged voice, neutral in gender, with a medium pitch and steady, mid-paced delivery; the timbre is rich, grounded, and resonant, carrying a measured, folkloric warmth suitable for audiobook narration.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "O4V2lNiEzNp86cKwQ1oUi",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-O4V2lNiEzNp86cKwQ1oUi",
+          "variants": {
+            "excited": {
+              "name": "qwen-O4V2lNiEzNp86cKwQ1oUi__excited"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "aliases": [
+        "Narrator"
+      ]
+    },
+    {
+      "id": "oduvan",
+      "name": "Одуван",
+      "role": "Blacksmith",
+      "color": "halloran",
+      "attributes": [
+        "gruff",
+        "experienced",
+        "pragmatic",
+        "authoritative",
+        "composed",
+        "professional"
+      ],
+      "tone": {
+        "warmth": 40,
+        "pace": 40,
+        "authority": 90,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "elderly",
+      "description": "An aged, gravel-voiced smith with decades of experience and little patience for unnecessary drama.",
+      "evidence": [
+        {
+          "quote": "«Колокол, — сказал он так, будто драконы просят их каждый вторник. — Тогда бронза, не железо. Воробушек — хорошее олово, тигель, и перестань плакать на формовочный песок, испортишь отливку».",
+          "note": "Пример профессионального тона мастера."
+        },
+        {
+          "quote": "«Оставь, — сказал мастер Одуван, не поднимая глаз. Семьдесят зим стёрли его голос до гравия и терпения. — Кто бы это ни был, пусть стучит».",
+          "note": "Вступление персонажа, задающее его характер."
+        },
+        {
+          "quote": "Господа, — сказал Одуван голосом, который берёг для треснувшего железа, — это малый колокол. Ему нужна малая публика.",
+          "note": "Авторитетное указание присутствующим."
+        },
+        {
+          "quote": "Вот вам верная нота, — сказал он. — Какую делает второй по мастерству кузнец.",
+          "note": "Скромная оценка своей работы."
+        }
+      ],
+      "lines": 29,
+      "scenes": 2,
+      "voiceStyle": "An elderly man's voice in his seventies, low-to-medium in pitch and gravelly, with a dry rasp and a faint tremor at the edges; slow, deliberate and unhurried, carrying the worn, unshakable authority of a lifelong craftsman — for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "wvFN3flxg_ihFQw4ZuvjY",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-wvFN3flxg_ihFQw4ZuvjY"
+        },
+        "kokoro": {
+          "name": "am_onyx"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "ren",
+      "name": "Рен",
+      "role": "Apprentice",
+      "color": "eliza",
+      "attributes": [
+        "earnest",
+        "observant",
+        "young",
+        "direct",
+        "reserved"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 30,
+        "emotion": 40
+      },
+      "gender": "female",
+      "ageRange": "teen",
+      "description": "A thirteen-year-old apprentice striving to prove her competence in the forge.",
+      "evidence": [
+        {
+          "quote": "Меня зовут Рен, — сказала Рен, краснея, — для всех, кроме него.",
+          "note": "Личное утверждение своей идентичности."
+        },
+        {
+          "quote": "«Я никогда не вздыхаю», — сказала Рен, которая вздохнула.",
+          "note": "Наивный и подростковый характер речи."
+        },
+        {
+          "quote": "На какой такой случай?",
+          "note": "Любопытный вопрос гостю."
+        },
+        {
+          "quote": "«Я не плачу».",
+          "note": "Оправдывающийся тон ребенка."
+        }
+      ],
+      "lines": 12,
+      "scenes": 2,
+      "voiceStyle": "A female teenager with a medium pitch and steady, mid-paced cadence, possessing a clear, breathy timbre and an earnest emotional register for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "FmurrCWbS2TY6m4rYvXN1",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-FmurrCWbS2TY6m4rYvXN1"
+        },
+        "kokoro": {
+          "name": "af_nicole"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "aliases": [
+        "Воробушек"
+      ]
+    },
+    {
+      "id": "mairin",
+      "voiceUuid": "TP3sfCclL5WIPEhaZ9-Jd",
+      "name": "Мэйрин",
+      "role": "Reeve",
+      "color": "marcus",
+      "attributes": [
+        "urgent",
+        "clipped",
+        "authoritative",
+        "steady",
+        "firm",
+        "protective"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 70,
+        "emotion": 40
+      },
+      "gender": "female",
+      "ageRange": "adult",
+      "description": "A local official, prone to urgency and direct, clipped speech.",
+      "evidence": [
+        {
+          "quote": "«Одуван. Запри ставни и залей угли». Слова её были отрывисты, как всегда, когда она бежала. «На коалфоллской дороге дракон. Огромный, с амбар. Идёт прямо по переулку».",
+          "note": "Срочное сообщение."
+        },
+        {
+          "quote": "«Нет, дитя, нарисованный. — Мэйрин не улыбнулась. — Настоящий. И направляется прямо к единственному освещённому окну в долине, то есть к вашему. Гасите огонь».",
+          "note": "Серьезное предупреждение."
+        },
+        {
+          "quote": "Пелл Холлис, — сказала Мэйрин, которая так и не ушла, — ты поднял полдолины из-за телеги с сеном в темноте на прошлый Ламмас.",
+          "note": "Упрек в адрес Пелла."
+        },
+        {
+          "quote": "Села, — сказала Мэйрин, очень ровно, очень медленно, — иди сюда, ко мне.",
+          "note": "Команда дочери."
+        }
+      ],
+      "lines": 13,
+      "scenes": 2,
+      "voiceStyle": "A mature female voice with a medium-low pitch and brisk, clipped pacing, featuring a crisp, resonant timbre and a cool, authoritative register, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-TP3sfCclL5WIPEhaZ9-Jd"
+        },
+        "kokoro": {
+          "name": "af_jessica"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "voiceState": "tuned"
+    },
+    {
+      "id": "coalfall-dragon",
+      "name": "Коалфолл",
+      "role": "Ancient dragon",
+      "color": "slot-4",
+      "attributes": [
+        "ancient",
+        "deliberate",
+        "melancholy",
+        "profound"
+      ],
+      "tone": {
+        "warmth": 60,
+        "pace": 30,
+        "authority": 80,
+        "emotion": 50
+      },
+      "gender": "neutral",
+      "ageRange": "elderly",
+      "description": "A weary, ancient entity seeking a legacy, with a voice described like a tired mountain.",
+      "evidence": [
+        {
+          "quote": "«Я прошёл долгий путь, — сказал дракон. Голос его не был громок. Так звучала бы гора, будь гора усталой, и каждое слово приходило мгновением позже, чем ты его ждал. — В деревнях меня зовут Коалфолл. Это не моё имя, но сойдёт. Мне сказали, что лучший кузнец долины держит этот горн».",
+          "note": "Первое обращение дракона, задающее его монументальный тон."
+        },
+        {
+          "quote": "Тогда он твой, когда я с ним покончу, — сказал он наконец. — Храни его где-нибудь повыше.",
+          "note": "Торжественное обещание ребенку."
+        },
+        {
+          "quote": "«У меня нет ничего, кроме времени. Начинайте».",
+          "note": "Завершающая фраза с чувством обреченности."
+        },
+        {
+          "quote": "Я не загадывал, — сказал он, — так далеко.",
+          "note": "Ответ о будущем."
+        }
+      ],
+      "lines": 32,
+      "scenes": 2,
+      "voiceStyle": "A gender-neutral, elderly voice with an ultra-low, resonant pitch and deliberate, sluggish pacing; the timbre is gravelly, metallic, and immense, projecting unshakable authority, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "RJznhtTqGRaeobU0bm5XN",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-RJznhtTqGRaeobU0bm5XN"
+        },
+        "kokoro": {
+          "name": "bm_george"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "pell-hollis",
+      "name": "Пелл Холлис",
+      "role": "Villager",
+      "color": "slot-5",
+      "attributes": [
+        "anxious",
+        "garrulous",
+        "well-meaning"
+      ],
+      "tone": {
+        "warmth": 70,
+        "pace": 70,
+        "authority": 20,
+        "emotion": 60
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "A nervous villager prone to shouting.",
+      "evidence": [
+        {
+          "quote": "Это я кричал, — сказал человек в дверях, который явно бежал сюда и явно жалел об этом. Лет тридцати с лишним, сплошные локти, с перьями на куртке, по которым выходило, что куры возражали против раннего запирания.",
+          "note": "Взволнованное объяснение своего прихода."
+        },
+        {
+          "quote": "Он лучший в долине, — сказал Пелл, который где-то в темноте решил, что это и его приключение тоже, — и я перекричу любого, кто скажет иначе. Я этим известен. Криком.",
+          "note": "Хвастливая поддержка мастера."
+        }
+      ],
+      "lines": 10,
+      "scenes": 2,
+      "voiceStyle": "A male adult voice with a medium-low pitch and erratic, fast-paced cadence, featuring a gravelly, restless timbre and a jittery, high-intensity emotional register for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "3W6SS1Q4vvK1hWrzOhi_l",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-3W6SS1Q4vvK1hWrzOhi_l",
+          "variants": {
+            "excited": {
+              "name": "qwen-3W6SS1Q4vvK1hWrzOhi_l__excited"
+            },
+            "whisper": {
+              "name": "qwen-3W6SS1Q4vvK1hWrzOhi_l__whisper"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "widow-kasper",
+      "name": "Вдова Каспер",
+      "role": "Elderly villager",
+      "color": "slot-6",
+      "attributes": [
+        "cynical",
+        "sharp",
+        "wise"
+      ],
+      "tone": {
+        "warmth": 30,
+        "pace": 60,
+        "authority": 60,
+        "emotion": 50
+      },
+      "gender": "female",
+      "ageRange": "elderly",
+      "description": "An elderly, sharp-tongued local.",
+      "evidence": [
+        {
+          "quote": "Меньше, чем в сказках",
+          "note": "Критическое замечание о размере дракона."
+        },
+        {
+          "quote": "Оставьте её",
+          "note": "Защита ребенка."
+        }
+      ],
+      "lines": 7,
+      "scenes": 1,
+      "voiceStyle": "A female elderly voice with a low, raspy pitch and measured, deliberate pace, possessing a brittle, clinical timbre and a detached, authoritative register, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "4qD9rkQOTtwjfUvpnL8Rs",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-4qD9rkQOTtwjfUvpnL8Rs"
+        },
+        "kokoro": {
+          "name": "af_sarah"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "brann-weir",
+      "name": "Бранн",
+      "role": "Quarry worker",
+      "color": "slot-7",
+      "attributes": [
+        "inquisitive",
+        "repetitive"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 30,
+        "emotion": 50
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "One of the quarry-working twins, speaks in questions.",
+      "evidence": [
+        {
+          "quote": "С каких пор у кузнеца колокольная бронза просто так валяется?",
+          "note": "Скептический вопрос."
+        },
+        {
+          "quote": "Так это, стало быть, дракон?",
+          "note": "Типичный для Бранна вопрос."
+        }
+      ],
+      "lines": 7,
+      "scenes": 1,
+      "voiceStyle": "A male adult voice with a medium-low pitch and a steady, rhythmic pace, featuring a resonant, gravelly timbre and a curious, rising inflection for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "NUdgiC63RTpX27R3hkHC2",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-NUdgiC63RTpX27R3hkHC2",
+          "variants": {
+            "whisper": {
+              "name": "qwen-NUdgiC63RTpX27R3hkHC2__whisper"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "berrin-weir",
+      "name": "Беррин",
+      "role": "Quarry worker",
+      "color": "slot-8",
+      "attributes": [
+        "concise",
+        "blunt"
+      ],
+      "tone": {
+        "warmth": 30,
+        "pace": 50,
+        "authority": 50,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "One of the quarry-working twins, speaks in flat statements.",
+      "evidence": [
+        {
+          "quote": "С ней всё хорошо",
+          "note": "Уверенная оценка ситуации."
+        },
+        {
+          "quote": "Это дракон.",
+          "note": "Краткий ответ-утверждение."
+        }
+      ],
+      "lines": 5,
+      "scenes": 1,
+      "voiceStyle": "A mature male voice with a low, gravelly timbre and steady, mid-paced delivery, characterized by a flat, uninflected monotone and dry, utilitarian precision, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "a-hYrcMYR-d2OaLXALxF8",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-a-hYrcMYR-d2OaLXALxF8"
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "father-lessom",
+      "name": "Отец Лессом",
+      "role": "Clergy",
+      "color": "slot-9",
+      "attributes": [
+        "hesitant",
+        "pious",
+        "formal"
+      ],
+      "tone": {
+        "warmth": 60,
+        "pace": 40,
+        "authority": 40,
+        "emotion": 50
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "The local priest, seeking propriety.",
+      "evidence": [
+        {
+          "quote": "Колокол, в который звонят по последнему чего бы то ни было, звонит по всему, что было.",
+          "note": "Репетиция фразы для проповеди."
+        },
+        {
+          "quote": "А правильно ли это, как по-вашему? Колокола — для душ.",
+          "note": "Сомнение относительно предназначения колокола."
+        }
+      ],
+      "lines": 6,
+      "scenes": 1,
+      "voiceStyle": "A mature male voice with a medium-low pitch and steady, measured pacing, featuring a resonant, dry timbre that conveys a calm, professional authority for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "14KZfNt2RXojvFwljXNpD",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-14KZfNt2RXojvFwljXNpD",
+          "variants": {
+            "whisper": {
+              "name": "qwen-14KZfNt2RXojvFwljXNpD__whisper"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "ivo",
+      "name": "Иво",
+      "role": "Pedlar",
+      "color": "slot-10",
+      "attributes": [
+        "transient",
+        "commercial",
+        "pragmatic"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 70,
+        "authority": 40,
+        "emotion": 40
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "A traveling pedlar with unusual customs.",
+      "evidence": [
+        {
+          "quote": "Колокол он хочет. Себе, колокол. У меня на родине для мёртвых сажают дерево — но дерево на когте не унесёшь, и потому: колокол. Разумно.",
+          "note": "Философское обоснование заказа."
+        },
+        {
+          "quote": "Есть верёвка, если нужна верёвка. И воск тоже. Даром, нынче ночью. Завтра — цены.",
+          "note": "Предложение товара."
+        }
+      ],
+      "lines": 3,
+      "scenes": 1,
+      "voiceStyle": "A mature male voice with a medium-low pitch and brisk, rhythmic pacing, featuring a grainy, earthy timbre and a dry, observational emotional register, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "_f-OXeE0Rx2YTIewNSzLQ",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-_f-OXeE0Rx2YTIewNSzLQ"
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "sela",
+      "name": "Села",
+      "role": "Child",
+      "color": "slot-11",
+      "attributes": [
+        "curious",
+        "bold",
+        "matter-of-fact"
+      ],
+      "tone": {
+        "warmth": 70,
+        "pace": 50,
+        "authority": 60,
+        "emotion": 50
+      },
+      "gender": "female",
+      "ageRange": "child",
+      "description": "Maerin's young daughter, fearless around the dragon.",
+      "evidence": [
+        {
+          "quote": "Я позвоню, — сказала Села. — Я собираюсь жить очень долго.",
+          "note": "Обещание позвонить в колокол."
+        },
+        {
+          "quote": "Ты последний",
+          "note": "Замечание о драконе."
+        }
+      ],
+      "lines": 8,
+      "scenes": 1,
+      "voiceStyle": "A youthful female voice with a medium-high pitch, steady moderate pace, and a clear, resonant timbre, blending bright innocence with a surprisingly firm, unwavering steadiness for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "DsQqmj3eEs0tzL-vp6UF9",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-DsQqmj3eEs0tzL-vp6UF9"
+        },
+        "kokoro": {
+          "name": "af_nicole"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "hart",
+      "name": "Харт",
+      "role": "Charcoal-burner",
+      "color": "slot-12",
+      "attributes": [
+        "quiet",
+        "grounded"
+      ],
+      "tone": {
+        "warmth": 40,
+        "pace": 30,
+        "authority": 50,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "A quiet charcoal-burner accustomed to working with fire.",
+      "evidence": [
+        {
+          "quote": "Тридцать лет жёг уголь, — сказал Харт. — Всё — каравай.",
+          "note": "Мудрость угольщика."
+        },
+        {
+          "quote": "Огонь просит корма. Если уж мы это делаем.",
+          "note": "Приземленный комментарий о работе."
+        }
+      ],
+      "lines": 5,
+      "scenes": 1,
+      "voiceStyle": "A mature male voice with a low, gravelly timbre and slow, measured cadence, featuring a steady, grounded projection and earthy texture for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "psOzUmbzKNK_26gBG2HzA",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-psOzUmbzKNK_26gBG2HzA"
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    }
+  ]
+}

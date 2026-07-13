@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-4qD9rkQOTtwjfUvpnL8Rs",
+  "voiceUuid": "4qD9rkQOTtwjfUvpnL8Rs",
+  "instruct": "A female elderly voice with a low, raspy pitch and measured, deliberate pace, possessing a brittle, clinical timbre and a detached, authoritative register, for expressive character dialogue.",
+  "language": "Russian",
+  "refText": "Съешь же ещё этих мягких французских булок да выпей чаю, и она подумала, что принесёт завтрашний день.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}

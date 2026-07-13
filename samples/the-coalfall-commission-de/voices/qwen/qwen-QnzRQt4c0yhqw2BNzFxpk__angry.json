@@ -1,0 +1,11 @@
+{
+  "voiceId": "qwen-QnzRQt4c0yhqw2BNzFxpk__angry",
+  "voiceUuid": "QnzRQt4c0yhqw2BNzFxpk",
+  "instruct": "Delivered with explosive, furious rage, shouting at the top of the voice, harsh and seething, sharp and aggressive, utterly enraged.",
+  "language": "German",
+  "refText": "Zwölf Boxkämpfer jagen Viktor quer über den großen Sylter Deich, und sie fragte sich, was der morgige Tag bringen würde.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+  "anchoredTo": "qwen-QnzRQt4c0yhqw2BNzFxpk",
+  "mintMethod": "anchored-icl-instruct"
+}

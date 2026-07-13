@@ -1,0 +1,11 @@
+{
+  "voiceId": "qwen-5AEYMKguzml-igpE5nM_K__sad",
+  "voiceUuid": "5AEYMKguzml-igpE5nM_K",
+  "instruct": "Delivered with quiet, downcast sadness, slow and subdued, low and weary, heavy and dejected.",
+  "language": "Spanish",
+  "refText": "El veloz murciélago hindú comía feliz cardillo y kiwi, y se preguntaba qué traería el mañana.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+  "anchoredTo": "qwen-5AEYMKguzml-igpE5nM_K",
+  "mintMethod": "anchored-icl-instruct"
+}

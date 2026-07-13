@@ -1,0 +1,632 @@
+{
+  "characters": [
+    {
+      "id": "narrator",
+      "name": "Narrador",
+      "role": "Third-person observer",
+      "color": "narrator",
+      "attributes": [
+        "formal",
+        "observational",
+        "measured",
+        "rhythmic"
+      ],
+      "tone": {
+        "warmth": 40,
+        "pace": 50,
+        "authority": 60,
+        "emotion": 40
+      },
+      "gender": "neutral",
+      "ageRange": "adult",
+      "description": "A grounded, steady narrator who observes the forge life with a touch of folkloric warmth.",
+      "evidence": [
+        {
+          "quote": "La fragua había tomado el color de un ocaso apagado, y Wren estaba raspando los últimos restos de escoria cuando empezaron los golpes en la puerta.",
+          "note": "Establece el tono descriptivo de la escena."
+        },
+        {
+          "quote": "Las noticias viajan de dos maneras en un valle: despacio, por el camino, y de golpe, por el olor de una fragua encendida después del anochecer.",
+          "note": "Apertura descriptiva del capítulo."
+        },
+        {
+          "quote": "La sala enmudeció con el silencio de un aliento contenido.",
+          "note": "Observación atmosférica sobre la tensión de la escena."
+        },
+        {
+          "quote": "Durante un rato el único sonido fue el del fuego.",
+          "note": "Breve intervención narrativa para marcar el ritmo."
+        }
+      ],
+      "lines": 142,
+      "scenes": 2,
+      "voiceStyle": "A middle-aged voice, neutral in gender, with a medium pitch and steady, mid-paced delivery; the timbre is rich, grounded, and resonant, carrying a measured, folkloric warmth suitable for audiobook narration.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "5AEYMKguzml-igpE5nM_K",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-5AEYMKguzml-igpE5nM_K",
+          "variants": {
+            "sad": {
+              "name": "qwen-5AEYMKguzml-igpE5nM_K__sad"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "aliases": [
+        "Narrator"
+      ],
+      "voiceState": "tuned"
+    },
+    {
+      "id": "wren",
+      "name": "Wren",
+      "role": "Apprentice",
+      "color": "eliza",
+      "attributes": [
+        "earnest",
+        "observant",
+        "young",
+        "direct",
+        "reserved"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 30,
+        "emotion": 40
+      },
+      "gender": "female",
+      "ageRange": "teen",
+      "description": "A thirteen-year-old apprentice striving to prove her competence in the forge.",
+      "evidence": [
+        {
+          "quote": "Me llamo Wren, para todo el mundo excepto para él.",
+          "note": "Reivindicación de su propia identidad ante el dragón."
+        },
+        {
+          "quote": "¿Por qué a ella le toca un nombre de pájaro?",
+          "note": "Interacción cuestionadora con Sela."
+        },
+        {
+          "quote": "«Yo nunca suspiro», dijo Wren, suspirando.",
+          "note": "Un momento de ironía en su diálogo."
+        },
+        {
+          "quote": "«No estoy llorando.»",
+          "note": "Respuesta defensiva al maestro."
+        }
+      ],
+      "lines": 13,
+      "scenes": 2,
+      "voiceStyle": "A female teenager with a medium pitch and steady, mid-paced cadence, possessing a clear, breathy timbre and an earnest emotional register for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "kIK7nC0R6Pf2B53PDldF7",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-kIK7nC0R6Pf2B53PDldF7"
+        },
+        "kokoro": {
+          "name": "af_aoede"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "aliases": [
+        "Gorrión"
+      ]
+    },
+    {
+      "id": "oduvan",
+      "name": "Oduvan",
+      "role": "Blacksmith",
+      "color": "halloran",
+      "attributes": [
+        "gruff",
+        "experienced",
+        "pragmatic",
+        "authoritative",
+        "composed",
+        "professional"
+      ],
+      "tone": {
+        "warmth": 40,
+        "pace": 40,
+        "authority": 90,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "elderly",
+      "description": "An aged, gravel-voiced smith with decades of experience and little patience for unnecessary drama.",
+      "evidence": [
+        {
+          "quote": "«Si apago el fuego», dijo Oduvan, «pierdo la soldadura que llevo cuidando desde el mediodía. Un dragón puede esperar lo que tarda una soldadura o no puede, y de cualquier modo prefiero recibirlo en calor.»",
+          "note": "Refleja su pragmatismo y dedicación a su oficio."
+        },
+        {
+          "quote": "«Le dicen mal», dijo Oduvan. «El mejor herrero del valle murió hace nueve años. Tendrá que conformarse con el segundo.»",
+          "note": "Muestra su carácter humilde pero firme."
+        },
+        {
+          "quote": "Caballeros, es una campana pequeña. Necesita un público pequeño.",
+          "note": "Imponiendo orden a los gemelos."
+        },
+        {
+          "quote": "Ahí tiene su nota verdadera. La del segundo mejor herrero.",
+          "note": "Entrega final del trabajo al dragón."
+        }
+      ],
+      "lines": 23,
+      "scenes": 2,
+      "voiceStyle": "An elderly man's voice in his seventies, low-to-medium in pitch and gravelly, with a dry rasp and a faint tremor at the edges; slow, deliberate and unhurried, carrying the worn, unshakable authority of a lifelong craftsman — for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "NFu-UIwS1qyHapWrAEt0E",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-NFu-UIwS1qyHapWrAEt0E",
+          "variants": {
+            "whisper": {
+              "name": "qwen-NFu-UIwS1qyHapWrAEt0E__whisper"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_onyx"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "maerin",
+      "name": "Maerin",
+      "role": "Reeve",
+      "color": "marcus",
+      "attributes": [
+        "urgent",
+        "clipped",
+        "authoritative",
+        "steady",
+        "firm",
+        "protective"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 70,
+        "emotion": 40
+      },
+      "gender": "female",
+      "ageRange": "adult",
+      "description": "A local official, prone to urgency and direct, clipped speech.",
+      "evidence": [
+        {
+          "quote": "«No, hija, uno pintado. De verdad. Y viniendo directo hacia la única ventana iluminada del valle, que es la vuestra. Apaga el fuego.»",
+          "note": "Instrucción seria y sin rodeos."
+        },
+        {
+          "quote": "«Oduvan. Cierra los postigos y apaga las brasas.»",
+          "note": "Orden directa y urgente."
+        }
+      ],
+      "lines": 9,
+      "scenes": 2,
+      "voiceStyle": "A mature female voice with a medium-low pitch and brisk, clipped pacing, featuring a crisp, resonant timbre and a cool, authoritative register, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "mDHAm-Z7LvF7VgOUNcxV-",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-mDHAm-Z7LvF7VgOUNcxV-",
+          "variants": {
+            "excited": {
+              "name": "qwen-mDHAm-Z7LvF7VgOUNcxV-__excited"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "af_jessica"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "coalfall",
+      "name": "Coalfall",
+      "role": "Ancient dragon",
+      "color": "slot-4",
+      "attributes": [
+        "ancient",
+        "deliberate",
+        "melancholy",
+        "profound"
+      ],
+      "tone": {
+        "warmth": 60,
+        "pace": 30,
+        "authority": 80,
+        "emotion": 50
+      },
+      "gender": "neutral",
+      "ageRange": "elderly",
+      "description": "A weary, ancient entity seeking a legacy, with a voice described like a tired mountain.",
+      "evidence": [
+        {
+          "quote": "«No tengo nada más que tiempo. Empezad.»",
+          "note": "Su paciencia infinita de criatura milenaria."
+        },
+        {
+          "quote": "Créatelo.",
+          "note": "Respuesta breve y solemne a la viuda."
+        }
+      ],
+      "lines": 29,
+      "scenes": 2,
+      "voiceStyle": "A gender-neutral, elderly voice with an ultra-low, resonant pitch and deliberate, sluggish pacing; the timbre is gravelly, metallic, and immense, projecting unshakable authority, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "GqT24EHx7jFqO9UZlP-7j",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-GqT24EHx7jFqO9UZlP-7j"
+        },
+        "kokoro": {
+          "name": "bm_george"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "pell",
+      "name": "Pell",
+      "role": "Villager",
+      "color": "slot-5",
+      "attributes": [
+        "anxious",
+        "garrulous",
+        "well-meaning"
+      ],
+      "tone": {
+        "warmth": 70,
+        "pace": 70,
+        "authority": 20,
+        "emotion": 60
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "A nervous villager prone to shouting.",
+      "evidence": [
+        {
+          "quote": "Ese era yo gritando. Por el carril. Lo de correr, lo de los insensatos, todo eso. Volvería a gritarlo.",
+          "note": "Explicación de su comportamiento."
+        },
+        {
+          "quote": "Tranquilos…",
+          "note": "Intento de calmar la situación durante la interacción con Sela."
+        }
+      ],
+      "lines": 9,
+      "scenes": 2,
+      "voiceStyle": "A male adult voice with a medium-low pitch and erratic, fast-paced cadence, featuring a gravelly, restless timbre and a jittery, high-intensity emotional register for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "axAxRhfqVaZCVE1enMpJC",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-axAxRhfqVaZCVE1enMpJC",
+          "variants": {
+            "excited": {
+              "name": "qwen-axAxRhfqVaZCVE1enMpJC__excited"
+            },
+            "whisper": {
+              "name": "qwen-axAxRhfqVaZCVE1enMpJC__whisper"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "brann",
+      "name": "Brann",
+      "role": "Quarry worker",
+      "color": "slot-7",
+      "attributes": [
+        "inquisitive",
+        "repetitive"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 30,
+        "emotion": 50
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "One of the quarry-working twins, speaks in questions.",
+      "evidence": [
+        {
+          "quote": "¿Ese es el dragón, entonces?",
+          "note": "Pregunta típica de su forma de hablar."
+        },
+        {
+          "quote": "¿Y tú qué sabes?",
+          "note": "Desafío a Hart."
+        }
+      ],
+      "lines": 7,
+      "scenes": 1,
+      "voiceStyle": "A male adult voice with a medium-low pitch and a steady, rhythmic pace, featuring a resonant, gravelly timbre and a curious, rising inflection for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "Uzu35X9Yn8PZ-ExV9G5C9",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-Uzu35X9Yn8PZ-ExV9G5C9",
+          "variants": {
+            "whisper": {
+              "name": "qwen-Uzu35X9Yn8PZ-ExV9G5C9__whisper"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "berrin",
+      "name": "Berrin",
+      "role": "Quarry worker",
+      "color": "slot-8",
+      "attributes": [
+        "concise",
+        "blunt"
+      ],
+      "tone": {
+        "warmth": 30,
+        "pace": 50,
+        "authority": 50,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "One of the quarry-working twins, speaks in flat statements.",
+      "evidence": [
+        {
+          "quote": "Es el dragón.",
+          "note": "Afirmación rotunda."
+        },
+        {
+          "quote": "Está bien.",
+          "note": "Evaluación de la situación de Sela."
+        }
+      ],
+      "lines": 5,
+      "scenes": 1,
+      "voiceStyle": "A mature male voice with a low, gravelly timbre and steady, mid-paced delivery, characterized by a flat, uninflected monotone and dry, utilitarian precision, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "THPzzmAEyHlIAtbSi5IG7",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-THPzzmAEyHlIAtbSi5IG7"
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "lessom",
+      "name": "Padre Lessom",
+      "role": "Clergy",
+      "color": "slot-9",
+      "attributes": [
+        "hesitant",
+        "pious",
+        "formal"
+      ],
+      "tone": {
+        "warmth": 60,
+        "pace": 40,
+        "authority": 40,
+        "emotion": 50
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "The local priest, seeking propriety.",
+      "evidence": [
+        {
+          "quote": "¿Estará bien, creéis? Las campanas son para las almas. No sé cuál es el dictamen para… esto.",
+          "note": "Expresando duda ante el ritual."
+        },
+        {
+          "quote": "Una campana que dobla por el último de algo dobla por todo lo que fue.",
+          "note": "Su dictamen final para la campana."
+        }
+      ],
+      "lines": 5,
+      "scenes": 1,
+      "voiceStyle": "A mature male voice with a medium-low pitch and steady, measured pacing, featuring a resonant, dry timbre that conveys a calm, professional authority for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "-XC0g9qdN8ifgfwQFGrj5",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen--XC0g9qdN8ifgfwQFGrj5"
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "ivo",
+      "name": "Ivo",
+      "role": "Pedlar",
+      "color": "slot-10",
+      "attributes": [
+        "transient",
+        "commercial",
+        "pragmatic"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 70,
+        "authority": 40,
+        "emotion": 40
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "A traveling pedlar with unusual customs.",
+      "evidence": [
+        {
+          "quote": "Una campana quiere. Para él, la campana. En mi tierra, para los muertos plantamos un árbol — pero un árbol en una garra no se puede llevar, y entonces: una campana. Tiene sentido.",
+          "note": "Explicación comercial y filosófica."
+        },
+        {
+          "quote": "En mi tierra lo llamamos martes.",
+          "note": "Respuesta críptica sobre la moral del comercio."
+        }
+      ],
+      "lines": 3,
+      "scenes": 1,
+      "voiceStyle": "A mature male voice with a medium-low pitch and brisk, rhythmic pacing, featuring a grainy, earthy timbre and a dry, observational emotional register, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "WTfH1JqW4rgOTJamLMjGU",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-WTfH1JqW4rgOTJamLMjGU"
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "sela",
+      "name": "Sela",
+      "role": "Child",
+      "color": "slot-11",
+      "attributes": [
+        "curious",
+        "bold",
+        "matter-of-fact"
+      ],
+      "tone": {
+        "warmth": 70,
+        "pace": 50,
+        "authority": 60,
+        "emotion": 50
+      },
+      "gender": "female",
+      "ageRange": "child",
+      "description": "Maerin's young daughter, fearless around the dragon.",
+      "evidence": [
+        {
+          "quote": "Yo la tocaré. Voy a vivir muchísimo tiempo.",
+          "note": "Promesa solemne realizada ante los adultos."
+        },
+        {
+          "quote": "Eres el último.",
+          "note": "Afirmación directa al dragón."
+        }
+      ],
+      "lines": 10,
+      "scenes": 1,
+      "voiceStyle": "A youthful female voice with a medium-high pitch, steady moderate pace, and a clear, resonant timbre, blending bright innocence with a surprisingly firm, unwavering steadiness for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "yblWu6et2nPe6EEw-WBl5",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-yblWu6et2nPe6EEw-WBl5"
+        },
+        "kokoro": {
+          "name": "af_nicole"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "hart",
+      "name": "Hart",
+      "role": "Charcoal-burner",
+      "color": "slot-12",
+      "attributes": [
+        "quiet",
+        "grounded"
+      ],
+      "tone": {
+        "warmth": 40,
+        "pace": 30,
+        "authority": 50,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "A quiet charcoal-burner accustomed to working with fire.",
+      "evidence": [
+        {
+          "quote": "Treinta años quemando carbón. Todo es un pan.",
+          "note": "Filosofía personal sobre su oficio."
+        },
+        {
+          "quote": "El fuego pide leña. Si vamos a hacer esto.",
+          "note": "Intervención técnica sobre el proceso."
+        }
+      ],
+      "lines": 6,
+      "scenes": 1,
+      "voiceStyle": "A mature male voice with a low, gravelly timbre and slow, measured cadence, featuring a steady, grounded projection and earthy texture for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "kAYr0y5bZelxqeFACmnfD",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-kAYr0y5bZelxqeFACmnfD"
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "widow-casper",
+      "name": "Viuda Casper",
+      "description": "An elderly, sharp-tongued local.",
+      "attributes": [
+        "cynical",
+        "sharp",
+        "wise"
+      ],
+      "tone": {
+        "warmth": 30,
+        "pace": 60,
+        "authority": 60,
+        "emotion": 50
+      },
+      "gender": "female",
+      "ageRange": "elderly",
+      "color": "slot-6",
+      "role": "Elderly villager",
+      "voiceStyle": "A female elderly voice with a low, raspy pitch and measured, deliberate pace, possessing a brittle, clinical timbre and a detached, authoritative register, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "lines": 8,
+      "voiceUuid": "1u_ZnjhYElZIoFPI1iXBY",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-1u_ZnjhYElZIoFPI1iXBY"
+        },
+        "kokoro": {
+          "name": "af_sarah"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "scenes": 1
+    }
+  ]
+}

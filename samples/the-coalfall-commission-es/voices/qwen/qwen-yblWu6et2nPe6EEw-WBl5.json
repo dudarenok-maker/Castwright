@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-yblWu6et2nPe6EEw-WBl5",
+  "voiceUuid": "yblWu6et2nPe6EEw-WBl5",
+  "instruct": "A youthful female voice with a medium-high pitch, steady moderate pace, and a clear, resonant timbre, blending bright innocence with a surprisingly firm, unwavering steadiness for expressive character dialogue.",
+  "language": "Spanish",
+  "refText": "El veloz murciélago hindú comía feliz cardillo y kiwi, y se preguntaba qué traería el mañana.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}
