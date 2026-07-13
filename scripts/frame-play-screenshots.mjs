@@ -16,7 +16,7 @@
    data: URIs so there are no file-origin issues. Every output is re-opened with
    sharp and its dimensions asserted before the run is declared green. */
 
-import { chromium } from 'playwright';
+import { chromium } from '@playwright/test';
 import sharp from 'sharp';
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -133,37 +133,41 @@ async function main() {
     console.error(`✖ No raw captures at ${RAW_DIR}. Run \`npm run capture:companion\` first.`);
     process.exit(1);
   }
-  const browser = await chromium.launch();
-  const page = await browser.newPage({ deviceScaleFactor: 1 });
   const made = [];
   const missing = [];
+  const browser = await chromium.launch();
+  // finally so a mid-run failure (e.g. a dimension-assert throw in shoot) can't
+  // leak the launched Chromium subprocess.
+  try {
+    const page = await browser.newPage({ deviceScaleFactor: 1 });
 
-  for (const theme of ['light', 'dark']) {
-    const dir = theme === 'light'
-      ? resolve(OUT_DIR, 'screenshots/phone')
-      : resolve(OUT_DIR, 'screenshots/phone/dark');
-    mkdirSync(dir, { recursive: true });
-    let n = 0;
-    for (const scene of SCENES) {
-      const raw = resolve(RAW_DIR, `${scene.id}.${theme}.png`);
-      if (!existsSync(raw)) {
-        missing.push(`${scene.id}.${theme}`);
-        continue;
+    for (const theme of ['light', 'dark']) {
+      const dir = theme === 'light'
+        ? resolve(OUT_DIR, 'screenshots/phone')
+        : resolve(OUT_DIR, 'screenshots/phone/dark');
+      mkdirSync(dir, { recursive: true });
+      let n = 0;
+      for (const scene of SCENES) {
+        const raw = resolve(RAW_DIR, `${scene.id}.${theme}.png`);
+        if (!existsSync(raw)) {
+          missing.push(`${scene.id}.${theme}`);
+          continue;
+        }
+        n += 1;
+        const nn = String(n).padStart(2, '0');
+        const out = resolve(dir, `${nn}-${scene.id}.png`);
+        const rawDataUri = `data:image/png;base64,${b64(raw)}`;
+        const dims = await shoot(page, phoneHtml({ rawDataUri, caption: scene.caption }), PHONE, out);
+        made.push(`${theme}/${nn}-${scene.id}.png (${dims})`);
       }
-      n += 1;
-      const nn = String(n).padStart(2, '0');
-      const out = resolve(dir, `${nn}-${scene.id}.png`);
-      const rawDataUri = `data:image/png;base64,${b64(raw)}`;
-      const dims = await shoot(page, phoneHtml({ rawDataUri, caption: scene.caption }), PHONE, out);
-      made.push(`${theme}/${nn}-${scene.id}.png (${dims})`);
     }
+
+    const featureOut = resolve(OUT_DIR, 'feature-graphic.png');
+    const fdims = await shoot(page, featureHtml(), FEATURE, featureOut);
+    made.push(`feature-graphic.png (${fdims})`);
+  } finally {
+    await browser.close();
   }
-
-  const featureOut = resolve(OUT_DIR, 'feature-graphic.png');
-  const fdims = await shoot(page, featureHtml(), FEATURE, featureOut);
-  made.push(`feature-graphic.png (${fdims})`);
-
-  await browser.close();
 
   console.log(`\n✔ Framed ${made.length} assets into ${OUT_DIR}:`);
   for (const m of made) console.log(`   ${m}`);
