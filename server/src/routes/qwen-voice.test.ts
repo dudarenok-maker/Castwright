@@ -525,6 +525,28 @@ describe('fs-25 — design-voice emotion variants (Wave 3)', () => {
     expect(maerin.overrideTtsVoices.qwen.variants.angry).toEqual({ name: 'qwen-v_maerin__angry' });
   });
 
+  it("fs-59 CJK: EMOTION_INSTRUCT is language-invariant — a 'zh' book gets the same clause as English, no crash", async () => {
+    /* EMOTION_INSTRUCT is keyed purely by emotion, never by language, so the
+       lookup can't return undefined for any book language. Documents the
+       CJK deferral (Task 4a.2): the delivery clause deliberately stays
+       English for zh/ja too, consistent with the Qwen VoiceDesign
+       persona-stays-English won't-fix. */
+    const statePath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK, '.audiobook', 'state.json');
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    writeFileSync(statePath, JSON.stringify({ ...state, language: 'zh' }));
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send({ ...designBody, emotion: 'angry' });
+
+    expect(res.status).toBe(200);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.language).toBe('Chinese');
+    // Same English delivery clause as the EN/RU 'angry' case above —
+    // language never participates in the EMOTION_INSTRUCT lookup key.
+    expect(sent.emotionInstruct).toContain('rage');
+  });
+
   it('#1057: designing a VARIANT for a no-uuid character does NOT mint a uuid (would orphan the base .pt)', async () => {
     /* Strip maerin's pre-seeded uuid so it resolves via the legacy voiceId key
        (qwen-v_maerin), where its base .pt actually lives. Designing a VARIANT
