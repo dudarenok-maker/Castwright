@@ -58,4 +58,10 @@ this cycle append to this draft rather than opening a new one.
 
 - **Kokoro no longer eager-loads at sidecar startup by default — the ~1 GB it held resident is now free unless you opt in.** fs-60 flipped the registry default `tts.preload.kokoro` to `false`, but the sidecar's own Python fallback in `_preload_default_engines` (`main.py`) was still hardcoded `True`, and `buildSidecarEnv` deliberately omits a knob that's at its registry default — so `PRELOAD_KOKORO` never reached the sidecar and it eager-loaded anyway, silently defeating the flip for every user who hadn't manually toggled the setting off. The Python fallback is now `False`, matching the registry default (and matching Coqui/Qwen, which already agreed on both sides). Kokoro warms on demand on the first synth that needs it (or via `POST /load`); opt back into the always-hot ~1 GB engine with `PRELOAD_KOKORO=1` (Advanced Settings → "Preload Kokoro at startup"). Regression test flipped in `test_kokoro.py` (`test_preload_skips_kokoro_when_unset`).
 
+---
+
+## 📱 Companion app
+
+- **app-10 — Stream-over-LAN instant play (companion).** An undownloaded chapter now plays instantly over the home LAN via an in-app loopback proxy that re-serves CA-pinned HTTPS audio as plaintext to the native player — no OS cert install, token never leaves the app. Failure degrades cleanly to download-to-play (or a re-pair prompt on an expired device token). (#553)
+
 **Full changelog:** v1.13.0...v1.14.0

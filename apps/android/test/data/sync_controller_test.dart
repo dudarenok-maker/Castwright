@@ -144,6 +144,24 @@ void main() {
     expect(await c.isBookDownloaded('b1'), isTrue);
   });
 
+  test('playlistFor carries audioUrl through the projection', () async {
+    final api = _FakeApi(
+      SyncManifestIndex(schemaVersion: 1, books: [idx('b1', 'B')], activeBookIds: ['b1']),
+      {
+        'b1': SyncManifestBookDetail(
+          schemaVersion: 1, bookId: 'b1', updatedAt: 't',
+          chapters: [ch('b1', 'u1', 1, 'fp1|3')],
+          activeChapterUuids: ['u1'],
+        ),
+      },
+    );
+    final c = make(api, {'/api/books/b1/chapters/1/audio.mp3': [1, 2, 3]});
+    await c.downloadBook('b1');
+
+    final list = c.playlistFor('b1');
+    expect(list.single.audioUrl, '/api/books/b1/chapters/1/audio.mp3');
+  });
+
   test('re-downloading after a regen pulls only the changed chapter', () async {
     // First sync.
     final api1 = _FakeApi(

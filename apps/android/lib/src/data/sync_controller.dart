@@ -194,6 +194,7 @@ class SyncController {
             path: _library.audioPath(bookId, c.uuid, c.urlSuffix!),
             title: c.title,
             durationSec: c.durationSec,
+            audioUrl: c.audioUrl,
           ),
     ];
   }

@@ -34,5 +34,10 @@ abstract class AudioEngine {
   /// auto-advance to the next chapter).
   Stream<void> get completionStream;
 
+  /// Fires when the underlying player reports a load/playback error (e.g. a
+  /// failed loopback fetch mid-stream — `app-10`). Drives the streaming
+  /// fallback in [PlayerController]. Empty on engines that never error.
+  Stream<Object> get errorStream;
+
   Future<void> dispose();
 }
