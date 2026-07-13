@@ -70,7 +70,7 @@ describe('parseLabelledChapter', () => {
 
 **Design notes (from spec §3.4):** align by `text` after the same normalisation `stage2-coverage.ts` `words()` uses (so smart quotes / spacing don't misalign). `aliasMap` collapses truth↔predicted id differences (alias-merge / id-stability): apply it to BOTH ids before comparing. A predicted line whose normalised text isn't in truth is a **`segMismatch`** (segmentation drift — a separate metric, NOT an attribution FP); a truth line with no matching prediction is an FN; a match with the wrong (alias-resolved) id is both an FP and an FN for that line.
 
-**Alignment must tolerate segmentation drift (stage-2 is stochastic).** Do NOT align by index or assert `predicted.length === truth.length` — a fresh analyzer run can segment differently than when the fixture was labelled, so a hard length check would flake on exactly the non-determinism the coverage guard exists for. Instead **align by a normalised-text map**: build `Map<normalisedText, speakerId>` from truth; for each predicted line, look up its normalised text — matched+right id = TP, matched+wrong id = FP&FN, **predicted text not in truth = segmentation-mismatch (report as a separate `segMismatch` count, not silently an FP)**, truth line never matched = FN. Emit `segMismatch` as its own metric so drift is visible without hard-failing. Best practice to keep drift low (Task 1.3 / 5.2): build labelled chapters ON the analyzer's own segmentation — run it once, correct only `speakerId`, never re-segment by hand — so `segMismatch` stays near zero and FP/FN reflects attribution, not segmentation.
+**Alignment must tolerate segmentation drift (stage-2 is stochastic) AND duplicate lines.** Do NOT align by index or assert `predicted.length === truth.length` — a fresh analyzer run can segment differently than when the fixture was labelled, so a hard length check would flake on exactly the non-determinism the coverage guard exists for. **Do NOT use a plain `Map<normalisedText, speakerId>` either** (independent-review finding): repeated dialogue with different speakers — `「はい」` by A then by B, common in the dialogue-heavy CJK chapters W5 mandates — collapses last-write-wins and mis-counts. Instead **align order-aware over occurrences**: group truth lines by normalised text into a queue per key (preserving order), and walk predicted lines in order, consuming the next unused truth occurrence of that text. For each predicted line — matched+right id = TP, matched+wrong id = FP&FN, **normalised text with no remaining truth occurrence = `segMismatch`** (a separate metric, not silently an FP); any truth occurrence never consumed = FN. Emit `segMismatch` so drift is visible without hard-failing. Best practice to keep drift low (Task 1.3 / 5.2): build labelled chapters ON the analyzer's own segmentation — run it once, correct only `speakerId`, never re-segment by hand — so segmentation matches and `segMismatch` stays near zero.
 
 - [ ] **Step 1: Write the failing test** — perfect match scores precision=recall=1.0; a single mis-attribution produces FP=FN=1; an alias map rescues an id rename.
 
@@ -98,6 +98,15 @@ describe('scoreAttribution', () => {
     const pred = [{ text: '"Careful."', characterId: 'char_7' }, { text: 'She said.', characterId: 'narrator' }];
     const s = scoreAttribution(truth, pred, new Map([['char_7', 'mairin']]));
     expect(s.precision).toBe(1);
+  });
+  it('repeated identical text with different speakers is not collapsed', () => {
+    const dup = { chapterText: '', lines: [
+      { text: '「はい」', speakerId: 'a' }, { text: '「はい」', speakerId: 'b' },
+    ] };
+    const pred = [{ text: '「はい」', characterId: 'a' }, { text: '「はい」', characterId: 'b' }];
+    const s = scoreAttribution(dup, pred);
+    expect(s.truePositive).toBe(2); // order-aware: each occurrence matched to its own truth
+    expect(s.falsePositive).toBe(0);
   });
 });
 ```
@@ -130,28 +139,38 @@ describe('scoreAttribution', () => {
 
 **Files:**
 - Modify: `server/src/tts/language-registry.ts` (`LanguageEntry` interface + `ENTRIES` array)
+- Modify: `server/src/tts/detect-language.ts` (`:49-52` — the CJK branch **hardcodes** `supported: false`)
 - Test: `server/src/tts/language-registry.test.ts`, `server/src/tts/detect-language.test.ts`
 
 **Interfaces:**
 - Modify `LanguageEntry`: widen `detect.script` to `'latin' | 'cyrillic' | 'cjk'`; add optional `promptExamples?: { roster: string; attribution: string }` (used in W3).
-- Produces: `getLanguageEntry('zh')` / `('ja')` return entries with `supported: false`.
+- Produces: `getLanguageEntry('zh')` / `('ja')` return entries; `detectManuscriptLanguage` reports `supported` **read through from the registry**, so the W5 flip actually propagates.
 
-- [ ] **Step 1: Write the failing test** — zh/ja resolve, are `supported:false`, and detection now returns them with `supported:false` from the registry (not a hardcode).
+> **CRITICAL (independent-review finding):** the spec's "adding registry rows flips detection automatically" is FALSE as written. `detect-language.ts:49-52` returns a **literal** `{ language, supported: false }` for CJK, bypassing the `result(code)` helper the ru/latin branches use. If left as-is, flipping `zh.supported = true` at W5 does nothing — `POST /api/import` keeps reporting `languageSupported: false`, the confirm gate keeps blocking, and the whole feature is a dead end despite every wave landing green. This task MUST change that branch to `return result(kana > han ? 'ja' : 'zh')`.
+
+- [ ] **Step 1: Write the failing test** — zh/ja resolve in the registry, and (the load-bearing one) a **temporary** registry stub with `zh.supported = true` makes `detectManuscriptLanguage(cjkText)` report `supported: true` — proving detection reads through, not hardcodes. (Since zh ships `supported:false`, assert the read-through via the helper path: e.g. a unit test that spies the registry, or assert the CJK branch calls `result()`; do NOT rely on the false==false coincidence.)
 
 ```ts
 import { describe, it, expect } from 'vitest';
 import { getLanguageEntry, isSupportedLanguage } from './language-registry.js';
+import { detectManuscriptLanguage } from './detect-language.js';
 
 it('zh/ja are registered but not yet supported', () => {
   expect(getLanguageEntry('zh')?.sidecarName).toBe('Chinese');
   expect(getLanguageEntry('ja')?.sidecarName).toBe('Japanese');
   expect(isSupportedLanguage('zh')).toBe(false);
-  expect(isSupportedLanguage('ja')).toBe(false);
+});
+it('detection reads supported THROUGH the registry for CJK (not a hardcode)', () => {
+  // a Japanese sample → ja, and supported mirrors the registry entry (false today)
+  const r = detectManuscriptLanguage('彼は歩いた。彼女は走った。'.repeat(50));
+  expect(r.language).toBe('ja');
+  expect(r.supported).toBe(getLanguageEntry('ja')?.supported ?? false); // read-through, not literal
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.**
-- [ ] **Step 3: Implement** — widen the `detect.script` union; add:
+- [ ] **Step 2: Run to verify it fails** (the registry entries don't exist yet).
+- [ ] **Step 3a: Fix the detection read-through** — in `detect-language.ts:49-52`, replace `return { language: kana > han ? 'ja' : 'zh', supported: false };` with `return result(kana > han ? 'ja' : 'zh');` (the `result` helper reads registry `supported`). Update `detect-language.test.ts:52-56` (which pins CJK→`supported:false`) to assert read-through instead of a literal — and note it will need to accept `true` once W5 flips the rows.
+- [ ] **Step 3b: Implement the registry rows** — widen the `detect.script` union; add:
   ```ts
   { code: 'zh', sidecarName: 'Chinese',  supported: false, detect: { script: 'cjk', iso6393: 'cmn' },
     headingLexicon: { keywords: ['章', '部', '巻', '節', '幕'], numberWords: [], standalone: ['序章', '終章', '序', '跋', 'プロローグ', 'エピローグ'] },
@@ -178,16 +197,17 @@ it('zh/ja are registered but not yet supported', () => {
 **Interfaces:**
 - `splitParagraphIntoSentences(para, charBudget)` signature unchanged; behaviour gains a CJK branch (self-detecting).
 
-**Design note:** keep the existing Latin path. Add: if the paragraph contains Han/Kana (`/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u`) and the Latin split yields ≤1 unit, split via `Intl.Segmenter(lang, { granularity: 'sentence' })` where `lang` is `'ja'` if any Kana present else `'zh'`. Reassemble under `charBudget` exactly as the Latin path does.
+**Design note:** keep the existing Latin path. Add: if the paragraph contains Han/Kana (`/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u`) and the Latin split yields ≤1 unit, split via `Intl.Segmenter(lang, { granularity: 'sentence' })` where `lang` is `'ja'` if any Kana present else `'zh'`. Reassemble under `charBudget` — but **join CJK segments with NO separator** (independent-review finding: the Latin reassembly joins packed sentences with a space at `stage2-chunk.ts:133`, `` `${cur} ${s}` ``; injecting ASCII spaces into CJK prose is lossy — `chunks.join('')` would no longer equal `para`). Use an empty joiner on the CJK branch.
 
 - [ ] **Step 1: Write the failing test** — a spaceless CJK paragraph with three `。` sentences splits into ≥3 chunks under a small budget (today it returns `[para]`).
 
 ```ts
-it('splits a spaceless CJK paragraph on 。 boundaries', () => {
+it('splits a spaceless CJK paragraph on 。 boundaries, lossless with no injected spaces', () => {
   const para = '彼は歩いた。彼女は走った。二人は止まった。';
-  const chunks = splitParagraphIntoSentences(para, 6); // tiny budget forces splitting
+  const chunks = splitParagraphIntoSentences(para, 14); // packs ~2 segments/chunk → exercises the joiner
   expect(chunks.length).toBeGreaterThan(1);
-  expect(chunks.join('')).toBe(para); // lossless
+  expect(chunks.join('')).toBe(para);        // no ASCII space injected (would fail with the Latin space-join)
+  expect(chunks.join('')).not.toContain(' '); // belt-and-suspenders
 });
 ```
 
@@ -229,17 +249,19 @@ it('flags a CJK short-dialogue repeat-loop the <8 key floor used to miss', () =>
 
 **Design note:** two Latin assumptions break for CJK — `line.length < 60` (CJK is denser) and `/\p{Ll}/u` (never matches caseless Han/Kana). Self-detecting fix: if the line contains Han/Kana, treat it as narrative when it has a CJK sentence ender (`[。！？…]`) and length ≥ a lower CJK threshold (e.g. 15), bypassing the lowercase test.
 
-- [ ] **Step 1: Write the failing test** — a real CJK narrative sentence is recognised as narrative (ends the front-matter region); a short CJK heading is not.
+- [ ] **Step 1: Write the failing test.** **NOTE (independent-review finding):** `isNarrativeLine` only controls WHEN the author/title-echo strip region ends; with `opts = {}` nothing is ever stripped, so a test with no author/title echo passes trivially and guards nothing. The failing test needs an author/title echo line placed AFTER a CJK narrative line — today the narrative line is mis-classified (never narrative → region stays open → the later echo is wrongly stripped); after the fix the narrative line closes the region and the echo survives.
 
 ```ts
-it('treats a CJK narrative line as narrative (not front-matter)', () => {
-  const body = '献辞\n\n彼は古い石段の上で足を止め、霧に沈んだ谷を見下ろした。';
-  const out = stripFrontMatterBoilerplate(body, {});
-  expect(out).toContain('彼は古い石段'); // narrative kept
+it('a CJK narrative line closes the front-matter region so a later author echo is NOT stripped', () => {
+  // 献辞 (dedication) → narrative line → then a line equal to the author name
+  const body = '献辞\n\n彼は古い石段の上で足を止め、霧に沈んだ谷を見下ろした。\n\n田中太郎';
+  const out = stripFrontMatterBoilerplate(body, { author: '田中太郎' });
+  expect(out).toContain('彼は古い石段');   // narrative kept
+  expect(out).toContain('田中太郎');        // author echo AFTER a real narrative line is NOT front-matter
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails** (`\p{Ll}` never matches → line treated as front-matter, potentially stripped).
+- [ ] **Step 2: Run to verify it fails** (`\p{Ll}` never matches Han/Kana → the narrative line never closes the region → the trailing `田中太郎` is stripped as a byline echo).
 - [ ] **Step 3: Implement** the self-detecting CJK branch in `isNarrativeLine`.
 - [ ] **Step 4: Run to verify it passes;** English/Russian tests stay green.
 - [ ] **Step 5: Commit** — `fix(server): CJK-aware isNarrativeLine (fs-59 W2)`.
@@ -257,13 +279,15 @@ it('treats a CJK narrative line as narrative (not front-matter)', () => {
 ```ts
 it('estimateInputTokens: CJK uses ~1.2 chars/token', async () => {
   const { estimateInputTokens } = await import('./gemini.js');
-  const cjk = '彼は歩いた'.repeat(200); // 1000 CJK chars ≈ ~830 tokens at 1.2
+  const cjk = '彼は歩いた'.repeat(200); // 1000 CJK chars ≈ ~833 tokens at 1.2
   const est = estimateInputTokens('', wrap(cjk));
-  expect(est).toBeGreaterThan(600); // far above the Latin /4 = 250
+  // NOTE (independent-review): current code = ceil(1000/4) + 1000 flat margin (gemini.ts:898) = 1250,
+  // so the bound MUST exceed 1250 to actually fail before the fix (post-fix ≈ 833 + 1000 = 1833).
+  expect(est).toBeGreaterThan(1500);
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.**
+- [ ] **Step 2: Run to verify it fails** (current: 1250 < 1500).
 - [ ] **Step 3: Implement** the CJK constant + fraction measurement.
 - [ ] **Step 4: Run to verify it passes;** existing Latin/Cyrillic assertions stay green.
 - [ ] **Step 5: Commit** — `feat(server): CJK token-estimate divisor (fs-59 W2)`.
@@ -278,24 +302,51 @@ it('estimateInputTokens: CJK uses ~1.2 chars/token', async () => {
 
 **Entry point (verified):** the splitter is `parseText(text, { format })` (`parsers/text.ts:231`), which tests `normaliseHeading(line)` against `CHAPTER_HEADING_RE` (`:51`, applied `:271`) and flushes a chapter per match. `normaliseHeading` (`:127`) only strips edge non-`\p{L}\p{N}` chars, so `第一章`/`第2章` survive intact (all Han/digit); `MAX_HEADING_LEN` (120) is fine for short CJK headings. **So the ONLY change is `CHAPTER_HEADING_RE` — no `normaliseHeading` change needed.**
 
-**Design note:** add a CJK alternative to `CHAPTER_HEADING_RE`: `第[0-9〇一二三四五六七八九十百千]+[章話回節部幕]` (Arabic OR kanji numerals; the common circumfix enders). Also make the STANDALONE match `\p{Script=Han}`/Katakana-aware for `序章`/`終章`/`プロローグ` (the trailing `\b` is unreliable after CJK — anchor on line end / punctuation instead). Self-detecting (the pattern only fires on CJK glyphs); no book-language threading.
+**Design note — must be WHOLE-LINE anchored (independent-review finding: a naive prefix regex deletes prose).** A prefix-only `^第[…]+[章話…]` misfires on line-initial body sentences — verified with `node`: `第三章で述べたように、…` ("As stated in chapter 3, …") and `第二部隊が丘を越えて進軍した。` (`第N部隊` compound) both MATCH, and in `parseText` a matched line is **consumed as the chapter title and removed from the body** → silent data loss per misfire. Requirements for the CJK alternative:
+- **Anchor the whole line** (or allow only a trailing separator/subtitle): the number+ender must be followed by end-of-normalised-line or a separator (`：:—-　` / whitespace), NOT arbitrary prose. e.g. `^第[0-9０-９〇一二三四五六七八九十百千]+[章話回節部幕巻](?:\s|[：:—-]|$)` and reject if the line continues with kana/particles (`で`, `が`, `の`, `は`…).
+- **Include fullwidth digits** `０-９` (U+FF10–FF19) — common in JA headings; verified the kanji-only class misses `第１章`.
+- **CJK-appropriate length cap** — `MAX_HEADING_LEN` (120) is ~2 CJK sentences; a real CJK heading is short, so gate the CJK branch on a tighter length (e.g. ≤ 20 chars) to refuse `第三章で述べた…`.
+- Make the STANDALONE match `\p{Script=Han}`/Katakana-aware for `序章`/`終章`/`プロローグ` (trailing `\b` unreliable after CJK — anchor on line end).
+Self-detecting (fires only on CJK glyphs); no book-language threading.
 
-- [ ] **Step 1: Write the failing test** — a body with `第一章`, `第2章`, `第十二話` headings splits into 3 chapters; a mid-paragraph `章` does not misfire.
+- [ ] **Step 1: Write the failing test** — headings split; **the misfire cases do NOT** (this is the load-bearing guard).
 
 ```ts
 import { parseText } from './text.js';
 
-it('splits a CJK book on 第N章 / 第N話 circumfix headings', () => {
-  const body = '第一章\n\n彼は歩いた。\n\n第2章\n\n彼女は走った。\n\n第十二話\n\n終わり。';
+it('splits CJK headings but does not eat 第N-prefixed prose', () => {
+  const body = [
+    '第一章', '', '彼は歩いた。第三章で述べたように、彼は振り返らなかった。', '',
+    '第２章', '', '第二部隊が丘を越えて進軍した。二人は止まった。', '',
+    '第十二話', '', '終わり。',
+  ].join('\n');
   const { chapters } = parseText(body, { format: 'plaintext' });
-  expect(chapters.length).toBe(3);
+  expect(chapters.length).toBe(3);                       // 第一章 / 第２章 / 第十二話
+  expect(chapters.map((c) => c.body).join('')).toContain('第三章で述べた'); // prose NOT deleted
+  expect(chapters.map((c) => c.body).join('')).toContain('第二部隊が丘');   // compound NOT a title
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails** (`cd server && npx vitest run src/parsers/text.test.ts` — today: 1 chapter, the circumfix never matches).
-- [ ] **Step 3: Implement** the CJK alternative in `CHAPTER_HEADING_RE` + kanji-numeral class + CJK-aware standalone anchoring.
-- [ ] **Step 4: Run to verify it passes;** confirm English/ES/RU heading tests stay green (the new alternative only fires on CJK glyphs).
+- [ ] **Step 2: Run to verify it fails** (`cd server && npx vitest run src/parsers/text.test.ts` — today: 1 chapter; a naive regex would instead delete the two prose lines).
+- [ ] **Step 3: Implement** the whole-line-anchored CJK alternative in `CHAPTER_HEADING_RE` + fullwidth+kanji numerals + the tighter CJK length gate + CJK-aware standalone.
+- [ ] **Step 4: Run to verify it passes;** confirm English/ES/RU heading tests stay green (the new alternative only fires on CJK glyphs, whole-line anchored).
 - [ ] **Step 5: Commit** — `fix(server): CJK 第N章 chapter-heading split (fs-59 W2)`.
+
+### Task 2.7: CJK word-count / front-matter miscount at import (independent-review finding)
+
+**Files:**
+- Modify: `server/src/routes/import.ts` (`countWords` `:73`; `isLikelyFrontMatter` `:161-163`)
+- Test: `server/src/routes/import.test.ts`
+
+**Why:** `countWords` (`:73`) splits on `\s+`; a spaceless CJK chapter yields ~1 "word" per paragraph, so a full CJK novel chapter counts ~30–60 "words" and trips `isLikelyFrontMatter: … || (wordCount > 0 && wordCount <= FRONT_MATTER_WORD_THRESHOLD /*150*/)` (`:161-163`). Result: **every chapter of a CJK book is pre-ticked for exclusion** on the confirm screen, and the book-level `wordCount` is nonsense — so "a CJK book splits into chapters" (issue acceptance) is hollow because the chapters are then auto-excluded.
+
+**Design note:** make the word count script-aware — for CJK text, count Han/Kana characters as word-equivalents (or divide char-count by ~1.7) rather than whitespace tokens. Self-detecting on Han/Kana presence; keep the Latin path byte-identical.
+
+- [ ] **Step 1: Write the failing test** — a spaceless CJK chapter of ~2000 characters is NOT flagged `isLikelyFrontMatter` and reports a plausible word count (hundreds, not ~40).
+- [ ] **Step 2: Run to verify it fails** (CJK chapter counts ~40 "words" → flagged front-matter).
+- [ ] **Step 3: Implement** the script-aware count.
+- [ ] **Step 4: Run to verify it passes;** English/Latin import tests stay green.
+- [ ] **Step 5: Commit** — `fix(server): CJK-aware import word count / front-matter flag (fs-59 W2)`.
 
 ---
 
@@ -323,21 +374,22 @@ it('registers zh/ja conventions', () => {
 
 - [ ] **Step 2: Run to verify it fails.**
 - [ ] **Step 3: Implement** both files + register in `TABLES`.
-- [ ] **Step 4: Add a `parser.test.ts` case** — a JA line `「気をつけて」と彼女は言った。` attributes the spoken span to the speaker and the tag to narrator (the §2.1 interrupted-quote defect target). Run; PASS.
+- [ ] **Step 4: Add a `parser.test.ts` case** — a JA line `「気をつけて」と彼女は言った。` attributes the spoken span to the speaker and the tag to narrator (the §2.1 interrupted-quote defect target). Run; PASS. **NOTE (independent-review):** `彼女` is a *pronoun* — it passes via the pronoun regex and masks the fact that NAME-tag anchoring is broken for CJK (Task 3.5). Add a SECOND case using a roster NAME tag (`「わかった」と田中は言った。` → 田中) which will FAIL until Task 3.5 lands — keep it (skipped/xfail) as the driver for 3.5, so this task doesn't falsely imply name-attribution works.
 - [ ] **Step 5: Commit** — `feat(server): CJK dialogue-structure conventions zh/ja (fs-59 W3)`.
 
-### Task 3.2: CJK quote glyphs in audio-tags + roster-coverage
+### Task 3.2: CJK quote glyphs in audio-tags (roster-coverage half is moot for CJK)
 
 **Files:**
-- Modify: `server/src/parsers/audio-tags.ts` (`QUOTE_OPENS`/`QUOTE_CLOSES`, `:22`)
-- Modify: `server/src/analyzer/roster-coverage.ts` (`QUOTE_CHARS_WIDE`, `:171`)
-- Test: the colocated `*.test.ts` for each
+- Modify: `server/src/parsers/audio-tags.ts` (`QUOTE_OPENS`/`QUOTE_CLOSES`, `:22-23`)
+- Test: `server/src/parsers/audio-tags.test.ts`
 
-- [ ] **Step 1: Write failing tests** — an audio-tag inside `「…」` is detected; a roster tag scan recognises a `「」`-quoted line.
-- [ ] **Step 2: Run to verify they fail.**
-- [ ] **Step 3: Implement** — add `「『` to opens, `」』` to closes; add the same to `QUOTE_CHARS_WIDE`.
-- [ ] **Step 4: Run to verify they pass.**
-- [ ] **Step 5: Commit** — `feat(server): CJK quote glyphs in audio-tags + roster guard (fs-59 W3)`.
+**Scope correction (independent-review finding):** do NOT add `「」` to `roster-coverage.ts` `QUOTE_CHARS_WIDE` — `validateRosterCoverage` early-returns `{ ok: true }` when `grammarFor(language)` is null (`roster-coverage.ts:189-190`), and Task 3.4 deliberately leaves zh/ja unmapped, so that half is **unreachable dead code** for CJK. Only the audio-tags half is real. Also: the audio-tag detectors trigger on ASCII cues (e.g. `!` at `audio-tags.ts:98`, `…`); adding corner-bracket *quote* glyphs alone does NOT make `[excited]` fire on a fullwidth `！`. Scope this task to: (a) add `「『` to `QUOTE_OPENS` / `」』` to `QUOTE_CLOSES` so a tag INSIDE corner brackets is found, and (b) decide per-detector whether to add fullwidth `！？。…` triggers or document the deferral (fullwidth-punctuation audio-tag detection is a nice-to-have, not an acceptance item).
+
+- [ ] **Step 1: Write the failing test** — a bracketed audio tag like `「[whisper] 静かに」` (or the detector's real trigger form) is recognised inside `「…」` (name the concrete detector under test).
+- [ ] **Step 2: Run to verify it fails.**
+- [ ] **Step 3: Implement** — add `「『`/`」』` to the quote sets; add fullwidth punctuation triggers only where a paired detector genuinely needs it.
+- [ ] **Step 4: Run to verify it passes.**
+- [ ] **Step 5: Commit** — `feat(server): CJK quote glyphs in audio-tag detectors (fs-59 W3)`.
 
 ### Task 3.3: CJK prompt hints + in-language few-shot examples
 
@@ -352,12 +404,18 @@ it('registers zh/ja conventions', () => {
 
 ```ts
 it('languagePreamble carries CJK conventions + in-language examples', () => {
-  expect(languagePreamble('ja')).toMatch(/「」|Japanese/);
-  expect(languagePreamble('zh')).toMatch(/“”|「」|Chinese/);
+  // NOTE (independent-review): do NOT assert on the language NAME — after Task 2.1
+  // registers the rows, `where` already contains "Japanese"/"Chinese" (gemini.ts:233),
+  // so /Japanese/ passes before any W3 change. Assert on the CJK-specific convention
+  // text + the in-language few-shot marker instead.
+  const ja = languagePreamble('ja');
+  expect(ja).toContain('「');                 // corner-bracket convention hint (new in W3)
+  expect(ja).toMatch(/tag[^]*narrator|話者ではない/); // interrupted-quote/tag-is-narrator few-shot
+  expect(languagePreamble('zh')).toContain('“'); // zh fullwidth-quote hint
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.**
+- [ ] **Step 2: Run to verify it fails** (the registered `where` string has the language name but none of the CJK convention text yet).
 - [ ] **Step 3: Implement** — add the zh/ja conventions strings + wire `promptExamples`.
 - [ ] **Step 4: Run to verify it passes.**
 - [ ] **Step 5: Commit** — `feat(server): CJK prompt conventions + in-language few-shot (fs-59 W3)`.
@@ -376,6 +434,22 @@ it('languagePreamble carries CJK conventions + in-language examples', () => {
 - [ ] **Step 4: Run to verify green.**
 - [ ] **Step 5: Commit** — `docs(server): document tag-grammar gate-off for CJK (fs-59 W3)`.
 
+### Task 3.5: CJK-aware roster-name tag anchoring (independent-review finding)
+
+**Files:**
+- Modify: `server/src/analyzer/dialogue-structure/name-matcher.ts` (`findRosterName`, `:27-35`)
+- Test: `server/src/analyzer/dialogue-structure/name-matcher.test.ts` + the 3.1 name-tag `parser.test.ts` case
+
+**Why:** `findRosterName` tokenises the tag clause with `text.toLowerCase().split(/[^\p{L}]+/u)` (`:27`). A CJK tag clause like `と田中は言った` has **no non-letter separators → one token**; with the identity `nameStemmer` (Task 3.1) the "stem" is the whole clause, so the roster lookup keyed by `田中` never hits. Result: `tag-name` evidence — the **highest-precedence** attribution anchor (`parser.ts:53-55`) — **never fires for CJK**; only the pronoun regexes work. This substantially weakens CJK attribution (and the §2.1 interrupted-quote fix leans on it).
+
+**Design note:** add a CJK branch to `findRosterName`: when the clause contains Han/Kana, match roster name stems by **substring containment** (does the clause contain any indexed Han name stem?) instead of whitespace tokenisation. Prefer the longest match; guard against 1-char stems causing false hits (require ≥2 Han chars, or the roster name's own length). Keep the Latin/Cyrillic tokenised path unchanged.
+
+- [ ] **Step 1: Write the failing test** — `findRosterName('と田中は言った', index)` returns the `田中` roster id (today: null). Also un-skip the 3.1 name-tag `parser.test.ts` case (`「わかった」と田中は言った。` → 田中).
+- [ ] **Step 2: Run to verify it fails.**
+- [ ] **Step 3: Implement** the substring-containment CJK branch.
+- [ ] **Step 4: Run to verify it passes;** Latin/Russian name-matching tests stay green.
+- [ ] **Step 5: Commit** — `fix(server): CJK substring roster-name tag anchoring (fs-59 W3)`.
+
 ---
 
 ## Wave 4 — CJK synthesis, both engines (sidecar + server)
@@ -387,6 +461,8 @@ it('languagePreamble carries CJK conventions + in-language examples', () => {
 - Test: `server/tts-sidecar/tests/test_calibration_text.py` (create if absent)
 
 **Design note:** add phonetically-rich `"Chinese"` and `"Japanese"` rows keyed by the sidecar language word (matching `sidecarName`). Today `_calibration_text()` falls back silently to the English pangram for any unmapped language — a CJK designed voice would fix the wrong phoneme set.
+
+**Wave-ordering note (independent-review finding — F9):** registering zh/ja in Task 2.1 makes `sidecarLanguageName('zh')` return `'Chinese'` instead of throwing, so the spec's "CJK can't reach the sidecar" fail-loud net is gone from W2 on, while calibration lands only here (W4a). The practical guard in the W2–W4a window is that zh/ja are `supported:false`, so the confirm gate blocks the book before design/synth — but to remove the latent wrong-phoneme-bake risk entirely, **land this task (4a.1) in the same PR wave as the registry rows (or immediately after), and do NOT attempt any on-box CJK voice design until it is merged.** If W2 and W4a must ship far apart, keep zh/ja out of the registry until calibration exists.
 
 - [ ] **Step 1: Write the failing pytest** — `_calibration_text('Chinese')` and `('Japanese')` return CJK text (contain Han/Kana), not the English pangram.
 - [ ] **Step 2: Run** `npm run test:sidecar` → FAIL (falls back to English).
@@ -428,25 +504,28 @@ it('zh/ja are eligible on qwen + coqui', () => {
 
 - [ ] **Step 2: Run to verify it fails.**
 - [ ] **Step 3: Implement** — add `'zh','ja'` to the `coqui` array.
-- [ ] **Step 4: Run to verify it passes;** confirm the fs-60 eligibility tests stay green.
+- [ ] **Step 4: Run to verify it passes.** **NOTE (independent-review):** this BREAKS a pinned fs-60 test — `language.test.ts:93-95` asserts `resolveEligibleEngines('zh', ALL_TTS_ENGINES)` `.toEqual(['qwen'])`. Update it in THIS commit to `['coqui','qwen']` (it exists precisely to pin zh as Qwen-only; that invariant is what this task changes). Confirm the OTHER fs-60 eligibility tests stay green.
 - [ ] **Step 5: Commit** — `feat(server): Coqui XTTS eligible for zh/ja (fs-59 W4b)`.
 
 ### Task 4b.2: `zh`→`zh-cn` Coqui language-code map
 
 **Files:**
 - Create: a small helper `coquiLanguageCode(bcp47: string): string` (in `server/src/tts/voice-mapping.ts` or `language.ts`)
-- Modify: `server/src/tts/synthesise-chapter.ts` — apply the map at the **Coqui provider call only** (NOT at the shared `langCode` resolution `:884`, which feeds `expandForSpeech` and must keep the registry code `zh`)
-- Test: `server/src/tts/synthesise-chapter-coqui-fallback.test.ts`
+- Modify: `server/src/tts/sidecar.ts` — apply the map inside `SidecarTtsProvider.synthesize` (`:100-105`), which already knows `this.engine === 'coqui'`. **This is the single clean seam** (independent-review finding) — cleaner than branching on `route.engine` at the two generic `provider.synthesize` call sites in `synthesise-chapter.ts` (`:1068`, `:1273`), and it does NOT touch the shared `langCode` (which feeds `expandForSpeech` and must keep the registry code `zh`).
+- Modify: `server/src/routes/voice-sample.ts` (`:145`) — **also thread `language` here** (see below).
+- Test: `server/src/tts/sidecar.test.ts` + `server/src/routes/voice-sample.test.ts`
 
-- [ ] **Step 1: Write the failing test** — a Coqui zh synth call carries `language: 'zh-cn'` (use the verified 4b.0 string); `ja` stays `ja`; a non-CJK language is unchanged.
-- [ ] **Step 2: Run to verify it fails.**
-- [ ] **Step 3: Implement** `coquiLanguageCode` (identity except `zh`→`zh-cn`) and apply it only where the Coqui provider receives its `language`.
-- [ ] **Step 4: Run to verify it passes;** assert the Qwen/ASR paths still see `zh` (no leak).
-- [ ] **Step 5: Commit** — `feat(server): zh→zh-cn Coqui language-code map (fs-59 W4b)`.
+**Second gap (independent-review finding):** `voice-sample.ts:145` calls `provider.synthesize({ text, voiceName, modelKey })` with **no `language`**, so a CJK Coqui voice sample renders through the English phonemiser (`COQUI_LANGUAGE='en'` default, `main.py:915,1105`) even after the map lands — and the Task 4b.3 listen-gate would false-fail if driven through the sample button. Thread the book/character language into this call too.
+
+- [ ] **Step 1: Write the failing tests** — (a) `SidecarTtsProvider('coqui').synthesize({..., language: 'zh'})` sends `zh-cn` (the verified 4b.0 string) in the request body; `ja` stays `ja`; Qwen/other engines pass language through unchanged. (b) `voice-sample.ts` forwards the language to `provider.synthesize`.
+- [ ] **Step 2: Run to verify they fail.**
+- [ ] **Step 3: Implement** `coquiLanguageCode` (identity except `zh`→`zh-cn`), apply it in `SidecarTtsProvider.synthesize` for the coqui engine, and thread language through `voice-sample.ts`.
+- [ ] **Step 4: Run to verify they pass;** assert the Qwen/ASR paths still see `zh` (no leak).
+- [ ] **Step 5: Commit** — `feat(server): zh→zh-cn Coqui language-code map + voice-sample language (fs-59 W4b)`.
 
 ### Task 4b.3: Coqui CJK output validation (on-box, procedure)
 
-- [ ] Render a short ZH and JA line through Coqui XTTS with an existing `COQUI_PROFILE_VOICES` speaker. Confirm audio is intelligible CJK (cross-lingual voice cloning). Only if quality is unacceptable, curate a CJK speaker subset — otherwise no code. Record the result for the W5 gate.
+- [ ] Render a short ZH and JA line through Coqui XTTS with an existing `COQUI_PROFILE_VOICES` speaker, **via a path that carries language** (a chapter render, or the sample button AFTER Task 4b.2 threads language — not before, or it renders English). Confirm audio is intelligible CJK (cross-lingual voice cloning). Only if quality is unacceptable, curate a CJK speaker subset — otherwise no code. Record the result for the W5 gate.
 
 ---
 
@@ -485,24 +564,30 @@ Not desk-verifiable — needs the GPU box, real weights, the operator's ears, an
 
 ## Self-Review — spec coverage
 
-- Registry rows / detection flip → 2.1 ✓
-- **CJK chapter splitting (第N章 circumfix) → 2.6 ✓ (acceptance-critical; NOT the heading lexicon)**
+- Registry rows + **detection read-through fix** (`detect-language.ts:51` hardcode) → 2.1 ✓
+- **CJK chapter splitting (第N章 circumfix, whole-line anchored) → 2.6 ✓ (acceptance-critical; NOT the heading lexicon)**
+- **CJK import word-count / front-matter miscount → 2.7 ✓ (else every CJK chapter auto-excluded)**
 - Coverage guard (dup-key floor only; word-count ruled out) → 2.3 ✓
-- Sentence split → 2.2 ✓; isNarrativeLine → 2.4 ✓; token divisor → 2.5 ✓
-- Dialogue conventions zh/ja → 3.1 ✓; quote glyphs → 3.2 ✓; prompt few-shot + `promptExamples` field → 3.3 (field added 2.1) ✓; tag-grammar gate-off → 3.4 ✓
-- Qwen calibration → 4a.1 ✓; emotion/nudge → 4a.2 ✓
-- Coqui: zh-cn pre-check → 4b.0 ✓; eligibility → 4b.1 ✓; code map → 4b.2 ✓; output validation → 4b.3 ✓
-- Attribution eval harness (W1, own PR) → 1.1–1.3 ✓
+- Sentence split (no-space CJK join) → 2.2 ✓; isNarrativeLine → 2.4 ✓; token divisor → 2.5 ✓
+- Dialogue conventions zh/ja → 3.1 ✓; **CJK roster-name tag anchoring → 3.5 ✓ (else only pronouns attribute)**; quote glyphs (audio-tags only; roster half moot) → 3.2 ✓; prompt few-shot + `promptExamples` field → 3.3 (field added 2.1) ✓; tag-grammar gate-off → 3.4 ✓
+- Qwen calibration (land with/near W2 registry rows — F9) → 4a.1 ✓; emotion/nudge → 4a.2 ✓
+- Coqui: zh-cn pre-check → 4b.0 ✓; eligibility (+ update pinned test) → 4b.1 ✓; code map (SidecarTtsProvider seam + voice-sample) → 4b.2 ✓; output validation → 4b.3 ✓
+- Attribution eval harness (W1, own PR; order-aware scorer) → 1.1–1.3 ✓
 - Fixtures / labelling / harness run / audio gate / flip / fs-70 reconcile → 5.1–5.5 ✓
-- Korean explicitly excluded (Global Constraints) ✓
-- Independent per-language flip (D2) → 5.5 Step 1 ✓
+- Korean explicitly excluded (Global Constraints) ✓; independent per-language flip (D2) → 5.5 Step 1 ✓
+- Spec Risk 5 (messy real-world fixture): a W2 fixture MUST include a chapter with mixed ASCII/fullwidth punctuation, U+3000 ideographic spaces, and a `第N章`-headed multi-chapter body — add it to the 2.2/2.6/2.7 fixtures.
 
 ## Notes for the implementer
 
-- Read spec §2.1 before Task 2.3 — the coverage fix is the dup-key floor ONLY; do not add word-level counting (verified irrelevant: ratio is scale-invariant).
-- **Task 2.6 is acceptance-critical** — CJK chapter splitting is a #1004 requirement and does NOT come from the heading lexicon (wrong regex shape). Verify the `parsers/text.ts` chapter-split entry-point name when implementing.
-- **The eval-harness scorer (1.2) assumes truth and predictions share segmentation** — always build labelled chapters on the analyzer's own output and correct only ids; the scorer flags a length/segmentation mismatch loudly rather than scoring misaligned pairs.
-- The heading/front-matter/speech-verb/calibration term lists in W2–W4 are starting sets; a native ZH/JA reviewer refines them at W5. Include **kanji numerals** (一二三…十百) in the 2.6 heading number class, not just Arabic digits.
-- Known-accepted v1 limits (do not over-engineer): the `ja` male-pronoun `/彼(?!女)/` still matches 彼ら/彼氏; a 1-char CJK dup key (`「え」`) is below the floor-2 dup-detector and can evade a pure 1-char-line loop. Both pathological; leave them.
+_Findings from an independent adversarial review are folded into the tasks above. The highest-consequence ones:_
+- **`detect-language.ts:49-52` hardcodes `supported:false` for CJK** — Task 2.1 MUST change it to read through the registry, or the W5 flip is a no-op and the whole feature is a dead end (Task 2.1 CRITICAL note).
+- **Task 2.6 regex must be whole-line anchored** — a naive prefix `^第[…]+[章…]` matches `第三章で述べた…` and `第N部隊…` and `parseText` then DELETES that prose as a title. Include fullwidth `０-９` + kanji numerals; cap CJK heading length.
+- **Task 2.7** — a spaceless CJK chapter counts ~40 whitespace "words" → pre-ticked front-matter → auto-excluded; the chapter-split win is hollow without this.
+- **Task 3.5** — `findRosterName` splits on `[^\p{L}]+`, so a CJK name tag is one token and never matches the roster; without the substring fix, CJK attribution rides on pronouns + prompt only.
+- **Three placebo tests fixed** (2.4 needs an author echo; 2.5 must exceed the +1000 flat margin, bound > 1500; 3.3 must not assert on the language name — it's already in `where`). Honour "verify it fails."
+- Read spec §2.1 before Task 2.3 — the coverage fix is the dup-key floor ONLY; word-level counting is verified irrelevant (ratio scale-invariant).
+- Scorer (1.2): order-aware occurrence matching, NOT a `Map` (duplicate lines with different speakers must not collapse); tolerate segmentation drift via `segMismatch`, never a hard length assertion.
+- Term lists in W2–W4 are starting sets; a native ZH/JA reviewer refines them at W5.
+- Known-accepted v1 limits (do not over-engineer): `ja` `/彼(?!女)/` still matches 彼ら/彼氏; a 1-char CJK dup key evades the floor-2 dup-detector. Pathological; leave them.
 - W4b.0 is a hard gate: verify XTTS's Chinese code before writing the map.
 - W1 is a standalone PR; W2/W3 are server-only and can each be 1–2 PRs; W4/W5 are the operator-gated tail.
