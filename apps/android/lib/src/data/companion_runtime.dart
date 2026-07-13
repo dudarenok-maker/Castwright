@@ -319,6 +319,7 @@ class CompanionRuntime {
     }
     audioHandler?.detach();
     await player.dispose();
+    await api.dispose(); // force-close the owned pinned clients (#1579)
     await library.close();
   }
 }

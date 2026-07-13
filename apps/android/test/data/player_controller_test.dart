@@ -62,11 +62,18 @@ class FakeAudioEngine implements AudioEngine {
     calls.add('set:$path');
   }
 
+  /// When set, [setStreamUrl] suspends on this gate before it confirms — lets a
+  /// test fire a late error from the OUTGOING stream *while* the incoming stream
+  /// is still loading (the app-10 misattribution window, #1579).
+  Completer<void>? streamGate;
+
   @override
   Future<void> setStreamUrl(String url, {Map<String, String>? headers}) async {
     if (throwOnStream) {
       throw Exception('stream load failed');
     }
+    final gate = streamGate;
+    if (gate != null) await gate.future;
     loadedPath = url;
     _position = Duration.zero;
     calls.add('stream:$url');
@@ -928,8 +935,9 @@ void main() {
 
       // Double-fire idempotency (the load-bearing property): a subsequent
       // errorStream event for the SAME failed load must be a no-op, because
-      // _handleStreamFailure already flipped _currentIsStream to false. Without
-      // the guard, this would route a second time (emitted == ['u1', 'u1']).
+      // _handleStreamFailure already nulled _streamingGen (so the errorStream
+      // closure now passes a null gen). Without the guard, this would route a
+      // second time (emitted == ['u1', 'u1']).
       engine.emitError('late');
       await Future<void>.delayed(Duration.zero);
       expect(emitted, ['u1'],
@@ -990,6 +998,58 @@ void main() {
             x.startsWith('set:') || x.startsWith('stream:') || x == 'play'),
         isEmpty,
       );
+    });
+
+    test(
+        'a late error from the OUTGOING stream is ignored while switching to a '
+        'new stream (no misattributed failure for the incoming chapter) (#1579)',
+        () async {
+      final engine = FakeAudioEngine();
+      final proxy = FakeProxy();
+      const two = [
+        PlayableChapter(uuid: 'u1', path: '/b1/u1.mp3', audioUrl: '/api/books/b1/chapters/1/audio.mp3'),
+        PlayableChapter(uuid: 'u2', path: '/b1/u2.mp3', audioUrl: '/api/books/b1/chapters/2/audio.mp3'),
+      ];
+      var repaired = 0;
+      final pc = PlayerController(
+        audioEngine: engine,
+        playbackStore: MemPlaybackStore(),
+        playlistLoader: (_) async => two,
+        clock: () => DateTime.utc(2026, 6, 6),
+        streaming: await cfg(proxy, streamOn: true, onLan: true, onRepair: () => repaired++),
+      );
+      await pc.openBook('b1'); // u1 streams and confirms
+      final emitted = <String>[];
+      pc.needsDownloadStream.listen(emitted.add);
+      final clearsBefore = proxy.clears;
+
+      // Begin switching to u2 (also a stream) but hold its load mid-flight so the
+      // incoming stream is NOT yet confirmed when the stale error arrives.
+      engine.streamGate = Completer<void>();
+      final switching = pc.playChapter('u2');
+      await Future<void>.delayed(Duration.zero);
+
+      // A late teardown error from the OUTGOING u1 stream lands during u2's load.
+      proxy.lastUpstreamStatus = 404; // as if it were u1's failing status
+      engine.emitError('u1 late teardown');
+      await Future<void>.delayed(Duration.zero);
+
+      // It must NOT be routed as u2's failure.
+      expect(emitted, isEmpty,
+          reason: 'a superseded stream error must not download-to-play the incoming chapter');
+      expect(repaired, 0);
+      expect(proxy.clears, clearsBefore,
+          reason: 'the incoming stream mapping must not be cleared by a stale error');
+
+      // u2 finishes loading and becomes the confirmed stream.
+      engine.streamGate!.complete();
+      await switching;
+      expect(engine.calls, contains('stream:http://127.0.0.1:9/s/id'));
+
+      // Sanity: a genuine mid-stream error for u2 now DOES route.
+      engine.emitError('u2 real failure');
+      await Future<void>.delayed(Duration.zero);
+      expect(emitted, ['u2']);
     });
 
     test('dispose disposes the proxy', () async {

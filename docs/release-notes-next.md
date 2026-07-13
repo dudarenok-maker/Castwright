@@ -63,5 +63,6 @@ this cycle append to this draft rather than opening a new one.
 ## 📱 Companion app
 
 - **app-10 — Stream-over-LAN instant play (companion).** An undownloaded chapter now plays instantly over the home LAN via an in-app loopback proxy that re-serves CA-pinned HTTPS audio as plaintext to the native player — no OS cert install, token never leaves the app. Failure degrades cleanly to download-to-play (or a re-pair prompt on an expired device token). (#553)
+- **app-10 follow-ups: stream→stream late-error isolation + `ApiClient.dispose()` (#1579).** Each LAN stream load now carries a generation id (`_streamGen`/`_streamingGen` in `PlayerController`); a late teardown error from an OUTGOING stream that arrives while the next chapter is still loading is recognised as superseded and ignored, instead of being misrouted as the incoming chapter's failure (a stray "download to play" / re-pair). And `ApiClient` gained a `dispose()` that force-closes its three owned pinned `HttpClient`s (JSON send, range download, LAN stream), now called from `CompanionRuntime.dispose()` so a re-pair no longer orphans the old connection pools. Regression tests: the superseded-error case in `player_controller_test.dart` and a new `api_client_dispose_test.dart`.
 
 **Full changelog:** v1.13.0...v1.14.0
