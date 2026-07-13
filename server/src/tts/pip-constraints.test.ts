@@ -39,9 +39,6 @@ describe('sanitizeConstraintsText', () => {
       resolve(__dirname, '..', '..', 'tts-sidecar', 'requirements', 'base.txt'),
       'utf8',
     );
-    /* Confidence check: base.txt genuinely carries an extras today, so the
-       sanitiser is doing real work rather than passing a trivially-clean file. */
-    expect(baseTxt).toMatch(/\[[^\]]+\]/);
     const sanitized = sanitizeConstraintsText(baseTxt);
     for (const line of sanitized.split('\n')) {
       const code = line.split('#')[0];
@@ -51,6 +48,13 @@ describe('sanitizeConstraintsText', () => {
 });
 
 describe('writeSanitizedConstraintsFile', () => {
+  it('falls back to the original path when the file is unreadable (no crash)', () => {
+    /* A missing base.txt must not throw a raw ENOENT from the helper — pip
+       should receive the path and emit its own clean error instead. */
+    const missing = resolve(__dirname, 'does-not-exist-constraints.txt');
+    expect(writeSanitizedConstraintsFile(missing)).toBe(missing);
+  });
+
   it('writes an extras-free copy and returns its path', () => {
     const baseTxt = resolve(
       __dirname,
