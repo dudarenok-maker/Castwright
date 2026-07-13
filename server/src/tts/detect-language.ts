@@ -47,8 +47,9 @@ export function detectManuscriptLanguage(
   const han = sample.match(HAN_RE)?.length ?? 0;
   const kana = sample.match(KANA_RE)?.length ?? 0;
   if ((han + kana) / letters >= SCRIPT_THRESHOLD) {
-    // CJK has no registry entry in this tranche → detected-but-unsupported (fs-59).
-    return { language: kana > han ? 'ja' : 'zh', supported: false };
+    // zh/ja are registered supported:false (fs-59 W2) — read THROUGH the
+    // registry (not a literal) so a later supported:true flip propagates here.
+    return result(kana > han ? 'ja' : 'zh');
   }
 
   /* 3. franc disambiguates Latin, restricted to the registry's Latin codes. */

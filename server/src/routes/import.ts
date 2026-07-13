@@ -70,8 +70,30 @@ function deterministicGradient(seed: string): [string, string] {
   return palette[Math.abs(h) % palette.length];
 }
 
+/* CJK (Han/Kana) scripts don't use inter-word whitespace, so a whitespace
+   split yields ~1 "word" per paragraph — a full CJK chapter then reads as
+   ~30-60 "words" and trips the front-matter word-count floor (fs-59 W2
+   task 2.7). Self-detects on Han/Kana presence: absent CJK chars, this is
+   byte-identical to the original whitespace-split behaviour. When present,
+   CJK chars are stripped to whitespace first (so they aren't ALSO counted
+   as a Latin token) and re-added as char-equivalents at ~1.7 chars/word —
+   the same ratio used elsewhere for CJK reading-time estimates. */
+const HAN_RE = /\p{Script=Han}/gu;
+const KANA_RE = /[\p{Script=Hiragana}\p{Script=Katakana}]/gu;
+const CJK_CHARS_PER_WORD = 1.7;
+
 function countWords(s: string): number {
-  return s.trim().split(/\s+/).filter(Boolean).length;
+  const cjkCharCount = (s.match(HAN_RE)?.length ?? 0) + (s.match(KANA_RE)?.length ?? 0);
+  if (cjkCharCount === 0) {
+    return s.trim().split(/\s+/).filter(Boolean).length;
+  }
+  const latinWordCount = s
+    .replace(HAN_RE, ' ')
+    .replace(KANA_RE, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+  return latinWordCount + Math.round(cjkCharCount / CJK_CHARS_PER_WORD);
 }
 
 /* ── POST /api/import — parse-only, no disk write ─────────────────────── */

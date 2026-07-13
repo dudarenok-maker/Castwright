@@ -49,6 +49,40 @@ describe('getLanguageEntry', () => {
     expect(getLanguageEntry('xy')).toBeUndefined();
     expect(getLanguageEntry('')).toBeUndefined();
   });
+
+  it('returns the zh entry, not yet supported (fs-59 W2)', () => {
+    const zh = getLanguageEntry('zh');
+    expect(zh).toEqual<LanguageEntry>({
+      code: 'zh',
+      sidecarName: 'Chinese',
+      supported: false,
+      detect: { script: 'cjk', iso6393: 'cmn' },
+      headingLexicon: {
+        keywords: ['章', '部', '巻', '節', '幕'],
+        numberWords: [],
+        standalone: ['序章', '終章', '序', '跋', 'プロローグ', 'エピローグ'],
+      },
+      frontMatterKeywords: ['目录', '版权', '致谢', '序言', '后记', '附录', '关于作者'],
+      narratorName: '旁白',
+    });
+  });
+
+  it('returns the ja entry, not yet supported (fs-59 W2)', () => {
+    const ja = getLanguageEntry('ja');
+    expect(ja).toEqual<LanguageEntry>({
+      code: 'ja',
+      sidecarName: 'Japanese',
+      supported: false,
+      detect: { script: 'cjk', iso6393: 'jpn' },
+      headingLexicon: {
+        keywords: ['章', '部', '巻', '節', '話', '幕'],
+        numberWords: [],
+        standalone: ['序章', '終章', 'プロローグ', 'エピローグ', 'あとがき', '前書き'],
+      },
+      frontMatterKeywords: ['目次', '著作権', '献辞', '謝辞', 'まえがき', 'あとがき', '付録', '著者について'],
+      narratorName: '語り手',
+    });
+  });
 });
 
 describe('isSupportedLanguage', () => {
@@ -58,7 +92,8 @@ describe('isSupportedLanguage', () => {
     expect(isSupportedLanguage('es')).toBe(true);
     expect(isSupportedLanguage('fr')).toBe(true);
     expect(isSupportedLanguage('de')).toBe(true);
-    expect(isSupportedLanguage('zh')).toBe(false); // absent from the registry (fs-59)
+    expect(isSupportedLanguage('zh')).toBe(false); // registered but not yet validated (fs-59 W2)
+    expect(isSupportedLanguage('ja')).toBe(false); // registered but not yet validated (fs-59 W2)
     expect(isSupportedLanguage('')).toBe(false);
   });
 });
@@ -85,12 +120,18 @@ describe('detect field + Latin entries', () => {
 });
 
 describe('isSupportedLanguage distinguishes absent from present', () => {
-  // With en/ru/es/fr/de all supported, no present-but-`false` entry remains;
-  // an absent code (zh, until fs-59 adds it as supported:false) exercises the
-  // `?? false` path. The present-but-false distinction returns when fs-59 lands.
-  it('is false for an absent code (zh not in the registry)', () => {
-    expect(getLanguageEntry('zh')).toBeUndefined();
+  // zh/ja (fs-59 W2) are the present-but-`false` case; a code truly absent
+  // from the registry (e.g. 'ko') exercises the `?? false` fallback path.
+  it('is false-but-present for zh/ja (registered, not yet validated)', () => {
+    expect(getLanguageEntry('zh')).toBeDefined();
+    expect(getLanguageEntry('ja')).toBeDefined();
     expect(isSupportedLanguage('zh')).toBe(false);
+    expect(isSupportedLanguage('ja')).toBe(false);
+  });
+
+  it('is false for a genuinely absent code (ko not in the registry)', () => {
+    expect(getLanguageEntry('ko')).toBeUndefined();
+    expect(isSupportedLanguage('ko')).toBe(false);
   });
 });
 
@@ -108,8 +149,10 @@ describe('supportedLanguages', () => {
 });
 
 describe('allLanguageEntries', () => {
-  it('includes all five codes', () => {
-    expect(allLanguageEntries().map((e) => e.code).sort()).toEqual(['de', 'en', 'es', 'fr', 'ru']);
+  it('includes all seven codes (fs-59 W2 adds zh/ja)', () => {
+    expect(allLanguageEntries().map((e) => e.code).sort()).toEqual([
+      'de', 'en', 'es', 'fr', 'ja', 'ru', 'zh',
+    ]);
   });
 });
 
@@ -175,11 +218,18 @@ describe('narratorName', () => {
   it('omits narratorName on en (defaults to "Narrator" at the call site)', () => {
     expect(getLanguageEntry('en')?.narratorName).toBeUndefined();
   });
+
+  it('exposes localized narrator names for zh/ja (fs-59, still supported:false)', () => {
+    // Seeded now so a CJK book's narrator localizes the moment zh/ja flip to
+    // supported at W5 — the seed reads getLanguageEntry(lang)?.narratorName.
+    expect(getLanguageEntry('zh')?.narratorName).toBe('旁白');
+    expect(getLanguageEntry('ja')?.narratorName).toBe('語り手');
+  });
 });
 
 describe('isDefaultNarratorName', () => {
   it('is true for the English default and every localized default, case-insensitively', () => {
-    for (const n of ['Narrator', 'narrator', ' NARRATOR ', 'Erzähler', 'Рассказчик', 'Narrador', 'Narrateur']) {
+    for (const n of ['Narrator', 'narrator', ' NARRATOR ', 'Erzähler', 'Рассказчик', 'Narrador', 'Narrateur', '旁白', '語り手']) {
       expect(isDefaultNarratorName(n)).toBe(true);
     }
   });
