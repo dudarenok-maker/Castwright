@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../domain/activate_book.dart';
@@ -92,7 +91,6 @@ class CompanionRuntime {
 
   /// Marketing-capture / test factory: build a runtime from already-constructed
   /// (fake) parts, bypassing the network/TLS wiring of [forConnection].
-  @visibleForTesting
   factory CompanionRuntime.forDemo({
     required ApiClient api,
     required DriftLocalLibrary library,
