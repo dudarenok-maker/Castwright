@@ -1,0 +1,11 @@
+{
+  "voiceId": "qwen-PIURlXnEQWDp7i_AYRDTD__excited",
+  "voiceUuid": "PIURlXnEQWDp7i_AYRDTD",
+  "instruct": "Delivered with bright, happy, upbeat excitement, cheerful and thrilled, full of joyful, positive energy.",
+  "language": "German",
+  "refText": "Zwölf Boxkämpfer jagen Viktor quer über den großen Sylter Deich, und sie fragte sich, was der morgige Tag bringen würde.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+  "anchoredTo": "qwen-PIURlXnEQWDp7i_AYRDTD",
+  "mintMethod": "anchored-icl-instruct"
+}

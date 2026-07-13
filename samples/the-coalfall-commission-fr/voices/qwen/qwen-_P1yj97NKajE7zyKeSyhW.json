@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-_P1yj97NKajE7zyKeSyhW",
+  "voiceUuid": "_P1yj97NKajE7zyKeSyhW",
+  "instruct": "A gender-neutral, elderly voice with an ultra-low, resonant pitch and deliberate, sluggish pacing; the timbre is gravelly, metallic, and immense, projecting unshakable authority, for expressive character dialogue.",
+  "language": "French",
+  "refText": "Portez ce vieux whisky au juge blond qui fume, et demandez-vous ce que demain réserve.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}

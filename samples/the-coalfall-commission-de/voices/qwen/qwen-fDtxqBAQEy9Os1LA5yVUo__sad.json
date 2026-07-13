@@ -1,0 +1,11 @@
+{
+  "voiceId": "qwen-fDtxqBAQEy9Os1LA5yVUo__sad",
+  "voiceUuid": "fDtxqBAQEy9Os1LA5yVUo",
+  "instruct": "Delivered with quiet, downcast sadness, slow and subdued, low and weary, heavy and dejected.",
+  "language": "German",
+  "refText": "Zwölf Boxkämpfer jagen Viktor quer über den großen Sylter Deich, und sie fragte sich, was der morgige Tag bringen würde.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+  "anchoredTo": "qwen-fDtxqBAQEy9Os1LA5yVUo",
+  "mintMethod": "anchored-icl-instruct"
+}

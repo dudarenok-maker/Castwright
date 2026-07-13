@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-4sURhnDHD6bc_SnUomCQD",
+  "voiceUuid": "4sURhnDHD6bc_SnUomCQD",
+  "instruct": "An elderly man in his seventies, his low-pitch voice features a dry, reedier rasp and a subtle, rhythmic tremor; he speaks at a measured, deliberate pace with a steady, grounded resonance for expressive character dialogue.",
+  "language": "German",
+  "refText": "Zwölf Boxkämpfer jagen Viktor quer über den großen Sylter Deich, und sie fragte sich, was der morgige Tag bringen würde.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}

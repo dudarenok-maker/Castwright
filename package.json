@@ -106,6 +106,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7",
     "fast-glob": "^3.3.3",
+    "fflate": "^0.8.3",
     "globals": "^17",
     "husky": "^9.1.7",
     "jest-axe": "^10.0.0",

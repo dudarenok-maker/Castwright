@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-a-hYrcMYR-d2OaLXALxF8",
+  "voiceUuid": "a-hYrcMYR-d2OaLXALxF8",
+  "instruct": "A mature male voice with a low, gravelly timbre and steady, mid-paced delivery, characterized by a flat, uninflected monotone and dry, utilitarian precision, for expressive character dialogue.",
+  "language": "Russian",
+  "refText": "Съешь же ещё этих мягких французских булок да выпей чаю, и она подумала, что принесёт завтрашний день.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}

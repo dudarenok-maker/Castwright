@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-dpZPo043mDX72ab4edzUw",
+  "voiceUuid": "dpZPo043mDX72ab4edzUw",
+  "instruct": "An elderly man's voice in his seventies, low-to-medium in pitch and gravelly, with a dry rasp and a faint tremor at the edges; slow, deliberate and unhurried, carrying the worn, unshakable authority of a lifelong craftsman — for expressive character dialogue.",
+  "language": "French",
+  "refText": "Portez ce vieux whisky au juge blond qui fume, et demandez-vous ce que demain réserve.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}

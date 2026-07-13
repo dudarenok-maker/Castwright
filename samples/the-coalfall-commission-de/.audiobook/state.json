@@ -1,0 +1,79 @@
+{
+  "bookId": "castwright__standalones__der-auftrag-von-coalfall",
+  "manuscriptId": "mns_91ee2dde2b",
+  "title": "Der Auftrag von Coalfall",
+  "author": "Castwright",
+  "series": "Standalones",
+  "seriesPosition": null,
+  "isStandalone": true,
+  "manuscriptFile": "manuscript.epub",
+  "castConfirmed": true,
+  "chapters": [
+    {
+      "id": 1,
+      "title": "Der Auftrag von Coalfall",
+      "slug": "01-der-auftrag-von-coalfall",
+      "duration": "00:00",
+      "excluded": true,
+      "uuid": "0c2d1493-96e8-42c1-b417-df3fff132b77"
+    },
+    {
+      "id": 2,
+      "title": "Kapitel Eins — Das Klopfen",
+      "slug": "02-kapitel-eins-das-klopfen",
+      "duration": "04:03",
+      "uuid": "ff1d5ba6-4f67-49c8-b7f6-e2b42f97cf3d",
+      "audioModelKey": "qwen3-tts-1.7b",
+      "audioEngines": {
+        "qwen": 5
+      },
+      "audioRenderedAt": "2026-07-12T21:59:08.835Z",
+      "audioQa": {
+        "status": "ok",
+        "reasons": [],
+        "measuredLufs": -16.74,
+        "truePeakDb": -1.5,
+        "durationSec": 243.4,
+        "expectedSec": 254.78571428571428,
+        "checkedAt": "2026-07-12T21:59:08.834Z"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Kapitel Zwei — Der Guss",
+      "slug": "03-kapitel-zwei-der-guss",
+      "duration": "12:18",
+      "uuid": "e0585ab1-9142-4f1e-94bf-51f1da488a49",
+      "audioModelKey": "qwen3-tts-1.7b",
+      "audioEngines": {
+        "qwen": 13
+      },
+      "audioRenderedAt": "2026-07-12T11:23:32.518Z",
+      "audioQa": {
+        "status": "ok",
+        "reasons": [],
+        "measuredLufs": -16.63,
+        "truePeakDb": -1.5,
+        "durationSec": 737.88,
+        "expectedSec": 813.9285714285714,
+        "checkedAt": "2026-07-12T11:23:32.518Z"
+      }
+    }
+  ],
+  "coverGradient": [
+    "#3C194F",
+    "#0F0E0D"
+  ],
+  "createdAt": "2026-06-25T05:16:20.496Z",
+  "updatedAt": "2026-07-12T21:59:08.869Z",
+  "chapterTitleParserVersion": 2,
+  "language": "de",
+  "schema": 1,
+  "narratorCredit": null,
+  "genre": null,
+  "publicationDate": null,
+  "description": null,
+  "notes": null,
+  "tags": [],
+  "liveInstruct": false
+}

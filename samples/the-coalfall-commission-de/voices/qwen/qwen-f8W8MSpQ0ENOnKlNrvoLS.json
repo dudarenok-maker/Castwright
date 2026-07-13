@@ -1,0 +1,9 @@
+{
+  "voiceId": "qwen-f8W8MSpQ0ENOnKlNrvoLS",
+  "voiceUuid": "f8W8MSpQ0ENOnKlNrvoLS",
+  "instruct": "A bright girl of about eight with a medium-high, light pitch and a clear, melodic timbre, speaking at a measured, rhythmic pace with an engaging, earnest quality for expressive character dialogue.",
+  "language": "German",
+  "refText": "Zwölf Boxkämpfer jagen Viktor quer über den großen Sylter Deich, und sie fragte sich, was der morgige Tag bringen würde.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}

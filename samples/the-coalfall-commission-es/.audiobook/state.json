@@ -1,0 +1,78 @@
+{
+  "bookId": "castwright__standalones__el-encargo-de-coalfall",
+  "manuscriptId": "mns_e0fce6b569",
+  "title": "El Encargo de Coalfall",
+  "author": "Castwright",
+  "series": "Standalones",
+  "seriesPosition": null,
+  "isStandalone": true,
+  "manuscriptFile": "manuscript.epub",
+  "castConfirmed": true,
+  "chapters": [
+    {
+      "id": 1,
+      "title": "El Encargo de Coalfall",
+      "slug": "01-el-encargo-de-coalfall",
+      "duration": "00:00",
+      "excluded": true,
+      "uuid": "11171e9a-f323-4c95-89cf-113ead4896c4"
+    },
+    {
+      "id": 2,
+      "title": "Capítulo Uno — La Llamada",
+      "slug": "02-capitulo-uno-la-llamada",
+      "duration": "04:20",
+      "uuid": "7b1f753e-d056-48d5-88f2-611b2f049e80",
+      "audioModelKey": "qwen3-tts-1.7b",
+      "audioEngines": {
+        "qwen": 6
+      },
+      "audioRenderedAt": "2026-07-12T22:06:03.446Z",
+      "audioQa": {
+        "status": "ok",
+        "reasons": [],
+        "measuredLufs": -16.06,
+        "truePeakDb": -1.5,
+        "durationSec": 260.04,
+        "expectedSec": 258.07142857142856,
+        "checkedAt": "2026-07-12T22:06:03.446Z"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Capítulo Dos — La Colada",
+      "slug": "03-capitulo-dos-la-colada",
+      "duration": "14:34",
+      "uuid": "dfbde4a9-fd53-4170-bc34-b479388d9433",
+      "audioModelKey": "qwen3-tts-1.7b",
+      "audioEngines": {
+        "qwen": 13
+      },
+      "audioRenderedAt": "2026-07-12T22:23:23.327Z",
+      "audioQa": {
+        "status": "ok",
+        "reasons": [],
+        "measuredLufs": -16.05,
+        "truePeakDb": -1.5,
+        "durationSec": 873.56,
+        "expectedSec": 913.7142857142857,
+        "checkedAt": "2026-07-12T22:23:23.327Z"
+      }
+    }
+  ],
+  "coverGradient": [
+    "#3C194F",
+    "#0F0E0D"
+  ],
+  "createdAt": "2026-06-25T05:16:20.485Z",
+  "updatedAt": "2026-07-12T22:23:23.424Z",
+  "chapterTitleParserVersion": 2,
+  "language": "es",
+  "schema": 1,
+  "narratorCredit": null,
+  "genre": null,
+  "publicationDate": null,
+  "description": null,
+  "notes": null,
+  "tags": []
+}

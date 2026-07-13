@@ -1,0 +1,644 @@
+{
+  "characters": [
+    {
+      "id": "narrator",
+      "name": "Narrateur",
+      "role": "Third-person observer",
+      "color": "narrator",
+      "attributes": [
+        "formal",
+        "observational",
+        "measured",
+        "rhythmic"
+      ],
+      "tone": {
+        "warmth": 40,
+        "pace": 50,
+        "authority": 60,
+        "emotion": 40
+      },
+      "gender": "neutral",
+      "ageRange": "adult",
+      "description": "A grounded, steady narrator who observes the forge life with a touch of folkloric warmth.",
+      "evidence": [
+        {
+          "quote": "Le dragon s'installa dans l'embrasure, un œil mi-clos contre la chaleur, et dit, de la voix d'une montagne fatiguée à qui l'on n'avait pas demandé, depuis très longtemps, d'attendre dans un lieu accueillant :",
+          "note": "Observation sur l'état du dragon."
+        },
+        {
+          "quote": "Il y a des choses dites au milieu de la nuit par des enfants qui plient le reste d'une vie autour d'elles, et tout le monde dans la forge sut qu'on venait d'en entendre une.",
+          "note": "Commentaire réflexif sur l'atmosphère."
+        },
+        {
+          "quote": "Les nouvelles voyagent de deux façons dans une vallée : lentement, par la route, et d'un coup, par l'odeur d'une forge allumée après la tombée de la nuit.",
+          "note": "Registre narratif initial, posant l'ambiance."
+        },
+        {
+          "quote": "La forge avait pris la couleur d'un couchant assoupi, et Wren raclait les derniers résidus de scorie lorsque les coups à la porte commencèrent.",
+          "note": "Description de l'ambiance initiale."
+        }
+      ],
+      "lines": 128,
+      "scenes": 2,
+      "voiceStyle": "A middle-aged voice, neutral in gender, with a medium pitch and steady, mid-paced delivery; the timbre is rich, grounded, and resonant, carrying a measured, folkloric warmth suitable for audiobook narration.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "JYgRnekuJ-VD8oEFlAQmW",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-JYgRnekuJ-VD8oEFlAQmW"
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "aliases": [
+        "Narrator"
+      ],
+      "voiceState": "tuned"
+    },
+    {
+      "id": "wren",
+      "name": "Wren",
+      "role": "Apprentice",
+      "color": "eliza",
+      "attributes": [
+        "earnest",
+        "observant",
+        "young",
+        "direct",
+        "reserved"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 30,
+        "emotion": 40
+      },
+      "gender": "female",
+      "ageRange": "teen",
+      "description": "A thirteen-year-old apprentice striving to prove her competence in the forge.",
+      "evidence": [
+        {
+          "quote": "« Tu as vraiment traversé le monde entier ? » demanda-t-elle. « Pour ça ? »",
+          "note": "Marque sa curiosité envers le dragon."
+        },
+        {
+          "quote": "« C'est Wren », dit Wren, rougissant, « pour tout le monde sauf lui. »",
+          "note": "Exprime son désir de reconnaissance."
+        },
+        {
+          "quote": "« Ça pourrait être un client. »",
+          "note": "Curiosité naturelle face aux coups frappés à la porte."
+        },
+        {
+          "quote": "« Je ne soupire jamais »",
+          "note": "Réponse défensive à son maître."
+        }
+      ],
+      "lines": 13,
+      "scenes": 2,
+      "voiceStyle": "A female teenager with a medium pitch and steady, mid-paced cadence, possessing a clear, breathy timbre and an earnest emotional register for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "vbPMMSTdapw-8sNv8CxvE",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-vbPMMSTdapw-8sNv8CxvE"
+        },
+        "kokoro": {
+          "name": "af_aoede"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b",
+      "aliases": [
+        "Moineau"
+      ]
+    },
+    {
+      "id": "oduvan",
+      "name": "Oduvan",
+      "role": "Blacksmith",
+      "color": "halloran",
+      "attributes": [
+        "gruff",
+        "experienced",
+        "pragmatic",
+        "authoritative",
+        "composed",
+        "professional"
+      ],
+      "tone": {
+        "warmth": 40,
+        "pace": 40,
+        "authority": 90,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "elderly",
+      "description": "An aged, gravel-voiced smith with decades of experience and little patience for unnecessary drama.",
+      "evidence": [
+        {
+          "quote": "« Si j'éteins le feu, je perds la soudure que je couve depuis midi. Un dragon peut attendre le temps d'une soudure ou il ne le peut pas, et dans les deux cas je préfère le recevoir au chaud. »",
+          "note": "Explication de ses priorités techniques."
+        },
+        {
+          "quote": "« Messieurs », dit Oduvan, de la voix qu'il gardait pour le fer fêlé, « c'est une petite cloche. Il lui faut un petit public. »",
+          "note": "Exprime son autorité naturelle sur les clients."
+        },
+        {
+          "quote": "« Le meilleur forgeron de la vallée est mort il y a neuf ans. Vous devrez vous contenter du second. »",
+          "note": "Exemple de sa franchise habituelle."
+        },
+        {
+          "quote": "« Voilà votre note juste », dit-il. « Telle que la fait le deuxième meilleur forgeron. »",
+          "note": "Exprime une humble fierté professionnelle."
+        }
+      ],
+      "lines": 21,
+      "scenes": 2,
+      "voiceStyle": "An elderly man's voice in his seventies, low-to-medium in pitch and gravelly, with a dry rasp and a faint tremor at the edges; slow, deliberate and unhurried, carrying the worn, unshakable authority of a lifelong craftsman — for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "dpZPo043mDX72ab4edzUw",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-dpZPo043mDX72ab4edzUw"
+        },
+        "kokoro": {
+          "name": "am_onyx"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "maerin",
+      "name": "Maerin",
+      "role": "Reeve",
+      "color": "marcus",
+      "attributes": [
+        "urgent",
+        "clipped",
+        "authoritative",
+        "steady",
+        "firm",
+        "protective"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 70,
+        "emotion": 40
+      },
+      "gender": "female",
+      "ageRange": "adult",
+      "description": "A local official, prone to urgency and direct, clipped speech.",
+      "evidence": [
+        {
+          "quote": "« Pell Hollis », dit Maerin, qui n'était jamais partie, « tu as réveillé la moitié de la vallée pour une charrette de foin dans le noir à la dernière Lammas. »",
+          "note": "Révèle son rôle de gardienne de l'ordre local."
+        },
+        {
+          "quote": "« Oduvan. Barre les volets et étouffe les braises. Il y a un dragon sur la route de Coalfall. Grand comme une grange. Il descend le chemin. »",
+          "note": "Alerte urgente."
+        },
+        {
+          "quote": "« Non, mon enfant, un peint. Un vrai. Et il vient droit vers la seule fenêtre éclairée de la vallée, qui est la vôtre. Éteins le feu. »",
+          "note": "Confirmation du danger."
+        },
+        {
+          "quote": "« Sela », dit Maerin, très posément, très lentement, « viens ici près de moi. »",
+          "note": "Ton autoritaire et maternel."
+        }
+      ],
+      "lines": 7,
+      "scenes": 2,
+      "voiceStyle": "A mature female voice with a medium-low pitch and brisk, clipped pacing, featuring a crisp, resonant timbre and a cool, authoritative register, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "Spb26cBAR6L3zyD8qaFxh",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-Spb26cBAR6L3zyD8qaFxh",
+          "variants": {
+            "excited": {
+              "name": "qwen-Spb26cBAR6L3zyD8qaFxh__excited"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "af_jessica"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "dragon",
+      "name": "Dragon",
+      "role": "Ancient dragon",
+      "color": "slot-4",
+      "attributes": [
+        "ancient",
+        "deliberate",
+        "melancholy",
+        "profound"
+      ],
+      "tone": {
+        "warmth": 60,
+        "pace": 30,
+        "authority": 80,
+        "emotion": 50
+      },
+      "gender": "neutral",
+      "ageRange": "elderly",
+      "description": "A weary, ancient entity seeking a legacy, with a voice described like a tired mountain.",
+      "evidence": [
+        {
+          "quote": "« Je viens de très loin. Les villages m'appellent Coalfall. Ce n'est pas mon nom, mais il fera l'affaire. On me dit que le meilleur forgeron de la vallée tient cette forge. »",
+          "note": "Introduction de sa requête."
+        },
+        {
+          "quote": "« Je ne veux pas d'épée. Tout le monde me veut mort, et une épée ne ferait que les encourager. Je veux une cloche. Assez petite pour pendre à une griffe. »",
+          "note": "Spécification de sa demande."
+        },
+        {
+          "quote": "« C'est une question honnête », dit le dragon, « et c'est une soirée honnête. »",
+          "note": "Exprime sa franchise."
+        },
+        {
+          "quote": "« Je n'avais pas », dit-il, « pensé aussi loin. »",
+          "note": "Ton lent, réfléchi, marqué par l'étonnement."
+        }
+      ],
+      "aliases": [
+        "Coalfall"
+      ],
+      "lines": 25,
+      "scenes": 2,
+      "voiceStyle": "A gender-neutral, elderly voice with an ultra-low, resonant pitch and deliberate, sluggish pacing; the timbre is gravelly, metallic, and immense, projecting unshakable authority, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "_P1yj97NKajE7zyKeSyhW",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-_P1yj97NKajE7zyKeSyhW"
+        },
+        "kokoro": {
+          "name": "am_onyx"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "pell",
+      "name": "Pell Hollis",
+      "role": "Villager",
+      "color": "slot-5",
+      "attributes": [
+        "anxious",
+        "garrulous",
+        "well-meaning"
+      ],
+      "tone": {
+        "warmth": 70,
+        "pace": 70,
+        "authority": 20,
+        "emotion": 60
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "A nervous villager prone to shouting.",
+      "evidence": [
+        {
+          "quote": "« C'est le meilleur de la vallée », dit Pell, qui avait décidé quelque part dans le noir que c'était aussi son aventure, « et je crierai plus fort que quiconque dira le contraire. »",
+          "note": "Ton enthousiaste et protecteur."
+        },
+        {
+          "quote": "« C'était moi qui criais », dit l'homme sur le seuil, qui avait manifestement couru jusque-là et regrettait manifestement de l'avoir fait.",
+          "note": "Défensif et essoufflé."
+        }
+      ],
+      "lines": 9,
+      "scenes": 2,
+      "voiceStyle": "A male adult voice with a medium-low pitch and erratic, fast-paced cadence, featuring a gravelly, restless timbre and a jittery, high-intensity emotional register for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "sa-UCs61Sxipme-G9skJF",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-sa-UCs61Sxipme-G9skJF",
+          "variants": {
+            "excited": {
+              "name": "qwen-sa-UCs61Sxipme-G9skJF__excited"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "veuve-casper",
+      "name": "Veuve Casper",
+      "role": "Elderly villager",
+      "color": "slot-6",
+      "attributes": [
+        "cynical",
+        "sharp",
+        "wise"
+      ],
+      "tone": {
+        "warmth": 30,
+        "pace": 60,
+        "authority": 60,
+        "emotion": 50
+      },
+      "gender": "female",
+      "ageRange": "elderly",
+      "description": "An elderly, sharp-tongued local.",
+      "evidence": [
+        {
+          "quote": "« Eh bien, inventez-en une », dit la veuve Casper. « C'est ce que font les gens de votre espèce, et ce soir on en a besoin. »",
+          "note": "Ton provocateur."
+        },
+        {
+          "quote": "« Plus petit que dans les histoires », dit-elle.",
+          "note": "Ton critique et direct."
+        }
+      ],
+      "lines": 7,
+      "scenes": 1,
+      "voiceStyle": "A female elderly voice with a low, raspy pitch and measured, deliberate pace, possessing a brittle, clinical timbre and a detached, authoritative register, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "XUxobKj1rs4kuFQB6kabY",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-XUxobKj1rs4kuFQB6kabY"
+        },
+        "kokoro": {
+          "name": "bf_emma"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "brann-weir",
+      "name": "Brann Weir",
+      "role": "Quarry worker",
+      "color": "slot-7",
+      "attributes": [
+        "inquisitive",
+        "repetitive"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 30,
+        "emotion": 50
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "One of the quarry-working twins, speaks in questions.",
+      "evidence": [
+        {
+          "quote": "« Depuis quand le forgeron a-t-il du bronze à cloche qui traîne ? »",
+          "note": "Style interrogatif maintenu."
+        },
+        {
+          "quote": "« C'est donc le dragon ? »",
+          "note": "Style de parole typique."
+        }
+      ],
+      "lines": 7,
+      "scenes": 1,
+      "voiceStyle": "A male adult voice with a medium-low pitch and a steady, rhythmic pace, featuring a resonant, gravelly timbre and a curious, rising inflection for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "2DOqrWv7tUS-wuMJ1CTPw",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-2DOqrWv7tUS-wuMJ1CTPw",
+          "variants": {
+            "excited": {
+              "name": "qwen-2DOqrWv7tUS-wuMJ1CTPw__excited"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "berrin-weir",
+      "name": "Berrin Weir",
+      "role": "Quarry worker",
+      "color": "slot-8",
+      "attributes": [
+        "concise",
+        "blunt"
+      ],
+      "tone": {
+        "warmth": 30,
+        "pace": 50,
+        "authority": 50,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "One of the quarry-working twins, speaks in flat statements.",
+      "evidence": [
+        {
+          "quote": "« Elle ne risque rien », dit Berrin, plat comme une étagère, et il avait, comme d'habitude, raison.",
+          "note": "Ton sec et factuel."
+        },
+        {
+          "quote": "« C'est le dragon. »",
+          "note": "Style de parole opposé à son frère."
+        }
+      ],
+      "lines": 5,
+      "scenes": 1,
+      "voiceStyle": "A mature male voice with a low, gravelly timbre and steady, mid-paced delivery, characterized by a flat, uninflected monotone and dry, utilitarian precision, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "SII18qPPmYgxlJJgf4i1S",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-SII18qPPmYgxlJJgf4i1S"
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "lessom",
+      "name": "Père Lessom",
+      "role": "Clergy",
+      "color": "slot-9",
+      "attributes": [
+        "hesitant",
+        "pious",
+        "formal"
+      ],
+      "tone": {
+        "warmth": 60,
+        "pace": 40,
+        "authority": 40,
+        "emotion": 50
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "The local priest, seeking propriety.",
+      "evidence": [
+        {
+          "quote": "« Une cloche sonnée pour le dernier de quoi que ce soit est sonnée pour tout ce qui fut. »",
+          "note": "Ton solennel de chaire."
+        }
+      ],
+      "lines": 6,
+      "scenes": 1,
+      "voiceStyle": "A mature male voice with a medium-low pitch and steady, measured pacing, featuring a resonant, dry timbre that conveys a calm, professional authority for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "ZQs5g5JruXNvXoIjsNtpQ",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-ZQs5g5JruXNvXoIjsNtpQ"
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "ivo",
+      "name": "Ivo",
+      "role": "Pedlar",
+      "color": "slot-10",
+      "attributes": [
+        "transient",
+        "commercial",
+        "pragmatic"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 70,
+        "authority": 40,
+        "emotion": 40
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "A traveling pedlar with unusual customs.",
+      "evidence": [
+        {
+          "quote": "« Une cloche, qu'il veut. Pour lui, la cloche. Dans mon pays, pour les morts on plante un arbre — mais un arbre sur une griffe on ne peut pas le porter, et donc : une cloche. Sensé. »",
+          "note": "Style de parole inversé/déconstruit."
+        },
+        {
+          "quote": "« Dans mon pays, on appelle ça mardi. »",
+          "note": "Ton pince-sans-rire."
+        }
+      ],
+      "lines": 3,
+      "scenes": 1,
+      "voiceStyle": "A mature male voice with a medium-low pitch and brisk, rhythmic pacing, featuring a grainy, earthy timbre and a dry, observational emotional register, for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "MiYzyfnsjqPQRnIDJr4eq",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-MiYzyfnsjqPQRnIDJr4eq"
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "sela",
+      "name": "Sela",
+      "role": "Child",
+      "color": "slot-11",
+      "attributes": [
+        "curious",
+        "bold",
+        "matter-of-fact"
+      ],
+      "tone": {
+        "warmth": 70,
+        "pace": 50,
+        "authority": 60,
+        "emotion": 50
+      },
+      "gender": "female",
+      "ageRange": "child",
+      "description": "Maerin's young daughter, fearless around the dragon.",
+      "evidence": [
+        {
+          "quote": "« Tu es le dernier », dit Sela. Pas une question. Les enfants n'en gaspillent pas.",
+          "note": "Ton d'une simplicité désarmante."
+        },
+        {
+          "quote": "« Je le ferai », dit Sela. « Je vais vivre très longtemps. »",
+          "note": "Affirmation grave et enfantine."
+        }
+      ],
+      "lines": 8,
+      "scenes": 1,
+      "voiceStyle": "A youthful female voice with a medium-high pitch, steady moderate pace, and a clear, resonant timbre, blending bright innocence with a surprisingly firm, unwavering steadiness for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "XEn1LoHmYgD4Magikt4MC",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-XEn1LoHmYgD4Magikt4MC"
+        },
+        "kokoro": {
+          "name": "af_nicole"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    },
+    {
+      "id": "hart",
+      "name": "Hart",
+      "role": "Charcoal-burner",
+      "color": "slot-12",
+      "attributes": [
+        "quiet",
+        "grounded"
+      ],
+      "tone": {
+        "warmth": 40,
+        "pace": 30,
+        "authority": 50,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "A quiet charcoal-burner accustomed to working with fire.",
+      "evidence": [
+        {
+          "quote": "« Le feu réclame à manger », dit-il, à peine au-dessus des braises. « Si on fait ça. »",
+          "note": "Ton pragmatique et sobre."
+        },
+        {
+          "quote": "« Trente ans à brûler du charbon », dit Hart. « Tout est un pain. »",
+          "note": "Ton simple et métaphorique."
+        }
+      ],
+      "lines": 5,
+      "scenes": 1,
+      "voiceStyle": "A mature male voice with a low, gravelly timbre and slow, measured cadence, featuring a steady, grounded projection and earthy texture for expressive character dialogue.",
+      "ttsEngine": "qwen",
+      "voiceUuid": "Nl7DFilnpJQFayYKzeI67",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-Nl7DFilnpJQFayYKzeI67"
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsModelKey": "qwen3-tts-1.7b"
+    }
+  ]
+}
