@@ -84,6 +84,18 @@ describe('notificationsSlice — pushToast', () => {
     expect(next.toasts[0].message).toBe('second');
   });
 
+  it('carries a retryReview scope through on push (fs-58 Task 9)', () => {
+    const next = notificationsSlice.reducer(
+      emptyState(),
+      notificationsActions.pushToast({
+        kind: 'error',
+        message: 'Model failed to load.',
+        retryReview: { bookId: 'b1', wholeBook: false, chapterId: 3, model: 'gemma' },
+      }),
+    );
+    expect(next.toasts[0].retryReview).toEqual({ bookId: 'b1', wholeBook: false, chapterId: 3, model: 'gemma' });
+  });
+
   it('two pushes with different keys produce two independent toasts', () => {
     const state = notificationsSlice.reducer(
       emptyState(),

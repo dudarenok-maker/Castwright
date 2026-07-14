@@ -15,6 +15,7 @@ import {
   seedReuseGuardsFromPriorCast,
   voicedSurvivorsDropped,
   applyRewriteToPriorCast,
+  dropReuseContinuityKeepDesignedVoice,
 } from './merge-analysis-cast.js';
 
 type C = Record<string, unknown> & { id: string };
@@ -314,5 +315,56 @@ describe('applyRewriteToPriorCast', () => {
     expect(survivor?.overrideTtsVoices?.qwen?.name).toBe('qwen-tuned'); // tuned beats generated
     expect(priorCast.filter((c) => c.id === 'ольга')).toHaveLength(1); // no duplicate id
     expect(droppedVoices).toEqual([{ id: 'olga', voiceState: 'generated' }]);
+  });
+});
+
+describe('dropReuseContinuityKeepDesignedVoice (fresh re-analysis prior)', () => {
+  it('keeps the designed voice but drops reuse continuity + reused state', () => {
+    const prior: C[] = [
+      {
+        id: 'anton',
+        name: 'Anton',
+        voiceUuid: 'U1',
+        ttsEngine: 'qwen',
+        voiceStyle: 'a persona',
+        overrideTtsVoices: { qwen: { name: 'qwen-U1', variants: { excited: { name: 'qwen-U1__excited' } } } },
+        voiceId: 'library-voice',
+        voiceState: 'reused',
+        matchedFrom: { bookId: 'prior', characterId: 'anton', confidence: 0.9 },
+        notLinkedTo: ['someone'],
+      },
+    ];
+    const [out] = dropReuseContinuityKeepDesignedVoice(prior);
+    // designed voice kept
+    expect(out.voiceUuid).toBe('U1');
+    expect(out.ttsEngine).toBe('qwen');
+    expect(out.voiceStyle).toBe('a persona');
+    expect(out.overrideTtsVoices).toEqual({
+      qwen: { name: 'qwen-U1', variants: { excited: { name: 'qwen-U1__excited' } } },
+    });
+    // reuse continuity dropped
+    expect(out.voiceId).toBeUndefined();
+    expect(out.matchedFrom).toBeUndefined();
+    expect(out.notLinkedTo).toBeUndefined();
+    expect(out.voiceState).toBeUndefined(); // 'reused' cleared
+  });
+
+  it("keeps a bespoke 'locked'/'tuned' voiceState (not reuse-derived)", () => {
+    const prior: C[] = [
+      { id: 'a', name: 'A', voiceState: 'locked', overrideTtsVoices: { qwen: { name: 'q-a' } } },
+      { id: 'b', name: 'B', voiceState: 'tuned', voiceUuid: 'Ub' },
+    ];
+    const out = dropReuseContinuityKeepDesignedVoice(prior);
+    expect(out[0].voiceState).toBe('locked');
+    expect(out[1].voiceState).toBe('tuned');
+  });
+
+  it('does not mutate the input', () => {
+    const prior: C[] = [
+      { id: 'a', name: 'A', voiceId: 'v', matchedFrom: { bookId: 'x' }, voiceUuid: 'U' },
+    ];
+    dropReuseContinuityKeepDesignedVoice(prior);
+    expect(prior[0].voiceId).toBe('v');
+    expect(prior[0].matchedFrom).toEqual({ bookId: 'x' });
   });
 });

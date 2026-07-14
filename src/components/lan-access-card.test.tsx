@@ -12,6 +12,11 @@ vi.mock('../lib/api', async (importOriginal) => {
       createDevicePairSession: vi.fn(),
       revokeDevice: vi.fn(),
       regenerateLanCert: vi.fn(),
+      getLanCertStatus: vi.fn().mockResolvedValue({
+        requested: true, active: true, health: 'healthy',
+        certHosts: ['192.168.1.42'], currentLanIps: ['192.168.1.42'],
+        uncoveredIps: [], expiresAt: '2099-01-01T00:00:00.000Z',
+      }),
     },
   };
 });
@@ -142,6 +147,22 @@ describe('LanAccessCard', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('shows actionable guidance instead of the raw code on a 403 (reached via a bare LAN IP)', async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
+    vi.mocked(api.createDevicePairSession).mockRejectedValue(new ApiError('pair-session failed (403)', 403));
+
+    render(<LanAccessCard />);
+    fireEvent.change(screen.getByPlaceholderText('Device name'), { target: { value: 'My Laptop' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Authorize a device' }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/start pairing from https:\/\/localhost:8443 or https:\/\/castwright\.local/i),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId('mock-qr')).not.toBeInTheDocument();
+  });
+
   it('shows "manage from desktop" note on 401 from listDevices (no crash)', async () => {
     vi.mocked(api.listDevices).mockRejectedValue(new ApiError('Unauthorized', 401));
 
@@ -152,7 +173,7 @@ describe('LanAccessCard', () => {
     );
   });
 
-  it('Regenerate certificate: click -> success shows the returned host list', async () => {
+  it('Regenerate certificate: click -> success re-fetches and re-renders LanCertStatus', async () => {
     vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
     vi.mocked(api.regenerateLanCert).mockResolvedValue({
       hosts: ['localhost', 'castwright.local', '192.168.1.42'],
@@ -165,9 +186,7 @@ describe('LanAccessCard', () => {
     fireEvent.click(btn);
 
     await waitFor(() => expect(api.regenerateLanCert).toHaveBeenCalled());
-    await waitFor(() =>
-      expect(screen.getByText(/localhost, castwright\.local, 192\.168\.1\.42/i)).toBeInTheDocument(),
-    );
+    expect(await screen.findByTestId('lan-cert-status-admin')).toBeInTheDocument();
   });
 
   it('Regenerate certificate: click -> failure shows the server error message', async () => {

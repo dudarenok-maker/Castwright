@@ -241,8 +241,10 @@ export const SCENES: Scene[] = [
     viewports: ['desktop'],
     action: async (page) => {
       await page.getByRole('button', { name: 'Pair a device with the Castwright Companion' }).click({ timeout: 5000 });
+      // Name-first modal: generate the code so the scene captures the scannable QR, not the naming form.
+      await page.getByRole('button', { name: /generate pairing code/i }).click({ timeout: 5000 });
     },
-    waitForAfterAction: '[data-testid="pair-device-modal"]',
+    waitForAfterAction: '[data-testid="pair-qr-image"]',
     strict: true,
   },
   {

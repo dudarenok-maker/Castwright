@@ -14,11 +14,26 @@ import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { X509Certificate } from 'node:crypto';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { resolveLanCertPaths } from '../app-dirs.js';
+import { enumerateLanIps } from '../lan-hosts.js';
+import { parseCertIps, computeCertHealth, type CertHealth } from '../lan-cert-health.js';
+import { getLanRuntime } from '../lan-runtime.js';
+import { isLanHttpsEnabled } from './export-lan.js';
 
 export const lanCertRouter = Router();
+
+export interface LanCertStatus {
+  requested: boolean;
+  active: boolean;
+  health: CertHealth;
+  certHosts: string[];
+  currentLanIps: string[];
+  uncoveredIps: string[];
+  expiresAt: string | null;
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..', '..', '..');
@@ -92,6 +107,44 @@ function execFileAsync(
    only by restarting the app. A single in-flight flag rejects the second
    request outright instead of racing. */
 let regenerationInFlight = false;
+
+/* ops-28 — read-only cert health for the first-run wizard + Admin card.
+   GET (non-mutating) passes the /api guards on localhost: requireSameOrigin
+   only gates mutating methods, and requireLanToken is bypassed for loopback. */
+lanCertRouter.get('/cert/status', (_req: Request, res: Response) => {
+  const certExists = existsSync(certFile);
+  const keyExists = existsSync(keyFile);
+
+  let parsed: { notAfter: Date; ips: string[] } | null = null;
+  if (certExists && keyExists) {
+    try {
+      const x = new X509Certificate(readFileSync(certFile));
+      parsed = { notAfter: new Date(x.validTo), ips: parseCertIps(x.subjectAltName) };
+    } catch {
+      parsed = null; // unparseable → treated as missing
+    }
+  }
+
+  const currentLanIps = enumerateLanIps();
+  const { health, uncoveredIps } = computeCertHealth({
+    certExists,
+    keyExists,
+    parsed,
+    currentLanIps,
+    now: new Date(),
+  });
+
+  const body: LanCertStatus = {
+    requested: isLanHttpsEnabled(),
+    active: getLanRuntime().httpsActive,
+    health,
+    certHosts: parsed?.ips ?? [],
+    currentLanIps,
+    uncoveredIps,
+    expiresAt: parsed ? parsed.notAfter.toISOString() : null,
+  };
+  res.status(200).json(body);
+});
 
 lanCertRouter.post('/cert/regenerate', async (req: Request, res: Response) => {
   if (regenerationInFlight) {

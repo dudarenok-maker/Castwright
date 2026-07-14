@@ -51,6 +51,9 @@ function bookSkeleton(
     /** When set, write the snapshot but skip the state.json — to exercise
         the "inconsistent workspace, silently skip" branch. */
     suppressStateJson?: boolean;
+    /** Marks the book's cast as confirmed in state.json. A confirmed book's
+        leftover snapshot must be excluded from the scan. Defaults to false. */
+    castConfirmed?: boolean;
   } = {},
 ): { bookId: string; bookDir: string } {
   const bookId = makeBookId(AUTHOR, SERIES, title);
@@ -69,7 +72,7 @@ function bookSkeleton(
         seriesPosition: null,
         isStandalone: true,
         manuscriptFile: 'manuscript.txt',
-        castConfirmed: false,
+        castConfirmed: opts.castConfirmed ?? false,
         chapters: [{ id: 1, title: 'Chapter 1', slug: 'chapter-one' }],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -205,6 +208,23 @@ describe('scanActiveAnalyses', () => {
     /* Avoid leaking the corrupt file across cases (beforeEach sweeps anyway). */
     const corrupt = join(bookDir, '..', 'Corrupt Book', '.audiobook', 'analysis-state.json');
     if (existsSync(corrupt)) unlinkSync(corrupt);
+  });
+
+  it('excludes a CONFIRMED book’s leftover snapshot (voice-strip incident 2026-07-14)', async () => {
+    /* A confirmed book’s analysis is finished; a stale paused/halted snapshot
+       must not resurface as a resumable active analysis (pill + "resume?" badge)
+       that, on click, re-analyses the book and strips its designed voices. An
+       unconfirmed book with a snapshot still surfaces. */
+    bookSkeleton('Confirmed Book', {
+      snapshot: { state: 'paused', writtenAt: 300 },
+      castConfirmed: true,
+    });
+    bookSkeleton('Unconfirmed Book', {
+      snapshot: { state: 'paused', writtenAt: 100 },
+      castConfirmed: false,
+    });
+    const snaps = await scanActiveAnalyses();
+    expect(snaps.map((s) => s.bookTitle)).toEqual(['Unconfirmed Book']);
   });
 
   it('carries kind / subsetChapterIds / engine through verbatim', async () => {

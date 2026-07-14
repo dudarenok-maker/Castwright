@@ -125,8 +125,16 @@ export interface StatusInput {
       from the per-engine ttsLifecycle state). */
   anyModelLoading: boolean;
   /** The active analysis sub-stage (prosody/review) progress, or null/absent.
-      Folds into the "Analysing" rung below the primary analysis pass. */
-  analysisSubstage?: { kind: 'prosody' | 'review'; percent: number } | null;
+      Folds into the "Analysing" rung below the primary analysis pass.
+      `activityState`/`fallbackActive` drive the amber warn tone while the
+      analyzer model is still warming up or has fallen back to Gemini —
+      plan 2026-07-14-script-review-progress-heartbeat-model-load-design. */
+  analysisSubstage?: {
+    kind: 'prosody' | 'review';
+    percent: number;
+    activityState?: 'loading' | 'waiting' | 'streaming';
+    fallbackActive?: boolean;
+  } | null;
 }
 
 /* Priority ladder (highest wins → the dominant state shown on the pill):
@@ -166,7 +174,12 @@ export function summarizeStatus({
       detail: `${analysis.percent}%`,
     };
   if (analysisSubstage)
-    return { label: 'Analysing', tone: 'peach', icon: 'spinner', detail: `${analysisSubstage.percent}%` };
+    return {
+      label: 'Analysing',
+      tone: analysisSubstage.activityState === 'loading' || analysisSubstage.fallbackActive ? 'amber' : 'peach',
+      icon: 'spinner',
+      detail: `${analysisSubstage.percent}%`,
+    };
   if (design?.state === 'running')
     return { label: 'Designing', tone: 'peach', icon: 'spinner', detail: `${design.percent}%` };
   if (exportPill?.state === 'running')
@@ -206,13 +219,21 @@ export interface StatusDetail {
   exportPill?: ExportPillData | null;
   onGoToExport?: () => void;
   /** The active analysis sub-stage (prosody/review) label + progress, or null/absent.
-      Rendered as a secondary row inside the Analysis section of the popover. */
+      Rendered as a secondary row inside the Analysis section of the popover.
+      `model`/`engine`/`activityState`/`activitySince`/`fallbackActive` mirror
+      `selectAnalysisSubstage`'s result — plan
+      2026-07-14-script-review-progress-heartbeat-model-load-design. */
   analysisSubstage?: {
     label: string;
     percent: number;
     chapterIndex?: number;
     totalChapters?: number;
     estRemainingMs?: number;
+    model?: string;
+    engine?: 'local' | 'gemini';
+    activityState?: 'loading' | 'waiting' | 'streaming';
+    activitySince?: number;
+    fallbackActive?: boolean;
   } | null;
   /** fs-21 wave 4 — shared setup diagnosis (useSetupDiagnosis()), forwarded
       to the popover so it can render the four blocker diagnosis blocks. */

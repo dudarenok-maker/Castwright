@@ -34,6 +34,7 @@ import {
 } from './top-bar';
 import { MODEL_OPTIONS } from '../lib/models';
 import { formatSubstageDetail } from '../lib/substage-progress-text';
+import { useElapsed } from '../hooks/use-elapsed';
 import type { BlockerDiagnosis, SetupReadiness } from '../lib/api';
 import { BlockerFixAction } from './blocker-fix-action';
 
@@ -66,6 +67,14 @@ interface StatusPopoverProps {
     chapterIndex?: number;
     totalChapters?: number;
     estRemainingMs?: number;
+    /** The model/engine actually driving this pass, and whether it's still
+        warming up (loading/waiting) or streaming output — plan
+        2026-07-14-script-review-progress-heartbeat-model-load-design. */
+    model?: string;
+    engine?: 'local' | 'gemini';
+    activityState?: 'loading' | 'waiting' | 'streaming';
+    activitySince?: number;
+    fallbackActive?: boolean;
   } | null;
   generation: GenerationPillData | null;
   design: DesignPillData | null;
@@ -107,6 +116,27 @@ function Section({
     Analysis section, with an optional ETA/chapter-count detail line. Shared by
     both Analysis-section branches — full analysis + substage, and substage-only
     — which differ only in whether the row spans the full section width. */
+/** State-aware ticking timer shown under the substage row while the model is
+    still warming up. Streaming has no extra line — the normal chapter/ETA
+    detail line already conveys progress. */
+function SubstageTimer({
+  state,
+  since,
+}: {
+  state?: 'loading' | 'waiting' | 'streaming';
+  since?: number;
+}) {
+  const secs = useElapsed(since);
+  if (!state) return null;
+  const prefix = state === 'loading' ? 'Loading model' : state === 'waiting' ? 'Waiting for model' : null;
+  if (!prefix) return null;
+  return (
+    <span data-testid="substage-timer" className="text-xs text-ink/50 tabular-nums">
+      {prefix} · {secs}s
+    </span>
+  );
+}
+
 function SubstageRow({
   analysisSubstage,
   fullWidth,
@@ -127,6 +157,18 @@ function SubstageRow({
       {substageDetailText && (
         <span data-testid="substage-detail" className="text-xs text-ink/50 tabular-nums">
           {substageDetailText}
+        </span>
+      )}
+      {analysisSubstage.model && (
+        <span data-testid="substage-engine-model" className="text-xs text-ink/50">
+          {analysisSubstage.engine === 'gemini' ? 'Gemini' : 'Ollama'} ·{' '}
+          {MODEL_OPTIONS.find((m) => m.id === analysisSubstage.model)?.label ?? analysisSubstage.model}
+        </span>
+      )}
+      <SubstageTimer state={analysisSubstage.activityState} since={analysisSubstage.activitySince} />
+      {analysisSubstage.fallbackActive && (
+        <span data-testid="substage-fallback-note" className="text-xs text-magenta">
+          Switched to Gemini — Ollama unreachable
         </span>
       )}
     </div>

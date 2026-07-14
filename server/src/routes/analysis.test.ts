@@ -2920,6 +2920,100 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
   );
 
   it(
+    'fresh re-analysis PRESERVES designed voices while dropping reuse continuity (voice-strip incident 2026-07-14)',
+    async () => {
+      /* Regression: a `fresh: true` re-analysis used to set priorCastForMerge=[]
+         and so overwrote cast.json with a voiceless roster, destroying every
+         designed Qwen voice (the 2026-07-14 Coalfall incident). "Start fresh"
+         legitimately discards reuse continuity (matchedFrom / voiceId / library
+         links), but must NEVER discard the user's bespoke designed voices. */
+      const manuscriptId = `test-fresh-preserve-voice-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      seedStateJson(bookDir, manuscriptId, { castConfirmed: true });
+      // Pre-seed a cast.json where 'narrator' (the character with a stable id
+      // across this fixture's fold) carries BOTH a designed Qwen voice (must
+      // survive) and a reuse link (must be dropped by a fresh run).
+      writeFileSync(
+        join(bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            {
+              id: 'narrator',
+              name: 'Narrator',
+              voiceUuid: 'U-narr',
+              ttsEngine: 'qwen',
+              overrideTtsVoices: {
+                qwen: {
+                  name: 'qwen-U-narr',
+                  variants: { excited: { name: 'qwen-U-narr__excited' } },
+                },
+              },
+              voiceId: 'some-library-voice',
+              voiceState: 'reused',
+              matchedFrom: { bookId: 'prior', characterId: 'narrator', confidence: 0.9 },
+            },
+          ],
+        }),
+      );
+      registerManuscript(manuscriptId, bookDir);
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      setPhase1Selection(buildSelection(buildPhase1Analyzer(), 'phase1-model'));
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: true,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        const narr = readCast(bookDir).characters.find((c) => c.id === 'narrator') as
+          | (Record<string, unknown> & { id: string })
+          | undefined;
+        expect(narr).toBeDefined();
+        // Designed voice SURVIVES the fresh run.
+        expect(narr!.overrideTtsVoices).toEqual({
+          qwen: {
+            name: 'qwen-U-narr',
+            variants: { excited: { name: 'qwen-U-narr__excited' } },
+          },
+        });
+        expect(narr!.voiceUuid).toBe('U-narr');
+        expect(narr!.ttsEngine).toBe('qwen');
+        // Reuse continuity is DROPPED by the fresh run.
+        expect(narr!.matchedFrom).toBeUndefined();
+        expect(narr!.voiceId).toBeUndefined();
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
+
+  it(
     "subset retry route: REWRITES analysisProvenance with a fresh `at` + recomputed report, superseding the prior run's",
     async () => {
       const manuscriptId = `test-provenance-subset-${Date.now()}-${Math.random()}`;

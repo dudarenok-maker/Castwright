@@ -77,4 +77,30 @@ describe('analysis-substage selectors', () => {
       estRemainingMs: undefined,
     });
   });
+
+  it('projects model/engine/activityState/activitySince/fallbackActive for a review pass', () => {
+    const s = mk(
+      {},
+      {
+        b1: {
+          progress: 12,
+          label: 'Reviewing script',
+          model: 'gemma-4-31b-it',
+          engine: 'gemini',
+          activityState: 'streaming',
+          activitySince: 1000,
+          fallbackActive: true,
+        } as never,
+      },
+    );
+    const out = selectAnalysisSubstage(s);
+    expect(out).toMatchObject({
+      kind: 'review',
+      model: 'gemma-4-31b-it',
+      engine: 'gemini',
+      activityState: 'streaming',
+      activitySince: 1000,
+      fallbackActive: true,
+    });
+  });
 });
