@@ -282,13 +282,20 @@ interface TopBarProps {
   onOpenQueue?: () => void;
 }
 
+/* Per-book tab order mirrors the actual workflow (fe-46 — voice design
+   precedes manuscript review): Cast → Manuscript → Generate → Listen are the
+   book-scoped steps in the order you do them. Log and Voices trail as the
+   cross-cutting controls, with Voices LAST because it's the cross-book voice
+   library — a global destination, not a per-book step. The guided tour and the
+   cast-first landing already follow this order; this strip is the last surface
+   that needed to catch up. */
 const TABS: Array<{ id: View; label: string }> = [
-  { id: 'manuscript', label: 'Manuscript' },
   { id: 'cast', label: 'Cast' },
-  { id: 'library', label: 'Voices' },
+  { id: 'manuscript', label: 'Manuscript' },
   { id: 'generate', label: 'Generate' },
   { id: 'listen', label: 'Listen' },
   { id: 'log', label: 'Log' },
+  { id: 'library', label: 'Voices' },
 ];
 
 /* Cross-book destinations available when no book is open (or when the user

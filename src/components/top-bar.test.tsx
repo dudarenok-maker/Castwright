@@ -838,6 +838,26 @@ describe('TopBar — responsive nav drawer (<xl hamburger)', () => {
     expect(d.getByTestId('nav-drawer-link-manuscript')).not.toHaveAttribute('aria-current');
   });
 
+  /* fe-46 — the per-book tabs read in workflow order: Cast (voice design)
+     precedes Manuscript review, then Generate → Listen, and the cross-cutting
+     Log + Voices trail at the end (Voices last — it's the cross-book library,
+     a global destination, not a per-book step). Locks BOTH surfaces the single
+     TABS array feeds: the inline xl strip and the hamburger drawer. */
+  it('renders the per-book tabs in workflow order (Cast · Manuscript · Generate · Listen · Log · Voices)', () => {
+    const expected = ['Cast', 'Manuscript', 'Generate', 'Listen', 'Log', 'Voices'];
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />);
+
+    // Inline strip (hidden xl:flex, but present in the DOM under jsdom).
+    const inlineNav = screen.getByRole('button', { name: 'Cast' }).closest('nav')!;
+    expect(within(inlineNav).getAllByRole('button').map((b) => b.textContent)).toEqual(expected);
+
+    // Hamburger drawer follows the same order — the first six menuitems (the
+    // seventh is the phone-only Admin row, #916).
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    const rows = within(screen.getByTestId('topbar-nav-drawer')).getAllByRole('menuitem');
+    expect(rows.slice(0, 6).map((r) => r.textContent)).toEqual(expected);
+  });
+
   it('opens the drawer with the global nav on a global stage', () => {
     renderWithStore(<TopBar {...makeProps({ stage: 'books' })} />);
     fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
