@@ -78,7 +78,7 @@ preparePersonaBatch(bookDir, signal?)
     → gpuSemaphore.acquire(gpuSemaphore.budget, { signal })
 ```
 
-The two single-character `voice-style.ts` callers (lines 66, 113) pass nothing;
+The two single-character `routes/voice-style.ts` callers (lines 66, 113) pass nothing;
 the optional param keeps their behaviour identical.
 
 **Abort semantics — swallow and return CPU args (decided).**
@@ -233,13 +233,17 @@ factory** (which already has the real `actual` in closure — no module-level
 
 ```ts
 const configValueMock = vi.fn(); // proven pattern here — cf. `generateContent` (line 24)
+let realConfigValue: (key: string) => unknown;
+// Shared by the factory AND the beforeEach (below) so restoreAllMocks can't strip it.
+function delegateConfigValue(key: string) {
+  if (key === 'analyzer.personaGeneration.engine') return process.env.PERSONA_GEN_ENGINE || 'gemini';
+  if (key === 'analyzer.personaGeneration.localModel') return process.env.PERSONA_GEN_LOCAL_MODEL || '';
+  return realConfigValue(key); // real impl for analyzer.gemini.voiceStyleModel
+}
 vi.mock('../config/resolver.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../config/resolver.js')>();
-  configValueMock.mockImplementation((key: string) => {
-    if (key === 'analyzer.personaGeneration.engine') return process.env.PERSONA_GEN_ENGINE || 'gemini';
-    if (key === 'analyzer.personaGeneration.localModel') return process.env.PERSONA_GEN_LOCAL_MODEL || '';
-    return actual.configValue(key); // real impl for analyzer.gemini.voiceStyleModel
-  });
+  realConfigValue = actual.configValue;
+  configValueMock.mockImplementation(delegateConfigValue);
   return { ...actual, configValue: configValueMock };
 });
 ```
@@ -251,10 +255,14 @@ vi.mock('../config/resolver.js', async (importOriginal) => {
 > reason the current suite survives). Stripped, `configValueMock` returns
 > `undefined`, and the sibling tests `'resolvePersonaEngine defaults to gemini…'`
 > and `'resolvePersonaLocalModel…'` (lines 237, 243) go **red**. The fix is the
-> same idiom `generateContent` already uses: **re-establish the implementation in
-> the top-level `beforeEach` (line 104)** so it is fresh for every test. Factor the
-> delegating impl into a named helper so the factory and the `beforeEach` share it.
-> Acceptance is explicit: the *entire* `voice-style.test.ts` suite stays green.
+> same idiom `generateContent` already uses: add
+> `configValueMock.mockImplementation(delegateConfigValue)` to the **top-level
+> `beforeEach` (line 104)** so the shared `delegateConfigValue` helper (see the
+> code above) is re-installed fresh for every test. No TDZ: `resolver.js` is
+> statically imported, so the factory's `realConfigValue = actual.configValue`
+> assignment runs at import time, strictly before any `beforeEach`; the helper
+> reads `realConfigValue` only at call time. Acceptance is explicit: the *entire*
+> `voice-style.test.ts` suite stays green.
 
 Then in the M4 case:
 
@@ -287,7 +295,7 @@ The `spyOn(configValue)` assertion above, added to the existing
 - No new `docs/features/` regression plan — a chore of this size is specified by
   the issue body plus the paired tests. The srv-48 archived spec gets a one-line
   "M1/M3/M4 addressed in #1561" pointer, nothing more.
-- No behaviour change for the two `voice-style.ts` single-character callers (they
+- No behaviour change for the two `routes/voice-style.ts` single-character callers (they
   pass no signal).
 
 ## Files touched
