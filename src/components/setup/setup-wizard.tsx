@@ -1,7 +1,7 @@
 /* fs-21 wave 2 — C5: SetupWizard orchestrator.
-   Composes the five step components into two modes:
+   Composes the six step components into two modes:
 
-   - guided    — linear, one step at a time, Back/Next paging + a "Step N of 5"
+   - guided    — linear, one step at a time, Back/Next paging + a "Step N of 6"
                  progress indicator. Next is ALWAYS enabled: the derived Wave 0
                  boot gate is the real lock, so the wizard never blocks
                  progression on a failing blocker. The final step (Finish) owns
@@ -25,15 +25,17 @@ import { StepEnvironment } from './step-environment';
 import { StepFfmpeg } from './step-ffmpeg';
 import { StepModels } from './step-models';
 import { StepDefaults } from './step-defaults';
+import { StepLanCert } from './step-lan-cert';
 import { StepFinish } from './step-finish';
 
-type StepId = 'environment' | 'ffmpeg' | 'models' | 'defaults' | 'finish';
+type StepId = 'environment' | 'ffmpeg' | 'models' | 'defaults' | 'lanCert' | 'finish';
 
 const STEPS: { id: StepId; title: string }[] = [
   { id: 'environment', title: 'Environment' },
   { id: 'ffmpeg', title: 'ffmpeg' },
   { id: 'models', title: 'Models' },
   { id: 'defaults', title: 'Defaults' },
+  { id: 'lanCert', title: 'LAN access' },
   { id: 'finish', title: 'Finish' },
 ];
 
@@ -62,6 +64,8 @@ function renderStep(
       return <StepModels readiness={readiness} onRefetch={onRefetch} />;
     case 'defaults':
       return <StepDefaults readiness={readiness} />;
+    case 'lanCert':
+      return <StepLanCert />;
     case 'finish':
       return <StepFinish readiness={readiness} onFinish={onFinish} onTryDemoBook={onTryDemoBook} />;
   }
@@ -136,7 +140,7 @@ function GuidedWizard({
         </button>
       )}
 
-      {/* Progress indicator: dots + "Step N of 5" */}
+      {/* Progress indicator: dots + "Step N of 6" */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1.5" aria-hidden>
           {STEPS.map((s, i) => (
@@ -280,6 +284,13 @@ function buildSummaryRows(readiness: SetupReadiness): SummaryRow[] {
       detail: 'New-book starting points',
       status: 'ok',
       stepIndex: 3,
+    },
+    {
+      key: 'lanCert',
+      label: 'LAN access',
+      detail: 'Phone/tablet HTTPS certificate',
+      status: 'ok',
+      stepIndex: 4,
     },
   ];
 }

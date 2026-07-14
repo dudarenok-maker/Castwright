@@ -5,6 +5,7 @@ import { PairingQr } from './pairing/pairing-qr';
 import { PrimaryButton } from './primitives';
 import { WikiLink } from './wiki-link';
 import { ADMIN_WIKI } from '../lib/wiki-links';
+import { LanCertStatus } from './lan-cert-status';
 
 const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleDateString() : '—');
 
@@ -16,9 +17,6 @@ export function LanAccessCard() {
     { url: string; friendlyUrl?: string; expiresAt: number } | null
   >(null);
   const [err, setErr] = useState<string | null>(null);
-  const [certState, setCertState] = useState<
-    { status: 'idle' } | { status: 'loading' } | { status: 'success'; hosts: string[] } | { status: 'error'; message: string }
-  >({ status: 'idle' });
 
   const refresh = () => {
     api.listDevices()
@@ -40,15 +38,6 @@ export function LanAccessCard() {
       setErr(e instanceof Error ? e.message : String(e));
     }
     refresh(); // re-read: a revoked device drops out of the list below
-  };
-  const regenerateCert = async () => {
-    setCertState({ status: 'loading' });
-    try {
-      const { hosts } = await api.regenerateLanCert();
-      setCertState({ status: 'success', hosts });
-    } catch (e) {
-      setCertState({ status: 'error', message: e instanceof Error ? e.message : String(e) });
-    }
   };
 
   return (
@@ -98,39 +87,9 @@ export function LanAccessCard() {
               </li>
             ))}
           </ul>
-          <div className="mt-5 text-xs text-ink/55">
-            <button
-              type="button"
-              onClick={regenerateCert}
-              disabled={certState.status === 'loading'}
-              className="px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs text-ink/70 hover:bg-ink/5 min-h-[44px] fine-pointer:min-h-0 disabled:opacity-50"
-            >
-              {certState.status === 'loading' ? 'Regenerating…' : 'Regenerate certificate'}
-            </button>
-            <p className="mt-2 leading-relaxed">
-              Run this if a phone or tablet shows "Not secure" — it refreshes this
-              computer's local certificate (covering every LAN address it's
-              currently reachable on) without restarting the app.
-            </p>
-            {certState.status === 'success' && (
-              <p className="mt-2 text-emerald-700">Now covers: {certState.hosts.join(', ')}</p>
-            )}
-            {certState.status === 'error' && (
-              <p className="mt-2 text-rose-700">{certState.message}</p>
-            )}
+          <div className="mt-5">
+            <LanCertStatus variant="admin" />
           </div>
-          <details className="mt-5 text-xs text-ink/55">
-            <summary className="cursor-pointer text-ink/70">Phone shows "Not secure" / certificate warning?</summary>
-            <p className="mt-2 leading-relaxed">
-              The phone's browser must trust this computer's local certificate (one-time). Run{' '}
-              <code className="px-1 py-0.5 rounded bg-ink/5">npm run install:cert-mobile</code> on this
-              computer — it prints a QR + per-OS steps to download and install the root certificate
-              (served at <code className="px-1 py-0.5 rounded bg-ink/5">/cert/root.crt</code>). On
-              Android: Settings → Security → Install a certificate → CA certificate; on iOS: install
-              the profile, then General → About → Certificate Trust Settings → enable it. The companion
-              app trusts it automatically (cert pinning) — only browsers need this step.
-            </p>
-          </details>
         </>
       )}
     </section>
