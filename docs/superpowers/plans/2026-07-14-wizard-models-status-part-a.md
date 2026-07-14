@@ -12,6 +12,34 @@
 
 **Issue:** `#1612` (child of epic `#1613` / fs-75). This plan `Closes #1612`.
 
+## POST-fe-49 RECONCILIATION (2026-07-14 — AUTHORITATIVE, overrides stale refs below)
+
+fe-49 (#1610) MERGED to main and this branch is rebased onto it. fe-49 split the
+wizard's Models step. **Wherever a task below says `step-models.tsx`, it no longer
+exists — retarget as follows:**
+
+- **`step-models.tsx` is DELETED.** Its voice half is now `src/components/setup/step-voice.tsx`
+  (component `StepVoice`, props `{ readiness, onRefetch }`) — a verbatim lift with the same
+  `BlockerBadge` (off `readiness.blockers.sidecar`/`.tts`) + self-fetching `VenvBootstrap`/
+  `KokoroInstall`/`QwenInstall`/`CoquiInstall`. **Impl 7 edits `step-voice.tsx`, not step-models.tsx.**
+  (The analyzer half became `step-analysis.tsx` — NOT our concern; do not touch it.)
+- **`setup-wizard.tsx` is now 7-step** (environment, ffmpeg, analysis, voice, defaults, lanCert,
+  finish). The **voice** summary row is `stepIndex 3` (was 2). `SummaryStatus` already includes
+  `'warn'`. Impl 8's `buildSummaryRows` voice-row neutral-transient patch applies to THIS file's
+  `buildSummaryRows` (voice row: `blockers.sidecar`/`.tts`), leaving the analyzer row alone.
+- **`BlockerDiagnosis.status` is already `'pass' | 'warn' | 'fail'`** (fe-49) in both
+  `server/src/routes/setup-readiness.ts` and `src/lib/api.ts`. The `ready` gate already counts
+  `warn` as ready. **Do NOT re-widen it.** My models-status-derived `sidecar`/`tts` badges produce
+  only `pass`/`fail` (via `diagnoseSidecar`/`diagnoseTts`) — `warn` is fe-49's analyzer concern.
+- **`setup-readiness.ts` sidecar/tts derivation (the block Impl 4 replaces) is UNCHANGED by fe-49**
+  — fe-49 only rewrote the ANALYZER leg (probe-both, `anyAnalyzerModelPulled`). Impl 4 replaces the
+  `buildDiagnostics`+`detect*`+`packageBrokenFlags`+`diagnoseSidecar`+`diagnoseTts` block with
+  `computeModelsStatus`-derived inputs + `vramTotalMb`, and **LEAVES fe-49's analyzer leg exactly as
+  is**. Removing `buildDiagnostics` is now fully safe (the analyzer leg uses `probeOllamaHealth`, not
+  `diagnostics`).
+- **Client `SetupReadiness.info`** stays `{ gpu: string }` in api.ts (fe-49 left it so; my server
+  `vramTotalMb` add is consumed only in Part B).
+
 ## Global Constraints
 
 - **No hex literals in component code** — use CSS custom properties / Tailwind tokens (`--peach`, `--ink`, `--magenta`, `emerald-*`, `amber-*`, etc.). Match existing card styling.
