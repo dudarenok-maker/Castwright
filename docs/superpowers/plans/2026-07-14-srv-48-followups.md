@@ -27,6 +27,7 @@
 | `server/src/gpu/semaphore.test.ts` | Unit tests for the abortable acquire (fresh instances) | 1 |
 | `server/src/tts/persona-gpu-plan.ts` | Thread `signal` through `preparePersonaBatch`/`unloadResidentSidecar`; catch `AbortError` → CPU args | 2 |
 | `server/src/routes/cast-design.ts` | Pass `job.controller.signal` into `preparePersonaBatch` | 2 |
+| `server/src/tts/persona-gpu-plan.test.ts` | Existing suite that pins `unloadResidentSidecar`'s `acquire(budget)` call shape — must stay green (no edit; the conditional keeps the no-signal call 1-arg) | 2 (run only) |
 | `server/src/tts/prepare-persona-batch.test.ts` | Add M1 abort-catch integration test (Task 2); M3 state-based rewrite (Task 3) | 2, 3 |
 | `server/src/analyzer/voice-style.test.ts` | M4 revert-proof wiring assertion + stray-import tidy | 4 |
 | `docs/release-notes-next.md` | One technical entry (PR-refed) | 5 |
@@ -96,7 +97,7 @@ describe('GpuSemaphore — abortable acquire', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cd server && npx vitest run src/gpu/semaphore.test.ts -t "abortable acquire"`
-Expected: FAIL — `acquire` ignores the second arg today, so the queued-abort test hangs/rejects wrong (the queued promise never rejects → the `rejects` assertion times out).
+Expected: FAIL — `acquire` ignores the second arg today. Tests 1 and 2 fail: test 1 by **timeout** (the queued promise never rejects, so the `rejects` assertion hangs to the default ~5s limit), test 2 because an already-aborted signal is ignored and the acquire resolves instead of rejecting. (Test 3, "synchronously granted ignores a later abort", actually passes on current code too — today's `acquire` grants immediately and has nothing to double-settle; it's a deliberate regression-guard for the new abort path, not a fail-first case. The describe is still red overall from tests 1–2.)
 
 - [ ] **Step 3: Implement the abortable acquire**
 
@@ -192,7 +193,7 @@ git commit -m "fix(server): make GpuSemaphore.acquire abortable via optional sig
 Add to `server/src/tts/prepare-persona-batch.test.ts` (inside `describe('preparePersonaBatch', …)`):
 
 ```ts
-it('abort mid evict-wait → CPU args, no throw escapes', async () => {
+it('threads the signal into the evict acquire; aborted wait → CPU args, no throw', async () => {
   const { preparePersonaBatch } = await import('./persona-gpu-plan.js');
   const residency = await import('../gpu/residency.js');
   const gen = await import('../routes/generation.js');
@@ -204,19 +205,22 @@ it('abort mid evict-wait → CPU args, no throw escapes', async () => {
   // A pause fires while the full-budget acquire is queued → acquire rejects AbortError.
   // (Spy-based: the REAL semaphore block can't be reached here — see the spec note. The
   //  real abort mechanism is unit-tested in semaphore.test.ts.)
-  vi.spyOn(gpuSemaphore, 'acquire').mockRejectedValue(
+  const acquireSpy = vi.spyOn(gpuSemaphore, 'acquire').mockRejectedValue(
     new DOMException('GpuSemaphore acquire aborted', 'AbortError'),
   );
 
-  const result = await preparePersonaBatch('/a');
+  const ac = new AbortController();
+  const result = await preparePersonaBatch('/a', ac.signal);
   expect(result).toEqual({ onCpu: true, keepAlive: 0 });
+  // The signal is actually forwarded to the reverse-evict acquire (the 2-arg branch):
+  expect(acquireSpy).toHaveBeenCalledWith(gpuSemaphore.budget, { signal: ac.signal });
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd server && npx vitest run src/tts/prepare-persona-batch.test.ts -t "abort mid evict-wait"`
-Expected: FAIL — today `preparePersonaBatch` only catches `GpuBusyForPersonaError`, so the `AbortError` re-throws out of `preparePersonaBatch` and the `await` rejects.
+Run: `cd server && npx vitest run src/tts/prepare-persona-batch.test.ts -t "threads the signal"`
+Expected: FAIL — today `preparePersonaBatch` only catches `GpuBusyForPersonaError`, so the `AbortError` re-throws out of `preparePersonaBatch` and the `await` rejects (the assertion is never even reached).
 
 - [ ] **Step 3: Thread the signal and catch `AbortError`**
 
@@ -224,7 +228,12 @@ In `server/src/tts/persona-gpu-plan.ts`, change `unloadResidentSidecar`'s signat
 
 ```ts
 export async function unloadResidentSidecar(signal?: AbortSignal): Promise<void> {
-  const release = await gpuSemaphore.acquire(gpuSemaphore.budget, { signal });
+  // Conditional: the no-signal path stays a literal 1-arg acquire(budget) — byte-identical
+  // to today — so persona-gpu-plan.test.ts:14's `toHaveBeenCalledWith(budget)` needs no edit.
+  // The 2-arg branch (signal present) is exercised by this task's new test.
+  const release = signal
+    ? await gpuSemaphore.acquire(gpuSemaphore.budget, { signal })
+    : await gpuSemaphore.acquire(gpuSemaphore.budget);
   try {
     // ...unchanged body (render recheck + /unload + /health)...
   } finally {
@@ -266,10 +275,12 @@ In `server/src/routes/cast-design.ts`, pass the job's signal at the call site (~
 const prep = await preparePersonaBatch(job.bookDir, job.controller.signal);
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Run BOTH affected suites to verify they pass**
 
-Run: `cd server && npx vitest run src/tts/prepare-persona-batch.test.ts`
-Expected: PASS — the new abort test AND the three existing `preparePersonaBatch` tests stay green (they call `preparePersonaBatch('/a')` with no signal; the optional param is undefined).
+Run: `cd server && npx vitest run src/tts/prepare-persona-batch.test.ts src/tts/persona-gpu-plan.test.ts`
+Expected: PASS —
+- the new abort test AND the three existing `preparePersonaBatch` tests stay green (they call `preparePersonaBatch('/a')` with no signal; the optional param is undefined);
+- **`persona-gpu-plan.test.ts` stays green unchanged**, specifically `unloadResidentSidecar`'s `expect(acquire).toHaveBeenCalledWith(gpuSemaphore.budget)` at line 14 — because `unloadResidentSidecar()` is called there with no signal, so the conditional keeps it a literal 1-arg `acquire(budget)`. **This is the regression the plan review caught; running this file is mandatory in this task.**
 
 - [ ] **Step 5: Typecheck the touched files**
 
@@ -335,7 +346,7 @@ Expected: PASS.
 Temporarily comment out the render recheck in `server/src/tts/persona-gpu-plan.ts` `unloadResidentSidecar` (the `if (activeGenerationBooks().length > 0) throw new GpuBusyForPersonaError(...)` block). Run the test again:
 
 Run: `cd server && npx vitest run src/tts/prepare-persona-batch.test.ts -t "evict refused"`
-Expected: FAIL — with the recheck gone, control reaches `fetch(.../unload)`, so `expect(fetchSpy).not.toHaveBeenCalled()` fails deterministically. **Restore the recheck** and confirm the test passes again before committing.
+Expected: FAIL — with the recheck gone, control reaches the real `fetch(.../unload)` (the `fetchSpy` has no mock impl, so it hits `http://localhost:9000`). The test then fails either way: `expect(fetchSpy).not.toHaveBeenCalled()` trips, and/or the real fetch rejection propagates out of `preparePersonaBatch`. Either failure proves the recheck is load-bearing. **Restore the recheck** and confirm the test passes again before committing.
 
 - [ ] **Step 4: Commit**
 
@@ -375,9 +386,10 @@ vi.mock('../config/resolver.js', async (importOriginal) => {
 });
 ```
 
-Then re-establish the impl every test so the two `vi.restoreAllMocks()` afterEach sites (line ~228 and line ~305) can't blank it out. Add this line to the **top-level** `beforeEach` (~line 104, alongside the `generateContent.mockReset()` idiom):
+Then re-establish the impl every test so the two `vi.restoreAllMocks()` afterEach sites (line ~228 and line ~305) can't blank it out, AND clear its call history so the wiring assertion is per-test isolated (the mutant-kill in Step 3 must not false-pass just because an earlier test happened to call the key). Add these lines to the **top-level** `beforeEach` (~line 104, alongside the `generateContent.mockReset()` idiom):
 
 ```ts
+  configValueMock.mockClear();                          // reset call history (impl-preserving)
   configValueMock.mockImplementation(delegateConfigValue);
 ```
 
@@ -473,7 +485,7 @@ git commit -m "docs(server): release note for srv-48 follow-ups (M1/M3/M4)"
 
 ## Acceptance (whole branch)
 
-- `cd server && npm run test` green (all four touched suites).
+- `cd server && npm run test` green (all five affected suites: `semaphore.test.ts`, `persona-gpu-plan.test.ts`, `prepare-persona-batch.test.ts`, `voice-style.test.ts`, plus the whole battery).
 - `npm run typecheck` green.
 - `npm run verify:fast:branch` green.
 - M1 semaphore unit test proves a queued abort leaks no tokens; M3 and M4 each fail on their respective reverts (verified in Task 3/4 Step 3).
