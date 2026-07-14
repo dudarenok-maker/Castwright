@@ -79,23 +79,27 @@ describe('preparePersonaBatch', () => {
     expect(gpuSemaphore.inFlight).toBe(0);
   });
 
-  it('evict refused → CPU args, no throw', async () => {
+  it('evict refused (render slips in during the budget wait) → CPU args, no throw', async () => {
     const { preparePersonaBatch } = await import('./persona-gpu-plan.js');
     const residency = await import('../gpu/residency.js');
     const gen = await import('../routes/generation.js');
 
     mockResolvePersonaEngine.mockReturnValue('local');
     vi.mocked(residency.shouldEvictBeforeSidecarLoad).mockReturnValue(true);
-    /* activeGenerationBooks returns empty so plan.evict=true,
-       but inside unloadResidentSidecar the SECOND check (after acquiring budget)
-       sees an active render → GpuBusyForPersonaError */
-    vi.mocked(gen.activeGenerationBooks)
-      .mockReturnValueOnce([])   // first call: resolvePersonaGpuPlan (busy check)
-      .mockReturnValue(['book-1']); // second call: inside unloadResidentSidecar
+
+    // State-based: idle at plan time; a render starts WHILE we wait for the full budget.
+    let activeBooks: string[] = [];
+    vi.mocked(gen.activeGenerationBooks).mockImplementation(() => activeBooks);
+    vi.spyOn(gpuSemaphore, 'acquire').mockImplementation(async () => {
+      activeBooks = ['book-1']; // render slipped in during the evict wait
+      return () => {};          // no-op release
+    });
+    const fetchSpy = vi.spyOn(global, 'fetch');
 
     const result = await preparePersonaBatch('/a');
     expect(result).toEqual({ onCpu: true, keepAlive: 0 });
-    expect(gpuSemaphore.inFlight).toBe(0); // semaphore released in finally
+    expect(fetchSpy).not.toHaveBeenCalled(); // refused evict must NOT reach /unload
+    expect(gpuSemaphore.inFlight).toBe(0);   // real semaphore untouched (acquire was spied)
   });
 
   it('gemini engine → off-GPU args, no evict', async () => {
