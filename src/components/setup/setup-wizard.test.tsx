@@ -356,4 +356,33 @@ describe('SetupWizard', () => {
     expect(analyzerRow.compareDocumentPosition(voiceRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(analyzerRow).toHaveAttribute('data-status', 'warn');
   });
+
+  it('summary board treats a transiently-starting voice engine as neutral, not attention (#1612)', () => {
+    // sidecar unreachable-transient just means the engine is still starting up —
+    // it should agree with the step-voice neutral pill, not flag as 'attention'.
+    const startingReadiness: SetupReadiness = {
+      ...READINESS,
+      blockers: {
+        ...READINESS.blockers,
+        sidecar: {
+          status: 'fail',
+          cause: 'unreachable-transient',
+          message: 'Voice engine is starting…',
+          remediation: '',
+        },
+        tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+      },
+    };
+    render(
+      <SetupWizard
+        readiness={startingReadiness}
+        mode="checklist"
+        onRefetch={() => {}}
+        onFinish={() => {}}
+      />,
+    );
+    const voiceRow = screen.getByTestId('setup-summary-row-voice');
+    expect(voiceRow).not.toHaveAttribute('data-status', 'attention');
+    expect(voiceRow).toHaveAttribute('data-status', 'ok');
+  });
 });
