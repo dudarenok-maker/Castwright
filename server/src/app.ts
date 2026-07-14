@@ -72,6 +72,7 @@ import { gpuQueueRouter } from './routes/gpu-queue.js';
 import { gpuDevicesRouter } from './routes/gpu-devices.js';
 import { diagnosticsRouter } from './routes/diagnostics.js';
 import { setupReadinessRouter } from './routes/setup-readiness.js';
+import { modelsStatusRouter } from './routes/models-status.js';
 import { tourRouter } from './routes/tour.js';
 import { workspaceRouter } from './routes/workspace.js';
 import { userSettingsRouter } from './routes/user-settings.js';
@@ -201,6 +202,7 @@ app.use('/api/gpu', gpuQueueRouter); // mounts GET /queue (semaphore depth + inF
 app.use('/api/gpu', gpuDevicesRouter); // mounts GET /devices (CUDA card discovery for the admin picker)
 app.use('/api/diagnostics', diagnosticsRouter); // fs-18 — GET / one-shot health board (admin console)
 app.use('/api/setup', setupReadinessRouter); // fs-21 — first-run readiness probe
+app.use('/api/setup', modelsStatusRouter); // GET /models-status — canonical voice-engine status payload
 app.use('/api/setup/venv', venvBootstrapRouter); // fs-21 wave 1b — venv bootstrap (decision Z)
 app.use('/api/tour', tourRouter); // guided-tour status + completion
 
