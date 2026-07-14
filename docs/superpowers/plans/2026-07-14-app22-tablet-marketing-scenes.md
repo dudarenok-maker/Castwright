@@ -57,7 +57,7 @@ Pure refactor: extract the phone framing into a config + templates module, leave
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SURFACES, dimsForTemplate, DIMS } from '../lib/play-frames/surfaces.mjs';
+import { SURFACES, dimsForTemplate, DIMS, rawRelPath } from '../lib/play-frames/surfaces.mjs';
 
 const PLAY_MIN = 320, PLAY_MAX = 3840, PLAY_MAX_RATIO = 2;
 
@@ -86,6 +86,18 @@ test('every scene has a non-empty caption', () => {
   for (const surface of SURFACES) {
     for (const scene of surface.scenes) {
       assert.ok(scene.caption && scene.caption.trim().length > 0, `${surface.id}/${scene.id} caption`);
+    }
+  }
+});
+
+test('rawRelPath: phone is flat, and never throws for any surface/scene', () => {
+  const phone = SURFACES.find((s) => s.id === 'phone');
+  assert.equal(rawRelPath(phone, phone.scenes[0], 'light'), 'library-home.light.png');
+  for (const surface of SURFACES) {
+    for (const scene of surface.scenes) {
+      const p = rawRelPath(surface, scene, 'dark');
+      assert.equal(typeof p, 'string');
+      assert.ok(p.endsWith('.dark.png'));
     }
   }
 });
@@ -141,6 +153,16 @@ export function dimsForTemplate(template) {
   }
 }
 
+// Raw-capture path RELATIVE to RAW_DIR, as a pure fn so the surface/scene field
+// wiring is unit-testable (the runner's I/O is not). rawSubdir resolves
+// per-scene first (fold sets it per-scene), then surface, then '' (flat phone).
+// rawId lets a scene read a differently-named raw (fold seam reuses 'library-home').
+export function rawRelPath(surface, scene, theme) {
+  const sub = scene.rawSubdir ?? surface.rawSubdir ?? '';
+  const stem = scene.rawId ?? scene.id;
+  return sub ? `${sub}/${stem}.${theme}.png` : `${stem}.${theme}.png`;
+}
+
 // Curated, ORDERED phone set — captions moved verbatim from the old SCENES array.
 const PHONE_SCENES = [
   { id: 'library-home', caption: 'Your whole library,\nin one place.' },
@@ -164,7 +186,7 @@ export const SURFACES = [
 
 - [ ] **Step 5: Rewrite `scripts/frame-play-screenshots.mjs` as a thin runner**
 
-Keep the file header comment, `repoRoot`, `RAW_DIR`, `OUT_DIR`. Import `{ b64, shoot, phoneHtml, featureHtml }` from `./lib/play-frames/templates.mjs` (do NOT import `FONTS` into the runner — it's used only inside the templates now; review note N4) and `{ SURFACES, dimsForTemplate }` from `./lib/play-frames/surfaces.mjs`. Replace the theme×SCENES loop with a surface-driven loop that, for the phone surface, reproduces today's behaviour exactly (light → `screenshots/phone`, dark → `screenshots/phone/dark`, `NN-<id>.png`, feature graphic once). Template dispatch by name:
+Keep the file header comment, `repoRoot`, `RAW_DIR`, `OUT_DIR`. Import `{ b64, shoot, phoneHtml, featureHtml }` from `./lib/play-frames/templates.mjs` (do NOT import `FONTS` into the runner — it's used only inside the templates now; review note N4) and `{ SURFACES, dimsForTemplate, rawRelPath }` from `./lib/play-frames/surfaces.mjs`. Replace the theme×SCENES loop with a surface-driven loop that, for the phone surface, reproduces today's behaviour exactly (light → `screenshots/phone`, dark → `screenshots/phone/dark`, `NN-<id>.png`, feature graphic once). Template dispatch by name:
 
 ```js
 const TEMPLATES = { phone: (raw) => phoneHtml(raw) /* tablet/fold added in Task 2 */ };
@@ -178,7 +200,11 @@ for (const surface of SURFACES) {
     let n = 0;
     for (const scene of surface.scenes) {
       const template = scene.template ?? surface.template;
-      const raw = resolve(RAW_DIR, surface.rawSubdir, `${scene.rawId ?? scene.id}.${theme}.png`);
+      // rawSubdir resolves per-scene first (the fold surface sets it per-scene:
+      // 'tablet10' for the reused unfolded raws, 'fold' for the seam), then falls
+      // back to the surface default, then '' (flat phone dir). Mirrors the
+      // scene.template ?? surface.template fallback above (review fix N-NEW1).
+      const raw = resolve(RAW_DIR, rawRelPath(surface, scene, theme));
       if (!existsSync(raw)) { missing.push(`${surface.id}/${scene.id}.${theme}`); continue; }
       n += 1;
       const nn = String(n).padStart(2, '0');
@@ -197,7 +223,7 @@ Preserve the `try/finally` browser lifecycle and the final `made`/`missing` logg
 - [ ] **Step 6: Run the framing test — expect PASS**
 
 Run: `node --test scripts/tests/frame-play-screenshots.test.mjs`
-Expected: PASS (3 tests).
+Expected: PASS (4 tests).
 
 - [ ] **Step 7: Behaviour-preservation check**
 
@@ -246,6 +272,17 @@ test('tablet + fold surfaces present with expected scene sets', () => {
   assert.ok(seam && seam.rawSubdir === 'fold' && seam.rawId === 'library-home');
   const unfolded = byId.fold.scenes.find((s) => s.id === 'library-home');
   assert.equal(unfolded.rawSubdir, 'tablet10');
+});
+
+test('rawRelPath resolves fold per-scene subdirs (the N-NEW1 regression)', () => {
+  const fold = SURFACES.find((s) => s.id === 'fold');
+  const unfolded = fold.scenes.find((s) => s.id === 'library-home');
+  const seam = fold.scenes.find((s) => s.id === 'library-home-seam');
+  // Unfolded reuses the tablet10 raw; seam reads its own fold raw (rawId).
+  assert.equal(rawRelPath(fold, unfolded, 'light'), 'tablet10/library-home.light.png');
+  assert.equal(rawRelPath(fold, seam, 'light'), 'fold/library-home.light.png');
+  // Distinct output stems avoid collision.
+  assert.notEqual(unfolded.id, seam.id);
 });
 
 test('no two scenes in one surface collide on output stem', () => {
@@ -416,7 +453,7 @@ The template call is unchanged from Task 1 — `TEMPLATES[template]({ rawDataUri
 - [ ] **Step 6: Run the test — expect PASS**
 
 Run: `node --test scripts/tests/frame-play-screenshots.test.mjs`
-Expected: PASS (5 tests).
+Expected: PASS (7 tests).
 
 - [ ] **Step 7: Parse check**
 
