@@ -1,16 +1,14 @@
 /* ops-28 — first-run wizard "LAN access" step. Advisory + soft-warning:
    never gates Finish; warns only when LAN HTTPS is requested yet the cert is
    missing/expired. */
-import { useEffect, useState } from 'react';
-import { api } from '../../lib/api';
+import { useState } from 'react';
 import type { LanCertStatus as CertStatus } from '../../lib/api';
 import { LanCertStatus, isCertWarning } from '../lan-cert-status';
 
 export function StepLanCert() {
+  // Banner tracks the child's LIVE status (via onStatus) rather than a separate
+  // mount-time fetch, so a successful in-wizard regenerate clears it.
   const [status, setStatus] = useState<CertStatus | null>(null);
-  useEffect(() => {
-    api.getLanCertStatus().then(setStatus).catch(() => setStatus(null));
-  }, []);
 
   return (
     <div className="space-y-4">
@@ -30,7 +28,7 @@ export function StepLanCert() {
         </div>
       )}
 
-      <LanCertStatus variant="wizard" />
+      <LanCertStatus variant="wizard" onStatus={setStatus} />
     </div>
   );
 }

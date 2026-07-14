@@ -19,15 +19,32 @@ export function isCertWarning(s: CertStatus): boolean {
   return s.requested && (s.health === 'missing' || s.health === 'expired');
 }
 
-export function LanCertStatus({ variant }: { variant: 'wizard' | 'admin' }) {
+export function LanCertStatus({
+  variant,
+  onStatus,
+}: {
+  variant: 'wizard' | 'admin';
+  /** Fired after every successful status fetch so a parent (e.g. the wizard
+      step's warning banner) tracks the LIVE health — including after a
+      regenerate re-fetch — instead of a stale mount-time copy. */
+  onStatus?: (s: CertStatus) => void;
+}) {
   const [status, setStatus] = useState<CertStatus | null>(null);
+  const [loadError, setLoadError] = useState(false);
   const [regen, setRegen] = useState<
     { k: 'idle' } | { k: 'loading' } | { k: 'error'; message: string }
   >({ k: 'idle' });
 
   const refresh = useCallback(() => {
-    api.getLanCertStatus().then(setStatus).catch(() => setStatus(null));
-  }, []);
+    api
+      .getLanCertStatus()
+      .then((s) => {
+        setStatus(s);
+        setLoadError(false);
+        onStatus?.(s);
+      })
+      .catch(() => setLoadError(true));
+  }, [onStatus]);
   useEffect(refresh, [refresh]);
 
   const regenerate = async () => {
@@ -41,7 +58,8 @@ export function LanCertStatus({ variant }: { variant: 'wizard' | 'admin' }) {
     }
   };
 
-  if (!status) {
+  // Pure initial load — no data and no error yet.
+  if (!status && !loadError) {
     return (
       <div className="text-sm text-ink/55" data-testid="lan-cert-loading">
         Checking LAN certificate…
@@ -49,33 +67,49 @@ export function LanCertStatus({ variant }: { variant: 'wizard' | 'admin' }) {
     );
   }
 
-  const restartNeeded = status.health === 'healthy' && !status.active;
+  const restartNeeded = status?.health === 'healthy' && !status.active;
   const buttonLabel =
     regen.k === 'loading'
       ? 'Working…'
-      : status.health === 'healthy'
+      : status?.health === 'healthy'
         ? 'Regenerate certificate'
         : 'Set up LAN certificate';
 
   return (
-    <div className="text-sm" data-testid={`lan-cert-status-${variant}`} data-health={status.health}>
-      <p className={status.health === 'healthy' ? 'text-ink/70' : 'text-amber-700'}>
-        {HEALTH_COPY[status.health]}
-        {status.health !== 'healthy' && (
-          <> You can set it up now, or skip if you only use Castwright on this computer.</>
-        )}
-      </p>
+    <div
+      className="text-sm"
+      data-testid={`lan-cert-status-${variant}`}
+      data-health={status?.health ?? 'unknown'}
+    >
+      {status ? (
+        <>
+          <p className={status.health === 'healthy' ? 'text-ink/70' : 'text-amber-700'}>
+            {HEALTH_COPY[status.health]}
+            {status.health !== 'healthy' && (
+              <> You can set it up now, or skip if you only use Castwright on this computer.</>
+            )}
+          </p>
 
-      {restartNeeded && (
-        <p className="mt-2 text-amber-700" data-testid="lan-cert-restart-note">
-          Certificate ready — restart Castwright once to serve over HTTPS.
-        </p>
-      )}
+          {restartNeeded && (
+            <p className="mt-2 text-amber-700" data-testid="lan-cert-restart-note">
+              Certificate ready — restart Castwright once to serve over HTTPS.
+            </p>
+          )}
 
-      {status.uncoveredIps.length > 0 && (
-        <p className="mt-2 text-ink/60" data-testid="lan-cert-coverage-hint">
-          This certificate doesn’t list {status.uncoveredIps.join(', ')} — regenerate to include
-          your current network.
+          {status.uncoveredIps.length > 0 && (
+            <p className="mt-2 text-ink/60" data-testid="lan-cert-coverage-hint">
+              This certificate doesn’t list {status.uncoveredIps.join(', ')} — regenerate to include
+              your current network.
+            </p>
+          )}
+        </>
+      ) : (
+        // Status fetch failed (e.g. server 500, or mid-restart right after a
+        // regenerate) — never strand the user on a spinner; keep the repair
+        // button + troubleshooting link as recourse.
+        <p className="text-amber-700" data-testid="lan-cert-unavailable">
+          Couldn’t check the LAN certificate right now. You can try setting it up, or see
+          troubleshooting.
         </p>
       )}
 

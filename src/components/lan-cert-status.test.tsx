@@ -51,4 +51,15 @@ describe('LanCertStatus', () => {
       'href', expect.stringContaining('LAN-HTTPS-Troubleshooting'),
     );
   });
+
+  it('falls back to an "unable to check" state with recourse when the status fetch fails', async () => {
+    // A server fault / mid-restart must NOT strand the user on the spinner —
+    // the Regenerate button + troubleshooting link stay available.
+    vi.mocked(api.getLanCertStatus).mockRejectedValue(new Error('ECONNREFUSED'));
+    render(<LanCertStatus variant="wizard" />);
+    expect(await screen.findByTestId('lan-cert-unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('lan-cert-loading')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /set up|regenerate/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /troubleshoot/i })).toBeInTheDocument();
+  });
 });
