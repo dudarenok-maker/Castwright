@@ -3278,57 +3278,121 @@ function writeMockScriptReviewState(bookId: string, state: MockScriptReviewState
   }
 }
 
-export async function mockReviewScript(
-  bookId: string,
-  { onOps, onPhase, onChapterFailed: _onChapterFailed, onCheckpoint, onHeartbeat }: ReviewScriptOpts = {},
-): Promise<ReviewScriptResult> {
-  const opsAccum: Record<number, import('./script-review-apply').ReviewOp[]> = {};
-  const versionAccum: Record<number, number> = {};
-  /* fs-58 follow-up (#1481) — mockAttachScriptReview delegates a resumed
-     reattach back into THIS SAME function; without this guard, resuming
-     from (say) 85% would restart the timeline at 25%, visibly regressing
-     the progress pill before it climbs again. A fresh "click Review
-     Script" call always starts with `running: null` (nothing recorded
-     yet for this book), so `alreadyAt` is 0 and every guard below is a
-     no-op — additive-only for that path. */
+/* fs-58 follow-up (#1496) — mock-mode dedup registry. Mock mode has no server
+   job registry, so without this a hydration effect re-firing mid-review (nav
+   away + back) would start a SECOND racing timeline for the same book. Each
+   live run is one entry; a concurrent caller JOINS it (replaying accumulated
+   ops/checkpoints, then subscribing to live events) instead of starting a
+   second run. The entry object reference IS the per-run identity used for
+   cancellation. Lives only within one JS context — sessionStorage remains the
+   durable cross-reload snapshot. */
+interface InFlightMockReview {
+  subscribers: Set<ReviewScriptOpts>;
+  opsAccum: Record<number, import('./script-review-apply').ReviewOp[]>;
+  versionAccum: Record<number, number>;
+  promise: Promise<ReviewScriptResult>;
+}
+const inFlightMockReviews = new Map<string, InFlightMockReview>();
+
+/** Test-only: clear the in-flight mock-review registry. MUST be called in
+    lockstep with sessionStorage.clear() in a test beforeEach (see the dedup
+    design spec) — clearing one but not the other manufactures an inconsistent
+    registry-empty + sessionStorage-running state the design assumes is
+    impossible in-context. */
+export function _resetMockScriptReviewInFlight(): void {
+  inFlightMockReviews.clear();
+}
+
+export async function mockReviewScript(bookId: string, opts: ReviewScriptOpts = {}): Promise<ReviewScriptResult> {
+  const existing = inFlightMockReviews.get(bookId);
+  if (existing) {
+    /* JOIN — replay what this caller missed, faithfully mirroring the real
+       server's attachSubscriber replay. attachToRunningReview (script-review
+       -thunk.ts) deliberately does NOT seed allOps/versionByChapter from the
+       state snapshot; it relies on the join replaying every already-emitted
+       ops/checkpoint through these callbacks. Replay from the accumulated
+       state (not an ordered log) is faithful: the joiner only pushes ops into
+       its own allOps and takes the last version per chapter. NO await between
+       replay and subscribe, so no live emit can interleave and be missed. */
+    for (const [chIdStr, ops] of Object.entries(existing.opsAccum)) {
+      // Snapshot copy — opsAccum[chId] is a live array a subsequent noteOps
+      // call keeps pushing into; handing out the reference itself would let
+      // a later live push silently mutate an already-replayed event's ops.
+      opts.onOps?.({ chapterId: Number(chIdStr), ops: [...ops] });
+    }
+    for (const [chIdStr, version] of Object.entries(existing.versionAccum)) {
+      opts.onCheckpoint?.({ chapterId: Number(chIdStr), version });
+    }
+    existing.subscribers.add(opts);
+    try {
+      return await existing.promise;
+    } finally {
+      existing.subscribers.delete(opts);
+    }
+  }
+
+  /* START — register BEFORE running (no await before set()), so the body can
+     reference `entry` for identity/accumulators and the first throwIfCancelled
+     (which only runs after the first await) always sees this entry. The
+     placeholder promise is assigned on the very next line; the body never
+     reads entry.promise. */
+  const entry: InFlightMockReview = {
+    subscribers: new Set([opts]),
+    opsAccum: {},
+    versionAccum: {},
+    promise: undefined as unknown as Promise<ReviewScriptResult>,
+  };
+  inFlightMockReviews.set(bookId, entry);
+  entry.promise = runMockReviewTimeline(bookId, entry);
+  try {
+    return await entry.promise;
+  } finally {
+    // Evict only if still the current entry — a cancel (which evicts) followed
+    // by a fresh run may have replaced us; never evict a successor.
+    if (inFlightMockReviews.get(bookId) === entry) inFlightMockReviews.delete(bookId);
+  }
+}
+
+async function runMockReviewTimeline(bookId: string, entry: InFlightMockReview): Promise<ReviewScriptResult> {
+  /* fs-58 follow-up (#1481) — a resumed reattach (mockAttachScriptReview after
+     a reload) delegates back here with progress already recorded; without the
+     alreadyAt guards below, resuming from 85% would restart the pill at 25%. A
+     fresh run has running:null, so alreadyAt is 0 and every guard is a no-op. */
   const alreadyAt = readMockScriptReviewState(bookId).running?.lastPhase.progress ?? 0;
+
+  const emitPhase = (p: SubstagePhaseEvent) => {
+    for (const s of entry.subscribers) s.onPhase?.(p);
+  };
   const notePhase = (phase: SubstagePhaseEvent) => {
     writeMockScriptReviewState(bookId, {
       running: { lastPhase: phase },
       entries: readMockScriptReviewState(bookId).entries,
     });
-    onPhase?.(phase);
+    emitPhase(phase);
   };
   const noteOps = (chId: number, ops: import('./script-review-apply').ReviewOp[]) => {
-    (opsAccum[chId] ??= []).push(...ops);
-    onOps?.({ chapterId: chId, ops });
+    (entry.opsAccum[chId] ??= []).push(...ops);
+    for (const s of entry.subscribers) s.onOps?.({ chapterId: chId, ops });
   };
   const noteCheckpoint = (chId: number, version: number) => {
-    versionAccum[chId] = version;
-    onCheckpoint?.({ chapterId: chId, version });
+    entry.versionAccum[chId] = version;
+    for (const s of entry.subscribers) s.onCheckpoint?.({ chapterId: chId, version });
   };
-  /* fs-58 follow-up (#1481) — mirrors the real server's job-registry abort
-     check so the mandated e2e Cancel spec has something real to observe.
-     `notePhase` writes `running` non-null on every tick; if it now reads
-     null, something else (mockCancelScriptReview) cleared it since our own
-     last tick — nothing else writes this book's mock state concurrently. */
+  /* Cancellation is now keyed on entry-object IDENTITY, not the shared
+     sessionStorage running flag (#1496): mockCancelScriptReview evicts this
+     book's entry, and a fresh run registers a different entry — either way
+     `get(bookId) !== entry` here, so a still-alive cancelled run can't be
+     resurrected by a fresh run re-writing running non-null. */
   const throwIfCancelled = () => {
-    if (readMockScriptReviewState(bookId).running === null) {
+    if (inFlightMockReviews.get(bookId) !== entry) {
       throw new ReviewScriptError('Review cancelled.', 'cancelled');
     }
   };
 
-  /* Mark this run as active IMMEDIATELY, synchronously, before the first
-     `await` yields control back to the event loop — not via notePhase
-     (which would also fire a possibly-premature onPhase callback). This
-     closes a real race a code review caught: without this, `running`
-     stays whatever it was BEFORE this call (null for a fresh run) for the
-     entire first `wait(60)` below, so a cancel landing in that window
-     writes `running: null` — indistinguishable from "hasn't started yet"
-     — and the first tick's own unconditional write then resurrects the
-     cancelled run instead of throwIfCancelled ever seeing the null. Since
-     this line runs before any `await`, no concurrently-dispatched cancel
-     can possibly interleave before it. */
+  /* Mark active synchronously before the first await — PERSISTENCE ONLY now
+     (cancellation is entry-identity based). Keeps mockGetScriptReviewState and
+     a reload within the first tick observing a running job. Runs before any
+     await, so no concurrently-dispatched cancel can interleave before it. */
   writeMockScriptReviewState(bookId, {
     running: { lastPhase: { progress: alreadyAt, label: 'Reviewing script' } },
     entries: readMockScriptReviewState(bookId).entries,
@@ -3337,13 +3401,7 @@ export async function mockReviewScript(
   await wait(60);
   throwIfCancelled();
   if (alreadyAt < 0.25) {
-    /* fs-58 heartbeat follow-up — a transient "loading the model" tick so
-       the popover has something to render before the first real chapter
-       tick lands. Not persisted via notePhase (that would clobber the
-       `running.lastPhase.progress` a reattach reads back — see the
-       alreadyAt comment above), so a page reload never sees this as the
-       last-known phase. */
-    onPhase?.({ progress: 0, label: 'Loading model', activityState: 'loading', engine: 'local', model: 'qwen3.5:9b' });
+    onPhaseLoadingTick(emitPhase);
     notePhase({
       progress: 0.25,
       label: 'Reviewing script',
@@ -3358,78 +3416,49 @@ export async function mockReviewScript(
   await wait(500);
   throwIfCancelled();
   if (alreadyAt < 0.5) {
-    notePhase({
-      progress: 0.5,
-      label: 'Reviewing script',
-      chapterId: 3,
-      chapterIndex: 2,
-      totalChapters: 3,
-      estRemainingMs: 20_000,
-    });
+    notePhase({ progress: 0.5, label: 'Reviewing script', chapterId: 3, chapterIndex: 2, totalChapters: 3, estRemainingMs: 20_000 });
   }
   await wait(500);
   throwIfCancelled();
   if (alreadyAt < 0.85) {
-    notePhase({
-      progress: 0.85,
-      label: 'Reviewing script',
-      chapterId: 3,
-      chapterIndex: 3,
-      totalChapters: 3,
-      estRemainingMs: 5_000,
-    });
+    notePhase({ progress: 0.85, label: 'Reviewing script', chapterId: 3, chapterIndex: 3, totalChapters: 3, estRemainingMs: 5_000 });
   }
   await wait(400);
   throwIfCancelled();
-  /* fs-58 heartbeat follow-up — one streaming heartbeat so the streaming
-     timer has data to render before the ops for this chapter land. */
-  onHeartbeat?.({ chapterId: 3, streaming: true });
-  /* fs-58 Unit A: strip_tag on sentence id:1 (chapterId:3). */
+  // One streaming heartbeat so the streaming timer has data before ops land.
+  for (const s of entry.subscribers) s.onHeartbeat?.({ chapterId: 3, streaming: true });
+  /* fs-58 Unit A: strip_tag on ch3 sentence 1. */
   noteOps(3, [{ id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' }]);
   noteCheckpoint(3, 1);
-  /* fs-58 validate_instruct (origin/main): strip_tag + validate_instruct on
-     chapter 1, sentence id:1. */
+  /* validate_instruct: strip_tag + validate_instruct on ch1 sentence 1. */
   noteOps(1, [
     { id: 1, op: 'strip_tag', newText: 'x', rationale: 'tag' },
-    {
-      id: 1,
-      op: 'validate_instruct',
-      newInstruct: 'a calm tone',
-      rationale: 'contradicts the line',
-    },
+    { id: 1, op: 'validate_instruct', newInstruct: 'a calm tone', rationale: 'contradicts the line' },
   ]);
   noteCheckpoint(1, 1);
-  /* fs-58 Unit B: off-roster reattribute on sentence id:3 (dialogue line),
-     and flag_nonstory on sentence id:15 (the "p. 42" artefact line).
-     Both default OFF in the diff modal (script-review-slice DEFAULT_OFF set). */
+  /* Progressive emission (#1496): yield here so a concurrent attach lands with
+     ch3 + ch1 already accumulated and exercises the join REPLAY path, instead
+     of every op arriving in one synchronous burst (which would make replay
+     dead code and its test self-certifying). Also better models a real review
+     that checkpoints chapters progressively. */
+  await wait(200);
+  throwIfCancelled();
+  /* fs-58 Unit B: off-roster reattribute on ch3 sentence 3, flag_nonstory on
+     ch3 sentence 15. Both default OFF in the diff modal. */
   noteOps(3, [
-    {
-      id: 3,
-      op: 'reattribute',
-      proposed: { name: 'Ferra', gender: 'female' },
-      rationale: 'speaker not in cast',
-    },
-    {
-      id: 15,
-      op: 'flag_nonstory',
-      rationale: 'page number artefact',
-    },
+    { id: 3, op: 'reattribute', proposed: { name: 'Ferra', gender: 'female' }, rationale: 'speaker not in cast' },
+    { id: 15, op: 'flag_nonstory', rationale: 'page number artefact' },
   ]);
   noteCheckpoint(3, 2);
 
-  /* Finalize: fold this run's ops/versions into the ledger and clear the
-     running flag — close enough to the real server's checkpoint-then-
-     complete lifecycle for the e2e specs to observe reload-survival. */
+  /* Finalize: fold this run's ops/versions into the ledger and clear running. */
   const entries: Record<string, LedgerEntryDTO> = { ...readMockScriptReviewState(bookId).entries };
-  for (const [chIdStr, ops] of Object.entries(opsAccum)) {
+  for (const [chIdStr, ops] of Object.entries(entry.opsAccum)) {
     entries[chIdStr] = {
       manuscriptId: bookId,
-      version: versionAccum[Number(chIdStr)] ?? 1,
-      // ops is the mock's own ReviewOp[] accumulator; LedgerEntryDTO['ops'] is
-      // the generated schema's deliberately-loose `{[key: string]: unknown}[]`
-      // (see the ScriptReviewLedgerEntry.ops description in openapi.yaml) — no
-      // index signature on ReviewOp itself, so the widening needs the
-      // `unknown` bounce same as every other ops-array cast in this feature.
+      version: entry.versionAccum[Number(chIdStr)] ?? 1,
+      // ReviewOp[] -> LedgerEntryDTO['ops'] (openapi's deliberately-loose
+      // {[key: string]: unknown}[]) — same unknown bounce as elsewhere here.
       ops: ops as unknown as LedgerEntryDTO['ops'],
       selected: {},
       completedAt: new Date().toISOString(),
@@ -3438,6 +3467,14 @@ export async function mockReviewScript(
   writeMockScriptReviewState(bookId, { running: null, entries });
 
   return { reviewedChapters: 1, totalOps: 5 };
+}
+
+/* fs-58 heartbeat follow-up — a transient "loading the model" tick so the
+   popover renders before the first real chapter tick. NOT persisted via
+   notePhase (that would clobber the running.lastPhase.progress a reattach
+   reads back), so a reload never sees this as the last-known phase. */
+function onPhaseLoadingTick(emitPhase: (p: SubstagePhaseEvent) => void): void {
+  emitPhase({ progress: 0, label: 'Loading model', activityState: 'loading', engine: 'local', model: 'qwen3.5:9b' });
 }
 
 // Finding 3 (PR review round 5): sourced from the generated
@@ -3678,6 +3715,9 @@ export async function mockPatchScriptReviewSelection(
 export async function mockCancelScriptReview(bookId: string): Promise<CancelScriptReviewResult> {
   const state = readMockScriptReviewState(bookId);
   const cancelled = state.running !== null;
+  // Kill the live run via entry-identity mismatch (#1496): a still-alive run's
+  // next throwIfCancelled will see its entry gone (or replaced) and throw.
+  inFlightMockReviews.delete(bookId);
   writeMockScriptReviewState(bookId, { running: null, entries: state.entries });
   return { ok: true, cancelled };
 }
