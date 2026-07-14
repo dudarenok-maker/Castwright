@@ -3,6 +3,8 @@ import { api, ApiError } from '../lib/api';
 import type { PublicDevice } from '../lib/types';
 import { PairingQr } from './pairing/pairing-qr';
 import { PrimaryButton } from './primitives';
+import { WikiLink } from './wiki-link';
+import { ADMIN_WIKI } from '../lib/wiki-links';
 
 const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleDateString() : '—');
 
@@ -51,7 +53,10 @@ export function LanAccessCard() {
 
   return (
     <section className="bg-white rounded-3xl border border-ink/10 shadow-card p-6">
-      <h2 className="font-serif text-xl font-bold text-ink">LAN access</h2>
+      <div className="flex items-center gap-2">
+        <h2 className="font-serif text-xl font-bold text-ink">LAN access</h2>
+        <WikiLink page={ADMIN_WIKI.lanAccess} label="Wiki" className="text-xs" />
+      </div>
       {manageHint ? (
         <p className="mt-2 text-sm text-ink/60">Manage devices from the desktop app.</p>
       ) : (

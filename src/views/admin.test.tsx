@@ -158,6 +158,17 @@ describe('AdminView — model manager link (fs-23)', () => {
   });
 });
 
+describe('AdminView — wiki links (help troubleshooting reorg)', () => {
+  it('links Admin nav cards out to the wiki', () => {
+    renderAdmin();
+    const hrefs = screen
+      .getAllByRole('link', { name: /wiki/i })
+      .map((l) => l.getAttribute('href'));
+    expect(hrefs).toContain('https://github.com/dudarenok-maker/Castwright/wiki/Model-Manager');
+    expect(hrefs).toContain('https://github.com/dudarenok-maker/Castwright/wiki/Advanced-Settings');
+  });
+});
+
 describe('AdminView — about link', () => {
   it('opens the About page when the link is clicked', async () => {
     const { store } = renderAdmin();
