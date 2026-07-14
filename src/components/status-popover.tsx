@@ -179,6 +179,13 @@ function SubstageRow({
     the blocker is passing. Shared by the Voice engines / Analysis sections. */
 function DiagnosisBlock({ diagnosis, onDone }: { diagnosis: BlockerDiagnosis; onDone: () => void }) {
   if (diagnosis.status === 'pass') return null;
+  if (diagnosis.status === 'warn') {
+    return (
+      <div className="mt-2">
+        <p className="text-sm text-amber-700/80">{diagnosis.message}</p>
+      </div>
+    );
+  }
   return (
     <div className="mt-2 space-y-1.5">
       <p className="text-sm text-ink/70">{diagnosis.message}</p>

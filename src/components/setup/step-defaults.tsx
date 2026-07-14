@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import { TTS_ENGINES, type TtsEngineId } from '../../lib/tts-models';
-import { buildLocalModelOptions, buildModelOptionGroups } from '../../lib/models';
+import { buildLocalModelOptions, buildModelOptionGroups, engineForModelId } from '../../lib/models';
 import type { TtsModelKey } from '../../lib/types';
 import type { ThemePreference } from '../../lib/use-theme';
 import { useAppDispatch, useAppSelector } from '../../store';
@@ -92,7 +92,10 @@ export function StepDefaults({ readiness: _readiness }: Props) {
 
   const handleAnalysisModelChange = (next: string) => {
     setAnalysisModel(next);
-    void dispatch(saveAccountSettings({ defaultAnalysisModel: next }));
+    // Auto-derive the engine from the id shape (":"→local, else gemini) — matches
+    // getResolvedOllamaModel's heuristic. This is what routes generation.
+    const engine = engineForModelId(next);
+    void dispatch(saveAccountSettings({ defaultAnalysisModel: next, analysisEngine: engine }));
   };
 
   const handleThemeChange = (next: ThemePreference) => {

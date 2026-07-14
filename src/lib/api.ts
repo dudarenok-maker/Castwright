@@ -7169,7 +7169,7 @@ export interface BlockerAction {
 }
 
 export interface BlockerDiagnosis {
-  status: 'pass' | 'fail';
+  status: 'pass' | 'warn' | 'fail';
   cause: BlockerCause;
   message: string;
   remediation: string;
@@ -7194,10 +7194,16 @@ async function realGetSetupReadiness(): Promise<SetupReadiness> {
    ?setup=notready param so the state survives the redirect to #/setup, where
    the query param is gone. */
 
-function mockBlocker(status: 'pass' | 'fail'): BlockerDiagnosis {
-  return status === 'pass'
-    ? { status: 'pass', cause: 'pass', message: 'Ready', remediation: '' }
-    : { status: 'fail', cause: 'venv-missing', message: 'Not set up', remediation: 'Set it up.' };
+function mockBlocker(status: 'pass' | 'warn' | 'fail'): BlockerDiagnosis {
+  if (status === 'pass') return { status: 'pass', cause: 'pass', message: 'Ready', remediation: '' };
+  if (status === 'warn')
+    return {
+      status: 'warn',
+      cause: 'pass',
+      message: 'Analyzer ready — no backup analyzer configured.',
+      remediation: '',
+    };
+  return { status: 'fail', cause: 'venv-missing', message: 'Not set up', remediation: 'Set it up.' };
 }
 
 /* The sidecar's venv-missing failure in the notReady branch below, copied

@@ -1,7 +1,7 @@
 /* fs-21 wave 2 — C5: SetupWizard orchestrator.
-   Composes the six step components into two modes:
+   Composes the seven step components into two modes:
 
-   - guided    — linear, one step at a time, Back/Next paging + a "Step N of 6"
+   - guided    — linear, one step at a time, Back/Next paging + a "Step N of 7"
                  progress indicator. Next is ALWAYS enabled: the derived Wave 0
                  boot gate is the real lock, so the wizard never blocks
                  progression on a failing blocker. The final step (Finish) owns
@@ -23,17 +23,19 @@ import { MixedHeading, PrimaryButton } from '../primitives';
 import type { SetupReadiness } from '../../lib/api';
 import { StepEnvironment } from './step-environment';
 import { StepFfmpeg } from './step-ffmpeg';
-import { StepModels } from './step-models';
+import { StepAnalysis } from './step-analysis';
+import { StepVoice } from './step-voice';
 import { StepDefaults } from './step-defaults';
 import { StepLanCert } from './step-lan-cert';
 import { StepFinish } from './step-finish';
 
-type StepId = 'environment' | 'ffmpeg' | 'models' | 'defaults' | 'lanCert' | 'finish';
+type StepId = 'environment' | 'ffmpeg' | 'analysis' | 'voice' | 'defaults' | 'lanCert' | 'finish';
 
 const STEPS: { id: StepId; title: string }[] = [
   { id: 'environment', title: 'Environment' },
   { id: 'ffmpeg', title: 'ffmpeg' },
-  { id: 'models', title: 'Models' },
+  { id: 'analysis', title: 'Analysis' },
+  { id: 'voice', title: 'Voice' },
   { id: 'defaults', title: 'Defaults' },
   { id: 'lanCert', title: 'LAN access' },
   { id: 'finish', title: 'Finish' },
@@ -60,8 +62,10 @@ function renderStep(
       return <StepEnvironment readiness={readiness} onRefetch={onRefetch} />;
     case 'ffmpeg':
       return <StepFfmpeg readiness={readiness} onRefetch={onRefetch} />;
-    case 'models':
-      return <StepModels readiness={readiness} onRefetch={onRefetch} />;
+    case 'analysis':
+      return <StepAnalysis readiness={readiness} onRefetch={onRefetch} />;
+    case 'voice':
+      return <StepVoice readiness={readiness} onRefetch={onRefetch} />;
     case 'defaults':
       return <StepDefaults readiness={readiness} />;
     case 'lanCert':
@@ -140,7 +144,7 @@ function GuidedWizard({
         </button>
       )}
 
-      {/* Progress indicator: dots + "Step N of 6" */}
+      {/* Progress indicator: dots + "Step N of 7" */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1.5" aria-hidden>
           {STEPS.map((s, i) => (
@@ -229,7 +233,7 @@ function ReEntryFlow({
   );
 }
 
-type SummaryStatus = 'ok' | 'attention';
+type SummaryStatus = 'ok' | 'warn' | 'attention';
 
 interface SummaryRow {
   key: string;
@@ -242,13 +246,17 @@ interface SummaryRow {
 
 /* Derive one at-a-glance row per setup area from the readiness blockers.
    Environment + Defaults are informational (always 'ok'); the three real
-   blockers (ffmpeg, voice runtime + default voice, analyzer) drive the dots. */
+   blockers (ffmpeg, voice runtime + default voice, analyzer) drive the dots.
+   Analyzer precedes Voice, mirroring the local-first Analysis-before-Voice
+   step order. */
 function buildSummaryRows(readiness: SetupReadiness): SummaryRow[] {
   const { blockers, info } = readiness;
   const voiceOk = blockers.sidecar.status === 'pass' && blockers.tts.status === 'pass';
   const voiceDetail = voiceOk
     ? 'Runtime + default voice ready'
     : (blockers.sidecar.status === 'fail' ? blockers.sidecar.message : blockers.tts.message);
+  const analyzerStatus: SummaryStatus =
+    blockers.analyzer.status === 'pass' ? 'ok' : blockers.analyzer.status === 'warn' ? 'warn' : 'attention';
   return [
     {
       key: 'environment',
@@ -265,32 +273,32 @@ function buildSummaryRows(readiness: SetupReadiness): SummaryRow[] {
       stepIndex: 1,
     },
     {
+      key: 'analyzer',
+      label: 'Analyzer',
+      detail: blockers.analyzer.status === 'pass' ? 'Ready' : blockers.analyzer.message,
+      status: analyzerStatus,
+      stepIndex: 2,
+    },
+    {
       key: 'voice',
       label: 'Voice engines',
       detail: voiceDetail,
       status: voiceOk ? 'ok' : 'attention',
-      stepIndex: 2,
-    },
-    {
-      key: 'analyzer',
-      label: 'Analyzer',
-      detail: blockers.analyzer.status === 'pass' ? 'Ready' : blockers.analyzer.message,
-      status: blockers.analyzer.status === 'pass' ? 'ok' : 'attention',
-      stepIndex: 2,
+      stepIndex: 3,
     },
     {
       key: 'defaults',
       label: 'Defaults',
       detail: 'New-book starting points',
       status: 'ok',
-      stepIndex: 3,
+      stepIndex: 4,
     },
     {
       key: 'lanCert',
       label: 'LAN access',
       detail: 'Phone/tablet HTTPS certificate',
       status: 'ok',
-      stepIndex: 4,
+      stepIndex: 5,
     },
   ];
 }
@@ -346,9 +354,15 @@ function SetupSummary({
             <span
               className={[
                 'inline-block w-2.5 h-2.5 rounded-full shrink-0',
-                r.status === 'ok' ? 'bg-emerald-500' : 'bg-amber-500',
+                r.status === 'ok' ? 'bg-emerald-500' : r.status === 'warn' ? 'bg-amber-400' : 'bg-amber-500',
               ].join(' ')}
-              aria-label={r.status === 'ok' ? `${r.label}: ready` : `${r.label}: needs attention`}
+              aria-label={
+                r.status === 'ok'
+                  ? `${r.label}: ready`
+                  : r.status === 'warn'
+                    ? `${r.label}: ready, no backup`
+                    : `${r.label}: needs attention`
+              }
             />
             <span className="font-semibold text-ink text-sm w-36 shrink-0">{r.label}</span>
             <span className="text-sm text-ink/60 min-w-0 flex-1 truncate">{r.detail}</span>

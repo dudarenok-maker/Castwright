@@ -67,6 +67,7 @@ export function BlockerFixAction({
   }, []);
 
   const action = diagnosis.action;
+  if (diagnosis.status !== 'fail') return null;
   if (!action) return null;
 
   const pollJob = (endpoint: string, id: string) => {
