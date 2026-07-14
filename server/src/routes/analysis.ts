@@ -107,6 +107,7 @@ import {
   seedReuseGuardsFromPriorCast,
   voicedSurvivorsDropped,
   applyRewriteToPriorCast,
+  dropReuseContinuityKeepDesignedVoice,
 } from '../store/merge-analysis-cast.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
@@ -2556,9 +2557,18 @@ export async function runMainAnalyzerJob(
     /* Snapshot the existing cast's designed-voice links BEFORE any interim
        write clobbers cast.json, so the final roster preserves them across a
        re-analysis (#518 — re-attribution must not strip designed voices).
-       `fresh` (Start fresh) intentionally discards them, so capture nothing. */
-    const priorCastForMerge: Array<{ id: string } & Record<string, unknown>> =
-      !requestedFresh && recordRef.bookDir ? await readPriorCastForMerge(recordRef.bookDir) : [];
+       `fresh` (Start fresh) re-derives attribution AND reuse continuity from
+       scratch, but must NOT discard the user's bespoke designed voices (the
+       2026-07-14 Coalfall voice-strip incident: fresh used to capture nothing
+       here, so the interim/final merge overwrote cast.json voiceless). So still
+       snapshot the prior on a fresh run — with reuse continuity stripped, since
+       fresh legitimately re-derives that. Read happens before the fresh block
+       below rm's cast.json, so the value survives that deletion. */
+    const priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = recordRef.bookDir
+      ? requestedFresh
+        ? dropReuseContinuityKeepDesignedVoice(await readPriorCastForMerge(recordRef.bookDir))
+        : await readPriorCastForMerge(recordRef.bookDir)
+      : [];
 
     /* Heal cross-series/author reuse links carried in the prior cast BEFORE it
        feeds the seed + every cast.json merge below. pruneStaleReuseLinks on the
