@@ -194,6 +194,124 @@ describe('StatusPopover', () => {
     expect(screen.queryByTestId('substage-detail')).not.toBeInTheDocument();
   });
 
+  it('shows "Ollama · <friendly model>" when the substage engine is local', () => {
+    render(
+      <StatusPopover
+        {...makeProps({
+          analysis: null,
+          analysisSubstage: { label: 'Reviewing script', percent: 10, engine: 'local', model: 'qwen3.5:9b' },
+        })}
+      />,
+    );
+    expect(screen.getByTestId('substage-engine-model').textContent).toBe('Ollama · Qwen3.5 9B (local)');
+  });
+
+  it('shows "Gemini · <friendly model>" when the substage engine is gemini', () => {
+    render(
+      <StatusPopover
+        {...makeProps({
+          analysis: null,
+          analysisSubstage: {
+            label: 'Reviewing script',
+            percent: 10,
+            engine: 'gemini',
+            model: 'gemma-4-31b-it',
+          },
+        })}
+      />,
+    );
+    expect(screen.getByTestId('substage-engine-model').textContent).toBe('Gemini · Gemma 4 31B');
+  });
+
+  it('omits the engine·model line when the substage has no model', () => {
+    render(
+      <StatusPopover
+        {...makeProps({
+          analysis: null,
+          analysisSubstage: { label: 'Reviewing script', percent: 10 },
+        })}
+      />,
+    );
+    expect(screen.queryByTestId('substage-engine-model')).not.toBeInTheDocument();
+  });
+
+  it('shows a "Loading model" ticking timer when activityState is loading', () => {
+    render(
+      <StatusPopover
+        {...makeProps({
+          analysis: null,
+          analysisSubstage: {
+            label: 'Reviewing script',
+            percent: 0,
+            activityState: 'loading',
+            activitySince: Date.now(),
+          },
+        })}
+      />,
+    );
+    expect(screen.getByTestId('substage-timer').textContent).toMatch(/^Loading model · \d+s$/);
+  });
+
+  it('shows a "Waiting for model" ticking timer when activityState is waiting', () => {
+    render(
+      <StatusPopover
+        {...makeProps({
+          analysis: null,
+          analysisSubstage: {
+            label: 'Reviewing script',
+            percent: 0,
+            activityState: 'waiting',
+            activitySince: Date.now(),
+          },
+        })}
+      />,
+    );
+    expect(screen.getByTestId('substage-timer').textContent).toMatch(/^Waiting for model · \d+s$/);
+  });
+
+  it('omits the timer when activityState is streaming (the normal detail line covers it)', () => {
+    render(
+      <StatusPopover
+        {...makeProps({
+          analysis: null,
+          analysisSubstage: {
+            label: 'Reviewing script',
+            percent: 40,
+            activityState: 'streaming',
+            activitySince: Date.now(),
+          },
+        })}
+      />,
+    );
+    expect(screen.queryByTestId('substage-timer')).not.toBeInTheDocument();
+  });
+
+  it('shows the fallback note when fallbackActive is set', () => {
+    render(
+      <StatusPopover
+        {...makeProps({
+          analysis: null,
+          analysisSubstage: { label: 'Reviewing script', percent: 10, fallbackActive: true },
+        })}
+      />,
+    );
+    expect(screen.getByTestId('substage-fallback-note').textContent).toBe(
+      'Switched to Gemini — Ollama unreachable',
+    );
+  });
+
+  it('omits the fallback note when fallbackActive is not set', () => {
+    render(
+      <StatusPopover
+        {...makeProps({
+          analysis: null,
+          analysisSubstage: { label: 'Reviewing script', percent: 10 },
+        })}
+      />,
+    );
+    expect(screen.queryByTestId('substage-fallback-note')).not.toBeInTheDocument();
+  });
+
   const FAIL_SIDECAR: BlockerDiagnosis = {
     status: 'fail',
     cause: 'venv-missing',
