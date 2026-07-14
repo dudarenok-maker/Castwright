@@ -147,7 +147,7 @@ export function startPortForwarder(
      no listener attached — Node treats an unhandled 'error' event on an
      EventEmitter as an uncaught exception, crashing the entire process, not
      just this convenience forwarder. Matches crash-logging.ts's
-     attachListenErrorHandler, which uses .on for the identical reason. */
+     listenWithAutoRebind, which uses .on for the identical reason. */
   server.on('error', (err) => {
     warn(
       `[lan-port-forwarder] could not bind :${listenPort} (port already in use, or ` +
