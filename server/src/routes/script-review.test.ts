@@ -41,10 +41,12 @@ let priorChapterIdFor: typeof PriorChapterIdFor;
    `selectedEngine` lets a test flip the reported engine to 'local' (so the
    chunker derives a finite, num_ctx-bound budget and a large chapter splits);
    it defaults to 'gemini' so the existing single-call tests are unchanged. */
-const { runReview, engineState, selectAnalyzerForPhaseMock } = vi.hoisted(() => ({
+const { runReview, engineState, selectAnalyzerForPhaseMock, warmOllamaModelMock, selectAnalyzerMock } = vi.hoisted(() => ({
   runReview: vi.fn(),
   engineState: { engine: 'gemini' as 'gemini' | 'local' },
   selectAnalyzerForPhaseMock: vi.fn(),
+  warmOllamaModelMock: vi.fn(),
+  selectAnalyzerMock: vi.fn(),
 }));
 
 vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
@@ -64,6 +66,41 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
       analyzer: fakeAnalyzer,
       engine: engineState.engine,
       model: 'test-model',
+      fallbackModel: null,
+    })),
+  };
+});
+
+/* Task 6 — warm step + Gemini-switch. `warmOllamaModel` is mocked so tests
+   control the warm outcome without a real Ollama daemon; `selectAnalyzer`
+   (the RE-selection `switchToFallback` performs) is mocked too so the
+   post-fallback analyzer instance is the SAME fake analyzer wired to
+   `runReview`, not a real GeminiAnalyzer that would attempt a network call. */
+vi.mock('./ollama-health.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./ollama-health.js')>();
+  return {
+    ...actual,
+    warmOllamaModel: warmOllamaModelMock,
+  };
+});
+
+vi.mock('../analyzer/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analyzer/index.js')>();
+  const fakeAnalyzer: Analyzer = {
+    runStage1: () => Promise.reject(new Error('not used')),
+    runStage1Chapter: () => Promise.reject(new Error('not used')),
+    runStage2Chapter: () => Promise.reject(new Error('not used')),
+    runEmotionChapter: () => Promise.reject(new Error('not used')),
+    runScriptReviewChapter: (m, c, p, call) => runReview(m, c, p, call),
+    runStage3Chapter: () => Promise.reject(new Error('not used')),
+    runAttributionEscalation: () => Promise.resolve(null),
+  };
+  return {
+    ...actual,
+    selectAnalyzer: selectAnalyzerMock.mockImplementation((opts?: { model?: string }) => ({
+      analyzer: fakeAnalyzer,
+      engine: 'gemini',
+      model: opts?.model ?? 'gemini-fallback-model',
       fallbackModel: null,
     })),
   };
@@ -174,6 +211,12 @@ beforeEach(() => {
   engineState.engine = 'gemini';
   delete process.env.ANALYZER_NUM_CTX;
   rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
+  // Default: warm succeeds instantly so the existing local-engine tests
+  // (which don't care about the warm step) are unaffected; individual
+  // Task 6 tests override this per-case.
+  warmOllamaModelMock.mockReset();
+  warmOllamaModelMock.mockResolvedValue({ ok: true });
+  selectAnalyzerMock.mockClear();
 });
 
 afterAll(() => {
@@ -461,9 +504,14 @@ describe('POST /api/books/:bookId/script-review', () => {
     expect(res.status).toBe(200);
     const events = parseSse(res.text);
     const phases = events.filter((e) => e.kind === 'phase');
+    // Task 6's warm-model phase (activityState: 'loading') now precedes the
+    // chapter-start phase for a local engine — filter to the chapter-start
+    // phases specifically (activityState: 'waiting') rather than assuming
+    // index 0.
+    const chapterStartPhases = phases.filter((e) => e.activityState === 'waiting');
 
     // Chapter-start phase carries model + engine + waiting.
-    expect(phases[0]).toMatchObject({
+    expect(chapterStartPhases[0]).toMatchObject({
       label: 'Reviewing script',
       activityState: 'waiting',
       model: expect.any(String),
@@ -473,6 +521,121 @@ describe('POST /api/books/:bookId/script-review', () => {
     // A per-chunk phase advanced progress strictly between chapter starts.
     const progresses = phases.map((p) => p.progress as number);
     expect(progresses.some((p, i) => i > 0 && p > progresses[i - 1] && p < 1)).toBe(true);
+  });
+
+  /* Task 6 — the explicit warm step ahead of the per-chapter loop, and the
+     switchToFallback latch it can trigger. Three branches: no-fallback warm
+     failure hard-errors; a configured Gemini fallback survives a cold/dead
+     Ollama instead of aborting a setup that works today; and a cancel that
+     lands DURING the warm await must not be reported as a load failure. */
+  describe('warm step + Gemini-switch latch (Task 6)', () => {
+    it('local engine, no Gemini fallback configured, warm fails → model_load_failed and zero chapters reviewed', async () => {
+      writeBook(SENTENCES);
+      selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({
+        analyzer: {
+          runStage1: () => Promise.reject(new Error('not used')),
+          runStage1Chapter: () => Promise.reject(new Error('not used')),
+          runStage2Chapter: () => Promise.reject(new Error('not used')),
+          runEmotionChapter: () => Promise.reject(new Error('not used')),
+          runScriptReviewChapter: (m: string, c: number, p: string, call: unknown) =>
+            (runReview as (...args: unknown[]) => unknown)(m, c, p, call),
+          runStage3Chapter: () => Promise.reject(new Error('not used')),
+          runAttributionEscalation: () => Promise.resolve(null),
+        } as Analyzer,
+        engine: 'local',
+        model: 'qwen3.5:9b',
+        fallbackModel: null,
+      }));
+      warmOllamaModelMock.mockResolvedValue({ ok: false, status: 503, error: 'connect ECONNREFUSED' });
+
+      const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+      expect(res.status).toBe(200);
+      const events = parseSse(res.text);
+
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'error', code: 'model_load_failed' }));
+      expect(events.filter((e) => e.kind === 'ops')).toHaveLength(0);
+      expect(events.some((e) => e.kind === 'result')).toBe(false);
+      expect(runReview).not.toHaveBeenCalled();
+    });
+
+    it('local engine, Gemini fallback configured, warm fails → no error, one gemini announcement phase, chapters still run', async () => {
+      writeBook(SENTENCES);
+      selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({
+        analyzer: {
+          runStage1: () => Promise.reject(new Error('not used')),
+          runStage1Chapter: () => Promise.reject(new Error('not used')),
+          runStage2Chapter: () => Promise.reject(new Error('not used')),
+          runEmotionChapter: () => Promise.reject(new Error('not used')),
+          runScriptReviewChapter: (m: string, c: number, p: string, call: unknown) =>
+            (runReview as (...args: unknown[]) => unknown)(m, c, p, call),
+          runStage3Chapter: () => Promise.reject(new Error('not used')),
+          runAttributionEscalation: () => Promise.resolve(null),
+        } as Analyzer,
+        engine: 'local',
+        model: 'qwen3.5:9b',
+        fallbackModel: 'gemma-4-31b-it',
+      }));
+      warmOllamaModelMock.mockResolvedValue({ ok: false, status: 503, error: 'connect ECONNREFUSED' });
+      runReview.mockResolvedValue({ ops: [] });
+
+      const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+      expect(res.status).toBe(200);
+      const events = parseSse(res.text);
+
+      expect(events.find((e) => e.kind === 'error')).toBeUndefined();
+      expect(
+        events.filter((e) => e.kind === 'phase' && e.engine === 'gemini' && e.fallbackReason),
+      ).toHaveLength(1);
+      // switchToFallback re-selected via the (mocked) selectAnalyzer, so the
+      // fallback model id it was asked for is the ORIGINAL selection's
+      // fallbackModel, not the dead local model.
+      expect(selectAnalyzerMock).toHaveBeenCalledWith({ model: 'gemma-4-31b-it' });
+      // Both chapters still get reviewed, on the switched-to analyzer.
+      expect(runReview).toHaveBeenCalled();
+      expect(events.find((e) => e.kind === 'result')).toMatchObject({ done: true, reviewedChapters: 2 });
+    });
+
+    it('cancel arriving during the warm await surfaces "cancelled", not "model_load_failed"', async () => {
+      writeBook(SENTENCES);
+      selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({
+        analyzer: {
+          runStage1: () => Promise.reject(new Error('not used')),
+          runStage1Chapter: () => Promise.reject(new Error('not used')),
+          runStage2Chapter: () => Promise.reject(new Error('not used')),
+          runEmotionChapter: () => Promise.reject(new Error('not used')),
+          runScriptReviewChapter: (m: string, c: number, p: string, call: unknown) =>
+            (runReview as (...args: unknown[]) => unknown)(m, c, p, call),
+          runStage3Chapter: () => Promise.reject(new Error('not used')),
+          runAttributionEscalation: () => Promise.resolve(null),
+        } as Analyzer,
+        engine: 'local',
+        model: 'qwen3.5:9b',
+        fallbackModel: null,
+      }));
+      let releaseWarm: ((v: { ok: false; status: number; error: string }) => void) | undefined;
+      warmOllamaModelMock.mockImplementation(
+        (_model: string, opts: { signal?: AbortSignal }) =>
+          new Promise((resolve) => {
+            releaseWarm = resolve;
+            // Mirrors warmOllamaModel's real contract: an aborted signal
+            // eventually resolves the pending call rather than hanging it.
+            opts.signal?.addEventListener('abort', () => resolve({ ok: false, status: 0, error: 'aborted' }));
+          }),
+      );
+
+      const { done } = firePost(`/api/books/${bookId}/script-review`, {});
+      done.catch(() => {});
+      await new Promise((r) => setTimeout(r, 20)); // let the request register and reach the gated warm call
+
+      await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
+      releaseWarm?.({ ok: false, status: 0, error: 'aborted' });
+      const res = await done;
+
+      const events = parseSse(res.text);
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'error', code: 'cancelled' }));
+      expect(events.some((e) => e.kind === 'error' && e.code === 'model_load_failed')).toBe(false);
+      expect(runReview).not.toHaveBeenCalled();
+    });
   });
 
   it('feeds the prior chapter exchange into the next chapter, first chunk only (fs-64)', async () => {
