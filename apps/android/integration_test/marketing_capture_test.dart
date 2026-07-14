@@ -24,11 +24,20 @@ const _seed = Color(0xFFA43C6C);
 /// they also appear in the always-visible "Continue listening" rail
 /// (`continue-<id>`), whose card routes through the SAME `onSelect`. Prefer the
 /// grid tile when it's built (phone — byte-identical to the historical path);
-/// fall back to the rail card otherwise (tablet).
+/// fall back to the rail card otherwise (tablet). The rail card only exists for
+/// an in-progress (resume-point) book; if a future scene ever drills into a
+/// non-resume book on tablet, neither finder matches — fail loudly here rather
+/// than letting `ensureVisible` throw a generic "No element".
 Future<void> _selectBook(WidgetTester tester, String bookId) async {
   final grid = find.byKey(Key('book-$bookId'));
   final target =
       grid.evaluate().isNotEmpty ? grid : find.byKey(Key('continue-$bookId'));
+  if (target.evaluate().isEmpty) {
+    throw StateError(
+        'Neither book-$bookId (library grid, may be below the lazy-list fold on '
+        'tablet) nor continue-$bookId (Continue-listening rail, needs a resume '
+        'point) is in the tree — cannot select this book for capture.');
+  }
   await tester.ensureVisible(target);
   await tester.pumpAndSettle();
   await tester.tap(target);

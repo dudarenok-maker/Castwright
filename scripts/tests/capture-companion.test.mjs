@@ -23,9 +23,16 @@ test('rotationValue: natural-landscape device (Pixel Tablet) — landscape=0, po
 });
 
 test('parseNaturalLandscape reads Physical size and compares W vs H', () => {
-  assert.equal(parseNaturalLandscape('Physical size: 2560x1600'), true); // Pixel Tablet
-  assert.equal(parseNaturalLandscape('Physical size: 800x1280'), false); // Nexus 7
+  // The 2560x1600 / 800x1280 strings are the REAL `adb shell wm size` output
+  // recorded on-box from the Pixel Tablet (PushTablet) and Nexus_7 AVDs during
+  // the app-22 capture run — the fix hinges on these being the natural
+  // (ROTATION_0) dimensions, which Android's `Physical size` always reports.
+  assert.equal(parseNaturalLandscape('Physical size: 2560x1600'), true); // Pixel Tablet (recorded)
+  assert.equal(parseNaturalLandscape('Physical size: 800x1280'), false); // Nexus 7 (recorded)
   assert.equal(parseNaturalLandscape('Physical size: 1080 x 2340'), false); // phone, spaced
+  // Real `wm size` can print a second `Override size:` line — must read the
+  // FIRST (Physical) match, not the override.
+  assert.equal(parseNaturalLandscape('Physical size: 2560x1600\nOverride size: 1920x1200'), true);
   assert.equal(parseNaturalLandscape('unexpected output'), false); // safe fallback → portrait
 });
 
