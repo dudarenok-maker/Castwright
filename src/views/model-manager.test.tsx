@@ -26,6 +26,15 @@ vi.mock('../lib/api', () => ({
     putUserSettings: vi.fn(),
     putGeminiKey: vi.fn(),
     restartSidecar: vi.fn(),
+    getModelsStatus: vi.fn().mockResolvedValue({
+      runtime: { installedOnDisk: true, pythonFound: true, process: 'ready' },
+      engines: {
+        kokoro: { state: 'ready', packageBroken: false },
+        qwen: { state: 'ready', packageBroken: false },
+        coqui: { state: 'not-installed', packageBroken: false },
+      },
+      info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
+    }),
     getOllamaHealth: vi.fn().mockResolvedValue({
       status: 'reachable',
       url: '(mock)',
@@ -498,6 +507,22 @@ describe('ModelManagerView — per-row install (fs-23 follow-up)', () => {
     expect(within(qwen).getByTestId('model-install-toggle-qwen-base')).toHaveTextContent(/Update/);
   });
 
+  it('renders the controlled voice cards from models-status when toggled open', async () => {
+    renderManager();
+    /* Kokoro card (real, controlled) reflects engines.kokoro='ready'. */
+    const kokoro = await screen.findByTestId('model-row-kokoro');
+    fireEvent.click(within(kokoro).getByTestId('model-install-toggle-kokoro'));
+    expect(await within(kokoro).findByText(/Kokoro is installed/i)).toBeInTheDocument();
+    /* Coqui card reflects engines.coqui='not-installed'. */
+    const coqui = screen.getByTestId('model-row-coqui');
+    fireEvent.click(within(coqui).getByTestId('model-install-toggle-coqui'));
+    expect(await within(coqui).findByText(/Coqui XTTS v2 is not installed/i)).toBeInTheDocument();
+    /* Qwen card is mocked to a stub button in this file. */
+    const qwen = screen.getByTestId('model-row-qwen-base');
+    fireEvent.click(within(qwen).getByTestId('model-install-toggle-qwen-base'));
+    expect(await within(qwen).findByTestId('mock-qwen-install-btn')).toBeInTheDocument();
+  });
+
   it('shows an Install toggle for kokoro (fs-21: weights fetched at install time, not bundled)', async () => {
     renderManager();
     const kokoro = await screen.findByTestId('model-row-kokoro');
@@ -636,8 +661,9 @@ describe('ModelManagerView — health honesty + repair + tier grouping', () => {
     /* Open the Repair installer panel. */
     fireEvent.click(within(row).getByTestId('model-install-toggle-qwen-base'));
 
-    /* The mocked QwenInstall stub is now visible; clicking it fires onInstalled(). */
-    const installBtn = within(row).getByTestId('mock-qwen-install-btn');
+    /* The mocked QwenInstall stub renders once models-status resolves; clicking
+       it fires onInstalled(). */
+    const installBtn = await within(row).findByTestId('mock-qwen-install-btn');
     fireEvent.click(installBtn);
 
     /* The onInstalled handler for a package-missing row calls api.restartSidecar. */
@@ -670,7 +696,7 @@ describe('ModelManagerView — health honesty + repair + tier grouping', () => {
 
     /* Open the Update panel and trigger onInstalled. */
     fireEvent.click(within(row).getByTestId('model-install-toggle-qwen-base'));
-    fireEvent.click(within(row).getByTestId('mock-qwen-install-btn'));
+    fireEvent.click(await within(row).findByTestId('mock-qwen-install-btn'));
 
     /* restartSidecar must NOT be called on a normal update. */
     await waitFor(() => expect(api.getModelInventory).toHaveBeenCalledTimes(2)); // initial + onChanged refetch
