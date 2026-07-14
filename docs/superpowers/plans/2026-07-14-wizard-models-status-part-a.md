@@ -392,7 +392,7 @@ Do the I/O (disk probes, one `/health` probe, VRAM read, runtime axes) and call 
 - Modify: wherever setup routers are mounted (grep `setupReadinessRouter` in `server/src/` to find the mount site — mount `modelsStatusRouter` alongside it under `/api/setup`).
 
 **Interfaces:**
-- Consumes: `buildModelsStatus`, `RuntimeProcessState` (`../tts/models-status.js`); `VOICE_ENGINES` (`../tts/voice-engine-registry.js`); `sidecarVenvPresent` (`../diagnostics/venv.js`); `probePython312Cached` (`./setup-diagnosis.js`); `probeSidecarHealth` (`./sidecar-health.js`); `getActiveSupervisor` (`../tts/sidecar-supervisor.js`); `getDeviceTotalVramMb` (`../gpu/device-total.js`); `buildDiagnostics` (`./diagnostics.js`, for the gpu detail string) or reuse the existing gpu detail path.
+- Consumes: `buildModelsStatus`, `RuntimeProcessState` (`../tts/models-status.js`); `VOICE_ENGINES` (`../tts/voice-engine-registry.js`); `sidecarVenvPresent` (`../diagnostics/venv.js`); `probePython312Cached` (`./setup-diagnosis.js`); `probeSidecarHealth`, `SidecarHealthResult` (`./sidecar-health.js`); `getActiveSupervisor` (`../tts/sidecar-supervisor.js`); `getDeviceTotalVramMb` (`../gpu/device-total.js`). **Do NOT consume `buildDiagnostics`** — the GPU string is built by the local `gpuDetail(health, …)` helper off the single `/health` probe (see Finding 3 / the "one probe" invariant).
 - Produces: `modelsStatusRouter`, `computeModelsStatus(repoRoot): Promise<ModelsStatus>` (exported so `setup-readiness.ts` reuses it — Task 4).
 
 - [ ] **Step 1: Write the failing test**
@@ -749,7 +749,7 @@ Lift the idle/detect status out of each card into a required prop; keep the inst
 - Modify: `src/components/{kokoro-install,venv-bootstrap,qwen-install,coqui-install}.test.tsx`
 
 **Interfaces (all four cards, uniform):**
-- Consumes: a `status` prop derived from `ModelsStatus` by the parent. For engine cards: `status: { state: EngineHealthState; packageBroken: boolean }`. For `VenvBootstrap`: `status: { installedOnDisk: boolean; pythonFound: boolean; process: RuntimeProcessState }`.
+- Consumes: a `status` prop derived from `ModelsStatus` by the parent. For engine cards: `status: { state: EngineHealthState; packageBroken: boolean }`. For `VenvBootstrap`: `status: { installedOnDisk: boolean; pythonFound: boolean; process: RuntimeProcessState }`. **Add `import type { EngineHealthState, RuntimeProcessState } from '../lib/api';`** to each card (exported in Task 5).
 - Produces: unchanged install-job behavior + `onInstalled?()` / `onBootstrapped?()`.
 
 **Migration shape (KokoroInstall — the others mirror it):**
@@ -1028,6 +1028,9 @@ The current `INSTALLER_BY_ID: Partial<Record<string, ComponentType<{ onInstalled
 ```tsx
 import type { ModelsStatus } from '../lib/api';
 // …
+// Returns the installer element (or null). `onInstalled` is the CALLER'S wrapped
+// callback — see the render site below, which preserves the existing
+// package-missing → restartSidecar → onChanged behavior.
 function renderInstaller(id: string, modelsStatus: ModelsStatus | null, onInstalled: () => void) {
   // Inventory id → models-status engine key. 'qwen-base' is the installable Qwen row.
   const engineKey = ({ kokoro: 'kokoro', coqui: 'coqui', 'qwen-base': 'qwen' } as const)[
@@ -1044,7 +1047,27 @@ function renderInstaller(id: string, modelsStatus: ModelsStatus | null, onInstal
   return null;
 }
 ```
-Delete `INSTALLER_BY_ID`; call `renderInstaller(id, modelsStatus, refetchInventory)` at the old render site. Add a `modelsStatus` state fetched via `api.getModelsStatus()` on mount and on the SAME 30s cadence as the existing inventory poll (`INVENTORY_POLL_MS`), plus refetched from `onInstalled`. Rewrite `model-manager.test.tsx` to provide `api.getModelsStatus` in its mock and assert the three voice cards render from it.
+
+**PRESERVE the package-missing → restart behavior.** The current render site
+(`model-manager.tsx:555-571`) wraps `onInstalled` so a package-missing repair restarts
+the sidecar (so the reinstalled package re-imports) before refreshing:
+```tsx
+const installerEl = renderInstaller(item.id, modelsStatus, async () => {
+  if (isPackageMissing) await api.restartSidecar();
+  onChanged();
+  void refetchModelsStatus(); // so the card + badges update after repair
+});
+// keep the existing wrapper + hint, now gated on installerEl (not INSTALLER_BY_ID[id]):
+{installerEl && installerOpen && (
+  <div data-testid={`model-installer-${item.id}`} className="border-t border-ink/10 pt-3">
+    {isPackageMissing && (
+      <p className="mb-2 text-xs text-ink/60">Reinstalls the engine package, then restarts the sidecar.</p>
+    )}
+    {installerEl}
+  </div>
+)}
+```
+`isPackageMissing` keeps its existing inventory-derived value (unchanged). Delete `INSTALLER_BY_ID`. Add a `modelsStatus` state fetched via `api.getModelsStatus()` on mount and on the SAME 30s cadence as the existing inventory poll (`INVENTORY_POLL_MS`); expose `refetchModelsStatus` for the wrapped callback. Rewrite `model-manager.test.tsx` to provide `api.getModelsStatus` in its mock and assert the three voice cards render from it AND that a package-missing repair still calls `api.restartSidecar`.
 
 > **Whisper note:** `WhisperInstall` is ASR, not a voice engine, and is excluded from `models-status` — it stays self-fetching (unchanged). The controlled migration is voice-engines-only. State this in the regression plan.
 
@@ -1082,7 +1105,7 @@ Expected: PASS.
 
 - [ ] **Step 3: Write the regression plan**
 
-From `docs/features/TEMPLATE.md`: invariants (single source of truth; per-engine no-masking; neutral transient; re-check refreshes badge; `packageBroken` sidecar-up-only; Whisper excluded), the manual acceptance walkthrough (force a weights-missing Kokoro; confirm badge+card agree), and the automated coverage list (Tasks 1–8 tests + this e2e). `status: active`.
+From `docs/features/TEMPLATE.md`: invariants (single source of truth; per-engine no-masking; neutral transient; re-check refreshes badge; `packageBroken` sidecar-up-only; Whisper excluded; Coqui now gated on `!packageBroken` uniformly), the manual acceptance walkthrough (force a weights-missing Kokoro; confirm badge+card agree; force a package-missing engine and confirm Model-Manager repair still restarts the sidecar), and the automated coverage list (Tasks 1–8 tests + this e2e). **Note two cosmetic deltas:** the wizard's `info.gpu` string wording changes (now built by `gpuDetail` off `/health`, not the diagnostics row), and Model-Manager voice cards render blank for the brief window until the first `getModelsStatus()` resolves. `status: active`.
 
 - [ ] **Step 4: Release notes (both files)**
 
