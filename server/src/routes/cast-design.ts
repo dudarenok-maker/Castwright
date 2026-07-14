@@ -234,7 +234,7 @@ async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[]): Promise<v
   if (baseIds.length === 0) return;
 
   // One GPU decision (evict / CPU-fallback) for the entire batch.
-  const prep = await preparePersonaBatch(job.bookDir);
+  const prep = await preparePersonaBatch(job.bookDir, job.controller.signal);
 
   // Emit the same `heartbeat` event type the design loop uses so the pill's
   // stall heuristic resets on a known event.

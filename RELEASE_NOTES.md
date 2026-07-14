@@ -19,6 +19,7 @@
 - **Castwright now supports Chinese and Japanese books.** Any book, performed by a full cast, now stretches to two of the world's most-spoken languages — upload a Chinese or Japanese manuscript and it's no longer turned away at the door. For the cleanest read on who's speaking, we recommend picking a local Qwen analysis model in Advanced Settings for these languages for now.
 - **Find help faster.** Troubleshooting is now sorted into clear, searchable sections instead of one long list — and Help and Admin link straight out to the matching guide in the wiki.
 - **Castwright now starts even when another app is already using its port.** If something else on your machine — another web app, or a leftover copy of Castwright — is already using the port Castwright wants, it used to refuse to start at all. Now it quietly finds the next free port and starts there, so a busy port no longer blocks your launch. Your phone and tablet still reach it at the same friendly address as always.
+- **Pausing a voice-design run now stops it promptly.** On a tight graphics card, Castwright briefly frees up GPU memory before designing your cast's voices with a local model. Pausing during that brief step now takes effect right away, instead of waiting for the current line to finish.
 - **Phone & tablet pairing, now self-healing.** Castwright's setup now checks the local certificate that powers listening on your phone or tablet — and fixes it in one click if it's missing, so pairing never silently stays off.
 
 # Castwright 1.13.0
