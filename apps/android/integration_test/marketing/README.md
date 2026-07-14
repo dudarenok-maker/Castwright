@@ -70,6 +70,109 @@ The curated order + caption per scene lives in the `SCENES` array at the top of
 the script. Recommended upload order (hero first): `library-home` → `player` →
 `book-detail` → `library-offline` → `pairing` → `settings`.
 
+## Tablet & foldable surfaces (app-22)
+
+The same demo runtime also drives three more capture passes, producing Play
+Store marketing assets for the app-21 two-pane adaptive UI:
+
+    npm run capture:companion:tablet7    # raw surfaces → mockups/marketing-screens/companion/tablet7/
+    npm run capture:companion:tablet10   # raw surfaces → mockups/marketing-screens/companion/tablet10/
+    npm run capture:companion:fold       # raw surfaces → mockups/marketing-screens/companion/fold/
+
+Boot the matching AVD **before** running the script — it doesn't launch one
+for you, same as `capture:companion`:
+
+| Script | AVD |
+|---|---|
+| `capture:companion:tablet7` | a 7" tablet profile (e.g. `Nexus 7`) |
+| `capture:companion:tablet10` | the Pixel Tablet AVD |
+| `capture:companion:fold` | the Pixel Fold AVD |
+
+The Pixel Tablet and Pixel Fold AVDs already exist from app-21. The 7" AVD is
+new — create it once with the same recipe used for those (adjust the API
+level/image to whatever the box already has installed):
+
+    # JAVA_HOME must point at Android Studio's bundled JBR (JDK 21) — avdmanager
+    # ships against that JDK, not a standalone JRE.
+    export JAVA_HOME="/path/to/Android Studio/jbr"   # or the JDK21 dir on Windows
+    avdmanager create avd \
+      -n Nexus_7_API_34 \
+      -k "system-images;android-34;google_apis;x86_64" \
+      -d "Nexus 7"
+
+Confirm with `flutter emulators` / `adb devices` as usual once it's booted.
+
+### What each pass captures
+
+Each tablet script runs **two `flutter drive` passes** against the booted AVD:
+a **landscape** pass for the four scenes that need the two-pane layout
+(`library-home`, `player`, `book-detail`, `library-offline` — the two-pane
+shell only renders at `≥840` dp, which only landscape clears on these AVDs),
+then a **portrait** pass for `settings`/`pairing` (single-pane on any size, so
+no orientation flip is needed for those two). `capture:companion:fold`
+captures **only the half-open seam** shot (`library-home`, one scene) — the
+*unfolded* fold marketing assets are **not** separately captured; the framing
+step (`npm run frame:play`) reframes the `tablet10` landscape raws into a
+fold bezel template instead, since unfolded-Fold and landscape-Pixel-Tablet
+render pixel-identically.
+
+Before each pass the script sets rotation via adb:
+
+    adb shell settings put system accelerometer_rotation 0
+    adb shell settings put system user_rotation 1   # landscape passes
+    adb shell settings put system user_rotation 0   # portrait passes
+
+and restores `accelerometer_rotation 1` afterwards (in a `finally`, so a
+failed pass doesn't leave the AVD rotation-locked for the next one).
+
+### Fold posture
+
+The half-open seam pass needs the AVD's **posture (device_state) index for
+`HALF_OPENED`** — this index is box-specific (it comes from whatever
+`device_states.textproto` config the emulator ships), so never hardcode it.
+Before your first fold capture on a given box, find it once:
+
+    adb shell cmd device_state print-states
+
+Look for the entry named `HALF_OPENED` and note its `identifier`. The script
+auto-detects it from that same `print-states` output; if auto-detection ever
+fails (unexpected output format, or you want to be explicit), set it yourself:
+
+    FOLD_HALF_OPEN_STATE=1 npm run capture:companion:fold
+
+After the seam shot, the script resets posture with
+`adb shell cmd device_state state reset`.
+
+### Fail-loud guards
+
+Two hard assertions turn "the rotation/posture command silently didn't take"
+into a failed test, instead of a wrong-looking-but-passing screenshot:
+
+- **Landscape passes** assert the window actually reads as `expanded`
+  (`windowSizeClassFor(width) == WindowSizeClass.expanded`) before the first
+  shot. If this fails, it means `adb ... user_rotation` didn't actually
+  rotate the AVD — it is **not** a code bug in the two-pane layout itself.
+- **The fold seam pass** asserts a vertical fold/hinge `DisplayFeature` is
+  present before the first shot. If this fails, the `device_state` posture
+  index didn't take (wrong index, or the AVD reset to flat `OPENED`) — again,
+  not a layout bug.
+
+If either fires, re-check the adb commands above ran against the right
+booted device (`adb devices`) rather than debugging the Flutter layout code.
+
+### Output
+
+Raw captures land under `mockups/marketing-screens/companion/<tablet7|tablet10|fold>/`
+(git-ignored, mirroring the flat phone raws). `npm run frame:play` now emits
+framed Play-ready assets for every surface, light + dark:
+
+- `screenshots/tablet-7/` — 2560×1600 landscape / 1600×2560 portrait
+- `screenshots/tablet-10/` — same dimensions, Pixel Tablet raws
+- `screenshots/fold/` — foldable-bezel template, reusing `tablet-10` landscape
+  raws for the four unfolded scenes plus the dedicated half-open seam shot
+
+alongside the existing `screenshots/phone/` set, all under `brand/` (git-ignored).
+
 ## When features change
 
 Add a screen → add a `Scene` to `integration_test/marketing/scenes.dart` and (if
