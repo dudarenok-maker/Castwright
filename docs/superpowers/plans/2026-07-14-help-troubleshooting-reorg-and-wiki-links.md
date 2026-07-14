@@ -44,17 +44,31 @@
 
 ---
 
-## Task 0: Cut the branch
+## Task 0: Cut the branch in an isolated worktree (no work on main)
 
-- [ ] **Step 1: Verify on latest main and cut branch**
+All implementation runs in a **dedicated git worktree** on the feature branch — never on `main`, never in the primary checkout. The feature branch is cut **off the docs branch** (`docs/help-troubleshooting-reorg-spec`) so the spec + plan ride along into one PR.
+
+- [ ] **Step 1: Create the worktree + feature branch off the docs branch**
 
 ```bash
-git switch main && git pull --ff-only
-git switch -c feat/frontend-help-troubleshooting-wiki-links
+# from the primary checkout root
+git worktree add -b feat/frontend-help-troubleshooting-wiki-links \
+  ../castwright-help-reorg docs/help-troubleshooting-reorg-spec
+cd ../castwright-help-reorg
+ls docs/superpowers/specs/2026-07-14-* docs/superpowers/plans/2026-07-14-*
 ```
-Expected: `Switched to a new branch 'feat/frontend-help-troubleshooting-wiki-links'`.
+Expected: worktree created on `feat/frontend-help-troubleshooting-wiki-links`; both spec + plan files listed (present on the branch).
 
-> Note: the spec/plan docs currently live on branch `docs/help-troubleshooting-reorg-spec`. Either merge that branch to main first, or cherry-pick its two commits onto this feature branch so the spec/plan travel with the delivery. Confirm the spec + plan files are present (`ls docs/superpowers/specs/2026-07-14-*` and `docs/superpowers/plans/2026-07-14-*`) before starting Task 1.
+- [ ] **Step 2: Activate hooks + deps in the worktree**
+
+A fresh worktree has no active husky hooks and its own `node_modules` state. Run once:
+
+```bash
+npm install   # activates husky (core.hooksPath) and installs deps in the worktree
+```
+Expected: install completes; `.husky/_` present. (If `node_modules` is huge, a junction to the primary checkout's is acceptable per repo convention — but `npm install` must still run so husky activates.)
+
+> Windows/worktree gotchas (see repo memory): don't `mklink /J` the whole `node_modules` blindly; `test:server` in a fresh worktree may trigger a real venv/torch bootstrap if `.venv` is absent — not relevant here (frontend-only), but avoid the server battery in the worktree while a GPU render is live.
 
 ---
 
@@ -66,7 +80,7 @@ Expected: `Switched to a new branch 'feat/frontend-help-troubleshooting-wiki-lin
 
 **Interfaces:**
 - Produces: `WIKI_BASE: string`; `type WikiPage`; `wikiUrl(page: WikiPage): string`; `CATEGORY_WIKI: Record<CategoryId, WikiPage>`; `ADMIN_WIKI: Record<'modelManager' | 'advanced' | 'lanAccess' | 'admin', WikiPage>`; `HELP_SECTION_WIKI: Record<'gettingStarted' | 'keyboard' | 'troubleshooting', WikiPage>`.
-- Consumes: `CategoryId` from `src/data/help-failures.ts` (Task 3). **To avoid a task-ordering cycle, Task 1 defines its own local `CategoryId` string-literal union inline and Task 3 imports it back**, OR Task 1 lands after Task 3. Chosen: **land Task 3 first is not required** — Task 1 declares `CATEGORY_WIKI` keyed by the literal category ids as strings and is typed `satisfies Record<CategoryId, WikiPage>` only after Task 3 exists. For Task 1 in isolation, type it `Record<string, WikiPage>` and tighten to `satisfies Record<CategoryId, WikiPage>` in Task 3, Step where `CategoryId` is created.
+- Consumes: nothing yet. `CATEGORY_WIKI` is typed `Record<string, WikiPage>` in this task (no dependency on `CategoryId`), and tightened to `satisfies Record<CategoryId, WikiPage>` in Task 3 Step 3d once `CategoryId` exists. The dependency is one-directional (`wiki-links.ts` will later import `CategoryId` from `help-failures.ts`; nothing imports back) — no cycle.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -502,10 +516,12 @@ In `src/views/help.test.tsx`, replace the `renders a taxonomy entry…` and `mar
     expect(screen.queryByText('GPU out of memory (VRAM)')).toBeNull();
   });
 
-  it('expands a group on header click', () => {
+  it('expands a group on header click and shows failure-card labels', () => {
     renderHelp();
     fireEvent.click(screen.getByRole('button', { name: /performance & gpu/i }));
     expect(screen.getByText('GPU out of memory (VRAM)')).toBeInTheDocument();
+    // failure cards carry the What-you-saw / What-to-do labels (topic cards do not)
+    expect(screen.getAllByText(/what to do/i).length).toBeGreaterThan(0);
   });
 
   it('mounts and marks the focused entry inside its auto-expanded group', () => {
@@ -759,20 +775,55 @@ Add the input just under the troubleshooting intro `<p>` (before the groups cont
             </div>
 ```
 
-Update the group loop from Task 4 so search overrides expansion. Replace the `const items` / `const open` lines and the empty-group case:
+Replace the **entire** group-loop container from Task 4 with this search-aware version (complete — do not leave any prose gaps). While `q !== ''`, a group is force-open and shows only its matching items; groups with no matches are hidden; the header count reflects `items.length` while searching, else the full `all.length`:
 
 ```tsx
+            <div className="mt-6 space-y-3">
               {HELP_CATEGORIES.map((cat) => {
                 const all = itemsFor(cat.id);
                 const items = q === '' ? all : all.filter(matches);
                 if (q !== '' && items.length === 0) return null; // hide non-matching groups while searching
                 const open = q !== '' ? true : expanded.has(cat.id);
-                // …render header (disable toggle visual state when searching is optional; keep clickable)…
-                //   header count shows `items.length` while searching, else `all.length`
-                //   body renders `items`
+                const count = q === '' ? all.length : items.length;
+                return (
+                  <div key={cat.id} className="rounded-xl border border-ink/10 bg-white">
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      aria-controls={`cat-panel-${cat.id}`}
+                      onClick={() => toggle(cat.id)}
+                      disabled={q !== ''}
+                      className="w-full flex items-center justify-between gap-3 px-4 sm:px-5 py-3 min-h-[44px] fine-pointer:min-h-0 text-left disabled:cursor-default"
+                    >
+                      <span className="font-semibold text-ink">
+                        {cat.label} <span className="font-normal text-ink/40">({count})</span>
+                      </span>
+                      {open ? (
+                        <IconChevD className="w-4 h-4 text-ink/50 shrink-0" aria-hidden="true" />
+                      ) : (
+                        <IconChevR className="w-4 h-4 text-ink/50 shrink-0" aria-hidden="true" />
+                      )}
+                    </button>
+                    {open && (
+                      <div
+                        id={`cat-panel-${cat.id}`}
+                        className="px-4 sm:px-5 pb-4 space-y-3 border-t border-ink/5 pt-3"
+                      >
+                        {items.map((item) => (
+                          <HelpItemCard key={item.id} item={item} focusCode={focusCode} focusedRef={focusedRef} />
+                        ))}
+                        <div className="pt-1">
+                          <WikiLink page={CATEGORY_WIKI[cat.id]} label="More on this in the wiki" className="text-xs" />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
 ```
 
-(Header count: show `all.length` when `q === ''`, else `items.length`. Body maps `items`.)
+> This block already includes the per-category `WikiLink` from Task 6 — when doing Task 5 before Task 6, omit the `WikiLink` line + its wrapping `<div>` and add them in Task 6; when doing them together, keep as shown. The `disabled={q !== ''}` on the header prevents toggling a force-open group mid-search (a click would otherwise mutate `expanded` invisibly).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -861,20 +912,25 @@ git commit -m "feat(frontend): add wiki links to Help sections and categories"
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `src/views/admin.test.tsx` (reuse the file's existing render helper/store — match its current setup):
+`admin.test.tsx` has **no** `renderAdmin` helper — it renders `<AdminView/>` inline with a store + a `vi.mock('../lib/api', …)` block whose fns are given `mockResolvedValue`s (handles at `admin.test.tsx:25-28`, resolved in the file's `beforeEach`). Append this test **inside** the existing top-level `describe` (so it inherits that `beforeEach`), asserting only the two synchronous nav cards (`ModelManagerLink`, `AdvancedConfigLink`) — they render immediately and need no resolved fetch, avoiding the async `HealthBoard`/`ResourceTrends` panels:
 
 ```tsx
-  it('links Admin panels out to the wiki', async () => {
-    renderAdmin(); // use the file's existing render helper
+  it('links Admin nav cards out to the wiki', () => {
+    const store = configureStore({ reducer: { ui: uiSlice.reducer } });
+    render(
+      <Provider store={store}>
+        <AdminView />
+      </Provider>,
+    );
     const hrefs = screen
-      .getAllByRole('link', { name: /read more on the wiki|wiki/i })
+      .getAllByRole('link', { name: /wiki/i })
       .map((l) => l.getAttribute('href'));
     expect(hrefs).toContain('https://github.com/dudarenok-maker/Castwright/wiki/Model-Manager');
     expect(hrefs).toContain('https://github.com/dudarenok-maker/Castwright/wiki/Advanced-Settings');
   });
 ```
 
-> Read `src/views/admin.test.tsx` first — match its existing render/store harness rather than inventing `renderAdmin`. `LanAccessCard` may need its slice/props; if it makes the test heavy, assert the Model-Manager + Advanced links (both plain nav cards, no extra deps) and cover the LAN link in its own component test.
+> `configureStore`, `render`, `Provider`, `screen`, `uiSlice`, `AdminView` are already imported at the top of `admin.test.tsx` (lines 1-6). The `beforeEach` in that file must already resolve the api mocks (`mockWorktrees.mockResolvedValue(...)`, etc.) — if it does not (some tests set them per-test), copy the resolutions from a neighboring test so the async panels don't throw on mount. The LAN link is covered separately in `lan-access-card`'s own test if one exists; otherwise a follow-up.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1022,3 +1078,14 @@ File a `type:feature` + `area:frontend` issue for the Troubleshooting reorg and 
 **Placeholder scan:** No TBD/TODO; all code steps carry real code; test commands have expected output. The only deliberately-deferred detail is matching `admin.test.tsx`'s existing render harness (Task 7 flags reading the file first — a real constraint, not a placeholder).
 
 **Type consistency:** `CategoryId` defined in `help-failures.ts` (Task 3), imported by `help-topics.ts`, `help-categories.ts`, `wiki-links.ts`, `help.tsx`. `HelpItem`/`itemsFor`/`HELP_ITEMS`/`HelpItemCard` names consistent across Tasks 4–6. `wikiUrl`/`WikiPage`/`CATEGORY_WIKI`/`ADMIN_WIKI`/`HELP_SECTION_WIKI` consistent across Tasks 1–2, 6–7. `WikiLink({ page, label?, className? })` signature matches all call sites.
+
+## Review notes (assumption-checker, 2026-07-14)
+
+Adversarial pass on this plan, folded before dispatch:
+
+1. **Task 5 search step was prose, not code (most dangerous).** Fixed: Task 5 Step 3 now inlines the complete search-aware group loop (force-open under query, header count source, empty-group suppression, `disabled` toggle).
+2. **Task 7 referenced a non-existent `renderAdmin()` helper.** Fixed: replaced with the real inline harness (store + `<AdminView/>` via the file's imports/`beforeEach`), asserting the two synchronous nav cards to avoid the async panels (confirmed vs `admin.test.tsx:1-28`).
+3. **Icon props accept `className`/`aria-hidden`.** Confirmed vs `icons.tsx:3` (`IconProps = SVGProps<SVGSVGElement>`); the Task 2 hedge is harmless.
+4. **Task 4 lost failure-card label coverage.** Fixed: the expand test now also asserts the "What to do" label.
+5. **Task 1 Interfaces contradicted itself on ordering.** Fixed: no cycle; `Record<string,WikiPage>` in Task 1, tightened in Task 3.
+6. **Branch/worktree coordination (user decision).** All implementation runs in a dedicated worktree on `feat/frontend-help-troubleshooting-wiki-links`, cut **off `docs/help-troubleshooting-reorg-spec`** (spec + plan ride along → one PR). No work on `main`. Task 0 rewritten accordingly.
