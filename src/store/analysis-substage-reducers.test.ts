@@ -102,3 +102,38 @@ describe('updateSubstageProgress', () => {
     expect(state.b2.progress).toBe(0);
   });
 });
+
+describe('substage reducers — heartbeat/model fields', () => {
+  it('updateSubstageProgress merges model/engine/activityState and stamps activitySince on state change', () => {
+    const state: Record<string, SubstageEntry> = {
+      b1: { progress: 0, label: 'Reviewing script' },
+    };
+    updateSubstageProgress(state, {
+      bookId: 'b1', progress: 0, activityState: 'waiting', model: 'qwen3.5:9b', engine: 'local', now: 1000,
+    });
+    expect(state.b1.activityState).toBe('waiting');
+    expect(state.b1.activitySince).toBe(1000);
+    expect(state.b1.model).toBe('qwen3.5:9b');
+    expect(state.b1.engine).toBe('local');
+  });
+
+  it('re-stamps activitySince only when activityState actually changes', () => {
+    const state: Record<string, SubstageEntry> = {
+      b1: { progress: 10, label: 'Reviewing script', activityState: 'streaming', activitySince: 1000 },
+    };
+    // same state, later tick — must NOT move activitySince (progress is a 0..1 fraction)
+    updateSubstageProgress(state, { bookId: 'b1', progress: 0.2, activityState: 'streaming', now: 5000 });
+    expect(state.b1.activitySince).toBe(1000);
+    // transition — must re-stamp
+    updateSubstageProgress(state, { bookId: 'b1', progress: 0.2, activityState: 'waiting', now: 6000 });
+    expect(state.b1.activitySince).toBe(6000);
+  });
+
+  it('sets fallbackActive and does not lose it on later merges', () => {
+    const state: Record<string, SubstageEntry> = { b1: { progress: 0, label: 'x' } };
+    updateSubstageProgress(state, { bookId: 'b1', progress: 0, fallbackActive: true, engine: 'gemini', model: 'gemma-4-31b-it' });
+    updateSubstageProgress(state, { bookId: 'b1', progress: 5 }); // bare progress tick
+    expect(state.b1.fallbackActive).toBe(true);
+    expect(state.b1.engine).toBe('gemini');
+  });
+});
