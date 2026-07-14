@@ -85,11 +85,11 @@ describe('substage reducers — heartbeat/model fields', () => {
     const state: Record<string, SubstageEntry> = {
       b1: { progress: 10, label: 'Reviewing script', activityState: 'streaming', activitySince: 1000 },
     };
-    // same state, later tick — must NOT move activitySince
-    updateSubstageProgress(state, { bookId: 'b1', progress: 20, activityState: 'streaming', now: 5000 });
+    // same state, later tick — must NOT move activitySince (progress is a 0..1 fraction)
+    updateSubstageProgress(state, { bookId: 'b1', progress: 0.2, activityState: 'streaming', now: 5000 });
     expect(state.b1.activitySince).toBe(1000);
     // transition — must re-stamp
-    updateSubstageProgress(state, { bookId: 'b1', progress: 20, activityState: 'waiting', now: 6000 });
+    updateSubstageProgress(state, { bookId: 'b1', progress: 0.2, activityState: 'waiting', now: 6000 });
     expect(state.b1.activitySince).toBe(6000);
   });
 
@@ -290,11 +290,15 @@ export async function warmOllamaModel(
       options: { num_ctx: resolveAnalyzerNumCtx(), num_gpu: resolveAnalyzerNumGpu() },
     },
     LOAD_TIMEOUT_MS,
-    opts.signal, // forward the abort signal if callOllamaGenerate accepts one; else add that param
+    opts.signal,
   );
-  return result.ok ? { ok: true } : { ok: false, status: result.status, error: result.error };
+  return result.ok ? { ok: true } : { ok: false, status: result.status, error: result.error ?? '' };
 }
+```
 
+And make the route a thin wrapper over it:
+
+```ts
 ollamaHealthRouter.post('/load', async (req: Request, res: Response) => {
   const requested = typeof req.body?.model === 'string' ? req.body.model.trim() : '';
   const model = requested || getResolvedOllamaModel();
@@ -304,7 +308,15 @@ ollamaHealthRouter.post('/load', async (req: Request, res: Response) => {
 });
 ```
 
-If `callOllamaGenerate` does not currently take a signal, add an optional trailing `signal?: AbortSignal` param threaded into its `fetch({ signal })` — keep it backward-compatible (all existing callers omit it).
+`callOllamaGenerate(url, body, timeoutMs)` today has **no signal param** and creates its own timeout `AbortController` internally (`ollama-health.ts:254-265`). `fetch` takes exactly one signal, so you cannot just pass `opts.signal` to `fetch` — that would drop the timeout. Add an optional trailing `signal?: AbortSignal` param and **combine** it with the internal timeout controller so both still abort the request:
+
+```ts
+// inside callOllamaGenerate, add a trailing `extSignal?: AbortSignal` param.
+// Where it currently does fetch(url, { ..., signal: controller.signal }):
+const signal = extSignal ? AbortSignal.any([controller.signal, extSignal]) : controller.signal;
+// ... fetch(url, { ..., signal });
+```
+(`AbortSignal.any` is available on Node 20.6+, which this repo targets. All existing callers omit the new param, so it's backward-compatible.)
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -336,7 +348,7 @@ git commit -m "feat(server): extract warmOllamaModel helper from /load route"
 // server/src/analyzer/fallback-analyzer.test.ts
 import { describe, it, expect, vi } from 'vitest';
 import { FallbackAnalyzer } from './index';
-import { LocalUnreachableError } from './errors'; // adjust import to where it's declared
+import { LocalUnreachableError } from './ollama'; // NOT ./errors — errors.ts only exports AnalyzerTruncatedError
 
 const stubOut = { ops: [] } as any;
 
@@ -515,7 +527,7 @@ Expected: FAIL — no warm step exists yet.
 
 - [ ] **Step 3: Implement**
 
-Immediately after `let activeSelection = selection;` (Task 5) and before the `for` loop, add the warm step + the switch helper. Import `warmOllamaModel` from `./ollama-health` and `selectAnalyzer` from `../analyzer`:
+Immediately after `let activeSelection = selection;` (Task 5) and before the `for` loop, add the warm step + the switch helper. Import `warmOllamaModel` from `./ollama-health.js` and `selectAnalyzer` from `../analyzer/index.js` (**explicit `.js` — NodeNext resolution rejects a bare `'../analyzer'` directory import**; `selectAnalyzer` is exported at `analyzer/index.ts:178`):
 
 ```ts
   let fellBack = false;
@@ -615,15 +627,15 @@ Expected: FAIL — parser drops the new fields (and `parseSubstagePhaseEvent` ma
 
 Extend the `SubstagePhaseEvent` type and `parseSubstagePhaseEvent` to carry the four optional fields (validate types: `model`/`engine`/`activityState`/`fallbackReason` are strings; only pass through when the right type, mirroring the existing guarded parse). Export `parseSubstagePhaseEvent` if needed for the test.
 
-Extend `ReviewScriptOpts` with `onHeartbeat?: (ev: { chapterId: number; streaming: boolean }) => void;` and add the case in **both** `realReviewScript`'s and the attach reader's `handle` switch:
+Extend `ReviewScriptOpts` with `onHeartbeat?: (ev: { chapterId: number; streaming: boolean }) => void;` and add the case in **both** `realReviewScript`'s and the attach reader's `handle` switch. **The heartbeat wire field is `chapterIndex`, NOT `chapterId`** (`server/src/routes/analysis-heartbeat.ts:32-43` emits `chapterIndex: chapterId, receivedBytes, …`; the existing `throttle` case at `api.ts:3165` already reads `p.chapterIndex`). Reading `p.chapterId` here would make the case never fire and silently kill the streaming upgrade:
 ```ts
       case 'heartbeat':
-        if (typeof p.chapterId === 'number') {
-          onHeartbeat?.({ chapterId: p.chapterId, streaming: typeof p.receivedBytes === 'number' });
+        if (typeof p.chapterIndex === 'number') {
+          onHeartbeat?.({ chapterId: p.chapterIndex, streaming: typeof p.receivedBytes === 'number' });
         }
         break;
 ```
-(Destructure `onHeartbeat` in both function signatures.)
+(Destructure `onHeartbeat` in both function signatures. `ReviewScriptOpts` is shared by `realReviewScript` and `realAttachScriptReview` — add it once. `parseSubstagePhaseEvent` is currently unexported — export it for the test.)
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -758,19 +770,15 @@ Add an `onHeartbeat`:
 ```
 `updateProgress` requires a `progress` number. To avoid moving the bar on a heartbeat, read the last known fraction: track `let lastProgress = 0;` updated in `onPhase` (`lastProgress = progress`) and pass it here. (Simplest correct approach — the reducer multiplies by 100 and rounds; passing the same fraction is a no-op for the bar.)
 
-Add the Retry toast in the `catch`'s error branch:
+Add the Retry toast in the `catch`'s error branch. **A function-valued `action.run` is NOT viable** — `Toast`/`PushToastPayload` (`notifications-slice.ts:28-50`) have no `action` field, and toasts are stored in Redux (`s.toasts.push`), so a closure trips RTK's `serializableCheck`. Instead follow the **existing `nudge` pattern** (a serializable discriminator on the toast that the toast component renders a special action for — see `VoiceNudgeToast`): add an optional serializable `retryReview?: { bookId: string }` to `PushToastPayload`/`Toast`, and have the toast-stack component render a "Retry" button that dispatches a fresh `runReviewScript` on click.
 ```ts
     } else if (err instanceof ReviewScriptError && err.code === 'model_load_failed') {
-      dispatch(notificationsActions.pushToast({
-        kind: 'error',
-        message: err.message,
-        action: { label: 'Retry', run: () => { void runReviewScript(bookId, opts); } },
-      }));
+      dispatch(notificationsActions.pushToast({ kind: 'error', message: err.message, retryReview: { bookId } }));
     } else {
       // existing generic error toast
     }
 ```
-Check the toast payload shape (`notifications-slice.ts` — does `pushToast` support an `action`? If not, add an optional `action?: { label: string; run: () => void }` to the toast type + render it in the toast component). If wiring an action callback through Redux state is awkward (non-serializable), instead surface Retry via the existing error-surface component the manuscript view uses; the acceptance is only that Retry re-invokes `runReviewScript(bookId, opts)`.
+In the toast-stack component (grep `ToastStack` / where toasts render), when `toast.retryReview` is set, render a Retry button whose handler re-runs the review — reuse the same call site the manuscript "Review script" button uses so `sentences`/`characterIds`/`manuscriptId` are supplied (do NOT try to reconstruct `opts` inside the toast). Acceptance: clicking Retry re-invokes `runReviewScript(bookId, …)`.
 
 Mirror the `onPhase`/`onHeartbeat` additions in `attachToRunningReview` (do **not** add Retry there — a reattach that fails is the existing silent/toast path).
 
@@ -814,7 +822,7 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement**
 
-Widen the `SubstageRow` prop (`analysisSubstage`) to include the five fields. Add, below the existing label/percent/detail:
+Widen the source type — `SubstageRow`'s prop is `analysisSubstage: NonNullable<StatusPopoverProps['analysisSubstage']>`, so add the five optional fields to `StatusPopoverProps['analysisSubstage']` (declared in `top-bar.tsx:210-216`) and they flow through. **`MODEL_OPTIONS` is already imported in `status-popover.tsx` (used at `:258`)** — only `useElapsed` is a new import. Add, below the existing label/percent/detail:
 ```tsx
 {analysisSubstage.model && (
   <span data-testid="substage-engine-model">
@@ -881,17 +889,17 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement**
 
-Widen the `analysisSubstage` field type on `StatusInput` to include `activityState?` and `fallbackActive?`. In the substage rung of `summarizeStatus` (line ~168), set the amber tone conditionally:
+Widen the `analysisSubstage` field type on `StatusInput` (today `{ kind; percent }`, `top-bar.tsx:129`) to include `activityState?` and `fallbackActive?`. In the substage rung of `summarizeStatus` (line ~168), set the amber tone conditionally. **`tone` is a local string union; existing warn states use the literal `'amber'` and the default is `'peach'` (`top-bar.tsx:157,160,169`) — there is no `WARN_TONE`/toast constant to reuse (toast `kind` is unrelated to pill `tone`):**
 ```ts
     if (analysisSubstage)
       return {
         label: 'Analysing',
-        tone: analysisSubstage.activityState === 'loading' || analysisSubstage.fallbackActive ? WARN_TONE : /* existing default tone */,
+        tone: analysisSubstage.activityState === 'loading' || analysisSubstage.fallbackActive ? 'amber' : 'peach',
         icon: /* unchanged */,
         detail: `${analysisSubstage.percent}%`,
       };
 ```
-Use the tone value the codebase already uses for warn (grep how `pushToast({kind:'warn'})` or an existing amber pill maps to a tone constant — reuse it, no new hex). Thread `activityState`/`fallbackActive` into the `analysisSubstage` object built in `layout.tsx` (`selectAnalysisSubstage` already returns them after Task 2 — just pass them through where `layout.tsx:1558` constructs the `analysisSubstage` input).
+Thread `activityState`/`fallbackActive` into the `analysisSubstage` object built in `layout.tsx` (`selectAnalysisSubstage` already returns them after Task 2 — just pass them through where `layout.tsx:1558` constructs the `analysisSubstage` input).
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -926,7 +934,7 @@ Run: `npm run test -- <mock test path>` (or defer to Task 13).
 
 - [ ] **Step 3: Implement**
 
-In the mock emitter, prepend a `{ kind:'phase', activityState:'loading', progress:0, label:'Loading model', engine:'local', model:'qwen3.5:9b' }`, add `activityState:'waiting'`, `model`, `engine` to the per-chapter phase it already emits, and emit one `{ kind:'heartbeat', chapterId, receivedBytes: 128, elapsedMs: 100 }` before the `ops`. Keep timings short (mock mode).
+**The mock (`mockReviewScript`, `api.ts:3264`) is NOT an SSE parser — it invokes the typed callbacks directly** (`onPhase`/`onOps`/…). So don't emit `{ kind: … }` objects; call the callbacks: destructure `onHeartbeat` into the mock signature, then before the existing `onOps`, call `onPhase?.({ progress: 0, label: 'Loading model', activityState: 'loading', engine: 'local', model: 'qwen3.5:9b' })`, add `activityState:'waiting'`, `model`, `engine` to the per-chapter `onPhase` it already fires, and call `onHeartbeat?.({ chapterId, streaming: true })` once. Keep timings short (mock mode).
 
 - [ ] **Step 4: Run**
 
@@ -1003,4 +1011,6 @@ git commit -m "docs(frontend): release notes for script-review heartbeat + model
 
 **Type consistency:** `activityState` union identical across `SubstageEntry`, payload, selector, phase parse, thunk. `warmOllamaModel` returns the same `{ok:false; status; error}` shape the route consumes. `onFallback: (info:{reason:string})=>void` identical in `StageCall`, `FallbackAnalyzer`, and the route's `onFallback` handler. `activeSelection` introduced in Task 5, reassigned in Task 6 — reads unified to `activeSelection.*`.
 
-**Placeholder scan:** the two soft spots (`WARN_TONE`, the toast `action` shape) are explicitly flagged with "grep the existing constant / add the field" directives and a concrete fallback, not left as bare TODOs.
+**Placeholder scan:** none. The two former soft spots are resolved to concrete code after the Opus plan review — pill tone is the literal `'amber'`/`'peach'` (`top-bar.tsx:157,169`), and Retry uses a serializable `retryReview: { bookId }` toast field on the nudge pattern (no stored closure).
+
+**Post-review corrections folded (2026-07-14 Opus plan pass):** C-1 heartbeat field `chapterIndex` not `chapterId` (Task 7); M-1 `LocalUnreachableError` from `./ollama` (Task 4); M-2 `selectAnalyzer` from `../analyzer/index.js` (Task 6); M-3 serializable Retry toast (Task 9); M-4 `AbortSignal.any` signal-combine in `callOllamaGenerate` (Task 3); m-1 `error ?? ''`; m-2 mock calls callbacks directly (Task 12); m-3 tone literals (Task 11); m-5 `MODEL_OPTIONS` already imported + widen `StatusPopoverProps['analysisSubstage']` (Task 10). Note (N-1): Task 5's `let activeSelection` is reassigned in Task 6 — if only Task 5 has landed, `prefer-const` may flag it; it's resolved once Task 6 lands (before push).
