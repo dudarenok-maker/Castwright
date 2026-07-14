@@ -7,6 +7,7 @@
 import type { Request, Response, NextFunction } from './http.js';
 import { enumerateLanUrls } from './routes/export-lan.js';
 import { readCwLanCookie } from './lan-auth.js';
+import { getLanRuntime } from './lan-runtime.js';
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -25,7 +26,9 @@ const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const DEV_LAN_HOSTNAME_ORIGIN = /^https:\/\/castwright\.dev\.local:\d+$/;
 
 function allowedOrigins(): Set<string> {
-  const port = Number(process.env.LAN_HTTPS_PORT ?? 8443);
+  // srv-60: the actual bound port (post auto-rebind), not the start constant —
+  // otherwise a device paired on a shifted port 403s on every mutating request.
+  const port = getLanRuntime().port;
   const loopback = [
     `https://localhost:${port}`,
     `https://127.0.0.1:${port}`,

@@ -22,13 +22,19 @@
  * crash, and it was NOT the hypothesised mid-run silent death: both FATALs were
  * `listen EADDRINUSE` at startup (a double-start while a prior instance still
  * held the port). A raw bind failure bubbling to uncaughtException prints a
- * cryptic Node stack; `attachListenErrorHandler` below intercepts it on the
- * listener itself and prints an actionable "a server is already running" line
- * before a clean exit, so EADDRINUSE never reaches the uncaughtException path.
+ * cryptic Node stack; `formatListenError` below turns it into an actionable
+ * "a server is already running" line instead.
+ *
+ * srv-60 — `listenWithAutoRebind` now owns the whole listen loop. In dev it
+ * keeps the srv-17 behavior (actionable message, clean exit) on EADDRINUSE;
+ * in production it instead walks upward to the next free port and retries,
+ * so a stale process holding the port no longer takes the whole server down.
  *
  * console.* is already timestamp-patched (logger.installTimestamps), so the
  * messages here inherit the standard `YYYY-MM-DD HH:mm:ss.SSS [server]` stamp.
  */
+
+import type { AddressInfo } from 'node:net';
 
 export type CrashKind = 'uncaughtException' | 'unhandledRejection';
 
@@ -70,11 +76,6 @@ export function installCrashHandlers(hooks: CrashHandlerHooks = {}): void {
 
 /* ---- srv-17: actionable listen-error handling ---------------------------- */
 
-/** A freshly-created HTTP/HTTPS listener — just the slice we attach to. */
-export interface ListenErrorTarget {
-  on(event: 'error', cb: (err: NodeJS.ErrnoException) => void): void;
-}
-
 /** Format a listen-error line. EADDRINUSE — the only one we've actually seen
  *  (a double-start) — gets an actionable hint pointing at the likely cause;
  *  any other bind error gets the generic FATAL form with the stack. No
@@ -90,21 +91,85 @@ export function formatListenError(port: number, err: NodeJS.ErrnoException): str
   return `[server] FATAL listen error on port ${port} — ${err.stack ?? `${err.name}: ${err.message}`}`;
 }
 
-/** Attach an `'error'` handler to a freshly-created listener so a bind failure
- *  (EADDRINUSE on a double-start, or a stale instance still holding the port)
- *  surfaces an actionable message and a clean exit, instead of bubbling to the
- *  uncaughtException handler as a cryptic stack. `onLog` / `onExit` default to
- *  console.error / process.exit and are injectable for tests, mirroring
- *  `installCrashHandlers`. */
-export function attachListenErrorHandler(
-  server: ListenErrorTarget,
-  port: number,
-  hooks: { onLog?: (msg: string) => void; onExit?: (code: number) => void } = {},
-): void {
-  const log = hooks.onLog ?? ((m: string) => console.error(m));
-  const exit = hooks.onExit ?? ((c: number) => process.exit(c));
+/** Minimal surface of a freshly-created (not-yet-listening) HTTP/HTTPS server
+ *  that listenWithAutoRebind drives. net/http/https `.Server` all satisfy it;
+ *  a fake stands in for tests. */
+export interface RebindServer {
+  on(event: 'error', cb: (err: NodeJS.ErrnoException) => void): void;
+  once(event: 'listening', cb: () => void): void;
+  listen(port: number, host?: string): void;
+  address(): AddressInfo | string | null;
+}
+
+export interface AutoRebindOptions {
+  /** First port to try; auto-shift walks upward from here. */
+  startPort: number;
+  /** Bind host (loopback vs 0.0.0.0). Omitted → Node default. */
+  host?: string;
+  /** Called ONCE, on the final successful bind, with the ACTUAL bound port. */
+  onListening: (port: number) => void;
+  /** Auto-shift on EADDRINUSE (production) vs actionable fatal-exit (dev). */
+  autoRebind: boolean;
+  /** Total bind attempts incl. the first. Default 20 (startPort..startPort+19). */
+  maxAttempts?: number;
+  onLog?: (msg: string) => void;
+  onExit?: (code: number) => void;
+}
+
+/** Format the "scanned the whole range, gave up" fatal line. */
+export function formatRebindExhausted(startPort: number, maxAttempts: number): string {
+  const last = startPort + maxAttempts - 1;
+  return (
+    `[server] Ports ${startPort}–${last} are all in use — could not bind after ` +
+    `${maxAttempts} attempts. Stop the conflicting server(s), then retry.`
+  );
+}
+
+/** Own the listen loop: bind `startPort`, and on EADDRINUSE (when `autoRebind`)
+ *  walk upward to the next port, up to `maxAttempts` total binds, then
+ *  fatal-exit. The success handler is attached ONCE via `once('listening')` — a
+ *  re-passed listen callback would accumulate (a failed bind emits 'error', not
+ *  'listening') and fire once PER attempt, double-spawning everything the
+ *  success handler wires up (#1030 recycle-storm). `onListening` receives the
+ *  real bound port from `server.address()`. In dev (`autoRebind:false`) an
+ *  EADDRINUSE keeps the pre-srv-60 behavior: actionable message + exit(1). */
+export function listenWithAutoRebind(server: RebindServer, opts: AutoRebindOptions): void {
+  const maxAttempts = opts.maxAttempts ?? 20;
+  const log = opts.onLog ?? ((m: string) => console.error(m));
+  const exit = opts.onExit ?? ((c: number) => process.exit(c));
+
+  let attempt = 0; // 0-based; attempt 0 is the initial bind
+  let port = opts.startPort;
+
+  const listen = () => {
+    if (opts.host !== undefined) server.listen(port, opts.host);
+    else server.listen(port);
+  };
+
+  server.once('listening', () => {
+    const addr = server.address();
+    const bound = typeof addr === 'object' && addr !== null ? addr.port : port;
+    opts.onListening(bound);
+  });
+
   server.on('error', (err) => {
+    const inUse = err.code === 'EADDRINUSE';
+    if (inUse && opts.autoRebind && attempt < maxAttempts - 1) {
+      log(`[server] Port ${port} is in use — trying ${port + 1}…`);
+      attempt += 1;
+      port += 1;
+      listen();
+      return;
+    }
+    if (inUse && opts.autoRebind) {
+      log(formatRebindExhausted(opts.startPort, maxAttempts));
+      exit(1);
+      return;
+    }
+    // dev EADDRINUSE, or any non-EADDRINUSE error → unchanged actionable/fatal exit
     log(formatListenError(port, err));
     exit(1);
   });
+
+  listen();
 }
