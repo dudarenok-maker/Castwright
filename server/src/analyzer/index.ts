@@ -61,6 +61,10 @@ export interface StageCall {
       Flows verbatim through every `runStage*` of every analyzer
       implementation, so it never touches a method signature. */
   language?: string;
+  /** Fired by FallbackAnalyzer when it switches from a LocalUnreachable
+      primary to the fallback for this call. Route uses it to announce the
+      switch. */
+  onFallback?: (info: { reason: string }) => void;
 }
 
 export interface Analyzer {
@@ -308,6 +312,7 @@ export class FallbackAnalyzer implements Analyzer {
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
       if (err instanceof LocalUnreachableError) {
+        call.onFallback?.({ reason: 'Ollama unreachable' });
         return await this.fallback.runScriptReviewChapter(
           manuscriptId,
           chapterId,
