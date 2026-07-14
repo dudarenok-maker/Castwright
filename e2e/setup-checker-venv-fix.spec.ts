@@ -50,9 +50,11 @@ test('venv-missing diagnosis shows a working fix action end to end', async ({ pa
   await page.goto('/#/?setup=notready');
   await expect(page).toHaveURL(/#\/setup/);
 
-  // Guided (first-run) mode always opens on Step 1 (Environment); the voice
-  // engine runtime diagnosis lives in Step 3 (Models).
+  // Guided (first-run) mode always opens on Step 1 (Environment); after the
+  // fe-49 analyzer/voice split the voice-engine runtime diagnosis lives on the
+  // Voice step (step 4): environment→ffmpeg→analysis→voice = 3 Next clicks.
   const next = page.getByRole('button', { name: /^next$/i });
+  await next.click();
   await next.click();
   await next.click();
 
