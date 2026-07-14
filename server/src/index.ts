@@ -22,11 +22,12 @@ installTimestamps();
    server vanishing silently (it died twice on 2026-05-30 with no trace). Also
    makes a stray unhandled rejection survivable so a transient async error can't
    take down an unattended generation run. See crash-logging.ts. */
-import { installCrashHandlers, attachListenErrorHandler } from './crash-logging.js';
+import { installCrashHandlers, listenWithAutoRebind } from './crash-logging.js';
 import { selectBindHost } from './bind-host.js';
 installCrashHandlers();
 
 import { createServer as createHttpsServer } from 'node:https';
+import { createServer as createHttpServer } from 'node:http';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -199,14 +200,14 @@ async function main(): Promise<void> {
   // the per-release server/.env — a versioned upgrade must keep the same token so
   // paired devices stay paired.
   ensureLanAuthToken(resolve(resolveRunDir(repoRoot), 'lan-auth.token'));
-  // Record what we ACTUALLY bound so GET /lan + pairing advertise the real protocol/
-  // port, not the requested flag (a cert-less box degrades to loopback HTTP here).
-  setLanRuntime({ httpsActive: lanHttps, port: lanHttps ? LAN_HTTPS_PORT : PORT });
   const bindHost = selectBindHost(lanHttps);
 
-  const listenerCallback = () => {
+  const listenerCallback = (listenPort: number) => {
     const protocol: 'http' | 'https' = lanHttps ? 'https' : 'http';
-    const listenPort = lanHttps ? LAN_HTTPS_PORT : PORT;
+
+    // Record what we ACTUALLY bound (post-rebind) so GET /lan + pairing + CSRF
+    // advertise the real protocol/port, not the requested constant.
+    setLanRuntime({ httpsActive: lanHttps, port: listenPort });
 
     console.log(`[server] listening on ${protocol}://localhost:${listenPort}`);
 
@@ -322,7 +323,7 @@ async function main(): Promise<void> {
        start:lan only (same NODE_ENV-gated shape as the mDNS responder above —
        dev:lan's server leg also sets LAN_HTTPS=1 and must not also get this). */
     if (shouldSpawnPortForwarder(lanHttps)) {
-      portForwarderHandle = startPortForwarder(LAN_HTTPS_PORT);
+      portForwarderHandle = startPortForwarder(listenPort);
     }
 
     /* castwright-local-pairing-link — expose a single combined liveness check
@@ -400,28 +401,31 @@ async function main(): Promise<void> {
   const warn = lanExposureWarning();
   if (warn) console.warn(warn);
 
+  const autoRebind = process.env.NODE_ENV === 'production';
+
   if (lanHttps) {
     // lanHttps already implies certsPresent (see the effective-LAN check above),
-    // so cert files are guaranteed here — a missing cert degraded to HTTP, it did
-    // not reach this branch.
+    // so cert files are guaranteed here.
     const key = readFileSync(LAN_KEY_FILE);
     const cert = readFileSync(LAN_CERT_FILE);
-    const server = createHttpsServer({ key, cert }, app).listen(
-      LAN_HTTPS_PORT,
-      bindHost,
-      listenerCallback,
-    );
-    /* castwright-local-port-cert — expose the live server so the cert-regen
-       route (server/src/routes/lan-cert.ts) can call setSecureContext() on it
-       without a circular import (index.ts imports the router; the router
-       can't import back from index.ts). Express's own app.set()/app.get() is
-       the idiomatic pattern for exactly this "expose a singleton to route
-       handlers" need — no new module required. */
+    const server = createHttpsServer({ key, cert }, app);
+    // Expose the live server so the cert-regen route (routes/lan-cert.ts) can
+    // setSecureContext() on it without a circular import.
     app.set('lanHttpsServer', server);
-    attachListenErrorHandler(server, LAN_HTTPS_PORT);
+    listenWithAutoRebind(server, {
+      startPort: LAN_HTTPS_PORT,
+      host: bindHost,
+      onListening: listenerCallback,
+      autoRebind,
+    });
   } else {
-    const server = app.listen(PORT, bindHost, listenerCallback);
-    attachListenErrorHandler(server, PORT);
+    const server = createHttpServer(app);
+    listenWithAutoRebind(server, {
+      startPort: PORT,
+      host: bindHost,
+      onListening: listenerCallback,
+      autoRebind,
+    });
   }
 }
 
