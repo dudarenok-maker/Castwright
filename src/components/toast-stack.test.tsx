@@ -10,6 +10,15 @@ import { ToastStack } from './toast-stack';
 import { notificationsSlice, notificationsActions, type Toast } from '../store/notifications-slice';
 import { castDesignSlice } from '../store/cast-design-slice';
 
+// fs-58 Task 9 — retryReviewScript is a thunk that reads the manuscript/cast
+// slices at click time; this store doesn't register them, and the Retry
+// wiring test only needs to prove ToastStack dispatches it, not exercise
+// its internals (those are covered by script-review-thunk.test.ts).
+const retryReviewScriptMock = vi.fn((_bookId: string, _args: unknown) => () => {});
+vi.mock('../store/script-review-thunk', () => ({
+  retryReviewScript: (bookId: string, args: unknown) => retryReviewScriptMock(bookId, args),
+}));
+
 vi.mock('../store', async () => {
   const actual = await vi.importActual<typeof import('../store')>('../store');
   return {
@@ -82,6 +91,47 @@ describe('ToastStack — render', () => {
     // Only the most recent (deduped) message renders.
     expect(screen.queryByText(/first/i)).not.toBeInTheDocument();
     expect(screen.getByText(/second/i)).toBeInTheDocument();
+  });
+});
+
+describe('ToastStack — retryReview (fs-58 Task 9)', () => {
+  beforeEach(() => {
+    retryReviewScriptMock.mockClear();
+  });
+
+  it('renders a Retry button when the toast carries a retryReview scope, and does not for a plain toast', () => {
+    sharedStore.dispatch(
+      notificationsActions.pushToast({
+        kind: 'error',
+        message: 'Model failed to load.',
+        retryReview: { bookId: 'b1', wholeBook: false, chapterId: 3, model: 'gemma' },
+      }),
+    );
+    sharedStore.dispatch(notificationsActions.pushToast({ kind: 'error', message: 'no retry here' }));
+    render(
+      <Provider store={sharedStore}>
+        <ToastStack />
+      </Provider>,
+    );
+    expect(screen.getAllByRole('button', { name: /^retry$/i })).toHaveLength(1);
+  });
+
+  it('clicking Retry dispatches retryReviewScript with the toast scope and dismisses the toast', () => {
+    sharedStore.dispatch(
+      notificationsActions.pushToast({
+        kind: 'error',
+        message: 'Model failed to load.',
+        retryReview: { bookId: 'b1', wholeBook: false, chapterId: 3, model: 'gemma' },
+      }),
+    );
+    render(
+      <Provider store={sharedStore}>
+        <ToastStack />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^retry$/i }));
+    expect(retryReviewScriptMock).toHaveBeenCalledWith('b1', { wholeBook: false, chapterId: 3, model: 'gemma' });
+    expect(sharedStore.getState().notifications.toasts).toHaveLength(0);
   });
 });
 

@@ -86,11 +86,28 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
     }
   };
 
+  // Last-known progress fraction, updated from onPhase — a heartbeat's own
+  // updateProgress dispatch (below) reuses it so a heartbeat can upgrade
+  // activityState to 'streaming' without moving the progress bar (the
+  // reducer just re-rounds the same fraction, a no-op for the displayed %).
+  let lastProgress = 0;
+
   try {
     await api.reviewScript(bookId, {
       ...(wholeBook ? {} : { chapterId }),
       model,
-      onPhase: ({ progress, label, chapterIndex, totalChapters, estRemainingMs }) =>
+      onPhase: ({
+        progress,
+        label,
+        chapterIndex,
+        totalChapters,
+        estRemainingMs,
+        activityState,
+        model: phaseModel,
+        engine,
+        fallbackReason,
+      }) => {
+        lastProgress = progress;
         dispatch(
           scriptReviewActions.updateProgress({
             bookId,
@@ -99,14 +116,32 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
             chapterIndex,
             totalChapters,
             estRemainingMs,
+            activityState,
+            model: phaseModel,
+            engine,
+            ...(fallbackReason ? { fallbackActive: true } : {}),
+            now: Date.now(),
           }),
-        ),
+        );
+      },
       onOps: ({ chapterId: chId, ops }: { chapterId: number; ops: ReviewOp[] }) => {
         for (const op of ops) allOps.push({ ...op, chapterId: chId });
       },
       onChapterFailed: (e: { chapterId: number; message: string }) => failed.push(e),
       onCheckpoint: ({ chapterId: chId, version }: { chapterId: number; version: number }) => {
         versionByChapter[chId] = version;
+      },
+      onHeartbeat: ({ streaming }) => {
+        if (streaming) {
+          dispatch(
+            scriptReviewActions.updateProgress({
+              bookId,
+              progress: lastProgress,
+              activityState: 'streaming',
+              now: Date.now(),
+            }),
+          );
+        }
       },
     });
     dispatchAccumulatedOps(allOps);
@@ -133,6 +168,22 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
       if (checkpointedOps.length > 0 || failed.length > 0) {
         dispatchAccumulatedOps(checkpointedOps);
       }
+    } else if (err instanceof ReviewScriptError && err.code === 'model_load_failed') {
+      // Task 9 — surface a Retry action alongside the error. The toast
+      // payload only carries the primitive run scope (bookId/wholeBook/
+      // chapterId/model); retryReviewScript re-reads live sentences/cast/
+      // manuscript from the store at click time rather than replaying
+      // whatever `sentences`/`characterIds` happened to be current here
+      // (both are non-serializable anyway — a Set and a possibly-stale
+      // snapshot — so they can't ride on the toast without tripping RTK's
+      // serializableCheck).
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: err.message,
+          retryReview: { bookId, wholeBook, model, ...(chapterId !== undefined ? { chapterId } : {}) },
+        }),
+      );
     } else {
       dispatch(
         notificationsActions.pushToast({
@@ -144,6 +195,34 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
   } finally {
     dispatch(scriptReviewActions.clear({ bookId }));
   }
+}
+
+/** Task 9 — the Retry action behind a `model_load_failed` toast
+    (RetryReview on notifications-slice.ts). A thunk (not a plain function)
+    so the toast/ToastStack — which has no live `sentences`/`characterIds`/
+    `manuscriptId` of its own — can dispatch it the same way
+    exports-middleware's `retryExport` is dispatched. Reuses
+    `snapshotIfReady`'s exact manuscript/cast read (below) rather than
+    replaying anything captured at the moment the original run failed, so
+    a Retry always starts from the CURRENT live manuscript/cast, not a
+    stale one. No-ops if the book's manuscript/cast aren't loaded (e.g. the
+    user navigated away) — mirrors waitForManuscriptAndCast's own guard,
+    but Retry doesn't wait; a click with nothing loaded simply does
+    nothing rather than hanging on a promise that may never resolve. */
+export function retryReviewScript(bookId: string, args: { wholeBook: boolean; chapterId?: number; model: string }) {
+  return (dispatch: AppDispatch, getState: () => RootState): void => {
+    const snapshot = snapshotIfReady(getState, bookId);
+    if (!snapshot) return;
+    void runReviewScript(bookId, {
+      dispatch,
+      wholeBook: args.wholeBook,
+      chapterId: args.chapterId,
+      model: args.model,
+      sentences: snapshot.sentences,
+      characterIds: snapshot.characterIds,
+      manuscriptId: snapshot.manuscriptId,
+    });
+  };
 }
 
 // Deliberately narrow — this is NOT the full GET /state running shape
@@ -244,6 +323,10 @@ export async function attachToRunningReview(
   const { dispatch, sentences, characterIds, manuscriptId } = opts;
   const allOps: ReviewOpWithChapter[] = [];
   const versionByChapter: Record<number, number> = {};
+  // Mirrors runReviewScript's own lastProgress/onHeartbeat wiring (Task 9)
+  // so a reattached stream's progress pill also upgrades to 'streaming' on
+  // a heartbeat without moving the bar.
+  let lastProgress = 0;
 
   /* Shared between the success path and the cancelled-catch path below
      (fs-58 follow-up #1481) — takes the ops to use as a parameter: success
@@ -264,16 +347,52 @@ export async function attachToRunningReview(
   try {
     const result = await api.attachScriptReview(bookId, {
       ...(running.chapterId !== undefined ? { chapterId: running.chapterId } : {}),
-      onPhase: ({ progress, label, chapterIndex, totalChapters, estRemainingMs }) =>
+      onPhase: ({
+        progress,
+        label,
+        chapterIndex,
+        totalChapters,
+        estRemainingMs,
+        activityState,
+        model,
+        engine,
+        fallbackReason,
+      }) => {
+        lastProgress = progress;
         dispatch(
-          scriptReviewActions.updateProgress({ bookId, progress, label, chapterIndex, totalChapters, estRemainingMs }),
-        ),
+          scriptReviewActions.updateProgress({
+            bookId,
+            progress,
+            label,
+            chapterIndex,
+            totalChapters,
+            estRemainingMs,
+            activityState,
+            model,
+            engine,
+            ...(fallbackReason ? { fallbackActive: true } : {}),
+            now: Date.now(),
+          }),
+        );
+      },
       onOps: ({ chapterId, ops }: { chapterId: number; ops: ReviewOp[] }) => {
         for (const op of ops) allOps.push({ ...op, chapterId });
       },
       onChapterFailed: () => {},
       onCheckpoint: ({ chapterId, version }: { chapterId: number; version: number }) => {
         versionByChapter[chapterId] = version;
+      },
+      onHeartbeat: ({ streaming }) => {
+        if (streaming) {
+          dispatch(
+            scriptReviewActions.updateProgress({
+              bookId,
+              progress: lastProgress,
+              activityState: 'streaming',
+              now: Date.now(),
+            }),
+          );
+        }
       },
     });
     if (result === null) {
