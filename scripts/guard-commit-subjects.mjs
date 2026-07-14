@@ -23,10 +23,10 @@ import { validateCommitSubject, helpMessage as subjectHelp } from './validate-co
 const isZeroSha = (sha) => /^0+$/.test(sha);
 const UNIT = '\x1f'; // git log field separator
 
-// Pure, unit-testable core. `listSubjects(remoteSha, localSha)` returns the
-// new commits in the push as [{ sha, subject }] — injected in tests so this
-// runs without a real repo. Each subject is validated; a deletion (zero
-// localSha) contributes nothing. Returns { blocked, failures }.
+// Pure, unit-testable core. `listSubjects(remoteSha, localSha)` returns the new
+// commits in the push as [{ sha, subject }] — injected in tests so this runs
+// without a real repo. Each subject is validated; a deletion (zero localSha)
+// contributes nothing. Returns { blocked, failures }.
 export function evaluatePush(stdinText, { listSubjects }) {
   const failures = [];
   const seen = new Set();
@@ -63,14 +63,36 @@ export function helpMessage(failures) {
   return lines.join('\n');
 }
 
+// The canonical trunk. Commits already on it are accepted history — they may
+// predate this convention or have landed via a bypassed hook, and can't be
+// reworded without rewriting shared history — so the guard must not re-validate
+// them. Expected to exist as a remote-tracking ref; if it doesn't resolve, the
+// `git log` below errors and gitListSubjects fails open (returns []), per the
+// best-effort contract.
+const TRUNK_REF = 'origin/main';
+
+// Pure, unit-testable: the `git log` revs for "commits this push introduces that
+// this guard should validate" — always excluding the trunk (TRUNK_REF).
+//   - Re-push (known prior tip): the push's own `remoteSha..localSha` range,
+//     minus the trunk. Using the push-authoritative range (not `--not
+//     --remotes`) keeps a bad commit that lives only on some OTHER branch but is
+//     new to THIS ref in scope, while excluding only the trunk means a merge
+//     from `main` no longer re-flags main's already-accepted history (the bug
+//     this fixes).
+//   - New branch (no prior tip): all of the branch's commits not on the trunk.
+// Trade-off: correctness leans on the local `origin/main` tracking ref being
+// current; if it is stale the worst case is over-blocking (annoying, bypassable
+// with --no-verify), never letting a genuinely new bad subject through.
+export function computeRevs(remoteSha, localSha) {
+  const base =
+    remoteSha && !isZeroSha(remoteSha) ? [`${remoteSha}..${localSha}`] : [localSha];
+  return [...base, '--not', TRUNK_REF];
+}
+
 // Real git-backed lister for CLI mode. Best-effort: a git error returns [] so
 // the guard never blocks a push because git itself hiccupped.
 function gitListSubjects(remoteSha, localSha) {
-  const revs =
-    remoteSha && !isZeroSha(remoteSha)
-      ? [`${remoteSha}..${localSha}`] // re-push: only commits since the last push
-      : [localSha, '--not', '--remotes']; // new branch: commits not yet on any remote
-  const res = spawnSync('git', ['log', `--format=%H${UNIT}%s`, ...revs], {
+  const res = spawnSync('git', ['log', `--format=%H${UNIT}%s`, ...computeRevs(remoteSha, localSha)], {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   });
