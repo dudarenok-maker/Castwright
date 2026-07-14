@@ -6,9 +6,9 @@
    a 409 means pairing isn't available yet (not LAN HTTPS / no cert / no token),
    in which case we show instructions rather than a useless QR. */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-import { api } from '../lib/api';
+import { api, ApiError } from '../lib/api';
 import { IconClose, IconCopy, IconQrCode, IconShield, IconCheck } from '../lib/icons';
 import type { PairSessionInfo } from '../lib/types';
 import { PairingQr } from '../components/pairing/pairing-qr';
@@ -24,6 +24,10 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
     'naming' | 'loading' | 'ready' | 'unavailable' | 'error' | 'restricted'
   >('naming');
   const [label, setLabel] = useState('');
+  /* Bumped on every open and every generate(); an in-flight createPairSession
+     whose token no longer matches is stale (the modal was reopened or the user
+     re-generated) and must not resolve onto the current state. */
+  const reqToken = useRef(0);
 
   /* Name-first: the user labels the device before we mint a session, so the
      admin LAN-access list reads sensibly instead of "Device". Reset to the
@@ -31,6 +35,7 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
      cache across opens. */
   useEffect(() => {
     if (!open) return;
+    reqToken.current += 1; // invalidate any generate() still in flight from a prior open
     setStatus('naming');
     setInfo(null);
     setLabel('');
@@ -40,25 +45,27 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
      label travels to the admin list via the session; the phone only reads the
      code from the QR. */
   const generate = () => {
-    let cancelled = false;
+    const token = ++reqToken.current;
     setStatus('loading');
     api
       .createPairSession(label)
       .then((r) => {
-        if (cancelled) return;
+        if (reqToken.current !== token) return;
         setInfo(r);
         setStatus('ready');
       })
-      .catch((e: Error) => {
-        if (cancelled) return;
-        const msg = e?.message ?? '';
+      .catch((e: unknown) => {
+        if (reqToken.current !== token) return;
+        const code = e instanceof ApiError ? e.status : undefined;
+        const msg = e instanceof Error ? e.message : '';
         setStatus(
-          /\b409\b/.test(msg) ? 'unavailable' : /\b403\b/.test(msg) ? 'restricted' : 'error',
+          code === 409 || /\b409\b/.test(msg)
+            ? 'unavailable'
+            : code === 403 || /\b403\b/.test(msg)
+              ? 'restricted'
+              : 'error',
         );
       });
-    return () => {
-      cancelled = true;
-    };
   };
 
   if (!open) return null;

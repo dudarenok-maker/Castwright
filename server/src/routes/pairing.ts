@@ -21,7 +21,12 @@ import { getLanRuntime } from '../lan-runtime.js';
 import { crockfordBase32 } from '../lib/crockford-base32.js';
 import { createPairingSession, redeemPairingSession } from '../workspace/pairing-sessions.js';
 import { createDevice, clampTtlDays } from '../workspace/device-tokens.js';
-import { isLanTokenEnforced, isPrivateNetworkRequest, mayStartPairingSession } from '../lan-auth.js';
+import {
+  isLanTokenEnforced,
+  isPrivateNetworkRequest,
+  mayStartPairingSession,
+  PAIRING_ORIGIN_HINT,
+} from '../lan-auth.js';
 import { configValue } from '../config/resolver.js';
 
 /** Effective TTL for device tokens — clamped to a sane positive integer. */
@@ -46,9 +51,7 @@ pairSessionRouter.post('/session', (req: Request, res: Response) => {
   // Loopback (the host UI) OR an already-paired device on the friendly hostname
   // may start a pairing session; bare-LAN-IP access stays loopback-only.
   if (!mayStartPairingSession(req)) {
-    res.status(403).json({
-      error: 'Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.',
-    });
+    res.status(403).json({ error: PAIRING_ORIGIN_HINT });
     return;
   }
   // Gate on what the server ACTUALLY bound, not the requested flag: a cert-less box
@@ -69,8 +72,8 @@ pairSessionRouter.post('/session', (req: Request, res: Response) => {
   // The desktop names the device up front (Listen-tab modal) so the admin list
   // reads sensibly; stored on the session and preferred over the phone's own
   // label at redeem time. Absent → falls back to the phone's label, then 'Device'.
-  const label = typeof (req.body as { label?: unknown })?.label === 'string'
-    ? (req.body as { label: string }).label : undefined;
+  const rawLabel = (req.body as { label?: unknown } | undefined)?.label;
+  const label = typeof rawLabel === 'string' ? rawLabel : undefined;
   const { code, expiresAt } = createPairingSession(label);
   const q = new URLSearchParams({ h: host, c: code, f: fpTag });
   const qrPayload = `https://www.castwright.ai/pair?${q.toString()}`;

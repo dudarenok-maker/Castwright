@@ -6660,7 +6660,10 @@ async function realCreatePairSession(label?: string): Promise<PairSessionInfo> {
     body: JSON.stringify(trimmed ? { label: trimmed } : {}),
   });
   if (!res.ok)
-    throw new Error(`pair session failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    throw new ApiError(
+      `pair session failed (${res.status}): ${(await res.text()) || res.statusText}`,
+      res.status,
+    );
   return res.json();
 }
 

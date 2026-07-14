@@ -34,7 +34,7 @@ export function LanAccessCard() {
       // A 403 here means this browser reached the server from a bare LAN IP (not
       // loopback or the friendly hostname) — actionable guidance beats the raw code.
       if (e instanceof ApiError && e.status === 403)
-        setErr('Start pairing from https://localhost:8443 or https://castwright.local on this computer.');
+        setErr('Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.');
       else setErr(e instanceof Error ? e.message : String(e));
     }
   };

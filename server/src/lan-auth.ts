@@ -139,6 +139,11 @@ export function mayStartPairingSession(req: Request): boolean {
   return isLoopbackRequest(req) || (isLanTokenEnforced() && isFriendlyHostnameRequest(req));
 }
 
+/* The actionable 403 body both pairing-session routes return when the caller
+   may not start a session — one source so the two never drift. */
+export const PAIRING_ORIGIN_HINT =
+  'Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.';
+
 /** Parse the cw_lan cookie defensively — this runs on EVERY /api request, so an
  *  unguarded throw here (e.g. a future `cookie` version that rejects bad input)
  *  would 500 the entire API. cookie@0.7.x doesn't throw, but the catch is cheap
