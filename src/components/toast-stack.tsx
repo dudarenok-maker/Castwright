@@ -60,11 +60,26 @@ function ToastItem({ toast }: { toast: Toast }) {
   // scope (bookId/wholeBook/chapterId/model); retryReviewScript re-reads
   // live sentences/cast/manuscript from the store at click time rather
   // than replaying whatever was current when the error fired.
+  //
+  // PR review round 5 — retryReviewScript returns false when it no-op'd
+  // (manuscript/cast for the book aren't loaded, e.g. the user navigated
+  // away). Only dismiss the toast when the retry actually launched;
+  // otherwise leave it so the user can navigate back and retry, and nudge
+  // them with a brief warn toast instead of a silent dead end.
   const onRetry = () => {
     if (!toast.retryReview) return;
     const { bookId, wholeBook, chapterId, model } = toast.retryReview;
-    dispatch(retryReviewScript(bookId, { wholeBook, chapterId, model }));
-    dispatch(notificationsActions.dismissToast(toast.id));
+    const launched = dispatch(retryReviewScript(bookId, { wholeBook, chapterId, model }));
+    if (launched) {
+      dispatch(notificationsActions.dismissToast(toast.id));
+    } else {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'warn',
+          message: 'Open the book to retry the review.',
+        }),
+      );
+    }
   };
 
   return (

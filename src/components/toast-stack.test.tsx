@@ -13,8 +13,11 @@ import { castDesignSlice } from '../store/cast-design-slice';
 // fs-58 Task 9 — retryReviewScript is a thunk that reads the manuscript/cast
 // slices at click time; this store doesn't register them, and the Retry
 // wiring test only needs to prove ToastStack dispatches it, not exercise
-// its internals (those are covered by script-review-thunk.test.ts).
-const retryReviewScriptMock = vi.fn((_bookId: string, _args: unknown) => () => {});
+// its internals (those are covered by script-review-thunk.test.ts). Default
+// mock behaves like a launched retry (returns true); the dead-end test below
+// overrides it to return false, mirroring the real thunk's "book not loaded"
+// no-op.
+const retryReviewScriptMock = vi.fn((_bookId: string, _args: unknown): (() => boolean) => () => true);
 vi.mock('../store/script-review-thunk', () => ({
   retryReviewScript: (bookId: string, args: unknown) => retryReviewScriptMock(bookId, args),
 }));
@@ -97,6 +100,7 @@ describe('ToastStack — render', () => {
 describe('ToastStack — retryReview (fs-58 Task 9)', () => {
   beforeEach(() => {
     retryReviewScriptMock.mockClear();
+    retryReviewScriptMock.mockImplementation((_bookId: string, _args: unknown) => (() => true));
   });
 
   it('renders a Retry button when the toast carries a retryReview scope, and does not for a plain toast', () => {
@@ -132,6 +136,29 @@ describe('ToastStack — retryReview (fs-58 Task 9)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^retry$/i }));
     expect(retryReviewScriptMock).toHaveBeenCalledWith('b1', { wholeBook: false, chapterId: 3, model: 'gemma' });
     expect(sharedStore.getState().notifications.toasts).toHaveLength(0);
+  });
+
+  it('does not dismiss the toast when retryReviewScript no-ops (book not loaded), and nudges the user instead', () => {
+    retryReviewScriptMock.mockImplementation((_bookId: string, _args: unknown) => (() => false));
+    sharedStore.dispatch(
+      notificationsActions.pushToast({
+        kind: 'error',
+        message: 'Model failed to load.',
+        retryReview: { bookId: 'b1', wholeBook: false, chapterId: 3, model: 'gemma' },
+      }),
+    );
+    render(
+      <Provider store={sharedStore}>
+        <ToastStack />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^retry$/i }));
+    expect(retryReviewScriptMock).toHaveBeenCalledWith('b1', { wholeBook: false, chapterId: 3, model: 'gemma' });
+    const toasts = sharedStore.getState().notifications.toasts;
+    // Original toast is NOT dismissed on a dead-end retry...
+    expect(toasts.some((t) => t.message === 'Model failed to load.')).toBe(true);
+    // ...and a brief warn toast nudges the user to navigate back.
+    expect(toasts.some((t) => t.kind === 'warn' && /open the book to retry the review/i.test(t.message))).toBe(true);
   });
 });
 

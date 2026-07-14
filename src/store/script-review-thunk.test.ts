@@ -329,12 +329,13 @@ describe('retryReviewScript (Task 9)', () => {
     });
 
     const thunk = retryReviewScript('book-1', { wholeBook: false, chapterId: 3, model: 'gemma' });
-    await thunk(dispatch, getState);
+    const launched = await thunk(dispatch, getState);
     // retryReviewScript fires-and-forgets runReviewScript (a plain async
     // function, not itself dispatched) — give its internal setActive/api
     // call a tick to land.
     await new Promise((r) => setTimeout(r, 0));
 
+    expect(launched).toBe(true);
     expect(api.reviewScript).toHaveBeenCalledWith(
       'book-1',
       expect.objectContaining({ chapterId: 3, model: 'gemma' }),
@@ -344,13 +345,14 @@ describe('retryReviewScript (Task 9)', () => {
     );
   });
 
-  it('no-ops when the manuscript/cast for the book are not loaded', async () => {
+  it('no-ops when the manuscript/cast for the book are not loaded, and reports it did not launch', async () => {
     const dispatch = vi.fn();
     const getState = fakeGetState({ manuscriptId: null, characters: [], sentences: [] });
 
     const thunk = retryReviewScript('book-1', { wholeBook: true, model: 'gemma' });
-    await thunk(dispatch, getState);
+    const launched = await thunk(dispatch, getState);
 
+    expect(launched).toBe(false);
     expect(api.reviewScript).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
   });

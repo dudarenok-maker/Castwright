@@ -208,11 +208,15 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
     stale one. No-ops if the book's manuscript/cast aren't loaded (e.g. the
     user navigated away) — mirrors waitForManuscriptAndCast's own guard,
     but Retry doesn't wait; a click with nothing loaded simply does
-    nothing rather than hanging on a promise that may never resolve. */
+    nothing rather than hanging on a promise that may never resolve.
+    Returns whether the retry actually launched (`true`) or no-op'd
+    because the snapshot wasn't ready (`false`), so a caller like
+    ToastStack's onRetry can avoid dismissing the toast on a dead-end
+    click — see toast-stack.tsx. */
 export function retryReviewScript(bookId: string, args: { wholeBook: boolean; chapterId?: number; model: string }) {
-  return (dispatch: AppDispatch, getState: () => RootState): void => {
+  return (dispatch: AppDispatch, getState: () => RootState): boolean => {
     const snapshot = snapshotIfReady(getState, bookId);
-    if (!snapshot) return;
+    if (!snapshot) return false;
     void runReviewScript(bookId, {
       dispatch,
       wholeBook: args.wholeBook,
@@ -222,6 +226,7 @@ export function retryReviewScript(bookId: string, args: { wholeBook: boolean; ch
       characterIds: snapshot.characterIds,
       manuscriptId: snapshot.manuscriptId,
     });
+    return true;
   };
 }
 
