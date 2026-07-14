@@ -7,10 +7,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import http from 'node:http';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { readFileSync, copyFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { setLanRuntime } from '../lan-runtime.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+vi.mock('../lan-hosts.js', () => ({ enumerateLanIps: vi.fn(() => [] as string[]) }));
+import { enumerateLanIps } from '../lan-hosts.js';
 
 vi.mock('node:child_process', () => ({
   execFile: vi.fn(),
@@ -238,5 +246,61 @@ describe('POST /api/lan/cert/regenerate', () => {
     } finally {
       server.close();
     }
+  });
+});
+
+describe('GET /api/lan/cert/status', () => {
+  let certDir: string;
+  const fixture = join(__dirname, '__fixtures__', 'lan-cert-healthy.pem');
+
+  beforeEach(() => {
+    certDir = mkdtempSync(join(tmpdir(), 'lan-cert-status-test-'));
+    __setCertPathsForTest({
+      certFile: join(certDir, 'lan-cert.pem'),
+      keyFile: join(certDir, 'lan-key.pem'),
+    });
+    vi.mocked(enumerateLanIps).mockReturnValue([]);
+    setLanRuntime({ httpsActive: false, port: 8080 });
+    delete process.env.LAN_HTTPS;
+  });
+  afterEach(() => {
+    rmSync(certDir, { recursive: true, force: true });
+    __setCertPathsForTest(null);
+    setLanRuntime({ httpsActive: false, port: 8080 });
+    delete process.env.LAN_HTTPS;
+  });
+
+  it('missing when no cert files exist', async () => {
+    const res = await request(makeApp()).get('/api/lan/cert/status');
+    expect(res.status).toBe(200);
+    expect(res.body.health).toBe('missing');
+    expect(res.body.certHosts).toEqual([]);
+    expect(res.body.expiresAt).toBeNull();
+  });
+
+  it('missing when files present but unparseable', async () => {
+    writeFileSync(join(certDir, 'lan-cert.pem'), 'FAKE-CERT');
+    writeFileSync(join(certDir, 'lan-key.pem'), 'FAKE-KEY');
+    const res = await request(makeApp()).get('/api/lan/cert/status');
+    expect(res.body.health).toBe('missing');
+  });
+
+  it('healthy for a real cert; reports certHosts + uncoveredIps informationally', async () => {
+    copyFileSync(fixture, join(certDir, 'lan-cert.pem'));
+    writeFileSync(join(certDir, 'lan-key.pem'), 'KEY-EXISTS');
+    vi.mocked(enumerateLanIps).mockReturnValue(['192.168.1.42', '10.0.0.9']);
+    const res = await request(makeApp()).get('/api/lan/cert/status');
+    expect(res.body.health).toBe('healthy');
+    expect(res.body.certHosts).toEqual(['127.0.0.1', '192.168.1.42']);
+    expect(res.body.uncoveredIps).toEqual(['10.0.0.9']);
+    expect(typeof res.body.expiresAt).toBe('string');
+  });
+
+  it('reflects requested (env) and active (runtime) flags', async () => {
+    process.env.LAN_HTTPS = '1';
+    setLanRuntime({ httpsActive: true, port: 8443 });
+    const res = await request(makeApp()).get('/api/lan/cert/status');
+    expect(res.body.requested).toBe(true);
+    expect(res.body.active).toBe(true);
   });
 });
