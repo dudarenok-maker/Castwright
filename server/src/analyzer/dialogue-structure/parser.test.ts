@@ -140,6 +140,22 @@ describe('parser — quote conventions', () => {
     expect(paras[0].kind).toBe('dialogue');
     expect(paras[0].spans.some((s) => s.kind === 'speech')).toBe(true);
   });
+  it('de quotes: MIXED closers in one paragraph (typographic “ then ASCII ") stay two runs — a „ run ends at the NEAREST closer of ANY glyph, not a same-glyph closer past it (#1601)', () => {
+    const line = '„Nein.“ Maerin schwieg. „Ein echter."';
+    const paras = parseChapterStructure(line, deIdx);
+    const speech = paras[0].spans.filter((s) => s.kind === 'speech');
+    expect(speech.map((s) => line.slice(s.start, s.end))).toEqual(['Nein.', 'Ein echter.']);
+    // the beat between the turns survives — never swallowed into the first run
+    expect(paras[0].spans.some((s) => line.slice(s.start, s.end).includes('Maerin schwieg'))).toBe(true);
+  });
+  it('de quotes: a stray ASCII " (inch-mark) after a typographic „…“ run does NOT extend the run into narration (#1601)', () => {
+    const line = '„Hallo.“ Er war 5" groß.';
+    const paras = parseChapterStructure(line, deIdx);
+    const speech = paras[0].spans.filter((s) => s.kind === 'speech');
+    expect(speech.map((s) => line.slice(s.start, s.end))).toEqual(['Hallo.']);
+    // the narration after the run (incl. the stray inch-mark) is NOT part of speech
+    expect(speech[0] && line.slice(speech[0].start, speech[0].end)).not.toContain('Er war');
+  });
   it('en quotes: U+201C stays an OPENER — a bare ASCII " does NOT close a “…” run (de fix must not leak into en)', () => {
     // “Hello" — U+201C open, ASCII close. en's pairs are “…”, "…", ‘…’; no
     // „…" pair exists, and U+201C never closes anything in en. The paragraph
