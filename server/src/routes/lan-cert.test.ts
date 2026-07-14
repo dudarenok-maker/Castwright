@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
 import http from 'node:http';
 import express, { type Express } from 'express';
 import request from 'supertest';
-import { readFileSync, copyFileSync } from 'node:fs';
+import { copyFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { setLanRuntime } from '../lan-runtime.js';
 
