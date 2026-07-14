@@ -95,5 +95,6 @@ this cycle append to this draft rather than opening a new one.
 ## 🆘 Help
 
 - Help: Troubleshooting is now grouped into searchable, collapsible categories (failures + FAQs merged by topic); Help and Admin link out to the matching GitHub wiki page. (feat/frontend-help-troubleshooting-wiki-links)
+- Analyzer setup: the Gemini API-key field (setup wizard + Account) now shows a **"Get a Gemini API key"** link. It opens a new **wiki walkthrough page** (`Getting-a-Gemini-API-Key`) — not straight to Google — so the fragile `aistudio.google.com` URL lives only in the wiki and a Google reshuffle is a wiki edit, not an app release; the existing install/analyzer pages' raw Google links were repointed to the same page. Reuses the shared `WikiLink` (`target="_blank"` + `rel="noopener noreferrer"`). (fe-50, feat/frontend-fe-50-gemini-key-link)
 
 **Full changelog:** v1.13.0...v1.14.0

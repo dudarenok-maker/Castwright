@@ -14,6 +14,7 @@ export type WikiPage =
   | 'Troubleshooting'
   | 'Voice-Engines'
   | 'Analysis-and-the-Analyzer'
+  | 'Getting-a-Gemini-API-Key'
   | 'Multi-language-Support'
   | 'Generating-Audio'
   | 'Reviewing-Cast-and-Assigning-Voices'
@@ -27,6 +28,12 @@ export type WikiPage =
 export function wikiUrl(page: WikiPage): string {
   return `${WIKI_BASE}/${page}`;
 }
+
+/* Analyzer setup "Get a Gemini API key" link (fe-50). The app links to this
+   wiki page — NOT straight to Google — so the fragile aistudio.google.com URL
+   lives ONLY in the wiki markdown. When Google reshuffles it (they do), it's a
+   one-line wiki edit, not an app release. */
+export const GEMINI_KEY_WIKI: WikiPage = 'Getting-a-Gemini-API-Key';
 
 /* Best-fit wiki page per Troubleshooting category. Page-level, so retuning is a
    one-line edit. Keyed by CategoryId (src/data/help-failures.ts). */
