@@ -142,7 +142,11 @@ loopback origins, the port-scoped friendly hostname, and the enumerated IP
 origins in one line. (Loopback/desktop is unaffected — CSRF only gates requests
 bearing the `__Host-cw_lan` cookie; the bare-hostname `castwright.local:443`
 forwarder path already matches the port-less allow-list entry, so that path
-never depended on the port constant.)
+never depended on the port constant.) In HTTP-only (non-LAN) mode
+`getLanRuntime().port` is the HTTP `PORT` (8080), so `allowedOrigins()` would
+compute `https://localhost:8080` etc. rather than the old `:8443` — this is
+inert, not a regression: the `__Host-`-prefixed `Secure` cookie only exists over
+HTTPS LAN, so no HTTP-mode request ever reaches the origin check.
 
 ## Non-goals
 
