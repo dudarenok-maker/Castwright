@@ -1555,7 +1555,14 @@ export function Layout() {
         exportPill,
         pendingRevisionsCount: pending.length,
         anyModelLoading,
-        analysisSubstage: analysisSubstage ? { kind: analysisSubstage.kind, percent: analysisSubstage.percent } : null,
+        analysisSubstage: analysisSubstage
+          ? {
+              kind: analysisSubstage.kind,
+              percent: analysisSubstage.percent,
+              activityState: analysisSubstage.activityState,
+              fallbackActive: analysisSubstage.fallbackActive,
+            }
+          : null,
       })
     : null;
   /* The detail rendered in the Status pill's hover/tap popover (the same data
@@ -1581,6 +1588,11 @@ export function Layout() {
           chapterIndex: analysisSubstage.chapterIndex,
           totalChapters: analysisSubstage.totalChapters,
           estRemainingMs: analysisSubstage.estRemainingMs,
+          model: analysisSubstage.model,
+          engine: analysisSubstage.engine,
+          activityState: analysisSubstage.activityState,
+          activitySince: analysisSubstage.activitySince,
+          fallbackActive: analysisSubstage.fallbackActive,
         }
       : null,
     readiness: setupReadiness,

@@ -1336,3 +1336,55 @@ describe('Layout — tier-modal 1.7B eligibility converges on the shared voice-r
     );
   });
 });
+
+describe('Layout — analysis sub-stage runtime fields forward to the Status pill/popover (Task 11)', () => {
+  /* Task 2 taught selectAnalysisSubstage to return model/engine/
+     activityState/activitySince/fallbackActive; Task 10 taught the popover's
+     SubstageRow to render them. This test pins the missing link: Layout must
+     actually forward those five fields from the selector into both the
+     summarizeStatus() input (compact-pill tone) and the StatusPopover prop
+     (popover detail) — otherwise they're silently undefined at runtime even
+     though every type along the chain compiles. */
+  it('carries model/engine/activityState/fallbackActive from the prosody stream through to the compact pill tone and popover detail', async () => {
+    const store = makeStore();
+    store.dispatch(
+      prosodySlice.actions.setActive({ bookId: 'b1', progress: 0.3, label: 'Detecting emotions' }),
+    );
+    store.dispatch(
+      prosodySlice.actions.updateProgress({
+        bookId: 'b1',
+        progress: 0.3,
+        model: 'gemma-4-31b-it',
+        engine: 'gemini',
+        activityState: 'streaming',
+        fallbackActive: true,
+        now: Date.now(),
+      }),
+    );
+
+    const { findByTestId } = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books']}>
+          <Routes>
+            <Route path="/books" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    /* Compact pill: fallbackActive alone (independent of activityState)
+       must flip the tone amber — proves summarizeStatus() received
+       fallbackActive via layout.tsx's StatusInput.analysisSubstage object. */
+    const pill = await findByTestId('status-pill');
+    expect(pill).toHaveAttribute('data-status-tone', 'amber');
+
+    /* Popover: model/engine/fallbackActive must reach StatusPopoverProps —
+       proves layout.tsx's StatusDetail.analysisSubstage object carries them
+       (not just percent/label/chapterIndex/totalChapters/estRemainingMs). */
+    fireEvent.click(pill);
+    expect(await findByTestId('substage-engine-model')).toHaveTextContent(/^Gemini ·/);
+    expect(await findByTestId('substage-fallback-note')).toHaveTextContent(
+      'Switched to Gemini — Ollama unreachable',
+    );
+  });
+});
