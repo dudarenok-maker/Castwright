@@ -21,6 +21,9 @@ vi.mock('./step-models', () => ({
 vi.mock('./step-defaults', () => ({
   StepDefaults: () => <div data-testid="step-defaults-stub">defaults</div>,
 }));
+vi.mock('./step-lan-cert', () => ({
+  StepLanCert: () => <div data-testid="step-lan-cert-stub" />,
+}));
 vi.mock('./step-finish', () => ({
   StepFinish: ({ onFinish }: { onFinish: () => void }) => (
     <div data-testid="step-finish-stub">
@@ -62,6 +65,7 @@ const STEP_TESTIDS = [
   'step-ffmpeg-stub',
   'step-models-stub',
   'step-defaults-stub',
+  'step-lan-cert-stub',
   'step-finish-stub',
 ];
 
@@ -110,7 +114,7 @@ describe('SetupWizard', () => {
     expect(screen.queryByTestId('step-finish-stub')).not.toBeInTheDocument();
   });
 
-  it('guided mode shows a "Step N of 5" progress indicator', () => {
+  it('guided mode shows a "Step N of 6" progress indicator', () => {
     render(
       <SetupWizard
         readiness={READINESS}
@@ -119,7 +123,7 @@ describe('SetupWizard', () => {
         onFinish={() => {}}
       />,
     );
-    expect(screen.getByText(/step 1 of 5/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 1 of 6/i)).toBeInTheDocument();
   });
 
   it('guided mode: Next is always enabled (no blocker gating) and advances', () => {
@@ -137,7 +141,7 @@ describe('SetupWizard', () => {
     fireEvent.click(next);
     expect(screen.getByTestId('step-ffmpeg-stub')).toBeInTheDocument();
     expect(screen.queryByTestId('step-environment-stub')).not.toBeInTheDocument();
-    expect(screen.getByText(/step 2 of 5/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 2 of 6/i)).toBeInTheDocument();
   });
 
   it('guided mode: Back returns to the previous step', () => {
@@ -153,7 +157,7 @@ describe('SetupWizard', () => {
     expect(screen.getByTestId('step-ffmpeg-stub')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /back/i }));
     expect(screen.getByTestId('step-environment-stub')).toBeInTheDocument();
-    expect(screen.getByText(/step 1 of 5/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 1 of 6/i)).toBeInTheDocument();
   });
 
   it('guided mode: Back is disabled on the first step', () => {
@@ -177,12 +181,12 @@ describe('SetupWizard', () => {
         onFinish={() => {}}
       />,
     );
-    // advance through all 4 transitions to the last (finish) step
-    for (let i = 0; i < 4; i++) {
+    // advance through all 5 transitions to the last (finish) step
+    for (let i = 0; i < 5; i++) {
       fireEvent.click(screen.getByRole('button', { name: /next/i }));
     }
     expect(screen.getByTestId('step-finish-stub')).toBeInTheDocument();
-    expect(screen.getByText(/step 5 of 5/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 6 of 6/i)).toBeInTheDocument();
     // Finish lives inside StepFinish; the wizard's own Next is gone
     expect(screen.queryByRole('button', { name: /next/i })).not.toBeInTheDocument();
   });
@@ -197,7 +201,7 @@ describe('SetupWizard', () => {
         onFinish={onFinish}
       />,
     );
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       fireEvent.click(screen.getByRole('button', { name: /next/i }));
     }
     fireEvent.click(screen.getByRole('button', { name: /finish setup/i }));
@@ -232,10 +236,10 @@ describe('SetupWizard', () => {
         onFinish={() => {}}
       />,
     );
-    // The "Audio assembly" row maps to the ffmpeg step (step 2 of 5).
+    // The "Audio assembly" row maps to the ffmpeg step (step 2 of 6).
     fireEvent.click(screen.getByTestId('setup-summary-row-ffmpeg'));
     expect(screen.getByTestId('step-ffmpeg-stub')).toBeInTheDocument();
-    expect(screen.getByText(/step 2 of 5/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 2 of 6/i)).toBeInTheDocument();
   });
 
   it('re-entry mode: a "Setup overview" link returns from the wizard to the summary', () => {
