@@ -72,8 +72,10 @@ Three concrete defects fall out of that split:
   aggregate "can I make audio at all?" answer is green.
 - A first-run user is guided to the **right** engine for their needs and hardware,
   and to the right download first — without being locked out of any engine.
-- The status surface scales: adding a future TTS engine surfaces automatically
-  rather than requiring a bespoke detect route + card wiring.
+- The status surface scales modestly: adding a future voice engine means one entry
+  in a single registry for this surface (probes + capability + card), not a bespoke
+  detect route wired into several places. (This does not consolidate the codebase's
+  existing ~5 divergent engine lists — that is out of scope.)
 
 ## Non-goals
 
@@ -98,11 +100,26 @@ done properly once.
 
 ### Server
 
-**New module `server/src/tts/models-status.ts`** — the single canonical computation.
-It iterates the **engine registry** (not a hardcoded kokoro/qwen/coqui list), so a
-future engine appears automatically. It reuses the existing per-engine disk
-detectors (`detect{Kokoro,Qwen,Coqui}InstallStateOnDisk`) and the sidecar `/health`
-payload; it does **not** re-implement them.
+**New module `server/src/tts/models-status.ts`** — a composition layer, NOT a new
+per-engine model. Per-engine state reuses the **existing** `deriveEngineHealth` /
+`EngineHealthState` (`server/src/tts/engine-health.ts`), already declared "one source
+of truth for the Model Manager badge, the inventory, and the readiness gate."
+`models-status` composes that per-engine health with the runtime (venv/process) axis
+and `info`. It feeds `deriveEngineHealth` from the existing package/weights probes
+(`kokoroPackageInstalled` + `detectKokoroInstalledOnDisk`, and the qwen/coqui
+equivalents) — not the *combined* `detect*InstallStateOnDisk`, which folds
+`package-missing` into `not-installed` (see the engine-state note below).
+
+**Engine set / registry.** There is no single iterable engine registry today — the
+codebase has ~5 divergent hardcoded lists (`ALL_TTS_ENGINES`, `TRACKED_ENGINES`,
+`SIDECAR_ENGINES`, `engine-health`'s `EngineId`, etc.). This spec does **not**
+consolidate them (out of scope). It defines **one small registry for this surface**:
+the installable local **voice** engines — **kokoro, qwen, coqui** — each mapped to its
+`{ package+weights probes, capability, install-card, defaultModelKey }`.
+`models-status` iterates that. **Excluded:** `whisper` (ASR, not a voice engine),
+`gemini` (cloud, no local install), `piper` (no install card/detector). The scaling
+claim is therefore the modest, true one: **adding a future voice engine means one
+entry in this registry**, not "surfaces automatically" across the whole app.
 
 Shape:
 
@@ -113,11 +130,16 @@ interface ModelsStatus {
     pythonFound: boolean;       // only meaningful when !installedOnDisk
     process: 'ready' | 'starting' | 'down' | 'crashed';  // live liveness, separate axis
   };
-  engines: Record<string /* engineId */, {
-    installState: 'not-installed' | 'weights-missing' | 'ready';
-    packageBroken: boolean;     // present in the venv but fails to import (live /health)
-    loaded: boolean;            // resident in the sidecar now
-    // usable is derived, not stored: installState === 'ready' && !packageBroken
+  // key = sidecar voice-engine id (kokoro | qwen | coqui) — NOT the account's
+  // `defaultTtsEngine`, which is the 'local'|'gemini' provider tier. See the
+  // terminology note under Part B.
+  engines: Record<string, {
+    state: EngineHealthState;   // reuse engine-health.ts: not-installed | package-missing
+                                //   | weights-missing | ready | loaded
+    packageBroken: boolean;     // ORTHOGONAL live signal: package present on disk but
+                                //   fails to IMPORT in the sidecar (from /health).
+                                //   Distinct from `package-missing` (disk: package absent).
+    // usable is derived, not stored: (state==='ready' || state==='loaded') && !packageBroken
   }>;
   info: {
     gpu: string;                // existing human string
@@ -150,13 +172,20 @@ carries each engine's full, independent state, so:
 - The **summary badge** answers only the roll-up question (green if any engine is
   usable).
 - Each **per-engine card** answers "what is the state of *this* engine?" from its own
-  slice — so the Coqui card shows *"Coqui is installed but its package failed to load
-  — repair"* even while the summary badge is green because Kokoro is usable.
+  slice — so the Coqui card shows its own `package-missing` ("weights present, package
+  gone — Repair") or live `packageBroken` ("installed but fails to load — Repair")
+  even while the summary badge is green because Kokoro is usable.
+
+Because per-engine state reuses `EngineHealthState`, the **`package-missing`**
+distinction (weights on disk, Python package gone after a venv rebuild → fast Repair,
+not full reinstall) is preserved rather than collapsed into `not-installed` — the
+existing Model-Manager behavior the naive 3-state draft would have dropped.
 
 **Honesty limit:** cards surface only the broken states the system can actually
-detect — `packageBroken` (import failure via `/health`) and `weights-missing`
-(weights dir empty). We do not invent a "partially corrupt weights" signal we have no
-probe for. This limit is documented rather than papered over.
+detect — `package-missing` (disk: package absent), `packageBroken` (live: present but
+import throws, via `/health`), and `weights-missing` (weights dir empty). We do not
+invent a "partially corrupt weights" signal we have no probe for. This limit is
+documented rather than papered over.
 
 ### Client
 
@@ -190,14 +219,17 @@ probe for. This limit is documented rather than papered over.
   "Runtime ready/needed" (which conflated disk + process). A green "installed" card
   now coexists with a blue "starting…" pill — both true, no contradiction.
 
-**Kokoro engine (fixes contradiction #1):** the card renders
-`engines.kokoro.installState` verbatim:
+**Kokoro engine (fixes contradiction #1):** the card renders `engines.kokoro.state`
+verbatim (no longer collapsing to an `installed` boolean):
 
 - `not-installed` → "Kokoro is not installed" + Install CTA
 - `weights-missing` → **"Kokoro is installed — voice weights not downloaded"** +
   "Download weights" CTA (identical wording to the badge, since both read the same
   field)
-- `ready` → green "Kokoro is installed"
+- `package-missing` → "Kokoro weights present — package needs repair" + Repair CTA
+- `packageBroken` (orthogonal) → "Kokoro is installed but fails to load — repair"
+- `ready` / `loaded` → green "Kokoro is installed" (`loaded` may add a subtle
+  "resident" hint)
 
 **Summary board + badges:** a shared client helper classifies each diagnosis as
 `ok` / `attention` / `pending`, where **`pending` (transient `starting`) renders
@@ -211,16 +243,26 @@ automatic: there is only one fetch to refresh.
 
 ### Files (Part A)
 
-- `server/src/tts/models-status.ts` (new) — canonical computation.
+- `server/src/tts/models-status.ts` (new) — composition layer over
+  `deriveEngineHealth` + the runtime/info axes; the small per-surface voice-engine
+  registry (kokoro/qwen/coqui → probes/capability/card/defaultModelKey).
 - `server/src/routes/models-status.ts` (new) — `GET /api/setup/models-status`.
+- `server/src/tts/engine-health.ts` — **reused** as the per-engine state source (not
+  re-implemented); no change unless a probe seam is needed.
 - `server/src/routes/setup-readiness.ts` — derive `sidecar`/`tts` blockers from the
-  module; surface `vramTotalMb`.
+  module; surface `vramTotalMb`. (Relocates the mock seam used by
+  `setup-readiness.orchestration.test.ts` — update that test.)
 - `src/components/setup/step-models.tsx` — fetch once, derive badges + card status,
   pass controlled props.
 - `src/components/{kokoro-install,venv-bootstrap,qwen-install,coqui-install}.tsx` —
-  controlled (status via prop; keep job/poll).
+  controlled (status via required prop; keep job/poll).
 - `src/views/model-manager.tsx` — feed status into `INSTALLER_BY_ID` rows.
 - `src/components/setup/setup-wizard.tsx` — `buildSummaryRows` neutral `pending`.
+- **Test migration (required, enumerated per Finding 5):**
+  `src/components/{kokoro-install,venv-bootstrap,qwen-install,coqui-install}.test.tsx`
+  each currently mock `/detect` self-fetch and assert self-fetch rendering — all four
+  must be rewritten to the controlled-prop contract. Plus `model-manager.test.tsx` and
+  `step-models.test.tsx`, and `setup-readiness.orchestration.test.ts` (mock-seam move).
 
 ---
 
@@ -230,8 +272,19 @@ Built on Part A's status surface.
 
 ### Capability map (grounded, not hardcoded)
 
-A small table derived from the **existing eligibility source** (`fs-59` / `fs-60` /
-`fs-70` language-code maps + `voice-mapping`) giving each engine:
+A small table with a **partly-derived, partly-authored** basis (stated plainly so it
+isn't over-claimed):
+
+- **`multilingual` is derived** from the existing eligibility source —
+  `resolveEligibleEngines(lang, …)` in `server/src/tts/language.ts` (e.g. `zh →
+  [coqui, qwen]`, `ko → [qwen]`), exercised in `language.test.ts`. An engine is
+  "multilingual" if it's eligible for some non-English language there.
+- **`expressive` and the VRAM floors are authored constants** — there is no code
+  source for "expressive," and `genVramFloorMb` / `designVramFloorMb` are authored
+  from measurement / the model-lifecycle notes, not derived. They live in one place
+  with a cited basis.
+
+Each engine carries:
 
 ```ts
 interface EngineCapability {
@@ -288,11 +341,17 @@ Consequences:
   path fits), with a soft aside that *voice design* (the 1.7B model) may be tight on
   this GPU. We do **not** steer generation to Kokoro here.
 - **Low VRAM but multilingual is needed** → recommend Qwen anyway (Kokoro literally
-  cannot do the job) with a "low VRAM — will run on CPU, slower" caveat. We never
-  steer someone to an engine that cannot meet their stated need.
+  cannot do the job), with an honest **"may not fit comfortably on this GPU"** caveat.
+  We never steer someone to an engine that cannot meet their stated need.
 - **Nothing is ever blocked.** Every engine stays installable and usable; the VRAM
-  signal only changes which engine *leads* and what caveat is shown. Qwen/Coqui still
-  install and run (on CPU, slower) on a low-VRAM box.
+  signal only changes which engine *leads* and what caveat is shown.
+
+**Caveat wording is a truthfulness open item (plan-time):** do NOT promise "will run
+on CPU, slower" until the sidecar's actual low-VRAM behavior is verified. The
+project's own incident history (8 GB bulk-design OOM; 1.7B-tier OOM storms) suggests
+a constrained-VRAM Qwen can **OOM-crash rather than gracefully fall back to CPU**. The
+plan must confirm the real behavior and either promise CPU fallback (if true) or keep
+the softer "may not fit comfortably on this GPU."
 
 **This deliberately revises #1614's literal acceptance criterion** ("detected VRAM
 < 6 GB → Kokoro recommended regardless"). That flat rule is inaccurate: Qwen's 0.6B
@@ -311,14 +370,45 @@ out here so the divergence from the issue text is a deliberate, visible decision
 - Drop "the default voice engine" language throughout the wizard — the recommendation
   is *derived*, not fixed.
 
+### Terminology: "engine" is overloaded — two distinct axes
+
+The codebase uses "engine" for two different things, and the recommendation must
+target the right one:
+
+- **Sidecar voice engine** = `kokoro | qwen | coqui` (what `models-status.engines`
+  keys on; what `engineForModelKey(modelKey)` returns).
+- **Account `defaultTtsEngine`** = `'local' | 'gemini'` — the UI's provider *tier*
+  (on-device vs cloud), NOT a kokoro/qwen/coqui id (`src/lib/tts-models.ts:12`).
+
+The kokoro/qwen/coqui choice is carried by **`defaultTtsModelKey`** — a model-key like
+`kokoro-v1` / `qwen3-tts-0.6b` / `coqui-xtts-v2` (`src/lib/model-keys.ts`). The bridge
+helpers already exist: `engineForModelKey(key)` (model-key → sidecar engine) and
+`engineGroupForModelKey(key)` (model-key → `'local'|'gemini'` tier).
+
 ### Defaults handoff
 
-The recommendation calls `saveAccountSettings({ defaultTtsEngine: <picked> })`,
-pre-seeding the setting. The **Defaults step** (`step-defaults.tsx`) already reads and
-re-syncs from `account.defaultTtsEngine`, so it shows the recommended engine
-pre-selected and is where the user **reconfirms**. No new plumbing — the existing
-account slice is the channel. Reconfirmation in a separate step is intentional: the
-Models-step pick is a suggestion; the Defaults step is the commit.
+The recommendation maps its picked sidecar engine to a default **model key** (kokoro
+→ `kokoro-v1`; qwen → `qwen3-tts-0.6b`, the 6-GB-fitting generation tier; coqui →
+`coqui-xtts-v2`) and calls:
+
+```ts
+saveAccountSettings({
+  defaultTtsModelKey: <picked model key>,
+  defaultTtsModelKeyExplicit: true,   // so a later resolved default can't silently override it
+  defaultTtsEngine: 'local',          // all recommended engines are on-device
+});
+```
+
+The **Defaults step** (`step-defaults.tsx`) already reads and re-syncs from
+`account.defaultTtsModelKey` via its **"Voice model"** dropdown (and pre-selects the
+`'local'` engine group), so it shows the recommended model pre-selected and is where
+the user **reconfirms**. No new plumbing — the existing account slice is the channel.
+Reconfirmation in a separate step is intentional: the Models-step pick is a
+suggestion; the Defaults step is the commit.
+
+(This corrects the original draft, which wrote the kokoro/qwen/coqui pick to
+`defaultTtsEngine` — a `'local'|'gemini'` field that cannot carry it. Verified against
+`tts-models.ts`, `model-keys.ts`, and `step-defaults.tsx`.)
 
 ### VRAM source
 
@@ -402,8 +492,9 @@ Each PR runs the full before-shipping checklist: regression plan, release-notes-
   ordering + defaults handoff and a follow-up `Refs` for the pull-priority
   composition.
 - **Controlled-card migration blast radius:** making the status prop required touches
-  model-manager in the same PR. Verified feasible (generic `INSTALLER_BY_ID` rows +
-  existing 30 s poll), but it is the one non-trivial extra surface in Part A.
+  model-manager in the same PR AND forces a rewrite of all four `*-install.test.tsx`
+  suites + `model-manager.test.tsx` (they mock `/detect` self-fetch today). Verified
+  feasible but real, enumerable work — listed as explicit plan tasks, not incidental.
 - **Capability-map floor numbers:** the exact `genVramFloorMb` / `designVramFloorMb`
   values must come from real measurement or the model registry, not guessed literals.
   The *structure* is fixed here; the numbers are a plan-time task.
