@@ -108,6 +108,37 @@ export function isLoopbackRequest(req: Request): boolean {
   return LOOPBACK.has(ip);
 }
 
+/* The one shipped friendly hostname (plan 239 mDNS name + its :443 forwarder).
+   A request that arrives with this Host reached us via castwright.local, not a
+   bare LAN IP — the only non-loopback origin we let START a pairing session. */
+export const FRIENDLY_HOSTNAME = 'castwright.local';
+
+/* True when the request's Host header names our shipped friendly hostname.
+   Strips any :port and lowercases; a browser on https://castwright.local omits
+   the default :443 so the header is bare `castwright.local`, but tolerate a port
+   too. NOTE: the Host header is client-controlled/spoofable on its own — this is
+   only ever ANDed with the LAN-token guard (see mayStartPairingSession), so a
+   spoofer would still need a valid device token to reach the handler. */
+export function isFriendlyHostnameRequest(req: Request): boolean {
+  const raw = req.headers['host'];
+  if (typeof raw !== 'string' || raw.length === 0) return false;
+  const host = raw.split(':')[0].toLowerCase();
+  return host === FRIENDLY_HOSTNAME;
+}
+
+/* Who may START a pairing session (mint a session code). Loopback (the physical
+   host UI) always may. Otherwise ONLY a request that (a) reached us via the
+   friendly hostname AND (b) is under the live LAN-token guard — which, for a
+   non-loopback caller, means requireLanToken already authenticated it as an
+   already-paired device (its req.ip is the :443 forwarder's 127.0.0.2, never
+   loopback, so it could not have bypassed the token check). Net effect: an
+   already-authorized device browsing castwright.local can pair another device;
+   bare-LAN-IP access and unpaired devices cannot. Direct token mint
+   (POST /api/devices) stays loopback-only regardless. */
+export function mayStartPairingSession(req: Request): boolean {
+  return isLoopbackRequest(req) || (isLanTokenEnforced() && isFriendlyHostnameRequest(req));
+}
+
 /** Parse the cw_lan cookie defensively — this runs on EVERY /api request, so an
  *  unguarded throw here (e.g. a future `cookie` version that rejects bad input)
  *  would 500 the entire API. cookie@0.7.x doesn't throw, but the catch is cheap

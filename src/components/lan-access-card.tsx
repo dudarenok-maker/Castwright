@@ -30,7 +30,13 @@ export function LanAccessCard() {
   const authorize = async () => {
     setErr(null);
     try { setSession(await api.createDevicePairSession({ label: label.trim() || 'Device' })); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) {
+      // A 403 here means this browser reached the server from a bare LAN IP (not
+      // loopback or the friendly hostname) — actionable guidance beats the raw code.
+      if (e instanceof ApiError && e.status === 403)
+        setErr('Start pairing from https://localhost:8443 or https://castwright.local on this computer.');
+      else setErr(e instanceof Error ? e.message : String(e));
+    }
   };
   const revoke = async (id: string) => {
     setErr(null);

@@ -142,6 +142,22 @@ describe('LanAccessCard', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('shows actionable guidance instead of the raw code on a 403 (reached via a bare LAN IP)', async () => {
+    vi.mocked(api.listDevices).mockResolvedValue({ devices: [] });
+    vi.mocked(api.createDevicePairSession).mockRejectedValue(new ApiError('pair-session failed (403)', 403));
+
+    render(<LanAccessCard />);
+    fireEvent.change(screen.getByPlaceholderText('Device name'), { target: { value: 'My Laptop' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Authorize a device' }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/start pairing from https:\/\/localhost:8443 or https:\/\/castwright\.local/i),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId('mock-qr')).not.toBeInTheDocument();
+  });
+
   it('shows "manage from desktop" note on 401 from listDevices (no crash)', async () => {
     vi.mocked(api.listDevices).mockRejectedValue(new ApiError('Unauthorized', 401));
 

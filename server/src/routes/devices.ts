@@ -16,7 +16,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { createDevice, listDevices, revokeDevice, clampTtlDays } from '../workspace/device-tokens.js';
 import { createPairingSession } from '../workspace/pairing-sessions.js';
-import { isLanTokenEnforced, isLoopbackRequest } from '../lan-auth.js';
+import { isLanTokenEnforced, isLoopbackRequest, mayStartPairingSession } from '../lan-auth.js';
 import { enumerateLanUrls } from './export-lan.js';
 import { getLanRuntime } from '../lan-runtime.js';
 import { configValue } from '../config/resolver.js';
@@ -45,8 +45,13 @@ devicesRouter.post('/devices', async (req: Request, res: Response) => {
 
 // browser pairing session (loopback-only; requires enforcement so the cookie is meaningful + HTTPS)
 devicesRouter.post('/devices/pair-session', (req: Request, res: Response) => {
-  if (!isLoopbackRequest(req)) {
-    res.status(403).json({ error: 'Pairing can only be started from the host UI.' });
+  // Loopback (the physical host UI) OR an already-paired device reaching us via
+  // the friendly hostname (castwright.local) may start pairing. Bare-LAN-IP
+  // access stays loopback-only. See mayStartPairingSession for the full rationale.
+  if (!mayStartPairingSession(req)) {
+    res.status(403).json({
+      error: 'Start pairing from https://localhost:8443 or https://castwright.local on the computer running Castwright.',
+    });
     return;
   }
   if (!isLanTokenEnforced()) {

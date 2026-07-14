@@ -20,17 +20,30 @@ interface PairDeviceModalProps {
 
 export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
   const [info, setInfo] = useState<PairSessionInfo | null>(null);
-  const [status, setStatus] = useState<'loading' | 'ready' | 'unavailable' | 'error'>('loading');
-  const [nonce, setNonce] = useState(0); // bump to regenerate the code
+  const [status, setStatus] = useState<
+    'naming' | 'loading' | 'ready' | 'unavailable' | 'error' | 'restricted'
+  >('naming');
+  const [label, setLabel] = useState('');
 
-  /* Fetch a new pairing session each time the modal opens (or the user hits
-     "Regenerate code"). Sessions are short-lived, so don't cache across opens. */
+  /* Name-first: the user labels the device before we mint a session, so the
+     admin LAN-access list reads sensibly instead of "Device". Reset to the
+     naming step each time the modal opens — sessions are short-lived, don't
+     cache across opens. */
   useEffect(() => {
     if (!open) return;
+    setStatus('naming');
+    setInfo(null);
+    setLabel('');
+  }, [open]);
+
+  /* Mint (or re-mint) a pairing session for the current label. The desktop
+     label travels to the admin list via the session; the phone only reads the
+     code from the QR. */
+  const generate = () => {
     let cancelled = false;
     setStatus('loading');
     api
-      .createPairSession()
+      .createPairSession(label)
       .then((r) => {
         if (cancelled) return;
         setInfo(r);
@@ -38,12 +51,15 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
       })
       .catch((e: Error) => {
         if (cancelled) return;
-        setStatus(/\b409\b/.test(e?.message ?? '') ? 'unavailable' : 'error');
+        const msg = e?.message ?? '';
+        setStatus(
+          /\b409\b/.test(msg) ? 'unavailable' : /\b403\b/.test(msg) ? 'restricted' : 'error',
+        );
       });
     return () => {
       cancelled = true;
     };
-  }, [open, nonce]);
+  };
 
   if (!open) return null;
 
@@ -78,6 +94,54 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
           </div>
 
           <div className="px-6 py-5 text-sm text-ink/75 leading-relaxed">
+            {status === 'naming' && (
+              <form
+                data-testid="pair-device-naming"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  generate();
+                }}
+                className="space-y-3"
+              >
+                <p>
+                  Name this device so you can recognise it later under{' '}
+                  <strong>LAN access</strong> — then generate a code and scan it from the
+                  Castwright Companion app.
+                </p>
+                <input
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                  placeholder="e.g. Anna's phone"
+                  aria-label="Device name"
+                  className="w-full px-4 py-2.5 rounded-full border border-ink/15 bg-white text-sm text-ink min-h-[44px] fine-pointer:min-h-0"
+                />
+                <button
+                  type="submit"
+                  className="w-full px-4 py-2.5 rounded-full bg-ink text-white text-sm font-semibold min-h-[44px] fine-pointer:min-h-0"
+                >
+                  Generate pairing code
+                </button>
+              </form>
+            )}
+
+            {status === 'restricted' && (
+              <div data-testid="pair-device-restricted" className="space-y-3">
+                <p>
+                  Pairing can only be started from the computer running Castwright. Open{' '}
+                  <code className="bg-ink/5 px-1 rounded">https://castwright.local</code> or{' '}
+                  <code className="bg-ink/5 px-1 rounded">https://localhost:8443</code> on that
+                  computer, then try again.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setStatus('naming')}
+                  className="px-4 py-2 rounded-full border border-ink/15 text-sm text-ink/70 hover:bg-ink/5 min-h-[44px] fine-pointer:min-h-0"
+                >
+                  Back
+                </button>
+              </div>
+            )}
+
             {status === 'loading' && (
               <p data-testid="pair-device-loading" className="text-center py-8 text-ink/50">
                 Loading pairing details…
@@ -120,11 +184,7 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
                   In the app, tap <strong>Pair a device → Scan QR</strong> and point the camera here.
                   Your phone must be on the same Wi‑Fi.
                 </p>
-                <PairingQr
-                  payload={info.qrPayload}
-                  expiresAt={info.expiresAt}
-                  onRegenerate={() => setNonce((n) => n + 1)}
-                />
+                <PairingQr payload={info.qrPayload} expiresAt={info.expiresAt} onRegenerate={generate} />
                 <details className="rounded-xl border border-ink/10 bg-ink/[0.02]">
                   <summary className="px-4 py-3 cursor-pointer text-ink/70 font-medium select-none">
                     Or enter these manually
