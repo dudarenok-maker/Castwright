@@ -3372,7 +3372,10 @@ async function runMockReviewTimeline(bookId: string, entry: InFlightMockReview):
   };
   const noteOps = (chId: number, ops: import('./script-review-apply').ReviewOp[]) => {
     (entry.opsAccum[chId] ??= []).push(...ops);
-    for (const s of entry.subscribers) s.onOps?.({ chapterId: chId, ops });
+    // Hand each subscriber its OWN array copy (matches the join-replay path's
+    // `[...ops]`) — with ≥2 live subscribers, sharing one reference would let a
+    // subscriber that mutated it in place corrupt what a sibling already read.
+    for (const s of entry.subscribers) s.onOps?.({ chapterId: chId, ops: [...ops] });
   };
   const noteCheckpoint = (chId: number, version: number) => {
     entry.versionAccum[chId] = version;
