@@ -677,6 +677,11 @@ async function runScriptReviewJob(
   let activeSelection = selection; // Task 6 may reassign this to a Gemini-only selection
 
   let fellBack = false;
+  // Tracks the progress fraction of the last emitted phase event, so a
+  // mid-run fallback (Ollama dying after several chapters are already done)
+  // announces itself at the CURRENT progress instead of snapping the bar
+  // back to 0% — the "frozen at 0%" symptom this feature exists to kill.
+  let lastEmittedProgress = 0;
   const switchToFallback = (reason: string): void => {
     if (fellBack) return;
     fellBack = true;
@@ -686,7 +691,7 @@ async function runScriptReviewJob(
     send({
       kind: 'phase',
       phaseId: 0,
-      progress: 0,
+      progress: lastEmittedProgress,
       label: 'Reviewing script',
       activityState: 'waiting',
       model: activeSelection.model,
@@ -707,7 +712,7 @@ async function runScriptReviewJob(
     }
     if (!warm.ok) {
       if (selection.fallbackModel === null) {
-        send({ kind: 'error', code: 'model_load_failed', message: `Couldn't load the analyzer model (${activeSelection.model}). Is Ollama running?`, model: activeSelection.model });
+        send({ kind: 'error', code: 'model_load_failed', message: `Couldn't load the analyzer model (${activeSelection.model}). Is Ollama running and the model pulled?`, model: activeSelection.model });
         for (const sub of job.subscribers) sub.res.end();
         return;
       }
@@ -733,10 +738,11 @@ async function runScriptReviewJob(
     for (let i = 0; i < chapterIds.length; i += 1) {
       if (job.controller.signal.aborted) break;
       const chapterId = chapterIds[i];
+      lastEmittedProgress = i / chapterIds.length;
       send({
         kind: 'phase',
         phaseId: 0,
-        progress: i / chapterIds.length,
+        progress: lastEmittedProgress,
         label: 'Reviewing script',
         chapterId,
         activityState: 'waiting',
@@ -799,10 +805,11 @@ async function runScriptReviewJob(
         // Intra-chapter creep: only advances the bar for multi-chunk (local)
         // chapters; single-chunk / cloud chapters rely on the client timer.
         if (!job.controller.signal.aborted) {
+          lastEmittedProgress = (i + (index + 1) / chunks.length) / chapterIds.length;
           send({
             kind: 'phase',
             phaseId: 0,
-            progress: (i + (index + 1) / chunks.length) / chapterIds.length,
+            progress: lastEmittedProgress,
             label: 'Reviewing script',
             chapterId,
           });

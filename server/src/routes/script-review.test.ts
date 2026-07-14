@@ -636,6 +636,51 @@ describe('POST /api/books/:bookId/script-review', () => {
       expect(events.some((e) => e.kind === 'error' && e.code === 'model_load_failed')).toBe(false);
       expect(runReview).not.toHaveBeenCalled();
     });
+
+    it('a MID-RUN fallback (warm succeeds, Ollama dies partway through the pass) announces the switch at the CURRENT progress, not 0', async () => {
+      writeBook(SENTENCES); // two chapters — chapter 1 completes before the fallback fires on chapter 2
+      selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({
+        analyzer: {
+          runStage1: () => Promise.reject(new Error('not used')),
+          runStage1Chapter: () => Promise.reject(new Error('not used')),
+          runStage2Chapter: () => Promise.reject(new Error('not used')),
+          runEmotionChapter: () => Promise.reject(new Error('not used')),
+          runScriptReviewChapter: (m: string, c: number, p: string, call: unknown) =>
+            (runReview as (...args: unknown[]) => unknown)(m, c, p, call),
+          runStage3Chapter: () => Promise.reject(new Error('not used')),
+          runAttributionEscalation: () => Promise.resolve(null),
+        } as Analyzer,
+        engine: 'local',
+        model: 'qwen3.5:9b',
+        fallbackModel: 'gemma-4-31b-it',
+      }));
+      // Warm succeeds (default mock: { ok: true }) — the fallback only fires
+      // mid-run, via onFallback on chapter 2's call, AFTER chapter 1 has
+      // already streamed a non-zero progress fraction.
+      runReview.mockImplementation((_m: string, chapterId: number, _p: string, call: { onFallback: (info: { reason: string }) => void }) => {
+        if (chapterId === 2) call.onFallback({ reason: 'Ollama unreachable mid-run' });
+        return Promise.resolve({ ops: [] });
+      });
+
+      const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+      expect(res.status).toBe(200);
+      const events = parseSse(res.text);
+
+      // Sanity: progress DID advance past 0 before the fallback (chapter 1's
+      // chapter-start/creep phases), so a hardcoded progress: 0 on the
+      // announcement would be a visible regression, not a no-op.
+      const preFallbackProgress = events
+        .filter((e) => e.kind === 'phase' && !e.fallbackReason)
+        .map((e) => e.progress as number);
+      expect(Math.max(...preFallbackProgress)).toBeGreaterThan(0);
+
+      const fallbackPhases = events.filter((e) => e.kind === 'phase' && e.engine === 'gemini' && e.fallbackReason);
+      expect(fallbackPhases).toHaveLength(1);
+      // The announcement must carry the LAST progress emitted before the
+      // fallback (0.5 — chapter 1 of 2 fully done), not a reset to 0.
+      expect(fallbackPhases[0].progress).toBe(0.5);
+      expect(fallbackPhases[0].progress).toBeGreaterThan(0);
+    });
   });
 
   it('feeds the prior chapter exchange into the next chapter, first chunk only (fs-64)', async () => {
