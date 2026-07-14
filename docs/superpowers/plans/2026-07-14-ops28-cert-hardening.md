@@ -826,7 +826,7 @@ This file hand-builds its `api` mock with only `listDevices` / `createDevicePair
       uncoveredIps: [], expiresAt: '2099-01-01T00:00:00.000Z',
     }),
 ```
-2. Rewrite the two assertions that checked the removed inline cert UI (the old `Now covers:` / "Regenerate certificate" text) to instead assert `await screen.findByTestId('lan-cert-status-admin')` renders.
+2. Reconcile the three tests that reference the removed cert UI: the `Now covers:` host-list assertion genuinely breaks → rewrite it to assert `await screen.findByTestId('lan-cert-status-admin')`; the error-message test and the "Regenerate hidden on 401" test should stay green (the 401 test renders the `manageHint` branch, which never mounts `<LanCertStatus>`) — confirm, don't rewrite, those two.
 
 Run: `npm run test -- src/components/lan-access-card.test.tsx`
 Expected: PASS (all tests — not just the two cert ones).
