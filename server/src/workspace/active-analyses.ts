@@ -76,6 +76,16 @@ export async function scanActiveAnalyses(): Promise<ActiveAnalysisSummary[]> {
            skip it silently rather than 500 the whole scan. */
         const state = await readJson<BookStateJson>(stateJsonPath(bookDir)).catch(() => null);
         if (!state) continue;
+        /* A confirmed book's analysis is finished; a leftover paused/halted
+           snapshot (e.g. an aborted or displaced run the server never cleared)
+           is stale and must NOT surface as a resumable "active analysis" — it
+           would drive a "Paused — resume?" library badge and a clickable top-bar
+           pill that, on click, RESUMES (re-analyses) the book. In the 2026-07-14
+           voice-strip incident, resuming such a stale analysis stripped the
+           book's designed voices. Only unconfirmed books surface here; a genuine
+           re-analysis of a confirmed book is tracked as a live in-flight job,
+           not this disk-snapshot scan. */
+        if (state.castConfirmed === true) continue;
         out.push(toSummary(state, snap));
       }
     }

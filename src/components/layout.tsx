@@ -43,6 +43,7 @@ import type { Character, BookExportJob } from '../lib/types';
 import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
 import { computeReanalyseProgress } from '../lib/reanalyse-progress';
+import { shouldSurfaceColdBootAnalysisPill } from '../lib/analysis-pill-gate';
 import { filterLinkablePriorCandidates } from '../lib/prior-link-candidates';
 import { parseDuration } from '../lib/time';
 import { stageToHash } from '../lib/router';
@@ -849,6 +850,13 @@ export function Layout() {
           .getAnalysisState(bookId)
           .then((snap) => {
             if (cancelled || !snap) return;
+            /* Don't resurrect a stale/terminal analysis pill for a book whose
+               cast is already confirmed — a lingering paused/halted snapshot
+               from an aborted or displaced run must not present a clickable
+               "Analysing" pill that resumes (and re-analyses) the book. Only a
+               genuinely-running analysis surfaces on a confirmed book. See the
+               2026-07-14 voice-strip incident. */
+            if (!shouldSurfaceColdBootAnalysisPill(res.state.castConfirmed, snap.state)) return;
             dispatch(
               analysisActions.setActiveStream({
                 bookId,
