@@ -1851,7 +1851,7 @@ describe('ProfileDrawer — fs-60 eligibility-based engine lock', () => {
     expect(screen.getByRole('option', { name: 'Coqui XTTS' })).toBeInTheDocument();
   });
 
-  it('still hard-locks to Qwen for a still-unsupported non-English language (zh)', () => {
+  it('still hard-locks to Qwen when Qwen is the only eligible engine (zh, no Coqui installed)', () => {
     renderDrawer(baseChar, {
       bookId: 'zh-book-1',
       libraryBook: { ...ruBook, bookId: 'zh-book-1', language: 'zh', eligibleTtsEngines: ['qwen'] },

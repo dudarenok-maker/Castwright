@@ -3,9 +3,9 @@
    voice: "Design full cast" kicks the bulk job (same payload shape as the
    cast view's "Design full cast" button, so it drives the same
    DesignPill/progress UI); English AND Coqui-eligible non-English books (fs-60
-   — ru/es/fr/de) get a "Proceed anyway" fallback, naming whichever engine
-   would actually render (Kokoro or Coqui); only a still-unsupported language
-   (Qwen is the sole eligible engine) has no proceed affordance at all —
+   — ru/es/fr/de/zh/ja) get a "Proceed anyway" fallback, naming whichever engine
+   would actually render (Kokoro or Coqui); only a language with no Coqui/Kokoro
+   fallback (Qwen is the sole eligible engine) has no proceed affordance at all —
    every speaking character needs a designed voice before that book can
    generate. */
 
