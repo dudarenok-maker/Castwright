@@ -27,7 +27,9 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js';
 import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
+import { selectAnalyzer } from '../analyzer/index.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
+import { warmOllamaModel } from './ollama-health.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { upsertChapterEntry, readLedger, discardChapters, resolveOps, patchSelection } from '../workspace/script-review-ledger.js';
@@ -672,6 +674,52 @@ async function runScriptReviewJob(
   };
   const heartbeat = makeThrottledHeartbeat(send, 2000);
   const selection = selectAnalyzerForPhase({ phase: 'phase1', model });
+  let activeSelection = selection; // Task 6 may reassign this to a Gemini-only selection
+
+  let fellBack = false;
+  // Tracks the progress fraction of the last emitted phase event, so a
+  // mid-run fallback (Ollama dying after several chapters are already done)
+  // announces itself at the CURRENT progress instead of snapping the bar
+  // back to 0% — the "frozen at 0%" symptom this feature exists to kill.
+  let lastEmittedProgress = 0;
+  const switchToFallback = (reason: string): void => {
+    if (fellBack) return;
+    fellBack = true;
+    // Re-select a Gemini-only analyzer (fallbackModel has no ':' → gemini),
+    // so subsequent chapters skip the dead Ollama primary entirely.
+    if (selection.fallbackModel) activeSelection = selectAnalyzer({ model: selection.fallbackModel });
+    send({
+      kind: 'phase',
+      phaseId: 0,
+      progress: lastEmittedProgress,
+      label: 'Reviewing script',
+      activityState: 'waiting',
+      model: activeSelection.model,
+      engine: activeSelection.engine, // 'gemini'
+      fallbackReason: reason,
+    });
+  };
+
+  // Warm the analyzer model the first chapter will actually use, so a cold
+  // Ollama doesn't hang silently behind chapter 1's first token.
+  if (activeSelection.engine === 'local') {
+    send({ kind: 'phase', phaseId: 0, progress: 0, label: 'Loading model', activityState: 'loading', model: activeSelection.model, engine: 'local' });
+    const warm = await warmOllamaModel(activeSelection.model, { signal: job.controller.signal });
+    if (job.controller.signal.aborted) {
+      send({ kind: 'error', code: 'cancelled', message: 'Review cancelled.' });
+      for (const sub of job.subscribers) sub.res.end();
+      return;
+    }
+    if (!warm.ok) {
+      if (selection.fallbackModel === null) {
+        send({ kind: 'error', code: 'model_load_failed', message: `Couldn't load the analyzer model (${activeSelection.model}). Is Ollama running and the model pulled?`, model: activeSelection.model });
+        for (const sub of job.subscribers) sub.res.end();
+        return;
+      }
+      // A Gemini fallback exists — don't abort a setup that works today.
+      switchToFallback('Ollama unreachable');
+    }
+  }
 
   let totalOps = 0;
   let reviewedChapters = 0;
@@ -690,12 +738,16 @@ async function runScriptReviewJob(
     for (let i = 0; i < chapterIds.length; i += 1) {
       if (job.controller.signal.aborted) break;
       const chapterId = chapterIds[i];
+      lastEmittedProgress = i / chapterIds.length;
       send({
         kind: 'phase',
         phaseId: 0,
-        progress: i / chapterIds.length,
+        progress: lastEmittedProgress,
         label: 'Reviewing script',
         chapterId,
+        activityState: 'waiting',
+        model: activeSelection.model,
+        engine: activeSelection.engine,
         ...chapterPacingPhaseFields({
           index: i,
           totalChapters: chapterIds.length,
@@ -712,7 +764,7 @@ async function runScriptReviewJob(
         ? buildStructureEvidence(bodyByChapter.get(chapterId) ?? '', byChapter.get(chapterId) ?? [], roster, reviewLanguage)
         : undefined;
       const chunks = chunkSentencesByBudget(byChapter.get(chapterId) ?? [], {
-        charBudget: chapterChunkBudget(selection.engine),
+        charBudget: chapterChunkBudget(activeSelection.engine),
         overlap: 3,
         serialize: (s) => JSON.stringify({ id: s.id, characterId: s.characterId, text: s.text }),
       });
@@ -728,11 +780,12 @@ async function runScriptReviewJob(
           manuscriptId, chapterId, chunkWithContext(chunk), roster, index === 0 ? priorExchange : null, structureEvidence,
         );
         try {
-          const result = await selection.analyzer.runScriptReviewChapter(manuscriptId, chapterId, prompt, {
+          const result = await activeSelection.analyzer.runScriptReviewChapter(manuscriptId, chapterId, prompt, {
             signal: job.controller.signal,
             language: bookStateLanguage(located.state),
             onChunk: (info) => heartbeat(0, chapterId, { receivedBytes: info.receivedBytes, elapsedMs: info.elapsedMs, sinceLastChunkMs: info.sinceLastChunkMs }),
-            onThrottle: (waitMs, reason) => send({ kind: 'throttle', phaseId: 0, chapterIndex: chapterId, model: selection.model, waitMs, reason }),
+            onThrottle: (waitMs, reason) => send({ kind: 'throttle', phaseId: 0, chapterIndex: chapterId, model: activeSelection.model, waitMs, reason }),
+            onFallback: ({ reason }) => switchToFallback(reason),
           });
           const owned = result.ops.filter((op) => ownsOp(chunk.coreIds, primarySentenceId(op)));
           if (owned.length) {
@@ -748,6 +801,18 @@ async function runScriptReviewJob(
             return;
           }
           send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
+        }
+        // Intra-chapter creep: only advances the bar for multi-chunk (local)
+        // chapters; single-chunk / cloud chapters rely on the client timer.
+        if (!job.controller.signal.aborted) {
+          lastEmittedProgress = (i + (index + 1) / chunks.length) / chapterIds.length;
+          send({
+            kind: 'phase',
+            phaseId: 0,
+            progress: lastEmittedProgress,
+            label: 'Reviewing script',
+            chapterId,
+          });
         }
       }
       if (job.controller.signal.aborted) {

@@ -16,6 +16,7 @@ import { useAppDispatch, useAppSelector } from '../store';
 import { IconClose, IconWarning, IconCheck } from '../lib/icons';
 import { notificationsActions, selectToasts, type Toast } from '../store/notifications-slice';
 import { VoiceNudgeToast } from './voice-nudge-toast';
+import { retryReviewScript } from '../store/script-review-thunk';
 
 const AUTO_DISMISS_MS = 6000;
 
@@ -55,12 +56,47 @@ function ToastItem({ toast }: { toast: Toast }) {
 
   const Icon = toast.kind === 'info' ? IconCheck : IconWarning;
 
+  // fs-58 Task 9 — model_load_failed carries a serializable RetryReview
+  // scope (bookId/wholeBook/chapterId/model); retryReviewScript re-reads
+  // live sentences/cast/manuscript from the store at click time rather
+  // than replaying whatever was current when the error fired.
+  //
+  // PR review round 5 — retryReviewScript returns false when it no-op'd
+  // (manuscript/cast for the book aren't loaded, e.g. the user navigated
+  // away). Only dismiss the toast when the retry actually launched;
+  // otherwise leave it so the user can navigate back and retry, and nudge
+  // them with a brief warn toast instead of a silent dead end.
+  const onRetry = () => {
+    if (!toast.retryReview) return;
+    const { bookId, wholeBook, chapterId, model } = toast.retryReview;
+    const launched = dispatch(retryReviewScript(bookId, { wholeBook, chapterId, model }));
+    if (launched) {
+      dispatch(notificationsActions.dismissToast(toast.id));
+    } else {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'warn',
+          message: 'Open the book to retry the review.',
+        }),
+      );
+    }
+  };
+
   return (
     <div
       className={`flex items-start gap-3 rounded-2xl border px-4 py-3 shadow-card min-w-[280px] max-w-[360px] fade-in ${kindClass}`}
     >
       <Icon className="w-4 h-4 mt-0.5 shrink-0" />
       <p className="flex-1 text-sm leading-snug">{toast.message}</p>
+      {toast.retryReview && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="text-sm font-semibold underline shrink-0 min-h-[44px] fine-pointer:min-h-0"
+        >
+          Retry
+        </button>
+      )}
       <button
         type="button"
         aria-label="Dismiss notification"

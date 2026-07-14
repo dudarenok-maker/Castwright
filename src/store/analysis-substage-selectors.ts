@@ -39,6 +39,11 @@ export const selectAnalysisSubstage = createSelector(
     chapterIndex?: number;
     totalChapters?: number;
     estRemainingMs?: number;
+    model?: string;
+    engine?: 'local' | 'gemini';
+    activityState?: 'loading' | 'waiting' | 'streaming';
+    activitySince?: number;
+    fallbackActive?: boolean;
   } | null => {
     const p = firstByLowestBookId(prosody);
     if (p)
@@ -49,6 +54,11 @@ export const selectAnalysisSubstage = createSelector(
         chapterIndex: p.entry.chapterIndex,
         totalChapters: p.entry.totalChapters,
         estRemainingMs: p.entry.estRemainingMs,
+        model: p.entry.model,
+        engine: p.entry.engine,
+        activityState: p.entry.activityState,
+        activitySince: p.entry.activitySince,
+        fallbackActive: p.entry.fallbackActive,
       };
     const r = firstByLowestBookId(review);
     if (r)
@@ -59,6 +69,11 @@ export const selectAnalysisSubstage = createSelector(
         chapterIndex: r.entry.chapterIndex,
         totalChapters: r.entry.totalChapters,
         estRemainingMs: r.entry.estRemainingMs,
+        model: r.entry.model,
+        engine: r.entry.engine,
+        activityState: r.entry.activityState,
+        activitySince: r.entry.activitySince,
+        fallbackActive: r.entry.fallbackActive,
       };
     return null;
   },

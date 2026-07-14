@@ -414,6 +414,48 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
     });
   });
 
+  it('sub-stage rung goes amber while the analyzer model is loading', () => {
+    const base = { analysis: null, generation: null, design: null, pendingRevisionsCount: 0, anyModelLoading: false };
+    expect(
+      summarizeStatus({
+        ...base,
+        analysisSubstage: { kind: 'review', percent: 2, activityState: 'loading' },
+      }),
+    ).toMatchObject({ label: 'Analysing', tone: 'amber' });
+  });
+
+  it('sub-stage rung goes amber when the Gemini fallback is active', () => {
+    const base = { analysis: null, generation: null, design: null, pendingRevisionsCount: 0, anyModelLoading: false };
+    expect(
+      summarizeStatus({
+        ...base,
+        analysisSubstage: { kind: 'review', percent: 55, fallbackActive: true },
+      }),
+    ).toMatchObject({ label: 'Analysing', tone: 'amber' });
+  });
+
+  it('sub-stage rung stays the default peach tone while streaming normally', () => {
+    const base = { analysis: null, generation: null, design: null, pendingRevisionsCount: 0, anyModelLoading: false };
+    expect(
+      summarizeStatus({
+        ...base,
+        analysisSubstage: { kind: 'review', percent: 55, activityState: 'streaming' },
+      }),
+    ).toMatchObject({ label: 'Analysing', tone: 'peach' });
+  });
+
+  it('sub-stage rung still surfaces (not outranked) when a paused main-analysis rung is also present', () => {
+    const result = summarizeStatus({
+      analysis: { state: 'paused', percent: 12, kind: 'full' } as never,
+      generation: null,
+      design: null,
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+      analysisSubstage: { kind: 'review', percent: 30, activityState: 'loading' },
+    });
+    expect(result).toMatchObject({ label: 'Analysing', tone: 'amber', detail: '30%' });
+  });
+
   it('voice-engine states (Generating, Loading model) outrank Analysis and the sub-stage', () => {
     const base = { analysis: null, generation: null, design: null, pendingRevisionsCount: 0, anyModelLoading: false };
     // Generating is the heaviest — always wins:

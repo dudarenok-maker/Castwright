@@ -27,6 +27,12 @@ export interface UpdateSubstageProgressPayload {
   chapterIndex?: number;
   totalChapters?: number;
   estRemainingMs?: number;
+  model?: string;
+  engine?: 'local' | 'gemini';
+  activityState?: 'loading' | 'waiting' | 'streaming';
+  fallbackActive?: boolean;
+  /** Client timestamp used to stamp activitySince when activityState changes. */
+  now?: number;
 }
 
 /** Start or restart a stream for `bookId` — fully REPLACES any existing
@@ -60,4 +66,11 @@ export function updateSubstageProgress(
   if (payload.chapterIndex !== undefined) e.chapterIndex = payload.chapterIndex;
   if (payload.totalChapters !== undefined) e.totalChapters = payload.totalChapters;
   if (payload.estRemainingMs !== undefined) e.estRemainingMs = payload.estRemainingMs;
+  if (payload.model !== undefined) e.model = payload.model;
+  if (payload.engine !== undefined) e.engine = payload.engine;
+  if (payload.fallbackActive !== undefined) e.fallbackActive = payload.fallbackActive;
+  if (payload.activityState !== undefined && payload.activityState !== e.activityState) {
+    e.activityState = payload.activityState;
+    if (payload.now !== undefined) e.activitySince = payload.now;
+  }
 }

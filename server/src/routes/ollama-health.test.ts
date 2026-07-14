@@ -11,6 +11,7 @@ import {
   detectOllamaDeviceDetailed,
   setOllamaBootstraps,
   _resetOllamaBootstraps,
+  warmOllamaModel,
 } from './ollama-health.js';
 import { _resetUserSettingsCache } from '../workspace/user-settings.js';
 import { InstallBootstrap } from '../ollama/install-bootstrap.js';
@@ -238,6 +239,47 @@ describe('GET /api/ollama/health', () => {
     expect(res.body.status).toBe('unreachable');
     expect(res.body.error).toMatch(/within \d+ms/);
   }, 10_000);
+});
+
+describe('warmOllamaModel', () => {
+  it('resolves ok:false with the upstream error when the daemon is down', async () => {
+    fetchMock.mockRejectedValue(
+      Object.assign(new TypeError('fetch failed'), {
+        cause: Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+      }),
+    );
+    const res = await warmOllamaModel('qwen3.5:9b');
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(typeof res.error).toBe('string');
+      expect(typeof res.status).toBe('number');
+    }
+  });
+
+  it('resolves ok:true and POSTs the same num_ctx/num_gpu the /load route uses', async () => {
+    fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+
+    const res = await warmOllamaModel('qwen3.5:9b');
+
+    expect(res.ok).toBe(true);
+    const init = fetchMock.mock.calls[0][1];
+    const body = JSON.parse(init.body);
+    expect(body.model).toBe('qwen3.5:9b');
+    expect(body.keep_alive).toBe('5m');
+    expect(body.prompt).toBe('');
+    expect(body.options?.num_ctx).toBe(32768);
+    expect(body.options?.num_gpu).toBe(999);
+  });
+
+  it('forwards opts.signal through to the underlying request', async () => {
+    fetchMock.mockImplementation((_url: string, init: { signal?: AbortSignal }) => {
+      expect(init.signal?.aborted).toBe(false);
+      return Promise.resolve(new Response('', { status: 200 }));
+    });
+    const controller = new AbortController();
+    const res = await warmOllamaModel('qwen3.5:9b', { signal: controller.signal });
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe('POST /api/ollama/load', () => {

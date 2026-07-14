@@ -25,6 +25,21 @@ export interface VoiceNudge {
   names: string[];
 }
 
+/** fs-58 Task 9 — the primitive scope of a failed script-review run, just
+    enough to re-invoke runReviewScript's non-live-context args from a
+    click. Deliberately does NOT carry `sentences`/`characterIds` (a Set,
+    non-serializable, and would trip RTK's serializableCheck) — the Retry
+    handler re-reads those live from the manuscript/cast slices at click
+    time instead (see retryReviewScript in script-review-thunk.ts), which
+    is also more correct than replaying whatever was current when the
+    error fired. */
+export interface RetryReview {
+  bookId: string;
+  wholeBook: boolean;
+  chapterId?: number;
+  model: string;
+}
+
 export interface Toast {
   id: string;
   kind: ToastKind;
@@ -34,6 +49,9 @@ export interface Toast {
   /** fs-63 — present only on the off-roster "Design now" nudge; routes the
       toast to <VoiceNudgeToast> and exempts it from auto-dismiss. */
   nudge?: VoiceNudge;
+  /** fs-58 Task 9 — present only on a model_load_failed script-review
+      error; routes ToastStack to render a "Retry" action. */
+  retryReview?: RetryReview;
 }
 
 export interface NotificationsState {
@@ -47,6 +65,7 @@ interface PushToastPayload {
   message: string;
   dedupeKey?: string;
   nudge?: VoiceNudge;
+  retryReview?: RetryReview;
 }
 
 export const notificationsSlice = createSlice({
@@ -55,7 +74,7 @@ export const notificationsSlice = createSlice({
   reducers: {
     pushToast: {
       reducer: (s, a: PayloadAction<{ id: string; createdAt: number } & PushToastPayload>) => {
-        const { id, kind, message, dedupeKey, createdAt, nudge } = a.payload;
+        const { id, kind, message, dedupeKey, createdAt, nudge, retryReview } = a.payload;
         if (dedupeKey) {
           const existing = s.toasts.find((t) => t.dedupeKey === dedupeKey);
           if (existing) {
@@ -78,7 +97,7 @@ export const notificationsSlice = createSlice({
             return;
           }
         }
-        s.toasts.push({ id, kind, message, dedupeKey, createdAt, nudge });
+        s.toasts.push({ id, kind, message, dedupeKey, createdAt, nudge, retryReview });
       },
       prepare: (payload: PushToastPayload) => ({
         payload: {

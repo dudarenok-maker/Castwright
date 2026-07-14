@@ -26,7 +26,7 @@ vi.mock('../lib/api', () => ({
 import { configureStore } from '@reduxjs/toolkit';
 import { api, ReviewScriptError } from '../lib/api';
 import type { ReviewScriptOpts } from '../lib/api';
-import { runReviewScript, hydrateScriptReview, attachToRunningReview, discardReview } from './script-review-thunk';
+import { runReviewScript, hydrateScriptReview, attachToRunningReview, discardReview, retryReviewScript } from './script-review-thunk';
 import { scriptReviewActions, scriptReviewSlice } from './script-review-slice';
 import { notificationsActions } from './notifications-slice';
 
@@ -47,7 +47,8 @@ describe('runReviewScript', () => {
     expect(types).toContain(scriptReviewActions.setActive.type);
     expect(types).toContain(scriptReviewActions.updateProgress.type); // fired from onPhase
     const lastProg = dispatch.mock.calls.map((c) => c[0]).filter((a) => a.type === scriptReviewActions.updateProgress.type).pop();
-    expect(lastProg.payload).toEqual({ bookId: 'b1', progress: 1 });
+    // Task 9 — onPhase now unconditionally stamps `now: Date.now()`.
+    expect(lastProg.payload).toEqual({ bookId: 'b1', progress: 1, now: expect.any(Number) });
     expect(types[types.length - 1]).toBe(scriptReviewActions.clear.type);
   });
 
@@ -91,6 +92,8 @@ describe('runReviewScript', () => {
       chapterIndex: 2,
       totalChapters: 3,
       estRemainingMs: 20_000,
+      // Task 9 — onPhase now unconditionally stamps `now: Date.now()`.
+      now: expect.any(Number),
     });
   });
 
@@ -115,6 +118,243 @@ describe('runReviewScript', () => {
     expect(dispatch).toHaveBeenCalledWith(
       scriptReviewActions.setReview({ bookId: 'b1', ops: [], unappliable: [], manuscriptId: 'ms-1', versionByChapter: {} }),
     );
+  });
+});
+
+// Task 9 — drive activityState/model/engine/fallbackActive from onPhase,
+// upgrade activityState to 'streaming' on a genuine heartbeat, and surface
+// a Retry toast on a model_load_failed error.
+describe('runReviewScript — activity/model fields + streaming heartbeat + Retry (Task 9)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('forwards activityState/model/engine from onPhase, and sets fallbackActive when fallbackReason is present', async () => {
+    vi.mocked(api.reviewScript).mockImplementation(
+      async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+        opts.onPhase?.({
+          progress: 0.4,
+          activityState: 'loading',
+          model: 'qwen3.5:9b',
+          engine: 'local',
+          fallbackReason: 'ollama unreachable',
+        });
+        return { reviewedChapters: 0, totalOps: 0 };
+      },
+    );
+    const dispatch = vi.fn();
+    await runReviewScript('b1', {
+      dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<string>(), manuscriptId: 'ms-1',
+    });
+    const progressCalls = dispatch.mock.calls
+      .map((c) => c[0])
+      .filter((a) => a.type === scriptReviewActions.updateProgress.type);
+    expect(progressCalls[0].payload).toEqual(
+      expect.objectContaining({
+        bookId: 'b1',
+        progress: 0.4,
+        activityState: 'loading',
+        model: 'qwen3.5:9b',
+        engine: 'local',
+        fallbackActive: true,
+        now: expect.any(Number),
+      }),
+    );
+  });
+
+  it('does not set fallbackActive when onPhase carries no fallbackReason', async () => {
+    vi.mocked(api.reviewScript).mockImplementation(
+      async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+        opts.onPhase?.({ progress: 0.4, activityState: 'waiting' });
+        return { reviewedChapters: 0, totalOps: 0 };
+      },
+    );
+    const dispatch = vi.fn();
+    await runReviewScript('b1', {
+      dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<string>(), manuscriptId: 'ms-1',
+    });
+    const progressCalls = dispatch.mock.calls
+      .map((c) => c[0])
+      .filter((a) => a.type === scriptReviewActions.updateProgress.type);
+    expect(progressCalls[0].payload.fallbackActive).toBeUndefined();
+  });
+
+  it('onHeartbeat({streaming:true}) dispatches updateProgress with activityState "streaming", reusing the last onPhase progress so the bar does not move', async () => {
+    vi.mocked(api.reviewScript).mockImplementation(
+      async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+        opts.onPhase?.({ progress: 0.6, activityState: 'waiting' });
+        opts.onHeartbeat?.({ chapterId: 1, streaming: true });
+        return { reviewedChapters: 0, totalOps: 0 };
+      },
+    );
+    const dispatch = vi.fn();
+    await runReviewScript('b1', {
+      dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<string>(), manuscriptId: 'ms-1',
+    });
+    const progressCalls = dispatch.mock.calls
+      .map((c) => c[0])
+      .filter((a) => a.type === scriptReviewActions.updateProgress.type);
+    expect(progressCalls).toHaveLength(2);
+    expect(progressCalls[1].payload).toEqual({
+      bookId: 'b1',
+      progress: 0.6, // lastProgress from the preceding onPhase — the bar does not move
+      activityState: 'streaming',
+      now: expect.any(Number),
+    });
+  });
+
+  it('a bare waiting heartbeat ({streaming:false}) does NOT dispatch an extra updateProgress', async () => {
+    vi.mocked(api.reviewScript).mockImplementation(
+      async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+        opts.onPhase?.({ progress: 0.3, activityState: 'waiting' });
+        opts.onHeartbeat?.({ chapterId: 1, streaming: false });
+        return { reviewedChapters: 0, totalOps: 0 };
+      },
+    );
+    const dispatch = vi.fn();
+    await runReviewScript('b1', {
+      dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<string>(), manuscriptId: 'ms-1',
+    });
+    const progressCalls = dispatch.mock.calls
+      .map((c) => c[0])
+      .filter((a) => a.type === scriptReviewActions.updateProgress.type);
+    expect(progressCalls).toHaveLength(1); // only the onPhase dispatch — the heartbeat was a no-op
+  });
+
+  it('a model_load_failed ReviewScriptError pushes a toast carrying a serializable retryReview scope', async () => {
+    vi.mocked(api.reviewScript).mockRejectedValue(
+      new ReviewScriptError('Model failed to load.', 'model_load_failed'),
+    );
+    const dispatch = vi.fn();
+    await runReviewScript('b1', {
+      dispatch, wholeBook: false, chapterId: 3, model: 'gemma', sentences: [], characterIds: new Set<string>(), manuscriptId: 'ms-1',
+    });
+    const toastCall = dispatch.mock.calls.find(([a]) => a.type === notificationsActions.pushToast.type);
+    expect(toastCall?.[0].payload).toEqual(
+      expect.objectContaining({
+        kind: 'error',
+        message: 'Model failed to load.',
+        retryReview: { bookId: 'b1', wholeBook: false, chapterId: 3, model: 'gemma' },
+      }),
+    );
+  });
+
+  it('a model_load_failed retryReview omits chapterId for a whole-book run', async () => {
+    vi.mocked(api.reviewScript).mockRejectedValue(
+      new ReviewScriptError('Model failed to load.', 'model_load_failed'),
+    );
+    const dispatch = vi.fn();
+    await runReviewScript('b1', {
+      dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<string>(), manuscriptId: 'ms-1',
+    });
+    const toastCall = dispatch.mock.calls.find(([a]) => a.type === notificationsActions.pushToast.type);
+    expect(toastCall?.[0].payload.retryReview).toEqual({ bookId: 'b1', wholeBook: true, model: 'gemma' });
+  });
+});
+
+describe('attachToRunningReview — activity/model fields + streaming heartbeat (Task 9)', () => {
+  it('mirrors onPhase\'s activityState/model/engine/fallbackActive fields', async () => {
+    vi.mocked(api.attachScriptReview).mockImplementation(
+      async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+        opts.onPhase?.({
+          progress: 0.7,
+          activityState: 'waiting',
+          model: 'qwen3.5:9b',
+          engine: 'gemini',
+          fallbackReason: 'local unreachable',
+        });
+        return { reviewedChapters: 0, totalOps: 0 } as never;
+      },
+    );
+    const dispatch = vi.fn();
+    await attachToRunningReview(
+      'book-1',
+      { chapterId: 5, replay: { lastPhase: null } },
+      { dispatch, sentences: [], characterIds: new Set(), manuscriptId: 'ms-1' },
+    );
+    const progressCalls = dispatch.mock.calls
+      .map((c) => c[0])
+      .filter((a) => a.type === scriptReviewActions.updateProgress.type);
+    expect(progressCalls[0].payload).toEqual(
+      expect.objectContaining({
+        activityState: 'waiting',
+        model: 'qwen3.5:9b',
+        engine: 'gemini',
+        fallbackActive: true,
+      }),
+    );
+  });
+
+  it('onHeartbeat({streaming:true}) dispatches a streaming updateProgress using the last onPhase progress', async () => {
+    vi.mocked(api.attachScriptReview).mockImplementation(
+      async (_bookId: string, opts: ReviewScriptOpts = {}) => {
+        opts.onPhase?.({ progress: 0.5 });
+        opts.onHeartbeat?.({ chapterId: 5, streaming: true });
+        return { reviewedChapters: 0, totalOps: 0 } as never;
+      },
+    );
+    const dispatch = vi.fn();
+    await attachToRunningReview(
+      'book-1',
+      { chapterId: 5, replay: { lastPhase: null } },
+      { dispatch, sentences: [], characterIds: new Set(), manuscriptId: 'ms-1' },
+    );
+    const progressCalls = dispatch.mock.calls
+      .map((c) => c[0])
+      .filter((a) => a.type === scriptReviewActions.updateProgress.type);
+    expect(progressCalls).toHaveLength(2);
+    expect(progressCalls[1].payload).toEqual(
+      expect.objectContaining({ progress: 0.5, activityState: 'streaming' }),
+    );
+  });
+});
+
+describe('retryReviewScript (Task 9)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function fakeGetState(overrides: { manuscriptId: string | null; bookId?: string | null; characters: Array<{ id: string }>; sentences: unknown[] }) {
+    const bookId = overrides.bookId === undefined ? 'book-1' : overrides.bookId;
+    return () =>
+      ({
+        manuscript: { bookId, manuscriptId: overrides.manuscriptId, sentences: overrides.sentences },
+        cast: { characters: overrides.characters },
+      }) as never;
+  }
+
+  it('re-invokes runReviewScript with the retry scope and the CURRENT live manuscript/cast snapshot', async () => {
+    vi.mocked(api.reviewScript).mockResolvedValue({ reviewedChapters: 0, totalOps: 0 });
+    const dispatch = vi.fn();
+    const getState = fakeGetState({
+      manuscriptId: 'ms-2',
+      characters: [{ id: 'c1' }],
+      sentences: [{ id: 1, chapterId: 3, text: 'Hi', characterId: 'c1' }],
+    });
+
+    const thunk = retryReviewScript('book-1', { wholeBook: false, chapterId: 3, model: 'gemma' });
+    const launched = await thunk(dispatch, getState);
+    // retryReviewScript fires-and-forgets runReviewScript (a plain async
+    // function, not itself dispatched) — give its internal setActive/api
+    // call a tick to land.
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(launched).toBe(true);
+    expect(api.reviewScript).toHaveBeenCalledWith(
+      'book-1',
+      expect.objectContaining({ chapterId: 3, model: 'gemma' }),
+    );
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.setActive({ bookId: 'book-1', progress: 0, label: 'Reviewing script' }),
+    );
+  });
+
+  it('no-ops when the manuscript/cast for the book are not loaded, and reports it did not launch', async () => {
+    const dispatch = vi.fn();
+    const getState = fakeGetState({ manuscriptId: null, characters: [], sentences: [] });
+
+    const thunk = retryReviewScript('book-1', { wholeBook: true, model: 'gemma' });
+    const launched = await thunk(dispatch, getState);
+
+    expect(launched).toBe(false);
+    expect(api.reviewScript).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });
 

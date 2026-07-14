@@ -29,6 +29,18 @@ export interface SubstageEntry {
   /** Pace-based ETA in ms for the rest of the operation. Absent until a
       pacing rate has been observed (never on the very first chapter). */
   estRemainingMs?: number;
+  /** Resolved model id (e.g. `qwen3.5:9b` or `gemma-4-31b-it`). */
+  model?: string;
+  /** Effective active backend (flips to 'gemini' on a mid-pass fallback). */
+  engine?: 'local' | 'gemini';
+  /** Coarse phase of the pass. 'loading'/'waiting' are server-stamped on
+      phase events; 'streaming' is a client upgrade off a live heartbeat. */
+  activityState?: 'loading' | 'waiting' | 'streaming';
+  /** Client Date.now() stamped when activityState last changed; drives the
+      client-side ticking timer. Re-stamped on reattach (timer resets). */
+  activitySince?: number;
+  /** True once the pass has switched Ollama → Gemini mid-run. Idempotent. */
+  fallbackActive?: boolean;
 }
 
 export interface ProsodyState {

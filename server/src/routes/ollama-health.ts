@@ -255,14 +255,16 @@ async function callOllamaGenerate(
   url: string,
   body: Record<string, unknown>,
   timeoutMs: number,
+  extSignal?: AbortSignal,
 ): Promise<{ ok: boolean; status: number; error?: string }> {
   const target = `${url}/api/generate`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const signal = extSignal ? AbortSignal.any([controller.signal, extSignal]) : controller.signal;
   try {
     const upstream = await fetch(target, {
       method: 'POST',
-      signal: controller.signal,
+      signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
@@ -306,10 +308,15 @@ async function callOllamaGenerate(
    to the UI as "Analysis stream ended without a result event" while
    the pill stays green ("Analyzer ready"), so every Try Again triggers
    the same reload-and-die loop. */
-ollamaHealthRouter.post('/load', async (req: Request, res: Response) => {
+/** Warm `model` into VRAM via the keep_alive:'5m' empty-prompt idiom, using the
+    same num_ctx/num_gpu the analyzer's runStage path uses (see the CRITICAL
+    note above). Extracted so the script-review job can warm the analyzer
+    model in-process, not just via the /load route below. */
+export async function warmOllamaModel(
+  model: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
   const url = getResolvedOllamaUrl();
-  const requested = typeof req.body?.model === 'string' ? req.body.model.trim() : '';
-  const model = requested || getResolvedOllamaModel();
   const result = await callOllamaGenerate(
     url,
     {
@@ -320,7 +327,15 @@ ollamaHealthRouter.post('/load', async (req: Request, res: Response) => {
       options: { num_ctx: resolveAnalyzerNumCtx(), num_gpu: resolveAnalyzerNumGpu() },
     },
     LOAD_TIMEOUT_MS,
+    opts.signal,
   );
+  return result.ok ? { ok: true } : { ok: false, status: result.status, error: result.error ?? '' };
+}
+
+ollamaHealthRouter.post('/load', async (req: Request, res: Response) => {
+  const requested = typeof req.body?.model === 'string' ? req.body.model.trim() : '';
+  const model = requested || getResolvedOllamaModel();
+  const result = await warmOllamaModel(model);
   if (!result.ok) {
     return res.status(result.status).json({ status: 'error', error: result.error });
   }
