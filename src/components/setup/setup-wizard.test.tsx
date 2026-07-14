@@ -1,5 +1,5 @@
 /* fs-21 wave 2 — C5: SetupWizard orchestrator tests.
-   The 5 step components are stubbed (lightweight divs with testids) so this
+   The 7 step components are stubbed (lightweight divs with testids) so this
    suite tests ORCHESTRATION — step paging, Back/Next, progress, mode split —
    not the steps themselves. */
 
@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import type { SetupReadiness } from '../../lib/api';
 
-// ── stub the 5 step components ────────────────────────────────────────────────
+// ── stub the 7 step components ────────────────────────────────────────────────
 
 vi.mock('./step-environment', () => ({
   StepEnvironment: () => <div data-testid="step-environment-stub">env</div>,
@@ -15,8 +15,11 @@ vi.mock('./step-environment', () => ({
 vi.mock('./step-ffmpeg', () => ({
   StepFfmpeg: () => <div data-testid="step-ffmpeg-stub">ffmpeg</div>,
 }));
-vi.mock('./step-models', () => ({
-  StepModels: () => <div data-testid="step-models-stub">models</div>,
+vi.mock('./step-analysis', () => ({
+  StepAnalysis: () => <div data-testid="step-analysis-stub">analysis</div>,
+}));
+vi.mock('./step-voice', () => ({
+  StepVoice: () => <div data-testid="step-voice-stub">voice</div>,
 }));
 vi.mock('./step-defaults', () => ({
   StepDefaults: () => <div data-testid="step-defaults-stub">defaults</div>,
@@ -63,7 +66,8 @@ const READY_READINESS: SetupReadiness = {
 const STEP_TESTIDS = [
   'step-environment-stub',
   'step-ffmpeg-stub',
-  'step-models-stub',
+  'step-analysis-stub',
+  'step-voice-stub',
   'step-defaults-stub',
   'step-lan-cert-stub',
   'step-finish-stub',
@@ -114,7 +118,7 @@ describe('SetupWizard', () => {
     expect(screen.queryByTestId('step-finish-stub')).not.toBeInTheDocument();
   });
 
-  it('guided mode shows a "Step N of 6" progress indicator', () => {
+  it('guided mode shows a "Step N of 7" progress indicator', () => {
     render(
       <SetupWizard
         readiness={READINESS}
@@ -123,7 +127,7 @@ describe('SetupWizard', () => {
         onFinish={() => {}}
       />,
     );
-    expect(screen.getByText(/step 1 of 6/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 1 of 7/i)).toBeInTheDocument();
   });
 
   it('guided mode: Next is always enabled (no blocker gating) and advances', () => {
@@ -141,7 +145,7 @@ describe('SetupWizard', () => {
     fireEvent.click(next);
     expect(screen.getByTestId('step-ffmpeg-stub')).toBeInTheDocument();
     expect(screen.queryByTestId('step-environment-stub')).not.toBeInTheDocument();
-    expect(screen.getByText(/step 2 of 6/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 2 of 7/i)).toBeInTheDocument();
   });
 
   it('guided mode: Back returns to the previous step', () => {
@@ -157,7 +161,7 @@ describe('SetupWizard', () => {
     expect(screen.getByTestId('step-ffmpeg-stub')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /back/i }));
     expect(screen.getByTestId('step-environment-stub')).toBeInTheDocument();
-    expect(screen.getByText(/step 1 of 6/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 1 of 7/i)).toBeInTheDocument();
   });
 
   it('guided mode: Back is disabled on the first step', () => {
@@ -181,12 +185,12 @@ describe('SetupWizard', () => {
         onFinish={() => {}}
       />,
     );
-    // advance through all 5 transitions to the last (finish) step
-    for (let i = 0; i < 5; i++) {
+    // advance through all 6 transitions to the last (finish) step
+    for (let i = 0; i < 6; i++) {
       fireEvent.click(screen.getByRole('button', { name: /next/i }));
     }
     expect(screen.getByTestId('step-finish-stub')).toBeInTheDocument();
-    expect(screen.getByText(/step 6 of 6/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 7 of 7/i)).toBeInTheDocument();
     // Finish lives inside StepFinish; the wizard's own Next is gone
     expect(screen.queryByRole('button', { name: /next/i })).not.toBeInTheDocument();
   });
@@ -201,7 +205,7 @@ describe('SetupWizard', () => {
         onFinish={onFinish}
       />,
     );
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 6; i++) {
       fireEvent.click(screen.getByRole('button', { name: /next/i }));
     }
     fireEvent.click(screen.getByRole('button', { name: /finish setup/i }));
@@ -236,10 +240,10 @@ describe('SetupWizard', () => {
         onFinish={() => {}}
       />,
     );
-    // The "Audio assembly" row maps to the ffmpeg step (step 2 of 6).
+    // The "Audio assembly" row maps to the ffmpeg step (step 2 of 7).
     fireEvent.click(screen.getByTestId('setup-summary-row-ffmpeg'));
     expect(screen.getByTestId('step-ffmpeg-stub')).toBeInTheDocument();
-    expect(screen.getByText(/step 2 of 6/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 2 of 7/i)).toBeInTheDocument();
   });
 
   it('re-entry mode: a "Setup overview" link returns from the wizard to the summary', () => {
@@ -326,5 +330,30 @@ describe('SetupWizard', () => {
     );
     expect(screen.queryByRole('button', { name: /continue to my library/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /fix setup/i })).toBeInTheDocument();
+  });
+
+  it('summary board renders the Analyzer row before Voice, with a yellow dot on warn', () => {
+    const warnReadiness: SetupReadiness = {
+      ...READINESS,
+      ready: true,
+      completedAt: '2026-07-01T00:00:00.000Z',
+      blockers: {
+        ...READINESS.blockers,
+        tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+        analyzer: { status: 'warn', cause: 'pass', message: 'no backup', remediation: '' },
+      },
+    };
+    render(
+      <SetupWizard
+        readiness={warnReadiness}
+        mode="checklist"
+        onRefetch={() => {}}
+        onFinish={() => {}}
+      />,
+    );
+    const analyzerRow = screen.getByTestId('setup-summary-row-analyzer');
+    const voiceRow = screen.getByTestId('setup-summary-row-voice');
+    expect(analyzerRow.compareDocumentPosition(voiceRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(analyzerRow).toHaveAttribute('data-status', 'warn');
   });
 });

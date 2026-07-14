@@ -10,8 +10,11 @@ vi.mock('../components/setup/step-environment', () => ({
 vi.mock('../components/setup/step-ffmpeg', () => ({
   StepFfmpeg: () => <div data-testid="step-ffmpeg-stub">ffmpeg</div>,
 }));
-vi.mock('../components/setup/step-models', () => ({
-  StepModels: () => <div data-testid="step-models-stub">models</div>,
+vi.mock('../components/setup/step-analysis', () => ({
+  StepAnalysis: () => <div data-testid="step-analysis-stub">analysis</div>,
+}));
+vi.mock('../components/setup/step-voice', () => ({
+  StepVoice: () => <div data-testid="step-voice-stub">voice</div>,
 }));
 vi.mock('../components/setup/step-defaults', () => ({
   StepDefaults: () => <div data-testid="step-defaults-stub">defaults</div>,
