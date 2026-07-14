@@ -334,3 +334,45 @@ describe('GpuSemaphore — VRAM-weighted acquire', () => {
     });
   });
 });
+
+describe('GpuSemaphore — abortable acquire', () => {
+  it('aborting a queued waiter rejects with AbortError and leaks no tokens', async () => {
+    const sem = new GpuSemaphore(1);
+    const held = await sem.acquire(1);            // occupies the only token
+    const ac = new AbortController();
+    const queued = sem.acquire(1, { signal: ac.signal }); // must queue
+    expect(sem.queueDepth).toBe(1);
+
+    ac.abort();
+    await expect(queued).rejects.toMatchObject({ name: 'AbortError' });
+    expect(sem.queueDepth).toBe(0);               // waiter removed
+    expect(sem.usedTokens).toBe(1);               // only `held` still holds
+    expect(sem.inFlight).toBe(1);
+
+    // The semaphore is still healthy: releasing the holder grants a fresh acquire.
+    held();
+    const next = await sem.acquire(1);            // must resolve, not hang
+    next();
+    expect(sem.inFlight).toBe(0);
+  });
+
+  it('acquire with an already-aborted signal rejects immediately and takes no token', async () => {
+    const sem = new GpuSemaphore(2);
+    const ac = new AbortController();
+    ac.abort();
+    await expect(sem.acquire(1, { signal: ac.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(sem.usedTokens).toBe(0);
+    expect(sem.inFlight).toBe(0);
+  });
+
+  it('a synchronously granted acquire ignores a later abort', async () => {
+    const sem = new GpuSemaphore(2);
+    const ac = new AbortController();
+    const release = await sem.acquire(1, { signal: ac.signal }); // granted immediately (tokens free)
+    expect(sem.inFlight).toBe(1);
+    ac.abort();                                   // must NOT throw or double-settle
+    expect(sem.inFlight).toBe(1);
+    release();
+    expect(sem.inFlight).toBe(0);
+  });
+});

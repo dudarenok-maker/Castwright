@@ -30,7 +30,14 @@
                                         usedTokens to the frontend pill via
                                         GET /api/gpu/queue. */
 
-type Waiter = { cost: number; resolve: (release: () => void) => void };
+type Waiter = {
+  cost: number;
+  resolve: (release: () => void) => void;
+  reject: (reason: unknown) => void;
+  settled: boolean;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+};
 
 export class GpuSemaphore {
   private used = 0;
@@ -52,8 +59,12 @@ export class GpuSemaphore {
       otherwise deadlock forever (no release can ever free enough tokens), so
       it's pinned to the full budget and runs alone; a cost below 1 is pinned
       to 1 so every acquire consumes at least one token. */
-  async acquire(cost = 1): Promise<() => void> {
+  async acquire(cost = 1, opts?: { signal?: AbortSignal }): Promise<() => void> {
     const want = this.clampCost(cost);
+    const signal = opts?.signal;
+    if (signal?.aborted) {
+      throw new DOMException('GpuSemaphore acquire aborted', 'AbortError');
+    }
     /* Grant immediately only when no one is queued ahead of us AND the
        tokens are free. Honouring the queue even when tokens happen to be
        free preserves strict FIFO — a late cheap acquire can't jump a
@@ -63,8 +74,19 @@ export class GpuSemaphore {
       this.holders += 1;
       return this.makeRelease(want);
     }
-    return new Promise<() => void>((resolve) => {
-      this.queue.push({ cost: want, resolve });
+    return new Promise<() => void>((resolve, reject) => {
+      const waiter: Waiter = { cost: want, resolve, reject, settled: false, signal };
+      if (signal) {
+        waiter.onAbort = () => {
+          if (waiter.settled) return;        // already granted — abort is a no-op
+          waiter.settled = true;
+          const idx = this.queue.indexOf(waiter);
+          if (idx !== -1) this.queue.splice(idx, 1);  // remove: never granted, no tokens to free
+          reject(new DOMException('GpuSemaphore acquire aborted', 'AbortError'));
+        };
+        signal.addEventListener('abort', waiter.onAbort, { once: true });
+      }
+      this.queue.push(waiter);
     });
   }
 
@@ -96,6 +118,9 @@ export class GpuSemaphore {
   private drain(): void {
     while (this.queue.length > 0 && this.used + this.queue[0].cost <= this.capacity) {
       const next = this.queue.shift()!;
+      if (next.settled) continue;            // defensive: aborted concurrently (splice usually removed it first)
+      next.settled = true;
+      if (next.signal && next.onAbort) next.signal.removeEventListener('abort', next.onAbort);
       this.used += next.cost;
       this.holders += 1;
       next.resolve(this.makeRelease(next.cost));
