@@ -25,8 +25,13 @@ export class GpuBusyForPersonaError extends Error {
     unload and fail that render's chapter). Re-checks the durable generation flag
     inside the hold and refuses if a render is active. Releases the budget in
     `finally` so a refused evict never wedges the GPU. */
-export async function unloadResidentSidecar(): Promise<void> {
-  const release = await gpuSemaphore.acquire(gpuSemaphore.budget);
+export async function unloadResidentSidecar(signal?: AbortSignal): Promise<void> {
+  // Conditional: the no-signal path stays a literal 1-arg acquire(budget) — byte-identical
+  // to today — so persona-gpu-plan.test.ts:14's `toHaveBeenCalledWith(budget)` needs no edit.
+  // The 2-arg branch (signal present) is exercised by this task's new test.
+  const release = signal
+    ? await gpuSemaphore.acquire(gpuSemaphore.budget, { signal })
+    : await gpuSemaphore.acquire(gpuSemaphore.budget);
   try {
     if (activeGenerationBooks().length > 0) {
       throw new GpuBusyForPersonaError('A render is active — skip the GPU persona pre-pass.');
@@ -82,15 +87,22 @@ export function resolvePersonaGpuPlan(bookDir: string): PersonaGpuPlan {
       GpuBusyForPersonaError (a render slipped in) fall back to CPU. */
 export async function preparePersonaBatch(
   bookDir: string,
+  signal?: AbortSignal,
 ): Promise<{ onCpu: boolean; keepAlive: string | number }> {
   if (resolvePersonaEngine() !== 'local') return { onCpu: false, keepAlive: 0 };
   const plan = resolvePersonaGpuPlan(bookDir);
   if (plan.evict) {
     try {
-      await unloadResidentSidecar();
+      await unloadResidentSidecar(signal);
     } catch (err) {
-      if (!(err instanceof GpuBusyForPersonaError)) throw err;
-      return { onCpu: true, keepAlive: 0 }; // a render slipped in — go CPU
+      // Render slipped in (GpuBusy) OR a pause aborted the evict-wait → fall back to CPU.
+      if (
+        err instanceof GpuBusyForPersonaError ||
+        (err as { name?: string } | null)?.name === 'AbortError'
+      ) {
+        return { onCpu: true, keepAlive: 0 };
+      }
+      throw err;
     }
   }
   return { onCpu: plan.onCpu, keepAlive: plan.keepAlive };

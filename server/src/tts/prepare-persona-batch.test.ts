@@ -107,4 +107,27 @@ describe('preparePersonaBatch', () => {
     expect(await preparePersonaBatch('/a')).toEqual({ onCpu: false, keepAlive: 0 });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  it('threads the signal into the evict acquire; aborted wait → CPU args, no throw', async () => {
+    const { preparePersonaBatch } = await import('./persona-gpu-plan.js');
+    const residency = await import('../gpu/residency.js');
+    const gen = await import('../routes/generation.js');
+
+    mockResolvePersonaEngine.mockReturnValue('local');
+    vi.mocked(residency.shouldEvictBeforeSidecarLoad).mockReturnValue(true); // plan.evict = true
+    vi.mocked(gen.activeGenerationBooks).mockReturnValue([]);
+
+    // A pause fires while the full-budget acquire is queued → acquire rejects AbortError.
+    // (Spy-based: the REAL semaphore block can't be reached here — see the spec note. The
+    //  real abort mechanism is unit-tested in semaphore.test.ts.)
+    const acquireSpy = vi.spyOn(gpuSemaphore, 'acquire').mockRejectedValue(
+      new DOMException('GpuSemaphore acquire aborted', 'AbortError'),
+    );
+
+    const ac = new AbortController();
+    const result = await preparePersonaBatch('/a', ac.signal);
+    expect(result).toEqual({ onCpu: true, keepAlive: 0 });
+    // The signal is actually forwarded to the reverse-evict acquire (the 2-arg branch):
+    expect(acquireSpy).toHaveBeenCalledWith(gpuSemaphore.budget, { signal: ac.signal });
+  });
 });
