@@ -24,7 +24,8 @@ import {
   saveGeminiApiKey,
   fetchAnalyzerModels,
 } from '../store/account-slice';
-import { api } from '../lib/api';
+import { api, type BlockerDiagnosis } from '../lib/api';
+import { useSetupDiagnosis } from '../lib/use-setup-diagnosis';
 import { isPrivateHostUrl } from '../lib/sidecar-url';
 import { OllamaInstall } from './ollama-install';
 import { ModelPullStatus } from './model-pull-status';
@@ -536,6 +537,36 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
   return <SettingsAccordion sections={MODEL_SETTINGS_SECTIONS}>{body}</SettingsAccordion>;
 }
 
+/* fe-49 mirror (#1641) — tri-state analyzer-readiness chip, the admin analog of
+   the setup wizard's Analysis-step badge (src/components/setup/step-analysis.tsx):
+   green = a working analyzer AND a backup; amber = works, no backup; rose =
+   won't run. Message-only (the installers in this card ARE the remedy). Reads
+   the SAME shared setup-readiness diagnosis the wizard uses, so the admin
+   surface and the wizard can never disagree about analyzer readiness. */
+function AnalyzerReadinessBadge({ diagnosis }: { diagnosis: BlockerDiagnosis }) {
+  const tone =
+    diagnosis.status === 'pass'
+      ? { dot: 'bg-emerald-600', chip: 'bg-emerald-100 text-emerald-800', label: 'Analyzer ready' }
+      : diagnosis.status === 'warn'
+        ? { dot: 'bg-amber-500', chip: 'bg-amber-100 text-amber-800', label: 'Analyzer ready — no backup' }
+        : { dot: 'bg-rose-600', chip: 'bg-rose-100 text-rose-800', label: 'Analyzer needed' };
+  return (
+    <div className="space-y-1.5" data-testid="admin-analyzer-readiness">
+      <span
+        data-blocker-status={diagnosis.status}
+        className={[
+          'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
+          tone.chip,
+        ].join(' ')}
+      >
+        <span className={['w-1.5 h-1.5 rounded-full', tone.dot].join(' ')} />
+        {tone.label}
+      </span>
+      {diagnosis.status !== 'pass' && <p className="text-xs text-ink/60">{diagnosis.message}</p>}
+    </div>
+  );
+}
+
 /* Plan 61 / Task 11a — Models card body. In-app installers (Ollama + analyzer
    pulls). Rendered inside a SettingsSection shell (GROUP_MODELS_INSTALL).
    Sources its pull rows from the server's curated allowlist via
@@ -546,6 +577,9 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
 function ModelsCardBody() {
   const dispatch = useAppDispatch();
   const pullableModels = useAppSelector((s) => s.account.pullableModels);
+  /* Shared setup-readiness poller (same hook the wizard + status-popover use) so
+     the admin analyzer badge reflects the exact server-resolved tri-state. */
+  const { readiness } = useSetupDiagnosis();
   const [health, setHealth] = useState<import('./model-pull-status').OllamaHealthEnvelope | null>(
     null,
   );
@@ -564,6 +598,7 @@ function ModelsCardBody() {
 
   return (
     <div data-testid="account-models-card" className="space-y-6">
+      {readiness && <AnalyzerReadinessBadge diagnosis={readiness.blockers.analyzer} />}
       <div>
         <h3 className="text-sm font-medium text-ink">Local analyzer (Ollama)</h3>
         <p className="mt-1 mb-3 text-xs text-ink/55">
