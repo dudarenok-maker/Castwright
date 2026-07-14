@@ -50,12 +50,12 @@ describe('getLanguageEntry', () => {
     expect(getLanguageEntry('')).toBeUndefined();
   });
 
-  it('returns the zh entry, not yet supported (fs-59 W2; promptExamples added W3)', () => {
+  it('returns the zh entry, supported (fs-59 W2 registered; promptExamples added W3; flipped supported:true W5)', () => {
     const zh = getLanguageEntry('zh');
     expect(zh).toEqual<LanguageEntry>({
       code: 'zh',
       sidecarName: 'Chinese',
-      supported: false,
+      supported: true,
       detect: { script: 'cjk', iso6393: 'cmn' },
       headingLexicon: {
         keywords: ['章', '部', '巻', '節', '幕'],
@@ -71,12 +71,12 @@ describe('getLanguageEntry', () => {
     });
   });
 
-  it('returns the ja entry, not yet supported (fs-59 W2; promptExamples added W3)', () => {
+  it('returns the ja entry, supported (fs-59 W2 registered; promptExamples added W3; flipped supported:true W5)', () => {
     const ja = getLanguageEntry('ja');
     expect(ja).toEqual<LanguageEntry>({
       code: 'ja',
       sidecarName: 'Japanese',
-      supported: false,
+      supported: true,
       detect: { script: 'cjk', iso6393: 'jpn' },
       headingLexicon: {
         keywords: ['章', '部', '巻', '節', '話', '幕'],
@@ -94,14 +94,14 @@ describe('getLanguageEntry', () => {
 });
 
 describe('isSupportedLanguage', () => {
-  it('is true for en/ru/es/fr/de (canary-validated), false otherwise', () => {
+  it('is true for en/ru/es/fr/de/zh/ja (all validated), false for absent codes', () => {
     expect(isSupportedLanguage('en')).toBe(true);
     expect(isSupportedLanguage('ru')).toBe(true);
     expect(isSupportedLanguage('es')).toBe(true);
     expect(isSupportedLanguage('fr')).toBe(true);
     expect(isSupportedLanguage('de')).toBe(true);
-    expect(isSupportedLanguage('zh')).toBe(false); // registered but not yet validated (fs-59 W2)
-    expect(isSupportedLanguage('ja')).toBe(false); // registered but not yet validated (fs-59 W2)
+    expect(isSupportedLanguage('zh')).toBe(true); // on-box validated, flipped fs-59 W5
+    expect(isSupportedLanguage('ja')).toBe(true); // on-box validated, flipped fs-59 W5
     expect(isSupportedLanguage('')).toBe(false);
   });
 });
@@ -128,13 +128,14 @@ describe('detect field + Latin entries', () => {
 });
 
 describe('isSupportedLanguage distinguishes absent from present', () => {
-  // zh/ja (fs-59 W2) are the present-but-`false` case; a code truly absent
-  // from the registry (e.g. 'ko') exercises the `?? false` fallback path.
-  it('is false-but-present for zh/ja (registered, not yet validated)', () => {
+  // zh/ja (fs-59 W2 registered, W5 validated) are the present-and-`true` case;
+  // a code truly absent from the registry (e.g. 'ko') exercises the `?? false`
+  // fallback path. No entry is currently present-but-`false` in the registry.
+  it('is true for zh/ja (registered + on-box validated, fs-59 W5)', () => {
     expect(getLanguageEntry('zh')).toBeDefined();
     expect(getLanguageEntry('ja')).toBeDefined();
-    expect(isSupportedLanguage('zh')).toBe(false);
-    expect(isSupportedLanguage('ja')).toBe(false);
+    expect(isSupportedLanguage('zh')).toBe(true);
+    expect(isSupportedLanguage('ja')).toBe(true);
   });
 
   it('is false for a genuinely absent code (ko not in the registry)', () => {
@@ -144,7 +145,7 @@ describe('isSupportedLanguage distinguishes absent from present', () => {
 });
 
 describe('supportedLanguages', () => {
-  it('returns only supported entries as {code,label}', () => {
+  it('returns only supported entries as {code,label} (zh/ja included since fs-59 W5)', () => {
     const list = supportedLanguages();
     expect(list).toEqual([
       { code: 'en', label: 'English' },
@@ -152,6 +153,8 @@ describe('supportedLanguages', () => {
       { code: 'es', label: 'Spanish' },
       { code: 'fr', label: 'French' },
       { code: 'de', label: 'German' },
+      { code: 'zh', label: 'Chinese' },
+      { code: 'ja', label: 'Japanese' },
     ]);
   });
 });
@@ -227,9 +230,9 @@ describe('narratorName', () => {
     expect(getLanguageEntry('en')?.narratorName).toBeUndefined();
   });
 
-  it('exposes localized narrator names for zh/ja (fs-59, still supported:false)', () => {
-    // Seeded now so a CJK book's narrator localizes the moment zh/ja flip to
-    // supported at W5 — the seed reads getLanguageEntry(lang)?.narratorName.
+  it('exposes localized narrator names for zh/ja (fs-59 W5, now supported:true)', () => {
+    // Seeded in W2/W3, now live: a CJK book's narrator localizes since the
+    // seed reads getLanguageEntry(lang)?.narratorName.
     expect(getLanguageEntry('zh')?.narratorName).toBe('旁白');
     expect(getLanguageEntry('ja')?.narratorName).toBe('語り手');
   });

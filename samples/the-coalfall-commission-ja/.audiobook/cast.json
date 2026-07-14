@@ -1,0 +1,374 @@
+{
+  "characters": [
+    {
+      "id": "narrator",
+      "name": "語り手",
+      "role": "Third-person observer",
+      "color": "narrator",
+      "tone": {
+        "warmth": 50,
+        "pace": 30,
+        "authority": 60,
+        "emotion": 25
+      },
+      "description": "A measured narrator …",
+      "evidence": [
+        {
+          "quote": "谷を噂が伝わる道は二つある。一つは街道をゆっくりと、もう一つは夜更けに灯る鍛冶場の匂いによって一気に。",
+          "note": "導入部。"
+        },
+        {
+          "quote": "鍛冶場は沈みかけた夕日の色に染まり、レンが最後の鉱滓をかき落としているとき、戸を叩く音が始まった。",
+          "note": "シーンの導入と状況設定。"
+        },
+        {
+          "quote": "だからここから先は語り手が語ろう——そこにいた者たちは、語るには忙しすぎたのだから。",
+          "note": "場面転換の記述。"
+        },
+        {
+          "quote": "[emphatic] Castwrightのオリジナル作品。",
+          "note": "Long-form: anchors register + period vocabulary."
+        },
+        {
+          "quote": "竜は、水が杯を満たすように、その向こうの闇を満たしていた。",
+          "note": "登場人物（竜）の存在感を描写する描写。"
+        }
+      ],
+      "lines": 18,
+      "scenes": 2,
+      "overrideTtsVoices": {}
+    },
+    {
+      "id": "oduvan",
+      "name": "オドゥヴァン親方",
+      "role": "鍛冶屋",
+      "color": "halloran",
+      "tone": {
+        "warmth": 45,
+        "pace": 40,
+        "authority": 75,
+        "emotion": 30
+      },
+      "description": "年老いた鍛冶屋。頑固で現実的だが、職人としての誇りを持つ。",
+      "evidence": [
+        {
+          "quote": "「聞き違いだ」とオドゥヴァンは言った。「この谷で一番の鍛冶は九年前に死んだ。二番目で我慢してもらうしかない」",
+          "note": "竜の発言に対する反論。"
+        },
+        {
+          "quote": "「商いの道徳というやつだな」とオドゥヴァンは言った。「ひと息の中にまとめて」",
+          "note": "発言。"
+        },
+        {
+          "quote": "「これをやる」とオドゥヴァンは言った。",
+          "note": "発言。"
+        }
+      ],
+      "lines": 8,
+      "scenes": 1,
+      "overrideTtsVoices": {}
+    },
+    {
+      "id": "maelin",
+      "name": "マエリン",
+      "role": "代官",
+      "color": "eliza",
+      "tone": {
+        "warmth": 60,
+        "pace": 35,
+        "authority": 50,
+        "emotion": 40
+      },
+      "description": "谷の代官。穏やかだが、時には毅然とした態度をとる。",
+      "evidence": [
+        {
+          "quote": "「ペル・ホリス」と、その場を離れずにいたマエリンが言った。「あなたは去年のラマスの夜、干し草の荷車のことで谷の半分を叩き起こしたでしょう」",
+          "note": "発言。"
+        },
+        {
+          "quote": "「セラ」と、マエリンはひどく平らに、ひどくゆっくりと言った。「こっちにいらっしゃい」",
+          "note": "発言。"
+        },
+        {
+          "quote": "「オドゥヴァン。よろい戸を閉めて、火を消しなさい」その言葉は切り詰められていた。",
+          "note": "命令を下す際の簡潔で強い口調。"
+        },
+        {
+          "quote": "「コールフォール街道に竜がいる。納屋ほどの大きさだ。この小道を下ってくる」",
+          "note": "状況を伝える発言。"
+        }
+      ],
+      "lines": 6,
+      "scenes": 1,
+      "overrideTtsVoices": {}
+    },
+    {
+      "id": "ren",
+      "name": "レン",
+      "role": "鍛冶場の弟子",
+      "color": "marcus",
+      "tone": {
+        "warmth": 50,
+        "pace": 45,
+        "authority": 30,
+        "emotion": 20
+      },
+      "description": "オドゥヴァンに仕える若き鍛冶場の弟子。感情を内に秘めている。",
+      "evidence": [
+        {
+          "quote": "「ため息なんかつきません」と、ため息をつきながらレンは言った。",
+          "note": "自身の感情を否定する発言。"
+        },
+        {
+          "quote": "「厳しくあることを、彼が忘れるからよ」とレンは言った。",
+          "note": "発言。"
+        },
+        {
+          "quote": "「念のため、何のですか?」レンが尋ねた。",
+          "note": "発言。"
+        },
+        {
+          "quote": "「本物ですか?」",
+          "note": "竜の存在に対する問いかけ。"
+        }
+      ],
+      "lines": 2,
+      "scenes": 1,
+      "overrideTtsVoices": {}
+    },
+    {
+      "id": "dragon",
+      "name": "竜",
+      "role": "謎の訪問者",
+      "color": "slot-4",
+      "tone": {
+        "warmth": 20,
+        "pace": 25,
+        "authority": 85,
+        "emotion": 15
+      },
+      "description": "巨大で神秘的な存在。その声は大きくはないが、重みがある。",
+      "evidence": [
+        {
+          "quote": "「遠い道のりを来た」と竜は言った。その声は大きくはなかった。",
+          "note": "自身の来訪の経緯を語る。"
+        },
+        {
+          "quote": "「話は、わしの祖母のことだ」と竜は言った。",
+          "note": "発言。"
+        },
+        {
+          "quote": "「そうだ。鐘はそのためのものだ」",
+          "note": "発言。"
+        }
+      ],
+      "lines": 12,
+      "scenes": 1,
+      "overrideTtsVoices": {}
+    },
+    {
+      "id": "pel-holis",
+      "name": "ペル・ホリス",
+      "role": "訪問者",
+      "color": "slot-5",
+      "tone": {
+        "warmth": 50,
+        "pace": 60,
+        "authority": 40,
+        "emotion": 70
+      },
+      "description": "谷を訪れた男。感情的で、声を上げることを厭わない。",
+      "evidence": [
+        {
+          "quote": "「荷車が闇の中で妙な動きをすれば、声を上げるのが当然でしょう」ペルは鉄床を自分と戸口の間に置くようにしながら、そろそろと中へ入った。",
+          "note": "発言。"
+        },
+        {
+          "quote": "「叫んでたのは俺です」と、戸口に立つ男が言った。",
+          "note": "発言。"
+        }
+      ],
+      "lines": 0,
+      "scenes": 0,
+      "overrideTtsVoices": {}
+    },
+    {
+      "id": "casper-widow",
+      "name": "カスパー未亡人",
+      "role": "地域住民",
+      "color": "slot-6",
+      "tone": {
+        "warmth": 70,
+        "pace": 30,
+        "authority": 45,
+        "emotion": 60
+      },
+      "description": "年配の女性。世間話に詳しく、率直な意見を持つ。",
+      "evidence": [
+        {
+          "quote": "「なら、勝手に決めておしまいなさい」とカスパー未亡人は言った。「それがあんたたちの仕事でしょう、そして今夜はそれが求められているの」",
+          "note": "発言。"
+        },
+        {
+          "quote": "「話に聞いていたより小さいのね」と彼女は言った。",
+          "note": "発言。"
+        }
+      ],
+      "lines": 0,
+      "scenes": 0,
+      "overrideTtsVoices": {}
+    },
+    {
+      "id": "blan-wye",
+      "name": "ブラン",
+      "role": "採石場労働者",
+      "color": "slot-7",
+      "tone": {
+        "warmth": 40,
+        "pace": 35,
+        "authority": 20,
+        "emotion": 30
+      },
+      "description": "ウィア兄弟の一人。疑問形で話す傾向がある。",
+      "evidence": [
+        {
+          "quote": "「どうしてそんなことがわかる?」ブランが、訊かずにはいられずに尋ねた。",
+          "note": "発言。"
+        },
+        {
+          "quote": "「それがあの竜か?」",
+          "note": "発言。"
+        }
+      ],
+      "lines": 0,
+      "scenes": 0,
+      "overrideTtsVoices": {}
+    },
+    {
+      "id": "berlin-wye",
+      "name": "ベリン",
+      "role": "採石場労働者",
+      "color": "slot-8",
+      "tone": {
+        "warmth": 40,
+        "pace": 35,
+        "authority": 20,
+        "emotion": 10
+      },
+      "description": "ウィア兄弟の一人。平叙文で話す傾向がある。",
+      "evidence": [
+        {
+          "quote": "「あの竜だ」",
+          "note": "発言。"
+        }
+      ],
+      "lines": 0,
+      "scenes": 0,
+      "overrideTtsVoices": {}
+    },
+    {
+      "id": "lesom-priest",
+      "name": "レッソム神父",
+      "role": "聖職者",
+      "color": "slot-9",
+      "tone": {
+        "warmth": 55,
+        "pace": 20,
+        "authority": 65,
+        "emotion": 40
+      },
+      "description": "物静かで儀礼を重んじる神父。",
+      "evidence": [
+        {
+          "quote": "「これは正しいのでしょうか。鐘というのは魂のためのものです。裁定がどうなっているのか、わたしには——」",
+          "note": "発言。"
+        },
+        {
+          "quote": "「思いつきました」と、いくらか反抗的な様子で未亡人に言った。「裁定を」",
+          "note": "発言。"
+        }
+      ],
+      "lines": 0,
+      "scenes": 0,
+      "overrideTtsVoices": {}
+    },
+    {
+      "id": "ivo",
+      "name": "イーヴォ",
+      "role": "行商人",
+      "color": "slot-10",
+      "tone": {
+        "warmth": 50,
+        "pace": 55,
+        "authority": 35,
+        "emotion": 45
+      },
+      "description": "珍しい話し方をする行商人。",
+      "evidence": [
+        {
+          "quote": "「鐘が欲しいと。自分のために、鐘を。わたしの国では、死者のために木を植えます——でも爪の上に木は運べない、それで、鐘。理にかなっている」",
+          "note": "発言。"
+        },
+        {
+          "quote": "「縄が要るなら、あります。蝋も。今夜はただで。明日は値段がつきます」",
+          "note": "発言。"
+        }
+      ],
+      "lines": 0,
+      "scenes": 0,
+      "overrideTtsVoices": {}
+    },
+    {
+      "id": "sela",
+      "name": "セラ",
+      "role": "子供",
+      "color": "slot-11",
+      "tone": {
+        "warmth": 65,
+        "pace": 30,
+        "authority": 10,
+        "emotion": 80
+      },
+      "description": "八歳の少女。純粋で、核心を突く問いを持つ。",
+      "evidence": [
+        {
+          "quote": "「でも、あなたが最後なら」と彼女は言った。「誰があなたのために鳴らすの? そのあとで?」",
+          "note": "発言。"
+        },
+        {
+          "quote": "「あとで」とセラは言った。",
+          "note": "発言。"
+        }
+      ],
+      "lines": 0,
+      "scenes": 0,
+      "overrideTtsVoices": {}
+    },
+    {
+      "id": "heart",
+      "name": "ハート",
+      "role": "鍛冶屋",
+      "color": "slot-12",
+      "tone": {
+        "warmth": 50,
+        "pace": 25,
+        "authority": 70,
+        "emotion": 35
+      },
+      "description": "鍛冶場にいる人物。経験豊富で、物事の本質を語る。",
+      "evidence": [
+        {
+          "quote": "「急げば、冷め方が狂う」と、誰にというより炭火に向かって彼は言った。「鐘はパンの塊みたいなものだ。中身と外側が合っていなけりゃならん」",
+          "note": "発言。"
+        },
+        {
+          "quote": "「炭を三十年焼いてきた」とハートは言った。「何もかもパンの塊よ」",
+          "note": "発言。"
+        }
+      ],
+      "lines": 0,
+      "scenes": 0,
+      "overrideTtsVoices": {}
+    }
+  ]
+}

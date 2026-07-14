@@ -37,6 +37,12 @@ this cycle append to this draft rather than opening a new one.
 
 ---
 
+## 🌐 Languages
+
+- **Chinese and Japanese books are now first-class — no longer blocked at the confirm screen (fs-59 W5).** `zh`/`ja` flip from registered-but-unsupported to `supported:true` in `language-registry.ts`, the final step of the fs-59 CJK tranche (registry, CJK script detection, CJK-aware word count, circumfix chapter-heading + front-matter lexicons, in-language roster/attribution prompt examples, and Coqui XTTS `zh`→`zh-cn` eligibility all shipped in earlier waves, #1572/#1577/#1582/#1585/#1597). Both Coqui XTTS (zh-cn/ja) and Qwen render CJK, validated on-box. CJK attribution quality is analyzer-model-dependent — a local Qwen analyzer model measured ~62% recall / 72% coverage / 100% precision vs. a weaker/unstable general lite default on CJK books, so operators are recommended to pick a local Qwen model (`analyzerPhase0Model`/`analyzerPhase1Model`) for CJK; there's no automatic per-language analyzer routing, so this stays a documented choice, not an enforced default. The existing attribution-drift demotion safety net is unchanged — a weak model tripping it on a CJK book is a correct, intended outcome. Ships full zh/ja *The Coalfall Commission* manuscript translations as new fixtures. See [docs/features/254-fs59-cjk-w5-supported-flip.md](docs/features/254-fs59-cjk-w5-supported-flip.md). (#1004)
+
+---
+
 ## 📚 Sample library
 
 - **The bundled demo pack now ships a runnable Coalfall sample in every supported language, and a guard keeps it that way (fs-61, #1027).** `samples/` previously carried only the English _Coalfall Commission_; a non-English user couldn't get a runnable demo, because a Qwen voice is calibrated in its design language. New captures `samples/the-coalfall-commission-{es,fr,de,ru}/` each ship the localized manuscript + language-matched Qwen voices designed from the same English personas (distinct `voiceUuid`-keyed `.pt` files, so all five samples co-load without clobber), and the English sample is refreshed with its redesigned cast. Sample discovery is a dir-scan and the release zip already globs `samples/**`, so the new books auto-list and auto-ship with no route or manifest change. A new server guard (`language-sample-coverage.test.ts`) asserts every `supported:true` language in `language-registry.ts` has a sample whose `state.json` language matches — adding a language now forces adding its sample.

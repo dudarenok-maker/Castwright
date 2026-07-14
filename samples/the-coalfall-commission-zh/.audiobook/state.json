@@ -1,0 +1,45 @@
+{
+  "bookId": "castwright__standalones__煤落的委托",
+  "manuscriptId": "mns_coalfall_zh",
+  "title": "煤落的委托",
+  "author": "Castwright",
+  "series": "Standalones",
+  "seriesPosition": null,
+  "isStandalone": true,
+  "manuscriptFile": "manuscript.md",
+  "castConfirmed": false,
+  "chapters": [
+    {
+      "id": 1,
+      "title": "Chapter 1",
+      "slug": "01-chapter-1",
+      "excluded": true
+    },
+    {
+      "id": 2,
+      "title": "第一章 — 敲门声",
+      "slug": "02-第一章-敲门声"
+    },
+    {
+      "id": 3,
+      "title": "第二章 — 浇铸",
+      "slug": "03-第二章-浇铸"
+    }
+  ],
+  "coverGradient": [
+    "#A43C6C",
+    "#3C194F"
+  ],
+  "createdAt": "2026-07-14T00:00:00.000Z",
+  "updatedAt": "2026-07-14T00:00:00.000Z",
+  "chapterTitleParserVersion": 2,
+  "language": "zh",
+  "schema": 1,
+  "narratorCredit": null,
+  "genre": null,
+  "publicationDate": null,
+  "description": null,
+  "notes": null,
+  "tags": [],
+  "liveInstruct": false
+}
