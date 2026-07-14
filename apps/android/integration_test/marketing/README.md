@@ -119,10 +119,17 @@ render pixel-identically.
 Before each pass the script sets rotation via adb:
 
     adb shell settings put system accelerometer_rotation 0
-    adb shell settings put system user_rotation 1   # landscape passes
-    adb shell settings put system user_rotation 0   # portrait passes
+    adb shell settings put system user_rotation <N>   # N derived per device
 
-and restores `accelerometer_rotation 1` afterwards (in a `finally`, so a
+**The `user_rotation` value is device-specific**, because "which rotation is
+landscape" depends on the device's *natural* orientation. Natural-portrait
+devices (phones, the **Nexus 7**) reach landscape at `user_rotation 1`; the
+**Pixel Tablet is natural-landscape**, so landscape is `user_rotation 0` and 1
+would rotate it *into* portrait (the app-side `expanded` guard then rejects the
+pass). The script reads the natural orientation once from `adb shell wm size`
+(`Physical size: WxH` — reported in the natural orientation regardless of the
+current rotation) and picks the correct index automatically; you don't set it
+by hand. It restores `accelerometer_rotation 1` afterwards (in a `finally`, so a
 failed pass doesn't leave the AVD rotation-locked for the next one).
 
 ### Fold posture
