@@ -191,10 +191,6 @@ export function HelpView() {
 
   const focusedRef = useRef<HTMLDivElement | null>(null);
   const focusedEntryExists = HELP_FAILURE_ENTRIES.some((e) => e.code === focusCode);
-  useEffect(() => {
-    /* Optional-chained: jsdom has no scrollIntoView. */
-    if (focusedEntryExists) focusedRef.current?.scrollIntoView?.({ block: 'start' });
-  }, [focusedEntryExists, focusCode]);
 
   const focusedCategory = HELP_FAILURE_ENTRIES.find((e) => e.code === focusCode)?.category;
   const [expanded, setExpanded] = useState<Set<CategoryId>>(() => {
@@ -209,6 +205,23 @@ export function HelpView() {
       else next.add(id);
       return next;
     });
+
+  /* focusCode can hydrate AFTER mount (HelpRoute populates it via a useEffect
+     that fires post-first-render) — the useState initializer above only runs
+     once, so a late-arriving focusedCategory needs to fold into `expanded`
+     here or its group never opens. */
+  useEffect(() => {
+    if (focusedCategory) {
+      setExpanded((prev) => (prev.has(focusedCategory) ? prev : new Set(prev).add(focusedCategory)));
+    }
+  }, [focusedCategory]);
+
+  useEffect(() => {
+    /* Optional-chained: jsdom has no scrollIntoView. `expanded` is a dep so
+       this re-runs once the focused card actually mounts (its group may have
+       just expanded above, on the same tick focusCode hydrated). */
+    if (focusedEntryExists) focusedRef.current?.scrollIntoView?.({ block: 'start' });
+  }, [focusedEntryExists, focusCode, expanded]);
 
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();

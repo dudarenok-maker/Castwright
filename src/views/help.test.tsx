@@ -97,6 +97,28 @@ describe('HelpView (fe-29)', () => {
     expect(screen.getByText(/play \/ pause/i)).toBeInTheDocument();
   });
 
+  it('auto-expands the focused category when focusCode hydrates AFTER mount', async () => {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, settings: settingsSlice.reducer },
+    });
+    // mount with NO focusCode (stage is not help yet) — mirrors route hydration timing
+    render(
+      <Provider store={store}>
+        <HelpView />
+      </Provider>,
+    );
+    // performance-group card not mounted yet
+    expect(document.getElementById('vram-spill')).toBeNull();
+    // focusCode hydrates after mount (as HelpRoute's effect does)
+    store.dispatch(uiActions.openHelp({ focusCode: 'vram-spill' }));
+    // now the performance group must auto-expand and the card must mount + be marked
+    await waitFor(() => {
+      const el = document.getElementById('vram-spill');
+      expect(el).not.toBeNull();
+      expect(el).toHaveAttribute('data-focused', 'true');
+    });
+  });
+
   it('reflects a rebound play-pause key', () => {
     const store = configureStore({
       reducer: { ui: uiSlice.reducer, settings: settingsSlice.reducer },
