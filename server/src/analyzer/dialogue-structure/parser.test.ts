@@ -112,6 +112,41 @@ describe('parser — quote conventions', () => {
     expect(paras[0].spans).toHaveLength(1);
     expect(paras[0].spans[0].kind).toBe('narration');
   });
+
+  /* #1598 — German „…" collapse. Our translated demo books open with U+201E „
+     but CLOSE with an ASCII " (U+0022), not the typographic U+201C “. Before the
+     de.ts quotePairs fix, `„…"` never formed a quote run, so every reply parsed
+     as narration and the cross-examiner demoted the whole chapter to the
+     narrator (~3% non-narrator coverage vs ~50% for en/fr/ru). These pin the
+     ASCII-closer pairing; en must not regress (U+201C stays an OPENER there). */
+  const deIdx = buildNameIndex(
+    [{ id: 'oduvan', name: 'Oduvan' }, { id: 'maerin', name: 'Maerin' }],
+    conventionsFor('de')!,
+  );
+  it('de quotes: „…" with an ASCII closer forms a speech run, tail → tag, anchored by name (#1598)', () => {
+    const paras = parseChapterStructure('„Lass es", sagte Meister Oduvan.', deIdx);
+    const spans = paras[0].spans;
+    expect(paras[0].kind).toBe('dialogue');
+    expect(spans.map((s) => s.kind)).toEqual(['speech', 'tag']);
+    expect(spans[0].speaker).toEqual({ characterId: 'oduvan', source: 'tag-name' });
+  });
+  it('de quotes: multi-turn „…" paragraph yields one speech span PER quoted run (#1598)', () => {
+    const paras = parseChapterStructure('„Nein, Kind." Maerin lächelte nicht. „Ein echter."', deIdx);
+    const speech = paras[0].spans.filter((s) => s.kind === 'speech');
+    expect(speech.length).toBe(2);
+  });
+  it('de quotes: typographic „…" (U+201C closer) still pairs (correct-typography German)', () => {
+    const paras = parseChapterStructure('„Es könnte ein Kunde sein.“', deIdx);
+    expect(paras[0].kind).toBe('dialogue');
+    expect(paras[0].spans.some((s) => s.kind === 'speech')).toBe(true);
+  });
+  it('en quotes: U+201C stays an OPENER — a bare ASCII " does NOT close a “…” run (de fix must not leak into en)', () => {
+    // “Hello" — U+201C open, ASCII close. en's pairs are “…”, "…", ‘…’; no
+    // „…" pair exists, and U+201C never closes anything in en. The paragraph
+    // must remain a single narration span (no phantom speech run).
+    const paras = parseChapterStructure('“Hello, world.', enIdx);
+    expect(paras[0].spans.filter((s) => s.kind === 'speech')).toHaveLength(0);
+  });
 });
 
 describe('parser — ja quote conventions (CJK, fs-59 W3)', () => {
