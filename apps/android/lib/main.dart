@@ -30,6 +30,21 @@ Future<String> _defaultDemoRoot() async =>
 Future<List<int>> _defaultDemoAsset(String key) async =>
     (await rootBundle.load(key)).buffer.asUint8List();
 
+/// Best-effort removal of the demo runtime's on-disk footprint (the app-private
+/// demo root — the only disk the demo leaves). Extracted as a testable seam
+/// because a full widget-driven exit deadlocks on runtime dispose while
+/// [LibraryHomeScreen] is still mounted (`library.close()` blocks on the live
+/// `_refresh` stream — see the reference note), so `_exitDemo`'s cleanup half is
+/// unit-tested through this helper instead. A null root or a delete failure is
+/// swallowed — cleanup must never block or throw out of exit.
+@visibleForTesting
+Future<void> deleteDemoRoot(FileStore fs, String? root) async {
+  if (root == null) return;
+  try {
+    await fs.deleteDir(root);
+  } catch (_) {}
+}
+
 /// Castwright — the native listening client (plan 188). app-1 shell +
 /// app-2 pairing + the app-3..14 library / sync / player wired on top, with
 /// OFFLINE launch (the runtime is rebuilt from the stored cert — no network
@@ -382,11 +397,7 @@ class _HomePageState extends State<HomePage> {
       });
     }
     await rt?.dispose();
-    if (root != null) {
-      try {
-        await fs.deleteDir(root);
-      } catch (_) {}
-    }
+    await deleteDemoRoot(fs, root);
   }
 
   @override

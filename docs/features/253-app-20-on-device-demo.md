@@ -123,6 +123,13 @@ owner: null
   four-books contract.
 - Widget — exit demo returns to "Not paired yet"; asserts the pairing store was never written
   (a spy store whose `save` was never called and whose `load()` is still `null`).
+- Widget + unit (`apps/android/test/ui/demo_exit_cleanup_test.dart`, #1592) — the leak-safety
+  disk cleanup. A full widget-driven exit deadlocks on runtime dispose while
+  `LibraryHomeScreen` is mounted (`library.close()` blocks on the live `_refresh` stream), so
+  `_exitDemo`'s cleanup half is extracted into a `deleteDemoRoot(fs, root)` seam and tested
+  directly: drive the real `_startDemo` (which writes covers under the demo root), assert the
+  footprint exists, then `deleteDemoRoot` removes it and the pairing store stays untouched.
+  Plus unit cases for the null-root no-op and swallowed-delete-failure guards.
 - Widget — in `demoMode`, `AppSettingsScreen` shows the demo badge / "Exit demo" wording and
   renders no Server section (no URL, no fingerprint, no "Paired since").
 - Unit (`apps/android/test/demo/demo_ticking_audio_engine_test.dart`) —
