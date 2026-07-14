@@ -83,6 +83,84 @@ export function featureHtml() {
   </body></html>`;
 }
 
+const STAGE_BG =
+  `linear-gradient(180deg,${INK} 0%,${PURPLE_DEEP} 46%,${MAGENTA} 76%,${PEACH} 100%)`;
+
+export function tabletLandscapeHtml({ rawDataUri, caption }) {
+  const { w, h } = DIMS.tabletLandscape;
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    ${FONTS}
+    *{margin:0;padding:0;box-sizing:border-box}
+    html,body{width:${w}px;height:${h}px;overflow:hidden}
+    .stage{width:${w}px;height:${h}px;background:${STAGE_BG};
+      display:flex;flex-direction:row;align-items:center;gap:80px;padding:0 140px;
+      font-family:'General Sans',system-ui,sans-serif}
+    .caption{flex:0 0 40%;color:#fff;font-weight:600;font-size:96px;line-height:1.1;
+      letter-spacing:-0.02em;display:flex;flex-direction:column;
+      text-shadow:0 2px 24px rgba(0,0,0,.28)}
+    .caption span:last-child{color:${CREAM}}
+    .tablet{flex:1 1 auto;border-radius:44px;background:#0b0b0c;padding:18px;
+      box-shadow:0 40px 90px rgba(0,0,0,.42),0 0 0 2px rgba(255,255,255,.06)}
+    .tablet img{display:block;width:100%;border-radius:30px}
+  </style></head><body>
+    <div class="stage">
+      <div class="caption">${captionSpans(caption)}</div>
+      <div class="tablet"><img src="${rawDataUri}"/></div>
+    </div>
+  </body></html>`;
+}
+
+export function tabletPortraitHtml({ rawDataUri, caption }) {
+  const { w, h } = DIMS.tabletPortrait;
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    ${FONTS}
+    *{margin:0;padding:0;box-sizing:border-box}
+    html,body{width:${w}px;height:${h}px;overflow:hidden}
+    .stage{width:${w}px;height:${h}px;background:${STAGE_BG};
+      display:flex;flex-direction:column;align-items:center;
+      font-family:'General Sans',system-ui,sans-serif}
+    .caption{margin-top:130px;padding:0 140px;text-align:center;color:#fff;
+      font-weight:600;font-size:82px;line-height:1.12;letter-spacing:-0.02em;
+      display:flex;flex-direction:column;text-shadow:0 2px 24px rgba(0,0,0,.28)}
+    .caption span:last-child{color:${CREAM}}
+    .tablet{margin-top:90px;width:1120px;border-radius:44px;background:#0b0b0c;
+      padding:18px;box-shadow:0 40px 90px rgba(0,0,0,.42),0 0 0 2px rgba(255,255,255,.06)}
+    .tablet img{display:block;width:100%;border-radius:30px}
+  </style></head><body>
+    <div class="stage">
+      <div class="caption">${captionSpans(caption)}</div>
+      <div class="tablet"><img src="${rawDataUri}"/></div>
+    </div>
+  </body></html>`;
+}
+
+// Fold: landscape bezel with a subtle centre crease line over the device.
+export function foldBezelHtml({ rawDataUri, caption }) {
+  const { w, h } = DIMS.tabletLandscape;
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    ${FONTS}
+    *{margin:0;padding:0;box-sizing:border-box}
+    html,body{width:${w}px;height:${h}px;overflow:hidden}
+    .stage{width:${w}px;height:${h}px;background:${STAGE_BG};
+      display:flex;flex-direction:row;align-items:center;gap:80px;padding:0 140px;
+      font-family:'General Sans',system-ui,sans-serif}
+    .caption{flex:0 0 40%;color:#fff;font-weight:600;font-size:96px;line-height:1.1;
+      letter-spacing:-0.02em;display:flex;flex-direction:column;
+      text-shadow:0 2px 24px rgba(0,0,0,.28)}
+    .caption span:last-child{color:${CREAM}}
+    .fold{flex:1 1 auto;position:relative;border-radius:36px;background:#0b0b0c;
+      padding:20px;box-shadow:0 40px 90px rgba(0,0,0,.42),0 0 0 2px rgba(255,255,255,.06)}
+    .fold img{display:block;width:100%;border-radius:22px}
+    .crease{position:absolute;top:20px;bottom:20px;left:50%;width:2px;
+      background:linear-gradient(180deg,transparent,rgba(255,255,255,.12),transparent)}
+  </style></head><body>
+    <div class="stage">
+      <div class="caption">${captionSpans(caption)}</div>
+      <div class="fold"><img src="${rawDataUri}"/><div class="crease"></div></div>
+    </div>
+  </body></html>`;
+}
+
 export async function shoot(page, html, { w, h }, outPath) {
   await page.setViewportSize({ width: w, height: h });
   await page.setContent(html, { waitUntil: 'networkidle' });

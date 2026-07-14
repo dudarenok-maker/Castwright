@@ -20,14 +20,19 @@ import { chromium } from '@playwright/test';
 import { existsSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { b64, shoot, phoneHtml, featureHtml } from './lib/play-frames/templates.mjs';
+import { b64, shoot, phoneHtml, featureHtml, tabletLandscapeHtml, tabletPortraitHtml, foldBezelHtml } from './lib/play-frames/templates.mjs';
 import { SURFACES, dimsForTemplate, rawRelPath, DIMS } from './lib/play-frames/surfaces.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const RAW_DIR = resolve(repoRoot, 'mockups/marketing-screens/companion');
 const OUT_DIR = resolve(repoRoot, 'brand/go-to-market/play-store');
 
-const TEMPLATES = { phone: (raw) => phoneHtml(raw) /* tablet/fold added in Task 2 */ };
+const TEMPLATES = {
+  phone: phoneHtml,
+  tabletLandscape: tabletLandscapeHtml,
+  tabletPortrait: tabletPortraitHtml,
+  foldBezel: foldBezelHtml,
+};
 
 async function main() {
   if (!existsSync(RAW_DIR)) {
