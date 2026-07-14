@@ -88,74 +88,137 @@ fields, all populated by the script-review thunk and read by the panel via
 `selectAnalysisSubstage` (`src/store/analysis-substage-selectors.ts:30-65`):
 
 - `model?: string` — resolved model id (e.g. `gemma-4-31b-it`).
-- `engine?: 'local' | 'gemini'` — active backend.
+- `engine?: 'local' | 'gemini'` — **effective** active backend (flips to `gemini` on a
+  mid-pass fallback).
 - `activityState?: 'loading' | 'waiting' | 'streaming'` — current phase of the pass.
+  **Coarse state (`loading`/`waiting`) is owned by the server** and stamped onto `phase`
+  events (so it is replayable from the state snapshot on reattach); the **`streaming`
+  upgrade is client-only**, applied off a live streaming heartbeat/`ops` (see Client.2).
+  After a reattach mid-stream the entry reads `waiting` until the next live heartbeat
+  (~2 s self-heal) — acceptable, and the reason `streaming` is deliberately not in the
+  snapshot.
 - `activitySince?: number` — **client** `Date.now()` stamped when `activityState` last
-  changed; the timer ticks client-side (a small `useElapsed` hook), so no server spam.
+  changes; the timer ticks client-side (a small `useElapsed` hook), so no server spam.
+  Known limitation: re-stamped on reattach, so the timer resets to `0 s` on reload even
+  mid-operation (a 40 s cold load can momentarily read `0 s`). Accepted as minor UX debt.
 - `fallbackActive?: boolean` — set when the pass has switched Ollama → Gemini mid-run.
+  Idempotent (see M3 resolution) — safe to set repeatedly.
 
 Percent stays a single `progress` number. The reducers already use last-known-value
 semantics (`analysis-substage-reducers.ts:52-63`), so an event that carries only
 `progress` leaves chapter/ETA/model fields intact.
 
+**Reducer/selector surface (do not understate this).** The five fields are **not**
+carried by the shared payload types `SetActiveSubstagePayload` /
+`UpdateSubstageProgressPayload` or the shared reducer bodies
+(`analysis-substage-reducers.ts:14-63`), which prosody also uses. Implementation must:
+(a) extend both payload types and both reducer functions to pass the new fields through;
+(b) route **every** post-init script-review event through `updateProgress` (merge), never
+`setActive` — `setActiveSubstage` **fully replaces** the entry (`:35-47`), so a stray
+`setActive` after pass start wipes the new fields; (c) widen the `selectAnalysisSubstage`
+projection (`:30-65`) **and** the two consumer prop shapes — `StatusInput.analysisSubstage`
+(today `{ kind, percent }` only, `top-bar.tsx:169`) for the amber tone, and the
+`SubstageRow` prop (`status-popover.tsx:110-134`) for the engine·model / timer / fallback
+lines. This is more than "add optional fields."
+
 "Engine · friendly model" is rendered by mapping `engine` (`local → Ollama`,
 `gemini → Gemini`) and looking up the friendly model label via the existing
 `MODEL_OPTIONS` table (`src/lib/models.ts:19-83`) — the exact mechanism the **main**
-analysis pass already uses in the popover (`status-popover.tsx:251-261`).
+analysis pass already uses in the popover (`status-popover.tsx:251-261`). An **uncurated**
+local Ollama tag not in `MODEL_OPTIONS` falls back to its raw id (matches the main pass);
+panel copy must not assume the label is always friendly.
 
 ### Server — `server/src/routes/script-review.ts` + analyzer wiring
 
 1. **Warm phase before chapter 1 (local engine only).** Extract the warm body of
    `POST /api/ollama/load` (`server/src/routes/ollama-health.ts:309-328`) into a shared
    in-process helper (matching `num_ctx`/`num_gpu` so warming doesn't trigger a
-   mid-request reload — the reason those options are matched today). In
-   `runScriptReviewJob`, before the chapter loop, when `selection.engine === 'local'`,
-   emit `phase { activityState: 'loading', model, engine, progress: 0 }`, then call the
-   warm helper. Gemini engine skips this (no cold load).
+   mid-request reload — the reason those options are matched today; the analyzer chat
+   path uses the same `resolveAnalyzerNumCtx()`/`resolveAnalyzerNumGpu()`,
+   `ollama.ts:606,610`, so the cache key matches). In `runScriptReviewJob`, before the
+   chapter loop, when `selection.engine === 'local'`, emit
+   `phase { activityState: 'loading', model, engine, progress: 0 }`, then call the warm
+   helper against `selection.model`. Gemini engine skips this (no cold load).
 
-2. **Warm failure → clean fatal abort.** If the warm helper fails, emit a single
-   `error { code: 'model_load_failed', model, engine }` and **do not enter the chapter
-   loop**. This is the deliberate override of today's silent degrade. The frontend
-   renders a clear error with a **Retry** action that re-runs the pass.
+   **Warm the model the first chapter will actually use.** Per-phase model selection
+   (`selectAnalyzerForPhase`) resolves `selection.model` for `phase1`; warm *that* id, not
+   `getResolvedOllamaModel()`, or we can warm the wrong tag.
 
-3. **Model + engine on `phase` events.** Add `model` and `engine` to the chapter-start
-   `phase` (`script-review.ts:693`) and the warm `phase`, mirroring
-   `server/src/routes/analysis.ts` (which already emits `model` on its phase events).
+2. **Warm failure — gate the abort on whether a fallback exists (C1).** `selectAnalyzer`
+   returns `engine: 'local'` **even when a `FallbackAnalyzer` wrapping Gemini is
+   configured** (`index.ts:193-198`), with `selection.fallbackModel` set to the Gemini
+   model. So warm-failure handling must branch:
+   - **`selection.fallbackModel === null`** (bare Ollama, no Gemini key): emit
+     `error { code: 'model_load_failed', model, engine }`, **do not enter the chapter
+     loop**. Frontend shows the error + a **Retry** action (re-runs the pass). This is the
+     clean-abort the user asked for.
+   - **`selection.fallbackModel` present**: warm failure must **not** abort — a working
+     "Ollama-down + Gemini-up" setup completes on Gemini today, and aborting would break
+     it and loop on Retry. Instead, proactively switch the pass to the Gemini fallback,
+     fire the `onFallback` announcement (§6), and enter the loop on Gemini. (Do **not**
+     block the whole pass on a warm probe when there is a viable cloud path.)
+
+3. **Model + engine + coarse `activityState` on `phase` events.** Add `model`, `engine`,
+   and `activityState` to the chapter-start `phase` (`script-review.ts:693`, →`waiting`)
+   and the warm `phase` (→`loading`), mirroring `server/src/routes/analysis.ts` (which
+   already emits `model` on its phase events). Stamping `activityState` on `phase` is what
+   makes it survive into the state snapshot for reattach (M2).
 
 4. **Per-chunk `phase` for intra-chapter creep.** In the existing chunk loop
    (`script-review.ts:724-752`), after each chunk emit
    `phase { progress: (i + (chunkIdx + 1) / chunkCount) / N }` (progress only). Chapter
-   label / ETA persist via last-known-value. This is also what makes the inline
-   manuscript pill's bar creep for free.
+   label / ETA persist via last-known-value. Monotonic: the last chunk's `(i+1)/N` equals
+   the next chapter-start value, so it never goes backwards or overshoots.
+   **Scope caveat (m1):** this only moves the bar for **multi-chunk local** chapters. Cloud
+   engines get a `MAX_SAFE_INTEGER` chunk budget → exactly one chunk, and any local chapter
+   that fits one chunk emits `(i+1)/N` only when it finishes. For those, liveness is carried
+   entirely by the **client-side ticking timer**, not the bar — which is fine, but the
+   "single large chapter no longer frozen" promise is delivered by the *timer* for the
+   single-chunk/cloud case and by the *bar* only for oversized local chapters.
 
-5. **Arm `onWaiting`.** Pass `onWaiting` on the script-review `StageCall`, wired to the
-   existing throttled heartbeat (`makeThrottledHeartbeat`, `script-review.ts:673`;
-   `server/src/routes/analysis-heartbeat.ts:23`). This makes the server emit liveness
-   while waiting for the first token. The first `heartbeat`/`ops` for a chapter is what
-   flips `activityState` `waiting → streaming`.
+5. **Streaming detection — no `onWaiting` (M1).** Do **not** arm `onWaiting`. It is
+   redundant here: script review is not on the analysis-stream middleware (its "avoid a
+   false Stalled" rationale doesn't apply), the visible waiting liveness is already the
+   client-side `useElapsed` timer, and `onChunk` heartbeats already fire today
+   (`script-review.ts:734`). `waiting → streaming` is a **client** transition detected from
+   a heartbeat that carries `receivedBytes` (i.e. one originating from `onChunk`, not a
+   pre-token waiting tick) or from an `ops` event — see Client.2. Arming `onWaiting` would
+   emit a *waiting* heartbeat indistinguishable at the payload level except by the absence
+   of `receivedBytes`, so relying on "first heartbeat = streaming" would falsely show
+   "streaming" while still waiting.
 
-6. **Surface the Gemini fallback (`onFallback` hook).** Add an optional
+6. **Surface the Gemini fallback (`onFallback` hook, M3).** Add an optional
    `onFallback?: (info: { model: string; engine: 'gemini'; reason: string }) => void`
    to the script-review `StageCall`. `FallbackAnalyzer.runScriptReviewChapter`
-   (`server/src/analyzer/index.ts:300-320`) invokes it at the moment it switches on
-   `LocalUnreachableError`. The route responds by emitting a `phase` carrying the
-   **effective** `model`, `engine: 'gemini'`, and a `fallbackReason`
-   (e.g. `"Ollama unreachable"`). The mid-pass fallback itself is unchanged — only now
-   it is announced.
+   (`server/src/analyzer/index.ts:300-320`) invokes it when it switches on
+   `LocalUnreachableError`. `FallbackAnalyzer` is **stateless**, so without a guard it
+   fires once per chunk/chapter and re-pays the Ollama connection-failure latency every
+   chapter. Add a **per-job latch in the route**: on the first `onFallback`, switch the
+   loop's analyzer to Gemini directly for the remaining chapters (skipping the doomed
+   Ollama primary) and emit the announcement `phase` **once** — effective `model`,
+   `engine: 'gemini'`, `fallbackReason` (e.g. `"Ollama unreachable"`). Re-fires are
+   idempotent on the client regardless.
 
 ### Client — SSE reader, thunk, selector, render
 
 1. **`realReviewScript` SSE reader** (`src/lib/api.ts:3136-3224`): add `case 'heartbeat'`
-   (today silently dropped) and read `model`/`engine`/`activityState`/`fallbackReason`
-   off `phase` events.
+   (today silently dropped). Read `model`/`engine`/`activityState`/`fallbackReason` off
+   `phase` events. Distinguish a **streaming** heartbeat (payload carries `receivedBytes`,
+   from `onChunk`) from a bare waiting tick — only the former (or an `ops` event) upgrades
+   the state to `streaming`.
 
-2. **Thunk** (`src/store/script-review-thunk.ts`): dispatch the new entry fields;
-   stamp `activitySince = Date.now()` whenever `activityState` changes; set
-   `fallbackActive` on a fallback `phase`. `warm/loading` on the first loading phase,
-   `waiting` on chapter-start, `streaming` on first heartbeat/ops of a chapter.
+2. **Thunk** (`src/store/script-review-thunk.ts`): dispatch the new entry fields **via
+   the merge action (`updateProgress`), never `setActive`** after the initial `setActive`
+   at pass start (`:45`) — a later `setActive` would wipe the new fields. Coarse
+   `activityState` (`loading`/`waiting`) arrives already stamped on `phase` events; the
+   thunk upgrades to `streaming` on the first streaming heartbeat/`ops` for a chapter.
+   Stamp `activitySince = Date.now()` whenever the resulting `activityState` changes; set
+   `fallbackActive = true` on a fallback `phase`.
 
 3. **Selector** `selectAnalysisSubstage` (`analysis-substage-selectors.ts`): project the
-   five new fields so the panel `SubstageRow` can read them.
+   five new fields so the panel `SubstageRow` can read them. (Note m2: this selector
+   prefers prosody and returns only one substage — if a prosody pass runs concurrently for
+   any book, the review's model/timer will not surface. Rare; accepted, noted here.)
 
 4. **Render:**
    - **Panel** `SubstageRow` (`status-popover.tsx`): add an "Engine · friendly model"
@@ -165,46 +228,96 @@ analysis pass already uses in the popover (`status-popover.tsx:251-261`).
      `Switched to Gemini — Ollama unreachable` note.
    - **Compact pill** `summarizeStatus` (`top-bar.tsx:140-188`): set an amber `tone`
      when the review substage `activityState === 'loading'` or `fallbackActive`. Label
-     unchanged.
+     unchanged. Reachability confirmed: the substage rung (`top-bar.tsx:168`) sits **above**
+     the paused-analysis rung (`:179`), so a review pass reaches it and the tone applies.
    - **Inline manuscript pill:** unchanged.
+
+5. **Retry affordance (m5).** Warm-failure `model_load_failed` (bare-Ollama case only)
+   surfaces via the existing error toast (`script-review-thunk.ts:136-143`) with an added
+   **Retry action** that **re-dispatches `runReviewScript(bookId)`** (a fresh run, not a
+   resume). This is net-new UI — there is no Retry today. A test asserts Retry re-runs.
 
 ### Error / edge handling
 
-- **Cold Ollama, warm fails:** `error: model_load_failed` → pass aborts before any
-  chapter → panel shows the error, Retry re-runs.
-- **Gemini engine:** warm phase skipped; pass starts at chapter 1 immediately.
+- **Cold Ollama, warm fails, NO Gemini key** (`fallbackModel === null`):
+  `error: model_load_failed` → pass aborts before any chapter → panel shows the error,
+  toast Retry re-runs.
+- **Cold Ollama, warm fails, Gemini key configured** (`fallbackModel` present, C1): do
+  **not** abort — switch to Gemini, fire `onFallback`, run the pass on Gemini. Panel reads
+  `Gemini · <model>` + the fallback note; compact pill amber. (Preserves today's working
+  behaviour instead of regressing it.)
+- **Gemini engine selected outright:** warm phase skipped; pass starts at chapter 1.
 - **Mid-pass Ollama drop (classified `LocalUnreachableError`, key configured):** existing
-  fallback still runs; now announced via `onFallback` → panel flips to
-  `Gemini · <model>` + note; compact pill goes amber.
+  fallback still runs; now announced once via `onFallback` + per-job latch (§Server.6) →
+  panel flips to `Gemini · <model>` + note; compact pill amber; remaining chapters skip
+  the dead Ollama primary.
 - **Mid-pass model error not classified as unreachable** (HTTP non-2xx, truncation,
-  empty body): unchanged — per-chapter `chapter-failed`, loop continues. Out of scope
-  to change here.
-- **Reconnect / attach** (`attachToRunningReview`): the new fields must survive the
-  `state` snapshot path — include `model`/`engine`/`activityState`/`fallbackActive` in
-  the `ScriptReviewReplayState` snapshot (`script-review.ts:218-231,441-478`) so a
-  re-attach repaints them (`activitySince` is re-stamped client-side on attach).
+  empty body): unchanged — per-chapter `chapter-failed`, loop continues. Out of scope.
+- **Cancellation racing the warm step:** an abort arriving during the `/load` warm call
+  must cancel cleanly (no `model_load_failed` surfaced for a user-initiated cancel) — the
+  warm helper takes the job's abort signal; a cancel short-circuits to the existing
+  `error { code: 'cancelled' }` path. Covered by a test.
+- **Reconnect / attach** (`attachToRunningReview`): `model`/`engine`/`activityState`
+  (coarse) survive because they are stamped on `phase`, and the snapshot's `lastPhase`
+  (`script-review.ts:667`) is the last broadcast `phase`. `streaming` is **not** in the
+  snapshot (heartbeats aren't replayed); a reattach mid-stream reads `waiting` and
+  self-heals on the next live heartbeat (~2 s). `activitySince` is re-stamped client-side
+  on attach (timer resets — known limitation, above). `fallbackActive` is derivable from
+  the snapshot's effective `engine === 'gemini'`.
 
 ## Testing
 
 - **Server** (`server/src/routes/script-review.*.test.ts`):
-  - warm helper invoked for `engine==='local'`; `loading` phase emitted first.
-  - warm failure → `model_load_failed` emitted and **no** chapter runs.
-  - multi-chunk chapter emits a `phase` per chunk with monotonically increasing
-    `progress`.
-  - `phase` events carry `model` + `engine`.
-  - `onWaiting` armed → a heartbeat is emitted while waiting for the first token.
-  - `onFallback` → a `phase` with `engine: 'gemini'` + `fallbackReason` is emitted.
-  - `state` snapshot includes the new fields (re-attach repaint).
+  - warm helper invoked for `engine==='local'` against `selection.model`; `loading` phase
+    emitted first.
+  - warm failure with **`fallbackModel === null`** → `model_load_failed` emitted and
+    **no** chapter runs.
+  - warm failure with **`fallbackModel` present** (C1) → **no** `model_load_failed`;
+    pass switches to Gemini, `onFallback` announcement emitted, chapters run on Gemini.
+  - multi-chunk chapter emits a `phase` per chunk with strictly increasing `progress`
+    that never exceeds the next chapter-start value; single-chunk chapter emits only the
+    end `(i+1)/N`.
+  - `phase` events carry `model` + `engine` + coarse `activityState`.
+  - `onFallback` → exactly one announcement `phase` with `engine: 'gemini'` +
+    `fallbackReason`; the per-job latch stops further Ollama primary attempts.
+  - cancellation during the warm step → `error { code: 'cancelled' }`, **not**
+    `model_load_failed`.
+  - `state` snapshot includes `model`/`engine`/`activityState` (coarse) for re-attach.
 - **Frontend**:
-  - thunk test: heartbeat + model + chunk `phase` + fallback events populate the
-    entry (`model`, `engine`, `activityState`, `fallbackActive`, creeping `progress`).
+  - thunk test: model/`phase` + streaming-heartbeat (with `receivedBytes`) + fallback
+    events populate the entry via merge (`model`, `engine`, `activityState` incl. the
+    `waiting → streaming` upgrade, `fallbackActive`, creeping `progress`); a bare waiting
+    heartbeat does **not** flip to `streaming`; a stray `setActive` would (negative test)
+    wipe fields — assert the thunk uses merge.
   - component test: panel `SubstageRow` renders friendly `Engine · model`, the ticking
     timer per state, and the fallback note; `summarizeStatus` returns the amber tone
-    for `loading`/`fallbackActive`.
+    for `loading`/`fallbackActive` **and** that the substage rung is reachable (not
+    outranked by a paused main-analysis rung).
+  - Retry test: `model_load_failed` toast Retry re-dispatches `runReviewScript` (fresh
+    run).
 - **E2E** (`e2e/`): one mock-mode Playwright spec — start a script review, open the
   status popover, assert it shows the model name and a moving progress indicator (the
   change crosses SSE → redux → layout → popover seams and two surfaces, so it earns an
   e2e per the testing-discipline bar).
+
+## Assumption-check resolutions (2026-07-14, Opus adversarial pass)
+
+- **C1 (Critical) — warm-abort regressed a working config.** Resolved: warm failure only
+  aborts when `selection.fallbackModel === null`; with a Gemini fallback configured it
+  switches to Gemini instead of aborting (§Server.2, §Error handling).
+- **M1 (Major) — wrong streaming signal / redundant `onWaiting`.** Resolved: dropped the
+  `onWaiting` change; `streaming` is a client upgrade off a `receivedBytes`-bearing
+  heartbeat or `ops` (§Server.5, §Client.1–2).
+- **M2 (Major) — `activityState` ownership contradiction.** Resolved: server owns coarse
+  `loading`/`waiting` on `phase` (replayable); client owns the `streaming` upgrade
+  (self-heals after reattach) (§Data model, §Server.3, §Error handling).
+- **M3 (Major) — `onFallback` not once-per-switch.** Resolved: per-job latch fires the
+  announcement once and stops retrying dead Ollama; client flag is idempotent (§Server.6).
+- **M4 (Major) — reducer/selector surface understated.** Resolved: spelled out payload +
+  reducer + selector + prop-shape changes and the merge-not-`setActive` rule (§Data model).
+- **Minors folded:** m1 per-chunk creep scope caveat (§Server.4), m2 concurrent-prosody
+  hides review (§Client.3), m3 attach timer reset (§Data model), m4 uncurated tag → raw id
+  (§Data model), m5 Retry placement + test (§Client.5), m6 test gaps (§Testing).
 
 ## Rollout / tracking
 
