@@ -1,4 +1,4 @@
-# fe-49 — First-run wizard: split analyzer/voice, close the local-Ollama loop, and make analyzer readiness primary/backup-aware
+# fe-49 — First-run wizard: split analyzer/voice, close the local-Ollama loop, and add a primary/backup analyzer signal
 
 **Issue:** [#1610](https://github.com/dudarenok-maker/Castwright/issues/1610) (`fe-49`, `area:fe`, `moscow:must`, `type:chore`, `feedback`)
 **Date:** 2026-07-14
@@ -30,11 +30,10 @@ Two further gaps surfaced during design:
    (`user-settings.ts:573`). So picking a local tag there is a silent no-op for
    routing.
 
-4. **Readiness follows only the active engine.** `diagnoseAnalyzer` checks the
-   one resolved engine (`setup-readiness.ts:194-212`), so it can't express "you
-   have a working analyzer AND a fallback." The product wants a primary/backup
-   view: green when both a local model and a Gemini key are present, yellow (no
-   backup, non-blocking) when only one is, red when neither.
+4. **Readiness can't express "no backup."** `diagnoseAnalyzer` returns a binary
+   pass/fail for the resolved engine (`setup-diagnosis.ts:226`). The product wants
+   a primary/backup signal on top of "will it run": green when both a local model
+   and a Gemini key are present, yellow (no backup, non-blocking) when only one is.
 
 ## Goals
 
@@ -44,8 +43,10 @@ Two further gaps surfaced during design:
   primary) and **Online via Gemini** (second) — as distinct cards; no buried
   "instead" link. Close the Ollama dead-end by reusing the admin Model-Manager
   machinery to **list all pulled models and pull the suggested one**.
-- Make the analyzer readiness **availability-based and primary/backup-aware**:
-  green (both), yellow/non-blocking (one, "no backup"), red/blocking (none).
+- Add a **primary/backup refinement** on top of today's (correct, engine-aware)
+  pass/fail: **green** when the resolved analyzer will run AND a second analyzer
+  is provisioned as backup; **yellow/non-blocking** when it will run but has no
+  backup; **red/blocking** when it won't run (unchanged from today).
 - Make choosing a local model in the **Defaults** step actually switch the
   engine, so generation routes to the chosen analyzer.
 
@@ -54,25 +55,41 @@ Two further gaps surfaced during design:
 - **Setting the analyzer default (active engine) in the analysis step.** Choosing
   which analyzer *runs* is owned by the **Defaults** step's model dropdown. The
   analysis step only makes analyzers *available*.
-- **Forcing our recommended model.** Any one pulled Ollama model counts as
-  "available" — the suggested tag is a convenience, not a requirement.
+- **Forcing our recommended model.** Any pulled **analyzer-capable** Ollama model
+  counts (see §5) — the suggested tag is a convenience, not a requirement.
 - **Reworking `saveGeminiApiKey`.** It stays key-only (`account-slice.ts:63`);
-  Gemini "availability" is read from whether a key is set, independent of it.
-- **Runtime analyzer fallback wiring** (e.g. gemini→local when the active engine
-  is unusable). See *Resolve during planning*.
+  Gemini availability is read from whether a key is set.
+- **Runtime analyzer fallback changes.** The existing local→gemini fallback
+  (`user-settings.ts:132-135`) is unchanged; we do NOT add a gemini→local one.
 - **Admin-screen disentanglement** — a follow-up (see §7).
 
-## Design decisions (from brainstorming)
+## Key correction vs earlier drafts (why the gate stays engine-aware)
+
+An earlier draft made readiness "availability-based, independent of the active
+engine." Adversarial review killed that: the client boot gate is
+`layout.tsx:529-532`, which force-navigates to `/setup` whenever the server's
+`readiness.ready` is false, and `ready` is `every(blocker.status === 'pass')`
+(`setup-readiness.ts:104`). Making "one analyzer provisioned" non-blocking
+**regardless of engine** would let a user who pulled an Ollama model but left the
+engine at its `gemini` default with **no key** (`user-settings.ts:263`) pass the
+gate — then fail at generation, because the gemini→local fallback does not exist
+(fallback is local→gemini only, `user-settings.ts:132-135`). Today that state is
+correctly **blocked**. So: **the pass/fail gate stays engine-aware** (fail = the
+resolved engine won't run, including its fallback); the primary/backup green-vs-
+yellow distinction is the only new, availability-based layer.
+
+## Design decisions
 
 | Decision | Choice |
 |---|---|
 | Voice vs analyzer | **Two separate wizard steps.** |
 | Step order | **Analysis first, then Voice.** |
 | Analyzer options | Two cards; **Ollama first** (local-first), Gemini second. |
-| Ollama section content | Render like admin `ModelsCardBody`: `OllamaInstall` + `ModelPullStatus` (list all pulled ∪ suggested-pull). |
-| "Ollama available" | **≥1 pulled model + daemon reachable** — any model, not just the suggested one. |
-| Who sets the active engine | The **Defaults step** dropdown (lists all pulled tags), via `':'` auto-derive. |
-| Analyzer readiness | **Availability-based tri-state**: both → green; one → yellow/**non-blocking**; none → red/blocking. Adds a `warn` state to `BlockerDiagnosis`. |
+| Ollama section content | Render like admin `ModelsCardBody`: `OllamaInstall` + `ModelPullStatus`. |
+| "Ollama available" | Daemon reachable + **≥1 pulled analyzer-capable model** (curated-family match, not any `/api/tags` entry). |
+| Who sets the active engine | The **Defaults step** dropdown, via `':'` auto-derive. |
+| Gate (pass/fail) | **Engine-aware** — fail iff the resolved engine won't run (incl. local→gemini fallback). Unchanged semantics from today. |
+| Green vs yellow | **green** = will run AND a backup analyzer is provisioned; **yellow/`warn`** (non-blocking) = will run, no backup. Adds a `warn` state to `BlockerDiagnosis`. |
 | Admin screens | **Follow-up** issue to mirror this design (not shared control). |
 
 ## Section 1 — Wizard structure
@@ -95,22 +112,20 @@ Step count 6 → 7.
 **Files**
 - New `src/components/setup/step-analysis.tsx` (+ `step-analysis.test.tsx`).
 - New `src/components/setup/step-voice.tsx` (+ `step-voice.test.tsx`).
-- Delete `src/components/setup/step-models.tsx` and `step-models.test.tsx`
-  (content moves into the two new files; the local `BlockerBadge` /
-  `SectionHeading` helpers move with them, or into a tiny shared module).
+- Delete `src/components/setup/step-models.tsx` and `step-models.test.tsx`.
 
 **`setup-wizard.tsx`**
 - Extend `StepId` + `STEPS`: replace `models` with `analysis` then `voice`.
 - Add `renderStep` cases for `analysis` and `voice` (both `{ readiness, onRefetch }`).
 - `buildSummaryRows` (`setup-wizard.tsx:246-296`): the **Analyzer** row moves to
-  `stepIndex: 2` and orders **before** the **Voice engines** row (`stepIndex: 3`);
+  `stepIndex: 2`, ordered **before** the **Voice engines** row (`stepIndex: 3`);
   `defaults` → `4`, `lanCert` → `5`. Progress dots + "Step N of 7" derive from
-  `STEPS.length`. The analyzer row must also render the new **yellow** state (§5),
-  so `SummaryStatus` gains a `warn` (yellow dot) alongside `ok`/`attention`.
+  `STEPS.length`. `SummaryStatus` gains `warn` (yellow dot) so the analyzer row
+  can render the new state (§5).
 
-**Voice step is a pure lift** — no behavior change: `VenvBootstrap`,
-`KokoroInstall`, and the "More voice engines" `<details>` (`QwenInstall` +
-`CoquiInstall`), with the `blockers.sidecar` / `blockers.tts` badges.
+**Voice step is a pure lift** — `VenvBootstrap`, `KokoroInstall`, the "More voice
+engines" `<details>` (`QwenInstall` + `CoquiInstall`), and the `blockers.sidecar`
+/ `blockers.tts` badges.
 
 ## Section 2 — The analysis step
 
@@ -118,32 +133,36 @@ Two distinct bordered-card sections, local-first order.
 
 **① Local via Ollama** (first)
 - Render **unconditionally, like admin's `ModelsCardBody`** (`model-settings-form.tsx`):
-  `OllamaInstall` (daemon install/detect, unchanged) followed by `ModelPullStatus`
-  (`model-pull-status.tsx`, reused as-is). `ModelPullStatus` already lists pulled
-  tags ∪ curated `pullable[]`, offers **Pull** with progress + poll, and shows its
-  own amber "daemon unreachable" banner when the daemon isn't serving — so we do
-  **not** gate its render on `OllamaInstall`'s detect state (which it doesn't
-  expose anyway).
-- Wiring: the step fetches `api.getOllamaHealth()` for the `health` prop and reads
-  `account.pullableModels` (dispatch `fetchAnalyzerModels` on mount). On a terminal
-  pull, `onPulled` → `onRefetch` (re-probe readiness) **and** re-dispatch
-  `fetchAnalyzerModels` so the new tag reaches the Defaults dropdown.
-- **No set-as-default action here.** Provisioning only. Once ≥1 model is pulled,
-  the analyzer badge reflects it (§5) in-step.
+  `OllamaInstall` (unchanged) then `ModelPullStatus` (`model-pull-status.tsx`,
+  reused as-is) — it lists pulled tags ∪ curated `pullable[]`, offers **Pull**
+  with progress, and shows its own amber "daemon unreachable" banner. We do not
+  gate its render on `OllamaInstall`'s detect state (which it doesn't expose).
+- Wiring: fetch `api.getOllamaHealth()` for the `health` prop; read
+  `account.pullableModels` (dispatch `fetchAnalyzerModels` on mount). On a
+  terminal pull, `onPulled` → `onRefetch` **and** re-dispatch `fetchAnalyzerModels`
+  so the tag reaches the Defaults dropdown.
+- **No set-as-default action here.** Once an analyzer-capable model is pulled,
+  show a bridge line: *"✓ Local analyzer available — pick it in the Defaults step
+  to use it."* (Provisioning ≠ activation; see below.)
 
 **② Online via Gemini** (second)
 - `GeminiKeyField` → `saveGeminiApiKey` + `onRefetch` (unchanged), as the second card.
 
-**Badge.** The step shows the analyzer `BlockerBadge` at the top, now rendering
-the availability tri-state (§5) — green/yellow/red. **On this step it renders
-message-only, without `BlockerFixAction`**: the remedies are the two cards right
-below, so the old fix action (which navigates to `#/advanced`, out of the
-wizard — `setup-diagnosis.ts:233`) is suppressed here. (Out-of-wizard consumers
-like the status-popover keep rendering the diagnosis's action.)
+**Badge behavior (honest, engine-aware).** The step shows the analyzer
+`BlockerBadge` at the top with the tri-state (§5), rendered **message-only, no
+`BlockerFixAction`** here (remedies are the two cards below; the old fix action
+navigates to `#/advanced`, out of the wizard — `setup-diagnosis.ts:233`).
 
-Because readiness is now availability-based rather than active-engine-based,
-**pulling Ollama or saving a Gemini key moves the badge in-step** — the earlier
-"still amber until the Defaults step" seam is gone.
+Because the gate is engine-aware, the badge is honest about *what will run*, and
+the two provisioning actions do **not** move it symmetrically:
+- Default engine is `gemini`, so **saving a Gemini key flips the badge in-step**
+  (gemini becomes usable immediately).
+- **Pulling an Ollama model does not, on its own**, turn the badge green/yellow
+  unless the user also makes local the engine (Defaults) OR already has a Gemini
+  key (then Ollama is the *backup* → green). Until then the Ollama card's bridge
+  line points the user to Defaults. This asymmetry is inherent to "Defaults owns
+  the active engine" and is the honest behavior — the badge never claims an
+  analyzer is ready when the resolved engine can't run it.
 
 ## Section 3 — Reused components (no new picker)
 
@@ -157,7 +176,7 @@ Because readiness is now availability-based rather than active-engine-based,
 
 We do **not** lift `ModelsCardBody` into a shared component; the analysis step
 composes the leaf controls directly (a shared wrapper can come with the admin
-follow-up if warranted).
+follow-up).
 
 ## Section 4 — Defaults step: engine auto-derive (routing)
 
@@ -170,60 +189,74 @@ dispatch(saveAccountSettings({ defaultAnalysisModel: next, analysisEngine: engin
 ```
 
 `':'` matches the exact heuristic `getResolvedOllamaModel()` uses
-(`user-settings.ts:566`); Ollama tags carry a `:`, Gemini ids do not. This is
-what routes generation to the chosen analyzer.
+(`user-settings.ts:566`). This is what routes generation to the chosen analyzer.
+The derive fires only on a change event, so a pre-existing mismatched
+`analysisEngine`/`defaultAnalysisModel` pair self-heals only when the user
+re-selects — acceptable for v1.
 
-**Availability ≠ active engine.** The badge (§5) reports what's *provisioned*; the
-Defaults dropdown sets what actually *runs*. The one case where these can diverge
-is *Ollama pulled, no Gemini key, user never opens Defaults* → badge is yellow but
-the resolved engine stays `gemini` (unusable). The Ollama card's presence + the
-Defaults dropdown are the intended path (pick the tag → engine=local); whether to
-add a runtime fallback for this residual case is deferred (see *Resolve during
-planning*). The engine derive only fires on a change event, so a pre-existing
-mismatched `analysisEngine`/`defaultAnalysisModel` pair self-heals only when the
-user re-selects — acceptable for v1.
+## Section 5 — Primary/backup analyzer signal (server leg)
 
-## Section 5 — Availability-based analyzer readiness (server leg)
-
-This reverses the earlier "verify-only" scope: readiness gains a real change.
+**Extend, don't replace, today's engine-aware `diagnoseAnalyzer`.** The current
+pass/fail logic (`setup-diagnosis.ts:226-258`) is correct and stays; we add a
+`warn` refinement and feed it both engines' availability.
 
 **Tri-state.** Extend `BlockerDiagnosis.status` from `'pass' | 'fail'` to
-`'pass' | 'warn' | 'fail'` (server type + the client mirror; if `BlockerDiagnosis`
-is part of `openapi.yaml`, update it and run `npm run openapi:types`).
+`'pass' | 'warn' | 'fail'`. **The type is hand-written in TWO places** — the
+client `src/lib/api.ts:7129` and the server's diagnosis type — updated in
+lockstep (NOT generated from `openapi.yaml`).
 
-**`diagnoseAnalyzer` rewrite** (`setup-diagnosis.ts:226`). Take both signals and
-branch on availability, independent of the active engine:
-- `geminiAvailable` = Gemini key set.
-- `ollamaAvailable` = daemon reachable **and ≥1 pulled model** (use
-  `models.length > 0`, **not** the expected-model-specific `modelPulled` — any
-  pulled model counts).
-- both → `pass` "Analyzer ready."
-- exactly one → `warn` "Analyzer ready — no backup analyzer configured." (message
-  nudges setting up the other; carries a remedy action for out-of-wizard
-  consumers, e.g. navigate to the Analysis step).
-- neither → `fail` "No analyzer configured." (remedy: set up Ollama or add a
-  Gemini key).
+**`diagnoseAnalyzer` logic.** Inputs: `engine`, `geminiKeySet`, `ollamaReachable`,
+`ollamaHasAnalyzerModel`, `expectedModel`, `pullable`. Define:
+- `localReady = ollamaReachable && ollamaHasAnalyzerModel`
+- `activeUsable` = `engine === 'gemini' ? geminiKeySet : (localReady || geminiKeySet)`
+  (the `local || gemini` reflects the documented local→gemini fallback)
+- `backups provisioned` = count of `{ geminiKeySet, localReady }` that are true
 
-**`setup-readiness.ts:194-212` rewrite.** Probe **both** unconditionally: compute
-`geminiKeySet` from `getResolvedGeminiApiKey()` and always `probeOllamaHealth()`,
-then pass both into `diagnoseAnalyzer`. (Drop the current if-engine branch.)
+Then:
+- `!activeUsable` → **`fail`** (blocking), with **today's engine-specific remedy**
+  unchanged (gemini→no-key; local→`ollama-unreachable`/`model-not-pulled` with the
+  `ollama-install`/`ollama-pull` actions).
+- `activeUsable` and both provisioned → **`pass`** "Analyzer ready."
+- `activeUsable` and exactly one provisioned → **`warn`** "Analyzer ready — no
+  backup analyzer configured." (non-blocking; carries a light navigate remedy for
+  out-of-wizard consumers).
 
-**Boot gate.** `buildSetupReadiness` sets
-`ready: Object.values(blockers).every(b => b.status === 'pass')`
-(`setup-readiness.ts:104`). Change to treat `warn` as non-blocking:
-`b.status === 'pass' || b.status === 'warn'`. This is what makes the yellow
-one-analyzer state non-blocking.
+**`ollamaHasAnalyzerModel`** = a pulled tag that prefix-matches the curated
+analyzer catalog (`pullable` ∪ known local `MODEL_OPTIONS`), reusing the existing
+`isPrefixMatch` logic — **not** bare `models.length > 0`, so an embedding-only
+install (e.g. `nomic-embed-text`) does not read as an analyzer. (Exact predicate,
+and whether to also honor a user-selected non-curated tag, is a planning detail.)
 
-**Front-end consumers of the tri-state** (all currently assume binary):
-- `step-analysis.tsx` `BlockerBadge` — green/yellow/red + label.
-- `buildSummaryRows` (`setup-wizard.tsx:277-278`) — analyzer row: `pass`→ok,
-  `warn`→yellow, `fail`→attention; `SummaryStatus` gains `warn`.
-- `status-popover.tsx` `DiagnosisBlock` (`status-popover.tsx:315`) — render `warn`.
-- Audit any other `.status === 'pass'` / `=== 'fail'` analyzer checks.
+**`setup-readiness.ts:194-212`.** Probe **both** unconditionally: compute
+`geminiKeySet` from `getResolvedGeminiApiKey()` and always `probeOllamaHealth()`
+(needed for the backup determination even when `engine === 'gemini'`); still read
+`getResolvedAnalysisEngine()` for the gate. Pass all into `diagnoseAnalyzer`.
+
+**Boot gate.** `buildSetupReadiness` (`setup-readiness.ts:104`):
+`ready: Object.values(blockers).every(b => b.status === 'pass')` →
+`... every(b => b.status === 'pass' || b.status === 'warn')`. This is the only
+gate — the client obeys `readiness.ready` (`layout.tsx:532`), it does not
+re-derive.
+
+**Full `warn` consumer surface** (the binary assumption is scattered — the plan
+carries a mechanical *"find every `BlockerDiagnosis.status` consumer"* sweep):
+- **Type:** `src/lib/api.ts:7129` (client) + server diagnosis type.
+- **Mock:** `src/lib/api.ts` `mockBlocker(status: 'pass' | 'fail')` and
+  `mockGetSetupReadiness` (computes `ready`; drives e2e + unit; asserted in
+  `api.test.ts:45,51`).
+- **Badge:** new `step-analysis.tsx` `BlockerBadge` — green/yellow/red.
+- **Summary:** `buildSummaryRows` (`setup-wizard.tsx:277-278`) + `SummaryStatus`.
+- **`blocker-fix-action.tsx`:** the badge renders it whenever `!isPass`; a `warn`
+  must NOT surface a spurious fix button — gate on `status === 'fail'`.
+- **`status-popover.tsx:181`** `DiagnosisBlock`: returns null only on `'pass'`;
+  give `warn` an explicit (non-alarming) render, not the red problem block.
+- **Existing test factories** hard-coding the binary union (`setup.test.tsx`,
+  `status-popover.test.tsx`, `layout.test.tsx`, `use-setup-diagnosis.test.ts`,
+  `prosody-autotrigger.test.tsx`, `routes/index.test.tsx`) widen to the tri-state.
 
 ## Section 6 — Ollama pull path (verify)
 
-Unchanged and confirmed working: `POST /api/ollama/pull` is allowlist-gated
+Confirmed working: `POST /api/ollama/pull` is allowlist-gated
 (`pull-bootstrap.ts:87`); the suggested `expectedModel` resolves to `qwen3.5:4b`,
 which is in `DEFAULT_ALLOWED_MODELS` (`pull-bootstrap.ts:64`), so the suggested
 pull is offered and permitted.
@@ -233,26 +266,30 @@ pull is offered and permitted.
 `model-settings-form.tsx` / `model-manager.tsx` carry the same voice/analyzer
 entanglement, but they are **distinct components** that only reuse the leaf
 controls (`OllamaInstall`, `ModelPullStatus`) — **not shared control**. So the
-admin disentanglement (and adopting the new tri-state badge there) is a separate
+admin disentanglement (and adopting the tri-state badge there) is a separate
 follow-up issue to mirror this design once fe-49 lands. File it during shipping +
 add the thin `docs/BACKLOG.md` row.
 
 ## Testing
 
 - **`step-analysis.test.tsx`** — renders `OllamaInstall` + `ModelPullStatus`;
-  pull path lists/pulls (mock **both** `api.getOllamaHealth` and global `fetch`,
-  since the leaf controls use raw `fetch`); Gemini key saves; badge shows the
-  right tri-state for both/one/none.
+  pull path lists/pulls (mock **both** `api.getOllamaHealth` and global `fetch` —
+  the leaf controls use raw `fetch`); Gemini key saves; bridge line appears when
+  an analyzer-capable model is pulled; badge message-only (no fix action).
 - **`step-voice.test.tsx`** — voice-engine controls render (lift regression).
 - **`setup-wizard.test.tsx`** — 7 steps; "Step N of 7"; summary rows: Analyzer
   before Voice; analyzer row renders the yellow `warn` state.
 - **`step-defaults.test.tsx`** — `':'` tag → saves `analysisEngine:'local'`;
-  Gemini id → `'gemini'` (both with the model).
-- **`setup-diagnosis.test.ts`** — `diagnoseAnalyzer`: both→`pass`, gemini-only→
-  `warn`, ollama-only(≥1 model)→`warn`, none→`fail`.
-- **`setup-readiness` route test** — probes both engines; `ready` is `true` when
-  the only non-pass blocker is analyzer `warn` (non-blocking); `false` on analyzer
-  `fail`.
+  Gemini id → `'gemini'`.
+- **`setup-diagnosis.test.ts`** — the full matrix: engine=gemini {no key → fail;
+  key only → warn; key + local model → pass}; engine=local {nothing → fail;
+  local model only → warn; local + key → pass; no local but key → warn via
+  fallback}; **regression guard: engine=gemini + no key + Ollama model pulled →
+  still `fail`** (must not go warn/pass).
+- **`setup-readiness` route test** — probes both engines; `ready` true when the
+  only non-pass blocker is analyzer `warn`; false on analyzer `fail`.
+- **Mock parity** — `mockGetSetupReadiness`/`mockBlocker` learn the tri-state; a
+  mock scenario exercises `warn`.
 - **e2e** — update `e2e/setup-wizard.spec.ts` for the new order/count; drive the
   Ollama pull path with mocked `GET/POST /api/ollama/*`.
 
@@ -262,43 +299,43 @@ add the thin `docs/BACKLOG.md` row.
       Analysis first; "Step N of 7"; summary board reordered, analyzer row can
       render yellow.
 - [ ] Analysis step shows **Local via Ollama** first and **Online via Gemini**
-      second as distinct cards; Ollama section lists all pulled models and offers
-      the suggested pull — no dead-end.
-- [ ] Ollama + ≥1 pulled model (any) → analyzer badge is at least yellow **in the
-      Analysis step** without visiting Defaults; badge is green when a Gemini key
-      is also set.
-- [ ] Exactly one analyzer configured → yellow "no backup", **non-blocking**
-      (`ready` still true); neither → red, blocking (`ready` false).
+      second as distinct cards; Ollama section lists pulled models + offers the
+      suggested pull — no dead-end; bridge line on a pulled analyzer model.
+- [ ] Gemini key set → analyzer badge usable in-step. Ollama model pulled while a
+      Gemini key exists → **green** (backup present). Ollama pulled with **no**
+      key and engine still `gemini` → **red/blocking** (regression guard).
+- [ ] Exactly one analyzer usable+provisioned → **yellow, non-blocking** (`ready`
+      true); resolved engine unusable → **red, blocking** (`ready` false).
 - [ ] Defaults: picking a `':'` tag sets `analysisEngine:'local'`; a Gemini id
       sets `'gemini'`.
+- [ ] "Ollama available" ignores non-analyzer tags (embedding-only install does
+      not read as ready).
 - [ ] Voice step is behavior-identical to today's voice section.
-- [ ] Paired tests for list/pull, tri-state diagnosis, non-blocking gate, and
-      defaults-engine paths; e2e updated.
+- [ ] Paired tests incl. the engine-aware matrix + regression guard; e2e updated.
 - [ ] Admin follow-up issue filed + `docs/BACKLOG.md` row added.
 
 ## Resolve during planning
 
-- **Runtime fallback for "Ollama pulled, no Gemini key, engine still gemini".**
-  Decide whether generation should fall to the available analyzer, or whether the
-  Defaults-dropdown path is sufficient (current assumption). If wiring is wanted,
-  scope it — likely out of fe-49.
-- **Exact `BlockerDiagnosis` type location(s)** and whether `warn` flows through
-  `openapi.yaml` → `api-types.ts` or a hand-written mirror.
-- **`warn` remedy action** for out-of-wizard consumers (status-popover): what it
-  navigates to now that the diagnosis is engine-agnostic.
+- **`ollamaHasAnalyzerModel` predicate** — the exact curated-family match, and
+  whether a user-selected non-curated local tag should also satisfy it.
+- **`warn` remedy action** for out-of-wizard consumers (status-popover) now that
+  the diagnosis carries a `warn` — what it navigates to.
+- **Whether the Ollama bridge line** should also offer a shortcut that jumps to
+  the Defaults step (vs. plain guidance text).
 
 ## Key files
 
-- `src/components/setup/setup-wizard.tsx` (steps, renderStep, summary rows + `warn`)
+- `src/components/setup/setup-wizard.tsx` (steps, renderStep, summary + `warn`)
 - `src/components/setup/step-analysis.tsx` (new), `step-voice.tsx` (new),
   `step-models.tsx` (delete)
 - `src/components/setup/step-defaults.tsx` (engine auto-derive)
-- `src/components/status-popover.tsx` (tri-state render)
-- `server/src/routes/setup-diagnosis.ts` (`diagnoseAnalyzer` rewrite + `warn`),
-  `server/src/routes/setup-readiness.ts` (probe both + `ready` gate)
+- `src/components/status-popover.tsx`, `src/components/blocker-fix-action.tsx`
+  (tri-state render)
+- `src/lib/api.ts` (`BlockerDiagnosis` type + `mockBlocker` + `mockGetSetupReadiness`)
+- `server/src/routes/setup-diagnosis.ts` (`diagnoseAnalyzer` + `warn`),
+  `server/src/routes/setup-readiness.ts` (probe both + `ready` gate) + server type
 - Reuse: `src/components/ollama-install.tsx`, `src/components/model-pull-status.tsx`,
-  `src/store/account-slice.ts`, `src/lib/api.ts`
-- Type: `BlockerDiagnosis` status enum (+ `openapi.yaml` if generated)
+  `src/store/account-slice.ts`
 
 ## Ship notes
 
