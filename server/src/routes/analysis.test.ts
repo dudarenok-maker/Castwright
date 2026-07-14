@@ -1345,7 +1345,7 @@ describe('remapCjkHonorificIds — CJK title-variant rescue before demotion', ()
       makeSentence(3, 2, '地保玛俐恩'), // Constable Maerin → 玛俐恩
       makeSentence(4, 2, '奥杜万'), // already valid — untouched
     ];
-    const result = remapCjkHonorificIds(sentences, roster, validIds, { isCjkBook: true });
+    const result = remapCjkHonorificIds(sentences, roster, validIds, { bookLanguage: 'zh' });
     expect(result.remappedCount).toBe(2);
     expect(result.sentences.map((s) => s.characterId)).toEqual([
       'narrator',
@@ -1366,11 +1366,42 @@ describe('remapCjkHonorificIds — CJK title-variant rescue before demotion', ()
     const validIds = new Set(roster.map((c) => c.id));
     // 烧炭人哈特 (Hart the charcoal-burner) was never rostered by Phase-0.
     const sentences = [makeSentence(1, 3, '烧炭人哈特')];
-    const result = remapCjkHonorificIds(sentences, roster, validIds, { isCjkBook: true });
+    const result = remapCjkHonorificIds(sentences, roster, validIds, { bookLanguage: 'zh' });
     expect(result.remappedCount).toBe(0);
     expect(result.sentences[0].characterId).toBe('烧炭人哈特'); // untouched → reconcile demotes it
     const reconciled = reconcileSentenceCharacterIds(result.sentences, validIds);
     expect(reconciled.demotedCount).toBe(1);
+  });
+
+  it('does NOT over-strip a familiar-prefix orphan into a wrong voice — it stays demoted', () => {
+    /* The silent WRONG-remap vector: 小雀 (Sparrow) must NOT strip to 雀 and
+       mis-map to a DIFFERENT roster character 雀. 小 is not an affix, so the
+       orphan finds no match and is demoted — correct, and safer than a wrong
+       voice. */
+    const roster = [
+      { id: 'narrator', name: 'Narrator' },
+      { id: '雀', name: '雀' }, // a distinct character
+    ];
+    const validIds = new Set(roster.map((c) => c.id));
+    const sentences = [makeSentence(1, 1, '小雀')];
+    const result = remapCjkHonorificIds(sentences, roster, validIds, { bookLanguage: 'zh' });
+    expect(result.remappedCount).toBe(0);
+    expect(result.sentences[0].characterId).toBe('小雀');
+    const reconciled = reconcileSentenceCharacterIds(result.sentences, validIds);
+    expect(reconciled.demotedCount).toBe(1); // demoted to narrator, NOT mis-mapped to 雀
+  });
+
+  it('does NOT over-strip a ja-honorific-shaped zh name (丽君 stays, not → 丽)', () => {
+    // Per-language gating: the ja list (君) never runs on a zh book.
+    const roster = [
+      { id: 'narrator', name: 'Narrator' },
+      { id: '丽', name: '丽' },
+    ];
+    const validIds = new Set(roster.map((c) => c.id));
+    const sentences = [makeSentence(1, 1, '丽君')];
+    const result = remapCjkHonorificIds(sentences, roster, validIds, { bookLanguage: 'zh' });
+    expect(result.remappedCount).toBe(0);
+    expect(result.sentences[0].characterId).toBe('丽君');
   });
 
   it('does not remap when the stripped form is ambiguous (>1 roster entry)', () => {
@@ -1380,19 +1411,19 @@ describe('remapCjkHonorificIds — CJK title-variant rescue before demotion', ()
     ];
     const validIds = new Set(['a', 'b']);
     const sentences = [makeSentence(1, 1, '王')];
-    const result = remapCjkHonorificIds(sentences, roster, validIds, { isCjkBook: true });
+    const result = remapCjkHonorificIds(sentences, roster, validIds, { bookLanguage: 'zh' });
     expect(result.remappedCount).toBe(0);
     expect(result.sentences[0].characterId).toBe('王');
   });
 
-  it('is a byte-identical no-op for a non-CJK book (isCjkBook=false)', () => {
+  it('is a byte-identical no-op for a non-CJK book (bookLanguage not zh/ja)', () => {
     const roster = [{ id: 'oduvan', name: 'Oduvan' }];
     const validIds = new Set(['oduvan', 'narrator']);
     const sentences = [
       makeSentence(1, 1, 'narrator'),
       makeSentence(2, 1, 'master-oduvan'), // an orphan, but non-CJK book → untouched
     ];
-    const result = remapCjkHonorificIds(sentences, roster, validIds, { isCjkBook: false });
+    const result = remapCjkHonorificIds(sentences, roster, validIds, { bookLanguage: 'en' });
     expect(result.remappedCount).toBe(0);
     expect(result.sentences).toBe(sentences); // same reference — no allocation
   });
@@ -1406,7 +1437,7 @@ describe('remapCjkHonorificIds — CJK title-variant rescue before demotion', ()
     ];
     const seen: string[] = [];
     const result = remapCjkHonorificIds(sentences, roster, validIds, {
-      isCjkBook: true,
+      bookLanguage: 'zh',
       onRemap: ({ originalId, toId }) => seen.push(`${originalId}->${toId}`),
     });
     expect(result.remappedCount).toBe(2);

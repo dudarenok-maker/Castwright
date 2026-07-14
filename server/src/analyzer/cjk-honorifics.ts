@@ -14,30 +14,42 @@
 
    This module strips a CONSERVATIVE, documented set of leading role-titles and
    trailing honorifics so a title-variant can be matched back to its roster
-   entry. The safety net is the caller's UNAMBIGUOUS-match rule: normalization
-   only ever REMAPS when the stripped form resolves to exactly one roster
-   entry — never when it maps to zero (a genuinely-missed speaker stays
-   demoted) or to more than one (never guess). Over-stripping therefore cannot
-   silently merge two distinct people: the ambiguity guard refuses the remap.
+   entry. Two safety rails:
+
+   1. PER-LANGUAGE gating. The affix lists are applied by book language only —
+      the zh lists for a `zh` book, the ja list for a `ja` book — never the
+      union. Without this, single-character ja honorifics (君/氏/様/殿) would
+      over-strip Chinese given names (丽君 → 丽; 君 is a common Chinese name
+      character), and vice versa.
+
+   2. UNAMBIGUOUS-match remapping (enforced by the caller). Normalization only
+      ever REMAPS when the stripped form resolves to exactly one roster entry.
+      This blocks >1-match collisions but does NOT protect against a
+      coincidental single match to the WRONG person, so the affix lists are
+      kept deliberately narrow: only multi-character occupation titles as
+      leading affixes (烧炭人 / 地保 / 货郎), never the single-character
+      familiar prefixes 老/小/阿 which are integral name syllables (小雀 =
+      Sparrow, 阿强) and would silently mis-remap.
 
    Deliberately NOT a general romanization/translation step — it only bridges
    title-variants of the SAME CJK name. Latin ids in a CJK book are left
-   untouched (the caller gates on `hasCjkChar`). */
+   untouched (`hasCjkChar` gate). */
 
 import { hasCjkChar } from '../util/cjk.js';
 
-/** True for the CJK book languages this normalization targets. `lang` is the
-    primary subtag as produced by `normaliseBookLanguage` (e.g. 'zh', 'ja'). */
-export function isCjkLanguage(lang: string): boolean {
+/** The CJK book languages this normalization targets. `lang` is the primary
+    subtag as produced by `normaliseBookLanguage` (e.g. 'zh', 'ja'). */
+export type CjkLang = 'zh' | 'ja';
+
+/** True for the CJK book languages this normalization targets. */
+export function isCjkLanguage(lang: string): lang is CjkLang {
   return lang === 'zh' || lang === 'ja';
 }
 
-/* Trailing honorifics / titles (zh + ja) that fuse to the END of a name.
+/* Chinese trailing honorifics / titles that fuse to the END of a name.
    Longest-first so 老爷子 strips before 老爷, 掌柜的 before 掌柜. Conservative:
-   only forms that are unambiguously an appended title, never a name syllable
-   in normal use. */
-const TRAILING_TITLES: readonly string[] = [
-  // Chinese — respectful / role
+   only forms that are unambiguously an appended title. */
+const ZH_TRAILING_TITLES: readonly string[] = [
   '老爷子',
   '掌柜的',
   '师傅',
@@ -64,31 +76,44 @@ const TRAILING_TITLES: readonly string[] = [
   '殿下',
   '公公',
   '婆婆',
-  // Japanese — honorific suffixes
+];
+
+/* Chinese leading role-titles that fuse to the START of a name. ONLY
+   multi-character occupation/office titles — the single-character familiar
+   prefixes 老/小/阿 are deliberately excluded (they are integral name
+   syllables and would silently mis-remap; the unique-match guard does not
+   protect a coincidental wrong single match). Longest-first. */
+const ZH_LEADING_TITLES: readonly string[] = ['烧炭人', '地保', '货郎'];
+
+/* Japanese trailing honorific suffixes. Applied only for a `ja` book (see
+   per-language gating) — several are single-character (様/氏/君/殿) and would
+   over-strip Chinese names if the union were applied to a zh book.
+   Longest-first. */
+const JA_TRAILING_TITLES: readonly string[] = [
   'さん',
   'ちゃん',
   'くん',
   'さま',
+  '先生',
   '様',
   '氏',
   '君',
   '殿',
-  '先生',
 ];
 
-/* Leading role-titles (zh) that fuse to the START of a name — occupation /
-   office titles observed fused to names in the corpus, plus the familiar
-   prefixes 老/小/阿. Longest-first. */
-const LEADING_TITLES: readonly string[] = [
-  '烧炭人',
-  '地保',
-  '货郎',
-  '老',
-  '小',
-  '阿',
-];
+/* Japanese has no fused leading role-titles in this corpus. */
+const JA_LEADING_TITLES: readonly string[] = [];
 
-/** Strip leading role-titles and trailing honorifics from a fused CJK name.
+function trailingTitlesFor(lang: CjkLang): readonly string[] {
+  return lang === 'ja' ? JA_TRAILING_TITLES : ZH_TRAILING_TITLES;
+}
+
+function leadingTitlesFor(lang: CjkLang): readonly string[] {
+  return lang === 'ja' ? JA_LEADING_TITLES : ZH_LEADING_TITLES;
+}
+
+/** Strip leading role-titles and trailing honorifics from a fused CJK name,
+    using ONLY the affix lists for `lang` (never the zh+ja union).
 
     Conservative: a title is only stripped when what remains is non-empty AND
     still contains a CJK character (so a bare title like `师傅` or `narrator`
@@ -99,12 +124,12 @@ const LEADING_TITLES: readonly string[] = [
     NOTE: normalization alone does NOT establish identity — two people can
     normalize to the same core. Callers MUST only act on a unique roster match.
     Exported for unit testing. */
-export function stripCjkHonorifics(name: string): string {
+export function stripCjkHonorifics(name: string, lang: CjkLang): string {
   if (!name || !hasCjkChar(name)) return name;
   let core = name.trim();
 
   // Trailing title (one match, longest-first).
-  for (const t of TRAILING_TITLES) {
+  for (const t of trailingTitlesFor(lang)) {
     if (core.length > t.length && core.endsWith(t)) {
       const rest = core.slice(0, core.length - t.length);
       if (hasCjkChar(rest)) {
@@ -115,7 +140,7 @@ export function stripCjkHonorifics(name: string): string {
   }
 
   // Leading title (one match, longest-first).
-  for (const t of LEADING_TITLES) {
+  for (const t of leadingTitlesFor(lang)) {
     if (core.length > t.length && core.startsWith(t)) {
       const rest = core.slice(t.length);
       if (hasCjkChar(rest)) {
@@ -129,21 +154,23 @@ export function stripCjkHonorifics(name: string): string {
 }
 
 /** Normalization key used to compare a fused name against a roster entry:
-    honorific-stripped. Empty/blank for non-CJK so the caller can skip it. */
-function honorificKey(name: string): string {
+    honorific-stripped for `lang`. Empty/blank for non-CJK so the caller can
+    skip it. */
+function honorificKey(name: string, lang: CjkLang): string {
   if (!name || !hasCjkChar(name)) return '';
-  return stripCjkHonorifics(name);
+  return stripCjkHonorifics(name, lang);
 }
 
 /** Build a lookup from honorific-stripped key → set of roster ids that carry
-    that key (via their id, name, or any alias). A key mapping to >1 id is
-    ambiguous and must not be used to remap. */
+    that key (via their id, name, or any alias), normalized for `lang`. A key
+    mapping to >1 id is ambiguous and must not be used to remap. */
 export function buildCjkHonorificIndex(
   characters: ReadonlyArray<{ id: string; name?: string; aliases?: string[] }>,
+  lang: CjkLang,
 ): Map<string, Set<string>> {
   const index = new Map<string, Set<string>>();
   const add = (raw: string | undefined, id: string): void => {
-    const key = honorificKey(raw ?? '');
+    const key = honorificKey(raw ?? '', lang);
     if (!key) return;
     let set = index.get(key);
     if (!set) {
@@ -161,14 +188,16 @@ export function buildCjkHonorificIndex(
 }
 
 /** Resolve an orphaned (not-in-roster) CJK attribution id to a UNIQUE roster
-    id via honorific-stripped matching, or return null when the stripped form
-    matches zero or more-than-one roster entries (never guess). Only attempts
-    CJK ids — a latin orphan in a CJK book returns null. */
+    id via honorific-stripped matching (normalized for `lang`), or return null
+    when the stripped form matches zero or more-than-one roster entries (never
+    guess). Only attempts CJK ids — a latin orphan in a CJK book returns null.
+    `lang` MUST match the language the index was built with. */
 export function resolveCjkHonorificId(
   orphanId: string,
   index: Map<string, Set<string>>,
+  lang: CjkLang,
 ): string | null {
-  const key = honorificKey(orphanId);
+  const key = honorificKey(orphanId, lang);
   if (!key) return null;
   const matches = index.get(key);
   if (!matches || matches.size !== 1) return null;

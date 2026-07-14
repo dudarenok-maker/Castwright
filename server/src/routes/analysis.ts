@@ -1118,23 +1118,26 @@ export function reconcileSentenceCharacterIds(
    This remaps an orphan id to its roster id ONLY on an unambiguous
    honorific-stripped match (see resolveCjkHonorificId). A genuinely-missed
    speaker (0 matches) or an ambiguous one (>1) is left untouched so reconcile
-   still demotes it — we never invent identity. `isCjkBook` gates the whole
-   pass off for en/de/ru/es/fr so their behaviour is byte-identical. Returns a
-   new array; never mutates the input. Exported for unit testing. */
+   still demotes it — we never invent identity. `bookLanguage` gates the whole
+   pass off for anything but zh/ja (byte-identical for en/de/ru/es/fr) AND
+   selects the per-language affix list (never the zh+ja union — see
+   cjk-honorifics.ts). Returns a new array; never mutates the input. Exported
+   for unit testing. */
 export function remapCjkHonorificIds(
   sentences: SentenceOutput[],
   characters: ReadonlyArray<{ id: string; name?: string; aliases?: string[] }>,
   validIds: Set<string>,
   options: {
-    isCjkBook: boolean;
+    bookLanguage: string;
     onRemap?: (info: { sentence: SentenceOutput; originalId: string; toId: string }) => void;
   },
 ): { sentences: SentenceOutput[]; remappedCount: number; remappedByOriginalId: Map<string, number> } {
   const remappedByOriginalId = new Map<string, number>();
-  if (!options.isCjkBook) {
+  if (!isCjkLanguage(options.bookLanguage)) {
     return { sentences, remappedCount: 0, remappedByOriginalId };
   }
-  const index = buildCjkHonorificIndex(characters);
+  const lang = options.bookLanguage;
+  const index = buildCjkHonorificIndex(characters, lang);
   let remappedCount = 0;
   const out: SentenceOutput[] = [];
   for (const s of sentences) {
@@ -1142,7 +1145,7 @@ export function remapCjkHonorificIds(
       out.push(s);
       continue;
     }
-    const toId = resolveCjkHonorificId(s.characterId, index);
+    const toId = resolveCjkHonorificId(s.characterId, index, lang);
     if (toId !== null && validIds.has(toId)) {
       remappedCount += 1;
       remappedByOriginalId.set(
@@ -4329,7 +4332,7 @@ export async function runMainAnalyzerJob(
        back to their roster id before demotion, so a Phase-0/Phase-1 title
        disagreement can't false-trip the drift gate. No-op for non-CJK. */
     const remappedForCjk = remapCjkHonorificIds(folded.sentences, characters, phase1ValidIds, {
-      isCjkBook: isCjkLanguage(bookLanguage),
+      bookLanguage,
       onRemap: ({ sentence, originalId, toId }) => {
         log(
           1,
@@ -5439,7 +5442,7 @@ export async function runSubsetAnalyzerJob(
     const subsetValidIds = new Set(enriched.map((c) => c.id));
     /* CJK title-variant rescue, mirroring the main route (see remapCjkHonorificIds). */
     const subsetRemappedForCjk = remapCjkHonorificIds(folded.sentences, enriched, subsetValidIds, {
-      isCjkBook: isCjkLanguage(bookLanguage),
+      bookLanguage,
       onRemap: ({ sentence, originalId, toId }) => {
         log(
           1,
