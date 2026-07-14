@@ -187,6 +187,14 @@ import throws, via `/health`), and `weights-missing` (weights dir empty). We do 
 invent a "partially corrupt weights" signal we have no probe for. This limit is
 documented rather than papered over.
 
+**`packageBroken` is a sidecar-up-only signal.** It comes from `/health`, so at
+first-run — when the sidecar is typically down — it is unavailable and defaults to
+`false`. An engine whose package *would* fail to import reads as usable-from-disk
+until the sidecar is up. This is inherent (not a first-run guarantee); the plan must
+state it so the two signals aren't conflated. (`sidecar-health.ts` also folds
+`qwenLoaded` into `qwen_package_installed` — a plan-time wrinkle to handle when
+mapping the Qwen live flag.)
+
 ### Client
 
 - **The install cards become controlled.** `KokoroInstall`, `VenvBootstrap`,
@@ -376,7 +384,10 @@ The codebase uses "engine" for two different things, and the recommendation must
 target the right one:
 
 - **Sidecar voice engine** = `kokoro | qwen | coqui` (what `models-status.engines`
-  keys on; what `engineForModelKey(modelKey)` returns).
+  keys on). Note `engineForModelKey(modelKey)` returns the *broader* set (incl.
+  `piper` / `gemini`); the recommendation's handoff maps its picked engine → model-key
+  directly and does not depend on that helper — it's cited only as the conceptual
+  bridge.
 - **Account `defaultTtsEngine`** = `'local' | 'gemini'` — the UI's provider *tier*
   (on-device vs cloud), NOT a kokoro/qwen/coqui id (`src/lib/tts-models.ts:12`).
 
