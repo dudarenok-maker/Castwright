@@ -18,6 +18,7 @@
 - **The Android app now stretches out on a tablet.** On a tablet or an unfolded foldable, Castwright's companion app shows your library and the player side by side, instead of one blown-up phone screen — tap a book on the left and it starts playing on the right, switch between books without losing your place, and turn the device however you like; your audiobook keeps playing right through the rotation. Bigger cover art fills the extra room — with comfortable margins so covers never run to the very edge of the screen — and on a phone everything looks exactly as it did before.
 - **Castwright now supports Chinese and Japanese books.** Any book, performed by a full cast, now stretches to two of the world's most-spoken languages — upload a Chinese or Japanese manuscript and it's no longer turned away at the door. For the cleanest read on who's speaking, we recommend picking a local Qwen analysis model in Advanced Settings for these languages for now.
 - **Find help faster.** Troubleshooting is now sorted into clear, searchable sections instead of one long list — and Help and Admin link straight out to the matching guide in the wiki.
+- **Phone & tablet pairing, now self-healing.** Castwright's setup now checks the local certificate that powers listening on your phone or tablet — and fixes it in one click if it's missing, so pairing never silently stays off.
 
 # Castwright 1.13.0
 
