@@ -1,6 +1,7 @@
 import { it, expect, vi, beforeEach } from 'vitest';
 import { requireSameOrigin } from './csrf-origin.js';
 import { enumerateLanUrls } from './routes/export-lan.js';
+import { setLanRuntime } from './lan-runtime.js';
 
 function mk(method: string, headers: Record<string, string>, ip = '192.168.1.9') {
   return { method, headers, ip, socket: { remoteAddress: ip } } as any;
@@ -9,7 +10,10 @@ function res() {
   return { statusCode: 200, body: undefined as unknown, status(c: number){this.statusCode=c;return this;}, json(b: unknown){this.body=b;return this;} } as any;
 }
 
-beforeEach(() => { process.env.LAN_HTTPS_PORT = '8443'; });
+beforeEach(() => {
+  process.env.LAN_HTTPS_PORT = '8443';
+  setLanRuntime({ httpsActive: true, port: 8443 });
+});
 
 it('passes a GET regardless of origin', () => {
   const next = vi.fn();
@@ -160,4 +164,31 @@ it('403s a cookie POST from castwright.dev.local when NODE_ENV=production (round
   } finally {
     process.env.NODE_ENV = originalNodeEnv;
   }
+});
+
+it('passes a cookie POST from a LAN origin on the SHIFTED (auto-rebound) port', () => {
+  // srv-60: the server auto-shifted 8443 → 8444; a device paired on 8444 must
+  // not be CSRF-rejected. allowedOrigins() reads getLanRuntime().port, so
+  // seeding the runtime to the shifted port allows that origin.
+  setLanRuntime({ httpsActive: true, port: 8444 });
+  const { urls } = enumerateLanUrls(8444, 'https'); // ['https://<live-nic-ip>:8444', ...]
+  if (urls.length === 0) return; // no non-loopback NIC in this env — nothing to assert
+  const next = vi.fn();
+  const r = res();
+  requireSameOrigin(mk('POST', { cookie: '__Host-cw_lan=x', origin: urls[0] }), r, next);
+  expect(next).toHaveBeenCalled();
+  expect(r.statusCode).toBe(200);
+});
+
+it('403s a cookie POST on the OLD port after an auto-rebind shifted it', () => {
+  setLanRuntime({ httpsActive: true, port: 8444 }); // shifted; 8443 is stale
+  const next = vi.fn();
+  const r = res();
+  requireSameOrigin(
+    mk('POST', { cookie: '__Host-cw_lan=x', origin: 'https://localhost:8443' }),
+    r,
+    next,
+  );
+  expect(next).not.toHaveBeenCalled();
+  expect(r.statusCode).toBe(403);
 });
