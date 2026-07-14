@@ -180,8 +180,11 @@ export function ManuscriptView({
       if (scriptReviewHydrationGenerationRef.current === generation) setScriptReviewHydrating(false);
     });
     // Intentionally no cleanup/abort: hydration is a one-shot reconciliation
-    // per mount, and the sticky job registry (server Task 2) makes a
-    // duplicate in-flight POST from attachToRunningReview safe to abandon.
+    // per mount, and a duplicate in-flight POST from attachToRunningReview is
+    // safe to abandon in BOTH modes — real backend via the sticky server job
+    // registry (server Task 2), and mock mode via the in-memory
+    // inFlightMockReviews dedup registry in src/lib/api.ts (#1496), which joins
+    // the existing timeline instead of starting a second racing one.
   }, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
   /* Sentences are the single source of truth in Redux. All edits go via
      dispatch(manuscriptActions.*) — no local copy. */

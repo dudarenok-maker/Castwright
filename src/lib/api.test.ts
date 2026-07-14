@@ -27,6 +27,7 @@ import {
   mockReviewScript,
   mockCancelScriptReview,
   mockAttachScriptReview,
+  _resetMockScriptReviewInFlight,
   ReviewScriptError,
   mockGetSidecarHealth,
   parseSubstagePhaseEvent,
@@ -612,6 +613,7 @@ describe('mock-mode script-review cancellation (fs-58 follow-up #1481)', () => {
   const cancelBookId = 'book-mock-cancel';
 
   beforeEach(() => {
+    _resetMockScriptReviewInFlight();
     sessionStorage.clear();
   });
 
@@ -720,6 +722,118 @@ describe('mock-mode script-review cancellation (fs-58 follow-up #1481)', () => {
     // Only the 85% tick (the one genuinely ahead of the seeded 50%) fires —
     // the 25% and 50% ticks are both skipped, so the pill never regresses.
     expect(phases.map((p) => p.progress)).toEqual([0.85]);
+  });
+});
+
+describe('mock-mode script-review dedup against a concurrent in-flight timeline (#1496)', () => {
+  beforeEach(() => {
+    _resetMockScriptReviewInFlight();
+    sessionStorage.clear();
+  });
+
+  it('a concurrent attach joins the single in-flight timeline (dedup) and replays already-emitted ops, without doubling the ledger', async () => {
+    vi.useFakeTimers();
+    try {
+      const bookId = 'book-mock-dedup';
+      const aOps: Array<{ chapterId: number; ops: unknown[] }> = [];
+      const aPromise = mockReviewScript(bookId, { onOps: (e) => aOps.push(e) });
+
+      // 60+500+500+400 = 1460ms reaches the terminal op block; ch3 + ch1 ops
+      // and their checkpoints emit synchronously, then the run suspends in the
+      // 200ms progressive-emission wait. Advancing to 1500 lands the joiner
+      // inside that window with ops already accumulated on the registry entry.
+      await vi.advanceTimersByTimeAsync(1500);
+
+      const bOps: Array<{ chapterId: number; ops: unknown[] }> = [];
+      const bCheckpoints: Array<{ chapterId: number; version: number }> = [];
+      const bPromise = mockAttachScriptReview(bookId, {
+        onOps: (e) => bOps.push(e),
+        onCheckpoint: (e) => bCheckpoints.push(e),
+      });
+
+      // Replay is synchronous on attach: the joiner already holds the pre-join
+      // ops/checkpoints BEFORE any further timer advance.
+      expect(bOps.flatMap((e) => e.ops).length).toBeGreaterThan(0);
+      expect(bCheckpoints.length).toBeGreaterThan(0);
+
+      await vi.advanceTimersByTimeAsync(300); // finish the timeline
+      const aResult = await aPromise;
+      const bResult = await bPromise;
+
+      // One timeline: both callers see the same single result.
+      expect(aResult).toEqual({ reviewedChapters: 1, totalOps: 5 });
+      expect(bResult).toEqual(aResult);
+
+      // Both callers end with the COMPLETE op set (assert the set/count, NOT
+      // the order of onOps calls — replay iterates chapter keys ascending).
+      expect(aOps.flatMap((e) => e.ops)).toHaveLength(5);
+      expect(bOps.flatMap((e) => e.ops)).toHaveLength(5);
+
+      // Ledger reflects exactly ONE canned run (a second racing timeline would
+      // double ch3 to 6 ops): ch3 = 3 ops, ch1 = 2 ops.
+      const state = await mockGetScriptReviewState(bookId);
+      if (state.kind !== 'ledger') throw new Error('expected ledger');
+      expect((state.entries['3'].ops as unknown[]).length).toBe(3);
+      expect((state.entries['1'].ops as unknown[]).length).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a cancel evicts the run by entry-identity, so a fresh run cannot resurrect the cancelled one via the shared sessionStorage flag', async () => {
+    vi.useFakeTimers();
+    try {
+      const bookId = 'book-mock-cancel-identity';
+      const run1 = mockReviewScript(bookId, {});
+      // Pre-empt Node's unhandledRejection detector: run1 rejects from deep
+      // inside the vi.advanceTimersByTimeAsync(600) call below, before the
+      // real `try { await run1 }` handler further down gets attached. This
+      // no-op catch registers a handler immediately so the rejection is
+      // never observed as unhandled; the real assertion still runs via the
+      // later try/catch on the same promise.
+      run1.catch(() => {});
+      await vi.advanceTimersByTimeAsync(100); // run1 past its sync prefix, suspended mid-timeline
+
+      const cancelResult = await mockCancelScriptReview(bookId);
+      expect(cancelResult.cancelled).toBe(true);
+
+      // Fresh run: registry was emptied by cancel, so this starts a NEW entry
+      // and re-writes sessionStorage.running non-null.
+      const run2 = mockReviewScript(bookId, {});
+
+      // run1's next throwIfCancelled sees run2's entry (not its own) and throws
+      // — it must NOT keep running just because running is non-null again.
+      await vi.advanceTimersByTimeAsync(600);
+      let caught: unknown;
+      try {
+        await run1;
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(ReviewScriptError);
+      expect((caught as InstanceType<typeof ReviewScriptError>).code).toBe('cancelled');
+
+      // run2 completes independently.
+      await vi.advanceTimersByTimeAsync(2000);
+      const r2 = await run2;
+      expect(r2).toEqual({ reviewedChapters: 1, totalOps: 5 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('with an empty registry but a persisted running job (post-reload), attach starts a resume run and completes without regressing the pill', async () => {
+    const bookId = 'book-mock-reload-resume';
+    sessionStorage.setItem(
+      mockScriptReviewKey(bookId),
+      JSON.stringify({ running: { lastPhase: { progress: 0.85, label: 'Reviewing script' } }, entries: {} }),
+    );
+    const phases: Array<{ progress: number }> = [];
+    const result = await mockAttachScriptReview(bookId, { onPhase: (p) => phases.push(p) });
+    expect(result).toEqual({ reviewedChapters: 1, totalOps: 5 });
+    // Seeded at 0.85: every phase tick at or below the seed is skipped, so the
+    // pill never regresses (no tick fires at all here).
+    expect(phases).toEqual([]);
   });
 });
 
