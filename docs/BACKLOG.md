@@ -107,11 +107,17 @@ _Full detail + acceptance:_ [#461](https://github.com/dudarenok-maker/Castwright
 - _Benefit:_ Extends language breadth to the two highest-population CJK languages — a large slice of the "rivals show 1,158 languages" gap that Latin alone can't close.
 _Full detail + acceptance:_ [#1004](https://github.com/dudarenok-maker/Castwright/issues/1004).
 
-#### `fs-61` — capture zh/ja Coalfall demo-book samples (sample-coverage guard) ([#1600](https://github.com/dudarenok-maker/Castwright/issues/1600))
+#### `fs-61` — backfill designed voices + covers onto the zh/ja Coalfall placeholder samples ([#1600](https://github.com/dudarenok-maker/Castwright/issues/1600))
 
-- _What:_ `language-sample-coverage.test.ts` (added in #1568) requires every `supported:true` registry language to ship a runnable Coalfall demo book under `samples/`. fs-59 W5 flips zh/ja to `supported:true` without a matching sample, tripping the guard — needs the real analyzer + Qwen VoiceDesign pipeline on a GPU box (per-character voices, cover slimming, README) to close, same bar as the existing `-de`/`-es`/`-fr`/`-ru` samples.
-- _Benefit:_ Keeps the fs-61 demo-book coverage invariant real and unblocks `npm run test:server`/CI going fully green on newly-supported languages.
+- _What:_ fs-59 W5 shipped minimal placeholder `samples/the-coalfall-commission-{zh,ja}/` (manuscript + state.json + a real 13-character cast.json with empty `overrideTtsVoices`) so the `language-sample-coverage.test.ts` guard (#1568) passes. They carry **no designed voices** yet. This item runs the Qwen VoiceDesign pipeline on a GPU box to design per-character voices onto the existing placeholders and slims each cover, bringing zh/ja up to the same bar as the `-de`/`-es`/`-fr`/`-ru` samples.
+- _Benefit:_ Gives the CJK demo books real, listenable voices so a zh/ja user gets a runnable demo, not just a roster — completing the fs-61 per-language sample set.
 _Full detail + acceptance:_ [#1600](https://github.com/dudarenok-maker/Castwright/issues/1600).
+
+#### `fe` — update stale zh/ja "unsupported" labels/comments after fs-59 W5 flip ([#1605](https://github.com/dudarenok-maker/Castwright/issues/1605))
+
+- _What:_ fs-59 W5 flipped zh/ja to `supported:true` and they're Coqui-eligible, so they correctly take the Coqui soft-gate path — but frontend comments/copy in `voice-readiness-selectors.ts`, `profile-drawer.tsx`, and `voice-readiness-gate.tsx` still describe zh as "still-unsupported" and list the soft-gate set as only "ru/es/fr/de". Copy-only; behavior is already correct (data-driven off `eligibleTtsEngines`).
+- _Benefit:_ Keeps the frontend comments honest so a reader isn't misled into thinking zh/ja are hard-blocked.
+_Full detail + acceptance:_ [#1605](https://github.com/dudarenok-maker/Castwright/issues/1605).
 
 #### `fs-10` — Render the chapter-title segment on the Listen view timeline ([#412](https://github.com/dudarenok-maker/Castwright/issues/412))
 

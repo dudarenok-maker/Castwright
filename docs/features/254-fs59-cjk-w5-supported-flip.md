@@ -6,14 +6,17 @@ owner: null
 
 # 254 — fs-59 W5: zh/ja `supported:true` flip (CJK language support)
 
-> Status: KNOWN: operational dependency — the registry flip + text pipeline are
-> code-complete and tested; the fs-61 per-language demo-book coverage guard
-> (`language-sample-coverage.test.ts`, from #1568) is red for zh/ja pending a
-> GPU-backed sample capture, tracked separately as `fs-61` [#1600](https://github.com/dudarenok-maker/Castwright/issues/1600).
+> Status: active — the registry flip + text pipeline are code-complete and
+> tested, and minimal placeholder `samples/the-coalfall-commission-{zh,ja}/`
+> ship so the fs-61 coverage guard (`language-sample-coverage.test.ts`, from
+> #1568) passes. The placeholders carry a real 13-character roster but no
+> designed voices yet; designed-voice + cover backfill is tracked as `fs-61`
+> [#1600](https://github.com/dudarenok-maker/Castwright/issues/1600).
 > Key files: `server/src/tts/language-registry.ts`, `server/src/tts/language-registry.test.ts`,
 > `server/src/tts/detect-language.ts`, `server/src/tts/detect-language.test.ts`,
 > `server/src/tts/language.test.ts`, `server/src/routes/import.test.ts`,
-> `server/src/__fixtures__/the-coalfall-commission.{zh,ja}.md`
+> `server/src/__fixtures__/the-coalfall-commission.{zh,ja}.md`,
+> `samples/the-coalfall-commission-{zh,ja}/`
 > URL surface: confirm-metadata language selector (built from `supportedLanguages()`); the rest is the standard analyze→generate→export pipeline.
 > OpenAPI ops: `POST /api/import`, `POST /api/manuscripts/{id}/analysis`, `PUT /api/books/{bookId}/state`, `POST /api/books/{bookId}/cast/design`, `POST /api/books/{bookId}/generation`, `POST /api/books/{bookId}/exports`
 
@@ -35,7 +38,7 @@ tests that pin "zh/ja not yet supported" moving to "supported".
 | W4/W4b | Coqui XTTS eligibility for zh/ja (`zh`→`zh-cn` language-code map) | ✅ merged (#1585) |
 | W2 follow-up | CJK standalone-heading `\b` gap fix, unified CJK regexes | ✅ merged (#1597) |
 | **W5** | **`supported:true` flip** | **this plan** |
-| — | fs-61 zh/ja demo-book sample capture (coverage guard) | ⏸️ follow-up, [#1600](https://github.com/dudarenok-maker/Castwright/issues/1600) |
+| — | fs-61 zh/ja designed-voice + cover backfill onto the placeholder samples | ⏸️ follow-up, [#1600](https://github.com/dudarenok-maker/Castwright/issues/1600) |
 | — | CJK-aware id reconciliation (title-fusion orphan-demotion) | 🔧 in progress, parallel PR `fix/server-cjk-id-reconciliation` |
 | — | fs-70: XTTS languages beyond Qwen's five | ⏸️ deferred, [#1303](https://github.com/dudarenok-maker/Castwright/issues/1303) |
 
@@ -124,24 +127,36 @@ directly; this plan does not duplicate that work.
    no hardcoded language list anywhere.
 3. `fs-61`'s sample-coverage guard (`language-sample-coverage.test.ts`,
    #1568) requires every `supported:true` registry language to ship a
-   runnable Coalfall demo book under `samples/`. This flip trips that guard
-   for zh/ja — tracked as a follow-up, not fixed here (see below).
+   runnable Coalfall sample under `samples/`. This flip satisfies that guard
+   for zh/ja via the minimal placeholder samples described below.
 
-## CJK demo books (fixtures)
+## CJK demo books (samples + fixtures)
 
-Full two-chapter zh/ja translations of *The Coalfall Commission* are committed
-alongside the existing English/Russian/Spanish/French/German fixtures, for the
-language-detection and future eval fixtures:
+**Minimal placeholder samples ship in this PR** so the fs-61 coverage guard
+stays green with zh/ja now `supported:true`:
+
+- `samples/the-coalfall-commission-zh/` and `samples/the-coalfall-commission-ja/`
+  — each carries `manuscript.md` (copied from the fixture translations below),
+  a `state.json` modeled on the `-de` sample (language, the 3-chapter split
+  with the framing chapter excluded, a deterministic cover gradient), and a
+  **real 13-character `cast.json`** analysed from the manuscript via the app
+  (localized narrator `旁白` / `語り手` plus the full Coalfall roster).
+- These are **placeholders, not finished demo books**: every character's
+  `overrideTtsVoices` is `{}` — **no designed voices yet**, and no slimmed
+  cover. #1600 is the **designed-voice + cover backfill onto these existing
+  placeholders** (run the Qwen VoiceDesign pipeline on a GPU box, then slim
+  each cover), *not* "add a missing sample."
+
+Full two-chapter zh/ja translations of *The Coalfall Commission* are also
+committed as source-text fixtures alongside the en/ru/es/fr/de ones:
 
 - `server/src/__fixtures__/the-coalfall-commission.zh.md`
 - `server/src/__fixtures__/the-coalfall-commission.ja.md`
 
-These are source-text fixtures only (mirroring `the-coalfall-commission.ru.md`),
-**not** the `samples/the-coalfall-commission-<lang>/` demo-book directories
-that ship with cast.json + designed voices (the `-de`/`-es`/`-fr`/`-ru`
-pattern) — capturing those real demo books requires the analyzer + Qwen
-VoiceDesign pipeline on a GPU box and is out of scope for this flip. See
-[#1600](https://github.com/dudarenok-maker/Castwright/issues/1600).
+These mirror `the-coalfall-commission.ru.md` and are the source the samples'
+`manuscript.md` was copied from. They are also available to wire a future CJK
+language-detection or e2e fixture the same way `.ru.md` backs the
+language-detection tests.
 
 ## Test plan
 
@@ -162,10 +177,11 @@ VoiceDesign pipeline on a GPU box and is out of scope for this flip. See
   updated to reflect `supported:true`.
 - Vitest server (`server/src/routes/import.test.ts`) — `POST /api/import`
   candidate `supportedLanguages` list now includes zh/ja.
-- **Known red, tracked separately:** `server/src/tts/language-sample-coverage.test.ts`
-  — 2 failing assertions (zh, ja) until the fs-61 demo-book capture
-  ([#1600](https://github.com/dudarenok-maker/Castwright/issues/1600)) lands.
-  This is a deliberate coverage guard, not a flake — do not skip it.
+- **Green:** `server/src/tts/language-sample-coverage.test.ts` passes for
+  zh/ja — the minimal placeholder samples (see above) satisfy the guard's
+  "every `supported:true` language ships a runnable Coalfall sample" rule.
+  Designed voices + slimmed covers are the fs-61 backfill
+  ([#1600](https://github.com/dudarenok-maker/Castwright/issues/1600)).
 - **No new e2e** — the confirm selector is already covered by the fs-2
   language e2e; flipping a flag adds an option, not a new seam.
 
@@ -181,8 +197,9 @@ a local Qwen analyzer model per the operator recommendation above.
 
 ## Out of scope
 
-- **fs-61 zh/ja demo-book capture** (full `samples/the-coalfall-commission-{zh,ja}/`
-  with designed per-character voices) — [#1600](https://github.com/dudarenok-maker/Castwright/issues/1600).
+- **fs-61 zh/ja designed-voice + cover backfill** — the placeholder samples
+  ship here with empty `overrideTtsVoices`; designing per-character Qwen voices
+  and slimming the covers is [#1600](https://github.com/dudarenok-maker/Castwright/issues/1600).
 - **CJK-aware id reconciliation** (title-fusion orphan-demotion) — addressed in
   a parallel PR (`fix/server-cjk-id-reconciliation`), not this plan.
 - **fs-70** (XTTS languages beyond Qwen's five, e.g. Korean/Arabic/Hindi) —
