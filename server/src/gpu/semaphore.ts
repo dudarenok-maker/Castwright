@@ -83,6 +83,9 @@ export class GpuSemaphore {
           const idx = this.queue.indexOf(waiter);
           if (idx !== -1) this.queue.splice(idx, 1);  // remove: never granted, no tokens to free
           reject(new DOMException('GpuSemaphore acquire aborted', 'AbortError'));
+          // Removing a head waiter can unblock a smaller follower that now fits;
+          // grant it now rather than stalling it until an unrelated release().
+          this.drain();
         };
         signal.addEventListener('abort', waiter.onAbort, { once: true });
       }

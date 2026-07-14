@@ -375,4 +375,25 @@ describe('GpuSemaphore — abortable acquire', () => {
     release();
     expect(sem.inFlight).toBe(0);
   });
+
+  it('aborting a head waiter immediately grants a smaller follower that now fits', async () => {
+    const sem = new GpuSemaphore(3);
+    const held = await sem.acquire(2);                     // used=2
+    const ac = new AbortController();
+    const head = sem.acquire(2, { signal: ac.signal });   // queues at head (2+2 > 3)
+    let followerGranted = false;
+    const follower = sem.acquire(1).then((rel) => { followerGranted = true; return rel; }); // queues behind
+    expect(sem.queueDepth).toBe(2);
+
+    ac.abort();                                            // head removed → follower (2+1 <= 3) must be granted NOW,
+    await expect(head).rejects.toMatchObject({ name: 'AbortError' }); // not stalled until `held` releases
+    const relFollower = await follower;                   // resolves without releasing `held`
+    expect(followerGranted).toBe(true);
+    expect(sem.inFlight).toBe(2);                          // held + follower
+    expect(sem.usedTokens).toBe(3);
+
+    relFollower();
+    held();
+    expect(sem.inFlight).toBe(0);
+  });
 });

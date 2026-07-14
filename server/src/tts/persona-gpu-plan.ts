@@ -26,12 +26,9 @@ export class GpuBusyForPersonaError extends Error {
     inside the hold and refuses if a render is active. Releases the budget in
     `finally` so a refused evict never wedges the GPU. */
 export async function unloadResidentSidecar(signal?: AbortSignal): Promise<void> {
-  // Conditional: the no-signal path stays a literal 1-arg acquire(budget) — byte-identical
-  // to today — so persona-gpu-plan.test.ts:14's `toHaveBeenCalledWith(budget)` needs no edit.
-  // The 2-arg branch (signal present) is exercised by this task's new test.
-  const release = signal
-    ? await gpuSemaphore.acquire(gpuSemaphore.budget, { signal })
-    : await gpuSemaphore.acquire(gpuSemaphore.budget);
+  // acquire treats an absent signal (opts.signal === undefined) identically to a
+  // 1-arg call, so the options object is always passed — no signal-vs-no-signal branch.
+  const release = await gpuSemaphore.acquire(gpuSemaphore.budget, { signal });
   try {
     if (activeGenerationBooks().length > 0) {
       throw new GpuBusyForPersonaError('A render is active — skip the GPU persona pre-pass.');
