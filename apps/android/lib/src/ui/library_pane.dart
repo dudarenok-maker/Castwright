@@ -76,6 +76,13 @@ class LibraryPane extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tree = buildLibraryTree(filterBooks(books, query));
+    // On tablet (medium/expanded) the cover-forward grid replaces the ListTile
+    // rows, whose contentPadding used to supply the horizontal gutter — restore
+    // it as a page inset so covers don't run flush to the pane edges. Compact
+    // keeps zero: the ListTiles still carry their own gutter.
+    final compact =
+        windowSizeClassFor(MediaQuery.of(context).size.width) ==
+            WindowSizeClass.compact;
     return Column(
       children: [
         Padding(
@@ -105,6 +112,9 @@ class LibraryPane extends StatelessWidget {
         else
           Expanded(
             child: ListView(
+              padding: compact
+                  ? EdgeInsets.zero
+                  : const EdgeInsets.symmetric(horizontal: 16),
               children: [
                 if (continueBooks.isNotEmpty && query.isEmpty)
                   _continueRail(context),

@@ -317,4 +317,116 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('library-grid')), findsOneWidget);
   });
+
+  // Regression: the cover-forward grid ran flush to the pane edges on tablet
+  // (medium/expanded) because the ListTile path's implicit 16-dp gutter was
+  // gone and nothing replaced it — cover art touched the screen edge.
+  testWidgets('wide surface insets library content from the pane edges',
+      (tester) async {
+    tester.view.physicalSize = const Size(1000, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const books = [
+      LibraryBook(
+        bookId: 'b1',
+        title: 'Book One',
+        author: 'Author A',
+        series: '',
+        seriesPosition: null,
+        downloadState: BookDownloadState.downloaded,
+      ),
+    ];
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: LibraryPane(
+          books: books,
+          continueBooks: const [],
+          covers: const {},
+          progress: const {},
+          totalSec: const {},
+          listened: const {},
+          collapsedKeys: const {},
+          query: '',
+          loading: false,
+          error: null,
+          currentBookId: null,
+          onQueryChanged: (_) {},
+          onToggleCollapse: (_) {},
+          onSelect: (_, _) {},
+          onDownload: (_) async {},
+          onRemoveDownload: (_) async {},
+          onRemoveFromShelf: (_) async {},
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    final listView = tester.widget<ListView>(find.ancestor(
+      of: find.byKey(const Key('library-grid')),
+      matching: find.byType(ListView),
+    ));
+    final pad = listView.padding?.resolve(TextDirection.ltr);
+    expect(pad, isNotNull, reason: 'tablet library list needs a page gutter');
+    expect(pad!.left, greaterThan(0));
+    expect(pad.right, greaterThan(0));
+  });
+
+  // The phone (compact) path uses ListTiles, whose own contentPadding supplies
+  // the gutter — the list itself must NOT add a horizontal inset there, or the
+  // rows double-indent.
+  testWidgets('compact surface keeps the library list flush (ListTile gutter)',
+      (tester) async {
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const books = [
+      LibraryBook(
+        bookId: 'b1',
+        title: 'Book One',
+        author: 'Author A',
+        series: '',
+        seriesPosition: null,
+        downloadState: BookDownloadState.downloaded,
+      ),
+    ];
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: LibraryPane(
+          books: books,
+          continueBooks: const [],
+          covers: const {},
+          progress: const {},
+          totalSec: const {},
+          listened: const {},
+          collapsedKeys: const {},
+          query: '',
+          loading: false,
+          error: null,
+          currentBookId: null,
+          onQueryChanged: (_) {},
+          onToggleCollapse: (_) {},
+          onSelect: (_, _) {},
+          onDownload: (_) async {},
+          onRemoveDownload: (_) async {},
+          onRemoveFromShelf: (_) async {},
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('library-grid')), findsNothing);
+    final listView = tester.widget<ListView>(find.ancestor(
+      of: find.byKey(const Key('book-b1')),
+      matching: find.byType(ListView),
+    ));
+    final pad = listView.padding?.resolve(TextDirection.ltr) ?? EdgeInsets.zero;
+    expect(pad.left, 0);
+    expect(pad.right, 0);
+  });
 }
