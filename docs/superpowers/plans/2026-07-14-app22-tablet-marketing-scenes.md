@@ -105,7 +105,20 @@ export const captionSpans = (caption) =>
   caption.split('\n').map((l) => `<span>${l}</span>`).join('');
 ```
 
-Replace `phoneHtml`'s inline caption map with `captionSpans(caption)`. `PHONE`/`FEATURE` dimensions move to `surfaces.mjs` (below) and are imported here for `featureHtml`/`phoneHtml` — import `DIMS` from `./surfaces.mjs` and use `DIMS.phone`/`DIMS.feature`. Keep `FONT_DIR`/`OUT_DIR` resolution in the runner (Step 5), passing `FONT_DIR` into the module via a small `setFontDir(dir)` or by importing `fileURLToPath`-derived paths locally — simplest: resolve `FONT_DIR` inside `templates.mjs` from `import.meta.url` (`resolve(dirname(fileURLToPath(import.meta.url)), '../../../public/fonts')`).
+Replace `phoneHtml`'s inline caption map with `captionSpans(caption)`. `PHONE`/`FEATURE` dimensions move to `surfaces.mjs` (below) and are imported here for `featureHtml`/`phoneHtml` — import `DIMS` from `./surfaces.mjs` and use `DIMS.phone`/`DIMS.feature`.
+
+**Module-scope resolution (review fix B1 — no gate catches this if wrong):** `templates.mjs` needs `FONT_DIR` (for `FONTS`) AND `OUT_DIR` (dereferenced by `featureHtml` at `resolve(OUT_DIR, 'castwright-play-header.svg')`). Resolve BOTH inside `templates.mjs` from `import.meta.url` — do not leave `OUT_DIR` only in the runner or `featureHtml()` throws `ReferenceError` at call time (the unit test never imports `templates.mjs`, and `node --check` only parses, so this ships green if missed):
+
+```js
+import { readFileSync, existsSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const HERE = dirname(fileURLToPath(import.meta.url));
+const FONT_DIR = resolve(HERE, '../../../public/fonts');
+const OUT_DIR = resolve(HERE, '../../../brand/go-to-market/play-store');
+```
+
+The runner keeps its own `OUT_DIR`/`RAW_DIR` for output paths and raw reads — that copy stays.
 
 - [ ] **Step 4: Create `scripts/lib/play-frames/surfaces.mjs`**
 
@@ -151,7 +164,7 @@ export const SURFACES = [
 
 - [ ] **Step 5: Rewrite `scripts/frame-play-screenshots.mjs` as a thin runner**
 
-Keep the file header comment, `repoRoot`, `RAW_DIR`, `OUT_DIR`. Import `{ FONTS, b64, shoot, phoneHtml, featureHtml }` from `./lib/play-frames/templates.mjs` and `{ SURFACES, dimsForTemplate }` from `./lib/play-frames/surfaces.mjs`. Replace the theme×SCENES loop with a surface-driven loop that, for the phone surface, reproduces today's behaviour exactly (light → `screenshots/phone`, dark → `screenshots/phone/dark`, `NN-<id>.png`, feature graphic once). Template dispatch by name:
+Keep the file header comment, `repoRoot`, `RAW_DIR`, `OUT_DIR`. Import `{ b64, shoot, phoneHtml, featureHtml }` from `./lib/play-frames/templates.mjs` (do NOT import `FONTS` into the runner — it's used only inside the templates now; review note N4) and `{ SURFACES, dimsForTemplate }` from `./lib/play-frames/surfaces.mjs`. Replace the theme×SCENES loop with a surface-driven loop that, for the phone surface, reproduces today's behaviour exactly (light → `screenshots/phone`, dark → `screenshots/phone/dark`, `NN-<id>.png`, feature graphic once). Template dispatch by name:
 
 ```js
 const TEMPLATES = { phone: (raw) => phoneHtml(raw) /* tablet/fold added in Task 2 */ };
@@ -250,10 +263,14 @@ Expected: FAIL — `missing surface tablet7`.
 
 - [ ] **Step 3: Add the three templates to `templates.mjs`**
 
-The tablet templates mirror `phoneHtml` (same gradient stage, `FONTS`, `captionSpans`) but land the device in a landscape/portrait bezel with the caption placed to fit. Full code:
+The tablet templates mirror `phoneHtml` (same gradient stage, `FONTS`, `captionSpans`) but land the device in a landscape/portrait bezel with the caption placed to fit. Templates keep the `({ rawDataUri, caption })` signature and read dims **internally** from `DIMS` — there is no circular import (`surfaces.mjs` imports nothing; `templates.mjs → surfaces.mjs` is a one-way edge), so do NOT change signatures to accept `w,h`.
+
+**Review fix S1:** the `import { DIMS } from './surfaces.mjs'` line below **already exists** from Task 1 Step 3 — do NOT re-add it (a second `import { DIMS }` is a `SyntaxError`). Append only `STAGE_BG` and the three new functions. The `import { DIMS }` in the snippet is shown for context, not to be pasted twice.
+
+Full code:
 
 ```js
-import { DIMS } from './surfaces.mjs';
+// import { DIMS } from './surfaces.mjs';  // ALREADY PRESENT from Task 1 — do not duplicate
 
 const STAGE_BG =
   `linear-gradient(180deg,${INK} 0%,${PURPLE_DEEP} 46%,${MAGENTA} 76%,${PEACH} 100%)`;
@@ -334,7 +351,7 @@ export function foldBezelHtml({ rawDataUri, caption }) {
 }
 ```
 
-(If `import { DIMS }` from `./surfaces.mjs` creates a cycle with Task 1's `templates` import in `surfaces`, keep `DIMS` defined in `surfaces.mjs` only and pass `{w,h}` into the template — but the runner already computes dims via `dimsForTemplate`; simplest is to inline the two dim constants the templates need. Prefer the no-cycle route: templates read dims from the argument the runner passes. Adjust the template signatures to `({ rawDataUri, caption, w, h })` and have the runner pass `dimsForTemplate(template)`.)
+(Each template reads its own dims from `DIMS` internally, exactly as shown. The runner passes dims to `shoot()` separately — it does NOT spread dims into the template call. This is the single, consistent contract; there is no `w,h` template parameter.)
 
 - [ ] **Step 4: Add the tablet + fold surfaces to `surfaces.mjs`**
 
@@ -394,7 +411,7 @@ const TEMPLATES = {
 };
 ```
 
-Pass `w,h` into the template call: `TEMPLATES[template]({ rawDataUri, caption: scene.caption, ...dimsForTemplate(template) })`. (Adjust `phoneHtml` to accept and ignore/use `w,h` consistently, or keep phone reading `DIMS.phone` internally — either, but keep phone output identical.)
+The template call is unchanged from Task 1 — `TEMPLATES[template]({ rawDataUri, caption: scene.caption })` — because every template reads dims internally. `dimsForTemplate(template)` is passed only to `shoot()` (the third arg), as in Task 1 Step 5. Do NOT spread dims into the template call. (For consistency, Task 1's `TEMPLATES = { phone: (raw) => phoneHtml(raw) }` and this task's `{ phone: phoneHtml, … }` are equivalent — either is fine; `phoneHtml` reads `DIMS.phone` internally and its output stays byte-identical.)
 
 - [ ] **Step 6: Run the test — expect PASS**
 
@@ -513,7 +530,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 }
 ```
 
-`main(argv)` parses `--surface`/`--orient`/`--scenes` (default `surface=phone`, no scenes → today's behaviour). For each pass in `SURFACE_PASSES[surface]` (or the CLI-supplied single orient/scenes): set rotation (`adb shell settings put system accelerometer_rotation 0`, then `adb shell settings put system user_rotation <rotationValue(orient)>`); for `orient === 'seam'`, resolve the half-open index via `FOLD_HALF_OPEN_STATE` env else `parseHalfOpenedState(adb shell cmd device_state print-states)`, erroring loudly if null, then `adb shell cmd device_state state <idx>`; run `flutter drive … --target=integration_test/marketing_capture_test.dart ${buildDartDefines(pass).join(' ')}`. Keep the existing device-online + cover-push preamble (run once, before the passes). After a `seam`/rotation run, reset with `adb shell settings put system accelerometer_rotation 1` and `adb shell cmd device_state state reset` in a `finally`.
+`main(argv)` parses `--surface`/`--orient`/`--scenes` (default `surface=phone`, no scenes → today's behaviour). For each pass in `SURFACE_PASSES[surface]` (or the CLI-supplied single orient/scenes): set rotation (`adb shell settings put system accelerometer_rotation 0`, then `adb shell settings put system user_rotation <rotationValue(orient)>`); for `orient === 'seam'`, resolve the half-open index via `FOLD_HALF_OPEN_STATE` env else `parseHalfOpenedState(adb shell cmd device_state print-states)`, erroring loudly if null, then `adb shell cmd device_state state <idx>`; run flutter drive by spreading the defines into the existing `sh('flutter', […])` args array (review note N3): `sh('flutter', ['drive', '--driver=test_driver/integration_test.dart', '--target=integration_test/marketing_capture_test.dart', ...buildDartDefines(pass)], { cwd: androidDir })` — `shell:true` on Windows passes `--dart-define=scenes=a,b` fine unquoted. Keep the existing device-online + cover-push preamble (run once, before the passes). After a `seam`/rotation run, reset with `adb shell settings put system accelerometer_rotation 1` and `adb shell cmd device_state state reset` in a `finally`.
 
 - [ ] **Step 5: Run the test — expect PASS**
 
@@ -598,7 +615,11 @@ When `orient == 'seam'`, assert a vertical fold `DisplayFeature` is present befo
 
 ```dart
 if (orient == 'seam') {
-  final features = tester.view.displayFeatures;
+  // Read posture from the platform view, not tester.view — matches how the app
+  // itself reads it (MediaQuery.displayFeatures), and is the more robust source
+  // for the real on-device fold (review note N2).
+  final features =
+      WidgetsBinding.instance.platformDispatcher.views.first.displayFeatures;
   final hasVerticalFold = features.any((f) =>
       (f.type == DisplayFeatureType.fold || f.type == DisplayFeatureType.hinge) &&
       f.bounds.width < f.bounds.height);
@@ -608,7 +629,9 @@ if (orient == 'seam') {
 }
 ```
 
-Add `import 'dart:ui' show DisplayFeatureType;` (or reference via `ui.DisplayFeatureType` if a prefix is already used).
+Add the fold-type imports mirroring the established codebase pattern at
+`apps/android/lib/src/domain/pane_split.dart:1` (review note N1):
+`import 'dart:ui' show DisplayFeature, DisplayFeatureType;`.
 
 - [ ] **Step 5: Analyze the changed file**
 
