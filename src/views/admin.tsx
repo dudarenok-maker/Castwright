@@ -21,10 +21,12 @@ import {
   type ResourceTelemetryRecord,
 } from '../lib/api';
 import { LanAccessCard } from '../components/lan-access-card';
+import { WikiLink } from '../components/wiki-link';
 import { formatDuration } from '../lib/time';
 import { useAppDispatch } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { ttsModelLabel, type TtsModelKey } from '../lib/tts-models';
+import { ADMIN_WIKI } from '../lib/wiki-links';
 
 /* Diagnostics poll cadence. The probes spawn processes + do disk I/O, and
    health isn't fast-moving, so 30 s (matching the sidecar/ollama health polls)
@@ -152,6 +154,7 @@ function ModelManagerLink() {
           Install, remove, and update the local TTS / analyzer / ASR models, see disk usage, and load
           or unload each into the GPU — all in one place.
         </p>
+        <WikiLink page={ADMIN_WIKI.modelManager} label="Wiki" className="text-xs" />
       </div>
       <button
         type="button"
@@ -198,6 +201,7 @@ function AdvancedConfigLink() {
         <p className="mt-1 text-xs text-ink/55 max-w-prose">
           Tune model, generation, and QA settings at your own risk.
         </p>
+        <WikiLink page={ADMIN_WIKI.advanced} label="Wiki" className="text-xs" />
       </div>
       <button
         type="button"
@@ -258,7 +262,10 @@ function HealthBoard() {
 
   return (
     <section className="mb-10">
-      <h3 className="text-lg font-medium tracking-tight text-ink mb-1">Health</h3>
+      <div className="flex items-center gap-2 mb-1">
+        <h3 className="text-lg font-medium tracking-tight text-ink">Health</h3>
+        <WikiLink page={ADMIN_WIKI.admin} label="Wiki" className="text-xs" />
+      </div>
       <p className="text-sm text-ink/60 mb-4">
         GPU &amp; VRAM, Voice engine, analyzer, ASR, ffmpeg and free disk. Re-checked every 30 s.
       </p>
@@ -399,7 +406,10 @@ function GenerationThroughput({ stats }: { stats: GenerationStatsResponse | null
 
   return (
     <section className="mt-10">
-      <h3 className="text-lg font-medium tracking-tight text-ink mb-1">Generation throughput</h3>
+      <div className="flex items-center gap-2 mb-1">
+        <h3 className="text-lg font-medium tracking-tight text-ink">Generation throughput</h3>
+        <WikiLink page={ADMIN_WIKI.admin} label="Wiki" className="text-xs" />
+      </div>
       <p className="text-sm text-ink/60 mb-4">
         Per-chapter RTF (synth-wall ÷ audio; &lt; 1 = faster than realtime), newest first.
         A <span className="text-rose-600">▲</span> means the chapter ran slower than the one
@@ -510,7 +520,10 @@ function ResourceTrends() {
 
   return (
     <section className="mt-10">
-      <h3 className="text-lg font-medium tracking-tight text-ink mb-1">Resource trends</h3>
+      <div className="flex items-center gap-2 mb-1">
+        <h3 className="text-lg font-medium tracking-tight text-ink">Resource trends</h3>
+        <WikiLink page={ADMIN_WIKI.admin} label="Wiki" className="text-xs" />
+      </div>
       <p className="text-sm text-ink/60 mb-4">
         Per-chapter RTF, wall-time and VRAM captured across the run — watch for a slow climb that
         precedes a VRAM spill or host OOM. Newest first.

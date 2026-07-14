@@ -10,14 +10,19 @@
    A `focusCode` on the stage (e.g. the "Help" link on a failed chapter row)
    scrolls to + highlights that taxonomy entry; unknown codes are ignored. */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAppSelector, useAppDispatch } from '../store';
 import { SectionLabel, MixedHeading } from '../components/primitives';
 import { stageToHash } from '../lib/router';
 import { formatKeyLabel } from '../lib/keybindings';
 import { HELP_FAILURE_ENTRIES } from '../data/help-failures';
+import type { CategoryId } from '../data/help-failures';
 import { HELP_TOPICS } from '../data/help-topics';
+import { HELP_CATEGORIES } from '../data/help-categories';
 import { startLinearTour } from '../store/tour-slice';
+import { IconChevR, IconChevD, IconSearch } from '../lib/icons';
+import { WikiLink } from '../components/wiki-link';
+import { HELP_SECTION_WIKI, CATEGORY_WIKI } from '../lib/wiki-links';
 
 /* Jump-nav targets. Plain in-page `href="#id"` anchors would fight the hash
    router (the fragment IS the route), so the links scroll programmatically. */
@@ -75,6 +80,72 @@ const GETTING_STARTED: Array<{ title: string; body: string }> = [
   },
 ];
 
+type HelpItem =
+  | { kind: 'failure'; id: string; title: string; category: CategoryId; search: string; entry: (typeof HELP_FAILURE_ENTRIES)[number] }
+  | { kind: 'topic'; id: string; title: string; category: CategoryId; search: string; topic: (typeof HELP_TOPICS)[number] };
+
+const HELP_ITEMS: HelpItem[] = [
+  ...HELP_FAILURE_ENTRIES.map((entry) => ({
+    kind: 'failure' as const,
+    id: entry.code,
+    title: entry.title,
+    category: entry.category,
+    search: `${entry.title} ${entry.userMessage} ${entry.remediation} ${entry.helpDetail ?? ''}`.toLowerCase(),
+    entry,
+  })),
+  ...HELP_TOPICS.map((topic) => ({
+    kind: 'topic' as const,
+    id: topic.id,
+    title: topic.title,
+    category: topic.category,
+    search: `${topic.title} ${topic.body}`.toLowerCase(),
+    topic,
+  })),
+];
+
+function itemsFor(category: CategoryId): HelpItem[] {
+  return HELP_ITEMS.filter((i) => i.category === category);
+}
+
+function HelpItemCard({
+  item,
+  focusCode,
+  focusedRef,
+}: {
+  item: HelpItem;
+  focusCode?: string;
+  focusedRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const focused = item.id === focusCode;
+  const cardCls = `rounded-xl border p-4 sm:p-5 scroll-mt-24 ${
+    focused ? 'border-magenta ring-2 ring-magenta/40 bg-magenta/5' : 'border-ink/10 bg-white'
+  }`;
+  if (item.kind === 'failure') {
+    const e = item.entry;
+    return (
+      <div id={e.code} data-focused={focused ? 'true' : undefined} ref={focused ? focusedRef : undefined} className={cardCls}>
+        <h4 className="font-semibold text-ink">{e.title}</h4>
+        <p className="mt-2 text-sm text-ink/70">
+          <span className="font-semibold text-ink/80">What you saw: </span>
+          {e.userMessage}
+        </p>
+        <p className="mt-1.5 text-sm text-ink/70">
+          <span className="font-semibold text-ink/80">What to do: </span>
+          {e.remediation}
+        </p>
+        {e.helpDetail && <p className="mt-1.5 text-sm text-ink/50">{e.helpDetail}</p>}
+      </div>
+    );
+  }
+  const t = item.topic;
+  return (
+    <div id={t.id} data-focused={focused ? 'true' : undefined} ref={focused ? focusedRef : undefined} className={cardCls}>
+      <h4 className="font-semibold text-ink">{t.title}</h4>
+      <p className="mt-2 text-sm text-ink/70">{t.body}</p>
+    </div>
+  );
+}
+
 const H2_CLASSES = 'text-2xl md:text-3xl font-medium leading-[1.1] tracking-tight text-ink';
 
 function JumpLink({
@@ -119,11 +190,52 @@ export function HelpView() {
   ];
 
   const focusedRef = useRef<HTMLDivElement | null>(null);
+  const scrolledForRef = useRef<string | undefined>(undefined);
   const focusedEntryExists = HELP_FAILURE_ENTRIES.some((e) => e.code === focusCode);
+
+  const focusedCategory = HELP_FAILURE_ENTRIES.find((e) => e.code === focusCode)?.category;
+  const [expanded, setExpanded] = useState<Set<CategoryId>>(() => {
+    const s = new Set<CategoryId>(['setup']);
+    if (focusedCategory) s.add(focusedCategory);
+    return s;
+  });
+  const toggle = (id: CategoryId) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  /* focusCode can hydrate AFTER mount (HelpRoute populates it via a useEffect
+     that fires post-first-render) — the useState initializer above only runs
+     once, so a late-arriving focusedCategory needs to fold into `expanded`
+     here or its group never opens. */
   useEffect(() => {
-    /* Optional-chained: jsdom has no scrollIntoView. */
-    if (focusedEntryExists) focusedRef.current?.scrollIntoView?.({ block: 'start' });
-  }, [focusedEntryExists, focusCode]);
+    if (focusedCategory) {
+      setExpanded((prev) => (prev.has(focusedCategory) ? prev : new Set(prev).add(focusedCategory)));
+    }
+  }, [focusedCategory]);
+
+  useEffect(() => {
+    /* Optional-chained: jsdom has no scrollIntoView. `expanded` is a dep so
+       this re-runs once the focused card actually mounts (its group may have
+       just expanded above, on the same tick focusCode hydrated) — but the
+       scrolledForRef guard limits the actual scroll to once per focusCode,
+       so expanding/collapsing OTHER groups later doesn't yank the viewport
+       back to the focused card. */
+    if (!focusedEntryExists) return;
+    if (scrolledForRef.current === focusCode) return;
+    if (focusedRef.current) {
+      focusedRef.current.scrollIntoView?.({ block: 'start' });
+      scrolledForRef.current = focusCode;
+    }
+  }, [focusedEntryExists, focusCode, expanded]);
+
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
+  const matches = (item: HelpItem) => q === '' || item.search.includes(q);
+  const totalMatches = q === '' ? HELP_ITEMS.length : HELP_ITEMS.filter(matches).length;
 
   return (
     <div className="max-w-[960px] mx-auto px-4 sm:px-6 py-10">
@@ -171,6 +283,7 @@ export function HelpView() {
             <p className="mt-3 text-ink/60 max-w-prose">
               From manuscript to a full-cast performance in six steps.
             </p>
+            <WikiLink page={HELP_SECTION_WIKI.gettingStarted} className="mt-4" />
             <button
               type="button"
               onClick={() => dispatch(startLinearTour())}
@@ -217,6 +330,7 @@ export function HelpView() {
               </a>
               .
             </p>
+            <WikiLink page={HELP_SECTION_WIKI.keyboard} className="mt-4" />
             <dl className="mt-6 max-w-md divide-y divide-ink/10 rounded-xl border border-ink/10 bg-white">
               {shortcuts.map((s) => (
                 <div
@@ -250,50 +364,65 @@ export function HelpView() {
               When a render goes wrong, Castwright names the failure instead of shrugging. Every
               failure it can name is listed here — what you saw, and what to do about it.
             </p>
+            <WikiLink page={HELP_SECTION_WIKI.troubleshooting} className="mt-4" />
 
-            <h3 className="mt-8 text-lg font-semibold text-ink">Failures the app can name</h3>
-            <div className="mt-4 space-y-3">
-              {HELP_FAILURE_ENTRIES.map((e) => {
-                const focused = e.code === focusCode;
+            <div className="mt-6 relative max-w-md">
+              <IconSearch className="w-4 h-4 text-ink/40 absolute left-3 top-1/2 -translate-y-1/2" aria-hidden="true" />
+              <input
+                type="search"
+                aria-label="Search troubleshooting"
+                placeholder="Search troubleshooting…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="w-full min-h-[44px] fine-pointer:min-h-0 rounded-xl border border-ink/15 bg-white pl-9 pr-3 py-2 text-sm text-ink placeholder:text-ink/40"
+              />
+              {q !== '' && (
+                <span className="mt-2 block text-xs text-ink/50">{totalMatches} of {HELP_ITEMS.length}</span>
+              )}
+            </div>
+
+            <div className="mt-6 space-y-3">
+              {HELP_CATEGORIES.map((cat) => {
+                const all = itemsFor(cat.id);
+                const items = q === '' ? all : all.filter(matches);
+                if (q !== '' && items.length === 0) return null; // hide non-matching groups while searching
+                const open = q !== '' ? true : expanded.has(cat.id);
+                const count = q === '' ? all.length : items.length;
                 return (
-                  <div
-                    key={e.code}
-                    id={e.code}
-                    data-focused={focused ? 'true' : undefined}
-                    ref={focused ? focusedRef : undefined}
-                    className={`rounded-xl border p-4 sm:p-5 scroll-mt-24 ${
-                      focused
-                        ? 'border-magenta ring-2 ring-magenta/40 bg-magenta/5'
-                        : 'border-ink/10 bg-white'
-                    }`}
-                  >
-                    <h4 className="font-semibold text-ink">{e.title}</h4>
-                    <p className="mt-2 text-sm text-ink/70">
-                      <span className="font-semibold text-ink/80">What you saw: </span>
-                      {e.userMessage}
-                    </p>
-                    <p className="mt-1.5 text-sm text-ink/70">
-                      <span className="font-semibold text-ink/80">What to do: </span>
-                      {e.remediation}
-                    </p>
-                    {e.helpDetail && <p className="mt-1.5 text-sm text-ink/50">{e.helpDetail}</p>}
+                  <div key={cat.id} className="rounded-xl border border-ink/10 bg-white">
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      aria-controls={open ? `cat-panel-${cat.id}` : undefined}
+                      onClick={() => toggle(cat.id)}
+                      disabled={q !== ''}
+                      className="w-full flex items-center justify-between gap-3 px-4 sm:px-5 py-3 min-h-[44px] fine-pointer:min-h-0 text-left disabled:cursor-default"
+                    >
+                      <span className="font-semibold text-ink">
+                        {cat.label} <span className="font-normal text-ink/40">({count})</span>
+                      </span>
+                      {open ? (
+                        <IconChevD className="w-4 h-4 text-ink/50 shrink-0" aria-hidden="true" />
+                      ) : (
+                        <IconChevR className="w-4 h-4 text-ink/50 shrink-0" aria-hidden="true" />
+                      )}
+                    </button>
+                    {open && (
+                      <div
+                        id={`cat-panel-${cat.id}`}
+                        className="px-4 sm:px-5 pb-4 space-y-3 border-t border-ink/5 pt-3"
+                      >
+                        {items.map((item) => (
+                          <HelpItemCard key={item.id} item={item} focusCode={focusCode} focusedRef={focusedRef} />
+                        ))}
+                        <div className="pt-1">
+                          <WikiLink page={CATEGORY_WIKI[cat.id]} label="More on this in the wiki" className="text-xs" />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
-            </div>
-
-            <h3 className="mt-10 text-lg font-semibold text-ink">Common questions</h3>
-            <div className="mt-4 space-y-3">
-              {HELP_TOPICS.map((t) => (
-                <div
-                  key={t.id}
-                  id={t.id}
-                  className="rounded-xl border border-ink/10 bg-white p-4 sm:p-5 scroll-mt-24"
-                >
-                  <h4 className="font-semibold text-ink">{t.title}</h4>
-                  <p className="mt-2 text-sm text-ink/70">{t.body}</p>
-                </div>
-              ))}
             </div>
           </section>
         </div>

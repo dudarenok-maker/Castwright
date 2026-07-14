@@ -33,25 +33,101 @@ describe('HelpView (fe-29)', () => {
     expect(screen.getByRole('heading', { name: /troubleshooting/i })).toBeInTheDocument();
   });
 
-  it('renders a taxonomy entry with What-you-saw / What-to-do', () => {
+  it('opens the Setup group by default and leaves others collapsed', () => {
     renderHelp();
+    // setup item visible…
+    expect(screen.getByText("The app won't start")).toBeInTheDocument();
+    // …a performance-group item is NOT mounted (group collapsed)
+    expect(screen.queryByText('GPU out of memory (VRAM)')).toBeNull();
+  });
+
+  it('expands a group on header click and shows failure-card labels', () => {
+    renderHelp();
+    fireEvent.click(screen.getByRole('button', { name: /performance & gpu/i }));
     expect(screen.getByText('GPU out of memory (VRAM)')).toBeInTheDocument();
+    // failure cards carry the What-you-saw / What-to-do labels (topic cards do not)
     expect(screen.getAllByText(/what to do/i).length).toBeGreaterThan(0);
   });
 
-  it('marks the focused entry when focusCode matches', () => {
-    renderHelp('vram-spill');
-    expect(document.getElementById('vram-spill')).toHaveAttribute('data-focused', 'true');
+  it('mounts and marks the focused entry inside its auto-expanded group', () => {
+    renderHelp('vram-spill'); // performance
+    const el = document.getElementById('vram-spill');
+    expect(el).not.toBeNull();
+    expect(el).toHaveAttribute('data-focused', 'true');
   });
 
-  it('ignores an unknown focusCode', () => {
+  it('ignores an unknown focusCode (setup still the only open group)', () => {
     renderHelp('nonsense');
     expect(document.querySelector('[data-focused="true"]')).toBeNull();
+    expect(screen.getByText("The app won't start")).toBeInTheDocument();
+    expect(screen.queryByText('GPU out of memory (VRAM)')).toBeNull();
+  });
+
+  it('filters items by search text and hides non-matching groups', () => {
+    renderHelp();
+    fireEvent.change(screen.getByRole('searchbox', { name: /search troubleshooting/i }), {
+      target: { value: 'vram' },
+    });
+    expect(screen.getByText('GPU out of memory (VRAM)')).toBeInTheDocument();
+    expect(screen.queryByText("The app won't start")).toBeNull();
+  });
+
+  it('shows a result count and clears back to grouped view', () => {
+    renderHelp();
+    const box = screen.getByRole('searchbox', { name: /search troubleshooting/i });
+    fireEvent.change(box, { target: { value: 'gpu' } });
+    expect(screen.getByText(/of 43/i)).toBeInTheDocument();
+    fireEvent.change(box, { target: { value: '' } });
+    // back to default: setup open, performance collapsed
+    expect(screen.getByText("The app won't start")).toBeInTheDocument();
+    expect(screen.queryByText('GPU out of memory (VRAM)')).toBeNull();
+  });
+
+  it('renders section-level and per-category wiki links', () => {
+    renderHelp();
+    const links = screen.getAllByRole('link', { name: /read more on the wiki/i });
+    // at least the 3 section links + setup category link are present on first render
+    const hrefs = links.map((l) => l.getAttribute('href'));
+    expect(hrefs).toContain('https://github.com/dudarenok-maker/Castwright/wiki/Getting-Started');
+    expect(hrefs).toContain('https://github.com/dudarenok-maker/Castwright/wiki/Troubleshooting');
   });
 
   it('shows the live keybindings from the store', () => {
     renderHelp();
     expect(screen.getByText(/play \/ pause/i)).toBeInTheDocument();
+  });
+
+  it('auto-expands the focused category when focusCode hydrates AFTER mount', async () => {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, settings: settingsSlice.reducer },
+    });
+    // mount with NO focusCode (stage is not help yet) — mirrors route hydration timing
+    render(
+      <Provider store={store}>
+        <HelpView />
+      </Provider>,
+    );
+    // performance-group card not mounted yet
+    expect(document.getElementById('vram-spill')).toBeNull();
+    // focusCode hydrates after mount (as HelpRoute's effect does)
+    store.dispatch(uiActions.openHelp({ focusCode: 'vram-spill' }));
+    // now the performance group must auto-expand and the card must mount + be marked
+    await waitFor(() => {
+      const el = document.getElementById('vram-spill');
+      expect(el).not.toBeNull();
+      expect(el).toHaveAttribute('data-focused', 'true');
+    });
+  });
+
+  it('scrolls to the deep-linked entry once, not again on later group toggles', () => {
+    const spy = vi.fn();
+    // jsdom lacks scrollIntoView; install a spy for this test
+    (window.HTMLElement.prototype as unknown as { scrollIntoView: unknown }).scrollIntoView = spy;
+    renderHelp('vram-spill'); // performance group auto-expands, card scrolls once
+    expect(spy).toHaveBeenCalledTimes(1);
+    // toggle an unrelated group — must NOT re-scroll
+    fireEvent.click(screen.getByRole('button', { name: /voice engines & models/i }));
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 
   it('reflects a rebound play-pause key', () => {

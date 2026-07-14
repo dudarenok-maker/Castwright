@@ -1,15 +1,19 @@
 /* fe-29 — hand-written troubleshooting topics for failures the taxonomy can't
    see (the server/sidecar never got far enough to classify anything). */
 
+import type { CategoryId } from './help-failures';
+
 export interface HelpTopic {
   id: string;
   title: string;
   body: string;
+  category: CategoryId;
 }
 
 export const HELP_TOPICS: HelpTopic[] = [
   {
     id: 'app-wont-start',
+    category: 'setup',
     title: "The app won't start",
     body:
       'One command starts everything: run `npm start` from the install folder and it brings up ' +
@@ -20,6 +24,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'setup-not-ready',
+    category: 'setup',
     title: '"Not ready" — what do I click?',
     body:
       "When a voice engine or the analyzer isn't ready yet, both the Setup screen (first launch) " +
@@ -31,6 +36,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'models-missing',
+    category: 'engines',
     title: 'Voices or models are missing',
     body:
       'Open Models (Admin → Model Manager) to see what is installed. The Kokoro voice pack installs ' +
@@ -41,6 +47,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'languages-supported',
+    category: 'voices',
     title: 'What languages does Castwright perform?',
     body:
       'English, Russian, Spanish, French and German today, all with the same full-cast craft — ' +
@@ -52,6 +59,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'voices-hidden-wrong-language',
+    category: 'voices',
     title: "Casting a character, but some voices aren't showing up",
     body:
       "For a non-English book, the voice picker hides voices that don't speak the book's " +
@@ -62,6 +70,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'higher-quality-tier',
+    category: 'quality',
     title: 'What does "Higher quality" mean, and should I turn it on?',
     body:
       'Every Qwen voice can render on two models: the everyday 0.6B (fast) or the larger 1.7B — ' +
@@ -74,6 +83,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'generation-slow',
+    category: 'performance',
     title: 'Generation is much slower than usual',
     body:
       "The usual culprit is a crowded GPU. Check it isn't sharing the card with something heavy " +
@@ -87,6 +97,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'amd-gpu',
+    category: 'performance',
     title: 'AMD GPU — running on CPU / experimental',
     body:
       'AMD GPU support is an experimental preview. On an AMD machine Qwen and Coqui run on ROCm, ' +
@@ -101,6 +112,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'multi-gpu-placement',
+    category: 'performance',
     title: 'I have two graphics cards — how do I put engines on different ones?',
     body:
       "In Advanced Configuration each voice engine has its own device pin, listed by the card's " +
@@ -115,6 +127,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'design-without-cloud-key',
+    category: 'voices',
     title: 'Can I design voices without a Gemini API key?',
     body:
       "Yes — voice design's description-writing step follows the same analyzer engine you've " +
@@ -126,6 +139,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'vocalizations',
+    category: 'quality',
     title: "Why is my character gasping, sighing, or laughing when the book doesn't say so?",
     body:
       'Beyond the words on the page, Castwright can perform the small human sounds between them — ' +
@@ -137,6 +151,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'line-direction',
+    category: 'quality',
     title: 'Can I direct a single line myself?',
     body:
       'Yes — every line in the Manuscript view, narration included, has a small direction chip ' +
@@ -148,6 +163,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'voice-consistency-flag',
+    category: 'quality',
     title: 'What does it mean when a line is flagged as "out of character"?',
     body:
       'Render-integrity QA (Advanced Configuration → QA gates, off by default) measures every ' +
@@ -159,6 +175,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'script-review-fixes',
+    category: 'cast',
     title: 'Can Castwright fix who-said-what mistakes for me?',
     body:
       'Review Script, in the Manuscript view, reads back over a chapter for the small mistakes ' +
@@ -172,6 +189,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'cast-carried-across-books',
+    category: 'cast',
     title: 'How does Castwright know a character already has a voice?',
     body:
       'Link a character to one from an earlier book in the series — offered on the Confirm Cast ' +
@@ -184,6 +202,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'engine-needs-repair',
+    category: 'engines',
     title: 'A voice engine says "Needs repair"',
     body:
       'Open Models (Admin → Model Manager). Each engine now shows its real state — whether its ' +
@@ -196,6 +215,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'phone-cant-reach',
+    category: 'files',
     title: "My phone can't reach the app (LAN / HTTPS)",
     body:
       'Real devices need the LAN HTTPS mode: run `npm run dev:lan` (or `npm run start:lan` for the ' +
@@ -207,6 +227,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'lan-token-pairing',
+    category: 'files',
     title: 'The app loads at castwright.local but the library won\'t — "Missing or invalid LAN access token"',
     body:
       'This means `LAN_AUTH_TOKEN` is set in `server/.env` — every non-loopback request then needs ' +
@@ -223,6 +244,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'where-files-live',
+    category: 'files',
     title: 'Where are my books and audio on disk?',
     body:
       'On your machine, in the open — nothing is hidden in a database. Each book lives in its ' +
@@ -233,6 +255,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'audiobookshelf-export',
+    category: 'files',
     title: 'How do I send a book to Audiobookshelf?',
     body:
       'From the Listen view, export straight to Audiobookshelf: point it at the library folder ' +
@@ -243,6 +266,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'caption-export',
+    category: 'files',
     title: 'Can I get captions or subtitles for a book?',
     body:
       'Yes — on the Listen view, under "Or download a file", the Captions tile writes an .srt or ' +
@@ -254,6 +278,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'analysis-reloads-or-gpu-busy',
+    category: 'analysis',
     title: 'Analysis keeps reloading the model, or says "GPU busy"',
     body:
       'The analyzer stays loaded while it reads through your book, so it is not reloading between ' +
@@ -268,6 +293,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'ollama-model-not-in-list',
+    category: 'analysis',
     title: "I pulled a model but it's not in the analysis-model list",
     body:
       "The analysis-model menu lists the models you've already installed into Ollama — the built-in " +
@@ -279,6 +305,7 @@ export const HELP_TOPICS: HelpTopic[] = [
   },
   {
     id: 'picked-local-but-ran-on-gemini',
+    category: 'analysis',
     title: 'I chose a model on my machine, but the analysis ran on Gemini',
     body:
       "When your analyzer engine is set to Local and Ollama can't be reached, Castwright falls back " +
