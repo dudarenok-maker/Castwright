@@ -190,7 +190,10 @@ rules — expected behaviour, not data loss.
     false-positive on substrings; identity matchers for en/es/fr/de.
   - `lang/index.test.ts` — convention-table wiring per language, empty table for unsupported.
   - `parser.test.ts` — dash-dialogue (tag before/after speech, interior-punctuation dashes that
-    must NOT toggle, multi-sentence continuation, pronoun tags) and quote-pair paths (en/es/fr/de).
+    must NOT toggle, multi-sentence continuation, pronoun tags) and quote-pair paths (en/es/fr/de),
+    incl. the German ASCII-closer pairing (#1598) and the mixed-closer invariant: `findQuoteRuns`
+    groups closers by opener so a `„` run ends at the NEAREST closer of any glyph (`“`/`”`/`"`),
+    keeping a mixed-glyph or stray-closer paragraph from over-merging narration into speech (#1601).
   - `windows.test.ts` — conversation-window grouping (narration-break threshold), alternation,
     pronoun resolution, the third-voice alternation-abort rule.
   - `aligner.test.ts` — glyph/whitespace drift, dash-variant/ellipsis normalization, duplicate-span

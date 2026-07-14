@@ -174,13 +174,26 @@ interface QuoteRun {
 }
 
 /** Find non-overlapping quoted runs for any of the language's quote pairs,
-    leftmost-match-wins on overlap (conservative: never double-count a run). */
+    leftmost-match-wins on overlap (conservative: never double-count a run).
+    Closers are grouped BY OPENER so a run ends at the nearest closer of ANY
+    glyph that pairs with its opener — not at a same-glyph closer sitting past
+    a nearer, different-glyph one. Without this, German (the only language
+    whose `„` opener maps to several closers — `“`/`”`/`"`) over-merges a
+    mixed-closer paragraph: the per-pair `„…"` regex would lazily run the first
+    `„` past an intervening `“` to a later ASCII `"`, swallowing the beat and
+    the next turn (#1601). `closeLen` comes from the captured closer, so
+    variable-length closers stay correct. */
 function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[] {
-  const candidates: QuoteRun[] = [];
+  const closersByOpener = new Map<string, string[]>();
   for (const [open, close] of pairs) {
-    const re = new RegExp(`${escapeRegExp(open)}[\\s\\S]*?${escapeRegExp(close)}`, 'gu');
+    (closersByOpener.get(open) ?? closersByOpener.set(open, []).get(open)!).push(close);
+  }
+  const candidates: QuoteRun[] = [];
+  for (const [open, closers] of closersByOpener) {
+    const closerClass = closers.map(escapeRegExp).join('|');
+    const re = new RegExp(`${escapeRegExp(open)}[\\s\\S]*?(${closerClass})`, 'gu');
     for (const m of line.matchAll(re)) {
-      candidates.push({ start: m.index!, end: m.index! + m[0].length, openLen: open.length, closeLen: close.length });
+      candidates.push({ start: m.index!, end: m.index! + m[0].length, openLen: open.length, closeLen: m[1].length });
     }
   }
   candidates.sort((a, b) => a.start - b.start || b.end - a.end);
