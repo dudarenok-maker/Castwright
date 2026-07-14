@@ -40,9 +40,12 @@ downstream is scripted and reproducible.
    each captured, so the 7" shots show their genuinely narrower two-pane. Output
    canvases share dimensions; the difference lives in the embedded content.
 4. **Foldable-unfolded is reframed, not recaptured.** An unfolded Fold is one
-   continuous wide surface — pixel-equivalent to the tablet landscape shot — so
-   the unfolded Fold assets **reuse the 10" landscape raws** inside a foldable
-   device bezel. Only the **half-open seam** shot needs a live PixelFold capture.
+   continuous wide surface showing the same two-pane layout as the tablet
+   landscape shot, so the unfolded Fold assets **reuse the 10" landscape raws**
+   inside a foldable device bezel. (A real Fold inner screen is near-square
+   ~2208×1840, not 16:10, so the reused raw is a reasonable marketing shortcut,
+   not a pixel-exact match — cosmetic only.) Only the **half-open seam** shot
+   needs a live PixelFold capture.
 5. **Half-open seam is produced but optional at upload.** The harness generates
    it; because a mid-screen seam can read as a rendering glitch to casual Play
    browsers, upload curation stays a manual per-slot choice (as it already is —
@@ -73,10 +76,13 @@ changes, all additive (no-flag invocation = today's phone behaviour):
    `--scenes=<csv>`. It:
    - sets device rotation: `adb shell settings put system accelerometer_rotation 0`
      then `adb shell settings put system user_rotation <1=landscape|0=portrait>`;
-   - for `--surface=fold`, sets the posture:
-     `adb shell cmd device_state state <2 = HALF_OPENED>` (per the app-21 fold
-     recipe — half-open emits `DisplayFeatureType.fold` / `postureFlat`, the
-     vertical centre seam);
+   - for `--surface=fold`, sets the half-open posture. **The state index is not
+     hardcoded** — the standard AOSP table (`0=CLOSED, 1=HALF_OPENED, 2=OPENED`)
+     would make `2` the flat OPENED posture with *no* seam. The operator runs
+     `adb shell cmd device_state print-states` once, selects the HALF_OPENED
+     identifier **by name**, and the README records the concrete index for this
+     box's PixelFold AVD. Half-open emits `DisplayFeatureType.fold` / `postureFlat`,
+     the vertical centre seam that `paneSplitForHinge` aligns the divider to.
    - passes `surface`/`orient`/`scenes` to `flutter drive` as `--dart-define`s;
    - the driver already writes `<name>.png` with `create(recursive: true)`, so
      output routing needs **no driver change** — the test prepends `<surface>/`
@@ -86,6 +92,15 @@ changes, all additive (no-flag invocation = today's phone behaviour):
    `marketingScenes` to the `--scenes` list (default: all, preserving phone
    behaviour) and prepends `<surface>/` to `takeScreenshot('<surface>/<id>.<theme>')`.
    With no `surface` define, the name is unprefixed → identical phone output.
+   **Fail-loud guard (amendment #3):** when a `surface` define with
+   `orient=landscape` is present, before the first shot the test asserts
+   `windowSizeClassFor(view.physicalSize.width / dpr) == expanded` (the exact
+   check `responsive_adaptive_test.dart:38-41` already uses). This turns a
+   silently-failed `user_rotation` — which would write portrait single-pane
+   pixels into a "landscape two-pane" slot — into a hard test failure instead
+   of undetectable wrong output. For the `fold` seam pass, the test additionally
+   asserts a vertical fold `DisplayFeature` is present, so a mis-set posture
+   (flat OPENED, no seam) also fails loud rather than capturing a seamless shot.
 
 3. **New npm scripts** wrap the passes so an operator runs one line per surface:
    - `capture:companion` — unchanged (phone).
@@ -126,8 +141,12 @@ scripts/lib/play-frames/
   templates.mjs   — phoneHtml (moved as-is) · tabletLandscapeHtml ·
                     tabletPortraitHtml · foldBezelHtml + shared helpers
                     (FONTS, gradient stage, captionHtml)
-  surfaces.mjs    — SURFACES config: [{ id, sceneList, captions, orientation,
-                    dims, outDir, bezel }]
+  surfaces.mjs    — SURFACES config. A tablet surface carries a MIXED-orientation
+                    scene set, so `orientation` lives PER-SCENE, not per-surface
+                    (amendment #7): [{ id, outDir, bezel, scenes: [{ id, caption,
+                    orientation }] }]. `dims` is DERIVED from orientation
+                    (landscape → 2560×1600, portrait → 1600×2560) via one lookup,
+                    so a scene can't carry an orientation/dims mismatch.
 scripts/frame-play-screenshots.mjs — thin runner: for each surface → pick
                     template → shoot() → assert dims; phone path preserved
 scripts/tests/frame-play-screenshots.test.mjs — Node unit test over the pure
@@ -137,7 +156,10 @@ scripts/tests/frame-play-screenshots.test.mjs — Node unit test over the pure
 Templates differ only in bezel art and caption placement (caption **beside** the
 device on wide landscape, **above** on portrait — matching the phone template's
 spirit). The fold bezel is the landscape frame with a foldable device mockup and
-a subtle centre crease line.
+a subtle centre crease line. Note the landscape two-pane composition is
+**library-left + player-right** (the persistent player pane) — the wide-landscape
+caption is authored for that split, not reused from the phone's full-player shot
+(assumption-check caveat #2).
 
 **Output canvases** (all within Play's 320–3840 px, ≤2:1 ratio limits; written to
 the git-ignored `brand/go-to-market/play-store/`):
@@ -163,7 +185,10 @@ are unchanged.
   (c) the SURFACES config is internally consistent (every scene id maps to a
   raw-name rule; no orphan captions). Mirrors the `build-companion-apk.test.mjs`
   precedent. The on-device captures themselves stay manual/on-box — like the
-  existing phone harness, they are not in CI.
+  existing phone harness, they are not in CI. **The automated test guards config
+  integrity (dims, caption coverage, consistency), not visual correctness** — a
+  caption overlapping a bezel or a broken crease overlay stays the job of manual
+  on-box acceptance (assumption-check caveat #8).
 - **Docs:** extend `apps/android/integration_test/marketing/README.md` with the
   tablet/fold passes, the 7" AVD-creation recipe, and the rotation/posture adb
   commands. No new regression-plan doc under `docs/features/` — this extends an
