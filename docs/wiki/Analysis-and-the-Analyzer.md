@@ -26,7 +26,7 @@ The model picker on the upload screen groups two kinds of analyzer:
 </picture>
 
 See [Installing Castwright](Installing-Castwright) for setting up either
-path (pulling an Ollama model vs. adding a Gemini API key).
+path (pulling an Ollama model vs. [adding a Gemini API key](Getting-a-Gemini-API-Key)).
 
 ## Two models, reading in parallel
 

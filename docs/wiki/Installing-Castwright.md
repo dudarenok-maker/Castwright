@@ -297,7 +297,7 @@ The install bundle ships Kokoro weights for TTS only — the analyzer needs eith
 
 Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3.5:4b`, then set the model in the Account tab. On macOS, also run `brew services start ollama` so the daemon starts on login and survives reboots (registers a launchd login item).
 
-**Option B — Gemini (cloud, free tier).** Get a key from <https://aistudio.google.com>, paste it into **Account → Server configuration → Gemini API key**. Engine selection follows from the model picker — pick any Gemini model in **Defaults for new books → Analysis model**. Save. The key persists to your per-user settings file `~/.castwright/user-settings.json` (plaintext, same trust model as `server/.env`).
+**Option B — Gemini (cloud, free tier).** Get a key by following [Getting a Gemini API Key](Getting-a-Gemini-API-Key), then paste it into **Account → Server configuration → Gemini API key**. Engine selection follows from the model picker — pick any Gemini model in **Defaults for new books → Analysis model**. Save. The key persists to your per-user settings file `~/.castwright/user-settings.json` (plaintext, same trust model as `server/.env`).
 
 **Option C — Pipelined two-model split.** For long books: Phase 0 (cast detection) runs on Gemma while Phase 1 (sentence attribution) runs on Gemini Flash in parallel, hitting independent rate-limit buckets so effective quota nearly doubles. Configure under **Account → Defaults for new books → Phase 0 model + Phase 1 model + Min-lag chapters** (default 10), or set `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` / `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` in `server/.env`.
 
@@ -359,7 +359,7 @@ Coqui XTTS v2 is not installed by default. To add it:
 
 The same Gemini key configured for the analyzer (see Option B above) doubles as the TTS provider when picked.
 
-1. Get an API key from <https://aistudio.google.com> (Google account required), saved via **Account → Server configuration → Gemini API key**.
+1. Get an API key by following [Getting a Gemini API Key](Getting-a-Gemini-API-Key) (Google account required), saved via **Account → Server configuration → Gemini API key**.
 2. **Account → Defaults for new books → Voice engine** → "Gemini (cloud)".
 3. **Voice model** → pick `gemini-3.1-flash-preview-tts` or `gemini-2.5-flash-preview-tts`. Save.
 

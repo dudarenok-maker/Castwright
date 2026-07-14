@@ -5,6 +5,7 @@
 - [Uploading a Book](Uploading-a-Book)
 - [Manuscript Management](Manuscript-Management)
 - [Analysis & the Analyzer](Analysis-and-the-Analyzer)
+- [Getting a Gemini API Key](Getting-a-Gemini-API-Key)
 - [Reviewing Low-Confidence Speaker Tags](Reviewing-Low-Confidence-Speaker-Tags)
 - [Generating Audio](Generating-Audio)
 - [The Quality Gate](The-Quality-Gate)

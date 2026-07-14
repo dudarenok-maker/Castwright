@@ -6,7 +6,9 @@
 
 import { useEffect, useState } from 'react';
 import { PrimaryButton } from './primitives';
+import { WikiLink } from './wiki-link';
 import { MODEL_OPTIONS } from '../lib/models';
+import { GEMINI_KEY_WIKI } from '../lib/wiki-links';
 
 /* Human label for an analyzer model id, for the split-status line. `null`
    (no per-phase override) reads as "server default" since the actual model
@@ -151,6 +153,7 @@ export function GeminiKeyField({
         Stored plaintext in server/user-settings.json (gitignored). The env-var GEMINI_API_KEY still
         wins when present (CI / power-user override).
       </span>
+      <WikiLink page={GEMINI_KEY_WIKI} label="Get a Gemini API key" className="mt-1 text-xs" />
       <div className="mt-2 flex items-center gap-2">
         <input
           type="password"
