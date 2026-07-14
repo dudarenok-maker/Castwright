@@ -1,7 +1,7 @@
 # Script-review progress heartbeat, model naming, and clean model-load step
 
 - **Date:** 2026-07-14
-- **Status:** draft
+- **Status:** active
 - **Area:** frontend + server (script review / fs-58)
 - **Related:** `docs/superpowers/specs/2026-06-23-fs58-llm-script-review-design.md`,
   `docs/features/236-prosody-review-progress-detail.md`,
