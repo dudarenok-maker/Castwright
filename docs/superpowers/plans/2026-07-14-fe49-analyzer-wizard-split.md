@@ -17,7 +17,7 @@
 - **Design tokens only** — no hex literals in component code; reuse existing `emerald`/`amber`/`rose`/`ink` utility classes already used by the setup components.
 - **Touch-target rule** — new interactive controls keep the existing `min-h-[44px] fine-pointer:min-h-0` pattern already present in the setup components (this work reuses existing controls, so no new targets are introduced).
 - **Testing discipline** — every task ships paired automated tests; the wizard restructure additionally updates the e2e spec. No `.skip`, no bypass.
-- **Union widening is additive/backward-compatible** — adding `'warn'` to `'pass' | 'fail'` does NOT force-edit every existing test that constructs a `'pass'`/`'fail'` diagnosis; those still satisfy the wider union and compile unchanged. Only tests that *assert `warn` behavior* are touched. Do not churn the other factories.
+- **`status`-union widening is additive; the server `AnalyzerDiagnosisInput` change is NOT.** Adding `'warn'` to the *output* `status` union does not force-edit tests that construct a `'pass'`/`'fail'` diagnosis — they still satisfy the wider union. BUT Task 2 also (a) adds a **required** `anyAnalyzerModelPulled` field to `AnalyzerDiagnosisInput` (a compile-breaking change for any existing input literal) and (b) splits today's local-ready `pass` into `pass`/`warn` (a semantic change). The one existing fixture affected — `setup-diagnosis.test.ts:214` `ANALYZER_LOCAL_READY` — is explicitly updated in Task 2 Step 4b. Do not assume the input change is free; do not churn the *client* output-union factories, which genuinely are unchanged.
 
 ## Resolved planning-open items (from spec §"Resolve during planning")
 
@@ -64,46 +64,26 @@ Introduce `warn` on the client `BlockerDiagnosis` and make the two non-wizard co
 
 - [ ] **Step 1: Write the failing test** — `warn` renders a gentle note, no fix button.
 
-In `src/components/status-popover.test.tsx`, add:
+In `src/components/status-popover.test.tsx`, add — **using the file's existing `readinessWith()` (`:32`) and `makeProps()` (`:43`) helpers**, which fill all blockers with PASS and supply every required `StatusPopover` prop. Using them is what makes this test fail for the RIGHT reason (the `status` union rejects `'warn'`) rather than on ~15 missing props:
 
 ```tsx
-import { render, screen } from '@testing-library/react';
-// (reuse the file's existing imports for StatusPopover / readinessWith if present;
-//  otherwise construct a minimal readiness object inline)
-
+// readinessWith + makeProps already exist at the top of this file — reuse them.
 it('renders a non-alarming note for a warn analyzer (no fix button)', () => {
-  const warnAnalyzer = {
-    status: 'warn' as const,
-    cause: 'pass' as const,
+  const warnAnalyzer: BlockerDiagnosis = {
+    status: 'warn',
+    cause: 'pass',
     message: 'Analyzer ready — no backup analyzer configured.',
     remediation: '',
   };
-  render(
-    <StatusPopover
-      open
-      anchorRef={{ current: document.createElement('button') }}
-      panelRef={{ current: null }}
-      readiness={{
-        ready: true,
-        completedAt: null,
-        blockers: {
-          sidecar: { status: 'pass', cause: 'pass', message: '', remediation: '' },
-          ffmpeg: { status: 'pass', cause: 'pass', message: '', remediation: '' },
-          tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
-          analyzer: warnAnalyzer,
-        },
-        info: { gpu: '' },
-      }}
-      onDiagnosisRefetch={() => {}}
-    />,
-  );
+  render(<StatusPopover {...makeProps({ readiness: readinessWith({ analyzer: warnAnalyzer }) })} />);
   expect(screen.getByText(/no backup analyzer configured/i)).toBeInTheDocument();
-  // No fix-action button for a warn.
+  // No fix-action button for a warn: BlockerFixAction renders nothing without an
+  // action AND is now gated to status === 'fail'.
   expect(screen.queryByRole('button', { name: /open|install|pull|set up/i })).toBeNull();
 });
 ```
 
-> Note: match the existing test's prop-passing style for `StatusPopover` (the file already renders it — copy that harness rather than the shape above if it differs). The assertion content is what matters.
+> The union widening (Step 3) is what flips this from red (TS rejects `status: 'warn'` in the typed `BlockerDiagnosis`) to green. The amber-note branch (Step 4) is exercised by the render; its tone is a class detail not asserted here (the load-bearing lock is "no fix button + message shown + non-blocking").
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -382,6 +362,25 @@ export function diagnoseAnalyzer(input: AnalyzerDiagnosisInput): BlockerDiagnosi
 }
 ```
 
+- [ ] **Step 4b: Update the EXISTING `diagnoseAnalyzer` test fixture** (`server/src/routes/setup-diagnosis.test.ts:214-222`).
+
+The current `ANALYZER_LOCAL_READY` predates the new input field AND the backup split, so leaving it untouched breaks the suite on BOTH axes: (a) it lacks the now-**required** `anyAnalyzerModelPulled` → TS2741 compile error across all six spread cases; (b) with `geminiKeySet: false`, the two `→ pass` assertions (`:225` local, `:248` gemini-with-key) now compute **`warn`**, because a reachable+pulled local analyzer with no second engine has no backup. Fix the fixture so it represents a fully-provisioned (green) box — add `anyAnalyzerModelPulled: true` and flip `geminiKeySet` to `true`:
+
+```ts
+const ANALYZER_LOCAL_READY: AnalyzerDiagnosisInput = {
+  engine: 'local',
+  ollamaReachable: true,
+  ollamaError: null,
+  modelPulled: true,
+  anyAnalyzerModelPulled: true,
+  expectedModel: 'qwen3.5:9b',
+  pullable: ['qwen3.5:9b'],
+  geminiKeySet: true,
+};
+```
+
+All six existing cases stay green under this base: the four `fail` cases each override only the field that trips their branch (the gate is engine-aware, so the added Gemini key never rescues a local fail — `:228` unreachable and `:233`/`:238` model-not-pulled still fail), and both `pass` cases (`:225`, `:248`) now have a real backup so they stay `pass`. The **local-only `warn`** semantics are pinned by the NEW matrix in Step 1 — do NOT mutate the existing assertions to `warn`.
+
 - [ ] **Step 5: Run the diagnosis test to verify it passes**
 
 Run: `cd server && npm test -- src/routes/setup-diagnosis.test.ts`
@@ -457,7 +456,9 @@ Add `anyAnalyzerModelPulled` to the existing import from `./setup-diagnosis.js` 
 - [ ] **Step 9: Run the readiness test + full server routes suite.**
 
 Run: `cd server && npm test -- src/routes/setup-readiness.test.ts && npm run test:server`
-Expected: PASS. If any existing readiness/route test asserted the gemini-engine path skips the Ollama probe, update it — probing both is intended.
+Expected: PASS. (No existing test asserts the gemini path skips the Ollama probe — the readiness tests target the pure `buildSetupReadiness`/`diagnose*` functions, not the route's I/O — so nothing needs updating there.)
+
+> **Cost note (accepted):** today the gemini-engine `/readiness` makes zero Ollama probe (`setup-readiness.ts:196-200` synthesizes `reachable:true`); this change makes `probeOllamaHealth()` unconditional so the backup label is available regardless of engine. For the common "no local Ollama" gemini user the two localhost fetches fast-fail (ECONNREFUSED, sub-ms); worst case is the 2s `PROBE_TIMEOUT_MS` when a daemon is up-but-wedged. The readiness poll is 10s-cadence, so this is tolerable for v1. (A future optimization could gate the probe on a cheap `installBootstrap.detect()` — deferred, not needed now.)
 
 - [ ] **Step 10: Commit**
 
@@ -546,8 +547,17 @@ import { ModelPullStatus, type OllamaHealthEnvelope } from '../model-pull-status
 import { GeminiKeyField } from '../account-forms';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { saveGeminiApiKey, fetchAnalyzerModels } from '../../store/account-slice';
+import { MODEL_OPTIONS } from '../../lib/models';
 import { api } from '../../lib/api';
 import type { SetupReadiness, BlockerDiagnosis } from '../../lib/api';
+
+/* Known local analyzer-model family roots (qwen3.5, llama3.1, …) from the
+   curated catalog. Used to gate the bridge line so an embedding-only install
+   (e.g. nomic-embed-text) does NOT read as "analyzer available" — mirrors the
+   server's anyAnalyzerModelPulled exclusion. */
+const LOCAL_ANALYZER_ROOTS = new Set(
+  MODEL_OPTIONS.filter((m) => m.engine === 'local').map((m) => m.id.split(':')[0]),
+);
 
 function AnalyzerBadge({ diagnosis }: { diagnosis: BlockerDiagnosis }) {
   const tone =
@@ -595,8 +605,14 @@ export function StepAnalysis({ readiness, onRefetch }: { readiness: SetupReadine
     void dispatch(fetchAnalyzerModels());
   };
 
-  // A pulled analyzer-capable model → show the bridge line to Defaults.
-  const hasLocalAnalyzerModel = account.localAnalyzerModels.length > 0;
+  // A pulled ANALYZER-CAPABLE local model → show the bridge line to Defaults.
+  // `localAnalyzerModels` is the raw /api/tags list (embeddings included), so
+  // filter to a curated analyzer family or a pull-allowlist match — never bare
+  // `.length > 0`, which would light for an embedding-only box.
+  const hasLocalAnalyzerModel = account.localAnalyzerModels.some((m) => {
+    const root = m.name.split(':')[0];
+    return LOCAL_ANALYZER_ROOTS.has(root) || account.pullableModels.some((p) => p.split(':')[0] === root);
+  });
 
   return (
     <div className="space-y-8">
@@ -954,24 +970,25 @@ Update the Playwright spec for the new step count/order and cover the closed Oll
   - Test 3 & 4 (reach last step): loop `for (let i = 0; i < 6; i++)`, then assert `/step 7 of 7/i`.
   - Re-entry test: assert `/step 1 of 7/i` has count 0; after clicking the ffmpeg row assert `/step 2 of 7/i`.
 
-- [ ] **Step 2: Add an Ollama-pull-path test** driving the mocked `/api/ollama/*` endpoints. Route to the Analysis step (step 3 via two `Next` clicks from `?setup=notready`), mock `GET /api/ollama/detect` → installed, `GET/POST /api/ollama/health|refresh` → reachable with a `pullable` list, `POST /api/ollama/pull` → a job that reaches `pulled`, and assert a `model-pull-*` control is present and the bridge line appears after a pull:
+- [ ] **Step 2: Add an Analysis-step test** covering the closed Ollama loop.
+
+**Mock-mode reality (important):** under `VITE_USE_MOCKS`, `api.getOllamaHealth` resolves to the in-app JS mock (`api.ts:7565`), which returns `status:'reachable'` with curated models **already pulled** (`['qwen3.5:4b','llama3.1:8b']`) and the full `pullable` list. So a `page.route('**/api/ollama/health', …)` would NOT intercept it (no network call is made) — do not route it. `ModelPullStatus` renders its list from that mock health prop, and `localAnalyzerModels` populates with the curated tags → the bridge line shows without simulating a pull. `OllamaInstall` DOES use a raw `fetch('/api/ollama/detect')` on mount, so stub only that (mirror the network-mock idiom in `setup-checker-venv-fix.spec.ts`):
 
 ```ts
-test('Analysis step exposes the Ollama pull path (mocked)', async ({ page }) => {
+test('Analysis step (step 3) exposes the Ollama pull list, Gemini card, and bridge line', async ({ page }) => {
   await page.route('**/api/ollama/detect', (r) => r.fulfill({ json: { installed: true, version: '0.1.0' } }));
-  await page.route('**/api/ollama/health', (r) =>
-    r.fulfill({ json: { status: 'reachable', url: 'http://x', models: [], expectedModel: 'qwen3.5:4b', modelPulled: false, pullable: ['qwen3.5:4b'] } }));
   await page.goto('/#/?setup=notready');
   const next = page.getByRole('button', { name: /^next$/i });
-  await next.click(); // ffmpeg
-  await next.click(); // analysis
+  await next.click(); // → ffmpeg (step 2)
+  await next.click(); // → analysis (step 3)
+  await expect(page.getByText(/step 3 of 7/i)).toBeVisible();
   await expect(page.getByText(/local via ollama/i)).toBeVisible();
   await expect(page.getByTestId('model-pull-status')).toBeVisible();
   await expect(page.getByText(/online via gemini/i)).toBeVisible();
+  // In-app mock reports curated analyzer models already pulled → bridge line shows.
+  await expect(page.getByTestId('analysis-local-bridge')).toBeVisible();
 });
 ```
-
-> Confirm the exact mock-routing idiom against the existing `setup-checker-venv-fix.spec.ts` (it already network-mocks setup jobs) and mirror it.
 
 - [ ] **Step 3: Run the e2e spec.**
 
@@ -997,6 +1014,7 @@ git commit -m "test(e2e): 7-step wizard order + Ollama pull path"
 ## Self-review
 
 - **Spec coverage:** Goals §1 wizard split → Task 3; §2 analysis step two-card local-first + closed dead-end + bridge line → Task 3; §4 Defaults engine derive → Task 4; §5 tri-state + probe-both + gate → Tasks 1–2; §6 pull allowlist → verified (no code change, `qwen3.5:4b` ∈ `DEFAULT_ALLOWED_MODELS`); §7 admin → ship-chore follow-up; testing § 7-step/matrix/regression-guards/mock-parity/e2e → Tasks 1–5. All acceptance-criteria bullets map to a task.
-- **Placeholder scan:** none — every code step shows the code; the two "match existing harness" notes point at a concrete existing file to copy, not a TODO.
-- **Type consistency:** `BlockerDiagnosis.status: 'pass' | 'warn' | 'fail'` widened in both hand-written locations (Tasks 1, 2); `AnalyzerDiagnosisInput.anyAnalyzerModelPulled` produced in Task 2 and consumed only there; `SummaryStatus: 'ok' | 'warn' | 'attention'` defined and used only in `setup-wizard.tsx` (Task 3); `StepAnalysis`/`StepVoice` props `{ readiness, onRefetch }` match `renderStep`'s call sites.
+- **Placeholder scan:** none — every code step shows the code; the "match existing harness" notes point at a concrete existing file/helper to copy, not a TODO.
+- **Type consistency:** `BlockerDiagnosis.status: 'pass' | 'warn' | 'fail'` widened in both hand-written locations (Tasks 1, 2); `AnalyzerDiagnosisInput.anyAnalyzerModelPulled` produced in Task 2, consumed by the route (Step 8) and both the new matrix (Step 1) and the existing fixture (Step 4b); `SummaryStatus: 'ok' | 'warn' | 'attention'` defined and used only in `setup-wizard.tsx` (Task 3); `StepAnalysis`/`StepVoice` props `{ readiness, onRefetch }` match `renderStep`'s call sites.
+- **Existing-test impact (from plan review):** the only existing suite that breaks is `setup-diagnosis.test.ts` (required-field + `pass`→`warn`), handled in Task 2 Step 4b; the client `status-popover.test.tsx` `warn` test reuses that file's `makeProps`/`readinessWith` helpers so it fails for the right reason; the e2e uses the in-app Ollama mock (no dead `page.route`). No exhaustive `switch(status)` on a diagnosis exists anywhere, so the union widening breaks no client consumer.
 - **Deviation flagged:** `localBackup` strengthened with `|| modelPulled` vs the spec's formula (green-vs-yellow only) — documented above with a dedicated guard test in Task 2.
