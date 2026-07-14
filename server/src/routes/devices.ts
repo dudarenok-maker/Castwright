@@ -16,7 +16,12 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { createDevice, listDevices, revokeDevice, clampTtlDays } from '../workspace/device-tokens.js';
 import { createPairingSession } from '../workspace/pairing-sessions.js';
-import { isLanTokenEnforced, isLoopbackRequest } from '../lan-auth.js';
+import {
+  isLanTokenEnforced,
+  isLoopbackRequest,
+  mayStartPairingSession,
+  PAIRING_ORIGIN_HINT,
+} from '../lan-auth.js';
 import { enumerateLanUrls } from './export-lan.js';
 import { getLanRuntime } from '../lan-runtime.js';
 import { configValue } from '../config/resolver.js';
@@ -43,10 +48,12 @@ devicesRouter.post('/devices', async (req: Request, res: Response) => {
   res.status(201).json({ ...device, token });
 });
 
-// browser pairing session (loopback-only; requires enforcement so the cookie is meaningful + HTTPS)
+// browser pairing session — startable from loopback (the host UI) OR an already-paired
+// device on the friendly hostname (see mayStartPairingSession); requires enforcement so
+// the cookie is meaningful + HTTPS. Bare-LAN-IP access stays loopback-only.
 devicesRouter.post('/devices/pair-session', (req: Request, res: Response) => {
-  if (!isLoopbackRequest(req)) {
-    res.status(403).json({ error: 'Pairing can only be started from the host UI.' });
+  if (!mayStartPairingSession(req)) {
+    res.status(403).json({ error: PAIRING_ORIGIN_HINT });
     return;
   }
   if (!isLanTokenEnforced()) {

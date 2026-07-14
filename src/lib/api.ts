@@ -6652,14 +6652,18 @@ async function realGetExportLanUrls(): Promise<ExportLanInfo> {
   return res.json();
 }
 
-async function realCreatePairSession(): Promise<PairSessionInfo> {
+async function realCreatePairSession(label?: string): Promise<PairSessionInfo> {
+  const trimmed = label?.trim();
   const res = await fetch(`/api/pair/session`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: '{}',
+    body: JSON.stringify(trimmed ? { label: trimmed } : {}),
   });
   if (!res.ok)
-    throw new Error(`pair session failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    throw new ApiError(
+      `pair session failed (${res.status}): ${(await res.text()) || res.statusText}`,
+      res.status,
+    );
   return res.json();
 }
 
@@ -6936,7 +6940,7 @@ async function mockGetExportLanUrls(): Promise<ExportLanInfo> {
   };
 }
 
-export async function mockCreatePairSession(): Promise<PairSessionInfo> {
+export async function mockCreatePairSession(_label?: string): Promise<PairSessionInfo> {
   await wait(20);
   const hostPort = '192.168.1.42:8443';
   const code = 'K7QF3M2P';
