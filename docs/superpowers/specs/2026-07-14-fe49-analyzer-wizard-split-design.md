@@ -86,9 +86,9 @@ yellow distinction is the only new, availability-based layer.
 | Step order | **Analysis first, then Voice.** |
 | Analyzer options | Two cards; **Ollama first** (local-first), Gemini second. |
 | Ollama section content | Render like admin `ModelsCardBody`: `OllamaInstall` + `ModelPullStatus`. |
-| "Ollama available" | Daemon reachable + **≥1 pulled analyzer-capable model** (curated-family match, not any `/api/tags` entry). |
+| "Ollama available" (backup label) | Daemon reachable + **≥1 pulled analyzer-capable model** (curated-family match, not any `/api/tags` entry). |
 | Who sets the active engine | The **Defaults step** dropdown, via `':'` auto-derive. |
-| Gate (pass/fail) | **Engine-aware** — fail iff the resolved engine won't run (incl. local→gemini fallback). Unchanged semantics from today. |
+| Gate (pass/fail) | **Byte-identical to today** — fail iff the *resolved* engine+model won't run (gemini: no key; local: daemon unreachable OR resolved model not pulled). Fallback NOT modeled in the gate (matches today). |
 | Green vs yellow | **green** = will run AND a backup analyzer is provisioned; **yellow/`warn`** (non-blocking) = will run, no backup. Adds a `warn` state to `BlockerDiagnosis`. |
 | Admin screens | **Follow-up** issue to mirror this design (not shared control). |
 
@@ -205,27 +205,46 @@ pass/fail logic (`setup-diagnosis.ts:226-258`) is correct and stays; we add a
 client `src/lib/api.ts:7129` and the server's diagnosis type — updated in
 lockstep (NOT generated from `openapi.yaml`).
 
-**`diagnoseAnalyzer` logic.** Inputs: `engine`, `geminiKeySet`, `ollamaReachable`,
-`ollamaHasAnalyzerModel`, `expectedModel`, `pullable`. Define:
-- `localReady = ollamaReachable && ollamaHasAnalyzerModel`
-- `activeUsable` = `engine === 'gemini' ? geminiKeySet : (localReady || geminiKeySet)`
-  (the `local || gemini` reflects the documented local→gemini fallback)
-- `backups provisioned` = count of `{ geminiKeySet, localReady }` that are true
+**`diagnoseAnalyzer` logic — `warn` is a pure additive label over today's PASS
+set; the pass/fail gate is byte-identical to today (never more lenient).** This
+matters: `FallbackAnalyzer` (`index.ts:235-249`) falls back to Gemini **only** on
+`LocalUnreachableError` (daemon unreachable) — a reachable daemon missing the
+resolved model hard-fails. So the gate must **not** credit the Gemini key as
+rescuing local, and today's `diagnoseAnalyzer` (`setup-diagnosis.ts:238-256`)
+correctly doesn't. We keep that.
+
+Inputs: `engine`, `geminiKeySet`, `ollamaReachable`, `resolvedModelPulled`,
+`anyAnalyzerModelPulled`, `expectedModel`, `pullable`. Two distinct ollama facts:
+- **`resolvedModelPulled`** — is `getResolvedOllamaModel()` pulled? (today's
+  `ollama.modelPulled`; drives the **gate**, model-specific).
+- **`anyAnalyzerModelPulled`** — is *any* analyzer-capable tag pulled? (a pulled
+  tag prefix-matching the curated catalog `pullable` ∪ known local `MODEL_OPTIONS`
+  via the existing `isPrefixMatch`; **not** bare `models.length > 0`, so an
+  embedding-only install like `nomic-embed-text` doesn't count; drives only the
+  **backup label**).
+
+Gate (`activeUsable`) — **exactly today's pass condition**, engine-aware,
+resolved-model-specific, fallback NOT modeled:
+- `engine === 'gemini'` → `geminiKeySet`
+- `engine === 'local'`  → `ollamaReachable && resolvedModelPulled`
+
+Backup label (only splits green vs yellow — never gates):
+- `geminiBackup = geminiKeySet`
+- `localBackup  = ollamaReachable && anyAnalyzerModelPulled`
 
 Then:
-- `!activeUsable` → **`fail`** (blocking), with **today's engine-specific remedy**
-  unchanged (gemini→no-key; local→`ollama-unreachable`/`model-not-pulled` with the
-  `ollama-install`/`ollama-pull` actions).
-- `activeUsable` and both provisioned → **`pass`** "Analyzer ready."
-- `activeUsable` and exactly one provisioned → **`warn`** "Analyzer ready — no
-  backup analyzer configured." (non-blocking; carries a light navigate remedy for
-  out-of-wizard consumers).
+- `!activeUsable` → **`fail`** (blocking) — **byte-identical to today's branch and
+  remedies** (gemini→no-key; local→`ollama-unreachable`/`model-not-pulled` with the
+  `ollama-install`/`ollama-pull` actions). No remedy is dropped, because this
+  branch *is* today's.
+- `activeUsable && geminiBackup && localBackup` → **`pass`** "Analyzer ready."
+- `activeUsable` otherwise → **`warn`** "Analyzer ready — no backup analyzer
+  configured." (non-blocking; carries a light navigate remedy for out-of-wizard
+  consumers).
 
-**`ollamaHasAnalyzerModel`** = a pulled tag that prefix-matches the curated
-analyzer catalog (`pullable` ∪ known local `MODEL_OPTIONS`), reusing the existing
-`isPrefixMatch` logic — **not** bare `models.length > 0`, so an embedding-only
-install (e.g. `nomic-embed-text`) does not read as an analyzer. (Exact predicate,
-and whether to also honor a user-selected non-curated tag, is a planning detail.)
+(Since `engine==='local'` pass ⇒ `resolvedModelPulled` ⇒ `localBackup`, green for
+local reduces to "also has a Gemini key"; for gemini pass, green reduces to "also
+has a local analyzer model." Exactly the intended primary/backup semantics.)
 
 **`setup-readiness.ts:194-212`.** Probe **both** unconditionally: compute
 `geminiKeySet` from `getResolvedGeminiApiKey()` and always `probeOllamaHealth()`
@@ -282,10 +301,12 @@ add the thin `docs/BACKLOG.md` row.
 - **`step-defaults.test.tsx`** — `':'` tag → saves `analysisEngine:'local'`;
   Gemini id → `'gemini'`.
 - **`setup-diagnosis.test.ts`** — the full matrix: engine=gemini {no key → fail;
-  key only → warn; key + local model → pass}; engine=local {nothing → fail;
-  local model only → warn; local + key → pass; no local but key → warn via
-  fallback}; **regression guard: engine=gemini + no key + Ollama model pulled →
-  still `fail`** (must not go warn/pass).
+  key only → warn; key + local analyzer model → pass}; engine=local {resolved
+  model not pulled → fail; resolved model pulled, no key → warn; resolved model
+  pulled + key → pass}; **regression guards:** (a) engine=gemini + no key + Ollama
+  model pulled → still `fail`; (b) engine=local + resolved model NOT pulled + key
+  set → still `fail` (fallback is unreachable-only, not model-missing) — neither
+  may go warn/pass.
 - **`setup-readiness` route test** — probes both engines; `ready` true when the
   only non-pass blocker is analyzer `warn`; false on analyzer `fail`.
 - **Mock parity** — `mockGetSetupReadiness`/`mockBlocker` learn the tri-state; a
@@ -304,8 +325,12 @@ add the thin `docs/BACKLOG.md` row.
 - [ ] Gemini key set → analyzer badge usable in-step. Ollama model pulled while a
       Gemini key exists → **green** (backup present). Ollama pulled with **no**
       key and engine still `gemini` → **red/blocking** (regression guard).
-- [ ] Exactly one analyzer usable+provisioned → **yellow, non-blocking** (`ready`
-      true); resolved engine unusable → **red, blocking** (`ready` false).
+- [ ] **Gate never more lenient than today:** `engine=local` with the *resolved*
+      model not pulled → **red/blocking even when a Gemini key exists** (the
+      fallback covers only an unreachable daemon, not a missing model).
+- [ ] `activeUsable` (green or yellow) → non-blocking (`ready` true); `fail` →
+      blocking (`ready` false). Green vs yellow is a label over today's PASS set,
+      not a change to what passes.
 - [ ] Defaults: picking a `':'` tag sets `analysisEngine:'local'`; a Gemini id
       sets `'gemini'`.
 - [ ] "Ollama available" ignores non-analyzer tags (embedding-only install does
