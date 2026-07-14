@@ -276,7 +276,7 @@ persists across cases in a file, so a `beforeEach` MUST reset it **in lockstep
 with `sessionStorage`** — clearing one but not the other manufactures the
 registry-empty + `sessionStorage`-running inconsistency the design assumes is
 impossible in-context. `api.ts` exports a test-only
-`__resetMockScriptReviewInFlight()` for this; the `beforeEach` calls it and
+`_resetMockScriptReviewInFlight()` for this; the `beforeEach` calls it and
 `sessionStorage.clear()`.
 
 1. **Dedup + replay:** start `mockReviewScript(book)` (don't await), advance
@@ -315,7 +315,7 @@ explicitly" rule.)
 - **Critical — inverted init order:** register-before-run made explicit and
   implementable (placeholder `promise`, entry-reference identity), with the
   no-`await`-before-`set()` invariant stated.
-- **Significant — test isolation:** exported `__resetMockScriptReviewInFlight()`
+- **Significant — test isolation:** exported `_resetMockScriptReviewInFlight()`
   + lockstep `beforeEach` reset with `sessionStorage`.
 - **Significant — double `setReview`:** confirmed idempotent (per-chapter
   preserve-the-rest replace) *given* replay makes both op sets identical.
