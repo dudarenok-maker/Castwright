@@ -119,6 +119,17 @@ describe('HelpView (fe-29)', () => {
     });
   });
 
+  it('scrolls to the deep-linked entry once, not again on later group toggles', () => {
+    const spy = vi.fn();
+    // jsdom lacks scrollIntoView; install a spy for this test
+    (window.HTMLElement.prototype as unknown as { scrollIntoView: unknown }).scrollIntoView = spy;
+    renderHelp('vram-spill'); // performance group auto-expands, card scrolls once
+    expect(spy).toHaveBeenCalledTimes(1);
+    // toggle an unrelated group — must NOT re-scroll
+    fireEvent.click(screen.getByRole('button', { name: /voice engines & models/i }));
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
   it('reflects a rebound play-pause key', () => {
     const store = configureStore({
       reducer: { ui: uiSlice.reducer, settings: settingsSlice.reducer },

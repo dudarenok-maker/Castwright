@@ -190,6 +190,7 @@ export function HelpView() {
   ];
 
   const focusedRef = useRef<HTMLDivElement | null>(null);
+  const scrolledForRef = useRef<string | undefined>(undefined);
   const focusedEntryExists = HELP_FAILURE_ENTRIES.some((e) => e.code === focusCode);
 
   const focusedCategory = HELP_FAILURE_ENTRIES.find((e) => e.code === focusCode)?.category;
@@ -219,8 +220,16 @@ export function HelpView() {
   useEffect(() => {
     /* Optional-chained: jsdom has no scrollIntoView. `expanded` is a dep so
        this re-runs once the focused card actually mounts (its group may have
-       just expanded above, on the same tick focusCode hydrated). */
-    if (focusedEntryExists) focusedRef.current?.scrollIntoView?.({ block: 'start' });
+       just expanded above, on the same tick focusCode hydrated) — but the
+       scrolledForRef guard limits the actual scroll to once per focusCode,
+       so expanding/collapsing OTHER groups later doesn't yank the viewport
+       back to the focused card. */
+    if (!focusedEntryExists) return;
+    if (scrolledForRef.current === focusCode) return;
+    if (focusedRef.current) {
+      focusedRef.current.scrollIntoView?.({ block: 'start' });
+      scrolledForRef.current = focusCode;
+    }
   }, [focusedEntryExists, focusCode, expanded]);
 
   const [query, setQuery] = useState('');
@@ -384,7 +393,7 @@ export function HelpView() {
                     <button
                       type="button"
                       aria-expanded={open}
-                      aria-controls={`cat-panel-${cat.id}`}
+                      aria-controls={open ? `cat-panel-${cat.id}` : undefined}
                       onClick={() => toggle(cat.id)}
                       disabled={q !== ''}
                       className="w-full flex items-center justify-between gap-3 px-4 sm:px-5 py-3 min-h-[44px] fine-pointer:min-h-0 text-left disabled:cursor-default"
