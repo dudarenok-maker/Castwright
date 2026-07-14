@@ -181,12 +181,17 @@ interface QuoteRun {
     whose `„` opener maps to several closers — `“`/`”`/`"`) over-merges a
     mixed-closer paragraph: the per-pair `„…"` regex would lazily run the first
     `„` past an intervening `“` to a later ASCII `"`, swallowing the beat and
-    the next turn (#1601). `closeLen` comes from the captured closer, so
-    variable-length closers stay correct. */
+    the next turn (#1601). The run ends at the nearest closer POSITION; a run's
+    `closeLen` is the actually-matched closer's length (all current closers are
+    one code unit). NOTE: alternation matches the leftmost alternative, not the
+    longest — if a future language ever pairs prefix-related multi-char closers
+    with one opener, order them longest-first here. */
 function findQuoteRuns(line: string, pairs: Array<[string, string]>): QuoteRun[] {
   const closersByOpener = new Map<string, string[]>();
   for (const [open, close] of pairs) {
-    (closersByOpener.get(open) ?? closersByOpener.set(open, []).get(open)!).push(close);
+    const list = closersByOpener.get(open);
+    if (list) list.push(close);
+    else closersByOpener.set(open, [close]);
   }
   const candidates: QuoteRun[] = [];
   for (const [open, closers] of closersByOpener) {
