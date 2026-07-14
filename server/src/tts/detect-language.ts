@@ -47,8 +47,8 @@ export function detectManuscriptLanguage(
   const han = sample.match(HAN_RE)?.length ?? 0;
   const kana = sample.match(KANA_RE)?.length ?? 0;
   if ((han + kana) / letters >= SCRIPT_THRESHOLD) {
-    // zh/ja are registered supported:false (fs-59 W2) — read THROUGH the
-    // registry (not a literal) so a later supported:true flip propagates here.
+    // zh/ja are supported:true since fs-59 W5 — read THROUGH the registry
+    // (not a literal) so any future registry change propagates here too.
     return result(kana > han ? 'ja' : 'zh');
   }
 

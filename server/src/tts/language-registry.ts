@@ -11,7 +11,12 @@
    acceptance (fs-41/fs-50 Spanish rollout). `fr` and `de` flipped `supported:true`
    2026-06-25 after operator audio acceptance of designed FR/DE Coalfall samples
    (plan 229). zh/ja were added `supported:false` in fs-59 W2 — registered but
-   not yet validated; flipping to `supported:true` is a later fs-59 wave. */
+   not yet validated — and flipped `supported:true` in fs-59 W5 after on-box
+   validation: Coqui XTTS (zh-cn/ja) and Qwen both render CJK, and CJK chapter
+   splitting via the heading lexicon shipped in #1576. CJK attribution quality
+   is analyzer-model-dependent — see the fs-59 regression plan for the
+   recommended local Qwen analyzer model and the demotion-gate caveat on the
+   general lite default. */
 
 export interface LanguageEntry {
   /** BCP-47 primary subtag, lower-cased (e.g. 'en', 'ru', 'es'). */
@@ -89,19 +94,21 @@ const ENTRIES: readonly LanguageEntry[] = [
       'epigraph'],
     narratorName: 'Erzähler',
   },
-  // zh/ja: registered fs-59 W2, supported:false — script routing + lexicons only.
-  // headingLexicon.keywords do NOT split CJK chapters yet (Latin-shape regex in
-  // parsers/text.ts expects `keyword <whitespace> number`; CJK is the circumfix
-  // "第<number>章" with no whitespace — that's Task 2.6). frontMatterKeywords DO
-  // feed FRONT_MATTER_RX as substrings today. Terms are a starting set — adjust
-  // with a native reviewer before flipping `supported:true` at W5.
-  { code: 'zh', sidecarName: 'Chinese',  supported: false, detect: { script: 'cjk', iso6393: 'cmn' },
+  // zh/ja: registered fs-59 W2 (supported:false), on-box validated + flipped
+  // supported:true in fs-59 W5. Coqui XTTS (zh-cn/ja) and Qwen both render
+  // CJK; headingLexicon.keywords feed the circumfix CJK chapter-split path
+  // (parsers/text.ts CJK_HEADING_ALT, landed #1576) in addition to
+  // frontMatterKeywords feeding FRONT_MATTER_RX as substrings. CJK attribution
+  // quality is analyzer-model-dependent (~62% recall / 72% coverage / 100%
+  // precision on a local Qwen analyzer model; weaker/unstable on the general
+  // lite default) — see the fs-59 W5 regression plan for the operator
+  // recommendation and the known demotion-gate interaction.
+  { code: 'zh', sidecarName: 'Chinese',  supported: true,  detect: { script: 'cjk', iso6393: 'cmn' },
     headingLexicon: { keywords: ['章', '部', '巻', '節', '幕'], numberWords: [],
       standalone: ['序章', '終章', '序', '跋', 'プロローグ', 'エピローグ'] },
     frontMatterKeywords: ['目录', '版权', '致谢', '序言', '后记', '附录', '关于作者'],
     narratorName: '旁白',
-    // In-language few-shot for the analyzer preamble (fs-59 W3, Task 3.3). Starting
-    // set — a native reviewer refines before the W5 supported:true flip. The
+    // In-language few-shot for the analyzer preamble (fs-59 W3, Task 3.3). The
     // attribution example demonstrates the interrupted-quote rule: a spoken turn
     // split by a narrator tag ("她说") — the SECOND spoken half belongs to the
     // speaker, not the narrator.
@@ -109,15 +116,15 @@ const ENTRIES: readonly LanguageEntry[] = [
       roster: '例如："林芳"（女主角，二十多岁，语气温柔）、"陈警官"（旁白之外的配角，说话直接）。',
       attribution: '例："“我们该走了，”她说，“天要黑了。”" — 引号内的两段话都是这个角色说的；"她说"是旁白的叙述标签，不是说话人，"天要黑了"这后半句仍然属于说话的角色，不是旁白。',
     } },
-  { code: 'ja', sidecarName: 'Japanese', supported: false, detect: { script: 'cjk', iso6393: 'jpn' },
+  { code: 'ja', sidecarName: 'Japanese', supported: true,  detect: { script: 'cjk', iso6393: 'jpn' },
     headingLexicon: { keywords: ['章', '部', '巻', '節', '話', '幕'], numberWords: [],
       standalone: ['序章', '終章', 'プロローグ', 'エピローグ', 'あとがき', '前書き'] },
     frontMatterKeywords: ['目次', '著作権', '献辞', '謝辞', 'まえがき', 'あとがき', '付録', '著者について'],
     narratorName: '語り手',
-    // In-language few-shot (fs-59 W3, Task 3.3) — starting set, refined by a native
-    // reviewer before W5. The attribution example demonstrates the interrupted-quote
-    // rule: a spoken turn split by a narrator tag ("彼女は言った") — the SECOND spoken
-    // half belongs to the speaker, not the narrator (the tag is narrator, not speaker).
+    // In-language few-shot (fs-59 W3, Task 3.3). The attribution example
+    // demonstrates the interrupted-quote rule: a spoken turn split by a
+    // narrator tag ("彼女は言った") — the SECOND spoken half belongs to the
+    // speaker, not the narrator (the tag is narrator, not speaker).
     promptExamples: {
       roster: '例：「美咲」（主人公、二十代、口調は穏やか）、「田中刑事」（脇役、話し方は率直）。',
       attribution: '例：「もう行かないと」彼女は言った。「日が暮れる前に」 — 「」内の二つの発言はどちらもこの人物のセリフである。「彼女は言った」は語り手のタグであり話者ではない。後半の「日が暮れる前に」もタグの後に続く同じ話者のセリフであり、語り手のものではない。',

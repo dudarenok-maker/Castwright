@@ -57,9 +57,10 @@ describe('sidecarLanguageName', () => {
     expect(() => sidecarLanguageName('ko-KR')).toThrow(/unsupported language/);
   });
 
-  it('resolves zh/ja now that fs-59 W2 registered them (even though supported:false)', () => {
+  it('resolves zh/ja now that fs-59 W2 registered them (supported:true since W5)', () => {
     // Registering zh/ja means sidecarLanguageName no longer throws for them — the
-    // old fail-loud net is replaced by the supported:false confirm gate (fs-59 F9).
+    // old fail-loud net was replaced by the confirm-screen gate (fs-59 F9),
+    // which now passes zh/ja through since the W5 supported:true flip.
     expect(sidecarLanguageName('ja')).toBe('Japanese');
     expect(sidecarLanguageName('ja-JP')).toBe('Japanese');
     expect(sidecarLanguageName('zh')).toBe('Chinese');

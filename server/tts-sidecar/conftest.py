@@ -8,6 +8,13 @@ import os
 
 os.environ.setdefault("PRELOAD_COQUI", "0")
 
+# The Qwen output-degeneracy guard (main.py `_QWEN_DEGEN_GUARD_ENABLED`) inspects
+# real synth-output length; the suite's minimal fakes emit non-realistic audio
+# (fixed tiny buffers / marker-length arrays) that would read as degenerate and
+# trip the reload+self-recycle path. Default it OFF suite-wide — the dedicated
+# regression test (test_qwen_degeneracy_guard.py) re-enables it explicitly.
+os.environ.setdefault("QWEN_DEGEN_GUARD", "0")
+
 
 def _qwen_weights_present() -> bool:
     """True only when the real qwen-tts + Qwen3-TTS weights are importable/loadable.

@@ -454,6 +454,8 @@ describe('POST /api/import — language detection (fs-41/fs-50)', () => {
       { code: 'es', label: 'Spanish' },
       { code: 'fr', label: 'French' },
       { code: 'de', label: 'German' },
+      { code: 'zh', label: 'Chinese' },
+      { code: 'ja', label: 'Japanese' },
     ]);
   });
 });

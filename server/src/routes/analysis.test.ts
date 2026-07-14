@@ -18,6 +18,7 @@ import {
   dropEvidencelessCast,
   isPhase0aCoverageComplete,
   reconcileSentenceCharacterIds,
+  remapCjkHonorificIds,
   attributionDriftExceeded,
   stage1ShrinkRefused,
   buildStage1ChapterInbox,
@@ -1317,6 +1318,131 @@ describe('reconcileSentenceCharacterIds — Phase 1 orphan id demoter', () => {
     expect(result.demotedCount).toBe(0);
     expect(result.sentences).toEqual([]);
     expect(result.demotedByOriginalId.size).toBe(0);
+  });
+});
+
+describe('remapCjkHonorificIds — CJK title-variant rescue before demotion', () => {
+  const makeSentence = (
+    id: number,
+    chapterId: number,
+    characterId: string,
+    text = `s${id}`,
+  ): SentenceOutput => ({ id, chapterId, characterId, text });
+
+  it('remaps honorific-fused orphan ids to their roster id on a zh book', () => {
+    /* The observed failure: roster id is the bare "奥杜万"; Phase-1 attributed
+       some lines to the fused "奥杜万师傅" (Master Oduvan). Strict equality
+       would demote them → false drift. Here they resolve back to the roster. */
+    const roster = [
+      { id: 'narrator', name: 'Narrator' },
+      { id: '奥杜万', name: '奥杜万' },
+      { id: '玛俐恩', name: '玛俐恩' },
+    ];
+    const validIds = new Set(roster.map((c) => c.id));
+    const sentences = [
+      makeSentence(1, 2, 'narrator'),
+      makeSentence(2, 2, '奥杜万师傅'), // Master Oduvan → 奥杜万
+      makeSentence(3, 2, '地保玛俐恩'), // Constable Maerin → 玛俐恩
+      makeSentence(4, 2, '奥杜万'), // already valid — untouched
+    ];
+    const result = remapCjkHonorificIds(sentences, roster, validIds, { bookLanguage: 'zh' });
+    expect(result.remappedCount).toBe(2);
+    expect(result.sentences.map((s) => s.characterId)).toEqual([
+      'narrator',
+      '奥杜万',
+      '玛俐恩',
+      '奥杜万',
+    ]);
+    // A subsequent reconcile now demotes nothing.
+    const reconciled = reconcileSentenceCharacterIds(result.sentences, validIds);
+    expect(reconciled.demotedCount).toBe(0);
+  });
+
+  it('leaves a genuinely-missed speaker to be demoted (no roster match)', () => {
+    const roster = [
+      { id: 'narrator', name: 'Narrator' },
+      { id: '奥杜万', name: '奥杜万' },
+    ];
+    const validIds = new Set(roster.map((c) => c.id));
+    // 烧炭人哈特 (Hart the charcoal-burner) was never rostered by Phase-0.
+    const sentences = [makeSentence(1, 3, '烧炭人哈特')];
+    const result = remapCjkHonorificIds(sentences, roster, validIds, { bookLanguage: 'zh' });
+    expect(result.remappedCount).toBe(0);
+    expect(result.sentences[0].characterId).toBe('烧炭人哈特'); // untouched → reconcile demotes it
+    const reconciled = reconcileSentenceCharacterIds(result.sentences, validIds);
+    expect(reconciled.demotedCount).toBe(1);
+  });
+
+  it('does NOT over-strip a familiar-prefix orphan into a wrong voice — it stays demoted', () => {
+    /* The silent WRONG-remap vector: 小雀 (Sparrow) must NOT strip to 雀 and
+       mis-map to a DIFFERENT roster character 雀. 小 is not an affix, so the
+       orphan finds no match and is demoted — correct, and safer than a wrong
+       voice. */
+    const roster = [
+      { id: 'narrator', name: 'Narrator' },
+      { id: '雀', name: '雀' }, // a distinct character
+    ];
+    const validIds = new Set(roster.map((c) => c.id));
+    const sentences = [makeSentence(1, 1, '小雀')];
+    const result = remapCjkHonorificIds(sentences, roster, validIds, { bookLanguage: 'zh' });
+    expect(result.remappedCount).toBe(0);
+    expect(result.sentences[0].characterId).toBe('小雀');
+    const reconciled = reconcileSentenceCharacterIds(result.sentences, validIds);
+    expect(reconciled.demotedCount).toBe(1); // demoted to narrator, NOT mis-mapped to 雀
+  });
+
+  it('does NOT over-strip a ja-honorific-shaped zh name (丽君 stays, not → 丽)', () => {
+    // Per-language gating: the ja list (君) never runs on a zh book.
+    const roster = [
+      { id: 'narrator', name: 'Narrator' },
+      { id: '丽', name: '丽' },
+    ];
+    const validIds = new Set(roster.map((c) => c.id));
+    const sentences = [makeSentence(1, 1, '丽君')];
+    const result = remapCjkHonorificIds(sentences, roster, validIds, { bookLanguage: 'zh' });
+    expect(result.remappedCount).toBe(0);
+    expect(result.sentences[0].characterId).toBe('丽君');
+  });
+
+  it('does not remap when the stripped form is ambiguous (>1 roster entry)', () => {
+    const roster = [
+      { id: 'a', name: '王先生' },
+      { id: 'b', name: '王夫人' },
+    ];
+    const validIds = new Set(['a', 'b']);
+    const sentences = [makeSentence(1, 1, '王')];
+    const result = remapCjkHonorificIds(sentences, roster, validIds, { bookLanguage: 'zh' });
+    expect(result.remappedCount).toBe(0);
+    expect(result.sentences[0].characterId).toBe('王');
+  });
+
+  it('is a byte-identical no-op for a non-CJK book (bookLanguage not zh/ja)', () => {
+    const roster = [{ id: 'oduvan', name: 'Oduvan' }];
+    const validIds = new Set(['oduvan', 'narrator']);
+    const sentences = [
+      makeSentence(1, 1, 'narrator'),
+      makeSentence(2, 1, 'master-oduvan'), // an orphan, but non-CJK book → untouched
+    ];
+    const result = remapCjkHonorificIds(sentences, roster, validIds, { bookLanguage: 'en' });
+    expect(result.remappedCount).toBe(0);
+    expect(result.sentences).toBe(sentences); // same reference — no allocation
+  });
+
+  it('reports per-original-id counts and fires onRemap', () => {
+    const roster = [{ id: '奥杜万', name: '奥杜万' }];
+    const validIds = new Set(['奥杜万']);
+    const sentences = [
+      makeSentence(1, 2, '奥杜万师傅'),
+      makeSentence(2, 2, '奥杜万师傅'),
+    ];
+    const seen: string[] = [];
+    const result = remapCjkHonorificIds(sentences, roster, validIds, {
+      bookLanguage: 'zh',
+      onRemap: ({ originalId, toId }) => seen.push(`${originalId}->${toId}`),
+    });
+    expect(result.remappedCount).toBe(2);
+    expect(result.remappedByOriginalId.get('奥杜万师傅')).toBe(2);
+    expect(seen).toEqual(['奥杜万师傅->奥杜万', '奥杜万师傅->奥杜万']);
   });
 });
 
