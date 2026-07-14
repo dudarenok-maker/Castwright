@@ -17,7 +17,7 @@
 - **Cert is NOT a readiness blocker** — do not touch `server/src/routes/setup-readiness.ts`, the `blockers` object, or `BlockerActionKind`. `buildSummaryRows()` stays a pure sync function.
 - **Design tokens only** — no hex literals in components; use existing Tailwind classes / CSS vars (`text-ink`, `bg-magenta`, `text-rose-700`, `text-emerald-700`, `text-amber-600`, etc.) exactly as `lan-access-card.tsx` does.
 - **Touch targets** — interactive controls get `min-h-[44px] fine-pointer:min-h-0` (match `lan-access-card.tsx`).
-- **Wiki links are page-level only** — no `#anchor` fragments; every referenced `WikiPage` must have a `docs/wiki/<page>.md` file (guard test enforces).
+- **Wiki links are page-level only** — no `#anchor` fragments. NOTE: `wiki-links.test.ts` only guards pages referenced through the `CATEGORY_WIKI`/`ADMIN_WIKI`/`HELP_SECTION_WIKI` maps (it iterates their *values*), NOT the `WikiPage` union and NOT inline `<WikiLink page="…">` literals. So the new page is referenced via `ADMIN_WIKI.lanTroubleshooting` (Task 5) to make the `docs/wiki/<page>.md` guard actually apply.
 - **Cert path source of truth** is `resolveLanCertPaths(repoRoot)` (`server/src/app-dirs.ts`) — never hardcode `.run/certs/...`.
 - **Frontend components import the API only via `api.*`** from `src/lib/api` — never `fetch` directly.
 
@@ -258,6 +258,8 @@ Wire the pure logic to the filesystem, X509 parse, LAN-IP enumeration, and runti
 - Consumes: `enumerateLanIps` (Task 1), `parseCertIps`/`computeCertHealth`/`CertHealth` (Task 2), `resolveLanCertPaths`, `getLanRuntime`, `isLanHttpsEnabled`, `X509Certificate`.
 - Produces: `GET /api/lan/cert/status` returning JSON `LanCertStatus` (shape below); `export interface LanCertStatus`.
 
+**Note on `expired` route coverage:** the route just forwards `notAfter` into `computeCertHealth`, whose `expired` branch is exhaustively covered by Task 2's pure tests — so no already-expired PEM fixture is minted here (the friction the spec flagged). The route tests below cover missing / unparseable / healthy / requested+active wiring.
+
 - [ ] **Step 1: Generate the committed healthy fixture (one-time, run locally)**
 
 The cert-parse seam needs one real PEM. Generate a 100-year self-signed cert with IP SANs and commit it (CI never regenerates it):
@@ -274,15 +276,22 @@ openssl req -x509 -newkey rsa:2048 -nodes \
 
 - [ ] **Step 2: Write the failing tests**
 
-Add to `server/src/routes/lan-cert.test.ts`. Mock `../lan-hosts.js` so `enumerateLanIps` is deterministic; drive `requested`/`active` via env + the real `setLanRuntime` setter (no mock needed). Add these imports near the top with the existing ones:
+Add to `server/src/routes/lan-cert.test.ts`. Mock `../lan-hosts.js` so `enumerateLanIps` is deterministic; drive `requested`/`active` via env + the real `setLanRuntime` setter (no mock needed).
+
+**IMPORTANT — this test file is ESM: `__dirname` is NOT defined.** The new fixture path uses `__dirname`, so you must derive it. Change the existing top-of-file `import { join } from 'node:path';` to `import { dirname, join } from 'node:path';`, then add these near the top with the existing imports:
 
 ```ts
 import { readFileSync, copyFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { setLanRuntime } from '../lan-runtime.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 vi.mock('../lan-hosts.js', () => ({ enumerateLanIps: vi.fn(() => [] as string[]) }));
 import { enumerateLanIps } from '../lan-hosts.js';
 ```
+
+(The existing `node:fs` mock in this file only overrides `readFileSync` when `readFileSyncOverride` is set — which these tests never do — so `copyFileSync` and the route's `readFileSync(certFile)` X509 parse both see the real fixture bytes. Verified against the file's mock.)
 
 Then a new describe block:
 
@@ -513,16 +522,16 @@ git commit -m "feat(frontend): add api.getLanCertStatus (real + mock)"
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `'LAN-HTTPS-Troubleshooting'` added to the `WikiPage` union; used by Task 6 via `<WikiLink page="LAN-HTTPS-Troubleshooting" …/>`.
+- Produces: `'LAN-HTTPS-Troubleshooting'` added to the `WikiPage` union AND to `ADMIN_WIKI` as `lanTroubleshooting` (routing it through a guarded map — see the Global Constraint note); used by Task 6 via `<WikiLink page={ADMIN_WIKI.lanTroubleshooting} …/>`.
 
 - [ ] **Step 1: Run the guard test to confirm current green**
 
 Run: `npm run test -- src/lib/wiki-links.test.ts`
 Expected: PASS (baseline before edit).
 
-- [ ] **Step 2: Add the page to the union**
+- [ ] **Step 2: Add the page to the union AND the ADMIN_WIKI map**
 
-In `src/lib/wiki-links.ts`, add to the `WikiPage` union (after `'Mobile-Tablet-and-Companion-App'`):
+In `src/lib/wiki-links.ts`: (a) add to the `WikiPage` union (after `'Mobile-Tablet-and-Companion-App'`):
 
 ```ts
   | 'Mobile-Tablet-and-Companion-App'
@@ -530,10 +539,22 @@ In `src/lib/wiki-links.ts`, add to the `WikiPage` union (after `'Mobile-Tablet-a
   | 'Admin';
 ```
 
+(b) add a `lanTroubleshooting` key to `ADMIN_WIKI` so the guard test — which iterates the map *values*, not the union — actually enforces the `.md`:
+
+```ts
+export const ADMIN_WIKI = {
+  modelManager: 'Model-Manager',
+  advanced: 'Advanced-Settings',
+  lanAccess: 'Mobile-Tablet-and-Companion-App',
+  lanTroubleshooting: 'LAN-HTTPS-Troubleshooting',
+  admin: 'Admin',
+} satisfies Record<string, WikiPage>;
+```
+
 - [ ] **Step 3: Run the guard test to verify it now fails**
 
 Run: `npm run test -- src/lib/wiki-links.test.ts`
-Expected: FAIL — asserts `docs/wiki/LAN-HTTPS-Troubleshooting.md` does not exist.
+Expected: FAIL — the guard iterates `ADMIN_WIKI` values and asserts `docs/wiki/LAN-HTTPS-Troubleshooting.md` exists (it doesn't yet). If it does NOT fail, the page isn't wired through a guarded map — recheck step 2(b).
 
 - [ ] **Step 4: Create the wiki page mirror**
 
@@ -679,6 +700,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import type { LanCertStatus as CertStatus } from '../lib/api';
 import { WikiLink } from './wiki-link';
+import { ADMIN_WIKI } from '../lib/wiki-links';
 
 const HEALTH_COPY: Record<CertStatus['health'], string> = {
   healthy: 'LAN certificate is set up.',
@@ -761,7 +783,7 @@ export function LanCertStatus({ variant }: { variant: 'wizard' | 'admin' }) {
         >
           {buttonLabel}
         </button>
-        <WikiLink page="LAN-HTTPS-Troubleshooting" label="Troubleshooting" className="text-xs" />
+        <WikiLink page={ADMIN_WIKI.lanTroubleshooting} label="Troubleshooting" className="text-xs" />
       </div>
 
       {regen.k === 'error' && (
@@ -792,10 +814,22 @@ Expected: PASS (4 tests).
 
 In `src/components/lan-access-card.tsx`: remove the local `certState` state (lines 19-21), the `regenerateCert` function (lines 44-52), the regenerate `<div className="mt-5 …">` block (lines 101-121), and the `<details>` block (lines 122-133). Replace the removed cert UI with `<LanCertStatus variant="admin" />` (add `import { LanCertStatus } from './lan-cert-status';`). Keep the header `<WikiLink page={ADMIN_WIKI.lanAccess} …/>` (general LAN help) and all device-pairing UI untouched. Remove the now-unused `ADMIN_WIKI` import only if nothing else in the file uses it (the header still does — keep it).
 
-- [ ] **Step 6: Update `lan-access-card.test.tsx` if it asserted the old cert UI**
+- [ ] **Step 6: Update `lan-access-card.test.tsx` (REQUIRED — it will break otherwise)**
+
+This file hand-builds its `api` mock with only `listDevices` / `createDevicePairSession` / `revokeDevice` / `regenerateLanCert`. After the refactor, `<LanAccessCard>` mounts `<LanCertStatus>`, which calls `api.getLanCertStatus()` in a `useEffect` — with no mock that's `undefined is not a function` and **every render test in the file throws**. Two required edits:
+
+1. Add `getLanCertStatus` to the mock `api` object:
+```ts
+    getLanCertStatus: vi.fn().mockResolvedValue({
+      requested: true, active: true, health: 'healthy',
+      certHosts: ['192.168.1.42'], currentLanIps: ['192.168.1.42'],
+      uncoveredIps: [], expiresAt: '2099-01-01T00:00:00.000Z',
+    }),
+```
+2. Rewrite the two assertions that checked the removed inline cert UI (the old `Now covers:` / "Regenerate certificate" text) to instead assert `await screen.findByTestId('lan-cert-status-admin')` renders.
 
 Run: `npm run test -- src/components/lan-access-card.test.tsx`
-If it references the removed "Regenerate certificate" inline text/`certState`, update those assertions to mock `api.getLanCertStatus` and assert `<LanCertStatus>` renders (e.g. `screen.findByTestId('lan-cert-status-admin')`). If no such test exists, note it in the commit.
+Expected: PASS (all tests — not just the two cert ones).
 
 - [ ] **Step 7: Run the frontend suite for both files**
 
@@ -958,10 +992,19 @@ Make these edits in `src/components/setup/setup-wizard.tsx`:
 ```
 6. Docstring (lines 2-8): update "five step components" → "six step components" and "Step N of 5" → "Step N of 6".
 
-- [ ] **Step 6: Run the wizard suite**
+- [ ] **Step 6: Update the EXISTING `setup-wizard.test.tsx` (REQUIRED — inserting a 6th step breaks it)**
+
+This file mocks only the 5 existing step components and reaches Finish by clicking **Next four times** with `/step 5 of 5/` assertions. Three required edits:
+
+1. **Add a `StepLanCert` mock** alongside the existing step-component mocks (the file stubs the other 5; an unmocked `StepLanCert` mounts the real component and fires an unmocked `api.getLanCertStatus()` → act() warnings/failures):
+```ts
+vi.mock('./step-lan-cert', () => ({ StepLanCert: () => <div data-testid="step-lan-cert-stub" /> }));
+```
+2. **Convert every 4-clicks-to-Finish loop to 5 clicks** (`for (let i = 0; i < 4; …)` → `< 5`) — Finish is now step 6.
+3. **Update every `of 5` → `of 6`** assertion (including the ffmpeg-row `of 2 of 5` → `of 2 of 6`, and the final `step 5 of 5` → `step 6 of 6`).
 
 Run: `npm run test -- src/components/setup/`
-Expected: PASS — `setup-wizard.test.tsx` still green (dots/counter derive off `STEPS.length`; new nav row present). If `setup-wizard.test.tsx` hardcodes "Step 1 of 5" or a step count, update those assertions to 6.
+Expected: PASS — `setup-wizard.test.tsx` (dots/counter derive off `STEPS.length`; new nav row present), `step-lan-cert.test.tsx`, and the other step suites all green.
 
 - [ ] **Step 7: Typecheck + commit**
 
@@ -983,20 +1026,24 @@ git commit -m "feat(frontend): add LAN-access wizard step with soft-warning bann
 **Interfaces:**
 - Consumes: mock-mode `api.getLanCertStatus` (Task 4 mock returns `health: 'missing'`, `requested: true`).
 
-- [ ] **Step 1: Check for an existing setup-wizard e2e**
+- [ ] **Step 1: Fix the EXISTING `e2e/setup-wizard.spec.ts` (REQUIRED — it hardcodes 5 steps)**
 
-Run: `ls e2e/ | grep -i setup`
-If a setup spec exists, add a test case to it instead of a new file. Otherwise create `e2e/setup-lan-cert.spec.ts`.
+The pre-existing spec has `of 5` assertions and `for (i < 4)` reach-Finish loops. With a 6th step these go red on the required `test:e2e` leg. Sweep it: every `of 5` → `of 6`, and every 4-clicks-to-Finish loop → 5 clicks.
 
-- [ ] **Step 2: Write the spec**
+Run: `npm run test:e2e -- setup-wizard`
+Expected: PASS after the sweep.
+
+- [ ] **Step 2: Write the new LAN-cert spec (guided mode)**
+
+The default mock readiness is "complete", so `/#/setup` opens the **checklist** board (no `Next`). Guided mode requires `/#/?setup=notready` (per the header comment in `e2e/setup-wizard.spec.ts`). Create `e2e/setup-lan-cert.spec.ts`:
 
 ```ts
 // e2e/setup-lan-cert.spec.ts
 import { test, expect } from '@playwright/test';
 
 test('first-run wizard surfaces the LAN-access cert step and can regenerate', async ({ page }) => {
-  await page.goto('/#/setup');
-  // Page through to the LAN access step (Next is never gated).
+  await page.goto('/#/?setup=notready'); // guided mode (default /#/setup is the checklist board)
+  // environment→ffmpeg→models→defaults→lanCert = 4 Next clicks (Next is never gated).
   for (let i = 0; i < 4; i++) {
     await page.getByRole('button', { name: 'Next' }).click();
   }
@@ -1008,7 +1055,7 @@ test('first-run wizard surfaces the LAN-access cert step and can regenerate', as
 });
 ```
 
-Adjust the number of `Next` clicks to land on the LAN-access step (index 4: environment→ffmpeg→models→defaults→lanCert = 4 clicks). Confirm the route (`/#/setup`) matches `SetupRoute` in `src/routes/index.tsx`; if the wizard opens in `checklist` mode (setup already complete in the mock), instead click the `setup-summary-row-lanCert` row to drill in.
+Confirm the guided entry (`/#/?setup=notready`) against `SetupRoute` in `src/routes/index.tsx` + the header comment of `e2e/setup-wizard.spec.ts`. If mock mode instead lands on the checklist board, drill in via `page.getByTestId('setup-summary-row-lanCert').click()`.
 
 - [ ] **Step 3: Run the spec**
 
@@ -1096,3 +1143,15 @@ git commit -m "docs(ops): ops-28 regression plan + release notes"
 **Type consistency check:** `LanCertStatus` shape identical in server (Task 3) and frontend (Task 4). `CertHealth`/`health` union `'healthy'|'missing'|'expired'` consistent across Tasks 2, 3, 4, 6. `enumerateLanIps` name consistent Tasks 1, 3. `isCertWarning` defined in Task 6, consumed in Task 7. `computeCertHealth` args shape identical between Task 2 def and Task 3 call. ✅
 
 **Placeholder scan:** no TBD/TODO; every code step carries complete code. ✅
+
+## Adversarial-review folds (applied 2026-07-14)
+
+An independent plan red-team found execution blockers concentrated in test-wiring the first draft under-scoped. All folded above:
+
+1. **ESM `__dirname`** — `lan-cert.test.ts` is ESM; `__dirname` is undefined. Task 3 Step 2 now derives it (`fileURLToPath`/`dirname`) and adds `dirname` to the existing `node:path` import.
+2. **`setup-wizard.test.tsx`** — inserting a 6th step breaks its 4-click-to-Finish loops and `of 5` assertions, and the file doesn't mock `StepLanCert`. Task 7 Step 6 now mandates the `StepLanCert` mock + 4→5 clicks + `of 5`→`of 6`.
+3. **`e2e/setup-wizard.spec.ts`** (pre-existing) — same 5-step arithmetic; the first draft never touched it. Task 8 Step 1 now sweeps it (required `test:e2e` leg).
+4. **`lan-access-card.test.tsx`** — its hand-built `api` mock lacks `getLanCertStatus`; after the refactor the card mounts `<LanCertStatus>` and throws. Task 6 Step 6 now mandates adding the mock + rewriting the two cert assertions.
+5. **Placebo wiki guard** — `wiki-links.test.ts` iterates the `ADMIN_WIKI`/etc. map values, not the union or inline `<WikiLink>` literals. Task 5 now routes the page through `ADMIN_WIKI.lanTroubleshooting` so the `.md` guard is real; the component (Task 6) references it via that constant.
+6. **e2e entry mode** — default `/#/setup` opens the checklist board (no `Next`); guided mode needs `/#/?setup=notready`. Task 8 Step 2 leads with the guided route.
+7. **`expired` route coverage** — documented as covered at Task 2's pure layer (no expired-PEM fixture minted), a deliberate spec-vs-delivered note.
