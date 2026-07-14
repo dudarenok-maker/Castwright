@@ -59,10 +59,10 @@ export function selectVoiceReadinessGateShouldFire(state: RootState, bookId: str
 }
 
 /** fs-60 — true only when this book's language has NO fallback engine at
-    all (a still-unsupported non-English language — Coqui isn't in
-    eligibleTtsEngines either). A Coqui-eligible language (en/ru/es/fr/de)
-    gets the soft-gate below instead of a hard block, since an undesigned
-    Qwen character falls back to Coqui rather than failing. */
+    all (neither Coqui nor Kokoro is in eligibleTtsEngines). A Coqui-eligible
+    language (en/ru/es/fr/de/zh/ja) gets the soft-gate below instead of a hard
+    block, since an undesigned Qwen character falls back to Coqui rather than
+    failing. */
 export function selectHasNoFallbackEngine(state: RootState, bookId: string): boolean {
   const book = state.library?.books?.find((b) => b.bookId === bookId);
   /* Missing book data (not yet loaded) defaults to "assume every engine is
@@ -81,9 +81,9 @@ export function selectHasNoFallbackEngine(state: RootState, bookId: string): boo
     book is non-English AND coqui is eligible; Kokoro otherwise. Same
     book-lookup + eligibleTtsEngines default as `selectHasNoFallbackEngine`
     above — don't fork the derivation. If `selectHasNoFallbackEngine` is true
-    (a still-unsupported language), the return value here is irrelevant since
-    no proceed button is shown in that case — 'Kokoro' is just the harmless
-    default. */
+    (no Coqui/Kokoro fallback for this language), the return value here is
+    irrelevant since no proceed button is shown in that case — 'Kokoro' is just
+    the harmless default. */
 export function selectFallbackEngineName(state: RootState, bookId: string): 'Coqui' | 'Kokoro' {
   const book = state.library?.books?.find((b) => b.bookId === bookId);
   const eligible = book?.eligibleTtsEngines ?? ['qwen', 'kokoro', 'coqui', 'gemini', 'piper'];
@@ -92,8 +92,8 @@ export function selectFallbackEngineName(state: RootState, bookId: string): 'Coq
 }
 
 /** fs-46/fs-60 — message-builder pair mirroring `analysisBusyMessage`. Three
-    branches: English's existing soft-gate (Kokoro fallback), the NEW
-    Coqui-eligible soft-gate (ru/es/fr/de), and the still-unsupported-language
+    branches: English's existing soft-gate (Kokoro fallback), the
+    Coqui-eligible soft-gate (ru/es/fr/de/zh/ja), and the no-fallback-engine
     hard block (unchanged copy). Returns null when the gate shouldn't fire. */
 export function voiceReadinessGateMessage(state: RootState, bookId: string): string | null {
   if (!selectVoiceReadinessGateShouldFire(state, bookId)) return null;

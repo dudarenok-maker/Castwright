@@ -84,9 +84,9 @@ interface Props {
   bookLanguage?: string;
   /** fs-60 — TTS engines eligible for this book's language, from the API.
       Drives whether the non-English banner's second sentence says
-      "undesigned characters can't be generated" (Qwen-only languages, e.g.
-      zh) or "fall back to a generic Coqui voice" (Coqui-eligible languages,
-      e.g. ru/es/fr/de) — see `qwenOnly` below. */
+      "undesigned characters can't be generated" (Qwen is the only eligible
+      engine) or "fall back to a generic Coqui voice" (Coqui-eligible
+      languages, e.g. ru/es/fr/de/zh/ja) — see `qwenOnly` below. */
   eligibleTtsEngines?: TtsEngine[];
   onOpenProfile: (id: string | null) => void;
   onShowMatchDetail: (id: string) => void;
@@ -159,9 +159,10 @@ export function CastView({
      silent (the banner already tells the user what to do). */
   const isNonEnglish = bookLanguage !== 'en';
   /* fs-60 — mirrors profile-drawer.tsx's `lockedToQwen`: true only when Qwen
-     is the SOLE eligible engine for this book's language (a still-unsupported
-     language, e.g. zh). For Coqui-eligible languages (ru/es/fr/de) this is
-     false — undesigned characters fall back to Coqui instead of failing. */
+     is the SOLE eligible engine for this book's language (no Coqui/Kokoro
+     fallback installed for it). For Coqui-eligible languages (ru/es/fr/de/zh/ja)
+     this is false — undesigned characters fall back to Coqui instead of
+     failing. */
   const qwenOnly = eligibleTtsEngines.length === 1 && eligibleTtsEngines[0] === 'qwen';
   const qwenAutoLoadFired = useRef(false);
   useEffect(() => {
@@ -896,9 +897,9 @@ export function CastView({
             book) benefits from a designed Qwen voice per speaking character
             for best quality; Qwen is being loaded in the background (see the
             entry effect above). fs-60 — the second sentence is eligibility-
-            aware: Qwen-only languages (e.g. zh) still can't generate
-            undesigned characters, but Coqui-eligible languages (ru/es/fr/de)
-            fall back to a generic Coqui voice instead. */}
+            aware: when Qwen is the only eligible engine, undesigned characters
+            still can't be generated, but Coqui-eligible languages (ru/es/fr/de/
+            zh/ja) fall back to a generic Coqui voice instead. */}
         {isNonEnglish && (
           <div
             role="status"

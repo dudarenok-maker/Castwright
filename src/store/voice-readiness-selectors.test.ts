@@ -133,7 +133,7 @@ describe('selectHasNoFallbackEngine', () => {
     expect(selectHasNoFallbackEngine(s, 'b1')).toBe(false);
   });
 
-  it('is true for a still-unsupported non-English language (zh)', () => {
+  it('is true when Qwen is the only eligible engine (zh with no Coqui fallback installed)', () => {
     const s = mk({ books: [{ bookId: 'b1', language: 'zh', eligibleTtsEngines: ['qwen'] }] });
     expect(selectHasNoFallbackEngine(s, 'b1')).toBe(true);
   });
@@ -178,7 +178,7 @@ describe('voiceReadinessGateMessage', () => {
     expect(voiceReadinessGateMessage(s, 'b1')).toMatch(/haven't been designed yet/);
   });
 
-  it('returns the hard-block copy for a still-unsupported non-English book', () => {
+  it('returns the hard-block copy when the book has no fallback engine (Qwen-only eligibility)', () => {
     const s = mk({
       characters: [qwenChar({ id: 'a', name: 'Alice', lines: 1 })],
       books: [{ bookId: 'b1', language: 'zh', eligibleTtsEngines: ['qwen'] }],

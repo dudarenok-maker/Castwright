@@ -287,12 +287,13 @@ export function ProfileDrawer({
      bespoke Qwen embedding server-side and returns an audition the drawer
      plays; on Save we pin the designed voiceId series-scoped. The
      narrator usually stays default — no character to design a voice for. */
-  /* fs-2 — a non-English book hard-locks every character to Qwen (Kokoro is
-     English-only). Default the choice to 'qwen' regardless of any stale/reused
-     ttsEngine on disk, matching the server's force-Qwen gate. */
+  /* fs-2/fs-60 — when a book hard-locks to Qwen (no Coqui/Kokoro fallback for
+     its language; see `lockedToQwen` below), default the choice to 'qwen'
+     regardless of any stale/reused ttsEngine on disk, matching the server's
+     force-Qwen gate. */
   /* fs-60 — lockedToQwen means "the ONLY eligible engine is Qwen" (a
-     still-unsupported non-English language), NOT "there's exactly one
-     eligible engine" — a Kokoro-only or Coqui-only install on an ENGLISH
+     non-English language with no Coqui/Kokoro fallback), NOT "there's exactly
+     one eligible engine" — a Kokoro-only or Coqui-only install on an ENGLISH
      book must not hard-lock to a disabled, uninstalled Qwen option. */
   const lockedToQwen = eligibleTtsEngines.length === 1 && eligibleTtsEngines[0] === 'qwen';
   const [engineChoice, setEngineChoice] = useState<EngineChoice>(

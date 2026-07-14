@@ -1490,8 +1490,9 @@ describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
   });
 
   /* fs-60 addendum — the banner's second sentence is eligibility-aware:
-     Coqui-eligible languages (ru/es/fr/de) get a Coqui-fallback tail instead
-     of the old "can't be generated" claim, which is now false for them. */
+     Coqui-eligible languages (ru/es/fr/de/zh/ja) get a Coqui-fallback tail
+     instead of the old "can't be generated" claim, which is now false for
+     them. */
   it('shows the Coqui-fallback tail for a Coqui-eligible non-English book', () => {
     vi.stubGlobal(
       'fetch',
@@ -1503,8 +1504,9 @@ describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
     expect(banner.textContent).not.toMatch(/can't be generated/);
   });
 
-  /* fs-60 addendum — Qwen-only languages (e.g. zh, not yet Coqui-eligible)
-     keep the original "can't be generated" wording. */
+  /* fs-60 addendum — a book whose only installed eligible engine is Qwen (here
+     zh with Coqui not installed) keeps the original "can't be generated"
+     wording. */
   it('shows the original "can\'t be generated" tail for a Qwen-only non-English book', () => {
     vi.stubGlobal(
       'fetch',

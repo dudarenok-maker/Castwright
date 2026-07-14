@@ -92,7 +92,7 @@ describe('VoiceReadinessGateModal', () => {
     expect(screen.getByText('Alice')).toBeInTheDocument();
   });
 
-  it('a still-unsupported non-English book (zh) omits the proceed affordance entirely', () => {
+  it('a book with no fallback engine (zh, Qwen-only eligibility) omits the proceed affordance entirely', () => {
     const store = makeStore({
       characters: [qwenChar({ id: 'a', name: 'Alice', lines: 3 })],
       language: 'zh',
