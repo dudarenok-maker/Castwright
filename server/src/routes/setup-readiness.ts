@@ -1,9 +1,10 @@
-/* fs-21 — GET /api/setup/readiness. A THIN MAPPER over diagnostics.ts (it
-   must not re-implement the aggregator), adding the two probes diagnostics
-   lacks: venv-on-disk and per-engine TTS weights. Drives the adaptive gate. */
+/* fs-21 — GET /api/setup/readiness. The sidecar/tts blocker badges are
+   derived from computeModelsStatus (models-status.ts) — the SAME
+   computation GET /api/setup/models-status exposes — so the two surfaces
+   can never disagree (fs-75 Part A). The ffmpeg/analyzer legs are diagnosed
+   independently below; they don't share a computation with another route. */
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { buildDiagnostics, type CheckId, type DiagnosticsResponse } from './diagnostics.js';
 import {
   getResolvedAnalysisEngine,
   getResolvedGeminiApiKey,
@@ -11,7 +12,6 @@ import {
   getResolvedOllamaModel,
   writeSetupCompletedAt,
 } from '../workspace/user-settings.js';
-import { sidecarVenvPresent } from '../diagnostics/venv.js';
 import { selectTtsProvider } from '../tts/index.js';
 import { encodePcmToAudio } from '../tts/mp3.js';
 import {
@@ -20,15 +20,13 @@ import {
   voiceSamplePublicUrl,
 } from '../tts/voice-sample-cache.js';
 import { probeOllamaHealth } from './ollama-health.js';
-import { probeSidecarHealth } from './sidecar-health.js';
+import { computeModelsStatus } from './models-status.js';
+import { engineUsable } from '../tts/models-status.js';
 import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
 import { venvCorePackageInstalled } from '../tts/venv-core-package.js';
-import { detectKokoroInstallStateOnDisk } from '../tts/kokoro-install-detect.js';
-import { detectQwenInstallStateOnDisk } from '../tts/qwen-install-detect.js';
-import { detectCoquiInstallStateOnDisk } from '../tts/coqui-install-detect.js';
 import { probeFfmpeg } from '../diagnostics/ffmpeg.js';
 import {
-  diagnoseSidecar, diagnoseTts, diagnoseFfmpeg, diagnoseAnalyzer, anyAnalyzerModelPulled, probePython312Cached,
+  diagnoseSidecar, diagnoseTts, diagnoseFfmpeg, diagnoseAnalyzer, anyAnalyzerModelPulled,
 } from './setup-diagnosis.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -79,14 +77,7 @@ export interface SetupReadiness {
   ready: boolean;
   completedAt: string | null;
   blockers: { sidecar: BlockerDiagnosis; ffmpeg: BlockerDiagnosis; tts: BlockerDiagnosis; analyzer: BlockerDiagnosis };
-  info: { gpu: string };
-}
-
-function checkOk(d: DiagnosticsResponse, id: CheckId): boolean {
-  return d.checks.find((c) => c.id === id)?.status === 'ok';
-}
-function detail(d: DiagnosticsResponse, id: CheckId): string {
-  return d.checks.find((c) => c.id === id)?.detail ?? '';
+  info: { gpu: string; vramTotalMb: number | null };
 }
 
 export function buildSetupReadiness(input: {
@@ -95,6 +86,7 @@ export function buildSetupReadiness(input: {
   tts: BlockerDiagnosis;
   analyzer: BlockerDiagnosis;
   gpu: string;
+  vramTotalMb: number | null;
   completedAt?: string | null;
 }): SetupReadiness {
   const blockers = {
@@ -104,7 +96,7 @@ export function buildSetupReadiness(input: {
     ready: Object.values(blockers).every((b) => b.status === 'pass' || b.status === 'warn'),
     completedAt: input.completedAt ?? null,
     blockers,
-    info: { gpu: input.gpu },
+    info: { gpu: input.gpu, vramTotalMb: input.vramTotalMb },
   };
 }
 
@@ -116,76 +108,38 @@ setupReadinessRouter.post('/complete', async (_req: Request, res: Response) => {
   res.json({ completedAt: ts });
 });
 
-/* DiagnosticsResponse only exposes each check's `detail` string, not the raw
-   kokoroPackageInstalled/qwenPackageInstalled booleans diagnostics.ts's own
-   'sidecar' check reads internally. This makes exactly one additional
-   probeSidecarHealth() call (on top of the one already inside
-   buildDiagnostics(), which computes info.gpu and the sidecar/ffmpeg
-   DiagnosticsCheck rows — two total network calls per /readiness request,
-   not three; the spec's Design §4 polling-cost note scopes "the one /health
-   fetch" as the accepted cost, so don't call this a second time anywhere
-   else). */
-async function packageBrokenFlags(
-  d: DiagnosticsResponse,
-): Promise<{ kokoroPackageConfirmedBroken: boolean; qwenPackageConfirmedBroken: boolean }> {
-  if (!checkOk(d, 'sidecar')) return { kokoroPackageConfirmedBroken: false, qwenPackageConfirmedBroken: false };
-  const h = await probeSidecarHealth();
-  if (h.status !== 'reachable') return { kokoroPackageConfirmedBroken: false, qwenPackageConfirmedBroken: false };
-  return {
-    kokoroPackageConfirmedBroken: h.kokoroPackageInstalled === false,
-    qwenPackageConfirmedBroken: h.qwenPackageInstalled === false,
-  };
-}
-
 setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {
-  /* This route only reads the 'sidecar' and 'gpu' rows off diagnostics —
-     it derives its own richer ffmpeg/analyzer diagnosis below from data a
-     DiagnosticsCheck row doesn't expose (booleans, error text, pullable
-     models), so skip the rest to avoid buildDiagnostics() re-running those
-     same probes (ffmpeg spawn, Ollama health, disk space) for a result this
-     route throws away. */
-  const diagnostics = await buildDiagnostics({ skip: ['asr', 'analyzer', 'gemini', 'ffmpeg', 'disk'] });
-  const venvPresent = sidecarVenvPresent(REPO_ROOT);
-  const pythonFound = venvPresent ? true : probePython312Cached();
-  const corePackageInstalled = venvPresent ? venvCorePackageInstalled(REPO_ROOT) : false;
+  /* Single source of truth for the sidecar/tts badges: computeModelsStatus
+     makes the one probeSidecarHealth() call this route needs (plus the disk
+     probes and vram total) and GET /api/setup/models-status reuses the exact
+     same computation, so the two surfaces can never disagree. */
+  const models = await computeModelsStatus(REPO_ROOT);
   const supervisor = getActiveSupervisor();
 
   const sidecar = diagnoseSidecar({
-    venvPresent,
-    pythonFound,
-    corePackageInstalled,
+    venvPresent: models.runtime.installedOnDisk,
+    pythonFound: models.runtime.pythonFound,
+    corePackageInstalled: venvCorePackageInstalled(REPO_ROOT),
     supervisorActive: supervisor !== null,
     supervisorTripped: supervisor?.tripEvent() != null,
     supervisorExhausted: supervisor?.exhaustedEvent() ?? false,
-    sidecarReachable: checkOk(diagnostics, 'sidecar'),
+    sidecarReachable: models.runtime.process === 'ready',
   });
 
-  const kokoroState = detectKokoroInstallStateOnDisk(REPO_ROOT);
-  const qwenState = detectQwenInstallStateOnDisk(REPO_ROOT);
-  const coquiState = detectCoquiInstallStateOnDisk(REPO_ROOT);
-  const noEngineAtAll = [kokoroState, qwenState, coquiState].every((s) => s === 'not-installed');
+  const VOICE_ENGINE_IDS = ['kokoro', 'qwen', 'coqui'] as const;
+  const noEngineAtAll = VOICE_ENGINE_IDS.every((id) => models.engines[id].state === 'not-installed');
+  const anyEngineUsable = VOICE_ENGINE_IDS.some((id) => engineUsable(models.engines[id]));
   const weightsMissingEngine =
-    kokoroState === 'weights-missing' ? 'kokoro' :
-    qwenState === 'weights-missing' ? 'qwen' :
-    coquiState === 'weights-missing' ? 'coqui' : null;
-  const packageFlags = await packageBrokenFlags(diagnostics);
-  /* "Usable" = ready on disk AND not live-confirmed-broken. Coqui has no
-     live package-broken signal (coqui-tts is a BASE sidecar requirement
-     present whenever the venv is bootstrapped — see coqui-install-detect.ts
-     — so its readiness on disk is the whole story). Computed AFTER
-     packageFlags, not alongside the plain disk-readiness check, precisely
-     because a disk-only "any engine ready" signal is what let a live-broken
-     engine still fail the whole blocker in round-3 plan review finding 1. */
-  const anyEngineUsable =
-    (kokoroState === 'ready' && !packageFlags.kokoroPackageConfirmedBroken) ||
-    (qwenState === 'ready' && !packageFlags.qwenPackageConfirmedBroken) ||
-    coquiState === 'ready';
+    models.engines.kokoro.state === 'weights-missing' ? 'kokoro' :
+    models.engines.qwen.state === 'weights-missing' ? 'qwen' :
+    models.engines.coqui.state === 'weights-missing' ? 'coqui' : null;
 
   const tts = diagnoseTts(sidecar, {
     noEngineAtAll,
     anyEngineUsable,
     weightsMissingEngine,
-    ...packageFlags,
+    kokoroPackageConfirmedBroken: models.engines.kokoro.packageBroken,
+    qwenPackageConfirmedBroken: models.engines.qwen.packageBroken,
   });
 
   const { ffmpeg: ffmpegPresent, ffprobe: ffprobePresent } = probeFfmpeg();
@@ -211,7 +165,8 @@ setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {
   res.json(
     buildSetupReadiness({
       sidecar, tts, ffmpeg, analyzer,
-      gpu: detail(diagnostics, 'gpu'),
+      gpu: models.info.gpu,
+      vramTotalMb: models.info.vramTotalMb,
       completedAt: getResolvedSetupCompletedAt(),
     }),
   );
