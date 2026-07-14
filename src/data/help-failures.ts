@@ -12,6 +12,41 @@ import type { components } from '../lib/api-types';
 
 export type FailureCode = components['schemas']['FailureCode'];
 
+export type CategoryId =
+  | 'setup'
+  | 'engines'
+  | 'analysis'
+  | 'voices'
+  | 'quality'
+  | 'cast'
+  | 'performance'
+  | 'files'
+  | 'other';
+
+/* Topical bucket per failure code — pinned total so a new FailureCode without a
+   category fails typecheck (mirrors the TITLES pin). */
+const CATEGORIES = {
+  'vram-spill': 'performance',
+  'recycle-storm': 'engines',
+  'sidecar-unreachable': 'engines',
+  'analyzer-rate-limit': 'analysis',
+  'analyzer-daily-quota': 'analysis',
+  'analyzer-truncated': 'analysis',
+  'analyzer-unreachable': 'analysis',
+  'analyzer-content-blocked': 'analysis',
+  'attribution-incomplete': 'analysis',
+  oom: 'performance',
+  'disk-full': 'files',
+  'model-not-loaded': 'engines',
+  'synth-timeout': 'engines',
+  'xtts-speaker-desync': 'engines',
+  'cuda-poisoned': 'performance',
+  'gpu-acceleration-unavailable': 'performance',
+  'voice-not-designed': 'voices',
+  auth: 'analysis',
+  unknown: 'other',
+} satisfies Record<FailureCode, CategoryId>;
+
 const TITLES = {
   'vram-spill': 'GPU out of memory (VRAM)',
   'recycle-storm': 'Voice engine keeps restarting',
@@ -37,6 +72,7 @@ const TITLES = {
 export interface HelpFailureEntry extends FailureRemediationCopy {
   code: FailureCode;
   title: string;
+  category: CategoryId;
 }
 
 export const HELP_FAILURE_ENTRIES: HelpFailureEntry[] = (
@@ -44,5 +80,6 @@ export const HELP_FAILURE_ENTRIES: HelpFailureEntry[] = (
 ).map((code) => ({
   code,
   title: TITLES[code],
+  category: CATEGORIES[code],
   ...FAILURE_REMEDIATIONS[code],
 }));

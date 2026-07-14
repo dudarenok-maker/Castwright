@@ -3,6 +3,8 @@
    README-markdown slugging and is fragile to replicate). The guard test asserts
    each referenced page file exists under docs/wiki/. */
 
+import type { CategoryId } from '../data/help-failures';
+
 /* NOTE: hardcodes the repo owner. If the repo transfers to an org, update this. */
 export const WIKI_BASE = 'https://github.com/dudarenok-maker/Castwright/wiki';
 
@@ -26,10 +28,8 @@ export function wikiUrl(page: WikiPage): string {
 }
 
 /* Best-fit wiki page per Troubleshooting category. Page-level, so retuning is a
-   one-line edit. Keyed by CategoryId (src/data/help-failures.ts) — typed as
-   Record<string, WikiPage> here; a later task tightens it to
-   `satisfies Record<CategoryId, WikiPage>` once CategoryId exists. */
-export const CATEGORY_WIKI: Record<string, WikiPage> = {
+   one-line edit. Keyed by CategoryId (src/data/help-failures.ts). */
+export const CATEGORY_WIKI = {
   setup: 'Getting-Started',
   engines: 'Voice-Engines',
   analysis: 'Analysis-and-the-Analyzer',
@@ -39,7 +39,7 @@ export const CATEGORY_WIKI: Record<string, WikiPage> = {
   performance: 'Advanced-Settings',
   files: 'Exporting',
   other: 'Troubleshooting',
-};
+} satisfies Record<CategoryId, WikiPage>;
 
 export const ADMIN_WIKI = {
   modelManager: 'Model-Manager',
