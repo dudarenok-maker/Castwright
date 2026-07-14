@@ -10,7 +10,7 @@
  * recycle storm: generation stalls because the sidecar is killed out from under
  * an in-flight chapter).
  *
- * Fix (Option B, mirroring `attachListenErrorHandler`'s EADDRINUSE handling in
+ * Fix (Option B, mirroring `listenWithAutoRebind`'s EADDRINUSE handling in
  * crash-logging.ts): the owning server drops a note (.run/tts.owner.json)
  * recording its pid + parent pid. A second server that finds a LIVE, FOREIGN
  * owner refuses to boot with an actionable message + exit(1) instead of starting
@@ -153,7 +153,7 @@ export interface EnforceOwnerOpts {
 
 /** Enforce single-ownership of the :9000 sidecar. If another LIVE, FOREIGN
     server already owns it, log an actionable FATAL line and exit(1) (mirroring
-    `attachListenErrorHandler`'s EADDRINUSE behaviour) — returning false WITHOUT
+    `listenWithAutoRebind`'s EADDRINUSE behaviour) — returning false WITHOUT
     clobbering the incumbent's note. Otherwise claim ownership for this server
     and return true. `log`/`exit` default to console.error / process.exit and
     are injectable for tests. */
