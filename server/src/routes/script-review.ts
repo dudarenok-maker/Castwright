@@ -672,6 +672,7 @@ async function runScriptReviewJob(
   };
   const heartbeat = makeThrottledHeartbeat(send, 2000);
   const selection = selectAnalyzerForPhase({ phase: 'phase1', model });
+  let activeSelection = selection; // Task 6 may reassign this to a Gemini-only selection
 
   let totalOps = 0;
   let reviewedChapters = 0;
@@ -696,6 +697,9 @@ async function runScriptReviewJob(
         progress: i / chapterIds.length,
         label: 'Reviewing script',
         chapterId,
+        activityState: 'waiting',
+        model: activeSelection.model,
+        engine: activeSelection.engine,
         ...chapterPacingPhaseFields({
           index: i,
           totalChapters: chapterIds.length,
@@ -748,6 +752,17 @@ async function runScriptReviewJob(
             return;
           }
           send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
+        }
+        // Intra-chapter creep: only advances the bar for multi-chunk (local)
+        // chapters; single-chunk / cloud chapters rely on the client timer.
+        if (!job.controller.signal.aborted) {
+          send({
+            kind: 'phase',
+            phaseId: 0,
+            progress: (i + (index + 1) / chunks.length) / chapterIds.length,
+            label: 'Reviewing script',
+            chapterId,
+          });
         }
       }
       if (job.controller.signal.aborted) {

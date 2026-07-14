@@ -340,7 +340,10 @@ describe('POST /api/books/:bookId/script-review', () => {
 
     const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
     const events = parseSse(res.text);
-    const phases = events.filter((e) => e.kind === 'phase' && typeof e.chapterId === 'number');
+    // Chapter-start phases carry chapterIndex/totalChapters; the fs-58
+    // heartbeat's per-chunk progress-creep phases (also kind:'phase' with a
+    // chapterId, but no pacing fields) are filtered out here.
+    const phases = events.filter((e) => e.kind === 'phase' && typeof e.chapterIndex === 'number');
 
     expect(phases[0]).toMatchObject({ chapterIndex: 1, totalChapters: 2 });
     expect(phases[0].estRemainingMs).toBeUndefined();
@@ -362,7 +365,7 @@ describe('POST /api/books/:bookId/script-review', () => {
     runReview.mockResolvedValue(CANNED_OPS);
     const res = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
     const events = parseSse(res.text);
-    const phases = events.filter((e) => e.kind === 'phase' && typeof e.chapterId === 'number');
+    const phases = events.filter((e) => e.kind === 'phase' && typeof e.chapterIndex === 'number');
     expect(phases).toHaveLength(1);
     expect(phases[0]).toMatchObject({ chapterIndex: 1, totalChapters: 1 });
     expect(phases[0].estRemainingMs).toBeUndefined();
@@ -377,7 +380,7 @@ describe('POST /api/books/:bookId/script-review', () => {
     });
     const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
     const events = parseSse(res.text);
-    const phases = events.filter((e) => e.kind === 'phase' && typeof e.chapterId === 'number');
+    const phases = events.filter((e) => e.kind === 'phase' && typeof e.chapterIndex === 'number');
     expect(typeof phases[1].estRemainingMs).toBe('number');
   });
 
@@ -434,6 +437,42 @@ describe('POST /api/books/:bookId/script-review', () => {
     expect(new Set(emittedIds).size).toBe(emittedIds.length); // no duplicates
 
     expect(events.some((e) => e.kind === 'result')).toBe(true);
+  });
+
+  it('stamps model/engine/activityState on the chapter-start phase, and emits per-chunk progress creep (fs-58 heartbeat)', async () => {
+    // Force the local engine + a small num_ctx so the chapter splits into
+    // >=2 chunks (mirrors "chunks a large chapter across calls" above) —
+    // the intra-chapter creep only has something to observe when there's
+    // more than one chunk.
+    engineState.engine = 'local';
+    process.env.ANALYZER_NUM_CTX = '400'; // → budget 2000
+
+    const longText = 'A'.repeat(800);
+    const chapterSentences = Array.from({ length: 12 }, (_, i) => ({
+      id: 100 + i,
+      chapterId: 10,
+      characterId: 'narrator',
+      text: longText,
+    }));
+    writeBook(chapterSentences);
+    runReview.mockResolvedValue({ ops: [] });
+
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    const phases = events.filter((e) => e.kind === 'phase');
+
+    // Chapter-start phase carries model + engine + waiting.
+    expect(phases[0]).toMatchObject({
+      label: 'Reviewing script',
+      activityState: 'waiting',
+      model: expect.any(String),
+      engine: expect.stringMatching(/local|gemini/),
+    });
+
+    // A per-chunk phase advanced progress strictly between chapter starts.
+    const progresses = phases.map((p) => p.progress as number);
+    expect(progresses.some((p, i) => i > 0 && p > progresses[i - 1] && p < 1)).toBe(true);
   });
 
   it('feeds the prior chapter exchange into the next chapter, first chunk only (fs-64)', async () => {
@@ -1336,6 +1375,26 @@ describe('GET /:bookId/script-review/state', () => {
     // the same book) rather than a single {chapterId, replay} pair.
     expect(res.body.running).toHaveLength(1);
     expect(res.body.running[0].chapterId).toBe(1);
+
+    resolveReview?.({ ops: [] });
+    await done;
+  });
+
+  it('replay.lastPhase carries model/engine/activityState so a reattaching client learns them immediately', async () => {
+    writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
+    let resolveReview: ((v: { ops: unknown[] }) => void) | undefined;
+    runReview.mockImplementation(() => new Promise((resolve) => { resolveReview = resolve; }));
+
+    const { done } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
+    expect(res.body.kind).toBe('running');
+    expect(res.body.running[0].replay.lastPhase).toMatchObject({
+      activityState: 'waiting',
+      model: expect.any(String),
+      engine: expect.stringMatching(/local|gemini/),
+    });
 
     resolveReview?.({ ops: [] });
     await done;
