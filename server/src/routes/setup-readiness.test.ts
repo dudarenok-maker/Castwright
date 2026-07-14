@@ -9,6 +9,9 @@ function pass(message = 'ok'): BlockerDiagnosis {
 function fail(cause: BlockerDiagnosis['cause'], message = 'broken'): BlockerDiagnosis {
   return { status: 'fail', cause, message, remediation: 'fix it' };
 }
+function warn(message = 'no backup'): BlockerDiagnosis {
+  return { status: 'warn', cause: 'pass', message, remediation: '' };
+}
 
 describe('buildSetupReadiness', () => {
   it('is ready when all four blockers pass', () => {
@@ -60,5 +63,19 @@ describe('buildSetupReadiness', () => {
   it('defaults completedAt to null when omitted', () => {
     const r = buildSetupReadiness({ sidecar: pass(), ffmpeg: pass(), tts: pass(), analyzer: pass(), gpu: '' });
     expect(r.completedAt).toBeNull();
+  });
+
+  it('ready=true when the only non-pass blocker is analyzer warn', () => {
+    const r = buildSetupReadiness({
+      sidecar: pass(), ffmpeg: pass(), tts: pass(), analyzer: warn(), gpu: '',
+    });
+    expect(r.ready).toBe(true);
+  });
+
+  it('ready=false on analyzer fail', () => {
+    const r = buildSetupReadiness({
+      sidecar: pass(), ffmpeg: pass(), tts: pass(), analyzer: fail('no-gemini-key'), gpu: '',
+    });
+    expect(r.ready).toBe(false);
   });
 });

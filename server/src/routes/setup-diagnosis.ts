@@ -41,7 +41,7 @@ export interface SidecarDiagnosisInput {
 }
 
 function diagnosis(
-  status: 'pass' | 'fail',
+  status: 'pass' | 'warn' | 'fail',
   cause: BlockerCause,
   message: string,
   remediation: string,
@@ -213,17 +213,36 @@ export function diagnoseFfmpeg(input: FfmpegDiagnosisInput): BlockerDiagnosis {
   return diagnosis('pass', 'pass', 'ffmpeg and ffprobe are both installed.', '');
 }
 
+/** True when at least one pulled tag prefix-matches a curated analyzer model
+    from the pull allowlist — mirrors ollama-health.ts's tag-canonicalisation
+    (bare ⇄ family-root / `-suffix`). Excludes non-analyzer installs (e.g. an
+    embedding-only `nomic-embed-text`, absent from the allowlist). Backup label
+    ONLY — never the gate. */
+export function anyAnalyzerModelPulled(pulledTags: string[], curated: string[]): boolean {
+  return pulledTags.some((tag) => {
+    const tagRoot = tag.split(':')[0];
+    return curated.some((m) => {
+      const root = m.split(':')[0];
+      return tag === m || tag.startsWith(`${m}-`) || (tagRoot === root && tag.startsWith(`${root}:`));
+    });
+  });
+}
+
 export interface AnalyzerDiagnosisInput {
   engine: 'local' | 'gemini';
   ollamaReachable: boolean;
   ollamaError: string | null;
+  /** Resolved analyzer model pulled — today's gate signal (model-specific). */
   modelPulled: boolean;
+  /** Any analyzer-capable model pulled — backup label only. */
+  anyAnalyzerModelPulled: boolean;
   expectedModel: string;
   pullable: string[];
   geminiKeySet: boolean;
 }
 
 export function diagnoseAnalyzer(input: AnalyzerDiagnosisInput): BlockerDiagnosis {
+  // ── Gate: byte-identical to today's pass/fail (fallback NOT modeled) ──
   if (input.engine === 'gemini') {
     if (!input.geminiKeySet) {
       return diagnosis(
@@ -233,26 +252,33 @@ export function diagnoseAnalyzer(input: AnalyzerDiagnosisInput): BlockerDiagnosi
         { kind: 'navigate', label: 'Open Advanced Settings', href: '#/advanced' },
       );
     }
-    return diagnosis('pass', 'pass', 'Gemini API key configured.', '');
+  } else {
+    if (!input.ollamaReachable) {
+      return diagnosis(
+        'fail', 'ollama-unreachable',
+        input.ollamaError ?? 'The local Ollama analyzer is not reachable.',
+        'Install and start Ollama.',
+        { kind: 'ollama-install', label: 'Install Ollama' },
+      );
+    }
+    if (!input.modelPulled) {
+      const action = input.pullable.includes(input.expectedModel)
+        ? { kind: 'ollama-pull' as const, label: `Pull ${input.expectedModel}`, params: { model: input.expectedModel } }
+        : undefined;
+      return diagnosis(
+        'fail', 'model-not-pulled',
+        `The analyzer model "${input.expectedModel}" has not been pulled.`,
+        action ? `Pull ${input.expectedModel}.` : `Pull it via the terminal: ollama pull ${input.expectedModel}`,
+        action,
+      );
+    }
   }
-  if (!input.ollamaReachable) {
-    return diagnosis(
-      'fail', 'ollama-unreachable',
-      input.ollamaError ?? 'The local Ollama analyzer is not reachable.',
-      'Install and start Ollama.',
-      { kind: 'ollama-install', label: 'Install Ollama' },
-    );
+
+  // ── activeUsable === true. Backup label splits green vs yellow (never gates). ──
+  const geminiBackup = input.geminiKeySet;
+  const localBackup = input.ollamaReachable && (input.anyAnalyzerModelPulled || input.modelPulled);
+  if (geminiBackup && localBackup) {
+    return diagnosis('pass', 'pass', 'Analyzer ready.', '');
   }
-  if (!input.modelPulled) {
-    const action = input.pullable.includes(input.expectedModel)
-      ? { kind: 'ollama-pull' as const, label: `Pull ${input.expectedModel}`, params: { model: input.expectedModel } }
-      : undefined;
-    return diagnosis(
-      'fail', 'model-not-pulled',
-      `The analyzer model "${input.expectedModel}" has not been pulled.`,
-      action ? `Pull ${input.expectedModel}.` : `Pull it via the terminal: ollama pull ${input.expectedModel}`,
-      action,
-    );
-  }
-  return diagnosis('pass', 'pass', 'Analyzer ready.', '');
+  return diagnosis('warn', 'pass', 'Analyzer ready — no backup analyzer configured.', '');
 }

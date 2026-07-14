@@ -28,7 +28,7 @@ import { detectQwenInstallStateOnDisk } from '../tts/qwen-install-detect.js';
 import { detectCoquiInstallStateOnDisk } from '../tts/coqui-install-detect.js';
 import { probeFfmpeg } from '../diagnostics/ffmpeg.js';
 import {
-  diagnoseSidecar, diagnoseTts, diagnoseFfmpeg, diagnoseAnalyzer, probePython312Cached,
+  diagnoseSidecar, diagnoseTts, diagnoseFfmpeg, diagnoseAnalyzer, anyAnalyzerModelPulled, probePython312Cached,
 } from './setup-diagnosis.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -67,7 +67,7 @@ export interface BlockerAction {
 }
 
 export interface BlockerDiagnosis {
-  status: 'pass' | 'fail';
+  status: 'pass' | 'warn' | 'fail';
   cause: BlockerCause;
   message: string;
   remediation: string;
@@ -101,7 +101,7 @@ export function buildSetupReadiness(input: {
     sidecar: input.sidecar, ffmpeg: input.ffmpeg, tts: input.tts, analyzer: input.analyzer,
   };
   return {
-    ready: Object.values(blockers).every((b) => b.status === 'pass'),
+    ready: Object.values(blockers).every((b) => b.status === 'pass' || b.status === 'warn'),
     completedAt: input.completedAt ?? null,
     blockers,
     info: { gpu: input.gpu },
@@ -192,24 +192,21 @@ setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {
   const ffmpeg = diagnoseFfmpeg({ ffmpegPresent, ffprobePresent });
 
   const engine = getResolvedAnalysisEngine();
-  let analyzer: BlockerDiagnosis;
-  if (engine === 'gemini') {
-    analyzer = diagnoseAnalyzer({
-      engine: 'gemini', ollamaReachable: true, ollamaError: null, modelPulled: true,
-      expectedModel: '', pullable: [], geminiKeySet: getResolvedGeminiApiKey() != null,
-    });
-  } else {
-    const ollama = await probeOllamaHealth();
-    analyzer = diagnoseAnalyzer({
-      engine: 'local',
-      ollamaReachable: ollama.status === 'reachable',
-      ollamaError: ollama.error ?? null,
-      modelPulled: ollama.modelPulled ?? false,
-      expectedModel: getResolvedOllamaModel(),
-      pullable: ollama.pullable ?? [],
-      geminiKeySet: false,
-    });
-  }
+  const geminiKeySet = getResolvedGeminiApiKey() != null;
+  /* Probe Ollama even when engine==='gemini' — the backup label needs the
+     local-availability facts regardless of the active engine. Bounded by the
+     2s probe budget in probeOllamaHealth(). */
+  const ollama = await probeOllamaHealth();
+  const analyzer = diagnoseAnalyzer({
+    engine,
+    ollamaReachable: ollama.status === 'reachable',
+    ollamaError: ollama.error ?? null,
+    modelPulled: ollama.modelPulled ?? false,
+    anyAnalyzerModelPulled: anyAnalyzerModelPulled(ollama.models ?? [], ollama.pullable ?? []),
+    expectedModel: ollama.expectedModel ?? getResolvedOllamaModel(),
+    pullable: ollama.pullable ?? [],
+    geminiKeySet,
+  });
 
   res.json(
     buildSetupReadiness({

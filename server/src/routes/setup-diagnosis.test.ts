@@ -188,7 +188,7 @@ describe('diagnoseTts', () => {
   });
 });
 
-import { diagnoseFfmpeg, diagnoseAnalyzer } from './setup-diagnosis.js';
+import { diagnoseFfmpeg, diagnoseAnalyzer, anyAnalyzerModelPulled } from './setup-diagnosis.js';
 import type { AnalyzerDiagnosisInput } from './setup-diagnosis.js';
 
 describe('diagnoseFfmpeg', () => {
@@ -216,9 +216,10 @@ const ANALYZER_LOCAL_READY: AnalyzerDiagnosisInput = {
   ollamaReachable: true,
   ollamaError: null,
   modelPulled: true,
+  anyAnalyzerModelPulled: true,
   expectedModel: 'qwen3.5:9b',
   pullable: ['qwen3.5:9b'],
-  geminiKeySet: false,
+  geminiKeySet: true,
 };
 
 describe('diagnoseAnalyzer', () => {
@@ -248,5 +249,60 @@ describe('diagnoseAnalyzer', () => {
   it('passes for the gemini engine when a key is set', () => {
     const r = diagnoseAnalyzer({ ...ANALYZER_LOCAL_READY, engine: 'gemini', geminiKeySet: true });
     expect(r).toMatchObject({ status: 'pass', cause: 'pass' });
+  });
+});
+
+const base = { expectedModel: 'qwen3.5:4b', pullable: ['qwen3.5:4b', 'llama3.1:8b'], ollamaError: null };
+
+describe('diagnoseAnalyzer tri-state', () => {
+  // engine = gemini
+  it('gemini, no key → fail', () => {
+    expect(diagnoseAnalyzer({ ...base, engine: 'gemini', geminiKeySet: false, ollamaReachable: false, modelPulled: false, anyAnalyzerModelPulled: false }).status).toBe('fail');
+  });
+  it('gemini, key only (no local model) → warn', () => {
+    expect(diagnoseAnalyzer({ ...base, engine: 'gemini', geminiKeySet: true, ollamaReachable: true, modelPulled: false, anyAnalyzerModelPulled: false }).status).toBe('warn');
+  });
+  it('gemini, key + local analyzer model → pass', () => {
+    expect(diagnoseAnalyzer({ ...base, engine: 'gemini', geminiKeySet: true, ollamaReachable: true, modelPulled: true, anyAnalyzerModelPulled: true }).status).toBe('pass');
+  });
+  // engine = local
+  it('local, resolved model not pulled → fail', () => {
+    expect(diagnoseAnalyzer({ ...base, engine: 'local', geminiKeySet: false, ollamaReachable: true, modelPulled: false, anyAnalyzerModelPulled: false }).status).toBe('fail');
+  });
+  it('local, resolved model pulled, no key → warn', () => {
+    expect(diagnoseAnalyzer({ ...base, engine: 'local', geminiKeySet: false, ollamaReachable: true, modelPulled: true, anyAnalyzerModelPulled: true }).status).toBe('warn');
+  });
+  it('local, resolved model pulled + key → pass', () => {
+    expect(diagnoseAnalyzer({ ...base, engine: 'local', geminiKeySet: true, ollamaReachable: true, modelPulled: true, anyAnalyzerModelPulled: true }).status).toBe('pass');
+  });
+
+  // Regression guards — the gate is NEVER more lenient than today.
+  it('gemini + no key + Ollama model pulled → still fail (no gemini→local fallback)', () => {
+    expect(diagnoseAnalyzer({ ...base, engine: 'gemini', geminiKeySet: false, ollamaReachable: true, modelPulled: true, anyAnalyzerModelPulled: true }).status).toBe('fail');
+  });
+  it('local + resolved model NOT pulled + key set → still fail (fallback is unreachable-only)', () => {
+    expect(diagnoseAnalyzer({ ...base, engine: 'local', geminiKeySet: true, ollamaReachable: true, modelPulled: false, anyAnalyzerModelPulled: false }).status).toBe('fail');
+  });
+  it('local + daemon unreachable → fail with ollama-install action', () => {
+    const d = diagnoseAnalyzer({ ...base, engine: 'local', geminiKeySet: false, ollamaReachable: false, modelPulled: false, anyAnalyzerModelPulled: false });
+    expect(d.status).toBe('fail');
+    expect(d.action?.kind).toBe('ollama-install');
+  });
+  // Deviation-fix guard: local custom-model primary + key → green (a running local counts).
+  it('local, resolved (custom) model pulled but not curated, key set → pass', () => {
+    expect(diagnoseAnalyzer({ ...base, engine: 'local', geminiKeySet: true, ollamaReachable: true, modelPulled: true, anyAnalyzerModelPulled: false }).status).toBe('pass');
+  });
+});
+
+describe('anyAnalyzerModelPulled', () => {
+  const curated = ['qwen3.5:4b', 'llama3.1:8b'];
+  it('true for a curated tag (canonicalised)', () => {
+    expect(anyAnalyzerModelPulled(['qwen3.5:4b-instruct-q4_K_M'], curated)).toBe(true);
+  });
+  it('false for an embedding-only install', () => {
+    expect(anyAnalyzerModelPulled(['nomic-embed-text:latest'], curated)).toBe(false);
+  });
+  it('false for an empty tag list', () => {
+    expect(anyAnalyzerModelPulled([], curated)).toBe(false);
   });
 });
