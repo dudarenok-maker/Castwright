@@ -41,11 +41,22 @@ export function parseHalfOpenedState(printStatesOutput) {
   return m ? Number(m[1]) : null;
 }
 
+// Fatal: throws (rather than process.exit) on non-zero so callers' `finally`
+// blocks still run — a capture failure must not skip rotation/posture cleanup.
 const sh = (cmd, args, opts = {}) => {
   const r = spawnSync(cmd, args, { stdio: 'inherit', shell: true, ...opts });
   if (r.status !== 0) {
-    console.error(`\n✖ ${cmd} ${args.join(' ')} failed (exit ${r.status}).`);
-    process.exit(r.status ?? 1);
+    throw new Error(`${cmd} ${args.join(' ')} failed (exit ${r.status}).`);
+  }
+};
+
+// Non-fatal: for cleanup commands only. Warns instead of throwing/exiting so
+// one failed restore step can't mask the real failure or abort the rest of
+// the same `finally` block.
+const shSoft = (cmd, args, opts = {}) => {
+  const r = spawnSync(cmd, args, { stdio: 'inherit', shell: true, ...opts });
+  if (r.status !== 0) {
+    console.warn(`⚠ ${cmd} ${args.join(' ')} failed (exit ${r.status}) (ignored).`);
   }
 };
 
@@ -54,73 +65,85 @@ function parseArgs(argv) {
   const orientArg = argv.find((a) => a.startsWith('--orient='));
   const scenesArg = argv.find((a) => a.startsWith('--scenes='));
   const surface = surfaceArg ? surfaceArg.slice('--surface='.length) : 'phone';
+  // Validate up front so a typo'd --surface (e.g. "tabletX") errors loudly in
+  // BOTH the CLI-supplied-orient branch below and the SURFACE_PASSES lookup
+  // branch, rather than silently flowing an unknown surface into the
+  // dart-define.
+  if (!SURFACE_PASSES[surface]) {
+    throw new Error(`Unknown surface "${surface}". Known surfaces: ${Object.keys(SURFACE_PASSES).join(', ')}.`);
+  }
   if (orientArg || scenesArg) {
     const orient = orientArg ? orientArg.slice('--orient='.length) : 'portrait';
     const scenes = scenesArg ? scenesArg.slice('--scenes='.length).split(',') : null;
     return { surface, passes: [{ orient, scenes }] };
   }
-  const passes = SURFACE_PASSES[surface];
-  if (!passes) {
-    console.error(`✖ Unknown surface "${surface}". Known surfaces: ${Object.keys(SURFACE_PASSES).join(', ')}.`);
-    process.exit(1);
-  }
-  return { surface, passes };
+  return { surface, passes: SURFACE_PASSES[surface] };
 }
 
 async function main(argv) {
-  const { surface, passes } = parseArgs(argv);
+  try {
+    const { surface, passes } = parseArgs(argv);
 
-  // 1. An emulator/device must be up. `adb devices` prints one `<serial>\tdevice`
-  //    line per online device (after a header line); match that exactly.
-  const devices = spawnSync('adb', ['devices'], { encoding: 'utf8', shell: true }).stdout ?? '';
-  const online = devices.split('\n').some((line) => /\tdevice$/.test(line.trimEnd()));
-  if (!online) {
-    console.error('✖ No running emulator/device (none shown as "device" by `adb devices`). Boot an AVD first — see apps/android/integration_test/marketing/README.md.');
-    process.exit(1);
-  }
-
-  // 2. Push the covers (operator-supplied; git-ignored). Filenames must match the
-  //    bookIds in lib/src/demo/demo_data.dart (e.g. hollow-tide-1.png).
-  if (!existsSync(COVERS_SRC) || readdirSync(COVERS_SRC).length === 0) {
-    console.error(`✖ No covers at ${COVERS_SRC}. Provide the brand book covers (git-ignored) and retry.`);
-    process.exit(1);
-  }
-  sh('adb', ['shell', 'mkdir', '-p', DEVICE_COVERS]);
-  sh('adb', ['push', `${COVERS_SRC}/.`, DEVICE_COVERS]);
-
-  // 3. Run flutter drive once per pass (rotation/posture set beforehand, reset after).
-  for (const pass of passes) {
-    sh('adb', ['shell', 'settings', 'put', 'system', 'accelerometer_rotation', '0']);
-    sh('adb', ['shell', 'settings', 'put', 'system', 'user_rotation', String(rotationValue(pass.orient))]);
-    try {
-      if (pass.orient === 'seam') {
-        let halfOpenIdx = process.env.FOLD_HALF_OPEN_STATE
-          ? Number(process.env.FOLD_HALF_OPEN_STATE)
-          : null;
-        if (halfOpenIdx === null) {
-          const printStates = spawnSync('adb', ['shell', 'cmd', 'device_state', 'print-states'], { encoding: 'utf8', shell: true }).stdout ?? '';
-          halfOpenIdx = parseHalfOpenedState(printStates);
-        }
-        if (halfOpenIdx === null) {
-          console.error('✖ Could not determine the fold half-open device_state index. Set FOLD_HALF_OPEN_STATE to override.');
-          process.exit(1);
-        }
-        sh('adb', ['shell', 'cmd', 'device_state', 'state', String(halfOpenIdx)]);
-      }
-
-      sh('flutter', [
-        'drive',
-        '--driver=test_driver/integration_test.dart',
-        '--target=integration_test/marketing_capture_test.dart',
-        ...buildDartDefines({ surface, orient: pass.orient, scenes: pass.scenes }),
-      ], { cwd: androidDir });
-    } finally {
-      sh('adb', ['shell', 'settings', 'put', 'system', 'accelerometer_rotation', '1']);
-      sh('adb', ['shell', 'cmd', 'device_state', 'state', 'reset']);
+    // 1. An emulator/device must be up. `adb devices` prints one `<serial>\tdevice`
+    //    line per online device (after a header line); match that exactly.
+    const devices = spawnSync('adb', ['devices'], { encoding: 'utf8', shell: true }).stdout ?? '';
+    const online = devices.split('\n').some((line) => /\tdevice$/.test(line.trimEnd()));
+    if (!online) {
+      throw new Error('No running emulator/device (none shown as "device" by `adb devices`). Boot an AVD first — see apps/android/integration_test/marketing/README.md.');
     }
-  }
 
-  console.log('\n✔ Companion shots written to mockups/marketing-screens/companion/');
+    // 2. Push the covers (operator-supplied; git-ignored). Filenames must match the
+    //    bookIds in lib/src/demo/demo_data.dart (e.g. hollow-tide-1.png).
+    if (!existsSync(COVERS_SRC) || readdirSync(COVERS_SRC).length === 0) {
+      throw new Error(`No covers at ${COVERS_SRC}. Provide the brand book covers (git-ignored) and retry.`);
+    }
+    sh('adb', ['shell', 'mkdir', '-p', DEVICE_COVERS]);
+    sh('adb', ['push', `${COVERS_SRC}/.`, DEVICE_COVERS]);
+
+    // 3. Run flutter drive once per pass (rotation/posture set beforehand, reset after).
+    for (const pass of passes) {
+      sh('adb', ['shell', 'settings', 'put', 'system', 'accelerometer_rotation', '0']);
+      sh('adb', ['shell', 'settings', 'put', 'system', 'user_rotation', String(rotationValue(pass.orient))]);
+      try {
+        if (pass.orient === 'seam') {
+          let halfOpenIdx = process.env.FOLD_HALF_OPEN_STATE
+            ? Number(process.env.FOLD_HALF_OPEN_STATE)
+            : null;
+          if (halfOpenIdx === null) {
+            const printStates = spawnSync('adb', ['shell', 'cmd', 'device_state', 'print-states'], { encoding: 'utf8', shell: true }).stdout ?? '';
+            halfOpenIdx = parseHalfOpenedState(printStates);
+          }
+          if (halfOpenIdx === null) {
+            throw new Error('Could not determine the fold half-open device_state index. Set FOLD_HALF_OPEN_STATE to override.');
+          }
+          sh('adb', ['shell', 'cmd', 'device_state', 'state', String(halfOpenIdx)]);
+        }
+
+        sh('flutter', [
+          'drive',
+          '--driver=test_driver/integration_test.dart',
+          '--target=integration_test/marketing_capture_test.dart',
+          ...buildDartDefines({ surface, orient: pass.orient, scenes: pass.scenes }),
+        ], { cwd: androidDir });
+      } finally {
+        // Always restore rotation control — non-fatal so a restore hiccup
+        // can't mask the real failure or skip the posture-reset check below.
+        shSoft('adb', ['shell', 'settings', 'put', 'system', 'accelerometer_rotation', '1']);
+        // Only the fold seam pass changes posture; resetting it unconditionally
+        // on every pass (including tablet passes, which never set it) risked a
+        // fatal `sh()` call killing the script between the tablet landscape and
+        // portrait passes.
+        if (pass.orient === 'seam') {
+          shSoft('adb', ['shell', 'cmd', 'device_state', 'state', 'reset']);
+        }
+      }
+    }
+
+    console.log('\n✔ Companion shots written to mockups/marketing-screens/companion/');
+  } catch (e) {
+    console.error(`\n✖ ${e.message}`);
+    process.exitCode = 1;
+  }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

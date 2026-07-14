@@ -151,7 +151,10 @@ Future<void> main() async {
                   'but found none — check `adb cmd device_state state <HALF_OPENED idx>`.');
         }
 
-        final namePrefix = surface.isEmpty ? '' : '$surface/';
+        // Phone raws stay FLAT to match framing's phone `rawSubdir: ''` (see
+        // scripts/lib/play-frames/surfaces.mjs) — never prefix under 'phone/'.
+        final namePrefix =
+            (surface.isEmpty || surface == 'phone') ? '' : '$surface/';
         await binding.takeScreenshot('$namePrefix${scene.id}.$themeName');
         // NOTE: do NOT dispose rt here — the just-pumped HomePage State still
         // references it; the framework tears it down when the next scene pumps
