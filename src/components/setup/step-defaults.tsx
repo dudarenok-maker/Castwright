@@ -92,7 +92,10 @@ export function StepDefaults({ readiness: _readiness }: Props) {
 
   const handleAnalysisModelChange = (next: string) => {
     setAnalysisModel(next);
-    void dispatch(saveAccountSettings({ defaultAnalysisModel: next }));
+    // Auto-derive the engine from the id shape (":"→local, else gemini) — matches
+    // getResolvedOllamaModel's heuristic. This is what routes generation.
+    const engine = next.includes(':') ? 'local' : 'gemini';
+    void dispatch(saveAccountSettings({ defaultAnalysisModel: next, analysisEngine: engine }));
   };
 
   const handleThemeChange = (next: ThemePreference) => {

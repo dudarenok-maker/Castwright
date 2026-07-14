@@ -145,4 +145,32 @@ describe('StepDefaults', () => {
       );
     });
   });
+
+  it('picking a local (":") tag saves analysisEngine=local', async () => {
+    renderStep({ localAnalyzerModels: [{ name: 'qwen3.5:4b' }] });
+    const select = screen.getByLabelText(/analysis model/i) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'qwen3.5:4b' } });
+    await waitFor(() => {
+      expect(putUserSettingsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          defaultAnalysisModel: 'qwen3.5:4b',
+          analysisEngine: 'local',
+        }),
+      );
+    });
+  });
+
+  it('picking a Gemini id saves analysisEngine=gemini', async () => {
+    renderStep({ defaultAnalysisModel: 'gemma-4-31b-it' });
+    const select = screen.getByLabelText(/analysis model/i) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'gemini-3.1-flash-lite' } });
+    await waitFor(() => {
+      expect(putUserSettingsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          defaultAnalysisModel: 'gemini-3.1-flash-lite',
+          analysisEngine: 'gemini',
+        }),
+      );
+    });
+  });
 });
