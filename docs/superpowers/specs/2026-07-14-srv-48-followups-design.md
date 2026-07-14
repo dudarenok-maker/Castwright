@@ -86,9 +86,10 @@ the optional param keeps their behaviour identical.
 `type:'error', code:'unknown'` broadcast — so letting an `AbortError` propagate
 would surface a spurious error to the user on a clean pause. Instead:
 
-- `unloadResidentSidecar` lets the `AbortError` from `acquire` bubble out of its
-  `try` (the `finally` still runs; since no token was granted on the aborted
-  acquire, `release` was never assigned — see note below).
+- `unloadResidentSidecar` lets the `AbortError` from `acquire` bubble out. Because
+  the `acquire` is *outside* the `try` (see the note below), a rejection throws
+  before the `try` body is entered, so the `finally` is skipped and `release` (never
+  assigned) is never called.
 - `preparePersonaBatch` **catches `AbortError`** (alongside its existing
   `GpuBusyForPersonaError` catch) and returns CPU args
   `{ onCpu: true, keepAlive: 0 }` — the same shape as evict-refused.
@@ -109,7 +110,25 @@ catch can never mask a real failure.
 
 ### Tests (M1)
 
-1. **`semaphore.test.ts`** (unit, on `GpuSemaphore` directly):
+> **Where the *real* abort path is verified — and why it can't be at the
+> integration level.** The real abortable-`acquire` mechanism lives entirely in
+> `GpuSemaphore`, so it is unit-tested there against **fresh `new GpuSemaphore(n)`
+> instances** — never the module singleton `gpuSemaphore`, whose `used`/`holders`
+> survive `vi.restoreAllMocks()` and would corrupt the `inFlight`-based assertions
+> elsewhere in the server suite.
+>
+> A `preparePersonaBatch`-level test **cannot** exercise the real semaphore block:
+> a full-budget `acquire` only *blocks* when `inFlight > 0`, but
+> `resolvePersonaGpuPlan` (`persona-gpu-plan.ts:64`) routes any `inFlight > 0`
+> state to `{ onCpu: true, evict: false }`, so `unloadResidentSidecar` is never
+> even called in exactly the states where its acquire would queue. Evict-and-block
+> are mutually exclusive by construction; the only production window where the
+> acquire genuinely queues is a narrow TOCTOU race (tokens grabbed *between* the
+> plan check and the acquire). So the integration test verifies the **catch
+> behaviour only, via a spy** — it is not the real abort path, and the spec no
+> longer pretends it is.
+
+1. **`semaphore.test.ts`** (unit, on fresh `new GpuSemaphore(n)` instances):
    - Aborting a **queued** waiter rejects with `AbortError`, removes it from the
      queue (`queueDepth` drops), and leaves `usedTokens` / `inFlight` uncorrupted
      — proving no token leak. A subsequent release of the holder drains normally.
@@ -117,9 +136,11 @@ catch can never mask a real failure.
      token.
    - A **synchronously granted** acquire ignores a later `abort()` (release still
      works; no double-settle).
-2. **`persona-gpu-plan.test.ts` / `prepare-persona-batch.test.ts`:** abort mid
-   evict-wait → `preparePersonaBatch` returns `{ onCpu: true, keepAlive: 0 }`, no
-   throw escapes.
+2. **`prepare-persona-batch.test.ts`** (integration, catch behaviour): spy
+   `gpuSemaphore.acquire` to reject with `AbortError`, assert `preparePersonaBatch`
+   returns `{ onCpu: true, keepAlive: 0 }` and no throw escapes. This is explicitly
+   a spy-based test of the `AbortError → CPU args` catch clause, not of the real
+   semaphore abort (see the note above).
 
 ## M3 — De-brittle the evict-refused test
 
@@ -168,6 +189,14 @@ Rewrite of the existing `'evict refused → CPU args, no throw'` case. Must stil
 green, and still fail if the post-acquire render recheck in `unloadResidentSidecar`
 is removed.
 
+**Make the mutant fail on a clean assertion, not incidental network behaviour.**
+Because the `acquire` spy returns a no-op release, deleting the render recheck would
+let `unloadResidentSidecar` fall through to the real `fetch(.../unload)` — today the
+mutant is only caught by an unmocked `ECONNREFUSED`, which is timing-dependent. Add
+`const fetchSpy = vi.spyOn(global, 'fetch')` and assert `expect(fetchSpy).not.toHaveBeenCalled()`
+so a removed recheck fails deterministically (the refused-evict path must never
+reach `/unload`).
+
 ## M4 — Make the disconnected-knob test revert-proof
 
 ### Problem
@@ -196,26 +225,36 @@ exactly the registry key `'analyzer.gemini.voiceStyleModel'` via the resolver.
 **Mechanism — promote the existing resolver mock to a tracked `vi.fn()`.** The
 file already replaces `configValue` inside `vi.mock('../config/resolver.js', …)`
 (lines 39–51) with a plain arrow function, so a fresh `vi.spyOn(resolver,
-'configValue')` would not observe the calls the mock intercepts. Instead, lift the
-mock's `configValue` into a top-level `vi.fn()` so its calls are recorded, keeping
-its current delegating behaviour:
+'configValue')` would not observe the calls the mock intercepts. Instead, make the
+mock's `configValue` a tracked `vi.fn()` so its calls are recorded, keeping its
+current delegating behaviour. Set its implementation **inside the `vi.mock`
+factory** (which already has the real `actual` in closure — no module-level
+`let actualResolver` and its `vi.mock`-hoisting TDZ risk):
 
 ```ts
-const configValueMock = vi.fn((key: string) => {
-  if (key === 'analyzer.personaGeneration.engine') return process.env.PERSONA_GEN_ENGINE || 'gemini';
-  if (key === 'analyzer.personaGeneration.localModel') return process.env.PERSONA_GEN_LOCAL_MODEL || '';
-  return actualResolver.configValue(key); // real impl for analyzer.gemini.voiceStyleModel
-});
+const configValueMock = vi.fn(); // proven pattern here — cf. `generateContent` (line 24)
 vi.mock('../config/resolver.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../config/resolver.js')>();
-  actualResolver = actual;
+  configValueMock.mockImplementation((key: string) => {
+    if (key === 'analyzer.personaGeneration.engine') return process.env.PERSONA_GEN_ENGINE || 'gemini';
+    if (key === 'analyzer.personaGeneration.localModel') return process.env.PERSONA_GEN_LOCAL_MODEL || '';
+    return actual.configValue(key); // real impl for analyzer.gemini.voiceStyleModel
+  });
   return { ...actual, configValue: configValueMock };
 });
 ```
 
-(The `actualResolver` late-binding dance is only needed because a `vi.mock` factory
-is hoisted above top-level `const`s; if the implementer finds a cleaner shape that
-keeps the same delegating behaviour and makes the calls observable, that's fine.)
+> **BLOCKER hazard — `vi.restoreAllMocks()` will nuke this.** The
+> `persona generation config` describe's `afterEach` calls `vi.restoreAllMocks()`
+> (lines 226–229). A promoted `vi.fn()` gets its implementation stripped by that
+> (a plain arrow function — today's mock — is *not* a mock, which is the only
+> reason the current suite survives). Stripped, `configValueMock` returns
+> `undefined`, and the sibling tests `'resolvePersonaEngine defaults to gemini…'`
+> and `'resolvePersonaLocalModel…'` (lines 237, 243) go **red**. The fix is the
+> same idiom `generateContent` already uses: **re-establish the implementation in
+> the top-level `beforeEach` (line 104)** so it is fresh for every test. Factor the
+> delegating impl into a named helper so the factory and the `beforeEach` share it.
+> Acceptance is explicit: the *entire* `voice-style.test.ts` suite stays green.
 
 Then in the M4 case:
 
@@ -226,14 +265,14 @@ expect(configValueMock).toHaveBeenCalledWith('analyzer.gemini.voiceStyleModel');
 
 This pins the fix's actual change — routing through the registry key — and fails
 hard on revert to a direct-env or hardcoded read. The existing default/override
-value assertions stay (they still document behaviour), and every current test that
-relied on the inline mock keeps working because the behaviour is byte-identical.
+value assertions stay (they still document behaviour).
 
-The issue also asks to "tidy a couple of mid-file test imports." Since we are in
-this file for M4, fold that in: consolidate/relocate the stray mid-file dynamic
-imports in `voice-style.test.ts` to the top where the surrounding test style keeps
-them. Scope it to the blocks M4 already touches plus the named stray imports —
-no unrelated reformatting (surgical-changes rule).
+The issue also asks to "tidy a couple of mid-file test imports." Scope this
+narrowly: the file *deliberately* uses `await import('./voice-style.js')` inside
+tests for mocks-before-import ordering — **do not** convert those dynamic imports
+(gratuitous churn + timing-regression risk, against the surgical-changes rule).
+Only the stray **static** `import { generateVoiceStylePersona } …` mid-file (near
+line 296) should move up to the top import block. Nothing else.
 
 ### Test (M4)
 
