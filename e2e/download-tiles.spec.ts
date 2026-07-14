@@ -95,6 +95,9 @@ test.describe('plan 57 — download tiles', () => {
     const modal = page.getByTestId('pair-device-modal');
     await expect(modal).toBeVisible({ timeout: 10_000 });
 
+    // Name-first: the modal opens on the naming step; generate the code to reach the QR.
+    await modal.getByRole('button', { name: /generate pairing code/i }).click();
+
     // The QR renders as a data: image from the mocked pairing session payload.
     const qr = page.getByTestId('pair-qr-image');
     await expect(qr).toBeVisible();

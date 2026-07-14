@@ -6693,14 +6693,18 @@ async function realGetExportLanUrls(): Promise<ExportLanInfo> {
   return res.json();
 }
 
-async function realCreatePairSession(): Promise<PairSessionInfo> {
+async function realCreatePairSession(label?: string): Promise<PairSessionInfo> {
+  const trimmed = label?.trim();
   const res = await fetch(`/api/pair/session`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: '{}',
+    body: JSON.stringify(trimmed ? { label: trimmed } : {}),
   });
   if (!res.ok)
-    throw new Error(`pair session failed (${res.status}): ${(await res.text()) || res.statusText}`);
+    throw new ApiError(
+      `pair session failed (${res.status}): ${(await res.text()) || res.statusText}`,
+      res.status,
+    );
   return res.json();
 }
 
@@ -6733,6 +6737,20 @@ async function realRegenerateLanCert() {
   }
   return res.json() as Promise<{ hosts: string[] }>;
 }
+export interface LanCertStatus {
+  requested: boolean;
+  active: boolean;
+  health: 'healthy' | 'missing' | 'expired';
+  certHosts: string[];
+  currentLanIps: string[];
+  uncoveredIps: string[];
+  expiresAt: string | null;
+}
+async function realGetLanCertStatus(): Promise<LanCertStatus> {
+  const res = await fetch('/api/lan/cert/status');
+  if (!res.ok) throw new ApiError(`cert status failed (${res.status})`, res.status);
+  return res.json() as Promise<LanCertStatus>;
+}
 async function realRedeemBrowserPair(body: { code: string }) {
   const res = await fetch('/api/pair/redeem-browser', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -6752,6 +6770,15 @@ const mockListDevices = async () => ({ devices: [] as PublicDevice[] });
 const mockRevokeDevice = async (_id: string) => ({ ok: true as const });
 const mockRegenerateLanCert = async () => ({
   hosts: ['localhost', 'castwright.local', 'castwright.dev.local', '192.168.1.42'],
+});
+const mockGetLanCertStatus = async (): Promise<LanCertStatus> => ({
+  requested: true,
+  active: false,
+  health: 'missing',
+  certHosts: [],
+  currentLanIps: ['192.168.1.42'],
+  uncoveredIps: [],
+  expiresAt: null,
 });
 const mockRedeemBrowserPair = async (_b: { code: string }) =>
   ({ label: 'This browser', expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() });
@@ -6954,7 +6981,7 @@ async function mockGetExportLanUrls(): Promise<ExportLanInfo> {
   };
 }
 
-export async function mockCreatePairSession(): Promise<PairSessionInfo> {
+export async function mockCreatePairSession(_label?: string): Promise<PairSessionInfo> {
   await wait(20);
   const hostPort = '192.168.1.42:8443';
   const code = 'K7QF3M2P';
@@ -9333,6 +9360,7 @@ const real = {
   listDevices: realListDevices,
   revokeDevice: realRevokeDevice,
   regenerateLanCert: realRegenerateLanCert,
+  getLanCertStatus: realGetLanCertStatus,
   redeemBrowserPair: realRedeemBrowserPair,
   getChapterAudio: async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio`);
@@ -9609,6 +9637,7 @@ const mock = {
   listDevices: mockListDevices,
   revokeDevice: mockRevokeDevice,
   regenerateLanCert: mockRegenerateLanCert,
+  getLanCertStatus: mockGetLanCertStatus,
   redeemBrowserPair: mockRedeemBrowserPair,
   getChapterAudio: mockGetChapterAudio,
   getChapterAudioPrevious: mockGetChapterAudioPrevious,

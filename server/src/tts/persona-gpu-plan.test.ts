@@ -11,7 +11,7 @@ describe('unloadResidentSidecar', () => {
     const acquire = vi.spyOn(gpuSemaphore, 'acquire');
     const fetchSpy = vi.spyOn(global, 'fetch');
     await expect(mod.unloadResidentSidecar()).rejects.toBeInstanceOf(mod.GpuBusyForPersonaError);
-    expect(acquire).toHaveBeenCalledWith(gpuSemaphore.budget); // full budget
+    expect(acquire).toHaveBeenCalledWith(gpuSemaphore.budget, { signal: undefined }); // full budget, no signal
     expect(fetchSpy).not.toHaveBeenCalled();                   // never sent /unload
     expect(gpuSemaphore.inFlight).toBe(0);                     // released in finally
   });

@@ -1,8 +1,11 @@
+import 'dart:ui' show DisplayFeature, DisplayFeatureType;
+
 import 'package:castwright/main.dart';
 import 'package:castwright/src/data/pairing_service.dart';
 import 'package:castwright/src/demo/demo_pairing_store.dart';
 import 'package:castwright/src/demo/demo_runtime.dart';
 import 'package:castwright/src/domain/pairing_qr.dart';
+import 'package:castwright/src/domain/window_size.dart';
 import 'package:castwright/src/ui/pairing_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -37,9 +40,17 @@ Future<void> main() async {
     final root =
         '${dir!.path}/demo-runtime'; // app-writable dir for Drift/settings
 
+    const surface = String.fromEnvironment('surface');
+    const orient = String.fromEnvironment('orient');
+    const scenesCsv = String.fromEnvironment('scenes');
+    final wanted = scenesCsv.isEmpty ? null : scenesCsv.split(',').toSet();
+    final scenes = wanted == null
+        ? marketingScenes
+        : marketingScenes.where((s) => wanted.contains(s.id)).toList();
+
     for (final theme in [ThemeMode.light, ThemeMode.dark]) {
       final themeName = theme == ThemeMode.light ? 'light' : 'dark';
-      for (final scene in marketingScenes) {
+      for (final scene in scenes) {
         final rt = await buildDemoRuntime(
           coversDir: coversDir,
           offline: scene.offline,
@@ -119,7 +130,32 @@ Future<void> main() async {
         );
         await tester.pumpAndSettle();
 
-        await binding.takeScreenshot('${scene.id}.$themeName');
+        if (orient == 'landscape') {
+          final w = tester.view.physicalSize.width / tester.view.devicePixelRatio;
+          expect(windowSizeClassFor(w), WindowSizeClass.expanded,
+              reason: 'surface=$surface expected landscape/expanded but width=$w dp — '
+                  'did adb user_rotation take? Refusing to capture single-pane into a two-pane slot.');
+        }
+
+        if (orient == 'seam') {
+          // Read posture from the platform view, not tester.view — matches how the app
+          // itself reads it (MediaQuery.displayFeatures), and is the more robust source
+          // for the real on-device fold (review note N2).
+          final List<DisplayFeature> features =
+              WidgetsBinding.instance.platformDispatcher.views.first.displayFeatures;
+          final hasVerticalFold = features.any((f) =>
+              (f.type == DisplayFeatureType.fold || f.type == DisplayFeatureType.hinge) &&
+              f.bounds.width < f.bounds.height);
+          expect(hasVerticalFold, isTrue,
+              reason: 'surface=fold expected a vertical fold/hinge DisplayFeature (half-open) '
+                  'but found none — check `adb cmd device_state state <HALF_OPENED idx>`.');
+        }
+
+        // Phone raws stay FLAT to match framing's phone `rawSubdir: ''` (see
+        // scripts/lib/play-frames/surfaces.mjs) — never prefix under 'phone/'.
+        final namePrefix =
+            (surface.isEmpty || surface == 'phone') ? '' : '$surface/';
+        await binding.takeScreenshot('$namePrefix${scene.id}.$themeName');
         // NOTE: do NOT dispose rt here — the just-pumped HomePage State still
         // references it; the framework tears it down when the next scene pumps
         // (different key). Disposing now closes the Drift DB the screen still

@@ -19,6 +19,7 @@ import {
   resolveVoiceStyleModel,
   resolvePersonaEngine,
   resolvePersonaLocalModel,
+  generateVoiceStylePersona,
 } from './voice-style.js';
 
 const generateContent = vi.fn();
@@ -36,18 +37,29 @@ vi.mock('../workspace/user-settings.js', () => ({
   readConfigOverrides: () => ({}),
 }));
 
+// vi.hoisted: this test file has a static top-level `import ... from './voice-style.js'`
+// (above), which transitively imports '../config/resolver.js'. That means the resolver's
+// vi.mock factory below runs while THIS file's own module graph is still resolving —
+// before any plain top-level `const`/`let` here has executed. A bare
+// `const configValueMock = vi.fn()` / `let realConfigValue` referenced from inside the
+// factory hits a TDZ ReferenceError at that point (verified). vi.hoisted is the
+// established fix for exactly this ordering (cf. `gpu-load.test.ts`,
+// `mp3-spawn-args.test.ts`): it hoists the variable creation itself above the mock
+// registrations, so the factory always sees initialized bindings.
+const { configValueMock, realConfigValueRef } = vi.hoisted(() => ({
+  configValueMock: vi.fn(), // proven pattern here — cf. `generateContent` at line 24
+  realConfigValueRef: { current: undefined as ((key: string) => unknown) | undefined },
+}));
+function delegateConfigValue(key: string) {
+  if (key === 'analyzer.personaGeneration.engine') return process.env.PERSONA_GEN_ENGINE || 'gemini';
+  if (key === 'analyzer.personaGeneration.localModel') return process.env.PERSONA_GEN_LOCAL_MODEL || '';
+  return realConfigValueRef.current!(key); // real impl for analyzer.gemini.voiceStyleModel
+}
 vi.mock('../config/resolver.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../config/resolver.js')>();
-  return {
-    ...actual,
-    configValue: (key: string) => {
-      // Override just the persona config keys; delegate others to the real implementation
-      if (key === 'analyzer.personaGeneration.engine') return process.env.PERSONA_GEN_ENGINE || 'gemini';
-      if (key === 'analyzer.personaGeneration.localModel') return process.env.PERSONA_GEN_LOCAL_MODEL || '';
-      // For other keys, use the real configValue function (includes analyzer.gemini.voiceStyleModel)
-      return actual.configValue(key);
-    },
-  };
+  realConfigValueRef.current = actual.configValue;
+  configValueMock.mockImplementation(delegateConfigValue);
+  return { ...actual, configValue: configValueMock };
 });
 
 /* Canonical static instruction text — matches the content of
@@ -109,6 +121,8 @@ beforeEach(() => {
   generateContent.mockResolvedValue({
     text: 'a poised, confident teenage girl, warm and a little playful, mid-paced',
   });
+  configValueMock.mockClear();                          // reset call history (impl-preserving)
+  configValueMock.mockImplementation(delegateConfigValue);
 });
 
 describe('buildVoiceStylePrompt', () => {
@@ -232,6 +246,9 @@ describe('persona generation config', () => {
     expect(resolveVoiceStyleModel()).toBe('gemini-3.1-flash-lite'); // registry default, not a code literal
     process.env.VOICE_STYLE_MODEL = 'gemini-3.1-pro';
     expect(resolveVoiceStyleModel()).toBe('gemini-3.1-pro');
+    // Revert-proof: prove it reads the registry KEY, not process.env directly.
+    resolveVoiceStyleModel();
+    expect(configValueMock).toHaveBeenCalledWith('analyzer.gemini.voiceStyleModel');
   });
 
   it('resolvePersonaEngine defaults to gemini, honours the env toggle', () => {
@@ -292,8 +309,6 @@ describe('generateVoiceStylePersona', () => {
     await expect(generateVoiceStylePersona(MAERIN)).rejects.toThrow(/empty persona/);
   });
 });
-
-import { generateVoiceStylePersona } from './voice-style.js';
 
 const CHAR = { id: 'miner', name: 'Old Tom' } as any;
 

@@ -21,6 +21,7 @@ export type WikiPage =
   | 'Exporting'
   | 'Model-Manager'
   | 'Mobile-Tablet-and-Companion-App'
+  | 'LAN-HTTPS-Troubleshooting'
   | 'Admin';
 
 export function wikiUrl(page: WikiPage): string {
@@ -45,6 +46,7 @@ export const ADMIN_WIKI = {
   modelManager: 'Model-Manager',
   advanced: 'Advanced-Settings',
   lanAccess: 'Mobile-Tablet-and-Companion-App',
+  lanTroubleshooting: 'LAN-HTTPS-Troubleshooting',
   admin: 'Admin',
 } satisfies Record<string, WikiPage>;
 

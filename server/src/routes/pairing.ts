@@ -21,7 +21,12 @@ import { getLanRuntime } from '../lan-runtime.js';
 import { crockfordBase32 } from '../lib/crockford-base32.js';
 import { createPairingSession, redeemPairingSession } from '../workspace/pairing-sessions.js';
 import { createDevice, clampTtlDays } from '../workspace/device-tokens.js';
-import { isLoopbackRequest, isLanTokenEnforced, isPrivateNetworkRequest } from '../lan-auth.js';
+import {
+  isLanTokenEnforced,
+  isPrivateNetworkRequest,
+  mayStartPairingSession,
+  PAIRING_ORIGIN_HINT,
+} from '../lan-auth.js';
 import { configValue } from '../config/resolver.js';
 
 /** Effective TTL for device tokens — clamped to a sane positive integer. */
@@ -43,8 +48,10 @@ export function caFingerprintTag(): string | undefined {
 export const pairSessionRouter = Router();
 
 pairSessionRouter.post('/session', (req: Request, res: Response) => {
-  if (!isLoopbackRequest(req)) {
-    res.status(403).json({ error: 'Pairing sessions can only be created from the host UI.' });
+  // Loopback (the host UI) OR an already-paired device on the friendly hostname
+  // may start a pairing session; bare-LAN-IP access stays loopback-only.
+  if (!mayStartPairingSession(req)) {
+    res.status(403).json({ error: PAIRING_ORIGIN_HINT });
     return;
   }
   // Gate on what the server ACTUALLY bound, not the requested flag: a cert-less box
@@ -62,7 +69,12 @@ pairSessionRouter.post('/session', (req: Request, res: Response) => {
     res.status(409).json({ error: !host ? 'no-lan-url' : 'no-ca' });
     return;
   }
-  const { code, expiresAt } = createPairingSession();
+  // The desktop names the device up front (Listen-tab modal) so the admin list
+  // reads sensibly; stored on the session and preferred over the phone's own
+  // label at redeem time. Absent → falls back to the phone's label, then 'Device'.
+  const rawLabel = (req.body as { label?: unknown } | undefined)?.label;
+  const label = typeof rawLabel === 'string' ? rawLabel : undefined;
+  const { code, expiresAt } = createPairingSession(label);
   const q = new URLSearchParams({ h: host, c: code, f: fpTag });
   const qrPayload = `https://www.castwright.ai/pair?${q.toString()}`;
   res.json({ qrPayload, hostPort: host, port, code, fpTag, expiresAt });
@@ -94,13 +106,15 @@ pairRedeemRouter.post('/redeem', redeemLimiter, express.json({ limit: '1kb' }), 
   }
   const body = (req.body ?? {}) as { code?: unknown; label?: unknown };
   const code = typeof body.code === 'string' ? body.code : '';
-  const label = typeof body.label === 'string' ? body.label : 'Device';
   const result = redeemPairingSession(code);
   if (!result.ok) {
     const status = result.reason === 'unknown' ? 401 : 410;
     res.status(status).json({ error: result.reason });
     return;
   }
+  // Desktop-chosen session label wins (so the admin list matches what the user
+  // named on this machine); otherwise the redeeming device's own label; else 'Device'.
+  const label = result.label ?? (typeof body.label === 'string' ? body.label : 'Device');
   const { token } = await createDevice(label, ttl());
   res.status(201).json({ token });
 });

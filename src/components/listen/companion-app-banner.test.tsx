@@ -104,7 +104,8 @@ describe('CompanionAppBanner', () => {
     expect(screen.queryByTestId('pair-device-modal')).toBeNull();
     pair.click();
     expect(await screen.findByTestId('pair-device-modal')).toBeInTheDocument();
-    // The QR renders from the mocked LAN pairing info.
+    // Name-first: generate the code, then the QR renders from the mocked LAN pairing info.
+    (await screen.findByRole('button', { name: /generate pairing code/i })).click();
     expect(await screen.findByTestId('pair-qr-image')).toBeInTheDocument();
   });
 });

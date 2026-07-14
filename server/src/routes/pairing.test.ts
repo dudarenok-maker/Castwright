@@ -32,6 +32,7 @@ mXs+glZrizT6pLoIQQucbslLc15G85a7tw==
 
 vi.mock('../lan-auth.js', () => ({
   isLoopbackRequest: vi.fn(() => true),
+  mayStartPairingSession: vi.fn(() => true),
   isLanTokenEnforced: vi.fn(() => true),
   isPrivateNetworkRequest: vi.fn(() => true),
   // requireLanToken must be present so app.ts can mount it; the body-size tests
@@ -77,8 +78,9 @@ vi.mock('../workspace/device-tokens.js', () => ({
 
 import { pairSessionRouter, pairRedeemRouter, redeemLimiter } from './pairing.js';
 import { _resetPairingSessionsForTests, createPairingSession } from '../workspace/pairing-sessions.js';
-import { isLoopbackRequest, isLanTokenEnforced, isPrivateNetworkRequest } from '../lan-auth.js';
+import { mayStartPairingSession, isLanTokenEnforced, isPrivateNetworkRequest } from '../lan-auth.js';
 import { getLanRuntime } from '../lan-runtime.js';
+import { createDevice } from '../workspace/device-tokens.js';
 
 function appWith(router: express.Router) {
   const app = express();
@@ -127,10 +129,31 @@ describe('pairing routes', () => {
     expect(res.status).toBe(401);
   });
 
-  it('POST /session 403s a non-loopback caller', async () => {
-    vi.mocked(isLoopbackRequest).mockReturnValueOnce(false);
+  it('POST /session 403s when the caller may not start a pairing session (non-loopback, non-friendly)', async () => {
+    vi.mocked(mayStartPairingSession).mockReturnValueOnce(false);
     const res = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
     expect(res.status).toBe(403);
+  });
+
+  it('POST /session stores the desktop label; /redeem prefers it over the phone-supplied label', async () => {
+    const session = await request(appWith(pairSessionRouter))
+      .post('/api/pair/session')
+      .send({ label: 'Anna phone' });
+    expect(session.status).toBe(200);
+    const res = await request(appWith(pairRedeemRouter))
+      .post('/api/pair/redeem')
+      .send({ code: session.body.code, label: 'phone-self-name' });
+    expect(res.status).toBe(201);
+    expect(vi.mocked(createDevice).mock.lastCall?.[0]).toBe('Anna phone');
+  });
+
+  it('POST /redeem falls back to the phone-supplied label when the session carried none', async () => {
+    const session = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
+    const res = await request(appWith(pairRedeemRouter))
+      .post('/api/pair/redeem')
+      .send({ code: session.body.code, label: 'Pixel-self' });
+    expect(res.status).toBe(201);
+    expect(vi.mocked(createDevice).mock.lastCall?.[0]).toBe('Pixel-self');
   });
 
   it('redeem-browser sets the __Host-cw_lan cookie and returns no raw token', async () => {
