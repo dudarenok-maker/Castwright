@@ -33,7 +33,7 @@
 - `server/src/tts/models-status.test.ts`
 - `server/src/routes/models-status.ts` — `GET /api/setup/models-status`; does the I/O (probes, health, vram) then calls `buildModelsStatus`.
 - `server/src/routes/models-status.route.test.ts`
-- `src/components/setup/engine-card-status.ts` — client-side pure mapping from a `ModelsStatus` engine slice / runtime to the card's display state + a `classifyBlocker` helper (`ok`/`attention`/`pending`).
+- `src/components/setup/engine-card-status.ts` — client-side pure helpers over a `ModelsStatus` runtime: `runtimeIsBlocking` and `runtimeLivenessPill` (neutral transient vs alarm).
 - `src/components/setup/engine-card-status.test.ts`
 - `e2e/setup-models-status.spec.ts` — badge/card consistency golden path.
 - `docs/features/246-wizard-models-status.md` — regression plan (number = next free; verify with `ls docs/features`).
@@ -462,7 +462,6 @@ import { probePython312Cached } from './setup-diagnosis.js';
 import { probeSidecarHealth, type SidecarHealthResult } from './sidecar-health.js';
 import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
 import { getDeviceTotalVramMb } from '../gpu/device-total.js';
-import { buildDiagnostics } from './diagnostics.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -477,6 +476,26 @@ function deriveProcess(input: {
   if (input.supervisorTripped || input.supervisorExhausted) return 'crashed';
   if (input.supervisorActive) return 'starting';
   return 'down';
+}
+
+/* Build the human GPU string from the SINGLE /health probe result (+ the
+   boot-time nvidia-smi total for the sidecar-down case). This deliberately does
+   NOT call buildDiagnostics — computeModelsStatus must make exactly ONE
+   probeSidecarHealth() call (setup-readiness.ts:119-127 documents a "no second
+   probe" invariant; a second one here would re-fire the setLastKnown* side
+   effects and double the Models-step probe count). */
+function gpuDetail(health: Partial<SidecarHealthResult>, bootTotalMb: number | null): string {
+  const gb = (mb: number | null | undefined) => (mb != null ? (mb / 1024).toFixed(1) : '?');
+  if (health.status === 'reachable') {
+    const total = health.vramTotalMb ?? bootTotalMb;
+    const reserved = health.vramReservedMb ?? null;
+    const cuda = health.device === 'cuda' || total != null;
+    if (!cuda) return health.device ? `device: ${health.device}` : 'CPU — no GPU detected';
+    if (reserved != null && total != null) return `cuda · ${gb(reserved)} / ${gb(total)} GB reserved`;
+    return total != null ? `cuda · ${gb(total)} GB` : `device: ${health.device}`;
+  }
+  // Sidecar down — fall back to the boot nvidia-smi total (sidecar-independent).
+  return bootTotalMb != null ? `GPU · ~${gb(bootTotalMb)} GB (voice engine offline)` : 'CPU — no GPU detected';
 }
 
 export async function computeModelsStatus(repoRoot: string): Promise<ModelsStatus> {
@@ -500,9 +519,8 @@ export async function computeModelsStatus(repoRoot: string): Promise<ModelsStatu
     };
   }
 
-  // GPU detail string (human) — reuse the diagnostics gpu row; skip the rest.
-  const diag = await buildDiagnostics({ skip: ['asr', 'analyzer', 'gemini', 'ffmpeg', 'disk'] });
-  const gpu = diag.checks.find((c) => c.id === 'gpu')?.detail ?? '';
+  // GPU string + total from the SINGLE probe (no second buildDiagnostics probe).
+  const bootTotalMb = getDeviceTotalVramMb();
 
   return buildModelsStatus({
     runtime: {
@@ -516,7 +534,7 @@ export async function computeModelsStatus(repoRoot: string): Promise<ModelsStatu
       }),
     },
     engines,
-    info: { gpu, vramTotalMb: getDeviceTotalVramMb() },
+    info: { gpu: gpuDetail(health, bootTotalMb), vramTotalMb: bootTotalMb },
   });
 }
 
@@ -634,9 +652,11 @@ const tts = diagnoseTts(sidecar, {
   qwenPackageConfirmedBroken: models.engines.qwen.packageBroken,
 });
 ```
-Then pass `vramTotalMb: models.info.vramTotalMb` and `gpu: models.info.gpu` into `buildSetupReadiness` (drop the now-redundant separate `buildDiagnostics` gpu read if it's only used for gpu — `computeModelsStatus` already returns `info.gpu`).
+Then pass `vramTotalMb: models.info.vramTotalMb` and `gpu: models.info.gpu` into `buildSetupReadiness`. **Remove the `buildDiagnostics({ skip: … })` call from `/readiness` entirely** — it existed only for the `sidecar` reachable check and the `gpu` detail, both of which now come from `computeModelsStatus` (`process` and `info.gpu`). Also **remove the local `packageBrokenFlags` helper + its `probeSidecarHealth` call** — `models.engines.*.packageBroken` already carries that. Net: `/readiness` now makes **one** `probeSidecarHealth()` call (inside `computeModelsStatus`), down from two — the "no second probe" invariant at `setup-readiness.ts:119-127` is satisfied and improved on.
 
-> **Behavior-preservation note:** `diagnoseTts`'s existing contract is unchanged — the same four inputs, now sourced from `models-status` instead of inline detects. The `unreachable-transient` → `sidecarReachable:false` mapping is preserved because `process==='ready'` is exactly the old `checkOk(diagnostics,'sidecar')` signal.
+> **Behavior-change note (NOT a no-op — Finding 2):** `sidecarReachable: models.runtime.process === 'ready'` is **not** identical to the old `checkOk(diagnostics,'sidecar')`. The diagnostics `sidecar` check returns `warn`/`fail` (so `checkOk` was false) when the sidecar is *reachable but a package is broken*; `process==='ready'` is *true* there. This is a deliberate improvement: a reachable-but-package-broken sidecar should read as running (the broken engine surfaces via `models.engines.*.packageBroken` / the per-engine card and the `tts` blocker), NOT as `unreachable-transient` ("starting up"), which the old path wrongly showed. The rewritten `setup-readiness.orchestration.test.ts` must assert this **new** behavior for the reachable-but-broken case.
+
+> **Coqui `anyEngineUsable` note (CONSIDER):** `engineUsable` gates all three engines on `!packageBroken`, whereas the old code treated Coqui as usable on `state==='ready'` alone (its comment noted Coqui has no live package-broken signal because `coqui-tts` is a base requirement). In practice Coqui's `coquiPackageInstalled` from `/health` is true whenever the venv is up, so this only differs in the near-impossible "Coqui is the only ready engine AND `/health` reports its package un-importable" case — where flipping the aggregate to not-ready is the *more* correct result. Treat uniformly; note it in the regression plan.
 
 - [ ] **Step 5: Update the orchestration test's mock seam**
 
@@ -806,19 +826,57 @@ The "Re-check" button in the ready render now calls `onInstalled?.()` (which mak
 Run: `npx vitest run src/components/kokoro-install.test.tsx`
 Expected: PASS (4 tests).
 
-- [ ] **Step 5: Repeat for VenvBootstrap, QwenInstall, CoquiInstall**
+- [ ] **Step 5: Convert VenvBootstrap to controlled (explicit — it's the most different card)**
 
-- `VenvBootstrap`: prop `status: { installedOnDisk; pythonFound; process }`. Ready render when `installedOnDisk`. When `!installedOnDisk && !pythonFound` → manual instructions; when `!installedOnDisk && pythonFound` → setup CTA. The `process` axis drives a NEW separate liveness pill rendered by `step-models.tsx` (Task 7), NOT inside this card — this card is disk-only. Rewrite `venv-bootstrap.test.tsx` accordingly.
-- `QwenInstall` / `CoquiInstall`: same engine-card shape as Kokoro (`status: { state; packageBroken }`), same five branches. Rewrite their tests.
+`VenvBootstrap` currently self-fetches `/api/setup/venv/detect` and renders five states. Controlled version:
+```tsx
+export function VenvBootstrap({
+  status,
+  onBootstrapped,
+}: {
+  // process is passed for prop-shape uniformity but the CARD is disk-only —
+  // the process/liveness pill is rendered by step-models.tsx (Task 7), NOT here.
+  status: { installedOnDisk: boolean; pythonFound: boolean; process: RuntimeProcessState };
+  onBootstrapped?: () => void;
+}) {
+  const [job, setJob] = useState<VenvBootstrapJob | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-Write the failing test first for each, watch it fail, implement, watch it pass — one card per commit.
+  // KEEP: the job poll useEffect; on job 'installed' → onBootstrapped?.() (parent refetches models-status).
+  // KEEP: startBootstrap(), the installing/error job renders (venv-bootstrap.tsx:127-163).
 
-- [ ] **Step 6: Run the full card suite**
+  if (!job || job.status === 'installed') {
+    if (status.installedOnDisk) {
+      return (/* existing green "Voice engine runtime ready" card — but the "Re-check"
+                 button's onClick becomes onBootstrapped (NOT the removed doDetect) */);
+    }
+    if (!status.pythonFound) {
+      return (/* existing "Python 3.11 not found" manual-instructions block — its
+                 "Re-check" button's onClick becomes onBootstrapped */);
+    }
+    return (/* existing "Voice engine runtime not set up" + setup CTA (startBootstrap) */);
+  }
+  // installing / error job renders unchanged.
+}
+```
+Remove: the `detect` state, `doDetect`, and its mount `useEffect`. Rewrite `venv-bootstrap.test.tsx` to render with `status` and assert: `installedOnDisk:true` → "runtime ready"; `installedOnDisk:false, pythonFound:false` → manual instructions; `installedOnDisk:false, pythonFound:true` → setup CTA. `status.process` is intentionally unused by the card (a lint `eslint-disable` is unnecessary — it's read as part of the prop object type, not destructured).
+
+- [ ] **Step 6: Convert QwenInstall + CoquiInstall (mirror Kokoro exactly)**
+
+Same engine-card shape as Kokoro: `status: { state: EngineHealthState; packageBroken: boolean }`, same five branches (not-installed / weights-missing / package-missing / packageBroken / ready|loaded), Re-check → `onInstalled`. Copy Kokoro's structure, swapping the engine name in copy + the install endpoint (already engine-specific in each file). Rewrite `qwen-install.test.tsx` / `coqui-install.test.tsx` to the four-state controlled contract.
+
+Write the failing test first for each card, watch it fail, implement, watch it pass — one card per commit.
+
+> **Gate note (Finding 1):** making `status` a REQUIRED prop is a type change Vitest/esbuild won't catch (no typecheck). After EACH card, run `npm run typecheck` in addition to the card's test — otherwise a contravariant assignability break (e.g. in `model-manager.tsx`'s `INSTALLER_BY_ID`, Task 8) stays invisible until `verify:fast:branch`. The card tasks are not green until `npm run typecheck` passes for the files touched so far. (Task 8 fixes the `INSTALLER_BY_ID` typing; expect a typecheck error there until then — that's why Task 8 immediately follows.)
+
+- [ ] **Step 7: Run the full card suite + typecheck**
 
 Run: `npx vitest run src/components/kokoro-install.test.tsx src/components/venv-bootstrap.test.tsx src/components/qwen-install.test.tsx src/components/coqui-install.test.tsx`
-Expected: PASS (all).
+Expected: PASS (all). Then `npm run typecheck` — expect a REMAINING error only in `model-manager.tsx` (fixed in Task 8); no errors in the card files themselves.
 
-- [ ] **Step 7: Commit (one per card, or one cohesive commit)**
+- [ ] **Step 8: Commit (one per card, or one cohesive commit)**
 
 ```bash
 git add src/components/kokoro-install.tsx src/components/kokoro-install.test.tsx
@@ -839,7 +897,7 @@ Fetch `models-status` once; derive the summary badges AND each card's `status` p
 
 **Interfaces:**
 - Consumes: `api.getModelsStatus` (Task 5); the controlled cards (Task 6); `ModelsStatus` (Task 5).
-- Produces: `classifyBlocker(status): 'ok' | 'attention' | 'pending'` and `runtimeBadgeLabel(runtime)` in `engine-card-status.ts`.
+- Produces: `runtimeIsBlocking(runtime): boolean` and `runtimeLivenessPill(runtime): { tone: 'neutral' | 'alarm'; label: string } | null` in `engine-card-status.ts`.
 
 - [ ] **Step 1: Write the failing pure-helper test**
 
@@ -965,9 +1023,30 @@ Expected: PASS.
 
 - [ ] **Step 5: Migrate model-manager to feed card status**
 
-`model-manager.tsx` renders `INSTALLER_BY_ID[id]` with `{ onInstalled }`. It already polls inventory every 30s — add a `models-status` fetch on that same cadence, and pass `status={modelsStatus.engines[id]}` into each engine card (map its inventory id → the `'kokoro'|'qwen'|'coqui'` key; skip `whisper` — WhisperInstall is out of this migration and keeps self-fetch, OR give it a follow-up; note it explicitly). Rewrite `model-manager.test.tsx` mocks to provide `api.getModelsStatus`.
+The current `INSTALLER_BY_ID: Partial<Record<string, ComponentType<{ onInstalled?: () => void }>>>` (`model-manager.tsx:51`) is rendered generically as `<Installer onInstalled={…} />` (`:562`). Once the three voice cards require a `status` prop and Whisper does NOT, a single uniform `ComponentType` map **cannot type-check** (contravariant break) and the generic render is missing `status`. **Replace the map + generic render with an explicit render helper**:
 
-> **Whisper note:** `WhisperInstall` is in `INSTALLER_BY_ID` but is ASR, not a voice engine, and is excluded from `models-status`. Leave `WhisperInstall` self-fetching (unchanged) — the controlled migration is voice-engines-only. State this in the regression plan.
+```tsx
+import type { ModelsStatus } from '../lib/api';
+// …
+function renderInstaller(id: string, modelsStatus: ModelsStatus | null, onInstalled: () => void) {
+  // Inventory id → models-status engine key. 'qwen-base' is the installable Qwen row.
+  const engineKey = ({ kokoro: 'kokoro', coqui: 'coqui', 'qwen-base': 'qwen' } as const)[
+    id as 'kokoro' | 'coqui' | 'qwen-base'
+  ];
+  if (engineKey) {
+    if (!modelsStatus) return null; // brief: until first models-status load
+    const status = modelsStatus.engines[engineKey];
+    if (id === 'kokoro') return <KokoroInstall status={status} onInstalled={onInstalled} />;
+    if (id === 'coqui') return <CoquiInstall status={status} onInstalled={onInstalled} />;
+    return <QwenInstall status={status} onInstalled={onInstalled} />;
+  }
+  if (id === 'whisper') return <WhisperInstall onInstalled={onInstalled} />; // ASR — self-fetch, unchanged
+  return null;
+}
+```
+Delete `INSTALLER_BY_ID`; call `renderInstaller(id, modelsStatus, refetchInventory)` at the old render site. Add a `modelsStatus` state fetched via `api.getModelsStatus()` on mount and on the SAME 30s cadence as the existing inventory poll (`INVENTORY_POLL_MS`), plus refetched from `onInstalled`. Rewrite `model-manager.test.tsx` to provide `api.getModelsStatus` in its mock and assert the three voice cards render from it.
+
+> **Whisper note:** `WhisperInstall` is ASR, not a voice engine, and is excluded from `models-status` — it stays self-fetching (unchanged). The controlled migration is voice-engines-only. State this in the regression plan.
 
 - [ ] **Step 6: Run model-manager + full frontend suite**
 
@@ -990,9 +1069,11 @@ git commit -m "feat(frontend): neutral transient runtime in summary; migrate mod
 - Create: `docs/features/<next-number>-wizard-models-status.md` (from `docs/features/TEMPLATE.md`)
 - Modify: `docs/features/INDEX.md`, `docs/release-notes-next.md`, `RELEASE_NOTES.md`
 
-- [ ] **Step 1: E2E golden path**
+- [ ] **Step 1: E2E golden path (ready-state consistency)**
 
-In mock mode (the mock `getModelsStatus` returns kokoro `ready`), drive to the wizard Models step and assert the badge + card agree (no element with "not installed" while a badge says installed; runtime "installed" is present). Model the spec's file after an existing `e2e/*.spec.ts`. To exercise the weights-missing contradiction case specifically, add a mock variant or a query param the mock honors (follow the existing mock-scenario pattern in `src/mocks`).
+Scope: the ready-state golden path only, which the static mock `getModelsStatus` (kokoro `ready`, runtime `installed`) already supports — no new mock plumbing. Drive to the wizard Models step and assert badge + card agree: the runtime shows "Runtime installed" (green) with no amber "Runtime needed", the Kokoro card shows "Kokoro is installed", and no element reads "not installed" while a badge says installed. Model the file after an existing `e2e/*.spec.ts`.
+
+> **Why not an e2e for the weights-missing / starting / broken-coqui contradiction cases:** `src/mocks` has no generic per-scenario override (the only hook, `window.__mockQueue.seed`, is export-queue-specific), and building one solely for this e2e is out of scope (YAGNI). Those three cases are the exact regressions unit-tested at the RTL layer in Task 7 Step 6 (`step-models.test.tsx`), which is the right altitude for them. The e2e locks the cross-seam ready-state path; RTL locks the contradiction logic.
 
 - [ ] **Step 2: Run e2e**
 
@@ -1052,3 +1133,5 @@ git commit -m "test(e2e): models-status badge/card consistency; docs(docs): regr
 - **Coqui `loaded`** comes from the generic `modelLoaded` (`model_loaded`) health flag, not a `coquiLoaded` field (there isn't one).
 - **Run the FULL frontend suite** (`npm test`) before pushing — a shared component (the cards) gaining a required prop / the parent gaining an on-mount fetch can break distant view-test mocks (see the project's known-gotcha register).
 - **Do not consolidate** the codebase's other engine lists (`ALL_TTS_ENGINES`, `TRACKED_ENGINES`, etc.) — out of scope; the new registry is for this surface only.
+- **Client `SetupReadiness.info` type stays `{ gpu: string }`** in Part A — the new server `info.vramTotalMb` is consumed by nothing client-side yet, so the client mirror is intentionally deferred to Part B (the recommendation reads it). Don't widen the client type in this plan.
+- **`computeModelsStatus` makes exactly ONE `probeSidecarHealth()` call.** Do not reintroduce `buildDiagnostics` for the GPU string (Task 3/4) — that was the reviewed probe-count regression.
