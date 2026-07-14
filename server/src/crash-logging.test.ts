@@ -10,7 +10,8 @@ import {
   formatCrash,
   installCrashHandlers,
   formatListenError,
-  attachListenErrorHandler,
+  listenWithAutoRebind,
+  formatRebindExhausted,
 } from './crash-logging.js';
 
 describe('formatCrash', () => {
@@ -80,28 +81,138 @@ describe('formatListenError', () => {
   });
 });
 
-describe('attachListenErrorHandler', () => {
-  it('EADDRINUSE error → logs the actionable line AND exits(1)', () => {
-    const server = new EventEmitter();
+/* srv-60 — a busy port is now recovered by walking upward to a free one
+ * (production only). listenWithAutoRebind owns the listen loop. A tiny fake
+ * server records listen() calls and lets the test drive 'error'/'listening'. */
+class FakeServer extends EventEmitter {
+  listened: number[] = [];
+  private boundPort: number | null = null;
+  listen(port: number, _host?: string): void {
+    this.listened.push(port);
+    this.boundPort = port;
+  }
+  address() {
+    return this.boundPort === null
+      ? null
+      : { address: '0.0.0.0', family: 'IPv4', port: this.boundPort };
+  }
+  /** Test helper: simulate the OS rejecting the most recent bind. */
+  failInUse() {
+    this.boundPort = null;
+    this.emit('error', Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' }));
+  }
+  /** Test helper: simulate the most recent bind succeeding. */
+  succeed() {
+    this.emit('listening');
+  }
+}
+
+describe('listenWithAutoRebind', () => {
+  it('autoRebind: first port busy → re-listens on port+1, does NOT exit', () => {
+    const server = new FakeServer();
+    const onListening = vi.fn();
+    const onExit = vi.fn();
+    listenWithAutoRebind(server as never, {
+      startPort: 8080,
+      onListening,
+      autoRebind: true,
+      onLog: vi.fn(),
+      onExit,
+    });
+
+    server.failInUse(); // 8080 busy
+    server.succeed(); // 8081 binds
+
+    expect(server.listened).toEqual([8080, 8081]);
+    expect(onListening).toHaveBeenCalledTimes(1);
+    expect(onListening).toHaveBeenCalledWith(8081); // the REAL bound port
+    expect(onExit).not.toHaveBeenCalled();
+  });
+
+  it('autoRebind: onListening fires exactly once across a multi-attempt rebind', () => {
+    const server = new FakeServer();
+    const onListening = vi.fn();
+    listenWithAutoRebind(server as never, {
+      startPort: 8080,
+      onListening,
+      autoRebind: true,
+      onLog: vi.fn(),
+      onExit: vi.fn(),
+    });
+
+    server.failInUse(); // 8080
+    server.failInUse(); // 8081
+    server.succeed(); // 8082
+
+    expect(onListening).toHaveBeenCalledTimes(1);
+    expect(onListening).toHaveBeenCalledWith(8082);
+  });
+
+  it('dev (autoRebind off): EADDRINUSE → actionable line AND exit(1), no rebind', () => {
+    const server = new FakeServer();
     const onLog = vi.fn();
     const onExit = vi.fn();
-    attachListenErrorHandler(server, 8080, { onLog, onExit });
+    listenWithAutoRebind(server as never, {
+      startPort: 8080,
+      onListening: vi.fn(),
+      autoRebind: false,
+      onLog,
+      onExit,
+    });
 
-    server.emit('error', Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' }));
+    server.failInUse();
 
+    expect(server.listened).toEqual([8080]); // no retry
     expect(onLog).toHaveBeenCalledWith(expect.stringContaining('already in use'));
     expect(onExit).toHaveBeenCalledWith(1);
   });
 
-  it('a generic listen error → logs the FATAL line AND exits(1)', () => {
-    const server = new EventEmitter();
+  it('autoRebind: every port busy → after maxAttempts, exit(1); last try is startPort+19', () => {
+    const server = new FakeServer();
     const onLog = vi.fn();
     const onExit = vi.fn();
-    attachListenErrorHandler(server, 8443, { onLog, onExit });
+    listenWithAutoRebind(server as never, {
+      startPort: 8443,
+      onListening: vi.fn(),
+      autoRebind: true,
+      onLog,
+      onExit,
+    });
+
+    for (let i = 0; i < 20; i++) server.failInUse();
+
+    expect(server.listened).toHaveLength(20);
+    expect(server.listened[0]).toBe(8443);
+    expect(server.listened[19]).toBe(8462); // startPort + (maxAttempts - 1)
+    expect(onLog).toHaveBeenCalledWith(expect.stringContaining('8443'));
+    expect(onLog).toHaveBeenCalledWith(expect.stringContaining('8462'));
+    expect(onExit).toHaveBeenCalledWith(1);
+  });
+
+  it('a non-EADDRINUSE error → FATAL line AND exit(1), even with autoRebind on', () => {
+    const server = new FakeServer();
+    const onLog = vi.fn();
+    const onExit = vi.fn();
+    listenWithAutoRebind(server as never, {
+      startPort: 8080,
+      onListening: vi.fn(),
+      autoRebind: true,
+      onLog,
+      onExit,
+    });
 
     server.emit('error', Object.assign(new Error('permission denied'), { code: 'EACCES' }));
 
     expect(onLog).toHaveBeenCalledWith(expect.stringContaining('FATAL listen error'));
     expect(onExit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('formatRebindExhausted', () => {
+  it('names the scanned range and attempt count', () => {
+    const line = formatRebindExhausted(8443, 20);
+    expect(line).toContain('8443');
+    expect(line).toContain('8462');
+    expect(line).toContain('20');
   });
 });
