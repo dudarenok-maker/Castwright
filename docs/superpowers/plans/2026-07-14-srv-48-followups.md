@@ -485,7 +485,7 @@ git commit -m "docs(server): release note for srv-48 follow-ups (M1/M3/M4)"
 
 ## Acceptance (whole branch)
 
-- `cd server && npm run test` green (all five affected suites: `semaphore.test.ts`, `persona-gpu-plan.test.ts`, `prepare-persona-batch.test.ts`, `voice-style.test.ts`, plus the whole battery).
+- `cd server && npm run test` green (all five affected suites: `semaphore.test.ts`, `persona-gpu-plan.test.ts`, `prepare-persona-batch.test.ts`, `voice-style.test.ts`, and `cast-design.test.ts` — the last is behaviour-neutral here since it mocks `preparePersonaBatch`, but Task 2 edits `cast-design.ts` so its suite must stay green — plus the whole battery).
 - `npm run typecheck` green.
 - `npm run verify:fast:branch` green.
 - M1 semaphore unit test proves a queued abort leaks no tokens; M3 and M4 each fail on their respective reverts (verified in Task 3/4 Step 3).
