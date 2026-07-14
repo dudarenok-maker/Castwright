@@ -198,7 +198,7 @@ Expected: FAIL — `listenWithAutoRebind is not a function` / `formatRebindExhau
 
 - [ ] **Step 3: Implement the helper**
 
-In `server/src/crash-logging.ts`: (a) add `import type { AddressInfo } from 'node:net';` at the top; (b) **delete** the `attachListenErrorHandler` function and its `ListenErrorTarget` interface (the block under `/* ---- srv-17: actionable listen-error handling ---- */` from `export interface ListenErrorTarget` through the end of `attachListenErrorHandler`), but **keep** `formatListenError`; (c) append the new code below `formatListenError`:
+In `server/src/crash-logging.ts`: (a) add `import type { AddressInfo } from 'node:net';` at the top; (b) **delete** the `attachListenErrorHandler` function and its `ListenErrorTarget` interface (the block under `/* ---- srv-17: actionable listen-error handling ---- */` from `export interface ListenErrorTarget` through the end of `attachListenErrorHandler`), but **keep** `formatListenError`; (c) update the file-header comment: the srv-17 paragraph (~lines 21–27) describes `attachListenErrorHandler` intercepting EADDRINUSE and exiting — reword it so it no longer describes a removed function, noting instead that `listenWithAutoRebind` now owns the listen loop and (in production) recovers from EADDRINUSE by shifting ports; (d) append the new code below `formatListenError`:
 
 ```typescript
 /** Minimal surface of a freshly-created (not-yet-listening) HTTP/HTTPS server
@@ -648,7 +648,7 @@ git commit -m "docs(server): srv-60 regression plan + release notes"
 - `once('listening')` single-fire → Task 1 helper + the "exactly once" test.
 - Cap = 20, attempt 1 = initial bind → Task 1 helper (`attempt < maxAttempts - 1`) + the `startPort+19` test.
 - Propagation: listening log / LAN URLs / `setLanRuntime` / forwarder → Task 2; CSRF allow-list → Task 3.
-- Testing #1–#6 from the spec → Task 1 (#1,2,3,5) + Task 2 typecheck (#4 propagation at the helper seam) + Task 3 (#6).
+- Testing #1–#6 from the spec → Task 1 (#1,2,3,5) + Task 3 (#6). Spec test #4 (resolved port reaches `setLanRuntime`) is covered **transitively**: Task 1 test 1 asserts `onListening` receives the shifted bound port (8081), locking the helper→callback contract that `index.ts`'s `listenerCallback` consumes to call `setLanRuntime(listenPort)`. `index.ts` boot has no test harness anywhere in the repo (consistent with existing practice), so there is no unit seam for the callback body itself — typecheck confirms the wiring compiles, not that it propagates.
 - Docs (regression plan, INDEX, release notes ×2) → Task 4.
 
 **Placeholder scan:** the only deferred value is `(#PR)` in the technical release note, explicitly flagged as fill-at-PR-open (it genuinely cannot exist earlier). No other TBDs.
