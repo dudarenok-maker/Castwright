@@ -57,6 +57,28 @@ def test_degeneracy_helper_passes_healthy_audio() -> None:
     assert main._qwen_synth_is_degenerate("a" * 20, 1200.0) is False
 
 
+def test_degeneracy_helper_ignores_long_punctuation_separator_lines() -> None:
+    """A long separator / ellipsis / markup-only line has many RAW chars but ~zero
+    SPEAKABLE ones, so it renders legitimately short and must NOT be flagged — the
+    denominator is speakable chars, not len(text). This is the false-positive that
+    would otherwise force a reload+retry then a code-44 recycle (which bypasses the
+    supervisor streak-trip → could loop on a deterministic FP)."""
+    assert main._qwen_synth_is_degenerate("—" * 30, 5.0) is False   # em-dash rule
+    assert main._qwen_synth_is_degenerate("." * 40, 5.0) is False   # ellipsis run
+    assert main._qwen_synth_is_degenerate("* * *  <br/>  * * *", 5.0) is False
+    # Whitespace/punctuation don't count toward the speakable floor.
+    assert main._qwen_speakable_len("———— <br/> ————") < main._QWEN_DEGEN_MIN_TEXT_LEN
+
+
+def test_degeneracy_helper_still_flags_real_text_with_incidental_punctuation() -> None:
+    """Real speech with ordinary punctuation still has plenty of speakable chars, so
+    a genuinely near-empty render for it is STILL flagged (the FP fix must not blind
+    the guard to the real fault)."""
+    # "The door creaked open, slowly." → 24 speakable letters; 160 ms is degenerate.
+    assert main._qwen_synth_is_degenerate("The door creaked open, slowly.", 160.0) is True
+    assert main._qwen_speakable_len("The door creaked open, slowly.") >= main._QWEN_DEGEN_MIN_TEXT_LEN
+
+
 # ── engine-level guard (end-to-end through synthesize) ───────────────────────
 
 class _ScriptedBase:
@@ -182,6 +204,21 @@ def test_legitimately_short_text_does_not_trigger_guard(degen_runtime) -> None:
     assert not degen_runtime["recycles"]
     short_frames = int(round(120.0 / 1000.0 * state["sr"]))
     assert len(res.pcm) // 2 == short_frames
+
+
+def test_long_separator_line_does_not_trigger_guard_end_to_end(degen_runtime) -> None:
+    """(d, extended): a LONG punctuation/separator line (many raw chars, ~zero
+    speakable) with near-zero audio must pass straight through — no reload, no
+    recycle. This is the FP that would otherwise loop a code-44 recycle."""
+    engine = degen_runtime["engine"]
+    state = degen_runtime["state"]
+    state["audio_ms"] = [5.0]  # a rule legitimately renders to almost nothing
+
+    engine.synthesize("0.6b", "v", "———————————————")  # 15 em-dashes, 0 speakable
+
+    assert state["idx"] == 1, "one forward only — no retry on a separator line"
+    assert state["loads"] == 1, "no reload"
+    assert not degen_runtime["recycles"], "a separator line must NOT self-recycle"
 
 
 def test_guard_also_covers_the_1_7b_base_path(degen_runtime) -> None:

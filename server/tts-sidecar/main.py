@@ -587,18 +587,28 @@ _QWEN_META_LOAD_ATTEMPTS = 2
 # audio_ms of only a few hundred ms REGARDLESS of how long the text is —
 # `text_len=18 ... audio_ms=160`, `text_len=20 ... audio_ms=480`. Language-agnostic
 # (observed on EN/de/es voices), so this is NOT a CJK bug. We therefore inspect the
-# OUTPUT: flag a synth as degenerate when the input text is long enough that even
-# the fastest speech could not be this short AND the audio is below a per-character
-# floor no healthy render undercuts.
+# OUTPUT: flag a synth as degenerate when the input has enough SPEAKABLE content
+# that even the fastest speech could not be this short AND the audio is below a
+# per-speakable-char floor no healthy render undercuts.
+#
+# "Speakable" = letters (any script incl. CJK) + digits, NOT raw `len(text)`. This
+# matters: a long separator / ellipsis / markup-only line (`———————`, `..........`,
+# `<br/>`, EPUB back-matter rules) has many RAW chars but little/no speech, so it
+# legitimately renders short. Denominating on raw length would flag it as
+# degenerate → force a reload+retry and then a code-44 recycle; and code-44
+# bypasses the supervisor's streak-trip, so a DETERMINISTIC false-positive could
+# loop if the sentence is re-sent. Counting only speakable chars removes that FP
+# surface while preserving detection for real degenerate renders.
 #
 # Thresholds chosen to be CONSERVATIVE — err toward NOT flagging, so a legitimately
 # short utterance can never trip the guard:
-#  - Only SUBSTANTIAL text is checked. A single character, a punctuation-only
-#    fragment, or a short interjection ("Oh!", "Go.") can legitimately render to a
-#    fraction of a second, so text shorter than this is NEVER flagged.
+#  - Only text with SUBSTANTIAL speakable content is checked. A single character, a
+#    punctuation/separator-only fragment, or a short interjection ("Oh!", "Go.") can
+#    legitimately render to a fraction of a second, so fewer speakable chars than
+#    this is NEVER flagged.
 _QWEN_DEGEN_MIN_TEXT_LEN = 10
-#  - Healthy Qwen renders run ~40-60 ms of audio per character (natural speech is
-#    ~12-15 chars/sec, PLUS leading/trailing padding that inflates ms/char for
+#  - Healthy Qwen renders run ~40-60 ms of audio per speakable char (natural speech
+#    is ~12-15 chars/sec, PLUS leading/trailing padding that inflates ms/char for
 #    short lines); the degenerate outputs above measure <~10 ms/char. The floor
 #    sits at 20 ms/char — 2x above the observed degenerate ceiling and 2x below the
 #    healthy floor — so only a genuine near-empty output trips it, and short-but-
@@ -616,14 +626,26 @@ _QWEN_DEGEN_MS_PER_CHAR = 20.0
 _QWEN_DEGEN_SYNTH_ATTEMPTS = 2
 
 
+def _qwen_speakable_len(text: str) -> int:
+    """Count of speech-bearing characters — letters (any script incl. CJK) and
+    digits, i.e. what actually gets vocalised. Whitespace, punctuation, separator
+    runs, and markup are NOT speech, so they're excluded: a long separator /
+    ellipsis / markup-only line (`———————`, `..........`, `<br/>`) legitimately
+    renders to little/no audio and must NOT be mistaken for a degenerate load.
+    `str.isalnum()` is Unicode-aware, so CJK ideographs and accented letters count
+    while `—`, `.`, `<`, `>`, spaces do not."""
+    return sum(1 for c in text if c.isalnum())
+
+
 def _qwen_synth_is_degenerate(text: str, audio_ms: float) -> bool:
     """True when a Qwen Base synth returned implausibly little audio for its input
     — the silent degenerate-load signature (see the constants above). Only flags
-    SUBSTANTIAL text (`>= _QWEN_DEGEN_MIN_TEXT_LEN`) whose audio falls below the
-    `len(text) * _QWEN_DEGEN_MS_PER_CHAR` floor, so legitimately short utterances
-    (single chars, punctuation, interjections) can never false-positive. Pure
-    function of the two measured scalars — GPU-free and directly unit-testable."""
-    n = len(text)
+    text with SUBSTANTIAL speakable content (`>= _QWEN_DEGEN_MIN_TEXT_LEN` letters/
+    digits) whose audio falls below the `speakable * _QWEN_DEGEN_MS_PER_CHAR` floor,
+    so legitimately short utterances AND long punctuation/separator/markup lines can
+    never false-positive. Pure function of the two measured scalars — GPU-free and
+    directly unit-testable."""
+    n = _qwen_speakable_len(text)
     if n < _QWEN_DEGEN_MIN_TEXT_LEN:
         return False
     return audio_ms < n * _QWEN_DEGEN_MS_PER_CHAR
@@ -3013,6 +3035,10 @@ class QwenEngine(Engine):
 
             # 4. audition preview — speak the caller's calibration line in the new
             #    voice (the full evidence quote, NOT the short reference text).
+            # The silent degenerate-load OUTPUT guard (#1593) is intentionally NOT
+            # applied to this audition forward: it's a cast-review preview the
+            # operator hears live (not shipped chapter audio), and a degenerate
+            # preview is re-run by clicking re-audition — no silent bad ship.
             _phase("rendering")
             _t = time.perf_counter()
             with self._synth_lock:
@@ -3179,7 +3205,10 @@ class QwenEngine(Engine):
             self._prompt_cache.pop(variant_voice_id, None)
         self._evict_17b_prompt(variant_voice_id)
 
-        # audition preview — speak the calibration line in the new variant voice
+        # audition preview — speak the calibration line in the new variant voice.
+        # As in design_voice, the degenerate-load OUTPUT guard (#1593) is
+        # intentionally NOT applied to this preview forward (live cast-review, not
+        # shipped audio; re-run by re-auditioning).
         _phase("rendering")
         _t = time.perf_counter()
         with self._synth_lock:
@@ -3543,6 +3572,12 @@ class QwenEngine(Engine):
         whole 1.7B tier on one path. `live_instruct=False` (default) keeps the
         existing wrapper path and ignores `instruct`. The 0.6B branch ignores
         `live_instruct` entirely (no live instruct on 0.6B)."""
+        # NOTE (#1593): the silent degenerate-load OUTPUT guard that `synthesize`
+        # applies via `_guarded_base_synth` is INTENTIONALLY NOT wired here yet — a
+        # batch retry needs a full-batch re-run and the 1.7B live-instruct bypass
+        # (`_icl_instruct_synth_batch`) doesn't route through `generate_voice_clone`,
+        # so a uniform batch guard is materially more complex. Deferred to a
+        # follow-up; the single-synth path is guarded.
         # See synthesize(): a real batch synth means generation, so free the
         # transient VoiceDesign model first (no-op once freed). Before any
         # _synth_lock acquire — the lock is non-reentrant.
