@@ -2869,7 +2869,7 @@ export interface components {
              *     deployment — the frontend intersects this with its own
              *     installed-engines list). Qwen is always eligible (the
              *     unconditional non-English⇒Qwen invariant, fs-2); Coqui is
-             *     additionally eligible for en/ru/es/fr/de. Optional — like `tags`,
+             *     additionally eligible for en/ru/es/fr/de/zh/ja. Optional — like `tags`,
              *     `scan.ts` always populates it in practice, but the schema keeps it
              *     optional (NOT added to `required`) so existing test fixtures that
              *     construct a `LibraryBook` object literal without every field don't
