@@ -32,6 +32,19 @@ vi.mock('../lib/api', () => ({
       models: ['qwen3.5:4b'],
       pullable: ['qwen3.5:4b', 'gemma-4-E4B-it-GGUF:UD-Q4_K_XL'],
     }),
+    /* #1641 — ModelSettingsForm's analyzer-readiness badge now polls this via
+       useSetupDiagnosis; stub it so the embedded form mounts cleanly here. */
+    getSetupReadiness: vi.fn().mockResolvedValue({
+      ready: true,
+      completedAt: null,
+      blockers: {
+        sidecar: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+        ffmpeg: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+        tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+        analyzer: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+      },
+      info: { gpu: '' },
+    }),
   },
 }));
 
