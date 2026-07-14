@@ -135,6 +135,11 @@ import {
   FAILURE_REMEDIATIONS,
 } from './failure-taxonomy.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
+import {
+  buildCjkHonorificIndex,
+  resolveCjkHonorificId,
+  isCjkLanguage,
+} from '../analyzer/cjk-honorifics.js';
 import { conventionsFor } from '../analyzer/dialogue-structure/lang/index.js';
 import { buildNameIndex } from '../analyzer/dialogue-structure/name-matcher.js';
 import { parseChapterStructure } from '../analyzer/dialogue-structure/parser.js';
@@ -1099,6 +1104,58 @@ export function reconcileSentenceCharacterIds(
     options.onDemote?.({ sentence: s, originalId: s.characterId });
   }
   return { sentences: out, demotedCount, demotedByOriginalId };
+}
+
+/* CJK honorific/title-variant remap pre-pass — runs BEFORE
+   `reconcileSentenceCharacterIds` for zh/ja books only. In CJK text an
+   honorific fuses to a name with no separator (奥杜万师傅 = Master Oduvan,
+   卡斯珀寡妇 = Widow Casper, 地保玛俐恩 = Constable Maerin), and Phase-0
+   rostering vs Phase-1 attribution don't always agree on including the title.
+   The strict-equality reconciler then demotes the title-variant as an orphan,
+   and enough false demotions trip the 5% drift gate (observed: a weaker model
+   at ~8% on the zh Coalfall book).
+
+   This remaps an orphan id to its roster id ONLY on an unambiguous
+   honorific-stripped match (see resolveCjkHonorificId). A genuinely-missed
+   speaker (0 matches) or an ambiguous one (>1) is left untouched so reconcile
+   still demotes it — we never invent identity. `isCjkBook` gates the whole
+   pass off for en/de/ru/es/fr so their behaviour is byte-identical. Returns a
+   new array; never mutates the input. Exported for unit testing. */
+export function remapCjkHonorificIds(
+  sentences: SentenceOutput[],
+  characters: ReadonlyArray<{ id: string; name?: string; aliases?: string[] }>,
+  validIds: Set<string>,
+  options: {
+    isCjkBook: boolean;
+    onRemap?: (info: { sentence: SentenceOutput; originalId: string; toId: string }) => void;
+  },
+): { sentences: SentenceOutput[]; remappedCount: number; remappedByOriginalId: Map<string, number> } {
+  const remappedByOriginalId = new Map<string, number>();
+  if (!options.isCjkBook) {
+    return { sentences, remappedCount: 0, remappedByOriginalId };
+  }
+  const index = buildCjkHonorificIndex(characters);
+  let remappedCount = 0;
+  const out: SentenceOutput[] = [];
+  for (const s of sentences) {
+    if (validIds.has(s.characterId)) {
+      out.push(s);
+      continue;
+    }
+    const toId = resolveCjkHonorificId(s.characterId, index);
+    if (toId !== null && validIds.has(toId)) {
+      remappedCount += 1;
+      remappedByOriginalId.set(
+        s.characterId,
+        (remappedByOriginalId.get(s.characterId) ?? 0) + 1,
+      );
+      options.onRemap?.({ sentence: s, originalId: s.characterId, toId });
+      out.push({ ...s, characterId: toId });
+      continue;
+    }
+    out.push(s);
+  }
+  return { sentences: out, remappedCount, remappedByOriginalId };
 }
 
 /* Attribution-drift threshold check. When demotion rate exceeds the
@@ -4268,8 +4325,29 @@ export async function runMainAnalyzerJob(
        demotion rate exceeds the threshold on a non-trivial sample so the
        confirm screen never advances against a corrupted run. */
     const phase1ValidIds = new Set(characters.map((c) => c.id));
+    /* CJK books: rescue honorific/title-variant orphans (奥杜万师傅 ↔ 奥杜万)
+       back to their roster id before demotion, so a Phase-0/Phase-1 title
+       disagreement can't false-trip the drift gate. No-op for non-CJK. */
+    const remappedForCjk = remapCjkHonorificIds(folded.sentences, characters, phase1ValidIds, {
+      isCjkBook: isCjkLanguage(bookLanguage),
+      onRemap: ({ sentence, originalId, toId }) => {
+        log(
+          1,
+          `Sentence in ch${sentence.chapterId} attributed to CJK title-variant "${originalId}" — remapped to roster id "${toId}".`,
+        );
+      },
+    });
+    if (remappedForCjk.remappedCount > 0) {
+      const summary = Array.from(remappedForCjk.remappedByOriginalId.entries())
+        .map(([id, count]) => `${id}=${count}`)
+        .join(', ');
+      log(
+        1,
+        `Remapped ${remappedForCjk.remappedCount} CJK title-variant attribution${remappedForCjk.remappedCount === 1 ? '' : 's'} to their roster ids (${summary}).`,
+      );
+    }
     const demotedByChapter = new Map<number, number>();
-    const reconciled = reconcileSentenceCharacterIds(folded.sentences, phase1ValidIds, {
+    const reconciled = reconcileSentenceCharacterIds(remappedForCjk.sentences, phase1ValidIds, {
       onDemote: ({ sentence, originalId }) => {
         demotedByChapter.set(
           sentence.chapterId,
@@ -5359,8 +5437,27 @@ export async function runSubsetAnalyzerJob(
        shrunk between attribution and persist), so the same guard
        applies here. */
     const subsetValidIds = new Set(enriched.map((c) => c.id));
+    /* CJK title-variant rescue, mirroring the main route (see remapCjkHonorificIds). */
+    const subsetRemappedForCjk = remapCjkHonorificIds(folded.sentences, enriched, subsetValidIds, {
+      isCjkBook: isCjkLanguage(bookLanguage),
+      onRemap: ({ sentence, originalId, toId }) => {
+        log(
+          1,
+          `Sentence in ch${sentence.chapterId} attributed to CJK title-variant "${originalId}" — remapped to roster id "${toId}".`,
+        );
+      },
+    });
+    if (subsetRemappedForCjk.remappedCount > 0) {
+      const summary = Array.from(subsetRemappedForCjk.remappedByOriginalId.entries())
+        .map(([id, count]) => `${id}=${count}`)
+        .join(', ');
+      log(
+        1,
+        `Remapped ${subsetRemappedForCjk.remappedCount} CJK title-variant attribution${subsetRemappedForCjk.remappedCount === 1 ? '' : 's'} to their roster ids (${summary}).`,
+      );
+    }
     const subsetDemotedByChapter = new Map<number, number>();
-    const subsetReconciled = reconcileSentenceCharacterIds(folded.sentences, subsetValidIds, {
+    const subsetReconciled = reconcileSentenceCharacterIds(subsetRemappedForCjk.sentences, subsetValidIds, {
       onDemote: ({ sentence, originalId }) => {
         subsetDemotedByChapter.set(
           sentence.chapterId,
