@@ -341,8 +341,9 @@ add the thin `docs/BACKLOG.md` row.
 
 ## Resolve during planning
 
-- **`ollamaHasAnalyzerModel` predicate** — the exact curated-family match, and
-  whether a user-selected non-curated local tag should also satisfy it.
+- **`anyAnalyzerModelPulled` predicate** (the backup-label fact) — the exact
+  curated-family match, and whether a user-selected non-curated local tag should
+  also satisfy it. (The gate's `resolvedModelPulled` is unambiguous — today's check.)
 - **`warn` remedy action** for out-of-wizard consumers (status-popover) now that
   the diagnosis carries a `warn` — what it navigates to.
 - **Whether the Ollama bridge line** should also offer a shortcut that jumps to
