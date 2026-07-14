@@ -2812,8 +2812,12 @@ export interface SubstagePhaseEvent {
   chapterIndex?: number;
   totalChapters?: number;
   estRemainingMs?: number;
+  model?: string;
+  engine?: 'local' | 'gemini';
+  activityState?: 'loading' | 'waiting' | 'streaming';
+  fallbackReason?: string;
 }
-function parseSubstagePhaseEvent(p: Record<string, unknown>): SubstagePhaseEvent | null {
+export function parseSubstagePhaseEvent(p: Record<string, unknown>): SubstagePhaseEvent | null {
   if (typeof p.progress !== 'number') return null;
   return {
     progress: p.progress,
@@ -2822,6 +2826,13 @@ function parseSubstagePhaseEvent(p: Record<string, unknown>): SubstagePhaseEvent
     chapterIndex: typeof p.chapterIndex === 'number' ? p.chapterIndex : undefined,
     totalChapters: typeof p.totalChapters === 'number' ? p.totalChapters : undefined,
     estRemainingMs: typeof p.estRemainingMs === 'number' ? p.estRemainingMs : undefined,
+    model: typeof p.model === 'string' ? p.model : undefined,
+    engine: p.engine === 'local' || p.engine === 'gemini' ? p.engine : undefined,
+    activityState:
+      p.activityState === 'loading' || p.activityState === 'waiting' || p.activityState === 'streaming'
+        ? p.activityState
+        : undefined,
+    fallbackReason: typeof p.fallbackReason === 'string' ? p.fallbackReason : undefined,
   };
 }
 
@@ -3118,6 +3129,7 @@ export interface ReviewScriptOpts {
   onOps?: (e: { chapterId: number; ops: import('./script-review-apply').ReviewOp[] }) => void;
   onChapterFailed?: (e: { chapterId: number; message: string }) => void;
   onCheckpoint?: (ev: { chapterId: number; version: number }) => void;
+  onHeartbeat?: (ev: { chapterId: number; streaming: boolean }) => void;
 }
 export interface ReviewScriptResult {
   reviewedChapters: number;
@@ -3135,7 +3147,7 @@ export class ReviewScriptError extends Error {
 
 async function realReviewScript(
   bookId: string,
-  { chapterId, model, signal, onPhase, onThrottle, onOps, onChapterFailed, onCheckpoint }: ReviewScriptOpts = {},
+  { chapterId, model, signal, onPhase, onThrottle, onOps, onChapterFailed, onCheckpoint, onHeartbeat }: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult> {
   const body: Record<string, unknown> = {};
   if (chapterId !== undefined) body.chapterId = chapterId;
@@ -3186,6 +3198,11 @@ async function realReviewScript(
       case 'checkpoint':
         if (typeof p.chapterId === 'number' && typeof p.version === 'number') {
           onCheckpoint?.({ chapterId: p.chapterId, version: p.version });
+        }
+        break;
+      case 'heartbeat':
+        if (typeof p.chapterIndex === 'number') {
+          onHeartbeat?.({ chapterId: p.chapterIndex, streaming: typeof p.receivedBytes === 'number' });
         }
         break;
       case 'result':
@@ -3491,7 +3508,7 @@ async function realCancelScriptReview(bookId: string): Promise<CancelScriptRevie
    expected, handled outcome (design spec §4.2), not a failure. */
 async function realAttachScriptReview(
   bookId: string,
-  { chapterId, signal, onPhase, onThrottle, onOps, onChapterFailed, onCheckpoint }: ReviewScriptOpts = {},
+  { chapterId, signal, onPhase, onThrottle, onOps, onChapterFailed, onCheckpoint, onHeartbeat }: ReviewScriptOpts = {},
 ): Promise<ReviewScriptResult | null> {
   const body: Record<string, unknown> = {};
   if (chapterId !== undefined) body.chapterId = chapterId;
@@ -3541,6 +3558,11 @@ async function realAttachScriptReview(
       case 'checkpoint':
         if (typeof p.chapterId === 'number' && typeof p.version === 'number') {
           onCheckpoint?.({ chapterId: p.chapterId, version: p.version });
+        }
+        break;
+      case 'heartbeat':
+        if (typeof p.chapterIndex === 'number') {
+          onHeartbeat?.({ chapterId: p.chapterIndex, streaming: typeof p.receivedBytes === 'number' });
         }
         break;
       case 'result':

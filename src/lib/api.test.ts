@@ -29,6 +29,7 @@ import {
   mockAttachScriptReview,
   ReviewScriptError,
   mockGetSidecarHealth,
+  parseSubstagePhaseEvent,
   type LedgerEntryDTO,
   api,
 } from './api';
@@ -148,6 +149,53 @@ describe('api.reviewScript', () => {
     const res = await api.reviewScript('b1', { onOps: (e) => seen.push(e) });
     expect(seen).toHaveLength(1);
     expect(res.totalOps).toBe(1);
+  });
+
+  it('parses heartbeat events and reports streaming when receivedBytes is present', async () => {
+    const chunks = [
+      'data: {"kind":"heartbeat","phaseId":"review","chapterIndex":2,"receivedBytes":128}\n\n',
+      'data: {"kind":"result","reviewedChapters":1,"totalOps":0}\n\n',
+    ].map((s) => new TextEncoder().encode(s));
+    let i = 0;
+    const body = { getReader: () => ({ read: async () => (i < chunks.length ? { done: false, value: chunks[i++] } : { done: true, value: undefined }) }) };
+    global.fetch = (async () => ({ ok: true, status: 200, body })) as never;
+    const seen: Array<{ chapterId: number; streaming: boolean }> = [];
+    await api.reviewScript('b1', { onHeartbeat: (e) => seen.push(e) });
+    expect(seen).toEqual([{ chapterId: 2, streaming: true }]);
+  });
+
+  it('parses heartbeat events and reports not-streaming when receivedBytes is absent', async () => {
+    const chunks = [
+      'data: {"kind":"heartbeat","phaseId":"review","chapterIndex":2}\n\n',
+      'data: {"kind":"result","reviewedChapters":1,"totalOps":0}\n\n',
+    ].map((s) => new TextEncoder().encode(s));
+    let i = 0;
+    const body = { getReader: () => ({ read: async () => (i < chunks.length ? { done: false, value: chunks[i++] } : { done: true, value: undefined }) }) };
+    global.fetch = (async () => ({ ok: true, status: 200, body })) as never;
+    const seen: Array<{ chapterId: number; streaming: boolean }> = [];
+    await api.reviewScript('b1', { onHeartbeat: (e) => seen.push(e) });
+    expect(seen).toEqual([{ chapterId: 2, streaming: false }]);
+  });
+});
+
+describe('parseSubstagePhaseEvent — new fields', () => {
+  it('parses model/engine/activityState/fallbackReason', () => {
+    const ev = parseSubstagePhaseEvent({
+      kind: 'phase',
+      progress: 0.5,
+      label: 'Reviewing script',
+      model: 'gemma-4-31b-it',
+      engine: 'gemini',
+      activityState: 'waiting',
+      fallbackReason: 'Ollama unreachable',
+    });
+    expect(ev).toMatchObject({
+      progress: 0.5,
+      model: 'gemma-4-31b-it',
+      engine: 'gemini',
+      activityState: 'waiting',
+      fallbackReason: 'Ollama unreachable',
+    });
   });
 });
 
