@@ -107,6 +107,12 @@ _Full detail + acceptance:_ [#461](https://github.com/dudarenok-maker/Castwright
 - _Benefit:_ Extends language breadth to the two highest-population CJK languages — a large slice of the "rivals show 1,158 languages" gap that Latin alone can't close.
 _Full detail + acceptance:_ [#1004](https://github.com/dudarenok-maker/Castwright/issues/1004).
 
+#### `fs-61` — capture zh/ja Coalfall demo-book samples (sample-coverage guard) ([#1600](https://github.com/dudarenok-maker/Castwright/issues/1600))
+
+- _What:_ `language-sample-coverage.test.ts` (added in #1568) requires every `supported:true` registry language to ship a runnable Coalfall demo book under `samples/`. fs-59 W5 flips zh/ja to `supported:true` without a matching sample, tripping the guard — needs the real analyzer + Qwen VoiceDesign pipeline on a GPU box (per-character voices, cover slimming, README) to close, same bar as the existing `-de`/`-es`/`-fr`/`-ru` samples.
+- _Benefit:_ Keeps the fs-61 demo-book coverage invariant real and unblocks `npm run test:server`/CI going fully green on newly-supported languages.
+_Full detail + acceptance:_ [#1600](https://github.com/dudarenok-maker/Castwright/issues/1600).
+
 #### `fs-10` — Render the chapter-title segment on the Listen view timeline ([#412](https://github.com/dudarenok-maker/Castwright/issues/412))
 
 - _What:_ The new title segment in `segments.json` (kind: `'title'`, empty `sentenceIds[]`) is currently filtered out at the `ChapterAudio` API boundary in `server/src/routes/chapter-audio.ts` because the wire contract types `sentenceId` as a required integer. To surface the title on the listen-view timeline (a labelled "TITLE" pill anchored at the start of the chapter, ~3 s wide including silence), widen the API segment shape so `sentenceId` is optional and add an optional `kind?: 'title' | 'sentence'` discriminator, regenerate `src/lib/api-types.ts`, then teach `src/components/listen/listen-player-region.tsx` to render title-kind segments differently from sentence-kind segments.

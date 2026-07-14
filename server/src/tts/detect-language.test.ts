@@ -50,16 +50,16 @@ describe('detectManuscriptLanguage', () => {
     expect(detectManuscriptLanguage(text)).toEqual({ language: 'es', supported: true });
   });
 
-  it('flags a CJK manuscript as detected-but-unsupported, reading `supported` THROUGH the registry (fs-59 W2) rather than hardcoding it', () => {
+  it('flags a CJK manuscript with `supported` read THROUGH the registry (fs-59 W2 mechanism; W5 flips zh to supported:true) rather than hardcoded', () => {
     const zh = '熔炉已经冷却到被灰烬覆盖的落日的颜色，当有人敲响她作坊的门时，雷恩正在刮掉最后的炉渣。';
     const r = detectManuscriptLanguage(zh);
-    // read-through, not a literal: mirrors whatever the registry says today
-    // (false today; flips automatically once fs-59 W5 sets zh.supported = true).
+    // read-through, not a literal: mirrors whatever the registry says
+    // (true since fs-59 W5 flipped zh.supported = true).
     expect(r.supported).toBe(getLanguageEntry('zh')?.supported ?? false);
     expect(['zh', 'ja']).toContain(r.language);
   });
 
-  it('detects Japanese via the CJK pre-pass, supported reads through the registry (false today)', () => {
+  it('detects Japanese via the CJK pre-pass, supported reads through the registry (true since fs-59 W5)', () => {
     const ja = '彼は歩いた。彼女は走った。'.repeat(50);
     const r = detectManuscriptLanguage(ja);
     expect(r.language).toBe('ja');
@@ -72,10 +72,11 @@ describe('detectManuscriptLanguage — CJK read-through proof (fs-59 W2, indepen
      dynamic `import('./detect-language.js')` inside the test picks up the
      stubbed registry rather than the module cache (see ensure-sidecar-loaded.test.ts
      for the same pattern). This is the load-bearing test: it does NOT rely on
-     the false==false coincidence (today's real zh.supported is false) — it
-     stubs the registry to zh.supported=true and proves detection propagates
-     that, which only happens if the CJK branch calls the `result()` helper
-     instead of returning a hardcoded `{ supported: false }` literal. */
+     the real registry's current zh.supported value (true since fs-59 W5) — it
+     stubs the registry to zh.supported=true independently and proves detection
+     propagates that stub, which only happens if the CJK branch calls the
+     `result()` helper instead of returning a hardcoded `{ supported: false }`
+     literal (the original independent-review CRITICAL finding). */
   afterEach(() => {
     vi.doUnmock('./language-registry.js');
     vi.resetModules();

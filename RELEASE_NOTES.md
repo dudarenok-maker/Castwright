@@ -15,6 +15,7 @@
 - **Skipping between streamed chapters is smoother.** When you jump from one not-yet-downloaded chapter straight to the next over home Wi-Fi, a brief hand-off hiccup from the chapter you're leaving can no longer be mistaken for the new one failing — so you won't see a stray "download to play" nudge mid-skip.
 - **Take Castwright for a spin — no setup.** Tap **Try the demo** on the companion app's pairing screen to explore a sample library, browse, and play, all on your device.
 - **The Android app now stretches out on a tablet.** On a tablet or an unfolded foldable, Castwright's companion app shows your library and the player side by side, instead of one blown-up phone screen — tap a book on the left and it starts playing on the right, switch between books without losing your place, and turn the device however you like; your audiobook keeps playing right through the rotation. Bigger cover art fills the extra room — with comfortable margins so covers never run to the very edge of the screen — and on a phone everything looks exactly as it did before.
+- **Castwright now supports Chinese and Japanese books.** Any book, performed by a full cast, now stretches to two of the world's most-spoken languages — upload a Chinese or Japanese manuscript and it's no longer turned away at the door. For the cleanest read on who's speaking, we recommend picking a local Qwen analysis model in Advanced Settings for these languages for now.
 
 # Castwright 1.13.0
 
