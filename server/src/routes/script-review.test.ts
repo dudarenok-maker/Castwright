@@ -1053,6 +1053,15 @@ describe('cancellation (fs-58 follow-up #1481)', () => {
     expect(events.some((e) => e.kind === 'error' && e.code === 'cancelled')).toBe(true);
     expect(events.some((e) => e.kind === 'result')).toBe(false);
     expect(events.some((e) => e.kind === 'checkpoint')).toBe(false);
+    // The intra-chapter progress-creep `phase` event (chapter 1's single
+    // chunk resolves AFTER the cancel above) must not be emitted once the
+    // job is aborted — it's distinguishable from the per-chapter "waiting"
+    // phase by carrying `progress` + `chapterId` but no `activityState`
+    // (only the chapter-start phase sets that). Guards
+    // server/src/routes/script-review.ts:758.
+    expect(
+      events.some((e) => e.kind === 'phase' && e.progress !== undefined && 'chapterId' in e && !('activityState' in e)),
+    ).toBe(false);
 
     const ledger = await readLedger(bookDir(), manuscriptId);
     expect(ledger.entries['1']).toBeUndefined();
