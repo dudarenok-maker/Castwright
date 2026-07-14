@@ -1,0 +1,45 @@
+{
+  "bookId": "castwright__standalones__コールフォールの依頼",
+  "manuscriptId": "mns_coalfall_ja",
+  "title": "コールフォールの依頼",
+  "author": "Castwright",
+  "series": "Standalones",
+  "seriesPosition": null,
+  "isStandalone": true,
+  "manuscriptFile": "manuscript.md",
+  "castConfirmed": false,
+  "chapters": [
+    {
+      "id": 1,
+      "title": "Chapter 1",
+      "slug": "01-chapter-1",
+      "excluded": true
+    },
+    {
+      "id": 2,
+      "title": "第一章 — 戸を叩く音",
+      "slug": "02-第一章-戸を叩く音"
+    },
+    {
+      "id": 3,
+      "title": "第二章 — 鋳込み",
+      "slug": "03-第二章-鋳込み"
+    }
+  ],
+  "coverGradient": [
+    "#3E5F4A",
+    "#162820"
+  ],
+  "createdAt": "2026-07-14T00:00:00.000Z",
+  "updatedAt": "2026-07-14T00:00:00.000Z",
+  "chapterTitleParserVersion": 2,
+  "language": "ja",
+  "schema": 1,
+  "narratorCredit": null,
+  "genre": null,
+  "publicationDate": null,
+  "description": null,
+  "notes": null,
+  "tags": [],
+  "liveInstruct": false
+}
