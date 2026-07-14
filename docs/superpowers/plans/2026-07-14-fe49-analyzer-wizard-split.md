@@ -42,6 +42,8 @@ The spec §5 defines `localBackup = ollamaReachable && anyAnalyzerModelPulled`. 
 | `src/components/setup/step-voice.tsx` (new) | Voice-engines step (verbatim lift of today's voice half). |
 | `src/components/setup/step-models.tsx` + `.test.tsx` | Delete. |
 | `src/components/setup/setup-wizard.tsx` | `StepId`/`STEPS`/`renderStep`: `models` → `analysis` + `voice`; `buildSummaryRows` reorder + `SummaryStatus` gains `warn`. |
+| `src/components/setup/setup-wizard.test.tsx` | Swap `step-models` mock → `step-analysis` + `step-voice`; `STEP_TESTIDS`; step counts 6→7; Next-loops 5→6; add warn-summary assertion. |
+| `src/views/setup.test.tsx` | Swap the dead `step-models` mock → `step-analysis` + `step-voice`. |
 | `src/components/setup/step-defaults.tsx` | `handleAnalysisModelChange` auto-derives + saves `analysisEngine`. |
 | `e2e/setup-wizard.spec.ts` | 6 → 7 steps, new order, Ollama pull path (mocked). |
 
@@ -120,23 +122,7 @@ function mockBlocker(status: 'pass' | 'warn' | 'fail'): BlockerDiagnosis {
 }
 ```
 
-In `mockGetSetupReadiness`, add a `warn` scenario keyed off a hash flag (so e2e/unit can exercise it) — insert before the final `ready: true` return:
-
-```ts
-if (window.location.hash.includes('setup=nobackup')) {
-  return {
-    ready: true,
-    completedAt: '2026-06-12T00:00:00.000Z',
-    blockers: {
-      sidecar: mockBlocker('pass'),
-      ffmpeg: mockBlocker('pass'),
-      tts: mockBlocker('pass'),
-      analyzer: mockBlocker('warn'),
-    },
-    info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
-  };
-}
-```
+That's the whole mock change — the widened `mockBlocker` signature + `warn` shape is the "mockBlocker learns the tri-state" parity the spec asks for. **Do NOT add a full-readiness `setup=nobackup` scenario to `mockGetSetupReadiness`** (an earlier draft did): its ready branch is a single ternary with no standalone `ready: true` return to insert before, and no test would exercise the scenario (the `warn` render is covered directly — status-popover unit test in this task, the server matrix in Task 2, and the summary-row test in Task 3 — so a latched full-readiness mock is dead scope-creep).
 
 - [ ] **Step 4: Handle `warn` in `DiagnosisBlock`** (`src/components/status-popover.tsx`):
 
@@ -478,7 +464,7 @@ Replace the combined step with a local-first **Analysis** step (closing the Olla
 - Create: `src/components/setup/step-voice.tsx`, `src/components/setup/step-voice.test.tsx`
 - Delete: `src/components/setup/step-models.tsx`, `src/components/setup/step-models.test.tsx`
 - Modify: `src/components/setup/setup-wizard.tsx` (`StepId`, `STEPS`, `renderStep`, `buildSummaryRows`, `SummaryStatus`, progress dot color)
-- Test: `src/components/setup/setup-wizard.test.tsx`
+- Test: `src/components/setup/setup-wizard.test.tsx` (mock swap + counts + warn assertion), `src/views/setup.test.tsx` (mock swap)
 
 **Interfaces:**
 - Consumes: `BlockerDiagnosis.status: 'pass' | 'warn' | 'fail'` (Task 1); `ModelPullStatus({ health, pullableModels, onPulled })` (`src/components/model-pull-status.tsx:65`); `OllamaInstall({ onInstalled })`; `GeminiKeyField`; `api.getOllamaHealth()`; `fetchAnalyzerModels()` (`src/store/account-slice.ts:74`) → `account.pullableModels` + `account.localAnalyzerModels`.
@@ -866,24 +852,45 @@ In `SetupSummary`, the `attention` filter must ignore `warn` (non-blocking). It 
 git rm src/components/setup/step-models.tsx src/components/setup/step-models.test.tsx
 ```
 
-- [ ] **Step 11: Update `setup-wizard.test.tsx`** — assert 7 steps, "Step N of 7", and the summary order (Analyzer row before Voice row) + the yellow `warn` dot. Add/adjust:
+- [ ] **Step 11: Fix `setup-wizard.test.tsx` for the deletion + split (MECHANICAL — the deleted `step-models` mock will otherwise render the real redux-connected steps with no `<Provider>` and hard-fail).** This suite stubs every step (`:12-35`) so it tests orchestration only. Apply ALL of:
+  1. **Swap the mock** (`:18-20`) — replace the `./step-models` mock with two:
+     ```tsx
+     vi.mock('./step-analysis', () => ({
+       StepAnalysis: () => <div data-testid="step-analysis-stub">analysis</div>,
+     }));
+     vi.mock('./step-voice', () => ({
+       StepVoice: () => <div data-testid="step-voice-stub">voice</div>,
+     }));
+     ```
+  2. **`STEP_TESTIDS`** (`:63-70`) — replace `'step-models-stub'` with `'step-analysis-stub', 'step-voice-stub'` (now 7 entries, in wizard order: environment, ffmpeg, analysis, voice, defaults, lan-cert, finish). The paging loop at `:222` then walks all 7.
+  3. **Progress counts** — `/step 1 of 6/i` → `/1 of 7/i` (`:126,160`), `/step 2 of 6/i` → `/2 of 7/i` (`:144,242`), `/step 6 of 6/i` → `/step 7 of 7/i` (`:189`).
+  4. **Next-loops** — both `for (let i = 0; i < 5; i++)` (`:185,204`) become `i < 6` (six Next clicks reach the 7th/Finish step).
+  5. **Add** two assertions — Analysis before Voice in the summary board, and the analyzer row renders the yellow `warn` state:
+     ```tsx
+     it('summary board renders the Analyzer row before Voice, with a yellow dot on warn', () => {
+       const warnReadiness = { ...READINESS, ready: true, completedAt: '2026-07-01T00:00:00.000Z',
+         blockers: { ...READINESS.blockers,
+           tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
+           analyzer: { status: 'warn', cause: 'pass', message: 'no backup', remediation: '' } } };
+       render(<SetupWizard readiness={warnReadiness} mode="checklist" onRefetch={() => {}} onFinish={() => {}} />);
+       const analyzerRow = screen.getByTestId('setup-summary-row-analyzer');
+       const voiceRow = screen.getByTestId('setup-summary-row-voice');
+       expect(analyzerRow.compareDocumentPosition(voiceRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+       expect(analyzerRow).toHaveAttribute('data-status', 'warn');
+     });
+     ```
+     (Confirm `mode="checklist"` opens the re-entry summary board — `setup-wizard.tsx:95` — matching the file's existing re-entry test.)
 
-```tsx
-it('has 7 steps with Analysis before Voice', () => {
-  // render guided wizard; expect "Step 1 of 7"
-  expect(screen.getByText(/step 1 of 7/i)).toBeInTheDocument();
-});
-
-it('summary board renders the Analyzer row before Voice, with a yellow dot on warn', () => {
-  // render re-entry summary with a warn analyzer readiness
-  const analyzerRow = screen.getByTestId('setup-summary-row-analyzer');
-  const voiceRow = screen.getByTestId('setup-summary-row-voice');
-  expect(analyzerRow.compareDocumentPosition(voiceRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(analyzerRow).toHaveAttribute('data-status', 'warn');
-});
-```
-
-Update any existing `setup-wizard.test.tsx` assertions that hard-code "of 6" or the old row order.
+- [ ] **Step 11b: Fix `src/views/setup.test.tsx:13-15`** — it mocks the now-deleted `../components/setup/step-models`, an unresolvable path after deletion. Replace that single mock with the two new ones (same factory shape), mirroring Step 11.1:
+  ```tsx
+  vi.mock('../components/setup/step-analysis', () => ({
+    StepAnalysis: () => <div data-testid="step-analysis-stub">analysis</div>,
+  }));
+  vi.mock('../components/setup/step-voice', () => ({
+    StepVoice: () => <div data-testid="step-voice-stub">voice</div>,
+  }));
+  ```
+  (This suite only asserts the guided first step renders, so no further changes — but the dead mock path must go.)
 
 - [ ] **Step 12: Run the full frontend suite.**
 
@@ -1016,5 +1023,5 @@ git commit -m "test(e2e): 7-step wizard order + Ollama pull path"
 - **Spec coverage:** Goals §1 wizard split → Task 3; §2 analysis step two-card local-first + closed dead-end + bridge line → Task 3; §4 Defaults engine derive → Task 4; §5 tri-state + probe-both + gate → Tasks 1–2; §6 pull allowlist → verified (no code change, `qwen3.5:4b` ∈ `DEFAULT_ALLOWED_MODELS`); §7 admin → ship-chore follow-up; testing § 7-step/matrix/regression-guards/mock-parity/e2e → Tasks 1–5. All acceptance-criteria bullets map to a task.
 - **Placeholder scan:** none — every code step shows the code; the "match existing harness" notes point at a concrete existing file/helper to copy, not a TODO.
 - **Type consistency:** `BlockerDiagnosis.status: 'pass' | 'warn' | 'fail'` widened in both hand-written locations (Tasks 1, 2); `AnalyzerDiagnosisInput.anyAnalyzerModelPulled` produced in Task 2, consumed by the route (Step 8) and both the new matrix (Step 1) and the existing fixture (Step 4b); `SummaryStatus: 'ok' | 'warn' | 'attention'` defined and used only in `setup-wizard.tsx` (Task 3); `StepAnalysis`/`StepVoice` props `{ readiness, onRefetch }` match `renderStep`'s call sites.
-- **Existing-test impact (from plan review):** the only existing suite that breaks is `setup-diagnosis.test.ts` (required-field + `pass`→`warn`), handled in Task 2 Step 4b; the client `status-popover.test.tsx` `warn` test reuses that file's `makeProps`/`readinessWith` helpers so it fails for the right reason; the e2e uses the in-app Ollama mock (no dead `page.route`). No exhaustive `switch(status)` on a diagnosis exists anywhere, so the union widening breaks no client consumer.
+- **Existing-test impact (from two plan-review passes):** THREE existing suites are touched by this change — (1) `server/src/routes/setup-diagnosis.test.ts` (required `anyAnalyzerModelPulled` field + `pass`→`warn` split) → Task 2 Step 4b; (2) `src/components/setup/setup-wizard.test.tsx` (the deleted `step-models` mock would render real redux-connected steps with no Provider and hard-fail; plus step-count/loop/testid churn) → Task 3 Step 11; (3) `src/views/setup.test.tsx` (dead `step-models` mock path) → Task 3 Step 11b. The client `status-popover.test.tsx` `warn` test reuses that file's `makeProps`/`readinessWith` helpers so it fails for the right reason; the e2e uses the in-app Ollama mock (no dead `page.route`). No exhaustive `switch(status)` on a diagnosis exists anywhere (verified across `src/` + `server/src/`), so the *union widening itself* breaks no consumer — only the file deletion has test-blast-radius, and it's now fully enumerated.
 - **Deviation flagged:** `localBackup` strengthened with `|| modelPulled` vs the spec's formula (green-vs-yellow only) — documented above with a dedicated guard test in Task 2.
