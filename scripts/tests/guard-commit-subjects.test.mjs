@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluatePush, helpMessage } from '../guard-commit-subjects.mjs';
+import { evaluatePush, helpMessage, computeRevs } from '../guard-commit-subjects.mjs';
 
 const ZERO = '0'.repeat(40);
 const line = (localSha, remoteSha = ZERO, remoteRef = 'refs/heads/feature') =>
@@ -80,6 +80,28 @@ test('a commit pushed on two refs is validated once', () => {
   // listSubjects runs per ref line, but the duplicate sha is only reported once
   assert.equal(calls, 2);
   assert.equal(r.failures.length, 1);
+});
+
+const ZERO40 = '0'.repeat(40);
+
+test('computeRevs (re-push) checks the push range minus the trunk', () => {
+  // A merge from `main` puts main's commits inside remoteSha..localSha; excluding
+  // the trunk (origin/main) drops them so they are not re-flagged, while a
+  // genuinely new bad commit (not on the trunk) stays in range.
+  const revs = computeRevs('REMOTE', 'LOCAL');
+  assert.deepEqual(revs, ['REMOTE..LOCAL', '--not', 'origin/main']);
+});
+
+test('computeRevs (new branch) checks all branch commits not on the trunk', () => {
+  const revs = computeRevs(ZERO40, 'LOCAL');
+  assert.deepEqual(revs, ['LOCAL', '--not', 'origin/main']);
+});
+
+test('computeRevs never excludes by --remotes (a bad commit on another branch, new to this ref, must stay checked)', () => {
+  // Regression guard: excluding --remotes would silently drop a bad-subject
+  // commit merged in from a scratch/experimental remote branch.
+  assert.ok(!computeRevs('REMOTE', 'LOCAL').includes('--remotes'));
+  assert.ok(!computeRevs(ZERO40, 'LOCAL').includes('--remotes'));
 });
 
 test('helpMessage names the offending sha + subject and shows the convention', () => {
