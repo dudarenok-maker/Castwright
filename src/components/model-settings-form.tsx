@@ -541,8 +541,9 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
    the setup wizard's Analysis-step badge (src/components/setup/step-analysis.tsx):
    green = a working analyzer AND a backup; amber = works, no backup; rose =
    won't run. Message-only (the installers in this card ARE the remedy). Reads
-   the SAME shared setup-readiness diagnosis the wizard uses, so the admin
-   surface and the wizard can never disagree about analyzer readiness. */
+   the same server-resolved setup-readiness diagnosis (`GET /api/setup/readiness`
+   → `diagnoseAnalyzer`) the wizard reads, so both surfaces show the same
+   tri-state (modulo poll timing — this card polls on its own dedicated timer). */
 function AnalyzerReadinessBadge({ diagnosis }: { diagnosis: BlockerDiagnosis }) {
   const tone =
     diagnosis.status === 'pass'
@@ -577,9 +578,11 @@ function AnalyzerReadinessBadge({ diagnosis }: { diagnosis: BlockerDiagnosis }) 
 function ModelsCardBody() {
   const dispatch = useAppDispatch();
   const pullableModels = useAppSelector((s) => s.account.pullableModels);
-  /* Shared setup-readiness poller (same hook the wizard + status-popover use) so
-     the admin analyzer badge reflects the exact server-resolved tri-state. */
-  const { readiness } = useSetupDiagnosis();
+  /* Dedicated setup-readiness poll (same hook the wizard + status-popover use)
+     feeding the admin analyzer badge. A slower 30s cadence than the shell's 10s
+     — an admin config screen doesn't need snappy readiness, and this keeps the
+     extra polling light while Model Manager is open. */
+  const { readiness } = useSetupDiagnosis(30_000);
   const [health, setHealth] = useState<import('./model-pull-status').OllamaHealthEnvelope | null>(
     null,
   );
