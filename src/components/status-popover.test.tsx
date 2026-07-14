@@ -346,6 +346,27 @@ describe('StatusPopover', () => {
     ).toBeInTheDocument();
   });
 
+  it('renders a non-alarming note for a warn analyzer (no fix button)', () => {
+    const warnAnalyzer: BlockerDiagnosis = {
+      status: 'warn',
+      cause: 'pass',
+      message: 'Analyzer ready — no backup analyzer configured.',
+      remediation: '',
+    };
+    render(<StatusPopover {...makeProps({ readiness: readinessWith({ analyzer: warnAnalyzer }) })} />);
+    expect(screen.getByText(/no backup analyzer configured/i)).toBeInTheDocument();
+    // No fix-action button for a warn: BlockerFixAction renders nothing without an
+    // action AND is now gated to status === 'fail'. Scoped to the Analysis section
+    // (not the whole screen) since makeProps' default pendingRevisionsCount renders
+    // an unrelated "… · Open" button in the Revisions section that would otherwise
+    // false-match this regex.
+    expect(
+      within(screen.getByTestId('status-popover-analysis')).queryByRole('button', {
+        name: /open|install|pull|set up/i,
+      }),
+    ).toBeNull();
+  });
+
   it('shows a top-of-panel ffmpeg banner only when it fails', () => {
     const failFfmpeg: BlockerDiagnosis = {
       status: 'fail',
