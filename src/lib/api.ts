@@ -7189,8 +7189,8 @@ async function realGetSetupReadiness(): Promise<SetupReadiness> {
   return (await res.json()) as SetupReadiness;
 }
 
-/* fe-49 — models-status wizard split. Mirrors ModelsStatus in
-   server/src/routes/setup-models-status.ts. */
+/* fs-38 Part A — models-status wizard single source. Mirrors ModelsStatus in
+   server/src/tts/models-status.ts. */
 export type EngineHealthState = 'ready' | 'package-missing' | 'weights-missing' | 'not-installed' | 'loaded';
 export type RuntimeProcessState = 'ready' | 'starting' | 'down' | 'crashed';
 export interface ModelsStatus {

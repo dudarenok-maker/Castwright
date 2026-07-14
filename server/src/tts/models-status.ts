@@ -6,7 +6,7 @@
    voice-engine registry. Pure over injected probe results (fs/network I/O lives
    in the route handler, mirroring setup-diagnosis.ts). */
 import { VOICE_ENGINES, type VoiceEngineId } from './voice-engine-registry.js';
-import { deriveEngineHealth, type EngineHealthState, type EngineId } from './engine-health.js';
+import { deriveEngineHealth, type EngineHealthState } from './engine-health.js';
 
 export type RuntimeProcessState = 'ready' | 'starting' | 'down' | 'crashed';
 
@@ -50,7 +50,7 @@ export function buildModelsStatus(input: BuildModelsStatusInput): ModelsStatus {
   const engines = {} as Record<VoiceEngineId, EngineStatus>;
   for (const entry of VOICE_ENGINES) {
     const p = input.engines[entry.id];
-    const { state } = deriveEngineHealth(entry.id as EngineId, {
+    const { state } = deriveEngineHealth(entry.id, {
       packageInstalled: p.packageOnDisk,
       weightsPresent: p.weightsOnDisk,
       loaded: p.loaded,
