@@ -9,6 +9,7 @@
        the book author or title, removed only before substantial narrative prose
        begins, so a story that *mentions* the author mid-prose is untouched. */
 import { normaliseNameKey } from '../util/safe-id.js';
+import { hasCjkChar } from '../util/cjk.js';
 
 const GLOBAL_BOILERPLATE: RegExp[] = [
   /_###ICE#BOOK#READER/i, // reader-tool header marker (whole line is the header)
@@ -34,11 +35,10 @@ function isGlobalBoilerplate(line: string): boolean {
    CJK prose is denser than Latin so the 60-char threshold is too high. For a
    line containing Han/Kana, use a lower length threshold (~15) plus a CJK
    sentence-ending punctuation mark instead of the lowercase-letter test. */
-const CJK_CHAR = /[぀-ヿ㐀-䶿一-鿿]/;
 const CJK_SENTENCE_END = /[。！？…]/;
 
 function isNarrativeLine(line: string): boolean {
-  if (CJK_CHAR.test(line)) {
+  if (hasCjkChar(line)) {
     return line.length >= 15 && CJK_SENTENCE_END.test(line);
   }
   if (line.length < 60) return false;

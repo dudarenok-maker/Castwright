@@ -39,6 +39,7 @@ import { getLanguageEntry } from '../tts/language-registry.js';
 import { AnalysisAbortedError } from './ollama.js';
 import { AnalyzerTruncatedError } from './errors.js';
 import { geminiRateLimiter, DailyQuotaExhaustedError } from './rate-limit.js';
+import { countCjkChars } from '../util/cjk.js';
 
 /* Idle-chunk watchdog: if the SDK stream goes more than this long between
    chunks (or before the first chunk), assume the upstream is wedged and
@@ -911,17 +912,13 @@ export function estimateInputTokens(
     const m = s.match(/[Ѐ-ӿ]/g);
     return m ? m.length : 0;
   };
-  const countHanKana = (s: string): number => {
-    const m = s.match(/[぀-ヿ㐀-䶿一-鿿]/g);
-    return m ? m.length : 0;
-  };
   cyrillic += countCyrillic(systemInstruction);
-  hanKana += countHanKana(systemInstruction);
+  hanKana += countCjkChars(systemInstruction);
   for (const turn of contents) {
     for (const part of turn.parts) {
       chars += part.text.length;
       cyrillic += countCyrillic(part.text);
-      hanKana += countHanKana(part.text);
+      hanKana += countCjkChars(part.text);
     }
   }
   const cyrillicFraction = chars > 0 ? cyrillic / chars : 0;

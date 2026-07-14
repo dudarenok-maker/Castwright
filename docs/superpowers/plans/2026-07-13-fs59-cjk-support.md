@@ -332,6 +332,22 @@ it('splits CJK headings but does not eat 第N-prefixed prose', () => {
 - [ ] **Step 4: Run to verify it passes;** confirm English/ES/RU heading tests stay green (the new alternative only fires on CJK glyphs, whole-line anchored).
 - [ ] **Step 5: Commit** — `fix(server): CJK 第N章 chapter-heading split (fs-59 W2)`.
 
+**Follow-up (issue #1576, fixed before W5):** the shipped Step 3 only routed the
+*full-form* CJK standalone terms (`序章`/`終章`/`プロローグ`/`エピローグ`) into the
+whole-line-anchored alternative; the single-token terms also in the registry's
+`headingLexicon.standalone` — `序`/`跋` (zh), `あとがき`/`前書き` (ja) — were still
+falling through to the `\b`-bounded `ALL_STANDALONE` alternative, and `\b` never
+borders a CJK codepoint, so those four terms silently never split. Fixed by
+partitioning the registry's standalone-term union on `hasCjkChar` at module load
+(new `server/src/util/cjk.ts`) rather than hardcoding a second list: the CJK
+subset feeds the whole-line-anchored alternative (alongside the four full-form
+terms above), the rest still feeds the `\b`-bounded one. Same fix also unified
+the two divergent CJK char-class regexes flagged by the Wave 2 review
+(`analyzer/gemini.ts` `countHanKana`, `analyzer/strip-front-matter.ts`
+`CJK_CHAR`) onto the shared `\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}`
+form. See `server/src/parsers/text.test.ts` (CJK chapter-splitting describe
+block) and `server/src/util/cjk.test.ts`.
+
 ### Task 2.7: CJK word-count / front-matter miscount at import (independent-review finding)
 
 **Files:**

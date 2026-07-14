@@ -11,6 +11,7 @@ import {
   tagShoutingDialog,
 } from './audio-tags.js';
 import { nonEnglishHeadingLexicon } from '../tts/language-registry.js';
+import { hasCjkChar } from '../util/cjk.js';
 
 /* Heading detection — built from three alternatives:
    1) Markdown H1/H2 (`# Foo` or `## Foo`).
@@ -40,10 +41,22 @@ const ALL_NUMBER_WORDS = [
   'eighty','ninety','hundred',
   ...NE_LEX.numberWords,
 ].join('|');
-const ALL_STANDALONE = [
-  ...['prologue','epilogue','interlude','preface','introduction','afterword','foreword'],
+
+/* `ALL_STANDALONE_TERMS` is every standalone-heading word across every
+   registry language (Latin/Cyrillic AND CJK) — used as-is by
+   `BARE_STANDALONE_HEADING_RE` below, which anchors on `\s*$` and so has no
+   trouble with CJK codepoints. `CHAPTER_HEADING_RE`'s standalone alternative
+   is different: it anchors with `\b`, and `\b` is ASCII-\w-based — it never
+   borders a Han/Kana codepoint, so a CJK term placed there can never match
+   (issue #1576). Split the union in two: `ALL_STANDALONE` (Latin/Cyrillic
+   only) feeds the `\b`-bounded alternative; the CJK subset is folded into
+   the whole-line-anchored `CJK_STANDALONE` alternative instead, which uses
+   `CJK_SEP` (whitespace/separator/end-of-line) rather than `\b`. */
+const ALL_STANDALONE_TERMS = [
+  'prologue','epilogue','interlude','preface','introduction','afterword','foreword',
   ...NE_LEX.standalone,
-].join('|');
+];
+const ALL_STANDALONE = ALL_STANDALONE_TERMS.filter((s) => !hasCjkChar(s)).join('|');
 
 /* Numbered-section number: Arabic digit, Roman numeral, or English/non-English word
    form (with optional compound for 21–99: "twenty-one", "thirty two", …). */
@@ -67,7 +80,15 @@ const CJK_HEADING_MAX_LEN = 20;
 const CJK_NUMBER = '[0-9０-９〇一二三四五六七八九十百千]+';
 const CJK_ENDER = '[章話回節部幕巻]'; // 章話回節部幕巻
 const CJK_SEP = '(?:[\\s：:—-]|$)'; // whitespace, fullwidth/halfwidth colon, em-dash, hyphen, or end-of-line
-const CJK_STANDALONE = '序章|終章|プロローグ|エピローグ'; // 序章|終章|プロローグ|エピローグ
+/* Base full-form CJK standalone headings, unioned with the CJK subset of
+   the registry's per-language `headingLexicon.standalone` (issue #1576) —
+   single-token terms like 序/跋 (zh) and あとがき/前書き (ja) that can only
+   ever reach a chapter split through this whole-line-anchored alternative,
+   never the `\b`-bounded `ALL_STANDALONE` above. */
+const CJK_STANDALONE_TERMS = [
+  ...new Set(['序章', '終章', 'プロローグ', 'エピローグ', ...ALL_STANDALONE_TERMS.filter(hasCjkChar)]),
+];
+const CJK_STANDALONE = CJK_STANDALONE_TERMS.join('|'); // 序章|終章|プロローグ|エピローグ|序|跋|あとがき|前書き
 const CJK_HEADING_ALT = `(?=.{1,${CJK_HEADING_MAX_LEN}}$)(?:第${CJK_NUMBER}${CJK_ENDER}${CJK_SEP}|(?:${CJK_STANDALONE})${CJK_SEP})`; // 第<number><ender>
 
 const CHAPTER_HEADING_RE = new RegExp(
@@ -84,7 +105,14 @@ const BARE_NUMBERED_HEADING_RE = new RegExp(
   `^(?:${ALL_HEADING_KEYWORDS})\\s+${NUMBER_PART}\\s*$`,
   'iu',
 );
-const BARE_STANDALONE_HEADING_RE = new RegExp(`^(?:${ALL_STANDALONE})\\s*$`, 'iu');
+/* Uses the FULL (Latin/Cyrillic + CJK) term union, not the `\b`-bounded
+   `ALL_STANDALONE` above — this pattern anchors on `\s*$`, which has no
+   CJK boundary problem, so a CJK bare heading (`序`, `跋`, …) still needs
+   to be recognised here. */
+const BARE_STANDALONE_HEADING_RE = new RegExp(
+  `^(?:${ALL_STANDALONE_TERMS.join('|')})\\s*$`,
+  'iu',
+);
 
 /* Cap on subtitle line length. Real chapter names rarely exceed 80 chars;
    anything longer is almost certainly a body sentence. Re-used by the

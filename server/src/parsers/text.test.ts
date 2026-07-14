@@ -380,6 +380,25 @@ describe('parseText — CJK chapter splitting (fs-59 W2, acceptance-critical)', 
     expect(chapters.length).toBe(2); // only 第一章 / 第二章 — 第五章のこと is NOT a 3rd chapter
     expect(chapters.map((c) => c.body).join('')).toContain('第五章のことを思い出した');
   });
+
+  /* Issue #1576 (fs-59 W2 review follow-up): 序/跋 (zh) and あとがき/前書き
+     (ja) live in the registry's standalone lexicon but were only reachable
+     via the `\b`-bounded ALL_STANDALONE alternative — and `\b` never
+     borders a CJK codepoint, so these single-token headings silently failed
+     to split. They must now split via the whole-line-anchored CJK
+     alternative, same as 序章/終章 already did. */
+  it.each([
+    ['序', 'zh 序 (preface)'],
+    ['跋', 'zh 跋 (afterword)'],
+    ['あとがき', 'ja あとがき (afterword)'],
+    ['前書き', 'ja 前書き (foreword)'],
+  ])('splits a standalone %s heading (%s) as its own chapter', (heading) => {
+    const body = [heading, '', '短い文章です。', '', '第一章', '', '物語が始まる。'].join('\n');
+    const { chapters } = parseText(body, { format: 'plaintext' });
+    expect(chapters.length).toBe(2);
+    expect(chapters[0].title).toBe(heading);
+    expect(chapters[0].body).toContain('短い文章です');
+  });
 });
 
 describe('parseText — audio-tag passthrough', () => {
