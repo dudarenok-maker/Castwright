@@ -16,6 +16,34 @@ import 'marketing/scenes.dart';
 
 const _seed = Color(0xFFA43C6C);
 
+/// Selects a demo book from the library, robust across the phone single-column
+/// list and the tablet two-pane grid. The grouped grid tile (`book-<id>`) lives
+/// in a LAZY vertical `ListView`, so on a wide tablet an in-progress book can be
+/// below the fold and never built — `find.byKey` then matches nothing and
+/// `ensureVisible` throws "No element". Both hero books carry a resume point, so
+/// they also appear in the always-visible "Continue listening" rail
+/// (`continue-<id>`), whose card routes through the SAME `onSelect`. Prefer the
+/// grid tile when it's built (phone — byte-identical to the historical path);
+/// fall back to the rail card otherwise (tablet). The rail card only exists for
+/// an in-progress (resume-point) book; if a future scene ever drills into a
+/// non-resume book on tablet, neither finder matches — fail loudly here rather
+/// than letting `ensureVisible` throw a generic "No element".
+Future<void> _selectBook(WidgetTester tester, String bookId) async {
+  final grid = find.byKey(Key('book-$bookId'));
+  final target =
+      grid.evaluate().isNotEmpty ? grid : find.byKey(Key('continue-$bookId'));
+  if (target.evaluate().isEmpty) {
+    throw StateError(
+        'Neither book-$bookId (library grid, may be below the lazy-list fold on '
+        'tablet) nor continue-$bookId (Continue-listening rail, needs a resume '
+        'point) is in the tree — cannot select this book for capture.');
+  }
+  await tester.ensureVisible(target);
+  await tester.pumpAndSettle();
+  await tester.tap(target);
+  await tester.pumpAndSettle();
+}
+
 ThemeData _appTheme({required Brightness brightness}) => ThemeData(
   colorScheme: ColorScheme.fromSeed(seedColor: _seed, brightness: brightness),
   useMaterial3: true,
@@ -101,11 +129,7 @@ Future<void> main() async {
             // Open the hero book (The Drowning Bell) and start a chapter so the
             // docked player shows the WaveformBar (peaks are seeded locally in
             // buildDemoRuntime) rather than the plain fallback slider.
-            final book = find.byKey(const Key('book-hollow-tide-1'));
-            await tester.ensureVisible(book);
-            await tester.pumpAndSettle();
-            await tester.tap(book);
-            await tester.pumpAndSettle();
+            await _selectBook(tester, 'hollow-tide-1');
             final chapter = find.byKey(const Key('chapter-ht1-c2'));
             if (chapter.evaluate().isNotEmpty) {
               await tester.tap(chapter);
@@ -115,11 +139,7 @@ Future<void> main() async {
             // A different book (The Coalfall Commission) opened at its resume
             // point — reads as "drilled into this book" (cover + chapter list +
             // resume position + waveform on the resumed chapter).
-            final book = find.byKey(const Key('book-coalfall-commission'));
-            await tester.ensureVisible(book);
-            await tester.pumpAndSettle();
-            await tester.tap(book);
-            await tester.pumpAndSettle();
+            await _selectBook(tester, 'coalfall-commission');
           }
         }
 

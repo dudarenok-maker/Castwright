@@ -27,7 +27,33 @@ export const SURFACE_PASSES = {
   fold: [{ orient: 'seam', scenes: ['library-home'] }],
 };
 
-export const rotationValue = (orient) => (orient === 'landscape' ? 1 : 0);
+// Absolute adb `user_rotation` (0/1/2/3 = 0°/90°/180°/270° from the device's
+// NATURAL orientation) needed to place it in `orient`. "Which rotation is
+// landscape" depends on the device's natural orientation: phones and the
+// Nexus 7 are natural-PORTRAIT (rotation 1 = landscape), but the Pixel Tablet
+// is natural-LANDSCAPE (rotation 0 = landscape). The caller derives
+// `naturalLandscape` from `adb shell wm size` (see parseNaturalLandscape) and
+// passes it in, so a fixed rotation index can't silently rotate a
+// natural-landscape tablet into portrait (which the app-side `expanded` guard
+// then rejects). 'seam' keeps the device at its natural rotation (0) — the
+// fold crease is defined by posture, not rotation.
+export const rotationValue = (orient, naturalLandscape = false) => {
+  if (orient === 'seam') return 0;
+  const wantLandscape = orient === 'landscape';
+  if (naturalLandscape) return wantLandscape ? 0 : 1;
+  return wantLandscape ? 1 : 0;
+};
+
+// True when the device's NATURAL (physical) orientation is landscape, parsed
+// from `adb shell wm size` ("Physical size: WxH" — always reported in the
+// natural orientation, independent of the current user_rotation). Unknown
+// output falls back to false (natural-portrait), preserving the historical
+// phone/Nexus-7 behaviour.
+export function parseNaturalLandscape(wmSizeOutput) {
+  const m = wmSizeOutput.match(/Physical size:\s*(\d+)\s*x\s*(\d+)/i);
+  if (!m) return false;
+  return Number(m[1]) > Number(m[2]);
+}
 
 export function buildDartDefines({ surface, orient, scenes }) {
   const defs = [`--dart-define=surface=${surface}`, `--dart-define=orient=${orient}`];
@@ -100,10 +126,17 @@ async function main(argv) {
     sh('adb', ['shell', 'mkdir', '-p', DEVICE_COVERS]);
     sh('adb', ['push', `${COVERS_SRC}/.`, DEVICE_COVERS]);
 
+    // The rotation index for "landscape" depends on the device's natural
+    // orientation (phones/Nexus 7 are natural-portrait; the Pixel Tablet is
+    // natural-landscape), so read it once from `adb shell wm size` and thread
+    // it into rotationValue below.
+    const wmSize = spawnSync('adb', ['shell', 'wm', 'size'], { encoding: 'utf8', shell: true }).stdout ?? '';
+    const naturalLandscape = parseNaturalLandscape(wmSize);
+
     // 3. Run flutter drive once per pass (rotation/posture set beforehand, reset after).
     for (const pass of passes) {
       sh('adb', ['shell', 'settings', 'put', 'system', 'accelerometer_rotation', '0']);
-      sh('adb', ['shell', 'settings', 'put', 'system', 'user_rotation', String(rotationValue(pass.orient))]);
+      sh('adb', ['shell', 'settings', 'put', 'system', 'user_rotation', String(rotationValue(pass.orient, naturalLandscape))]);
       try {
         if (pass.orient === 'seam') {
           let halfOpenIdx = process.env.FOLD_HALF_OPEN_STATE
