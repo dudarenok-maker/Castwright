@@ -94,4 +94,49 @@ describe('StepVoice', () => {
     // …while the aggregate "Voice" badge stays green (readiness.tts pass).
     expect(screen.getByText(/^Voice ready$/i)).toBeInTheDocument();
   });
+
+  it('renders the runtime guided fix when installed on disk but the sidecar is blocked (e.g. crashed)', async () => {
+    vi.spyOn(api, 'getModelsStatus').mockResolvedValue(
+      modelsStatus({ runtime: { installedOnDisk: true, pythonFound: true, process: 'crashed' } }),
+    );
+    const readiness: SetupReadiness = {
+      ...allPassReadiness,
+      ready: false,
+      blockers: {
+        ...allPassReadiness.blockers,
+        sidecar: {
+          status: 'fail',
+          cause: 'supervisor-exhausted',
+          message: 'The voice engine crashed repeatedly and stopped trying to restart.',
+          remediation: 'Reset and restart the voice engine.',
+          action: { kind: 'sidecar-restart', label: 'Reset & restart voice engine' },
+        },
+      },
+    };
+    render(<StepVoice readiness={readiness} onRefetch={() => {}} />);
+    expect(await screen.findByTestId('runtime-fix-action')).toBeInTheDocument();
+    expect(screen.getByText(/crashed repeatedly/i)).toBeInTheDocument();
+  });
+
+  it('suppresses the runtime fix-action for a transient starting sidecar (neutral pill instead)', async () => {
+    vi.spyOn(api, 'getModelsStatus').mockResolvedValue(
+      modelsStatus({ runtime: { installedOnDisk: true, pythonFound: true, process: 'starting' } }),
+    );
+    const readiness: SetupReadiness = {
+      ...allPassReadiness,
+      ready: false,
+      blockers: {
+        ...allPassReadiness.blockers,
+        sidecar: {
+          status: 'fail',
+          cause: 'unreachable-transient',
+          message: 'The voice engine is starting up.',
+          remediation: 'This usually resolves within a few seconds.',
+        },
+      },
+    };
+    render(<StepVoice readiness={readiness} onRefetch={() => {}} />);
+    await screen.findByTestId('runtime-liveness-pill');
+    expect(screen.queryByTestId('runtime-fix-action')).not.toBeInTheDocument();
+  });
 });

@@ -122,6 +122,21 @@ export function StepVoice({ readiness, onRefetch }: { readiness: SetupReadiness;
         />
       </div>
 
+      {/* Guided fix for a runtime that IS installed on disk but the sidecar is
+          still blocked (process crashed/exhausted, package broken) — the cases the
+          VenvBootstrap card can't resolve. When !installedOnDisk (venv/python
+          missing) the card owns the setup flow, so we don't duplicate its button;
+          a transient 'starting' is the neutral pill above, never a fix-action. */}
+      {models &&
+        models.runtime.installedOnDisk &&
+        readiness.blockers.sidecar.status !== 'pass' &&
+        readiness.blockers.sidecar.cause !== 'unreachable-transient' && (
+          <div className="space-y-1.5" data-testid="runtime-fix-action">
+            <p className="text-xs text-ink/60">{readiness.blockers.sidecar.message}</p>
+            <BlockerFixAction diagnosis={readiness.blockers.sidecar} onDone={refetchBoth} />
+          </div>
+        )}
+
       <p className="text-sm text-ink/60">
         Voice engines turn your manuscript into speech. They all share one Python runtime —
         set it up once, then every voice engine can use it.
