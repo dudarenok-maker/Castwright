@@ -1,6 +1,6 @@
 # Manuscript Management
 
-Uploading a book gets a manuscript into Castwright. The **Manuscript** tab — one of the six tabs across the top of a book once it's ready (Manuscript / Cast / Voices / Generate / Listen / Log) — is where you keep shaping it afterward: correcting who says what, running a second read for the mistakes only a careful reader catches, and tidying chapters that came in slightly wrong. It's a genuinely ongoing surface, not a one-time step you pass through on the way to generating audio.
+Uploading a book gets a manuscript into Castwright. The **Manuscript** tab — one of the six tabs across the top of a book once it's ready (Cast / Manuscript / Generate / Listen / Log / Voices) — is where you keep shaping it afterward: correcting who says what, running a second read for the mistakes only a careful reader catches, and tidying chapters that came in slightly wrong. It's a genuinely ongoing surface, not a one-time step you pass through on the way to generating audio.
 
 ## Every sentence, attributed and color-coded
 

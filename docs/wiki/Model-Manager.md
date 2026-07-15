@@ -109,6 +109,10 @@ opt in.
 | Ollama URL | Base URL of the local Ollama daemon | `http://localhost:11434` | string |
 | Gemini API key | API key for Gemini analyzer/persona calls | (unset) | string |
 
+The Gemini API key field carries a **"Get a Gemini API key"** link to a
+one-minute [step-by-step walkthrough](Getting-a-Gemini-API-Key), so you don't
+have to hunt for where Google issues one.
+
 > **Not the same knob as [Advanced Settings](Advanced-Settings)'s "Analyzer
 > engine."** This one is your per-account preference (defaults to
 > `gemini`, matching the free-tier-friendly out-of-the-box experience);
@@ -128,5 +132,12 @@ Install the Ollama daemon and pull analyzer model weights without dropping
 to a terminal — pull-tag UI plus a live health probe. The voice-engine / ASR
 models (Kokoro, Qwen, Coqui, Whisper) install from their own rows in
 **Installed models** above, not here.
+
+This card also carries an at-a-glance **analyzer-readiness chip** — the same
+server-resolved status the first-run wizard shows: green **"Analyzer ready"**
+(the resolved analyzer will run *and* a second one is provisioned as backup),
+amber **"ready — no backup"** (it'll run, but nothing is there to fall back
+on), or red **"Analyzer needed"** (it won't run as configured). Amber is a
+non-blocking signal, not an error — a cloud-only setup reads amber by design.
 
 Next: [Advanced Settings](Advanced-Settings).

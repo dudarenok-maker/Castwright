@@ -5,7 +5,8 @@ This is where a book becomes a Castwright project — the manuscript arrives, Ca
 ## 1. Upload your manuscript
 
 Drop a file (Markdown, plain text, EPUB, PDF, MOBI, or AZW3), paste text
-directly, or try the built-in demo book. Pick an analysis model here too —
+directly, or try the built-in demo book (bundled in every supported language).
+Pick an analysis model here too —
 see [Analysis & the Analyzer](Analysis-and-the-Analyzer) for what the local
 vs. cloud choice means.
 

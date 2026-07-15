@@ -28,6 +28,15 @@ The model picker on the upload screen groups two kinds of analyzer:
 See [Installing Castwright](Installing-Castwright) for setting up either
 path (pulling an Ollama model vs. [adding a Gemini API key](Getting-a-Gemini-API-Key)).
 
+> **Chinese and Japanese books: pick a capable local model.** CJK attribution
+> leans on the analyzer model more than English does, and there's no automatic
+> per-language routing — the analyzer you choose here is the one every language
+> gets. For a `zh` or `ja` book, prefer a strong **local Qwen** analyzer model
+> (set the phase-0 / phase-1 model in Advanced Settings) over a lightweight
+> cloud default: a weak model can attribute CJK dialogue poorly enough to trip
+> the attribution-drift safety net and refuse the whole run. See
+> [Multi-language Support](Multi-language-Support) for the full CJK story.
+
 ## Two models, reading in parallel
 
 A cloud analyzer also unlocks a **pipelined two-model split** on the Analysing screen itself — one model races ahead detecting characters (Phase 0) while a second, more careful model trails behind verifying attribution (Phase 1), gated by a warm-up lag so the second model always has a roster to work against before it starts. Configure each phase independently, or leave both on "(use server default)" for the ordinary single-model path.

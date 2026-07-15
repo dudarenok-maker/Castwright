@@ -14,7 +14,12 @@ See [Installing Castwright](Installing-Castwright) for setup steps for each.
 
 Ships as a **standard** engine — installs with the Python sidecar — and every
 character carries a Kokoro preset as a fallback, so a book still generates
-even before Qwen or Coqui are set up. Below, Kokoro's row in Model Manager:
+even before Qwen or Coqui are set up. As of v1.14.0 Kokoro no longer eagerly
+loads at startup by default: it warms on demand on the first synth that needs
+it, freeing the ~1 GB it used to hold resident. Its fallback role is unchanged
+— every character still carries a Kokoro preset — only its idle VRAM footprint
+is; opt back into the always-hot engine with **Preload Kokoro at startup** in
+[Advanced Settings](Advanced-Settings) (`PRELOAD_KOKORO`). Below, Kokoro's row in Model Manager:
 fully installed, **DEFAULT** + **FALLBACK** badges, **verified** integrity,
 loaded and ready with a **Stop** action.
 
@@ -29,9 +34,11 @@ loaded and ready with a **Stop** action.
 An **optional add-on** (not installed by default) — install it from **Admin
 → Model Manager → Optional add-ons → Coqui → Install**. Once the package is
 present, Coqui gets the same idle/loading/ready pill as any other engine (see
-[The Model Control Pill](The-Model-Control-Pill)). Below, Coqui's row once
-installed: **Installed** badge, **Load model** pill, and an **Update** toggle
-for reinstalling the package.
+[The Model Control Pill](The-Model-Control-Pill)). Coqui also renders Chinese
+(`zh-cn`) and Japanese, so it's a valid engine for a CJK cast rather than just
+English and European voices — its installer pulls the extra CJK text frontends
+those languages need. Below, Coqui's row once installed: **Installed** badge,
+**Load model** pill, and an **Update** toggle for reinstalling the package.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/voice-engines/coqui-row-dark.png">

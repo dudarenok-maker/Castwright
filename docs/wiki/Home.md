@@ -13,7 +13,7 @@ Professional human narration is beautiful when it's right, but expensive, slow, 
 
 A *cast-wright* is the one who builds the cast — that's the whole job. Drop in a manuscript (EPUB, PDF, MOBI, plain text, or paste it straight in) and Castwright reads it, finds the twenty or thirty characters who actually speak, and builds a voice profile for each one — age, gender, accent where the text implies one, personality, the vocal qualities the writer keeps gesturing at. The narrator gets a profile too. Then, chapter by chapter, it renders the audio: every line of dialogue in the right voice, every paragraph of narration carried by the narrator the book has earned, tone read from the surrounding prose so fear sounds like fear and dry humor lands dry.
 
-It performs **five languages today — English, Russian, Spanish, French, and German** — and recognizes which one your manuscript is written in the moment you import it. A cast never crosses languages inside a single book.
+It performs **seven languages today — English, Russian, Spanish, French, German, Chinese, and Japanese** — and recognizes which one your manuscript is written in the moment you import it. A cast never crosses languages inside a single book.
 
 Voices carry across a series. The narrator who read Book 1 keeps reading Book 2. A recurring character keeps their voice from one book to the next, even if the author renamed them along the way — the cast merge writes the old name into the new one's aliases, so the next book still finds them.
 

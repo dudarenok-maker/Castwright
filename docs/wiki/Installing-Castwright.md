@@ -38,7 +38,7 @@ After install you'll have a single command (`npm run start:prod`) that brings up
   - macOS: **Apple Silicon (M-series)** is used automatically via Metal (`mps`) — no drivers, no CUDA, no config. Intel Macs fall back to CPU.
   - **AMD GPU — experimental preview.** Auto-detected (or force with `ACCELERATOR=amd`); see "AMD GPU (experimental)" below. Qwen/Coqui run on **ROCm**, Kokoro on **CPU**, and a failed ROCm install **falls back to a working CPU install** automatically — so it never blocks setup.
 
-> **PyTorch / CUDA.** `torch==2.11.0` + `torchaudio==2.11.0` (a matched pair) are explicit sidecar requirements (recent `coqui-tts` no longer pulls torch transitively) and install with `pip install -r requirements.txt` — used by the Coqui XTTS and Qwen engines (Kokoro uses ONNX Runtime, no torch). We **drop coqui-tts's `[codec]` extra** and avoid `torchcodec` entirely: the sidecar does all audio I/O via soundfile + ffmpeg and never calls `torchaudio.load`, so torchaudio's 2.9 backend removal doesn't affect it. On an NVIDIA box the bootstrap pre-installs the **cu128** build from the PyTorch index before the overlay (PyPI's default torch wheel is CPU-only on Windows, so a plain install would silently drop GPU); macOS uses the default CPU/MPS build. To pin a **different** CUDA build, pre-install the pair yourself before the requirements — e.g. `pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128` (swap `cu128` for another CUDA index from pytorch.org, or use `…/whl/cpu` to force CPU-only).
+> **PyTorch / CUDA.** `torch==2.11.0` + `torchaudio==2.11.0` (a matched pair) are explicit sidecar requirements (recent `coqui-tts` no longer pulls torch transitively) and install with `pip install -r requirements.txt` — used by the Coqui XTTS and Qwen engines (Kokoro uses ONNX Runtime, no torch). We **drop coqui-tts's `[codec]` extra** from the core install: the sidecar does all audio I/O via soundfile + ffmpeg and never calls `torchaudio.load`, so torchaudio's 2.9 backend removal doesn't affect it. The one exception is the opt-in Coqui add-on — recent `coqui-tts` raises at *import* time unless `torchcodec` is merely **present**, so its installer drops `torchcodec` in (`--no-deps`, so it can't perturb the pinned torch); it's never actually called at runtime. On an NVIDIA box the bootstrap pre-installs the **cu128** build from the PyTorch index before the overlay (PyPI's default torch wheel is CPU-only on Windows, so a plain install would silently drop GPU); macOS uses the default CPU/MPS build. To pin a **different** CUDA build, pre-install the pair yourself before the requirements — e.g. `pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128` (swap `cu128` for another CUDA index from pytorch.org, or use `…/whl/cpu` to force CPU-only).
 
 > **AMD GPU (experimental preview).** The installer detects an AMD GPU and selects the **`amd`** accelerator profile (or force it with `ACCELERATOR=amd` in `server/.env`, the first-run wizard, or the `#/advanced` **Accelerator profile** knob). On that profile **Qwen and Coqui run on ROCm** (alpha preview `torch` wheels from `repo.radeon.com`, pre-installed before the requirements) and **Kokoro runs on CPU** — DirectML was validated and **cannot run the Kokoro model** (its ConvTranspose op fails in `onnxruntime-directml`), so Kokoro stays on the CPU EP. Requirements: a **ROCm-supported AMD GPU** + a recent AMD driver (Windows: latest Adrenalin). Because the ROCm wheels are alpha previews, the install is **best-effort with an automatic CPU fallback** — if any AMD step fails, the bootstrap completes a working **CPU** install instead of erroring (it records `.accelerator-fallback.json` and the app reports it's running on CPU). The accelerator profile is stamped into the venv, so switching it later rebuilds the environment; your books and designed voices are untouched (they live in the workspace dir, not the venv). More detail: [`server/tts-sidecar/README.md`](https://github.com/dudarenok-maker/Castwright/blob/main/server/tts-sidecar/README.md#accelerator-profiles-nvidia--amd--cpu--apple).
 
@@ -117,7 +117,7 @@ npm run start:prod
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/installing-castwright/02-install-windows-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="images/installing-castwright/02-install-windows.png">
-  <img alt="The Setup Wizard's Models step, installing Kokoro and setting the analyzer key" src="images/installing-castwright/02-install-windows.png">
+  <img alt="The Setup Wizard's Voice step, installing the Kokoro voice engine" src="images/installing-castwright/02-install-windows.png">
 </picture>
 
 Browser opens `https://localhost:8443` (the v1.13.0 LAN-HTTPS default; falls back to `http://localhost:8080` if no LAN certificate is present — see [Mobile + tablet access](#mobile--tablet-access-over-lan-https)).
@@ -220,7 +220,7 @@ ships in the bundle; the demo runs the real pipeline locally.
 Short version — the full version lives on the [Troubleshooting](Troubleshooting) wiki page.
 
 - **"ffmpeg not found on PATH"** — confirm with `ffmpeg -version`; prepend its directory to PATH if it's installed but not found.
-- **Port :8080 already in use** — `npm run stop:prod` then retry, or override for one run via `PORT=8081 npm run start:prod`.
+- **Port :8080 already in use** — in production the server now auto-shifts to the next free port (8080→8081→…, and likewise 8443→… for HTTPS) instead of dying, so this usually resolves itself; to force a specific port, `npm run stop:prod` then retry, or override for one run via `PORT=8081 npm run start:prod`.
 - **Sidecar fails to load Kokoro** — usually an interrupted weights download; re-run `install-kokoro.sh` / `install-kokoro.ps1`.
 - **GPU not detected** — sidecar falls back to CPU and logs it; check driver/CUDA versions (NVIDIA), confirm `device=mps` in the log (Apple Silicon), or check for `.accelerator-fallback.json` (AMD preview).
 - **"Cannot find module '../../dist/index.html'"** — the release zip ships `dist/` pre-built; re-extract if it's missing.
@@ -301,17 +301,27 @@ Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3
 
 **Option C — Pipelined two-model split.** For long books: Phase 0 (cast detection) runs on Gemma while Phase 1 (sentence attribution) runs on Gemini Flash in parallel, hitting independent rate-limit buckets so effective quota nearly doubles. Configure under **Account → Defaults for new books → Phase 0 model + Phase 1 model + Min-lag chapters** (default 10), or set `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` / `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` in `server/.env`.
 
+> **Chinese or Japanese books need a capable analyzer model.** CJK attribution
+> depends on the analyzer model more than English does, and there's no
+> automatic per-language routing — the model you pick applies to every book.
+> For a `zh`/`ja` book, choose a strong **local Qwen** analyzer model (set the
+> phase-0/phase-1 model above, or `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL`)
+> rather than a lightweight cloud default; a weak model can attribute CJK
+> dialogue poorly enough to trip the attribution-drift safety net and refuse
+> the run. Both Coqui XTTS (`zh-cn`/`ja`) and Qwen render CJK once analysed.
+> See [Multi-language Support](Multi-language-Support).
+
 ## Voice engines: standard vs optional
 
 Castwright ships three **standard** voice engines that install automatically with the Python sidecar:
 
 | Engine | Profile | What it does |
 |---|---|---|
-| **Kokoro** (default) | all boxes | High-quality preset-catalogue TTS; eagerly loaded; ~1.1 GB weights. |
+| **Kokoro** (default) | all boxes | High-quality preset-catalogue TTS; warms on demand (no longer eager-loaded by default — opt in with `PRELOAD_KOKORO=1`); ~1.1 GB weights. |
 | **Qwen3-TTS** | GPU only (NVIDIA / AMD) | Per-character bespoke voice design from the cast persona. `qwen-tts` is included in `requirements/nvidia-cuda.txt` and `requirements/amd-rocm.txt`, so it installs with the standard `pip install -r requirements/<profile>.txt` step. Weights (~2.5 GB) are fetched separately (see below). |
 | **Whisper ASR** | all boxes | Speech-to-text QA gate (`faster-whisper` ships in `requirements/base.txt`). Off by default (`SEG_ASR_ENABLED=0`); model weights are fetched on first ASR load. |
 
-**Coqui XTTS v2** is an **optional add-on** (not in any requirements overlay). Install it from **Admin → Model Manager → Optional add-ons → Coqui → Install**. The in-app installer runs `pip install coqui-tts` constrained against `base.txt` to preserve the shared `transformers<5.0` lockstep. Existing Coqui installs from before this release are preserved across upgrades (pip-install never uninstalls).
+**Coqui XTTS v2** is an **optional add-on** (not in any requirements overlay). Install it from **Admin → Model Manager → Optional add-ons → Coqui → Install**. The in-app installer runs `pip install coqui-tts` constrained against `base.txt` to preserve the shared `transformers<5.0` lockstep; it also pulls `torchcodec` (present-only, required for `import TTS` to succeed on the CVE-pinned torch) and, for Chinese/Japanese synthesis, the extra text frontends `coqui-tts` doesn't (`pypinyin`, `cutlet`, `unidic-lite`). Existing Coqui installs from before this release are preserved across upgrades (pip-install never uninstalls).
 
 > **Manual pip install note.** If you need to `pip install` a package into the sidecar venv by hand (e.g. a scripted / offline setup), always pass `-c server/tts-sidecar/requirements/base.txt` to stay within the shared `transformers>=4.45,<5.0` pin that keeps Qwen, Kokoro, and optional Coqui compatible.
 
@@ -352,7 +362,7 @@ When a compatible build is present (however it got there), activate it via `QWEN
 Coqui XTTS v2 is not installed by default. To add it:
 
 1. Start the app, open **Admin → Model Manager → Optional add-ons**.
-2. Click **Install** on the Coqui card. The installer runs `pip install coqui-tts -c base.txt` (respects the shared `transformers<5.0` pin) and fetches the model weights (~2 GB) in the background.
+2. Click **Install** on the Coqui card. The installer runs `pip install coqui-tts` against a sanitized `base.txt` constraints file (respecting the shared `transformers<5.0` pin — the earlier `ERROR: Constraints cannot have extras` abort is fixed), adds `torchcodec` plus the Chinese/Japanese text frontends (`pypinyin`, `cutlet`, `unidic-lite`), and fetches the model weights (~2 GB) in the background.
 3. Once complete, go to **Account → Defaults for new books → Voice model** → pick "Coqui XTTS v2". Save.
 
 ## Using Gemini for TTS (cloud, free tier)
@@ -410,7 +420,7 @@ The native Flutter **Castwright** pairs to the server over the LAN and delta-syn
    fixed `LAN_AUTH_TOKEN` there for scripted setups, or set `LAN_HTTPS=0` to turn LAN off;
    an explicit token always wins over the auto-generated one.)_
 3. The pairing values are served at `GET /api/export/lan` (`{ urls, protocol: "https", token, caFingerprint }`) — this is what the pairing QR encodes.
-4. In the app: **Pair a device** → scan the pairing QR or enter the server URL (`https://<lan-ip>:8443`), access token, and CA fingerprint. The app pins the CA itself, so — unlike the mobile *web* UI — **you do not install the root CA on the phone**.
+4. In the app: **Pair a device** → scan the pairing QR or enter the server URL (`https://<lan-ip>:8443`, or the friendly `https://castwright.local` under the `npm run start:lan` profile), access token, and CA fingerprint. The app pins the CA itself, so — unlike the mobile *web* UI — **you do not install the root CA on the phone**.
 
 Build/sideload instructions for the app live in [`apps/android/README.md`](https://github.com/dudarenok-maker/Castwright/blob/main/apps/android/README.md); the full design is [`docs/features/188-android-companion-app.md`](https://github.com/dudarenok-maker/Castwright/blob/main/docs/features/188-android-companion-app.md).
 

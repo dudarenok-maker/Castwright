@@ -13,11 +13,15 @@ The server pipes chapter PCM through ffmpeg at encode time; missing it = no audi
 
 ### Port :8080 already in use
 
-Either another instance of this app is running (`npm run stop:prod` then retry), or another process is bound to :8080. On Windows: `netstat -ano | findstr :8080` shows the PID. On POSIX: `lsof -i:8080`. Override the port for one run via `PORT=8081 npm run start:prod` (then visit `http://localhost:8081`).
+In production the server now **auto-shifts to the next free port** on a clash (8080→8081→…, and likewise 8443→… for HTTPS), so a start rarely fails outright on this anymore — check the startup log (or the pairing QR) for the port it actually bound. If you'd rather free :8080: either another instance of this app is running (`npm run stop:prod` then retry), or another process is bound to it. On Windows: `netstat -ano | findstr :8080` shows the PID. On POSIX: `lsof -i:8080`. Override the port for one run via `PORT=8081 npm run start:prod` (then visit `http://localhost:8081`).
 
 ### Sidecar fails to load Kokoro
 
 The sidecar logs to `logs/server.log` (the Node server captures sidecar stdout). Most common cause: the Kokoro weights download was interrupted mid-flight. Re-running `install-kokoro.sh` / `install-kokoro.ps1` cleans up partial downloads and retries.
+
+### Installing Coqui or Qwen fails — "Constraints cannot have extras"
+
+**Fixed in v1.14.0.** An older build's Coqui/Qwen installer passed the sidecar's `requirements/base.txt` directly as a pip `-c` constraints file, but that file legitimately carries an extra (`uvicorn[standard]`) — which pip forbids in a constraints file, aborting the whole install with `ERROR: Constraints cannot have extras` before it even started. Update to v1.14.0 or newer and re-run the install/repair from **Admin → Model Manager**; the installer now strips extras into a sanitized constraints file first.
 
 ### GPU not detected
 
@@ -172,7 +176,7 @@ Open Models (Admin → Model Manager) to see what is installed. The Kokoro voice
 
 ### What languages does Castwright perform?
 
-English, Russian, Spanish, French and German today, all with the same full-cast craft — the manuscript is read in its own language, every character gets a voice that speaks it, and the cast's tone and descriptions stay written in the book's own tongue. Drop in a manuscript and Castwright detects its language the moment you import it, showing you what it found — before you commit — on the Confirm details screen. A language it can't perform yet falls back to English rather than guessing. More languages are on the way.
+English, Russian, Spanish, French, German, Chinese and Japanese today, all with the same full-cast craft — the manuscript is read in its own language, every character gets a voice that speaks it, and the cast's tone and descriptions stay written in the book's own tongue. Drop in a manuscript and Castwright detects its language the moment you import it, showing you what it found — before you commit — on the Confirm details screen. A language it can't perform yet falls back to English rather than guessing. Chinese and Japanese are the newest additions (v1.14.0) — for a CJK book, pick a capable local analyzer model, since CJK attribution leans on the model more than English does. More languages are on the way.
 
 See [Multi-language Support](Multi-language-Support) for the detection walkthrough.
 
@@ -248,7 +252,7 @@ Open Models (Admin → Model Manager). Each engine now shows its real state — 
 
 As of v1.13.0, a production start (`npm run start:prod` / native installer / Pinokio) already serves LAN HTTPS on `:8443` — you don't need `npm run start:lan`. If your phone still can't reach it, work down this list:
 
-- **Is it actually on HTTPS?** If the desktop opens on `http://localhost:8080`, the LAN certificate wasn't provisioned (usually `mkcert` isn't installed). Install `mkcert` (`scoop`/`brew`/`apt install mkcert`, then `mkcert -install`) and restart — the app auto-provisions the cert on the next start and comes up on `:8443`. Pinokio installs `mkcert` for you.
+- **Is it actually on HTTPS?** If the desktop opens on `http://localhost:8080`, the LAN certificate wasn't provisioned (usually `mkcert` isn't installed). Install `mkcert` (`scoop`/`brew`/`apt install mkcert`, then `mkcert -install`) and restart — the app auto-provisions the cert on the next start and comes up on `:8443`. Pinokio installs `mkcert` for you. Once the app is up, **Admin → LAN access** also flags a missing or expired certificate and offers a one-click **Regenerate** — quicker than the manual `mkcert` dance if the cert has simply lapsed.
 - **Trust the certificate on the device once** — from **Admin → LAN access** (or `npm run install:cert-mobile`), open the root-CA link/QR and install it (iOS: Settings → Profile → Install → trust; Android: Settings → Security → Install certificate).
 - **Same network:** phone and desktop must be on the same LAN. Pair via the QR at the LAN-IP address (`https://<lan-ip>:8443`).
 - **Want the friendly `https://castwright.local` name** (and the `:443` forwarder so you can drop the port)? Run `npm run start:lan` — those extras are opt-in and not part of the bare default.

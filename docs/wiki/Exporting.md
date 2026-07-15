@@ -14,7 +14,7 @@ Five top-level ways to get a finished book out: a single chaptered **M4B**, a **
 
 ## The Castwright Companion app
 
-This screen leads with Castwright's own companion app — **Android today, iOS at launch** — above the listener-app list. Pair a device here with a QR code (or the manual code behind it) and it syncs your library over the home network, downloads books for offline listening, and remembers exactly where you left off, in a real native player with lock-screen controls and a sleep timer. If the maintainer's build has an APK ready to hand out, a **Download .apk** button appears right here too.
+This screen leads with Castwright's own companion app — **Android today, iOS at launch** — above the listener-app list. Pair a device here with a QR code (or the manual code behind it) and it syncs your library over the home network, plays any chapter instantly over that network even before it's downloaded, downloads books for offline listening, and remembers exactly where you left off, in a real native player with lock-screen controls and a sleep timer. If the maintainer's build has an APK ready to hand out, a **Download .apk** button appears right here too.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/exporting/format-tiles-companion-banner-dark.png">
