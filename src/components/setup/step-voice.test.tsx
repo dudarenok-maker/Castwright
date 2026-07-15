@@ -12,12 +12,13 @@
    per-test spies; only putUserSettings is stubbed to echo the patch). */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { useState } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { accountSlice } from '../../store/account-slice';
-import type { SetupReadiness, ModelsStatus } from '../../lib/api';
+import type { SetupReadiness, ModelsStatus, NeedsAnswer } from '../../lib/api';
 
 const putUserSettingsMock = vi.fn();
 vi.mock('../../lib/api', async () => {
@@ -98,9 +99,22 @@ function renderStepVoice(
       } as ReturnType<typeof accountSlice.getInitialState>,
     },
   });
+  // Wrap StepVoice in a stateful host that owns `needs`, mirroring how the
+  // wizard drives the (now-controlled) step.
+  function Host() {
+    const [needs, setNeeds] = useState<NeedsAnswer | null>(null);
+    return (
+      <StepVoice
+        readiness={opts.readiness ?? allPassReadiness}
+        onRefetch={() => {}}
+        needs={needs}
+        onChooseNeeds={setNeeds}
+      />
+    );
+  }
   const utils = render(
     <Provider store={store}>
-      <StepVoice readiness={opts.readiness ?? allPassReadiness} onRefetch={() => {}} />
+      <Host />
     </Provider>,
   );
   return { ...utils, store };

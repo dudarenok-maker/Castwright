@@ -19,7 +19,26 @@ vi.mock('./step-analysis', () => ({
   StepAnalysis: () => <div data-testid="step-analysis-stub">analysis</div>,
 }));
 vi.mock('./step-voice', () => ({
-  StepVoice: () => <div data-testid="step-voice-stub">voice</div>,
+  // Reflects the wizard-owned `needs` so navigation-persistence is observable.
+  StepVoice: ({
+    needs,
+    onChooseNeeds,
+  }: {
+    needs: string | null;
+    onChooseNeeds: (a: string) => void;
+  }) => (
+    <div data-testid="step-voice-stub">
+      <label>
+        <input
+          type="radio"
+          name="voice-needs-stub"
+          checked={needs === 'expressive-or-multilingual'}
+          onChange={() => onChooseNeeds('expressive-or-multilingual')}
+        />
+        yes — expressive
+      </label>
+    </div>
+  ),
 }));
 vi.mock('./step-defaults', () => ({
   StepDefaults: () => <div data-testid="step-defaults-stub">defaults</div>,
@@ -162,6 +181,28 @@ describe('SetupWizard', () => {
     fireEvent.click(screen.getByRole('button', { name: /back/i }));
     expect(screen.getByTestId('step-environment-stub')).toBeInTheDocument();
     expect(screen.getByText(/step 1 of 7/i)).toBeInTheDocument();
+  });
+
+  it('guided mode: the Voice step answer survives Back/Next (#wizard-answer-persistence)', () => {
+    // Regression: the guided yes/no answer used to live in StepVoice's local
+    // state, so paging away (which unmounts the step) forgot it — and re-answering
+    // on return re-fired the recommended-engine save, clobbering a finer model
+    // chosen on the Defaults step. The answer now lives on the wizard.
+    render(
+      <SetupWizard readiness={READINESS} mode="guided" onRefetch={() => {}} onFinish={() => {}} />,
+    );
+    // Advance to the Voice step (index 3).
+    for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    const radio = screen.getByRole('radio', { name: /yes — expressive/i });
+    expect(radio).not.toBeChecked();
+    fireEvent.click(radio);
+    expect(radio).toBeChecked();
+    // Page forward to Defaults, then back to Voice.
+    fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    expect(screen.getByTestId('step-defaults-stub')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /back/i }));
+    // The answer is still selected — no re-click needed, so no clobbering save.
+    expect(screen.getByRole('radio', { name: /yes — expressive/i })).toBeChecked();
   });
 
   it('guided mode: Back is disabled on the first step', () => {
