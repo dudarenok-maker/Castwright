@@ -561,6 +561,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'restart-sidecar', risk: 'high',
   },
   {
+    key: 'tts.qwen.degenGuard',
+    env: 'QWEN_DEGEN_GUARD',
+    group: 'tts-engine',
+    label: 'Qwen degeneracy guard',
+    help: 'Master on/off for the Qwen output-degeneracy guard (#1594). When on (default), each Qwen Base synth checks that a substantial line rendered a plausible amount of audio (≈20 ms per speakable character); an implausibly short render triggers one in-process Base-model reload + retry, then a supervised sidecar recycle, rather than silently shipping near-empty audio. Turn off only to disable that protection (e.g. to isolate a suspected false-positive on unusual text) — the detection thresholds themselves are fixed, not tunable here. Changing this requires a sidecar restart.',
+    type: 'boolean',
+    default: true, // ← QWEN_DEGEN_GUARD default in tts-sidecar/main.py (_QWEN_DEGEN_GUARD_ENABLED, _parse_bool default=True)
+    apply: 'restart-sidecar', risk: 'medium',
+  },
+  {
     key: 'tts.preload.coqui',
     env: 'PRELOAD_COQUI',
     group: 'tts-engine',

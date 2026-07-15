@@ -15,6 +15,7 @@ describe('buildSidecarEnv injects resolved restart-sidecar knobs', () => {
   beforeEach(() => {
     (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({});
     delete process.env.QWEN_ATTN_IMPL;
+    delete process.env.QWEN_DEGEN_GUARD;
   });
 
   it('injects an overridden sidecar knob into the child env', () => {
@@ -89,6 +90,19 @@ describe('buildSidecarEnv injects resolved restart-sidecar knobs', () => {
     });
     const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
     expect(env.PRELOAD_KOKORO).toBe('1');
+  });
+
+  it('tts.qwen.degenGuard left at its default-on value is NOT injected (sidecar Python default True applies)', () => {
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env.QWEN_DEGEN_GUARD).toBeUndefined();
+  });
+
+  it('turning tts.qwen.degenGuard off injects QWEN_DEGEN_GUARD=0', () => {
+    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({
+      'tts.qwen.degenGuard': false,
+    });
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env.QWEN_DEGEN_GUARD).toBe('0');
   });
 
   it('boolean overrides are emitted as 1/0 (not true/false) so == "1" sidecar reads work', () => {
