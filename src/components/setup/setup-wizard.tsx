@@ -28,18 +28,7 @@ import { StepVoice } from './step-voice';
 import { StepDefaults } from './step-defaults';
 import { StepLanCert } from './step-lan-cert';
 import { StepFinish } from './step-finish';
-
-type StepId = 'environment' | 'ffmpeg' | 'analysis' | 'voice' | 'defaults' | 'lanCert' | 'finish';
-
-const STEPS: { id: StepId; title: string }[] = [
-  { id: 'environment', title: 'Environment' },
-  { id: 'ffmpeg', title: 'ffmpeg' },
-  { id: 'analysis', title: 'Analysis' },
-  { id: 'voice', title: 'Voice' },
-  { id: 'defaults', title: 'Defaults' },
-  { id: 'lanCert', title: 'LAN access' },
-  { id: 'finish', title: 'Finish' },
-];
+import { STEPS, type StepId } from './steps';
 
 interface Props {
   readiness: SetupReadiness;
