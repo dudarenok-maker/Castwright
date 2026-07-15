@@ -283,13 +283,16 @@ Built on Part A's status surface.
 A small table with a **partly-derived, partly-authored** basis (stated plainly so it
 isn't over-claimed):
 
-- **`multilingual` is derived** from the existing eligibility source —
-  `resolveEligibleEngines(lang, …)` in `server/src/tts/language.ts` (e.g. `zh →
-  [coqui, qwen]`, `ko → [qwen]`), exercised in `language.test.ts`. An engine is
-  "multilingual" if it's eligible for some non-English language there.
+- **`multilingual` is derived** from the existing eligibility source — the
+  `ENGINE_LANGUAGE_SUPPORT` map (`server/src/tts/voice-mapping.ts`) that
+  `resolveEligibleEngines` itself reads (`qwen: '*'`, `coqui: [en,ru,es,fr,de,zh,ja]`,
+  `kokoro: [en]`). The plan's `isMultilingualEngine(id)` (Task 2) reads that map
+  directly — an engine is "multilingual" if it supports any non-English language
+  there. (Reading the map vs calling `resolveEligibleEngines(lang, …)` yields identical
+  results for these three engines; the plan takes the direct-map form.)
 - **`expressive` and the VRAM floors are authored constants** — there is no code
-  source for "expressive," and `genVramFloorMb` / `designVramFloorMb` are authored
-  from measurement / the model-lifecycle notes, not derived. They live in one place
+  source for "expressive," and `genVramFloorMb` is an authored estimate
+  from the model-lifecycle notes, not derived. They live in one place
   with a cited basis.
 
 Each engine carries:
@@ -462,9 +465,9 @@ the `diagnose*` pure-function test pattern; the client only renders the result o
   `capablePreferenceRank`). `multilingual` is **derived** (not stored); `designVramFloorMb`
   is **not** added in Part B (no consumer — YAGNI).
 - `server/src/tts/` (new module, e.g. `engine-recommendation.ts`) — pure
-  `recommend(needsAnswer, vramTotalMb)` over the registry; `multilingual` **derived** from
-  `resolveEligibleEngines` (`server/src/tts/language.ts`), `expressive` + VRAM floors are
-  authored constants.
+  `recommend(needsAnswer, vramTotalMb)` over the registry; `multilingual` **derived** via
+  `isMultilingualEngine` from `ENGINE_LANGUAGE_SUPPORT` (`server/src/tts/voice-mapping.ts`,
+  the map `resolveEligibleEngines` reads), `expressive` + VRAM floor are authored constants.
 - `server/src/tts/models-status.ts` / `server/src/routes/models-status.ts` — surface the
   recommendation (or its inputs) alongside the existing `info.vramTotalMb`.
 - `src/components/setup/step-voice.tsx` — **(NOT the deleted `step-models.tsx`;** fe-49

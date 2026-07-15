@@ -599,7 +599,9 @@ Then add the harness (reuses the suite's existing `allPassReadiness` const — a
 function renderStepVoice(opts: { readiness?: SetupReadiness; account?: Partial<ReturnType<typeof accountSlice.getInitialState>> } = {}) {
   const store = configureStore({
     reducer: { account: accountSlice.reducer },
-    preloadedState: { account: { ...accountSlice.getInitialState(), ...opts.account } },
+    preloadedState: {
+      account: { ...accountSlice.getInitialState(), ...opts.account } as ReturnType<typeof accountSlice.getInitialState>,
+    },
   });
   const utils = render(
     <Provider store={store}>
@@ -609,6 +611,8 @@ function renderStepVoice(opts: { readiness?: SetupReadiness; account?: Partial<R
   return { ...utils, store };
 }
 ```
+
+> Keep the `as ReturnType<typeof accountSlice.getInitialState>` cast on `preloadedState.account` — RTK's strict `preloadedState` typing (as in `step-defaults.test.tsx:62`) rejects a bare spread otherwise. Also add the test imports this task's new/handoff tests need but the current file lacks: `import userEvent from '@testing-library/user-event'` and add `waitFor` to the `@testing-library/react` import (the file imports only `render, screen` today).
 
 Then **rewrite all 6 existing tests**: each keeps its own leading `vi.spyOn(api, 'getModelsStatus').mockResolvedValue(modelsStatus({…}))`, and its `render(<StepVoice readiness={X} onRefetch={…} />)` becomes `renderStepVoice({ readiness: X })` (the two tests that build an inline `readiness` pass it through; the rest omit it and get `allPassReadiness`).
 
