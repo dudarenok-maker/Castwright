@@ -69,12 +69,6 @@ _Full detail + acceptance:_ [#721](https://github.com/dudarenok-maker/Castwright
 - _Benefit:_ cheap targeted re-detect for one chapter.
 _Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/Castwright/issues/592).
 
-#### `app-10` — Stream-over-LAN instant play ([#553](https://github.com/dudarenok-maker/Castwright/issues/553))
-
-- _What:_ Optionally stream …/audio.mp3 (range) to start a not-yet-downloaded chapter on the home network.
-- _Benefit:_ Zero-wait preview before committing a download (deprioritised — offline emphasised).
-_Full detail + acceptance:_ [#553](https://github.com/dudarenok-maker/Castwright/issues/553).
-
 #### `srv-57` — Multi-GPU Wave 2 — on-box acceptance + Task 16/16.5 auto-revert follow-up ([#1230](https://github.com/dudarenok-maker/Castwright/issues/1230))
 
 - _What:_ Two related, gated items left over from the multi-GPU per-model arc (Wave 1 → Wave 2 → Plan 2a, all merged to `main`): 1. **Wave 2's on-box acceptance checklist has never run against real hardware.** `test:sidecar` is venv-gated so CI never exercises the real CUDA paths — this checklist is the only place Wave 2's per-card safety runtime (device ledger, free-VRAM floor, code-43 streak guard, cross-charge guards) gets verified against real GPUs. Full list lives in `docs/superpowers/plans/2026-07-02-multi-gpu-wave2-plan2.md` → "## Ship notes" → "### Wave 2" (status: NOT YET SHIPPED as of 2026-07-03), also referenced from `docs/features/236-multi-gpu-per-model-safety.md`. Checklist items: [ ] Confirm torch exposes real per-card UUIDs on this box (`python -c "import torch; print(torch.cuda.get_device_properties(0).uuid)"` in the sidecar venv) — if it errors, `DeviceLedger`'s renumber-detection is a no-op on this box; note that explicitly rather than assuming the guarantee holds. [ ] `SIDECAR_VRAM_FREE_FLOOR_MB=1024` (default) — starve a card to <1024MB free → sidecar self-exits (code 43), `/health` gpus[] showed the breach before exit. [ ] `QWEN_DEVICE=cuda:0 KOKORO_DEVICE=cuda:1` (different cards) → VoiceDesign + concurrent Kokoro synth, no blocking (`shares_device=False`). [ ] `QWEN_DEVICE=cuda:0 KOKORO_DEVICE=cuda:0` (same card, default) → VoiceDesign blocks new Kokoro synths until done (`shares_device=True`, unchanged from Wave 1). [ ] Force 3 code-43 exits within 10 minutes via a CARD-SPECIFIC trigger → streak-trip warning logs; sidecar stops respawning; `tripEvent()` shows the right card + resident engines. [ ] Force 3 code-43 exits within 10 minutes via a NON-card-specific trigger (e.g. absurdly low `SIDECAR_RESTART_MB`) → streak still trips; the "tripped WITHOUT a specific card... requires MANUAL investigation" path is exercised (this is exactly what makes auto-revert's "unrevertable" status meaningful — see item 2 below). [ ] Analyzer confirmed on CPU (`ANALYZER=local`, Ollama CPU-only) — run at least one analysis first so `analyzer-device-state.ts`'s cache actually populates — → a concurrent Qwen GPU synth is NOT serialized behind the analyzer. [ ] Analyzer confirmed on GPU → existing serialization behaviour unchanged (regression check). [ ] `COQUI_DEVICE=cpu` while the analyzer holds the GPU → the Coqui load runs immediately, no eviction wait. [ ] Qwen voice-design while `tts.qwen.device=cpu` → the design's `withGpuLoad` call runs immediately too. 2. **Task 16/16.5 (auto-revert on a repeated bad pin + its operator toast)** — deliberately excluded from Plan 2a (#1222, shipped 2026-07-03) because `runAutoRevert` directly consumes Wave 2's `tripEvent()`, which item 1 above is what actually exercises on real hardware. Scope (already designed, not yet built): a card-specific code-43 streak triggers `runAutoRevert`, which reverts the offending pin and surfaces a toast ("auto-reverted: ..."); a non-card-specific streak instead surfaces a distinct "not tied to a specific GPU card... manual investigation" toast via `/api/gpu/trip-status` reporting `status:'unrevertable'`.
@@ -100,24 +94,6 @@ _Full detail + acceptance:_ [#481](https://github.com/dudarenok-maker/Castwright
 - _What:_ Per-book markers (note + re-record kinds) already live in `src/store/listen-progress-slice.ts` and render in the markers panel (`src/components/listen/listen-player-region.tsx`). Add an export affordance that writes the marker list (timestamp · chapter · label · kind) to a text/JSON file the user can save or share.
 - _Benefit:_ Makes re-record markers actionable outside the app (study / review / handoff to an editor). _Net-new from the 2026-06-02 backlog brainstorm (Listener / Reliability / Distribution / Net-new / Sharing lenses). MoSCoW `should` is a placeholder — to be re-bucketed in the upcoming whole-backlog priority pass._
 _Full detail + acceptance:_ [#461](https://github.com/dudarenok-maker/Castwright/issues/461).
-
-#### `fs-59` — CJK (Chinese/Japanese) language support: analysis + synthesis ([#1004](https://github.com/dudarenok-maker/Castwright/issues/1004))
-
-- _What:_ CJK (Chinese `zh`, Japanese `ja`) language support, end-to-end, as a follow-on to the Latin-script Qwen tranche (`fs-50` / the 2026-06-22 language-aware-ingest spec). Split out because CJK analysis is materially harder than Latin and needs its own foundations.
-- _Benefit:_ Extends language breadth to the two highest-population CJK languages — a large slice of the "rivals show 1,158 languages" gap that Latin alone can't close.
-_Full detail + acceptance:_ [#1004](https://github.com/dudarenok-maker/Castwright/issues/1004).
-
-#### `fs-61` — backfill designed voices + covers onto the zh/ja Coalfall placeholder samples ([#1600](https://github.com/dudarenok-maker/Castwright/issues/1600))
-
-- _What:_ fs-59 W5 shipped minimal placeholder `samples/the-coalfall-commission-{zh,ja}/` (manuscript + state.json + a real 13-character cast.json with empty `overrideTtsVoices`) so the `language-sample-coverage.test.ts` guard (#1568) passes. They carry **no designed voices** yet. This item runs the Qwen VoiceDesign pipeline on a GPU box to design per-character voices onto the existing placeholders and slims each cover, bringing zh/ja up to the same bar as the `-de`/`-es`/`-fr`/`-ru` samples.
-- _Benefit:_ Gives the CJK demo books real, listenable voices so a zh/ja user gets a runnable demo, not just a roster — completing the fs-61 per-language sample set.
-_Full detail + acceptance:_ [#1600](https://github.com/dudarenok-maker/Castwright/issues/1600).
-
-#### `fe` — update stale zh/ja "unsupported" labels/comments after fs-59 W5 flip ([#1605](https://github.com/dudarenok-maker/Castwright/issues/1605))
-
-- _What:_ fs-59 W5 flipped zh/ja to `supported:true` and they're Coqui-eligible, so they correctly take the Coqui soft-gate path — but frontend comments/copy in `voice-readiness-selectors.ts`, `profile-drawer.tsx`, and `voice-readiness-gate.tsx` still describe zh as "still-unsupported" and list the soft-gate set as only "ru/es/fr/de". Copy-only; behavior is already correct (data-driven off `eligibleTtsEngines`).
-- _Benefit:_ Keeps the frontend comments honest so a reader isn't misled into thinking zh/ja are hard-blocked.
-_Full detail + acceptance:_ [#1605](https://github.com/dudarenok-maker/Castwright/issues/1605).
 
 #### `fs-10` — Render the chapter-title segment on the Listen view timeline ([#412](https://github.com/dudarenok-maker/Castwright/issues/412))
 
@@ -149,10 +125,10 @@ _Full detail + acceptance:_ [#1302](https://github.com/dudarenok-maker/Castwrigh
 - _Benefit:_ marginal — touch users get a brief press-feedback flash on already-visible controls. Low priority precisely because the controls are already reachable; this is cosmetic parity only.
 _Full detail + acceptance:_ [#799](https://github.com/dudarenok-maker/Castwright/issues/799).
 
-#### `fs-70` — XTTS languages beyond Qwen's five (zh-cn, ja, ko, ar, hi, nl, pl, tr, cs, hu, it, pt) ([#1303](https://github.com/dudarenok-maker/Castwright/issues/1303))
+#### `fs-70` — XTTS/Qwen languages beyond the five (it, pt, ko dual-engine; pl, tr, nl, cs, ar, hu, hi Coqui-only) ([#1303](https://github.com/dudarenok-maker/Castwright/issues/1303))
 
-- _What:_ Coqui XTTS v2 natively supports 17 languages; fs-60 (#1005) only enabled the five the analyze/attribution pipeline already fully supports (en/ru/es/fr/de, via fs-41/fs-50). This item opens the remaining XTTS-capable languages (zh-cn, ja, ko, ar, hi, nl, pl, tr, cs, hu, it, pt) as new book languages, gated to XTTS-only casting (no Qwen path, since Qwen design doesn't support them).
-- _Benefit:_ Extends language reach past Qwen's five without waiting on Qwen design support for each one — XTTS becomes a real gap-filler for languages Qwen may never reach. Lowest strategic priority; large analyze-side lift for a broad language set.
+- _What:_ Coqui XTTS v2 natively supports 17 languages; fs-60 (#1005) only enabled the five the analyze/attribution pipeline already fully supports (en/ru/es/fr/de, via fs-41/fs-50). This item opens the remaining XTTS-capable languages beyond fs-59's CJK pair as new book languages. The remaining set, after fs-59 (#1004) claims zh + ja, is **10 languages**. They do **not** all route the same way — some are Qwen-capable (dual-engine, full fallback resilience) and some are Coqui-only (no Qwen path). This is the correction to the original framing: it previously assumed the whole set was "XTTS-only, since Qwen design doesn't support them," which is wrong for ko/pt/it.
+- _Benefit:_ Extends language reach past Qwen's five without waiting on Qwen design support for each one — Bucket A gains two engines, Bucket B makes XTTS a real gap-filler for languages Qwen may never reach. Lowest strategic priority; large analyze-side lift for a broad language set, which is why the wave sequencing front-loads the cheap, high-resilience pair (it, pt).
 _Full detail + acceptance:_ [#1303](https://github.com/dudarenok-maker/Castwright/issues/1303).
 
 #### `fs-71` — Cross-book/cross-language voice-identity check (srv-36 extension) ([#1304](https://github.com/dudarenok-maker/Castwright/issues/1304))
@@ -287,23 +263,11 @@ _Full detail + acceptance:_ [#428](https://github.com/dudarenok-maker/Castwright
 - _Benefit:_ **User:** power users can snapshot and restore their tuning profile across machines or reinstall without re-entering values manually. **Technical:** validates that the descriptor schema is stable enough to round-trip through JSON. **Architectural:** the export format becomes a natural migration target if server-side config shapes change in future. _Full detail + acceptance:_ plan `docs/features/199-advanced-settings.md`.
 _Full detail + acceptance:_ [#668](https://github.com/dudarenok-maker/Castwright/issues/668).
 
-#### `fe-1` — In-app LAN HTTPS banner under dev settings ([#401](https://github.com/dudarenok-maker/Castwright/issues/401))
-
-- _What:_ Account settings card showing the current LAN HTTPS URL (from `GET /api/export/lan` when LAN_HTTPS=1) with one-click "Copy URL" + "Install cert on phone" links. The latter opens a doc / route that shows the QR code that `npm run install:cert-mobile` prints to the terminal today. Dev-mode only — hidden in production single-user environments.
-- _Benefit:_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected).
-_Full detail + acceptance:_ [#401](https://github.com/dudarenok-maker/Castwright/issues/401).
-
 #### `ops-21` — Robust per-interface / multi-address mDNS answers for friendly LAN hostnames ([#1239](https://github.com/dudarenok-maker/Castwright/issues/1239))
 
 - _What:_ Replace the single "OS default-route interface" heuristic the `castwright.local`/`castwright.dev.local` mDNS responder uses (see `docs/superpowers/specs/2026-07-03-castwright-local-hostnames-design.md`, Component 1) with a more robust answer strategy — either answering per the interface the query actually arrived on, or returning multiple candidate LAN addresses and letting the client's own connection-retry behavior (the repo's `vite.config.ts` already documents hitting an analogous Happy-Eyeballs-style multi-address tradeoff) sort out which one is reachable.
 - _Benefit:_ **Technical/architectural** — closes a known, adversarial-review-identified gap (three rounds of `assumption-checker` review on the base spec flagged that the v1 "primary LAN IP" heuristic is a best-effort default, not a guarantee, under VPN or dual-homed LAN setups) without blocking the base feature's ship, which already degrades gracefully to the existing LAN-IP URL in the meantime.
 _Full detail + acceptance:_ [#1239](https://github.com/dudarenok-maker/Castwright/issues/1239).
-
-#### `ops-9` — Enable server-side branch protection on `main` (when Pro/public) ([#429](https://github.com/dudarenok-maker/Castwright/issues/429))
-
-- _What:_ create an active ruleset on the default branch blocking deletion + non-fast-forward (force) pushes. Ready command:
-- _Benefit:_ server-side enforcement that no `--no-verify` local bypass or fresh clone can sidestep; the local guard (plan 163) becomes belt-and-suspenders. Required status checks deliberately excluded (would deadlock doc-only PRs that skip `verify.yml`).
-_Full detail + acceptance:_ [#429](https://github.com/dudarenok-maker/Castwright/issues/429).
 
 #### `fs-74` — VRAM MB-accounting policy + two-model-split UI (Wave 4 — beta 12/16GB cards) ([#845](https://github.com/dudarenok-maker/Castwright/issues/845))
 
