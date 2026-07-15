@@ -741,7 +741,12 @@ function previewFoldForLiveView(
   characters: CharacterOutput[],
   language?: string,
 ): CharacterOutput[] {
-  return foldMinorCast(characters, [], { nameOnly: true, language }).characters;
+  // Fix 1 — dedup by name BEFORE the fold (mirroring finalization order at
+  // dedupAndPrepare) so the live "Cast so far" SSE and the interim cast.json
+  // dedup consistently with the final cast. Empty sentences: Tier-1 is
+  // name/gender-only; Tier-2a survivor degrades to deterministic snapshot order.
+  const deduped = dedupeRosterByName(characters, [], { language }).characters;
+  return foldMinorCast(deduped, [], { nameOnly: true, language }).characters;
 }
 
 /* Stage 1 doesn't know per-sentence counts. Compute lines (sentences spoken)
