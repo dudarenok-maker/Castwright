@@ -12,7 +12,7 @@
    per-test spies; only putUserSettings is stubbed to echo the patch). */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
@@ -231,5 +231,17 @@ describe('StepVoice', () => {
     await userEvent.click(await screen.findByRole('radio', { name: /no — simple english/i }));
     const badge = await screen.findByText(/recommended for you/i);
     expect(badge.closest('[data-engine-card="kokoro"]')).not.toBeNull();
+  });
+
+  it('seeds defaultTtsModelKey when the recommendation is answered', async () => {
+    vi.spyOn(api, 'getModelsStatus').mockResolvedValue(modelsStatus()); // qwen-lead recommendation
+    const { store } = renderStepVoice();
+    await userEvent.click(await screen.findByRole('radio', { name: /yes — expressive/i }));
+    await waitFor(() => {
+      expect(putUserSettingsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ defaultTtsModelKey: 'qwen3-tts-0.6b', defaultTtsModelKeyExplicit: true, defaultTtsEngine: 'local' }),
+      );
+      expect(store.getState().account.defaultTtsModelKey).toBe('qwen3-tts-0.6b');
+    });
   });
 });

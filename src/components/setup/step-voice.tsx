@@ -20,6 +20,8 @@ import {
   type NeedsAnswer,
   type EngineRecommendation,
 } from '../../lib/api';
+import { useAppDispatch } from '../../store';
+import { saveAccountSettings } from '../../store/account-slice';
 import { runtimeLivenessPill } from './engine-card-status';
 import { NEEDS_QUESTION, needsAnswerLabel, RECOMMENDED_BADGE, engineDisplayName } from './engine-recommendation-copy';
 
@@ -98,6 +100,7 @@ function RuntimeLivenessPill({ runtime }: { runtime: ModelsStatus['runtime'] }) 
 }
 
 export function StepVoice({ readiness, onRefetch }: { readiness: SetupReadiness; onRefetch: () => void }) {
+  const dispatch = useAppDispatch();
   const [models, setModels] = useState<ModelsStatus | null>(null);
   const [needs, setNeeds] = useState<NeedsAnswer | null>(null);
 
@@ -107,6 +110,25 @@ export function StepVoice({ readiness, onRefetch }: { readiness: SetupReadiness;
         ? models.recommendation.expressiveOrMultilingual
         : models.recommendation.simpleEnglish
       : null;
+
+  const chooseNeeds = useCallback(
+    (answer: NeedsAnswer) => {
+      setNeeds(answer);
+      if (!models) return;
+      const rec =
+        answer === 'expressive-or-multilingual'
+          ? models.recommendation.expressiveOrMultilingual
+          : models.recommendation.simpleEnglish;
+      void dispatch(
+        saveAccountSettings({
+          defaultTtsModelKey: rec.modelKey,
+          defaultTtsModelKeyExplicit: true,
+          defaultTtsEngine: 'local',
+        }),
+      );
+    },
+    [dispatch, models],
+  );
 
   const refetchModels = useCallback(async () => {
     try {
@@ -173,7 +195,7 @@ export function StepVoice({ readiness, onRefetch }: { readiness: SetupReadiness;
                 key={a}
                 className="flex items-center gap-2 text-sm text-ink/80 min-h-[44px] fine-pointer:min-h-0"
               >
-                <input type="radio" name="voice-needs" checked={needs === a} onChange={() => setNeeds(a)} />
+                <input type="radio" name="voice-needs" checked={needs === a} onChange={() => chooseNeeds(a)} />
                 {needsAnswerLabel(a)}
               </label>
             ))}
