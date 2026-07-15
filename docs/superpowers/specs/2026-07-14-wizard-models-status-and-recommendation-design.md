@@ -341,25 +341,34 @@ The recommendation logic:
 
 Consequences:
 
-- **Very low VRAM or CPU-only** (below Qwen-base's generation floor, or
-  `vramTotalMb` null on a box with no capable GPU) → **recommend Kokoro** ("Recommended
-  — runs comfortably on low VRAM / CPU"). Kokoro is genuinely the engine for very low
-  VRAM or CPU-only machines.
+- **"Simple English" answer, any VRAM (incl. CPU-only)** → **recommend Kokoro**
+  ("Recommended — runs comfortably on low VRAM / CPU"). Kokoro is genuinely the engine
+  for very low VRAM or CPU-only machines when the need is English-only, non-expressive.
 - **~6 GB + expressive/multilingual need** → **recommend Qwen** (its 0.6B generation
   path fits), with a soft aside that *voice design* (the 1.7B model) may be tight on
   this GPU. We do **not** steer generation to Kokoro here.
-- **Low VRAM but multilingual is needed** → recommend Qwen anyway (Kokoro literally
-  cannot do the job), with an honest **"may not fit comfortably on this GPU"** caveat.
+- **Low VRAM OR CPU-only, but expressive/multilingual is needed** → recommend Qwen
+  **anyway** (Kokoro literally cannot do a non-English book), with an honest CPU caveat.
   We never steer someone to an engine that cannot meet their stated need.
 - **Nothing is ever blocked.** Every engine stays installable and usable; the VRAM
   signal only changes which engine *leads* and what caveat is shown.
 
-**Caveat wording is a truthfulness open item (plan-time):** do NOT promise "will run
-on CPU, slower" until the sidecar's actual low-VRAM behavior is verified. The
-project's own incident history (8 GB bulk-design OOM; 1.7B-tier OOM storms) suggests
-a constrained-VRAM Qwen can **OOM-crash rather than gracefully fall back to CPU**. The
-plan must confirm the real behavior and either promise CPU fallback (if true) or keep
-the softer "may not fit comfortably on this GPU."
+**CPU-only + "yes" answer → Qwen-with-CPU-caveat (decided 2026-07-15, user-approved
+— a deliberate revision of a literal read of this section + the Testing case-4
+"CPU-only → Kokoro").** The single "expressive **and/or** multilingual?" question
+cannot separate a non-English need (Kokoro can't serve at all) from expressive-English
+(Kokoro can). So on a CPU-only / no-GPU box the "yes" branch still **leads Qwen** and
+uses the caveat — not a downgrade to Kokoro — to nudge the expressive-English user
+while serving the multilingual user correctly. The Testing case-4 "CPU-only → Kokoro"
+applies to the **"simple English" answer**, not the "yes" branch.
+
+**Caveat wording (resolved):** the low/no-VRAM "yes"-branch caveat is **"May not fit
+this GPU's memory — you can run Qwen on CPU (slower) via the voice-engine device
+setting, or pick Kokoro below for fast English-only voices."** Per the product owner,
+Qwen *does* run on CPU (slower) via the device setting — this is distinct from the
+constrained-*GPU* auto-fallback OOM history (8 GB bulk-design OOM; 1.7B storms), which
+is a different path. On-box acceptance confirms forcing CPU actually renders; if not,
+soften the caveat to drop the CPU offer and keep only the "pick Kokoro" nudge.
 
 **This deliberately revises #1614's literal acceptance criterion** ("detected VRAM
 < 6 GB → Kokoro recommended regardless"). That flat rule is inaccurate: Qwen's 0.6B
@@ -482,8 +491,9 @@ Paired automated tests are required (testing-discipline rule), not optional.
   `installedOnDisk` vs `process` independence; `vramTotalMb` surfacing (incl. null).
 - **Server unit — recommendation function (pure, mirrors `diagnose*` tests):**
   needs-answer × capability map × `vramTotalMb` → recommended engine + caveats. Cover
-  the four cases: no-need→Kokoro; need+adequate VRAM→Qwen; need+low VRAM→Qwen+CPU
-  caveat; no capable GPU / CPU-only→Kokoro.
+  the four cases: **"simple English"→Kokoro (any VRAM)**; need+adequate VRAM→Qwen;
+  need+low VRAM→Qwen+CPU caveat; **need+CPU-only (`vramTotalMb` null)→Qwen+CPU caveat**
+  (the deliberate case-4 revision — NOT Kokoro; see the CPU-only note above).
 - **Frontend (Vitest + RTL) — `step-models.test.tsx`:** the three regressions
   (weights-missing card wording matches badge; `starting` renders neutral not amber;
   re-check refreshes the badge); controlled-card rendering; broken-Coqui-shown-while-

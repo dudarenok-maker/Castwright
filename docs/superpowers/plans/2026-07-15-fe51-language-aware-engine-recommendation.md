@@ -21,8 +21,9 @@ Every task's requirements implicitly include this section.
 - **Mocks parity** — `mockGetModelsStatus()` (`src/lib/api.ts`) must return the same shape as the real endpoint; adding a field to `ModelsStatus` means updating the mock in the same task or every `step-voice`/`model-manager` test that renders off the mock breaks.
 - **`defaultTtsModelKey`, NOT `defaultTtsEngine`** carries the kokoro/qwen/coqui choice. `defaultTtsEngine` is the `'local' | 'gemini'` provider *tier* and cannot hold an engine id. The handoff sets `defaultTtsModelKey` (+ `defaultTtsModelKeyExplicit: true`) and `defaultTtsEngine: 'local'` (all recommended engines are on-device).
 - **Capability is a hard filter; VRAM is a soft preference.** Never recommend an engine that cannot meet the stated need (multilingual → Kokoro is ineligible). VRAM never *reorders* the capable branch — it only attaches a caveat. Nothing is ever blocked; every engine stays installable.
-- **Qwen leads the capable branch, Coqui is the optional alternate** (per #1614, explicit). The capable preference order is authored (`['qwen', 'coqui']`), not derived from VRAM floors (which would wrongly rank Coqui first).
-- **Truthfulness — caveat wording.** Do **not** promise "runs on CPU, slower" for a constrained-VRAM Qwen. The project's incident history (8 GB bulk-design OOM #1155; 1.7B-tier OOM storms) shows constrained Qwen can OOM-crash rather than fall back to CPU. Use the safe wording **"may not fit comfortably on this GPU"** until real low-VRAM sidecar behavior is verified (Task 6 note).
+- **Data-driven capability (decided 2026-07-15).** The capable set is **derived** — `VOICE_ENGINES.filter(e => e.expressive || isMultilingualEngine(e.id))` — so a future expressive/multilingual engine qualifies automatically (the spec's stated goal). Ordering within the capable set uses an **authored `capablePreferenceRank`** field (Qwen `0`, Coqui `1`), *not* VRAM floors (which would wrongly rank Coqui first). Today this yields Qwen-leads-Coqui, per #1614 — but via live capability + rank, not a hardcoded id list. `expressive` is therefore load-bearing (it's read by the filter); `designVramFloorMb` is **dropped** (no consumer in Part B).
+- **CPU-only / no-GPU + "yes" answer → Qwen with a CPU caveat (decided 2026-07-15 — a deliberate revision of the spec's case-4 "CPU-only → Kokoro").** Rationale: Qwen *does* run on CPU (slower) via the voice-engine device setting, and the single "expressive **and/or** multilingual" question can't tell a non-English need (Kokoro literally cannot serve) from expressive-English (Kokoro can). Leading Qwen serves the multilingual user correctly; the caveat nudges the expressive-English user to Kokoro. Recommending Kokoro here (spec-literal) would hand a non-English user an engine that cannot do their language at all. **This override is flagged in Task 2 and in Self-Review — it is NOT silent.**
+- **Truthfulness — caveat wording.** The caveat for a low/no-VRAM Qwen recommendation is **"May not fit this GPU's memory — you can run Qwen on CPU (slower) via the voice-engine device setting, or pick Kokoro below for fast English-only voices."** This is honest per the product owner (Qwen runs on CPU, just slow) — distinct from the *constrained-GPU auto-fallback* OOM history (#1155), which is a different path. On-box acceptance still confirms forcing CPU actually renders (Task 6 note).
 - **Testing discipline** — every task ships paired automated tests (fails-before/passes-after for the behavior it adds). Server pure functions get Vitest unit tests mirroring the `diagnose*` pattern; UI crossing redux/fetch/layout seams earns one Playwright e2e.
 - **Commit convention** — `<type>(<scope>): <subject>`; scopes here are `server` and `frontend` (and `docs` for the plan/regression-doc commits). Multi-file client+server changes stay split by task so scope stays single.
 
@@ -36,7 +37,7 @@ Every task's requirements implicitly include this section.
 - `docs/features/259-fe51-engine-recommendation.md` — regression plan (verify `259` is still free at implementation time; bump if a concurrent plan claimed it).
 
 **Modified files:**
-- `server/src/tts/voice-engine-registry.ts` — extend `VoiceEngineEntry` with authored capability fields (`expressive`, `genVramFloorMb`, `designVramFloorMb?`); populate the three entries.
+- `server/src/tts/voice-engine-registry.ts` — extend `VoiceEngineEntry` with authored capability fields (`expressive`, `genVramFloorMb`, `capablePreferenceRank`); populate the three entries.
 - `server/src/tts/models-status.ts` — add `recommendation: RecommendationSet` to `ModelsStatus`; `buildModelsStatus` calls `recommendEngines(input.info.vramTotalMb)`.
 - `src/lib/api.ts` — mirror the `recommendation` field onto the client `ModelsStatus` interface; add it to `mockGetModelsStatus()`.
 - `src/components/setup/step-voice.tsx` — guided-question control; recommendation-driven card ordering + "Recommended for you" badge + primary CTA; de-defaulting copy; Defaults handoff dispatch.
@@ -57,12 +58,14 @@ Extend Part A's `VoiceEngineEntry` with the authored capability constants the re
 
 **Interfaces:**
 - Consumes: existing `VoiceEngineEntry` / `VOICE_ENGINES` (Part A).
-- Produces: `VoiceEngineEntry.expressive: boolean`, `VoiceEngineEntry.genVramFloorMb: number`, `VoiceEngineEntry.designVramFloorMb?: number` — read by `recommendEngines` (Task 2).
+- Produces: `VoiceEngineEntry.expressive: boolean`, `VoiceEngineEntry.genVramFloorMb: number`, `VoiceEngineEntry.capablePreferenceRank: number` — all read by `recommendEngines` (Task 2). (`expressive` drives the capable-set filter; `capablePreferenceRank` orders the capable set; `genVramFloorMb` sets the caveat threshold.)
 
-**Grounded VRAM constants** (cited basis — real numbers, not guesses; the *structure* is fixed, confirm the exact values against `server/src/config/registry.ts` help text + measurement during implementation and adjust if the registry is authoritative):
-- **Kokoro** `genVramFloorMb: 1024` — ~1 GB, fits CPU (CLAUDE.md model-lifecycle notes). `expressive: false`.
-- **Qwen** `genVramFloorMb: 6144` — 0.6B generation path fits comfortably ~6 GB (#1614 threshold + spec); `designVramFloorMb: 5120` — VoiceDesign 1.7B ~4–5 GB transient (registry `qwen.design.idleTtlSec` help, line ~700). `expressive: true`.
-- **Coqui** `genVramFloorMb: 4096` — XTTS v2 ~3 GB load + gen headroom (registry `tts.preload.coqui` help, line ~568). `expressive: true`.
+**Authored constants** (estimates, not measured — only the *structure* is fixed; treat the numbers as best-effort authored values grounded in CLAUDE.md's model-lifecycle notes, and refine on-box if measurement contradicts them. **Only the capable lead's `genVramFloorMb` is read today** — see Task 2 — but every engine carries one as a coherent per-engine property for when it leads):
+- **Kokoro** — `expressive: false`, `genVramFloorMb: 1024` (~1 GB, fits CPU), `capablePreferenceRank: 99` (never in the capable set — `expressive` false + English-only — so its rank is inert; a high sentinel documents that).
+- **Qwen** — `expressive: true`, `genVramFloorMb: 6144` (0.6B generation path; the one #1614-derived threshold), `capablePreferenceRank: 0` (leads the capable branch — the multi-cast default).
+- **Coqui** — `expressive: true`, `genVramFloorMb: 4096`, `capablePreferenceRank: 1` (optional alternate).
+
+`designVramFloorMb` from the spec's draft `EngineCapability` is intentionally **omitted** — Part B's recommendation never reads it (it governs voice-design VRAM steering, a separate future feature). Add it when a consumer exists (YAGNI).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -75,17 +78,18 @@ import { VOICE_ENGINES } from './voice-engine-registry.js';
 describe('VOICE_ENGINES capability fields', () => {
   const byId = Object.fromEntries(VOICE_ENGINES.map((e) => [e.id, e]));
 
-  it('carries authored expressive + VRAM floors per engine', () => {
+  it('carries authored expressive + VRAM floor + capable rank per engine', () => {
     expect(byId.kokoro.expressive).toBe(false);
     expect(byId.kokoro.genVramFloorMb).toBe(1024);
-    expect(byId.kokoro.designVramFloorMb).toBeUndefined();
+    expect(byId.kokoro.capablePreferenceRank).toBe(99);
 
     expect(byId.qwen.expressive).toBe(true);
     expect(byId.qwen.genVramFloorMb).toBe(6144);
-    expect(byId.qwen.designVramFloorMb).toBe(5120);
+    expect(byId.qwen.capablePreferenceRank).toBe(0);
 
     expect(byId.coqui.expressive).toBe(true);
     expect(byId.coqui.genVramFloorMb).toBe(4096);
+    expect(byId.coqui.capablePreferenceRank).toBe(1);
   });
 
   it('every entry has a positive generation floor', () => {
@@ -104,16 +108,19 @@ Expected: FAIL — `expressive`/`genVramFloorMb` are `undefined` (type error at 
 In `server/src/tts/voice-engine-registry.ts`, add to `VoiceEngineEntry` (after `liveLoaded`):
 
 ```ts
-  /** Authored: the engine produces expressive/emotive speech (no code source for
-      this — a curated fact). Kokoro is flat/fast; Qwen + Coqui are expressive. */
+  /** Authored: the engine produces expressive/emotive speech (no code source —
+      a curated fact). Kokoro is flat/fast; Qwen + Coqui are expressive. Read by
+      the recommendation's capable-set filter (expressive || multilingual). */
   expressive: boolean;
-  /** Authored: comfortable VRAM (MB) for the GENERATION path. Grounded in the
-      registry help text + measurement, not derived. */
+  /** Authored estimate: comfortable VRAM (MB) for the GENERATION path. The
+      recommendation reads the capable LEAD's floor to decide whether to attach a
+      caveat. Not measured — refine on-box if contradicted. */
   genVramFloorMb: number;
-  /** Authored: comfortable VRAM (MB) for a heavy transient DESIGN model, when the
-      engine has one (Qwen VoiceDesign 1.7B). Governs the voice-design feature, NOT
-      a reason to steer generation away from the engine. */
-  designVramFloorMb?: number;
+  /** Authored: lead preference within the capable (expressive||multilingual) set.
+      Lower wins. Only meaningful for capable engines (Qwen 0, Coqui 1); a
+      non-capable engine (Kokoro) never enters the set, so its rank is a high
+      sentinel (99). */
+  capablePreferenceRank: number;
 ```
 
 Then add the fields to each entry:
@@ -125,6 +132,7 @@ Then add the fields to each entry:
     // …existing probe fns…
     expressive: false,
     genVramFloorMb: 1024,
+    capablePreferenceRank: 99,
   },
   {
     id: 'qwen',
@@ -132,7 +140,7 @@ Then add the fields to each entry:
     // …existing probe fns…
     expressive: true,
     genVramFloorMb: 6144,
-    designVramFloorMb: 5120,
+    capablePreferenceRank: 0,
   },
   {
     id: 'coqui',
@@ -140,6 +148,7 @@ Then add the fields to each entry:
     // …existing probe fns…
     expressive: true,
     genVramFloorMb: 4096,
+    capablePreferenceRank: 1,
   },
 ```
 
@@ -176,8 +185,8 @@ The heart of Part B: a pure function over authored capability + derived multilin
 
 **Logic (verbatim — do not paraphrase into "handle edge cases"):**
 - `simpleEnglish` → **always Kokoro** (`kokoro-v1`), `caveat: null`, `alternate: null`, `reason: 'Fast and light — runs comfortably on low VRAM or CPU.'`
-- `expressiveOrMultilingual` → the capable engines are those where `expressive || isMultilingualEngine`. Ordered by the **authored preference** `['qwen', 'coqui']`, intersected with that capable set. `engine` = first (Qwen today); `alternate` = second if present (Coqui today); `reason: 'Expressive and multilingual — the multi-cast default.'`
-- **Caveat** (soft, never reorders): `null` when `vramTotalMb != null && vramTotalMb >= <lead>.genVramFloorMb`; otherwise `'May not fit comfortably on this GPU — install anyway, or pick a lighter engine below.'` (covers both low-VRAM and CPU-only/`null`).
+- `expressiveOrMultilingual` → **data-driven**: capable set = `VOICE_ENGINES.filter(e => e.expressive || isMultilingualEngine(e.id))`, sorted ascending by `capablePreferenceRank`. `engine` = first (Qwen today); `alternate` = second's id if present (Coqui today), else `null`; `reason: 'Expressive and multilingual — the multi-cast default.'`
+- **Caveat** (soft, never reorders): `null` when `vramTotalMb != null && vramTotalMb >= lead.genVramFloorMb`; otherwise the CPU caveat string. This covers **both** low-VRAM and CPU-only/`null` — the CPU-only case **deliberately still leads Qwen** (not Kokoro), a flagged revision of the spec's case-4 (see Global Constraints): Qwen runs on CPU (slower) and Kokoro can't do non-English, so the caveat — not a downgrade — is the honest tool.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -214,16 +223,17 @@ describe('recommendEngines', () => {
     expect(r.caveat).toBeNull();
   });
 
-  it('need + low VRAM (< Qwen floor) → Qwen with caveat (never downgraded to Kokoro)', () => {
+  it('need + low VRAM (< Qwen floor) → Qwen with CPU caveat (never downgraded to Kokoro)', () => {
     const r = recommendEngines(4096).expressiveOrMultilingual;
     expect(r.engine).toBe('qwen');
-    expect(r.caveat).toMatch(/may not fit comfortably/i);
+    expect(r.caveat).toMatch(/may not fit/i);
+    expect(r.caveat).toMatch(/CPU/i); // caveat offers the CPU-mode escape hatch
   });
 
-  it('need + CPU-only (vram null) → Qwen with caveat, still not Kokoro', () => {
+  it('need + CPU-only (vram null) → Qwen with CPU caveat, still not Kokoro (deliberate case-4 revision)', () => {
     const r = recommendEngines(null).expressiveOrMultilingual;
     expect(r.engine).toBe('qwen');
-    expect(r.caveat).toMatch(/may not fit comfortably/i);
+    expect(r.caveat).toMatch(/may not fit/i);
   });
 });
 ```
@@ -265,13 +275,15 @@ export interface RecommendationSet {
   simpleEnglish: EngineRecommendation;
 }
 
-/** Authored preference for the capable (expressive/multilingual) branch: Qwen is
-    the multi-cast default, Coqui the optional alternate (#1614). NOT ordered by
-    VRAM floor — that would wrongly rank Coqui first. */
-const CAPABLE_PREFERENCE: VoiceEngineId[] = ['qwen', 'coqui'];
-
+/* CPU caveat for a low/no-VRAM Qwen recommendation. Honest per the product owner:
+   Qwen runs on CPU (slower) via the voice-engine device setting; Kokoro is the fast
+   English-only escape hatch. This is a caveat, NOT a downgrade — the CPU-only case
+   still LEADS Qwen (deliberate revision of the spec's case-4 "CPU-only → Kokoro",
+   because Kokoro can't serve a non-English book at all and the one guided question
+   can't tell non-English from expressive-English). */
 const CAVEAT_VRAM =
-  'May not fit comfortably on this GPU — install anyway, or pick a lighter engine below.';
+  "May not fit this GPU's memory — you can run Qwen on CPU (slower) via the voice-engine " +
+  'device setting, or pick Kokoro below for fast English-only voices.';
 
 const byId = new Map<VoiceEngineId, VoiceEngineEntry>(VOICE_ENGINES.map((e) => [e.id, e]));
 
@@ -283,28 +295,23 @@ export function isMultilingualEngine(id: VoiceEngineId): boolean {
   return support.some((lang) => lang !== DEFAULT_LANGUAGE);
 }
 
-function entry(id: VoiceEngineId): VoiceEngineEntry {
-  const e = byId.get(id);
-  if (!e) throw new Error(`[engine-recommendation] unknown engine id: ${id}`);
-  return e;
-}
-
 export function recommendEngines(vramTotalMb: number | null): RecommendationSet {
-  // Capable = expressive OR multilingual, in authored preference order.
-  const capable = CAPABLE_PREFERENCE.filter(
-    (id) => entry(id).expressive || isMultilingualEngine(id),
-  );
-  const leadId = capable[0] ?? 'qwen';
-  const lead = entry(leadId);
-  const alternate = capable[1] ?? null;
+  // Capable = expressive OR multilingual (DERIVED — a future qualifying engine joins
+  // automatically), ordered by authored capablePreferenceRank (Qwen 0, Coqui 1).
+  const capable = VOICE_ENGINES.filter(
+    (e) => e.expressive || isMultilingualEngine(e.id),
+  ).sort((a, b) => a.capablePreferenceRank - b.capablePreferenceRank);
+
+  const lead = capable[0];
+  const alternate: VoiceEngineId | null = capable[1]?.id ?? null;
 
   const fits = vramTotalMb != null && vramTotalMb >= lead.genVramFloorMb;
 
-  const kokoro = entry('kokoro');
+  const kokoro = byId.get('kokoro')!;
 
   return {
     expressiveOrMultilingual: {
-      engine: leadId,
+      engine: lead.id,
       modelKey: lead.defaultModelKey,
       reason: 'Expressive and multilingual — the multi-cast default.',
       caveat: fits ? null : CAVEAT_VRAM,
@@ -441,7 +448,8 @@ Update `mockGetModelsStatus()` (~line 7272) to return a recommendation (mock is 
         engine: 'qwen',
         modelKey: 'qwen3-tts-0.6b',
         reason: 'Expressive and multilingual — the multi-cast default.',
-        caveat: 'May not fit comfortably on this GPU — install anyway, or pick a lighter engine below.',
+        caveat:
+          "May not fit this GPU's memory — you can run Qwen on CPU (slower) via the voice-engine device setting, or pick Kokoro below for fast English-only voices.",
         alternate: 'coqui',
       },
       simpleEnglish: {
@@ -554,40 +562,69 @@ export function engineDisplayName(id: 'kokoro' | 'qwen' | 'coqui'): string {
 Run: `npx vitest run src/components/setup/engine-recommendation-copy.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Write the failing step-voice test**
+- [ ] **Step 5: Build a Provider-backed `renderStepVoice` harness and migrate the existing tests**
 
-Extend `src/components/setup/step-voice.test.tsx` (the suite already mocks `api.getModelsStatus`; reuse its render harness). Add:
+**Critical — there is NO `renderStepVoice` today.** `src/components/setup/step-voice.test.tsx` currently `render(<StepVoice readiness={…} onRefetch={…} />)` **inline with no redux Provider** across ~6 tests (they pass differing `readiness`: all-pass, `crashed`, `starting`). Task 5 adds `useAppDispatch` to `StepVoice`, which makes a Provider **mandatory** — so the harness must exist and every current test must route through it, or Task 5 lands 6 red tests. Build it now (this task adds no redux to the component yet, so the Provider is harmless here and ready for Task 5).
+
+Add to `step-voice.test.tsx` (copy the pattern from `step-defaults.test.tsx`, which already renders a store-backed `<Provider>` and stubs the account thunk's `putUserSettings` echo):
+
+```tsx
+import { configureStore } from '@reduxjs/toolkit';
+import { Provider } from 'react-redux';
+import { render } from '@testing-library/react';
+import accountReducer from '../../store/account-slice'; // match step-defaults.test.tsx's import
+
+function renderStepVoice(opts?: { readiness?: SetupReadiness; account?: Record<string, unknown> }) {
+  const store = configureStore({
+    reducer: { account: accountReducer },
+    preloadedState: opts?.account ? { account: opts.account } : undefined,
+  });
+  const readiness = opts?.readiness ?? passingReadiness(); // reuse the suite's existing readiness fixture
+  const utils = render(
+    <Provider store={store}>
+      <StepVoice readiness={readiness} onRefetch={() => {}} />
+    </Provider>,
+  );
+  return { ...utils, store };
+}
+```
+
+Then **rewrite each of the 6 existing inline `render(<StepVoice … />)` calls** to `renderStepVoice({ readiness: <that test's readiness> })`. Reuse whatever `readiness` fixtures the suite already defines (all-pass, crashed, starting); if the account thunk (`saveAccountSettings`) hits the API on dispatch, reuse `step-defaults.test.tsx`'s `vi.mock('../../lib/api', …)` `putUserSettings` echo stub so no test performs a real fetch. (Confirm `accountReducer`'s export shape — default vs named — against `src/store/account-slice.ts`.)
+
+- [ ] **Step 6: Write the failing new-behavior tests**
+
+Add to `step-voice.test.tsx`:
 
 ```tsx
 it('shows the guided question and, once answered "yes", leads with the recommended engine', async () => {
-  renderStepVoice(); // existing harness; mock returns the Task-3 mock recommendation (qwen lead)
+  renderStepVoice(); // mock getModelsStatus returns the Task-3 recommendation (qwen lead, CPU caveat)
   expect(await screen.findByText(/expressive and\/or multilingual/i)).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole('radio', { name: /yes — expressive/i }));
 
   const badge = await screen.findByText(/recommended for you/i);
-  // The recommended (Qwen) card leads: badge appears before the Kokoro card in DOM order.
-  const kokoro = screen.getByText(/Kokoro/i);
-  expect(badge.compareDocumentPosition(kokoro) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  // CPU-only mock → Qwen caveat is shown, neutral (not an amber blocker).
-  expect(screen.getByText(/may not fit comfortably/i)).toBeInTheDocument();
+  // The recommended (Qwen) card leads: the badge sits on the qwen card wrapper.
+  expect(badge.closest('[data-engine-card="qwen"]')).not.toBeNull();
+  // CPU-only mock → Qwen caveat shown, neutral (sky) not an amber blocker.
+  expect(screen.getByTestId('recommendation-caveat')).toHaveTextContent(/may not fit/i);
 });
 
 it('answering "no" recommends Kokoro', async () => {
   renderStepVoice();
   await userEvent.click(await screen.findByRole('radio', { name: /no — simple english/i }));
   const badge = await screen.findByText(/recommended for you/i);
-  // Badge sits on the Kokoro card.
   expect(badge.closest('[data-engine-card="kokoro"]')).not.toBeNull();
 });
 ```
 
-- [ ] **Step 6: Run test to verify it fails**
+> **Assertion note (finding #5):** do NOT `getByText(/Kokoro/i)` for ordering — with Qwen leading, "Kokoro" also appears in the "Other engines" `<summary>` preview string, so `getByText` throws on multiple matches. Anchor on the `data-engine-card` wrapper instead (emitted by Step 7).
+
+- [ ] **Step 7: Run tests to verify they fail**
 
 Run: `npx vitest run src/components/setup/step-voice.test.tsx`
 Expected: FAIL — no guided-question radios / no "Recommended for you" badge.
 
-- [ ] **Step 7: Implement the guided question + ordering in `step-voice.tsx`**
+- [ ] **Step 8: Implement the guided question + ordering in `step-voice.tsx`**
 
 Add state + a small `RecommendedBadge`, and render cards ordered by the active recommendation. Key edits (keep the existing badges/runtime/venv block untouched):
 
@@ -632,13 +669,11 @@ const ALL: Array<'kokoro' | 'qwen' | 'coqui'> = ['kokoro', 'qwen', 'coqui'];
 const leadId = activeRec?.engine ?? 'kokoro';
 const ordered = [leadId, ...ALL.filter((id) => id !== leadId)];
 
-const CARD = {
-  kokoro: (rec: boolean) => (
-    <KokoroInstall status={models.engines.kokoro} onInstalled={refetchBoth} />
-  ),
+const CARD: Record<'kokoro' | 'qwen' | 'coqui', () => JSX.Element> = {
+  kokoro: () => <KokoroInstall status={models.engines.kokoro} onInstalled={refetchBoth} />,
   qwen: () => <QwenInstall status={models.engines.qwen} onInstalled={refetchBoth} />,
   coqui: () => <CoquiInstall status={models.engines.coqui} onInstalled={refetchBoth} />,
-} as const;
+};
 ```
 
 Then render lead + rest (the lead wrapped with the badge + caveat):
@@ -677,13 +712,15 @@ Then render lead + rest (the lead wrapped with the badge + caveat):
 Keep `VenvBootstrap` above this block (runtime is shared, engine-agnostic). Wrap the Kokoro lead case with `data-engine-card="kokoro"` too (already handled by the `data-engine-card={leadId}` wrapper). Remove the now-unused hardcoded Qwen-auto-install paragraph, or fold its Qwen/Coqui hint into the "Other engines" body.
 
 > **De-defaulting note:** this replaces the fixed "Kokoro leads, others hidden under *More voice engines*" structure with derived ordering. That IS the "stop labelling Kokoro the default" acceptance item — no copy anywhere should call any engine "the default voice engine."
+>
+> **"Pull priority" = presentation, not a queue (finding #6):** there is no fe-49 pull *queue* to reprioritize — each install card fires its own independent install job on click. "Prioritize the recommended engine's pull" is therefore satisfied by making that engine lead with the primary/emphasized Install CTA (the lead card's CTA is the visually dominant one; the others sit under the "Other engines" disclosure). Do **not** wire anything into fe-49's install machinery — that acceptance item is met by ordering + CTA emphasis alone.
 
-- [ ] **Step 8: Run test to verify it passes**
+- [ ] **Step 9: Run test to verify it passes**
 
 Run: `npx vitest run src/components/setup/step-voice.test.tsx`
-Expected: PASS.
+Expected: PASS (the 6 migrated tests + the 2 new ones).
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add src/components/setup/engine-recommendation-copy.ts src/components/setup/engine-recommendation-copy.test.ts src/components/setup/step-voice.tsx src/components/setup/step-voice.test.tsx
@@ -803,7 +840,7 @@ test('answering the guided question leads with the recommended engine', async ({
   await page.getByRole('radio', { name: /yes — expressive/i }).click();
   await expect(page.getByText(/recommended for you/i)).toBeVisible();
   // Recommended (Qwen) card is not buried under the disclosure.
-  await expect(page.getByText(/may not fit comfortably/i)).toBeVisible(); // CPU-only mock
+  await expect(page.getByTestId('recommendation-caveat')).toContainText(/may not fit/i); // CPU-only mock
 });
 ```
 
@@ -816,9 +853,9 @@ Expected: PASS. Then `npm run test:e2e` (full suite) Expected: PASS (no sibling 
 
 - [ ] **Step 3: Write the regression plan**
 
-Create `docs/features/259-fe51-engine-recommendation.md` from `docs/features/TEMPLATE.md` (verify `259` is still free; bump if a concurrent plan claimed it). `status: active`. Cover: the guided question; capability-hard-filter / VRAM-soft-caveat invariant; the four recommendation cases; the defaults handoff via `defaultTtsModelKey` (+ reconfirmation in Defaults); the de-defaulting (no "default voice engine" copy). Cite the spec and `#1614`. **Include the open truthfulness item** below as a documented manual-verification step, not a code TODO.
+Create `docs/features/259-fe51-engine-recommendation.md` from `docs/features/TEMPLATE.md` (verify `259` is still free; bump if a concurrent plan claimed it). `status: active`. Cover: the guided question; capability-hard-filter / VRAM-soft-caveat invariant; the four recommendation cases (incl. the **deliberate case-4 revision** — CPU-only + "yes" → Qwen-with-CPU-caveat, not Kokoro); the defaults handoff via `defaultTtsModelKey` (+ reconfirmation in Defaults); the de-defaulting (no "default voice engine" copy). Cite the spec and `#1614`. **Include the on-box acceptance item** below.
 
-> **Caveat-truthfulness item (record in the plan, verify on-box):** the caveat wording is deliberately the safe "may not fit comfortably on this GPU." Do NOT upgrade it to "runs on CPU, slower" until the sidecar's real constrained-VRAM Qwen behavior is verified (project history: 8 GB bulk-design OOM #1155; 1.7B OOM storms) — it may OOM-crash rather than fall back to CPU. This is a manual on-box acceptance check, listed here so it isn't silently promised.
+> **On-box acceptance item (record in the plan):** the caveat tells a low/no-VRAM user they can *run Qwen on CPU (slower) via the voice-engine device setting*. Confirm on-box that forcing the device to CPU **actually renders** (per the product owner it does — slow, not crashing; distinct from the constrained-*GPU* auto-fallback OOM path in #1155/1.7B storms). If forcing CPU turns out not to render, soften the caveat to drop the CPU-mode offer and keep only the "pick Kokoro" nudge.
 
 - [ ] **Step 4: Update INDEX + release notes**
 
@@ -842,20 +879,26 @@ Expected: PASS. Then open the PR (`Closes #1614`), let cloud `verify.yml` + the 
 
 ## Self-Review
 
+> **Post-review revision (2026-07-15):** an adversarial `assumption-checker` pass caught two blockers and the items below; all folded in. The one **deliberate divergence from the spec** — CPU-only + "yes" → Qwen-with-CPU-caveat instead of the spec's case-4 "→ Kokoro" — is a **user-approved decision** (Qwen runs on CPU; Kokoro can't do non-English; the one question can't separate the sub-needs), flagged in Global Constraints + Task 2, not silent.
+
 **Spec coverage** (Part B section of the design doc):
 - Guided question → Task 4. ✅
-- Yes → Qwen, Coqui optional alternate → Task 2 (`CAPABLE_PREFERENCE`) + Task 4 (`alternate` rendered under "Other engines"). ✅
+- Yes → Qwen, Coqui optional alternate → Task 1 (`capablePreferenceRank`) + Task 2 (data-driven capable filter/sort) + Task 4 (`alternate` under "Other engines"). ✅
 - No → Kokoro → Task 2 (`simpleEnglish`). ✅
 - Capability hard filter / VRAM soft caveat → Task 2 logic + Global Constraints. ✅
 - VRAM `<` floor → caveat, never downgraded → Task 2 (need+low-VRAM, need+null cases). ✅
-- Grounded capability map (multilingual derived from `resolveEligibleEngines`/`ENGINE_LANGUAGE_SUPPORT`; expressive+floors authored) → Task 1 (authored) + Task 2 (`isMultilingualEngine`). ✅
+- CPU-only / no-GPU + "yes" → **DELIBERATE REVISION of spec case-4** (Qwen+caveat, not Kokoro) — user-approved, flagged in Global Constraints + Task 2. ⚠️ (documented divergence, not silent)
+- Grounded capability map (multilingual **derived** from `ENGINE_LANGUAGE_SUPPORT`; expressive load-bearing in the filter; VRAM floors authored estimates) → Task 1 + Task 2 (`isMultilingualEngine`). ✅
 - Defaults handoff via `defaultTtsModelKey` (+ `Explicit`, `defaultTtsEngine: 'local'`), reconfirmed in Defaults → Task 5. ✅
-- Drop "the default voice engine" copy / pull-priority → Task 4 (derived ordering + primary CTA + de-default note). ✅
-- Tests: needs × capability × VRAM → engine (server unit) → Task 2; three regressions live in Part A's suite; recommendation UI e2e → Task 6. ✅
+- Drop "the default voice engine" copy / pull-priority (presentation) → Task 4 (derived ordering + primary CTA + de-default + pull-priority notes). ✅
+- Tests: needs × capability × VRAM → engine (server unit) → Task 2; the three Part-A status regressions stay in Part A's suite; recommendation UI e2e → Task 6. ✅
 - `Closes #1614` (fe-49 merged) → header + Task 6. ✅
+- `designVramFloorMb` (in the spec's draft `EngineCapability`) → **intentionally omitted** (YAGNI — no Part B consumer); noted in Task 1. ⚠️
 
-**Placeholder scan:** no "TBD"/"add error handling"/"similar to Task N" — every code step carries actual content; VRAM floors are concrete grounded numbers (with a verify-against-registry instruction, not a placeholder). ✅
+**Placeholder scan:** no "TBD"/"add error handling"/"similar to Task N" — every code step carries actual content. VRAM floors are concrete authored estimates (refine on-box if contradicted — a documented instruction, not a placeholder). ✅
 
-**Type consistency:** `NeedsAnswer`, `EngineRecommendation`, `RecommendationSet`, `recommendEngines`, `isMultilingualEngine`, `RECOMMENDED_BADGE`, `engineDisplayName`, `defaultModelKey` values (`kokoro-v1`/`qwen3-tts-0.6b`/`coqui-xtts-v2`) are named identically across server (Tasks 1–3) and the client mirror (Task 3) and consumers (Tasks 4–5). ✅
+**Type consistency:** `NeedsAnswer`, `EngineRecommendation`, `RecommendationSet`, `recommendEngines`, `isMultilingualEngine`, `capablePreferenceRank`, `RECOMMENDED_BADGE`, `engineDisplayName`, and the `defaultModelKey` values (`kokoro-v1`/`qwen3-tts-0.6b`/`coqui-xtts-v2`) are named identically across server (Tasks 1–3), the client mirror (Task 3), and consumers (Tasks 4–5). The `CAPABLE_PREFERENCE` hardcoded array from the first draft is **gone** — replaced by the data-driven filter + `capablePreferenceRank`. ✅
 
-**Open items deliberately carried (not placeholders):** (1) exact VRAM floor numbers — verify against `registry.ts`/measurement in Task 1; (2) caveat-truthfulness — safe wording now, on-box verification recorded in the regression plan (Task 6).
+**Test-harness blast radius (was blocker #2):** Task 4 Step 5 creates the Provider-backed `renderStepVoice` and migrates all 6 existing inline renders **before** Task 5 adds redux to the component — so no test lands red. ✅
+
+**Open items deliberately carried (not placeholders):** (1) VRAM floor numbers — authored estimates, refine on-box (Task 1); (2) on-box confirmation that forcing Qwen to CPU actually renders, with the caveat-softening fallback if not (Task 6).
