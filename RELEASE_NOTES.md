@@ -32,6 +32,10 @@
 - **That same "ready / ready-but-no-backup / needed" analyzer status now shows in the Model Manager too.** So whether you're in first-run setup or later tweaking models in the admin screen, you see the one consistent readiness signal — no guessing whether your analyzer is good to go.
 - **Setup now tells you the truth about your voice engines — one clear status, no more "installed" and "not installed" on the same screen.** The Voice step could show a green "Runtime installed" badge right next to a card claiming a voice engine wasn't installed — both reading the same setup from two different places that occasionally disagreed. Now there's just one source of truth: the badge and every engine's card always agree, and a voice engine that's briefly starting up shows a calm "starting" note instead of a false alarm telling you something's wrong.
 - **First run now asks one question and picks the right voice engine for your books and your machine — no more guessing.** Instead of leading with one fixed "default" engine, setup now asks whether you want expressive and/or multilingual audio. Say yes and it recommends Qwen — the engine built for that — with Coqui offered alongside; say no and it recommends Kokoro, fast and light for English narration. On a lighter machine you'll see an honest note that the expressive engine may run slower, with a one-tap nudge to Kokoro if you'd rather keep things fast — your answer also carries straight through to your account defaults, so you don't have to pick again.
+- Stuck partway through setup? Every step of the first-run wizard now has help
+  right where you are — a "Need help?" bar linking the guide, troubleshooting,
+  and the community, plus a "Learn more" link to the wiki page for whatever
+  you're on.
 
 # Castwright 1.13.0
 
