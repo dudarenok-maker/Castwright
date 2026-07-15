@@ -28,14 +28,15 @@ import { readJson } from '../workspace/state-io.js';
 import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js';
 import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
 import { selectAnalyzer } from '../analyzer/index.js';
+import { getResolvedGeminiApiKey, getResolvedAllowCloudFallback } from '../workspace/user-settings.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { warmOllamaModel } from './ollama-health.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
+import { AnalyzerTruncatedError } from '../analyzer/errors.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { upsertChapterEntry, readLedger, discardChapters, resolveOps, patchSelection } from '../workspace/script-review-ledger.js';
 import {
   chunkSentencesByBudget,
-  chunkWithContext,
   ownsOp,
   primarySentenceId,
   chapterChunkBudget,
@@ -71,6 +72,16 @@ interface CastFile {
    final two-speaker exchange is fed (read-only) into a chapter's first chunk so
    the model can resolve a tagless chapter-opening line via turn-taking. */
 const NARRATOR_ID = 'narrator'; // module-private convention (re-declared, never exported)
+
+/* Part 4 — max depth for the force-split-on-truncation recovery (halving the
+   chunk's core each level: 1 chunk → up to 8 sub-chunks at depth 3). Beyond
+   this a still-truncating span re-throws → chapter-failed (Part 3). */
+const MAX_FORCE_SPLIT_DEPTH = 3;
+
+/* Context sentences carried on each side of a chunk core — shared by the
+   top-level chunker AND the force-split recursion so the two windows can't
+   silently diverge if one is retuned. */
+const CHUNK_OVERLAP = 3;
 export const PRIOR_TURN_LOOKBACK = 6; // sentences (positions) scanned back from the chapter end
 export const MAX_PRIOR_TURN_CHARS = 240; // hard cap per rendered line
 
@@ -703,8 +714,12 @@ async function runScriptReviewJob(
   // Warm the analyzer model the first chapter will actually use, so a cold
   // Ollama doesn't hang silently behind chapter 1's first token.
   if (activeSelection.engine === 'local') {
-    send({ kind: 'phase', phaseId: 0, progress: 0, label: 'Loading model', activityState: 'loading', model: activeSelection.model, engine: 'local' });
-    const warm = await warmOllamaModel(activeSelection.model, { signal: job.controller.signal });
+    // Emit the `loading` heartbeat from warmOllamaModel's 1s ticker so the
+    // panel shows "Loading model · Ns" while the (blocking) keep_alive POST is
+    // in flight — a merely-slow cold load reads as working, not stuck.
+    const emitLoading = (elapsedMs: number): void =>
+      send({ kind: 'phase', phaseId: 0, progress: 0, label: 'Loading model', activityState: 'loading', model: activeSelection.model, engine: 'local', elapsedMs });
+    const warm = await warmOllamaModel(activeSelection.model, { signal: job.controller.signal, onProgress: emitLoading });
     if (job.controller.signal.aborted) {
       send({ kind: 'error', code: 'cancelled', message: 'Review cancelled.' });
       for (const sub of job.subscribers) sub.res.end();
@@ -712,12 +727,25 @@ async function runScriptReviewJob(
     }
     if (!warm.ok) {
       if (selection.fallbackModel === null) {
-        send({ kind: 'error', code: 'model_load_failed', message: `Couldn't load the analyzer model (${activeSelection.model}). Is Ollama running and the model pulled?`, model: activeSelection.model });
+        // No fallback (no key, or cloud fallback opted out) — surface the
+        // distinct cause so Retry copy tells "Ollama down" from "load too slow".
+        const base =
+          warm.kind === 'load_timeout'
+            ? `The analyzer model (${activeSelection.model}) didn't finish loading in time. It may be large or on a slow disk — try again, or pick a smaller model.`
+            : `Couldn't reach the analyzer model (${activeSelection.model}). Is Ollama running and the model pulled?`;
+        // Part 1.4 — an opt-out user who has a Gemini key but turned Cloud
+        // fallback OFF has a one-click path back: nudge them to it.
+        const canReenableCloud = getResolvedGeminiApiKey() != null && !getResolvedAllowCloudFallback();
+        const message = canReenableCloud
+          ? `${base} Or turn on Cloud fallback in Settings → analyzer to use Gemini when the local analyzer is unavailable.`
+          : base;
+        send({ kind: 'error', code: 'model_load_failed', message, model: activeSelection.model, warmKind: warm.kind });
         for (const sub of job.subscribers) sub.res.end();
         return;
       }
-      // A Gemini fallback exists — don't abort a setup that works today.
-      switchToFallback('Ollama unreachable');
+      // A Gemini fallback exists (key present + cloud fallback on) — don't abort
+      // a setup that works today.
+      switchToFallback(warm.kind === 'load_timeout' ? 'Ollama model load timed out' : 'Ollama unreachable');
     }
   }
 
@@ -765,19 +793,30 @@ async function runScriptReviewJob(
         : undefined;
       const chunks = chunkSentencesByBudget(byChapter.get(chapterId) ?? [], {
         charBudget: chapterChunkBudget(activeSelection.engine),
-        overlap: 3,
+        overlap: CHUNK_OVERLAP,
         serialize: (s) => JSON.stringify({ id: s.id, characterId: s.characterId, text: s.text }),
       });
-      // Finding 8 (PR review round 4): accumulate this chapter's own ops
-      // locally as they're produced instead of re-filtering the ENTIRE
-      // job-lifetime opsEvents array after every chapter (O(n^2) over a
-      // long book) — see chapterOps below.
-      const chapterOpsAccum: ScriptReviewOp[] = [];
-      for (let index = 0; index < chunks.length; index += 1) {
-        const chunk = chunks[index];
-        if (job.controller.signal.aborted) break;
+
+      /* Part 4 — force-split-on-truncation recovery. Bounding INPUT chars only
+         APPROXIMATES bounding OUTPUT tokens (verbose rationales mean a small
+         input with many flagged sentences can still overrun), so a chunk can
+         still hit MAX_TOKENS (AnalyzerTruncatedError). On truncation, halve the
+         chunk's core and retry each half, preserving "each sentence owned by
+         exactly one core" (the left/right cores partition the parent core, so
+         ownsOp keeps de-duping). A single sentence that still truncates can't
+         split further → it re-throws and surfaces as chapter-failed (Part 3).
+         Returns the owned ops for `core`. */
+      const OVERLAP = CHUNK_OVERLAP;
+      const reviewCore = async (
+        core: SentenceOutput[],
+        contextBefore: SentenceOutput[],
+        contextAfter: SentenceOutput[],
+        withPrior: boolean,
+        depth: number,
+      ): Promise<ScriptReviewOp[]> => {
+        const coreIds = new Set(core.map((s) => s.id));
         const prompt = buildScriptReviewChapterInbox(
-          manuscriptId, chapterId, chunkWithContext(chunk), roster, index === 0 ? priorExchange : null, structureEvidence,
+          manuscriptId, chapterId, [...contextBefore, ...core, ...contextAfter], roster, withPrior ? priorExchange : null, structureEvidence,
         );
         try {
           const result = await activeSelection.analyzer.runScriptReviewChapter(manuscriptId, chapterId, prompt, {
@@ -787,7 +826,33 @@ async function runScriptReviewJob(
             onThrottle: (waitMs, reason) => send({ kind: 'throttle', phaseId: 0, chapterIndex: chapterId, model: activeSelection.model, waitMs, reason }),
             onFallback: ({ reason }) => switchToFallback(reason),
           });
-          const owned = result.ops.filter((op) => ownsOp(chunk.coreIds, primarySentenceId(op)));
+          return result.ops.filter((op) => ownsOp(coreIds, primarySentenceId(op)));
+        } catch (err) {
+          if (err instanceof AnalyzerTruncatedError && depth < MAX_FORCE_SPLIT_DEPTH && core.length > 1) {
+            const mid = Math.ceil(core.length / 2);
+            const left = core.slice(0, mid);
+            const right = core.slice(mid);
+            // left keeps the chunk's leading context + the head of `right` as its
+            // trailing context; right gets the tail of `left` + the chunk's
+            // trailing context. Document order is preserved in both prompts.
+            const leftOps = await reviewCore(left, contextBefore, [...right.slice(0, OVERLAP), ...contextAfter], withPrior, depth + 1);
+            const rightOps = await reviewCore(right, [...contextBefore, ...left.slice(-OVERLAP)], contextAfter, false, depth + 1);
+            return [...leftOps, ...rightOps];
+          }
+          throw err;
+        }
+      };
+
+      // Finding 8 (PR review round 4): accumulate this chapter's own ops
+      // locally as they're produced instead of re-filtering the ENTIRE
+      // job-lifetime opsEvents array after every chapter (O(n^2) over a
+      // long book) — see chapterOps below.
+      const chapterOpsAccum: ScriptReviewOp[] = [];
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunk = chunks[index];
+        if (job.controller.signal.aborted) break;
+        try {
+          const owned = await reviewCore(chunk.core, chunk.contextBefore, chunk.contextAfter, index === 0, 0);
           if (owned.length) {
             send({ kind: 'ops', chapterId, ops: owned });
             totalOps += owned.length;
@@ -859,8 +924,39 @@ async function runScriptReviewJob(
   if (job.controller.signal.aborted) {
     send({ kind: 'error', code: 'cancelled', message: 'Review cancelled.' });
   } else {
+    // Part 3 — surface chapter failures instead of swallowing them. A chapter
+    // that errored (analyzer fail, or a checkpoint-save fail) emitted a
+    // `chapter-failed`; collect them (deduped by chapter, keeping the last
+    // message) so a partial run says "N chapters couldn't be reviewed" and a
+    // total wipeout is a terminal error rather than a silent empty result.
+    const failedChapterIds = [...new Set(job.replay.chapterFailedEvents.map((e) => e.chapterId))];
+    const failedChapters = failedChapterIds.map((chapterId) => {
+      const last = [...job.replay.chapterFailedEvents].reverse().find((e) => e.chapterId === chapterId);
+      return { chapterId, message: last?.message ?? 'Chapter review failed.' };
+    });
     send({ kind: 'phase', phaseId: 0, progress: 1, label: 'Done' });
-    send({ kind: 'result', done: true, reviewedChapters, totalOps });
+    if (failedChapters.length > 0 && totalOps === 0) {
+      // Nothing usable came back AND something errored — a genuine failure, not
+      // a clean "no changes needed" pass. Terminal error so the panel shows it
+      // + a Retry instead of quietly emptying (the chapter-35 incident).
+      send({
+        kind: 'error',
+        code: 'review_failed',
+        message: `Script review failed — ${failedChapters.length} chapter${failedChapters.length === 1 ? '' : 's'} couldn't be reviewed.`,
+        failedChapters,
+        lastMessage: failedChapters[failedChapters.length - 1]?.message,
+      });
+    } else {
+      // Success — but if SOME chapters failed while others produced ops, carry a
+      // non-fatal failedChapters summary so the partial failure is visible.
+      send({
+        kind: 'result',
+        done: true,
+        reviewedChapters,
+        totalOps,
+        ...(failedChapters.length > 0 ? { failedChapters } : {}),
+      });
+    }
   }
   for (const sub of job.subscribers) sub.res.end();
 }

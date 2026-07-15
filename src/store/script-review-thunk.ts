@@ -168,8 +168,14 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
       if (checkpointedOps.length > 0 || failed.length > 0) {
         dispatchAccumulatedOps(checkpointedOps);
       }
-    } else if (err instanceof ReviewScriptError && err.code === 'model_load_failed') {
-      // Task 9 — surface a Retry action alongside the error. The toast
+    } else if (
+      err instanceof ReviewScriptError &&
+      (err.code === 'model_load_failed' || err.code === 'review_failed')
+    ) {
+      // Task 9 / Part 3 — surface a Retry action alongside the error. Covers
+      // both a failed model warm (model_load_failed) and a run where every
+      // chapter failed with zero usable ops (review_failed) — the latter used
+      // to end as a silent empty result (the "0% → empty" symptom). The toast
       // payload only carries the primitive run scope (bookId/wholeBook/
       // chapterId/model); retryReviewScript re-reads live sentences/cast/
       // manuscript from the store at click time rather than replaying

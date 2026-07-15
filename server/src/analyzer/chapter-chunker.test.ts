@@ -1,7 +1,42 @@
 import { describe, it, expect } from 'vitest';
-import { chunkSentencesByBudget, chunkWithContext, ownsOp, primarySentenceId } from './chapter-chunker.js';
+import {
+  chunkSentencesByBudget,
+  chunkWithContext,
+  ownsOp,
+  primarySentenceId,
+  chapterChunkBudget,
+} from './chapter-chunker.js';
+import { resolveStage1ChunkCharBudget } from './stage1-chunk.js';
 
 const S = (id: number, len = 10) => ({ id, text: 'x'.repeat(len) });
+
+describe('chapterChunkBudget (Part 4 — finite Gemini budget for output-heavy passes)', () => {
+  it('gemini is FINITE now (not MAX_SAFE_INTEGER) so a large chapter splits', () => {
+    const budget = chapterChunkBudget('gemini');
+    expect(budget).toBeLessThan(Number.MAX_SAFE_INTEGER);
+    expect(budget).toBe(32000); // registry default analyzer.gemini.outputHeavyChunkChars
+  });
+
+  it('local stays the num_ctx-derived stage-1 budget (unchanged behaviour)', () => {
+    expect(chapterChunkBudget('local')).toBe(resolveStage1ChunkCharBudget('local'));
+  });
+
+  it('stage-1 cast detection keeps MAX_SAFE_INTEGER on gemini (separate seam, never chunks)', () => {
+    // The output-heavy budget changing must NOT touch stage-1's direct resolver.
+    expect(resolveStage1ChunkCharBudget('gemini')).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('a Night-Watch-sized chapter yields >=2 gemini chunks (was exactly 1 under MAX_SAFE_INTEGER)', () => {
+    const budget = chapterChunkBudget('gemini');
+    // ~60k chars — 600 sentences of ~100 chars.
+    const sentences = Array.from({ length: 600 }, (_, i) => ({ id: i + 1, text: 'x'.repeat(100) }));
+    const chunks = chunkSentencesByBudget(sentences, { charBudget: budget, overlap: 3, serialize: (s) => s.text });
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    // Under the old MAX_SAFE_INTEGER budget this was exactly 1.
+    const oneCall = chunkSentencesByBudget(sentences, { charBudget: Number.MAX_SAFE_INTEGER, overlap: 3, serialize: (s) => s.text });
+    expect(oneCall.length).toBe(1);
+  });
+});
 
 describe('chunkSentencesByBudget', () => {
   it('cores partition the sentences with no gaps or overlaps', () => {

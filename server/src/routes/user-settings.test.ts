@@ -72,12 +72,12 @@ describe('user-settings router', () => {
     const res = await request(app).get('/api/user/settings');
     expect(res.status).toBe(200);
     expect(res.body.displayName).toBe('Castwright');
-    /* Default flipped to Gemini (was qwen3.5:4b). The analysis-model
-       and analysis-engine defaults must travel together so a fresh
-       install routes the first analysis through the Gemini API rather
-       than asking the user to `ollama pull` something first. */
-    expect(res.body.defaultAnalysisModel).toBe('gemini-3.1-flash-lite');
-    expect(res.body.analysisEngine).toBe('gemini');
+    /* Local-first default (Part 0): engine + model travel together so a
+       fresh install runs analysis on-device. A brand-new box with no
+       Ollama shows "Analyzer needed" until Ollama is set up or the user
+       picks Gemini + adds a key (the wizard guides this). */
+    expect(res.body.defaultAnalysisModel).toBe('qwen3.5:4b');
+    expect(res.body.analysisEngine).toBe('local');
     expect(res.body.defaultTtsEngine).toBe('local');
     expect(res.body.defaultTtsModelKey).toBe('kokoro-v1');
     expect(res.body.sidecarUrl).toBe('http://localhost:9000');
@@ -252,6 +252,8 @@ describe('user-settings router', () => {
       defaultTtsModelKeyExplicit: true,
       sidecarUrl: 'http://localhost:9100',
       analysisEngine: 'local',
+      /* non-default (false) so the round-trip proves the opt-out persists. */
+      allowCloudFallback: false,
       ollamaUrl: 'http://localhost:11500',
       workspaceDirOverride: 'D:/audiobooks-ws',
       exportSyncFolder: '/tmp/export-sync',

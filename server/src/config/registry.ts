@@ -80,6 +80,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'medium',
   },
   {
+    key: 'analyzer.gemini.outputHeavyChunkChars',
+    env: 'ANALYZER_GEMINI_OUTPUT_HEAVY_CHUNK_CHARS',
+    group: 'analyzer-chunking',
+    label: 'Gemini output-heavy chunk chars',
+    help: "Per-chunk INPUT char budget for the OUTPUT-heavy Gemini passes (script review, emotion detection, instruct annotation) — each emits per-sentence output, so a large chapter (Night Watch-sized) would overrun Gemini's output-token cap (MAX_TOKENS) in a single call. Splitting the chapter into <= this many input chars per call keeps each call's output under the cap. Larger than the local num_ctx-derived budget (Gemini has more headroom, and fewer calls eases RPM/RPD), but FINITE — unlike stage-1 cast detection, whose tiny roster output stays one call per chapter. A residual overrun is caught by script review's force-split. Default 32000.",
+    type: 'integer', min: 2000,
+    default: 32000, // ← chapterChunkBudget('gemini') in analyzer/chapter-chunker.ts
+    apply: 'live', risk: 'medium',
+  },
+  {
     key: 'analyzer.stage2.minCoverage',
     env: 'STAGE2_MIN_COVERAGE',
     group: 'analyzer-chunking',
@@ -824,6 +834,16 @@ export const KNOBS: ConfigKnob[] = [
     type: 'integer', min: 0,
     default: 999, // ← ANALYZER_NUM_GPU constant in analyzer/ollama.ts (line 150)
     apply: 'live', risk: 'medium',
+  },
+  {
+    key: 'analyzer.ollama.warmTimeoutMs',
+    env: 'ANALYZER_OLLAMA_WARM_TIMEOUT_MS',
+    group: 'analyzer-sampling',
+    label: 'Ollama warm timeout (ms)',
+    help: 'How long to wait for a cold Ollama model to load into VRAM (the keep_alive warm call the Analysing screen fires before the first chapter, and the manual Load button). Default 120000 (2 min) — a large model (e.g. 15 GB) on a slow disk can exceed the old hard 30s and read as "unreachable" when it was only loading. A connection refusal is still reported immediately; only a genuine load wait is bounded by this.',
+    type: 'integer', min: 1000,
+    default: 120_000, // ← WARM_TIMEOUT_MS fallback in routes/ollama-health.ts
+    apply: 'live', risk: 'low',
   },
 
   // ── rate-limits ───────────────────────────────────────────────────────────

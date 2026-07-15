@@ -130,9 +130,20 @@ export const userSettingsSchema = z.object({
   defaultTtsModelKeyExplicit: z.boolean().optional(),
   sidecarUrl: z.string().min(1).max(2000),
   /* Analyzer dispatch. `local` routes through OllamaAnalyzer (with Gemini
-     as automatic fallback iff GEMINI_API_KEY is set and the local daemon
-     is unreachable — see selectAnalyzer). `gemini` always goes direct. */
-  analysisEngine: z.enum(ANALYSIS_ENGINE_VALUES),
+     as an opt-out fallback iff GEMINI_API_KEY is set, allowCloudFallback is
+     on, and the local daemon is unreachable — see selectAnalyzer). `gemini`
+     always goes direct. Defaults local (defence-in-depth atop the always-
+     present DEFAULT); a corrupt value fails the parse and the read path
+     falls back to all-DEFAULT (also local) — see getResolvedAnalysisEngine.
+     The ANALYZER env var no longer selects the engine. */
+  analysisEngine: z.enum(ANALYSIS_ENGINE_VALUES).default('local'),
+  /* Part 1 — opt-out cloud fallback gate. When engine=local and a Gemini key
+     is present, the analyzer wraps Ollama in a FallbackAnalyzer that fails over
+     to Gemini iff the local daemon is unreachable. Default true (non-breaking:
+     existing installs keep today's behaviour). Turn OFF to keep analysis
+     strictly local — no silent (or announced) cloud fall-through. See
+     selectAnalyzer + getResolvedAllowCloudFallback. */
+  allowCloudFallback: z.boolean().default(true),
   /* Base URL of the local Ollama daemon. Falls through to OLLAMA_URL env
      and then http://localhost:11434 in getResolvedOllamaUrl. */
   ollamaUrl: z.string().min(1).max(2000),
@@ -236,14 +247,17 @@ export type UserSettings = z.infer<typeof userSettingsSchema>;
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
   displayName: 'Castwright',
-  /* Default to Gemini 3.1 Flash Lite over a Google API key — the free
-     tier (15 RPM, 250K TPM, 500/day) comfortably parses a full novel,
-     dispatch is async-friendly so it doesn't tax the local GPU, and
-     no `ollama pull` is required before first run. Local Ollama
-     models stay one click away in the picker for users who want to
-     run analysis on-device. Flip in lockstep with
+  /* Default to the local Qwen3.5 4B Ollama model — Castwright is
+     local-first, so analysis runs on-device by default with no data
+     leaving the box. Must travel in lockstep with analysisEngine
+     ('local' below): a Gemini model id here would let the Defaults
+     step re-derive analysisEngine:'gemini' via engineForModelId and
+     silently undo the local default. A fresh box with no Ollama shows
+     "Analyzer needed" until Ollama is set up or the user picks Gemini
+     + adds a key (the wizard guides this). Gemini models stay one
+     click away in the picker. Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
-  defaultAnalysisModel: 'gemini-3.1-flash-lite',
+  defaultAnalysisModel: 'qwen3.5:4b',
   defaultTtsEngine: 'local',
   /* Kokoro v1 is the new default — TTS-Arena #1 for its size, ~1 GB
      VRAM (vs ~3 GB for XTTS), and small enough to be eagerly preloaded
@@ -257,10 +271,15 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      changes the model. */
   defaultTtsModelKeyExplicit: false,
   sidecarUrl: 'http://localhost:9000',
-  /* Gemini matches the analysis-model default. Picking 'local' falls
-     through to the Ollama daemon — kept as an opt-in for users who
-     want analysis on-device. */
-  analysisEngine: 'gemini',
+  /* Local-first: analysis runs on-device through the Ollama daemon by
+     default (matches defaultAnalysisModel above). Picking 'gemini' in the
+     Defaults step routes to the free Gemini API instead. Flip in lockstep
+     with src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
+  analysisEngine: 'local',
+  /* Part 1 — cloud fallback ON by default (opt-out). Existing installs keep
+     today's Ollama→Gemini fallback; strict-local users turn it off in analyzer
+     settings. Flip in lockstep with src/lib/account-defaults.ts. */
+  allowCloudFallback: true,
   ollamaUrl: 'http://localhost:11434',
   workspaceDirOverride: null,
   exportSyncFolder: null,
@@ -557,9 +576,10 @@ export const DEFAULT_OLLAMA_MODEL = 'qwen3.5:4b';
       2. process.env.OLLAMA_MODEL
       3. DEFAULT_OLLAMA_MODEL ('qwen3.5:4b')
     The per-request `model` override (see selectAnalyzer) trumps all
-    three. We intentionally do NOT fall through to
-    DEFAULT_USER_SETTINGS.defaultAnalysisModel any more, because that
-    default is now a Gemini id and would break Ollama dispatch. */
+    three. Only a `:`-tagged saved model is honoured here — a Gemini id
+    saved as defaultAnalysisModel (engine=gemini) must not be handed to
+    Ollama, so it falls through to OLLAMA_MODEL / DEFAULT_OLLAMA_MODEL
+    (both `qwen3.5:4b`, which now also matches the DEFAULT). */
 export function getResolvedOllamaModel(): string {
   const c = cached;
   const fromSettings = c?.defaultAnalysisModel;
@@ -567,13 +587,29 @@ export function getResolvedOllamaModel(): string {
   return process.env.OLLAMA_MODEL ?? DEFAULT_OLLAMA_MODEL;
 }
 
-/** Analyzer engine selector: cached settings → ANALYZER env → 'local'.
-    Coerces anything outside the `local | gemini` schema to 'local', so a
-    stray legacy value in an old `.env` resolves safely instead of breaking. */
+/** Analyzer engine selector — reads the saved user-settings value only.
+    `getCachedUserSettings()` returns DEFAULT_USER_SETTINGS (engine `local`)
+    when the module cache is cold, so a null cache resolves local rather than
+    leaking to the `ANALYZER` env var. This deliberately RETIRES `ANALYZER` as
+    an engine selector (a stray `ANALYZER=gemini` in an old `.env` is now inert
+    for engine choice — the engine is UI/user-settings-driven). `GEMINI_API_KEY`
+    is unaffected (still used for TTS + opt-out cloud fallback). The coercion is
+    defensive only: the cached value is always a parsed `local|gemini` enum. */
 export function getResolvedAnalysisEngine(): 'local' | 'gemini' {
+  return getCachedUserSettings().analysisEngine === 'gemini' ? 'gemini' : 'local';
+}
+
+/** Cloud-fallback gate (Part 1). Reads the saved user setting, defaulting
+    TRUE (opt-out: existing installs keep today's Ollama→Gemini fallback).
+    `ANALYZER_ALLOW_CLOUD_FALLBACK=0` is a legacy PRE-CACHE under-ride only —
+    it can force the gate OFF when no user setting is cached yet (e.g. a strict-
+    local deployer setting it in `.env` before the first settings read), but a
+    saved user value always wins once the cache is warm, and it can NEVER force
+    the gate on. */
+export function getResolvedAllowCloudFallback(): boolean {
   const c = cached;
-  const raw = c?.analysisEngine ?? process.env.ANALYZER ?? 'local';
-  return raw === 'gemini' ? 'gemini' : 'local';
+  if (c) return c.allowCloudFallback;
+  return process.env.ANALYZER_ALLOW_CLOUD_FALLBACK !== '0';
 }
 
 /** Plan 49 — dedicated write path for the Gemini API key. The general
@@ -710,4 +746,13 @@ export function _resetUserSettingsCache(): void {
   cached = null;
   writeChain = Promise.resolve();
   lastKnownQwenInstallState = 'not-installed';
+}
+
+/** Test-only: seed the in-process cache with a partial override atop
+    DEFAULT_USER_SETTINGS, so engine/model resolvers read a chosen value
+    without a disk round-trip. Since ANALYZER env no longer selects the
+    analyzer engine (it is UI/user-settings-driven — see
+    getResolvedAnalysisEngine), tests drive the engine through this. */
+export function _setUserSettingsCacheForTest(partial: Partial<UserSettings>): void {
+  cached = { ...DEFAULT_USER_SETTINGS, ...partial };
 }

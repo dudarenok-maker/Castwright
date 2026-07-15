@@ -241,8 +241,15 @@ describe('GET /api/ollama/health', () => {
   }, 10_000);
 });
 
-describe('warmOllamaModel', () => {
-  it('resolves ok:false with the upstream error when the daemon is down', async () => {
+/* Part 2 added a cheap /api/tags reachability pre-check before the warm POST,
+   so the warm POST is no longer fetchMock.mock.calls[0]. Grab it by URL. */
+function generateCallBody(): Record<string, unknown> | undefined {
+  const call = fetchMock.mock.calls.find((c) => String(c[0]).endsWith('/api/generate'));
+  return call ? JSON.parse(call[1].body) : undefined;
+}
+
+describe('warmOllamaModel (Part 2 — patient warm)', () => {
+  it('connection refusal → unreachable, reported fast (warm POST skipped)', async () => {
     fetchMock.mockRejectedValue(
       Object.assign(new TypeError('fetch failed'), {
         cause: Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }),
@@ -251,24 +258,70 @@ describe('warmOllamaModel', () => {
     const res = await warmOllamaModel('qwen3.5:9b');
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(typeof res.error).toBe('string');
-      expect(typeof res.status).toBe('number');
+      expect(res.kind).toBe('unreachable');
+      expect(res.status).toBe(503);
     }
+    // Only the reachability probe fired — the (long-budget) warm POST was skipped.
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).endsWith('/api/generate'))).toBe(false);
   });
 
-  it('resolves ok:true and POSTs the same num_ctx/num_gpu the /load route uses', async () => {
+  it('reachable + successful warm → ok:true, POSTing the analyzer num_ctx/num_gpu', async () => {
     fetchMock.mockResolvedValue(new Response('', { status: 200 }));
-
     const res = await warmOllamaModel('qwen3.5:9b');
-
     expect(res.ok).toBe(true);
-    const init = fetchMock.mock.calls[0][1];
-    const body = JSON.parse(init.body);
-    expect(body.model).toBe('qwen3.5:9b');
-    expect(body.keep_alive).toBe('5m');
-    expect(body.prompt).toBe('');
-    expect(body.options?.num_ctx).toBe(32768);
-    expect(body.options?.num_gpu).toBe(999);
+    const body = generateCallBody();
+    expect(body?.model).toBe('qwen3.5:9b');
+    expect(body?.keep_alive).toBe('5m');
+    expect(body?.prompt).toBe('');
+    expect((body?.options as { num_ctx?: number })?.num_ctx).toBe(32768);
+    expect((body?.options as { num_gpu?: number })?.num_gpu).toBe(999);
+  });
+
+  it('emits a loading heartbeat via onProgress while the warm POST is in flight', async () => {
+    fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+    const ticks: number[] = [];
+    const res = await warmOllamaModel('qwen3.5:9b', { onProgress: (ms) => ticks.push(ms) });
+    expect(res.ok).toBe(true);
+    // At minimum the initial 0ms tick fired (the panel switches to "Loading…").
+    expect(ticks[0]).toBe(0);
+  });
+
+  it('reachable but the model never finishes loading → load_timeout (NOT unreachable)', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).endsWith('/api/tags')) return Promise.resolve(new Response('', { status: 200 }));
+      // The warm POST aborts as if the budget timer fired.
+      return Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    });
+    const res = await warmOllamaModel('qwen3.5:9b');
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.kind).toBe('load_timeout');
+  });
+
+  it('a cancel mid-warm → cancelled (not a model-load failure)', async () => {
+    fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+    const controller = new AbortController();
+    controller.abort();
+    const res = await warmOllamaModel('qwen3.5:9b', { signal: controller.signal });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.kind).toBe('cancelled');
+  });
+
+  it('the load-timeout message reflects the analyzer.ollama.warmTimeoutMs registry knob', async () => {
+    process.env.ANALYZER_OLLAMA_WARM_TIMEOUT_MS = '5000';
+    try {
+      fetchMock.mockImplementation((url: string) => {
+        if (String(url).endsWith('/api/tags')) return Promise.resolve(new Response('', { status: 200 }));
+        return Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+      });
+      const res = await warmOllamaModel('qwen3.5:9b');
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.kind).toBe('load_timeout');
+        expect(res.error).toContain('5s');
+      }
+    } finally {
+      delete process.env.ANALYZER_OLLAMA_WARM_TIMEOUT_MS;
+    }
   });
 
   it('forwards opts.signal through to the underlying request', async () => {
@@ -283,36 +336,29 @@ describe('warmOllamaModel', () => {
 });
 
 describe('POST /api/ollama/load', () => {
-  it('POSTs /api/generate with keep_alive: "5m", empty prompt, and the analyzer num_ctx', async () => {
+  it('POSTs /api/generate with keep_alive: "5m", empty prompt, and the analyzer num_ctx → ready', async () => {
     fetchMock.mockResolvedValue(new Response('', { status: 200 }));
 
     const res = await request(makeApp()).post('/api/ollama/load');
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: 'ready' });
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringMatching(/\/api\/generate$/),
-      expect.objectContaining({
-        method: 'POST',
-        body: expect.stringContaining('"keep_alive":"5m"'),
-      }),
-    );
     /* Empty prompt is the warm-without-generating idiom — without it Ollama
        would actually run inference against the analyzer model. */
-    const init = fetchMock.mock.calls[0][1];
-    const body = JSON.parse(init.body);
-    expect(body.prompt).toBe('');
-    expect(body.stream).toBe(false);
+    const body = generateCallBody();
+    expect(body?.prompt).toBe('');
+    expect(body?.stream).toBe(false);
+    expect(body?.keep_alive).toBe('5m');
     /* CRITICAL: warming must use the same num_ctx AND num_gpu the
        analyzer's runStage path passes (ANALYZER_NUM_CTX, ANALYZER_NUM_GPU
        in server/src/analyzer/ollama.ts). Either drifting triggers a
        full model reload on the first real analysis call and the SSE
        dies mid-stream — the "Try Again" infinite-loop bug. */
-    expect(body.options?.num_ctx).toBe(32768);
-    expect(body.options?.num_gpu).toBe(999);
+    expect((body?.options as { num_ctx?: number })?.num_ctx).toBe(32768);
+    expect((body?.options as { num_gpu?: number })?.num_gpu).toBe(999);
   });
 
-  it('surfaces the upstream error envelope when Ollama returns non-2xx', async () => {
+  it('non-2xx from a running daemon → error envelope carrying kind:error', async () => {
     fetchMock.mockResolvedValue(
       new Response('model not found', { status: 404, statusText: 'Not Found' }),
     );
@@ -320,6 +366,19 @@ describe('POST /api/ollama/load', () => {
     expect(res.status).toBe(404);
     expect(res.body.status).toBe('error');
     expect(res.body.error).toMatch(/404/);
+    expect(res.body.kind).toBe('error');
+  });
+
+  it('connection refused → 503 unreachable envelope', async () => {
+    fetchMock.mockRejectedValue(
+      Object.assign(new TypeError('fetch failed'), {
+        cause: Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+      }),
+    );
+    const res = await request(makeApp()).post('/api/ollama/load');
+    expect(res.status).toBe(503);
+    expect(res.body.status).toBe('error');
+    expect(res.body.kind).toBe('unreachable');
   });
 
   it('targets the model from the request body when provided, still threading num_ctx/num_gpu', async () => {
@@ -330,11 +389,11 @@ describe('POST /api/ollama/load', () => {
       .send({ model: 'llama3.1:8b' });
 
     expect(res.status).toBe(200);
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.model).toBe('llama3.1:8b');
-    expect(body.keep_alive).toBe('5m');
-    expect(body.options?.num_ctx).toBe(32768);
-    expect(body.options?.num_gpu).toBe(999);
+    const body = generateCallBody();
+    expect(body?.model).toBe('llama3.1:8b');
+    expect(body?.keep_alive).toBe('5m');
+    expect((body?.options as { num_ctx?: number })?.num_ctx).toBe(32768);
+    expect((body?.options as { num_gpu?: number })?.num_gpu).toBe(999);
   });
 });
 

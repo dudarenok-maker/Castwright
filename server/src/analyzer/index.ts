@@ -1,12 +1,13 @@
 /* Analyzer abstraction with two concrete implementations:
      - OllamaAnalyzer (local CUDA daemon on :11434, default)
      - GeminiAnalyzer (free-tier Google API)
-   Dispatch is by `analysisEngine` in user-settings (cached) → `ANALYZER`
-   env → 'local'. When engine is 'local' AND a Gemini API key is set, the
-   primary is wrapped in FallbackAnalyzer so the *single* failure mode of
-   "Ollama unreachable" silently retries against Gemini. Every other error
-   propagates and hard-fails — the rule, per plan 29: a misbehaving local
-   model must not silently burn Gemini quota. */
+   Dispatch is by `analysisEngine` in user-settings (cached; the `ANALYZER`
+   env no longer selects the engine — see getResolvedAnalysisEngine). When
+   engine is 'local', a Gemini API key is set, AND the opt-out cloud-fallback
+   gate is on (default), the primary is wrapped in FallbackAnalyzer so the
+   *single* failure mode of "Ollama unreachable" retries against Gemini. Every
+   other error propagates and hard-fails — the rule, per plan 29: a misbehaving
+   local model must not silently burn Gemini quota. */
 
 import type {
   Stage1Output,
@@ -25,6 +26,7 @@ import {
   getResolvedOllamaUrl,
   getResolvedOllamaModel,
   getResolvedGeminiApiKey,
+  getResolvedAllowCloudFallback,
 } from '../workspace/user-settings.js';
 
 export interface StageChunkInfo {
@@ -191,7 +193,12 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
     const ollamaModel = opts.model ?? getResolvedOllamaModel();
     const primary = new OllamaAnalyzer({ url: ollamaUrl, model: ollamaModel });
 
-    if (apiKey) {
+    /* Part 1 — wrap in the Gemini fallback only when a key is present AND
+       the opt-out cloud-fallback gate is on (default). A strict-local user
+       who turned the gate off gets a bare OllamaAnalyzer even with a key set
+       (kept for Gemini TTS), so a local outage never routes analysis to the
+       cloud — announced or otherwise. */
+    if (apiKey && getResolvedAllowCloudFallback()) {
       const fallbackModel = process.env.GEMINI_MODEL ?? 'gemma-4-31b-it';
       const fallback = new GeminiAnalyzer({ apiKey, model: fallbackModel });
       return {
@@ -202,10 +209,10 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
       };
     }
 
-    /* No fallback configured. Bare OllamaAnalyzer hard-fails with the
-       LocalUnreachableError message, which the route layer surfaces to
-       the UI verbatim. The user can either start the daemon or set
-       GEMINI_API_KEY for fallback. */
+    /* No fallback configured (no key, or the gate is off). Bare OllamaAnalyzer
+       hard-fails with the LocalUnreachableError message, which the route layer
+       surfaces to the UI verbatim. The user can start the daemon, add a
+       GEMINI_API_KEY, or turn cloud fallback back on. */
     return { analyzer: primary, engine: 'local', model: ollamaModel, fallbackModel: null };
   }
 

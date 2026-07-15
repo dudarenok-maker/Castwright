@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { accountSlice } from '../store/account-slice';
 import { ModelSettingsForm } from './model-settings-form';
 import { api, type SetupReadiness, type BlockerDiagnosis } from '../lib/api';
@@ -92,5 +92,36 @@ describe('ModelSettingsForm — analyzer readiness badge (fe-49 mirror #1641)', 
     expect(within(badge).getByText('Analyzer needed')).toBeInTheDocument();
     expect(within(badge).getByText('No Gemini API key is configured.')).toBeInTheDocument();
     expect(badge.querySelector('[data-blocker-status="fail"]')).not.toBeNull();
+  });
+});
+
+describe('ModelSettingsForm — Cloud fallback toggle (Part 1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getSetupReadiness).mockResolvedValue(readinessWith(PASS));
+  });
+
+  it('defaults the Cloud fallback toggle to ON (opt-out)', async () => {
+    renderForm();
+    const toggle = (await screen.findByTestId('account-allow-cloud-fallback')) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+  });
+
+  it('turning it off and saving PATCHes allowCloudFallback:false', async () => {
+    vi.mocked(api.putUserSettings).mockImplementation(
+      async (patch) =>
+        ({ ...accountSlice.getInitialState(), ...(patch as object) }) as never,
+    );
+    renderForm();
+    const toggle = (await screen.findByTestId('account-allow-cloud-fallback')) as HTMLInputElement;
+    fireEvent.click(toggle);
+    expect(toggle.checked).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => {
+      expect(vi.mocked(api.putUserSettings)).toHaveBeenCalledWith(
+        expect.objectContaining({ allowCloudFallback: false }),
+      );
+    });
   });
 });

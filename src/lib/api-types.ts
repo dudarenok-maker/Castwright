@@ -2398,12 +2398,23 @@ export interface components {
             sidecarUrl: string;
             /**
              * @description Analyzer dispatch. `local` routes through OllamaAnalyzer (with
-             *     Gemini as automatic fallback iff GEMINI_API_KEY is set AND the
-             *     local daemon is unreachable). `gemini` always goes direct.
-             *     See server/src/analyzer/index.ts selectAnalyzer.
+             *     Gemini as an opt-out fallback iff GEMINI_API_KEY is set,
+             *     allowCloudFallback is on, AND the local daemon is unreachable).
+             *     `gemini` always goes direct. The ANALYZER env no longer selects
+             *     the engine. See server/src/analyzer/index.ts selectAnalyzer.
              * @enum {string}
              */
             analysisEngine: "local" | "gemini";
+            /**
+             * @description Opt-out cloud-fallback gate. When engine=local and a Gemini key is
+             *     set, the analyzer falls back to Gemini iff the local daemon is
+             *     unreachable — but only when this is true. Default true (non-
+             *     breaking: existing installs keep today's behaviour). Turn OFF to
+             *     keep analysis strictly local: no cloud fall-through even on a local
+             *     outage. Resolved as the saved value (default true), with
+             *     ANALYZER_ALLOW_CLOUD_FALLBACK=0 as a pre-cache under-ride only.
+             */
+            allowCloudFallback: boolean;
             /**
              * @description Base URL of the local Ollama daemon. Falls through to OLLAMA_URL
              *     env then http://localhost:11434 in the server resolver. Re-read
@@ -2568,6 +2579,7 @@ export interface components {
             sidecarUrl?: string;
             /** @enum {string} */
             analysisEngine?: "local" | "gemini";
+            allowCloudFallback?: boolean;
             ollamaUrl?: string;
             workspaceDirOverride?: string | null;
             exportSyncFolder?: string | null;

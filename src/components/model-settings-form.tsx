@@ -110,6 +110,9 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
   const [defaultTtsModelKey, setDefaultTtsModelKey] = useState<TtsModelKey>(effectiveTtsModelKey);
   const [sidecarUrl, setSidecarUrl] = useState(account.sidecarUrl);
   const [analysisEngine, setAnalysisEngine] = useState<'local' | 'gemini'>(account.analysisEngine);
+  const [allowCloudFallback, setAllowCloudFallback] = useState<boolean>(
+    account.allowCloudFallback ?? true,
+  );
   const [ollamaUrl, setOllamaUrl] = useState(account.ollamaUrl);
   const [analyzerPhase0Model, setAnalyzerPhase0Model] = useState<string | null>(
     account.analyzerPhase0Model ?? null,
@@ -137,6 +140,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
     setDefaultTtsModelKey(account.resolvedTtsModelKey ?? account.defaultTtsModelKey);
     setSidecarUrl(account.sidecarUrl);
     setAnalysisEngine(account.analysisEngine);
+    setAllowCloudFallback(account.allowCloudFallback ?? true);
     setOllamaUrl(account.ollamaUrl);
     setAnalyzerPhase0Model(account.analyzerPhase0Model ?? null);
     setAnalyzerPhase1Model(account.analyzerPhase1Model ?? null);
@@ -152,6 +156,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
     account.resolvedTtsModelKey,
     account.sidecarUrl,
     account.analysisEngine,
+    account.allowCloudFallback,
     account.ollamaUrl,
     account.analyzerPhase0Model,
     account.analyzerPhase1Model,
@@ -185,6 +190,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
       defaultTtsModelKey !== effectiveTtsModelKey ||
       sidecarUrl !== account.sidecarUrl ||
       analysisEngine !== account.analysisEngine ||
+      allowCloudFallback !== (account.allowCloudFallback ?? true) ||
       ollamaUrl !== account.ollamaUrl ||
       analyzerPhase0Model !== (account.analyzerPhase0Model ?? null) ||
       analyzerPhase1Model !== (account.analyzerPhase1Model ?? null) ||
@@ -201,6 +207,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
     effectiveTtsModelKey,
     sidecarUrl,
     analysisEngine,
+    allowCloudFallback,
     ollamaUrl,
     analyzerPhase0Model,
     analyzerPhase1Model,
@@ -225,6 +232,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
         defaultTtsModelKey !== effectiveTtsModelKey ? true : account.defaultTtsModelKeyExplicit,
       sidecarUrl,
       analysisEngine,
+      allowCloudFallback,
       ollamaUrl,
       analyzerPhase0Model,
       analyzerPhase1Model,
@@ -479,7 +487,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
         <FieldRow
           label="Analyzer engine"
           sublabel={
-            'Default — Gemini API sends every chapter straight to Google using the GEMINI_API_KEY in server/.env. Local routes analysis through the Ollama daemon on this machine instead (with Gemini as automatic fallback only when the daemon is unreachable, assuming GEMINI_API_KEY is configured). Pick Local only if you want analysis to run on-device.'
+            'Default — Local routes analysis through the Ollama daemon on this machine, so nothing leaves the box (with Gemini as an opt-out fallback only when the daemon is unreachable, if a GEMINI_API_KEY is configured and Cloud fallback below is on). Gemini API sends every chapter straight to Google using the GEMINI_API_KEY in server/.env. Pick Gemini only if you want analysis to run in the cloud.'
           }
         >
           <select
@@ -487,9 +495,24 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
             onChange={(e) => setAnalysisEngine(e.target.value as 'local' | 'gemini')}
             className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
           >
-            <option value="gemini">Gemini API (default — direct)</option>
-            <option value="local">Local Ollama (on-device, with Gemini fallback)</option>
+            <option value="local">Local Ollama (default — on-device, with Gemini fallback)</option>
+            <option value="gemini">Gemini API (direct)</option>
           </select>
+        </FieldRow>
+        <FieldRow
+          label="Cloud fallback"
+          sublabel="If the local analyzer is unavailable, fall back to Gemini for that run (requires a GEMINI_API_KEY). On by default. Turn off to keep analysis strictly local — the analyzer will never fall back to the cloud, even during a local outage. Only applies when the engine is Local."
+        >
+          <Checkbox
+            checked={allowCloudFallback}
+            onChange={setAllowCloudFallback}
+            data-testid="account-allow-cloud-fallback"
+            label={
+              allowCloudFallback
+                ? 'On — a local outage falls back to Gemini (announced, never silent).'
+                : 'Off — strictly local; a local outage fails the run instead of using the cloud.'
+            }
+          />
         </FieldRow>
         <FieldRow
           label="Ollama URL"

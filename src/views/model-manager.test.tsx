@@ -98,6 +98,7 @@ const SETTINGS_FIXTURE: UserSettings = {
   defaultTtsModelKey: 'coqui-xtts-v2',
   sidecarUrl: 'http://localhost:9000',
   analysisEngine: 'local',
+  allowCloudFallback: true,
   ollamaUrl: 'http://localhost:11434',
   workspaceDirOverride: null,
   minorCastMinLines: 3,

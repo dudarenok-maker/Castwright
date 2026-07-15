@@ -3037,6 +3037,7 @@ components:
         - defaultTtsModelKey
         - sidecarUrl
         - analysisEngine
+        - allowCloudFallback
         - ollamaUrl
         - minorCastMinLines
         - apiKeyStatus
@@ -3100,9 +3101,20 @@ components:
           enum: [local, gemini]
           description: |
             Analyzer dispatch. `local` routes through OllamaAnalyzer (with
-            Gemini as automatic fallback iff GEMINI_API_KEY is set AND the
-            local daemon is unreachable). `gemini` always goes direct.
-            See server/src/analyzer/index.ts selectAnalyzer.
+            Gemini as an opt-out fallback iff GEMINI_API_KEY is set,
+            allowCloudFallback is on, AND the local daemon is unreachable).
+            `gemini` always goes direct. The ANALYZER env no longer selects
+            the engine. See server/src/analyzer/index.ts selectAnalyzer.
+        allowCloudFallback:
+          type: boolean
+          description: |
+            Opt-out cloud-fallback gate. When engine=local and a Gemini key is
+            set, the analyzer falls back to Gemini iff the local daemon is
+            unreachable — but only when this is true. Default true (non-
+            breaking: existing installs keep today's behaviour). Turn OFF to
+            keep analysis strictly local: no cloud fall-through even on a local
+            outage. Resolved as the saved value (default true), with
+            ANALYZER_ALLOW_CLOUD_FALLBACK=0 as a pre-cache under-ride only.
         ollamaUrl:
           type: string
           description: |
@@ -3285,6 +3297,7 @@ components:
             defaultTtsModelKey.
         sidecarUrl: { type: string }
         analysisEngine: { type: string, enum: [local, gemini] }
+        allowCloudFallback: { type: boolean }
         ollamaUrl: { type: string }
         workspaceDirOverride:
           type: string

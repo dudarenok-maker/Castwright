@@ -160,8 +160,9 @@ export function buildLocalModelOptions(
 /** Grouped form for <optgroup>-rendering pickers. Gemini is the curated static
     catalog; the local group is whatever was merged from live tags. Keeps the
     optgroup labels in one place so the upload / re-parse / analysing pickers
-    stay in sync. Gemini renders first because it's now the default analyzer
-    engine — local Ollama follows as the on-device alternative. */
+    stay in sync. Local Ollama is the default analyzer engine now; the Gemini
+    group still renders first as the curated static catalog (the pre-selected
+    model — a local id — is driven by the saved default, not group order). */
 export function buildModelOptionGroups(localOptions: ModelOption[]): Array<{
   engine: 'local' | 'gemini';
   label: string;
@@ -170,10 +171,10 @@ export function buildModelOptionGroups(localOptions: ModelOption[]): Array<{
   return [
     {
       engine: 'gemini',
-      label: 'Gemini API (default)',
+      label: 'Gemini API (cloud)',
       models: MODEL_OPTIONS.filter((m) => m.engine === 'gemini'),
     },
-    { engine: 'local', label: 'Local Ollama (on-device)', models: localOptions },
+    { engine: 'local', label: 'Local Ollama (default, on-device)', models: localOptions },
   ];
 }
 

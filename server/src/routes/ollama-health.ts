@@ -11,6 +11,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../workspace/user-settings.js';
 import { resolveAnalyzerNumCtx, resolveAnalyzerNumGpu } from '../analyzer/ollama.js';
+import { configValue } from '../config/resolver.js';
 import {
   installBootstrap as defaultInstallBootstrap,
   type InstallBootstrap,
@@ -50,10 +51,18 @@ interface OllamaTagsResponse {
   models?: Array<{ name?: string; model?: string }>;
 }
 
-/* Warming a cold Ollama model (e.g. qwen3.5:4b ~3 GB) into VRAM takes
-   ~5-15s depending on disk + GPU; unloading is near-instant. Give /load a
-   30s ceiling, but keep /unload on the 2s probe budget. */
-const LOAD_TIMEOUT_MS = 30_000;
+/* Warming a cold Ollama model into VRAM takes ~5-15s for a small model but a
+   large one (e.g. 15 GB) on a slow disk can take a minute-plus — the old hard
+   30s made that read as "unreachable" when it was only loading. The budget is
+   now a registry knob (analyzer.ollama.warmTimeoutMs, default below); this
+   constant is only the fallback when the config layer isn't wired (tests).
+   /unload stays on the 2s probe budget. */
+const WARM_TIMEOUT_FALLBACK_MS = 120_000;
+
+function resolveWarmTimeoutMs(): number {
+  const v = configValue<number>('analyzer.ollama.warmTimeoutMs');
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : WARM_TIMEOUT_FALLBACK_MS;
+}
 
 interface OllamaPsResponse {
   models?: Array<{
@@ -256,7 +265,7 @@ async function callOllamaGenerate(
   body: Record<string, unknown>,
   timeoutMs: number,
   extSignal?: AbortSignal,
-): Promise<{ ok: boolean; status: number; error?: string }> {
+): Promise<{ ok: boolean; status: number; error?: string; aborted?: boolean; connError?: boolean }> {
   const target = `${url}/api/generate`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -284,13 +293,20 @@ async function callOllamaGenerate(
   } catch (e) {
     clearTimeout(timer);
     const err = e as { name?: string; message?: string };
-    const isTimeout = err.name === 'AbortError';
+    const isAbort = err.name === 'AbortError';
     return {
       ok: false,
       status: 503,
-      error: isTimeout
+      error: isAbort
         ? `Ollama did not respond within ${timeoutMs}ms.`
         : err.message || 'Ollama request failed.',
+      /* `aborted` = our timeout timer OR an external cancel fired (the caller
+         disambiguates via its own signal). `connError` = fetch itself threw a
+         non-abort error, i.e. the daemon wasn't reachable (ECONNREFUSED /
+         ENOTFOUND / socket reset). Lets warmOllamaModel classify the failure
+         kind without re-parsing the message string. */
+      aborted: isAbort,
+      connError: !isAbort,
     };
   }
 }
@@ -308,28 +324,115 @@ async function callOllamaGenerate(
    to the UI as "Analysis stream ended without a result event" while
    the pill stays green ("Analyzer ready"), so every Try Again triggers
    the same reload-and-die loop. */
+/* Discriminated warm outcome (Part 2). `unreachable` = the daemon isn't
+   answering (start Ollama); `load_timeout` = it's up but the model didn't
+   finish loading inside the budget (bigger model / slower disk, or wait);
+   `cancelled` = the caller aborted mid-warm; `error` = a running daemon
+   returned an HTTP error (e.g. the model isn't pulled). The route maps each
+   kind to its HTTP status; script-review maps each to distinct UI copy. */
+export type WarmModelResult =
+  | { ok: true }
+  | {
+      ok: false;
+      kind: 'unreachable' | 'load_timeout' | 'cancelled' | 'error';
+      status: number;
+      error: string;
+    };
+
+/** Cheap reachability pre-check before the (now much longer) warm budget: a
+    connection error (ECONNREFUSED/ENOTFOUND) → 'refused', so "Ollama isn't
+    running" is reported immediately instead of after the full timeout. Any HTTP
+    response → 'reachable' (even a 5xx means the daemon answered; let the warm
+    proceed). An abort → 'timeout' (reachable-but-hung daemon, or an external
+    cancel — the caller checks its own signal); fall through to the warm. */
+async function probeOllamaReachable(
+  url: string,
+  extSignal?: AbortSignal,
+): Promise<'reachable' | 'refused' | 'timeout'> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  const signal = extSignal ? AbortSignal.any([controller.signal, extSignal]) : controller.signal;
+  try {
+    await fetch(`${url}/api/tags`, { method: 'GET', signal });
+    return 'reachable';
+  } catch (e) {
+    const err = e as { name?: string };
+    return err.name === 'AbortError' ? 'timeout' : 'refused';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Warm `model` into VRAM via the keep_alive:'5m' empty-prompt idiom, using the
     same num_ctx/num_gpu the analyzer's runStage path uses (see the CRITICAL
-    note above). Extracted so the script-review job can warm the analyzer
-    model in-process, not just via the /load route below. */
+    note above). Extracted so the script-review job can warm the analyzer model
+    in-process, not just via the /load route below.
+
+    Patient by design (Part 2): a merely-SLOW cold load is waited out to the
+    analyzer.ollama.warmTimeoutMs budget (default 120s) — only a genuine
+    connection refusal is 'unreachable'. `onProgress(elapsedMs)` fires on a 1s
+    ticker while the blocking POST is in flight (liveness the keep_alive call
+    can't emit itself; an /api/ps poll can't help because /api/ps lists only
+    already-resident models). An external `signal` short-circuits to
+    'cancelled'. */
 export async function warmOllamaModel(
   model: string,
-  opts: { signal?: AbortSignal } = {},
-): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  opts: { signal?: AbortSignal; onProgress?: (elapsedMs: number) => void } = {},
+): Promise<WarmModelResult> {
   const url = getResolvedOllamaUrl();
-  const result = await callOllamaGenerate(
-    url,
-    {
-      model,
-      prompt: '',
-      keep_alive: '5m',
-      stream: false,
-      options: { num_ctx: resolveAnalyzerNumCtx(), num_gpu: resolveAnalyzerNumGpu() },
-    },
-    LOAD_TIMEOUT_MS,
-    opts.signal,
-  );
-  return result.ok ? { ok: true } : { ok: false, status: result.status, error: result.error ?? '' };
+
+  // 1. Fast reachability pre-check — a refused connection is 'unreachable' now,
+  //    not after the whole warm budget.
+  const reach = await probeOllamaReachable(url, opts.signal);
+  if (opts.signal?.aborted) return { ok: false, kind: 'cancelled', status: 499, error: 'Warm cancelled.' };
+  if (reach === 'refused') {
+    return { ok: false, kind: 'unreachable', status: 503, error: `Can't reach Ollama at ${url}. Is the daemon running?` };
+  }
+
+  // 2. Liveness ticker while the (blocking) keep_alive POST runs.
+  const startedAt = Date.now();
+  let ticker: ReturnType<typeof setInterval> | undefined;
+  if (opts.onProgress) {
+    opts.onProgress(0);
+    ticker = setInterval(() => {
+      if (!opts.signal?.aborted) opts.onProgress?.(Date.now() - startedAt);
+    }, 1000);
+  }
+
+  try {
+    const budget = resolveWarmTimeoutMs();
+    const result = await callOllamaGenerate(
+      url,
+      {
+        model,
+        prompt: '',
+        keep_alive: '5m',
+        stream: false,
+        options: { num_ctx: resolveAnalyzerNumCtx(), num_gpu: resolveAnalyzerNumGpu() },
+      },
+      budget,
+      opts.signal,
+    );
+    if (result.ok) return { ok: true };
+    // Classify the failure. Check the external signal FIRST so a cancel that
+    // aborted the POST reads as 'cancelled', not 'load_timeout'.
+    if (opts.signal?.aborted) return { ok: false, kind: 'cancelled', status: 499, error: 'Warm cancelled.' };
+    if (result.aborted) {
+      return {
+        ok: false,
+        kind: 'load_timeout',
+        status: 504,
+        error: `The analyzer model (${model}) didn't finish loading within ${Math.round(budget / 1000)}s.`,
+      };
+    }
+    if (result.connError) {
+      return { ok: false, kind: 'unreachable', status: 503, error: result.error || `Can't reach Ollama at ${url}.` };
+    }
+    // A running daemon returned an HTTP error (e.g. 404 — model not pulled).
+    return { ok: false, kind: 'error', status: result.status, error: result.error || 'Ollama warm failed.' };
+  } finally {
+    if (ticker) clearInterval(ticker);
+  }
 }
 
 ollamaHealthRouter.post('/load', async (req: Request, res: Response) => {
@@ -337,7 +440,9 @@ ollamaHealthRouter.post('/load', async (req: Request, res: Response) => {
   const model = requested || getResolvedOllamaModel();
   const result = await warmOllamaModel(model);
   if (!result.ok) {
-    return res.status(result.status).json({ status: 'error', error: result.error });
+    // Carry `kind` so the UI can distinguish "Ollama isn't running" from
+    // "the model took too long to load".
+    return res.status(result.status).json({ status: 'error', error: result.error, kind: result.kind });
   }
   return res.json({ status: 'ready' });
 });
