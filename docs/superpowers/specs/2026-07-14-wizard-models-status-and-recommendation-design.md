@@ -431,14 +431,30 @@ nvidia-smi) means "unknown" → no VRAM-based nudge beyond the CPU-only lean.
 
 ### Files (Part B)
 
-- `src/components/setup/step-models.tsx` — guided question + recommendation
-  presentation.
-- `src/lib/models.ts` (or a new `src/lib/engine-capability.ts`) — capability map +
-  pure recommendation function.
-- `server/voice-mapping` / language-code maps — source for the capability map.
+**Recommendation placement — server-side** (resolves the earlier draft's Files-vs-Testing
+contradiction, confirmed 2026-07-15 against the landed Part A interfaces). The capability
+map + pure `recommend()` live beside the `VOICE_ENGINES` registry on the server, mirroring
+the `diagnose*` pure-function test pattern; the client only renders the result off the
+`models-status` response it already fetches.
+
+- `server/src/tts/voice-engine-registry.ts` — **extend `VoiceEngineEntry`** (landed in
+  Part A with a `defaultModelKey` seam already tagged "for the Defaults handoff (Part B)")
+  with the capability fields (`expressive`, `multilingual`, `genVramFloorMb`,
+  `designVramFloorMb?`).
+- `server/src/tts/` (new module, e.g. `engine-recommendation.ts`) — pure
+  `recommend(needsAnswer, vramTotalMb)` over the registry; `multilingual` **derived** from
+  `resolveEligibleEngines` (`server/src/tts/language.ts`), `expressive` + VRAM floors are
+  authored constants.
+- `server/src/tts/models-status.ts` / `server/src/routes/models-status.ts` — surface the
+  recommendation (or its inputs) alongside the existing `info.vramTotalMb`.
+- `src/components/setup/step-voice.tsx` — **(NOT the deleted `step-models.tsx`;** fe-49
+  split it into `step-analysis.tsx` + `step-voice.tsx`, voice cards now here) — guided
+  question + recommendation presentation.
 - `src/components/setup/step-defaults.tsx` — unchanged mechanics; receives the
-  pre-seeded default.
-- fe-49 (#1610) shared pull machinery — composed for pull-priority wiring.
+  pre-seeded default via `defaultTtsModelKey` + `defaultTtsModelKeyExplicit`.
+- fe-49 (#1610) **shipped/MERGED (PR #1642)** — its shared pull machinery is available now,
+  so Part B composes pull-priority in-scope and `Closes #1614` outright (no `Refs`
+  deferral).
 
 ---
 
@@ -487,9 +503,9 @@ two PRs, Part A before Part B:
   controlled cards, model-manager migration, the three status fixes. No fe-49
   dependency → ships first. `Closes #1612`.
 - **PR 2 — Part B (fe-51 / #1614):** capability map, guided question, VRAM
-  soft-recommendation, defaults handoff, copy de-defaulting. Built on PR 1; the
-  pull-priority wiring composes with fe-49 (#1610) when it lands. `Closes #1614`
-  (`Refs` if fe-49 gates full close).
+  soft-recommendation, defaults handoff, copy de-defaulting. Built on PR 1; fe-49
+  (#1610) is **merged (PR #1642)**, so the pull-priority wiring composes in-scope and
+  this PR `Closes #1614` outright.
 
 Each PR runs the full before-shipping checklist: regression plan, release-notes-next
 + RELEASE_NOTES entries, verified issue link, `verify:fast:branch`, and the mandatory
@@ -497,11 +513,10 @@ Each PR runs the full before-shipping checklist: regression plan, release-notes-
 
 ## Risks & open questions
 
-- **fe-49 dependency (Part B):** the recommendation/ordering/VRAM logic is
-  independently buildable and testable; only the actual weights-pull wiring needs
-  fe-49's shared machinery. If fe-49 slips, Part B ships with the recommendation +
-  ordering + defaults handoff and a follow-up `Refs` for the pull-priority
-  composition.
+- **fe-49 dependency (Part B): RESOLVED.** fe-49 merged (PR #1642, 2026-07-14), so its
+  shared pull machinery is available and the pull-priority wiring is in-scope for Part B's
+  single PR — no `Refs` deferral. (The recommendation/ordering/VRAM logic was always
+  independently buildable; this only removes the pull-wiring caveat.)
 - **Controlled-card migration blast radius:** making the status prop required touches
   model-manager in the same PR AND forces a rewrite of all four `*-install.test.tsx`
   suites + `model-manager.test.tsx` (they mock `/detect` self-fetch today). Verified
