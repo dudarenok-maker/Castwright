@@ -248,6 +248,24 @@ describe('runReviewScript — activity/model fields + streaming heartbeat + Retr
     const toastCall = dispatch.mock.calls.find(([a]) => a.type === notificationsActions.pushToast.type);
     expect(toastCall?.[0].payload.retryReview).toEqual({ bookId: 'b1', wholeBook: true, model: 'gemma' });
   });
+
+  it('Part 3 — a review_failed error (every chapter failed) also gets an error toast WITH Retry', async () => {
+    vi.mocked(api.reviewScript).mockRejectedValue(
+      new ReviewScriptError("Script review failed — 2 chapters couldn't be reviewed.", 'review_failed'),
+    );
+    const dispatch = vi.fn();
+    await runReviewScript('b1', {
+      dispatch, wholeBook: true, model: 'gemma', sentences: [], characterIds: new Set<string>(), manuscriptId: 'ms-1',
+    });
+    const toastCall = dispatch.mock.calls.find(([a]) => a.type === notificationsActions.pushToast.type);
+    expect(toastCall?.[0].payload).toEqual(
+      expect.objectContaining({
+        kind: 'error',
+        message: "Script review failed — 2 chapters couldn't be reviewed.",
+        retryReview: { bookId: 'b1', wholeBook: true, model: 'gemma' },
+      }),
+    );
+  });
 });
 
 describe('attachToRunningReview — activity/model fields + streaming heartbeat (Task 9)', () => {

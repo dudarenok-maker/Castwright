@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import type { Analyzer } from '../analyzer/index.js';
+import { _setUserSettingsCacheForTest, _resetUserSettingsCache } from '../workspace/user-settings.js';
 import type { ScriptReviewOutput } from '../handoff/schemas.js';
 import type {
   buildReviewSentencesInput as BuildReviewSentencesInput,
@@ -371,7 +372,46 @@ describe('POST /api/books/:bookId/script-review', () => {
     expect(events.some((e) => e.kind === 'ops' && e.chapterId === 2)).toBe(true);
     // Each chapter is counted once after its chunk loop, so a chapter whose only
     // chunk failed still counts as reviewed (both chapters here = 2).
-    expect(events.find((e) => e.kind === 'result')).toMatchObject({ reviewedChapters: 2 });
+    const result = events.find((e) => e.kind === 'result') as
+      | { reviewedChapters?: number; failedChapters?: Array<{ chapterId: number }> }
+      | undefined;
+    expect(result).toMatchObject({ reviewedChapters: 2 });
+    // Part 3 — the partial failure is carried on the (successful) result, not
+    // swallowed: chapter 1 is listed even though chapter 2 produced ops.
+    expect(result?.failedChapters).toEqual([{ chapterId: 1, message: expect.stringContaining('flaky chapter') }]);
+  });
+
+  it('Part 3 — EVERY chapter fails (zero ops) → terminal review_failed error, not a silent empty result', async () => {
+    writeBook(SENTENCES);
+    runReview.mockRejectedValue(new Error('model exploded'));
+
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    const events = parseSse(res.text);
+
+    // No silent empty result — a terminal error the panel can show + Retry on.
+    expect(events.some((e) => e.kind === 'result')).toBe(false);
+    const err = events.find((e) => e.kind === 'error') as
+      | { code?: string; failedChapters?: Array<{ chapterId: number }>; message?: string }
+      | undefined;
+    expect(err?.code).toBe('review_failed');
+    expect(err?.failedChapters?.length).toBe(2);
+    expect(err?.message).toMatch(/couldn't be reviewed/i);
+  });
+
+  it('Part 3 — a genuinely clean book (no failures, no ops) stays a normal empty result (no review_failed)', async () => {
+    writeBook(SENTENCES);
+    runReview.mockResolvedValue({ ops: [] });
+
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    const events = parseSse(res.text);
+
+    expect(events.some((e) => e.kind === 'error')).toBe(false);
+    const result = events.find((e) => e.kind === 'result') as
+      | { totalOps?: number; failedChapters?: unknown }
+      | undefined;
+    expect(result).toMatchObject({ done: true, totalOps: 0 });
+    // No failedChapters key on a clean run.
+    expect(result?.failedChapters).toBeUndefined();
   });
 
   it('carries chapterIndex/totalChapters on every phase event, and estRemainingMs only from the 2nd chapter onward', async () => {
@@ -587,6 +627,41 @@ describe('POST /api/books/:bookId/script-review', () => {
       expect(err?.warmKind).toBe('load_timeout');
       expect(err?.message).toMatch(/finish loading|too long|slow disk/i);
       expect(runReview).not.toHaveBeenCalled();
+    });
+
+    it('Part 1.4 — warm fail with a Gemini key present but Cloud fallback OFF nudges the user to re-enable it', async () => {
+      writeBook(SENTENCES);
+      selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({
+        analyzer: {
+          runStage1: () => Promise.reject(new Error('not used')),
+          runStage1Chapter: () => Promise.reject(new Error('not used')),
+          runStage2Chapter: () => Promise.reject(new Error('not used')),
+          runEmotionChapter: () => Promise.reject(new Error('not used')),
+          runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+          runStage3Chapter: () => Promise.reject(new Error('not used')),
+          runAttributionEscalation: () => Promise.resolve(null),
+        } as Analyzer,
+        engine: 'local',
+        model: 'qwen3.5:9b',
+        fallbackModel: null, // gate off ⇒ selectAnalyzer wired no fallback
+      }));
+      warmOllamaModelMock.mockResolvedValue({ ok: false, kind: 'unreachable', status: 503, error: 'down' });
+      // Key present (env) + cloud fallback opted OUT.
+      const priorKey = process.env.GEMINI_API_KEY;
+      process.env.GEMINI_API_KEY = 'k-present';
+      _setUserSettingsCacheForTest({ allowCloudFallback: false });
+      try {
+        const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+        const events = parseSse(res.text);
+        const err = events.find((e) => e.kind === 'error' && e.code === 'model_load_failed') as
+          | { message?: string }
+          | undefined;
+        expect(err?.message).toMatch(/turn on Cloud fallback/i);
+      } finally {
+        if (priorKey === undefined) delete process.env.GEMINI_API_KEY;
+        else process.env.GEMINI_API_KEY = priorKey;
+        _resetUserSettingsCache();
+      }
     });
 
     it('local engine, Gemini fallback configured, warm fails → no error, one gemini announcement phase, chapters still run', async () => {

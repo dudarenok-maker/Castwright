@@ -28,6 +28,7 @@ import { readJson } from '../workspace/state-io.js';
 import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js';
 import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
 import { selectAnalyzer } from '../analyzer/index.js';
+import { getResolvedGeminiApiKey, getResolvedAllowCloudFallback } from '../workspace/user-settings.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { warmOllamaModel } from './ollama-health.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
@@ -718,10 +719,16 @@ async function runScriptReviewJob(
       if (selection.fallbackModel === null) {
         // No fallback (no key, or cloud fallback opted out) — surface the
         // distinct cause so Retry copy tells "Ollama down" from "load too slow".
-        const message =
+        const base =
           warm.kind === 'load_timeout'
             ? `The analyzer model (${activeSelection.model}) didn't finish loading in time. It may be large or on a slow disk — try again, or pick a smaller model.`
             : `Couldn't reach the analyzer model (${activeSelection.model}). Is Ollama running and the model pulled?`;
+        // Part 1.4 — an opt-out user who has a Gemini key but turned Cloud
+        // fallback OFF has a one-click path back: nudge them to it.
+        const canReenableCloud = getResolvedGeminiApiKey() != null && !getResolvedAllowCloudFallback();
+        const message = canReenableCloud
+          ? `${base} Or turn on Cloud fallback in Settings → analyzer to use Gemini when the local analyzer is unavailable.`
+          : base;
         send({ kind: 'error', code: 'model_load_failed', message, model: activeSelection.model, warmKind: warm.kind });
         for (const sub of job.subscribers) sub.res.end();
         return;
@@ -870,8 +877,39 @@ async function runScriptReviewJob(
   if (job.controller.signal.aborted) {
     send({ kind: 'error', code: 'cancelled', message: 'Review cancelled.' });
   } else {
+    // Part 3 — surface chapter failures instead of swallowing them. A chapter
+    // that errored (analyzer fail, or a checkpoint-save fail) emitted a
+    // `chapter-failed`; collect them (deduped by chapter, keeping the last
+    // message) so a partial run says "N chapters couldn't be reviewed" and a
+    // total wipeout is a terminal error rather than a silent empty result.
+    const failedChapterIds = [...new Set(job.replay.chapterFailedEvents.map((e) => e.chapterId))];
+    const failedChapters = failedChapterIds.map((chapterId) => {
+      const last = [...job.replay.chapterFailedEvents].reverse().find((e) => e.chapterId === chapterId);
+      return { chapterId, message: last?.message ?? 'Chapter review failed.' };
+    });
     send({ kind: 'phase', phaseId: 0, progress: 1, label: 'Done' });
-    send({ kind: 'result', done: true, reviewedChapters, totalOps });
+    if (failedChapters.length > 0 && totalOps === 0) {
+      // Nothing usable came back AND something errored — a genuine failure, not
+      // a clean "no changes needed" pass. Terminal error so the panel shows it
+      // + a Retry instead of quietly emptying (the chapter-35 incident).
+      send({
+        kind: 'error',
+        code: 'review_failed',
+        message: `Script review failed — ${failedChapters.length} chapter${failedChapters.length === 1 ? '' : 's'} couldn't be reviewed.`,
+        failedChapters,
+        lastMessage: failedChapters[failedChapters.length - 1]?.message,
+      });
+    } else {
+      // Success — but if SOME chapters failed while others produced ops, carry a
+      // non-fatal failedChapters summary so the partial failure is visible.
+      send({
+        kind: 'result',
+        done: true,
+        reviewedChapters,
+        totalOps,
+        ...(failedChapters.length > 0 ? { failedChapters } : {}),
+      });
+    }
   }
   for (const sub of job.subscribers) sub.res.end();
 }
