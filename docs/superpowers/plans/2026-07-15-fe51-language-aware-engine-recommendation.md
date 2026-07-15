@@ -439,7 +439,7 @@ export interface ModelsStatus {
 }
 ```
 
-Update `mockGetModelsStatus()` (~line 7272) to return a recommendation (mock is CPU-only → `vramTotalMb: null` → Qwen caveat present):
+Update `mockGetModelsStatus()` (~line 7272) to return a recommendation (mock is CPU-only → `vramTotalMb: null` → Qwen caveat present). Note the caveat string here is a **hand-copy** of the server's `CAVEAT_VRAM` (Task 2) — the client mirror can't import a server const. This only affects mock-mode display + tests, and every assertion is a `/may not fit/i` substring (not exact equality), so the two can't break a test by drifting; the real runtime caveat always comes from the server. Add a `// keep in sync with server CAVEAT_VRAM` comment:
 
 ```ts
     info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
@@ -464,10 +464,10 @@ Update `mockGetModelsStatus()` (~line 7272) to return a recommendation (mock is 
 
 - [ ] **Step 5: Update local `ModelsStatus` test fixtures**
 
-Making `recommendation` **required** breaks any hand-built `ModelsStatus` fixture. Grep and fix each:
+Making `recommendation` **required** breaks any hand-built **full `ModelsStatus`** literal. Find them, but add the field **only to full-`ModelsStatus` builders — NOT to `RuntimeStatus`-shaped literals** (`{ installedOnDisk, pythonFound, process }` passed to `VenvBootstrap`/`runtimeIsBlocking`), which have no `recommendation` field and would type-error if you add one:
 
-Run: `git grep -l "installedOnDisk" -- 'src/**/*.test.tsx' 'src/**/*.test.ts'`
-Expected hits include `src/components/setup/step-voice.test.tsx` (its local `modelsStatus()` helper) and any `model-manager.test.tsx` fixture. Add a `recommendation` field to each — reuse the same object shape as the Task-3 `mockGetModelsStatus` (Qwen lead, CPU-only caveat). A shared helper is fine.
+Run: `git grep -ln "installedOnDisk" -- 'src/**/*.test.tsx' 'src/**/*.test.ts'`
+The only **full-`ModelsStatus`** builders are `src/components/setup/step-voice.test.tsx` (its local `modelsStatus()` helper — add `recommendation` to that helper's default object) and `src/views/model-manager.test.tsx` (its `getModelsStatus` mock — untyped `vi.fn().mockResolvedValue({…})`, so it won't type-error, but add the field for realism). `venv-bootstrap.test.tsx` and `engine-card-status.test.ts` build `RuntimeStatus`, **not** `ModelsStatus` — leave them alone. Reuse the Task-3 `mockGetModelsStatus` recommendation shape (Qwen lead, CPU caveat). A shared exported fixture is fine.
 
 - [ ] **Step 6: Run tests + typecheck to verify green**
 
@@ -496,7 +496,7 @@ Add the one needs-based question above the engine cards and reorder them so the 
 
 **Interfaces:**
 - Consumes: `ModelsStatus['recommendation']` (Task 3); the existing controlled `KokoroInstall`/`QwenInstall`/`CoquiInstall` (`status` + `onInstalled` props, Part A).
-- Produces: the `NeedsAnswer` local state + `activeRecommendation` selection consumed by the handoff (Task 5).
+- Produces: the `NeedsAnswer` local state + the `activeRec` selection consumed by the handoff (Task 5).
 
 **Behavior:**
 - A two-option control (segmented radio) with the question. Default: **unanswered** (`null`).
@@ -566,30 +566,51 @@ Expected: PASS.
 
 **Critical — there is NO `renderStepVoice` today.** `src/components/setup/step-voice.test.tsx` currently `render(<StepVoice readiness={…} onRefetch={…} />)` **inline with no redux Provider** across ~6 tests (they pass differing `readiness`: all-pass, `crashed`, `starting`). Task 5 adds `useAppDispatch` to `StepVoice`, which makes a Provider **mandatory** — so the harness must exist and every current test must route through it, or Task 5 lands 6 red tests. Build it now (this task adds no redux to the component yet, so the Provider is harmless here and ready for Task 5).
 
-Add to `step-voice.test.tsx` (copy the pattern from `step-defaults.test.tsx`, which already renders a store-backed `<Provider>` and stubs the account thunk's `putUserSettings` echo):
+**Copy `step-defaults.test.tsx`'s exact store + module-mock pattern — do NOT invent one.** Verified against the code: `account-slice.ts` exports `accountSlice` **named** (no default export), so use `accountSlice.reducer` + `accountSlice.getInitialState()`. `saveAccountSettings` calls `api.putUserSettings(patch)` and its `.fulfilled` does `Object.assign(s, a.payload)`, so the test must stub `putUserSettings` to **echo** `{...getInitialState(), ...patch}` or the account state never updates. And under vitest `VITE_USE_MOCKS` is **false** (`.env.development` = `false`, no `.env.test`), so `api.getModelsStatus` is the REAL fetch — every test must keep its own `vi.spyOn(api, 'getModelsStatus').mockResolvedValue(...)` (as the 6 existing tests already do).
+
+At the **top of `step-voice.test.tsx`**, add the module mock (copied verbatim from `step-defaults.test.tsx:15-30` — it `importActual`s so `getModelsStatus` stays real for the per-test spies, and only overrides `putUserSettings`):
 
 ```tsx
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render } from '@testing-library/react';
-import accountReducer from '../../store/account-slice'; // match step-defaults.test.tsx's import
+import { accountSlice } from '../../store/account-slice';
 
-function renderStepVoice(opts?: { readiness?: SetupReadiness; account?: Record<string, unknown> }) {
+const putUserSettingsMock = vi.fn();
+vi.mock('../../lib/api', async () => {
+  const actual = await vi.importActual<typeof import('../../lib/api')>('../../lib/api');
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      putUserSettings: (patch: unknown) => {
+        putUserSettingsMock(patch);
+        return Promise.resolve({ ...accountSlice.getInitialState(), ...(patch as object) });
+      },
+    },
+  };
+});
+```
+
+> Adapt the `api: { ...actual.api, putUserSettings }` shape to whatever `step-defaults.test.tsx` actually does — mirror it exactly (it may override the top-level export instead of the `api` object; copy the working form). `saveAccountSettings` dispatches through `api.putUserSettings`, so that's the binding the stub must intercept. `beforeEach(() => putUserSettingsMock.mockReset())`.
+
+Then add the harness (reuses the suite's existing `allPassReadiness` const — a **value**, not `passingReadiness()`):
+
+```tsx
+function renderStepVoice(opts: { readiness?: SetupReadiness; account?: Partial<ReturnType<typeof accountSlice.getInitialState>> } = {}) {
   const store = configureStore({
-    reducer: { account: accountReducer },
-    preloadedState: opts?.account ? { account: opts.account } : undefined,
+    reducer: { account: accountSlice.reducer },
+    preloadedState: { account: { ...accountSlice.getInitialState(), ...opts.account } },
   });
-  const readiness = opts?.readiness ?? passingReadiness(); // reuse the suite's existing readiness fixture
   const utils = render(
     <Provider store={store}>
-      <StepVoice readiness={readiness} onRefetch={() => {}} />
+      <StepVoice readiness={opts.readiness ?? allPassReadiness} onRefetch={() => {}} />
     </Provider>,
   );
   return { ...utils, store };
 }
 ```
 
-Then **rewrite each of the 6 existing inline `render(<StepVoice … />)` calls** to `renderStepVoice({ readiness: <that test's readiness> })`. Reuse whatever `readiness` fixtures the suite already defines (all-pass, crashed, starting); if the account thunk (`saveAccountSettings`) hits the API on dispatch, reuse `step-defaults.test.tsx`'s `vi.mock('../../lib/api', …)` `putUserSettings` echo stub so no test performs a real fetch. (Confirm `accountReducer`'s export shape — default vs named — against `src/store/account-slice.ts`.)
+Then **rewrite all 6 existing tests**: each keeps its own leading `vi.spyOn(api, 'getModelsStatus').mockResolvedValue(modelsStatus({…}))`, and its `render(<StepVoice readiness={X} onRefetch={…} />)` becomes `renderStepVoice({ readiness: X })` (the two tests that build an inline `readiness` pass it through; the rest omit it and get `allPassReadiness`).
 
 - [ ] **Step 6: Write the failing new-behavior tests**
 
@@ -743,21 +764,21 @@ When the user answers the guided question, pre-seed the account default to the r
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `src/components/setup/step-voice.test.tsx` (spy on the account thunk — mirror how `step-defaults.test.tsx` asserts `saveAccountSettings`; if that suite mocks the thunk module, reuse the same mock here):
+Add to `src/components/setup/step-voice.test.tsx`. The `renderStepVoice` harness (returns `{ store }`) and the `putUserSettings` echo mock were **already built in Task 4 Step 5** — this test just needs the leading `getModelsStatus` spy + the assertion. The echo mock makes `saveAccountSettings` resolve `.fulfilled` with `{...getInitialState(), ...patch}`, so the account state actually updates:
 
 ```tsx
 it('seeds defaultTtsModelKey when the recommendation is answered', async () => {
+  vi.spyOn(api, 'getModelsStatus').mockResolvedValue(modelsStatus()); // qwen-lead recommendation
   const { store } = renderStepVoice();
   await userEvent.click(await screen.findByRole('radio', { name: /yes — expressive/i }));
   await waitFor(() => {
+    expect(putUserSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultTtsModelKey: 'qwen3-tts-0.6b', defaultTtsModelKeyExplicit: true, defaultTtsEngine: 'local' }),
+    );
     expect(store.getState().account.defaultTtsModelKey).toBe('qwen3-tts-0.6b');
-    expect(store.getState().account.defaultTtsModelKeyExplicit).toBe(true);
-    expect(store.getState().account.defaultTtsEngine).toBe('local');
   });
 });
 ```
-
-> If `renderStepVoice` does not currently return the `store`, extend the harness to render inside a real `configureStore`-backed `<Provider>` (the account slice + `saveAccountSettings` thunk), matching `step-defaults.test.tsx`. This is part of this task's setup.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -879,7 +900,7 @@ Expected: PASS. Then open the PR (`Closes #1614`), let cloud `verify.yml` + the 
 
 ## Self-Review
 
-> **Post-review revision (2026-07-15):** an adversarial `assumption-checker` pass caught two blockers and the items below; all folded in. The one **deliberate divergence from the spec** — CPU-only + "yes" → Qwen-with-CPU-caveat instead of the spec's case-4 "→ Kokoro" — is a **user-approved decision** (Qwen runs on CPU; Kokoro can't do non-English; the one question can't separate the sub-needs), flagged in Global Constraints + Task 2, not silent.
+> **Post-review revisions (2026-07-15) — TWO adversarial `assumption-checker` passes.** Pass 1 caught two blockers (non-existent harness; silent spec-case-4 override) + the data-driven/YAGNI items. Pass 2 caught that the pass-1 harness *fix* was still non-functional (wrong reducer import, missing `getModelsStatus` spy + `putUserSettings` echo — all now corrected against `account-slice.ts`/`step-defaults.test.tsx`) and a leftover spec↔plan contradiction (spec step-2 said VRAM *reorders* the capable set; reconciled to caveat-only, matching the plan). The one **deliberate divergence** — CPU-only + "yes" → Qwen-with-CPU-caveat, not the spec's case-4 "→ Kokoro" — is a **user-approved decision**, flagged in Global Constraints + Task 2 + the spec, not silent.
 
 **Spec coverage** (Part B section of the design doc):
 - Guided question → Task 4. ✅

@@ -294,26 +294,32 @@ isn't over-claimed):
 
 Each engine carries:
 
+Authored fields live on the `VOICE_ENGINES` registry entry (`expressive`,
+`genVramFloorMb`, `capablePreferenceRank`); `multilingual` is **derived**, not stored
+(see below). (The plan revised the draft `EngineCapability` shape: `multilingual`
+became derived and `designVramFloorMb` was dropped as unused in Part B — add it back
+when voice-design VRAM steering has a consumer.)
+
 ```ts
-interface EngineCapability {
-  expressive: boolean;
-  multilingual: boolean;
-  genVramFloorMb: number;       // comfortable VRAM for the GENERATION path
-  designVramFloorMb?: number;   // only for engines with a heavy design model (Qwen VoiceDesign 1.7B)
-}
+// On VoiceEngineEntry (voice-engine-registry.ts):
+  expressive: boolean;          // authored
+  genVramFloorMb: number;       // authored estimate — comfortable VRAM for GENERATION
+  capablePreferenceRank: number;// authored — lead order within the capable set (Qwen 0, Coqui 1)
+// multilingual is DERIVED from ENGINE_LANGUAGE_SUPPORT (isMultilingualEngine), NOT stored.
 ```
 
-The recommendation **reads** this map rather than hardcoding "Qwen," so a future
-engine that gains multilingual becomes eligible automatically. Rough floors, grounded
-in the CLAUDE.md model-lifecycle notes (exact numbers pulled from real measurement /
-the model registry, not guessed in code):
+The recommendation **derives** the capable set from `expressive || isMultilingualEngine`
+rather than hardcoding "Qwen," so a future engine that gains multilingual becomes
+eligible automatically; ordering uses the authored `capablePreferenceRank`. Rough
+floors — **authored estimates** grounded in the CLAUDE.md model-lifecycle notes (refine
+on-box if measurement contradicts; not guaranteed measured):
 
 - **Kokoro** — ~1 GB; fits anything, incl. CPU. English-only, non-expressive.
 - **Qwen Base 0.6B (generation)** — fits comfortably around 6 GB. Expressive,
-  multilingual. The **VoiceDesign 1.7B** model (~4–5 GB, transient, only during
-  cast-review voice design) is tracked as `designVramFloorMb` — a *separate* signal
-  that governs the voice-design feature, **not** a reason to steer generation away
-  from Qwen.
+  multilingual. Its **VoiceDesign 1.7B** model (~4–5 GB, transient, only during
+  cast-review voice design) is a *separate* signal that governs the voice-design
+  feature, **not** a reason to steer generation away from Qwen — so Part B does **not**
+  factor it into the recommendation (the dropped `designVramFloorMb`).
 - **Coqui XTTS v2** — higher generation headroom; zero-shot cloning.
 
 ### The guided question
@@ -336,8 +342,12 @@ The recommendation logic:
 1. **Hard filter by capability** — never recommend an engine that cannot meet the
    stated need. If the user needs multilingual, Kokoro (English-only) is *not*
    eligible.
-2. **Soft-prefer the lightest fitting engine** — among capable engines, prefer the
-   lightest whose `genVramFloorMb` fits detected `vramTotalMb`.
+2. **Order the capable set by authored `capablePreferenceRank`** (Qwen 0 → Coqui 1);
+   the lead is rank-0. **VRAM never reorders the capable set** — it only decides
+   whether the lead gets a caveat. (This corrects the earlier draft's "soft-prefer the
+   lightest *fitting* engine," which would have led Coqui over Qwen on a ~5 GB box —
+   wrong, since Qwen is the multi-cast default and #1614 requires it to lead. VRAM is a
+   caveat signal, not a reordering key.)
 
 Consequences:
 
@@ -448,8 +458,9 @@ the `diagnose*` pure-function test pattern; the client only renders the result o
 
 - `server/src/tts/voice-engine-registry.ts` — **extend `VoiceEngineEntry`** (landed in
   Part A with a `defaultModelKey` seam already tagged "for the Defaults handoff (Part B)")
-  with the capability fields (`expressive`, `multilingual`, `genVramFloorMb`,
-  `designVramFloorMb?`).
+  with the authored capability fields (`expressive`, `genVramFloorMb`,
+  `capablePreferenceRank`). `multilingual` is **derived** (not stored); `designVramFloorMb`
+  is **not** added in Part B (no consumer — YAGNI).
 - `server/src/tts/` (new module, e.g. `engine-recommendation.ts`) — pure
   `recommend(needsAnswer, vramTotalMb)` over the registry; `multilingual` **derived** from
   `resolveEligibleEngines` (`server/src/tts/language.ts`), `expressive` + VRAM floors are
@@ -531,6 +542,7 @@ Each PR runs the full before-shipping checklist: regression plan, release-notes-
   model-manager in the same PR AND forces a rewrite of all four `*-install.test.tsx`
   suites + `model-manager.test.tsx` (they mock `/detect` self-fetch today). Verified
   feasible but real, enumerable work — listed as explicit plan tasks, not incidental.
-- **Capability-map floor numbers:** the exact `genVramFloorMb` / `designVramFloorMb`
-  values must come from real measurement or the model registry, not guessed literals.
-  The *structure* is fixed here; the numbers are a plan-time task.
+- **Capability-map floor numbers:** the `genVramFloorMb` values are **authored
+  estimates** (grounded in CLAUDE.md's model-lifecycle notes, refined on-box if
+  measurement contradicts). The *structure* is fixed here; only the capable lead's
+  floor is read at runtime (to decide the caveat).
