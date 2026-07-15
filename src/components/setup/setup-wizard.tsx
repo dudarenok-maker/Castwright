@@ -29,6 +29,9 @@ import { StepDefaults } from './step-defaults';
 import { StepLanCert } from './step-lan-cert';
 import { StepFinish } from './step-finish';
 import { STEPS, type StepId } from './steps';
+import { WikiLink } from '../wiki-link';
+import { stepLearnMorePage } from '../../lib/wiki-links';
+import { HelpResources } from './help-resources';
 
 interface Props {
   readiness: SetupReadiness;
@@ -93,6 +96,8 @@ export function SetupWizard({ readiness, mode, onRefetch, onFinish, onTryDemoBoo
           onTryDemoBook={onTryDemoBook}
         />
       )}
+
+      <HelpResources />
     </div>
   );
 }
@@ -118,6 +123,7 @@ function GuidedWizard({
   onExit?: () => void;
 }) {
   const step = STEPS[stepIndex];
+  const learnMorePage = stepLearnMorePage(step.id);
   const isFirst = stepIndex === 0;
   const isLast = stepIndex === STEPS.length - 1;
 
@@ -152,6 +158,11 @@ function GuidedWizard({
       </div>
 
       <div className="rounded-2xl border border-ink/10 bg-white p-5 sm:p-6 shadow-card">
+        {learnMorePage && (
+          <div className="mb-3 flex flex-wrap justify-end">
+            <WikiLink page={learnMorePage} label="Learn more" />
+          </div>
+        )}
         {renderStep(step.id, readiness, onRefetch, onFinish, onTryDemoBook)}
       </div>
 

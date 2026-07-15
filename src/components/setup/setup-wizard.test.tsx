@@ -386,3 +386,46 @@ describe('SetupWizard', () => {
     expect(voiceRow).toHaveAttribute('data-status', 'ok');
   });
 });
+
+const WIKI = 'https://github.com/dudarenok-maker/Castwright/wiki';
+
+describe('SetupWizard — help & wiki links (fe-52/fe-53)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('renders the persistent "Need help?" footer in guided mode', () => {
+    render(
+      <SetupWizard readiness={READINESS} mode="guided" onRefetch={() => {}} onFinish={() => {}} />,
+    );
+    expect(screen.getByText(/need help\?/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /report a problem/i })).toHaveAttribute(
+      'href', 'https://github.com/dudarenok-maker/Castwright/issues',
+    );
+  });
+
+  it('renders the "Need help?" footer on the re-entry summary board too', () => {
+    render(
+      <SetupWizard readiness={READINESS} mode="checklist" onRefetch={() => {}} onFinish={() => {}} />,
+    );
+    expect(screen.getByTestId('setup-summary-board')).toBeInTheDocument();
+    expect(screen.getByText(/need help\?/i)).toBeInTheDocument();
+  });
+
+  it('hides "Learn more" on steps whose page is already a footer link, shows it otherwise', () => {
+    render(
+      <SetupWizard readiness={READINESS} mode="guided" onRefetch={() => {}} onFinish={() => {}} />,
+    );
+    // Step 1 = Environment → Installing-Castwright (a footer link) → suppressed
+    expect(screen.getByTestId('step-environment-stub')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /learn more/i })).not.toBeInTheDocument();
+    // Step 2 = ffmpeg → Installing-Castwright → also suppressed
+    fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    expect(screen.getByTestId('step-ffmpeg-stub')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /learn more/i })).not.toBeInTheDocument();
+    // Step 3 = Analysis → Analysis-and-the-Analyzer (not in footer) → shown
+    fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    expect(screen.getByTestId('step-analysis-stub')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /learn more/i })).toHaveAttribute(
+      'href', `${WIKI}/Analysis-and-the-Analyzer`,
+    );
+  });
+});
