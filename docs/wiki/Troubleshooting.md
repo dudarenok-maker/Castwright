@@ -188,6 +188,22 @@ Fixed as of v1.11.0 — update if you're still seeing this. The narrator and the
 
 Every Qwen voice can render on two models: the everyday 0.6B (fast) or the larger 1.7B — better prosody and emotional range, noticeably slower and heavier on VRAM. Pin it per character from the voice picker, for a whole book at Start Generation, for a single chapter at Regenerate, or for your whole cast in one tap from the Cast view ("Pin 1.7B quality to all Qwen cast"). It also unlocks per-line direction and the vocal reactions (gasps, sighs, laughs) — those only render on the 1.7B tier. Worth it for a book you care about; leave everyday books on the fast tier.
 
+### A line came out silent or nearly empty (Qwen degeneracy guard)
+
+Under heavy VRAM churn on a tight card, the Qwen voice model can very
+occasionally enter a state where it runs without any error but emits
+near-empty audio — a broken, near-silent sentence that would otherwise ship
+unnoticed. Castwright watches for this: whenever a substantial line renders
+implausibly short, it reloads the Qwen model and retries once, and if the
+retry is still degenerate it recycles the voice engine and fails the request
+loudly rather than shipping the bad audio. This guard is **on by default** and
+needs no action — a stray silent line usually just re-renders correctly on
+Retry. It lives in **Advanced Settings → Voice engine & device → "Qwen
+degeneracy guard"** (a sidecar restart applies a change); the only reason to
+turn it off is to isolate a suspected false-positive on unusual text, and you
+should turn it straight back on afterwards. The detection thresholds
+themselves are fixed and not adjustable.
+
 ### Generation is much slower than usual
 
 The usual culprit is a crowded GPU. Check it isn't sharing the card with something heavy (games, a second model), and keep only one heavy voice engine loaded — unload the analyzer Ollama or a second engine from the model pills. Rendering on the Higher-quality (1.7B) tier is also simply slower by design — that is expected, not a fault. Castwright now watches for a voice engine that has gone quiet without crashing and restarts it on its own, so a stalled render usually recovers by itself; if it doesn't pick back up within a minute or two, restart the voice engine yourself from its pill. The Admin view's Resource trends panel shows the per-chapter speed history.

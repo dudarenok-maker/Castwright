@@ -749,12 +749,16 @@ def _parse_bool(value: Optional[str], default: bool) -> bool:
 # Master switch for the Qwen output-degeneracy guard (see the constants + helper
 # near `_QWEN_DEGEN_MS_PER_CHAR`). Default ON so the live box gets the protection
 # without any operator action — the fault is already shipping near-silent audio.
-# This is NOT a tuning knob (the thresholds stay fixed); it exists so the guard —
-# which inspects real synth-output length — can be turned OFF for the unit suite,
-# whose minimal fakes emit non-realistic audio that would otherwise read as
-# degenerate. `tests/conftest.py` sets `QWEN_DEGEN_GUARD=0` suite-wide (mirroring
-# its `PRELOAD_COQUI=0`); the degeneracy regression test re-enables it explicitly.
-# Env-only (like PRELOAD_COQUI / ASR_DEVICE / SEG_ASR_ENABLED) — no registry key.
+# This is a master on/off, NOT a threshold tuner (the detection thresholds stay
+# fixed); it exists so the guard — which inspects real synth-output length — can
+# be turned OFF for the unit suite, whose minimal fakes emit non-realistic audio
+# that would otherwise read as degenerate. `tests/conftest.py` sets
+# `QWEN_DEGEN_GUARD=0` suite-wide (mirroring its `PRELOAD_COQUI=0`); the
+# degeneracy regression test re-enables it explicitly.
+# Surfaced as the `tts.qwen.degenGuard` Advanced-Settings knob (registry key,
+# env `QWEN_DEGEN_GUARD`, default true) — buildSidecarEnv injects it on restart
+# only when overridden off, so this Python default still governs the untouched
+# case.
 _QWEN_DEGEN_GUARD_ENABLED = _parse_bool(os.environ.get("QWEN_DEGEN_GUARD"), True)
 
 
