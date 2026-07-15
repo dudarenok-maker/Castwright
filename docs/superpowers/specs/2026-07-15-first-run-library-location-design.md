@@ -280,6 +280,25 @@ The adversarial review (2026-07-15) raised three; all resolved in this revision:
 
 ## Open questions
 
-None blocking. Two plan-time implementation details (not design forks): the
-shared-vs-duplicated `defaultLibraryDir()` helper, and the exact frontend source
-for the "library already has books" signal used by the non-empty degradation.
+None blocking (spec re-reviewed 2026-07-15 → GREEN). Plan-time carry-forwards,
+each an implementation detail, not a design fork:
+
+1. **Shared-vs-duplicated `defaultLibraryDir()` helper** — one shared module vs.
+   a small function duplicated across the two launcher trees.
+2. **Split the homedir fallback into two testable halves.** `defaultLibraryDir()`
+   checks only *resolvability* (`!homedir || !isAbsolute` → null) and is pure /
+   injectable, so `planLaunch` can unit-test the resolvability-null branch. The
+   *writability* fallback is a side-effecting mkdir-probe in launcher glue and
+   needs its **own** test with an **injected/faked `mkdir`** — do not try to
+   exercise a real mkdir-failure through `planLaunch`.
+3. **The non-empty-library signal needs a real source.** `SetupReadiness` (the
+   object passed to every wizard step) carries **no book count** — verified:
+   `ready`, `completedAt`, `blockers`, `info.gpu` only. So the non-empty
+   degradation (Lever B) cannot read it from readiness. The plan must pick one:
+   (a) the books/library redux slice if it is reliably populated at first-run,
+   or (b) a minimal count surfaced onto the data the wizard already fetches.
+   Prefer not adding a brand-new endpoint. Bounded worst case if the signal is
+   absent: the warning simply doesn't render — no library becomes invisible (the
+   Lever A guards still protect existing data; an override is only ever written
+   on a deliberate edit), so the failure mode is a *split* library, not data
+   loss. Ship-blocking to get right, but not a data-safety risk.
