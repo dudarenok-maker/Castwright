@@ -39,6 +39,7 @@ const SERVER_FIXTURE: UserSettings = {
   defaultTtsModelKey: 'gemini-2.5-flash',
   sidecarUrl: 'http://localhost:9001',
   analysisEngine: 'local',
+  allowCloudFallback: true,
   ollamaUrl: 'http://localhost:11434',
   workspaceDirOverride: null,
   minorCastMinLines: 3,

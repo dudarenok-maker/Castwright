@@ -252,6 +252,8 @@ describe('user-settings router', () => {
       defaultTtsModelKeyExplicit: true,
       sidecarUrl: 'http://localhost:9100',
       analysisEngine: 'local',
+      /* non-default (false) so the round-trip proves the opt-out persists. */
+      allowCloudFallback: false,
       ollamaUrl: 'http://localhost:11500',
       workspaceDirOverride: 'D:/audiobooks-ws',
       exportSyncFolder: '/tmp/export-sync',

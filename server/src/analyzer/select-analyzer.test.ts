@@ -66,6 +66,24 @@ describe('selectAnalyzer dispatch', () => {
     expect(s.fallbackModel).toBeNull();
   });
 
+  it('local + key + allowCloudFallback OFF → bare OllamaAnalyzer (Part 1 gate, strict-local)', () => {
+    _setUserSettingsCacheForTest({ analysisEngine: 'local', allowCloudFallback: false });
+    process.env.GEMINI_API_KEY = 'test-key';
+    const s = selectAnalyzer();
+    expect(s.engine).toBe('local');
+    expect(s.analyzer).toBeInstanceOf(OllamaAnalyzer);
+    expect(s.analyzer).not.toBeInstanceOf(FallbackAnalyzer);
+    expect(s.fallbackModel).toBeNull();
+  });
+
+  it('local + key + allowCloudFallback ON (default) → FallbackAnalyzer (pins the non-breaking default)', () => {
+    _setUserSettingsCacheForTest({ analysisEngine: 'local', allowCloudFallback: true });
+    process.env.GEMINI_API_KEY = 'test-key';
+    const s = selectAnalyzer();
+    expect(s.analyzer).toBeInstanceOf(FallbackAnalyzer);
+    expect(s.fallbackModel).toBe('gemma-4-31b-it');
+  });
+
   it('per-request model override wins on the local path', () => {
     const s = selectAnalyzer({ model: 'llama3.1:8b' });
     expect(s.engine).toBe('local');

@@ -137,6 +137,13 @@ export const userSettingsSchema = z.object({
      falls back to all-DEFAULT (also local) — see getResolvedAnalysisEngine.
      The ANALYZER env var no longer selects the engine. */
   analysisEngine: z.enum(ANALYSIS_ENGINE_VALUES).default('local'),
+  /* Part 1 — opt-out cloud fallback gate. When engine=local and a Gemini key
+     is present, the analyzer wraps Ollama in a FallbackAnalyzer that fails over
+     to Gemini iff the local daemon is unreachable. Default true (non-breaking:
+     existing installs keep today's behaviour). Turn OFF to keep analysis
+     strictly local — no silent (or announced) cloud fall-through. See
+     selectAnalyzer + getResolvedAllowCloudFallback. */
+  allowCloudFallback: z.boolean().default(true),
   /* Base URL of the local Ollama daemon. Falls through to OLLAMA_URL env
      and then http://localhost:11434 in getResolvedOllamaUrl. */
   ollamaUrl: z.string().min(1).max(2000),
@@ -269,6 +276,10 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      Defaults step routes to the free Gemini API instead. Flip in lockstep
      with src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
   analysisEngine: 'local',
+  /* Part 1 — cloud fallback ON by default (opt-out). Existing installs keep
+     today's Ollama→Gemini fallback; strict-local users turn it off in analyzer
+     settings. Flip in lockstep with src/lib/account-defaults.ts. */
+  allowCloudFallback: true,
   ollamaUrl: 'http://localhost:11434',
   workspaceDirOverride: null,
   exportSyncFolder: null,
@@ -586,6 +597,19 @@ export function getResolvedOllamaModel(): string {
     defensive only: the cached value is always a parsed `local|gemini` enum. */
 export function getResolvedAnalysisEngine(): 'local' | 'gemini' {
   return getCachedUserSettings().analysisEngine === 'gemini' ? 'gemini' : 'local';
+}
+
+/** Cloud-fallback gate (Part 1). Reads the saved user setting, defaulting
+    TRUE (opt-out: existing installs keep today's Ollama→Gemini fallback).
+    `ANALYZER_ALLOW_CLOUD_FALLBACK=0` is a legacy PRE-CACHE under-ride only —
+    it can force the gate OFF when no user setting is cached yet (e.g. a strict-
+    local deployer setting it in `.env` before the first settings read), but a
+    saved user value always wins once the cache is warm, and it can NEVER force
+    the gate on. */
+export function getResolvedAllowCloudFallback(): boolean {
+  const c = cached;
+  if (c) return c.allowCloudFallback;
+  return process.env.ANALYZER_ALLOW_CLOUD_FALLBACK !== '0';
 }
 
 /** Plan 49 — dedicated write path for the Gemini API key. The general

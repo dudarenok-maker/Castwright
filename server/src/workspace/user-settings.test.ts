@@ -12,6 +12,7 @@ import {
   getResolvedAutoStartSidecar,
   getResolvedGenerationWorkers,
   getResolvedAnalysisEngine,
+  getResolvedAllowCloudFallback,
   resolveUserSettingsPath,
   migrateLegacyUserSettings,
   _resetUserSettingsCache,
@@ -137,6 +138,60 @@ describe('analysisEngine default + resolution (Part 0 — local-by-default)', ()
   it('ANALYZER=gemini in env is inert on a cold cache too (env retired) → local', () => {
     process.env.ANALYZER = 'gemini';
     expect(getResolvedAnalysisEngine()).toBe('local');
+  });
+});
+
+describe('allowCloudFallback (Part 1 — opt-out cloud fallback gate)', () => {
+  beforeEach(() => {
+    _resetUserSettingsCache();
+    delete process.env.ANALYZER_ALLOW_CLOUD_FALLBACK;
+  });
+
+  afterEach(() => {
+    _resetUserSettingsCache();
+    delete process.env.ANALYZER_ALLOW_CLOUD_FALLBACK;
+  });
+
+  it('defaults to true on a fresh user-settings document (non-breaking opt-out)', () => {
+    expect(DEFAULT_USER_SETTINGS.allowCloudFallback).toBe(true);
+  });
+
+  it('a legacy file missing the field parses to true via the zod default', () => {
+    const { allowCloudFallback: _drop, ...legacy } = DEFAULT_USER_SETTINGS;
+    const parsed = userSettingsSchema.parse(legacy);
+    expect(parsed.allowCloudFallback).toBe(true);
+  });
+
+  it('accepts an explicit false (strict-local opt-out)', () => {
+    const parsed = userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, allowCloudFallback: false });
+    expect(parsed.allowCloudFallback).toBe(false);
+  });
+
+  it('getResolvedAllowCloudFallback returns true on a cold cache', () => {
+    expect(getResolvedAllowCloudFallback()).toBe(true);
+  });
+
+  it('a saved false wins over the default', () => {
+    _setUserSettingsCacheForTest({ allowCloudFallback: false });
+    expect(getResolvedAllowCloudFallback()).toBe(false);
+  });
+
+  it('ANALYZER_ALLOW_CLOUD_FALLBACK=0 is a PRE-CACHE under-ride that forces off', () => {
+    process.env.ANALYZER_ALLOW_CLOUD_FALLBACK = '0';
+    expect(getResolvedAllowCloudFallback()).toBe(false);
+  });
+
+  it('a saved value (true) wins over the env under-ride once the cache is warm', () => {
+    _setUserSettingsCacheForTest({ allowCloudFallback: true });
+    process.env.ANALYZER_ALLOW_CLOUD_FALLBACK = '0';
+    expect(getResolvedAllowCloudFallback()).toBe(true);
+  });
+
+  it('the env under-ride can never force the gate ON (values other than "0" are inert)', () => {
+    process.env.ANALYZER_ALLOW_CLOUD_FALLBACK = '1';
+    expect(getResolvedAllowCloudFallback()).toBe(true); // already true by default; not "forced"
+    _setUserSettingsCacheForTest({ allowCloudFallback: false });
+    expect(getResolvedAllowCloudFallback()).toBe(false); // saved off stays off
   });
 });
 
