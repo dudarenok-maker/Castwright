@@ -3,11 +3,40 @@
    the card wording matches the badge, a transient 'starting' shows a neutral pill
    (not amber), and a broken engine surfaces on its own card while the aggregate
    stays green. The cards are rendered for real (they're controlled — no fetch);
-   only api.getModelsStatus is stubbed. */
+   only api.getModelsStatus is stubbed.
+
+   fe-51: StepVoice now reads/dispatches the account slice (Task 5), so a redux
+   Provider is mandatory for every render — see renderStepVoice below. The
+   module mock + store-preload pattern is copied verbatim from
+   step-defaults.test.tsx (importActual so getModelsStatus stays real for the
+   per-test spies; only putUserSettings is stubbed to echo the patch). */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { configureStore } from '@reduxjs/toolkit';
+import { Provider } from 'react-redux';
+import { accountSlice } from '../../store/account-slice';
 import type { SetupReadiness, ModelsStatus } from '../../lib/api';
+
+const putUserSettingsMock = vi.fn();
+vi.mock('../../lib/api', async () => {
+  const actual = await vi.importActual<typeof import('../../lib/api')>('../../lib/api');
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      putUserSettings: (patch: unknown) => {
+        putUserSettingsMock(patch);
+        return Promise.resolve({
+          ...accountSlice.getInitialState(),
+          ...(patch as Record<string, unknown>),
+        });
+      },
+    },
+  };
+});
+
 import { api } from '../../lib/api';
 import { StepVoice } from './step-voice';
 
@@ -54,14 +83,38 @@ function modelsStatus(overrides: Partial<ModelsStatus> = {}): ModelsStatus {
   };
 }
 
+function renderStepVoice(
+  opts: {
+    readiness?: SetupReadiness;
+    account?: Partial<ReturnType<typeof accountSlice.getInitialState>>;
+  } = {},
+) {
+  const store = configureStore({
+    reducer: { account: accountSlice.reducer },
+    preloadedState: {
+      account: {
+        ...accountSlice.getInitialState(),
+        ...opts.account,
+      } as ReturnType<typeof accountSlice.getInitialState>,
+    },
+  });
+  const utils = render(
+    <Provider store={store}>
+      <StepVoice readiness={opts.readiness ?? allPassReadiness} onRefetch={() => {}} />
+    </Provider>,
+  );
+  return { ...utils, store };
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
+  putUserSettingsMock.mockReset();
 });
 
 describe('StepVoice', () => {
   it('renders the voice-engine controls once models-status resolves', async () => {
     vi.spyOn(api, 'getModelsStatus').mockResolvedValue(modelsStatus());
-    render(<StepVoice readiness={allPassReadiness} onRefetch={() => {}} />);
+    renderStepVoice();
     expect(await screen.findByText(/voice engine runtime ready/i)).toBeInTheDocument();
     expect(screen.getByText(/more voice engines/i)).toBeInTheDocument();
     expect(screen.getByText(/Kokoro is installed/i)).toBeInTheDocument();
@@ -77,7 +130,7 @@ describe('StepVoice', () => {
         },
       }),
     );
-    render(<StepVoice readiness={allPassReadiness} onRefetch={() => {}} />);
+    renderStepVoice();
     expect(await screen.findByText(/voice weights not downloaded/i)).toBeInTheDocument();
     expect(screen.queryByText(/Kokoro is not installed/i)).not.toBeInTheDocument();
   });
@@ -86,7 +139,7 @@ describe('StepVoice', () => {
     vi.spyOn(api, 'getModelsStatus').mockResolvedValue(
       modelsStatus({ runtime: { installedOnDisk: true, pythonFound: true, process: 'starting' } }),
     );
-    render(<StepVoice readiness={allPassReadiness} onRefetch={() => {}} />);
+    renderStepVoice();
     const pill = await screen.findByTestId('runtime-liveness-pill');
     expect(pill).toHaveAttribute('data-tone', 'neutral');
     expect(pill).toHaveTextContent(/starting/i);
@@ -106,7 +159,7 @@ describe('StepVoice', () => {
         },
       }),
     );
-    render(<StepVoice readiness={allPassReadiness} onRefetch={() => {}} />);
+    renderStepVoice();
     // Coqui's own card surfaces the broken/repair state…
     expect(await screen.findByText(/Coqui XTTS v2 is installed but fails to load/i)).toBeInTheDocument();
     // …while the aggregate "Voice" badge stays green (readiness.tts pass).
@@ -131,7 +184,7 @@ describe('StepVoice', () => {
         },
       },
     };
-    render(<StepVoice readiness={readiness} onRefetch={() => {}} />);
+    renderStepVoice({ readiness });
     expect(await screen.findByTestId('runtime-fix-action')).toBeInTheDocument();
     expect(screen.getByText(/crashed repeatedly/i)).toBeInTheDocument();
   });
@@ -153,8 +206,30 @@ describe('StepVoice', () => {
         },
       },
     };
-    render(<StepVoice readiness={readiness} onRefetch={() => {}} />);
+    renderStepVoice({ readiness });
     await screen.findByTestId('runtime-liveness-pill');
     expect(screen.queryByTestId('runtime-fix-action')).not.toBeInTheDocument();
+  });
+
+  it('shows the guided question and, once answered "yes", leads with the recommended engine', async () => {
+    vi.spyOn(api, 'getModelsStatus').mockResolvedValue(modelsStatus());
+    renderStepVoice(); // mock getModelsStatus returns the Task-3 recommendation (qwen lead, CPU caveat)
+    expect(await screen.findByText(/expressive and\/or multilingual/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('radio', { name: /yes — expressive/i }));
+
+    const badge = await screen.findByText(/recommended for you/i);
+    // The recommended (Qwen) card leads: the badge sits on the qwen card wrapper.
+    expect(badge.closest('[data-engine-card="qwen"]')).not.toBeNull();
+    // CPU-only mock → Qwen caveat shown, neutral (sky) not an amber blocker.
+    expect(screen.getByTestId('recommendation-caveat')).toHaveTextContent(/may not fit/i);
+  });
+
+  it('answering "no" recommends Kokoro', async () => {
+    vi.spyOn(api, 'getModelsStatus').mockResolvedValue(modelsStatus());
+    renderStepVoice();
+    await userEvent.click(await screen.findByRole('radio', { name: /no — simple english/i }));
+    const badge = await screen.findByText(/recommended for you/i);
+    expect(badge.closest('[data-engine-card="kokoro"]')).not.toBeNull();
   });
 });
