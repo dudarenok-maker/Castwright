@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import type { SetupReadiness } from '../../lib/api';
 
-// ── stub the 7 step components ────────────────────────────────────────────────
+// ── stub the 8 step components ────────────────────────────────────────────────
 
 vi.mock('./step-environment', () => ({
   StepEnvironment: () => <div data-testid="step-environment-stub">env</div>,

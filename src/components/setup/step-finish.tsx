@@ -47,7 +47,14 @@ export function StepFinish({ readiness: _readiness, onFinish, onTryDemoBook, lib
 
       {libraryChanged && (
         <p className="text-xs text-amber-800 bg-amber-100 rounded-2xl px-4 py-2">
-          Restart the server to move your library to <span className="font-medium break-all">{target}</span>.
+          {target ? (
+            <>
+              Restart the server to move your library to{' '}
+              <span className="font-medium break-all">{target}</span>.
+            </>
+          ) : (
+            'Restart the server to apply your new library location.'
+          )}
         </p>
       )}
 

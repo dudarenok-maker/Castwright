@@ -1,7 +1,7 @@
 /* fs-21 wave 2 — C5: SetupWizard orchestrator.
-   Composes the seven step components into two modes:
+   Composes the eight step components into two modes:
 
-   - guided    — linear, one step at a time, Back/Next paging + a "Step N of 7"
+   - guided    — linear, one step at a time, Back/Next paging + a "Step N of 8"
                  progress indicator. Next is ALWAYS enabled: the derived Wave 0
                  boot gate is the real lock, so the wizard never blocks
                  progression on a failing blocker. The final step (Finish) owns
@@ -197,7 +197,7 @@ function GuidedWizard({
         </button>
       )}
 
-      {/* Progress indicator: dots + "Step N of 7" */}
+      {/* Progress indicator: dots + "Step N of 8" */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1.5" aria-hidden>
           {STEPS.map((s, i) => (

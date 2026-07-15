@@ -35,28 +35,22 @@ if (require.main === module) {
   const appDir = process.argv[2] || process.cwd();
   const examplePath = resolve('server', '.env.example');
   const envPath = resolve('server', '.env');
-  const installLocal = `${appDir}/workspace`;
 
-  let workspaceDir = chooseFreshWorkspaceDir({
-    appDir,
-    workspaceExists: existsSync(installLocal),
-  });
-  // Boot-safety: never emit a dir we can't create. Probe once; fall back on failure.
-  try {
-    mkdirSync(workspaceDir, { recursive: true });
-  } catch (err) {
-    process.stdout.write(`[write-env] ${workspaceDir} not creatable (${err.code}); using ${installLocal}\n`);
-    workspaceDir = installLocal;
-  }
-
-  const out = buildEnvContents({
-    exampleText: readFileSync(examplePath, 'utf8'),
-    workspaceDir,
-    envExists: existsSync(envPath),
-  });
-  if (out === null) {
+  // Check idempotency FIRST — when .env already exists we touch nothing, and
+  // must NOT run the mkdir probe (it would leave a stray empty ~/Castwright).
+  if (existsSync(envPath)) {
     process.stdout.write('[write-env] server/.env already exists — left untouched\n');
   } else {
+    const installLocal = `${appDir}/workspace`;
+    let workspaceDir = chooseFreshWorkspaceDir({ appDir, workspaceExists: existsSync(installLocal) });
+    // Boot-safety: never emit a dir we can't create. Probe once; fall back on failure.
+    try {
+      mkdirSync(workspaceDir, { recursive: true });
+    } catch (err) {
+      process.stdout.write(`[write-env] ${workspaceDir} not creatable (${err.code}); using ${installLocal}\n`);
+      workspaceDir = installLocal;
+    }
+    const out = buildEnvContents({ exampleText: readFileSync(examplePath, 'utf8'), workspaceDir, envExists: false });
     writeFileSync(envPath, out, 'utf8');
     process.stdout.write(`[write-env] wrote server/.env (WORKSPACE_DIR=${workspaceDir})\n`);
   }
