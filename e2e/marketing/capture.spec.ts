@@ -150,6 +150,11 @@ for (const scene of SCENES) {
     if (fullPage) {
       await page.addStyleTag({ content: 'header.z-40 { position: static !important; }' });
     }
+    /* The BuildStamp footer is verbose (version · sha* · branch · time) under a
+       dev server, which is what the capture harness runs — never wanted in a
+       marketing/wiki shot, and it lands in-frame on short pages (the setup
+       checklist board). Hide it for every capture. */
+    await page.addStyleTag({ content: '[data-testid="build-stamp"] { display: none !important; }' });
     for (const theme of themes) {
       await page.emulateMedia({ colorScheme: theme });
       await page.waitForTimeout(400); // settle the theme re-render
