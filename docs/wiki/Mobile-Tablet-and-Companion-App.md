@@ -98,6 +98,12 @@ turning the device never tears the player down. Narrower tablets in portrait
 get a cover-forward grid instead, and a phone is unchanged. The same adaptive
 layout is what the app will use on iPad.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/mobile-tablet-and-companion-app/03-companion-tablet-two-pane-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/mobile-tablet-and-companion-app/03-companion-tablet-two-pane.png">
+  <img alt="Companion app on a tablet — two-pane layout with the library on the left and a persistent player on the right" src="images/mobile-tablet-and-companion-app/03-companion-tablet-two-pane.png">
+</picture>
+
 ### Try the demo — no server, no pairing
 
 The pairing screen has a **"Try the demo"** entry that runs the whole app
