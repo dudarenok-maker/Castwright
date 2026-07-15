@@ -1,5 +1,9 @@
 # Account & Settings
 
+> Setting up for the first time? This page explains the app-wide defaults the
+> setup wizard's **Defaults** step lets you pre-pick — voice engine, models, and
+> theme — and where to change them later.
+
 **Account** (`#/account`) is reached from the avatar in the top-right of the
 top bar. It centralises workspace-wide defaults and non-secret server
 overrides — things that seed new books, not per-book choices; once you pick

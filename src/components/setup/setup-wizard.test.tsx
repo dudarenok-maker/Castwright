@@ -19,7 +19,26 @@ vi.mock('./step-analysis', () => ({
   StepAnalysis: () => <div data-testid="step-analysis-stub">analysis</div>,
 }));
 vi.mock('./step-voice', () => ({
-  StepVoice: () => <div data-testid="step-voice-stub">voice</div>,
+  // Reflects the wizard-owned `needs` so navigation-persistence is observable.
+  StepVoice: ({
+    needs,
+    onChooseNeeds,
+  }: {
+    needs: string | null;
+    onChooseNeeds: (a: string) => void;
+  }) => (
+    <div data-testid="step-voice-stub">
+      <label>
+        <input
+          type="radio"
+          name="voice-needs-stub"
+          checked={needs === 'expressive-or-multilingual'}
+          onChange={() => onChooseNeeds('expressive-or-multilingual')}
+        />
+        yes — expressive
+      </label>
+    </div>
+  ),
 }));
 vi.mock('./step-defaults', () => ({
   StepDefaults: () => <div data-testid="step-defaults-stub">defaults</div>,
@@ -162,6 +181,28 @@ describe('SetupWizard', () => {
     fireEvent.click(screen.getByRole('button', { name: /back/i }));
     expect(screen.getByTestId('step-environment-stub')).toBeInTheDocument();
     expect(screen.getByText(/step 1 of 7/i)).toBeInTheDocument();
+  });
+
+  it('guided mode: the Voice step answer survives Back/Next (#wizard-answer-persistence)', () => {
+    // Regression: the guided yes/no answer used to live in StepVoice's local
+    // state, so paging away (which unmounts the step) forgot it — and re-answering
+    // on return re-fired the recommended-engine save, clobbering a finer model
+    // chosen on the Defaults step. The answer now lives on the wizard.
+    render(
+      <SetupWizard readiness={READINESS} mode="guided" onRefetch={() => {}} onFinish={() => {}} />,
+    );
+    // Advance to the Voice step (index 3).
+    for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    const radio = screen.getByRole('radio', { name: /yes — expressive/i });
+    expect(radio).not.toBeChecked();
+    fireEvent.click(radio);
+    expect(radio).toBeChecked();
+    // Page forward to Defaults, then back to Voice.
+    fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    expect(screen.getByTestId('step-defaults-stub')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /back/i }));
+    // The answer is still selected — no re-click needed, so no clobbering save.
+    expect(screen.getByRole('radio', { name: /yes — expressive/i })).toBeChecked();
   });
 
   it('guided mode: Back is disabled on the first step', () => {
@@ -384,5 +425,48 @@ describe('SetupWizard', () => {
     const voiceRow = screen.getByTestId('setup-summary-row-voice');
     expect(voiceRow).not.toHaveAttribute('data-status', 'attention');
     expect(voiceRow).toHaveAttribute('data-status', 'ok');
+  });
+});
+
+const WIKI = 'https://github.com/dudarenok-maker/Castwright/wiki';
+
+describe('SetupWizard — help & wiki links (fe-52/fe-53)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('renders the persistent "Need help?" footer in guided mode', () => {
+    render(
+      <SetupWizard readiness={READINESS} mode="guided" onRefetch={() => {}} onFinish={() => {}} />,
+    );
+    expect(screen.getByText(/need help\?/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /report a problem/i })).toHaveAttribute(
+      'href', 'https://github.com/dudarenok-maker/Castwright/issues',
+    );
+  });
+
+  it('renders the "Need help?" footer on the re-entry summary board too', () => {
+    render(
+      <SetupWizard readiness={READINESS} mode="checklist" onRefetch={() => {}} onFinish={() => {}} />,
+    );
+    expect(screen.getByTestId('setup-summary-board')).toBeInTheDocument();
+    expect(screen.getByText(/need help\?/i)).toBeInTheDocument();
+  });
+
+  it('hides "Learn more" on steps whose page is already a footer link, shows it otherwise', () => {
+    render(
+      <SetupWizard readiness={READINESS} mode="guided" onRefetch={() => {}} onFinish={() => {}} />,
+    );
+    // Step 1 = Environment → Installing-Castwright (a footer link) → suppressed
+    expect(screen.getByTestId('step-environment-stub')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /learn more/i })).not.toBeInTheDocument();
+    // Step 2 = ffmpeg → Installing-Castwright → also suppressed
+    fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    expect(screen.getByTestId('step-ffmpeg-stub')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /learn more/i })).not.toBeInTheDocument();
+    // Step 3 = Analysis → Analysis-and-the-Analyzer (not in footer) → shown
+    fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    expect(screen.getByTestId('step-analysis-stub')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /learn more/i })).toHaveAttribute(
+      'href', `${WIKI}/Analysis-and-the-Analyzer`,
+    );
   });
 });
