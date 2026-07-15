@@ -118,7 +118,7 @@ export function LanCertStatus({
           type="button"
           onClick={regenerate}
           disabled={regen.k === 'loading'}
-          className="px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs text-ink/70 hover:bg-ink/5 min-h-[44px] fine-pointer:min-h-0 disabled:opacity-50"
+          className="px-3 py-1.5 rounded-full border border-ink/20 bg-white text-xs font-medium text-ink hover:bg-ink/5 min-h-[44px] fine-pointer:min-h-0 disabled:opacity-50"
         >
           {buttonLabel}
         </button>

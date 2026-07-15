@@ -20,7 +20,7 @@
 
 import { useState } from 'react';
 import { MixedHeading, PrimaryButton } from '../primitives';
-import type { SetupReadiness } from '../../lib/api';
+import type { SetupReadiness, NeedsAnswer } from '../../lib/api';
 import { StepEnvironment } from './step-environment';
 import { StepFfmpeg } from './step-ffmpeg';
 import { StepAnalysis } from './step-analysis';
@@ -41,12 +41,18 @@ interface Props {
   onTryDemoBook?: () => void;
 }
 
-/* Render a single step by id, passing ONLY the props its type declares. */
+/* Render a single step by id, passing ONLY the props its type declares.
+   The wizard swaps steps by unmounting the current one, so any answer a step
+   holds in its own state is lost on Back/Next. The Voice step's guided answer
+   therefore lives on the wizard (voiceNeeds) and is threaded in here, so it
+   survives navigation. */
 function renderStep(
   id: StepId,
   readiness: SetupReadiness,
   onRefetch: () => void,
   onFinish: () => void,
+  voiceNeeds: NeedsAnswer | null,
+  onChooseVoiceNeeds: (answer: NeedsAnswer) => void,
   onTryDemoBook?: () => void,
 ) {
   switch (id) {
@@ -57,7 +63,14 @@ function renderStep(
     case 'analysis':
       return <StepAnalysis readiness={readiness} onRefetch={onRefetch} />;
     case 'voice':
-      return <StepVoice readiness={readiness} onRefetch={onRefetch} />;
+      return (
+        <StepVoice
+          readiness={readiness}
+          onRefetch={onRefetch}
+          needs={voiceNeeds}
+          onChooseNeeds={onChooseVoiceNeeds}
+        />
+      );
     case 'defaults':
       return <StepDefaults readiness={readiness} />;
     case 'lanCert':
@@ -69,6 +82,11 @@ function renderStep(
 
 export function SetupWizard({ readiness, mode, onRefetch, onFinish, onTryDemoBook }: Props) {
   const [stepIndex, setStepIndex] = useState(0);
+  /* The Voice step's guided answer lives here, not in StepVoice, so paging
+     Back/Next (which unmounts the step) doesn't forget it — and the user never
+     has to re-answer, which previously re-fired the recommended-engine save and
+     clobbered a finer model picked on the Defaults step. */
+  const [voiceNeeds, setVoiceNeeds] = useState<NeedsAnswer | null>(null);
 
   return (
     <div className="max-w-[960px] mx-auto px-4 sm:px-6 py-10">
@@ -86,6 +104,8 @@ export function SetupWizard({ readiness, mode, onRefetch, onFinish, onTryDemoBoo
           onStepChange={setStepIndex}
           onRefetch={onRefetch}
           onFinish={onFinish}
+          voiceNeeds={voiceNeeds}
+          onChooseVoiceNeeds={setVoiceNeeds}
           onTryDemoBook={onTryDemoBook}
         />
       ) : (
@@ -93,6 +113,8 @@ export function SetupWizard({ readiness, mode, onRefetch, onFinish, onTryDemoBoo
           readiness={readiness}
           onRefetch={onRefetch}
           onFinish={onFinish}
+          voiceNeeds={voiceNeeds}
+          onChooseVoiceNeeds={setVoiceNeeds}
           onTryDemoBook={onTryDemoBook}
         />
       )}
@@ -110,6 +132,8 @@ function GuidedWizard({
   onStepChange,
   onRefetch,
   onFinish,
+  voiceNeeds,
+  onChooseVoiceNeeds,
   onTryDemoBook,
   onExit,
 }: {
@@ -118,6 +142,9 @@ function GuidedWizard({
   onStepChange: (next: number) => void;
   onRefetch: () => void;
   onFinish: () => void;
+  /** Voice step's guided answer, owned by the wizard so it survives paging. */
+  voiceNeeds: NeedsAnswer | null;
+  onChooseVoiceNeeds: (answer: NeedsAnswer) => void;
   onTryDemoBook?: () => void;
   /** When provided (re-entry), shows a "Setup overview" link back to the summary. */
   onExit?: () => void;
@@ -163,7 +190,15 @@ function GuidedWizard({
             <WikiLink page={learnMorePage} label="Learn more" />
           </div>
         )}
-        {renderStep(step.id, readiness, onRefetch, onFinish, onTryDemoBook)}
+        {renderStep(
+          step.id,
+          readiness,
+          onRefetch,
+          onFinish,
+          voiceNeeds,
+          onChooseVoiceNeeds,
+          onTryDemoBook,
+        )}
       </div>
 
       <div className="flex items-center justify-between">
@@ -198,11 +233,15 @@ function ReEntryFlow({
   readiness,
   onRefetch,
   onFinish,
+  voiceNeeds,
+  onChooseVoiceNeeds,
   onTryDemoBook,
 }: {
   readiness: SetupReadiness;
   onRefetch: () => void;
   onFinish: () => void;
+  voiceNeeds: NeedsAnswer | null;
+  onChooseVoiceNeeds: (answer: NeedsAnswer) => void;
   onTryDemoBook?: () => void;
 }) {
   /* null → showing the summary board; a number → showing the guided wizard
@@ -227,6 +266,8 @@ function ReEntryFlow({
       onStepChange={setWizardStep}
       onRefetch={onRefetch}
       onFinish={onFinish}
+      voiceNeeds={voiceNeeds}
+      onChooseVoiceNeeds={onChooseVoiceNeeds}
       onTryDemoBook={onTryDemoBook}
       onExit={() => setWizardStep(null)}
     />

@@ -99,10 +99,21 @@ function RuntimeLivenessPill({ runtime }: { runtime: ModelsStatus['runtime'] }) 
   );
 }
 
-export function StepVoice({ readiness, onRefetch }: { readiness: SetupReadiness; onRefetch: () => void }) {
+export function StepVoice({
+  readiness,
+  onRefetch,
+  needs,
+  onChooseNeeds,
+}: {
+  readiness: SetupReadiness;
+  onRefetch: () => void;
+  /** Guided "expressive vs simple" answer. Owned by the wizard (not local
+      state) so it survives Back/Next paging — see setup-wizard.tsx. */
+  needs: NeedsAnswer | null;
+  onChooseNeeds: (answer: NeedsAnswer) => void;
+}) {
   const dispatch = useAppDispatch();
   const [models, setModels] = useState<ModelsStatus | null>(null);
-  const [needs, setNeeds] = useState<NeedsAnswer | null>(null);
 
   const activeRec: EngineRecommendation | null =
     models && needs
@@ -113,7 +124,7 @@ export function StepVoice({ readiness, onRefetch }: { readiness: SetupReadiness;
 
   const chooseNeeds = useCallback(
     (answer: NeedsAnswer) => {
-      setNeeds(answer);
+      onChooseNeeds(answer);
       if (!models) return;
       const rec =
         answer === 'expressive-or-multilingual'
@@ -127,7 +138,7 @@ export function StepVoice({ readiness, onRefetch }: { readiness: SetupReadiness;
         }),
       );
     },
-    [dispatch, models],
+    [dispatch, models, onChooseNeeds],
   );
 
   const refetchModels = useCallback(async () => {
