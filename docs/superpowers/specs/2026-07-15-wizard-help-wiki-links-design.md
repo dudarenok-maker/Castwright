@@ -90,7 +90,7 @@ export const WIZARD_STEP_WIKI = {
   voice: 'Voice-Engines',
   defaults: 'Account-and-Settings',
   lanCert: 'Mobile-Tablet-and-Companion-App',
-  finish: 'Getting-Started',
+  finish: 'Generating-Audio',
 } satisfies Record<StepId, WikiPage>;
 ```
 
@@ -138,7 +138,7 @@ exposed in the union for fe-53 — is the real install guide; the 610-word
 | Voice | `Voice-Engines` | direct topic match |
 | Defaults | `Account-and-Settings` | step sets 4 persisted prefs — this is the settings page |
 | LAN access | `Mobile-Tablet-and-Companion-App` | positive "how LAN access works" (Troubleshooting is in the footer for when it breaks) |
-| Finish | `Getting-Started` | its "Upload → Analyze → Cast → Generate → Listen" overview is the "what now?" next step |
+| Finish | `Generating-Audio` | "you're set up — now make your first book"; distinct from the footer's Getting-Started link (which else would double up on this screen) |
 
 Environment and ffmpeg intentionally share `Installing-Castwright`: both *are*
 install prerequisites and the page leads with exactly that content. Page-level
@@ -175,14 +175,15 @@ linking makes the shared target land at the top where Prerequisites lives.
   guided frame is `<progress dots> → <card>{renderStep(id)}</card>`;
   `STEPS[].title` is used only for the dots' `aria-label`, never rendered, and
   each step component renders its *own* `<h2>` (inconsistent with the frame
-  titles — ffmpeg's is "Audio assembly", finish's is "Ready to perform"). So the
-  link mounts as a **right-aligned element pinned to the top-right of the step
-  card** (the card gets `relative`; the link is absolutely positioned top-right,
-  or the card gains a thin flex header row). It then sits on the same visual line
-  as each step's own top-left `<h2>` — reproducing the approved "link in the
-  section header" intent without a frame-level title and without touching the 7
-  step files. It does **not** go above the card (that would render before the
-  step's heading).
+  titles — ffmpeg's is "Audio assembly", finish's is "Ready to perform"). The
+  link mounts as a **right-aligned "Learn more →" in a thin in-flow flex header
+  row at the top of the card**, above `renderStep(id)`. In-flow (not absolutely
+  positioned) so it **reflows** — it stays clear of a long step `<h2>` and drops
+  onto its own line on narrow screens instead of overlapping. This reproduces the
+  "contextual link at the top of the section" intent without a frame-level title
+  and without touching any of the 7 step files. (Absolute top-right positioning
+  was rejected: out-of-flow, it would overlap a long heading on phones rather
+  than wrap.)
 
   Because `ReEntryFlow` delegates its drilled-in step rendering to the same
   `GuidedWizard`, the contextual link appears there too. It does **not** appear on
@@ -210,8 +211,9 @@ linking makes the shared target land at the top where Prerequisites lives.
 - Footer "Need help?" row: `flex-wrap` so links stack on `<640px`; single row on
   `sm:`+. 44px touch targets come from `ExternalLink` (`min-h-[44px]
   fine-pointer:min-h-0`).
-- Contextual "Learn more": inherits `WikiLink`'s 44px target; pinned top-right of
-  the step card (per §4), wrapping under the step's `<h2>` on narrow widths.
+- Contextual "Learn more": inherits `WikiLink`'s 44px target; in-flow, right-
+  aligned in the card's header row (per §4), dropping to its own line on narrow
+  widths.
 - Verified at phone / tablet / desktop per the mobile-testing protocol.
 
 ## Testing
