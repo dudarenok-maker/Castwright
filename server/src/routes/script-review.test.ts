@@ -546,15 +546,46 @@ describe('POST /api/books/:bookId/script-review', () => {
         model: 'qwen3.5:9b',
         fallbackModel: null,
       }));
-      warmOllamaModelMock.mockResolvedValue({ ok: false, status: 503, error: 'connect ECONNREFUSED' });
+      warmOllamaModelMock.mockResolvedValue({ ok: false, kind: 'unreachable', status: 503, error: 'connect ECONNREFUSED' });
 
       const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
       expect(res.status).toBe(200);
       const events = parseSse(res.text);
 
-      expect(events).toContainEqual(expect.objectContaining({ kind: 'error', code: 'model_load_failed' }));
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'error', code: 'model_load_failed', warmKind: 'unreachable' }));
       expect(events.filter((e) => e.kind === 'ops')).toHaveLength(0);
       expect(events.some((e) => e.kind === 'result')).toBe(false);
+      expect(runReview).not.toHaveBeenCalled();
+    });
+
+    it('local engine, no fallback, warm load_timeout → model_load_failed with the "took too long" copy (Part 2)', async () => {
+      writeBook(SENTENCES);
+      selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({
+        analyzer: {
+          runStage1: () => Promise.reject(new Error('not used')),
+          runStage1Chapter: () => Promise.reject(new Error('not used')),
+          runStage2Chapter: () => Promise.reject(new Error('not used')),
+          runEmotionChapter: () => Promise.reject(new Error('not used')),
+          runScriptReviewChapter: (m: string, c: number, p: string, call: unknown) =>
+            (runReview as (...args: unknown[]) => unknown)(m, c, p, call),
+          runStage3Chapter: () => Promise.reject(new Error('not used')),
+          runAttributionEscalation: () => Promise.resolve(null),
+        } as Analyzer,
+        engine: 'local',
+        model: 'qwen3.5:9b',
+        fallbackModel: null,
+      }));
+      warmOllamaModelMock.mockResolvedValue({ ok: false, kind: 'load_timeout', status: 504, error: 'slow' });
+
+      const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+      const events = parseSse(res.text);
+
+      const err = events.find((e) => e.kind === 'error' && e.code === 'model_load_failed') as
+        | { message?: string; warmKind?: string }
+        | undefined;
+      expect(err).toBeDefined();
+      expect(err?.warmKind).toBe('load_timeout');
+      expect(err?.message).toMatch(/finish loading|too long|slow disk/i);
       expect(runReview).not.toHaveBeenCalled();
     });
 
@@ -575,7 +606,7 @@ describe('POST /api/books/:bookId/script-review', () => {
         model: 'qwen3.5:9b',
         fallbackModel: 'gemma-4-31b-it',
       }));
-      warmOllamaModelMock.mockResolvedValue({ ok: false, status: 503, error: 'connect ECONNREFUSED' });
+      warmOllamaModelMock.mockResolvedValue({ ok: false, kind: 'unreachable', status: 503, error: 'connect ECONNREFUSED' });
       runReview.mockResolvedValue({ ops: [] });
 
       const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});

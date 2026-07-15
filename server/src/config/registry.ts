@@ -825,6 +825,16 @@ export const KNOBS: ConfigKnob[] = [
     default: 999, // ← ANALYZER_NUM_GPU constant in analyzer/ollama.ts (line 150)
     apply: 'live', risk: 'medium',
   },
+  {
+    key: 'analyzer.ollama.warmTimeoutMs',
+    env: 'ANALYZER_OLLAMA_WARM_TIMEOUT_MS',
+    group: 'analyzer-sampling',
+    label: 'Ollama warm timeout (ms)',
+    help: 'How long to wait for a cold Ollama model to load into VRAM (the keep_alive warm call the Analysing screen fires before the first chapter, and the manual Load button). Default 120000 (2 min) — a large model (e.g. 15 GB) on a slow disk can exceed the old hard 30s and read as "unreachable" when it was only loading. A connection refusal is still reported immediately; only a genuine load wait is bounded by this.',
+    type: 'integer', min: 1000,
+    default: 120_000, // ← WARM_TIMEOUT_MS fallback in routes/ollama-health.ts
+    apply: 'live', risk: 'low',
+  },
 
   // ── rate-limits ───────────────────────────────────────────────────────────
   {

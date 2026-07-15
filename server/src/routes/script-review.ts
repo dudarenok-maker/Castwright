@@ -703,8 +703,12 @@ async function runScriptReviewJob(
   // Warm the analyzer model the first chapter will actually use, so a cold
   // Ollama doesn't hang silently behind chapter 1's first token.
   if (activeSelection.engine === 'local') {
-    send({ kind: 'phase', phaseId: 0, progress: 0, label: 'Loading model', activityState: 'loading', model: activeSelection.model, engine: 'local' });
-    const warm = await warmOllamaModel(activeSelection.model, { signal: job.controller.signal });
+    // Emit the `loading` heartbeat from warmOllamaModel's 1s ticker so the
+    // panel shows "Loading model · Ns" while the (blocking) keep_alive POST is
+    // in flight — a merely-slow cold load reads as working, not stuck.
+    const emitLoading = (elapsedMs: number): void =>
+      send({ kind: 'phase', phaseId: 0, progress: 0, label: 'Loading model', activityState: 'loading', model: activeSelection.model, engine: 'local', elapsedMs });
+    const warm = await warmOllamaModel(activeSelection.model, { signal: job.controller.signal, onProgress: emitLoading });
     if (job.controller.signal.aborted) {
       send({ kind: 'error', code: 'cancelled', message: 'Review cancelled.' });
       for (const sub of job.subscribers) sub.res.end();
@@ -712,12 +716,19 @@ async function runScriptReviewJob(
     }
     if (!warm.ok) {
       if (selection.fallbackModel === null) {
-        send({ kind: 'error', code: 'model_load_failed', message: `Couldn't load the analyzer model (${activeSelection.model}). Is Ollama running and the model pulled?`, model: activeSelection.model });
+        // No fallback (no key, or cloud fallback opted out) — surface the
+        // distinct cause so Retry copy tells "Ollama down" from "load too slow".
+        const message =
+          warm.kind === 'load_timeout'
+            ? `The analyzer model (${activeSelection.model}) didn't finish loading in time. It may be large or on a slow disk — try again, or pick a smaller model.`
+            : `Couldn't reach the analyzer model (${activeSelection.model}). Is Ollama running and the model pulled?`;
+        send({ kind: 'error', code: 'model_load_failed', message, model: activeSelection.model, warmKind: warm.kind });
         for (const sub of job.subscribers) sub.res.end();
         return;
       }
-      // A Gemini fallback exists — don't abort a setup that works today.
-      switchToFallback('Ollama unreachable');
+      // A Gemini fallback exists (key present + cloud fallback on) — don't abort
+      // a setup that works today.
+      switchToFallback(warm.kind === 'load_timeout' ? 'Ollama model load timed out' : 'Ollama unreachable');
     }
   }
 
