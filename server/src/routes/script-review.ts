@@ -77,6 +77,11 @@ const NARRATOR_ID = 'narrator'; // module-private convention (re-declared, never
    chunk's core each level: 1 chunk → up to 8 sub-chunks at depth 3). Beyond
    this a still-truncating span re-throws → chapter-failed (Part 3). */
 const MAX_FORCE_SPLIT_DEPTH = 3;
+
+/* Context sentences carried on each side of a chunk core — shared by the
+   top-level chunker AND the force-split recursion so the two windows can't
+   silently diverge if one is retuned. */
+const CHUNK_OVERLAP = 3;
 export const PRIOR_TURN_LOOKBACK = 6; // sentences (positions) scanned back from the chapter end
 export const MAX_PRIOR_TURN_CHARS = 240; // hard cap per rendered line
 
@@ -788,7 +793,7 @@ async function runScriptReviewJob(
         : undefined;
       const chunks = chunkSentencesByBudget(byChapter.get(chapterId) ?? [], {
         charBudget: chapterChunkBudget(activeSelection.engine),
-        overlap: 3,
+        overlap: CHUNK_OVERLAP,
         serialize: (s) => JSON.stringify({ id: s.id, characterId: s.characterId, text: s.text }),
       });
 
@@ -801,7 +806,7 @@ async function runScriptReviewJob(
          ownsOp keeps de-duping). A single sentence that still truncates can't
          split further → it re-throws and surfaces as chapter-failed (Part 3).
          Returns the owned ops for `core`. */
-      const OVERLAP = 3;
+      const OVERLAP = CHUNK_OVERLAP;
       const reviewCore = async (
         core: SentenceOutput[],
         contextBefore: SentenceOutput[],
