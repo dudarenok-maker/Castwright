@@ -42,6 +42,17 @@ describe('LanCertStatus', () => {
     await waitFor(() => expect(api.getLanCertStatus).toHaveBeenCalledTimes(2));
   });
 
+  it('styles the regenerate button as a design-system secondary button (not dimmed/under-weight)', async () => {
+    // Regression: the button used `text-ink/70` + no `font-medium` + `border-ink/15`,
+    // so on the wizard's bg-white card it read as a washed-out, off-spec control.
+    vi.mocked(api.getLanCertStatus).mockResolvedValue(status({ health: 'healthy', active: true }));
+    render(<LanCertStatus variant="wizard" />);
+    const btn = await screen.findByRole('button', { name: /regenerate/i });
+    expect(btn.className).toContain('font-medium');
+    expect(btn.className).toContain('text-ink');
+    expect(btn.className).not.toContain('text-ink/70');
+  });
+
   it('shows the wiki troubleshooting link on regenerate error', async () => {
     vi.mocked(api.getLanCertStatus).mockResolvedValue(status({ health: 'missing', certHosts: [], expiresAt: null }));
     vi.mocked(api.regenerateLanCert).mockRejectedValue(new Error('mkcert not found'));

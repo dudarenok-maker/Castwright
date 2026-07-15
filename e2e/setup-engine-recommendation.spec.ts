@@ -40,3 +40,31 @@ test('Voice step: answering "yes" recommends Qwen with a may-not-fit caveat', as
   // The recommended lead card is Qwen's, not Kokoro's.
   await expect(page.locator('[data-engine-card="qwen"]')).toBeVisible();
 });
+
+test('Voice step: the guided answer survives paging to Defaults and back', async ({ page }) => {
+  // Regression: the yes/no answer used to live in StepVoice's local state, so
+  // paging (which unmounts the step) forgot it on return — and re-answering
+  // re-fired the recommended-engine save, clobbering the model picked on the
+  // Defaults step. The answer now lives on the wizard and must round-trip.
+  await page.goto('/#/?setup=notready');
+  await expect(page.getByRole('heading', { name: /set up castwright/i })).toBeVisible();
+
+  const next = page.getByRole('button', { name: /^next$/i });
+  const back = page.getByRole('button', { name: /^back$/i });
+  await next.click(); // → ffmpeg
+  await next.click(); // → analysis
+  await next.click(); // → voice
+  await expect(page.getByText(/step 4 of 7/i)).toBeVisible();
+
+  const yes = page.getByRole('radio', { name: /yes — expressive/i });
+  await yes.click();
+  await expect(yes).toBeChecked();
+
+  await next.click(); // → defaults (step 5)
+  await expect(page.getByText(/step 5 of 7/i)).toBeVisible();
+  await back.click(); // → voice (step 4)
+  await expect(page.getByText(/step 4 of 7/i)).toBeVisible();
+
+  // Still selected — no re-answer needed, so nothing overwrites the Defaults model.
+  await expect(page.getByRole('radio', { name: /yes — expressive/i })).toBeChecked();
+});
