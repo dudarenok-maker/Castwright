@@ -71,4 +71,17 @@ describe('buildModelsStatus', () => {
     expect(s.runtime.process).toBe('ready');
     expect(s.info.vramTotalMb).toBe(8192);
   });
+
+  it('surfaces a recommendation derived from vramTotalMb', () => {
+    const probe = { packageOnDisk: false, weightsOnDisk: false, loaded: false, importable: undefined };
+    const engines = { kokoro: probe, qwen: probe, coqui: probe };
+
+    const hi = buildModelsStatus({ ...base, info: { ...base.info, vramTotalMb: 8192 }, engines });
+    expect(hi.recommendation.expressiveOrMultilingual.engine).toBe('qwen');
+    expect(hi.recommendation.expressiveOrMultilingual.caveat).toBeNull();
+    expect(hi.recommendation.simpleEnglish.engine).toBe('kokoro');
+
+    const lo = buildModelsStatus({ ...base, info: { ...base.info, vramTotalMb: 2048 }, engines });
+    expect(lo.recommendation.expressiveOrMultilingual.caveat).toMatch(/may not fit/i);
+  });
 });

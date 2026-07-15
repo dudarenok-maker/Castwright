@@ -29,6 +29,19 @@ export interface VoiceEngineEntry {
   livePackageImportable: (h: Partial<SidecarHealthResult>) => boolean | undefined;
   /** Live: model resident in the sidecar now. */
   liveLoaded: (h: Partial<SidecarHealthResult>) => boolean;
+  /** Authored: the engine produces expressive/emotive speech (no code source —
+      a curated fact). Kokoro is flat/fast; Qwen + Coqui are expressive. Read by
+      the recommendation's capable-set filter (expressive || multilingual). */
+  expressive: boolean;
+  /** Authored estimate: comfortable VRAM (MB) for the GENERATION path. The
+      recommendation reads the capable LEAD's floor to decide whether to attach a
+      caveat. Not measured — refine on-box if contradicted. */
+  genVramFloorMb: number;
+  /** Authored: lead preference within the capable (expressive||multilingual) set.
+      Lower wins. Only meaningful for capable engines (Qwen 0, Coqui 1); a
+      non-capable engine (Kokoro) never enters the set, so its rank is a high
+      sentinel (99). */
+  capablePreferenceRank: number;
 }
 
 export const VOICE_ENGINES: VoiceEngineEntry[] = [
@@ -39,6 +52,9 @@ export const VOICE_ENGINES: VoiceEngineEntry[] = [
     weightsPresentOnDisk: (root) => detectKokoroInstalledOnDisk(root),
     livePackageImportable: (h) => h.kokoroPackageInstalled,
     liveLoaded: (h) => h.kokoroLoaded === true,
+    expressive: false,
+    genVramFloorMb: 1024,
+    capablePreferenceRank: 99,
   },
   {
     id: 'qwen',
@@ -47,6 +63,9 @@ export const VOICE_ENGINES: VoiceEngineEntry[] = [
     weightsPresentOnDisk: () => qwenWeightsPresent(),
     livePackageImportable: (h) => h.qwenPackageInstalled,
     liveLoaded: (h) => h.qwenLoaded === true,
+    expressive: true,
+    genVramFloorMb: 6144,
+    capablePreferenceRank: 0,
   },
   {
     id: 'coqui',
@@ -55,5 +74,8 @@ export const VOICE_ENGINES: VoiceEngineEntry[] = [
     weightsPresentOnDisk: () => coquiWeightsPresent(),
     livePackageImportable: (h) => h.coquiPackageInstalled,
     liveLoaded: (h) => h.modelLoaded === true,
+    expressive: true,
+    genVramFloorMb: 4096,
+    capablePreferenceRank: 1,
   },
 ];

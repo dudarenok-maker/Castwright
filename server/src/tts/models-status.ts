@@ -7,6 +7,7 @@
    in the route handler, mirroring setup-diagnosis.ts). */
 import { VOICE_ENGINES, type VoiceEngineId } from './voice-engine-registry.js';
 import { deriveEngineHealth, type EngineHealthState } from './engine-health.js';
+import { recommendEngines, type RecommendationSet } from './engine-recommendation.js';
 
 export type RuntimeProcessState = 'ready' | 'starting' | 'down' | 'crashed';
 
@@ -28,6 +29,9 @@ export interface ModelsStatus {
   runtime: RuntimeStatus;
   engines: Record<VoiceEngineId, EngineStatus>;
   info: { gpu: string; vramTotalMb: number | null };
+  /** fe-51 — precomputed recommendation for both answers to the wizard's guided
+      question. Derived from info.vramTotalMb + the engine capability map. */
+  recommendation: RecommendationSet;
 }
 
 /** Per-engine probe results, gathered by the route handler. `importable` is the
@@ -60,7 +64,12 @@ export function buildModelsStatus(input: BuildModelsStatusInput): ModelsStatus {
     const packageBroken = p.packageOnDisk && p.importable === false;
     engines[entry.id] = { state, packageBroken };
   }
-  return { runtime: input.runtime, engines, info: input.info };
+  return {
+    runtime: input.runtime,
+    engines,
+    info: input.info,
+    recommendation: recommendEngines(input.info.vramTotalMb),
+  };
 }
 
 /** Derived: an engine a book could actually render with right now. */

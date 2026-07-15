@@ -6,14 +6,24 @@
    readiness.blockers.tts diagnosis (its source is consistent with models-status
    server-side). */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type JSX } from 'react';
 import { VenvBootstrap } from '../venv-bootstrap';
 import { KokoroInstall } from '../kokoro-install';
 import { QwenInstall } from '../qwen-install';
 import { CoquiInstall } from '../coqui-install';
 import { BlockerFixAction } from '../blocker-fix-action';
-import { api, type SetupReadiness, type BlockerDiagnosis, type ModelsStatus } from '../../lib/api';
+import {
+  api,
+  type SetupReadiness,
+  type BlockerDiagnosis,
+  type ModelsStatus,
+  type NeedsAnswer,
+  type EngineRecommendation,
+} from '../../lib/api';
+import { useAppDispatch } from '../../store';
+import { saveAccountSettings } from '../../store/account-slice';
 import { runtimeLivenessPill } from './engine-card-status';
+import { NEEDS_QUESTION, needsAnswerLabel, RECOMMENDED_BADGE, engineDisplayName } from './engine-recommendation-copy';
 
 function BlockerBadge({
   diagnosis,
@@ -90,7 +100,35 @@ function RuntimeLivenessPill({ runtime }: { runtime: ModelsStatus['runtime'] }) 
 }
 
 export function StepVoice({ readiness, onRefetch }: { readiness: SetupReadiness; onRefetch: () => void }) {
+  const dispatch = useAppDispatch();
   const [models, setModels] = useState<ModelsStatus | null>(null);
+  const [needs, setNeeds] = useState<NeedsAnswer | null>(null);
+
+  const activeRec: EngineRecommendation | null =
+    models && needs
+      ? needs === 'expressive-or-multilingual'
+        ? models.recommendation.expressiveOrMultilingual
+        : models.recommendation.simpleEnglish
+      : null;
+
+  const chooseNeeds = useCallback(
+    (answer: NeedsAnswer) => {
+      setNeeds(answer);
+      if (!models) return;
+      const rec =
+        answer === 'expressive-or-multilingual'
+          ? models.recommendation.expressiveOrMultilingual
+          : models.recommendation.simpleEnglish;
+      void dispatch(
+        saveAccountSettings({
+          defaultTtsModelKey: rec.modelKey,
+          defaultTtsModelKeyExplicit: true,
+          defaultTtsEngine: 'local',
+        }),
+      );
+    },
+    [dispatch, models],
+  );
 
   const refetchModels = useCallback(async () => {
     try {
@@ -149,24 +187,80 @@ export function StepVoice({ readiness, onRefetch }: { readiness: SetupReadiness;
       ) : (
         <>
           <VenvBootstrap status={models.runtime} onBootstrapped={refetchBoth} />
-          <KokoroInstall status={models.engines.kokoro} onInstalled={refetchBoth} />
 
-          <details className="group rounded-2xl border border-ink/10">
-            <summary className="flex cursor-pointer items-center justify-between px-4 py-3 text-sm font-medium text-ink select-none">
-              <span>More voice engines</span>
-              <span className="text-xs text-ink/50 group-open:hidden">Qwen3-TTS · Coqui XTTS v2</span>
-              <span className="text-xs text-ink/50 hidden group-open:inline">Hide</span>
-            </summary>
-            <div className="px-4 pb-4 space-y-4">
-              <p className="text-xs text-ink/55">
-                On a GPU box, Qwen3-TTS installs automatically with the Python runtime — fetch its
-                model weights here to enable bespoke per-character voice design. Coqui XTTS v2 is an
-                optional add-on for zero-shot voice cloning.
+          <fieldset className="rounded-2xl border border-ink/10 p-4 space-y-2">
+            <legend className="text-sm font-medium text-ink px-1">{NEEDS_QUESTION}</legend>
+            {(['expressive-or-multilingual', 'simple-english'] as NeedsAnswer[]).map((a) => (
+              <label
+                key={a}
+                className="flex items-center gap-2 text-sm text-ink/80 min-h-[44px] fine-pointer:min-h-0"
+              >
+                <input type="radio" name="voice-needs" checked={needs === a} onChange={() => chooseNeeds(a)} />
+                {needsAnswerLabel(a)}
+              </label>
+            ))}
+            {!needs && (
+              <p className="text-xs text-ink/50 pt-1">
+                Answer to see which engine we'd recommend for you.
               </p>
-              <QwenInstall status={models.engines.qwen} onInstalled={refetchBoth} />
-              <CoquiInstall status={models.engines.coqui} onInstalled={refetchBoth} />
-            </div>
-          </details>
+            )}
+          </fieldset>
+
+          {(() => {
+            const ALL: Array<'kokoro' | 'qwen' | 'coqui'> = ['kokoro', 'qwen', 'coqui'];
+            const leadId = activeRec?.engine ?? 'kokoro';
+            const ordered = [leadId, ...ALL.filter((id) => id !== leadId)];
+
+            const CARD: Record<'kokoro' | 'qwen' | 'coqui', () => JSX.Element> = {
+              kokoro: () => <KokoroInstall status={models.engines.kokoro} onInstalled={refetchBoth} />,
+              qwen: () => <QwenInstall status={models.engines.qwen} onInstalled={refetchBoth} />,
+              coqui: () => <CoquiInstall status={models.engines.coqui} onInstalled={refetchBoth} />,
+            };
+
+            return (
+              <>
+                <div data-engine-card={leadId} className="space-y-2">
+                  {activeRec && (
+                    <div className="space-y-1">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
+                        {RECOMMENDED_BADGE}
+                      </span>
+                      {activeRec.caveat && (
+                        <p data-testid="recommendation-caveat" aria-live="polite" className="text-xs text-sky-700">
+                          {activeRec.caveat}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {CARD[leadId]()}
+                </div>
+
+                <details className="group rounded-2xl border border-ink/10" open={!activeRec}>
+                  <summary className="flex cursor-pointer items-center justify-between px-4 py-3 text-sm font-medium text-ink select-none">
+                    <span>{activeRec ? 'Other engines' : 'More voice engines'}</span>
+                    <span className="text-xs text-ink/50 group-open:hidden">
+                      {ordered.slice(1).map(engineDisplayName).join(' · ')}
+                    </span>
+                    <span className="text-xs text-ink/50 hidden group-open:inline">Hide</span>
+                  </summary>
+                  <div className="px-4 pb-4 space-y-4">
+                    {!activeRec && (
+                      <p className="text-xs text-ink/55">
+                        On a GPU box, Qwen3-TTS installs automatically with the Python runtime — fetch
+                        its model weights here to enable bespoke per-character voice design. Coqui XTTS
+                        v2 is an optional add-on for zero-shot voice cloning.
+                      </p>
+                    )}
+                    {ordered.slice(1).map((id) => (
+                      <div key={id} data-engine-card={id}>
+                        {CARD[id]()}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              </>
+            );
+          })()}
         </>
       )}
     </div>

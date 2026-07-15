@@ -34,6 +34,24 @@ vi.mock('../lib/api', () => ({
         coqui: { state: 'not-installed', packageBroken: false },
       },
       info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
+      recommendation: {
+        expressiveOrMultilingual: {
+          engine: 'qwen',
+          modelKey: 'qwen3-tts-0.6b',
+          reason: 'Expressive and multilingual — the multi-cast default.',
+          // keep in sync with server CAVEAT_VRAM (server/src/tts/engine-recommendation.ts)
+          caveat:
+            "May not fit this GPU's memory — you can run Qwen on CPU (slower) via the voice-engine device setting, or pick Kokoro below for fast English-only voices.",
+          alternate: 'coqui',
+        },
+        simpleEnglish: {
+          engine: 'kokoro',
+          modelKey: 'kokoro-v1',
+          reason: 'Fast and light — runs comfortably on low VRAM or CPU.',
+          caveat: null,
+          alternate: null,
+        },
+      },
     }),
     getOllamaHealth: vi.fn().mockResolvedValue({
       status: 'reachable',
