@@ -97,6 +97,10 @@ Closes #1615 (fe-52, "Need help?" footer), #1616 (fe-53, per-step "Learn more").
    time (Getting-Started, Installing-Castwright, Troubleshooting, Analysis-and-the-Analyzer,
    Voice-Engines, Account-and-Settings, Mobile-Tablet-and-Companion-App, Generating-Audio), but
    nothing in the automated suite re-verifies that on every run.
+   - **Arrival-lead editorial pass (Task 7):** of the 8 target pages, 7 already opened with a
+     clear orienting sentence for a reader arriving mid-setup and needed no change; only
+     `Account-and-Settings.md` got an added lead sentence. The narrow 1-of-8 edit is the intended
+     conservative outcome of that pass, not an incomplete sweep.
 4. **`WikiLink`'s public API and rendered output are unchanged after the `ExternalLink`
    extraction** — same props (`page`/`label`/`className`), same href (`wikiUrl(page)`), same
    `target="_blank" rel="noopener noreferrer"`, same default label ("Read more on the wiki").
