@@ -25,3 +25,25 @@ describe('VOICE_ENGINES registry', () => {
     expect(kokoro.livePackageImportable({} as never)).toBeUndefined();
   });
 });
+
+describe('VOICE_ENGINES capability fields', () => {
+  const byId = Object.fromEntries(VOICE_ENGINES.map((e) => [e.id, e]));
+
+  it('carries authored expressive + VRAM floor + capable rank per engine', () => {
+    expect(byId.kokoro.expressive).toBe(false);
+    expect(byId.kokoro.genVramFloorMb).toBe(1024);
+    expect(byId.kokoro.capablePreferenceRank).toBe(99);
+
+    expect(byId.qwen.expressive).toBe(true);
+    expect(byId.qwen.genVramFloorMb).toBe(6144);
+    expect(byId.qwen.capablePreferenceRank).toBe(0);
+
+    expect(byId.coqui.expressive).toBe(true);
+    expect(byId.coqui.genVramFloorMb).toBe(4096);
+    expect(byId.coqui.capablePreferenceRank).toBe(1);
+  });
+
+  it('every entry has a positive generation floor', () => {
+    for (const e of VOICE_ENGINES) expect(e.genVramFloorMb).toBeGreaterThan(0);
+  });
+});
