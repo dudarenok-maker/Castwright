@@ -108,6 +108,7 @@ import {
   voicedSurvivorsDropped,
   applyRewriteToPriorCast,
   dropReuseContinuityKeepDesignedVoice,
+  dedupePriorCastByName,
 } from '../store/merge-analysis-cast.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
@@ -2569,7 +2570,7 @@ export async function runMainAnalyzerJob(
        snapshot the prior on a fresh run — with reuse continuity stripped, since
        fresh legitimately re-derives that. Read happens before the fresh block
        below rm's cast.json, so the value survives that deletion. */
-    const priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = recordRef.bookDir
+    let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = recordRef.bookDir
       ? requestedFresh
         ? dropReuseContinuityKeepDesignedVoice(await readPriorCastForMerge(recordRef.bookDir))
         : await readPriorCastForMerge(recordRef.bookDir)
@@ -2587,6 +2588,23 @@ export async function runMainAnalyzerJob(
         recordRef.bookId,
         priorCastForMerge as unknown as Parameters<typeof pruneStaleReuseLinks>[1],
       );
+    }
+
+    /* Fix 2 — collapse same-name duplicate rows in the prior cast so the
+       carryover merge cannot re-add a voiced duplicate. Applied here, at the
+       single load point, so all cast.json write sites AND
+       seedReuseGuardsFromPriorCast below see one prior row per name. */
+    if (priorCastForMerge.length > 1) {
+      const reconciled = dedupePriorCastByName(priorCastForMerge);
+      priorCastForMerge = reconciled.cast;
+      if (reconciled.dropped.length) {
+        log(
+          1,
+          `Collapsed ${reconciled.dropped.length} duplicate prior-cast row(s) by name (${reconciled.dropped
+            .map((d) => d.name ?? d.id)
+            .join(', ')}).`,
+        );
+      }
     }
 
     if (requestedFresh) {
@@ -4905,7 +4923,7 @@ export async function runSubsetAnalyzerJob(
 
   /* Preserve designed-voice links across a subset re-analysis (#518) — snapshot
      the existing cast before any interim write clobbers cast.json. */
-  const priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = record.bookDir
+  let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = record.bookDir
     ? await readPriorCastForMerge(record.bookDir)
     : [];
 
@@ -4918,6 +4936,21 @@ export async function runSubsetAnalyzerJob(
       record.bookId,
       priorCastForMerge as unknown as Parameters<typeof pruneStaleReuseLinks>[1],
     );
+  }
+
+  /* Fix 2 — same-name prior-cast collapse (see streaming path). Applied here so
+     the subset re-analysis path's writes + seed also see one prior row per name. */
+  if (priorCastForMerge.length > 1) {
+    const reconciled = dedupePriorCastByName(priorCastForMerge);
+    priorCastForMerge = reconciled.cast;
+    if (reconciled.dropped.length) {
+      log(
+        1,
+        `Collapsed ${reconciled.dropped.length} duplicate prior-cast row(s) by name (${reconciled.dropped
+          .map((d) => d.name ?? d.id)
+          .join(', ')}).`,
+      );
+    }
   }
 
   /* Used inside the persist guards below in place of the old `clientGone`

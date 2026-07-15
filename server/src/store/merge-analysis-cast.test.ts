@@ -447,4 +447,35 @@ describe('dedupePriorCastByName', () => {
     const { cast } = dedupePriorCastByName(prior);
     expect(cast).toHaveLength(1);
   });
+
+  it('composition: collapsed prior + merge yields no 0-line duplicate, voice on fresh survivor', () => {
+    // Prior cast has the legacy duplicate (both voiced); fresh roster has one
+    // canonical Антон (post-dedup). Today merge re-adds the extra as a 0-line dup.
+    const prior: C[] = [
+      { id: 'anton', name: 'Антон', voiceState: 'tuned', voiceUuid: 'U1', lines: 40 },
+      { id: 'антон', name: 'Антон', voiceState: 'generated', overrideTtsVoices: { qwen: { name: 'q2' } }, lines: 2 },
+    ];
+    const fresh: C[] = [{ id: 'антон', name: 'Антон', lines: 55 }]; // fresh survivor id
+    const collapsed = dedupePriorCastByName(prior).cast;
+    const merged = mergeAnalysisResultWithExistingCast(collapsed, fresh);
+    expect(merged.filter((c) => c.name === 'Антон')).toHaveLength(1);
+    expect(merged[0].voiceUuid).toBe('U1'); // strongest bespoke voice rode onto the fresh survivor
+    expect(merged[0].lines).toBe(55); // fresh attribution wins
+  });
+
+  it('composition: a voiceUuid-only (generated) survivor whose id differs from fresh still bridges its voice', () => {
+    // Regression guard: hasBespokeVoice ranks a voiceUuid-only row as bespoke, so
+    // it can win the collapse; the merge's name-fallback must recognise voiceUuid
+    // (isVoicedOrReused fix) or the fresh row is written voiceless.
+    const prior: C[] = [
+      { id: 'anton', name: 'Антон', voiceState: 'generated', voiceUuid: 'U9', lines: 40 },
+      { id: 'антон-old', name: 'Антон', voiceState: 'reused', voiceId: 'lib-1', lines: 1 },
+    ];
+    const fresh: C[] = [{ id: 'антон', name: 'Антон', lines: 50 }]; // id differs from both prior rows
+    const collapsed = dedupePriorCastByName(prior).cast;
+    expect(collapsed[0].id).toBe('anton'); // voiceUuid (rank 3) beats reused (rank 2)
+    const merged = mergeAnalysisResultWithExistingCast(collapsed, fresh);
+    expect(merged.filter((c) => c.name === 'Антон')).toHaveLength(1);
+    expect(merged[0].voiceUuid).toBe('U9'); // bridged despite voiceState generated + id drift
+  });
 });
