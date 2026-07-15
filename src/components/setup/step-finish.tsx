@@ -18,11 +18,13 @@ interface Props {
   onFinish: () => void;
   /** Optional — renders the "Play the demo book" button when provided. */
   onTryDemoBook?: () => void;
+  /** True when the user changed the library location earlier in the wizard (Task 5 renders the reminder). */
+  libraryChanged?: boolean;
 }
 
 // ── component ───────────────────────────────────────────────────────────────
 
-export function StepFinish({ readiness: _readiness, onFinish, onTryDemoBook }: Props) {
+export function StepFinish({ readiness: _readiness, onFinish, onTryDemoBook, libraryChanged: _libraryChanged }: Props) {
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<SmokeTestResult | null>(null);
 

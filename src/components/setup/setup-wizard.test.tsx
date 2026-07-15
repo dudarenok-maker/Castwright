@@ -43,6 +43,9 @@ vi.mock('./step-voice', () => ({
 vi.mock('./step-defaults', () => ({
   StepDefaults: () => <div data-testid="step-defaults-stub">defaults</div>,
 }));
+vi.mock('./step-library', () => ({
+  StepLibrary: () => <div data-testid="step-library-stub">library</div>,
+}));
 vi.mock('./step-lan-cert', () => ({
   StepLanCert: () => <div data-testid="step-lan-cert-stub" />,
 }));
@@ -88,6 +91,7 @@ const STEP_TESTIDS = [
   'step-analysis-stub',
   'step-voice-stub',
   'step-defaults-stub',
+  'step-library-stub',
   'step-lan-cert-stub',
   'step-finish-stub',
 ];
@@ -137,7 +141,7 @@ describe('SetupWizard', () => {
     expect(screen.queryByTestId('step-finish-stub')).not.toBeInTheDocument();
   });
 
-  it('guided mode shows a "Step N of 7" progress indicator', () => {
+  it('guided mode shows a "Step N of 8" progress indicator', () => {
     render(
       <SetupWizard
         readiness={READINESS}
@@ -146,7 +150,7 @@ describe('SetupWizard', () => {
         onFinish={() => {}}
       />,
     );
-    expect(screen.getByText(/step 1 of 7/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 1 of 8/i)).toBeInTheDocument();
   });
 
   it('guided mode: Next is always enabled (no blocker gating) and advances', () => {
@@ -164,7 +168,7 @@ describe('SetupWizard', () => {
     fireEvent.click(next);
     expect(screen.getByTestId('step-ffmpeg-stub')).toBeInTheDocument();
     expect(screen.queryByTestId('step-environment-stub')).not.toBeInTheDocument();
-    expect(screen.getByText(/step 2 of 7/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 2 of 8/i)).toBeInTheDocument();
   });
 
   it('guided mode: Back returns to the previous step', () => {
@@ -180,7 +184,14 @@ describe('SetupWizard', () => {
     expect(screen.getByTestId('step-ffmpeg-stub')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /back/i }));
     expect(screen.getByTestId('step-environment-stub')).toBeInTheDocument();
-    expect(screen.getByText(/step 1 of 7/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 1 of 8/i)).toBeInTheDocument();
+  });
+
+  it('guided mode reaches the Library step', () => {
+    render(<SetupWizard readiness={READINESS} mode="guided" onRefetch={() => {}} onFinish={() => {}} />);
+    for (let i = 0; i < 5; i++) fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    expect(screen.getByTestId('step-library-stub')).toBeInTheDocument();
+    expect(screen.getByText(/step 6 of 8/i)).toBeInTheDocument();
   });
 
   it('guided mode: the Voice step answer survives Back/Next (#wizard-answer-persistence)', () => {
@@ -226,12 +237,12 @@ describe('SetupWizard', () => {
         onFinish={() => {}}
       />,
     );
-    // advance through all 6 transitions to the last (finish) step
-    for (let i = 0; i < 6; i++) {
+    // advance through all 7 transitions to the last (finish) step
+    for (let i = 0; i < 7; i++) {
       fireEvent.click(screen.getByRole('button', { name: /next/i }));
     }
     expect(screen.getByTestId('step-finish-stub')).toBeInTheDocument();
-    expect(screen.getByText(/step 7 of 7/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 8 of 8/i)).toBeInTheDocument();
     // Finish lives inside StepFinish; the wizard's own Next is gone
     expect(screen.queryByRole('button', { name: /next/i })).not.toBeInTheDocument();
   });
@@ -246,7 +257,7 @@ describe('SetupWizard', () => {
         onFinish={onFinish}
       />,
     );
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 7; i++) {
       fireEvent.click(screen.getByRole('button', { name: /next/i }));
     }
     fireEvent.click(screen.getByRole('button', { name: /finish setup/i }));
@@ -281,10 +292,10 @@ describe('SetupWizard', () => {
         onFinish={() => {}}
       />,
     );
-    // The "Audio assembly" row maps to the ffmpeg step (step 2 of 7).
+    // The "Audio assembly" row maps to the ffmpeg step (step 2 of 8).
     fireEvent.click(screen.getByTestId('setup-summary-row-ffmpeg'));
     expect(screen.getByTestId('step-ffmpeg-stub')).toBeInTheDocument();
-    expect(screen.getByText(/step 2 of 7/i)).toBeInTheDocument();
+    expect(screen.getByText(/step 2 of 8/i)).toBeInTheDocument();
   });
 
   it('re-entry mode: a "Setup overview" link returns from the wizard to the summary', () => {

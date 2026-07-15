@@ -8,6 +8,7 @@ export type StepId =
   | 'analysis'
   | 'voice'
   | 'defaults'
+  | 'library'
   | 'lanCert'
   | 'finish';
 
@@ -17,6 +18,7 @@ export const STEPS: { id: StepId; title: string }[] = [
   { id: 'analysis', title: 'Analysis' },
   { id: 'voice', title: 'Voice' },
   { id: 'defaults', title: 'Defaults' },
+  { id: 'library', title: 'Library' },
   { id: 'lanCert', title: 'LAN access' },
   { id: 'finish', title: 'Finish' },
 ];

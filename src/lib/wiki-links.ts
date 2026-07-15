@@ -83,6 +83,7 @@ export const WIZARD_STEP_WIKI = {
   analysis: 'Analysis-and-the-Analyzer',
   voice: 'Voice-Engines',
   defaults: 'Account-and-Settings',
+  library: 'Account-and-Settings',
   lanCert: 'Mobile-Tablet-and-Companion-App',
   finish: 'Generating-Audio',
 } satisfies Record<StepId, WikiPage>;
