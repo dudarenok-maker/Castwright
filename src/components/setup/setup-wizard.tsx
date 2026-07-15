@@ -28,18 +28,10 @@ import { StepVoice } from './step-voice';
 import { StepDefaults } from './step-defaults';
 import { StepLanCert } from './step-lan-cert';
 import { StepFinish } from './step-finish';
-
-type StepId = 'environment' | 'ffmpeg' | 'analysis' | 'voice' | 'defaults' | 'lanCert' | 'finish';
-
-const STEPS: { id: StepId; title: string }[] = [
-  { id: 'environment', title: 'Environment' },
-  { id: 'ffmpeg', title: 'ffmpeg' },
-  { id: 'analysis', title: 'Analysis' },
-  { id: 'voice', title: 'Voice' },
-  { id: 'defaults', title: 'Defaults' },
-  { id: 'lanCert', title: 'LAN access' },
-  { id: 'finish', title: 'Finish' },
-];
+import { STEPS, type StepId } from './steps';
+import { WikiLink } from '../wiki-link';
+import { stepLearnMorePage } from '../../lib/wiki-links';
+import { HelpResources } from './help-resources';
 
 interface Props {
   readiness: SetupReadiness;
@@ -126,6 +118,8 @@ export function SetupWizard({ readiness, mode, onRefetch, onFinish, onTryDemoBoo
           onTryDemoBook={onTryDemoBook}
         />
       )}
+
+      <HelpResources />
     </div>
   );
 }
@@ -156,6 +150,7 @@ function GuidedWizard({
   onExit?: () => void;
 }) {
   const step = STEPS[stepIndex];
+  const learnMorePage = stepLearnMorePage(step.id);
   const isFirst = stepIndex === 0;
   const isLast = stepIndex === STEPS.length - 1;
 
@@ -190,6 +185,11 @@ function GuidedWizard({
       </div>
 
       <div className="rounded-2xl border border-ink/10 bg-white p-5 sm:p-6 shadow-card">
+        {learnMorePage && (
+          <div className="mb-3 flex flex-wrap justify-end">
+            <WikiLink page={learnMorePage} label="Learn more" />
+          </div>
+        )}
         {renderStep(
           step.id,
           readiness,
