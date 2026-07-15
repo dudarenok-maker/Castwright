@@ -283,37 +283,46 @@ Built on Part A's status surface.
 A small table with a **partly-derived, partly-authored** basis (stated plainly so it
 isn't over-claimed):
 
-- **`multilingual` is derived** from the existing eligibility source —
-  `resolveEligibleEngines(lang, …)` in `server/src/tts/language.ts` (e.g. `zh →
-  [coqui, qwen]`, `ko → [qwen]`), exercised in `language.test.ts`. An engine is
-  "multilingual" if it's eligible for some non-English language there.
+- **`multilingual` is derived** from the existing eligibility source — the
+  `ENGINE_LANGUAGE_SUPPORT` map (`server/src/tts/voice-mapping.ts`) that
+  `resolveEligibleEngines` itself reads (`qwen: '*'`, `coqui: [en,ru,es,fr,de,zh,ja]`,
+  `kokoro: [en]`). The plan's `isMultilingualEngine(id)` (Task 2) reads that map
+  directly — an engine is "multilingual" if it supports any non-English language
+  there. (Reading the map vs calling `resolveEligibleEngines(lang, …)` yields identical
+  results for these three engines; the plan takes the direct-map form.)
 - **`expressive` and the VRAM floors are authored constants** — there is no code
-  source for "expressive," and `genVramFloorMb` / `designVramFloorMb` are authored
-  from measurement / the model-lifecycle notes, not derived. They live in one place
+  source for "expressive," and `genVramFloorMb` is an authored estimate
+  from the model-lifecycle notes, not derived. They live in one place
   with a cited basis.
 
 Each engine carries:
 
+Authored fields live on the `VOICE_ENGINES` registry entry (`expressive`,
+`genVramFloorMb`, `capablePreferenceRank`); `multilingual` is **derived**, not stored
+(see below). (The plan revised the draft `EngineCapability` shape: `multilingual`
+became derived and `designVramFloorMb` was dropped as unused in Part B — add it back
+when voice-design VRAM steering has a consumer.)
+
 ```ts
-interface EngineCapability {
-  expressive: boolean;
-  multilingual: boolean;
-  genVramFloorMb: number;       // comfortable VRAM for the GENERATION path
-  designVramFloorMb?: number;   // only for engines with a heavy design model (Qwen VoiceDesign 1.7B)
-}
+// On VoiceEngineEntry (voice-engine-registry.ts):
+  expressive: boolean;          // authored
+  genVramFloorMb: number;       // authored estimate — comfortable VRAM for GENERATION
+  capablePreferenceRank: number;// authored — lead order within the capable set (Qwen 0, Coqui 1)
+// multilingual is DERIVED from ENGINE_LANGUAGE_SUPPORT (isMultilingualEngine), NOT stored.
 ```
 
-The recommendation **reads** this map rather than hardcoding "Qwen," so a future
-engine that gains multilingual becomes eligible automatically. Rough floors, grounded
-in the CLAUDE.md model-lifecycle notes (exact numbers pulled from real measurement /
-the model registry, not guessed in code):
+The recommendation **derives** the capable set from `expressive || isMultilingualEngine`
+rather than hardcoding "Qwen," so a future engine that gains multilingual becomes
+eligible automatically; ordering uses the authored `capablePreferenceRank`. Rough
+floors — **authored estimates** grounded in the CLAUDE.md model-lifecycle notes (refine
+on-box if measurement contradicts; not guaranteed measured):
 
 - **Kokoro** — ~1 GB; fits anything, incl. CPU. English-only, non-expressive.
 - **Qwen Base 0.6B (generation)** — fits comfortably around 6 GB. Expressive,
-  multilingual. The **VoiceDesign 1.7B** model (~4–5 GB, transient, only during
-  cast-review voice design) is tracked as `designVramFloorMb` — a *separate* signal
-  that governs the voice-design feature, **not** a reason to steer generation away
-  from Qwen.
+  multilingual. Its **VoiceDesign 1.7B** model (~4–5 GB, transient, only during
+  cast-review voice design) is a *separate* signal that governs the voice-design
+  feature, **not** a reason to steer generation away from Qwen — so Part B does **not**
+  factor it into the recommendation (the dropped `designVramFloorMb`).
 - **Coqui XTTS v2** — higher generation headroom; zero-shot cloning.
 
 ### The guided question
@@ -336,30 +345,43 @@ The recommendation logic:
 1. **Hard filter by capability** — never recommend an engine that cannot meet the
    stated need. If the user needs multilingual, Kokoro (English-only) is *not*
    eligible.
-2. **Soft-prefer the lightest fitting engine** — among capable engines, prefer the
-   lightest whose `genVramFloorMb` fits detected `vramTotalMb`.
+2. **Order the capable set by authored `capablePreferenceRank`** (Qwen 0 → Coqui 1);
+   the lead is rank-0. **VRAM never reorders the capable set** — it only decides
+   whether the lead gets a caveat. (This corrects the earlier draft's "soft-prefer the
+   lightest *fitting* engine," which would have led Coqui over Qwen on a ~5 GB box —
+   wrong, since Qwen is the multi-cast default and #1614 requires it to lead. VRAM is a
+   caveat signal, not a reordering key.)
 
 Consequences:
 
-- **Very low VRAM or CPU-only** (below Qwen-base's generation floor, or
-  `vramTotalMb` null on a box with no capable GPU) → **recommend Kokoro** ("Recommended
-  — runs comfortably on low VRAM / CPU"). Kokoro is genuinely the engine for very low
-  VRAM or CPU-only machines.
+- **"Simple English" answer, any VRAM (incl. CPU-only)** → **recommend Kokoro**
+  ("Recommended — runs comfortably on low VRAM / CPU"). Kokoro is genuinely the engine
+  for very low VRAM or CPU-only machines when the need is English-only, non-expressive.
 - **~6 GB + expressive/multilingual need** → **recommend Qwen** (its 0.6B generation
   path fits), with a soft aside that *voice design* (the 1.7B model) may be tight on
   this GPU. We do **not** steer generation to Kokoro here.
-- **Low VRAM but multilingual is needed** → recommend Qwen anyway (Kokoro literally
-  cannot do the job), with an honest **"may not fit comfortably on this GPU"** caveat.
+- **Low VRAM OR CPU-only, but expressive/multilingual is needed** → recommend Qwen
+  **anyway** (Kokoro literally cannot do a non-English book), with an honest CPU caveat.
   We never steer someone to an engine that cannot meet their stated need.
 - **Nothing is ever blocked.** Every engine stays installable and usable; the VRAM
   signal only changes which engine *leads* and what caveat is shown.
 
-**Caveat wording is a truthfulness open item (plan-time):** do NOT promise "will run
-on CPU, slower" until the sidecar's actual low-VRAM behavior is verified. The
-project's own incident history (8 GB bulk-design OOM; 1.7B-tier OOM storms) suggests
-a constrained-VRAM Qwen can **OOM-crash rather than gracefully fall back to CPU**. The
-plan must confirm the real behavior and either promise CPU fallback (if true) or keep
-the softer "may not fit comfortably on this GPU."
+**CPU-only + "yes" answer → Qwen-with-CPU-caveat (decided 2026-07-15, user-approved
+— a deliberate revision of a literal read of this section + the Testing case-4
+"CPU-only → Kokoro").** The single "expressive **and/or** multilingual?" question
+cannot separate a non-English need (Kokoro can't serve at all) from expressive-English
+(Kokoro can). So on a CPU-only / no-GPU box the "yes" branch still **leads Qwen** and
+uses the caveat — not a downgrade to Kokoro — to nudge the expressive-English user
+while serving the multilingual user correctly. The Testing case-4 "CPU-only → Kokoro"
+applies to the **"simple English" answer**, not the "yes" branch.
+
+**Caveat wording (resolved):** the low/no-VRAM "yes"-branch caveat is **"May not fit
+this GPU's memory — you can run Qwen on CPU (slower) via the voice-engine device
+setting, or pick Kokoro below for fast English-only voices."** Per the product owner,
+Qwen *does* run on CPU (slower) via the device setting — this is distinct from the
+constrained-*GPU* auto-fallback OOM history (8 GB bulk-design OOM; 1.7B storms), which
+is a different path. On-box acceptance confirms forcing CPU actually renders; if not,
+soften the caveat to drop the CPU offer and keep only the "pick Kokoro" nudge.
 
 **This deliberately revises #1614's literal acceptance criterion** ("detected VRAM
 < 6 GB → Kokoro recommended regardless"). That flat rule is inaccurate: Qwen's 0.6B
@@ -431,14 +453,31 @@ nvidia-smi) means "unknown" → no VRAM-based nudge beyond the CPU-only lean.
 
 ### Files (Part B)
 
-- `src/components/setup/step-models.tsx` — guided question + recommendation
-  presentation.
-- `src/lib/models.ts` (or a new `src/lib/engine-capability.ts`) — capability map +
-  pure recommendation function.
-- `server/voice-mapping` / language-code maps — source for the capability map.
+**Recommendation placement — server-side** (resolves the earlier draft's Files-vs-Testing
+contradiction, confirmed 2026-07-15 against the landed Part A interfaces). The capability
+map + pure `recommend()` live beside the `VOICE_ENGINES` registry on the server, mirroring
+the `diagnose*` pure-function test pattern; the client only renders the result off the
+`models-status` response it already fetches.
+
+- `server/src/tts/voice-engine-registry.ts` — **extend `VoiceEngineEntry`** (landed in
+  Part A with a `defaultModelKey` seam already tagged "for the Defaults handoff (Part B)")
+  with the authored capability fields (`expressive`, `genVramFloorMb`,
+  `capablePreferenceRank`). `multilingual` is **derived** (not stored); `designVramFloorMb`
+  is **not** added in Part B (no consumer — YAGNI).
+- `server/src/tts/` (new module, e.g. `engine-recommendation.ts`) — pure
+  `recommend(needsAnswer, vramTotalMb)` over the registry; `multilingual` **derived** via
+  `isMultilingualEngine` from `ENGINE_LANGUAGE_SUPPORT` (`server/src/tts/voice-mapping.ts`,
+  the map `resolveEligibleEngines` reads), `expressive` + VRAM floor are authored constants.
+- `server/src/tts/models-status.ts` / `server/src/routes/models-status.ts` — surface the
+  recommendation (or its inputs) alongside the existing `info.vramTotalMb`.
+- `src/components/setup/step-voice.tsx` — **(NOT the deleted `step-models.tsx`;** fe-49
+  split it into `step-analysis.tsx` + `step-voice.tsx`, voice cards now here) — guided
+  question + recommendation presentation.
 - `src/components/setup/step-defaults.tsx` — unchanged mechanics; receives the
-  pre-seeded default.
-- fe-49 (#1610) shared pull machinery — composed for pull-priority wiring.
+  pre-seeded default via `defaultTtsModelKey` + `defaultTtsModelKeyExplicit`.
+- fe-49 (#1610) **shipped/MERGED (PR #1642)** — its shared pull machinery is available now,
+  so Part B composes pull-priority in-scope and `Closes #1614` outright (no `Refs`
+  deferral).
 
 ---
 
@@ -466,8 +505,9 @@ Paired automated tests are required (testing-discipline rule), not optional.
   `installedOnDisk` vs `process` independence; `vramTotalMb` surfacing (incl. null).
 - **Server unit — recommendation function (pure, mirrors `diagnose*` tests):**
   needs-answer × capability map × `vramTotalMb` → recommended engine + caveats. Cover
-  the four cases: no-need→Kokoro; need+adequate VRAM→Qwen; need+low VRAM→Qwen+CPU
-  caveat; no capable GPU / CPU-only→Kokoro.
+  the four cases: **"simple English"→Kokoro (any VRAM)**; need+adequate VRAM→Qwen;
+  need+low VRAM→Qwen+CPU caveat; **need+CPU-only (`vramTotalMb` null)→Qwen+CPU caveat**
+  (the deliberate case-4 revision — NOT Kokoro; see the CPU-only note above).
 - **Frontend (Vitest + RTL) — `step-models.test.tsx`:** the three regressions
   (weights-missing card wording matches badge; `starting` renders neutral not amber;
   re-check refreshes the badge); controlled-card rendering; broken-Coqui-shown-while-
@@ -487,9 +527,9 @@ two PRs, Part A before Part B:
   controlled cards, model-manager migration, the three status fixes. No fe-49
   dependency → ships first. `Closes #1612`.
 - **PR 2 — Part B (fe-51 / #1614):** capability map, guided question, VRAM
-  soft-recommendation, defaults handoff, copy de-defaulting. Built on PR 1; the
-  pull-priority wiring composes with fe-49 (#1610) when it lands. `Closes #1614`
-  (`Refs` if fe-49 gates full close).
+  soft-recommendation, defaults handoff, copy de-defaulting. Built on PR 1; fe-49
+  (#1610) is **merged (PR #1642)**, so the pull-priority wiring composes in-scope and
+  this PR `Closes #1614` outright.
 
 Each PR runs the full before-shipping checklist: regression plan, release-notes-next
 + RELEASE_NOTES entries, verified issue link, `verify:fast:branch`, and the mandatory
@@ -497,15 +537,15 @@ Each PR runs the full before-shipping checklist: regression plan, release-notes-
 
 ## Risks & open questions
 
-- **fe-49 dependency (Part B):** the recommendation/ordering/VRAM logic is
-  independently buildable and testable; only the actual weights-pull wiring needs
-  fe-49's shared machinery. If fe-49 slips, Part B ships with the recommendation +
-  ordering + defaults handoff and a follow-up `Refs` for the pull-priority
-  composition.
+- **fe-49 dependency (Part B): RESOLVED.** fe-49 merged (PR #1642, 2026-07-14), so its
+  shared pull machinery is available and the pull-priority wiring is in-scope for Part B's
+  single PR — no `Refs` deferral. (The recommendation/ordering/VRAM logic was always
+  independently buildable; this only removes the pull-wiring caveat.)
 - **Controlled-card migration blast radius:** making the status prop required touches
   model-manager in the same PR AND forces a rewrite of all four `*-install.test.tsx`
   suites + `model-manager.test.tsx` (they mock `/detect` self-fetch today). Verified
   feasible but real, enumerable work — listed as explicit plan tasks, not incidental.
-- **Capability-map floor numbers:** the exact `genVramFloorMb` / `designVramFloorMb`
-  values must come from real measurement or the model registry, not guessed literals.
-  The *structure* is fixed here; the numbers are a plan-time task.
+- **Capability-map floor numbers:** the `genVramFloorMb` values are **authored
+  estimates** (grounded in CLAUDE.md's model-lifecycle notes, refined on-box if
+  measurement contradicts). The *structure* is fixed here; only the capable lead's
+  floor is read at runtime (to decide the caveat).
