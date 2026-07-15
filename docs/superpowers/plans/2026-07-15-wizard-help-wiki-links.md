@@ -24,7 +24,7 @@
 
 - **Create** `src/components/setup/steps.ts` — `StepId` type + `STEPS` array, lifted from `setup-wizard.tsx`.
 - **Modify** `src/components/setup/setup-wizard.tsx` — import `StepId`/`STEPS` from `steps.ts`; mount `<HelpResources>`; render contextual `<WikiLink>` in `GuidedWizard`.
-- **Modify** `src/lib/wiki-links.ts` — add `Installing-Castwright` to `WikiPage`, `REPO_BASE`, `SUPPORT_LINKS`, `WIZARD_STEP_WIKI`.
+- **Modify** `src/lib/wiki-links.ts` — add `Installing-Castwright` to `WikiPage`, `REPO_BASE`, `SUPPORT_LINKS`, `WIZARD_STEP_WIKI`, `HELP_FOOTER_WIKI`, `stepLearnMorePage()`.
 - **Modify** `src/lib/wiki-links.test.ts` — extend guard to `WIZARD_STEP_WIKI`; assert step-map exhaustiveness.
 - **Create** `src/components/external-link.tsx` — generic external link primitive.
 - **Modify** `src/components/wiki-link.tsx` — become a thin wrapper over `<ExternalLink>`.
@@ -34,7 +34,7 @@
 - **Modify** `src/components/setup/setup-wizard.test.tsx` — footer + contextual-link assertions.
 - **Create** `e2e/setup-help-links.spec.ts` — one Playwright spec.
 - **Edit (docs)** the 8 target pages under `docs/wiki/` — light arrival-lead pass.
-- **Create (docs)** `docs/features/fe-52-53-wizard-help-links.md` + `docs/features/INDEX.md` entry.
+- **Create (docs)** `docs/features/260-wizard-help-links.md` + `docs/features/INDEX.md` entry.
 - **Edit (docs)** `docs/release-notes-next.md` + `RELEASE_NOTES.md`.
 
 ---
@@ -131,7 +131,7 @@ git commit -m "refactor(frontend): lift wizard StepId/STEPS into shared steps.ts
 
 **Interfaces:**
 - Consumes: `StepId` from `src/components/setup/steps.ts` (Task 1, type-only).
-- Produces: `export const REPO_BASE: string`; `export const SUPPORT_LINKS: { issues: string; discussions: string }`; `export const WIZARD_STEP_WIKI: Record<StepId, WikiPage>`; `'Installing-Castwright'` added to the `WikiPage` union.
+- Produces: `export const REPO_BASE: string`; `export const SUPPORT_LINKS: { issues: string; discussions: string }`; `export const WIZARD_STEP_WIKI: Record<StepId, WikiPage>`; `export const HELP_FOOTER_WIKI: readonly WikiPage[]`; `export function stepLearnMorePage(step: StepId): WikiPage | null`; `'Installing-Castwright'` added to the `WikiPage` union.
 
 - [ ] **Step 1: Write the failing guard/exhaustiveness test**
 
@@ -141,9 +141,9 @@ In `src/lib/wiki-links.test.ts`, add these imports to the existing top-of-file i
 import { STEPS } from '../components/setup/steps';
 ```
 
-Add `WIZARD_STEP_WIKI`, `SUPPORT_LINKS`, and `REPO_BASE` to the existing `} from './wiki-links';` destructure.
+Add `WIZARD_STEP_WIKI`, `HELP_FOOTER_WIKI`, `stepLearnMorePage`, `SUPPORT_LINKS`, and `REPO_BASE` to the existing `} from './wiki-links';` destructure.
 
-Then extend the existing `'every referenced WikiPage exists…'` test's `pages` Set to include the new map, and add a new test — append inside the `describe('wiki-links', …)` block:
+Then extend the existing `'every referenced WikiPage exists…'` test's `pages` Set to include the new pages, and add new tests — append inside the `describe('wiki-links', …)` block:
 
 ```ts
   it('WIZARD_STEP_WIKI maps every wizard step to an existing wiki page', () => {
@@ -155,13 +155,23 @@ Then extend the existing `'every referenced WikiPage exists…'` test's `pages` 
     }
   });
 
+  it('stepLearnMorePage suppresses steps whose page is already a footer link', () => {
+    // environment + ffmpeg → Installing-Castwright, which is a footer link → null
+    expect(stepLearnMorePage('environment')).toBeNull();
+    expect(stepLearnMorePage('ffmpeg')).toBeNull();
+    // unique pages are kept
+    expect(stepLearnMorePage('analysis')).toBe('Analysis-and-the-Analyzer');
+    expect(stepLearnMorePage('voice')).toBe('Voice-Engines');
+    expect(stepLearnMorePage('finish')).toBe('Generating-Audio');
+  });
+
   it('SUPPORT_LINKS point at the repo issues + discussions', () => {
     expect(SUPPORT_LINKS.issues).toBe(`${REPO_BASE}/issues`);
     expect(SUPPORT_LINKS.discussions).toBe(`${REPO_BASE}/discussions`);
   });
 ```
 
-And update the existing page-existence test's Set literal to also spread the new map:
+And update the existing page-existence test's Set literal to also spread the new map + the footer pages:
 
 ```ts
     const pages = new Set<string>([
@@ -169,6 +179,7 @@ And update the existing page-existence test's Set literal to also spread the new
       ...Object.values(ADMIN_WIKI),
       ...Object.values(HELP_SECTION_WIKI),
       ...Object.values(WIZARD_STEP_WIKI),
+      ...HELP_FOOTER_WIKI,
       GEMINI_KEY_WIKI,
     ]);
 ```
@@ -219,6 +230,22 @@ export const WIZARD_STEP_WIKI = {
   lanCert: 'Mobile-Tablet-and-Companion-App',
   finish: 'Generating-Audio',
 } satisfies Record<StepId, WikiPage>;
+
+/* Wiki pages shown in the fe-52 footer — single source of truth for the footer's
+   wiki links AND the per-step suppression rule below. */
+export const HELP_FOOTER_WIKI: readonly WikiPage[] = [
+  'Getting-Started',
+  'Installing-Castwright',
+  'Troubleshooting',
+];
+
+/* A step's contextual "Learn more" page, or null when that page is already a
+   footer link (the wizard then hides the duplicate contextual link for that
+   step). Derived from HELP_FOOTER_WIKI, so it stays correct if links change. */
+export function stepLearnMorePage(step: StepId): WikiPage | null {
+  const page = WIZARD_STEP_WIKI[step];
+  return HELP_FOOTER_WIKI.includes(page) ? null : page;
+}
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
@@ -451,7 +478,7 @@ git commit -m "feat(frontend): add Help & resources footer for the setup wizard"
 - Test: `src/components/setup/setup-wizard.test.tsx`
 
 **Interfaces:**
-- Consumes: `HelpResources` (Task 4); `WikiLink` (Task 3); `WIZARD_STEP_WIKI` (Task 2); `STEPS`/`StepId` (Task 1).
+- Consumes: `HelpResources` (Task 4); `WikiLink` (Task 3); `stepLearnMorePage` (Task 2); `STEPS`/`StepId` (Task 1).
 - Produces: no new exports — wires existing pieces into the wizard shell.
 
 - [ ] **Step 1: Write the failing tests**
@@ -482,16 +509,18 @@ describe('SetupWizard — help & wiki links (fe-52/fe-53)', () => {
     expect(screen.getByText(/need help\?/i)).toBeInTheDocument();
   });
 
-  it('shows a contextual "Learn more" link that retargets per step', () => {
+  it('hides "Learn more" on steps whose page is already a footer link, shows it otherwise', () => {
     render(
       <SetupWizard readiness={READINESS} mode="guided" onRefetch={() => {}} onFinish={() => {}} />,
     );
-    // Step 1 = Environment → Installing-Castwright
-    expect(screen.getByRole('link', { name: /learn more/i })).toHaveAttribute(
-      'href', `${WIKI}/Installing-Castwright`,
-    );
-    // advance to step 3 = Analysis → Analysis-and-the-Analyzer
+    // Step 1 = Environment → Installing-Castwright (a footer link) → suppressed
+    expect(screen.getByTestId('step-environment-stub')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /learn more/i })).not.toBeInTheDocument();
+    // Step 2 = ffmpeg → Installing-Castwright → also suppressed
     fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    expect(screen.getByTestId('step-ffmpeg-stub')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /learn more/i })).not.toBeInTheDocument();
+    // Step 3 = Analysis → Analysis-and-the-Analyzer (not in footer) → shown
     fireEvent.click(screen.getByRole('button', { name: /next/i }));
     expect(screen.getByTestId('step-analysis-stub')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /learn more/i })).toHaveAttribute(
@@ -512,7 +541,7 @@ After the `import { STEPS, type StepId } from './steps';` line (added in Task 1)
 
 ```ts
 import { WikiLink } from '../wiki-link';
-import { WIZARD_STEP_WIKI } from '../../lib/wiki-links';
+import { stepLearnMorePage } from '../../lib/wiki-links';
 import { HelpResources } from './help-resources';
 ```
 
@@ -555,13 +584,15 @@ Replace the step-card block (currently lines 165-167):
       </div>
 ```
 
-with an in-flow flex header row holding the right-aligned contextual link above the step body:
+with an in-flow flex header row holding the right-aligned contextual link above the step body — rendered only when `stepLearnMorePage(step.id)` is non-null (suppressed when the step's page is already a footer link). Add `const learnMorePage = stepLearnMorePage(step.id);` next to the existing `const step = STEPS[stepIndex];` line, then:
 
 ```tsx
       <div className="rounded-2xl border border-ink/10 bg-white p-5 sm:p-6 shadow-card">
-        <div className="mb-3 flex flex-wrap justify-end">
-          <WikiLink page={WIZARD_STEP_WIKI[step.id]} label="Learn more" />
-        </div>
+        {learnMorePage && (
+          <div className="mb-3 flex flex-wrap justify-end">
+            <WikiLink page={learnMorePage} label="Learn more" />
+          </div>
+        )}
         {renderStep(step.id, readiness, onRefetch, onFinish, onTryDemoBook)}
       </div>
 ```
@@ -613,12 +644,11 @@ test.describe('first-run wizard — help & wiki links (fe-52/fe-53)', () => {
       'href', 'https://github.com/dudarenok-maker/Castwright/issues',
     );
 
-    // fe-53 — contextual link targets the Environment step's page
-    await expect(page.getByRole('link', { name: /learn more/i })).toHaveAttribute(
-      'href', `${WIKI}/Installing-Castwright`,
-    );
+    // fe-53 — Environment maps to Installing-Castwright, which the footer already
+    // links ("Install & setup"), so its contextual "Learn more" is suppressed.
+    await expect(page.getByRole('link', { name: /learn more/i })).toHaveCount(0);
 
-    // advance to the Analysis step (step 3) → contextual link retargets
+    // advance to the Analysis step (step 3) → unique page → contextual link shows
     await page.getByRole('button', { name: /next/i }).click();
     await page.getByRole('button', { name: /next/i }).click();
     await expect(page.getByRole('link', { name: /learn more/i })).toHaveAttribute(
@@ -688,16 +718,16 @@ git commit -m "docs(docs): orient wiki page leads for first-run wizard arrivals"
 Docs-only. Records the invariants and the user-facing delta.
 
 **Files (docs):**
-- Create: `docs/features/fe-52-53-wizard-help-links.md`
+- Create: `docs/features/260-wizard-help-links.md`
 - Modify: `docs/features/INDEX.md`
 - Modify: `docs/release-notes-next.md`, `RELEASE_NOTES.md`
 
 - [ ] **Step 1: Create the regression plan from the template**
 
-Copy `docs/features/TEMPLATE.md` to `docs/features/fe-52-53-wizard-help-links.md` and fill it in. It MUST record these invariants (paired to their automated test):
+Copy `docs/features/TEMPLATE.md` to `docs/features/260-wizard-help-links.md` and fill it in. It MUST record these invariants (paired to their automated test):
 
 - The Help & resources footer renders on **every** wizard surface — guided steps, re-entry summary board, re-entry drilled-in step — with exactly 5 links, all `target="_blank" rel="noopener noreferrer"` → `setup-wizard.test.tsx`, `help-resources.test.tsx`, `e2e/setup-help-links.spec.ts`.
-- The contextual "Learn more" link targets the current step's mapped page and retargets on step change → `setup-wizard.test.tsx`, e2e.
+- The contextual "Learn more" link targets the current step's mapped page and retargets on step change, and is **suppressed** on steps whose page is already a footer link (Environment, ffmpeg → Installing-Castwright) → `setup-wizard.test.tsx`, `wiki-links.test.ts` (`stepLearnMorePage`), e2e.
 - Every `WIZARD_STEP_WIKI` value + footer target exists as a `docs/wiki/*.md` file (dead-link guard) → `wiki-links.test.ts`. Note the guard is a local-file proxy; live status confirmed 200 for all 8 at ship time.
 - `WikiLink` public API + rendered output unchanged after the `ExternalLink` extraction → `wiki-link.test.tsx`.
 
@@ -705,7 +735,7 @@ Set frontmatter `status: active`.
 
 - [ ] **Step 2: Add the INDEX entry**
 
-Add a line under the setup/wizard area in `docs/features/INDEX.md` pointing to `fe-52-53-wizard-help-links.md`.
+Add a line under the setup/wizard area in `docs/features/INDEX.md` pointing to `260-wizard-help-links.md`.
 
 - [ ] **Step 3: Append release notes (both files)**
 
@@ -730,7 +760,7 @@ To the in-progress version section at the top of `RELEASE_NOTES.md` (user-facing
 - [ ] **Step 4: Commit**
 
 ```bash
-git add docs/features/fe-52-53-wizard-help-links.md docs/features/INDEX.md docs/release-notes-next.md RELEASE_NOTES.md
+git add docs/features/260-wizard-help-links.md docs/features/INDEX.md docs/release-notes-next.md RELEASE_NOTES.md
 git commit -m "docs(docs): regression plan + release notes for wizard help/wiki links"
 ```
 
@@ -772,7 +802,7 @@ centralized in `src/lib/wiki-links.ts`; a guard test blocks dead links. Design:
   `external-link.test.tsx`, `help-resources.test.tsx`, `setup-wizard.test.tsx`
   (footer + contextual link).
 - e2e: `e2e/setup-help-links.spec.ts` (footer + per-step link, phone viewport).
-- Regression plan: `docs/features/fe-52-53-wizard-help-links.md`.
+- Regression plan: `docs/features/260-wizard-help-links.md`.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 BODY
@@ -794,7 +824,7 @@ Per CLAUDE.md, a single-scope `feat` PR gets a **`low`-effort** `code-review` pa
 
 **Spec coverage:**
 - fe-52 persistent footer → Tasks 4 + 5 (mount) + 6 (e2e). ✓
-- fe-53 per-step contextual link → Tasks 2 (map) + 5 (render) + 6 (e2e). ✓
+- fe-53 per-step contextual link + footer-duplication suppression → Tasks 2 (map + `stepLearnMorePage`) + 5 (conditional render) + 6 (e2e). ✓
 - Single constants module, externally-owned comments → Task 2. ✓
 - `Installing-Castwright` exposed + no dead links (guard) → Task 2. ✓
 - `StepId` shared module (no lib→component cycle) → Task 1. ✓
@@ -806,4 +836,4 @@ Per CLAUDE.md, a single-scope `feat` PR gets a **`low`-effort** `code-review` pa
 
 **Placeholder scan:** every code/step block contains real content; no TBD/TODO. ✓
 
-**Type consistency:** `StepId`/`STEPS` (Task 1) consumed by `WIZARD_STEP_WIKI` (Task 2) and `GuidedWizard` (Task 5); `ExternalLink({href,label,className})` (Task 3) consumed by `HelpResources` (Task 4); `WIZARD_STEP_WIKI[step.id]` keyed by the same `StepId`. Names match across tasks. ✓
+**Type consistency:** `StepId`/`STEPS` (Task 1) consumed by `WIZARD_STEP_WIKI`/`stepLearnMorePage` (Task 2) and by `GuidedWizard` via `stepLearnMorePage(step.id): WikiPage | null` (Task 5); `ExternalLink({href,label,className})` (Task 3) consumed by `HelpResources` (Task 4); `stepLearnMorePage` keyed by the same `StepId`. Names match across tasks. ✓

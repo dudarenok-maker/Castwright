@@ -92,6 +92,21 @@ export const WIZARD_STEP_WIKI = {
   lanCert: 'Mobile-Tablet-and-Companion-App',
   finish: 'Generating-Audio',
 } satisfies Record<StepId, WikiPage>;
+
+// The wiki pages that appear in the fe-52 footer. Single source of truth for the
+// footer's wiki links AND the per-step suppression rule (§3).
+export const HELP_FOOTER_WIKI: readonly WikiPage[] = [
+  'Getting-Started',
+  'Installing-Castwright',
+  'Troubleshooting',
+];
+
+// A step's contextual "Learn more" page, or null when that page is already a
+// footer link (so the wizard hides the duplicate contextual link for that step).
+export function stepLearnMorePage(step: StepId): WikiPage | null {
+  const page = WIZARD_STEP_WIKI[step];
+  return HELP_FOOTER_WIKI.includes(page) ? null : page;
+}
 ```
 
 **`StepId` must move to a shared module (required, not optional).** It is
@@ -144,6 +159,28 @@ Environment and ffmpeg intentionally share `Installing-Castwright`: both *are*
 install prerequisites and the page leads with exactly that content. Page-level
 linking makes the shared target land at the top where Prerequisites lives.
 
+**Suppression rule (no duplicate link per screen).** The contextual "Learn more"
+is **hidden on any step whose page is already a footer link** — because the
+footer (visible on the same screen) already offers it one tap away. The footer
+carries `Getting-Started`, `Installing-Castwright`, `Troubleshooting`, so:
+
+| Step | Page | "Learn more" shown? |
+|---|---|---|
+| Environment | `Installing-Castwright` | **no** — footer's "Install & setup" |
+| ffmpeg | `Installing-Castwright` | **no** — footer's "Install & setup" |
+| Analysis | `Analysis-and-the-Analyzer` | yes |
+| Voice | `Voice-Engines` | yes |
+| Defaults | `Account-and-Settings` | yes |
+| LAN access | `Mobile-Tablet-and-Companion-App` | yes |
+| Finish | `Generating-Audio` | yes |
+
+Derived from the footer's page set (a `HELP_FOOTER_WIKI` list + a
+`stepLearnMorePage(step)` helper that returns `null` when the step's page is in
+that set), **not** by hardcoding "environment/ffmpeg" — so if a footer or step
+link changes later, suppression stays correct automatically. `WIZARD_STEP_WIKI`
+still maps all 7 steps (keeps the dead-link guard covering every page + documents
+each step's topic); only the *rendering* is gated.
+
 ### 4. Components & placement
 
 - **Extract `<ExternalLink>`** (`src/components/external-link.tsx`) from the
@@ -167,9 +204,11 @@ linking makes the shared target land at the top where Prerequisites lives.
   three.)
 
 - **Contextual "Learn more" (fe-53):** rendered **centrally** in `GuidedWizard`,
-  keyed by the current step id, as `<WikiLink page={WIZARD_STEP_WIKI[step.id]}
-  label="Learn more" />`. Rendering once (keyed by `step.id`) rather than editing
-  all 7 `step-*.tsx` files gives identical UX with one test instead of seven.
+  keyed by the current step id via `stepLearnMorePage(step.id)` — which returns
+  the step's `WIZARD_STEP_WIKI` page, or `null` when that page is already a footer
+  link (suppression rule, §3). The link renders only when the helper is non-null.
+  Rendering once (keyed by `step.id`) rather than editing all 7 `step-*.tsx` files
+  gives identical UX with one test instead of seven.
 
   **Mount point — precise, because the frame has no heading of its own.** The
   guided frame is `<progress dots> → <card>{renderStep(id)}</card>`;
@@ -227,9 +266,11 @@ linking makes the shared target land at the top where Prerequisites lives.
 - **`help-resources.test.tsx`** — renders exactly the 5 links with the correct
   hrefs; all `target="_blank" rel="noopener noreferrer"`.
 - **`setup-wizard.test.tsx`** — `HelpResources` present on every step (guided) and
-  in re-entry; the contextual "Learn more" link shows the right page per step.
-- **e2e** (`e2e/`) — one Playwright spec: walk the wizard, assert the footer links
-  on ≥2 steps + the per-step "Learn more" target, at phone/tablet/desktop.
+  in re-entry; the contextual "Learn more" is **hidden** on Environment/ffmpeg
+  (footer-duplicated) and **shows the right page** on a kept step (e.g. Analysis).
+- **e2e** (`e2e/`) — one Playwright spec: walk the wizard, assert the footer links,
+  that Environment shows **no** "Learn more", and that a kept step (Analysis)
+  shows the correct target, at desktop + phone viewports.
 
 ## Shipping
 
