@@ -27,6 +27,7 @@
        from cast.json, so only analyzer-dropped characters get rescued. */
 
 import { normaliseForMatch } from '../util/text-match.js';
+import { normaliseNameKey } from '../util/safe-id.js';
 import { isDefaultNarratorName } from '../tts/language-registry.js';
 
 /** Per-character fields owned by voice design / reuse, not by the analyzer. */
@@ -74,7 +75,12 @@ export function dropReuseContinuityKeepDesignedVoice<T extends CastRecord>(
 function isVoicedOrReused(c: CastRecord): boolean {
   const state = c.voiceState;
   if (state === 'reused' || state === 'tuned' || state === 'locked') return true;
-  return Boolean(c.voiceId || c.matchedFrom || c.overrideTtsVoices || c.overrideTtsVoice);
+  // voiceUuid counts as a designed voice (srv-43): a voiceUuid-only row must be
+  // carry-forward/bridge-eligible so the same-name collapse never routes a
+  // bespoke voice through a survivor the merge then drops (Coalfall class).
+  return Boolean(
+    c.voiceId || c.matchedFrom || c.overrideTtsVoices || c.overrideTtsVoice || c.voiceUuid,
+  );
 }
 
 /** Union two alias lists (case-insensitive dedup, original casing preserved,
@@ -315,4 +321,123 @@ export function seedReuseGuardsFromPriorCast<
     if (f.matchedFrom === undefined && old.matchedFrom !== undefined)
       f.matchedFrom = old.matchedFrom as T['matchedFrom'];
   }
+}
+
+/** True when a row carries a concrete bespoke designed voice (not merely a
+    reuse link). Used so the same-name collapse never drops a designed voice in
+    favour of a reuse-linked sibling (2026-07-14 Coalfall voice-strip class). */
+function hasBespokeVoice(c: CastRecord): boolean {
+  return Boolean(c.overrideTtsVoices || c.overrideTtsVoice || c.voiceUuid);
+}
+
+/** Voice strength for same-name collapse. locked > tuned > any bespoke voice
+    (even voiceState generated/absent) > reuse link > other-voiced > none. */
+function priorVoiceRank(c: CastRecord): number {
+  if (c.voiceState === 'locked') return 5;
+  if (c.voiceState === 'tuned') return 4;
+  if (hasBespokeVoice(c)) return 3;
+  if (c.voiceState === 'reused') return 2;
+  if (isVoicedOrReused(c)) return 1;
+  return 0;
+}
+
+/** True when any two rows in the group are explicitly marked not-the-same-person
+    via notLinkedTo (by the other member's id). Conservative: any such edge blocks
+    collapsing the whole group, mirroring Tier-1's gender-conflict skip. */
+function groupHasNotLinkedEdge(group: ReadonlyArray<CastRecord>): boolean {
+  const ids = new Set(group.map((g) => g.id));
+  for (const c of group) {
+    const nl = c.notLinkedTo;
+    if (!Array.isArray(nl)) continue;
+    for (const entry of nl) {
+      const cid = (entry as { characterId?: unknown })?.characterId;
+      if (typeof cid === 'string' && ids.has(cid)) return true;
+    }
+  }
+  return false;
+}
+
+/** Collapse same-normalised-name rows in a prior cast to one survivor each so
+    the carryover merge cannot re-add a voiced duplicate. Bespoke voice beats a
+    reuse link; narrator rows and notLinkedTo-separated pairs are never
+    collapsed; the dropped rows' names/aliases fold onto the survivor (never the
+    survivor's own name). Returns a new array (original order, survivor at the
+    first member's slot) + a dropped-row log for the change-log. Input is not
+    mutated. */
+export function dedupePriorCastByName<T extends CastRecord>(
+  priorCast: ReadonlyArray<T>,
+): { cast: T[]; dropped: Array<{ id: string; name?: string; voiceState?: string }> } {
+  if (priorCast.length < 2) return { cast: [...priorCast], dropped: [] };
+
+  const nameKeyOf = (c: CastRecord): string =>
+    typeof c.name === 'string' ? normaliseNameKey(c.name) : '';
+  const isNarrator = (c: CastRecord): boolean =>
+    c.id === 'narrator' || c.id === 'char-narrator';
+
+  const groups = new Map<string, T[]>();
+  for (const c of priorCast) {
+    const key = nameKeyOf(c);
+    if (!key || isNarrator(c)) continue;
+    const g = groups.get(key);
+    if (g) g.push(c);
+    else groups.set(key, [c]);
+  }
+
+  const dropped: Array<{ id: string; name?: string; voiceState?: string }> = [];
+  const survivorByKey = new Map<string, T>();
+  const collapsedKeys = new Set<string>();
+
+  for (const [key, group] of groups) {
+    if (group.length < 2 || groupHasNotLinkedEdge(group)) continue;
+    collapsedKeys.add(key);
+
+    let best = group[0];
+    for (const row of group.slice(1)) {
+      const rr = priorVoiceRank(row);
+      const br = priorVoiceRank(best);
+      const rl = typeof row.lines === 'number' ? row.lines : -1;
+      const bl = typeof best.lines === 'number' ? best.lines : -1;
+      if (rr > br || (rr === br && rl > bl)) best = row;
+    }
+
+    const survivorName =
+      typeof best.name === 'string' ? best.name.trim().toLowerCase() : '';
+    let aliases: string[] | undefined = Array.isArray(best.aliases)
+      ? (best.aliases as string[])
+      : undefined;
+    for (const row of group) {
+      if (row === best) continue;
+      // Fold the dropped row's alternate names in, but never the survivor's own
+      // name (a same-name collapse would otherwise add "Антон" as an alias of Антон).
+      const add = [
+        ...(typeof row.name === 'string' && row.name.trim().toLowerCase() !== survivorName
+          ? [row.name]
+          : []),
+        ...(Array.isArray(row.aliases) ? (row.aliases as string[]) : []),
+      ];
+      aliases = unionAliases(aliases, add);
+      dropped.push({
+        id: row.id,
+        ...(typeof row.name === 'string' ? { name: row.name } : {}),
+        ...(typeof row.voiceState === 'string' ? { voiceState: row.voiceState } : {}),
+      });
+    }
+    survivorByKey.set(key, aliases ? ({ ...best, aliases } as T) : best);
+  }
+
+  if (!collapsedKeys.size) return { cast: [...priorCast], dropped: [] };
+
+  const emitted = new Set<string>();
+  const out: T[] = [];
+  for (const c of priorCast) {
+    const key = nameKeyOf(c);
+    if (!key || isNarrator(c) || !collapsedKeys.has(key)) {
+      out.push(c);
+      continue;
+    }
+    if (emitted.has(key)) continue;
+    emitted.add(key);
+    out.push(survivorByKey.get(key)!);
+  }
+  return { cast: out, dropped };
 }
