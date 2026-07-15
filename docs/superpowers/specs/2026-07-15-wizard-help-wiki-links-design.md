@@ -94,23 +94,39 @@ export const WIZARD_STEP_WIKI = {
 } satisfies Record<StepId, WikiPage>;
 ```
 
-`StepId` is the union currently declared inside `setup-wizard.tsx`. Export it (or
-lift the `StepId` + `STEPS` declaration into a tiny shared module) so the map can
-be keyed by it and stay exhaustive at compile time via `satisfies`.
+**`StepId` must move to a shared module (required, not optional).** It is
+currently a **local, non-exported** type inside `setup-wizard.tsx`. Keying the
+map in `src/lib/wiki-links.ts` by it would force a lib→component import **and a
+cycle** (`setup-wizard.tsx` imports `WIZARD_STEP_WIKI` back). Fix: lift `StepId`
++ `STEPS` into a new `src/components/setup/steps.ts`. `setup-wizard.tsx` imports
+both from it; `wiki-links.ts` does a **type-only** `import type { StepId } from
+'../components/setup/steps'` for the `satisfies` check. A type-only import erases
+at compile time, so there is no runtime cycle. (The lib→component direction is a
+type-only edge and acceptable; `steps.ts` is where wizard step-identity belongs.)
 
-Both `GET`s are verified live: `has_issues` and `has_discussions` are both true
-on the repo (checked 2026-07-15), so Issues and Discussions are safe targets.
+Both support targets are verified live: `has_issues` and `has_discussions` are
+both true on the repo, and a `curl` of all 7 wiki targets — `Installing-Castwright`
+included — returned HTTP 200 (checked 2026-07-15). So no target is a dead link at
+spec time.
 
 ### 2. The fe-52 footer set (derived, not a new constant)
 
-Four links, in order:
+Five links, in order — one per category the fe-52 issue names (wiki home,
+install/setup guide, troubleshooting, and two community/support routes):
 
 | Label | Target |
 |---|---|
-| Getting started | `wikiUrl('Getting-Started')` (wiki home / install guide) |
+| Getting started | `wikiUrl('Getting-Started')` (wiki home) |
+| Install & setup | `wikiUrl('Installing-Castwright')` (the full install guide — the page a stuck first-run user most likely needs) |
 | Troubleshooting | `wikiUrl('Troubleshooting')` |
 | Report a problem | `SUPPORT_LINKS.issues` |
 | Ask a question | `SUPPORT_LINKS.discussions` |
+
+(An earlier draft folded "install/setup guide" into "Getting started" for a
+4-link row. Restored as its own link because environment/install is the single
+most likely reason a first-run user is stuck, and `Installing-Castwright` — now
+exposed in the union for fe-53 — is the real install guide; the 610-word
+`Getting-Started` overview is not a substitute.)
 
 ### 3. The step → wiki-page map (fe-53)
 
@@ -139,25 +155,50 @@ linking makes the shared target land at the top where Prerequisites lives.
   Existing `WikiLink` call-sites and tests are untouched (same rendered output).
 
 - **`<HelpResources>`** (`src/components/setup/help-resources.tsx`) — the fe-52
-  "Need help?" footer row: a label + the four `ExternalLink`s. `flex-wrap` so it
+  "Need help?" footer row: a label + the five `ExternalLink`s. `flex-wrap` so it
   reflows on phones.
 
 - **Wizard shell** (`setup-wizard.tsx`): render `<HelpResources>` **once** in the
-  outer `SetupWizard` shell, below the mode switch, so it is persistent on every
-  step in **both** guided and re-entry modes.
+  outer `SetupWizard` return (alongside the existing `<header>`, after the
+  guided/re-entry mode switch), so it is persistent across **every** wizard
+  surface: all guided steps, the re-entry summary board, and re-entry drilled-in
+  steps. (Verified against the component: the outer `SetupWizard` `<div>` wraps
+  both `GuidedWizard` and `ReEntryFlow`, so a single mount there reaches all
+  three.)
 
-- **Contextual "Learn more" (fe-53):** rendered **centrally** in the guided step
-  frame, keyed by the current `stepId`:
-  `<WikiLink page={WIZARD_STEP_WIKI[id]} label="Learn more" />`, positioned in the
-  step-frame header. Rendering once (keyed by `stepId`) rather than editing all 7
-  `step-*.tsx` files gives identical UX with one test instead of seven and a far
-  smaller surface area. The re-entry flow reuses the same guided step frame when
-  drilling into a step, so it is covered too.
+- **Contextual "Learn more" (fe-53):** rendered **centrally** in `GuidedWizard`,
+  keyed by the current step id, as `<WikiLink page={WIZARD_STEP_WIKI[step.id]}
+  label="Learn more" />`. Rendering once (keyed by `step.id`) rather than editing
+  all 7 `step-*.tsx` files gives identical UX with one test instead of seven.
+
+  **Mount point — precise, because the frame has no heading of its own.** The
+  guided frame is `<progress dots> → <card>{renderStep(id)}</card>`;
+  `STEPS[].title` is used only for the dots' `aria-label`, never rendered, and
+  each step component renders its *own* `<h2>` (inconsistent with the frame
+  titles — ffmpeg's is "Audio assembly", finish's is "Ready to perform"). So the
+  link mounts as a **right-aligned element pinned to the top-right of the step
+  card** (the card gets `relative`; the link is absolutely positioned top-right,
+  or the card gains a thin flex header row). It then sits on the same visual line
+  as each step's own top-left `<h2>` — reproducing the approved "link in the
+  section header" intent without a frame-level title and without touching the 7
+  step files. It does **not** go above the card (that would render before the
+  step's heading).
+
+  Because `ReEntryFlow` delegates its drilled-in step rendering to the same
+  `GuidedWizard`, the contextual link appears there too. It does **not** appear on
+  the re-entry **summary board** (which has no single active step) — correct: the
+  global footer covers that surface.
 
 ### 5. Wiki content work ("update pages so it flows")
 
 - **Expose `Installing-Castwright`** in the `WikiPage` union (1-line type
-  addition). The existing guard test then covers it automatically (file exists).
+  addition). **This alone does NOT make the guard test check it** — the guard
+  (`wiki-links.test.ts`) iterates a hand-built `Set` spread from exactly
+  `CATEGORY_WIKI`, `ADMIN_WIKI`, `HELP_SECTION_WIKI`, `GEMINI_KEY_WIKI`. The guard
+  must be **explicitly extended** to also spread `...Object.values(WIZARD_STEP_WIKI)`
+  (see Testing). Note the guard is a **local-file proxy** — it asserts
+  `docs/wiki/<page>.md` exists, not that the page is published live; live status
+  was confirmed 200 for all 7 targets at spec time (§1).
 - **Light editorial "arrival" pass** on the 7 target pages: confirm each page's
   *opening* speaks to a first-run user arriving from that step; tighten the lead
   where it does not. This is copy-editing existing pages, not authoring new ones.
@@ -169,18 +210,19 @@ linking makes the shared target land at the top where Prerequisites lives.
 - Footer "Need help?" row: `flex-wrap` so links stack on `<640px`; single row on
   `sm:`+. 44px touch targets come from `ExternalLink` (`min-h-[44px]
   fine-pointer:min-h-0`).
-- Contextual "Learn more": inherits `WikiLink`'s 44px target; sits in the step
-  frame header, wrapping under the heading on narrow widths.
+- Contextual "Learn more": inherits `WikiLink`'s 44px target; pinned top-right of
+  the step card (per §4), wrapping under the step's `<h2>` on narrow widths.
 - Verified at phone / tablet / desktop per the mobile-testing protocol.
 
 ## Testing
 
-- **`wiki-links.test.ts`** — extend the page-existence guard to `WIZARD_STEP_WIKI`
-  values; assert every `StepId` is mapped (runtime exhaustiveness alongside the
-  compile-time `satisfies`).
+- **`wiki-links.test.ts`** — add `...Object.values(WIZARD_STEP_WIKI)` to the
+  guard's page `Set` (without this, `Installing-Castwright` is never checked);
+  assert every `StepId` from `STEPS` has a `WIZARD_STEP_WIKI` entry (runtime
+  exhaustiveness alongside the compile-time `satisfies`).
 - **`external-link.test.tsx`** — renders `href`, `target="_blank"`,
   `rel="noopener noreferrer"`, label, icon.
-- **`help-resources.test.tsx`** — renders exactly the 4 links with the correct
+- **`help-resources.test.tsx`** — renders exactly the 5 links with the correct
   hrefs; all `target="_blank" rel="noopener noreferrer"`.
 - **`setup-wizard.test.tsx`** — `HelpResources` present on every step (guided) and
   in re-entry; the contextual "Learn more" link shows the right page per step.
@@ -200,8 +242,9 @@ linking makes the shared target land at the top where Prerequisites lives.
 fe-52:
 - [ ] Every wizard step exposes a Help & resources affordance with working links
       (new tab, `noopener`).
-- [ ] Links include wiki home (Getting-Started), Troubleshooting, and a
-      support/community route (Issues + Discussions).
+- [ ] Links include wiki home (Getting-Started), the install/setup guide
+      (Installing-Castwright), Troubleshooting, and a support/community route
+      (Issues + Discussions).
 - [ ] URLs centralized in `wiki-links.ts` with the "externally owned" comment.
 - [ ] Renders across phone / tablet / desktop breakpoints.
 
