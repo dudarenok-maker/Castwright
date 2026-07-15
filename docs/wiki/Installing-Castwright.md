@@ -117,7 +117,7 @@ npm run start:prod
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/installing-castwright/02-install-windows-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="images/installing-castwright/02-install-windows.png">
-  <img alt="The Setup Wizard's Voice step, installing the Kokoro voice engine" src="images/installing-castwright/02-install-windows.png">
+  <img alt="The Setup Wizard's Voice step — the shared voice-engine runtime plus the per-book engine recommendation" src="images/installing-castwright/02-install-windows.png">
 </picture>
 
 Browser opens `https://localhost:8443` (the v1.13.0 LAN-HTTPS default; falls back to `http://localhost:8080` if no LAN certificate is present — see [Mobile + tablet access](#mobile--tablet-access-over-lan-https)).
@@ -287,6 +287,14 @@ steps above). All knobs have safe defaults — set only what you need.
 ## Setting up the analyzer
 
 The install bundle ships Kokoro weights for TTS only — the analyzer needs either a local Ollama daemon or a Gemini API key. The server-side default is `ANALYZER=local` (Ollama); if no Ollama daemon is reachable, the analyzer auto-falls back to the Gemini free tier when a key is configured.
+
+The first-run wizard's **Analysis** step sets this up in-app — local-first, with **Local via Ollama** presented first (list and pull a model without leaving the app) and **Online via Gemini** as the peer option:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/installing-castwright/setup-analysis-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/installing-castwright/setup-analysis.png">
+  <img alt="The Setup Wizard's Analysis step — local-first analyzer setup with Ollama or Gemini" src="images/installing-castwright/setup-analysis.png">
+</picture>
 
 **Option A — Ollama (private, fully on-device).** The Account → Models card in the running app installs Ollama and pulls models without leaving the UI:
 
