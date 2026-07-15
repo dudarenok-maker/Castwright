@@ -7193,10 +7193,23 @@ async function realGetSetupReadiness(): Promise<SetupReadiness> {
    server/src/tts/models-status.ts. */
 export type EngineHealthState = 'ready' | 'package-missing' | 'weights-missing' | 'not-installed' | 'loaded';
 export type RuntimeProcessState = 'ready' | 'starting' | 'down' | 'crashed';
+export type NeedsAnswer = 'expressive-or-multilingual' | 'simple-english';
+export interface EngineRecommendation {
+  engine: 'kokoro' | 'qwen' | 'coqui';
+  modelKey: 'kokoro-v1' | 'qwen3-tts-0.6b' | 'coqui-xtts-v2';
+  reason: string;
+  caveat: string | null;
+  alternate: 'kokoro' | 'qwen' | 'coqui' | null;
+}
+export interface RecommendationSet {
+  expressiveOrMultilingual: EngineRecommendation;
+  simpleEnglish: EngineRecommendation;
+}
 export interface ModelsStatus {
   runtime: { installedOnDisk: boolean; pythonFound: boolean; process: RuntimeProcessState };
   engines: Record<'kokoro' | 'qwen' | 'coqui', { state: EngineHealthState; packageBroken: boolean }>;
   info: { gpu: string; vramTotalMb: number | null };
+  recommendation: RecommendationSet;
 }
 
 async function realGetModelsStatus(): Promise<ModelsStatus> {
@@ -7278,6 +7291,24 @@ export async function mockGetModelsStatus(): Promise<ModelsStatus> {
       coqui: { state: 'not-installed', packageBroken: false },
     },
     info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
+    recommendation: {
+      expressiveOrMultilingual: {
+        engine: 'qwen',
+        modelKey: 'qwen3-tts-0.6b',
+        reason: 'Expressive and multilingual — the multi-cast default.',
+        // keep in sync with server CAVEAT_VRAM (server/src/tts/engine-recommendation.ts)
+        caveat:
+          "May not fit this GPU's memory — you can run Qwen on CPU (slower) via the voice-engine device setting, or pick Kokoro below for fast English-only voices.",
+        alternate: 'coqui',
+      },
+      simpleEnglish: {
+        engine: 'kokoro',
+        modelKey: 'kokoro-v1',
+        reason: 'Fast and light — runs comfortably on low VRAM or CPU.',
+        caveat: null,
+        alternate: null,
+      },
+    },
   };
 }
 
