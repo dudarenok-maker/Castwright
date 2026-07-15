@@ -137,6 +137,18 @@ describe('selectAnalyzer dispatch', () => {
     expect(() => selectAnalyzer()).toThrow(/GEMINI_API_KEY is required/);
   });
 
+  it('Part 5 — gemini engine + key → GeminiAnalyzer regardless of allowCloudFallback (explicit selection is never gated)', () => {
+    /* The allowCloudFallback gate only governs the LOCAL branch's Gemini
+       fallback wrap; a user who explicitly picked Gemini as their engine still
+       routes to Gemini even with the gate off. */
+    _setUserSettingsCacheForTest({ analysisEngine: 'gemini', allowCloudFallback: false });
+    process.env.GEMINI_API_KEY = 'test-key';
+    const s = selectAnalyzer();
+    expect(s.engine).toBe('gemini');
+    expect(s.analyzer).toBeInstanceOf(GeminiAnalyzer);
+    expect(s.fallbackModel).toBeNull();
+  });
+
   it('no saved engine (cold cache) → defaults to local', () => {
     /* Local is the default; gemini is opt-in via user-settings. */
     const s = selectAnalyzer();

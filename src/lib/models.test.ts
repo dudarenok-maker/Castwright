@@ -9,6 +9,7 @@ import {
   MODEL_OPTION_GROUPS,
   MODEL_OPTIONS,
 } from './models';
+import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 
 describe('engineForModelId', () => {
   it('classifies a tag with a colon as local', () => {
@@ -17,6 +18,17 @@ describe('engineForModelId', () => {
   });
   it('classifies a colonless id as gemini', () => {
     expect(engineForModelId('gemma-4-31b-it')).toBe('gemini');
+  });
+});
+
+describe('Part 5 — fresh-user default coherence (Blocker-1 coupling)', () => {
+  it('the default analysis model is a local `:`-tagged id whose engine derives to local, matching the default engine', () => {
+    const model = FRONTEND_ACCOUNT_DEFAULTS.defaultAnalysisModel;
+    // A Gemini id here would let the Defaults step re-derive analysisEngine=gemini
+    // via engineForModelId on the first save and silently undo the local default.
+    expect(model).toContain(':');
+    expect(engineForModelId(model)).toBe('local');
+    expect(FRONTEND_ACCOUNT_DEFAULTS.analysisEngine).toBe('local');
   });
 });
 

@@ -1,7 +1,18 @@
 # Analyzer: local-by-default engine + opt-out (announced) cloud fallback + patient warm + honest review progress
 
 - **Date:** 2026-07-15
-- **Status:** draft (v4 — folds three 2026-07-15 Opus adversarial passes)
+- **Status:** implemented (v4 — folds three 2026-07-15 Opus adversarial passes) — see Ship notes
+- **Issue:** [#1660](https://github.com/dudarenok-maker/Castwright/issues/1660)
+- **Ship notes:** Implemented on `fix/server-analyzer-local-warm-and-fallback-gate`, six commits —
+  Part 0 `361ca3d4` (local default + ANALYZER retired), Part 1 `8d912055` (allowCloudFallback gate + UI),
+  Part 2 `24f4e8c8` (patient warm), Part 3 `c51e4c9e` (honest review failure), Part 4 `1515d839`
+  (finite Gemini chunk budget + force-split), Part 5 + ship-prep (this commit). Full frontend + server
+  suites green at each step. **Accept-owed on a GPU box:** 3.2 (loading/waiting timer + amber tone on a
+  real slow local warm — not changed blind), 4.5 (Gemini multi-chunk vs single-call parity on Coalfall +
+  a Night-Watch-scale chapter). Deferred: force-split is script-review-only; annotate-emotion +
+  instruct-annotation rely on the finite budget + honest `chapter-failed`. E2E for the failure panel
+  skipped (mock `reviewScript` has no failure-injection hook; covered by server + jsdom tests). The
+  immediate `.env` `ANALYZER=gemini` removal on the dev box still needs a **server restart**.
 - **Area:** server (analyzer routing / chunking / script review) + frontend (settings UI, review progress)
 - **Amends:** `docs/superpowers/specs/2026-07-14-script-review-progress-heartbeat-model-load-design.md`
   (deliberately **reverses its C1 resolution** — see §Background)
