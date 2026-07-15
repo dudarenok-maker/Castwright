@@ -18,6 +18,7 @@
    (it delegates straight to resolveStage1ChunkCharBudget). */
 
 import { resolveStage1ChunkCharBudget } from './stage1-chunk.js';
+import { configValue } from '../config/resolver.js';
 
 export interface SentenceChunk<S> {
   core: S[];
@@ -87,9 +88,17 @@ export function primarySentenceId(op: { id: number; op: string; mergeIds?: numbe
   return op.op === 'merge' ? Math.min(...(op.mergeIds ?? [op.id])) : op.id;
 }
 
-/* Per-chunk char budget for the script-review pass — delegates straight to the
-   stage-1 budget resolver (gemini ⇒ Number.MAX_SAFE_INTEGER, never chunks;
-   local ⇒ num_ctx-derived). */
+/* Per-chunk char budget for the OUTPUT-heavy passes (script review,
+   annotate-emotion, instruct-annotation — each emits per-sentence output).
+   - local  ⇒ num_ctx-derived (delegates to resolveStage1ChunkCharBudget).
+   - gemini ⇒ a FINITE budget (registry knob analyzer.gemini.outputHeavyChunkChars).
+     NOT the Number.MAX_SAFE_INTEGER stage-1 keeps: a Night-Watch-sized chapter's
+     per-sentence output would otherwise overrun Gemini's output-token cap and
+     stop at MAX_TOKENS with an empty/partial buffer (the 2026-07-14 incident).
+   Stage-1 cast detection calls resolveStage1ChunkCharBudget DIRECTLY, so its
+   gemini ⇒ MAX_SAFE_INTEGER (tiny roster output, correct — never chunk) is a
+   clean, separate seam untouched by this. */
 export function chapterChunkBudget(engine: 'gemini' | 'local'): number {
-  return resolveStage1ChunkCharBudget(engine);
+  if (engine === 'local') return resolveStage1ChunkCharBudget('local');
+  return configValue<number>('analyzer.gemini.outputHeavyChunkChars');
 }

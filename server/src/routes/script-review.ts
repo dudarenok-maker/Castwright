@@ -32,11 +32,11 @@ import { getResolvedGeminiApiKey, getResolvedAllowCloudFallback } from '../works
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { warmOllamaModel } from './ollama-health.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
+import { AnalyzerTruncatedError } from '../analyzer/errors.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { upsertChapterEntry, readLedger, discardChapters, resolveOps, patchSelection } from '../workspace/script-review-ledger.js';
 import {
   chunkSentencesByBudget,
-  chunkWithContext,
   ownsOp,
   primarySentenceId,
   chapterChunkBudget,
@@ -72,6 +72,11 @@ interface CastFile {
    final two-speaker exchange is fed (read-only) into a chapter's first chunk so
    the model can resolve a tagless chapter-opening line via turn-taking. */
 const NARRATOR_ID = 'narrator'; // module-private convention (re-declared, never exported)
+
+/* Part 4 — max depth for the force-split-on-truncation recovery (halving the
+   chunk's core each level: 1 chunk → up to 8 sub-chunks at depth 3). Beyond
+   this a still-truncating span re-throws → chapter-failed (Part 3). */
+const MAX_FORCE_SPLIT_DEPTH = 3;
 export const PRIOR_TURN_LOOKBACK = 6; // sentences (positions) scanned back from the chapter end
 export const MAX_PRIOR_TURN_CHARS = 240; // hard cap per rendered line
 
@@ -786,16 +791,27 @@ async function runScriptReviewJob(
         overlap: 3,
         serialize: (s) => JSON.stringify({ id: s.id, characterId: s.characterId, text: s.text }),
       });
-      // Finding 8 (PR review round 4): accumulate this chapter's own ops
-      // locally as they're produced instead of re-filtering the ENTIRE
-      // job-lifetime opsEvents array after every chapter (O(n^2) over a
-      // long book) — see chapterOps below.
-      const chapterOpsAccum: ScriptReviewOp[] = [];
-      for (let index = 0; index < chunks.length; index += 1) {
-        const chunk = chunks[index];
-        if (job.controller.signal.aborted) break;
+
+      /* Part 4 — force-split-on-truncation recovery. Bounding INPUT chars only
+         APPROXIMATES bounding OUTPUT tokens (verbose rationales mean a small
+         input with many flagged sentences can still overrun), so a chunk can
+         still hit MAX_TOKENS (AnalyzerTruncatedError). On truncation, halve the
+         chunk's core and retry each half, preserving "each sentence owned by
+         exactly one core" (the left/right cores partition the parent core, so
+         ownsOp keeps de-duping). A single sentence that still truncates can't
+         split further → it re-throws and surfaces as chapter-failed (Part 3).
+         Returns the owned ops for `core`. */
+      const OVERLAP = 3;
+      const reviewCore = async (
+        core: SentenceOutput[],
+        contextBefore: SentenceOutput[],
+        contextAfter: SentenceOutput[],
+        withPrior: boolean,
+        depth: number,
+      ): Promise<ScriptReviewOp[]> => {
+        const coreIds = new Set(core.map((s) => s.id));
         const prompt = buildScriptReviewChapterInbox(
-          manuscriptId, chapterId, chunkWithContext(chunk), roster, index === 0 ? priorExchange : null, structureEvidence,
+          manuscriptId, chapterId, [...contextBefore, ...core, ...contextAfter], roster, withPrior ? priorExchange : null, structureEvidence,
         );
         try {
           const result = await activeSelection.analyzer.runScriptReviewChapter(manuscriptId, chapterId, prompt, {
@@ -805,7 +821,33 @@ async function runScriptReviewJob(
             onThrottle: (waitMs, reason) => send({ kind: 'throttle', phaseId: 0, chapterIndex: chapterId, model: activeSelection.model, waitMs, reason }),
             onFallback: ({ reason }) => switchToFallback(reason),
           });
-          const owned = result.ops.filter((op) => ownsOp(chunk.coreIds, primarySentenceId(op)));
+          return result.ops.filter((op) => ownsOp(coreIds, primarySentenceId(op)));
+        } catch (err) {
+          if (err instanceof AnalyzerTruncatedError && depth < MAX_FORCE_SPLIT_DEPTH && core.length > 1) {
+            const mid = Math.ceil(core.length / 2);
+            const left = core.slice(0, mid);
+            const right = core.slice(mid);
+            // left keeps the chunk's leading context + the head of `right` as its
+            // trailing context; right gets the tail of `left` + the chunk's
+            // trailing context. Document order is preserved in both prompts.
+            const leftOps = await reviewCore(left, contextBefore, [...right.slice(0, OVERLAP), ...contextAfter], withPrior, depth + 1);
+            const rightOps = await reviewCore(right, [...contextBefore, ...left.slice(-OVERLAP)], contextAfter, false, depth + 1);
+            return [...leftOps, ...rightOps];
+          }
+          throw err;
+        }
+      };
+
+      // Finding 8 (PR review round 4): accumulate this chapter's own ops
+      // locally as they're produced instead of re-filtering the ENTIRE
+      // job-lifetime opsEvents array after every chapter (O(n^2) over a
+      // long book) — see chapterOps below.
+      const chapterOpsAccum: ScriptReviewOp[] = [];
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunk = chunks[index];
+        if (job.controller.signal.aborted) break;
+        try {
+          const owned = await reviewCore(chunk.core, chunk.contextBefore, chunk.contextAfter, index === 0, 0);
           if (owned.length) {
             send({ kind: 'ops', chapterId, ops: owned });
             totalOps += owned.length;
