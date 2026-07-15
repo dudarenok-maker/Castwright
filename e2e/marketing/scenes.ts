@@ -285,6 +285,56 @@ export const SCENES: Scene[] = [
     waitForAfterAction: '[data-testid="whats-new-banner"]',
     strict: true,
   },
+
+  /* Wiki wave — guided first-run wizard, one scene per step. The `setup=notready`
+     hash seam (mockGetSetupReadiness) forces guided mode (completedAt: null), so
+     #/setup renders the linear "Step N of 7" walkthrough instead of the re-entry
+     checklist. Each scene pages forward with the always-enabled Next button and
+     confirms it landed via `Step N of 7`. Steps (0-indexed): 0 Environment /
+     1 ffmpeg / 2 Analysis / 3 Voice / 4 Defaults / 5 LAN access / 6 Finish. */
+  {
+    id: 'setup-environment',
+    hash: '#/setup?setup=notready',
+    viewports: ['desktop'],
+    waitFor: 'text=Step 1 of 7',
+    strict: true,
+  },
+  {
+    id: 'setup-analysis',
+    hash: '#/setup?setup=notready',
+    viewports: ['desktop'],
+    waitFor: 'text=Step 1 of 7',
+    action: async (page) => {
+      for (let i = 0; i < 2; i++) await page.getByRole('button', { name: 'Next' }).click();
+      await page.evaluate(() => window.scrollTo(0, 0));
+    },
+    waitForAfterAction: 'text=Step 3 of 7',
+    strict: true,
+  },
+  {
+    id: 'setup-voice',
+    hash: '#/setup?setup=notready',
+    viewports: ['desktop'],
+    waitFor: 'text=Step 1 of 7',
+    action: async (page) => {
+      for (let i = 0; i < 3; i++) await page.getByRole('button', { name: 'Next' }).click();
+      await page.evaluate(() => window.scrollTo(0, 0));
+    },
+    waitForAfterAction: 'text=Step 4 of 7',
+    strict: true,
+  },
+  {
+    id: 'setup-defaults',
+    hash: '#/setup?setup=notready',
+    viewports: ['desktop'],
+    waitFor: 'text=Step 1 of 7',
+    action: async (page) => {
+      for (let i = 0; i < 4; i++) await page.getByRole('button', { name: 'Next' }).click();
+      await page.evaluate(() => window.scrollTo(0, 0));
+    },
+    waitForAfterAction: 'text=Step 5 of 7',
+    strict: true,
+  },
   {
     id: 'help-getting-started',
     hash: '#/help',

@@ -15,7 +15,7 @@ Once setup is done, re-opening it later collapses into a compact summary board i
   <img alt="Setup summary board — everything ready, one row per area" src="images/getting-started/01-books-view.png">
 </picture>
 
-> **About this screenshot:** the screenshot above is the re-entry summary board (everything already set up), not the Setup wizard's five-step walkthrough itself — capturing that step-by-step flow is tracked as a follow-up, since it needs a fresh (never-set-up) install to shoot honestly rather than a staged one.
+> **About this screenshot:** this is the re-entry summary board (everything already set up) — one row per area, including the new **Analyzer**, **Voice engines**, and **LAN access** rows. The first-run guided walkthrough itself, page by page (Environment → Analysis → Voice → Defaults → …), is shown step by step over in [Installing Castwright](Installing-Castwright).
 
 ## 2. Try the built-in sample book
 
@@ -27,7 +27,7 @@ Castwright ships with a demo book — *The Coalfall Commission* — a two-chapte
 
 Beyond this wiki, the app has its own **Help** page (`#/help`, reached from the top-bar "?" or from Account) with a six-step Getting Started walkthrough — Add a book, Let it read, Meet the cast, Give everyone a voice, Generate, Listen & take it anywhere — plus a **Take the tour** button that spotlights the real screens as you go, anchoring each step to the live element it describes rather than just describing it in prose. It works offline, so it's there even with the server down.
 
-> A screenshot of the Help page's walkthrough and the guided tour in action is tracked as the same follow-up as the Setup wizard shot above.
+> A screenshot of the Help page's walkthrough and the guided tour in action is tracked as a follow-up.
 
 ## 4. Upload → Analyze → Cast → Generate → Listen
 
