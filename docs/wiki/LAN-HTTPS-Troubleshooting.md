@@ -10,7 +10,9 @@ certificate is missing, expired, or doesn't cover your current network.
 
 Open **Set up Castwright → LAN access** (or **Admin → LAN access**) and click
 **Regenerate certificate**. If the app booted without HTTPS, restart it once
-afterwards to bind HTTPS.
+afterwards to bind HTTPS. The first-run wizard's **LAN access** step now
+detects a missing or expired certificate on its own and surfaces the same
+one-click regenerate, so you usually won't have to go looking for it.
 
 ## Fix it from a terminal
 

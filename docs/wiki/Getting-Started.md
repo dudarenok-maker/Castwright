@@ -5,9 +5,9 @@ A condensed quickstart. For full per-OS install steps, see
 
 ## 1. Install and let the app check itself
 
-Follow [Installing Castwright](Installing-Castwright) to bring the app up, then run it. First launch doesn't drop you straight into an empty library — a **Setup wizard** runs a readiness check for everything the pipeline needs (the Python environment, the voice engine's weights, the analyzer, ffmpeg, the audio-assembly path) and walks you through whatever's missing, in plain language, with the fix attached rather than a stack trace. Five short steps — Environment, ffmpeg, Models, Defaults, Finish — and Next is never blocked on a failing check, so you can move through the whole thing even before every box is ticked.
+Follow [Installing Castwright](Installing-Castwright) to bring the app up, then run it. First launch doesn't drop you straight into an empty library — a **Setup wizard** runs a readiness check for everything the pipeline needs (the Python environment, the voice engine's weights, the analyzer, ffmpeg, the audio-assembly path) and walks you through whatever's missing, in plain language, with the fix attached rather than a stack trace. Seven short steps — Environment, ffmpeg, Analysis, Voice, Defaults, LAN access, Finish — and Next is never blocked on a failing check, so you can move through the whole thing even before every box is ticked. Analysis and Voice are separate steps: Analysis is local-first (list and pull an Ollama model right there in-app, or fall back to a cloud key), and Voice is where the synthesis engines are set up.
 
-Once setup is done, re-opening it later collapses into a compact summary board instead — one row per area with a green or amber dot, so you can see at a glance that everything's still ready, and drill back into a single step only if something needs attention.
+Once setup is done, re-opening it later collapses into a compact summary board instead — one row per area with a colored dot, so you can see at a glance that everything's still ready, and drill back into a single step only if something needs attention. The analyzer row carries a three-state signal: **green** means it'll run and has a second analyzer provisioned as backup, **yellow — "ready, no backup"** means it'll run but with nothing to fall back on, and **red** means it won't run as configured. A cloud-only setup — a Gemini key with no local Ollama — reads yellow by design; it's fully ready, just without a backup, so a yellow analyzer dot isn't a problem to fix.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/getting-started/01-books-view-dark.png">
@@ -19,7 +19,7 @@ Once setup is done, re-opening it later collapses into a compact summary board i
 
 ## 2. Try the built-in sample book
 
-Castwright ships with a demo book — *The Coalfall Commission* — a two-chapter, fourteen-character original story with its cast already designed, so you can hear a full-cast performance before uploading anything of your own. It's the fastest way to answer the only question that matters: does this sound like a cast, or like one voice reading everyone?
+Castwright ships with a demo book — *The Coalfall Commission* — a two-chapter, thirteen-character original story with its cast already designed, so you can hear a full-cast performance before uploading anything of your own. It's the fastest way to answer the only question that matters: does this sound like a cast, or like one voice reading everyone?
 
 ![Empty library, with "try a sample book" one click away](images/getting-started/02-try-sample-book.png)
 

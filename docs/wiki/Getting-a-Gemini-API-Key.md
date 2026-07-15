@@ -9,7 +9,7 @@ Castwright can use Google's **Gemini** models to analyse your book — finding w
 1. Open the **Google AI Studio → API keys** page linked above and **sign in** with any Google account. (First visit? Accept the terms when prompted.)
 2. Click **Create API key**. If you're asked to pick a Google Cloud project, the default one it offers is fine.
 3. Your key appears — a long string starting with `AIza…`. Click **Copy**.
-4. Back in Castwright, go to **Account → Server configuration → Gemini API key**, paste the key into the field, and click **Save key**. (The same field appears in the setup wizard's Analyzer step.)
+4. Back in Castwright, go to **Account → Server configuration → Gemini API key**, paste the key into the field, and click **Save key**. (The same field appears in the setup wizard's Analysis step, and a **"Get a Gemini API key"** link beside it brings you back to this page.)
 
 That's it — pick any Gemini model under **Defaults for new books → Analysis model** and Castwright will use your key.
 

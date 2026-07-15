@@ -20,9 +20,11 @@ Design runs on the GPU, one character at a time. The top bar shows a
 "Designing · N%" pill while it works, and it's safe to close the drawer —
 progress keeps going in the background, so you can move on to the next character while this one finishes.
 
+The **narrator** is the one exception to "Needs voice": a newly analysed book seeds it with a consistent folkloric Qwen voice (and a name in the book's own language) up front, so it starts out designed rather than blank. You can still redesign it like any other character, and a rename or redesign survives a re-parse.
+
 ## Emotion variants
 
-A single flat voice gets you *who's* speaking; emotion variants get you *how*. Once a character has a designed base voice, the profile samples directly from that design (no library voice matched yet) and the button becomes **Design & compare** for another pass. Saving pins the voice across the whole series, so it travels with this character into book two the way it should. From here, per-emotion variants — Whisper, Angry, and any other tags used in the manuscript — become available to design individually, so a character who's furious in chapter three actually sounds furious. Below, Wren — a thirteen-year-old apprentice, designed from 13 lines of dialogue — already carries 4 emotion variants.
+A single flat voice gets you *who's* speaking; emotion variants get you *how*. Once a character has a designed base voice, the profile samples directly from that design (no library voice matched yet) and the button becomes **Design & compare** for another pass. Saving pins the voice across the whole series, so it travels with this character into book two the way it should. Approving a redesign from **Design & compare** replaces the base voice in place — and because a character's emotion variants are derived from that base, they're cleared at the same time and re-mint from the new voice, rather than lingering on the old embedding they no longer match. From here, per-emotion variants — Whisper, Angry, and any other tags used in the manuscript — become available to design individually, so a character who's furious in chapter three actually sounds furious. Below, Wren — a thirteen-year-old apprentice, designed from 13 lines of dialogue — already carries 4 emotion variants.
 
 ![Character drawer showing a designed base voice with 4 emotion variants](images/designing-a-voice/02-emotion-variants.png)
 

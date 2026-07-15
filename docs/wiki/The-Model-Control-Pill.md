@@ -18,6 +18,11 @@ frees the VRAM.
   <img alt="Model Manager row — Kokoro loaded and ready" src="images/the-model-control-pill/03-pill-loaded.png">
 </picture>
 
+Kokoro reaching this ready state is now on-demand rather than automatic: as of
+v1.14.0 it no longer preloads at startup by default, so a fresh boot shows it
+**idle** with a **Load model** action until the first synth warms it (or you
+turn **Preload Kokoro at startup** back on in [Advanced Settings](Advanced-Settings)).
+
 An engine still loading shows an amber "Loading …" pill with its button
 disabled, so a second click can't fire mid-load; one that's installed but not
 yet loaded reads "idle" with a **Load model** action instead. An engine

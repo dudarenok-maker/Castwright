@@ -158,7 +158,7 @@ sidecar — not instant, but your books/cast/voices are untouched.
 | Qwen codec chunk size | Codec decode chunk width; lower it if GPU codec decode runs a card out of memory | 300 | integer, min 1 | restart · sidecar | high |
 | Qwen codec left-context size | Codec chunk overlap, for smoother chunk boundaries | 25 | integer, min 0 | restart · sidecar | high |
 | Preload Coqui at startup | Eager-load Coqui at boot (~3GB VRAM) | `false` | boolean | restart · sidecar | high |
-| Preload Kokoro at startup | Eager-load Kokoro at boot (~1GB VRAM) | `true` | boolean | restart · sidecar | high |
+| Preload Kokoro at startup | Eager-load Kokoro at boot (~1GB VRAM); off by default, so Kokoro warms on demand | `false` | boolean | restart · sidecar | high |
 | Preload Qwen at startup | Eager-load Qwen Base at boot (~1.2GB VRAM) | `false` | boolean | restart · sidecar | high |
 | Preload Qwen 1.7B-Base at startup | Eager-load 1.7B-Base for anchored emotion variants (~3.4GB) | `false` | boolean | restart · sidecar | high |
 | Qwen degeneracy guard | Catches near-silent Qwen renders and reloads/retries instead of shipping them — leave on unless isolating a false-positive | `true` | boolean | restart · sidecar | medium |

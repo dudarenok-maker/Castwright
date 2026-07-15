@@ -15,7 +15,10 @@ story, tagline, app version), **Model Manager** (see
 [Model Manager](Model-Manager)), and **Advanced configuration** (see
 [Advanced Settings](Advanced-Settings)) — followed by the **LAN access**
 card for pairing phones/tablets (see
-[Mobile, Tablet & Companion App](Mobile-Tablet-and-Companion-App)).
+[Mobile, Tablet & Companion App](Mobile-Tablet-and-Companion-App)). The LAN
+access card also watches the LAN-HTTPS certificate: if it's missing or expired
+it flags it and offers a one-click regenerate, rather than silently dropping
+back to loopback-only HTTP.
 
 Below that sits the actual console, three stacked sections:
 

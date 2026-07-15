@@ -76,12 +76,46 @@ Once paired, the companion app mirrors your library for offline listening,
 tracks finished books in its own shelf, and keeps that shelf and your
 listening position in sync across every paired device.
 
+### Instant play over your LAN
+
+You don't have to download a chapter before you can hear it. Tap any
+undownloaded chapter and it starts **instantly over your home network** — the
+app streams it from your desktop over the same trusted LAN session, with no
+OS-level certificate to install and the device's pairing token never leaving
+the app. Off the home network it degrades cleanly: a chapter you haven't
+downloaded falls back to download-to-play (or asks you to re-pair if the
+device token has expired), while anything already downloaded still plays fully
+offline.
+
+### On a tablet or foldable
+
+On a screen wide enough for it — a tablet, or an unfolded foldable — the
+companion drops its phone-first single column for a **two-pane layout**: your
+library on the left, a **persistent player on the right**. That player pane
+keeps playing through a book switch *and* through a device rotation — picking a
+different book reloads the right pane without ever stopping playback, and
+turning the device never tears the player down. Narrower tablets in portrait
+get a cover-forward grid instead, and a phone is unchanged. The same adaptive
+layout is what the app will use on iPad.
+
+### Try the demo — no server, no pairing
+
+The pairing screen has a **"Try the demo"** entry that runs the whole app
+against a self-contained sample library — no desktop server, no pairing, no
+network at all (it's airplane-mode safe). It's the quickest way to see what the
+companion feels like before pairing it to your own library.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/mobile-tablet-and-companion-app/pair-a-device-modal-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="images/mobile-tablet-and-companion-app/pair-a-device-modal.png">
   <img alt="Pair a device modal — QR code, expiry countdown, and the manual-code fallback" src="images/mobile-tablet-and-companion-app/pair-a-device-modal.png">
 </picture>
 
-The Listen view's Companion banner opens the same pairing flow: **Pair a device → Scan QR** in the app, pointed at this code — it expires after a few minutes, with **Regenerate code** and a manual-entry fallback if scanning isn't an option.
+The Listen view's Companion banner opens the pairing flow **name-first**: you
+name the device, then **Pair a device → Scan QR** in the app, pointed at the
+resulting code — it expires after a few minutes, with **Regenerate code** and a
+manual-entry fallback if scanning isn't an option. Naming the device first
+means it appears under that name in **Admin → LAN access** rather than a
+generic "Device."
 
 Next: [Admin](Admin).

@@ -23,6 +23,8 @@ tagged books simply doesn't render the row, rather than showing it empty. A
 second chip row appears whenever the library spans more than one language —
 **English**, **Deutsch**, **Русский** below — and ANDs into the same filter.
 
+Each book carries a **status badge** tracking where it is in the pipeline: **Ready to analyse**, **Analysing**, **Cast confirmation** (waiting for you to confirm the detected cast), **Cast ready**, **Generating**, and **Complete**. **Cast ready** is the step between confirming a cast and rendering it — the cast is locked but no audio has been generated yet, so the book is still designing (or waiting on) voices; opening it lands on the **Cast** view rather than the Generate tab, and it counts under the header's **In progress** total right alongside **Generating**.
+
 ## Series grouping
 
 Every book belongs to a series — or, if it's a standalone, to a synthetic
