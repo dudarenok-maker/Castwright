@@ -20,9 +20,10 @@
    ship inside every release zip and sit harmlessly in a developer checkout. */
 
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { homedir as osHomedir } from 'node:os';
 
 const SEMVER_DIR = /^v(\d+)\.(\d+)\.(\d+)$/;
 
@@ -39,6 +40,30 @@ export function highestReleaseVersion(releaseDirNames) {
   return parsed[0].name.slice(1); // drop the leading 'v'
 }
 
+/** Fresh-install default library dir, or null when the home dir is unusable. Pure. */
+export function defaultLibraryDir(homedir = osHomedir()) {
+  if (!homedir || !isAbsolute(homedir)) return null;
+  return join(homedir, 'Castwright');
+}
+
+/** Resolvability-only workspace choice. Existing <installRoot>/workspace wins
+    (migration guard); else ~/Castwright; else install-local. Pure. */
+export function chooseWorkspaceDir({ installRoot, homedir = osHomedir(), exists = existsSync }) {
+  const installLocal = join(installRoot, 'workspace');
+  if (exists(installLocal)) return installLocal;
+  return defaultLibraryDir(homedir) ?? installLocal;
+}
+
+/** Boot-safety: return `chosen` if creatable, else `fallback`. mkdir injected for tests. */
+export function ensureWorkspaceWritable(chosen, fallback, mkdir = (p) => mkdirSync(p, { recursive: true })) {
+  try {
+    mkdir(chosen);
+    return chosen;
+  } catch {
+    return fallback;
+  }
+}
+
 /**
  * Decide how to launch from an install root, WITHOUT spawning anything (pure,
  * so it's unit-testable). Returns either:
@@ -48,7 +73,7 @@ export function highestReleaseVersion(releaseDirNames) {
  * `envOverrides` lists the shared-data env vars to apply, but ONLY for keys not
  * already present in `baseEnv` (an explicit ops override always wins).
  */
-export function planLaunch({ installRoot, baseEnv = {}, readDir = readdirSync, exists = existsSync, readPointer }) {
+export function planLaunch({ installRoot, baseEnv = {}, readDir = readdirSync, exists = existsSync, readPointer, homedir = osHomedir() }) {
   const releasesDir = join(installRoot, 'releases');
   const pointerFile = join(installRoot, '.current-version');
 
@@ -77,7 +102,7 @@ export function planLaunch({ installRoot, baseEnv = {}, readDir = readdirSync, e
   }
 
   const shared = {
-    WORKSPACE_DIR: join(installRoot, 'workspace'),
+    WORKSPACE_DIR: chooseWorkspaceDir({ installRoot, homedir, exists }),
     SIDECAR_VENV_DIR: join(installRoot, 'venv'),
     KOKORO_MODEL_PATH: join(installRoot, 'models', 'kokoro', 'kokoro-v1.0.onnx'),
     KOKORO_VOICES_PATH: join(installRoot, 'models', 'kokoro', 'voices-v1.0.bin'),
@@ -102,6 +127,16 @@ export function planLaunch({ installRoot, baseEnv = {}, readDir = readdirSync, e
 function main() {
   const installRoot = dirname(fileURLToPath(import.meta.url));
   const plan = planLaunch({ installRoot, baseEnv: process.env });
+
+  // Boot-safety: never emit a WORKSPACE_DIR we can't create. Only probe a
+  // fresh ~/Castwright pick — never mkdir-probe an install-local path the
+  // installer already owns.
+  if (plan.mode === 'release' && plan.envOverrides.WORKSPACE_DIR) {
+    const installLocal = join(installRoot, 'workspace');
+    if (plan.envOverrides.WORKSPACE_DIR !== installLocal) {
+      plan.envOverrides.WORKSPACE_DIR = ensureWorkspaceWritable(plan.envOverrides.WORKSPACE_DIR, installLocal);
+    }
+  }
 
   const childEnv = { ...process.env };
   if (plan.mode === 'release') {

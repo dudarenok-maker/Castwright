@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { planLaunch, highestReleaseVersion } from '../../launch.mjs';
+import { defaultLibraryDir, chooseWorkspaceDir, ensureWorkspaceWritable, planLaunch, highestReleaseVersion } from '../../launch.mjs';
 
 const INSTALL = join('/srv', 'audiobook');
 
@@ -40,6 +40,7 @@ test('versioned install resolves releases/v<pointer>/ and the shared-data env', 
   const plan = planLaunch({
     installRoot: INSTALL,
     baseEnv: {},
+    homedir: '',
     exists: existsFor([releasesDir, pointerFile, releaseDir]),
     readPointer: () => '1.6.0\n',
   });
@@ -117,4 +118,48 @@ test('highestReleaseVersion ignores non-semver names and picks the max', () => {
   assert.equal(highestReleaseVersion(['v1.2.0', 'v1.10.0', 'v1.9.3', 'junk']), '1.10.0');
   assert.equal(highestReleaseVersion([]), null);
   assert.equal(highestReleaseVersion(['nope']), null);
+});
+
+test('defaultLibraryDir: absolute -> <home>/Castwright; empty -> null', () => {
+  assert.equal(defaultLibraryDir('/home/me'), join('/home/me', 'Castwright'));
+  assert.equal(defaultLibraryDir(''), null);
+});
+
+test('chooseWorkspaceDir: fresh install + usable home -> ~/Castwright', () => {
+  const out = chooseWorkspaceDir({ installRoot: '/inst', homedir: '/home/me', exists: () => false });
+  assert.equal(out, join('/home/me', 'Castwright'));
+});
+test('chooseWorkspaceDir: existing <install>/workspace -> keep it', () => {
+  const out = chooseWorkspaceDir({ installRoot: '/inst', homedir: '/home/me', exists: (p) => p === join('/inst', 'workspace') });
+  assert.equal(out, join('/inst', 'workspace'));
+});
+test('chooseWorkspaceDir: unusable home -> install-local', () => {
+  const out = chooseWorkspaceDir({ installRoot: '/inst', homedir: '', exists: () => false });
+  assert.equal(out, join('/inst', 'workspace'));
+});
+
+test('ensureWorkspaceWritable: mkdir ok -> chosen', () => {
+  const out = ensureWorkspaceWritable('/a/Castwright', '/inst/workspace', () => {});
+  assert.equal(out, '/a/Castwright');
+});
+test('ensureWorkspaceWritable: mkdir throws -> fallback', () => {
+  const out = ensureWorkspaceWritable('/a/Castwright', '/inst/workspace', () => { throw new Error('EACCES'); });
+  assert.equal(out, '/inst/workspace');
+});
+
+test('planLaunch: release mode, fresh install, uses ~/Castwright for WORKSPACE_DIR', () => {
+  const installRoot = '/inst';
+  const releasesDir = join(installRoot, 'releases');
+  const pointerFile = join(installRoot, '.current-version');
+  const releaseDir = join(releasesDir, 'v1.0.0');
+  const plan = planLaunch({
+    installRoot,
+    baseEnv: {},
+    homedir: '/home/me',
+    exists: existsFor([releasesDir, pointerFile, releaseDir]),
+    readDir: () => ['v1.0.0'],
+    readPointer: () => '1.0.0',
+  });
+  assert.equal(plan.mode, 'release');
+  assert.equal(plan.envOverrides.WORKSPACE_DIR, join('/home/me', 'Castwright'));
 });

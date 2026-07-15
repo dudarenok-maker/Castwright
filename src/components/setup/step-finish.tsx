@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { PrimaryButton } from '../primitives';
 import { api } from '../../lib/api';
 import type { SetupReadiness, SmokeTestResult } from '../../lib/api';
+import { useAppSelector } from '../../store';
 
 // ── prop types ──────────────────────────────────────────────────────────────
 
@@ -18,13 +19,16 @@ interface Props {
   onFinish: () => void;
   /** Optional — renders the "Play the demo book" button when provided. */
   onTryDemoBook?: () => void;
+  /** True when the user changed the library location earlier in the wizard (Task 5 renders the reminder). */
+  libraryChanged?: boolean;
 }
 
 // ── component ───────────────────────────────────────────────────────────────
 
-export function StepFinish({ readiness: _readiness, onFinish, onTryDemoBook }: Props) {
+export function StepFinish({ readiness: _readiness, onFinish, onTryDemoBook, libraryChanged }: Props) {
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<SmokeTestResult | null>(null);
+  const target = useAppSelector((s) => s.account.workspaceDirOverride);
 
   const runSmoke = async () => {
     setPending(true);
@@ -40,6 +44,19 @@ export function StepFinish({ readiness: _readiness, onFinish, onTryDemoBook }: P
   return (
     <section className="space-y-6">
       <h2 className="text-lg font-semibold text-ink">Ready to perform</h2>
+
+      {libraryChanged && (
+        <p className="text-xs text-amber-800 bg-amber-100 rounded-2xl px-4 py-2">
+          {target ? (
+            <>
+              Restart the server to move your library to{' '}
+              <span className="font-medium break-all">{target}</span>.
+            </>
+          ) : (
+            'Restart the server to apply your new library location.'
+          )}
+        </p>
+      )}
 
       <p className="text-sm text-ink/60">
         That's everything Castwright needs. Generate a quick test line to hear your setup

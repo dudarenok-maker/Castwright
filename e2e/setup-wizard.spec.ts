@@ -9,7 +9,10 @@
  *   - Back button:  "Back"  (disabled on step 1, enabled on step 2+)
  *   - Next button:  "Next"  (hidden on the last step — StepFinish owns
  *                            its own "Finish & open my library" button instead)
- *   - Progress:     "Step N of 7"
+ *   - Progress:     "Step N of 8"
+ *
+ * Step order (steps.ts): environment, ffmpeg, analysis, voice, defaults,
+ * library, lanCert, finish — 8 steps; Library is step 6.
  */
 
 import { test, expect } from '@playwright/test';
@@ -18,8 +21,8 @@ test('first-run wizard renders with step UI when not ready', async ({ page }) =>
   await page.goto('/#/?setup=notready');
   await expect(page).toHaveURL(/#\/setup/);
   await expect(page.getByRole('heading', { name: /set up castwright/i })).toBeVisible();
-  // Step 1 shows "Step 1 of 7" progress indicator
-  await expect(page.getByText(/step 1 of 7/i)).toBeVisible();
+  // Step 1 shows "Step 1 of 8" progress indicator
+  await expect(page.getByText(/step 1 of 8/i)).toBeVisible();
   // Next is always enabled in guided mode
   await expect(page.getByRole('button', { name: /^next$/i })).toBeVisible();
   // Back is present but disabled on the first step
@@ -36,9 +39,25 @@ test('wizard can advance through steps (Next is always enabled)', async ({ page 
   // After advancing, Back becomes enabled
   await expect(page.getByRole('button', { name: /^back$/i })).toBeEnabled();
   // Progress indicator advances
-  await expect(page.getByText(/step 2 of 7/i)).toBeVisible();
+  await expect(page.getByText(/step 2 of 8/i)).toBeVisible();
   // Next is still available (not on the last step yet)
   await expect(next).toBeVisible();
+});
+
+test('wizard reaches the Library step (step 6) and shows the resolved path', async ({ page }) => {
+  await page.goto('/#/?setup=notready');
+  await expect(page.getByRole('heading', { name: /set up castwright/i })).toBeVisible();
+
+  const next = page.getByRole('button', { name: /^next$/i });
+  // Advance 1 → 2 → 3 → 4 → 5 → 6 (Library) via Next ×5.
+  for (let i = 0; i < 5; i++) {
+    await expect(next).toBeVisible();
+    await next.click();
+  }
+  await expect(page.getByText(/step 6 of 8/i)).toBeVisible();
+  await expect(page.getByRole('heading', { name: /^library$/i })).toBeVisible();
+  // The editable folder input is present (prefilled empty when no override).
+  await expect(page.getByLabel(/library folder/i)).toBeVisible();
 });
 
 test('wizard reaches the last step and shows the finish button', async ({ page }) => {
@@ -47,14 +66,14 @@ test('wizard reaches the last step and shows the finish button', async ({ page }
 
   const next = page.getByRole('button', { name: /^next$/i });
 
-  // Advance through steps 1 → 2 → 3 → 4 → 5 → 6 (Next disappears on step 7)
-  for (let i = 0; i < 6; i++) {
+  // Advance through steps 1 → … → 7 (Next disappears on step 8)
+  for (let i = 0; i < 7; i++) {
     await expect(next).toBeVisible();
     await next.click();
   }
 
-  // On step 7 the wizard's Next is gone; StepFinish owns the finish button
-  await expect(page.getByText(/step 7 of 7/i)).toBeVisible();
+  // On step 8 the wizard's Next is gone; StepFinish owns the finish button
+  await expect(page.getByText(/step 8 of 8/i)).toBeVisible();
   await expect(next).not.toBeVisible();
   await expect(page.getByRole('button', { name: /finish & open my library/i })).toBeVisible();
 });
@@ -63,13 +82,13 @@ test('Tier-1 smoke test runs and renders audio (mock)', async ({ page }) => {
   await page.goto('/#/?setup=notready');
   await expect(page.getByRole('heading', { name: /set up castwright/i })).toBeVisible();
 
-  // Advance through steps 1 → 2 → 3 → 4 → 5 → 6 → 7 (Finish) via Next ×6.
-  // On step 7 the wizard's Next is gone; StepFinish owns the finish button.
+  // Advance through steps 1 → … → 8 (Finish) via Next ×7.
+  // On step 8 the wizard's Next is gone; StepFinish owns the finish button.
   const next = page.getByRole('button', { name: /^next$/i });
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 7; i++) {
     await next.click();
   }
-  await expect(page.getByText(/step 7 of 7/i)).toBeVisible();
+  await expect(page.getByText(/step 8 of 8/i)).toBeVisible();
 
   // On the Finish step: run the smoke test.
   const smoke = page.getByTestId('smoke-test-placeholder');
@@ -95,11 +114,14 @@ test('re-entry opens on the summary board and drills into the wizard', async ({ 
   await expect(page.getByRole('heading', { name: /set up castwright/i })).toBeVisible();
   await expect(page.getByTestId('setup-summary-board')).toBeVisible();
   // No wizard paging at the summary level.
-  await expect(page.getByText(/step 1 of 7/i)).toHaveCount(0);
+  await expect(page.getByText(/step 1 of 8/i)).toHaveCount(0);
+
+  // The Library summary row is present.
+  await expect(page.getByTestId('setup-summary-row-library')).toBeVisible();
 
   // Clicking a summary row drills into that step of the guided flow.
   await page.getByTestId('setup-summary-row-ffmpeg').click();
-  await expect(page.getByText(/step 2 of 7/i)).toBeVisible();
+  await expect(page.getByText(/step 2 of 8/i)).toBeVisible();
 
   // "Setup overview" returns to the summary board.
   await page.getByRole('button', { name: /setup overview/i }).click();
@@ -114,7 +136,7 @@ test('Analysis step (step 3) exposes the Ollama pull list, Gemini card, and brid
   const next = page.getByRole('button', { name: /^next$/i });
   await next.click(); // → ffmpeg (step 2)
   await next.click(); // → analysis (step 3)
-  await expect(page.getByText(/step 3 of 7/i)).toBeVisible();
+  await expect(page.getByText(/step 3 of 8/i)).toBeVisible();
   await expect(page.getByText(/local via ollama/i)).toBeVisible();
   await expect(page.getByTestId('model-pull-status')).toBeVisible();
   await expect(page.getByText(/online via gemini/i)).toBeVisible();

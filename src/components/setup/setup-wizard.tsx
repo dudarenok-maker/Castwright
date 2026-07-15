@@ -1,7 +1,7 @@
 /* fs-21 wave 2 — C5: SetupWizard orchestrator.
-   Composes the seven step components into two modes:
+   Composes the eight step components into two modes:
 
-   - guided    — linear, one step at a time, Back/Next paging + a "Step N of 7"
+   - guided    — linear, one step at a time, Back/Next paging + a "Step N of 8"
                  progress indicator. Next is ALWAYS enabled: the derived Wave 0
                  boot gate is the real lock, so the wizard never blocks
                  progression on a failing blocker. The final step (Finish) owns
@@ -26,12 +26,17 @@ import { StepFfmpeg } from './step-ffmpeg';
 import { StepAnalysis } from './step-analysis';
 import { StepVoice } from './step-voice';
 import { StepDefaults } from './step-defaults';
+import { StepLibrary } from './step-library';
 import { StepLanCert } from './step-lan-cert';
 import { StepFinish } from './step-finish';
 import { STEPS, type StepId } from './steps';
 import { WikiLink } from '../wiki-link';
 import { stepLearnMorePage } from '../../lib/wiki-links';
 import { HelpResources } from './help-resources';
+
+function assertNever(x: never): never {
+  throw new Error(`Unhandled wizard step: ${String(x)}`);
+}
 
 interface Props {
   readiness: SetupReadiness;
@@ -53,6 +58,8 @@ function renderStep(
   onFinish: () => void,
   voiceNeeds: NeedsAnswer | null,
   onChooseVoiceNeeds: (answer: NeedsAnswer) => void,
+  libraryChanged: boolean,
+  onLibraryChanged: () => void,
   onTryDemoBook?: () => void,
 ) {
   switch (id) {
@@ -73,10 +80,21 @@ function renderStep(
       );
     case 'defaults':
       return <StepDefaults readiness={readiness} />;
+    case 'library':
+      return <StepLibrary readiness={readiness} onLibrarySaved={onLibraryChanged} />;
     case 'lanCert':
       return <StepLanCert />;
     case 'finish':
-      return <StepFinish readiness={readiness} onFinish={onFinish} onTryDemoBook={onTryDemoBook} />;
+      return (
+        <StepFinish
+          readiness={readiness}
+          onFinish={onFinish}
+          onTryDemoBook={onTryDemoBook}
+          libraryChanged={libraryChanged}
+        />
+      );
+    default:
+      return assertNever(id);
   }
 }
 
@@ -87,6 +105,10 @@ export function SetupWizard({ readiness, mode, onRefetch, onFinish, onTryDemoBoo
      has to re-answer, which previously re-fired the recommended-engine save and
      clobbered a finer model picked on the Defaults step. */
   const [voiceNeeds, setVoiceNeeds] = useState<NeedsAnswer | null>(null);
+  /* Session flag: did the user change the library location earlier in the
+     wizard? Threaded down to the Finish step so it can remind about the
+     restart needed to move the library. */
+  const [libraryChanged, setLibraryChanged] = useState(false);
 
   return (
     <div className="max-w-[960px] mx-auto px-4 sm:px-6 py-10">
@@ -106,6 +128,8 @@ export function SetupWizard({ readiness, mode, onRefetch, onFinish, onTryDemoBoo
           onFinish={onFinish}
           voiceNeeds={voiceNeeds}
           onChooseVoiceNeeds={setVoiceNeeds}
+          libraryChanged={libraryChanged}
+          onLibraryChanged={() => setLibraryChanged(true)}
           onTryDemoBook={onTryDemoBook}
         />
       ) : (
@@ -115,6 +139,8 @@ export function SetupWizard({ readiness, mode, onRefetch, onFinish, onTryDemoBoo
           onFinish={onFinish}
           voiceNeeds={voiceNeeds}
           onChooseVoiceNeeds={setVoiceNeeds}
+          libraryChanged={libraryChanged}
+          onLibraryChanged={() => setLibraryChanged(true)}
           onTryDemoBook={onTryDemoBook}
         />
       )}
@@ -134,6 +160,8 @@ function GuidedWizard({
   onFinish,
   voiceNeeds,
   onChooseVoiceNeeds,
+  libraryChanged,
+  onLibraryChanged,
   onTryDemoBook,
   onExit,
 }: {
@@ -145,6 +173,9 @@ function GuidedWizard({
   /** Voice step's guided answer, owned by the wizard so it survives paging. */
   voiceNeeds: NeedsAnswer | null;
   onChooseVoiceNeeds: (answer: NeedsAnswer) => void;
+  /** Did the user change the library location earlier in the wizard? */
+  libraryChanged: boolean;
+  onLibraryChanged: () => void;
   onTryDemoBook?: () => void;
   /** When provided (re-entry), shows a "Setup overview" link back to the summary. */
   onExit?: () => void;
@@ -166,7 +197,7 @@ function GuidedWizard({
         </button>
       )}
 
-      {/* Progress indicator: dots + "Step N of 7" */}
+      {/* Progress indicator: dots + "Step N of 8" */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1.5" aria-hidden>
           {STEPS.map((s, i) => (
@@ -197,6 +228,8 @@ function GuidedWizard({
           onFinish,
           voiceNeeds,
           onChooseVoiceNeeds,
+          libraryChanged,
+          onLibraryChanged,
           onTryDemoBook,
         )}
       </div>
@@ -235,6 +268,8 @@ function ReEntryFlow({
   onFinish,
   voiceNeeds,
   onChooseVoiceNeeds,
+  libraryChanged,
+  onLibraryChanged,
   onTryDemoBook,
 }: {
   readiness: SetupReadiness;
@@ -242,6 +277,8 @@ function ReEntryFlow({
   onFinish: () => void;
   voiceNeeds: NeedsAnswer | null;
   onChooseVoiceNeeds: (answer: NeedsAnswer) => void;
+  libraryChanged: boolean;
+  onLibraryChanged: () => void;
   onTryDemoBook?: () => void;
 }) {
   /* null → showing the summary board; a number → showing the guided wizard
@@ -268,6 +305,8 @@ function ReEntryFlow({
       onFinish={onFinish}
       voiceNeeds={voiceNeeds}
       onChooseVoiceNeeds={onChooseVoiceNeeds}
+      libraryChanged={libraryChanged}
+      onLibraryChanged={onLibraryChanged}
       onTryDemoBook={onTryDemoBook}
       onExit={() => setWizardStep(null)}
     />
@@ -338,11 +377,18 @@ function buildSummaryRows(readiness: SetupReadiness): SummaryRow[] {
       stepIndex: 4,
     },
     {
+      key: 'library',
+      label: 'Library',
+      detail: 'Where audiobooks are saved',
+      status: 'ok',
+      stepIndex: 5,
+    },
+    {
       key: 'lanCert',
       label: 'LAN access',
       detail: 'Phone/tablet HTTPS certificate',
       status: 'ok',
-      stepIndex: 5,
+      stepIndex: 6,
     },
   ];
 }

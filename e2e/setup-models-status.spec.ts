@@ -10,7 +10,7 @@
  * docs/features/258-wizard-models-status.md).
  *
  * Step order (setup-wizard.tsx): environment, ffmpeg, analysis, voice,
- * defaults, lanCert, finish — Voice is step 4 of 7.
+ * defaults, library, lanCert, finish — Voice is step 4 of 8.
  */
 
 import { test, expect } from '@playwright/test';
@@ -23,7 +23,7 @@ test('Voice step: runtime badge and Kokoro card agree on ready state', async ({ 
   await next.click(); // step 1 → ffmpeg (step 2)
   await next.click(); // step 2 → analysis (step 3)
   await next.click(); // step 3 → voice (step 4)
-  await expect(page.getByText(/step 4 of 7/i)).toBeVisible();
+  await expect(page.getByText(/step 4 of 8/i)).toBeVisible();
 
   // Runtime badge: GREEN "Runtime installed", never amber "Runtime needed".
   const diskBadge = page.getByTestId('runtime-disk-badge');

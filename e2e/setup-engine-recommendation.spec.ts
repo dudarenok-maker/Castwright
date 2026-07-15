@@ -10,7 +10,7 @@
  * caveat. See docs/features/259-fe51-engine-recommendation.md.
  *
  * Step order (setup-wizard.tsx): environment, ffmpeg, analysis, voice,
- * defaults, lanCert, finish — Voice is step 4 of 7 (same sequence as
+ * defaults, library, lanCert, finish — Voice is step 4 of 8 (same sequence as
  * e2e/setup-models-status.spec.ts).
  */
 
@@ -24,7 +24,7 @@ test('Voice step: answering "yes" recommends Qwen with a may-not-fit caveat', as
   await next.click(); // step 1 → ffmpeg (step 2)
   await next.click(); // step 2 → analysis (step 3)
   await next.click(); // step 3 → voice (step 4)
-  await expect(page.getByText(/step 4 of 7/i)).toBeVisible();
+  await expect(page.getByText(/step 4 of 8/i)).toBeVisible();
 
   // Guided question is visible before any answer is given.
   await expect(page.getByText(/do you want expressive and\/or multilingual audio\?/i)).toBeVisible();
@@ -54,16 +54,16 @@ test('Voice step: the guided answer survives paging to Defaults and back', async
   await next.click(); // → ffmpeg
   await next.click(); // → analysis
   await next.click(); // → voice
-  await expect(page.getByText(/step 4 of 7/i)).toBeVisible();
+  await expect(page.getByText(/step 4 of 8/i)).toBeVisible();
 
   const yes = page.getByRole('radio', { name: /yes — expressive/i });
   await yes.click();
   await expect(yes).toBeChecked();
 
   await next.click(); // → defaults (step 5)
-  await expect(page.getByText(/step 5 of 7/i)).toBeVisible();
+  await expect(page.getByText(/step 5 of 8/i)).toBeVisible();
   await back.click(); // → voice (step 4)
-  await expect(page.getByText(/step 4 of 7/i)).toBeVisible();
+  await expect(page.getByText(/step 4 of 8/i)).toBeVisible();
 
   // Still selected — no re-answer needed, so nothing overwrites the Defaults model.
   await expect(page.getByRole('radio', { name: /yes — expressive/i })).toBeChecked();
