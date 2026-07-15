@@ -197,10 +197,14 @@ Design rationale:
   (git-ignored). Pure helpers unit-tested in `scripts/tests/build-companion-apk.test.mjs`.
 - `npm run openapi:types` — regenerate `src/lib/api-types.ts` from `openapi.yaml`.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
-  (Node 20.6+ native `process.loadEnvFile`, no dotenv dep).
-  - `ANALYZER=local` (default) — calls a local Ollama model (with Gemini as an
-    automatic fallback when `GEMINI_API_KEY` is set and the daemon is unreachable).
-  - `ANALYZER=gemini` + `GEMINI_API_KEY=…` — calls the free-tier Gemini API
+  (Node 20.6+ native `process.loadEnvFile`, no dotenv dep). **The analyzer engine
+  is chosen in the UI (Account → analyzer settings) / `user-settings.json`, not
+  by env — `ANALYZER` no longer selects the engine (retired 2026-07-15); a stray
+  `ANALYZER=gemini` in an old `.env` is inert.** The default is **local**.
+  - **Local (default)** — calls a local Ollama model (with Gemini as an opt-out
+    fallback when `GEMINI_API_KEY` is set, `allowCloudFallback` is on, and the
+    daemon is unreachable).
+  - **Gemini** (`GEMINI_API_KEY=…`) — calls the free-tier Gemini API
     directly. Optional `GEMINI_MODEL` (default `gemma-4-31b-it` — separate
     free-tier bucket from `gemini-*` and 1,500 RPD; flip to
     `gemini-3.1-flash-lite` etc. via env). Every outbound call (primary

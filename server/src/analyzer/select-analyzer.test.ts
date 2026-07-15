@@ -22,6 +22,7 @@ import {
 import {
   DEFAULT_USER_SETTINGS,
   _resetUserSettingsCache,
+  _setUserSettingsCacheForTest,
   type UserSettings,
 } from '../workspace/user-settings.js';
 
@@ -47,7 +48,7 @@ afterEach(() => {
 
 describe('selectAnalyzer dispatch', () => {
   it('local + Gemini key → FallbackAnalyzer wrapping Ollama with Gemini fallback', () => {
-    process.env.ANALYZER = 'local';
+    /* Engine=local is the cold-cache default now (ANALYZER env retired). */
     process.env.GEMINI_API_KEY = 'test-key';
     const s = selectAnalyzer();
     expect(s.engine).toBe('local');
@@ -59,7 +60,6 @@ describe('selectAnalyzer dispatch', () => {
   });
 
   it('local + no Gemini key → bare OllamaAnalyzer (no fallback)', () => {
-    process.env.ANALYZER = 'local';
     const s = selectAnalyzer();
     expect(s.engine).toBe('local');
     expect(s.analyzer).toBeInstanceOf(OllamaAnalyzer);
@@ -67,7 +67,6 @@ describe('selectAnalyzer dispatch', () => {
   });
 
   it('per-request model override wins on the local path', () => {
-    process.env.ANALYZER = 'local';
     const s = selectAnalyzer({ model: 'llama3.1:8b' });
     expect(s.engine).toBe('local');
     expect(s.model).toBe('llama3.1:8b');
@@ -77,7 +76,6 @@ describe('selectAnalyzer dispatch', () => {
     /* The model-picker dropdown groups local + Gemini options. When the user
        picks a Gemini option mid-run, the override must route to Gemini —
        otherwise we'd hand a Gemini id to Ollama, which 404s. */
-    process.env.ANALYZER = 'local';
     process.env.GEMINI_API_KEY = 'test-key';
     const s = selectAnalyzer({ model: 'gemini-2.5-flash' });
     expect(s.engine).toBe('gemini');
@@ -89,7 +87,7 @@ describe('selectAnalyzer dispatch', () => {
   it('per-request model override of Ollama shape (contains colon) routes to local even when engine=gemini', () => {
     /* Symmetric: a user on engine=gemini who picks qwen3.5:9b from the
        dropdown should get the local engine for that run. */
-    process.env.ANALYZER = 'gemini';
+    _setUserSettingsCacheForTest({ analysisEngine: 'gemini' });
     process.env.GEMINI_API_KEY = 'test-key';
     const s = selectAnalyzer({ model: 'qwen3.5:9b' });
     expect(s.engine).toBe('local');
@@ -99,7 +97,6 @@ describe('selectAnalyzer dispatch', () => {
   });
 
   it('OLLAMA_MODEL env beats the static default', () => {
-    process.env.ANALYZER = 'local';
     /* Arbitrary fictional tag — the assertion is "env var overrides the
        DEFAULT_USER_SETTINGS fallback", independent of which real model
        the user has pulled. */
@@ -109,7 +106,7 @@ describe('selectAnalyzer dispatch', () => {
   });
 
   it('gemini + key → bare GeminiAnalyzer', () => {
-    process.env.ANALYZER = 'gemini';
+    _setUserSettingsCacheForTest({ analysisEngine: 'gemini' });
     process.env.GEMINI_API_KEY = 'test-key';
     const s = selectAnalyzer();
     expect(s.engine).toBe('gemini');
@@ -118,23 +115,20 @@ describe('selectAnalyzer dispatch', () => {
   });
 
   it('gemini + no key → throws (hard requirement, no silent fall-through)', () => {
-    process.env.ANALYZER = 'gemini';
+    _setUserSettingsCacheForTest({ analysisEngine: 'gemini' });
     expect(() => selectAnalyzer()).toThrow(/GEMINI_API_KEY is required/);
   });
 
-  it('unset / unknown ANALYZER → defaults to local', () => {
-    /* Mirrors the env-default we pick when neither user-settings.json nor
-       the env var is set — local is the new default, gemini is opt-in. */
-    process.env.ANALYZER = '';
+  it('no saved engine (cold cache) → defaults to local', () => {
+    /* Local is the default; gemini is opt-in via user-settings. */
     const s = selectAnalyzer();
     expect(s.engine).toBe('local');
   });
 
-  it('stray legacy ANALYZER=manual is coerced to local (manual mode retired in 71b35a8)', () => {
-    /* The single retained reference to the retired manual analyzer: the
-       safety net for an old `.env` that still sets `ANALYZER=manual`, so
-       startup silently falls back to local instead of breaking. */
-    process.env.ANALYZER = 'manual';
+  it('a stray ANALYZER=gemini in env is inert — engine stays local (env retired, Part 0)', () => {
+    /* ANALYZER no longer selects the engine; the cold-cache DEFAULT (local)
+       wins over any legacy `.env` value. */
+    process.env.ANALYZER = 'gemini';
     const s = selectAnalyzer();
     expect(s.engine).toBe('local');
   });
@@ -180,12 +174,12 @@ describe('selectAnalyzerForPhase — plan 88 per-phase selector', () => {
     expect(s0.analyzer).not.toBe(s1.analyzer);
   });
 
-  it('REGRESSION: legacy single-model ANALYZER=… path keeps working when neither per-phase var is set', () => {
+  it('REGRESSION: single-model path keeps working when neither per-phase var is set', () => {
     /* The fall-through invariant: a deployer who never sets the new
-       env vars should see today's single-model behaviour unchanged.
-       Both phases get the same analyzer keyed by the legacy ANALYZER
-       env var (here: gemini). */
-    process.env.ANALYZER = 'gemini';
+       per-phase env vars should see today's single-model behaviour
+       unchanged. Both phases get the same analyzer keyed by the saved
+       engine (here: gemini via user-settings). */
+    _setUserSettingsCacheForTest({ analysisEngine: 'gemini' });
     process.env.GEMINI_API_KEY = 'test-key';
     const s0 = selectAnalyzerForPhase({ phase: 'phase0' });
     const s1 = selectAnalyzerForPhase({ phase: 'phase1' });
@@ -197,8 +191,7 @@ describe('selectAnalyzerForPhase — plan 88 per-phase selector', () => {
     expect(s1.model).toBe(s0.model);
   });
 
-  it('REGRESSION: legacy ANALYZER=local + Gemini key still wraps in FallbackAnalyzer when no per-phase vars set', () => {
-    process.env.ANALYZER = 'local';
+  it('REGRESSION: engine=local (default) + Gemini key still wraps in FallbackAnalyzer when no per-phase vars set', () => {
     process.env.GEMINI_API_KEY = 'test-key';
     const s0 = selectAnalyzerForPhase({ phase: 'phase0' });
     expect(s0.engine).toBe('local');
@@ -211,7 +204,6 @@ describe('selectAnalyzerForPhase — plan 88 per-phase selector', () => {
        The Phase-1 selector must still return a working analyzer via
        the legacy fall-through. */
     process.env.ANALYZER_PHASE0_MODEL = 'gemma-4-31b-it';
-    process.env.ANALYZER = 'local';
     process.env.GEMINI_API_KEY = 'test-key';
     const s0 = selectAnalyzerForPhase({ phase: 'phase0' });
     const s1 = selectAnalyzerForPhase({ phase: 'phase1' });
@@ -351,10 +343,10 @@ describe('selectAnalyzerForPhase — user-settings precedence (plan 88 phase-2)'
       analyzerPhase1Model: null,
     };
     const s = selectAnalyzerForPhase({ phase: 'phase0', userSettings });
-    /* gemma-4-31b-it is the Gemini default surfaced via
-       selectAnalyzer({}) → DEFAULT_USER_SETTINGS.defaultAnalysisModel
-       (note: the engine resolves to 'gemini' because the legacy fall-
-       through uses analysisEngine='gemini' by default). */
+    /* The model falls through to selectAnalyzer({}); with the local-first
+       default (Part 0) the engine resolves to 'local' on a cold cache and
+       the model to the resolved Ollama tag. The contract here is just
+       "fell through" — no env, no user-settings model, hardcoded default. */
     expect(s).toBeDefined();
     /* Concretely the model resolves through selectAnalyzer({}) — the
        exact id depends on DEFAULT_USER_SETTINGS.defaultAnalysisModel.

@@ -76,10 +76,9 @@ describe('PhaseModelChip', () => {
         { phaseId: 0, state: 'pending' },
         { selectedModel: '' },
       );
-      /* account initial defaultAnalysisModel is gemini-3.1-flash-lite. */
-      expect(screen.getByTestId('phase-model-chip-0').textContent).toContain(
-        'Gemini 3.1 Flash Lite',
-      );
+      /* account initial defaultAnalysisModel is the local-first default
+         qwen3.5:4b now (Part 0). */
+      expect(screen.getByTestId('phase-model-chip-0').textContent).toContain('Qwen3.5 4B (local)');
     });
 
     it('does NOT show the warm-up hint for phase 1 even in the warming state', () => {

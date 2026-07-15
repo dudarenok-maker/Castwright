@@ -36,13 +36,14 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
   | 'backupRetention'
 > = {
   displayName: 'Castwright',
-  /* Gemini 3.1 Flash Lite over the Google API key is the new default
-     for analysis — free tier (15 RPM, 250K TPM, 500/day) handles a
-     full novel without saturating the local GPU. Local Ollama models
-     stay one click away in the picker for users who want analysis to
-     run on-device. Flip in lockstep with
-     server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
-  defaultAnalysisModel: 'gemini-3.1-flash-lite',
+  /* Local Qwen3.5 4B is the default analysis model — Castwright is
+     local-first, so analysis runs on-device by default. Must travel in
+     lockstep with analysisEngine ('local' below): a Gemini id here would
+     let the Defaults step re-derive analysisEngine:'gemini' and undo the
+     local default. Gemini models stay one click away in the picker. Flip
+     in lockstep with server/src/workspace/user-settings.ts
+     DEFAULT_USER_SETTINGS. */
+  defaultAnalysisModel: 'qwen3.5:4b',
   defaultTtsEngine: 'local',
   /* Kokoro v1 is the new default — quality-tuned, ~1 GB VRAM (vs ~3 GB
      for XTTS), eagerly loaded by the sidecar. XTTS stays available as
@@ -51,8 +52,10 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
      server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
   defaultTtsModelKey: 'kokoro-v1',
   sidecarUrl: 'http://localhost:9000',
-  /* Gemini matches the analysis-model default; Local stays an opt-in. */
-  analysisEngine: 'gemini',
+  /* Local-first: matches the analysis-model default above; Gemini is
+     opt-in via the Defaults step. Flip in lockstep with
+     server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
+  analysisEngine: 'local',
   ollamaUrl: 'http://localhost:11434',
   workspaceDirOverride: null,
   minorCastMinLines: 3,
