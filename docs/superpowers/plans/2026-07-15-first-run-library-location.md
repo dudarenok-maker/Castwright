@@ -321,10 +321,13 @@ if (plan.mode === 'release' && plan.envOverrides.WORKSPACE_DIR) {
 
 (If `launch.mjs`'s bottom is not structured to allow this, wrap the plan→spawn glue in a small function; keep `planLaunch` pure. Confirm the exact insertion point by reading `launch.mjs` lines 100–end.)
 
+- [ ] **Step 3b: Fix the EXISTING regressing assertion.** `scripts/tests/launch.test.mjs:50` (the release-mode test) asserts `plan.envOverrides.WORKSPACE_DIR === join(INSTALL, 'workspace')` with an `exists` set that does NOT include `<install>/workspace` and passes no `homedir`. After this change `chooseWorkspaceDir` returns `join(realHome,'Castwright')` and the assertion fails machine-dependently. Update that test to force install-local by passing `homedir: ''` to its `planLaunch(...)` call (or add `join(INSTALL,'workspace')` to its `exists` set). Do this in the same edit as Step 1.
+
 - [ ] **Step 4: Run tests, verify they pass**
 
 Run: `node --test scripts/tests/launch.test.mjs`
-Expected: PASS. Also run the existing suite to confirm no regression: same command covers it.
+Then confirm the hook lane is green: `npm run test:hooks`
+Expected: PASS, including the amended existing release-mode test.
 
 - [ ] **Step 5: Commit**
 
@@ -352,23 +355,31 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
-import accountReducer from '../../store/account-slice';
+import { accountSlice } from '../../store/account-slice';
 import { StepLibrary } from './step-library';
 import { api } from '../../lib/api';
 import type { SetupReadiness } from '../../lib/api';
 
 const READINESS = { ready: true, completedAt: null, blockers: {} as never, info: { gpu: 'CPU' } } as unknown as SetupReadiness;
 
-function makeStore(accountOverrides: Record<string, unknown>) {
+// Store idiom — mirrors step-defaults.test.tsx:53-65. NO default export exists;
+// use accountSlice.reducer + accountSlice.getInitialState() (also fully resolves
+// the account shape — do NOT hand-build AccountState).
+type AccountPreload = Partial<ReturnType<typeof accountSlice.getInitialState>>;
+function makeStore(over: AccountPreload = {}) {
   return configureStore({
-    reducer: { account: accountReducer },
-    preloadedState: { account: { ...baseAccount(), ...accountOverrides } as never },
+    reducer: { account: accountSlice.reducer },
+    preloadedState: {
+      account: { ...accountSlice.getInitialState(), ...over } as ReturnType<typeof accountSlice.getInitialState>,
+    },
   });
 }
-// baseAccount(): minimal AccountState — copy the slice's initialState shape or import it.
+// getLibrary() shape is { authors: [{ name, series: [{ name, books: [] }] }] }.
+const EMPTY_LIB = { authors: [] };
+const TWO_BOOKS = { authors: [{ name: 'A', series: [{ name: 'S', books: [{}, {}] }] }] };
 
 beforeEach(() => {
-  vi.spyOn(api, 'getLibrary').mockResolvedValue({ books: [] } as never);
+  vi.spyOn(api, 'getLibrary').mockResolvedValue(EMPTY_LIB as never);
 });
 
 describe('StepLibrary', () => {
@@ -386,7 +397,11 @@ describe('StepLibrary', () => {
     expect(input.value).toBe('');               // REGRESSION: fails if seeded from workspaceRoot
     expect(screen.queryByText(/restart/i)).not.toBeInTheDocument();
     expect((screen.getByRole('button', { name: /save/i }) as HTMLButtonElement).disabled).toBe(true);
-    expect(spy).not.toHaveBeenCalledWith(expect.objectContaining({ type: expect.stringContaining('account/save') }));
+    // No account/save action dispatched (getLibrary's fetch may dispatch nothing on this slice).
+    const saveCalls = spy.mock.calls.filter(
+      ([a]) => typeof a === 'object' && a !== null && String((a as { type?: string }).type).includes('account/save'),
+    );
+    expect(saveCalls).toHaveLength(0);
   });
 
   it('editing then Save dispatches workspaceDirOverride and calls onLibrarySaved', async () => {
@@ -407,19 +422,17 @@ describe('StepLibrary', () => {
   });
 
   it('non-empty library renders the "does not move existing files" warning', async () => {
-    vi.spyOn(api, 'getLibrary').mockResolvedValue({ books: [{}, {}] } as never);
-    render(<Provider store={makeStore({})}><StepLibrary readiness={READINESS} /></Provider>);
+    vi.spyOn(api, 'getLibrary').mockResolvedValue(TWO_BOOKS as never);
+    render(<Provider store={makeStore()}><StepLibrary readiness={READINESS} /></Provider>);
     expect(await screen.findByText(/does not move existing files/i)).toBeInTheDocument();
   });
 
   it('empty library renders the "nothing to move" copy', async () => {
-    render(<Provider store={makeStore({})}><StepLibrary readiness={READINESS} /></Provider>);
+    render(<Provider store={makeStore()}><StepLibrary readiness={READINESS} /></Provider>);
     expect(await screen.findByText(/nothing to move/i)).toBeInTheDocument();
   });
 });
 ```
-
-Note: implement `baseAccount()` by importing the slice's exported `initialState` if available, else construct the minimal `AccountState` (see `src/store/account-slice.ts:37-47`). The account reducer is the slice's default export.
 
 - [ ] **Step 2: Run test, verify it fails**
 
@@ -465,11 +478,16 @@ export function StepLibrary({ readiness: _readiness, onLibrarySaved }: Props) {
   }, [account.hydrated, account.workspaceDirOverride]);
 
   // Non-empty-library signal — reuse the existing library listing, no new endpoint.
+  // getLibrary() returns { authors: [{ series: [{ books: [] }] }] } — books are
+  // nested three deep, so flatten (house idiom, src/lib/api.sample.test.ts:15).
   useEffect(() => {
     let alive = true;
     api
       .getLibrary()
-      .then((lib) => alive && setHasBooks((lib.books?.length ?? 0) > 0))
+      .then((lib) => {
+        const count = lib.authors.flatMap((a) => a.series.flatMap((s) => s.books)).length;
+        if (alive) setHasBooks(count > 0);
+      })
       .catch(() => alive && setHasBooks(false)); // safe default: treat as empty
     return () => {
       alive = false;
@@ -566,23 +584,42 @@ git commit -m "feat(frontend): add StepLibrary first-run step (prefill from raw 
 - Consumes: `StepLibrary` (Task 3).
 - Produces: `StepId` now includes `'library'`; `STEPS` has 8 entries; `renderStep` handles `'library'` and is exhaustive via `assertNever`.
 
-- [ ] **Step 1: Write the failing test** — update `setup-wizard.test.tsx` step-count assertions
+- [ ] **Step 1: Update `setup-wizard.test.tsx` for the 8th step.** The suite stubs the step components and renders `SetupWizard` with **no redux `<Provider>`**, so the real `StepLibrary` (which uses `useAppSelector`/`api.getLibrary`) would throw when paged to. Make ALL of these edits:
 
-Find the assertion(s) referencing "Step 1 of 7" / `STEPS.length` and change the expected count to **8**. Add a guided-mode assertion that paging reaches a "Library" heading. Example addition:
+  1. **Add a `step-library` stub** alongside the others (near line 43-45):
 
 ```tsx
-it('guided mode includes the Library step', () => {
-  render(<SetupWizard readiness={READINESS} mode="guided" onRefetch={() => {}} onFinish={() => {}} />);
-  expect(screen.getByText(/Step 1 of 8/)).toBeInTheDocument();
-});
+vi.mock('./step-library', () => ({
+  StepLibrary: () => <div data-testid="step-library-stub">library</div>,
+}));
 ```
 
-(Also update any existing test that hardcodes `of 7`.)
+  2. **Add its testid** to the `STEP_TESTIDS` array (line 85), inserted after `'step-defaults-stub'` and before `'step-lan-cert-stub'`:
+
+```tsx
+  'step-defaults-stub',
+  'step-library-stub',
+  'step-lan-cert-stub',
+```
+
+  3. **Bump every `of 7` string** to `of 8` — lines 140 (test title), 149, 167, 183, 234, 287 (`/step N of 7/i` → the count changes to 8; the last-step assertion at 234 becomes `/step 8 of 8/i`).
+  4. **Bump the two paging loops** that walk to the last step: `for (let i = 0; i < 6; i++)` → `< 7` at lines 230 and 249 (one extra Next to reach the now-8th step).
+  5. The comment at 284 ("step 2 of 7") → "step 2 of 8"; the ffmpeg row still maps to step index 1, unchanged.
+  6. **Add a Library assertion:**
+
+```tsx
+it('guided mode reaches the Library step', () => {
+  render(<SetupWizard readiness={READINESS} mode="guided" onRefetch={() => {}} onFinish={() => {}} />);
+  for (let i = 0; i < 5; i++) fireEvent.click(screen.getByRole('button', { name: /next/i }));
+  expect(screen.getByTestId('step-library-stub')).toBeInTheDocument();
+  expect(screen.getByText(/step 6 of 8/i)).toBeInTheDocument();
+});
+```
 
 - [ ] **Step 2: Run tests, verify they fail**
 
 Run: `npm test -- src/components/setup/setup-wizard.test.tsx`
-Expected: FAIL — still "of 7".
+Expected: FAIL — new Library assertion + `of 8` strings not yet satisfied by the wizard.
 
 - [ ] **Step 3: Implement**
 
@@ -654,7 +691,22 @@ Pass `libraryChanged` + `onLibraryChanged={() => setLibraryChanged(true)}` down 
       return assertNever(id);
 ```
 
-(`renderStep` gains params `libraryChanged: boolean` and `onLibraryChanged: () => void`; StepFinish's `libraryChanged` prop is added in Task 5.)
+(`renderStep` gains params `libraryChanged: boolean` and `onLibraryChanged: () => void`.)
+
+5. **Declare the `StepFinish.libraryChanged` prop in THIS task** so the tree typechecks green between Task 4 and Task 5 (passing an undeclared prop is a TS2322 error). In `src/components/setup/step-finish.tsx`, add the optional prop to `Props` and accept it (rendering it is Task 5):
+
+```tsx
+interface Props {
+  readiness: SetupReadiness;
+  onFinish: () => void;
+  onTryDemoBook?: () => void;
+  /** True when the user changed the library location earlier in the wizard (Task 5 renders the reminder). */
+  libraryChanged?: boolean;
+}
+export function StepFinish({ readiness: _readiness, onFinish, onTryDemoBook, libraryChanged: _libraryChanged }: Props) {
+```
+
+(The `_libraryChanged` underscore keeps lint happy until Task 5 uses it. Commit `step-finish.tsx` with this task.)
 
 4. `buildSummaryRows` — insert a `library` row after `defaults` and **fix `lanCert`'s `stepIndex` 5→6** (the insertion shifts it):
 
@@ -679,7 +731,7 @@ Expected: PASS + clean typecheck.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/components/setup/steps.ts src/lib/wiki-links.ts src/components/setup/setup-wizard.tsx src/components/setup/setup-wizard.test.tsx
+git add src/components/setup/steps.ts src/lib/wiki-links.ts src/components/setup/setup-wizard.tsx src/components/setup/setup-wizard.test.tsx src/components/setup/step-finish.tsx
 git commit -m "feat(frontend): wire Library step into the setup wizard + summary board"
 ```
 
@@ -692,21 +744,35 @@ git commit -m "feat(frontend): wire Library step into the setup wizard + summary
 - Test: `src/components/setup/step-finish.test.tsx` (create if absent, else extend)
 
 **Interfaces:**
-- Consumes: `libraryChanged: boolean` prop from the wizard (Task 4). Also reads `useAppSelector(s => s.account.workspaceDirOverride)` to name the target path.
+- Consumes: `libraryChanged?: boolean` prop — already DECLARED on `StepFinish.Props` in Task 4 (as `_libraryChanged`). This task renders the reminder body and reads `useAppSelector(s => s.account.workspaceDirOverride)` to name the target path.
 
-- [ ] **Step 1: Write the failing test** (`src/components/setup/step-finish.test.tsx`)
+- [ ] **Step 1: Write the failing test** (`src/components/setup/step-finish.test.tsx` — create; if a StepFinish test already exists, extend it instead)
 
 ```tsx
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
-import accountReducer from '../../store/account-slice';
+import { accountSlice } from '../../store/account-slice';
 import { StepFinish } from './step-finish';
+import { api } from '../../lib/api';
 import type { SetupReadiness } from '../../lib/api';
 
 const READINESS = { ready: true, completedAt: null, blockers: {} as never, info: { gpu: 'CPU' } } as unknown as SetupReadiness;
-const store = (over = {}) => configureStore({ reducer: { account: accountReducer }, preloadedState: { account: { /* baseAccount */ ...over } as never } });
+
+function store(over: Partial<ReturnType<typeof accountSlice.getInitialState>> = {}) {
+  return configureStore({
+    reducer: { account: accountSlice.reducer },
+    preloadedState: {
+      account: { ...accountSlice.getInitialState(), ...over } as ReturnType<typeof accountSlice.getInitialState>,
+    },
+  });
+}
+
+// StepFinish's smoke-test button calls api.runSmokeTest lazily; stub so mount is inert.
+beforeEach(() => {
+  vi.spyOn(api, 'runSmokeTest').mockResolvedValue({ ok: true, url: '' } as never);
+});
 
 describe('StepFinish library reminder', () => {
   it('shows restart reminder when libraryChanged', () => {
@@ -716,35 +782,27 @@ describe('StepFinish library reminder', () => {
     expect(screen.getByText(/D:\\Books/)).toBeInTheDocument();
   });
   it('hides it when not changed', () => {
-    render(<Provider store={store({})}><StepFinish readiness={READINESS} onFinish={() => {}} libraryChanged={false} /></Provider>);
+    render(<Provider store={store()}><StepFinish readiness={READINESS} onFinish={() => {}} libraryChanged={false} /></Provider>);
     expect(screen.queryByText(/move your library/i)).not.toBeInTheDocument();
   });
 });
 ```
 
+Note: StepFinish did not previously read redux, so wrapping it in a `<Provider>` here is new — that's why the test builds a store.
+
 - [ ] **Step 2: Run test, verify it fails**
 
 Run: `npm test -- src/components/setup/step-finish.test.tsx`
-Expected: FAIL — `libraryChanged` prop doesn't exist; no reminder rendered.
+Expected: FAIL — reminder not rendered (`_libraryChanged` is unused from Task 4).
 
-- [ ] **Step 3: Implement** — in `step-finish.tsx`:
-
-Add the prop and a redux read; render a one-line reminder near the top of the returned `<section>`:
+- [ ] **Step 3: Implement** — in `step-finish.tsx`, replace the Task-4 placeholder param with a live one, add the redux read, and render the reminder:
 
 ```tsx
 import { useAppSelector } from '../../store';
-// ... Props:
-interface Props {
-  readiness: SetupReadiness;
-  onFinish: () => void;
-  onTryDemoBook?: () => void;
-  /** True when the user changed the library location earlier in the wizard. */
-  libraryChanged?: boolean;
-}
-
+// Props already declares libraryChanged?: boolean (Task 4). Change the destructure:
 export function StepFinish({ readiness: _readiness, onFinish, onTryDemoBook, libraryChanged }: Props) {
   const target = useAppSelector((s) => s.account.workspaceDirOverride);
-  // ... existing state ...
+  // ... existing useState hooks unchanged ...
   return (
     <section className="space-y-6">
       <h2 className="text-lg font-semibold text-ink">Ready to perform</h2>
@@ -753,7 +811,7 @@ export function StepFinish({ readiness: _readiness, onFinish, onTryDemoBook, lib
           Restart the server to move your library to <span className="font-medium break-all">{target}</span>.
         </p>
       )}
-      {/* ...rest unchanged... */}
+      {/* ...rest of the existing section unchanged... */}
 ```
 
 - [ ] **Step 4: Run test, verify it passes**
@@ -778,7 +836,7 @@ git commit -m "feat(frontend): remind to restart on Finish when library location
 - Modify: `docs/release-notes-next.md`, `RELEASE_NOTES.md`.
 - Modify: `docs/features/INDEX.md` only if a plan moves.
 
-- [ ] **Step 1: e2e** — add/extend a spec that pages the guided wizard to the Library step and asserts the heading + resolved-path text render. Run: `npm run test:e2e -- setup` (adjust to the spec's grep). Expected: PASS. (If the e2e harness can't reach the step without full readiness, assert via the summary-board `setup-summary-row-library` row instead.)
+- [ ] **Step 1: e2e** — the guided wizard needs satisfied readiness to page through, which mock mode may not provide. Primary approach: assert the **re-entry summary board** shows the new row via its testid `setup-summary-row-library` (added in Task 4). Identify the spec that already exercises the setup wizard by grepping `e2e/` for `setup-summary` / `data-testid="setup-` and extend the nearest one; if none drives the wizard, add a minimal `e2e/setup-library.spec.ts`. Run: `npm run test:e2e -- <spec>`. Expected: PASS. If neither the guided step nor the summary row is reachable in mock mode, record that explicitly in the PR (the Task 3–5 unit/component coverage is the real gate) rather than shipping a hollow spec.
 
 - [ ] **Step 2: Docs** — in `docs/features/218-pinokio-installer.md`, document that `write-env.js` now defaults a fresh install's `WORKSPACE_DIR` to `~/Castwright` (keeping an existing `<appRoot>/workspace`, falling back if home is unusable). In the fs-21 wizard plan, add the Library step to the step list.
 
@@ -814,6 +872,18 @@ git commit -m "test(e2e),docs: cover Library wizard step + document ~/Castwright
 **Placeholder scan:** No TBD/TODO. Two "confirm at plan time" notes remain as explicit implementer verifications (exact `launch.mjs` bottom insertion point; which e2e spec drives the wizard) — each names precisely what to check, not a deferred design decision.
 
 **Type consistency:** `defaultLibraryDir`/`chooseFreshWorkspaceDir`/`chooseWorkspaceDir`/`ensureWorkspaceWritable`/`buildEnvContents` signatures are consistent across tasks and their tests. `StepLibrary` prop `onLibrarySaved` (Task 3) is fed by the wizard's `onLibraryChanged` (Task 4); `StepFinish` prop `libraryChanged` (Task 5) matches the wizard's threaded state. `WIZARD_STEP_WIKI['library'] = 'Account-and-Settings'` is a valid `WikiPage`.
+
+## Plan-review fold (2026-07-15)
+
+Adversarial plan review (Opus) found 2 CRITICAL + 3 MAJOR against the real code; all folded:
+
+- **[CRITICAL] `getLibrary()` shape** — returns `{ authors: [{ series: [{ books }] }] }`, not `{ books }`. Task 3 now flattens `authors.flatMap(a => a.series.flatMap(s => s.books))` (house idiom, `api.sample.test.ts:15`); test mocks use the `{ authors: [...] }` shape.
+- **[CRITICAL] no default reducer export** — Task 3 & 5 tests now use `accountSlice.reducer` + `accountSlice.getInitialState()` (mirrors `step-defaults.test.tsx:53-65`), which also removes the hand-waved `baseAccount()`.
+- **[MAJOR] Task 4 breaks `setup-wizard.test.tsx`** — Task 4 Step 1 now adds the `./step-library` stub, the `STEP_TESTIDS` entry, bumps every `of 7`→`of 8` (lines 140/149/167/183/234/287) and the `< 6`→`< 7` loops (230/249).
+- **[MAJOR] Task 2 regresses `launch.test.mjs:50`** — Task 2 Step 3b amends that assertion (`homedir: ''`).
+- **[MAJOR] Task 4→5 red typecheck** — `StepFinish.libraryChanged` prop is now DECLARED in Task 4 (as `_libraryChanged`); Task 5 renders it. Tree stays green between tasks.
+
+Confirmed-fine (reviewer): `launch.mjs:102-126` `main()` is the writability-probe insertion point; `buildEnvContents` has no external caller; `renderStep` has no `default`; `Account-and-Settings.md` exists; the Finish reminder correctly keys off the session flag not `dirty`.
 
 ## Carry-forward #1 (helper duplication) — decided
 
