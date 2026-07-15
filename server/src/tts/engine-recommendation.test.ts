@@ -40,4 +40,10 @@ describe('recommendEngines', () => {
     expect(r.engine).toBe('qwen');
     expect(r.caveat).toMatch(/may not fit/i);
   });
+
+  it('need + VRAM exactly at Qwen floor (6144) → fits, no caveat (>= boundary is inclusive)', () => {
+    const r = recommendEngines(6144).expressiveOrMultilingual;
+    expect(r.engine).toBe('qwen');
+    expect(r.caveat).toBeNull();
+  });
 });

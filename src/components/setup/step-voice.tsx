@@ -226,7 +226,7 @@ export function StepVoice({ readiness, onRefetch }: { readiness: SetupReadiness;
                         {RECOMMENDED_BADGE}
                       </span>
                       {activeRec.caveat && (
-                        <p data-testid="recommendation-caveat" className="text-xs text-sky-700">
+                        <p data-testid="recommendation-caveat" aria-live="polite" className="text-xs text-sky-700">
                           {activeRec.caveat}
                         </p>
                       )}
