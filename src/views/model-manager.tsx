@@ -7,7 +7,7 @@
 
    The moved form sections land in step A7 (alongside the Account surgery). */
 
-import { useCallback, useEffect, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { MixedHeading } from '../components/primitives';
 import { DevicePanel } from '../components/device-panel';
 import { useAppDispatch } from '../store';
@@ -17,7 +17,7 @@ import {
   type ModelControlState,
   type ModelKind,
 } from '../components/ModelControlPill';
-import { api, type ModelInventoryItem, type ModelInventoryResponse } from '../lib/api';
+import { api, type ModelInventoryItem, type ModelInventoryResponse, type ModelsStatus } from '../lib/api';
 import { formatBytes } from '../lib/bytes';
 import { ModelSettingsForm, MODEL_SETTINGS_SECTIONS } from '../components/model-settings-form';
 import { SettingsAccordion } from '../components/settings/settings-accordion';
@@ -48,12 +48,27 @@ const TTS_LOAD_MODEL_BY_ID: Partial<Record<string, '1.7b'>> = {
    are fetched at install time rather than bundled in the release zip.
    qwen-design is fetched at design time, and ollama models live in the analyzer
    section below — neither gets a row installer here. */
-const INSTALLER_BY_ID: Partial<Record<string, ComponentType<{ onInstalled?: () => void }>>> = {
-  kokoro: KokoroInstall,
-  coqui: CoquiInstall,
-  'qwen-base': QwenInstall,
-  whisper: WhisperInstall,
-};
+const INSTALLER_IDS = new Set(['kokoro', 'coqui', 'qwen-base', 'whisper']);
+
+/* The three voice-engine cards are CONTROLLED — their status comes from the
+   shared models-status fetch. Whisper (ASR) is excluded from models-status and
+   stays self-fetching. Returns the installer element (or null while models-status
+   is still loading for a voice engine). `onInstalled` is the CALLER'S wrapped
+   callback (see the render site, which preserves package-missing → restartSidecar). */
+function renderInstaller(id: string, modelsStatus: ModelsStatus | null, onInstalled: () => void) {
+  const engineKey = ({ kokoro: 'kokoro', coqui: 'coqui', 'qwen-base': 'qwen' } as const)[
+    id as 'kokoro' | 'coqui' | 'qwen-base'
+  ];
+  if (engineKey) {
+    if (!modelsStatus) return null; // until the first models-status load resolves
+    const status = modelsStatus.engines[engineKey];
+    if (id === 'kokoro') return <KokoroInstall status={status} onInstalled={onInstalled} />;
+    if (id === 'coqui') return <CoquiInstall status={status} onInstalled={onInstalled} />;
+    return <QwenInstall status={status} onInstalled={onInstalled} />;
+  }
+  if (id === 'whisper') return <WhisperInstall onInstalled={onInstalled} />; // ASR — self-fetch
+  return null;
+}
 
 export function ModelManagerView() {
   const dispatch = useAppDispatch();
@@ -103,6 +118,7 @@ export function ModelManagerView() {
 
 function ModelInventory() {
   const [inv, setInv] = useState<ModelInventoryResponse | null>(null);
+  const [modelsStatus, setModelsStatus] = useState<ModelsStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmItem, setConfirmItem] = useState<ModelInventoryItem | null>(null);
@@ -118,11 +134,25 @@ function ModelInventory() {
     }
   }, []);
 
+  /* Feeds the controlled voice-install cards. Same 30s cadence as the inventory
+     poll; keeps the last good status on a failed refresh. */
+  const refetchModelsStatus = useCallback(async () => {
+    try {
+      setModelsStatus(await api.getModelsStatus());
+    } catch {
+      /* keep the last good status */
+    }
+  }, []);
+
   useEffect(() => {
     void refetch();
-    const t = setInterval(() => void refetch(), INVENTORY_POLL_MS);
+    void refetchModelsStatus();
+    const t = setInterval(() => {
+      void refetch();
+      void refetchModelsStatus();
+    }, INVENTORY_POLL_MS);
     return () => clearInterval(t);
-  }, [refetch]);
+  }, [refetch, refetchModelsStatus]);
 
   if (!inv) {
     return (
@@ -171,6 +201,8 @@ function ModelInventory() {
         const rowProps = (item: ModelInventoryItem) => ({
           item,
           sidecarReachable: inv.sidecarReachable,
+          modelsStatus,
+          refetchModelsStatus,
           busy: busyId === item.id,
           onAction: async (action: () => Promise<unknown>) => {
             setBusyId(item.id);
@@ -426,6 +458,8 @@ function IntegrityChip({ integrity }: { integrity: NonNullable<ModelInventoryIte
 function ModelRow({
   item,
   sidecarReachable,
+  modelsStatus,
+  refetchModelsStatus,
   busy,
   onAction,
   onChanged,
@@ -433,13 +467,15 @@ function ModelRow({
 }: {
   item: ModelInventoryItem;
   sidecarReachable: boolean;
+  modelsStatus: ModelsStatus | null;
+  refetchModelsStatus: () => void;
   busy: boolean;
   onAction: (action: () => Promise<unknown>) => Promise<void>;
   onChanged: () => void;
   onRemove: () => void;
 }) {
   const [installerOpen, setInstallerOpen] = useState(false);
-  const Installer = INSTALLER_BY_ID[item.id];
+  const hasInstaller = INSTALLER_IDS.has(item.id);
   const engine = TTS_ENGINE_BY_ID[item.id];
   const loadModel = TTS_LOAD_MODEL_BY_ID[item.id];
   const isAnalyzer = item.kind === 'analyzer';
@@ -527,7 +563,7 @@ function ModelRow({
               onStop={doStop}
             />
           )}
-          {Installer && (
+          {hasInstaller && (
             <button
               type="button"
               onClick={() => setInstallerOpen((o) => !o)}
@@ -552,21 +588,20 @@ function ModelRow({
         </div>
       </div>
 
-      {Installer && installerOpen && (
+      {hasInstaller && installerOpen && (
         <div data-testid={`model-installer-${item.id}`} className="border-t border-ink/10 pt-3">
           {isPackageMissing && (
             <p className="mb-2 text-xs text-ink/60">
               Reinstalls the engine package, then restarts the sidecar.
             </p>
           )}
-          <Installer
-            onInstalled={async () => {
-              if (isPackageMissing) {
-                await api.restartSidecar();
-              }
-              onChanged();
-            }}
-          />
+          {renderInstaller(item.id, modelsStatus, async () => {
+            if (isPackageMissing) {
+              await api.restartSidecar();
+            }
+            onChanged();
+            void refetchModelsStatus();
+          })}
         </div>
       )}
     </li>

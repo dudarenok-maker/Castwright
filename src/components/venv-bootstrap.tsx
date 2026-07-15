@@ -1,21 +1,24 @@
 /* In-app voice-engine runtime bootstrap affordance (fs-21 wave 1b).
-   Three states driven by GET /api/setup/venv/detect:
+   CONTROLLED: the idle state comes from a required `status` prop (derived from
+   models-status by the parent); the card owns only the bootstrap-job POST/poll.
+   Three idle states driven by status:
 
-     1. venvPresent (or job installed)  → green "Voice engine runtime ready" card
-     2. !venvPresent && pythonFound     → one-click "Set up the voice engine runtime"
-                                          button that POSTs bootstrap and polls the job
-     3. !venvPresent && !pythonFound    → decision-Z degrade: per-OS manual
+     1. installedOnDisk                 → green "Voice engine runtime ready" card
+     2. !installedOnDisk && !pythonFound → decision-Z degrade: per-OS manual
                                           instructions + Re-check button
+     3. !installedOnDisk && pythonFound  → one-click "Set up the voice engine
+                                          runtime" button that POSTs bootstrap
 
    Routes:
-     GET  /api/setup/venv/detect          → { state, venvPresent, pythonFound, installed }
      POST /api/setup/venv/bootstrap       → { id, status, step, error, ... } (202)
      GET  /api/setup/venv/bootstrap/:id   → poll
 
-   Self-contained — owns its polling loop, no redux. */
+   The process/liveness pill is rendered by the parent (StepVoice), NOT here —
+   this card is disk-only. */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { PrimaryButton } from './primitives';
+import type { RuntimeProcessState } from '../lib/api';
 
 export interface VenvBootstrapJob {
   id: string;
@@ -24,39 +27,20 @@ export interface VenvBootstrapJob {
   error: string | null;
 }
 
-interface DetectResp {
-  state: string;
-  venvPresent: boolean;
-  pythonFound: boolean;
-  installed: boolean;
-}
-
 const POLL_INTERVAL_MS = 1_500;
 
-export function VenvBootstrap({ onBootstrapped }: { onBootstrapped?: () => void } = {}) {
-  const [detect, setDetect] = useState<DetectResp | null>(null);
+export function VenvBootstrap({
+  status,
+  onBootstrapped,
+}: {
+  // `process` is part of the prop shape for uniformity but the CARD is disk-only.
+  status: { installedOnDisk: boolean; pythonFound: boolean; process: RuntimeProcessState };
+  onBootstrapped?: () => void;
+}) {
   const [job, setJob] = useState<VenvBootstrapJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const doDetect = useCallback(async () => {
-    try {
-      const res = await fetch('/api/setup/venv/detect');
-      if (!res.ok) throw new Error(`detect failed: HTTP ${res.status}`);
-      const body = (await res.json()) as DetectResp;
-      setDetect(body);
-      if (body.venvPresent || body.installed) {
-        onBootstrapped?.();
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [onBootstrapped]);
-
-  useEffect(() => {
-    void doDetect();
-  }, [doDetect]);
 
   useEffect(() => {
     if (!job) return;
@@ -69,7 +53,6 @@ export function VenvBootstrap({ onBootstrapped }: { onBootstrapped?: () => void 
         const body = (await res.json()) as VenvBootstrapJob;
         setJob(body);
         if (body.status === 'installed') {
-          void doDetect();
           onBootstrapped?.();
         }
       } catch (e) {
@@ -79,7 +62,7 @@ export function VenvBootstrap({ onBootstrapped }: { onBootstrapped?: () => void 
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current);
     };
-  }, [job, doDetect, onBootstrapped]);
+  }, [job, onBootstrapped]);
 
   const startBootstrap = async () => {
     setError(null);
@@ -94,34 +77,6 @@ export function VenvBootstrap({ onBootstrapped }: { onBootstrapped?: () => void 
       setBusy(false);
     }
   };
-
-  // State 1: venv already present (or just installed)
-  if (detect?.venvPresent || detect?.installed || job?.status === 'installed') {
-    return (
-      <div
-        data-testid="venv-bootstrap-ready"
-        className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4"
-      >
-        <div className="flex items-center gap-3">
-          <span className="w-2 h-2 rounded-full bg-emerald-600" />
-          <div className="flex-1">
-            <p className="text-sm font-semibold text-emerald-900">Voice engine runtime ready</p>
-            <p className="text-xs text-emerald-900/70">
-              The Python runtime is set up — all voice engines can be loaded.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={doDetect}
-            disabled={busy}
-            className="px-3 py-1.5 rounded-full border border-emerald-300 bg-white text-xs text-emerald-900 hover:bg-emerald-100 disabled:opacity-50"
-          >
-            Re-check
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   // Job in progress
   if (job && job.status === 'installing') {
@@ -162,8 +117,35 @@ export function VenvBootstrap({ onBootstrapped }: { onBootstrapped?: () => void 
     );
   }
 
+  // State 1: runtime present on disk (or just installed)
+  if (status.installedOnDisk || job?.status === 'installed') {
+    return (
+      <div
+        data-testid="venv-bootstrap-ready"
+        className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4"
+      >
+        <div className="flex items-center gap-3">
+          <span className="w-2 h-2 rounded-full bg-emerald-600" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-emerald-900">Voice engine runtime ready</p>
+            <p className="text-xs text-emerald-900/70">
+              The Python runtime is set up — all voice engines can be loaded.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onBootstrapped?.()}
+            className="px-3 py-1.5 rounded-full border border-emerald-300 bg-white text-xs text-emerald-900 hover:bg-emerald-100 disabled:opacity-50"
+          >
+            Re-check
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // State 3: decision-Z — no Python found → manual instructions
-  if (detect && !detect.pythonFound) {
+  if (!status.pythonFound) {
     return (
       <div
         data-testid="venv-bootstrap-manual"
@@ -197,7 +179,7 @@ export function VenvBootstrap({ onBootstrapped }: { onBootstrapped?: () => void 
 
         <button
           type="button"
-          onClick={doDetect}
+          onClick={() => onBootstrapped?.()}
           className="px-3 py-1.5 rounded-full border border-ink/20 bg-white text-xs text-ink hover:bg-ink/5"
         >
           Re-check

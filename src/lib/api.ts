@@ -7189,6 +7189,22 @@ async function realGetSetupReadiness(): Promise<SetupReadiness> {
   return (await res.json()) as SetupReadiness;
 }
 
+/* fs-38 Part A — models-status wizard single source. Mirrors ModelsStatus in
+   server/src/tts/models-status.ts. */
+export type EngineHealthState = 'ready' | 'package-missing' | 'weights-missing' | 'not-installed' | 'loaded';
+export type RuntimeProcessState = 'ready' | 'starting' | 'down' | 'crashed';
+export interface ModelsStatus {
+  runtime: { installedOnDisk: boolean; pythonFound: boolean; process: RuntimeProcessState };
+  engines: Record<'kokoro' | 'qwen' | 'coqui', { state: EngineHealthState; packageBroken: boolean }>;
+  info: { gpu: string; vramTotalMb: number | null };
+}
+
+async function realGetModelsStatus(): Promise<ModelsStatus> {
+  const res = await fetch('/api/setup/models-status');
+  if (!res.ok) throw new Error(`models-status failed: HTTP ${res.status}`);
+  return (await res.json()) as ModelsStatus;
+}
+
 /* Exported so unit tests can drive it directly (the `api.*` indirection locks
    USE_MOCKS at import). Latches not-ready into sessionStorage from the
    ?setup=notready param so the state survives the redirect to #/setup, where
@@ -7251,6 +7267,18 @@ export async function mockGetSetupReadiness(): Promise<SetupReadiness> {
         blockers: { sidecar: mockBlocker('pass'), ffmpeg: mockBlocker('pass'), tts: mockBlocker('pass'), analyzer: mockBlocker('pass') },
         info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
       };
+}
+
+export async function mockGetModelsStatus(): Promise<ModelsStatus> {
+  return {
+    runtime: { installedOnDisk: true, pythonFound: true, process: 'ready' },
+    engines: {
+      kokoro: { state: 'ready', packageBroken: false },
+      qwen: { state: 'not-installed', packageBroken: false },
+      coqui: { state: 'not-installed', packageBroken: false },
+    },
+    info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
+  };
 }
 
 async function realCompleteSetup(): Promise<{ completedAt: string }> {
@@ -9385,6 +9413,7 @@ const real = {
   getGpuQueueState: realGetGpuQueueState,
   getDiagnostics: realGetDiagnostics,
   getSetupReadiness: realGetSetupReadiness,
+  getModelsStatus: realGetModelsStatus,
   completeSetup: realCompleteSetup,
   getTourStatus: realGetTourStatus,
   completeTour: realCompleteTour,
@@ -9662,6 +9691,7 @@ const mock = {
   getGpuQueueState: mockGetGpuQueueState,
   getDiagnostics: mockGetDiagnostics,
   getSetupReadiness: mockGetSetupReadiness,
+  getModelsStatus: mockGetModelsStatus,
   completeSetup: mockCompleteSetup,
   getTourStatus: mockGetTourStatus,
   completeTour: mockCompleteTour,

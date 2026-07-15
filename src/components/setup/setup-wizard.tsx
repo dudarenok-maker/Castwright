@@ -251,10 +251,13 @@ interface SummaryRow {
    step order. */
 function buildSummaryRows(readiness: SetupReadiness): SummaryRow[] {
   const { blockers, info } = readiness;
-  const voiceOk = blockers.sidecar.status === 'pass' && blockers.tts.status === 'pass';
+  // Transient sidecar unreachability (engine still starting up) is not a
+  // real blocker — agrees with the step-voice neutral pill (#1612).
+  const sidecarBlocking = blockers.sidecar.status === 'fail' && blockers.sidecar.cause !== 'unreachable-transient';
+  const voiceOk = !sidecarBlocking && blockers.tts.status === 'pass';
   const voiceDetail = voiceOk
     ? 'Runtime + default voice ready'
-    : (blockers.sidecar.status === 'fail' ? blockers.sidecar.message : blockers.tts.message);
+    : (sidecarBlocking ? blockers.sidecar.message : blockers.tts.message);
   const analyzerStatus: SummaryStatus =
     blockers.analyzer.status === 'pass' ? 'ok' : blockers.analyzer.status === 'warn' ? 'warn' : 'attention';
   return [
