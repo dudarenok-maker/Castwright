@@ -231,8 +231,9 @@ export function dedupeRosterByName(
     // prevents a cross-gender pair from ever landing in the same component.
     // Survivor = most name tokens (prefer real name), then most lines, then
     // earliest roster order — deterministic regardless of union order.
-    // (Secondary line-count tiebreak can undercount a Tier-2a survivor whose
-    // victim's sentences aren't rewritten until dedupAndPrepare; only bites on a
+    // (Secondary line-count tiebreak can undercount a Tier-1/Tier-2a survivor
+    // whose id was renamed or whose victim's sentences aren't rewritten until
+    // dedupAndPrepare, so `lines.get(id)` can read 0 for it; only bites on a
     // token-count tie, so it never changes which real name wins.)
     const ranked = members
       .map((m) => ({ m, idx: roster.indexOf(m), tok: tokens(m.name).length, ln: lines.get(m.id) ?? 0 }))
@@ -282,7 +283,10 @@ export function dedupeRosterByName(
       let key: string | undefined;
       let display: string | undefined;
       if (linkXY || linkYX) {
-        // One-sided single-token name link (mutual/multi-token already merged).
+        // One-sided single-token name link. This is single-token/non-mutual by
+        // construction: a mutual or multi-token link is a STRONG edge, so it
+        // would already have unioned the pair and dropped one party from
+        // t3survivors — any name-link that survives to here is therefore weak.
         key = linkXY ? nameKeyOf(x) : nameKeyOf(y);
         display = linkXY ? x.name : y.name;
       } else {

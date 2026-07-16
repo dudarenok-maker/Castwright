@@ -178,6 +178,30 @@ describe('dedupeRosterByName Tier-3 (alias coreference — strong merge)', () =>
     expect(r.rewrites).toEqual({ a: 'b', k: 'b' });
   });
 
+  it('collapses a Tier-1 canonical that then becomes a Tier-3 victim (cross-tier rewrite chain)', () => {
+    // Two «Анна» rows → Tier-1 merges them into a synthesized canonical id
+    // `анна` (safeId), unioning aliases. That `анна` canonical then forms a
+    // mutual Tier-3 edge with the 2-token «Мария Ивановна», which wins the
+    // survivor (more tokens) → `анна` becomes a Tier-3 victim. The transitive
+    // collapse must resolve the FULL chain anna1/anna2 → анна → maria — and it
+    // must not regress as later tiers evolve. Note `анна` carries 0 lines under
+    // its synthesized id (sentences stay under anna1/anna2 until dedupAndPrepare),
+    // yet the 2-token real name still wins because token-count is the primary key.
+    const chars = [
+      c({ id: 'anna1', name: 'Анна', gender: 'female', aliases: ['Мария Ивановна'] }),
+      c({ id: 'anna2', name: 'Анна', gender: 'female' }),
+      c({ id: 'maria', name: 'Мария Ивановна', gender: 'female', aliases: ['Анна'] }),
+    ];
+    const r = dedupeRosterByName(chars as any, [...sent('anna1', 5), ...sent('anna2', 3), ...sent('maria', 8)]);
+    expect(r.characters).toHaveLength(1);
+    expect(r.characters[0].id).toBe('maria');
+    expect(r.characters[0].name).toBe('Мария Ивановна');
+    // Both Tier-1 victims AND the synthesized Tier-1 canonical resolve to the
+    // final Tier-3 survivor — the cross-tier collapse leaves no dangling id.
+    expect(r.rewrites).toEqual({ anna1: 'maria', anna2: 'maria', 'анна': 'maria' });
+    expect(r.suggestions).toEqual([]);
+  });
+
   it('picks the same survivor regardless of roster order (stable survivor)', () => {
     const mk = () => [
       c({ id: 'boss', name: 'шеф', gender: 'male', aliases: ['Борис Игнатьевич'] }),
