@@ -75,22 +75,32 @@ export function resolveStage2ChunkCharBudget(engine?: 'gemini' | 'local'): numbe
   );
 }
 
-/** Fold a fragment-sized chunk — one with a NONZERO but sub-`STAGE2_MIN_EVALUABLE_WORDS`
-    attributable-word count, e.g. a lone heading "Глава 4" — into an adjacent
-    chunk so it is never attributed as its own model call. Such a fragment gets
-    isolated when it sits between two over-budget paragraphs the packing loop
-    can't co-locate it with; alone, its tiny word count makes the coverage guard
-    un-evaluable and the model tends to loop on the near-empty span, sticking the
-    chapter on every retry (the 2026-07-16 Ночной дозор ch6 defect: 1405 output
-    words vs ~2 source → ratio 702.50). Unlike a WORD-FREE separator ("***"),
-    which has nothing to narrate and is skipped downstream, a fragment carries
-    real words (a heading) and is PRESERVED — merged forward into the next chunk
-    when there is one (a heading reads best leading its section), else back into
-    the previous. Merging only concatenates adjacent chunks, so `chunks.join('')`
-    still reproduces the body exactly; word-free chunks are left in place. */
+/* A fragment must be short in CHARS too, not only in words: a chunk can be
+   char-LARGE yet normalise to few words (a long run with no word breaks — e.g. a
+   synthetic single-token blob, or an unusual glyph run). Merging such a chunk
+   would bloat a neighbour and defeat chunking, so only a genuinely SHORT low-word
+   span (a lone heading like "Глава 4" — 9 chars) qualifies. Real headings are far
+   under this; real prose reaches STAGE2_MIN_EVALUABLE_WORDS words long before it. */
+const STAGE2_TINY_FRAGMENT_MAX_CHARS = 200;
+
+/** Fold a fragment-sized chunk — SHORT in both chars and attributable words
+    (nonzero but sub-`STAGE2_MIN_EVALUABLE_WORDS`), e.g. a lone heading "Глава 4"
+    — into an adjacent chunk so it is never attributed as its own model call.
+    Such a fragment gets isolated when it sits between two over-budget paragraphs
+    the packing loop can't co-locate it with; alone, its tiny word count makes
+    the coverage guard un-evaluable and the model tends to loop on the near-empty
+    span, sticking the chapter on every retry (the 2026-07-16 Ночной дозор ch6
+    defect: 1405 output words vs ~2 source → ratio 702.50). Unlike a WORD-FREE
+    separator ("***"), which has nothing to narrate and is skipped downstream, a
+    fragment carries real words (a heading) and is PRESERVED — merged forward into
+    the next chunk when there is one (a heading reads best leading its section),
+    else back into the previous. Merging only concatenates adjacent chunks, so
+    `chunks.join('')` still reproduces the body exactly; word-free chunks and
+    large word-sparse chunks are left in place. */
 function mergeTinyChunks(chunks: string[]): string[] {
   if (chunks.length <= 1) return chunks;
   const isTinyFragment = (c: string): boolean => {
+    if (c.length >= STAGE2_TINY_FRAGMENT_MAX_CHARS) return false;
     const wc = attributableWordCount(c);
     return wc >= 1 && wc < STAGE2_MIN_EVALUABLE_WORDS;
   };

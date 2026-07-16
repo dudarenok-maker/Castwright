@@ -67,6 +67,31 @@ describe('splitBodyIntoChunks', () => {
     // The huge paragraph is not fragmented across chunks.
     expect(chunks.filter((c) => c.includes(huge))).toHaveLength(1);
   });
+
+  it('merges a short heading-sized fragment into a neighbour (lossless)', () => {
+    // A lone heading "Глава 4" trapped between two over-budget paragraphs must
+    // ride with a neighbour, never stand alone (see mergeTinyChunks).
+    const big1 = 'Word '.repeat(60).trim();
+    const big2 = 'Other stuff here '.repeat(30).trim();
+    const body = `${big1}\n\nГлава 4\n\n${big2}`;
+    const chunks = splitBodyIntoChunks(body, 120);
+    expect(chunks.some((c) => c.trim() === 'Глава 4')).toBe(false); // never alone
+    expect(chunks.some((c) => c.includes('Глава 4'))).toBe(true); // text preserved
+    expect(chunks.join('')).toBe(body); // lossless
+  });
+
+  it('does NOT merge a char-large but word-sparse chunk (only short fragments merge)', () => {
+    // A chunk can be char-LARGE yet normalise to few words (a run with no word
+    // breaks); that is NOT a fragment and must keep its own chunk, or stage-1/2
+    // chunking would collapse. Only a chunk that is short in BOTH words and
+    // chars (a lone heading) is merged.
+    const bigSparse = 'a'.repeat(2000); // one long token → 1 attributable word
+    const other = 'b'.repeat(2000);
+    const body = `${bigSparse}\n\n${other}`;
+    const chunks = splitBodyIntoChunks(body, 2500);
+    expect(chunks.length).toBeGreaterThan(1); // NOT collapsed into one
+    expect(chunks.join('')).toBe(body);
+  });
 });
 
 describe('splitParagraphIntoSentences', () => {
