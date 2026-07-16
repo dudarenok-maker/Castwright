@@ -307,6 +307,18 @@ describe('dedupeRosterByName — first-person pronoun phantom (RC1)', () => {
     expect(r.characters.map((x) => x.id)).toEqual(['антон']);
     expect(r.rewrites['я']).toBe('narrator');
   });
+
+  it('a phantom «Я» with MORE lines than the real protagonist does NOT dissolve the protagonist into narrator', () => {
+    const chars = [
+      c({ id: 'антон', name: 'Антон', gender: 'male', aliases: ['Я'] }),
+      c({ id: 'я', name: 'Я', gender: 'male', aliases: [] }),
+    ];
+    // phantom has FAR more lines than антон — this is what triggers the inversion.
+    const r = dedupeRosterByName(chars as any, [...sent('антон', 20), ...sent('я', 300)], { language: 'ru' });
+    expect(r.characters.map((x) => x.id)).toEqual(['антон']); // real protagonist survives, keeps id антон
+    expect(r.rewrites['я']).toBe('антон');                    // phantom merged INTO антон
+    expect(Object.values(r.rewrites)).not.toContain('narrator'); // антон NOT dissolved to narrator
+  });
 });
 
 describe('dedupeRosterByName Tier-3 (alias coreference — weak suggestions)', () => {

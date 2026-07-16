@@ -263,7 +263,13 @@ export function dedupeRosterByName(
     // token-count tie, so it never changes which real name wins.)
     const ranked = members
       .map((m) => ({ m, idx: roster.indexOf(m), tok: tokens(m.name).length, ln: lines.get(m.id) ?? 0 }))
-      .sort((a, b) => b.tok - a.tok || b.ln - a.ln || a.idx - b.idx);
+      .sort(
+        (a, b) =>
+          (isFirstPersonName(a.m) ? 1 : 0) - (isFirstPersonName(b.m) ? 1 : 0) ||
+          b.tok - a.tok ||
+          b.ln - a.ln ||
+          a.idx - b.idx,
+      );
     const survivor = ranked[0].m;
     // Merge victims in roster order for deterministic field-merge results.
     const victims = ranked
