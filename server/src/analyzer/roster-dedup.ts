@@ -164,6 +164,93 @@ export function dedupeRosterByName(
 
   roster = roster.filter((ch) => !droppedT2.has(ch.id));
 
+  // ── Tier-3: alias coreference — strong auto-merge via union-find ──────────
+  // A candidate link X→Y := X's normalised name appears in Y's alias set.
+  // Strong (auto-merge) when MUTUAL, or one-directional via a MULTI-token name
+  // (a full proper name is unlikely to also be a different character's whole
+  // name). A one-sided SINGLE-token (bare-word) link is left to the weak pass
+  // so a role-word-named minor (`шеф`) is never directionally absorbed into a
+  // principal. Hoisted so Tier-3 and Tier-2b share one suggestions array.
+  const suggestions: MergeSuggestion[] = [];
+
+  const nameKeyOf = (ch: CharacterOutput): string => normaliseNameKey(ch.name);
+  const aliasKeysOf = (ch: CharacterOutput): Set<string> =>
+    new Set((ch.aliases ?? []).map((a) => normaliseNameKey(a)).filter(Boolean));
+
+  const t3nodes = roster.filter((ch) => ch.id !== NARRATOR_ID);
+  const t3aliases = new Map<string, Set<string>>();
+  for (const ch of t3nodes) t3aliases.set(ch.id, aliasKeysOf(ch));
+
+  // Union-find over strong edges (roster is tiny — plain find, no compression).
+  // The tuple annotation keeps `new Map<string,string>(...)` type-checking
+  // (a bare `[ch.id, ch.id]` infers as string[], not the [string,string] the
+  // Map ctor wants).
+  const parent = new Map<string, string>(t3nodes.map((ch): [string, string] => [ch.id, ch.id]));
+  const find = (x: string): string => {
+    let r = x;
+    while (parent.get(r) !== r) r = parent.get(r)!;
+    return r;
+  };
+  const union = (a: string, b: string): void => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+
+  // Gender gate is PER EDGE (matches the spec's pair-level wording): a
+  // cross-gender candidate link is simply dropped, so an unrelated same-gender
+  // merge in the same component still proceeds. (Do NOT skip the whole
+  // component on one bad cross-gender edge — that silently blocks valid merges.)
+  for (let i = 0; i < t3nodes.length; i++) {
+    for (let j = i + 1; j < t3nodes.length; j++) {
+      const x = t3nodes[i];
+      const y = t3nodes[j];
+      if (gendersConflict(x.gender, y.gender)) continue;
+      const linkXY = t3aliases.get(y.id)!.has(nameKeyOf(x)); // x's name ∈ y aliases
+      const linkYX = t3aliases.get(x.id)!.has(nameKeyOf(y)); // y's name ∈ x aliases
+      const mutual = linkXY && linkYX;
+      const strong =
+        mutual ||
+        (linkXY && tokens(x.name).length >= 2) ||
+        (linkYX && tokens(y.name).length >= 2);
+      if (strong) union(x.id, y.id);
+    }
+  }
+
+  // Group survivors by component root; merge each ≥2 component into one survivor.
+  const t3components = new Map<string, CharacterOutput[]>();
+  for (const ch of t3nodes) {
+    const root = find(ch.id);
+    if (!t3components.has(root)) t3components.set(root, []);
+    t3components.get(root)!.push(ch);
+  }
+  const droppedT3 = new Set<string>();
+  for (const members of t3components.values()) {
+    if (members.length < 2) continue;
+    // NOTE: no component-level gender check — the per-edge gate above already
+    // prevents a cross-gender pair from ever landing in the same component.
+    // Survivor = most name tokens (prefer real name), then most lines, then
+    // earliest roster order — deterministic regardless of union order.
+    // (Secondary line-count tiebreak can undercount a Tier-2a survivor whose
+    // victim's sentences aren't rewritten until dedupAndPrepare; only bites on a
+    // token-count tie, so it never changes which real name wins.)
+    const ranked = members
+      .map((m) => ({ m, idx: roster.indexOf(m), tok: tokens(m.name).length, ln: lines.get(m.id) ?? 0 }))
+      .sort((a, b) => b.tok - a.tok || b.ln - a.ln || a.idx - b.idx);
+    const survivor = ranked[0].m;
+    // Merge victims in roster order for deterministic field-merge results.
+    const victims = ranked
+      .slice(1)
+      .map((r) => r.m)
+      .sort((a, b) => roster.indexOf(a) - roster.indexOf(b));
+    for (const victim of victims) {
+      mergeCharacterFields(survivor, victim);
+      rewrites[victim.id] = survivor.id;
+      droppedT3.add(victim.id);
+    }
+  }
+  roster = roster.filter((ch) => !droppedT3.has(ch.id));
+
   // Collapse rewrites transitively (a victim may have been a Tier-1 canonical).
   for (const k of Object.keys(rewrites)) {
     let v = rewrites[k];
@@ -176,7 +263,6 @@ export function dedupeRosterByName(
   }
 
   // ── Tier-2b: diminutive → suggestion only ────────────────────────────────
-  const suggestions: MergeSuggestion[] = [];
   for (let i = 0; i < roster.length; i++) {
     for (let j = i + 1; j < roster.length; j++) {
       const a = roster[i];
