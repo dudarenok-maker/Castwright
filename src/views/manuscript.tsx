@@ -52,11 +52,6 @@ import { runReviewScript, hydrateScriptReview, discardReview } from '../store/sc
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 import type { SeriesRosterEntry } from '../lib/api';
 
-/* fs-58 — Unit-A per-run default model. No persisted model-picker knob in
-   Unit A; a per-run local-model option is deferred to srv-48. Used both for
-   the per-run `model` opt and to compute the whole-book RPD warning. */
-const REVIEW_MODEL = 'gemma-4-31b-it';
-
 /* Stable fallback for when sentencesFromStore is momentarily null (e.g.
    mid-hydration) — a literal `[]` would be a fresh array every render and
    defeat the useMemo hooks keyed on `sentences` below. */
@@ -734,6 +729,22 @@ export function ManuscriptView({
   const scriptReviewBucket = useAppSelector((s) => (bookId ? s.scriptReview?.byBook[bookId] : undefined));
   const jobActiveForBook = useAppSelector((s) => !!(bookId && s.scriptReview?.activeStreams[bookId]));
 
+  /* srv-48 fix — the script-review model follows the user's configured
+     analyzer default (Account → Defaults → Analysis model), NOT a hardcoded
+     model. A local Ollama id (contains ':') routes the review to the local
+     engine and warms it via `selectAnalyzerForPhase`, exactly like the main
+     analysis path; a Gemini id keeps the cloud path. This fixes the review
+     always running on Gemini regardless of the local engine setting — the
+     hardcoded 'gemma-4-31b-it' placeholder that shipped from fs-58 Unit-A
+     overrode the local engine on every run. Declared up here (before the
+     `!currentChapter` guard below) so the hook is unconditional. Optional
+     chain + '' fallthrough: the real store always hydrates a model, so ''
+     only occurs in partial-store tests. An empty model is falsy on the
+     server (`if (opts.model)` in selectAnalyzerForPhase) so it falls through
+     to the resolved default engine (→ local) — same as the main analysis
+     path — and `rpdWarningFor` treats '' as "no cap". */
+  const reviewModel = useAppSelector((s) => s.account?.defaultAnalysisModel) ?? '';
+
   /* Defensive guard for the empty-chapters transient (e.g. the manuscript
      slice rehydrating after a reparse, or a stale URL pointing at a book
      whose chapter list hasn't loaded yet). The whole view dereferences
@@ -804,12 +815,12 @@ export function ManuscriptView({
     />
   );
 
-  /* fs-58 — LLM script-review trigger. The model is per-run in Unit A (no
-     persisted knob); we pass the server free-tier default so the RPD warning
-     can reason about quota. Per-chapter (the default) uses one request; a
-     whole-book sweep fires one request per chapter, so the RPD warning below
-     gates it when the book is longer than the model's daily cap. */
-  const reviewModel = REVIEW_MODEL;
+  /* LLM script-review trigger. `reviewModel` (resolved above from the user's
+     analyzer default) drives both the per-run `model` opt sent to the server
+     and the whole-book RPD warning. Per-chapter (the default) uses one
+     request; a whole-book sweep fires one request per chapter, so the RPD
+     warning below gates it when the book is longer than the model's daily
+     cap (local models are uncapped → no warning). */
   /* Non-excluded chapters are the ones a whole-book sweep would actually hit
      (excluded chapters never reach the analyzer). */
   const reviewableChapterCount = chapters.filter((c) => !c.excluded).length;
