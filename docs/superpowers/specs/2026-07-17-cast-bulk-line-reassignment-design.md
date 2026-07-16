@@ -21,7 +21,7 @@ Let a user move many attributed lines from one character to another in a single,
 - **Sentence model** (`src/lib/api-types.ts:4043-4057`, app-side `src/lib/types.ts:43-45`): speaker is `characterId: string`; sentence `id` restarts per chapter, so every lookup is keyed by the composite `(chapterId, id)`. Redux home `src/store/manuscript-slice.ts`; on disk `manuscript-edits.json`.
 - **Reassignment reducers:** `setSentenceCharacter({chapterId, sentenceId, characterId})` (`manuscript-slice.ts:279-287`) and the per-chapter batch `setSentencesCharacter({chapterId, sentenceIds[], characterId})` (`:421-431`). Both are single-chapter.
 - **Persistence:** rule `'manuscript/setSentenceCharacter'` in `src/store/persistence-middleware.ts:81-84` debounces `PUT /api/books/:bookId/state` with `slice: 'manuscript'` (whole `sentences[]`). No dedicated per-line REST endpoint.
-- **Stale indicator:** every reassignment path dispatches `changeLogActions.bumpBoundaryMove({chapterId, count})`; a rendered chapter is flagged "needs regeneration" from the latest boundary-move vs. its render time.
+- **Stale indicator:** every reassignment path dispatches `changeLogActions.bumpBoundaryMove({chapterId, count})`. The "needs regeneration" flag is computed in `src/views/generation.tsx:1313-1321` as an **OR** of two independent signals: (a) a **precise** per-sentence diff of render-time speakers vs. live `characterId` (`stale-chapters.ts:59` `isChapterReassignedSinceRender`), which by design reads *not-stale* after a reassign-then-undo; and (b) an **always-on time-based** clause (`stale-chapters.ts:33` `isChapterStaleFromReassign`) comparing the newest `boundary_move` `.at` timestamp vs. `audioRenderedAt`. The time-based clause is not a fallback — it runs unconditionally, so a move-then-undo still reads stale via that clause. The change-log slice is **append/head-only** (`change-log-slice.ts:59-131`): `unshift`, in-place head `bumpBoundaryMove`, wholesale hydrate/reset — **no edit-or-delete-by-id**, so a `boundary_move` cannot be surgically reverted.
 - **Existing multi-sentence UI:** boundary drag (`manuscript.tsx:555-596`) and whole-segment reassign (`:632-646`), both dispatching the per-chapter batch. `useSentenceSelection` (`:2161-2207`) is a **single**-sentence text-range selection (used for splits). There is no checkbox / arbitrary multi-select and **no undo** anywhere for cast/line edits.
 
 ## Design
@@ -47,7 +47,8 @@ Candidate resolution:
 UI additions over today's modal:
 - Per-row **checkbox**; header **select-all**, **per-chapter select-all**, and **invert selection**; live **selected count**.
 - **Filter** row with two facets: a **text substring** filter over sentence text, and — in `selection` mode where rows may span speakers — a **current-speaker** facet. A **"select all matching filter"** button applies the current selection to exactly the filtered subset. (In `character` mode every row is the same speaker, so only the text facet is meaningful.) This satisfies the #1676 acceptance verbs: *filter by current speaker*, *select-all-for-character*.
-- **Virtualized / windowed row list** — the candidate list must render with windowing (only visible rows mounted). The origin case is 1184 rows on Егор, and reassigning to/from Narrator can exceed 10k rows; today's modal mounts every row and would hit a DOM/perf cliff. The reducer already accepts an arbitrary key set, so only the view needs virtualization.
+- **Virtualized / windowed row list** — the candidate list must render with windowing (only visible rows mounted), using `@tanstack/react-virtual` (already a dependency). The origin case is 1184 rows on Егор, and reassigning to/from Narrator can exceed 10k rows; today's modal mounts every row and would hit a DOM/perf cliff. The reducer already accepts an arbitrary key set, so only the view needs virtualization.
+- **Selection model (must be render-independent).** Selection is a `Set<compositeKey>` (`"${chapterId}:${sentenceId}"`) held over the **full resolved candidate list** in component state — never derived from mounted DOM rows. Every bulk-select op (select-all, per-chapter select-all, invert, select-all-matching-filter) folds over that in-memory list. If selection were read from rendered rows, virtualization would silently limit "select all" to the visible window — defeating the exact 1184/10k-row cases virtualization exists for.
 - **Target-character picker** — roster dropdown. Excluded/flagged targets: the source itself (disabled); characters pending removal (excluded); and a **light confirm when the target is Narrator** (re-muddying narrator identity is the origin class of bug — worth a deliberate beat).
 - Single **Apply** button: "Reassign N lines → {Target}". Apply always routes through one lightweight confirm that doubles as the count summary: "Reassign N lines from X to Y across M chapters?" (Cancel returns to the form with the selection intact.)
 - Existing empty-state preserved (e.g. `character` source with zero lines, or `unlink` with no candidates).
@@ -67,10 +68,10 @@ manuscriptActions.setSentencesCharacterBulk({ keys: SentenceKey[]; characterId: 
 ```
 
 - Rewrites `characterId` for each `(chapterId, sentenceId)` key.
-- Records the undo snapshot into the undo slot (§3): each key's **prior** `characterId`, plus the pre-apply boundary-move baseline for each affected chapter (so undo can restore stale state, not re-dirty it).
+- Records the undo snapshot into the undo slot (§3): each key's **prior** `characterId`. (No stale/boundary-move baseline is captured — see §3 for why that would be both unimplementable and unnecessary.)
 - A persistence-middleware rule for `'manuscript/setSentencesCharacterBulk'` (and for the undo action, §3) mirrors the existing `setSentenceCharacter` rule. **It must build the full `{ sentences, mergedAwayKeys }` patch shape** — the existing rule persists both, and dropping `mergedAwayKeys` would lose sentence-merge tombstones. No server change; line attribution round-trips through the generic `PUT /books/:id/state` as today.
-- Change-log: dispatch `bumpBoundaryMove` **per affected chapter** so each touched chapter's stale indicator fires. One logical bulk action, but per-chapter stale bumps.
-- **Persist-failure signal:** the apply/undo PUT can fail (network). Because redux would then show the move applied while disk holds the prior attribution, surface a failure toast so the user isn't silently diverged. (m7)
+- Change-log: apply dispatches `bumpBoundaryMove` **per affected chapter** so each touched chapter's stale indicator fires (one logical bulk action, per-chapter stale bumps). Undo does **not** touch `bumpBoundaryMove`; instead it appends one `appendLogEvent` ("Reverted reassignment of N lines") so the audit trail is symmetric without rewriting history (m2).
+- **Persist-failure signal (scoped).** The apply/undo PUT can fail (network); redux would then show the move applied while disk holds prior attribution. The flush path currently **swallows** failures (`persistence-middleware.ts:295-297`, `console.error` only) for *all* slices. To avoid a book-wide behavior change, scope the new failure toast to the two bulk action types (apply/undo) — do not broaden it to every persisted slice. (m7)
 
 ### 3. Undo lifecycle — one-level, book-session-scoped
 
@@ -78,7 +79,6 @@ manuscriptActions.setSentencesCharacterBulk({ keys: SentenceKey[]; characterId: 
 manuscript.lastBulkReassign:
   | {
       moves: { chapterId: number; sentenceId: number; prevCharacterId: string }[];
-      staleBaseline: { chapterId: number; /* pre-apply boundary-move state to restore */ }[];
       targetLabel: string;
     }
   | null
@@ -86,13 +86,13 @@ manuscript.lastBulkReassign:
 
 **Set / clear arbitration (fixes C1 — the set-then-clear self-defeat).** The clear is an **explicit whitelist**, not a blanket matcher over manuscript actions:
 - `setSentencesCharacterBulk` **sets** the slot (reducer computes each `prevCharacterId` from current state before overwriting). It is *exempt* from the clear set — it must not clear the slot it just wrote.
-- A **separate `undoBulkReassign` action** performs the restore: it rewrites each key back to `prevCharacterId`, restores the `staleBaseline` for affected chapters, and **nulls the slot**. It does **not** record a new undo record (so no undo-of-undo). This is why Undo cannot reuse the recording reducer — that was the internal contradiction.
-- The slot **clears only** on a *conflicting* edit — a single-line reassign/split/boundary-move that touches one of the moved keys' chapters — or on a *second* `setSentencesCharacterBulk`. Unrelated edits elsewhere in the book do **not** discard undo (fixes M6: a stray single-line edit no longer nukes a 700-line undo).
-- Undo is **book-session-scoped**, not view-scoped: it survives cast↔script navigation within the same book, and is cleared on book switch/close. It is **not** persisted, so a full reload drops it (accepted: "undoable" is satisfied by one-level in-session undo; m7).
+- A **separate `undoBulkReassign` action** performs the restore: it rewrites each key back to `prevCharacterId` and **nulls the slot**. It does **not** record a new undo record (so no undo-of-undo). This is why Undo cannot reuse the recording reducer — that was the internal contradiction.
+- **Clear on conflict is key-granular, not chapter-granular (M-2).** The slot clears only when a later single-line edit (reassign / split / boundary-move) touches a **moved key** — i.e. membership in the stored `moves` key set — or on a *second* `setSentencesCharacterBulk`. A split of a moved line counts as a conflict (it renumbers that key). Edits to *untouched sibling lines in the same chapter* do **not** clear undo. Chapter-granularity was rejected: the origin bug spans nearly every chapter, so a chapter-level predicate would let almost any later edit nuke the undo — reintroducing the very M6 failure this is meant to fix.
+- Undo is **book-session-scoped**, not view-scoped: it survives cast↔script navigation within the same book. The slot lives in the manuscript slice, but the book-transition reducers mutate fields individually and will **not** clear a new field automatically — so `lastBulkReassign = null` must be added explicitly to **`manuscript.reset`, `hydrateFromBookState`, and `hydrateFromAnalysis`** (M-1). Missing any of these leaks Book A's undo (with A's composite keys) onto Book B, where clicking Undo would rewrite colliding B keys — silent cross-book corruption. It is **not** persisted, so a full reload drops it (accepted: "undoable" is satisfied by one-level in-session undo).
 
-**Stale-marking on undo (fixes M4).** Undo restores the `staleBaseline` captured at apply time rather than emitting fresh `bumpBoundaryMove`s. After undo, attribution equals the last-rendered state, so those chapters must **not** be left flagged "needs regeneration."
+**Stale-marking on undo — accept stale-after-undo (revises M4).** Undo does **not** try to un-flag chapters. On the precise stale path, restoring each `prevCharacterId` makes live == rendered, so the chapter auto-reads not-stale for free. On the always-on time-based clause (§Current-behavior), the chapter remains flagged for regen — which is **exactly** how every existing reassign-then-undo already behaves (the append-only change-log has no way to revert a `boundary_move`, and building one is a separate concern touching all edit paths, out of scope here). Consistent, honest for a one-level undo, and zero new machinery. (The earlier `staleBaseline` idea was both unimplementable against this change-log and unnecessary.)
 
-**Banner host (fixes m10).** The Undo affordance is a **persistent, non-auto-dismissing** banner "Reassigned N lines to {targetLabel} — **Undo**", rendered at the **layout level** (not inside the modal, which closes on apply), and tied to the book-session-scoped slot above — so it behaves identically regardless of which view opened the form.
+**Banner host (fixes m10).** The Undo affordance is a **persistent, non-auto-dismissing** banner "Reassigned N lines to {targetLabel} — **Undo**", rendered at the **layout level** (joining the existing `WhatsNewBanner` / `UpdateNotifierBanner` / `ToastStack` region — non-dismiss action toasts already have precedent), not inside the modal (which closes on apply), and tied to the book-session-scoped slot above — so it behaves identically regardless of which view opened the form.
 
 ### 4. Entry points
 
@@ -109,11 +109,13 @@ manuscript.lastBulkReassign:
 
 ## Testing
 
-- **Unit (reducer):** `setSentencesCharacterBulk` rewrites `characterId` for all keys and records the correct inverse + `staleBaseline`; `lastBulkReassign` populated and **not** immediately cleared by its own dispatch (C1); `undoBulkReassign` restores prior ids, restores stale baseline, nulls the slot, and records no new undo record.
-- **Undo lifecycle:** slot survives an unrelated single-line edit in a different chapter and cast↔script navigation (M6); slot **clears** on a conflicting edit (touching a moved key's chapter) and on a second bulk; slot dropped on book switch.
-- **Persistence middleware:** both new actions trigger the debounced state PUT with the full `{ sentences, mergedAwayKeys }` patch (`slice: 'manuscript'`); a failed PUT surfaces a toast (m7).
-- **Change-log / stale:** apply emits one `bumpBoundaryMove` per affected chapter; **undo does not re-flag** those chapters stale — it restores the baseline (M4).
-- **Component:** select-all / per-chapter select-all / invert / select-all-matching / text + speaker filter / target picker (source disabled, Narrator confirm) / apply count / confirm step / empty-state; virtualized list renders a 1000+ candidate set without mounting every row (M2); undo banner appears at layout level and reverts the move; drift-skip reporting (m9).
+- **Unit (reducer):** `setSentencesCharacterBulk` rewrites `characterId` for all keys and records the correct inverse; `lastBulkReassign` populated and **not** immediately cleared by its own dispatch (C1); `undoBulkReassign` restores prior ids, nulls the slot, records no new undo record, and appends one revert audit event (m2).
+- **Undo lifecycle (key-granular, M-2):** slot survives an edit to an **untouched sibling line in a touched chapter** and cast↔script navigation; slot **clears** on an edit to a **moved key** (incl. a split of a moved line) and on a second bulk.
+- **Cross-book clearing (M-1):** slot is nulled by `manuscript.reset`, `hydrateFromBookState`, and `hydrateFromAnalysis` — a bulk in Book A then opening Book B shows no stale banner and cannot rewrite B's keys.
+- **Persistence middleware:** both new actions trigger the debounced state PUT with the full `{ sentences, mergedAwayKeys }` patch (`slice: 'manuscript'`); a failed **apply and a failed undo** PUT each surface a toast, scoped to the bulk actions (m7, S-0).
+- **Selection/virtualization (M2, m-1):** select-all / invert / select-all-matching operate over the full candidate set with only a small window mounted (e.g. invert with 20 of 1000 rows mounted selects 980); virtualized list renders a 1000+ set without mounting every row.
+- **Stale-after-undo (accepted):** apply emits one `bumpBoundaryMove` per affected chapter; after undo, a render-mapped chapter reads not-stale via the precise diff, while the time-based clause behaves identically to an existing single-line reassign-then-undo (no new un-flagging machinery).
+- **Component:** per-chapter select-all / text + speaker filter / target picker (source disabled, Narrator confirm) / apply count / confirm step / empty-state; undo banner appears at layout level and reverts the move; drift-skip reporting (m9).
 - **Regression:** existing alias-unlink → reattribute flow still works through the generalized form (renamed `ReassignLinesModal`, `unlink` source).
 
 ## Rollout / follow-up
@@ -123,10 +125,19 @@ manuscript.lastBulkReassign:
 
 ## Adversarial-review revisions (2026-07-17)
 
-Two independent reviewers (codebase fact-check + design attack) ran against this spec. Fact-check: all codebase assumptions confirmed. Design fixes folded in above:
+### Round 1 (fact-check + design attack against the initial spec)
 - **C1 (critical):** undo set/clear was self-defeating — replaced blanket-clear with an explicit clear-whitelist; the bulk-set is exempt, and a separate `undoBulkReassign` action restores without recording (§3).
 - **M2:** virtualized candidate list (origin case is 1184+ rows; Narrator 10k+) (§1).
-- **M4:** undo restores the pre-apply stale baseline instead of re-flagging chapters for regeneration (§2/§3).
-- **M6:** undo is book-session-scoped and cleared only by a conflicting edit or a second bulk — an unrelated single-line edit no longer discards it (§3).
+- **M4:** undo stale handling — *later revised in round 2 (see below); the round-1 `staleBaseline` fix was wrong.*
+- **M6:** undo is book-session-scoped and cleared only by a conflicting edit or a second bulk (§3).
 - **M3/M5 (scope, user-decided):** ergonomics-only — invert, select-all-matching, speaker facet, per-speaker select-all; no heuristic auto-select (§1).
 - **m7/m8/m9/m10:** persist-failure toast, target exclusions + Narrator confirm, key-drift re-validation at apply, layout-level banner host.
+
+Round-1 caveat: the fact-check ran against the *original* spec and did not cover mechanisms introduced by the round-1 fixes — notably the stale subsystem's OR-semantics — which round 2 then caught.
+
+### Round 2 (attacking the round-1 fixes; both reviewers converged)
+- **C-1 (critical) — dropped `staleBaseline` entirely.** The stale flag is an OR of a precise per-sentence diff and an *always-on* time-based `boundary_move` clause; the change-log is append/head-only with no revert-by-id, so the round-1 baseline was unimplementable — and unnecessary, since the precise path already reads not-stale after undo. Now: **accept stale-after-undo**, matching every existing reassign-then-undo (§3). This also removed most of the added complexity, so the design is proportionate.
+- **M-1 (major) — cross-book leak.** The undo slot must be explicitly nulled in `reset`, `hydrateFromBookState`, **and** `hydrateFromAnalysis`; book switch is a partial hydrate, not a slice reset (§3).
+- **M-2 (major) — clear is now key-granular, not chapter-granular** (chapter-level barely fixed M6 for the book-wide origin case) (§3).
+- **m-1/m-2:** selection pinned to a `Set<key>` over the full candidate set (virtualization-safe); undo appends its own revert audit event (§1/§2).
+- **Confirmed sound:** apply→undo persistence ordering (single per-slice last-wins debounce); virtualization lib already present (`@tanstack/react-virtual`); layout-level banner host has precedent.
