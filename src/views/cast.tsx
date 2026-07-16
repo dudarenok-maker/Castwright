@@ -919,10 +919,11 @@ export function CastView({
           </div>
         )}
 
-        {/* Tier-2b — diminutive merge-suggestion cards. Rendered when the
-            dedup pass detected possible name-alias duplicates (e.g. "Оля" vs
-            "Ольга"). One card per suggestion; accept folds the source character
-            into the target, dismiss hides the card without merging. */}
+        {/* Merge-suggestion cards from the dedup pass — Tier-2b diminutives
+            (e.g. "Оля" vs "Ольга") AND Tier-3 distinctive alias overlaps
+            (#1662, e.g. a role word shared by two rows). Rendered generically
+            off any MergeSuggestion; accept folds the source character into the
+            target, dismiss hides the card without merging. */}
         {mergeSuggestions.length > 0 && (
           <div data-testid="merge-suggestions-list" className="mb-4 space-y-0">
             {mergeSuggestions.map((s) => {
