@@ -202,6 +202,27 @@ describe('dedupeRosterByName Tier-3 (alias coreference — strong merge)', () =>
     expect(r.rewrites).toEqual({});
   });
 
+  it('does NOT merge a male and a neutral bridged by an unknown-gender node', () => {
+    // The guard mirrors the per-edge conflict semantics: male/female/neutral are
+    // all mutually distinct. An UNKNOWN node bridging a male and a neutral forms
+    // a component (unknown conflicts with neither), and male+neutral is just as
+    // contradictory as male+female — so it must be refused too, not only the
+    // narrow male+female case. (A directly-gendered bridge wouldn't form edges at
+    // all; the unknown bridge is what lets the mismatched pair co-land.)
+    const chars = [
+      c({ id: 'max', name: 'Максим', gender: 'male', aliases: ['Мост'] }),
+      c({ id: 'bridge', name: 'Мост', aliases: ['Максим', 'Дух'] }), // gender unset
+      c({ id: 'dukh', name: 'Дух', gender: 'neutral', aliases: ['Мост'] }),
+    ];
+    const r = dedupeRosterByName(chars as any, [
+      ...sent('max', 10),
+      ...sent('bridge', 5),
+      ...sent('dukh', 8),
+    ]);
+    expect(r.characters).toHaveLength(3);
+    expect(r.rewrites).toEqual({});
+  });
+
   it('collapses a Tier-1 canonical that then becomes a Tier-3 victim (cross-tier rewrite chain)', () => {
     // Two «Анна» rows → Tier-1 merges them into a synthesized canonical id
     // `анна` (safeId), unioning aliases. That `анна` canonical then forms a

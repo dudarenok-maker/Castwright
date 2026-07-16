@@ -217,7 +217,7 @@ export const analyzerCharacterSchema = characterSchema.extend({
 });
 
 /** Grammar variant of stage1ChapterSchema — embeds analyzerCharacterSchema
-    so the model must emit tone on every character it returns. */
+    so the model must emit tone AND gender on every character it returns. */
 export const stage1ChapterGrammarSchema = z
   .object({
     characters: z.array(analyzerCharacterSchema),
