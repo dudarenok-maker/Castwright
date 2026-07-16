@@ -52,7 +52,6 @@ import { runReviewScript, hydrateScriptReview, discardReview } from '../store/sc
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 import type { SeriesRosterEntry } from '../lib/api';
 
-
 /* Stable fallback for when sentencesFromStore is momentarily null (e.g.
    mid-hydration) — a literal `[]` would be a fresh array every render and
    defeat the useMemo hooks keyed on `sentences` below. */
