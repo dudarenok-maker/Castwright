@@ -498,6 +498,96 @@ git commit -m "fix(analyzer): prefer scene-separator boundaries when splitting s
 
 ---
 
+### Task 8: Aligner robustness — combining-mark fold + bounded prefix-anchored fuzzy fallback (RC2 depth)
+
+The 2026-07-17 verification showed alignedPct STAYED low (54%) on gemma-e4b, keeping most chapters below the 80% floor so the structure engine's speech/pronoun corrections never ran — the residual «я»→Егор. ё→е alone (T1) wasn't enough: gemma also emits decomposed diacritics and paraphrases/drops words mid-sentence. Two additive, offset-preserving improvements to `aligner.ts`:
+
+**(A)** strip Unicode combining marks (`\p{Mn}`) in `buildNormalizedMap` — folds decomposed ё (е+U+0308) and other decomposed forms to match composed body text; 1:1-or-empty per char, offset-safe.
+
+**(B)** a **bounded prefix-anchored fuzzy fallback** in `alignSentences`: when exact match fails AND the needle is long (≥24 chars), anchor on its 16-char prefix (usually copied faithfully — a dialogue dash + first words) and approximate the extent from needle length, so a paraphrased sentence still attaches to its paragraph's spans. Bounded (long needles only) to avoid false anchors on short ambiguous lines. Approximate offsets are fine — the structure engine classifies by overlapping spans (speech/narration/tag), not exact boundaries.
+
+**Files:** Modify `server/src/analyzer/dialogue-structure/aligner.ts`; Test `server/src/analyzer/dialogue-structure/aligner.test.ts`.
+
+**Interfaces:** `alignSentences` / `buildNormalizedMap` unchanged signatures; strictly ≥ current alignedPct (fuzzy only fires when exact fails).
+
+- [ ] **Step 1: Write failing tests**
+
+```ts
+it('(RC2) aligns across composed vs decomposed ё (combining diaeresis)', () => {
+  const ruIdx = buildNameIndex([{ id: 'anton', name: 'Антон' }], conventionsFor('ru')!);
+  const body = '— Ещё раз, — сказал Антон.'; // composed ё
+  const paras = parseChapterStructure(body, ruIdx);
+  const speechSpan = paras.flatMap((p) => p.spans).find((s) => s.kind === 'speech')!;
+  const decomposed = 'Ещё раз,'.normalize('NFD'); // е + U+0308
+  const result = alignSentences([mkSentence(1, 'anton', decomposed)], paras, body);
+  expect(result.aligned[0].spans).toContain(speechSpan);
+  expect(result.alignedPct).toBe(100);
+});
+
+it('(RC2) prefix-anchored fuzzy fallback aligns a paraphrased long sentence to its paragraph', () => {
+  const ruIdx = buildNameIndex([{ id: 'anton', name: 'Антон' }], conventionsFor('ru')!);
+  const body = '— Я упустил вампиршу вчера ночью возле старого парка, — сказал Антон.';
+  const paras = parseChapterStructure(body, ruIdx);
+  const speechSpan = paras.flatMap((p) => p.spans).find((s) => s.kind === 'speech')!;
+  const drifted = 'Я упустил вампиршу вчера возле тёмного парка,'; // middle words changed/dropped
+  const result = alignSentences([mkSentence(1, 'anton', drifted)], paras, body);
+  expect(result.aligned[0].spans).toContain(speechSpan);
+  expect(result.alignedPct).toBe(100);
+});
+
+it('(RC2) does NOT fuzzy-match a short needle (avoids false anchors)', () => {
+  const ruIdx = buildNameIndex([{ id: 'anton', name: 'Антон' }], conventionsFor('ru')!);
+  const body = '— Да, конечно, я помню тот давний день очень хорошо, — кивнул Антон.';
+  const paras = parseChapterStructure(body, ruIdx);
+  const result = alignSentences([mkSentence(1, 'anton', 'Нет.')], paras, body); // <24 chars, absent
+  expect(result.aligned[0].spans).toEqual([]);
+});
+```
+
+- [ ] **Step 2: Run — confirm the ё-decomposed and fuzzy tests FAIL, the short-needle test PASSES.**
+
+- [ ] **Step 3: Implement**
+
+At module level in `aligner.ts` add:
+```ts
+const COMBINING_MARK = /\p{Mn}/u;
+const FUZZY_MIN_NEEDLE = 24;
+const FUZZY_ANCHOR_LEN = 16;
+```
+In `buildNormalizedMap`, extend the `else` branch (which already has the ё→е fold):
+```ts
+    } else {
+      out = raw[i].toLowerCase();
+      if (out === 'ё') out = 'е';
+      else if (COMBINING_MARK.test(out)) out = ''; // drop decomposed diacritics (offset-safe)
+    }
+```
+In `alignSentences`, replace the per-sentence match block (lines ~153-162) with the fuzzy-fallback version:
+```ts
+    const needle = normalize(sentence.text);
+    let matchStart = needle.length > 0 ? findMatch(normBody, needle, cursor) : -1;
+    if (matchStart === -1 && needle.length >= FUZZY_MIN_NEEDLE) {
+      // Exact failed (gemma paraphrased/dropped a word). Anchor on the prefix so
+      // the sentence still attaches to its paragraph; approximate the extent.
+      const anchorPos = findMatch(normBody, needle.slice(0, FUZZY_ANCHOR_LEN), cursor);
+      if (anchorPos !== -1) matchStart = anchorPos;
+    }
+
+    if (matchStart === -1) {
+      aligned.push({ sentence, spans: [], lumped: false });
+      continue;
+    }
+
+    const matchEnd = Math.min(matchStart + needle.length, normBody.length);
+    cursor = matchEnd;
+```
+(The `Math.min` is a no-op for exact matches — those never exceed the body — so exact behavior is byte-identical.)
+
+- [ ] **Step 4: Run `cd server && npx vitest run src/analyzer/dialogue-structure/aligner.test.ts` — all pass (new + existing).**
+- [ ] **Step 5: Commit** `fix(server): aligner combining-mark fold + bounded prefix-anchored fuzzy fallback`
+
+---
+
 ### Task 7: Fresh re-analysis of Night Watch on Gemma — acceptance
 
 Prove the compound fix end-to-end on the reproduction book, using the same model, via a FRESH analysis (cache-bypassing).
