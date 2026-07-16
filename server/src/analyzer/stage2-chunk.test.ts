@@ -94,15 +94,15 @@ describe('splitBodyIntoChunks', () => {
   });
 
   it('(RC3) prefers a scene-separator boundary so no chunk straddles two scenes', () => {
-    const sceneA = 'а'.repeat(60) + '.\n\n';
-    const sep = '***\n\n';
-    const sceneB = 'б'.repeat(60) + '.\n\n';
-    const body = sceneA + sceneA + sep + sceneB + sceneB; // ~260 chars, 4 prose paras + separator
-    const chunks = splitBodyIntoChunks(body, 200); // over budget → must split
-
-    // No chunk contains prose from BOTH scenes.
+    const sceneA = 'Первый герой шёл по длинной пыльной улице и думал о своём давнем деле.\n\n';
+    const sep = '* * *\n\n';
+    const sceneB = 'Второй герой молча сидел в тёмной холодной комнате и ждал условного часа.\n\n';
+    const body = sceneA + sceneA + sep + sceneB + sceneB;
+    // Budget forces a split AND is large enough that, without separator-awareness,
+    // the greedy packer would straddle the seam (pack sceneA…sep…sceneB together).
+    const chunks = splitBodyIntoChunks(body, 250);
     for (const ch of chunks) {
-      expect(ch.includes('а') && ch.includes('б')).toBe(false);
+      expect(ch.includes('Первый') && ch.includes('Второй')).toBe(false); // no chunk has both scenes
     }
     expect(chunks.join('')).toBe(body); // lossless
   });

@@ -104,35 +104,18 @@ function mergeTinyChunks(chunks: string[]): string[] {
     const wc = attributableWordCount(c);
     return wc >= 1 && wc < STAGE2_MIN_EVALUABLE_WORDS;
   };
-  /* A chunk that OPENS with a word-free separator paragraph ("***") is one the
-     packing loop deliberately started a fresh scene on (see splitBodyIntoChunks).
-     A chunk can still be "tiny" by word count (a short scene, or one built almost
-     entirely of the same repeated glyph) without being a fragment in the
-     mergeTinyChunks sense — folding it into its neighbour would silently undo the
-     scene-boundary preference and re-mix two scenes into one chunk. Guard both
-     merge directions on this so the separator boundary the packing loop just
-     created survives this pass. */
-  const startsWithSceneSeparator = (c: string): boolean => {
-    const firstPara = c.split(/\n[ \t]*\n/, 1)[0] ?? '';
-    return firstPara.trim().length > 0 && attributableWordCount(firstPara) === 0;
-  };
   const work = [...chunks];
   const out: string[] = [];
   for (let i = 0; i < work.length; i += 1) {
-    if (isTinyFragment(work[i]) && i + 1 < work.length && !startsWithSceneSeparator(work[i + 1])) {
+    if (isTinyFragment(work[i]) && i + 1 < work.length) {
       work[i + 1] = work[i] + work[i + 1]; // forward-merge into the next chunk
     } else {
       out.push(work[i]);
     }
   }
   // A fragment that was LAST had no following chunk to join — fold it (and any
-  // fragment that merging left trailing) back into the previous chunk instead,
-  // unless it is itself a scene that starts with a separator (preserve the break).
-  while (
-    out.length >= 2 &&
-    isTinyFragment(out[out.length - 1]) &&
-    !startsWithSceneSeparator(out[out.length - 1])
-  ) {
+  // fragment that merging left trailing) back into the previous chunk instead.
+  while (out.length >= 2 && isTinyFragment(out[out.length - 1])) {
     out[out.length - 2] += out.pop()!;
   }
   return out;
