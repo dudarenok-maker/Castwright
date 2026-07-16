@@ -92,6 +92,20 @@ describe('splitBodyIntoChunks', () => {
     expect(chunks.length).toBeGreaterThan(1); // NOT collapsed into one
     expect(chunks.join('')).toBe(body);
   });
+
+  it('(RC3) prefers a scene-separator boundary so no chunk straddles two scenes', () => {
+    const sceneA = 'а'.repeat(60) + '.\n\n';
+    const sep = '***\n\n';
+    const sceneB = 'б'.repeat(60) + '.\n\n';
+    const body = sceneA + sceneA + sep + sceneB + sceneB; // ~260 chars, 4 prose paras + separator
+    const chunks = splitBodyIntoChunks(body, 200); // over budget → must split
+
+    // No chunk contains prose from BOTH scenes.
+    for (const ch of chunks) {
+      expect(ch.includes('а') && ch.includes('б')).toBe(false);
+    }
+    expect(chunks.join('')).toBe(body); // lossless
+  });
 });
 
 describe('splitParagraphIntoSentences', () => {
