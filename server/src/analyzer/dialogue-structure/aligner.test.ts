@@ -139,4 +139,23 @@ describe('alignSentences', () => {
     expect(result.aligned[0].spans).toEqual([speechSpan]);
     expect(result.alignedPct).toBe(100);
   });
+
+  it('(RC2) folds ё↔е so a model ё/е swap still aligns', () => {
+    const ruIdx = buildNameIndex([{ id: 'anton', name: 'Антон' }], conventionsFor('ru')!);
+    // Body uses ё in both "Ещё" and "всё".
+    const body = '— Ещё не всё, — сказал Антон.';
+    const paras = parseChapterStructure(body, ruIdx);
+    const speechSpan = paras.flatMap((p) => p.spans).find((s) => s.kind === 'speech')!;
+    expect(body.slice(speechSpan.start, speechSpan.end)).toBe('Ещё не всё,');
+
+    // Model returned the same line with е instead of ё (the classic RU drift).
+    const sentences = [mkSentence(1, 'anton', 'Еще не все,')];
+    const result = alignSentences(sentences, paras, body);
+
+    // Assert on membership + alignedPct, NOT strict array-equality: the overlap
+    // filter (aligner.ts:161) can graze the adjacent tag span depending on the
+    // comma-boundary offset, and that's not what this test is about.
+    expect(result.aligned[0].spans).toContain(speechSpan);
+    expect(result.alignedPct).toBe(100);
+  });
 });

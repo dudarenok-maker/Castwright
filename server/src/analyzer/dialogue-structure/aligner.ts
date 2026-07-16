@@ -67,6 +67,11 @@ function buildNormalizedMap(raw: string): { text: string; rawStart: number[]; ra
       out = '...';
     } else {
       out = raw[i].toLowerCase();
+      // RU: models routinely swap ё↔е. Fold to е so a single ё/е divergence
+      // doesn't orphan the whole sentence (which would drag the chapter under
+      // the 80% alignment floor and suppress ALL structure corrections).
+      // 1:1 char replacement — preserves the offset map exactly.
+      if (out === 'ё') out = 'е';
     }
     const atomStart = i;
     const atomEnd = i + atomLen;
