@@ -167,6 +167,11 @@ A name/alias string present on **3+ rows** is treated as a generic role word
 (`the guard`, `мальчик`) and emits **nothing** — this keeps the cast page from
 flooding with low-value cards.
 
+Alias evidence for the weak pass is the **pre-merge snapshot** of each row's
+aliases (captured before any strong merge), not the mutated survivor rows — so a
+"shared alias" suggestion reflects the model's own annotation and never fires on
+an alias a strong merge just accumulated onto a survivor.
+
 Suggestion shape matches the existing contract:
 `{ sourceId, targetId, reason }`, with `source = fewer lines`,
 `target = more lines` (tie → stable order), mirroring Tier-2b. Reason string,
@@ -174,9 +179,13 @@ e.g. `Both known as «the Reaper»`.
 
 ### Guards (apply to both strong merges and weak suggestions)
 
-- **Gender gate** — reuse `gendersConflict`; two rows with conflicting _concrete_
-  genders produce neither a merge nor a suggestion. (Absent gender on either side
-  does not block, matching existing tiers.)
+- **Gender gate (per candidate edge)** — reuse `gendersConflict`; two rows with
+  conflicting _concrete_ genders produce neither a merge nor a suggestion.
+  Applied at the **edge** level, not the component level: a cross-gender link is
+  simply dropped, so an unrelated same-gender merge elsewhere in the same
+  connected component still proceeds (one bad cross-gender alias must not
+  suppress a valid merge). (Absent gender on either side does not block, matching
+  existing tiers.)
 - **Single-token mutuality gate** — the primary false-merge guard, described
   under "Strong signal" above: a bare-word name link auto-merges only when
   mutual, so a role-word-named minor is never directionally absorbed into a

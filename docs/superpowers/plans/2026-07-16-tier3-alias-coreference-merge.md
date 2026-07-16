@@ -15,6 +15,9 @@
 - **No signature change** to `dedupeRosterByName(characters, sentences, { language })` and no change to its return contract `{ characters, rewrites, suggestions }`. Both `analysis.ts` call sites (`:4264`, `:5360`) stay untouched.
 - **Hard ordering invariant (already satisfied, must not regress):** Tier-3 runs *before* `foldMinorCast` (call order in `analysis.ts`: `dedupAndPrepare` at `:4264`, then `foldMinorCast` at `:4305`). Never move Tier-3 after the fold — the fold rolls folded names into the `Unknown male/female` bucket aliases, which would become strong-edge magnets.
 - **`notLinkedTo` is NOT consulted** (it is cross-book only and absent on the fresh dedup roster — see spec Guards).
+- **Gender gate is PER EDGE (pair-level), not per component.** A cross-gender candidate link is dropped so a same-gender merge elsewhere in the same component still proceeds — matches the spec's "two rows … produce neither a merge nor a suggestion" wording. Never skip a whole component because one cross-gender edge exists (that silently blocks valid merges).
+- **Weak-suggestion alias evidence is the PRE-MERGE snapshot** (`t3aliases`, built before any strong merge), so a suggestion reflects the model's annotation, not aliases a strong merge accumulated onto a survivor.
+- **Test dependency (verified against the current table):** the exact-array `toEqual` suggestion assertions assume Tier-2b emits nothing for the chosen names. That holds today — `шеф/Анна/Рекс/Пёс/Алекс/Боб/Карл/Мэри` are absent from `ru-diminutives.ts`, and `Мария/Борис` only ever pair with a non-table name (so `!db` short-circuits). If a future table entry breaks this, relax the affected assertion to `length` + `objectContaining`, don't weaken the code.
 - **Never merge or remap onto `narrator`** — exclude `NARRATOR_ID` from all Tier-3 candidate sets.
 - **RTK/Immer & style:** match the surrounding file — inline tiers, module-scope pure helpers, `const`-first, no new deps.
 - **TDD, frequent commits.** Commit type `fix(server)` / `test(server)` (scope `server`); this fixes the duplicate-roster bug #1662.
@@ -132,7 +135,7 @@ describe('dedupeRosterByName Tier-3 (alias coreference — strong merge)', () =>
     expect(rev.characters[0].id).toBe('boris');
   });
 
-  it('leaves a component un-merged when it contains a gender conflict', () => {
+  it('does NOT merge a cross-gender pair even with a mutual link', () => {
     const chars = [
       c({ id: 'boss', name: 'шеф', gender: 'male', aliases: ['Борис Игнатьевич'] }),
       c({ id: 'boris', name: 'Борис Игнатьевич', gender: 'female', aliases: ['шеф'] }),
@@ -140,6 +143,20 @@ describe('dedupeRosterByName Tier-3 (alias coreference — strong merge)', () =>
     const r = dedupeRosterByName(chars as any, [...sent('boss'), ...sent('boris')]);
     expect(r.characters).toHaveLength(2);
     expect(r.rewrites).toEqual({});
+  });
+
+  it('pair-level gate: merges the same-gender pair, leaves the cross-gender member separate', () => {
+    const chars = [
+      c({ id: 'a', name: 'Алекс', gender: 'male', aliases: ['Боб'] }),
+      c({ id: 'b', name: 'Боб', gender: 'male', aliases: ['Алекс', 'Мэри'] }),
+      c({ id: 'm', name: 'Мэри', gender: 'female', aliases: ['Боб'] }),
+    ];
+    // a↔b (both male) is a mutual strong edge → merge. b↔m is gender-blocked, so
+    // one bad cross-gender edge must NOT suppress the valid a↔b merge.
+    const r = dedupeRosterByName(chars as any, [...sent('a', 5), ...sent('b', 40), ...sent('m', 5)]);
+    expect(r.characters).toHaveLength(2);
+    expect(r.rewrites).toEqual({ a: 'b' });
+    expect(r.characters.map((ch) => ch.id).sort()).toEqual(['b', 'm']);
   });
 });
 ```
@@ -195,7 +212,10 @@ and BEFORE the `// Collapse rewrites transitively` comment, insert:
   for (const ch of t3nodes) t3aliases.set(ch.id, aliasKeysOf(ch));
 
   // Union-find over strong edges (roster is tiny — plain find, no compression).
-  const parent = new Map<string, string>(t3nodes.map((ch) => [ch.id, ch.id]));
+  // The tuple annotation keeps `new Map<string,string>(...)` type-checking
+  // (a bare `[ch.id, ch.id]` infers as string[], not the [string,string] the
+  // Map ctor wants).
+  const parent = new Map<string, string>(t3nodes.map((ch): [string, string] => [ch.id, ch.id]));
   const find = (x: string): string => {
     let r = x;
     while (parent.get(r) !== r) r = parent.get(r)!;
@@ -207,10 +227,15 @@ and BEFORE the `// Collapse rewrites transitively` comment, insert:
     if (ra !== rb) parent.set(ra, rb);
   };
 
+  // Gender gate is PER EDGE (matches the spec's pair-level wording): a
+  // cross-gender candidate link is simply dropped, so an unrelated same-gender
+  // merge in the same component still proceeds. (Do NOT skip the whole
+  // component on one bad cross-gender edge — that silently blocks valid merges.)
   for (let i = 0; i < t3nodes.length; i++) {
     for (let j = i + 1; j < t3nodes.length; j++) {
       const x = t3nodes[i];
       const y = t3nodes[j];
+      if (gendersConflict(x.gender, y.gender)) continue;
       const linkXY = t3aliases.get(y.id)!.has(nameKeyOf(x)); // x's name ∈ y aliases
       const linkYX = t3aliases.get(x.id)!.has(nameKeyOf(y)); // y's name ∈ x aliases
       const mutual = linkXY && linkYX;
@@ -232,11 +257,13 @@ and BEFORE the `// Collapse rewrites transitively` comment, insert:
   const droppedT3 = new Set<string>();
   for (const members of t3components.values()) {
     if (members.length < 2) continue;
-    // Gender conflict in the component → leave it un-merged (mirrors Tier-1).
-    const genders = new Set(members.map((m) => m.gender).filter(Boolean));
-    if (genders.size > 1) continue;
+    // NOTE: no component-level gender check — the per-edge gate above already
+    // prevents a cross-gender pair from ever landing in the same component.
     // Survivor = most name tokens (prefer real name), then most lines, then
     // earliest roster order — deterministic regardless of union order.
+    // (Secondary line-count tiebreak can undercount a Tier-2a survivor whose
+    // victim's sentences aren't rewritten until dedupAndPrepare; only bites on a
+    // token-count tie, so it never changes which real name wins.)
     const ranked = members
       .map((m) => ({ m, idx: roster.indexOf(m), tok: tokens(m.name).length, ln: lines.get(m.id) ?? 0 }))
       .sort((a, b) => b.tok - a.tok || b.ln - a.ln || a.idx - b.idx);
@@ -282,7 +309,7 @@ git commit -m "fix(server): Tier-3 strong alias-coreference auto-merge (#1662)"
 - Test: `server/src/analyzer/roster-dedup.test.ts`
 
 **Interfaces:**
-- Consumes: the hoisted `suggestions` array, `rewrites`/reduced `roster`, and the Task-1 closures `nameKeyOf`/`aliasKeysOf`, plus module-scope `gendersConflict`, `lines`, `NARRATOR_ID`, `normaliseNameKey`.
+- Consumes: the hoisted `suggestions` array, the reduced `roster`, and the Task-1 bindings `nameKeyOf` and `t3aliases` (the pre-merge alias snapshot), plus module-scope `gendersConflict`, `lines`, `NARRATOR_ID`, `normaliseNameKey`.
 - Produces: appends `MergeSuggestion` entries (`{ sourceId, targetId, reason }`) to `suggestions` for one-sided single-token name links and shared third-party aliases that appear on exactly two surviving rows. Tier-2b continues appending to the same array afterward.
 
 - [ ] **Step 1: Write the failing tests**
@@ -362,11 +389,15 @@ In `server/src/analyzer/roster-dedup.ts`, immediately AFTER Task 1's `roster = r
   // shared third-party aliases surface as user-confirmable suggestions — but
   // only when the linking string is on exactly two surviving rows (3+ ⇒ generic
   // role word ⇒ nothing), keeping the cast page quiet.
+  //
+  // Alias sets here are the PRE-MERGE snapshot `t3aliases` (built above, before
+  // any strong merge), NOT the mutated survivor rows — so a "shared alias"
+  // suggestion reflects the model's own annotation and never fires on an alias
+  // a strong merge just accumulated onto a survivor. Dropped victims aren't
+  // iterated, so they never count toward rowCountOfKey.
   const t3survivors = roster.filter((ch) => ch.id !== NARRATOR_ID);
-  const survAliases = new Map<string, Set<string>>();
-  for (const ch of t3survivors) survAliases.set(ch.id, aliasKeysOf(ch));
   const rowCountOfKey = (key: string): number =>
-    t3survivors.filter((ch) => nameKeyOf(ch) === key || survAliases.get(ch.id)!.has(key)).length;
+    t3survivors.filter((ch) => nameKeyOf(ch) === key || t3aliases.get(ch.id)!.has(key)).length;
   const displayForKey = (ch: CharacterOutput, key: string): string | undefined =>
     normaliseNameKey(ch.name) === key
       ? ch.name
@@ -378,8 +409,8 @@ In `server/src/analyzer/roster-dedup.ts`, immediately AFTER Task 1's `roster = r
       const y = t3survivors[j];
       if (gendersConflict(x.gender, y.gender)) continue;
 
-      const linkXY = survAliases.get(y.id)!.has(nameKeyOf(x));
-      const linkYX = survAliases.get(x.id)!.has(nameKeyOf(y));
+      const linkXY = t3aliases.get(y.id)!.has(nameKeyOf(x));
+      const linkYX = t3aliases.get(x.id)!.has(nameKeyOf(y));
 
       let key: string | undefined;
       let display: string | undefined;
@@ -389,7 +420,7 @@ In `server/src/analyzer/roster-dedup.ts`, immediately AFTER Task 1's `roster = r
         display = linkXY ? x.name : y.name;
       } else {
         // Shared third-party alias (neither name links the other).
-        const shared = [...survAliases.get(x.id)!].find((k) => survAliases.get(y.id)!.has(k));
+        const shared = [...t3aliases.get(x.id)!].find((k) => t3aliases.get(y.id)!.has(k));
         if (shared) {
           key = shared;
           display = displayForKey(x, shared) ?? displayForKey(y, shared) ?? shared;
@@ -525,7 +556,7 @@ git commit -m "docs(server): release notes + cast-view comment for Tier-3 alias 
 - Survivor prefers real name → Task 1 tests "real name survives", "prefers real name over higher-line role word". ✅
 - Transitive component collapse → Task 1 test "linked only transitively". ✅
 - Stable survivor regardless of order → Task 1 test "same survivor regardless of roster order". ✅
-- Gender gate (merge + suggestion) → Task 1 "gender conflict" + Task 2 "NO suggestion across a gender conflict". ✅
+- Gender gate (per-edge, merge + suggestion) → Task 1 "does NOT merge a cross-gender pair" + "pair-level gate: merges the same-gender pair, leaves the cross-gender member separate" + Task 2 "NO suggestion across a gender conflict". ✅
 - Weak distinctive suggestion, exactly-2-rows, 3+ ⇒ none → Task 2 four cases. ✅
 - Shared third-party alias branch → Task 2 "shared third-party alias" + its 3-row negative. ✅
 - `notLinkedTo` not consulted / no signature change → Global Constraints + no `analysis.ts` edits. ✅
@@ -535,4 +566,4 @@ git commit -m "docs(server): release notes + cast-view comment for Tier-3 alias 
 
 **2. Placeholder scan:** No TBD/TODO/"handle edge cases"/"similar to Task N". Every code step shows full code; every run step shows an exact command + expected result. The one discovery step (Task 3 step 3, "find the top-most in-progress version section") gives concrete content to insert — the heading is environment-specific and must be located at implementation time, not guessed.
 
-**3. Type consistency:** `nameKeyOf`, `aliasKeysOf`, `find`, `union`, `t3nodes`, `t3aliases`, `parent`, `droppedT3`, `t3survivors`, `survAliases`, `rowCountOfKey`, `displayForKey`, and the hoisted `suggestions` are defined in Task 1 and reused with identical names/signatures in Task 2. `MergeSuggestion` shape `{ sourceId, targetId, reason }` matches the existing interface in `roster-dedup.ts`. `tokens`, `gendersConflict`, `mergeCharacterFields`, `normaliseNameKey`, `lines`, `NARRATOR_ID` are consumed exactly as they exist in the file. ✅
+**3. Type consistency:** `nameKeyOf`, `aliasKeysOf`, `find`, `union`, `t3nodes`, `t3aliases`, `parent`, `droppedT3`, and the hoisted `suggestions` are defined in Task 1; Task 2 adds `t3survivors`, `rowCountOfKey`, `displayForKey` and reuses `t3aliases`/`nameKeyOf`/`gendersConflict`/`lines` with identical names/signatures. `parent` is initialized with an explicit `[string, string]` tuple annotation so `new Map<string, string>(...)` type-checks. `MergeSuggestion` shape `{ sourceId, targetId, reason }` matches the existing interface in `roster-dedup.ts`. `tokens`, `gendersConflict`, `mergeCharacterFields`, `normaliseNameKey`, `lines`, `NARRATOR_ID` are consumed exactly as they exist in the file. ✅
