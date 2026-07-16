@@ -105,6 +105,24 @@ export function hasAttributableContent(text: string): boolean {
   return words(text).length > 0;
 }
 
+/** How many attributable words this prose normalises to (see {@link words}). */
+export function attributableWordCount(text: string): number {
+  return words(text).length;
+}
+
+/* Below this many normalised source words a span is too small for the coverage
+   RATIO to be a reliable signal: a handful of stray or looped output words blows
+   the ratio past `maxCoverageRatio` even though nothing is wrong. The 2026-07-16
+   Ночной дозор ch6 defect: an internal heading "Глава 4" (2 source words) was
+   isolated as its own chunk between two over-budget paragraphs; the model looped
+   on the near-empty span → 1405 output words vs ~2 source → ratio 702.50, so the
+   excess-coverage guard rejected it on every retry and the chapter stuck, then
+   flagged. Such a span is treated as ratio-un-evaluable here (a genuine loop is
+   still caught by the duplicated-block signal, an empty result by the
+   no-sentences check). The stage-2 chunker uses the SAME floor to MERGE a
+   fragment-sized chunk into an adjacent one so it is never attributed alone. */
+export const STAGE2_MIN_EVALUABLE_WORDS = 5;
+
 /** Largest contiguous run of sentences whose normalised text repeats an earlier
     sentence's text at a CONSTANT offset (the loop signature). */
 function findDuplicatedBlock(
@@ -154,15 +172,19 @@ export function validateStage2Coverage(
   const bodyWords = words(bodyText);
   const outWords = sentences.flatMap((s) => words(s.text));
 
-  /* A source that normalises to zero words is UN-EVALUABLE — there is nothing
-     to under- or over-cover, so the ratio is meaningless and must not gate. The
-     old code forced ratio 0 and let `0 < minCoverage` flag it "truncated" on
-     every retry → a permanent stuck loop on a word-free span (2026-06-19
-     Ночной дозор ch7: a lone "***" chunk; cf. the 2026-06-15 Cyrillic case the
-     module header records). An empty OUTPUT is still caught below via the
-     "No sentences attributed" check, so a genuinely empty result never slips. */
-  const sourceEvaluable = bodyWords.length > 0;
-  const coverageRatio = sourceEvaluable ? outWords.length / bodyWords.length : 0;
+  /* A source with too few words is UN-EVALUABLE for the coverage RATIO — the
+     denominator is meaningless, so a handful of stray or looped output words
+     blows past `maxCoverageRatio` and it must not gate. Two shapes hit this: a
+     ZERO-word span (a lone "***" scene break — the 2026-06-19 Ночной дозор ch7
+     stuck loop; cf. the 2026-06-15 Cyrillic case in the module header), and a
+     tiny NONZERO span (an isolated "Глава 4" heading — the 2026-07-16 Ночной
+     дозор ch6 stuck loop, 1405 output words vs ~2 source → ratio 702.50). Below
+     `STAGE2_MIN_EVALUABLE_WORDS` the ratio is suppressed; a genuine loop is
+     still caught by the duplicated-block signal and an empty OUTPUT by the "No
+     sentences attributed" check, so nothing broken slips. The ratio itself is
+     still reported (informative in logs) — only the pass/fail gate is skipped. */
+  const sourceEvaluable = bodyWords.length >= STAGE2_MIN_EVALUABLE_WORDS;
+  const coverageRatio = bodyWords.length > 0 ? outWords.length / bodyWords.length : 0;
 
   // Ending present: do the source's trailing words appear (contiguously) in the
   // attributed word stream?

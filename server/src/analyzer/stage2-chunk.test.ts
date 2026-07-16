@@ -276,6 +276,34 @@ describe('runStage2ChapterChunked', () => {
     expect(out.coverage.ok).toBe(true);
   });
 
+  it('merges a tiny heading chunk into a neighbour instead of attributing it alone', async () => {
+    /* Regression (2026-07-16 Ночной дозор ch6): an internal chapter heading
+       "Глава 4", trapped as its own paragraph between two over-budget
+       paragraphs, was isolated by splitBodyIntoChunks as a standalone chunk.
+       Unlike a word-free "***" (skipped), it normalises to 2 words — nonzero,
+       so it slipped the skip guard and was sent to the model ALONE. The model
+       looped on the near-empty span, producing 1405 output words vs ~2 source
+       (ratio 702.50 → "repeat-loop") and the chapter stuck on every retry, then
+       flagged. A tiny prose fragment must ride with an adjacent chunk — its text
+       PRESERVED (it is a heading, not a scene break) — never attributed alone. */
+    const big1 = 'Word '.repeat(40).trim();
+    const big2 = 'Other text here '.repeat(20).trim();
+    const body = `${big1}\n\nГлава 4\n\n${big2}`;
+    const call = vi.fn(async (subBody: string, _preceding: string | null) => fakeAttribute(subBody));
+    const out = await runStage2ChapterChunked({
+      body,
+      charBudget: 100, // both real paragraphs over budget → heading isolated
+      coverageRetries: 2,
+      callForBody: call,
+    });
+    // The tiny heading is never sent to the model as its own span.
+    expect(call.mock.calls.some(([sub]) => sub.trim() === 'Глава 4')).toBe(false);
+    // But its text is preserved (merged into a neighbour, not dropped like ***).
+    expect(out.sentences.some((s) => s.text.includes('Глава 4'))).toBe(true);
+    // And the chapter completes cleanly — no stuck coverage loop.
+    expect(out.coverage.ok).toBe(true);
+  });
+
   it('retries a chunk whose first attempt has low coverage', async () => {
     const body = makeBody(8);
     const onRetry = vi.fn();
@@ -315,7 +343,13 @@ describe('runStage2ChapterChunked', () => {
 
 describe('onSectionDone', () => {
   it('fires once per section with the section sentence count (multi-chunk)', async () => {
-    const body = 'A'.repeat(50) + '\n\n' + 'B'.repeat(50); // 2 paragraphs
+    /* Two REAL multi-word paragraphs (not single-token blobs like 'A'*50, which
+       normalise to one word and would be merged as fragments by mergeTinyChunks)
+       so the budget forces a genuine 2-section split. */
+    const body =
+      'Alpha alpha words here for the first section.' +
+      '\n\n' +
+      'Beta beta words here for the second section.';
     const calls: Array<[number, number]> = [];
     await runStage2ChapterChunked({
       body,
@@ -323,7 +357,7 @@ describe('onSectionDone', () => {
       coverageRetries: 0,
       callForBody: async (sub) => ({
         // 2 sentences for the first span, 3 for the second — distinguishable
-        sentences: (sub.includes('A') ? [1, 2] : [1, 2, 3]).map((id) => ({
+        sentences: (sub.includes('Alpha') ? [1, 2] : [1, 2, 3]).map((id) => ({
           id,
           chapterId: 1,
           characterId: 'narrator',

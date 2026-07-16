@@ -31,6 +31,8 @@ import {
   runStage2WithCoverageGuard,
   validateStage2Coverage,
   hasAttributableContent,
+  attributableWordCount,
+  STAGE2_MIN_EVALUABLE_WORDS,
   type Stage2CoverageThresholds,
   type Stage2CoverageVerdict,
 } from './stage2-coverage.js';
@@ -73,13 +75,51 @@ export function resolveStage2ChunkCharBudget(engine?: 'gemini' | 'local'): numbe
   );
 }
 
+/** Fold a fragment-sized chunk — one with a NONZERO but sub-`STAGE2_MIN_EVALUABLE_WORDS`
+    attributable-word count, e.g. a lone heading "Глава 4" — into an adjacent
+    chunk so it is never attributed as its own model call. Such a fragment gets
+    isolated when it sits between two over-budget paragraphs the packing loop
+    can't co-locate it with; alone, its tiny word count makes the coverage guard
+    un-evaluable and the model tends to loop on the near-empty span, sticking the
+    chapter on every retry (the 2026-07-16 Ночной дозор ch6 defect: 1405 output
+    words vs ~2 source → ratio 702.50). Unlike a WORD-FREE separator ("***"),
+    which has nothing to narrate and is skipped downstream, a fragment carries
+    real words (a heading) and is PRESERVED — merged forward into the next chunk
+    when there is one (a heading reads best leading its section), else back into
+    the previous. Merging only concatenates adjacent chunks, so `chunks.join('')`
+    still reproduces the body exactly; word-free chunks are left in place. */
+function mergeTinyChunks(chunks: string[]): string[] {
+  if (chunks.length <= 1) return chunks;
+  const isTinyFragment = (c: string): boolean => {
+    const wc = attributableWordCount(c);
+    return wc >= 1 && wc < STAGE2_MIN_EVALUABLE_WORDS;
+  };
+  const work = [...chunks];
+  const out: string[] = [];
+  for (let i = 0; i < work.length; i += 1) {
+    if (isTinyFragment(work[i]) && i + 1 < work.length) {
+      work[i + 1] = work[i] + work[i + 1]; // forward-merge into the next chunk
+    } else {
+      out.push(work[i]);
+    }
+  }
+  // A fragment that was LAST had no following chunk to join — fold it (and any
+  // fragment that merging left trailing) back into the previous chunk instead.
+  while (out.length >= 2 && isTinyFragment(out[out.length - 1])) {
+    out[out.length - 2] += out.pop()!;
+  }
+  return out;
+}
+
 /** Split `body` into chunks at blank-line (paragraph) boundaries, each ≤
     `charBudget` where possible. NEVER splits inside a paragraph (so a quote and
     its dialogue tag stay in the same call). A single paragraph longer than the
     budget becomes its own chunk — it can't be split without cutting a sentence.
-    Concatenating the returned chunks reproduces `body` exactly (the blank-line
-    separators ride along with the paragraph before them), so no prose is dropped
-    or duplicated across the seam. Returns `[body]` unchanged when it fits. */
+    A fragment-sized chunk (a lone heading) is merged into a neighbour rather
+    than left to stand alone (see {@link mergeTinyChunks}). Concatenating the
+    returned chunks reproduces `body` exactly (the blank-line separators ride
+    along with the paragraph before them), so no prose is dropped or duplicated
+    across the seam. Returns `[body]` unchanged when it fits. */
 export function splitBodyIntoChunks(body: string, charBudget: number): string[] {
   if (body.length <= charBudget) return [body];
   /* Capture the separators so reconstruction is lossless: split() with a
@@ -101,7 +141,7 @@ export function splitBodyIntoChunks(body: string, charBudget: number): string[] 
     }
   }
   if (cur) chunks.push(cur);
-  return chunks.length > 0 ? chunks : [body];
+  return mergeTinyChunks(chunks.length > 0 ? chunks : [body]);
 }
 
 /** Split a SINGLE paragraph (no blank-line boundaries) at sentence boundaries,
