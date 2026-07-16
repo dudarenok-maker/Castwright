@@ -1495,12 +1495,20 @@ ${chapter.body}
 `;
 }
 
-function buildStage2ChapterInbox(
+export function buildStage2ChapterInbox(
   manuscriptId: string,
   title: string,
   stage1: Stage1Output,
   chapter: { id: number; title: string; body: string },
+  firstPersonId: string | null,
 ): string {
+  const firstPersonBlock = firstPersonId
+    ? `## First-person narrator
+
+This manuscript is narrated in the FIRST PERSON. Every first-person pronoun («я», «меня», «мне», «мной», «мы») refers to character id \`${firstPersonId}\`. Attribute first-person narration and any first-person spoken line to \`${firstPersonId}\` UNLESS a dialogue tag explicitly names a different speaker. Never route a first-person line to another character merely because that character is prominent nearby.
+
+`
+    : '';
   return `---
 manuscriptId: ${manuscriptId}
 stage: 2
@@ -1537,7 +1545,7 @@ ${JSON.stringify(
 )}
 \`\`\`
 
-## Chapter ${chapter.id} — ${chapter.title}
+${firstPersonBlock}## Chapter ${chapter.id} — ${chapter.title}
 
 ${chapter.body}
 `;
@@ -1549,13 +1557,14 @@ ${chapter.body}
    untagged quote keeps its speaker across the seam. The model must attribute
    ONLY the section, not the context. The chunk runner renumbers ids across
    sections, so per-section 1-based numbering is fine. */
-function buildStage2ChunkInbox(
+export function buildStage2ChunkInbox(
   manuscriptId: string,
   title: string,
   stage1: Stage1Output,
   chapter: { id: number; title: string; body: string },
   subBody: string,
   precedingContext: string | null,
+  firstPersonId: string | null,
 ): string {
   const contextBlock = precedingContext
     ? `## Preceding context (already attributed — do NOT include in your output)
@@ -1565,6 +1574,13 @@ ONLY so you can carry a speaker across the boundary (e.g. an untagged quote
 whose speaker was named just before). Do NOT emit any sentences for this text.
 
 ${precedingContext}
+
+`
+    : '';
+  const firstPersonBlock = firstPersonId
+    ? `## First-person narrator
+
+This manuscript is narrated in the FIRST PERSON. Every first-person pronoun («я», «меня», «мне», «мной», «мы») refers to character id \`${firstPersonId}\`. Attribute first-person narration and any first-person spoken line to \`${firstPersonId}\` UNLESS a dialogue tag explicitly names a different speaker. Never route a first-person line to another character merely because that character is prominent nearby.
 
 `
     : '';
@@ -1602,7 +1618,7 @@ ${JSON.stringify(
 )}
 \`\`\`
 
-${contextBlock}## Section to attribute (Chapter ${chapter.id} — ${chapter.title})
+${contextBlock}${firstPersonBlock}## Section to attribute (Chapter ${chapter.id} — ${chapter.title})
 
 ${subBody}
 `;
@@ -1688,10 +1704,19 @@ export async function attributeChapterStage2(opts: {
      consulted when `analyzer.structure.escalation === 'cloud'`. */
   escalationAnalyzer?: Analyzer | null;
 }): Promise<Stage2ChunkRunResult> {
+  /* RC3 — thread the known first-person narrator id into the stage-2 prompt
+     itself (not just the deterministic structure engine below) so the model
+     doesn't need to infer «я» from role/prominence alone. Computed once per
+     chapter, independent of the `analyzer.structure.enabled` gate that guards
+     the deterministic engine's own (separate) computation further down. */
+  const fpConventions = conventionsFor(opts.stageCall.language);
+  const firstPersonId = fpConventions
+    ? findFirstPersonCharacter(opts.stage1.characters, fpConventions)
+    : null;
   const callForBody = (subBody: string, preceding: string | null) => {
     const prompt =
       preceding === null && subBody === opts.chapter.body
-        ? buildStage2ChapterInbox(opts.manuscriptId, opts.title, opts.stage1, opts.chapter)
+        ? buildStage2ChapterInbox(opts.manuscriptId, opts.title, opts.stage1, opts.chapter, firstPersonId)
         : buildStage2ChunkInbox(
             opts.manuscriptId,
             opts.title,
@@ -1699,6 +1724,7 @@ export async function attributeChapterStage2(opts: {
             opts.chapter,
             subBody,
             preceding,
+            firstPersonId,
           );
     return opts.analyzer.runStage2Chapter(
       opts.manuscriptId,
