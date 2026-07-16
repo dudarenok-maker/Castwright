@@ -23,6 +23,7 @@ import { uiSlice, uiActions } from '../store/ui-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { castSlice } from '../store/cast-slice';
+import { accountSlice } from '../store/account-slice';
 import type { Toast } from '../store/notifications-slice';
 import { TOUR_STEPS } from '../lib/tour-steps';
 import { ManuscriptView, isExcludedSentenceId } from './manuscript';
@@ -1084,6 +1085,56 @@ describe('ManuscriptView — script-review planApply quarantine at seed', () => 
       },
     });
   }
+
+  /* srv-48 regression — the script-review trigger must POST the user's
+     CONFIGURED analyzer model (Account → Defaults → Analysis model), not a
+     hardcoded Gemini model. The prior code shipped `const REVIEW_MODEL =
+     'gemma-4-31b-it'` (a Gemini id), which overrode the local engine on the
+     server for EVERY review — so a local-analyzer user's script-review
+     silently ran on Gemini (and wedged on a stale cloud model). This pins
+     that the local Ollama model flows through to api.reviewScript. */
+  it('passes the configured local Ollama analyzer model to reviewScript (not a hardcoded Gemini model)', async () => {
+    const user = userEvent.setup();
+    reviewScript.mockResolvedValue(undefined);
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+        account: accountSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: { ...manuscriptSlice.getInitialState(), sentences: [liveSentence] as never },
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: { kind: 'ready', bookId: 'bk-1', view: 'manuscript', currentChapterId: 1, openProfileId: null } as never,
+        },
+        account: { ...accountSlice.getInitialState(), defaultAnalysisModel: 'gemma4-e4b-8gb:latest' },
+      },
+    });
+
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[quarantineChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[liveSentence]}
+        />
+      </Provider>,
+    );
+
+    await user.click(screen.getByTestId('review-script-chapter'));
+
+    await waitFor(() => expect(reviewScript).toHaveBeenCalled());
+    const opts = reviewScript.mock.calls[0][1] as { model?: string };
+    expect(opts.model).toBe('gemma4-e4b-8gb:latest');
+    /* Guard against the fs-58 Unit-A regression re-appearing. */
+    expect(opts.model).not.toBe('gemma-4-31b-it');
+  });
 
   it('seeds ops with only resolvable ops; stale-id op goes to unappliable', async () => {
     const user = userEvent.setup();
