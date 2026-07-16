@@ -520,11 +520,12 @@ export function AnalysingView({
             if (cancelled) return;
             setConn('streaming');
             markEvent();
-            /* Merge into the cast slice so the cast view (and Phase 0
-               live preview below) reflect the chapter-by-chapter roster
-               as it grows. Replay-safe — late-arriving snapshots upsert
-               by id, preserving locked voices on existing entries. */
-            dispatch(castActions.mergeCharacters(characters));
+            /* Replace the cast slice with each full roster snapshot so the
+               cast view (and Phase 0 live preview below) mirror the server's
+               already-deduped, verifier-pruned roster exactly — no stale
+               same-name dups or verifier-dropped names lingering. Replay-safe
+               — snapshots upsert by id, preserving locked voices on survivors. */
+            dispatch(castActions.replaceLiveRoster(characters));
           },
           onChapterFailed: ({ chapterId, message, code, remediation }) => {
             if (cancelled) return;
@@ -838,7 +839,9 @@ export function AnalysingView({
         },
         onCastUpdate: ({ characters }) => {
           markEvent();
-          dispatch(castActions.mergeCharacters(characters));
+          /* Full roster snapshot — replace, don't accumulate (see the other
+             onCastUpdate handler above and replaceLiveRoster's rationale). */
+          dispatch(castActions.replaceLiveRoster(characters));
         },
         onChapterFailed: ({ chapterId: failedId, message, code, remediation }) => {
           markEvent();

@@ -25,6 +25,29 @@ function unionAliases(a?: string[], b?: string[]): string[] | undefined {
   return out.length ? out : undefined;
 }
 
+/* Overlay locally-known voice / design fields onto a fresh analyser-snapshot
+   entry, matched by id. The analyser doesn't know about the user's voice
+   matches, designed Qwen voices, "not the same person" decisions or manually-
+   added aliases, so a live roster snapshot must never clobber them (#518 —
+   Berrin/Sela/Quill stripped on re-analysis; srv-13). Shared by both the
+   delta-merge (`mergeCharacters`) and full-snapshot-replace (`replaceLiveRoster`)
+   paths so the preservation rules can't drift between them. */
+function overlaySnapshotEntry(existing: Character | undefined, inc: Character): Character {
+  if (!existing) return inc.voiceState ? inc : { ...inc, voiceState: 'generated' };
+  return {
+    ...inc,
+    voiceId: existing.voiceId ?? inc.voiceId,
+    matchedFrom: existing.matchedFrom ?? inc.matchedFrom,
+    matchFactors: existing.matchFactors ?? inc.matchFactors,
+    voiceState: existing.voiceState ?? inc.voiceState ?? 'generated',
+    overrideTtsVoices: existing.overrideTtsVoices ?? inc.overrideTtsVoices,
+    ttsEngine: existing.ttsEngine ?? inc.ttsEngine,
+    voiceStyle: existing.voiceStyle ?? inc.voiceStyle,
+    notLinkedTo: existing.notLinkedTo ?? inc.notLinkedTo,
+    aliases: unionAliases(existing.aliases, inc.aliases),
+  };
+}
+
 export interface CastState {
   characters: Character[];
   /** fe-16 — characterId → engine the character actually rendered in when it
@@ -201,42 +224,36 @@ export const castSlice = createSlice({
       const next: Character[] = [];
       const seen = new Set<string>();
       for (const inc of incoming) {
-        const existing = byId.get(inc.id);
-        if (existing) {
-          /* Preserve voice matching / design fields from the local entry —
-             those came from voice matching or the user's voice design and must
-             NOT be clobbered by an analyser snapshot that doesn't know about
-             them. `overrideTtsVoices` holds the designed Qwen voice for
-             generated characters (no voiceId); omitting it here dropped the
-             voice in Redux and a later cast persist wrote it out of cast.json
-             (#518 — Berrin/Sela/Quill stripped on re-analysis). */
-          next.push({
-            ...inc,
-            voiceId: existing.voiceId ?? inc.voiceId,
-            matchedFrom: existing.matchedFrom ?? inc.matchedFrom,
-            matchFactors: existing.matchFactors ?? inc.matchFactors,
-            voiceState: existing.voiceState ?? inc.voiceState ?? 'generated',
-            overrideTtsVoices: existing.overrideTtsVoices ?? inc.overrideTtsVoices,
-            ttsEngine: existing.ttsEngine ?? inc.ttsEngine,
-            voiceStyle: existing.voiceStyle ?? inc.voiceStyle,
-            /* The user's "not the same person" decision and any manually-added
-               aliases must survive a live Phase-0a roster snapshot (srv-13). */
-            notLinkedTo: existing.notLinkedTo ?? inc.notLinkedTo,
-            aliases: unionAliases(existing.aliases, inc.aliases),
-          });
-        } else {
-          next.push(inc.voiceState ? inc : { ...inc, voiceState: 'generated' });
-        }
+        next.push(overlaySnapshotEntry(byId.get(inc.id), inc));
         seen.add(inc.id);
       }
       /* Carry forward any locally-known characters the snapshot omitted.
-         Defensive — Phase 0a sends the full roster on every event so this
-         set should always be empty in practice, but keeps the slice safe
-         against future delta-style updates. */
+         REQUIRED for the generation-time SUBSET path (generation.tsx feeds
+         a single re-analysed chapter's characters here), which is a genuine
+         delta — dropping the untouched rows would wipe the rest of the cast.
+         The full-roster analysis live view uses `replaceLiveRoster` instead. */
       for (const c of s.characters) {
         if (!seen.has(c.id)) next.push(c);
       }
       s.characters = next;
+    },
+    /* Full-roster snapshot from Phase-0a live cast detection (analysis view).
+       Unlike `mergeCharacters`, this REPLACES the roster with the snapshot —
+       rows absent from the snapshot are DROPPED, not carried forward. The
+       server's live snapshots are already name-deduped and verifier-pruned
+       (previewFoldForLiveView), so faithfully mirroring each one keeps the
+       "Cast so far" pills free of two display artefacts the carry-forward
+       loop caused: (a) same-name duplicates left behind when a Tier-1 merge
+       re-keys a survivor's id mid-stream (the earlier singleton id lingers),
+       and (b) characters the verifier later dropped resurrecting on every
+       later event. Voice / design fields are still preserved by id-match for
+       any surviving row (#518 / srv-13). No-op on an empty snapshot so a stray
+       empty event can't wipe a populated roster. */
+    replaceLiveRoster: (s, a: PayloadAction<Character[]>) => {
+      const incoming = a.payload;
+      if (!incoming?.length) return;
+      const byId = new Map(s.characters.map((c) => [c.id, c]));
+      s.characters = incoming.map((inc) => overlaySnapshotEntry(byId.get(inc.id), inc));
     },
     /* From POST /api/books/:bookId/cast/merge — replaces the local cast
        with the server's merged list. The server is authoritative because

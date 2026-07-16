@@ -356,6 +356,75 @@ describe('castSlice — mergeCharacters (Phase 0a live cast snapshots)', () => {
   });
 });
 
+describe('castSlice — replaceLiveRoster (Phase 0a full-snapshot replace)', () => {
+  it('drops locally-known characters the snapshot omits (verifier-dropped names do not resurrect)', () => {
+    /* "Светлане" / "Как" were detected early then dropped by the verifier;
+       a later full snapshot omits them and they must NOT linger in the pills. */
+    const start = baseState([
+      makeChar('svetlana', { name: 'Светлана' }),
+      makeChar('svetlane', { name: 'Светлане' }),
+      makeChar('kak', { name: 'Как' }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.replaceLiveRoster([makeChar('svetlana', { name: 'Светлана' })]),
+    );
+    expect(next.characters.map((c) => c.id)).toEqual(['svetlana']);
+  });
+
+  it('collapses a same-name id-flip to the single snapshot row', () => {
+    /* The earlier singleton "Ольга" was emitted under a raw id; once a Tier-1
+       group formed the server re-keyed the survivor to a canonical id. The
+       stale singleton id must not survive as a duplicate pill. */
+    const start = baseState([makeChar('ольга-2', { name: 'Ольга' })]);
+    const next = castSlice.reducer(
+      start,
+      castActions.replaceLiveRoster([makeChar('ольга', { name: 'Ольга' })]),
+    );
+    expect(next.characters.map((c) => c.id)).toEqual(['ольга']);
+    expect(next.characters.filter((c) => c.name === 'Ольга')).toHaveLength(1);
+  });
+
+  it('preserves locked voice / designed-Qwen fields by id-match on a surviving row (#518)', () => {
+    const start = baseState([
+      makeChar('wren', {
+        voiceState: 'locked',
+        voiceId: 'v_wren_from_book1',
+        matchedFrom: { bookTitle: 'KOTC #1', confidence: 0.94 },
+        overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+      }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.replaceLiveRoster([
+        { id: 'wren', name: 'Wren Sparrow', role: 'protagonist', color: 'orange', description: 'richer' },
+      ]),
+    );
+    const wren = next.characters.find((c) => c.id === 'wren')!;
+    expect(wren.voiceId).toBe('v_wren_from_book1');
+    expect(wren.voiceState).toBe('locked');
+    expect(wren.matchedFrom).toEqual({ bookTitle: 'KOTC #1', confidence: 0.94 });
+    expect(wren.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-wren' } });
+    expect(wren.name).toBe('Wren Sparrow'); // fresh fields still flow through
+  });
+
+  it('mirrors the snapshot order and defaults voiceState for brand-new rows', () => {
+    const start = baseState([makeChar('narrator')]);
+    const next = castSlice.reducer(
+      start,
+      castActions.replaceLiveRoster([makeChar('narrator'), makeChar('wren'), makeChar('marlow')]),
+    );
+    expect(next.characters.map((c) => c.id)).toEqual(['narrator', 'wren', 'marlow']);
+    expect(next.characters.find((c) => c.id === 'wren')!.voiceState).toBe('generated');
+  });
+
+  it('is a no-op for an empty snapshot (a stray empty event must not wipe the roster)', () => {
+    const start = baseState([makeChar('wren')]);
+    const next = castSlice.reducer(start, castActions.replaceLiveRoster([]));
+    expect(next.characters).toEqual(start.characters);
+  });
+});
+
 describe('castSlice — applyMerge (manual character merge response)', () => {
   it('replaces the local cast with the server payload while preserving local voice state on survivors', () => {
     /* User had locked the target's voice in a prior session. The server's
