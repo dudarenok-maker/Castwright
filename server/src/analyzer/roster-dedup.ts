@@ -2,6 +2,7 @@ import type { CharacterOutput } from '../handoff/schemas.js';
 import { safeId, normaliseNameKey } from '../util/safe-id.js';
 import { mergeCharacterFields } from './roster-merge-fields.js';
 import { diminutiveCanonical } from './ru-diminutives.js';
+import { conventionsFor } from './dialogue-structure/lang/index.js';
 
 export interface MergeSuggestion { sourceId: string; targetId: string; reason: string }
 
@@ -49,7 +50,7 @@ export function composeRewrites(
 export function dedupeRosterByName(
   characters: CharacterOutput[],
   sentences: ReadonlyArray<{ characterId: string }>,
-  _opts: { language?: string } = {},
+  opts: { language?: string } = {},
 ): { characters: CharacterOutput[]; rewrites: Record<string, string>; suggestions: MergeSuggestion[] } {
   const lines = lineCounts(sentences);
   const rewrites: Record<string, string> = {};
@@ -174,6 +175,16 @@ export function dedupeRosterByName(
   const suggestions: MergeSuggestion[] = [];
 
   const nameKeyOf = (ch: CharacterOutput): string => normaliseNameKey(ch.name);
+
+  // A "character" whose NAME is the language's bare first-person pronoun (the
+  // model rostering «Я»/«I» as its own entity) is never real — it's the
+  // narrator-protagonist's self-reference. Force it to a STRONG edge so it
+  // merges into whichever real character claims that pronoun as an alias,
+  // overriding the single-token weak-link gate that protects role-word minors.
+  const firstPersonRx = conventionsFor(opts.language)?.pronouns.firstPerson ?? null;
+  const isFirstPersonName = (ch: CharacterOutput): boolean =>
+    firstPersonRx !== null && firstPersonRx.test(` ${nameKeyOf(ch)} `);
+
   const aliasKeysOf = (ch: CharacterOutput): Set<string> =>
     new Set((ch.aliases ?? []).map((a) => normaliseNameKey(a)).filter(Boolean));
 
@@ -211,8 +222,8 @@ export function dedupeRosterByName(
       const mutual = linkXY && linkYX;
       const strong =
         mutual ||
-        (linkXY && tokens(x.name).length >= 2) ||
-        (linkYX && tokens(y.name).length >= 2);
+        (linkXY && (tokens(x.name).length >= 2 || isFirstPersonName(x))) ||
+        (linkYX && (tokens(y.name).length >= 2 || isFirstPersonName(y)));
       if (strong) union(x.id, y.id);
     }
   }
@@ -266,6 +277,16 @@ export function dedupeRosterByName(
     }
   }
   roster = roster.filter((ch) => !droppedT3.has(ch.id));
+
+  // Fallback: a bare first-person-pronoun character that STILL stands (no
+  // roster peer aliased it above) is never a real character — route it and its
+  // lines to the narrator rather than leave a pronoun masquerading as a
+  // speaker. Terminal rewrite (→ narrator), so ordering vs the collapse below
+  // is irrelevant. Guarantees "no bare-pronoun row survives" unconditionally.
+  for (const ch of roster) {
+    if (ch.id !== NARRATOR_ID && isFirstPersonName(ch)) rewrites[ch.id] = NARRATOR_ID;
+  }
+  roster = roster.filter((ch) => ch.id === NARRATOR_ID || !isFirstPersonName(ch));
 
   // ── Tier-3 weak suggestions: distinctive overlap on EXACTLY two rows ──────
   // One-sided single-token name links (that failed the mutuality gate) and
