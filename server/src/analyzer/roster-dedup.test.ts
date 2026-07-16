@@ -215,3 +215,59 @@ describe('dedupeRosterByName Tier-3 (alias coreference — strong merge)', () =>
     expect(r.characters.map((ch) => ch.id).sort()).toEqual(['b', 'm']);
   });
 });
+
+describe('dedupeRosterByName Tier-3 (alias coreference — weak suggestions)', () => {
+  it('suggests (does not merge) a one-sided bare-word link on exactly two rows', () => {
+    const chars = [
+      c({ id: 'boss', name: 'шеф', gender: 'male' }),
+      c({ id: 'boris', name: 'Борис Игнатьевич', gender: 'male', aliases: ['шеф'] }),
+    ];
+    const r = dedupeRosterByName(chars as any, [...sent('boss', 3), ...sent('boris', 30)]);
+    expect(r.characters).toHaveLength(2);
+    expect(r.rewrites).toEqual({});
+    expect(r.suggestions).toEqual([
+      { sourceId: 'boss', targetId: 'boris', reason: expect.any(String) },
+    ]);
+  });
+
+  it('emits NO suggestion when the bare word is on three or more rows', () => {
+    const chars = [
+      c({ id: 'boss', name: 'шеф', gender: 'male' }),
+      c({ id: 'boris', name: 'Борис Игнатьевич', gender: 'male', aliases: ['шеф'] }),
+      c({ id: 'ivan', name: 'Иван', gender: 'male', aliases: ['шеф'] }),
+    ];
+    const r = dedupeRosterByName(chars as any, [...sent('boss'), ...sent('boris'), ...sent('ivan')]);
+    expect(r.suggestions).toEqual([]);
+  });
+
+  it('suggests a shared third-party alias on exactly two rows (neither name-linked)', () => {
+    const chars = [
+      c({ id: 'a', name: 'Анна', gender: 'female', aliases: ['Жница'] }),
+      c({ id: 'b', name: 'Мария', gender: 'female', aliases: ['Жница'] }),
+    ];
+    const r = dedupeRosterByName(chars as any, [...sent('a', 10), ...sent('b', 4)]);
+    expect(r.characters).toHaveLength(2);
+    expect(r.suggestions).toEqual([
+      { sourceId: 'b', targetId: 'a', reason: expect.stringContaining('Жница') },
+    ]);
+  });
+
+  it('emits NO suggestion when a shared alias is on three or more rows', () => {
+    const chars = [
+      c({ id: 'a', name: 'Анна', gender: 'female', aliases: ['Жница'] }),
+      c({ id: 'b', name: 'Мария', gender: 'female', aliases: ['Жница'] }),
+      c({ id: 'd', name: 'Дарья', gender: 'female', aliases: ['Жница'] }),
+    ];
+    const r = dedupeRosterByName(chars as any, [...sent('a'), ...sent('b'), ...sent('d')]);
+    expect(r.suggestions).toEqual([]);
+  });
+
+  it('emits NO suggestion across a gender conflict', () => {
+    const chars = [
+      c({ id: 'boss', name: 'шеф', gender: 'female' }),
+      c({ id: 'boris', name: 'Борис Игнатьевич', gender: 'male', aliases: ['шеф'] }),
+    ];
+    const r = dedupeRosterByName(chars as any, [...sent('boss'), ...sent('boris')]);
+    expect(r.suggestions).toEqual([]);
+  });
+});

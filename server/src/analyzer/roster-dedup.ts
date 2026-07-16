@@ -251,6 +251,64 @@ export function dedupeRosterByName(
   }
   roster = roster.filter((ch) => !droppedT3.has(ch.id));
 
+  // ── Tier-3 weak suggestions: distinctive overlap on EXACTLY two rows ──────
+  // One-sided single-token name links (that failed the mutuality gate) and
+  // shared third-party aliases surface as user-confirmable suggestions — but
+  // only when the linking string is on exactly two surviving rows (3+ ⇒ generic
+  // role word ⇒ nothing), keeping the cast page quiet.
+  //
+  // Alias sets here are the PRE-MERGE snapshot `t3aliases` (built above, before
+  // any strong merge), NOT the mutated survivor rows — so a "shared alias"
+  // suggestion reflects the model's own annotation and never fires on an alias
+  // a strong merge just accumulated onto a survivor. Dropped victims aren't
+  // iterated, so they never count toward rowCountOfKey.
+  const t3survivors = roster.filter((ch) => ch.id !== NARRATOR_ID);
+  const rowCountOfKey = (key: string): number =>
+    t3survivors.filter((ch) => nameKeyOf(ch) === key || t3aliases.get(ch.id)!.has(key)).length;
+  const displayForKey = (ch: CharacterOutput, key: string): string | undefined =>
+    normaliseNameKey(ch.name) === key
+      ? ch.name
+      : (ch.aliases ?? []).find((a) => normaliseNameKey(a) === key);
+
+  for (let i = 0; i < t3survivors.length; i++) {
+    for (let j = i + 1; j < t3survivors.length; j++) {
+      const x = t3survivors[i];
+      const y = t3survivors[j];
+      if (gendersConflict(x.gender, y.gender)) continue;
+
+      const linkXY = t3aliases.get(y.id)!.has(nameKeyOf(x));
+      const linkYX = t3aliases.get(x.id)!.has(nameKeyOf(y));
+
+      let key: string | undefined;
+      let display: string | undefined;
+      if (linkXY || linkYX) {
+        // One-sided single-token name link (mutual/multi-token already merged).
+        key = linkXY ? nameKeyOf(x) : nameKeyOf(y);
+        display = linkXY ? x.name : y.name;
+      } else {
+        // Shared third-party alias (neither name links the other).
+        const shared = [...t3aliases.get(x.id)!].find((k) => t3aliases.get(y.id)!.has(k));
+        if (shared) {
+          key = shared;
+          display = displayForKey(x, shared) ?? displayForKey(y, shared) ?? shared;
+        }
+      }
+      if (!key) continue;
+      if (rowCountOfKey(key) !== 2) continue;
+
+      // source = fewer lines, target = more lines (tie → i<j, so y is source).
+      const xln = lines.get(x.id) ?? 0;
+      const yln = lines.get(y.id) ?? 0;
+      const target = xln >= yln ? x : y;
+      const source = target === x ? y : x;
+      suggestions.push({
+        sourceId: source.id,
+        targetId: target.id,
+        reason: `Both known as «${display}»`,
+      });
+    }
+  }
+
   // Collapse rewrites transitively (a victim may have been a Tier-1 canonical).
   for (const k of Object.keys(rewrites)) {
     let v = rewrites[k];
