@@ -4,7 +4,7 @@
 
 **Goal:** Stop the analyzer from scattering a Russian first-person narrator's «я» material across a phantom pronoun character, a mislabeled side-character, and the real protagonist — so re-analyzing Night Watch on the same local model attributes first-person correctly.
 
-**Architecture:** The bug is a compound of two independent root causes, fixed in two subsystems. **RC1 (stage-1 identity):** nothing stops the model from rostering a bare pronoun «Я» as a character or seeding first-person evidence onto the wrong character — fixed by a deterministic roster-dedup guard + a prompt id-rule. **RC2 (structure engine suppressed):** the dialogue-structure correction engine goes `flagOnly` below an 80% per-chapter alignment floor, and Night Watch aligned at only 65.6% because the aligner is an exact-substring match whose normalizer doesn't fold Russian ё↔е — fixed by widening the normalizer + letting the one high-precision narration demote run even below floor. Each fix is deterministic and unit-tested; a final fresh re-analysis proves it end-to-end.
+**Architecture:** The bug is a compound of three root causes. **RC1 (stage-1 identity):** nothing stops the model from rostering a bare pronoun «Я» as a character or seeding first-person evidence onto the wrong character — fixed by a deterministic roster-dedup guard + a prompt id-rule. **RC2 (structure engine suppressed):** the dialogue-structure correction engine goes `flagOnly` below an 80% per-chapter alignment floor, and Night Watch aligned at only 65.6% because the aligner is an exact-substring match whose normalizer doesn't fold Russian ё↔е — fixed by widening the normalizer + letting the one high-precision narration demote run even below floor. **RC3 (stage-2 prompt has no «я» anchor):** the model is handed the roster with no first-person→character mapping, so a model told "egor = Protagonist" routes first-person prose to egor — fixed by surfacing the known first-person-narrator id into the stage-2 prompt (Task 5), plus separator-aware chunking hardening (Task 6). Each code fix is deterministic and unit-tested; a final fresh re-analysis on the same local model proves it end-to-end.
 
 **Tech Stack:** TypeScript (server), Vitest, local Ollama analyzer (`gemma4-e4b-8gb:latest`), the `server/src/analyzer/dialogue-structure/` engine (srv-59).
 
@@ -344,7 +344,161 @@ git commit -m "feat(analyzer): stage-1 prompt id-rule for the single first-perso
 
 ---
 
-### Task 5: Fresh re-analysis of Night Watch on Gemma — acceptance
+### Task 5: Anchor first-person «я» to the narrator id in the stage-2 prompt (RC3-investigation lever)
+
+The stage-2 model prompt passes the roster as `{id,name,role}` with NO «я»→character mapping (analysis.ts:1527, :1592), so a model told "egor = Protagonist" routes first-person prose to egor. The pipeline already computes the first-person narrator (`findFirstPersonCharacter`, analysis.ts:1608) but only feeds it to the structure engine (:1726), never the model. Surface it as an explicit prompt instruction. **This is the most direct lever for the SPEECH-side «я»→Егор lines that RC2's narration demote does not touch** — and the fresh re-analysis is where it takes effect.
+
+**Files:**
+- Modify: `server/src/routes/analysis.ts` — `buildStage2ChapterInbox` (:1491) + `buildStage2ChunkInbox` (:1545): add trailing `firstPersonId: string | null` param and an instruction block; `attributeChapterStage2` (:1654): compute the id once and thread it through `callForBody`. `export` both builders for testing.
+- Test: `server/src/routes/analysis.test.ts` (add a describe block).
+
+**Interfaces:**
+- Consumes: `findFirstPersonCharacter(characters, conv)` (exists, :1608), `conventionsFor(language)`.
+- Produces: `buildStage2ChapterInbox(manuscriptId, title, stage1, chapter, firstPersonId)`; `buildStage2ChunkInbox(manuscriptId, title, stage1, chapter, subBody, precedingContext, firstPersonId)`.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+import { buildStage2ChapterInbox } from './analysis.js'; // add to exports in Step 3
+
+describe('stage-2 prompt first-person anchor (RC3)', () => {
+  const stage1 = { characters: [
+    { id: 'антон', name: 'Антон', role: 'Colleague', aliases: ['Антон Городецкий', 'Я'] },
+    { id: 'егор', name: 'Егор', role: 'Protagonist / Observer' },
+  ]} as any;
+  const chapter = { id: 1, title: 'Ch1', body: 'Я кивнул.' };
+
+  it('emits the first-person anchor naming the narrator id when one is provided', () => {
+    const prompt = buildStage2ChapterInbox('m', 'Title', stage1, chapter, 'антон');
+    expect(prompt).toContain('First-person narrator');
+    expect(prompt).toContain('`антон`');
+  });
+
+  it('omits the anchor block when firstPersonId is null', () => {
+    const prompt = buildStage2ChapterInbox('m', 'Title', stage1, chapter, null);
+    expect(prompt).not.toContain('First-person narrator');
+  });
+});
+```
+
+- [ ] **Step 2: Run — verify FAIL**
+
+Run: `cd server && npx vitest run src/routes/analysis.test.ts -t "first-person anchor"`
+Expected: FAIL — `buildStage2ChapterInbox` is not exported / doesn't accept `firstPersonId`.
+
+- [ ] **Step 3: Implement**
+
+`export` both builders. Add the `firstPersonId: string | null` param to each. In each, build the block and insert it right before the body section (`## Chapter …` / `## Section to attribute …`):
+
+```ts
+  const firstPersonBlock = firstPersonId
+    ? `## First-person narrator
+
+This manuscript is narrated in the FIRST PERSON. Every first-person pronoun («я», «меня», «мне», «мной», «мы») refers to character id \`${firstPersonId}\`. Attribute first-person narration and any first-person spoken line to \`${firstPersonId}\` UNLESS a dialogue tag explicitly names a different speaker. Never route a first-person line to another character merely because that character is prominent nearby.
+
+`
+    : '';
+```
+
+Insert `${firstPersonBlock}` immediately before `## Chapter ${chapter.id}` (chapter builder) and before `## Section to attribute` (chunk builder — after `${contextBlock}`).
+
+Then in `attributeChapterStage2` (:1654), compute the id once before `runStage2ChapterChunked` and thread it into both builder calls inside `callForBody`:
+
+```ts
+  const fpConventions = conventionsFor(opts.stageCall.language);
+  const firstPersonId = fpConventions ? findFirstPersonCharacter(opts.stage1.characters, fpConventions) : null;
+```
+
+Update the two `callForBody` builder invocations to pass `firstPersonId` as the final argument.
+
+- [ ] **Step 4: Run — verify PASS**
+
+Run: `cd server && npx vitest run src/routes/analysis.test.ts`
+Expected: PASS (new tests + existing analysis tests green — the extra param is additive; existing callers pass the new arg).
+
+> **Note:** this lever is only as good as `findFirstPersonCharacter` returning the right id, which needs the stage-1 roster to carry «я» in the narrator's aliases — that is exactly what Task 4's prompt rule reinforces. If a fresh run still fragments Антон or omits the «я» alias, the anchor no-ops (null) rather than mis-anchoring — safe by construction.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add server/src/routes/analysis.ts server/src/routes/analysis.test.ts
+git commit -m "feat(server): anchor first-person «я» to the narrator id in the stage-2 prompt"
+```
+
+---
+
+### Task 6: Prefer scene-separator boundaries when splitting stage-2 chunks (RC3 hardening)
+
+`splitBodyIntoChunks` splits by size at blank-line boundaries and does NOT prefer scene/section separators (`***`, `* * *`, `⁂`), so a chunk can straddle a scene break. Evidence shows this did NOT cause the Night Watch bug, but a chunk straddling two scenes is a latent attribution-confusion risk. Make a word-free separator paragraph a preferred break point. Only affects over-budget bodies; lossless (`chunks.join('')` still reproduces the body).
+
+**Files:**
+- Modify: `server/src/analyzer/stage2-chunk.ts` — `splitBodyIntoChunks` (:133-155)
+- Test: `server/src/analyzer/stage2-chunk.test.ts`
+
+**Interfaces:**
+- Consumes: `attributableWordCount` (already imported at stage2-chunk.ts:34).
+- Produces: `splitBodyIntoChunks` unchanged signature; a scene-separator unit now forces a chunk boundary.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+it('(RC3) prefers a scene-separator boundary so no chunk straddles two scenes', () => {
+  const sceneA = 'а'.repeat(60) + '.\n\n';
+  const sep = '***\n\n';
+  const sceneB = 'б'.repeat(60) + '.\n\n';
+  const body = sceneA + sceneA + sep + sceneB + sceneB; // ~260 chars, 4 prose paras + separator
+  const chunks = splitBodyIntoChunks(body, 200); // over budget → must split
+
+  // No chunk contains prose from BOTH scenes.
+  for (const ch of chunks) {
+    expect(ch.includes('а') && ch.includes('б')).toBe(false);
+  }
+  expect(chunks.join('')).toBe(body); // lossless
+});
+```
+
+- [ ] **Step 2: Run — verify FAIL**
+
+Run: `cd server && npx vitest run src/analyzer/stage2-chunk.test.ts -t "scene-separator boundary"`
+Expected: FAIL — without the fix, chunk 1 packs `аа*** б` (194 < 200) so it contains both `а` and `б`.
+
+- [ ] **Step 3: Implement**
+
+In `splitBodyIntoChunks`, add a helper and make a separator unit force a break. Replace the packing loop (currently lines 144-152):
+
+```ts
+  const isSceneSeparatorUnit = (u: string): boolean =>
+    u.trim().length > 0 && attributableWordCount(u) === 0;
+  const chunks: string[] = [];
+  let cur = '';
+  for (const u of units) {
+    // A scene-separator paragraph forces a boundary BEFORE it, so the separator
+    // (and the scene that follows) starts a fresh chunk — no chunk straddles a
+    // scene break. Size overflow breaks too, as before.
+    if (cur && (isSceneSeparatorUnit(u) || cur.length + u.length > charBudget)) {
+      chunks.push(cur);
+      cur = u;
+    } else {
+      cur += u;
+    }
+  }
+```
+
+- [ ] **Step 4: Run — verify PASS**
+
+Run: `cd server && npx vitest run src/analyzer/stage2-chunk.test.ts`
+Expected: PASS (new test + all existing chunk tests green — a word-free separator is not a tiny fragment, so `mergeTinyChunks` is unaffected; a separator-only chunk is skipped at attribution by `hasAttributableContent`).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add server/src/analyzer/stage2-chunk.ts server/src/analyzer/stage2-chunk.test.ts
+git commit -m "fix(analyzer): prefer scene-separator boundaries when splitting stage-2 chunks"
+```
+
+---
+
+### Task 7: Fresh re-analysis of Night Watch on Gemma — acceptance
 
 Prove the compound fix end-to-end on the reproduction book, using the same model, via a FRESH analysis (cache-bypassing).
 
@@ -386,7 +540,7 @@ jq '.sentences | map(.characterId) | group_by(.) | map({id: .[0], n: length}) | 
 **Acceptance (Gemma is the bar) — calibrated to what the deterministic fixes actually guarantee (review fold, MAJOR 2 & 3):**
 - **Phantom `я` character GONE from cast.json** (hard pass — Task 2 makes this unconditional).
 - **First-person NARRATION off Егор → ~0** (hard pass — `decideNarrationOnly`, now running below floor via Task 3). Егор keeps only his genuine dialogue + any residual first-person *speech*.
-- **First-person SPEECH on Егор: markedly reduced but NOT required to be 0.** Unanchored first-person quotes ("- Я упустил вампиршу") are structurally ambiguous (any speaker says «я») and are left *flagged* by design (#1676). Report the residual count as a bounded number, not a zero. Reattribution of these depends on alignment clearing 80% (so tag-anchored Антон lines auto-correct) + Task 4's prompt — measure, don't assume.
+- **First-person SPEECH on Егор: markedly reduced, target low but not asserted 0.** The primary lever is now Task 5 (the stage-2 «я»→narrator-id prompt anchor) which biases the model to attribute first-person speech to Антон at the source on the fresh run; Task 4 (stage-1 «я» alias) feeds it, and above-floor alignment lets tag-anchored lines auto-correct. Structurally, an unanchored first-person quote remains ambiguous (any speaker says «я»), so a residual is expected — report it as a bounded number, don't assume 0. Measure the before/after Егор count.
 - **`alignedPct` — MEASURED, not asserted.** Record the new book-wide value and the per-chapter `[analysis:structure] aligned=..%` lines vs the 65.6% baseline. If a majority of chapters are still sub-floor, that's the signal to add NFC/fuzzy matching (Task 1 scope note) — a follow-up, not a Task-5 failure.
 - No characterIds in `manuscript-edits.json` absent from `cast.json` (id-drift not reintroduced).
 
@@ -404,7 +558,7 @@ If pass: note it against issue for this fix + update memory (`project_analyzer_f
 
 - **Spec coverage:** RC1 phantom → Task 2; RC1 stage-1 seeding → Task 4 (prompt) + downstream RC2 demote; RC2 low alignment → Task 1; RC2 floor suppression of narration demote → Task 3; same-model fresh re-analysis + Qwen compare → Task 5. All covered.
 - **Deliberately NOT doing:** forcing unanchored first-person QUOTES ("- Я упустил вампиршу") to the narrator — structurally ambiguous (any speaker says «я»); would over-correct. These remain flagged + escalated; Task 4 reduces them at the source. Features (b)/(c) are issue #1676, out of scope.
-- **Ordering:** Tasks 1-4 are independent and unit-tested; do them in any order; Task 5 depends on all. Task 1 is highest-leverage for RC2.
+- **Ordering:** Tasks 1-6 are independent and unit-tested; do them in any order; Task 7 (verify) depends on all. Task 1 is highest-leverage for RC2; Task 5 is highest-leverage for the speech-side «я»→Егор lines (RC3).
 
 ## Independent review folds (2026-07-16, opus adversarial pass)
 
@@ -415,3 +569,10 @@ If pass: note it against issue for this fix + update memory (`project_analyzer_f
 - **MINOR 5 — acknowledged (no code):** `previewFoldForLiveView` (analysis.ts:749) dedups with empty sentences, so the *live* "Cast so far" pill could momentarily show «Я» surviving on roster order; cosmetic only — final cast.json (analysis.ts:726, real sentences) is correct and the frontend snapshot-replaces the roster (per prior live-cast fix).
 - **MINOR 7 — folded:** Task 1 test asserts `spans` membership + alignedPct, not strict array-equality (avoids the tag-span overlap off-by-one).
 - **Confirmed sound by review:** RC1/RC2 diagnosis; Task 1 fold correctness/offset-preservation/symmetry; Task 2 union + survivor-ranking picks Антон, no `isFirstPersonName` false-positive on Яков/Оля/Ян, no circular import, `opts.language` passed by callers.
+
+## RC3 investigation folds (2026-07-16, opus evidence pass)
+
+- **Chunker scene-straddle is NOT the dominant cause (evidence):** misattribution is pervasive, not seam-localized — Антон's own lines are mislabeled `egor` *inside* one unbroken dialogue scene (ch1 bin 600-800); every observable separator landed *at* a chunk boundary, not mid-chunk; a clean single-POV Антон section still dumped 248 lines on `egor` (ch5). Separators survive normalization (`html-utils.ts`: `</p>`→`\n\n`, `\n{3,}`→`\n\n`).
+- **The evidenced miss:** the stage-2 prompt (`analysis.ts:1527/:1592`) passes `{id,name,role}` only — no «я»→id mapping — and `findFirstPersonCharacter` (:1608) is wired only to the structure engine (:1726), never the model. **→ Task 5 (new): surface the first-person-narrator id in the stage-2 prompt.** Highest-leverage lever for the speech-side «я»→Егор lines.
+- **Chunker hardening kept (user-requested):** **→ Task 6 (new): separator-aware `splitBodyIntoChunks`.** Safe + lossless, only-when-over-budget; latent-risk hardening, not the fix for this bug.
+- **Manuscript-view scene separator filed as #1679** (the display counterpart of Task 6); editing-UX (alias re-point + bulk reassign) is #1676. Both out of scope here.
