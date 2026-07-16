@@ -1434,6 +1434,13 @@ true:
    A whole **first-person novel is NOT** such a document — its first-person
    voice is the protagonist/narrator, NOT the book's author; never roster the
    byline author as that voice.
+   The first-person «я» voice is exactly ONE character. NEVER create a
+   character whose name is a bare pronoun (я, I, ich, …) — that is not a
+   character. Attribute first-person NARRATION to \`narrator\`; attribute
+   first-person SPOKEN dialogue to the single protagonist and record «я» in
+   that protagonist's aliases. Do NOT spread first-person lines across
+   several characters, and never attach a first-person line as evidence to a
+   secondary character.
 
 **An explicit \`<Name> <speech-verb>\` dialogue tag is binding** — \`"…,"
 Lessom repeated.\`, \`"Fine," Sela agreed.\`, \`"Where?" Wren asked.\`

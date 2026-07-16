@@ -78,6 +78,13 @@ Registry File`, the surrounding bio block, etc.). The author of
    is the protagonist/narrator, not the book's author. Never roster the book's
    byline author as a character unless they explicitly act or speak in the story
    (e.g. a clearly-framed author's note).
+   The first-person «я» voice is exactly ONE character. NEVER create a
+   character whose name is a bare pronoun (я, I, ich, …) — that is not a
+   character. Attribute first-person NARRATION to `narrator`; attribute
+   first-person SPOKEN dialogue to the single protagonist and record «я» in
+   that protagonist's aliases. Do NOT spread first-person lines across
+   several characters, and never attach a first-person line as evidence to a
+   secondary character.
 
 **Binding rule — an explicit dialogue tag always counts.** If the chapter
 contains a `<Name> <speech-verb>` attribution beat next to a quote — `"…,"
