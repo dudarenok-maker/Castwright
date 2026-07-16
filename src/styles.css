@@ -539,13 +539,22 @@
 [data-theme='dark'] .text-emerald-600 {
   color: #34d399;
 }
-[data-theme='dark'] .text-amber-800 {
+/* The failed-cast-detection retry panel (`src/views/analysing.tsx:1471–1538`)
+   paints its body copy as `text-amber-800/80` and its "What to do:" remediation
+   line as `text-amber-900/90`. Those alpha modifiers compile to their own
+   selectors the bare rules below can't reach, so in dark mode they held the
+   light palette's dark-brown amber-800/900 and read dark-on-dark — the muddy,
+   low-contrast lines this fix closes. Collapse each onto the same legible tint
+   as its bare form; the alpha is harmless once the text is already light. */
+[data-theme='dark'] .text-amber-800,
+[data-theme='dark'] .text-amber-800\/80 {
   color: #fbbf24;
 }
 [data-theme='dark'] .text-amber-700 {
   color: #fbbf24;
 }
-[data-theme='dark'] .text-amber-900 {
+[data-theme='dark'] .text-amber-900,
+[data-theme='dark'] .text-amber-900\/90 {
   color: #fcd34d;
 }
 
@@ -561,7 +570,12 @@
 [data-theme='dark'] .border-ink\/15 {
   border-color: rgba(var(--ink-rgb), 0.18);
 }
+/* The `/70` alpha variant on the retry panel's inner Chapter card border
+   (`src/views/analysing.tsx:1496`) compiles to its own selector — fold it in
+   so the card outline holds the same amber tint instead of the pale light-mode
+   `amber-200` bleeding onto the dark surface. */
 [data-theme='dark'] .border-amber-200,
+[data-theme='dark'] .border-amber-200\/70,
 [data-theme='dark'] .border-amber-300 {
   border-color: rgba(245, 158, 11, 0.3);
 }

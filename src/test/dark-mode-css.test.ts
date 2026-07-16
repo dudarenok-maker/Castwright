@@ -78,6 +78,14 @@ describe('dark-mode CSS overrides (styles.css)', () => {
     { selector: '.hover\\:bg-amber-50:hover', label: 'amber-50 hover (drift banner)' },
     { selector: '.text-amber-700', label: 'amber-700 status text' },
     { selector: '.border-amber-200', label: 'amber-200 panel border' },
+    /* Failed-cast-detection retry panel (`src/views/analysing.tsx:1471–1538`):
+       body copy `text-amber-800/80`, "What to do:" line `text-amber-900/90`,
+       inner Chapter card `border-amber-200/70`. Each alpha variant compiles to
+       its own selector the bare rules can't reach — without these the panel read
+       dark-brown-on-dark in dark mode, the exact low-contrast bug this closes. */
+    { selector: '.text-amber-800\\/80', label: 'amber-800 /80 (retry panel body)' },
+    { selector: '.text-amber-900\\/90', label: 'amber-900 /90 (retry panel remediation)' },
+    { selector: '.border-amber-200\\/70', label: 'amber-200 /70 (retry panel card border)' },
     /* `floating-pill-inverse` is a bespoke utility for the cast-view
        selection bar at `src/views/cast.tsx:439`. The bar wants to read as
        a dark capsule in BOTH modes — using `bg-ink text-canvas` was a
