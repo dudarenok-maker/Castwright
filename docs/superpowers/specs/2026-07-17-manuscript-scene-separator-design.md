@@ -1,7 +1,7 @@
 # Manuscript view: visual scene-change separator — design
 
 - **Issue:** #1679
-- **Status:** approved (design), v3 after two adversarial-review rounds
+- **Status:** approved (design), v4 after three adversarial-review rounds (round 3 refined v3, did not overturn it)
 - **Date:** 2026-07-17
 - **Scope:** server (read-only post-attribution detection + EPUB/MOBI `<hr>` preservation + additive schema field) + OpenAPI + frontend (manuscript view)
 
@@ -45,33 +45,42 @@ never a corrupted cast or a stuck chapter.
 
 ### 1. Detection — read-only post-attribution alignment (server)
 
-At the tail of `runStage2ChapterChunked` / `runChunks`, both the chapter body
-(`opts.body`, which still contains the separator lines — they are only dropped
-as *sentences*, not from the body string) and the final, renumbered ordered
-`sentences` array coexist (proven: `validateStage2Coverage(opts.body,
-sentences, …)` already runs there, `stage2-chunk.ts:345`). Insert a pure
-post-processing pass:
+**Insertion point (corrected — round-3 ship-blocker).** The pass must run on the
+**final** per-chapter `sentences` array *after the whole stage-2 flow completes*
+— i.e. after `runStage2ChapterChunked` returns **and** after the
+`crossExamine` + `escalateFlaggedWindows` passes in the analysis route
+(`server/src/routes/analysis.ts`, after ~`:1735`). It must **not** sit at
+`stage2-chunk.ts:345`: that line is inside `runChunks`, which the single-call
+common path bypasses entirely (`stage2-chunk.ts:351-369` returns without calling
+`runChunks`), so a pass there would flag nothing on the *majority* of chapters.
+Running after escalation also guarantees the flag lands on the final,
+post-transform sentences (crossExamine spreads `...as.sentence` so it survives,
+`cross-examine.ts:285`; the escalation path must be confirmed to spread too — the
+plan verifies this, and running last sidesteps the risk regardless).
 
-1. Split `opts.body` into blank-line paragraph units (the `\n[ \t]*\n` boundary
-   the chunker already uses). A unit for which `hasAttributableContent` is false
-   (`stage2-coverage.ts`) is a **separator**, not content.
-2. Walk a body cursor and the ordered sentences together: for each sentence, in
-   order, locate its (tag-normalized) text at/after the cursor. If a separator
-   unit lies in the gap between the previous sentence's end and this sentence's
-   start, set `sceneBreakBefore = true` on **this** sentence.
-3. On a match failure (the greedy walk can't locate a sentence's text — model
-   paraphrase, tag drift), skip ahead and continue. A miss drops one divider;
-   it never corrupts a sentence.
+At that point both the chapter body (which still contains the separator lines —
+they are dropped only as *sentences*, not from the body string) and the final
+ordered `sentences` array are in hand. The pass:
 
-**This changes nothing about chunking, model calls, coverage, or attribution.**
-Every v2 concern (tiny-scene loops, per-scene coverage, context reset, cost) is
-dissolved because the chunker is untouched.
+1. Split the chapter body into blank-line paragraph units (`\n[ \t]*\n`); a unit
+   for which `hasAttributableContent` is false (`stage2-coverage.ts`) is a
+   **separator**, and record its character offset in the body.
+2. **Reuse the existing `alignSentences`** (`server/src/analyzer/dialogue-structure/aligner.ts:136`)
+   — do NOT hand-roll a second walk. It returns each sentence's body offset via
+   `buildNormalizedMap` + `findMatch` (`:43,:129`) plus an `alignedPct` (`:170`).
+   For each separator offset, set `sceneBreakBefore = true` on the **first
+   aligned sentence whose start offset is after the separator**.
+3. Unaligned sentences (the walk couldn't locate their text) are skipped; the
+   separator then binds to the next *aligned* sentence — so a miss **misplaces
+   the divider mid-scene or drops it**, never corrupts a sentence.
 
-**Matching detail:** the parser injects audio-tag markers (`[emphasis]…`) into
-the body before analysis (`text.ts` flush), so both body and sentence text share
-that form; normalize/strip those markers on both sides before comparing. Match
-is a forgiving substring/prefix compare, not an exact equality — the goal is
-placement, not validation.
+**This changes nothing about chunking, model calls, coverage, or attribution** —
+every v2 concern (tiny-scene loops, per-scene coverage, context reset, cost) is
+dissolved because the chunker is untouched. Reusing `alignSentences` also inherits
+its measured reality: aggregate alignment on Night Watch is ~65.6%
+(`analysis.ts` crossExamine floor is 80). Scene-*opening* sentences are usually
+verbatim narration and should align better than the dialogue-dragged aggregate,
+but that hit-rate is **unmeasured** — see the acceptance gate in Testing.
 
 ### 2. EPUB/MOBI: preserve `<hr>` (server, `html-utils.ts`)
 
@@ -81,7 +90,10 @@ while `</p>`→`\n\n` already preserves `<p>* * *</p>` as a line (`:39`). Add
 `<hr>`-style breaks survive into the body as a detectable separator. Confirmed
 feasible: EPUB feeds raw chapter HTML through `stripHtml` (`epub.ts:150,256`;
 nothing strips `<hr>` earlier), and MOBI shares the helper (`mobi.ts:25,166`).
-`<hr>` is the most common EPUB scene-break representation.
+`<hr>` is the most common EPUB scene-break representation. **Implementation
+note:** emit the canonical line with surrounding blank lines (`\n\n* * *\n\n`)
+so `stripHtml`'s `\n{3,}`→`\n\n` collapse (`html-utils.ts:54`) leaves it a
+standalone paragraph unit rather than gluing it to adjacent prose.
 
 ### 3. Data model
 
@@ -117,12 +129,20 @@ review).
 - Draw the **hairline + centered Lora-serif ✦** divider (two faint `--ink`
   hairline rules flanking the ornament, generous vertical spacing; no new color
   token, no hex literals) immediately *above* any segment whose
-  `sceneBreakBefore` is true — never above the chapter's first segment.
+  `sceneBreakBefore` is true. **Guard positionally, not on the flag alone:** the
+  condition is `segIdx > 0 && seg.sceneBreakBefore` — the "flagged sentence is
+  its segment's head" construction does not by itself stop segment 0 carrying the
+  flag, so a leading-separator flag that slipped the drop rule would otherwise
+  paint a divider at the chapter top.
 - **Suppress the boundary handle at the seam:** omit the `BoundaryHandle` between
-  segment *i-1* and *i* when segment *i*'s `sceneBreakBefore` is true (an
-  explicit new per-boundary predicate in the render loop, ~`manuscript.tsx:1234`
-  — not free). Reassigning attribution across a scene break is not a meaningful
-  edit; the divider occupies that gap.
+  segment *i-1* and *i* when segment *i*'s `sceneBreakBefore` is true (a new
+  per-boundary predicate — not free). **Both render branches must be patched:**
+  the flat path (`manuscript.tsx:1234`) *and* the virtualized path
+  (`:1205`, `boundaryIdx={virtualItem.index + 1}`) — a large chapter (≥60
+  segments) renders through the virtualized branch, so patching only the flat one
+  leaves the seam handle (and a missing divider) on big chapters. Reassigning
+  attribution across a scene break is not a meaningful edit; the divider occupies
+  that gap.
 - **`splitSentence` must strip the flag from non-first pieces.** The reducer
   spreads `...original` into every piece (`src/store/manuscript-slice.ts:464-476`),
   which would duplicate the flag and paint a spurious mid-scene divider; mirror
@@ -143,7 +163,9 @@ review).
   `words('42')` → `['42']` (digits are `\p{N}`), so `hasAttributableContent` is
   true. `* * *` / `⁂` / `• • •` / `---` / `―` all normalize to zero words.
   Confirmed vs `stage2-coverage.ts:88-97`.
-- Alignment miss (model paraphrase / tag drift) → one divider dropped, cosmetic.
+- Alignment miss (model paraphrase / tag drift): the separator binds to the next
+  *aligned* sentence, so the divider is **dropped or misplaced mid-scene** —
+  cosmetic either way, never a data change.
 
 ### 6. Population — re-analysis, optional backfill
 
@@ -158,11 +180,17 @@ in cleanly.
 ## Testing
 
 - **Server — alignment** (new test): a `* * *` mid-chapter flags the following
-  paragraph's first sentence and nothing else; robust to `[emphasis]` tags in
-  body/sentence text; consecutive/leading separators collapse to one break; a
-  page-number unit is not a break; a paraphrase mismatch drops the divider
-  without error. Chunking output (sentence count/ids, coverage) is byte-identical
-  to pre-change — a guard that we changed nothing but the flag.
+  paragraph's first sentence and nothing else; the flag is set on **both** the
+  single-call and multi-chunk paths (guards the insertion-point ship-blocker);
+  consecutive/leading separators collapse to one break; a page-number unit is not
+  a break; a paraphrase mismatch drops/misplaces the divider without error.
+  Chunking output (sentence count/ids, coverage) is byte-identical to pre-change —
+  a guard that we changed nothing but the flag.
+- **Acceptance gate — measure the scene-opening hit-rate.** Before shipping, run
+  the pass on Night Watch and one real EPUB and report what fraction of true
+  scene breaks produced a correctly-placed divider (the aggregate `alignedPct` is
+  ~65.6%, but scene-openers should score higher). If it is too low to trust, the
+  aid is not shippable as-is — this gate decides go/no-go, not a nice-to-have.
 - **Server — `stripHtml`:** `<hr>` converts to a surviving word-free line;
   `<p>* * *</p>` still survives.
 - **Frontend unit** (`manuscript.test.tsx`): a flagged sentence renders the
