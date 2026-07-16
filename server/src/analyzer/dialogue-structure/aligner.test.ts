@@ -158,4 +158,34 @@ describe('alignSentences', () => {
     expect(result.aligned[0].spans).toContain(speechSpan);
     expect(result.alignedPct).toBe(100);
   });
+
+  it('(RC2) aligns across composed vs decomposed ё (combining diaeresis)', () => {
+    const ruIdx = buildNameIndex([{ id: 'anton', name: 'Антон' }], conventionsFor('ru')!);
+    const body = '— Ещё раз, — сказал Антон.'; // composed ё
+    const paras = parseChapterStructure(body, ruIdx);
+    const speechSpan = paras.flatMap((p) => p.spans).find((s) => s.kind === 'speech')!;
+    const decomposed = 'Ещё раз,'.normalize('NFD'); // е + U+0308
+    const result = alignSentences([mkSentence(1, 'anton', decomposed)], paras, body);
+    expect(result.aligned[0].spans).toContain(speechSpan);
+    expect(result.alignedPct).toBe(100);
+  });
+
+  it('(RC2) prefix-anchored fuzzy fallback aligns a paraphrased long sentence to its paragraph', () => {
+    const ruIdx = buildNameIndex([{ id: 'anton', name: 'Антон' }], conventionsFor('ru')!);
+    const body = '— Я упустил вампиршу вчера ночью возле старого парка, — сказал Антон.';
+    const paras = parseChapterStructure(body, ruIdx);
+    const speechSpan = paras.flatMap((p) => p.spans).find((s) => s.kind === 'speech')!;
+    const drifted = 'Я упустил вампиршу вчера возле тёмного парка,'; // middle words changed/dropped
+    const result = alignSentences([mkSentence(1, 'anton', drifted)], paras, body);
+    expect(result.aligned[0].spans).toContain(speechSpan);
+    expect(result.alignedPct).toBe(100);
+  });
+
+  it('(RC2) does NOT fuzzy-match a short needle (avoids false anchors)', () => {
+    const ruIdx = buildNameIndex([{ id: 'anton', name: 'Антон' }], conventionsFor('ru')!);
+    const body = '— Да, конечно, я помню тот давний день очень хорошо, — кивнул Антон.';
+    const paras = parseChapterStructure(body, ruIdx);
+    const result = alignSentences([mkSentence(1, 'anton', 'Нет.')], paras, body); // <24 chars, absent
+    expect(result.aligned[0].spans).toEqual([]);
+  });
 });

@@ -15,6 +15,9 @@ import type { SentenceOutput } from '../../handoff/schemas.js';
    moves the cursor. */
 
 const WINDOW = 4096;
+const COMBINING_MARK = /\p{Mn}/u;
+const FUZZY_MIN_NEEDLE = 24;
+const FUZZY_ANCHOR_LEN = 16;
 
 export interface AlignedSentence {
   sentence: SentenceOutput;
@@ -72,6 +75,7 @@ function buildNormalizedMap(raw: string): { text: string; rawStart: number[]; ra
       // the 80% alignment floor and suppress ALL structure corrections).
       // 1:1 char replacement — preserves the offset map exactly.
       if (out === 'ё') out = 'е';
+      else if (COMBINING_MARK.test(out)) out = ''; // drop decomposed diacritics (offset-safe)
     }
     const atomStart = i;
     const atomEnd = i + atomLen;
@@ -151,14 +155,20 @@ export function alignSentences(
 
   for (const sentence of sentences) {
     const needle = normalize(sentence.text);
-    const matchStart = needle.length > 0 ? findMatch(normBody, needle, cursor) : -1;
+    let matchStart = needle.length > 0 ? findMatch(normBody, needle, cursor) : -1;
+    if (matchStart === -1 && needle.length >= FUZZY_MIN_NEEDLE) {
+      // Exact failed (gemma paraphrased/dropped a word). Anchor on the prefix so
+      // the sentence still attaches to its paragraph; approximate the extent.
+      const anchorPos = findMatch(normBody, needle.slice(0, FUZZY_ANCHOR_LEN), cursor);
+      if (anchorPos !== -1) matchStart = anchorPos;
+    }
 
     if (matchStart === -1) {
       aligned.push({ sentence, spans: [], lumped: false });
       continue; // do NOT move the cursor — a single bad sentence can't desync the rest
     }
 
-    const matchEnd = matchStart + needle.length;
+    const matchEnd = Math.min(matchStart + needle.length, normBody.length);
     cursor = matchEnd;
 
     const rawMatchStart = rawStart[matchStart];
