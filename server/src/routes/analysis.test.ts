@@ -1853,6 +1853,19 @@ describe('buildInterimCast — mid-run cast snapshot', () => {
     expect(female.aliases).toEqual(['Tall Lady']);
   });
 
+  it('dedups same-name characters with divergent model ids in the interim cast (Fix 1)', () => {
+    /* During Phase 0a the running roster merges by model id, so a small model
+       that slugs the same name two ways (anton / антон) yields two pills. The
+       interim cast + live SSE must dedup by name — consistently with the final
+       cast — before the fold. */
+    const chapterCast: Record<number, CharacterOutput[]> = {
+      1: [{ id: 'anton', name: 'Антон', role: 'op', color: 'c' }],
+      2: [{ id: 'антон', name: 'Антон', role: 'op', color: 'c' }],
+    };
+    const cast = buildInterimCast(chapterCast, [1, 2]);
+    expect(cast.filter((c) => c.name === 'Антон')).toHaveLength(1);
+  });
+
   it('mints localized Russian bucket names end-to-end when language is ru (Wave D, plan 221)', () => {
     /* A Russian book folds bare generic-noun descriptors and the bucket
        carries the user-specified Russian display name, matching what the

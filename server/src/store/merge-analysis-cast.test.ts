@@ -16,6 +16,7 @@ import {
   voicedSurvivorsDropped,
   applyRewriteToPriorCast,
   dropReuseContinuityKeepDesignedVoice,
+  dedupePriorCastByName,
 } from './merge-analysis-cast.js';
 
 type C = Record<string, unknown> & { id: string };
@@ -366,5 +367,115 @@ describe('dropReuseContinuityKeepDesignedVoice (fresh re-analysis prior)', () =>
     dropReuseContinuityKeepDesignedVoice(prior);
     expect(prior[0].voiceId).toBe('v');
     expect(prior[0].matchedFrom).toEqual({ bookId: 'x' });
+  });
+});
+
+describe('dedupePriorCastByName', () => {
+  it('collapses two same-name voiced rows to one survivor', () => {
+    const prior: C[] = [
+      { id: 'anton', name: 'Антон', voiceState: 'tuned', voiceUuid: 'U1', lines: 40 },
+      { id: 'антон', name: 'Антон', voiceState: 'generated', lines: 2 },
+    ];
+    const { cast, dropped } = dedupePriorCastByName(prior);
+    expect(cast).toHaveLength(1);
+    expect(cast[0].id).toBe('anton'); // stronger voiceState survives
+    expect(cast[0].voiceUuid).toBe('U1');
+    expect(dropped.map((d) => d.id)).toEqual(['антон']);
+  });
+
+  it('prefers a bespoke designed voice over a reuse link (Coalfall guard)', () => {
+    const prior: C[] = [
+      { id: 'a-reused', name: 'Света', voiceState: 'reused', voiceId: 'lib-1' },
+      {
+        id: 'a-bespoke',
+        name: 'Света',
+        voiceState: 'generated',
+        overrideTtsVoices: { qwen: { name: 'q-sveta' } },
+      },
+    ];
+    const { cast } = dedupePriorCastByName(prior);
+    expect(cast).toHaveLength(1);
+    expect(cast[0].id).toBe('a-bespoke'); // bespoke beats reuse despite weaker voiceState
+    expect(cast[0].overrideTtsVoices).toEqual({ qwen: { name: 'q-sveta' } });
+  });
+
+  it('folds the dropped row name into the survivor aliases', () => {
+    const prior: C[] = [
+      { id: 'boris', name: 'Борис Игнатьевич', voiceState: 'tuned', lines: 30, aliases: ['шеф'] },
+      { id: 'boris-2', name: 'Борис Игнатьевич', voiceState: 'generated', lines: 1, aliases: ['Гесер'] },
+    ];
+    const { cast } = dedupePriorCastByName(prior);
+    expect(cast).toHaveLength(1);
+    expect(cast[0].aliases).toEqual(expect.arrayContaining(['шеф', 'Гесер']));
+    // survivor's own name is NOT folded in as a redundant alias
+    expect(cast[0].aliases).not.toContain('Борис Игнатьевич');
+  });
+
+  it('does NOT collapse a notLinkedTo-separated same-name pair', () => {
+    const prior: C[] = [
+      { id: 'john-a', name: 'John', voiceState: 'tuned', notLinkedTo: [{ bookId: 'b', characterId: 'john-b' }] },
+      { id: 'john-b', name: 'John', voiceState: 'tuned' },
+    ];
+    const { cast } = dedupePriorCastByName(prior);
+    expect(cast).toHaveLength(2);
+  });
+
+  it('never collapses narrator rows sharing a name', () => {
+    const prior: C[] = [
+      { id: 'narrator', name: 'Narrator', voiceState: 'tuned' },
+      { id: 'char-narrator', name: 'Narrator', voiceState: 'generated' },
+    ];
+    const { cast } = dedupePriorCastByName(prior);
+    expect(cast).toHaveLength(2);
+  });
+
+  it('leaves distinct names untouched and preserves order', () => {
+    const prior: C[] = [
+      { id: 'a', name: 'Alice', voiceState: 'tuned' },
+      { id: 'b', name: 'Bob', voiceState: 'tuned' },
+    ];
+    const { cast, dropped } = dedupePriorCastByName(prior);
+    expect(cast.map((c) => c.id)).toEqual(['a', 'b']);
+    expect(dropped).toEqual([]);
+  });
+
+  it('collapses accent-variant spellings (normaliseNameKey deburrs Latin)', () => {
+    const prior: C[] = [
+      { id: 'cafe', name: 'Cafe', voiceState: 'generated', voiceUuid: 'U2' },
+      { id: 'café', name: 'Café', voiceState: 'generated' },
+    ];
+    const { cast } = dedupePriorCastByName(prior);
+    expect(cast).toHaveLength(1);
+  });
+
+  it('composition: collapsed prior + merge yields no 0-line duplicate, voice on fresh survivor', () => {
+    // Prior cast has the legacy duplicate (both voiced); fresh roster has one
+    // canonical Антон (post-dedup). Today merge re-adds the extra as a 0-line dup.
+    const prior: C[] = [
+      { id: 'anton', name: 'Антон', voiceState: 'tuned', voiceUuid: 'U1', lines: 40 },
+      { id: 'антон', name: 'Антон', voiceState: 'generated', overrideTtsVoices: { qwen: { name: 'q2' } }, lines: 2 },
+    ];
+    const fresh: C[] = [{ id: 'антон', name: 'Антон', lines: 55 }]; // fresh survivor id
+    const collapsed = dedupePriorCastByName(prior).cast;
+    const merged = mergeAnalysisResultWithExistingCast(collapsed, fresh);
+    expect(merged.filter((c) => c.name === 'Антон')).toHaveLength(1);
+    expect(merged[0].voiceUuid).toBe('U1'); // strongest bespoke voice rode onto the fresh survivor
+    expect(merged[0].lines).toBe(55); // fresh attribution wins
+  });
+
+  it('composition: a voiceUuid-only (generated) survivor whose id differs from fresh still bridges its voice', () => {
+    // Regression guard: hasBespokeVoice ranks a voiceUuid-only row as bespoke, so
+    // it can win the collapse; the merge's name-fallback must recognise voiceUuid
+    // (isVoicedOrReused fix) or the fresh row is written voiceless.
+    const prior: C[] = [
+      { id: 'anton', name: 'Антон', voiceState: 'generated', voiceUuid: 'U9', lines: 40 },
+      { id: 'антон-old', name: 'Антон', voiceState: 'reused', voiceId: 'lib-1', lines: 1 },
+    ];
+    const fresh: C[] = [{ id: 'антон', name: 'Антон', lines: 50 }]; // id differs from both prior rows
+    const collapsed = dedupePriorCastByName(prior).cast;
+    expect(collapsed[0].id).toBe('anton'); // voiceUuid (rank 3) beats reused (rank 2)
+    const merged = mergeAnalysisResultWithExistingCast(collapsed, fresh);
+    expect(merged.filter((c) => c.name === 'Антон')).toHaveLength(1);
+    expect(merged[0].voiceUuid).toBe('U9'); // bridged despite voiceState generated + id drift
   });
 });
