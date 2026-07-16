@@ -161,6 +161,23 @@ describe('validateStage2Coverage', () => {
     expect(v.issues.some((i) => /truncat|dropped|cover|loop|excess/i.test(i))).toBe(false);
   });
 
+  it('does NOT gate the ratio when the source is too small to evaluate (heading-sized span)', () => {
+    /* Regression (2026-07-16 Ночной дозор ch6): an isolated "Глава 4" chunk
+       (2 source words) on which the model looped produced 1405 output words →
+       ratio 702.50, rejected as a "repeat-loop" on every retry → the chapter
+       stuck. A span this small can't be ratio-checked: the denominator is noise,
+       so any real output blows past maxCoverageRatio. Such a span is un-evaluable
+       for the ratio — a genuine loop is still caught by the duplicated-block
+       signal, and an empty result by the no-sentences check. Here the (unique)
+       output must NOT be flagged as excess coverage. */
+    const body = 'Глава 4'; // 2 attributable words
+    const looped = Array.from({ length: 300 }, (_, i) => ({ text: `word ${i} unique line here` }));
+    const v = validateStage2Coverage(body, looped);
+    expect(v.duplicatedBlock).toBeNull(); // unique lines → not a real loop
+    expect(v.issues.some((i) => /excess|loop|cover/i.test(i))).toBe(false);
+    expect(v.ok).toBe(true);
+  });
+
   it('does NOT false-positive a short-but-complete chapter (e.g. a preface)', () => {
     const body = 'PREFACE. A short opening note. For the future.';
     const sentences = [sent('PREFACE.'), sent('A short opening note.'), sent('For the future.')];
