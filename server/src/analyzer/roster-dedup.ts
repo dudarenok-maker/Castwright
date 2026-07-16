@@ -227,8 +227,23 @@ export function dedupeRosterByName(
   const droppedT3 = new Set<string>();
   for (const members of t3components.values()) {
     if (members.length < 2) continue;
-    // NOTE: no component-level gender check — the per-edge gate above already
-    // prevents a cross-gender pair from ever landing in the same component.
+    // Component-consistency guard (defense-in-depth). The per-edge gate only
+    // sees pairs: it drops a conflicting edge (male↔female, male↔neutral,
+    // female↔neutral — `gendersConflict` treats all three as mutually
+    // distinct), but it CANNOT stop an unknown-gender node from linking to two
+    // rows of DIFFERENT concrete genders (unknown conflicts with neither).
+    // Union-find is transitive, so e.g. male—unknown—female co-land in one
+    // component with no conflicting edge ever allowed — and the merge below
+    // would then collapse a female into a male row (the Night Watch over-merge).
+    // Mirror the per-edge notion of conflict: if a component carries ≥2 distinct
+    // CONCRETE genders, it is contradictory — refuse the whole auto-merge and
+    // leave the members standing for the user rather than pick a wrong survivor.
+    // (Forcing gender required in the analyzer grammar keeps unknown-gender
+    // rosters rare, but other engines / pre-fix cast.json can still produce them.)
+    const concreteGenders = new Set(
+      members.map((m) => m.gender).filter((g) => g === 'male' || g === 'female' || g === 'neutral'),
+    );
+    if (concreteGenders.size > 1) continue;
     // Survivor = most name tokens (prefer real name), then most lines, then
     // earliest roster order — deterministic regardless of union order.
     // (Secondary line-count tiebreak can undercount a Tier-1/Tier-2a survivor

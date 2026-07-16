@@ -178,6 +178,51 @@ describe('dedupeRosterByName Tier-3 (alias coreference — strong merge)', () =>
     expect(r.rewrites).toEqual({ a: 'b', k: 'b' });
   });
 
+  it('does NOT merge a component where an unknown-gender node bridges a male and a female', () => {
+    // Fail-open guard: the per-edge gender gate lets an UNKNOWN-gender node link
+    // to both a male and a female (unknown conflicts with neither). Union-find is
+    // transitive, so male—unknown—female all co-land in one component even though
+    // no male↔female edge was ever allowed. Without the component-consistency
+    // check this collapsed «Галина» (female) into «Максим» (male) — the exact
+    // Night Watch over-merge. The whole contradictory component must be refused.
+    const chars = [
+      c({ id: 'max', name: 'Максим', gender: 'male', aliases: ['Мост'] }),
+      c({ id: 'bridge', name: 'Мост', aliases: ['Максим', 'Галина'] }), // gender unset
+      c({ id: 'galina', name: 'Галина', gender: 'female', aliases: ['Мост'] }),
+    ];
+    const r = dedupeRosterByName(chars as any, [
+      ...sent('max', 10),
+      ...sent('bridge', 5),
+      ...sent('galina', 8),
+    ]);
+    // No auto-merge: all three rows survive, male and female stay distinct.
+    expect(r.characters).toHaveLength(3);
+    const names = r.characters.map((ch) => ch.name).sort();
+    expect(names).toEqual(['Галина', 'Максим', 'Мост']);
+    expect(r.rewrites).toEqual({});
+  });
+
+  it('does NOT merge a male and a neutral bridged by an unknown-gender node', () => {
+    // The guard mirrors the per-edge conflict semantics: male/female/neutral are
+    // all mutually distinct. An UNKNOWN node bridging a male and a neutral forms
+    // a component (unknown conflicts with neither), and male+neutral is just as
+    // contradictory as male+female — so it must be refused too, not only the
+    // narrow male+female case. (A directly-gendered bridge wouldn't form edges at
+    // all; the unknown bridge is what lets the mismatched pair co-land.)
+    const chars = [
+      c({ id: 'max', name: 'Максим', gender: 'male', aliases: ['Мост'] }),
+      c({ id: 'bridge', name: 'Мост', aliases: ['Максим', 'Дух'] }), // gender unset
+      c({ id: 'dukh', name: 'Дух', gender: 'neutral', aliases: ['Мост'] }),
+    ];
+    const r = dedupeRosterByName(chars as any, [
+      ...sent('max', 10),
+      ...sent('bridge', 5),
+      ...sent('dukh', 8),
+    ]);
+    expect(r.characters).toHaveLength(3);
+    expect(r.rewrites).toEqual({});
+  });
+
   it('collapses a Tier-1 canonical that then becomes a Tier-3 victim (cross-tier rewrite chain)', () => {
     // Two «Анна» rows → Tier-1 merges them into a synthesized canonical id
     // `анна` (safeId), unioning aliases. That `анна` canonical then forms a
