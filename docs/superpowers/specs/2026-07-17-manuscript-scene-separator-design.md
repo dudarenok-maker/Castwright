@@ -1,182 +1,222 @@
-# Manuscript view: visual scene-change separator — design
+# Scene-aware chunking + manuscript scene-change separator — design
 
-- **Issue:** #1679
-- **Status:** approved (design)
+- **Issue:** #1679 (display) — now unified with the RC3 chunker scene-straddle concern noted on that issue.
+- **Status:** approved (design), revised after adversarial review
 - **Date:** 2026-07-17
-- **Scope:** server (analyzer + EPUB/MOBI parser) + OpenAPI schema + frontend (manuscript view)
+- **Scope:** server (stage-2 analyzer chunking + EPUB/MOBI parser + strict handoff schema) + OpenAPI schema + frontend (manuscript view)
 
 ## Problem
 
 The manuscript / script-review view renders consecutive scenes with **no
 visual boundary**. A scene break in the source (`* * *`, dinkus `⁂`, `<hr>`)
-shows as ordinary flowing text, so the reader/editor cannot see where one
-scene ends and the next begins.
+shows as ordinary flowing text, so the editor cannot see where one scene ends
+and the next begins.
 
-This is not only a polish gap — it hid a real analyzer bug. On *Ночной дозор*
-(Night Watch), first-person «я» material was mis-attributed across characters,
-and it was hard to spot precisely because the scenes **looked merged
-together**. Scene boundaries are where attribution context resets (a new scene
-can change who is present/speaking), so making them visible directly aids
-spotting mis-attribution across a seam.
+This is not only polish. On *Ночной дозор* (Night Watch), first-person «я»
+material was mis-attributed across characters, and it was hard to spot because
+the scenes **looked merged**. Scene boundaries are where attribution context
+resets (a new scene can change who is present/speaking), so making them visible
+aids spotting mis-attribution across a seam.
 
-## Key finding that shapes the design
+## Why this became an analyzer change (adversarial-review finding)
 
-There is **no "scene" concept anywhere in the data model today**, and the
-scene-break signal is **destroyed during analysis**:
+The scene-break signal is **destroyed during analysis** and cannot be robustly
+recovered downstream:
 
 - `Sentence` carries no section/scene marker; the parser splits only on
   *chapter* headings.
-- When stage-2 chunking encounters a word-free separator line (`***`), it is
-  dropped entirely — **zero sentences, no `excludeFromSynthesis` residue**
-  (locked by the 2026-06-19 Night Watch ch7 regression test in
-  `server/src/analyzer/stage2-chunk.test.ts`).
-- The raw `sourceText` is available frontend-side, but there is **no positional
-  mapping** from raw text back to individual sentences.
+- A word-free separator line (`***`) is dropped **only when stage-2 isolates it
+  as its own chunk**, which happens **only for over-budget chapters**:
+  `splitBodyIntoChunks` early-returns `[body]` unchanged when
+  `body.length <= charBudget` (`server/src/analyzer/stage2-chunk.ts:134`), the
+  "overwhelming majority" path. In the common under-budget case a `* * *`
+  between two paragraphs is sent to the model **inside one chunk**, and whether
+  it leaves a residue sentence is model-dependent.
+- There is **no positional mapping** from model-output sentences back to body
+  positions. Any post-hoc "which sentence follows this separator" reconstruction
+  is fuzzy sentence↔body text alignment — the same brittle approach rejected for
+  the frontend, and the codebase has a scar proving it bites server-side too
+  (the entity-mismatch substring-match regression, `server/src/parsers/html-utils.ts:8-16`).
 
-So the issue's premise ("read-only display; the server keeps the separator;
-the view just shows it") is not true yet. Something must **carry** the
-boundary from where it is known (analysis time) to the view.
-
-### EPUB/MOBI reality (`stripHtml`)
-
-- `<p>* * *</p>` centered-asterisk breaks → the `* * *` text **survives** as a
-  word-free line. Detectable.
-- `<hr>` thematic breaks → caught by the generic tag-strip and **erased
-  entirely**. Not detectable today — and `<hr>` is the most common EPUB
-  scene-break representation.
-- CSS-styled empty-paragraph breaks → collapse to a blank gap; lost (out of
-  scope regardless).
+**Conclusion:** the only alignment-free, budget-independent mechanism is to make
+a scene-break line a **hard stage-2 chunk boundary** and attribute scene-by-scene.
+This is exactly the RC3 "chunker splits by size, not scene boundary" fix the
+issue anticipated. It is therefore an analyzer change, **not** a read-only view
+tweak — a deliberate, accepted scope expansion.
 
 ## Decisions
 
-1. **Signal source: server-preserved metadata.** Detect scene breaks
-   server-side at analysis time and persist them as additive per-sentence
-   metadata. (Frontend re-derivation from `sourceText` was rejected — see
-   Alternatives.)
-2. **Detection scope: explicit word-free separator lines only.** A scene break
-   is any body line that normalizes to zero words (`* * *`, `***`, `⁂`,
-   `• • •`, `---`/`―`). Blank-gap detection is out of scope: markdown-normalized
-   bodies separate every paragraph with a blank line, so a gap carries no
-   reliable scene-break signal.
-3. **Divider style: hairline + ornament.** Two short faint hairline rules
-   flanking a centered Lora-serif `✦`, with generous vertical spacing. Reads as
-   a literary scene break; uses existing `--ink` token at low opacity, no new
-   color token, no hex literals.
+1. **Mechanism: scene-aware chunking.** Split each chapter body into scenes at
+   word-free separator lines *before* budget chunking; attribute each scene
+   independently; flag the first sentence of every post-break scene. Robust, no
+   text alignment, works on under-budget chapters.
+2. **Detection scope: explicit word-free separator lines only.** A scene
+   delimiter is any blank-line-delimited paragraph *unit* that normalizes to
+   zero words (`* * *`, `***`, `⁂`, `• • •`, `---`/`―`) — reusing
+   `hasAttributableContent` (`server/src/analyzer/stage2-coverage.ts`). Blank
+   gaps are out of scope (markdown separates every paragraph with a blank line).
+3. **Data model: additive per-sentence `sceneBreakBefore?: boolean`.**
+4. **Divider style: hairline + centered Lora-serif `✦`** flanked by two faint
+   `--ink` hairline rules, generous vertical spacing. No new color token, no hex
+   literals.
 
 ## Design
 
-### 1. Detection (server, analysis time)
+### 1. Scene-aware chunking (server, `stage2-chunk.ts`)
 
-A scene break = a **word-free separator line** in the chapter body — reusing
-the exact "word-free chunk" notion the chunker already relies on for its skip
-logic, so there is no new glyph taxonomy to maintain. Two pieces:
+Per chapter, at the top of the stage-2 chapter runner (`runStage2ChapterChunked`):
 
-- **`stripHtml` (EPUB/MOBI path, `server/src/parsers/html-utils.ts`):** convert
-  `<hr>` to a canonical word-free separator line **before** the generic
-  tag-strip, so `<hr>`-style breaks survive into the body instead of being
-  erased. Asterisk-paragraph breaks already survive; this closes the biggest
-  real-world gap. (MOBI shares `stripHtml`, so it is covered too.)
-- **Stage-2 assembly:** locate word-free separator lines in the chapter body
-  relative to the ordered sentence list, and mark the sentence that immediately
-  follows each break. The separator line itself still produces **no sentence**
-  (unchanged — the ch7 regression test stays green); we only record that it was
-  there.
+1. **Split the body into scenes** at word-free separator units. Split the body
+   into blank-line paragraph units (same `\n[ \t]*\n` unit boundary
+   `splitBodyIntoChunks` already uses); a unit for which `hasAttributableContent`
+   is false is a **scene delimiter**, not content. Consecutive delimiters and a
+   leading delimiter collapse (they bound empty scenes, which are skipped).
+2. **Chunk + attribute each scene independently** via the existing
+   budget-chunking + coverage-retry path (`splitBodyIntoChunks` +
+   `mergeTinyChunks` run *within* a scene). Scene order is preserved; the runner
+   tracks which scene each emitted sentence came from.
+3. **Flag the boundary:** the first sentence of each scene after scene 0 gets
+   `sceneBreakBefore = true`. Scene 0's first sentence never gets it (the chapter
+   heading is already the boundary).
 
-**Mechanism choice deferred to the plan.** Two candidate seams, both running at
-analysis time against the authoritative body (before any client edits or
-audio-tag round-trips — which is why this is robust here and would be fragile
-on the client): (a) emit a scene-break event from the body-splitter tied to the
-next word-bearing chunk's first sentence; or (b) a post-assembly alignment pass
-correlating separator-line positions with sentence ordinals. The plan selects
-and justifies one.
+The separator unit itself still produces **no sentence** (unchanged behavior;
+the 2026-06-19 ch7 regression test — `stage2-chunk.test.ts` — stays green: a
+lone `***` yields no `***` sentence and the chapter completes cleanly; it gains
+one new assertion that the following paragraph's first sentence is flagged).
 
-### 2. Data model
+**Attribution impact (stated honestly):** scene-aware chunking changes stage-2
+chunk boundaries, so a chapter with scene breaks may attribute differently than
+before — generally *better*, because the model no longer straddles two scenes in
+one call (the RC3 failure mode). This is an accepted, intended behavior change;
+it is **not** "read-only." Preceding-context policy at a scene boundary (reset
+vs. carry) is a plan-level detail.
 
-Add one optional field to the `Sentence` schema:
+**Cost:** a multi-scene chapter now makes ≥2 model calls where it previously made
+1. Negligible for local engines (the Night Watch driving case). A moderate,
+within-daily-cap increase for cloud Gemini; the existing per-model RPD limiter
+already governs it. No new rate-limit work required.
 
-```
-sceneBreakBefore?: boolean   // true on the first sentence after a scene break
-```
+### 2. EPUB/MOBI: preserve `<hr>` (server, `html-utils.ts`)
 
-- **OpenAPI** `Sentence` schema (source of truth) + regenerate
+`stripHtml` currently erases `<hr>` via its generic `<[^>]+>` pass
+(`html-utils.ts:41-45`) while `</p>`→`\n\n` already preserves `<p>* * *</p>` as
+a line (`:39`). Add `<hr>` → a canonical word-free separator line **before** the
+generic strip, so `<hr>`-style breaks survive into the body as a scene delimiter.
+Confirmed feasible: EPUB feeds raw chapter HTML through `stripHtml`
+(`epub.ts:150,256`; nothing strips `<hr>` earlier), and MOBI shares the helper
+(`mobi.ts:25,166`). `<hr>` is the most common EPUB scene-break representation, so
+this closes the biggest real-world gap.
+
+### 3. Data model — TWO server schemas + OpenAPI
+
+`sceneBreakBefore` must be added in **all three** places (the adversarial review
+caught that the analyzer path has its own strict schema):
+
+- **`server/src/handoff/schemas.ts` `sentenceSchema`** — add
+  `sceneBreakBefore: z.boolean().optional()`. This schema is `.strict()`
+  (`:137`) and `SentenceOutput` is inferred from it (`:182`), so omitting it is a
+  typecheck error and `.strict()` would reject the key. Follows the established
+  additive-optional pattern (`emotion`/`instruct`/`vocalization`/
+  `excludeFromSynthesis`, `:126-135`).
+- **OpenAPI `Sentence` schema** (source of truth) → regenerate
   `src/lib/api-types.ts` via `npm run openapi:types`.
-- **Persisted** in `state.json` so it survives reloads without re-analysis.
-- Purely additive — absent behaves exactly as today. A break at the very
-  *start* of a chapter is dropped (nothing precedes it; the chapter heading is
-  already the boundary).
+- **Persistence:** `state.json` read path uses `sentenceSchema.passthrough()`
+  (`server/src/store/book-state.ts:594`), so the field round-trips once it is in
+  `sentenceSchema`. Purely additive; absent behaves exactly as today.
 
-### 3. Rendering (frontend, `src/views/manuscript.tsx`)
+### 4. Rendering (frontend, `src/views/manuscript.tsx`)
 
-**Force a segment boundary at each scene break.** In the `segments` useMemo,
-start a new segment when a sentence has `sceneBreakBefore`, *even if the speaker
-is unchanged*. This is the key simplifying move: a break can otherwise fall
-mid-segment (narrator prose on both sides), which would force divider-drawing
-inside `SegmentRow`. By splitting the segment, the divider always renders at a
-segment boundary — one code path — and it visually reinforces the break (the
-narration becomes two blocks).
+**Split segments on the flag itself.** The `segments` useMemo starts a new
+segment when `s.sceneBreakBefore || s.characterId !== last.characterId`. Keying
+the split on the flag directly makes the invariant *the flagged sentence is
+always the first sentence of its segment* hold **by construction** — so a later
+boundary-drag that merges the flagged sentence's neighbors can never push the
+flag off the segment head (the review's divider-vanish failure mode). Each
+segment derives `sceneBreakBefore` from its first sentence.
 
-- Each segment derives `sceneBreakBefore: boolean` from its first sentence. The
-  render loop draws the **hairline + ✦** divider immediately *above* any segment
-  whose flag is true (never above the first segment in the chapter).
-- **Divider markup:** a centered flex row — two `flex-1` hairline rules at low
-  `--ink` opacity flanking a Lora-serif `✦`, with generous vertical padding.
-- **No boundary handle at a scene-break seam.** The drag-to-reassign
-  `BoundaryHandle` between two segments split *only* by a scene break is
-  suppressed — moving attribution across a scene break is not a meaningful edit,
-  and the divider occupies that gap instead.
+- The render loop draws the **hairline + ✦** divider immediately *above* any
+  segment whose `sceneBreakBefore` is true (never above the first segment in the
+  chapter).
+- **Suppress the boundary handle at the seam.** The `BoundaryHandle` between
+  segment *i-1* and *i* is omitted when segment *i*'s `sceneBreakBefore` is true.
+  This is an explicit new per-boundary predicate in the render loop
+  (`manuscript.tsx` ~1234), not free — the divider occupies that gap instead, and
+  reassigning attribution across a scene break is not a meaningful edit.
 - **Virtualization:** the divider lives inside the segment's virtual row (above
-  its content), so `measureElement` captures its true height automatically — no
-  `estimateSize` retune. Identical behavior on the flat (<60 segment) path.
+  its content), so `measureElement` captures its height automatically — no
+  `estimateSize` retune. Identical on the flat (<60 segment) path.
 - **Excluded chapters** render nothing (unchanged early-return).
 
-### 4. Edge cases
+### 5. Edge cases (corrected per review)
 
-- Break before the chapter's first sentence → dropped (no leading divider).
-- Manual **split** of a flagged sentence → the reducer carries
-  `sceneBreakBefore` to the first resulting piece so the divider does not vanish
-  on edit. **Boundary-drag** reassigns `characterId` only (never deletes
-  sentences), so the flag is untouched.
-- A run of consecutive separators (`* * *` then `⁂`) collapses to a single break
-  (only the next word-bearing sentence is flagged).
+- **`splitSentence` must STRIP the flag from non-first pieces.** The reducer
+  currently spreads `...original` into every piece
+  (`src/store/manuscript-slice.ts:464-476`), which would *duplicate*
+  `sceneBreakBefore` onto all offspring and paint a spurious mid-scene divider.
+  Mirror the `instruct`/`vocalization` null-out (`:475`): keep the flag on the
+  first piece only.
+- **Boundary-drag** reassigns `characterId` only (`commitBoundaryMove`,
+  `manuscript.tsx:573-583`, indexing the full `sentences[]` via `absIdx`), never
+  deletes sentences and never touches the flag — and because the segment split
+  keys on the flag, the divider is stable across drags.
+- **Chapter that is only a separator** → the body normalizes to zero words and
+  the parsers already skip empty bodies (`epub.ts:152 if (!body) continue`), so
+  there is no chapter and no sentence to flag. No-op.
+- **Leading / consecutive separators** collapse (they bound empty scenes, which
+  are skipped) — a single break, one flag on the next word-bearing sentence.
+- **False-positive guard:** a page-number-only unit (`42`) must not read as a
+  scene break. Confirm `words()`/`hasAttributableContent` treats a bare number as
+  a word (→ not a delimiter) in the plan; such residue is typically already
+  `excludeFromSynthesis` anyway.
 
 ## Testing
 
-- **Server unit:** `stripHtml` converts `<hr>` to a surviving word-free line;
-  stage-2 assembly sets `sceneBreakBefore` on the correct following sentence and
-  on nothing else; the existing ch7 "no sentence for `***`" test stays green.
-  Fixture: a small body with a `* * *` mid-chapter.
-- **Frontend unit** (`manuscript.test.tsx`): a segment with `sceneBreakBefore`
-  renders the divider; segments split at a break even for same-speaker prose; no
-  divider above segment 0; no boundary handle at the seam.
-- **E2E** (`e2e/`): one spec asserting the divider is visible in the manuscript
-  view for a fixture book with a scene break (crosses the redux/layout seam the
-  e2e bar calls for). Add a scene break to the Coalfall fixture (or its Russian
+- **Server — scene-aware chunking** (`stage2-chunk.test.ts`): a `* * *` in an
+  **under-budget** chapter now splits into two scenes and flags the following
+  paragraph's first sentence (this is the case the old design missed); the ch7
+  isolated-`***` test stays green + gains the flag assertion; consecutive/leading
+  separators collapse to one break; a page-number unit is not a break.
+- **Server — `stripHtml`**: `<hr>` converts to a surviving word-free line;
+  `<p>* * *</p>` still survives.
+- **Server — schema round-trip**: an assembled sentence with `sceneBreakBefore`
+  passes `sentenceSchema` (strict) and round-trips through the `state.json` read
+  path.
+- **Frontend unit** (`manuscript.test.tsx`): a flagged sentence renders the
+  divider and is always its segment's head even for same-speaker prose; no
+  divider above segment 0; no boundary handle at the seam; a boundary-drag near
+  the seam leaves the divider in place; `splitSentence` keeps the flag on the
+  first piece only.
+- **E2E** (`e2e/`): the divider is visible in the manuscript view for a fixture
+  book with a scene break. Add a `* * *` to the Coalfall fixture (or its Russian
   variant) rather than inventing a new manuscript.
-- **Regression plan:** new `docs/features/` doc (cross-cutting: server + schema
-  + frontend); tag the issue `needs-plan`.
+- **Regression plan:** new `docs/features/` doc (cross-cutting: analyzer +
+  parser + schema + frontend); tag the issue `needs-plan`. Note the RC3 unification.
 
-## Re-analysis implication (stated honestly)
+## Re-analysis implication
 
-The flag only populates when a book is **(re-)analyzed** — existing analyzed
-books show no dividers until then. Acceptable and aligned: Night Watch, the
-motivating case, is already slated for re-analysis under the analyzer fix. No
-backfill/migration is attempted.
+The flag populates only on **(re-)analysis** (detection runs at assembly time).
+The re-analysis merge spreads fresh analysis then overrides only user-authored
+fields (`manuscript-slice.ts:150-158`), so a server-computed `sceneBreakBefore`
+rides in cleanly. Existing analyzed books show no dividers until re-analyzed;
+Night Watch is already slated for re-analysis under the analyzer fix. No backfill.
 
 ## Alternatives considered and rejected
 
-- **Frontend re-derivation from `sourceText`** — greedy sentence↔raw-text
-  alignment on the client is brittle under audio-tag rewrites and
-  re-segmentation, and duplicates on every render what the server can compute
-  once at analysis time.
-- **Blank-gap detection** — no reliable signal in markdown-normalized bodies;
-  would put a divider between every paragraph or need a fragile threshold.
+- **Server-side text alignment** (correlate separator positions to sentence
+  ordinals post-assembly) — the fragile sentence↔body alignment the review
+  showed bites server-side too (entity-mismatch regression). Rejected.
+- **Frontend re-derivation from `sourceText`** — same alignment fragility, on the
+  client, recomputed every render. Rejected.
+- **Keep truly read-only (tag only budget-isolated separators)** — misses the
+  common under-budget case; unpredictable coverage. Rejected.
 - **Chapter-level break-list** instead of a per-sentence flag — the flag renders
-  naturally in the existing segment loop and survives sentence-id remaps; a
-  side list would need its own remap bookkeeping.
+  in the existing segment loop and survives sentence-id remaps. Rejected.
 
 ## Out of scope
 
-- Reading-experience (listen) view — this is a manuscript/editorial affordance.
-- Any change to attribution data or to synthesis (the separator remains
-  non-spoken, exactly as today).
-- CSS-styled/blank-gap scene breaks in EPUBs.
+- Reading-experience (listen) view — this is an editorial affordance.
+- Changing **which speaker** a line is attributed to as a *goal* (attribution
+  *outcomes* may shift as a side effect of scene-aware chunking; that is
+  intended, not a separate objective).
+- CSS-styled / blank-gap scene breaks that leave no word-free line.
+- The separator remains **non-spoken**, exactly as today.
