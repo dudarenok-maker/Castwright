@@ -147,6 +147,10 @@ describe('analyzer grammar schemas — required tone (Task 6)', () => {
     ...charWithoutTone,
     tone: { warmth: 50, pace: 60, authority: 70, emotion: 40 },
   };
+  // Grammar now also requires gender (constrained decoding forces the local
+  // model to emit it — see the required-tone precedent). A fully-conformant
+  // grammar character therefore carries BOTH tone and gender.
+  const charWithToneAndGender = { ...charWithTone, gender: 'female' as const };
 
   it('analyzerCharacterSchema rejects a character with NO tone (grammar strict)', () => {
     expect(analyzerCharacterSchema.safeParse(charWithoutTone).success).toBe(false);
@@ -156,8 +160,19 @@ describe('analyzer grammar schemas — required tone (Task 6)', () => {
     expect(characterSchema.safeParse(charWithoutTone).success).toBe(true);
   });
 
-  it('analyzerCharacterSchema accepts a character with all four tone axes', () => {
-    expect(analyzerCharacterSchema.safeParse(charWithTone).success).toBe(true);
+  it('analyzerCharacterSchema rejects a character with tone but NO gender (grammar strict)', () => {
+    // charWithTone has tone but no gender — must fail the grammar schema so
+    // constrained decoding forces the model to emit gender on every character.
+    expect(analyzerCharacterSchema.safeParse(charWithTone).success).toBe(false);
+  });
+
+  it('characterSchema still accepts a character with NO gender (validation tolerant)', () => {
+    // Stored cast.json validation stays lenient so pre-fix analyses keep loading.
+    expect(characterSchema.safeParse(charWithTone).success).toBe(true);
+  });
+
+  it('analyzerCharacterSchema accepts a character with all four tone axes AND gender', () => {
+    expect(analyzerCharacterSchema.safeParse(charWithToneAndGender).success).toBe(true);
   });
 
   it('stage1ChapterGrammarSchema JSON-schema marks tone required on character and axes required on tone', () => {
@@ -171,10 +186,12 @@ describe('analyzer grammar schemas — required tone (Task 6)', () => {
     const charArraySchema = props['characters'] as Record<string, unknown>;
     const charItemSchema = charArraySchema['items'] as Record<string, unknown>;
 
-    // tone must appear in the character's required array
+    // tone AND gender must appear in the character's required array so the
+    // constrained decoder forces the local model to emit both every time.
     const charRequired = charItemSchema['required'] as string[];
     expect(Array.isArray(charRequired)).toBe(true);
     expect(charRequired).toContain('tone');
+    expect(charRequired).toContain('gender');
 
     // tone's own JSON schema must list all four axes in its required array
     const charItemProps = charItemSchema['properties'] as Record<string, unknown>;

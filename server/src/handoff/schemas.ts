@@ -200,10 +200,21 @@ export const requiredToneSchema = z
   })
   .strict();
 
-/** Character schema for the analyzer GRAMMAR — tone required so constrained
-    decoding nudges the model to emit all four axes. Never used for validation
-    (that stays characterSchema, tone optional). */
-export const analyzerCharacterSchema = characterSchema.extend({ tone: requiredToneSchema });
+/** Character schema for the analyzer GRAMMAR — tone AND gender required so
+    constrained decoding forces the model to emit them on every character.
+    `gender` is optional in `characterSchema` (validation), but a small local
+    model (gemma4-e4b) reliably emits only the fields the grammar marks
+    required: with gender optional it dropped gender on ~all characters of a
+    Russian per-chapter run (tone, which IS required, came through 100%), which
+    in turn disabled the roster-dedup cross-gender merge gate and let female
+    minors collapse into a male row. Forcing gender here mirrors the tone fix.
+    `neutral` is always an available enum value, so constrained decoding can
+    never deadlock on it. Never used for validation (that stays
+    characterSchema, gender + tone optional so old cast.json files load). */
+export const analyzerCharacterSchema = characterSchema.extend({
+  tone: requiredToneSchema,
+  gender: z.enum(['male', 'female', 'neutral']),
+});
 
 /** Grammar variant of stage1ChapterSchema — embeds analyzerCharacterSchema
     so the model must emit tone on every character it returns. */
