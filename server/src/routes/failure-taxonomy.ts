@@ -107,10 +107,10 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     fatal: true,
     source: 'analysis',
     matchName: 'DailyQuotaExhaustedError',
-    /* Same free-tier regex as statusToFailureCode, but applied to the RAW string —
+    /* Same per_day regex as statusToFailureCode, but applied to the RAW string —
        the two paths see different inputs; do not unify. */
     match: (raw, ctx) =>
-      ctx.status === 429 && /free[_-]?tier|quotaValue":"\d{1,3}"/i.test(raw),
+      ctx.status === 429 && /per[_-]?day|quotaValue":"\d{1,3}"/i.test(raw),
   },
   {
     code: 'analyzer-rate-limit',
@@ -416,9 +416,9 @@ export function tryParseApiError(
 function statusToFailureCode(status: number | undefined, message?: string): FailureCode {
   if (!status) return 'unknown';
   if (status === 429) {
-    /* Same regex as the analyzer-daily-quota signature, but applied to the parsed envelope MESSAGE
+    /* Same per_day regex as the analyzer-daily-quota signature, but applied to the parsed envelope MESSAGE
        only (raw would false-positive on per-minute quotaValue details). Do not unify. */
-    if (message && /free[_-]?tier|quotaValue":"\d{1,3}"/i.test(message)) return 'analyzer-daily-quota';
+    if (message && /per[_-]?day|quotaValue":"\d{1,3}"/i.test(message)) return 'analyzer-daily-quota';
     return 'analyzer-rate-limit';
   }
   if (status === 503 || status === 500) return 'analyzer-unreachable';
