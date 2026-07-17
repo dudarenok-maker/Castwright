@@ -171,3 +171,28 @@ export function alignSentences(
 
   return { aligned, alignedPct };
 }
+
+/** #1679 — Locate each sentence's raw start offset in `body`, reusing the same
+    normalization + windowed forward-match this module already uses for
+    alignment. Returns an array parallel to `sentences`: the raw body offset of
+    each sentence's first character, or null when its text couldn't be located
+    (model paraphrase / tag drift). A miss NEVER advances the cursor, so one bad
+    sentence can't desync the rest — identical semantics to alignSentences.
+
+    Unlike alignSentences this needs only the body (no ParagraphEvidence), so it
+    runs on every chapter regardless of whether the dialogue-structure engine is
+    active. Pure: no I/O, no model calls. */
+export function locateSentenceOffsets(
+  sentences: Array<{ text: string }>,
+  body: string,
+): Array<number | null> {
+  const { text: normBody, rawStart } = buildNormalizedMap(body);
+  let cursor = 0;
+  return sentences.map((s) => {
+    const needle = normalize(s.text);
+    const matchStart = needle.length > 0 ? findMatch(normBody, needle, cursor) : -1;
+    if (matchStart === -1) return null;
+    cursor = matchStart + needle.length;
+    return rawStart[matchStart];
+  });
+}

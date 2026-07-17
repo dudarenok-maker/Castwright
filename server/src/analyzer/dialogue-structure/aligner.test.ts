@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { conventionsFor } from './lang/index.js';
 import { buildNameIndex } from './name-matcher.js';
 import { parseChapterStructure } from './parser.js';
-import { alignSentences } from './aligner.js';
+import { alignSentences, locateSentenceOffsets } from './aligner.js';
 import type { SentenceOutput } from '../../handoff/schemas.js';
 
 const mkSentence = (id: number, characterId: string, text: string): SentenceOutput => ({
@@ -138,5 +138,44 @@ describe('alignSentences', () => {
     expect(result.aligned).toHaveLength(1);
     expect(result.aligned[0].spans).toEqual([speechSpan]);
     expect(result.alignedPct).toBe(100);
+  });
+});
+
+describe('locateSentenceOffsets (#1679)', () => {
+  it('returns each sentence start offset in body order', () => {
+    const body = 'The door opened. A shadow fell across the floor.';
+    const offsets = locateSentenceOffsets(
+      [{ text: 'The door opened.' }, { text: 'A shadow fell across the floor.' }],
+      body,
+    );
+    expect(offsets[0]).toBe(0);
+    expect(offsets[1]).toBe(body.indexOf('A shadow'));
+  });
+
+  it('returns null for a sentence whose text is not in the body (paraphrase/drift)', () => {
+    const body = 'The door opened.';
+    const offsets = locateSentenceOffsets(
+      [{ text: 'The door opened.' }, { text: 'Something else entirely.' }],
+      body,
+    );
+    expect(offsets[0]).toBe(0);
+    expect(offsets[1]).toBeNull();
+  });
+
+  it('a mid-sequence miss does not desync later matches (cursor unmoved on miss)', () => {
+    const body = 'Alpha here. Beta here. Gamma here.';
+    const offsets = locateSentenceOffsets(
+      [{ text: 'Alpha here.' }, { text: 'nope.' }, { text: 'Gamma here.' }],
+      body,
+    );
+    expect(offsets[0]).toBe(0);
+    expect(offsets[1]).toBeNull();
+    expect(offsets[2]).toBe(body.indexOf('Gamma'));
+  });
+
+  it('tolerates smart-quote / dash normalization drift', () => {
+    const body = 'He said — quietly — nothing.'; // em dashes in body
+    const offsets = locateSentenceOffsets([{ text: 'He said -- quietly -- nothing.' }], body);
+    expect(offsets[0]).toBe(0);
   });
 });
