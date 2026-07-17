@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { sampleAndRecordVram } from './model-vram-stats.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from '../tts/engine-vram-cost.js';
-import { acquireAnalyzerSlot } from './analyzer-concurrency.js';
+import { acquireAnalyzerSlot, describeAnalyzerConcurrency } from './analyzer-concurrency.js';
 import { getLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { getResolvedOllamaUrl } from '../workspace/user-settings.js';
 import { configValue } from '../config/resolver.js';
@@ -53,6 +53,10 @@ import {
   loadSkill,
   type SkillName,
 } from './gemini.js';
+
+if (process.env.VITEST !== 'true' && process.env.NODE_ENV !== 'test') {
+  console.log(describeAnalyzerConcurrency(costForEngine('analyzer'), gpuSemaphore.budget));
+}
 
 /** Sentinel error class. The FallbackAnalyzer decorator in index.ts uses
     `err instanceof LocalUnreachableError` as the SOLE trigger for Gemini

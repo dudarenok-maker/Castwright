@@ -136,6 +136,10 @@ all want a real Ollama + a long chapter to confirm end to end).
    the response (length)" now completes (logged as attributed in N sections).
 5. CPU box (`ASR`/Ollama on CPU): first-chapter ETA seeds slow (~15 chars/s),
    not GPU-fast.
+6. Under K>1 (`feat/server-analyzer-ollama-concurrency`), `LiveChapterTicker`
+   renders every in-flight chapter (already 2-wide today); verify it reads
+   well at K=4 and the per-phase progress bar stays monotonic (server
+   completed-count must not regress). One e2e/screenshot check.
 
 ## Ship notes
 

@@ -87,6 +87,10 @@ export async function recordVramSample(rec: VramSampleRecord): Promise<void> {
         out.push(r);
       }
       out.reverse();                                      // restore chronological
+      /* NOTE (M5): this read-then-writeFile trim is not concurrency-safe; K-wide
+         analyzer calls make interleaved rewrites likelier. Best-effort telemetry,
+         try/catch-wrapped, never thrown — worst case a torn/dropped sample line.
+         No correctness impact; out of scope for the concurrency work. */
       await writeFile(path, `${out.map((r) => JSON.stringify(r)).join('\n')}\n`, 'utf8');
     }
   } catch {
