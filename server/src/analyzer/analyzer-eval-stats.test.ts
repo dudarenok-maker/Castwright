@@ -23,10 +23,11 @@ beforeEach(() => { __resetAnalyzerEvalQueueForTest(); try { writeFileSync(analyz
 
 describe('foldPassTiming', () => {
   it('token-weights tok/s across sub-calls (not a mean of rates)', () => {
-    // 100 tok in 1e9 ns (100 t/s) + 900 tok in 9e9 ns (100 t/s) → 1000 tok / 10s = 100
-    const f = foldPassTiming([t({ evalCount: 100, evalDuration: 1e9 }), t({ evalCount: 900, evalDuration: 9e9 })]);
-    expect(f?.evalTokS).toBeCloseTo(100, 5);
-    expect(f?.evalCount).toBe(1000);
+    // 100 tok @ 100 t/s (1e9 ns) + 100 tok @ 25 t/s (4e9 ns).
+    // Token-weighted: 200 tok / 5s = 40 t/s. A mean of per-call rates would give 62.5.
+    const f = foldPassTiming([t({ evalCount: 100, evalDuration: 1e9 }), t({ evalCount: 100, evalDuration: 4e9 })]);
+    expect(f?.evalTokS).toBeCloseTo(40, 5);
+    expect(f?.evalCount).toBe(200);
     expect(f?.subCalls).toBe(2);
   });
   it('loadMs is the MAX over sub-calls, in ms', () => {

@@ -169,6 +169,6 @@ export async function withPassEval<T>(
     outcome = 'failed';
     throw e;
   } finally {
-    void recordPassEval(acc, { ...ctx, chunkCount, outcome });
+    await recordPassEval(acc, { ...ctx, chunkCount, outcome });
   }
 }
