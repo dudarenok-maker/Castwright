@@ -64,7 +64,11 @@ Two radio options:
 1. **Make «{alias}» its own character** — today's split-to-new path.
 2. **Move «{alias}» to → [character ▾]** — a `<select>` of every roster
    character **except** the source. No default selection; picking a target is
-   required to enable Continue for this branch.
+   required to enable Continue for this branch. Background buckets
+   (`narrator`, `unknown-male`, `unknown-female`) are **intentionally kept** as
+   valid destinations — a first-person alias legitimately belongs on Narrator
+   (e.g. «Я» narrator-protagonist), and the reassign modal already surfaces its
+   narrator-target warning for the follow-on line move.
 
 Footer: `[Cancel]` / `[Continue]`. Continue is disabled until the choice is
 complete (option 2 requires a target). Cancel closes with no side effect.
@@ -96,6 +100,12 @@ Behavior:
    The append is case-insensitive-idempotent (mirrors `add-alias`): if the
    target already carries the alias, the append is a no-op and the route sets
    `alreadyPresent: true`, but the source strip still happens regardless.
+   **Name-collision:** unlike `add-alias` (which 400s when `aliasName ===
+   target.name`), repoint treats that case as `alreadyPresent` too — the target's
+   primary name already covers the alias, so strip from source and no-op the
+   append rather than rejecting. (400-ing here would strip-then-fail and strand
+   the alias — and this is exactly the target case the feature exists for:
+   moving a first-person alias onto the protagonist whose name may match it.)
 5. Apply both edits (source strip + target append, display casing preserved) in
    **one atomic `writeJsonAtomic(cast.json)`**.
 6. Compute `impactedChapters` exactly as unlink does (same source-attributed
@@ -128,9 +138,25 @@ New `applyRepointAlias({ sourceCharacterId, aliasName, targetCharacterId })`:
 - Idempotent under double-dispatch (network retry): a second run finds the alias
   already gone from source and already on target → no change.
 
-Persisted to `cast.json` by the existing cast persistence rule (same path
-add-alias / unlink already use). No sentence movement here — lines are handled
-by the reassign modal, exactly as in the unlink flow.
+No sentence movement here — lines are handled by the reassign modal, exactly as
+in the unlink flow.
+
+**Persistence (mirror `add-alias`, not `unlink`).** These are *different*
+mechanisms and the distinction matters:
+- `applyUnlinkAlias` is a redux-only delta — it has **no** entry in
+  `PERSIST_RULES` (`src/store/persistence-middleware.ts`); the roster change
+  survives a reload solely because the unlink *route* does `writeJsonAtomic`.
+- `applyAddAlias` **does** carry a client persist rule
+  (`'cast/applyAddAlias'` → writes `{ characters }`), added deliberately to win
+  a last-write race: a debounced full-cast PUT from an earlier edit can land
+  *after* the server's alias write and clobber it with a stale character list.
+
+Repoint mutates **two** characters (strip source + append target) and is exactly
+as exposed to that clobber race, so it mirrors `add-alias`: **add a new
+`'cast/applyRepointAlias'` entry to `PERSIST_RULES`** (`build: (s) => ({
+characters: s.cast.characters })`). This is the one new persistence wiring the
+feature needs — the route's own `writeJsonAtomic` handles the primary write; the
+client rule is the race-guard, matching add-alias.
 
 ### 5. Layout wiring (`src/components/layout.tsx`)
 
@@ -199,6 +225,13 @@ API + modal orchestration.
   - `unlink-alias-dialog.test.tsx` — Continue disabled until valid; Cancel is a
     no-op; both branches resolve the right choice; source excluded from target
     options; degenerate single-character roster doesn't crash.
+  - **Rewrite the three existing `profile-drawer.test.tsx` unlink cases** (the
+    "clicking the X dispatches onUnlinkAlias", "disables every X while an unlink
+    is in flight", and "surfaces a server error inline" tests): ✕ now opens the
+    dialog first, so they click ✕ → dialog → choose split/move → assert the
+    **widened** callback. The `aliasBusy` double-fire guard and inline-error
+    assertions move to the post-resolution (dialog-confirmed) path. The
+    `onUnlinkAlias` test-double type must widen to carry the destination.
 - **e2e** (`e2e/cast-alias-edit.spec.ts`): extend with the move-to-X path — open
   drawer, ✕ a chip, choose "Move to X", assert the chip lands under X and the
   Reassign Lines modal opens seeded to X.
