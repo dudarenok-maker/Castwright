@@ -11,6 +11,7 @@
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { sanitizeIdSegment } from '../util/safe-path.js';
 
 export type ChapterAudioExt = 'mp3' | 'm4a' | 'ogg';
 
@@ -40,8 +41,16 @@ const EXT_PROBE_ORDER: readonly FormatDescriptor[] = [
 ];
 
 export function findChapterAudio(audioRoot: string, slug: string): ChapterAudioFile | null {
+  /* `slug` is derived from user/import-controlled chapter metadata and reaches
+     this join unfiltered from every export builder. sanitizeIdSegment collapses
+     any `..` run and path separators to `_`, so a crafted slug like
+     `../../secret` can only ever resolve to a plain file *inside* audioRoot
+     (which won't exist → null), never escape it. It's a no-op on real slugs —
+     they contain no separators or `..` runs — so behaviour is unchanged for
+     every legitimate chapter. */
+  const safeSlug = sanitizeIdSegment(slug);
   for (const desc of EXT_PROBE_ORDER) {
-    const path = join(audioRoot, `${slug}.${desc.ext}`);
+    const path = join(audioRoot, `${safeSlug}.${desc.ext}`);
     if (existsSync(path)) {
       return { path, ext: desc.ext, mime: desc.mime, urlSuffix: desc.urlSuffix };
     }

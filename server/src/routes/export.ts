@@ -40,6 +40,7 @@ import { buildCaptions } from '../export/build-captions.js';
 import { writeFolderToSyncFolder, writeToSyncFolder } from '../export/sync-folder.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { sanitizeIdSegment } from '../util/safe-path.js';
 import {
   AVG_CHAPTER_BYTES,
   diskGuardMode,
@@ -155,7 +156,12 @@ async function rehydrateBook(bookDir: string, bookId: string): Promise<void> {
    against the per-book exports dir at read time so the workspace can
    move between machines without breaking download links. */
 function resolveArtifactPath(bookDir: string, job: BookExportJob): string {
-  return join(bookExportsDir(bookDir), job.filename);
+  /* `job.filename` is derived from the book title (slugified) but can also be
+     rehydrated from an on-disk manifest, so sanitise it as a single path
+     segment at every join. sanitizeIdSegment is a no-op on real export
+     filenames (`<slug>.zip`, `<slug>.sentence.srt`) — no separators, no `..`
+     runs — but neutralises any `..`/separator a tampered manifest could carry. */
+  return join(bookExportsDir(bookDir), sanitizeIdSegment(job.filename));
 }
 
 /* Plan 79 — when a new same-format export finishes, revoke any prior
@@ -358,7 +364,7 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
   const exportsRoot = bookExportsDir(located.bookDir);
   await mkdir(exportsRoot, { recursive: true });
   await mkdir(bookExportManifestsDir(located.bookDir), { recursive: true });
-  const outPath = join(exportsRoot, filename);
+  const outPath = join(exportsRoot, sanitizeIdSegment(filename));
 
   const job: BookExportJob = {
     id: exportId,
@@ -521,10 +527,14 @@ exportRouter.get('/:bookId/exports/:exportId/download', async (req: Request, res
     (err) => {
       if (!err) return;
       const status = (err as { status?: number }).status ?? 500;
+      /* Static format string with %s placeholders — the tainted `path` /
+         `err.message` are arguments, never the format itself (js/tainted-
+         format-string). */
       console.error(
-        `[export] sendFile failed for ${path}${
-          res.headersSent ? ' (after headers sent)' : ''
-        }: ${err.message}`,
+        '[export] sendFile failed for %s%s: %s',
+        path,
+        res.headersSent ? ' (after headers sent)' : '',
+        err.message,
         { status },
       );
       if (!res.headersSent) res.status(status).end();
@@ -641,7 +651,10 @@ async function runExportJob(
          rename pattern matches sync-folder.ts's tmp+renameWithRetry shape
          so the final clobber is atomic for any reader (the download
          endpoint, the user's File Explorer, the sync-folder copy). */
-      const buildPath = join(bookExportsDir(bookDir), `.${job.filename}.partial-${job.id}`);
+      const buildPath = join(
+        bookExportsDir(bookDir),
+        `.${sanitizeIdSegment(job.filename)}.partial-${job.id}`,
+      );
       try {
         const result =
           job.format === 'mp3-zip'
