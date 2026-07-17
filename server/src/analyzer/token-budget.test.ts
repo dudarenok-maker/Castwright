@@ -24,8 +24,19 @@ describe('cloudBodyCharBudget', () => {
     const body = 'a'.repeat(1000);
     expect(cloudBodyCharBudget(body, 5000)).toBe(cloudBodyCharBudget(body, 0) - 5000);
   });
+  it('reserves tokens in token-space (script-correct: expands at the body rate)', () => {
+    // Latin body: 4 chars/token → each reserved token removes 4 body chars.
+    const latin = 'a'.repeat(1000);
+    expect(cloudBodyCharBudget(latin, 0, 1000)).toBe(cloudBodyCharBudget(latin, 0) - 1000 * 4);
+    // Cyrillic body: 2.5 chars/token → each reserved token removes only 2.5 chars,
+    // so the SAME token reservation removes fewer chars than for Latin. A fixed
+    // char reservation could not track this — that's why stage-1 reserves tokens.
+    const cyr = 'а'.repeat(1000);
+    expect(cloudBodyCharBudget(cyr, 0, 1000)).toBe(cloudBodyCharBudget(cyr, 0) - 1000 * 2.5);
+  });
   it('never drops below the 2000 floor', () => {
     expect(cloudBodyCharBudget('a'.repeat(10), 10_000_000)).toBe(2000);
+    expect(cloudBodyCharBudget('a'.repeat(10), 0, 10_000_000)).toBe(2000);
   });
 });
 

@@ -32,8 +32,20 @@ export function resolveMaxInputTokensPerRequest(): number {
 }
 
 /** Char budget for a cloud request body sized to the per-request token cap,
-    minus fixed per-call overhead (roster/context/system). 2000-char floor. */
-export function cloudBodyCharBudget(body: string, reservedChars = 0): number {
-  const perRequestChars = Math.floor(resolveMaxInputTokensPerRequest() * charsPerTokenForText(body));
+    minus fixed per-call overhead (roster/context/system). 2000-char floor.
+
+    Two ways to reserve overhead:
+    - `reservedTokens` — TOKEN-space: subtracted from the cap BEFORE it is
+      converted to chars, so the reservation is script-correct (the remaining
+      token budget is expanded at the BODY's own chars/token rate). Use this for
+      a fixed, script-agnostic overhead like a large system instruction, whose
+      token cost is the same whatever script the body is in.
+    - `reservedChars` — CHAR-space: subtracted AFTER the char conversion. A
+      cruder approximation (it can't be right across scripts — see the header),
+      kept for the existing roster-length callers (script review / output-heavy
+      passes) that already pass a char count. */
+export function cloudBodyCharBudget(body: string, reservedChars = 0, reservedTokens = 0): number {
+  const availableTokens = Math.max(0, resolveMaxInputTokensPerRequest() - reservedTokens);
+  const perRequestChars = Math.floor(availableTokens * charsPerTokenForText(body));
   return Math.max(2000, perRequestChars - reservedChars);
 }
