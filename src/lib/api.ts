@@ -445,7 +445,8 @@ export interface UnlinkAliasResponse {
   newCharacter: Character;
   /** Chapters whose Phase-0a roster originally listed this alias, each
       with the IDs of sentences currently attributed to the source
-      character so the Reattribute Lines modal can render them. */
+      character so the Reassign Lines modal (unlink source) can render
+      them as candidates. */
   impactedChapters: UnlinkAliasImpactedChapter[];
 }
 /* POST /api/books/:bookId/cast/add-alias — append a name to a
@@ -3985,9 +3986,9 @@ async function mockUnlinkAlias({ aliasName }: UnlinkAliasArgs): Promise<UnlinkAl
 
      impactedChapters is intentionally empty: building a meaningful list
      would require carrying around a parallel chapter-cast snapshot in the
-     mock, which doesn't pay for itself. The Reattribute Lines modal
-     handles the empty-list case gracefully (the Skip / Done buttons are
-     all that's needed). */
+     mock, which doesn't pay for itself. The Reassign Lines modal handles
+     the empty-list case gracefully (its own empty-state copy + Close
+     button are all that's needed). */
   await wait(60);
   const displayName = aliasName.trim();
   if (!displayName) throw new Error('Alias name cannot be empty.');

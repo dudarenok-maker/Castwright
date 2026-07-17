@@ -40,7 +40,20 @@ export interface ManuscriptState {
       Prevents a re-analysis from resurrecting sentence ids that were
       deliberately merged away by the user. Format: `"${chapterId}:${id}"`. */
   mergedAwayKeys: string[];
+  /** #1676(c) — one-level, book-session-scoped undo for the last bulk line
+      reassignment. Holds each moved key's PRIOR characterId so a single Undo
+      restores them. NOT persisted (a full reload drops it — "undoable" is
+      satisfied by in-session one-level undo). Cleared by any book transition
+      (reset / hydrate*) and by a later edit that touches a moved key. */
+  lastBulkReassign:
+    | {
+        moves: { chapterId: number; sentenceId: number; prevCharacterId: string }[];
+        targetLabel: string;
+      }
+    | null;
 }
+
+export type SentenceKey = { chapterId: number; sentenceId: number };
 
 export interface PendingReupload {
   bookId: string;
@@ -81,7 +94,19 @@ const initialState: ManuscriptState = {
   importCandidate: null,
   pendingReupload: null,
   mergedAwayKeys: [],
+  lastBulkReassign: null,
 };
+
+/* #1676(c) — key-granular undo invalidation. Returns true when any of the
+   just-edited keys is a member of the pending bulk-undo's moved-key set, in
+   which case the caller nulls lastBulkReassign. Chapter-granularity was
+   rejected: the origin bug spans nearly every chapter, so a chapter-level
+   predicate would let almost any later edit nuke the undo. */
+function bulkUndoConflicts(s: ManuscriptState, touched: string[]): boolean {
+  if (!s.lastBulkReassign) return false;
+  const moved = new Set(s.lastBulkReassign.moves.map((m) => `${m.chapterId}:${m.sentenceId}`));
+  return touched.some((k) => moved.has(k));
+}
 
 export const manuscriptSlice = createSlice({
   name: 'manuscript',
@@ -124,6 +149,7 @@ export const manuscriptSlice = createSlice({
          lands the full AnalyseResponse) anchors this slice to its book
          even if the response trivially has no sentences. */
       if (a.payload.bookId) s.bookId = a.payload.bookId;
+      s.lastBulkReassign = null;
       const incoming = a.payload.sentences as unknown as Sentence[] | undefined;
       if (!incoming?.length) return;
       if (s.manuscriptId === null) {
@@ -194,6 +220,7 @@ export const manuscriptSlice = createSlice({
       if (format) s.format = format;
       if (sentences?.length) s.sentences = sentences;
       s.mergedAwayKeys = a.payload.mergedAwayKeys ?? [];
+      s.lastBulkReassign = null;
     },
     reset: (s) => {
       s.bookId = null;
@@ -206,6 +233,7 @@ export const manuscriptSlice = createSlice({
       s.importCandidate = null;
       s.pendingReupload = null;
       s.mergedAwayKeys = [];
+      s.lastBulkReassign = null;
     },
 
     /* Plan 74 — capture the user's re-uploaded manuscript without
@@ -284,6 +312,46 @@ export const manuscriptSlice = createSlice({
         (x) => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId,
       );
       if (sent) sent.characterId = a.payload.characterId;
+      if (bulkUndoConflicts(s, [`${a.payload.chapterId}:${a.payload.sentenceId}`]))
+        s.lastBulkReassign = null;
+    },
+
+    /* #1676(c) — cross-chapter bulk reassignment. Rewrites characterId for each
+       resolvable (chapterId, sentenceId) key and records each key's PRIOR
+       characterId into the one-level undo slot. Keys that no longer resolve
+       (drift between modal-open and apply) are skipped; only applied moves are
+       recorded. Exempt from the clear-on-conflict guard — it must not clear the
+       slot it just wrote (fixes C1). */
+    setSentencesCharacterBulk: (
+      s,
+      a: PayloadAction<{ keys: SentenceKey[]; characterId: string; targetLabel: string }>,
+    ) => {
+      const index = new Map<string, Sentence>();
+      for (const sent of s.sentences) index.set(`${sent.chapterId}:${sent.id}`, sent);
+      const moves: { chapterId: number; sentenceId: number; prevCharacterId: string }[] = [];
+      for (const k of a.payload.keys) {
+        const sent = index.get(`${k.chapterId}:${k.sentenceId}`);
+        if (!sent) continue; // drift — skip
+        moves.push({ chapterId: k.chapterId, sentenceId: k.sentenceId, prevCharacterId: sent.characterId });
+        sent.characterId = a.payload.characterId;
+      }
+      s.lastBulkReassign = { moves, targetLabel: a.payload.targetLabel };
+    },
+
+    /* #1676(c) — restore the last bulk reassignment. Rewrites each moved key
+       back to its prevCharacterId and nulls the slot. Records NO new undo
+       record (no undo-of-undo) — which is why Undo cannot reuse the recording
+       reducer above. No-op when the slot is empty. */
+    undoBulkReassign: (s) => {
+      const slot = s.lastBulkReassign;
+      if (!slot) return;
+      const index = new Map<string, Sentence>();
+      for (const sent of s.sentences) index.set(`${sent.chapterId}:${sent.id}`, sent);
+      for (const m of slot.moves) {
+        const sent = index.get(`${m.chapterId}:${m.sentenceId}`);
+        if (sent) sent.characterId = m.prevCharacterId;
+      }
+      s.lastBulkReassign = null;
     },
 
     /* fs-58 Unit B — User/review edit: mark a sentence excluded from synthesis
@@ -428,6 +496,13 @@ export const manuscriptSlice = createSlice({
           sent.characterId = a.payload.characterId;
         }
       }
+      if (
+        bulkUndoConflicts(
+          s,
+          a.payload.sentenceIds.map((id) => `${a.payload.chapterId}:${id}`),
+        )
+      )
+        s.lastBulkReassign = null;
     },
 
     /* User edit: split a sentence's text at the given offsets, producing
@@ -479,6 +554,8 @@ export const manuscriptSlice = createSlice({
       }
       if (pieces.length === 0) return;
       s.sentences.splice(idx, 1, ...pieces);
+      if (bulkUndoConflicts(s, [`${a.payload.chapterId}:${a.payload.sentenceId}`]))
+        s.lastBulkReassign = null;
     },
 
     /* Apply a chapter restructure remap (plan 51). Rewrites each
@@ -543,6 +620,13 @@ export const manuscriptSlice = createSlice({
         if (i >= 0) s.sentences.splice(i, 1);
         s.mergedAwayKeys.push(`${a.payload.chapterId}:${m.id}`);
       }
+      if (
+        bulkUndoConflicts(
+          s,
+          a.payload.sentenceIds.map((id) => `${a.payload.chapterId}:${id}`),
+        )
+      )
+        s.lastBulkReassign = null;
     },
 
     /* promote-first-sentence-to-title (2026-07-01 spec) — deletes a sentence
@@ -558,6 +642,8 @@ export const manuscriptSlice = createSlice({
       if (i < 0) return; // no-op if the sentence is already gone
       s.sentences.splice(i, 1);
       s.mergedAwayKeys.push(`${a.payload.chapterId}:${a.payload.sentenceId}`);
+      if (bulkUndoConflicts(s, [`${a.payload.chapterId}:${a.payload.sentenceId}`]))
+        s.lastBulkReassign = null;
     },
   },
 });

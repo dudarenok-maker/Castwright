@@ -305,8 +305,8 @@ export const castSlice = createSlice({
        (case-insensitive, trim-tolerant), then append the new character
        at the end (matches the analyser fold + cast-merge convention of
        appending freshly-minted entries). No sentence reassignment here
-       — the Reattribute Lines modal handles those via the existing
-       per-sentence picker dispatching manuscriptActions.setSentenceCharacter. */
+       — the Reassign Lines modal (unlink source) handles those via
+       manuscriptActions.setSentencesCharacterBulk. */
     applyUnlinkAlias: (
       s,
       a: PayloadAction<{

@@ -1,7 +1,8 @@
 // Pairs with docs/features/archive/12-manuscript-view.md
 
 import { describe, expect, it } from 'vitest';
-import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
+import { manuscriptSlice, manuscriptActions, type ManuscriptState } from './manuscript-slice';
+import { isChapterReassignedSinceRender } from '../lib/stale-chapters';
 import type { Sentence } from '../lib/types';
 import { start } from './manuscript-slice.test-helpers';
 
@@ -20,6 +21,7 @@ const baseState = (initial: Sentence[]) => ({
   importCandidate: null,
   pendingReupload: null,
   mergedAwayKeys: [] as string[],
+  lastBulkReassign: null as ManuscriptState['lastBulkReassign'],
 });
 
 describe('manuscriptSlice — splitSentence', () => {
@@ -1239,5 +1241,252 @@ describe('fs-56 — split/merge instruct guard (#1100 base)', () => {
     const pieces = next.sentences.filter((s) => s.chapterId === 1);
     expect(pieces[0].sceneBreakBefore).toBe(true);
     expect(pieces[1].sceneBreakBefore).toBeUndefined();
+  });
+});
+
+/* ── #1676(c) — bulk line-reassign reducer + one-level undo slot ──────
+   Nested under one describe so its local `sent`/`baseState` helpers are
+   scoped to this closure rather than the module top level, where they'd
+   collide with the file's existing top-level `baseState` (different
+   shape) — a purely mechanical adaptation of the task brief's test code,
+   not a change to any assertion or reducer call. `reducer` reuses the
+   module-level `const reducer = manuscriptSlice.reducer;` declared
+   above. */
+describe('#1676(c) — bulk line-reassign reducer + one-level undo slot', () => {
+  function sent(chapterId: number, id: number, characterId: string): Sentence {
+    return { chapterId, id, text: `s${id}`, characterId } as Sentence;
+  }
+
+  function bulkBaseState(sentences: Sentence[]): ManuscriptState {
+    return {
+      ...manuscriptSlice.getInitialState(),
+      manuscriptId: 'm1',
+      bookId: 'b1',
+      sentences,
+    };
+  }
+
+  describe('setSentencesCharacterBulk', () => {
+    it('rewrites characterId for every resolvable key and records the inverse', () => {
+      const s0 = bulkBaseState([sent(1, 1, 'egor'), sent(1, 2, 'egor'), sent(2, 1, 'anton')]);
+      const s1 = reducer(
+        s0,
+        manuscriptActions.setSentencesCharacterBulk({
+          keys: [
+            { chapterId: 1, sentenceId: 1 },
+            { chapterId: 1, sentenceId: 2 },
+          ],
+          characterId: 'narrator',
+          targetLabel: 'Narrator',
+        }),
+      );
+      expect(s1.sentences.find((x) => x.chapterId === 1 && x.id === 1)!.characterId).toBe('narrator');
+      expect(s1.sentences.find((x) => x.chapterId === 1 && x.id === 2)!.characterId).toBe('narrator');
+      expect(s1.sentences.find((x) => x.chapterId === 2 && x.id === 1)!.characterId).toBe('anton');
+      expect(s1.lastBulkReassign).toEqual({
+        moves: [
+          { chapterId: 1, sentenceId: 1, prevCharacterId: 'egor' },
+          { chapterId: 1, sentenceId: 2, prevCharacterId: 'egor' },
+        ],
+        targetLabel: 'Narrator',
+      });
+    });
+
+    it('skips keys that no longer resolve (drift) and records only applied moves', () => {
+      const s0 = bulkBaseState([sent(1, 1, 'egor')]);
+      const s1 = reducer(
+        s0,
+        manuscriptActions.setSentencesCharacterBulk({
+          keys: [
+            { chapterId: 1, sentenceId: 1 },
+            { chapterId: 1, sentenceId: 99 }, // gone
+          ],
+          characterId: 'narrator',
+          targetLabel: 'Narrator',
+        }),
+      );
+      expect(s1.lastBulkReassign!.moves).toEqual([
+        { chapterId: 1, sentenceId: 1, prevCharacterId: 'egor' },
+      ]);
+    });
+
+    it('does NOT clear the slot it just wrote (C1)', () => {
+      const s0 = bulkBaseState([sent(1, 1, 'egor')]);
+      const s1 = reducer(
+        s0,
+        manuscriptActions.setSentencesCharacterBulk({
+          keys: [{ chapterId: 1, sentenceId: 1 }],
+          characterId: 'narrator',
+          targetLabel: 'Narrator',
+        }),
+      );
+      expect(s1.lastBulkReassign).not.toBeNull();
+    });
+  });
+
+  describe('undoBulkReassign', () => {
+    it('restores prior ids, nulls the slot, and records no new undo record', () => {
+      const s0 = bulkBaseState([sent(1, 1, 'egor'), sent(1, 2, 'egor')]);
+      const s1 = reducer(
+        s0,
+        manuscriptActions.setSentencesCharacterBulk({
+          keys: [
+            { chapterId: 1, sentenceId: 1 },
+            { chapterId: 1, sentenceId: 2 },
+          ],
+          characterId: 'narrator',
+          targetLabel: 'Narrator',
+        }),
+      );
+      const s2 = reducer(s1, manuscriptActions.undoBulkReassign());
+      expect(s2.sentences.every((x) => x.characterId === 'egor')).toBe(true);
+      expect(s2.lastBulkReassign).toBeNull();
+    });
+
+    it('is a no-op when the slot is empty', () => {
+      const s0 = bulkBaseState([sent(1, 1, 'egor')]);
+      const s1 = reducer(s0, manuscriptActions.undoBulkReassign());
+      expect(s1.sentences[0].characterId).toBe('egor');
+      expect(s1.lastBulkReassign).toBeNull();
+    });
+  });
+
+  describe('lastBulkReassign clear-on-conflict (key-granular, M-2)', () => {
+    function withBulk(): ManuscriptState {
+      const s0 = bulkBaseState([sent(1, 1, 'egor'), sent(1, 2, 'egor'), sent(1, 3, 'anton')]);
+      return reducer(
+        s0,
+        manuscriptActions.setSentencesCharacterBulk({
+          keys: [
+            { chapterId: 1, sentenceId: 1 },
+            { chapterId: 1, sentenceId: 2 },
+          ],
+          characterId: 'narrator',
+          targetLabel: 'Narrator',
+        }),
+      );
+    }
+
+    it('survives an edit to an untouched sibling line in a touched chapter', () => {
+      const s1 = withBulk();
+      const s2 = reducer(
+        s1,
+        manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 3, characterId: 'egor' }),
+      );
+      expect(s2.lastBulkReassign).not.toBeNull();
+    });
+
+    it('clears when a later single reassign touches a moved key', () => {
+      const s1 = withBulk();
+      const s2 = reducer(
+        s1,
+        manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 1, characterId: 'anton' }),
+      );
+      expect(s2.lastBulkReassign).toBeNull();
+    });
+
+    it('clears when a split renumbers a moved key', () => {
+      const s1 = withBulk();
+      const s2 = reducer(
+        s1,
+        manuscriptActions.splitSentence({
+          chapterId: 1,
+          sentenceId: 1,
+          offsets: [1],
+          characterIds: ['narrator', 'egor'],
+        }),
+      );
+      expect(s2.lastBulkReassign).toBeNull();
+    });
+
+    it('clears on a second bulk (overwrite)', () => {
+      const s1 = withBulk();
+      const s2 = reducer(
+        s1,
+        manuscriptActions.setSentencesCharacterBulk({
+          keys: [{ chapterId: 1, sentenceId: 3 }],
+          characterId: 'narrator',
+          targetLabel: 'Narrator',
+        }),
+      );
+      // fresh slot for the new move, not the old one
+      expect(s2.lastBulkReassign!.moves).toEqual([
+        { chapterId: 1, sentenceId: 3, prevCharacterId: 'anton' },
+      ]);
+    });
+  });
+
+  describe('lastBulkReassign cross-book clearing (M-1)', () => {
+    it('is nulled by reset', () => {
+      const s1 = bulkBaseState([sent(1, 1, 'egor')]);
+      s1.lastBulkReassign = { moves: [{ chapterId: 1, sentenceId: 1, prevCharacterId: 'egor' }], targetLabel: 'X' };
+      expect(reducer(s1, manuscriptActions.reset()).lastBulkReassign).toBeNull();
+    });
+
+    it('is nulled by hydrateFromBookState', () => {
+      const s1 = bulkBaseState([sent(1, 1, 'egor')]);
+      s1.lastBulkReassign = { moves: [{ chapterId: 1, sentenceId: 1, prevCharacterId: 'egor' }], targetLabel: 'X' };
+      const s2 = reducer(
+        s1,
+        manuscriptActions.hydrateFromBookState({
+          state: { bookId: 'b2', manuscriptId: 'm2', title: 'T' } as never,
+          sentences: [sent(1, 1, 'a')],
+        }),
+      );
+      expect(s2.lastBulkReassign).toBeNull();
+    });
+
+    it('is nulled by hydrateFromAnalysis', () => {
+      const s1 = bulkBaseState([sent(1, 1, 'egor')]);
+      s1.lastBulkReassign = { moves: [{ chapterId: 1, sentenceId: 1, prevCharacterId: 'egor' }], targetLabel: 'X' };
+      const s2 = reducer(
+        s1,
+        manuscriptActions.hydrateFromAnalysis({ bookId: 'b1', sentences: [sent(1, 1, 'a')] } as never),
+      );
+      expect(s2.lastBulkReassign).toBeNull();
+    });
+  });
+
+  describe('stale-after-undo (accepted, §6)', () => {
+    it('the precise per-sentence diff reads not-stale once undo restores prior speakers', () => {
+      // Rendered chapter mapped sentence 1 -> 'egor'. A bulk move to 'narrator'
+      // makes the precise diff stale; undo restores 'egor', so it reads clean again.
+      // (The always-on time-based clause stays flagged — identical to any existing
+      // single-line reassign-then-undo; no new un-flagging machinery, per §3.)
+      const s0 = bulkBaseState([sent(1, 1, 'egor')]);
+      const s1 = reducer(
+        s0,
+        manuscriptActions.setSentencesCharacterBulk({
+          keys: [{ chapterId: 1, sentenceId: 1 }],
+          characterId: 'narrator',
+          targetLabel: 'Narrator',
+        }),
+      );
+      expect(isChapterReassignedSinceRender({ 1: 'egor' }, s1.sentences)).toBe(true);
+      const s2 = reducer(s1, manuscriptActions.undoBulkReassign());
+      expect(isChapterReassignedSinceRender({ 1: 'egor' }, s2.sentences)).toBe(false);
+    });
+  });
+
+  describe('undo slot survives unrelated activity (book-session scope, §6)', () => {
+    it('is NOT cleared by an edit to an untouched line in another chapter', () => {
+      // The slice has no view field, so cast<->script navigation cannot touch the
+      // slot; the reducer-level proxy is an unrelated edit that leaves it intact.
+      // (True cross-view survival is asserted end-to-end in Task 8.)
+      const s0 = bulkBaseState([sent(1, 1, 'egor'), sent(2, 5, 'anton')]);
+      const s1 = reducer(
+        s0,
+        manuscriptActions.setSentencesCharacterBulk({
+          keys: [{ chapterId: 1, sentenceId: 1 }],
+          characterId: 'narrator',
+          targetLabel: 'Narrator',
+        }),
+      );
+      const s2 = reducer(
+        s1,
+        manuscriptActions.setSentenceCharacter({ chapterId: 2, sentenceId: 5, characterId: 'egor' }),
+      );
+      expect(s2.lastBulkReassign).not.toBeNull();
+    });
   });
 });
