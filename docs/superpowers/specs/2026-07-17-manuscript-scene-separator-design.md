@@ -82,6 +82,38 @@ its measured reality: aggregate alignment on Night Watch is ~65.6%
 verbatim narration and should align better than the dialogue-dragged aggregate,
 but that hit-rate is **unmeasured** — see the acceptance gate in Testing.
 
+**Shipped reality (post-measurement, folded 2026-07-17 — see
+`docs/features/261-manuscript-scene-separator.md` for the full acceptance
+data).** Two corrections to the design above landed during implementation,
+found by the acceptance measurement this spec calls for below. Architecture
+is unchanged (still read-only, still additive-flag-only); only the binding
+rule and one assumption about the sentence stream changed:
+
+1. **Marker-anchored binding replaced drop-on-miss.** §1's rule above ("flag
+   the first *located* sentence after the separator, drop on miss") turned
+   out to drop dividers on real Russian restructure-heavy text specifically
+   at the scene-opening sentence — the one place the divider matters most —
+   because a scene opener's own text is disproportionately likely to be
+   re-emitted/restructured by the model relative to its neighbors. The
+   shipped `annotateSceneBreaks` instead anchors on the separator's own
+   exact, literal body offset, finds the **last sentence that located
+   strictly before it**, and flags the next sentence in reading order —
+   independent of whether that next sentence's own text locates. This is a
+   strict reliability improvement with the same failure ceiling (a miss is
+   still cosmetic-only), not a new risk category.
+2. **Premise correction: a word-free separator line IS emitted as its own
+   sentence.** This spec's Design history and §1 both assumed a `* * *`/`⁂`
+   line produces no sentence at all — the analyzer would skip over it
+   entirely. Measurement disproved this: the analyzer emits the separator
+   glyph as its own word-free sentence in the output stream. Two shipped
+   fixes respond to this: the annotator (server) skips any run of
+   separator-only sentences immediately after its anchor point to reach the
+   true next-scene opener; the frontend (`isSeparatorOnly`, §4) filters
+   those separator-only sentences out of the manuscript's rendered rows
+   entirely, since the divider already represents them and showing both
+   would be redundant. Neither fix touches attribution, chunking, or
+   synthesis — both are within this spec's existing read-only boundary.
+
 ### 2. EPUB/MOBI: preserve `<hr>` (server, `html-utils.ts`)
 
 `stripHtml` erases `<hr>` via its generic `<[^>]+>` pass (`html-utils.ts:41-45`)

@@ -44,6 +44,12 @@
   calls by several names (a title, a first name, a nickname) no longer splits
   into duplicate cast rows with duplicate voices — Castwright now recognises
   them as one, and offers a one-tap merge when it's unsure.
+- **Scene breaks now show up when you're reviewing the script.** Wherever your
+  book had a scene change — a `* * *`, a dinkus, or a chapter break carried
+  over from an ebook — the manuscript view now draws a quiet divider above the
+  line that opens the next scene, so you can see at a glance where one scene
+  ends and the next begins. It's purely a reading aid — nothing about how your
+  book is cast or narrated changes.
 
 # Castwright 1.13.0
 

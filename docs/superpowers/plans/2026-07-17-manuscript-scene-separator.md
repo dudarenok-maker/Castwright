@@ -548,6 +548,34 @@ git commit -m "feat(server): add annotateSceneBreaks read-only detection pass (#
 
 ---
 
+**Shipped correction (post-merge, folded from the acceptance measurement — see
+`docs/features/261-manuscript-scene-separator.md`).** Two corrections landed
+on top of this task's code during implementation; the architecture (pure,
+read-only, additive-flag-only) is unchanged:
+
+(a) **Binding is marker-anchored, not drop-on-miss.** The task above binds a
+separator to "the first sentence whose located offset is after the
+separator" and drops the divider when the opener itself doesn't locate. Real
+measurement on Russian restructure-heavy text showed the scene-*opening*
+sentence frequently fails to locate even when its neighbors do (dash-prefixed
+/ split dialogue the model re-emits differently) — so drop-on-miss silently
+lost dividers exactly where they'd be most useful. The shipped
+`annotateSceneBreaks` instead anchors on the separator's own literal, exact
+body offset, finds the **last sentence that located strictly before it**,
+and flags the next sentence in reading order regardless of whether that
+sentence's own text locates (commit `e7b877c1`).
+
+(b) **Premise correction — separators are emitted as their own sentences.**
+This task's tests assumed a `* * *`/`⁂` line produces no sentence at all. A
+shipped-behavior measurement disproved that: the analyzer emits the
+separator glyph as its own word-free sentence. **Fix A** (this file, same
+commit `e7b877c1`): the marker-anchored bind skips over any run of
+separator-only (non-attributable) sentences immediately after the anchor
+point, so the flag lands on the real opener, not the separator's own
+placeholder sentence. **Fix B** is in Task 6 below (frontend).
+
+---
+
 ## Task 5: Wire the annotator into `attributeChapterStage2`
 
 **Spec correction (do not skip).** The spec's "insertion point after crossExamine + escalation (~:1735)" sits INSIDE the `if (conventions)` structure-engine branch. Chapters where the engine is off or the language is unsupported take the `else` branch (:1781-1787, `applyNarratorDefault`) and would get NO dividers. Both branches converge at `return result;` (:1788). Insert there — one call, universal across every language and engine state.
@@ -872,6 +900,23 @@ Expected: PASS — new tests green, existing manuscript tests unaffected.
 git add src/views/manuscript.tsx src/views/manuscript.test.tsx
 git commit -m "feat(frontend): render scene-change divider in manuscript view (#1679)"
 ```
+
+---
+
+**Shipped correction — Fix B (post-merge, paired with Task 4's Fix A; see
+`docs/features/261-manuscript-scene-separator.md`).** The same
+separators-are-sentences premise correction that changed Task 4's binding
+also required a frontend fix, landed in a follow-up commit
+(`8abb9df0`): since the analyzer emits the `* * *`/`⁂`/`<hr>`-derived glyph
+line as its own word-free sentence, and the divider already visually
+represents that break, rendering the glyph line as an ordinary segment row
+too would show a redundant text row right next to the divider. A new
+`isSeparatorOnly(text)` predicate (true when a sentence's text has no
+letters or digits) filters those rows out of the manuscript's segment list
+in both the flat and virtualized branches. Display-only — the sentence
+itself is untouched in the underlying data and still exists for
+synthesis/attribution purposes; `absIdx` still uses the real array index so
+drag/boundary edits on the surrounding rows are unaffected.
 
 ---
 
