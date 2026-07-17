@@ -10,6 +10,7 @@ import type {
   RecentChapter,
   DiagnosticsResponse,
   ResourceTelemetryRecord,
+  AnalyzerEvalRecord,
 } from '../lib/api';
 
 vi.mock('../lib/api', () => ({
@@ -18,6 +19,7 @@ vi.mock('../lib/api', () => ({
     getGenerationStats: vi.fn(),
     getDiagnostics: vi.fn(),
     getResourceTelemetry: vi.fn(),
+    getAnalyzerStats: vi.fn(),
     listDevices: vi.fn().mockResolvedValue({ devices: [] }),
     // LanAccessCard now renders <LanCertStatus>, which fetches on mount (ops-28).
     getLanCertStatus: vi.fn().mockResolvedValue({
@@ -32,6 +34,7 @@ const mockWorktrees = vi.mocked(api.getWorktrees);
 const mockStats = vi.mocked(api.getGenerationStats);
 const mockDiag = vi.mocked(api.getDiagnostics);
 const mockTelemetry = vi.mocked(api.getResourceTelemetry);
+const mockAnalyzerStats = vi.mocked(api.getAnalyzerStats);
 
 const idleStats: GenerationStatsResponse = {
   chapters: 0,
@@ -94,6 +97,23 @@ const telemetry = (over: Partial<ResourceTelemetryRecord>): ResourceTelemetryRec
   ...over,
 });
 
+const mk = (over: Partial<AnalyzerEvalRecord>): AnalyzerEvalRecord => ({
+  at: '2026-06-01T09:00:00Z',
+  manuscriptId: 'A',
+  bookTitle: null,
+  model: 'qwen:latest',
+  stage: 'attribution',
+  chapterId: 1,
+  evalTokS: 24,
+  promptTokS: 800,
+  evalCount: 120,
+  loadMs: 40,
+  subCalls: 1,
+  chunkCount: null,
+  outcome: 'ok',
+  ...over,
+});
+
 /* AdminView dispatches (the fs-23 "Open Model Manager" link), so it must
    render inside a Provider. A minimal store with just the ui slice is enough —
    the view only reads diagnostics/stats through the mocked api. */
@@ -115,6 +135,7 @@ beforeEach(() => {
   mockStats.mockResolvedValue(idleStats);
   mockDiag.mockResolvedValue(healthyBoard);
   mockTelemetry.mockResolvedValue({ records: [] });
+  mockAnalyzerStats.mockResolvedValue({ records: [] });
 });
 
 afterEach(() => {
@@ -413,6 +434,29 @@ describe('AdminView — fs-20 resource trends panel', () => {
     await waitFor(() => expect(mockTelemetry).toHaveBeenCalled());
     expect(screen.queryByTestId('resource-trends')).toBeNull();
     expect(screen.getByText(/No telemetry recorded yet/i)).toBeInTheDocument();
+  });
+});
+
+describe('AdminView — AnalyzerTrends panel', () => {
+  it('AnalyzerTrends buckets interleaved records by (manuscriptId, model)', async () => {
+    mockAnalyzerStats.mockResolvedValue({
+      records: [
+        mk({ manuscriptId: 'A', model: 'qwen:latest', evalTokS: 24 }),
+        mk({ manuscriptId: 'B', model: 'gemma:latest', evalTokS: 40 }),
+        mk({ manuscriptId: 'A', model: 'qwen:latest', evalTokS: 28 }),
+        mk({ manuscriptId: 'B', model: 'gemma:latest', evalTokS: 41 }),
+      ],
+    });
+    renderAdmin();
+    // Two sections despite A,B,A,B interleave:
+    expect(await screen.findAllByTestId('analyzer-trends-section')).toHaveLength(2);
+    expect(screen.getByTestId('analyzer-trends-scroll')).toBeInTheDocument();
+  });
+
+  it('AnalyzerTrends shows empty state when no records', async () => {
+    mockAnalyzerStats.mockResolvedValue({ records: [] });
+    renderAdmin();
+    expect(await screen.findByText(/No analyzer telemetry recorded yet/i)).toBeInTheDocument();
   });
 });
 

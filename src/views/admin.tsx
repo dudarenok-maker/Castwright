@@ -11,7 +11,7 @@
 
    Plan 86 (worktrees) + plan 127 (throughput) folded into this view. */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   api,
   type GenerationStatsResponse,
@@ -19,6 +19,7 @@ import {
   type DiagnosticsResponse,
   type DiagnosticsStatus,
   type ResourceTelemetryRecord,
+  type AnalyzerEvalRecord,
 } from '../lib/api';
 import { LanAccessCard } from '../components/lan-access-card';
 import { WikiLink } from '../components/wiki-link';
@@ -136,6 +137,7 @@ export function AdminView() {
       <HealthBoard />
       <GenerationThroughput stats={stats} />
       <ResourceTrends />
+      <AnalyzerTrends />
       {import.meta.env.DEV && <WorktreesSection />}
     </div>
   );
@@ -657,6 +659,192 @@ function RtfSparkline({ records }: { records: ResourceTelemetryRecord[] }) {
         strokeLinejoin="round"
         strokeLinecap="round"
       />
+    </svg>
+  );
+}
+
+/* Analyzer eval-rate trend panel. Polls GET /api/generation/analyzer-stats,
+   buckets by (manuscriptId, model) — NOT contiguous runs, so a concurrent
+   multi-book run can't shatter a trend — and renders each bucket as a tok/s
+   sparkline + per-(chapter,pass) table inside a bounded scroll. Falling
+   tok/s = deteriorating (inverse of RTF). */
+const ANALYZER_STATS_POLL_MS = 30000;
+
+interface AnalyzerGroup {
+  key: string;
+  manuscriptId: string;
+  model: string;
+  bookTitle: string | null;
+  rows: AnalyzerEvalRecord[];
+  avgTokS: number | null;
+}
+
+/* Bucket by (manuscriptId, model) across the whole window (records arrive
+   newest-first). Buckets ordered by most-recent row; rows kept newest-first. */
+function groupByManuscriptModel(records: AnalyzerEvalRecord[]): AnalyzerGroup[] {
+  const map = new Map<string, AnalyzerGroup>();
+  for (const r of records) {
+    const key = `${r.manuscriptId} ${r.model}`;
+    let g = map.get(key);
+    if (!g) {
+      g = { key, manuscriptId: r.manuscriptId, model: r.model, bookTitle: r.bookTitle, rows: [], avgTokS: null };
+      map.set(key, g);
+    }
+    g.rows.push(r);
+    if (g.bookTitle == null && r.bookTitle) g.bookTitle = r.bookTitle;
+  }
+  const groups = [...map.values()];
+  for (const g of groups) {
+    const vals = g.rows.map((r) => r.evalTokS).filter((v): v is number => v != null);
+    g.avgTokS = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  }
+  return groups; // insertion order = first-seen = newest-first bucket ordering
+}
+
+const fmtTokS = (v: number | null): string => (v == null ? '–' : `${v.toFixed(1)} t/s`);
+/* Tok/s wobble to ignore when deciding the row-level deterioration marker
+   (distinct from the RTF-trend TREND_EPSILON above — different unit/scale). */
+const ANALYZER_TOKS_EPSILON = 0.5;
+
+function AnalyzerTrends() {
+  const [records, setRecords] = useState<AnalyzerEvalRecord[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchOnce = () =>
+      api
+        .getAnalyzerStats(400)
+        .then((res) => {
+          if (!cancelled) setRecords(res.records);
+        })
+        .catch(() => {
+          /* Best-effort — leave the last-good snapshot in place. */
+        });
+    fetchOnce();
+    const t = setInterval(fetchOnce, ANALYZER_STATS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
+
+  const groups = useMemo(() => groupByManuscriptModel(records ?? []), [records]);
+  const loaded = records != null;
+
+  return (
+    <section className="mt-10">
+      <div className="flex items-center gap-2 mb-1">
+        <h3 className="text-lg font-medium tracking-tight text-ink">Analyzer throughput</h3>
+        <WikiLink page={ADMIN_WIKI.admin} label="Wiki" className="text-xs" />
+      </div>
+      <p className="text-sm text-ink/60 mb-4">
+        Per-pass Ollama decode speed (eval tok/s), newest first — grouped by book &amp; model.
+        Falling tok/s = slowing down.
+      </p>
+
+      {!loaded && <p className="text-sm text-ink/50">Loading telemetry…</p>}
+      {loaded && groups.length === 0 && (
+        <p className="text-sm text-ink/50">No analyzer telemetry recorded yet.</p>
+      )}
+      {loaded && groups.length > 0 && (
+        <div
+          data-testid="analyzer-trends-scroll"
+          className="max-h-[28rem] overflow-y-auto scrollbar-thin rounded-3xl border border-ink/10 bg-white shadow-card"
+        >
+          {groups.map((g) => (
+            <div
+              key={g.key}
+              data-testid="analyzer-trends-section"
+              className="border-b border-ink/5 p-4 last:border-b-0"
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="font-semibold text-ink text-sm truncate">
+                  {g.bookTitle ?? g.manuscriptId}
+                </span>
+                <span className="text-xs text-ink/50 shrink-0">
+                  {g.model} · {g.rows.length} passes · avg {fmtTokS(g.avgTokS)}
+                </span>
+              </div>
+              <TokSSparkline rows={g.rows} />
+              <table className="mt-1 w-full text-xs">
+                <thead>
+                  <tr className="text-ink/50">
+                    <th className="text-left font-medium">Ch</th>
+                    <th className="text-left font-medium">Pass</th>
+                    <th className="text-right font-medium">tok/s</th>
+                    <th className="text-right font-medium">prompt t/s</th>
+                    <th className="text-right font-medium">load</th>
+                    <th className="text-right font-medium">calls</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {g.rows.map((r, i) => (
+                    <AnalyzerRow
+                      key={`${r.at}:${r.chapterId}:${r.stage}`}
+                      row={r}
+                      newerTokS={g.rows[i - 1]?.evalTokS}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AnalyzerRow({ row, newerTokS }: { row: AnalyzerEvalRecord; newerTokS?: number | null }) {
+  /* Falling tok/s vs the NEWER neighbour = deteriorating (rows are newest-first,
+     so "newer" is the row above). Load spike + failure get their own tint. */
+  const dropped =
+    row.evalTokS != null && newerTokS != null && newerTokS < row.evalTokS - ANALYZER_TOKS_EPSILON;
+  const loadSpike = row.loadMs > 200;
+  return (
+    <tr className={row.outcome === 'failed' ? 'text-magenta' : undefined} data-testid="analyzer-trends-row">
+      <td>{row.chapterId}</td>
+      <td>
+        {row.stage}
+        {row.chunkCount && row.chunkCount > 1 ? ` ⑂${row.chunkCount}` : ''}
+      </td>
+      <td className={`text-right ${dropped ? 'text-magenta' : ''}`}>
+        {fmtTokS(row.evalTokS)}
+        {dropped ? ' ▼' : ''}
+      </td>
+      <td className="text-right">{row.promptTokS == null ? '–' : row.promptTokS.toFixed(0)}</td>
+      <td className={`text-right ${loadSpike ? 'text-magenta' : ''}`}>{Math.round(row.loadMs)}</td>
+      <td className="text-right">{row.subCalls}</td>
+    </tr>
+  );
+}
+
+/* Hand-rolled inline SVG sparkline of eval tok/s across a group's rows. Rows
+   arrive newest-first; plot oldest→newest left→right so the trend reads
+   naturally. Null tok/s points are skipped. No charting dependency. */
+function TokSSparkline({ rows }: { rows: AnalyzerEvalRecord[] }) {
+  const series = rows
+    .map((r) => r.evalTokS)
+    .filter((v): v is number => v != null)
+    .reverse(); // oldest→newest
+  if (series.length < 2) return null;
+  const max = Math.max(...series);
+  const min = Math.min(...series);
+  const span = max - min || 1;
+  const pts = series
+    .map((v, i) => `${(i / (series.length - 1)) * 260},${28 - ((v - min) / span) * 24}`)
+    .join(' ');
+  return (
+    <svg
+      width="100%"
+      height="30"
+      viewBox="0 0 260 30"
+      preserveAspectRatio="none"
+      data-testid="analyzer-toks-sparkline"
+      role="img"
+      aria-label={`tok/s trend across ${series.length} passes`}
+    >
+      <polyline fill="none" stroke="currentColor" strokeWidth="1.6" points={pts} className="text-magenta" />
     </svg>
   );
 }
