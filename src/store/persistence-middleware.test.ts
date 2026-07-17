@@ -171,6 +171,19 @@ describe('persistenceMiddleware — payload shape', () => {
     });
   });
 
+  it('persists the full cast on applyRepointAlias so the moved alias is the authoritative last write', async () => {
+    const next = vi.fn((x) => x);
+    const state = baseState({
+      cast: { characters: [{ id: 'egor', aliases: [] }, { id: 'anton', aliases: ['Я'] }] },
+    });
+    persistenceMiddleware(makeStore(state))(next)({ type: 'cast/applyRepointAlias' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'cast',
+      patch: { characters: [{ id: 'egor', aliases: [] }, { id: 'anton', aliases: ['Я'] }] },
+    });
+  });
+
   it('sends both pending + drift for revisions actions', async () => {
     const next = vi.fn((x) => x);
     /* Each drift event carries its own bookId so the persist filter can
