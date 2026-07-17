@@ -2174,6 +2174,9 @@ export function Layout() {
               }
               renderedFallbackEngine={renderedFallbackByCharacter?.[profileCharacter.id]}
               qwen17bAvailable={ttsLifecycle.qwen1_7b.state === 'ready'}
+              onReassignLines={(characterId) =>
+                setReassignSource({ kind: 'character', characterId })
+              }
               onClose={() => dispatch(uiActions.setOpenProfileId(null))}
               onSave={(updated, meta) => {
                 const prior = profileCharacter;

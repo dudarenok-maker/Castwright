@@ -125,6 +125,7 @@ function renderDrawer(
     renderedFallbackEngine?: string | null;
     bookId?: string;
     libraryBook?: LibraryBook;
+    onReassignLines?: (characterId: string) => void;
   } = {},
 ) {
   const store = makeStore({
@@ -153,6 +154,7 @@ function renderDrawer(
           duplicateOther={extra.duplicateOther}
           onReviewDuplicate={extra.onReviewDuplicate}
           renderedFallbackEngine={extra.renderedFallbackEngine}
+          onReassignLines={extra.onReassignLines}
         />
       </Provider>,
     ),
@@ -1857,5 +1859,14 @@ describe('ProfileDrawer — fs-60 eligibility-based engine lock', () => {
       libraryBook: { ...ruBook, bookId: 'zh-book-1', language: 'zh', eligibleTtsEngines: ['qwen'] },
     });
     expect(screen.getByTestId('qwen-locked-note')).toBeInTheDocument();
+  });
+});
+
+describe('ProfileDrawer roster entry point (bulk reassign)', () => {
+  it('invokes onReassignLines with the character id when the action is clicked', () => {
+    const onReassignLines = vi.fn();
+    renderDrawer(baseChar, { onReassignLines });
+    fireEvent.click(screen.getByRole('button', { name: /reassign lines/i }));
+    expect(onReassignLines).toHaveBeenCalledWith(baseChar.id);
   });
 });

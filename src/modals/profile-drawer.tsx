@@ -124,7 +124,7 @@ interface Props {
       auto-fold step (server/src/analyzer/fold-minor-cast.ts) and the
       manual merge route are append-only; this is the only reverse path.
       Layout's handler fires the unlink-alias endpoint, dispatches the
-      delta reducer, and opens the Reattribute Lines modal seeded with
+      delta reducer, and opens the reassign-lines flow seeded with
       the server-returned impacted chapters so the user can move the
       right sentences to the new character. */
   onUnlinkAlias?: (sourceCharacterId: string, aliasName: string) => Promise<void>;
@@ -155,6 +155,10 @@ interface Props {
   /** fs-56 — whether the Qwen 1.7B-Base is currently resident on the sidecar.
       When true, the engine picker shows the "Higher quality (1.7B)" toggle. */
   qwen17bAvailable?: boolean;
+  /** Open the bulk reassign-lines flow seeded with this character as the
+      source. Layout wires this to `setReassignSource({ kind: 'character',
+      characterId })`. Omitted = the "Reassign lines…" action hides. */
+  onReassignLines?: (characterId: string) => void;
 }
 
 export interface PriorMergeCandidate {
@@ -214,6 +218,7 @@ export function ProfileDrawer({
   onReviewDuplicate,
   renderedFallbackEngine,
   qwen17bAvailable = false,
+  onReassignLines,
 }: Props) {
   const [tone, setTone] = useState(
     character.tone ?? { warmth: 50, pace: 50, authority: 50, emotion: 50 },
@@ -1455,6 +1460,15 @@ export function ProfileDrawer({
                 )}
               </div>
             ) : null}
+            {onReassignLines && (
+              <button
+                type="button"
+                onClick={() => onReassignLines(character.id)}
+                className="mb-3 text-sm font-semibold text-magenta hover:underline min-h-[44px] fine-pointer:min-h-0"
+              >
+                Reassign lines…
+              </button>
+            )}
             {(() => {
               const inBookCount = onMerge && mergeCandidates?.length ? mergeCandidates.length : 0;
               const priorCount =
