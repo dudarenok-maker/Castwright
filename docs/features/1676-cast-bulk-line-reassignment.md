@@ -4,21 +4,28 @@ shipped: null
 owner: null
 ---
 
-# Cast: bulk-reassign attributed lines to a character (#1676, part c)
+# Cast: bulk line reassignment + alias repoint on unlink (#1676, parts b+c)
 
 > Status: active
 > Key files: `src/modals/reassign-lines.tsx`, `src/components/bulk-reassign-undo-banner.tsx`,
 > `src/store/manuscript-slice.ts`, `src/store/persistence-middleware.ts`,
 > `src/lib/change-log.ts`, `src/modals/profile-drawer.tsx` (roster entry point),
 > `src/views/manuscript.tsx` (script entry point), `src/components/layout.tsx`
-> (unlink entry point + banner mount)
+> (unlink entry point + banner mount + split/move branch), `src/modals/unlink-alias-dialog.tsx`
+> (destination dialog, part b), `server/src/routes/cast-aliases.ts` (`repoint-alias`
+> route, part b), `src/lib/api.ts` (`repointAlias` client, part b), `src/store/cast-slice.ts`
+> (`applyRepointAlias` reducer, part b)
 > URL surface: `#/books/<id>/cast` (roster entry), `#/books/<id>/manuscript`
 > (script entry) — the modal and Undo banner render at the layout level, not
 > tied to either route
-> OpenAPI ops: none (client-only; line attribution round-trips through the
-> existing generic `PUT /api/books/{id}/state`)
+> OpenAPI ops: `POST /api/books/{id}/cast/repoint-alias` (part b; sibling to the
+> existing `unlink-alias`/`add-alias` routes) — line attribution itself still
+> round-trips through the generic `PUT /api/books/{id}/state`
 
-Design spec: [docs/superpowers/specs/2026-07-17-cast-bulk-line-reassignment-design.md](../superpowers/specs/2026-07-17-cast-bulk-line-reassignment-design.md).
+Design specs: [docs/superpowers/specs/2026-07-17-cast-bulk-line-reassignment-design.md](../superpowers/specs/2026-07-17-cast-bulk-line-reassignment-design.md)
+(part c) and [docs/superpowers/specs/2026-07-17-cast-alias-repoint-on-unlink-design.md](../superpowers/specs/2026-07-17-cast-alias-repoint-on-unlink-design.md)
+(part b). Part b's implementation plan:
+[docs/superpowers/plans/2026-07-17-cast-alias-repoint-on-unlink.md](../superpowers/plans/2026-07-17-cast-alias-repoint-on-unlink.md).
 
 ## Benefit / Rationale
 
@@ -36,8 +43,12 @@ Design spec: [docs/superpowers/specs/2026-07-17-cast-bulk-line-reassignment-desi
   scoped undo slot on a redux slice (`manuscript.lastBulkReassign`), with an
   explicit clear-whitelist (not a blanket action matcher) — a pattern future
   bulk-edit features can reuse instead of re-deriving from scratch. Part (b)
-  (alias re-point on unlink) is a deliberate follow-up that reuses this same
-  form; not built here.
+  (alias re-point on unlink) landed as a follow-up on the same branch: it
+  reuses this exact `ReassignLinesModal`/`unlink` source unchanged, adding
+  only a destination choice ahead of it (see "Part (b): alias repoint on
+  unlink" below) — no new line-reassignment machinery, just a new server
+  route + reducer that redirect where the alias's chip lands before the
+  existing modal opens.
 
 ## Architectural impact
 
@@ -118,6 +129,57 @@ Design spec: [docs/superpowers/specs/2026-07-17-cast-bulk-line-reassignment-desi
    "pending removal" exclusion, since `Character` carries no such state in
    part (c) (a part-(b) concept).
 
+## Part (b): alias repoint on unlink
+
+Previously, removing an alias chip in the Profile Drawer only ever **split**
+it — the alias always became a brand-new standalone character, even when the
+"alias" was really a distinct, pre-existing cast member that had been
+mis-merged (the motivating case, per the design spec: an over-eager fold
+merging a real character's name into another's alias list). Part (b) adds a
+second destination so the user can send the alias's lines straight onto an
+**existing** character instead of minting a new one.
+
+- **Destination dialog** (`src/modals/unlink-alias-dialog.tsx`,
+  `UnlinkAliasDialog`) — a small controlled dialog (no store/api access of its
+  own) shown when an alias chip's × is clicked. Two radio options: "Make
+  «alias» its own character" (the pre-existing split, unchanged, now just
+  gated behind this dialog instead of firing immediately) and "Move «alias»
+  to [target picker]" (new). Confirm is disabled until a target is picked in
+  move mode. Returns a `UnlinkDestination` discriminated union (`{ mode:
+  'split' }` / `{ mode: 'move'; targetCharacterId: string }`) to the caller.
+- **Server route** `POST /api/books/{id}/cast/repoint-alias`
+  (`server/src/routes/cast-aliases.ts`) — sibling to the existing
+  `unlink-alias`/`add-alias` routes. Validates `sourceCharacterId`,
+  `aliasName`, `targetCharacterId` are all present and that source ≠ target
+  (400 otherwise), then atomically strips the alias off the source and
+  dedup-appends it to the target's `aliases` (skipping the append —
+  `alreadyPresent: true` — when the target already carries the alias, or the
+  alias equals the target's own name). Reuses the exact same
+  journal-then-`chapterCast`-fallback lineage lookup as `unlink-alias` to
+  compute `impactedChapters`, since the candidate lines are the same
+  source-attributed sentences regardless of destination. Responds
+  `{ impactedChapters, alreadyPresent }`.
+- **Reducer** `cast/applyRepointAlias` (`src/store/cast-slice.ts`) — client-side
+  mirror of the route: strips the alias from the source and dedup-appends to
+  the target (no-op on a blank/whitespace alias name or a missing
+  source/target), so the store update and the disk write stay in lockstep
+  without a full-cast refetch.
+- **Persist rule** `cast/applyRepointAlias` (`src/store/persistence-middleware.ts`)
+  — persists the full `{ characters: s.cast.characters }` patch, mirroring the
+  existing `cast/applyAddAlias` rule's shape.
+- **Layout wiring** (`src/components/layout.tsx`, `onUnlinkAlias`) — branches
+  on `destination.mode`: `'split'` is the byte-for-byte original path
+  (`api.unlinkAlias` → `applyUnlinkAlias` → open `ReassignLinesModal` seeded
+  to the newly-split character); `'move'` calls `api.repointAlias`, dispatches
+  `applyRepointAlias`, then opens the same `ReassignLinesModal` (`source: {
+  kind: 'unlink' }`) seeded to the **existing** target character instead —
+  so the alias's lines follow the alias to wherever it landed, split or move,
+  through the one unchanged modal.
+- **No undo for the alias-string move itself** — only the subsequent line
+  move (via the reused `ReassignLinesModal`/`lastBulkReassign` slot) is
+  undoable, same as the pre-existing split path. Repointing the alias string
+  a second time (or re-adding it) is always available as a manual correction.
+
 ## Test plan
 
 ### Automated coverage
@@ -151,7 +213,36 @@ Design spec: [docs/superpowers/specs/2026-07-17-cast-bulk-line-reassignment-desi
   → Undo dismisses it.
 - Playwright e2e (`e2e/cast-alias-edit.spec.ts`) — regression: the alias
   chip's X still opens the (now-generalized) `ReassignLinesModal` with the
-  `unlink` source; asserts the renamed aria-label and empty-state copy.
+  `unlink` source; asserts the renamed aria-label and empty-state copy; **new**
+  move-to-X path: chip × → dialog → "Move to" → pick a target → confirm →
+  `ReassignLinesModal` opens seeded to the target, not a freshly-split
+  character.
+- Vitest server (`server/src/routes/cast-aliases.test.ts`, describe block
+  `repoint-alias`, 6 cases) — happy-path strip-and-append; `alreadyPresent`
+  when the target already carries the alias or the alias equals the target's
+  own name; 400 on a missing field or a self-target; 404 on an unknown
+  source/target character or an alias not on the source; the journal/
+  `chapterCast` lineage fallback is exercised identically to `unlink-alias`.
+- Vitest unit (`src/store/cast-slice.test.ts`, describe block
+  `applyRepointAlias`) — strips from source and dedup-appends to target;
+  no-op when the target already carries the alias or the alias equals the
+  target's name; no-op on a blank/whitespace alias name or a missing
+  source/target character (regression test added for the whitespace +
+  missing-target no-op cases).
+- Vitest unit (`src/store/persistence-middleware.test.ts`) — the
+  `cast/applyRepointAlias` action triggers a persist of the full
+  `{ characters }` patch.
+- Vitest component (`src/modals/unlink-alias-dialog.test.tsx`) — defaults to
+  "own character" and confirms a split; requires a target before "move" can
+  confirm; Cancel fires `onCancel` and never `onConfirm`; renders the error
+  line when `error` is set; disables both buttons while `busy`; does not
+  crash with an empty target list (only split selectable).
+- Vitest component (`src/modals/profile-drawer.test.tsx`) — rewritten unlink
+  tests route the × click through `UnlinkAliasDialog` before calling
+  `onUnlinkAlias`, for both the split and move destinations; a regression
+  test locks that opening the dialog for a fresh unlink clears any stale
+  error left over from a previous failed attempt (placebo-proof: fails red
+  without the fix).
 
 If a surface area is untested: the script-view multi-select entry point
 (`{ kind: 'selection' }`) has Vitest coverage on `manuscript.tsx`'s selection
@@ -200,22 +291,35 @@ Run in mock mode (`VITE_USE_MOCKS=true`, `npm run dev`).
    "Select lines" multi-select, check several lines across chapters, click
    the floating "Reassign N selected…" bar → expected: the same modal opens
    with `source: { kind: 'selection' }`, pre-seeded with exactly those keys.
-8. **Unlink entry point (regression).** In a character's profile drawer,
-   remove an alias chip via its X → expected: the alias splits into its own
-   character AND the same `ReassignLinesModal` opens with
-   `source: { kind: 'unlink' }`, target pre-set to the newly split-off
-   character, empty-state copy "Nothing to reassign here — 0 lines to move
-   for this selection." when the mock returns no impacted chapters.
-9. **Cross-book isolation.** With a pending Undo banner on Book A, switch to
-   Book B (library → open another book) → expected: no stale banner shows on
-   Book B, and there is no residual `lastBulkReassign` slot pointing at
-   Book A's composite keys.
+8. **Unlink entry point — split (regression).** In a character's profile
+   drawer, click an alias chip's X → expected: the `UnlinkAliasDialog` opens
+   (`aria-label="Unlink alias"`), defaulted to "Make «alias» its own
+   character." Click Continue → the alias splits into its own character AND
+   the same `ReassignLinesModal` opens with `source: { kind: 'unlink' }`,
+   target pre-set to the newly split-off character, empty-state copy
+   "Nothing to reassign here — 0 lines to move for this selection." when the
+   mock returns no impacted chapters.
+9. **Unlink entry point — move to X (part b, new).** Repeat step 8 but pick
+   "Move «alias» to" and choose an existing roster character from the
+   dropdown, then Continue → expected: the dialog closes, the alias chip
+   disappears from the source character's "Also known as" row, the alias
+   reappears on the **chosen target's** "Also known as" row (no new character
+   is created), and the `ReassignLinesModal` opens seeded to that target
+   (not a freshly-split character) so the alias's lines follow it there.
+   Confirming the reassignment leaves the target with both the alias string
+   and the reassigned lines. Re-opening the drawer for a different alias
+   afterwards shows a clean dialog with no leftover error from a prior
+   attempt.
+10. **Cross-book isolation.** With a pending Undo banner on Book A, switch to
+    Book B (library → open another book) → expected: no stale banner shows on
+    Book B, and there is no residual `lastBulkReassign` slot pointing at
+    Book A's composite keys.
 
 ## Out of scope
 
-- Part (b) — re-point an alias to another existing character at unlink time
-  (a "Drop vs. Move to \<character\>" choice) — separate follow-up spec that
-  reuses this form; not implemented here.
+- Undo for the alias-string move itself (part b) — only the subsequent line
+  reassignment is undoable via the existing one-level slot; repointing the
+  alias again is the manual correction path.
 - A server-side bulk-reassign endpoint — line attribution keeps round-
   tripping through the generic `PUT /api/books/{id}/state`.
 - Heuristic/smart auto-selection of "wrong" lines — selection is manual,
