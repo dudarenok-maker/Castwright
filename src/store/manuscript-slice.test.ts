@@ -1221,6 +1221,27 @@ describe('fs-56 — split/merge instruct guard (#1100 base)', () => {
     expect(survivor?.text).toContain('She ran.'); // merged text
     expect(survivor?.instruct).toBeUndefined();   // #1100 drops the survivor's stale instruct
   });
+
+  // #1679 — a split must not duplicate the scene-break flag onto later pieces
+  it('splitSentence keeps sceneBreakBefore on the first piece only', () => {
+    const state = baseState(
+      sentences([
+        { id: 1, chapterId: 1, characterId: 'narrator', text: 'Alpha beta gamma.', sceneBreakBefore: true },
+      ]),
+    );
+    const next = manuscriptSlice.reducer(
+      state,
+      manuscriptActions.splitSentence({
+        chapterId: 1,
+        sentenceId: 1,
+        offsets: [5],
+        characterIds: ['narrator', 'narrator'],
+      }),
+    );
+    const pieces = next.sentences.filter((s) => s.chapterId === 1);
+    expect(pieces[0].sceneBreakBefore).toBe(true);
+    expect(pieces[1].sceneBreakBefore).toBeUndefined();
+  });
 });
 
 /* ── #1676(c) — bulk line-reassign reducer + one-level undo slot ──────

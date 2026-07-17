@@ -15,6 +15,9 @@ import type { SentenceOutput } from '../../handoff/schemas.js';
    moves the cursor. */
 
 const WINDOW = 4096;
+const COMBINING_MARK = /\p{Mn}/u;
+const FUZZY_MIN_NEEDLE = 24;
+const FUZZY_ANCHOR_LEN = 16;
 
 export interface AlignedSentence {
   sentence: SentenceOutput;
@@ -67,6 +70,12 @@ function buildNormalizedMap(raw: string): { text: string; rawStart: number[]; ra
       out = '...';
     } else {
       out = raw[i].toLowerCase();
+      // RU: models routinely swap ё↔е. Fold to е so a single ё/е divergence
+      // doesn't orphan the whole sentence (which would drag the chapter under
+      // the 80% alignment floor and suppress ALL structure corrections).
+      // 1:1 char replacement — preserves the offset map exactly.
+      if (out === 'ё') out = 'е';
+      else if (COMBINING_MARK.test(out)) out = ''; // drop decomposed diacritics (offset-safe)
     }
     const atomStart = i;
     const atomEnd = i + atomLen;
@@ -146,14 +155,20 @@ export function alignSentences(
 
   for (const sentence of sentences) {
     const needle = normalize(sentence.text);
-    const matchStart = needle.length > 0 ? findMatch(normBody, needle, cursor) : -1;
+    let matchStart = needle.length > 0 ? findMatch(normBody, needle, cursor) : -1;
+    if (matchStart === -1 && needle.length >= FUZZY_MIN_NEEDLE) {
+      // Exact failed (gemma paraphrased/dropped a word). Anchor on the prefix so
+      // the sentence still attaches to its paragraph; approximate the extent.
+      const anchorPos = findMatch(normBody, needle.slice(0, FUZZY_ANCHOR_LEN), cursor);
+      if (anchorPos !== -1) matchStart = anchorPos;
+    }
 
     if (matchStart === -1) {
       aligned.push({ sentence, spans: [], lumped: false });
       continue; // do NOT move the cursor — a single bad sentence can't desync the rest
     }
 
-    const matchEnd = matchStart + needle.length;
+    const matchEnd = Math.min(matchStart + needle.length, normBody.length);
     cursor = matchEnd;
 
     const rawMatchStart = rawStart[matchStart];
@@ -170,4 +185,29 @@ export function alignSentences(
   const alignedPct = sentences.length ? (100 * alignedCount) / sentences.length : 0;
 
   return { aligned, alignedPct };
+}
+
+/** #1679 — Locate each sentence's raw start offset in `body`, reusing the same
+    normalization + windowed forward-match this module already uses for
+    alignment. Returns an array parallel to `sentences`: the raw body offset of
+    each sentence's first character, or null when its text couldn't be located
+    (model paraphrase / tag drift). A miss NEVER advances the cursor, so one bad
+    sentence can't desync the rest — identical semantics to alignSentences.
+
+    Unlike alignSentences this needs only the body (no ParagraphEvidence), so it
+    runs on every chapter regardless of whether the dialogue-structure engine is
+    active. Pure: no I/O, no model calls. */
+export function locateSentenceOffsets(
+  sentences: Array<{ text: string }>,
+  body: string,
+): Array<number | null> {
+  const { text: normBody, rawStart } = buildNormalizedMap(body);
+  let cursor = 0;
+  return sentences.map((s) => {
+    const needle = normalize(s.text);
+    const matchStart = needle.length > 0 ? findMatch(normBody, needle, cursor) : -1;
+    if (matchStart === -1) return null;
+    cursor = matchStart + needle.length;
+    return rawStart[matchStart];
+  });
 }

@@ -22,7 +22,7 @@ import type {
 } from '../handoff/schemas.js';
 import { applyNarratorDefault } from '../analyzer/narrator-default.js';
 import { CONFIDENCE } from '../analyzer/dialogue-structure/cross-examine.js';
-import { attributeChapterStage2 } from './analysis.js';
+import { attributeChapterStage2, reconcileSentenceCharacterIds } from './analysis.js';
 
 const CHAPTER_BODY =
   '— Ты уверен, что это сработает, — спросил Антон.\n\nОльга кивнула и отвернулась.';
@@ -123,6 +123,39 @@ describe('attributeChapterStage2 — structure engine wiring (srv-59)', () => {
     const expected = applyNarratorDefault(mockSentences());
     expect(result.sentences).toEqual(expected);
     expect(result.structureReport).toBeUndefined();
+  });
+});
+
+describe('attributeChapterStage2 — Task 9 roster consolidation before stage-2', () => {
+  it('hands the model a consolidated roster (bare «Я» phantom + fragmented Антон merged) and fires the «я» anchor', async () => {
+    // Raw stage-1 the model would otherwise see: a bare pronoun «Я» char, Антон
+    // split across two ids, and Ольга. `anton` carries «Я» as an alias (the model
+    // volunteered it) so the phantom folds into Антон and the anchor can fire.
+    const rawChars: CharacterOutput[] = [
+      { id: 'anton', name: 'Антон', role: 'lead', color: '#111111', gender: 'male', aliases: ['Я'] },
+      { id: 'anton-gorodetsky', name: 'Антон Городецкий', role: 'lead', color: '#112222', gender: 'male' },
+      { id: 'я', name: 'Я', role: 'char', color: '#113333', gender: 'male' },
+      { id: 'olga', name: 'Ольга', role: 'lead', color: '#222222', gender: 'female' },
+    ];
+    let captured = '';
+    const analyzer: Analyzer = {
+      ...fakeAnalyzer(mockSentences()),
+      runStage2Chapter: (_m: string, _c: number, prompt: string) => {
+        captured = prompt;
+        return Promise.resolve({ sentences: mockSentences() });
+      },
+    };
+    await attributeChapterStage2({
+      ...baseOpts('ru', mockSentences()),
+      analyzer,
+      stage1: { characters: rawChars, chapters: [{ id: 1, title: 'Chapter One' }] },
+    });
+
+    expect(captured).not.toContain('"id": "я"'); // bare pronoun phantom gone from the prompt
+    // Антон is ONE row now (Городецкий fragment merged), not two competing ids.
+    expect(captured.match(/"id": "anton(-gorodetsky)?"/g) ?? []).toHaveLength(1);
+    // …and the «я» prompt-anchor fires because the surviving Антон row carries «Я».
+    expect(captured).toContain('First-person narrator');
   });
 });
 
@@ -377,4 +410,73 @@ describe('attributeChapterStage2 — escalation wiring (srv-59 Task 9b)', () => 
       warn.mockRestore();
     });
   });
+});
+
+/* #1679 — annotateSceneBreaks is wired at the single universal exit of
+   attributeChapterStage2 (after BOTH the conventions/structure-engine branch
+   and the applyNarratorDefault/else branch converge), so scene-break flags
+   populate on every chapter regardless of language or structure-engine
+   state. The annotator itself (marker location, offset math) is unit-tested
+   directly in scene-breaks.test.ts — this only pins the wiring. */
+describe('attributeChapterStage2 — scene-break annotation (#1679)', () => {
+  const SCENE_BODY =
+    'Первая сцена заканчивается тут.\n\n* * *\n\nВторая сцена начинается тут.';
+
+  function sceneSentences(): SentenceOutput[] {
+    return [
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 'Первая сцена заканчивается тут' },
+      { id: 2, chapterId: 1, characterId: 'narrator', text: 'Вторая сцена начинается тут' },
+    ];
+  }
+
+  function sceneOpts(language: string) {
+    return {
+      analyzer: fakeAnalyzer(sceneSentences()),
+      manuscriptId: 'm1',
+      title: 'Test Book',
+      stage1: STAGE1,
+      chapter: { id: 1, title: 'Chapter One', body: SCENE_BODY },
+      stageCall: { language } as StageCall,
+    };
+  }
+
+  it('flags the post-separator sentence on the structure-engine (conventions) branch', async () => {
+    const result = await attributeChapterStage2(sceneOpts('ru'));
+    expect(result.sentences[0].sceneBreakBefore).toBeUndefined();
+    expect(result.sentences[1].sceneBreakBefore).toBe(true);
+  });
+
+  it('flags the post-separator sentence on the applyNarratorDefault (else) branch too', async () => {
+    const result = await attributeChapterStage2(sceneOpts('xx')); // unsupported language
+    expect(result.sentences[0].sceneBreakBefore).toBeUndefined();
+    expect(result.sentences[1].sceneBreakBefore).toBe(true);
+  });
+});
+
+/* #1679 round-4 review follow-up — `attributeChapterStage2`'s return value is
+   NOT the persisted array: sentences pass through several more spread-based
+   transforms (dedupAndPrepare, stripThirdPartyFrontMatter, foldMinorCast,
+   remapCjkHonorificIds, reconcileSentenceCharacterIds) before landing in
+   manuscript-edits.json. Those transforms build their output via object
+   SPREAD (`{ ...s, characterId: ... }`), which carries any additive field
+   forward untouched — but nothing tested that. This pins it against the real
+   `reconcileSentenceCharacterIds` (exported, cheaply callable in isolation):
+   an id NOT in `validIds` takes the spread-rewrite path (demoted to the
+   fallback id), and the flag must survive that rewrite; an id already valid
+   passes through unchanged and must keep the flag's absence. */
+it('sceneBreakBefore survives the spread-based reconcileSentenceCharacterIds rewrite', () => {
+  const flagged: SentenceOutput[] = [
+    { id: 1, chapterId: 1, characterId: 'narrator', text: 'Scene one.' },
+    { id: 2, chapterId: 1, characterId: 'ghost', text: 'Scene two.', sceneBreakBefore: true },
+  ];
+  const validIds = new Set(['narrator']);
+
+  const { sentences: out, demotedCount } = reconcileSentenceCharacterIds(flagged, validIds);
+
+  expect(demotedCount).toBe(1); // sanity: id 2 actually took the spread-rewrite path
+  expect(out.find((s) => s.id === 2)).toMatchObject({
+    characterId: 'narrator', // demoted from the invalid 'ghost'
+    sceneBreakBefore: true, // survived the spread
+  });
+  expect(out.find((s) => s.id === 1)?.sceneBreakBefore).toBeUndefined();
 });

@@ -546,8 +546,10 @@ export const manuscriptSlice = createSlice({
              keeps the id + the hints); every later fragment is NEW text, so
              null both — a stale `vocalization:true` would turn real narration
              into a sound-effect token, and an `instruct` written for the whole
-             sentence may not fit a fragment. */
-          ...(isFirst ? {} : { instruct: undefined, vocalization: undefined }),
+             sentence may not fit a fragment. #1679 — the scene-break flag
+             describes the original sentence's opening; only the first piece
+             may keep it, else a split paints a spurious mid-scene divider. */
+          ...(isFirst ? {} : { instruct: undefined, vocalization: undefined, sceneBreakBefore: undefined }),
         });
       }
       if (pieces.length === 0) return;

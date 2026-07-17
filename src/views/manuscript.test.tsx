@@ -2737,3 +2737,81 @@ describe('ManuscriptView — checkbox multi-select → bulk reassign', () => {
     vi.restoreAllMocks();
   });
 });
+
+describe('ManuscriptView — scene divider (#1679)', () => {
+  function renderScene(chapterSentences: Sentence[]) {
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+    });
+    return render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[chapter1, chapter2]}
+          currentChapterId={2}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={chapterSentences}
+        />
+      </Provider>,
+    );
+  }
+
+  it('renders a scene divider above the sentence flagged sceneBreakBefore', () => {
+    renderScene([
+      { id: 1, chapterId: 2, characterId: 'narrator', text: 'Scene one ends.' },
+      {
+        id: 2,
+        chapterId: 2,
+        characterId: 'narrator',
+        text: 'Scene two begins.',
+        sceneBreakBefore: true,
+      },
+    ]);
+    expect(screen.getByTestId('scene-divider')).toBeInTheDocument();
+  });
+
+  it('does not render a divider above segment 0 even if it carries the flag', () => {
+    renderScene([
+      { id: 1, chapterId: 2, characterId: 'narrator', text: 'Leading.', sceneBreakBefore: true },
+    ]);
+    expect(screen.queryByTestId('scene-divider')).not.toBeInTheDocument();
+  });
+
+  it('starts a new segment at the flagged sentence even for same-speaker prose', () => {
+    renderScene([
+      { id: 1, chapterId: 2, characterId: 'narrator', text: 'Same speaker one.' },
+      {
+        id: 2,
+        chapterId: 2,
+        characterId: 'narrator',
+        text: 'Same speaker two.',
+        sceneBreakBefore: true,
+      },
+    ]);
+    expect(screen.getAllByTestId('scene-divider')).toHaveLength(1);
+  });
+
+  // #1679 — the separator glyph sentence must NOT render as a text row; the divider represents it
+  it('suppresses the separator-only sentence row and shows the divider above the opener', () => {
+    renderScene([
+      { id: 1, chapterId: 2, characterId: 'narrator', text: 'Prose before the break.' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: '* * *' },
+      {
+        id: 3,
+        chapterId: 2,
+        characterId: 'narrator',
+        text: 'Prose after the break.',
+        sceneBreakBefore: true,
+      },
+    ]);
+    // the glyph row is gone
+    expect(screen.queryByText('* * *')).not.toBeInTheDocument();
+    // but the divider and the real prose are present
+    expect(screen.getByTestId('scene-divider')).toBeInTheDocument();
+    expect(screen.getByText(/Prose before the break/)).toBeInTheDocument();
+    expect(screen.getByText(/Prose after the break/)).toBeInTheDocument();
+  });
+});

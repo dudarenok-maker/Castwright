@@ -244,19 +244,33 @@ describe('crossExamine — hard invariants', () => {
     expect(result.flags).toEqual([{ index: 0, reason: 'lumped' }]);
   });
 
-  it('INVARIANT: below the alignment floor -> flagOnly, zero corrections, only the unaligned caps applied', () => {
+  it('below the alignment floor -> speech/tag corrections suppressed, but pure-narration still demotes (Wave A parity)', () => {
     const list = [
-      aligned(mkSentence('narrator'), [speechSpan({ characterId: 'anton', source: 'tag-name' })]), // would normally auto-correct
-      aligned(mkSentence('olga', 0.9), [narrationSpan()]), // would normally demote
+      aligned(mkSentence('narrator'), [speechSpan({ characterId: 'anton', source: 'tag-name' })]), // tag-name correction SUPPRESSED below floor
+      aligned(mkSentence('olga', 0.9), [narrationSpan()]), // pure narration STILL demotes to narrator (Wave A parity)
       aligned(mkSentence('anton'), []), // unaligned
     ];
     const result = run(list, 50); // 50% < 80% floor
 
     expect(result.report.flagOnly).toBe(true);
-    expect(result.report.corrected).toBe(0);
-    // model ids pass through completely unchanged, even the tag-name-contradicting one
-    expect(result.sentences.map((s) => s.characterId)).toEqual(['narrator', 'olga', 'anton']);
+    // the tag-name-contradicting speech line is NOT corrected below floor; only the narration demote is
+    expect(result.sentences.map((s) => s.characterId)).toEqual(['narrator', 'narrator', 'anton']);
+    expect(result.report.corrected).toBe(1);
     for (const s of result.sentences) expect(s.confidence).toBeLessThanOrEqual(CONFIDENCE.UNALIGNED_CAP);
+  });
+
+  it('(RC2) below the alignment floor, still demotes pure-narration off a named char to narrator', () => {
+    const as = {
+      sentence: mkSentence('егор'),
+      spans: [{ kind: 'narration', start: 0, end: 12 } as SpanEvidence],
+      lumped: false,
+    };
+    const result = crossExamine(
+      { alignedPct: 60, aligned: [as] } as any,
+      { rosterIds: new Set(['егор', 'narrator']), unknownBucketIds: new Set(), alignmentFloorPct: 80 },
+    );
+    expect(result.sentences[0].characterId).toBe('narrator');
+    expect(result.sentences[0].confidence).toBeLessThanOrEqual(0.5);
   });
 
   it('DEFENSIVE GUARD: an anchored speech span with an unexpected EvidenceSource (neither tag-name, tag-pronoun, nor alternation) keeps the model id and flags it — never auto-corrects to the span speaker', () => {

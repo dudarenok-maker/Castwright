@@ -257,6 +257,14 @@ function decideSentence(as: AlignedSentence, opts: CrossExamineOpts, block: { ac
   return decideNarrationOnly(modelId, block);
 }
 
+/** A pure-narration aligned sentence (spans present, no speech, not lumped) is
+    narrator voice on its own structural evidence — so this ONE demote is safe
+    to apply even below the alignment floor, where every other correction is
+    suppressed as unreliable. */
+function isPureNarrationAligned(as: AlignedSentence): boolean {
+  return as.spans.length > 0 && !as.lumped && !as.spans.some((s) => s.kind === 'speech');
+}
+
 /** Cross-examine every aligned sentence against its structural evidence.
     Below the alignment floor, correction is disabled chapter-wide (§5.2) —
     every sentence gets the flag-only pass-through, never a correction. */
@@ -279,7 +287,20 @@ export function crossExamine(alignment: AlignmentResult, opts: CrossExamineOpts)
   const block = { active: false };
 
   alignment.aligned.forEach((as, index) => {
-    const decision = flagOnly ? flagOnlyDecision(as) : decideSentence(as, opts, block);
+    let decision: Decision;
+    if (flagOnly) {
+      // Suppress corrections below the floor EXCEPT the high-precision
+      // pure-narration demote, which doesn't depend on the (unreliable)
+      // window/alternation picture.
+      if (isPureNarrationAligned(as) && as.sentence.characterId !== NARRATOR_ID) {
+        decision = decideNarrationOnly(as.sentence.characterId, block);
+      } else {
+        block.active = false;
+        decision = flagOnlyDecision(as);
+      }
+    } else {
+      decision = decideSentence(as, opts, block);
+    }
     report[decision.bucket] += 1;
     if (decision.flagged) flags.push({ index, reason: decision.reason });
     sentences.push({ ...as.sentence, characterId: decision.characterId, confidence: decision.confidence });
