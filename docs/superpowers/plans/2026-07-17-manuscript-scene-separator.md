@@ -13,7 +13,7 @@
 - **Design of record:** `docs/superpowers/specs/2026-07-17-manuscript-scene-separator-design.md` (v4, approved). This plan corrects two spec imprecisions discovered while reading the code — noted inline where they occur; the architecture is unchanged.
 - **Read-only:** the pass mutates ONLY the new `sceneBreakBefore` flag. Sentence `text`, `characterId`, order, ids, and count are byte-identical to pre-change. No change to chunking, coverage, attribution, or synthesis.
 - **Additive-optional field:** `sceneBreakBefore?: boolean` follows the existing additive pattern (`emotion`/`instruct`/`vocalization`/`excludeFromSynthesis`). The model NEVER emits it — it is set by post-processing *after* `.strict()` validation of model output, so strict validation is unaffected.
-- **No hex literals in component code** — use existing CSS custom properties / Tailwind tokens (`--ink` etc.). Divider ornament is Lora serif (the app's serif font).
+- **No hex literals in component code** — use existing CSS custom properties / Tailwind tokens. This repo is **Tailwind v4 CSS-first (no `tailwind.config.ts`)**: tokens are declared in `src/styles.css`'s `@theme` block (`--color-ink: var(--ink)` → `text-ink`/`bg-ink`; `--font-serif: Lora` → `font-serif`), and opacity modifiers (`text-ink/40`, `bg-ink/15`) work via v4 `color-mix`. `text-ink`/`bg-ink`/`font-serif` are already used across 8+ views — confirmed resolvable. Divider ornament is Lora serif.
 - **OpenAPI is the type source of truth** — never hand-edit `src/lib/api-types.ts`; regenerate via `npm run openapi:types`.
 - **Touch targets** unaffected (no new interactive control; the divider is non-interactive and the boundary handle is *removed* at the seam, not added).
 - **Commit convention:** `<type>(<scope>): <subject>`; scopes used here: `server`, `frontend`, `docs`. Commit trailers required (see any recent commit).
@@ -50,6 +50,52 @@
 
 ---
 
+## Task 0: Alignment measurement spike — GO/NO-GO gate (do this FIRST)
+
+**Why first (round-4 adversarial review, most-dangerous assumption):** the entire feature bets that scene-*opening* sentences align back to their body offset reliably. The aggregate `alignedPct` is only ~65.6% and the scene-opener sub-rate is **unmeasured**. Measuring it is cheap and needs only the locator + separator logic — so it runs *before* the schema, wiring, and frontend build, not after. If the hit-rate is poor, a "no divider here" is ambiguous (real gap vs. alignment miss) and the aid is not shippable — **stop and surface to the user** rather than sinking Tasks 1–8.
+
+This task also lands the locator (`locateSentenceOffsets`) permanently — it is needed regardless — so Task 3 below only formalizes its committed unit tests.
+
+**Files:**
+- Modify: `server/src/analyzer/dialogue-structure/aligner.ts` (add exported `locateSentenceOffsets` — full code in Task 3, Step 3)
+- Create (throwaway, NOT committed): `scripts/scene-break-measure.mjs` — a measurement harness
+- Test data: _Ночной дозор_ (Night Watch) and one real `<hr>`-bearing EPUB, analyzed locally
+
+**Interfaces:**
+- Produces: `locateSentenceOffsets` (see Task 3). Consumed by the measurement harness and Tasks 3/4.
+
+- [ ] **Step 1: Land the locator**
+
+Implement `locateSentenceOffsets` exactly as in **Task 3, Step 3** (aligner.ts), with its unit tests (Task 3, Step 1). Commit it:
+
+```bash
+git add server/src/analyzer/dialogue-structure/aligner.ts server/src/analyzer/dialogue-structure/aligner.test.ts
+git commit -m "feat(server): add locateSentenceOffsets body-offset helper (#1679)"
+```
+
+(This is Task 3's commit, pulled forward. Task 3 becomes a no-op checkpoint confirming it landed.)
+
+- [ ] **Step 2: Write the throwaway measurement harness**
+
+Create `scripts/scene-break-measure.mjs`. For each test book: read the analyzed `manuscript-edits.json` (sentences) + the source chapter bodies, compute separator offsets (inline the `separatorOffsets` logic from Task 4, Step 3) and sentence offsets (`locateSentenceOffsets`), and for every true `* * *`/`<hr>` break report whether the divider would bind to the correct scene-opening sentence (the first real sentence of the next scene) vs. mid-scene vs. dropped. Print a hit / miss / drop tally per book. This file is deliberately NOT committed (it's a spike).
+
+- [ ] **Step 3: Analyze the two books and run the harness**
+
+Run `npm start`, analyze Night Watch and the EPUB through the UI, then `node scripts/scene-break-measure.mjs`. Record the per-book hit-rate.
+
+- [ ] **Step 4: GO/NO-GO decision**
+
+- **GO** (the vast majority of true breaks bind correctly): record the number for the regression doc (Task 8) and proceed to Task 1.
+- **NO-GO** (dividers land mid-scene / drop often enough to mislead): **STOP. Surface the numbers to the user** and do not build Tasks 1–8 as-is. The spec makes this an explicit go/no-go gate, not a nice-to-have.
+
+- [ ] **Step 5: Delete the throwaway harness**
+
+```bash
+rm scripts/scene-break-measure.mjs
+```
+
+---
+
 ## Task 1: Data model — `sceneBreakBefore` field (schema + OpenAPI + generated types)
 
 Foundation: every later task references the type. Additive-optional boolean.
@@ -58,7 +104,7 @@ Foundation: every later task references the type. Additive-optional boolean.
 - Modify: `server/src/handoff/schemas.ts:135` (inside `sentenceSchema`, before the closing `})` at :136)
 - Modify: `openapi.yaml` (the `Sentence` schema, after `excludeFromSynthesis` at ~:5347)
 - Regenerate: `src/lib/api-types.ts` (via `npm run openapi:types` — do NOT hand-edit)
-- Test: `server/src/handoff/schemas.test.ts` (create if absent — check first with a directory listing)
+- Test: `server/src/handoff/schemas.test.ts` (**already exists** — append the new describe block; do not recreate)
 
 **Interfaces:**
 - Produces: `SentenceOutput` (`z.infer<typeof sentenceSchema>`) gains optional `sceneBreakBefore?: boolean`. Frontend `Sentence` (generated) gains the same optional field. Consumed by Tasks 4, 5, 6, 7.
@@ -225,6 +271,8 @@ git commit -m "feat(server): preserve <hr> scene breaks through stripHtml (#1679
 ---
 
 ## Task 3: Sentence body-offset locator (`locateSentenceOffsets`)
+
+> **Landed in Task 0.** The locator is built and committed as part of the Task 0 gating spike (it is needed to measure). This section is retained as the canonical spec for its code + unit tests; if you ran Task 0, verify the commit exists and skip to Task 4.
 
 **Spec correction (do not skip reading this).** The spec says "reuse `alignSentences` for per-sentence body offsets." That is not directly possible: `alignSentences` (aligner.ts:136) (a) requires `ParagraphEvidence[]`, which only exists inside the structure-engine branch of `attributeChapterStage2`, and (b) returns overlapping `spans`, discarding the raw offset. To populate dividers on EVERY chapter (all languages, structure-engine on or off), add a thin locator that reuses the same module-private normalization/match primitives (`buildNormalizedMap`, `normalize`, `findMatch`) but needs only the body. Same match behaviour, same ~65.6%-aggregate hit rate — see the acceptance gate in Task 8.
 
@@ -470,6 +518,11 @@ export function annotateSceneBreaks(sentences: SentenceOutput[], body: string): 
   const offsets = locateSentenceOffsets(sentences, body);
 
   for (const sep of separators) {
+    /* A leading separator (chapter-top, before any located prose) is DROPPED:
+       only bind when at least one located sentence precedes the separator, so a
+       `* * *` at offset 0 doesn't flag the very first sentence. */
+    const hasPreceding = offsets.some((o) => o != null && o < sep);
+    if (!hasPreceding) continue;
     for (let i = 0; i < sentences.length; i++) {
       const off = offsets[i];
       if (off != null && off > sep) {
@@ -574,6 +627,30 @@ Then, in `attributeChapterStage2`, replace the final `return result;` (:1788) wi
 
 Run: `cd server && npx vitest run src/routes/analysis.structure-engine.test.ts`
 Expected: PASS (existing tests + the 2 new ones). The existing structure-engine assertions are unchanged (the annotator only adds an optional flag).
+
+- [ ] **Step 4b: Prove the flag survives to the PERSISTED array (not just the function boundary)**
+
+`attributeChapterStage2`'s `return result` is NOT the persisted array: sentences then pass through `dedupAndPrepare` (`analysis.ts:~727`), `stripThirdPartyFrontMatter`, `foldMinorCast` (`analyzer/fold-minor-cast.ts:~279`), `remapCjkHonorificIds`, and `reconcileSentenceCharacterIds` (`analysis.ts:~1103`) before landing in `manuscript-edits.json`/state.json (and being read back via `z.array(sentenceSchema.passthrough())`, `routes/book-state.ts:594`). Round-4 review verified all of these use object-**spread** when rewriting a sentence, so an additive field survives — but nothing tests it. Add a focused regression that runs a flagged sentence through the real spread-based transforms and asserts survival, so a future reconstruct-not-spread change is caught.
+
+Add to `server/src/routes/analysis.structure-engine.test.ts` (import the transforms from their real modules — confirm each import path and signature by reading the function before writing the call; do NOT guess a signature):
+
+```ts
+import { reconcileSentenceCharacterIds } from './analysis.js'; // confirm it is exported; else use foldMinorCast from ../analyzer/fold-minor-cast.js
+// #1679 — the scene-break flag must survive the post-attribution transform chain.
+it('sceneBreakBefore survives the spread-based post-attribution transforms', () => {
+  const flagged: SentenceOutput[] = [
+    { id: 1, chapterId: 1, characterId: 'narrator', text: 'Scene one.' },
+    { id: 2, chapterId: 1, characterId: 'narrator', text: 'Scene two.', sceneBreakBefore: true },
+  ];
+  // Exercise the real reconcile pass (identity roster → no id changes, but it
+  // rewrites every row via spread). Assert the additive flag is untouched.
+  const out = reconcileSentenceCharacterIds(flagged, /* roster/args per the real signature */);
+  expect(out.find((s) => s.id === 2)?.sceneBreakBefore).toBe(true);
+  expect(out.find((s) => s.id === 1)?.sceneBreakBefore).toBeUndefined();
+});
+```
+
+If `reconcileSentenceCharacterIds` is not exported / not cheaply callable in isolation, instead extend the fuller-path integration test in `server/src/routes/analysis.structure-fixture.test.ts` (which already drives closer to persisted output) with a fixture chapter containing a `* * *` break, and assert the flag is present on the persisted/returned sentence array there. Either way, the assertion must be on the array AFTER the transform chain, not on `attributeChapterStage2`'s immediate return.
 
 - [ ] **Step 5: Commit**
 
@@ -895,9 +972,9 @@ await expect(page.getByTestId('scene-divider').first()).toBeVisible();
 Run: `npx playwright test --project=chromium <spec-file>`
 Expected: FAIL before the fixture flows through analysis with the flag; PASS once the mock manuscript payload carries `sceneBreakBefore` (if the e2e runs against mock mode, add the flag to the corresponding `src/mocks/manuscripts/` payload sentence in the same step so the mock and real paths agree).
 
-- [ ] **Step 4: Run the acceptance gate (go/no-go)**
+- [ ] **Step 4: Confirm the acceptance-gate result (measured up front in Task 0)**
 
-This is a **measurement**, not a code change. Analyze _Ночной дозор_ (Night Watch) and one real EPUB with `<hr>` breaks, then report: of the true scene breaks, what fraction produced a correctly-placed divider. Record the number in the regression doc. If it is too low to trust (dividers land mid-scene often enough to mislead), STOP and surface to the user before merge — the spec makes this an explicit go/no-go gate, not a nice-to-have. Command to drive a local analysis: `npm start`, then analyze the book through the UI; inspect the resulting `state.json` for `sceneBreakBefore` placement against the source `* * *` offsets.
+The go/no-go alignment measurement was run in **Task 0** *before* this build started. Here, simply confirm the shipped end-to-end behavior matches that measurement: analyze _Ночной дозор_ + the `<hr>` EPUB through the real pipeline and eyeball that dividers land where Task 0 predicted. Record the Task 0 number in the regression doc (Step 5). If Task 0 was GO, this is a confirmation; if anything regressed between the spike and the shipped path, surface it before merge.
 
 - [ ] **Step 5: Write the regression plan doc**
 
@@ -934,7 +1011,15 @@ git commit -m "test(frontend): e2e + regression doc for scene separator (#1679)"
 
 **3. Type consistency:** `locateSentenceOffsets(sentences, body): Array<number|null>` — same name/signature in Tasks 3, 4. `annotateSceneBreaks(sentences, body): void` — same in Tasks 4, 5. `sceneBreakBefore?: boolean` — identical across schema (T1), Segment (T6), split-strip (T7). `SceneDivider` / `data-testid="scene-divider"` — consistent across T6 render + T8 e2e. ✓
 
-**Known residual risk (carried from the spec, surfaced to the user, NOT a plan defect):** the locator inherits the aligner's ~65.6% aggregate hit rate. Task 8 Step 4 is the go/no-go gate that decides whether scene-opener placement is reliable enough to ship. If the measurement is poor, the feature does not ship as-is.
+**Known residual risk (carried from the spec, surfaced to the user, NOT a plan defect):** the locator inherits the aligner's ~65.6% aggregate hit rate. **Task 0** is now the go/no-go gate — measured *before* the build, so a poor hit-rate stops the work before Tasks 1–8 are sunk cost, not after.
+
+**Round-4 adversarial-review folds (independent Opus reviewer on this plan):**
+- **Acceptance gate moved to a gating Task 0 spike** (was Task 8 Step 4) — the most-dangerous assumption is measured before building.
+- **Leading-separator guard added** to `annotateSceneBreaks` (Task 4) — a chapter-top `* * *` would otherwise flag sentence 0 (offset > 0), contradicting the task's own test and the design's "leading separator dropped." Now: bind only when a located sentence precedes the separator.
+- **Persisted-array survival test added** (Task 5 Step 4b) — the function-boundary test can't catch a downstream drop across `dedupAndPrepare`/`foldMinorCast`/`reconcileSentenceCharacterIds` (all verified spread-based) before `manuscript-edits.json`.
+- **`book-state.ts` read path corrected** — `server/src/routes/book-state.ts:594` reads `manuscript-edits.json` via `z.array(sentenceSchema.passthrough())`; additive-optional + passthrough is safe (the spec's "file doesn't exist" and the reviewer's `store/` path were both wrong on the directory).
+- **`schemas.test.ts` already exists** (append, not create); **`tailwind.config.ts` is stale** — repo is Tailwind v4 CSS-first, tokens confirmed resolvable.
+- **Accepted-as-limitation (documented in spec, not fixed):** stage-2 cache cross-version-resume replay skips annotation (self-heals on re-analyze); seam handle-suppression is a visual affordance, not a hard cross-scene reassignment lock.
 
 ## Execution Handoff
 

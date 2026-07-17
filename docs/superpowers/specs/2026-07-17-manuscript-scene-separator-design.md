@@ -1,7 +1,7 @@
 # Manuscript view: visual scene-change separator — design
 
 - **Issue:** #1679
-- **Status:** approved (design), v4 after three adversarial-review rounds (round 3 refined v3, did not overturn it)
+- **Status:** approved (design), v5 — three spec-review rounds converged the architecture (v3/v4); round 4 was an adversarial review of the *implementation plan* that folded back into this spec (leading-separator guard, cache-replay gap, corrected `book-state.ts` passthrough citation, acceptance gate moved up-front, cross-seam-drag scope note). Architecture unchanged.
 - **Date:** 2026-07-17
 - **Scope:** server (read-only post-attribution detection + EPUB/MOBI `<hr>` preservation + additive schema field) + OpenAPI + frontend (manuscript view)
 
@@ -112,10 +112,18 @@ Add one optional field, `sceneBreakBefore?: boolean`, in these places:
   via `npm run openapi:types`.
 - **Persistence:** state.json is written as raw JSON and read back via a raw
   `readJson<BookStateJson>` (`server/src/routes/analysis.ts:4502,5621`) with **no
-  schema gate on read**, so the additive field round-trips freely.
-  *(Correcting v2: there is no `server/src/store/book-state.ts`; the earlier
-  `.passthrough()` citation was wrong. Adding to `sentenceSchema` is still
-  required — for the type, above.)*
+  schema gate on read**. The frontend's canonical sentence source is
+  `manuscript-edits.json`, read back through `z.array(sentenceSchema.passthrough())`
+  (`server/src/routes/book-state.ts:594`) — `.passthrough()` **plus** the new
+  additive-optional field means the flag survives that parse cleanly, and
+  `manuscript-edits.json` rows are written verbatim ("extra fields pass through",
+  `workspace/restructure.ts:21`). So the flag round-trips server → state/edits JSON
+  → API → frontend without a schema gate rejecting it.
+  *(Round-4 correction: the file is `server/src/routes/book-state.ts` — not
+  `store/`; both the v2 spec ("no such file") and the plan-review's `store/`
+  citation had the directory wrong. Adding the field to `sentenceSchema` is still
+  required — for the `SentenceOutput` type — and is now doubly safe on this
+  passthrough read path.)*
 
 ### 4. Rendering (frontend, `src/views/manuscript.tsx`)
 
@@ -142,7 +150,12 @@ review).
   segments) renders through the virtualized branch, so patching only the flat one
   leaves the seam handle (and a missing divider) on big chapters. Reassigning
   attribution across a scene break is not a meaningful edit; the divider occupies
-  that gap.
+  that gap. **Scope note (round-4 plan-review):** suppressing the seam handle only
+  removes *that* boundary's drag control — a drag on a neighboring, non-suppressed
+  boundary can still move its candidate across the seam. Fully forbidding
+  cross-seam reassignment is out of scope for a display aid; the suppression is a
+  visual affordance ("this gap is a scene break, not an edit point"), not an
+  attribution lock.
 - **`splitSentence` must strip the flag from non-first pieces.** The reducer
   spreads `...original` into every piece (`src/store/manuscript-slice.ts:464-476`),
   which would duplicate the flag and paint a spurious mid-scene divider; mirror
@@ -156,7 +169,14 @@ review).
 
 - Consecutive / leading separators collapse: they bound empty regions with no
   word-bearing sentence to flag → a single break, one flag on the next real
-  sentence. A leading separator (before any prose) is dropped.
+  sentence. **A leading separator (before any prose) is dropped — this must be
+  enforced in code, not assumed** (round-4 plan-review catch): the detector only
+  binds a separator to the following sentence when at least one located sentence
+  *precedes* the separator offset. Without that guard a chapter-top `* * *` at
+  offset 0 would flag the very first sentence (`offset > 0`), and although the
+  frontend `segIdx > 0` guard hides that divider, the stray server flag is wrong
+  and the annotator's own unit test asserts it stays unset. The `hasPreceding`
+  guard is the server-side belt to the frontend's suspenders.
 - A chapter whose body is only a separator normalizes to zero words and is
   already skipped by the parsers (`epub.ts:152 if (!body) continue`). No-op.
 - **False-positive guard:** a page-number-only unit (`42`) is NOT a separator —
@@ -177,6 +197,18 @@ spreads fresh analysis then overrides only user-authored fields
 (`manuscript-slice.ts:150-158`), so a server-computed `sceneBreakBefore` rides
 in cleanly.
 
+**Known gap — the stage-2 cache replay path (round-4 plan-review catch).** The
+per-chapter attribution cache is *written after* annotation
+(`analysis.ts:~4079`), so a same-version run that replays cached chapters
+(`analysis.ts:~3676` `sentencesByChapter.set(ch.id, cached)`, which does **not**
+call `attributeChapterStage2`) still serves flagged sentences — fine. The one
+uncovered case: a run interrupted **before this feature shipped** and resumed
+**after upgrade** replays pre-feature cached chapters that carry no flag and are
+never re-annotated, so those chapters show no dividers until a fresh
+re-analysis. This is cosmetic and self-heals on the next full analyze; the
+optional backfill script also covers it. Accepted for v1 rather than adding
+annotation to the cache-replay path (extra surface for a display aid).
+
 ## Testing
 
 - **Server — alignment** (new test): a `* * *` mid-chapter flags the following
@@ -186,11 +218,18 @@ in cleanly.
   a break; a paraphrase mismatch drops/misplaces the divider without error.
   Chunking output (sentence count/ids, coverage) is byte-identical to pre-change —
   a guard that we changed nothing but the flag.
-- **Acceptance gate — measure the scene-opening hit-rate.** Before shipping, run
-  the pass on Night Watch and one real EPUB and report what fraction of true
-  scene breaks produced a correctly-placed divider (the aggregate `alignedPct` is
-  ~65.6%, but scene-openers should score higher). If it is too low to trust, the
-  aid is not shippable as-is — this gate decides go/no-go, not a nice-to-have.
+- **Acceptance gate — measure the scene-opening hit-rate FIRST, as a pre-build
+  spike (round-4 plan-review: this is the most dangerous assumption).** The whole
+  feature rides on scene-*opening* sentences aligning back to their body offset
+  reliably; the aggregate `alignedPct` is only ~65.6% and the scene-opener
+  sub-rate is **unmeasured**. Measuring it is cheap — reuse `locateSentenceOffsets`
+  against Night Watch + one real `<hr>` EPUB and compare offsets to the true
+  `* * *`/`<hr>` positions — so it runs **before** the frontend/data-model build,
+  as a gating spike, not after. If scene-openers land correctly often enough
+  (target: the vast majority), build the rest; if not, a "no divider here" is
+  ambiguous (real gap vs. alignment miss) and the aid is not shippable as-is —
+  stop and rethink rather than shipping a misleading affordance. Go/no-go, up
+  front.
 - **Server — `stripHtml`:** `<hr>` converts to a surviving word-free line;
   `<p>* * *</p>` still survives.
 - **Frontend unit** (`manuscript.test.tsx`): a flagged sentence renders the
