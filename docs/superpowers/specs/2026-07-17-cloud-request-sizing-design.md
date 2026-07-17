@@ -24,7 +24,7 @@ an *output-heavy* pass, which the first draft of this spec wrongly scoped out.
 
 | # | Where | Bug |
 |---|---|---|
-| RC1 | `stage1-chunk.ts:56/62` (`MAX_SAFE_INTEGER`), `stage2-chunk.ts:63` (full budget), **`chapter-chunker.ts:101-103`** (`outputHeavyChunkChars`=32000, fixed) | No cloud pass sizes its request to an input-token cap. Stage-1 never chunks; stage-2 keeps the full char budget; the **output-heavy passes** (script-review / annotate-emotion / instruct) use a fixed 32k-char budget with no token awareness *and* prepend the full cast roster — the actually-observed 46k-char / >16k-token 429. |
+| RC1 | `stage1-chunk.ts:56/62` (`MAX_SAFE_INTEGER`), `stage2-chunk.ts:63` (full budget), **`chapter-chunker.ts:101-103`** (`outputHeavyChunkChars`=32000, fixed) | No cloud pass sizes its request to an input-token cap. Stage-1 never chunks; stage-2 keeps the full char budget; the **output-heavy passes** (script-review / annotate-emotion / instruct) use a fixed 32k-char budget with no token awareness; **script-review additionally prepends the full cast roster** (~14k chars) — the actually-observed 46k-char / >16k-token 429. (annotate-emotion / instruct carry no roster.) |
 | RC2 | `rate-limit.ts:41-42` + `registry.ts:867` | Gemma's built-in TPM is `Infinity` (registry default `0` = unlimited). Google now enforces 16k input-tokens/min free-tier, so the limiter never paces Gemma. |
 | RC3 | `gemini.ts:591` **and** `routes/failure-taxonomy.ts:113` (raw) + `:414` (message) | Daily-quota regex `/free[_-]?tier\|quotaValue":"\d{1,3}"/i` matches the *per-minute* metric `...free_tier_input_token_count` → classified fatal daily-quota (no retry) → chapter dropped. **Three sites.** |
 | RC4 | local Ollama stage-2 | Verbose stage-2 output overflows `num_ctx` → truncates. Confirmed: `done_reason=length bytes=71681 model=qwen3.5:4b`, `bytes=60549 model=gemma4-e4b-8gb`. |
@@ -72,13 +72,15 @@ Apply it at **all three** cloud sizing seams:
    chunk against the token-derived budget.
 2. **Stage-2** — `stage2ChunkBudgetForEngine` (`:63`) takes
    `min(configured, token-derived)` for cloud.
-3. **Output-heavy** — `chapterChunkBudget('gemini')` (`chapter-chunker.ts:103`)
-   returns `min(outputHeavyChunkChars, token-derived)`. **Critically, the request
-   also carries the cast roster + context sentences**, which are fixed per-call
-   overhead — so the *core* budget must be `token-derived − roster − context −
-   system` (subtract the measured roster/context length), not the raw cap. That
-   overhead is what turned a 32k core into the 46k failing request. The roster
-   length is known at call-build time; the plan wires it into the budget.
+3. **Output-heavy** — `chapterChunkBudget('gemini', reservedChars, sampleText)`
+   (`chapter-chunker.ts:103`) returns `min(outputHeavyChunkChars,
+   cloudBodyCharBudget(sampleText, reservedChars))`. **For script-review the
+   request also carries the cast roster** (~14k chars, fixed per-call overhead) —
+   so its *core* budget subtracts the serialized roster length (`reservedChars`);
+   that overhead is what turned a 32k core into the 46k failing request.
+   annotate-emotion and instruct carry **no** roster (`reservedChars = 0`); they
+   still shrink on dense scripts via `sampleText`. Only script-review passes a
+   non-zero reservation.
 
 **The safety margin is the cap + Fix 5, not a precise ratio.** Because density is
 only bounded (≤2.88), we do not trust an exact chars/token. The cap (12000) sits

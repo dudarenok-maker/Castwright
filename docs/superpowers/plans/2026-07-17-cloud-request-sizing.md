@@ -110,7 +110,7 @@ Expected: FAIL — `Cannot find module './token-budget.js'`.
    this carries no promptTokenCount, so the ratio is a bounded approximation, not
    a measurement — size conservatively; the rate-limiter fail-fast guard backstops. */
 import { configValue } from '../config/resolver.js';
-import { countCjkChars } from './cjk.js'; // ← same import gemini.ts uses today
+import { countCjkChars } from '../util/cjk.js'; // ← verified path: gemini.ts:42 imports it from here
 
 export const LATIN_CHARS_PER_TOKEN = 4;
 export const CYRILLIC_CHARS_PER_TOKEN = 2.5;
@@ -221,19 +221,27 @@ it('cloud stage-1 sizes to the token cap, not MAX_SAFE_INTEGER', () => {
 });
 
 it('local stage-1 input fraction knob lowers the budget', () => {
-  // default 0.7; a smaller fraction → smaller budget (verify via stage1ChunkBudgetForEngine)
-  const hi = stage1ChunkBudgetForEngine(24000, 32768, 'local', 0.7);
-  const lo = stage1ChunkBudgetForEngine(24000, 32768, 'local', 0.4);
+  // large `configured` so the num_ctx-derived value (not the min clamp) decides.
+  const hi = stage1ChunkBudgetForEngine(100000, 16384, 'local', 0.7); // floor(16384*1.4)=22937
+  const lo = stage1ChunkBudgetForEngine(100000, 16384, 'local', 0.4); // floor(16384*0.8)=13107
   expect(lo).toBeLessThan(hi);
 });
 ```
 
+Also **UPDATE the existing assertion** at `stage1-chunk.test.ts` that locks in the old cloud invariant — the `it('… keeps MAX_SAFE_INTEGER on gemini …')` case in `chapter-chunker.test.ts:24-27` (it calls `resolveStage1ChunkCharBudget('gemini')`): rewrite it to assert cloud stage-1 now returns a finite chunked budget:
+
+```ts
+  it('stage-1 cast detection now sizes gemini to a finite token-derived budget (no longer MAX_SAFE_INTEGER)', () => {
+    expect(resolveStage1ChunkCharBudget('gemini', 'x'.repeat(200000))).toBeLessThan(200000);
+  });
+```
+
 - [ ] **Step 2: Run, verify failure**
 
-Run: `cd server && npm run test -- src/analyzer/stage1-chunk.test.ts`
-Expected: FAIL — `resolveStage1ChunkCharBudget('gemini', body)` still returns `MAX_SAFE_INTEGER` / arity mismatch.
+Run: `cd server && npm run test -- src/analyzer/stage1-chunk.test.ts src/analyzer/chapter-chunker.test.ts`
+Expected: FAIL — new cloud test + the rewritten `chapter-chunker.test.ts` case (still MAX_SAFE_INTEGER).
 
-- [ ] **Step 3: Implement** — replace `stage1ChunkBudgetForEngine` and `resolveStage1ChunkCharBudget` (`stage1-chunk.ts:48-68`):
+- [ ] **Step 3: Implement** — edit `stage1ChunkBudgetForEngine` and `resolveStage1ChunkCharBudget` (`stage1-chunk.ts:48-68`). **Keep the helper's gemini branch as `MAX_SAFE_INTEGER`** (so the existing helper tests `:122/:124/:128` stay green — the new `localInputFraction` param is OPTIONAL); the cloud sizing lives entirely in the resolver:
 
 ```ts
 import { cloudBodyCharBudget } from './token-budget.js';
@@ -242,9 +250,9 @@ export function stage1ChunkBudgetForEngine(
   configured: number,
   numCtxTokens: number,
   engine: 'gemini' | 'local',
-  localInputFraction: number,
+  localInputFraction = 0.7, // OPTIONAL: existing 3-arg callers/tests keep the prior 0.7 behavior
 ): number {
-  if (engine !== 'local') return configured; // cloud: caller passes the token-derived budget in `configured`
+  if (engine !== 'local') return Number.MAX_SAFE_INTEGER; // helper unchanged; cloud sizing is in the resolver
   const numCtxDerived = Math.floor(numCtxTokens * localInputFraction * 2);
   return Math.max(2000, Math.min(configured, numCtxDerived));
 }
@@ -263,7 +271,7 @@ export function resolveStage1ChunkCharBudget(engine?: 'gemini' | 'local', body?:
 }
 ```
 
-> The stage-1 CALLER (`routes/analysis.ts`, where `resolveStage1ChunkCharBudget(engine)` is invoked) must now pass the chapter body: `resolveStage1ChunkCharBudget(engine, chapterBody)`. Grep `resolveStage1ChunkCharBudget(` and update each call to pass the body it is about to chunk. `chapter-chunker.ts:102` calls `resolveStage1ChunkCharBudget('local')` — local ignores `body`, so that call is unaffected.
+> **TWO** stage-1 cloud callers must pass the chapter body — `routes/analysis.ts:3151` AND `routes/analysis.ts:5111` (both have `ch.body` in scope): change each to `resolveStage1ChunkCharBudget(selection.engine, ch.body)`. `chapter-chunker.ts:102` calls `resolveStage1ChunkCharBudget('local')` — local ignores `body`, unaffected.
 
 - [ ] **Step 4: Add the registry knob**
 
@@ -288,7 +296,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add server/src/analyzer/stage1-chunk.ts server/src/analyzer/stage1-chunk.test.ts server/src/routes/analysis.ts server/src/config/registry.ts server/src/config/generated*
+git add server/src/analyzer/stage1-chunk.ts server/src/analyzer/stage1-chunk.test.ts server/src/analyzer/chapter-chunker.test.ts server/src/routes/analysis.ts server/src/config/registry.ts server/src/config/generated*
 git commit -m "feat(server): size cloud stage-1 to the token cap + local input-fraction knob (#1682)"
 ```
 
@@ -318,8 +326,9 @@ it('cloud stage-2 caps to min(configured, token-derived)', () => {
 });
 
 it('local stage-2 input fraction knob lowers the budget', () => {
-  const hi = stage2ChunkBudgetForEngine(9000, 32768, 'local', 0.3);
-  const lo = stage2ChunkBudgetForEngine(9000, 32768, 'local', 0.15);
+  // large `configured` so the num_ctx-derived value (not the min clamp) decides.
+  const hi = stage2ChunkBudgetForEngine(100000, 32768, 'local', 0.3);  // floor(32768*2*0.3)=19660
+  const lo = stage2ChunkBudgetForEngine(100000, 32768, 'local', 0.15); // floor(32768*2*0.15)=9830
   expect(lo).toBeLessThan(hi);
 });
 ```
@@ -327,9 +336,9 @@ it('local stage-2 input fraction knob lowers the budget', () => {
 - [ ] **Step 2: Run, verify failure**
 
 Run: `cd server && npm run test -- src/analyzer/stage2-chunk.test.ts`
-Expected: FAIL (arity / cloud returns full configured unconditionally).
+Expected: FAIL (new cloud + fraction tests). Existing `:145/:149/:152/:155` stay GREEN — the new param is optional (defaults to 0.3) and the gemini branch is unchanged.
 
-- [ ] **Step 3: Implement** — replace `stage2ChunkBudgetForEngine` + `resolveStage2ChunkCharBudget` (`stage2-chunk.ts:58-76`):
+- [ ] **Step 3: Implement** — replace `stage2ChunkBudgetForEngine` + `resolveStage2ChunkCharBudget` (`stage2-chunk.ts:58-76`). The gemini branch is UNCHANGED (`return configured` — matches existing `:145`); `localInputFraction` is OPTIONAL:
 
 ```ts
 import { cloudBodyCharBudget } from './token-budget.js';
@@ -338,7 +347,7 @@ export function stage2ChunkBudgetForEngine(
   configured: number,
   numCtxTokens: number,
   engine: 'gemini' | 'local',
-  localInputFraction: number,
+  localInputFraction = 0.3, // OPTIONAL: existing 3-arg callers/tests keep the prior 0.3 behavior
 ): number {
   if (engine !== 'local') return configured;
   const numCtxDerived = Math.floor(numCtxTokens * 2 * localInputFraction);
@@ -360,7 +369,7 @@ export function resolveStage2ChunkCharBudget(engine?: 'gemini' | 'local', body?:
 }
 ```
 
-> Update the stage-2 caller in `routes/analysis.ts` to pass the chapter body: `resolveStage2ChunkCharBudget(engine, chapterBody)`. Grep `resolveStage2ChunkCharBudget(`.
+> The single stage-2 caller is `routes/analysis.ts:1754` — change `resolveStage2ChunkCharBudget(opts.engine)` to `resolveStage2ChunkCharBudget(opts.engine, opts.chapter.body)` (confirm the in-scope body var name via grep). No existing test locks the old cloud resolver value (`resolveStage2ChunkCharBudget('gemini')` with no body still returns `min(configured, cloudBodyCharBudget(''))` = 9000, unchanged), so nothing else breaks.
 
 - [ ] **Step 4: Add the registry knob**
 
@@ -443,11 +452,11 @@ export function chapterChunkBudget(
 }
 ```
 
-- [ ] **Step 4: Update the three call sites to pass roster + sample**
+- [ ] **Step 4: Update the three call sites — ONLY script-review has a roster**
 
-In each route, the roster is serialized into the prompt; compute its length once and pass it. Pattern (adapt variable names per route):
+**Verified:** `grep roster` returns 16 hits in `script-review.ts` but **0** in `annotate-emotion.ts` and `instruct-annotation.ts` — those two passes prepend **no** cast roster, so their reserved overhead is 0. Do NOT reference `roster` there (it does not exist and won't compile).
 
-`script-review.ts:795` — the roster is `roster` (`CastCharacterSlim[]`); the sentences being chunked are `sentences`. Replace:
+**`script-review.ts:795`** — `roster` (`CastCharacterSlim[]`) is in scope; the sentences are `byChapter.get(chapterId) ?? []` (there is no `sentences` variable). Replace:
 
 ```ts
         charBudget: chapterChunkBudget(activeSelection.engine),
@@ -459,11 +468,17 @@ with:
         charBudget: chapterChunkBudget(
           activeSelection.engine,
           JSON.stringify(roster).length + 800, // roster payload + fixed template scaffold
-          sentences.map((s) => s.text).join(' '), // script sample → chars/token
+          (byChapter.get(chapterId) ?? []).map((s) => s.text).join(' '), // sample → chars/token
         ),
 ```
 
-Apply the equivalent at `annotate-emotion.ts:166` and `instruct-annotation.ts` (each has a `roster`/`CastCharacterSlim[]` in scope and a `sentences` array; use the same two extra args). The `+800` is a conservative fixed allowance for the prompt header/instructions — keep it identical across the three so behavior is uniform.
+**`annotate-emotion.ts:166`** and **`instruct-annotation.ts:165`** — no roster; pass `reservedChars = 0` and the sample text from their local `sentences` array:
+
+```ts
+          charBudget: chapterChunkBudget(selection.engine, 0, sentences.map((s) => s.text).join(' ')),
+```
+
+The `+800` (script-review only) is a conservative fixed allowance for the prompt header/instructions. `sampleText` only affects the chars/token estimate, so the empty-roster passes still shrink correctly on dense scripts.
 
 - [ ] **Step 5: `config:sync` not needed (no new knob); run tests**
 
@@ -521,17 +536,30 @@ Change both Gemma builtins (`:41-42`):
   'gemma-4-26b-a4b-it': { rpm: 15, tpm: 16_000, rpd: 1500 },
 ```
 
-Make the `0`/`unlimited` sentinel explicit in `readEnvNumber` (`:51-57`) so it no longer depends on the builtin being Infinity:
+Make the `0` sentinel explicit **for TPM only** — do NOT change the shared `readEnvNumber` (it is also used for RPM/RPD, where `0` should keep meaning "fall back to builtin", not "unlimited"). Leave `readEnvNumber` as-is (it already maps `"unlimited" → Infinity`) and add a TPM-scoped reader, then use it for the TPM dimension in `resolveLimits` (`:59-67`):
 
 ```ts
-function readEnvNumber(name: string): number | undefined {
+/* TPM-only sentinel: 0 (and "unlimited") mean "no per-minute gate" (Infinity).
+   Needed now that the Gemma builtin TPM is a finite 16000 — otherwise env 0
+   would resolve to 16000, not unlimited. RPM/RPD keep readEnvNumber (0 → builtin). */
+function readTpmEnv(name: string): number | undefined {
   const raw = process.env[name];
   if (raw === undefined) return undefined;
   const t = raw.trim().toLowerCase();
-  if (t === 'unlimited' || t === '0') return Infinity; // explicit "no gate" sentinel
+  if (t === 'unlimited' || t === '0') return Infinity;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
+```
+
+In `resolveLimits`, use `readTpmEnv` for the tpm field only:
+
+```ts
+  return {
+    rpm: readEnvNumber(`GEMINI_RPM_${slug}`) ?? base.rpm,
+    tpm: readTpmEnv(`GEMINI_TPM_${slug}`) ?? base.tpm,
+    rpd: readEnvNumber(`GEMINI_RPD_${slug}`) ?? base.rpd,
+  };
 ```
 
 - [ ] **Step 4: Registry** — change `rate.tpm.gemma` default `0 → 16000`, update help; add `rate.tpm.gemma26`:
@@ -638,6 +666,8 @@ export class RequestExceedsTpmError extends Error {
       throw new RequestExceedsTpmError(model, estimatedTokens, limits.tpm);
     }
 ```
+
+> Placement notes (verified): the `Number.isFinite(limits.tpm)` guard means it never fires when TPM is unlimited (`Infinity`). It sits before the `while` loop, so an over-TPM request whose RPD is *also* exhausted throws `RequestExceedsTpmError` rather than `DailyQuotaExhaustedError` — cosmetic (both terminal, the request can never run). `acquire()` is called at `gemini.ts:544` OUTSIDE the `try` (which opens at `:549`), so this throw propagates cleanly past the retry loop to the route — same path `DailyQuotaExhaustedError` already takes.
 
 - [ ] **Step 4: Classify it in failure-taxonomy** — add a signature entry (near the other analyzer signatures) so it surfaces cleanly rather than as `unknown`:
 
