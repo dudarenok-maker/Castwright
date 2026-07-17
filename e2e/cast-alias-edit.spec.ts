@@ -67,6 +67,12 @@ test.describe('cast view → profile drawer → alias chip editing', () => {
        the Reassign Lines modal with an `{ kind: 'unlink' }` source. */
     await unlinkCap.click();
 
+    /* #1676(b): the X now opens a destination dialog first. Default is
+       "own character" (today's split), so Continue reaches the same modal. */
+    const dialog = page.getByRole('dialog', { name: 'Unlink alias' });
+    await expect(dialog).toBeVisible({ timeout: 5_000 });
+    await dialog.getByRole('button', { name: /continue/i }).click();
+
     /* Modal mounted. #1676(c): the generalized modal's aria-label is the
        fixed "Reassign lines" (no longer alias-specific — the source
        union carries the alias identity instead of the title). */
@@ -87,5 +93,54 @@ test.describe('cast view → profile drawer → alias chip editing', () => {
        its own character), the +Add button is reachable again. */
     await expect(page.getByRole('button', { name: 'Unlink Cap' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Add alias' })).toBeVisible();
+  });
+
+  /* #1676(b): the ✕ now opens a destination dialog before unlinking — choosing
+     "Move to <character>" instead of the default split calls api.repointAlias
+     and re-opens the same Reassign Lines modal, seeded to the target
+     character rather than a freshly-split-off one. */
+  test('user can move an alias onto another character (repoint), which opens the reassign modal', async ({
+    page,
+  }) => {
+    await goToConfirm(page);
+    await waitForRouteReady(page);
+
+    const card = page.getByRole('button', { name: /Open profile for Captain Halloran/i });
+    await expect(card).toBeVisible({ timeout: 10_000 });
+    await card.click();
+
+    await expect(page.getByText('Also known as')).toBeVisible({ timeout: 10_000 });
+    await page.getByText('Also known as').scrollIntoViewIfNeeded();
+
+    const addButton = page.getByRole('button', { name: 'Add alias' });
+    await expect(addButton).toBeVisible();
+    await addButton.click();
+    const input = page.getByRole('textbox', { name: 'New alias name' });
+    await input.fill('Skipper');
+    await input.press('Enter');
+
+    const unlinkSkipper = page.getByRole('button', { name: 'Unlink Skipper' });
+    await expect(unlinkSkipper).toBeVisible({ timeout: 5_000 });
+    await unlinkSkipper.click();
+
+    /* Destination dialog: pick "Move to" and choose the first real target
+       from the picker (index 0 is the "Choose…" placeholder). */
+    const dialog = page.getByRole('dialog', { name: 'Unlink alias' });
+    await expect(dialog).toBeVisible({ timeout: 5_000 });
+    await dialog.getByRole('radio', { name: /move/i }).click();
+    const select = dialog.getByRole('combobox', { name: /move .* to/i });
+    await select.selectOption({ index: 1 });
+    await dialog.getByRole('button', { name: /continue/i }).click();
+
+    /* Reassign modal opens (mock returns empty impactedChapters → empty
+       state), same as the split path. */
+    const modal = page.getByRole('dialog', { name: 'Reassign lines' });
+    await expect(modal).toBeVisible({ timeout: 5_000 });
+    await modal.getByRole('button', { name: 'Close' }).click();
+    await expect(modal).not.toBeVisible();
+
+    /* Skipper chip is gone from Halloran — it was moved onto the target,
+       not split off. */
+    await expect(page.getByRole('button', { name: 'Unlink Skipper' })).toHaveCount(0);
   });
 });

@@ -2104,29 +2104,54 @@ export function Layout() {
               }
               onUnlinkAlias={
                 bookId
-                  ? async (sourceCharacterId, aliasName) => {
-                      const res = await api.unlinkAlias({
-                        bookId,
-                        sourceCharacterId,
-                        aliasName,
-                      });
-                      dispatch(
-                        castActions.applyUnlinkAlias({
+                  ? async (sourceCharacterId, aliasName, destination) => {
+                      if (destination.mode === 'split') {
+                        const res = await api.unlinkAlias({
+                          bookId,
                           sourceCharacterId,
                           aliasName,
-                          newCharacter: res.newCharacter,
-                        }),
-                      );
-                      /* Open the Reassign Lines modal so the user can move
-                         the freed-up alias's lines off the source character. The
-                         drawer stays open behind it — closing the modal returns
-                         the user to the drawer where they can confirm the chip
-                         is gone. */
-                      setReassignSource({
-                        kind: 'unlink',
-                        impactedChapters: res.impactedChapters,
-                        aliasCharacterId: res.newCharacter.id,
-                      });
+                        });
+                        dispatch(
+                          castActions.applyUnlinkAlias({
+                            sourceCharacterId,
+                            aliasName,
+                            newCharacter: res.newCharacter,
+                          }),
+                        );
+                        /* Open the Reassign Lines modal so the user can move
+                           the freed-up alias's lines off the source character. The
+                           drawer stays open behind it — closing the modal returns
+                           the user to the drawer where they can confirm the chip
+                           is gone. */
+                        setReassignSource({
+                          kind: 'unlink',
+                          impactedChapters: res.impactedChapters,
+                          aliasCharacterId: res.newCharacter.id,
+                        });
+                      } else {
+                        const { targetCharacterId } = destination;
+                        const res = await api.repointAlias({
+                          bookId,
+                          sourceCharacterId,
+                          aliasName,
+                          targetCharacterId,
+                        });
+                        dispatch(
+                          castActions.applyRepointAlias({
+                            sourceCharacterId,
+                            aliasName,
+                            targetCharacterId,
+                          }),
+                        );
+                        /* Same reassign-lines follow-up as the split path, but
+                           the alias's lines land on the existing target
+                           character rather than a freshly-split-off one. */
+                        setReassignSource({
+                          kind: 'unlink',
+                          impactedChapters: res.impactedChapters,
+                          aliasCharacterId: targetCharacterId,
+                        });
+                      }
                     }
                   : undefined
               }

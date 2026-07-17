@@ -87,6 +87,10 @@ const PERSIST_RULES: Record<
      edit, or the endpoint reading pre-rename disk, could clobber the alias /
      rename (the intermittent "also-known-as / rename didn't save" race). */
   'cast/applyAddAlias': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
+  /* Repoint mutates TWO characters (strip source + append target); mirror
+     add-alias' full-cast persist so the latest redux wins any concurrent
+     debounced cast PUT. The route also writes cast.json; this is the race-guard. */
+  'cast/applyRepointAlias': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
   'cast/lockVoice': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
 
   'manuscript/setSentenceCharacter': {

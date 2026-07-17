@@ -770,6 +770,97 @@ describe('castSlice — applyAddAlias (POST /cast/add-alias response)', () => {
   });
 });
 
+describe('castSlice — applyRepointAlias (POST /cast/repoint-alias response)', () => {
+  it('strips the alias off the source and appends it to the target', () => {
+    const start = baseState([
+      makeChar('egor', { name: 'Егор', aliases: ['Я', 'Sior'] }),
+      makeChar('anton', { name: 'Антон', aliases: [] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyRepointAlias({ sourceCharacterId: 'egor', aliasName: 'Я', targetCharacterId: 'anton' }),
+    );
+    expect(next.characters.find((c) => c.id === 'egor')!.aliases).toEqual(['Sior']);
+    expect(next.characters.find((c) => c.id === 'anton')!.aliases).toEqual(['Я']);
+  });
+
+  it('dedups case-insensitively on the target (no double add)', () => {
+    const start = baseState([
+      makeChar('egor', { name: 'Егор', aliases: ['Я', 'Sior'] }),
+      makeChar('anton', { name: 'Антон', aliases: ['я'] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyRepointAlias({ sourceCharacterId: 'egor', aliasName: 'Я', targetCharacterId: 'anton' }),
+    );
+    expect(next.characters.find((c) => c.id === 'anton')!.aliases).toEqual(['я']);
+    expect(next.characters.find((c) => c.id === 'egor')!.aliases).toEqual(['Sior']);
+  });
+
+  it('does not append when the alias equals the target primary name (still strips source)', () => {
+    const start = baseState([
+      makeChar('egor', { name: 'Егор', aliases: ['Антон', 'Sior'] }),
+      makeChar('anton', { name: 'Антон', aliases: [] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyRepointAlias({ sourceCharacterId: 'egor', aliasName: 'Антон', targetCharacterId: 'anton' }),
+    );
+    expect(next.characters.find((c) => c.id === 'anton')!.aliases).toEqual([]);
+    expect(next.characters.find((c) => c.id === 'egor')!.aliases).toEqual(['Sior']);
+  });
+
+  it('is a no-op when the source or target is missing', () => {
+    const start = baseState([
+      makeChar('egor', { name: 'Егор', aliases: ['Я', 'Sior'] }),
+      makeChar('anton', { name: 'Антон', aliases: [] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyRepointAlias({ sourceCharacterId: 'ghost', aliasName: 'Я', targetCharacterId: 'anton' }),
+    );
+    expect(next.characters.find((c) => c.id === 'anton')!.aliases).toEqual([]);
+  });
+
+  it('no-ops for an empty/whitespace alias key', () => {
+    const start = baseState([
+      makeChar('egor', { name: 'Егор', aliases: ['Я', 'Sior'] }),
+      makeChar('anton', { name: 'Антон', aliases: [] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyRepointAlias({ sourceCharacterId: 'egor', aliasName: '   ', targetCharacterId: 'anton' }),
+    );
+    expect(next.characters.find((c) => c.id === 'egor')!.aliases).toEqual(['Я', 'Sior']);
+    expect(next.characters.find((c) => c.id === 'anton')!.aliases).toEqual([]);
+  });
+
+  it('is a no-op when the target is missing (source keeps its alias)', () => {
+    const start = baseState([
+      makeChar('egor', { name: 'Егор', aliases: ['Я', 'Sior'] }),
+      makeChar('anton', { name: 'Антон', aliases: [] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyRepointAlias({ sourceCharacterId: 'egor', aliasName: 'Я', targetCharacterId: 'ghost' }),
+    );
+    expect(next.characters.find((c) => c.id === 'egor')!.aliases).toEqual(['Я', 'Sior']);
+    expect(next.characters.some((c) => (c.aliases ?? []).includes('Я') && c.id !== 'egor')).toBe(false);
+  });
+
+  it('is a full no-op when source and target are the same character', () => {
+    const start = baseState([
+      makeChar('egor', { name: 'Егор', aliases: ['Я', 'Sior'] }),
+      makeChar('anton', { name: 'Антон', aliases: [] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyRepointAlias({ sourceCharacterId: 'egor', aliasName: 'Я', targetCharacterId: 'egor' }),
+    );
+    expect(next.characters.find((c) => c.id === 'egor')!.aliases).toEqual(['Я', 'Sior']);
+  });
+});
+
 describe('castSlice — setVoiceStyle (plan 108)', () => {
   it('sets the voice-design persona on the matching character', () => {
     const start = baseState([makeChar('wren'), makeChar('marlow')]);

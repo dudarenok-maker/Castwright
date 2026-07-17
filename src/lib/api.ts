@@ -467,6 +467,19 @@ export interface AddAliasResponse {
   alias: string;
   alreadyPresent: boolean;
 }
+export interface RepointAliasArgs {
+  bookId: string;
+  sourceCharacterId: string;
+  aliasName: string;
+  targetCharacterId: string;
+}
+export interface RepointAliasResponse {
+  /** Same lineage shape as unlink — candidate lines to (optionally) move to
+      the target via the reused ReassignLinesModal (unlink source). */
+  impactedChapters: UnlinkAliasImpactedChapter[];
+  /** Target already carried the alias (or it equals the target's name). */
+  alreadyPresent: boolean;
+}
 /* POST /api/books/:bookId/cast/:characterId/voice-style/generate (single)
    and /cast/voice-style/generate-all (batch) — plan 108. The server makes
    ONE Gemini (`gemini-3.1-flash-lite`) call per character from the
@@ -4042,6 +4055,37 @@ async function mockAddAlias({ characterId, aliasName }: AddAliasArgs): Promise<A
      store state. Returning alreadyPresent=false unconditionally is fine;
      the reducer no-ops when the alias is already there. */
   return { characterId, alias: trimmed, alreadyPresent: false };
+}
+
+async function realRepointAlias({
+  bookId,
+  sourceCharacterId,
+  aliasName,
+  targetCharacterId,
+}: RepointAliasArgs): Promise<RepointAliasResponse> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/repoint-alias`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sourceCharacterId, aliasName, targetCharacterId }),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Re-point alias failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockRepointAlias({ aliasName }: RepointAliasArgs): Promise<RepointAliasResponse> {
+  await wait(60);
+  if (!aliasName.trim()) throw new Error('Alias name cannot be empty.');
+  /* impactedChapters intentionally empty (same reason as mockUnlinkAlias); the
+     ReassignLinesModal renders its empty state. */
+  return { impactedChapters: [], alreadyPresent: false };
 }
 
 async function realGenerateVoiceStyle(
@@ -9389,6 +9433,7 @@ const real = {
   seriesPatchCharacter: realSeriesPatchCharacter,
   unlinkAlias: realUnlinkAlias,
   addAlias: realAddAlias,
+  repointAlias: realRepointAlias,
   generateVoiceStyle: realGenerateVoiceStyle,
   generateAllVoiceStyles: realGenerateAllVoiceStyles,
   fetchDesignedPersona: realFetchDesignedPersona,
@@ -9667,6 +9712,7 @@ const mock = {
   seriesPatchCharacter: mockSeriesPatchCharacter,
   unlinkAlias: mockUnlinkAlias,
   addAlias: mockAddAlias,
+  repointAlias: mockRepointAlias,
   generateVoiceStyle: mockGenerateVoiceStyle,
   generateAllVoiceStyles: mockGenerateAllVoiceStyles,
   fetchDesignedPersona: mockFetchDesignedPersona,
