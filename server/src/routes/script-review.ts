@@ -42,6 +42,7 @@ import {
   ownsOp,
   primarySentenceId,
   chapterChunkBudget,
+  OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,
 } from '../analyzer/chapter-chunker.js';
 import {
   buildCharsByChapter,
@@ -798,9 +799,15 @@ async function runScriptReviewJob(
           activeSelection.engine,
           JSON.stringify(roster).length + 800, // roster payload + fixed template scaffold
           (byChapter.get(chapterId) ?? []).map((s) => s.text).join(' '), // sample → chars/token
+          OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS, // reserve the system-prompt overhead (skill + preamble) so the whole request clears the Gemma TPM guard
         ),
         overlap: CHUNK_OVERLAP,
-        serialize: (s) => JSON.stringify({ id: s.id, characterId: s.characterId, text: s.text }),
+        // Size each sentence by the REAL per-sentence payload buildReviewSentencesInput
+        // emits — the appended structureEvidence note (folded into `text`) and the
+        // `instruct`/`vocalization` fields — not the bare {id,characterId,text}. The
+        // real request carries these, so packing to the bare shape underfilled the
+        // budget and let a dense chunk overrun the TPM guard (#1682).
+        serialize: (s) => JSON.stringify(buildReviewSentencesInput([s], structureEvidence)[0]),
       });
 
       /* Part 4 — force-split-on-truncation recovery. Bounding INPUT chars only

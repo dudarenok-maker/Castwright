@@ -96,6 +96,23 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
   script review), a per-minute rate-limit is retried instead of being mistaken
   for daily-quota exhaustion, and the limiter can no longer hang on an oversized
   request. (Refs #1682)
+- Analyzer: the OUTPUT-heavy cloud passes (script review, emotion, instruct
+  annotation) now reserve the system-prompt overhead — the per-pass skill + the
+  non-English language preamble — in token space before sizing the body chunk,
+  via a shared `OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS` (4000) threaded through
+  `chapterChunkBudget`. Previously the body filled the whole ~12k-token cap and
+  left no room for the large system prompt, so a dense Cyrillic script-review
+  chunk estimated ~18.6k input tokens (measured) and tripped `RequestExceedsTpm`
+  — which, unlike a truncation, no recovery catches, so the chapter failed
+  permanently. Script review additionally now packs its chunks by the REAL
+  per-sentence payload (the appended `structureEvidence` note + `instruct`
+  field), not the bare `{id,characterId,text}` it used to size by, so a packed
+  chunk can no longer overrun the guard once those fields are added back at
+  request time. Locked by a real-prompt regression (`output-heavy-tpm.test.ts`)
+  that reconstructs each pass's actual skill + inbox over a worst-case Cyrillic
+  chunk and asserts the estimate stays ≤ 14.5k, and re-trips if a skill grows.
+  Throughput note: the reservation splits a Night-Watch-sized (~600-sentence)
+  chapter into a few more calls; typical chapters stay one call. (Refs #1682)
 
 ---
 

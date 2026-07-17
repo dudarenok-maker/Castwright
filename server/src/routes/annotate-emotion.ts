@@ -23,6 +23,7 @@ import {
   chunkSentencesByBudget,
   chunkWithContext,
   chapterChunkBudget,
+  OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,
 } from '../analyzer/chapter-chunker.js';
 import {
   buildCharsByChapter,
@@ -163,7 +164,12 @@ annotateEmotionRouter.post(
         const chapterStartedAt = Date.now();
         const sentences = byChapter.get(chapterId) ?? [];
         const chunks = chunkSentencesByBudget(sentences, {
-          charBudget: chapterChunkBudget(selection.engine, 0, sentences.map((s) => s.text).join(' ')),
+          charBudget: chapterChunkBudget(
+            selection.engine,
+            0,
+            sentences.map((s) => s.text).join(' '),
+            OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS, // reserve system-prompt overhead so the whole request clears the Gemma TPM guard (#1682)
+          ),
           overlap: 3,
           serialize: (s) =>
             JSON.stringify({ sentenceId: s.id, characterId: s.characterId, text: s.text }),
