@@ -640,6 +640,53 @@ describe('ModelManagerView — per-model keep-alive control', () => {
       }),
     );
   });
+
+  /* Regression: the field is a silent autosave with no Save button of its
+     own. Pressing Enter — the natural "commit" gesture — must save without
+     first tabbing/clicking away, or the typed value is lost on reload. */
+  it('saves on Enter without an explicit blur', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        ...INVENTORY.items,
+        { ...ANALYZER_ITEM_FIXTURE, keepAliveSeconds: 0, keepAliveIsOverride: false },
+      ],
+    });
+    putUserSettings.mockResolvedValue(SETTINGS_FIXTURE);
+    renderManager({ analyzerKeepAliveByModel: { 'qwen3.5:4b': 120 } });
+
+    const field = (await screen.findByTestId(
+      'keepalive-ollama:qwen36-castwright:latest',
+    )) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: '90' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+
+    await waitFor(() =>
+      expect(putUserSettings).toHaveBeenCalledWith({
+        analyzerKeepAliveByModel: { 'qwen3.5:4b': 120, 'qwen36-castwright:latest': 90 },
+      }),
+    );
+  });
+
+  it('flashes a Saved confirmation after a keep-alive save', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        ...INVENTORY.items,
+        { ...ANALYZER_ITEM_FIXTURE, keepAliveSeconds: 0, keepAliveIsOverride: false },
+      ],
+    });
+    putUserSettings.mockResolvedValue(SETTINGS_FIXTURE);
+    renderManager();
+
+    const field = await screen.findByTestId('keepalive-ollama:qwen36-castwright:latest');
+    fireEvent.change(field, { target: { value: '90' } });
+    fireEvent.blur(field);
+
+    expect(
+      await screen.findByTestId('keepalive-saved-ollama:qwen36-castwright:latest'),
+    ).toBeInTheDocument();
+  });
 });
 
 describe('ModelManagerView — back-to-Admin breadcrumb', () => {
