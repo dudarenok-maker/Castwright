@@ -55,46 +55,94 @@ Stated explicitly so scope cannot silently expand:
 | Cloud / Gemini path | **Untouched.** `costForEngine('gemini') = 0` — not semaphore-gated; its concurrency is bounded by `rate-limit.ts`, not the GPU. |
 | Auto-derived K from VRAM headroom | **Out (YAGNI).** VRAM weights are provisional/unmeasured; K is a configured knob. A future auto-sizer can compute K without touching the fan-out plumbing. |
 
-## Approach — two-level concurrency
+## Approach — per-wave two-level concurrency
 
-The single `gpuSemaphore` currently conflates two jobs. Split them:
+> **Revised after adversarial review (F1/F2).** An earlier draft held the outer
+> reservation for the **whole book**. That was wrong: `gpuSemaphore` is budget-1
+> / analyzer-cost-4, and today's acquire/release is **per `/api/chat` call**
+> (`ollama.ts:635` / release `~779`), so two concurrent books — or a book plus a
+> TTS generation on another — **interleave at call granularity** under FIFO
+> drain. Holding one budget-1 slot for a ~30-min run would starve the second
+> book and any TTS op for the entire run, regressing the first-class
+> concurrent-multi-book / concurrent-generation invariant (pills must reflect
+> real-time progress). The design below holds the slot **per wave**, not per
+> book.
 
-- **Outer (cross-engine, coarse) — unchanged semantics.** Acquire
-  `gpuSemaphore.acquire(costForEngine('analyzer'))` **once for the whole
-  analysis job** (per book), release when the book finishes. Wraps the job
-  orchestration in `routes/analysis.ts` (the Phase 0 / Phase 1 region around
-  `:2458–2827`). Analysis serializes against TTS / a second session exactly as
-  today — they genuinely thrash, so co-residence is not wanted.
+The single `gpuSemaphore` conflates cross-engine VRAM arbitration with per-call
+serialization. Add a second level, held at wave granularity:
 
-- **Inner (intra-analyzer, new).** A lightweight FIFO counting semaphore of
-  width **K**. Every analyzer `/api/chat` on the job path acquires the *inner*
-  pool instead of taking `gpuSemaphore` per-call. This caps concurrent Ollama
-  requests at K; `OLLAMA_NUM_PARALLEL` (Ollama-side) must be ≥ K to actually
-  service them in parallel.
+- **Outer (cross-engine, coarse) — held per WAVE.** The analyzer dispatches work
+  in waves of up to K calls. Around each wave it acquires
+  `gpuSemaphore.acquire(costForEngine('analyzer'))` **once**, runs the wave's
+  ≤K calls concurrently under that single held slot, then **releases before the
+  next wave**. Between waves, FIFO drain (`semaphore.ts:121-131`) grants a
+  queued second-book wave or a TTS op, so cross-engine / cross-book work
+  interleaves at **wave granularity** — coarser than today's per-call, but
+  bounded to ~one chunk's runtime, never the whole book. On an uncontended
+  overnight batch the analyzer simply re-acquires immediately and runs waves
+  back-to-back (≈ continuous K-concurrency).
+
+- **Inner (intra-analyzer) — the wave width K.** Up to K `/api/chat` calls run
+  concurrently within a wave; the one held outer slot covers all K, because
+  they share the resident model's weights and so do **not** overcommit VRAM
+  beyond the single slot's accounting (1× weights + K× smaller KV). `think:false`
+  and identical `num_ctx`/`num_gpu` are already sent per call, so the slots are
+  homogeneous. `OLLAMA_NUM_PARALLEL` (Ollama-side) must be ≥ K.
+
+Because the outer acquire is per-wave (not per-book), the **two** analyzer job
+bodies — the main job (`runMainAnalyzerJob`, `analysis.ts:2487`) and the
+subset/retry job (`POST /:id/analysis/chapters`, `:4714`, its own
+`inFlightSubsetByManuscript` map, designed to run **alongside** a main run) —
+both dispatch through the same per-wave mechanism and interleave cleanly. There
+is no "single wrappable whole-book scope," which is correct because none exists
+(F2).
+
+**Known throughput tradeoff:** a wave barrier means each wave waits for its
+slowest-of-K call before the next wave starts. For similarly-sized chunks at
+K=2–4 the overhead is small; a future optimization could pipeline wave refills.
+Acceptable for v1.
 
 ### Unified work queue
 
-Stage-1 chunks, stage-2 chunks, and whole chapters are all "one LLM call" to
-the inner pool — no distinction (the "both, unified" decision). The existing
-`STAGE2_CONCURRENCY` knob (a no-op today because the semaphore serializes
-underneath it) is **superseded** by the single width-K inner pool, so there is
-one concurrency number rather than two fighting.
+Stage-1 chunks, stage-2 chunks, and whole chapters are all "one LLM call" fed
+to the wave dispatcher — no distinction (the "both, unified" decision). The
+existing `STAGE2_CONCURRENCY` knob (a no-op today because the per-call semaphore
+serializes underneath it) is **superseded** by the single width-K wave, so
+there is one concurrency number rather than two fighting.
 
-### The shared-method seam (main integration risk)
+### Call-site inventory (deadlock- and starvation-critical)
 
-`ollama.ts`'s chat method is shared between the job pipeline and out-of-band
-callers (persona generation in `voice-style.ts`, script-review). The method
-must know which mode it is in:
+Every analyzer `/api/chat` reaches `ollama.ts`'s chat path. Each call is one of
+two kinds, threaded by an explicit context flag (not ambient state) so both
+modes are unambiguous and unit-testable:
 
-- **Under a job reservation →** use the inner pool (the outer `gpuSemaphore` is
-  already held once at job level; taking it per-call would deadlock against the
-  job's own held reservation).
-- **Standalone (no job reservation) →** keep the current per-call
-  `gpuSemaphore.acquire` behavior unchanged.
+**In-job (dispatched via the wave mechanism; must NOT take `gpuSemaphore`
+per-call — the wave already holds it).** A missed conversion here is a **hard
+deadlock**: a per-call `acquire(4)` can never be granted while its own wave
+holds the only slot. Full set the plan MUST cover:
+- `runStage1Chapter` → `runStage` (Phase 0a cast) — `ollama.ts:263-279, ~456/516`
+- `runStage2Chapter` / `runStage2ChapterChunked` (Phase 1) — `analysis.ts:1746/1753/4060`
+- `runAttributionEscalation` **local** path — a *separate* chat path
+  (`ollama.ts:374-417`), taken when `analyzer.structure.escalation` ≠ `'cloud'`
+  (`analysis.ts:2553-2554`); easy to miss
+- `runNonStoryClassification` — main job (`analysis.ts:4357-4361`) **and** subset
+  job (`:5471`)
+- subset job's `attributeChapterStage2` (`:5361`)
 
-This is threaded as an explicit context flag/parameter (not ambient state) so
-the two modes are unambiguous and unit-testable. The plan pins down the exact
-signature.
+A test MUST fail if any in-job local call path takes `gpuSemaphore` directly.
+
+**Out-of-band (single detached route calls; keep per-call `gpuSemaphore` — under
+the per-wave outer this no longer stalls, it just queues one wave):**
+- persona generation (`voice-style.ts`) — routes through
+  `acquireGpuTokenIfOnGpu` (`gpu-semaphore-gate.ts:20-26`), which **skips** the
+  semaphore entirely when `onCpu`; preserve that.
+- script-review, annotate-emotion (`runEmotionChapter`, `annotate-emotion.ts:186`),
+  instruct-annotation (`runStage3Chapter`, `instruct-annotation.ts:185`)
+
+**CPU-analyzer preservation.** A confirmed-CPU analyzer costs 0
+(`engine-vram-cost.ts:52-57`) and must **not** be gated by the wave/inner width
+either — the wave mechanism applies only when the analyzer is on the GPU, or CPU
+throughput regresses.
 
 ## Configuration
 
@@ -134,32 +182,44 @@ just fits at 32K × 2.
 Roster merge and cross-chapter carry-forward must remain **order-independent**
 under concurrency. Stage-2 already runs at concurrency 2, so the merge path is
 *already* exercised concurrently — the spec calls this out as an invariant to
-**re-verify**, not assume, when the inner pool widens K beyond 2.
+**re-verify**, not assume, when the wave width K grows beyond 2.
 
 ## Testing
 
-- **Unit — inner pool:** caps in-flight at K; releases on success, throw, and
-  abort (mirrors the `gpuSemaphore` FIFO/abort tests in
-  `server/src/gpu/semaphore.ts`).
-- **Unit — reservation mode:** a job-path call takes the inner pool and does
-  **not** take `gpuSemaphore`; a standalone call still takes `gpuSemaphore`
-  per-call.
-- **Unit — one outer reservation per job:** the job acquires exactly one
-  `gpuSemaphore` slot for its lifetime.
+- **Unit — wave dispatcher:** caps in-flight at K; acquires exactly **one**
+  `gpuSemaphore` slot per wave and **releases it between waves** (mirrors the
+  FIFO/abort tests in `server/src/gpu/semaphore.ts`).
+- **Unit — interleave (guards F1):** while a wave holds the slot, a second
+  waiter (second book / TTS op) is granted on the **wave's release**, not held
+  for the run's duration. This is the regression test for the concurrent-
+  multi-book invariant.
+- **Unit — in-job flag coverage (guards F3):** every in-job local chat path
+  (stage1, stage2, chunked internals, attribution-escalation-local,
+  non-story, subset) does **not** take `gpuSemaphore` per-call. Test fails if
+  any in-job path acquires the semaphore directly (the hard-deadlock trap).
+- **Unit — out-of-band unchanged:** a standalone call still takes per-call
+  `gpuSemaphore`; a CPU persona-gen call still **skips** it via
+  `acquireGpuTokenIfOnGpu`.
 - **Integration (mocked Ollama):** N chapter calls under one job run ≤ K in
   flight, each response is its own (no cross-request bleed) — mirrors the
   sidecar contract in `server/tts-sidecar/tests/test_concurrent_synthesis.py`.
-- **Regression — behavior-preserving at K=1:** single-book analysis output is
-  byte-identical to pre-change when K=1, proving the refactor changes only
-  concurrency, not results.
+- **Regression — behavior-preserving at K=1 (stubbed analyzer):** with a
+  **deterministic stubbed analyzer**, single-book analysis output is
+  byte-identical to pre-change at K=1 (wave width 1 = strictly serial = same
+  merge order). *Not* a live-model assertion — first-attempt temperature is 0.2
+  with a temperature-bumping retry loop (`ollama.ts:110, 502-522`), so real
+  output is non-deterministic (F5).
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| Shared chat-method seam (job vs standalone) | Explicit context flag, unit-tested both ways; the one deadlock trap (per-call acquire under a held job reservation) is the reason the flag exists. |
+| **Concurrent-book / TTS starvation (F1)** | Per-**wave** hold (not per-book) + FIFO release between waves; interleave unit test guards it. |
+| **Missed in-job call site → hard deadlock (F3)** | Full call-site inventory above; a test fails if any in-job local path takes `gpuSemaphore` directly. |
+| Two job bodies, no single scope (F2) | Both main and subset jobs dispatch through the same per-wave mechanism; no whole-book wrap needed. |
 | `num_ctx × K` VRAM overflow on smaller/single-GPU boxes | K default 2 + the calibration step; `numCtx` drop to 16K as the escape valve. |
-| Merge non-determinism surfacing only at K>2 | Determinism invariant re-verified as K widens; regression test at K=1 anchors correctness. |
+| Merge non-determinism surfacing only at K>2 | Determinism invariant re-verified as K widens; K=1 stubbed regression anchors correctness. |
+| Wave-barrier throughput loss (slowest-of-K per wave) | Accepted for v1; K=2 default keeps barrier cheap; pipelined refill noted as a future optimization. |
 
 ## Rollout
 
