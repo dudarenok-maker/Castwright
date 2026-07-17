@@ -1704,6 +1704,22 @@ export async function attributeChapterStage2(opts: {
      consulted when `analyzer.structure.escalation === 'cloud'`. */
   escalationAnalyzer?: Analyzer | null;
 }): Promise<Stage2ChunkRunResult> {
+  /* Task 9 — consolidate the roster BEFORE stage-2 so the model sees CLEAN ids.
+     The raw stage-1 roster routinely hands the model a bare first-person-pronoun
+     phantom («Я») and the same character split across several ids (Антон /
+     Антон Городецкий / …). The model then attributes to the pronoun row and
+     spreads one person's lines across the fragments. Merge them up front —
+     exactly as the final cast build merges them — via `dedupeRosterByName` with
+     no sentences (deterministic: name/token structure only, no line counts). The
+     post-stage-2 `dedupAndPrepare` re-runs dedup on the raw roster and remaps any
+     survivor-id difference onto the same final id, so sentence ids stay
+     consistent. This also lets the «я» prompt-anchor below fire whenever a merged
+     row carries «я» as an alias. */
+  const stage1: Stage1Output = {
+    ...opts.stage1,
+    characters: dedupeRosterByName(opts.stage1.characters, [], { language: opts.stageCall.language })
+      .characters,
+  };
   /* RC3 — thread the known first-person narrator id into the stage-2 prompt
      itself (not just the deterministic structure engine below) so the model
      doesn't need to infer «я» from role/prominence alone. Computed once per
@@ -1711,16 +1727,16 @@ export async function attributeChapterStage2(opts: {
      the deterministic engine's own (separate) computation further down. */
   const fpConventions = conventionsFor(opts.stageCall.language);
   const firstPersonId = fpConventions
-    ? findFirstPersonCharacter(opts.stage1.characters, fpConventions)
+    ? findFirstPersonCharacter(stage1.characters, fpConventions)
     : null;
   const callForBody = (subBody: string, preceding: string | null) => {
     const prompt =
       preceding === null && subBody === opts.chapter.body
-        ? buildStage2ChapterInbox(opts.manuscriptId, opts.title, opts.stage1, opts.chapter, firstPersonId)
+        ? buildStage2ChapterInbox(opts.manuscriptId, opts.title, stage1, opts.chapter, firstPersonId)
         : buildStage2ChunkInbox(
             opts.manuscriptId,
             opts.title,
-            opts.stage1,
+            stage1,
             opts.chapter,
             subBody,
             preceding,
@@ -1754,12 +1770,12 @@ export async function attributeChapterStage2(opts: {
     ? conventionsFor(opts.stageCall.language)
     : null;
   if (conventions) {
-    const index = buildNameIndex(opts.stage1.characters, conventions);
+    const index = buildNameIndex(stage1.characters, conventions);
     const paras = parseChapterStructure(opts.chapter.body, index);
-    const firstPersonId = findFirstPersonCharacter(opts.stage1.characters, conventions);
-    resolveWindows(paras, rosterGenderMap(opts.stage1.characters), firstPersonId);
+    const firstPersonId = findFirstPersonCharacter(stage1.characters, conventions);
+    resolveWindows(paras, rosterGenderMap(stage1.characters), firstPersonId);
     const alignment = alignSentences(result.sentences, paras, opts.chapter.body);
-    const rosterIds = new Set(opts.stage1.characters.map((c) => c.id));
+    const rosterIds = new Set(stage1.characters.map((c) => c.id));
     const examined = crossExamine(alignment, {
       rosterIds,
       unknownBucketIds: new Set([MALE_BUCKET_ID, FEMALE_BUCKET_ID]),
