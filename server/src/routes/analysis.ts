@@ -910,15 +910,14 @@ export function refineCastChapterEstMs(
   const floor = Math.round(elapsedMs * 1.1) + 3000;
   return Math.max(est, floor);
 }
-/* Stage 2 chapter concurrency. Default 2 keeps us well under Gemini's
-   free-tier RPM limits while roughly halving wall-clock time vs sequential.
-   Bump via STAGE2_CONCURRENCY env if your tier (or the model) allows; cap
-   at 6 because narrative-consistency benefits drop off and the per-call
-   overhead dominates beyond that. */
-function readStage2Concurrency(): number {
-  const raw = Number(process.env.STAGE2_CONCURRENCY);
-  if (!Number.isFinite(raw) || raw < 1) return 2;
-  return Math.min(6, Math.floor(raw));
+/* Analyzer chapter-pool width (stage-1 cast + stage-2 attribution), = K, read
+   LIVE from the analyzer.ollama.concurrency knob so tests can set it per-case.
+   Replaces the removed STAGE2_CONCURRENCY env. Capped at 6 (per-call overhead
+   dominates beyond that). The width-K limiter (analyzer-concurrency.ts) is the
+   hard cap on in-flight calls; this only governs how many chapters are dispatched. */
+export function analyzerPoolWidth(): number {
+  const k = configValue<number>('analyzer.ollama.concurrency');
+  return Math.min(6, Math.max(1, Math.floor(k)));
 }
 
 /* Stage-2 coverage guard retry budget. The attribution model occasionally
@@ -3077,7 +3076,7 @@ export async function runMainAnalyzerJob(
         if (ch.excluded) continue;
         if (!chapterCast[ch.id] || failedSet.has(ch.id)) castTaskIndices.push(i);
       }
-      const castConcurrency = readStage2Concurrency();
+      const castConcurrency = analyzerPoolWidth();
       if (castTaskIndices.length > 0) {
         const requeuedFailedCount = castTaskIndices.filter((i) =>
           failedSet.has(recordRef.chapterHints[i].id),
@@ -3808,7 +3807,7 @@ export async function runMainAnalyzerJob(
       if (!completedSet.has(i)) taskIndices.push(i);
     }
 
-    const concurrency = readStage2Concurrency();
+    const concurrency = analyzerPoolWidth();
     log(
       1,
       `Running ${taskIndices.length} chapter${taskIndices.length === 1 ? '' : 's'} with up to ${concurrency} in parallel.`,

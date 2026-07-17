@@ -49,7 +49,7 @@ beforeEach(() => {
   delete process.env.ANALYZER_PHASE1_MODEL;
   delete process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS;
   delete process.env.GEMINI_API_KEY;
-  delete process.env.STAGE2_CONCURRENCY;
+  delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
   delete process.env.ANALYSIS_CAST_CONCURRENCY;
   /* These cases assert Phase 0/1 dispatch scheduling + call counts with stub
      (deliberately non-covering) attribution responses, so disable the stage-2
@@ -400,11 +400,11 @@ describe('runMainAnalyzerJob — pipelined Phase 0/1 interleaved execution', () 
   it('Phase 1 chapter 0 dispatches after Phase 0 chapter 9 completes but before chapter 11 starts (LAG=10)', async () => {
     const manuscriptId = `test-pipeline-interleave-${Date.now()}`;
     registerStubManuscript(manuscriptId, 30);
-    /* Both Phase 0 and Phase 1 use `readStage2Concurrency`. Set to 1 so
+    /* Both Phase 0 and Phase 1 use `analyzerPoolWidth`. Set to 1 so
        chapter dispatch order is deterministic — assertion "chapter 12
        hasn't started when chapter 0 dispatches" depends on the Phase 0
        worker pool advancing strictly in chapter-id order. */
-    process.env.STAGE2_CONCURRENCY = '1';
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
 
     const { fixture, phase0Analyzer, phase1Analyzer } = makePipelineFixture();
     const phase0Selection = buildSpyAnalyzerSelection(phase0Analyzer, 'gemma-4-31b-it');
@@ -481,7 +481,7 @@ describe('runMainAnalyzerJob — rolling roster snapshot', () => {
        ch-cast OUT of the roster snapshot so the `not.toContain` assertion
        still has teeth. */
     registerStubManuscript(manuscriptId, 12);
-    process.env.STAGE2_CONCURRENCY = '1';
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
 
     const { fixture, phase0Analyzer, phase1Analyzer } = makePipelineFixture();
     const phase0Selection = buildSpyAnalyzerSelection(phase0Analyzer, 'gemma-4-31b-it');
@@ -551,7 +551,7 @@ describe('runMainAnalyzerJob — back-pressure under stall', () => {
   it('Phase 1 chapter id=3 parks while Phase 0 chapter 13 is held; releasing unblocks dispatch', async () => {
     const manuscriptId = `test-backpressure-${Date.now()}`;
     registerStubManuscript(manuscriptId, 30);
-    /* `readStage2Concurrency` is shared by Phase 0 + Phase 1. We need
+    /* `analyzerPoolWidth` is shared by Phase 0 + Phase 1. We need
        Phase 0 concurrency=1 for the watermark to cap deterministically
        at 11 when chapter 13 holds. Phase 1's worker pool will inherit
        the same value; since chapter id=3 parks the entire single
@@ -559,7 +559,7 @@ describe('runMainAnalyzerJob — back-pressure under stall', () => {
        dispatched, chapter 3 has NOT dispatched yet" — using concurrency
        higher than 1 would let chapter 3 spin up a second worker that
        dispatches independently. */
-    process.env.STAGE2_CONCURRENCY = '1';
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
 
     const { fixture, phase0Analyzer, phase1Analyzer } = makePipelineFixture();
     const phase0Selection = buildSpyAnalyzerSelection(phase0Analyzer, 'gemma-4-31b-it');
@@ -625,7 +625,7 @@ describe('runMainAnalyzerJob — non-pipelined mode collapses to sequential', ()
   it('sequential mode — Phase 1 never dispatches while any Phase 0 chapter is pending', async () => {
     const manuscriptId = `test-sequential-${Date.now()}`;
     registerStubManuscript(manuscriptId, 6);
-    process.env.STAGE2_CONCURRENCY = '2';
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '2';
 
     const { fixture, phase0Analyzer, phase1Analyzer } = makePipelineFixture();
     const phase0Selection = buildSpyAnalyzerSelection(phase0Analyzer, 'gemma-4-31b-it');
@@ -684,7 +684,7 @@ describe('runMainAnalyzerJob — concurrent pool interleaving in production', ()
     const manuscriptId = `test-concurrent-interleave-${Date.now()}`;
     registerStubManuscript(manuscriptId, 15);
     process.env.ANALYSIS_CAST_CONCURRENCY = '2';
-    process.env.STAGE2_CONCURRENCY = '2';
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '2';
 
     const { fixture, phase0Analyzer, phase1Analyzer } = makePipelineFixture();
     const phase0Selection = buildSpyAnalyzerSelection(phase0Analyzer, 'gemma-4-31b-it');
@@ -741,7 +741,7 @@ describe('runMainAnalyzerJob — Phase 1 resolves via selectAnalyzerForPhase eve
   it('does not reuse the Phase 0 selection for Phase 1 when requestedModel is set', async () => {
     const manuscriptId = `test-phase1-uniform-${Date.now()}`;
     registerStubManuscript(manuscriptId, 4);
-    process.env.STAGE2_CONCURRENCY = '1';
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
 
     const { fixture, phase0Analyzer, phase1Analyzer } = makePipelineFixture();
     const phase0Selection = buildSpyAnalyzerSelection(phase0Analyzer, 'gemma-4-31b-it');
