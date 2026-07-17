@@ -12,6 +12,11 @@
 
 - Node ESM; imports use `.js` extensions. Server tests: `cd server && npm run test -- <file>` (or `npm run test:server`).
 - OpenAPI/config are generated: any `registry.ts` change REQUIRES `npm run config:sync` in the same commit (validated by `config:check`).
+- **Every new env var MUST be a registry knob (Advanced Settings).** No setting may be read from `process.env` without a corresponding `registry.ts` entry surfacing it as a knob. Each of this plan's four new env vars maps to a registry key (table below); do not add any env-only read. Add each to `server/.env.example` too (documentation surface), commented at its default.
+  - `ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST` → `analyzer.gemini.maxInputTokensPerRequest`
+  - `ANALYZER_STAGE1_LOCAL_INPUT_FRACTION` → `analyzer.stage1.localInputFraction`
+  - `ANALYZER_STAGE2_LOCAL_INPUT_FRACTION` → `analyzer.stage2.localInputFraction`
+  - `GEMINI_TPM_GEMMA_4_26B_A4B_IT` → `rate.tpm.gemma26`
 - RTK/immer conventions are frontend-only; this is all server-side.
 - Commit convention: `<type>(<scope>): <subject>`; scope `server` for code, `docs` for docs. End every commit body with the two trailer lines used on this branch.
 - Free-tier reality: Gemma input limit is **16,000 tokens/minute** (`quotaId: …PerMinute-FreeTier`). Per-request body cap default **12000**.
@@ -786,6 +791,7 @@ git commit -m "docs(docs): analyzer cloud request-sizing regression plan + relea
 - [ ] `cd server && npm run test:server` — full server suite green.
 - [ ] `npm run typecheck` — clean (worktree needs `server/node_modules` junctioned — already done).
 - [ ] `npm run config:check` — registry/generated in sync.
+- [ ] **Knob-parity check:** every new env var (`ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST`, `ANALYZER_STAGE1_LOCAL_INPUT_FRACTION`, `ANALYZER_STAGE2_LOCAL_INPUT_FRACTION`, `GEMINI_TPM_GEMMA_4_26B_A4B_IT`) appears in BOTH `registry.ts` (as a knob) AND `server/.env.example`. Grep each name in both files; no env-only reads.
 - [ ] `npm run verify:fast:branch` — the pre-push battery.
 - [ ] Manual (on-box, owner): free-tier Gemma re-analysis of *Ночной дозор* completes without dropped chapters or hang; calibrate `analyzer.stage2.localInputFraction` against a Qwen local truncation trace.
 - [ ] Open PR: `fix/server-cloud-request-sizing` → `main`, body `Closes #1682`, link this plan + the spec; run the mandatory `code-review` gate.
