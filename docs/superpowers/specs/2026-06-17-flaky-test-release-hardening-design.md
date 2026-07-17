@@ -28,7 +28,7 @@ The most recent offender (`server/src/routes/analysis-pipelining.test.ts`,
 - **What actually fails is *runtime*, not correctness.** The assertions are
   already deterministic — they use trace **array insertion order**
   (`trace.indexOf` / `slice` / `findIndex`) under the pinned
-  `STAGE2_CONCURRENCY=1`, NOT wall-clock timing. (`CallTrace.startedAt` is
+  `ANALYZER_OLLAMA_CONCURRENCY=1`, NOT wall-clock timing. (`CallTrace.startedAt` is
   recorded but **never asserted on** — verified.) The flake is that the test
   **drives the whole `runMainAnalyzerJob` to completion**, polling for a
   dispatch *event* via a `setTimeout` budget loop (`waitFor`, line 344), and
@@ -104,7 +104,7 @@ So two independent things make this awful, and both must be fixed:
 2. **Genuinely deterministic tests.** Every quarantined test is rewritten to
    assert its real invariant on the event sequence — never on **wall-clock
    budgets, real-timer polling, or real disk/network I/O in the assertion
-   path**. (Disambiguation: the *in-test* `STAGE2_CONCURRENCY` pin stays — the
+   path**. (Disambiguation: the *in-test* `ANALYZER_OLLAMA_CONCURRENCY` pin stays — the
    ordering invariant legitimately requires it; the enemy is wall-clock/I/O
    under load, not the controlled in-test concurrency.) Each rewrite graduates
    back onto the gate. **Verifiable (strengthened per review M4):** the rewritten
@@ -239,7 +239,7 @@ The playbook, applied to every quarantined test until the register is empty.
    awaiter registered *after* an intervening `await` misses the event and hangs
    to the backstop (review m1). Await the *event*, not the clock.
 2. **Keep the assertions as-is** — they already use deterministic trace
-   insertion order under the pinned `STAGE2_CONCURRENCY=1`; do **not** "fix"
+   insertion order under the pinned `ANALYZER_OLLAMA_CONCURRENCY=1`; do **not** "fix"
    ordering assertions (there are none on wall-clock — review M1). Keep the
    in-test concurrency pin.
 3. **Outer per-test timeout = deadlock backstop only** (generous, e.g. 30 s),
