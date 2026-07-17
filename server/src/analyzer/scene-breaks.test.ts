@@ -79,3 +79,40 @@ describe('annotateSceneBreaks (#1679, marker-anchored binding)', () => {
     expect(after).toEqual(before);
   });
 });
+
+describe('annotateSceneBreaks — separator captured as its own sentence (#1679 shipped-fix)', () => {
+  it('flags the TRUE opener, not the dinkus sentence, when * * * is its own sentence', () => {
+    const body = 'Scene one.\n\n* * *\n\nScene two.';
+    // Analyzer emits the dinkus line as id2, a real (word-free) sentence.
+    const s = sents('Scene one.', '* * *', 'Scene two.');
+    annotateSceneBreaks(s, body);
+    expect(s[0].sceneBreakBefore).toBeUndefined();
+    expect(s[1].sceneBreakBefore).toBeUndefined(); // the dinkus sentence is NOT flagged
+    expect(s[2].sceneBreakBefore).toBe(true); // the true opener IS
+  });
+
+  it('skips a run of consecutive separator sentences to the first attributable opener', () => {
+    const body = 'One.\n\n* * *\n\n⁂\n\nTwo.';
+    const s = sents('One.', '* * *', '⁂', 'Two.');
+    annotateSceneBreaks(s, body);
+    expect(s[3].sceneBreakBefore).toBe(true);
+    expect(s.filter((x) => x.sceneBreakBefore).length).toBe(1);
+  });
+
+  it('Russian-style: opener text does not locate but separator sentence present → still flags opener by index', () => {
+    const body = 'Первая сцена.\n\n* * *\n\nВторая сцена.';
+    // The model re-emitted the opener as restructured text absent from the body,
+    // but the dinkus sentence is present; skipping it still lands on the opener.
+    const s = sents('Первая сцена.', '* * *', 'Совсем другой несовпадающий текст.');
+    annotateSceneBreaks(s, body);
+    expect(s[1].sceneBreakBefore).toBeUndefined();
+    expect(s[2].sceneBreakBefore).toBe(true);
+  });
+
+  it('a separator sentence at chapter top (leading) flags nothing', () => {
+    const body = '* * *\n\nOnly scene.';
+    const s = sents('* * *', 'Only scene.');
+    annotateSceneBreaks(s, body);
+    expect(s.every((x) => !x.sceneBreakBefore)).toBe(true);
+  });
+});

@@ -10,8 +10,8 @@
    requiring the opener itself to locate, we anchor on the exact separator offset
    plus the LAST sentence that reliably located BEFORE it, and flag the next
    sentence in reading order — the true opener even when its text didn't match.
-   Where the opener DOES locate (clean English prose) this agrees exactly with a
-   naive "first sentence after the marker" rule.
+   The analyzer emits the separator glyph as its own word-free sentence, so the
+   bind skips that sentence (and any run of separators) to reach the real opener.
 
    Pure display aid: mutates ONLY the flag. Worst case is a divider placed a
    sentence or two off, or (leading separator) dropped — never a corrupted
@@ -62,9 +62,13 @@ export function annotateSceneBreaks(sentences: SentenceOutput[], body: string): 
     // so a `* * *` at the very start doesn't flag sentence 0.
     if (lastBefore === -1) continue;
 
-    // Marker-anchored bind: the opener is the next sentence in reading order,
-    // whether or not its own text located. Clamp to range.
-    const target = lastBefore + 1;
+    /* Marker-anchored bind: the opener is the next ATTRIBUTABLE sentence in
+       reading order. The analyzer emits the separator glyph line itself
+       (`* * *`, dinkus, `<hr>`-derived) as its OWN word-free sentence, so skip
+       that sentence (and any run of them) and flag the real opener — whether or
+       not the opener's own text located in the body. Clamp to range. */
+    let target = lastBefore + 1;
+    while (target < sentences.length && !hasAttributableContent(sentences[target].text)) target++;
     if (target < sentences.length) sentences[target].sceneBreakBefore = true;
   }
 }
