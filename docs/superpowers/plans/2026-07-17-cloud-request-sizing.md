@@ -16,7 +16,9 @@
   - `ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST` → `analyzer.gemini.maxInputTokensPerRequest`
   - `ANALYZER_STAGE1_LOCAL_INPUT_FRACTION` → `analyzer.stage1.localInputFraction`
   - `ANALYZER_STAGE2_LOCAL_INPUT_FRACTION` → `analyzer.stage2.localInputFraction`
+  - `GEMINI_RPM_GEMMA_4_26B_A4B_IT` → `rate.rpm.gemma26`
   - `GEMINI_TPM_GEMMA_4_26B_A4B_IT` → `rate.tpm.gemma26`
+  - `GEMINI_RPD_GEMMA_4_26B_A4B_IT` → `rate.rpd.gemma26`
 - RTK/immer conventions are frontend-only; this is all server-side.
 - Commit convention: `<type>(<scope>): <subject>`; scope `server` for code, `docs` for docs. End every commit body with the two trailer lines used on this branch.
 - Free-tier reality: Gemma input limit is **16,000 tokens/minute** (`quotaId: …PerMinute-FreeTier`). Per-request body cap default **12000**.
@@ -477,7 +479,7 @@ git commit -m "feat(server): size cloud output-heavy passes to the token cap inc
 
 ---
 
-## Task 5: Gemma free-tier TPM (finite) + 0/unlimited sentinel + 26b knob
+## Task 5: Gemma free-tier TPM (finite) + 0/unlimited sentinel + 26b RPM/TPM/RPD parity
 
 **Files:**
 - Modify: `server/src/analyzer/rate-limit.ts:30-67`
@@ -537,6 +539,16 @@ function readEnvNumber(name: string): number | undefined {
 ```ts
   // rate.tpm.gemma: default 16000, help: 'Input-tokens/min for gemma-4-31b-it (free tier 16000). Set 0 (or "unlimited") for a paid key.'
   {
+    key: 'rate.rpm.gemma26',
+    env: 'GEMINI_RPM_GEMMA_4_26B_A4B_IT',
+    group: 'rate-limits',
+    label: 'Gemma 4 26B A4B RPM',
+    help: 'Requests-per-minute cap for gemma-4-26b-a4b-it (free tier 15). The limiter waits proactively so no 429s are issued.',
+    type: 'integer', min: 1,
+    default: 15,
+    apply: 'restart-server', risk: 'low',
+  },
+  {
     key: 'rate.tpm.gemma26',
     env: 'GEMINI_TPM_GEMMA_4_26B_A4B_IT',
     group: 'rate-limits',
@@ -544,6 +556,16 @@ function readEnvNumber(name: string): number | undefined {
     help: 'Input-tokens/min for gemma-4-26b-a4b-it (free tier 16000). Set 0 (or "unlimited") for a paid key.',
     type: 'integer', min: 0,
     default: 16000,
+    apply: 'restart-server', risk: 'low',
+  },
+  {
+    key: 'rate.rpd.gemma26',
+    env: 'GEMINI_RPD_GEMMA_4_26B_A4B_IT',
+    group: 'rate-limits',
+    label: 'Gemma 4 26B A4B RPD',
+    help: 'Requests-per-day cap for gemma-4-26b-a4b-it (free tier 1500). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
+    type: 'integer', min: 1,
+    default: 1500,
     apply: 'restart-server', risk: 'low',
   },
 ```
@@ -556,8 +578,8 @@ Expected: PASS. Reset `process.env.GEMINI_TPM_GEMMA_4_31B_IT` in an `afterEach`.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add server/src/analyzer/rate-limit.ts server/src/analyzer/rate-limit.test.ts server/src/config/registry.ts server/src/config/generated*
-git commit -m "fix(server): finite Gemma free-tier TPM + explicit 0/unlimited sentinel + 26b knob (#1682)"
+git add server/src/analyzer/rate-limit.ts server/src/analyzer/rate-limit.test.ts server/src/config/registry.ts server/src/config/generated* server/.env.example
+git commit -m "fix(server): finite Gemma free-tier TPM + 0/unlimited sentinel + 26b RPM/TPM/RPD knobs (#1682)"
 ```
 
 ---
@@ -791,7 +813,7 @@ git commit -m "docs(docs): analyzer cloud request-sizing regression plan + relea
 - [ ] `cd server && npm run test:server` — full server suite green.
 - [ ] `npm run typecheck` — clean (worktree needs `server/node_modules` junctioned — already done).
 - [ ] `npm run config:check` — registry/generated in sync.
-- [ ] **Knob-parity check:** every new env var (`ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST`, `ANALYZER_STAGE1_LOCAL_INPUT_FRACTION`, `ANALYZER_STAGE2_LOCAL_INPUT_FRACTION`, `GEMINI_TPM_GEMMA_4_26B_A4B_IT`) appears in BOTH `registry.ts` (as a knob) AND `server/.env.example`. Grep each name in both files; no env-only reads.
+- [ ] **Knob-parity check:** every new env var (`ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST`, `ANALYZER_STAGE1_LOCAL_INPUT_FRACTION`, `ANALYZER_STAGE2_LOCAL_INPUT_FRACTION`, `GEMINI_RPM_GEMMA_4_26B_A4B_IT`, `GEMINI_TPM_GEMMA_4_26B_A4B_IT`, `GEMINI_RPD_GEMMA_4_26B_A4B_IT`) appears in BOTH `registry.ts` (as a knob) AND `server/.env.example`. Grep each name in both files; no env-only reads. (The 26b now has full RPM/TPM/RPD parity with the 31b.)
 - [ ] `npm run verify:fast:branch` — the pre-push battery.
 - [ ] Manual (on-box, owner): free-tier Gemma re-analysis of *Ночной дозор* completes without dropped chapters or hang; calibrate `analyzer.stage2.localInputFraction` against a Qwen local truncation trace.
 - [ ] Open PR: `fix/server-cloud-request-sizing` → `main`, body `Closes #1682`, link this plan + the spec; run the mandatory `code-review` gate.
