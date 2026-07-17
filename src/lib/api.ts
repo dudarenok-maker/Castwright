@@ -445,7 +445,8 @@ export interface UnlinkAliasResponse {
   newCharacter: Character;
   /** Chapters whose Phase-0a roster originally listed this alias, each
       with the IDs of sentences currently attributed to the source
-      character so the Reattribute Lines modal can render them. */
+      character so the Reassign Lines modal (unlink source) can render
+      them as candidates. */
   impactedChapters: UnlinkAliasImpactedChapter[];
 }
 /* POST /api/books/:bookId/cast/add-alias — append a name to a
@@ -464,6 +465,19 @@ export interface AddAliasResponse {
       re-add from a fresh append without diffing the cast. */
   characterId: string;
   alias: string;
+  alreadyPresent: boolean;
+}
+export interface RepointAliasArgs {
+  bookId: string;
+  sourceCharacterId: string;
+  aliasName: string;
+  targetCharacterId: string;
+}
+export interface RepointAliasResponse {
+  /** Same lineage shape as unlink — candidate lines to (optionally) move to
+      the target via the reused ReassignLinesModal (unlink source). */
+  impactedChapters: UnlinkAliasImpactedChapter[];
+  /** Target already carried the alias (or it equals the target's name). */
   alreadyPresent: boolean;
 }
 /* POST /api/books/:bookId/cast/:characterId/voice-style/generate (single)
@@ -3985,9 +3999,9 @@ async function mockUnlinkAlias({ aliasName }: UnlinkAliasArgs): Promise<UnlinkAl
 
      impactedChapters is intentionally empty: building a meaningful list
      would require carrying around a parallel chapter-cast snapshot in the
-     mock, which doesn't pay for itself. The Reattribute Lines modal
-     handles the empty-list case gracefully (the Skip / Done buttons are
-     all that's needed). */
+     mock, which doesn't pay for itself. The Reassign Lines modal handles
+     the empty-list case gracefully (its own empty-state copy + Close
+     button are all that's needed). */
   await wait(60);
   const displayName = aliasName.trim();
   if (!displayName) throw new Error('Alias name cannot be empty.');
@@ -4041,6 +4055,37 @@ async function mockAddAlias({ characterId, aliasName }: AddAliasArgs): Promise<A
      store state. Returning alreadyPresent=false unconditionally is fine;
      the reducer no-ops when the alias is already there. */
   return { characterId, alias: trimmed, alreadyPresent: false };
+}
+
+async function realRepointAlias({
+  bookId,
+  sourceCharacterId,
+  aliasName,
+  targetCharacterId,
+}: RepointAliasArgs): Promise<RepointAliasResponse> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/repoint-alias`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sourceCharacterId, aliasName, targetCharacterId }),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Re-point alias failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockRepointAlias({ aliasName }: RepointAliasArgs): Promise<RepointAliasResponse> {
+  await wait(60);
+  if (!aliasName.trim()) throw new Error('Alias name cannot be empty.');
+  /* impactedChapters intentionally empty (same reason as mockUnlinkAlias); the
+     ReassignLinesModal renders its empty state. */
+  return { impactedChapters: [], alreadyPresent: false };
 }
 
 async function realGenerateVoiceStyle(
@@ -9388,6 +9433,7 @@ const real = {
   seriesPatchCharacter: realSeriesPatchCharacter,
   unlinkAlias: realUnlinkAlias,
   addAlias: realAddAlias,
+  repointAlias: realRepointAlias,
   generateVoiceStyle: realGenerateVoiceStyle,
   generateAllVoiceStyles: realGenerateAllVoiceStyles,
   fetchDesignedPersona: realFetchDesignedPersona,
@@ -9666,6 +9712,7 @@ const mock = {
   seriesPatchCharacter: mockSeriesPatchCharacter,
   unlinkAlias: mockUnlinkAlias,
   addAlias: mockAddAlias,
+  repointAlias: mockRepointAlias,
   generateVoiceStyle: mockGenerateVoiceStyle,
   generateAllVoiceStyles: mockGenerateAllVoiceStyles,
   fetchDesignedPersona: mockFetchDesignedPersona,

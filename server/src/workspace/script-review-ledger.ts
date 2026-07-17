@@ -40,6 +40,28 @@ async function loadRaw(bookDir: string): Promise<LedgerFile> {
   return raw;
 }
 
+/* Keys that, if used to index or merge into a plain object, could pollute
+   Object.prototype. The chapter key and the selection map's keys both come
+   from the request body, so reject/filter them before any index or spread. */
+const DANGEROUS_KEYS = ['__proto__', 'constructor', 'prototype'];
+
+/** True when `key` is a prototype-polluting property name. Written as explicit
+    `===` comparisons (not a Set/`.has`) so CodeQL's
+    js/prototype-polluting-assignment barrier recognises it inline with the
+    guarded assignment. */
+function isDangerousKey(key: string): boolean {
+  return key === '__proto__' || key === 'constructor' || key === 'prototype';
+}
+
+/** Copy a request-supplied selection map, dropping prototype-polluting keys. */
+function safeSelection(incoming: Record<string, boolean>): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const [k, v] of Object.entries(incoming)) {
+    if (!DANGEROUS_KEYS.includes(k)) out[k] = v;
+  }
+  return out;
+}
+
 /** Read the ledger, pruning any entry whose manuscriptId no longer matches
     the book's current one (a reparse renumbered its sentence ids — see
     spec §4.2/§7). The prune is read-time only; it isn't written back here,
@@ -83,6 +105,11 @@ export async function resolveOps(
   return withKeyLock(`script-review-ledger:${bookId}`, async () => {
     const ledger = await loadRaw(bookDir);
     const key = String(params.chapterId);
+    /* Reject a prototype-polluting chapter key before indexing entries — keeps
+       the `entry.ops = …` assignment below off Object.prototype
+       (js/prototype-polluting-assignment). chapterId is a number, so this
+       never fires for a real request. */
+    if (isDangerousKey(key)) return { ok: false };
     const entry = ledger.entries[key];
     if (!entry || entry.version !== params.version) return { ok: false };
     const removed = new Set(params.appliedOpKeys);
@@ -116,9 +143,14 @@ export async function patchSelection(
   return withKeyLock(`script-review-ledger:${bookId}`, async () => {
     const ledger = await loadRaw(bookDir);
     const key = String(params.chapterId);
+    /* Reject a prototype-polluting chapter key before indexing entries — keeps
+       the `entry.selected = …` assignment below off Object.prototype
+       (js/prototype-polluting-assignment). chapterId is a number, so this
+       never fires for a real request. */
+    if (isDangerousKey(key)) return { ok: false };
     const entry = ledger.entries[key];
     if (!entry || entry.version !== params.version) return { ok: false };
-    entry.selected = { ...entry.selected, ...params.selected };
+    entry.selected = { ...entry.selected, ...safeSelection(params.selected) };
     ledger.entries[key] = entry;
     await writeJsonAtomic(scriptReviewLedgerJsonPath(bookDir), ledger);
     return { ok: true };

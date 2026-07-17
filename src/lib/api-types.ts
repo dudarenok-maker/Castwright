@@ -4054,6 +4054,8 @@ export interface components {
             vocalization?: boolean;
             /** @description fs-58 Unit B — when true, this sentence is import residue (page number, running header, etc.) and is excluded from synthesis. */
             excludeFromSynthesis?: boolean;
+            /** @description #1679 — read-only editorial flag: true on the first sentence after a word-free scene break (* * *, <hr>) in the source. Display-only; never spoken, never affects attribution. */
+            sceneBreakBefore?: boolean;
         };
         /**
          * @description fs-25 — per-quote delivery emotion. Absent or `neutral` renders exactly

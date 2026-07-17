@@ -1,6 +1,7 @@
 // Pairs with docs/features/archive/27-book-state-persistence.md
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { configureStore } from '@reduxjs/toolkit';
 
 const { putBookState } = vi.hoisted(() => ({
   putBookState: vi.fn().mockResolvedValue(undefined),
@@ -8,6 +9,9 @@ const { putBookState } = vi.hoisted(() => ({
 vi.mock('../lib/api', () => ({ api: { putBookState } }));
 
 import { persistenceMiddleware } from './persistence-middleware';
+import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
+import { uiSlice } from './ui-slice';
+import { notificationsSlice } from './notifications-slice';
 
 function makeStore(state: Record<string, unknown>) {
   return {
@@ -164,6 +168,19 @@ describe('persistenceMiddleware — payload shape', () => {
     expect(putBookState).toHaveBeenCalledWith('book-1', {
       slice: 'cast',
       patch: { characters: [{ id: 'castor', aliases: ['Castor'] }] },
+    });
+  });
+
+  it('persists the full cast on applyRepointAlias so the moved alias is the authoritative last write', async () => {
+    const next = vi.fn((x) => x);
+    const state = baseState({
+      cast: { characters: [{ id: 'egor', aliases: [] }, { id: 'anton', aliases: ['Я'] }] },
+    });
+    persistenceMiddleware(makeStore(state))(next)({ type: 'cast/applyRepointAlias' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'cast',
+      patch: { characters: [{ id: 'egor', aliases: [] }, { id: 'anton', aliases: ['Я'] }] },
     });
   });
 
@@ -461,5 +478,87 @@ describe('persistenceMiddleware — error handling', () => {
 
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
+  });
+});
+
+/* #1676(c) — the two tests above use the lightweight fake-store harness
+   (getState/dispatch mocks) that this file already defines; it can't be
+   reused for the toast assertions below because pushToast needs to run
+   through a REAL notifications reducer to land in state.notifications.toasts.
+   makeReduxStore wires the actual manuscript/ui/notifications reducers plus
+   the middleware under test, with a preloaded 'ready' ui.stage so
+   bookIdFromState resolves a bookId (otherwise the middleware early-returns
+   and every assertion below would pass vacuously). */
+function makeReduxStore() {
+  return configureStore({
+    reducer: {
+      manuscript: manuscriptSlice.reducer,
+      ui: uiSlice.reducer,
+      notifications: notificationsSlice.reducer,
+      cast: (s: unknown = { characters: [] }) => s,
+      revisions: (s: unknown = {}) => s,
+      changeLog: (s: unknown = { events: [] }) => s,
+      bookMeta: (s: unknown = { saved: {} }) => s,
+    } as never,
+    preloadedState: {
+      ui: { stage: { kind: 'ready', bookId: 'b1', view: 'cast', currentChapterId: 3, openProfileId: null } },
+    } as never,
+    middleware: (gDM) => gDM().concat(persistenceMiddleware),
+  });
+}
+
+describe('bulk-reassign persistence', () => {
+  it('flushes the full {sentences, mergedAwayKeys} patch for setSentencesCharacterBulk', async () => {
+    const store = makeReduxStore();
+    store.dispatch(
+      manuscriptActions.setSentencesCharacterBulk({
+        keys: [{ chapterId: 1, sentenceId: 1 }],
+        characterId: 'narrator',
+        targetLabel: 'Narrator',
+      }),
+    );
+    await vi.runAllTimersAsync();
+    expect(putBookState).toHaveBeenCalledWith(
+      'b1',
+      expect.objectContaining({
+        slice: 'manuscript',
+        patch: expect.objectContaining({ sentences: expect.any(Array), mergedAwayKeys: expect.any(Array) }),
+      }),
+    );
+  });
+
+  it('surfaces an error toast when a bulk apply PUT fails', async () => {
+    putBookState.mockRejectedValueOnce(new Error('net'));
+    const store = makeReduxStore();
+    store.dispatch(
+      manuscriptActions.setSentencesCharacterBulk({
+        keys: [{ chapterId: 1, sentenceId: 1 }],
+        characterId: 'narrator',
+        targetLabel: 'Narrator',
+      }),
+    );
+    await vi.runAllTimersAsync();
+    const toasts = (store.getState() as { notifications: { toasts: { kind: string }[] } }).notifications.toasts;
+    expect(toasts.some((t) => t.kind === 'error')).toBe(true);
+  });
+
+  it('surfaces an error toast when an undo PUT fails', async () => {
+    putBookState.mockRejectedValueOnce(new Error('net'));
+    const store = makeReduxStore();
+    store.dispatch(manuscriptActions.undoBulkReassign());
+    await vi.runAllTimersAsync();
+    const toasts = (store.getState() as { notifications: { toasts: { kind: string }[] } }).notifications.toasts;
+    expect(toasts.some((t) => t.kind === 'error')).toBe(true);
+  });
+
+  it('does NOT toast when a non-bulk manuscript edit PUT fails (scope)', async () => {
+    putBookState.mockRejectedValueOnce(new Error('net'));
+    const store = makeReduxStore();
+    store.dispatch(
+      manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 1, characterId: 'x' }),
+    );
+    await vi.runAllTimersAsync();
+    const toasts = (store.getState() as { notifications: { toasts: { kind: string }[] } }).notifications.toasts;
+    expect(toasts.length).toBe(0);
   });
 });

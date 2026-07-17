@@ -95,6 +95,45 @@ describe('script-review-ledger', () => {
     expect(ledger.entries['3'].selected).toEqual({ '3:1:strip_tag': false });
   });
 
+  it('patchSelection strips prototype-polluting keys from the incoming selection map', async () => {
+    await upsertChapterEntry(bookDir, 'book-1', {
+      chapterId: 3,
+      manuscriptId: 'ms-1',
+      ops: [{ id: 1, op: 'strip_tag' }],
+    });
+    /* Build the selection map via JSON.parse so `__proto__` lands as a real
+       OWN enumerable property (the attacker-controlled request-body shape),
+       not the special literal that sets a prototype. */
+    const malicious = JSON.parse('{"__proto__": true, "constructor": true, "3:1:strip_tag": false}');
+    const result = await patchSelection(bookDir, 'book-1', {
+      chapterId: 3,
+      version: 1,
+      selected: malicious as Record<string, boolean>,
+    });
+    expect(result.ok).toBe(true);
+
+    const ledger = await readLedger(bookDir, 'ms-1');
+    /* Only the legitimate op key survives; the dangerous keys are dropped. */
+    expect(ledger.entries['3'].selected).toEqual({ '3:1:strip_tag': false });
+    expect(Object.keys(ledger.entries['3'].selected)).not.toContain('__proto__');
+    expect(Object.keys(ledger.entries['3'].selected)).not.toContain('constructor');
+    // Sanity: the global prototype was never touched.
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it('patchSelection rejects a prototype-polluting chapter key without touching Object.prototype', async () => {
+    /* chapterId is typed number, so a real caller can't reach this — but a
+       tampered/untyped call must not index entries with `__proto__`. Cast to
+       bypass the type and assert the guard rejects it. */
+    const result = await patchSelection(bookDir, 'book-1', {
+      chapterId: '__proto__' as unknown as number,
+      version: 1,
+      selected: { polluted: true } as Record<string, boolean>,
+    });
+    expect(result.ok).toBe(false);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
   it('loadRaw returns an empty envelope when the ledger file contains syntactically invalid JSON (no throw)', async () => {
     const ledgerPath = scriptReviewLedgerJsonPath(bookDir);
     const ledgerDir = dirname(ledgerPath);

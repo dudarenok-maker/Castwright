@@ -139,3 +139,25 @@ describe('GENERIC_NCX_RE — non-English generic chapter labels (seam 3b)', () =
     expect(GENERIC_NCX_RE.test('El Comienzo del Fin')).toBe(false);
   });
 });
+
+describe('stripHtml — scene-break preservation (#1679)', () => {
+  it('converts <hr> to a standalone word-free separator line', () => {
+    const body = stripHtml('<p>End of scene one.</p><hr/><p>Scene two begins.</p>');
+    const units = body.split(/\n[ \t]*\n/).map((u) => u.trim());
+    expect(units).toContain('* * *');
+    expect(body).toContain('End of scene one.');
+    expect(body).toContain('Scene two begins.');
+  });
+
+  it('preserves an existing <p>* * *</p> separator line', () => {
+    const body = stripHtml('<p>Before.</p><p>* * *</p><p>After.</p>');
+    const units = body.split(/\n[ \t]*\n/).map((u) => u.trim());
+    expect(units).toContain('* * *');
+  });
+
+  it('handles <hr> with attributes and whitespace', () => {
+    const body = stripHtml('<p>A.</p>\n<hr class="scene" />\n<p>B.</p>');
+    const units = body.split(/\n[ \t]*\n/).map((u) => u.trim());
+    expect(units).toContain('* * *');
+  });
+});

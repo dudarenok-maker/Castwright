@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { ZipFile } from 'yazl';
 import { audioDir, coverImagePath } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { sanitizeIdSegment } from '../util/safe-path.js';
 import { applyId3v24Tags, type Id3Tags } from './id3-tags.js';
 import { artistForExport } from './narrator-credit.js';
 import type { BookStateJson } from '../workspace/scan.js';
@@ -124,7 +125,11 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
       signal?.throwIfAborted();
       const { chapter, mp3Path } = resolved[i];
       const entryName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.mp3`;
-      const taggedPath = join(stagingDir, entryName);
+      /* `entryName` is the pretty label written INTO the zip; the on-disk
+         staging filename is the same string routed through sanitizeIdSegment
+         so a `..`/separator that survived sanitiseForZip can't escape
+         stagingDir (js/path-injection). No-op for real titles. */
+      const taggedPath = join(stagingDir, sanitizeIdSegment(entryName));
 
       const tags: Id3Tags = {
         title: chapter.title,

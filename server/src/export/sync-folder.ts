@@ -17,6 +17,7 @@
 import { copyFile, mkdir, readdir, unlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
+import { assertContained, sanitizeIdSegment } from '../util/safe-path.js';
 
 export interface WriteToSyncFolderResult {
   syncPath: string;
@@ -28,7 +29,12 @@ export async function writeToSyncFolder(
   filename: string,
 ): Promise<WriteToSyncFolderResult> {
   await mkdir(destDir, { recursive: true });
-  const finalPath = join(destDir, filename);
+  /* `filename` is a slugified book filename, but it flows in from the caller
+     as a bare string — sanitise it as a single segment and assert the result
+     stays under destDir so a `..` can't write outside the user's sync target
+     (js/path-injection). No-op for real export filenames. */
+  const finalPath = join(destDir, sanitizeIdSegment(filename));
+  assertContained(destDir, finalPath);
   const tmpPath = `${finalPath}.tmp-${process.pid}-${Date.now()}`;
 
   /* copyFile (not rename) because the source lives under the workspace
@@ -69,7 +75,11 @@ export async function writeFolderToSyncFolder(
   destDir: string,
   bookSubfolder: string,
 ): Promise<WriteFolderToSyncFolderResult> {
-  const targetDir = join(destDir, bookSubfolder);
+  /* Sanitise the book sub-folder segment and assert containment under
+     destDir before we mkdir/copy into it (js/path-injection). No-op for a
+     real book title. */
+  const targetDir = join(destDir, sanitizeIdSegment(bookSubfolder));
+  assertContained(destDir, targetDir);
   await mkdir(targetDir, { recursive: true });
 
   const entries = await readdir(srcDir);

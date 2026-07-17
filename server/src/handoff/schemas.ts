@@ -133,6 +133,11 @@ export const sentenceSchema = z
     /* fs-58 Unit B — flag_nonstory soft-exclude. Absent/false ⇒ synthesised
        as today; true ⇒ filtered out of buildSentenceGroups. Additive. */
     excludeFromSynthesis: z.boolean().optional(),
+    /* #1679 — read-only editorial display flag: true on the first sentence
+       after a word-free scene break (`* * *`, `<hr>`) in the source. Set by
+       the post-attribution annotateSceneBreaks pass, never by the model, so
+       .strict() validation of model output is unaffected. Additive. */
+    sceneBreakBefore: z.boolean().optional(),
   })
   .strict();
 

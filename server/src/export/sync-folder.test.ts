@@ -55,6 +55,17 @@ describe('writeToSyncFolder', () => {
     expect(stragglers).toEqual([]);
   });
 
+  it('keeps a path-traversal filename contained under the destination (CodeQL path-injection)', async () => {
+    /* Pre-fix, `join(dest, '../escape.zip')` would write into tmpRoot — one
+       level ABOVE the user's chosen sync target. The sanitiser collapses the
+       `..` so the file can only ever land inside dest. */
+    const dest = join(tmpRoot, 'sync');
+    const result = await writeToSyncFolder(srcPath, dest, '../escape.zip');
+
+    expect(result.syncPath.startsWith(dest)).toBe(true);
+    expect(existsSync(join(tmpRoot, 'escape.zip'))).toBe(false);
+  });
+
   /* Plan 79 — Google Drive / OneDrive sync failures should surface with
      a destination-specific hint instead of just the raw errno. The
      renameWithRetry primitive throws after exhausting its backoff; the
@@ -180,5 +191,17 @@ describe('writeFolderToSyncFolder', () => {
     const result = await writeFolderToSyncFolder(srcDir, destDir, 'The Coalfall Commission');
     expect(result.copied).toBe(2);
     expect(existsSync(join(result.syncPath, 'README.txt'))).toBe(false);
+  });
+
+  it('keeps a path-traversal book sub-folder contained under destDir (CodeQL path-injection)', async () => {
+    /* A crafted book title of `../escape` would, pre-fix, place the copied
+       chapters in tmpRoot/escape — outside the user's sync target. The
+       sanitiser keeps the sub-folder inside destDir. */
+    const destDir = join(tmpRoot, 'sync');
+    const result = await writeFolderToSyncFolder(srcDir, destDir, '../escape');
+
+    expect(result.copied).toBe(2);
+    expect(result.syncPath.startsWith(destDir)).toBe(true);
+    expect(existsSync(join(tmpRoot, 'escape'))).toBe(false);
   });
 });

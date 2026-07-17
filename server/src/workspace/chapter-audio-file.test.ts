@@ -4,7 +4,7 @@
    re-introducing a wav branch must trip this regression. */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findChapterAudio, chapterAudioExists } from './chapter-audio-file.js';
@@ -63,6 +63,27 @@ describe('findChapterAudio', () => {
     await writeFile(join(workdir, 'ch01.m4a'), 'fake-m4a');
     const result = findChapterAudio(workdir, 'ch01');
     expect(result?.ext).toBe('mp3');
+  });
+
+  it('does NOT escape audioRoot via a path-traversal slug (CodeQL path-injection)', async () => {
+    /* Plant a file one level ABOVE the audio root that a `../` slug would
+       otherwise resolve to. Pre-fix, `join(root, '../evil.mp3')` reaches it
+       and leaks a file outside the book's audio dir; post-fix the slug is
+       sanitised to a plain in-root name that doesn't exist → null. */
+    const audioRoot = join(workdir, 'audio');
+    await mkdir(audioRoot, { recursive: true });
+    await writeFile(join(workdir, 'evil.mp3'), 'outside-the-audio-root');
+
+    const result = findChapterAudio(audioRoot, '../evil');
+    expect(result).toBeNull();
+  });
+
+  it('sanitises a backslash-traversal slug the same way (Windows separator)', async () => {
+    const audioRoot = join(workdir, 'audio');
+    await mkdir(audioRoot, { recursive: true });
+    await writeFile(join(workdir, 'evil.mp3'), 'outside-the-audio-root');
+
+    expect(findChapterAudio(audioRoot, '..\\evil')).toBeNull();
   });
 });
 

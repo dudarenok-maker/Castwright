@@ -42,6 +42,7 @@ import { SubstageProgressPill } from '../components/substage-progress-pill';
 import { PromoteFirstSentenceButton } from '../components/promote-first-sentence-button';
 import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-bar';
 import { ScriptReviewDiff } from '../components/script-review-diff';
+import { ReassignLinesModal } from '../modals/reassign-lines';
 import { api } from '../lib/api';
 import { selectVisibleReview, unresolvedCountForChapters, scriptReviewActions } from '../store/script-review-slice';
 import { selectAnalysisBusyForBook } from '../store/analysis-substage-selectors';
@@ -56,6 +57,13 @@ import type { SeriesRosterEntry } from '../lib/api';
    mid-hydration) — a literal `[]` would be a fresh array every render and
    defeat the useMemo hooks keyed on `sentences` below. */
 const EMPTY_SENTENCES: Sentence[] = [];
+
+/* #1679 — a "separator-only" sentence has no letters or digits (the analyzer
+   emits scene-break glyph lines — `* * *`, dinkus `⁂`, `<hr>`-derived `* * *`,
+   dash rules — as their own word-free sentences). The scene divider represents
+   them, so they are skipped from the manuscript display rather than shown as a
+   redundant glyph text row. Display-only; the sentence still exists in the data. */
+const isSeparatorOnly = (text: string): boolean => !/[\p{L}\p{N}]/u.test(text);
 
 interface Props {
   characters: Character[];
@@ -84,6 +92,8 @@ interface Segment {
   id: string;
   characterId: string;
   sentences: IndexedSentence[];
+  /** #1679 — true when this segment opens on a source scene break. */
+  sceneBreakBefore?: boolean;
 }
 interface Drag {
   boundaryIdx: number;
@@ -207,7 +217,18 @@ export function ManuscriptView({
   const nextChapter = chapters[currentIdx + 1];
   const containerRef = useRef<HTMLDivElement>(null);
   const articleRef = useRef<HTMLElement>(null);
-  const selection = useSentenceSelection(articleRef);
+  /* #1676 part c — checkbox multi-select mode (script-view entry point
+     for bulk line reassignment). A DISTINCT mode from the text-range
+     split-selection below: while active, `useSentenceSelection` is told
+     to suppress its listener entirely (see the `multiSelect` arg) so a
+     gutter/shift-click can never contend with range-drag split logic,
+     and the SelectionPopover it feeds hides for free (its `sel` stays
+     null). Toggling `multiSelect` off restores the text-range affordance. */
+  const [multiSelect, setMultiSelect] = useState(false);
+  const [checkedKeys, setCheckedKeys] = useState<Set<string>>(new Set());
+  const [reassignOpen, setReassignOpen] = useState(false);
+  const lastCheckedRef = useRef<string | null>(null);
+  const selection = useSentenceSelection(articleRef, multiSelect);
 
   /* Substring match on title plus "CH NN" / bare id so the user can jump
      by either the chapter name or its index. Empty filter passes everything
@@ -269,17 +290,31 @@ export function ManuscriptView({
     for (let i = 0; i < sentences.length; i++) {
       const s = sentences[i];
       if (currentChapterId != null && s.chapterId !== currentChapterId) continue;
+      // #1679 — don't render the scene-break glyph line as a text row; the
+      // divider (flagged on the following opener) represents it. absIdx still
+      // uses the real index i, so drag/boundary edits on other rows are unaffected.
+      if (isSeparatorOnly(s.text)) continue;
       const last = segs[segs.length - 1];
-      if (last && last.characterId === s.characterId) last.sentences.push({ ...s, absIdx: i });
+      if (last && last.characterId === s.characterId && !s.sceneBreakBefore)
+        last.sentences.push({ ...s, absIdx: i });
       else
         segs.push({
           id: `seg_${segs.length}`,
           characterId: s.characterId,
+          sceneBreakBefore: s.sceneBreakBefore,
           sentences: [{ ...s, absIdx: i }],
         });
     }
     return segs;
   }, [sentences, currentChapterId]);
+
+  /* Flat, display-ordered composite keys over the current chapter's
+     sentences — the range shift-click extends over THIS order, not
+     insertion order into `checkedKeys`. */
+  const orderedSentenceKeys = useMemo(
+    () => segments.flatMap((seg) => seg.sentences.map((s) => `${s.chapterId}:${s.id}`)),
+    [segments],
+  );
 
   /* Per-chapter counts so the "X speakers · Y low-confidence" stats above
      the manuscript reflect what's actually visible. */
@@ -681,6 +716,36 @@ export function ManuscriptView({
     window.getSelection()?.removeAllRanges();
   }
 
+  /* Gutter-checkbox toggle for the #1676c multi-select mode. Plain click
+     toggles just `key`; shift-click extends the range from the last
+     checkbox touched (`lastCheckedRef`) over `orderedSentenceKeys`, the
+     same "shift-click range" idiom as a file-manager multi-select. */
+  function toggleChecked(key: string, shiftKey: boolean) {
+    // Capture the previous key BEFORE mutating the ref: `setCheckedKeys`'s
+    // functional updater doesn't run synchronously here (React defers it to
+    // the batched re-render), so reading `lastCheckedRef.current` from
+    // *inside* the updater would see the ref already overwritten with the
+    // current `key` by the assignment below, collapsing every shift-click
+    // range to a single element (`from === to`).
+    const lastKey = lastCheckedRef.current;
+    setCheckedKeys((prev) => {
+      const next = new Set(prev);
+      if (shiftKey && lastKey) {
+        const from = orderedSentenceKeys.indexOf(lastKey);
+        const to = orderedSentenceKeys.indexOf(key);
+        if (from !== -1 && to !== -1) {
+          const [lo, hi] = from <= to ? [from, to] : [to, from];
+          for (let i = lo; i <= hi; i++) next.add(orderedSentenceKeys[i]);
+          return next;
+        }
+      }
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+    lastCheckedRef.current = key;
+  }
+
   /* The sidebar (chapters + detected) and the inspector panel are
      rendered as their own subtrees so the same markup can show inline
      on `lg:` (sticky asides) AND inside drawer/sheet overlays on
@@ -1027,6 +1092,28 @@ export function ManuscriptView({
                 onClick={() => dispatch(uiActions.changeView('restructure'))}
               />
               <DetectEmotionsButton disabled={sentences.length === 0} />
+              {/* #1676 part c — enters the checkbox multi-select mode (gutter
+                  checkboxes + shift-click range) that feeds the "Reassign N
+                  selected…" floating bar below. Distinct from, and mutually
+                  exclusive with, the text-range split-selection popover. */}
+              <button
+                type="button"
+                onClick={() =>
+                  setMultiSelect((v) => {
+                    const next = !v;
+                    if (!next) setCheckedKeys(new Set());
+                    return next;
+                  })
+                }
+                aria-pressed={multiSelect}
+                className={`inline-flex items-center gap-2 px-4 min-h-[44px] fine-pointer:min-h-0 py-2 rounded-full border text-sm font-semibold transition-colors ${
+                  multiSelect
+                    ? 'border-magenta bg-magenta/10 text-magenta'
+                    : 'border-ink/20 bg-white text-ink hover:bg-ink/5'
+                }`}
+              >
+                {multiSelect ? 'Done selecting' : 'Select lines'}
+              </button>
               <PromoteFirstSentenceButton
                 /* PR-gate review finding 1 — key the instance to the current
                    chapter so switching chapters unmounts/remounts the button,
@@ -1183,6 +1270,7 @@ export function ManuscriptView({
                           transform: `translateY(${virtualItem.start - virtualizer.options.scrollMargin}px)`,
                         }}
                       >
+                        {virtualItem.index > 0 && seg.sceneBreakBefore && <SceneDivider />}
                         <SegmentRow
                           seg={seg}
                           characters={characters}
@@ -1199,8 +1287,11 @@ export function ManuscriptView({
                           onReassignSegment={(newCharId) => reassignSegment(seg, newCharId)}
                           onOpenProfile={onOpenProfile}
                           findChar={findChar}
+                          multiSelect={multiSelect}
+                          checkedKeys={checkedKeys}
+                          onToggleCheck={toggleChecked}
                         />
-                        {!isLast && (
+                        {!isLast && !segments[virtualItem.index + 1]?.sceneBreakBefore && (
                           <BoundaryHandle
                             boundaryIdx={virtualItem.index + 1}
                             drag={drag}
@@ -1214,6 +1305,7 @@ export function ManuscriptView({
               ) : (
                 segments.map((seg, segIdx) => (
                   <Fragment key={seg.id}>
+                    {segIdx > 0 && seg.sceneBreakBefore && <SceneDivider />}
                     <SegmentRow
                       seg={seg}
                       characters={characters}
@@ -1230,14 +1322,18 @@ export function ManuscriptView({
                       onReassignSegment={(newCharId) => reassignSegment(seg, newCharId)}
                       onOpenProfile={onOpenProfile}
                       findChar={findChar}
+                      multiSelect={multiSelect}
+                      checkedKeys={checkedKeys}
+                      onToggleCheck={toggleChecked}
                     />
-                    {segIdx < segments.length - 1 && (
-                      <BoundaryHandle
-                        boundaryIdx={segIdx + 1}
-                        drag={drag}
-                        onPointerDown={onBoundaryPointerDown}
-                      />
-                    )}
+                    {segIdx < segments.length - 1 &&
+                      !segments[segIdx + 1]?.sceneBreakBefore && (
+                        <BoundaryHandle
+                          boundaryIdx={segIdx + 1}
+                          drag={drag}
+                          onPointerDown={onBoundaryPointerDown}
+                        />
+                      )}
                   </Fragment>
                 ))
               )}
@@ -1295,6 +1391,47 @@ export function ManuscriptView({
         characters={characters}
         onAssign={assignSelectionTo}
       />
+
+      {/* #1676 part c — floating bulk-reassign action bar. Selection state
+          (checkedKeys) is local to this view, so the modal is rendered here
+          directly with a `selection` source rather than routed through the
+          layout's setReassignSource. */}
+      {multiSelect && checkedKeys.size > 0 && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 rounded-full bg-ink text-white px-5 py-3 shadow-drawer">
+          <span className="text-sm font-semibold">{checkedKeys.size} selected</span>
+          <button
+            onClick={() => setReassignOpen(true)}
+            className="text-sm font-semibold underline min-h-[44px] fine-pointer:min-h-0"
+          >
+            Reassign {checkedKeys.size} selected…
+          </button>
+          <button
+            onClick={() => {
+              setCheckedKeys(new Set());
+              setMultiSelect(false);
+            }}
+            className="text-sm opacity-70 min-h-[44px] fine-pointer:min-h-0"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+      {reassignOpen && (
+        <ReassignLinesModal
+          source={{
+            kind: 'selection',
+            keys: [...checkedKeys].map((k) => {
+              const [c, s] = k.split(':');
+              return { chapterId: Number(c), sentenceId: Number(s) };
+            }),
+          }}
+          onClose={() => {
+            setReassignOpen(false);
+            setCheckedKeys(new Set());
+            setMultiSelect(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1677,6 +1814,12 @@ interface SegmentRowProps {
   onReassignSegment: (newCharId: string) => void;
   onOpenProfile?: (id: string) => void;
   findChar: (id: string) => Character | undefined;
+  /* #1676 part c — checkbox multi-select mode. `checkedKeys` holds
+     `${chapterId}:${sentenceId}` composite keys; `onToggleCheck` reports
+     the clicked key plus whether shift was held (for range-extend). */
+  multiSelect: boolean;
+  checkedKeys: Set<string>;
+  onToggleCheck: (key: string, shiftKey: boolean) => void;
 }
 
 function SegmentRow({
@@ -1692,6 +1835,9 @@ function SegmentRow({
   onReassignSegment,
   onOpenProfile,
   findChar,
+  multiSelect,
+  checkedKeys,
+  onToggleCheck,
 }: SegmentRowProps) {
   const [hovered, setHovered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1788,8 +1934,44 @@ function SegmentRow({
           {seg.sentences.map((s, i) => {
             const isCandidate = drag && drag.candidateSentenceIdx === s.absIdx;
             const isLast = i === seg.sentences.length - 1;
+            const checkKey = `${s.chapterId}:${s.id}`;
             return (
               <Fragment key={s.id}>
+                {/* #1676 part c — gutter checkbox, only mounted in multi-select
+                    mode so it can never collide with the text-range/split
+                    selection handled by useSentenceSelection above (that hook
+                    is itself disabled while multiSelect is on). stopPropagation
+                    keeps a checkbox click from also firing the segment's
+                    onSelect (which would open the inspector). */}
+                {multiSelect && (
+                  <label
+                    className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] fine-pointer:min-w-0 fine-pointer:min-h-0 align-middle mr-1 cursor-pointer"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      aria-label={`Select line ${s.id}`}
+                      checked={checkedKeys.has(checkKey)}
+                      /* Toggle logic lives in onClick (not onChange) so we can
+                         read `shiftKey` — the native 'change' event that
+                         follows a checkbox click carries no modifier keys,
+                         only the 'click' MouseEvent does. Deliberately NOT
+                         calling preventDefault(): letting the browser's own
+                         (uncontrolled) toggle proceed avoids a jsdom/React
+                         ordering hazard where the browser's post-click
+                         "activation canceled" step (which restores the
+                         pre-click checked value when the default IS
+                         prevented) can run after React's own commit and
+                         silently revert the just-clicked box back to
+                         unchecked. Since `checked` stays fully controlled by
+                         `checkedKeys` on every render, the transient native
+                         toggle is immediately reconciled away regardless. */
+                      onClick={(e) => onToggleCheck(checkKey, e.shiftKey)}
+                      onChange={() => {}}
+                      className="w-4 h-4"
+                    />
+                  </label>
+                )}
                 <span
                   data-sentence-id={s.id}
                   data-sentence-idx={s.absIdx}
@@ -1840,6 +2022,22 @@ function SegmentRow({
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* #1679 — read-only scene-change divider. Two faint --ink hairlines flanking a
+   Lora-serif ornament; non-interactive, generous vertical spacing. */
+function SceneDivider() {
+  return (
+    <div
+      data-testid="scene-divider"
+      aria-hidden="true"
+      className="flex items-center gap-4 my-8 select-none text-ink/40"
+    >
+      <span className="h-px flex-1 bg-ink/15" />
+      <span className="font-serif text-lg leading-none">&#10022;</span>
+      <span className="h-px flex-1 bg-ink/15" />
     </div>
   );
 }
@@ -2158,9 +2356,23 @@ function sentenceOffsetFromRangePoint(node: Node, offsetInNode: number): number 
   return base + offsetInNode;
 }
 
-function useSentenceSelection(containerRef: RefObject<HTMLElement | null>): SelectionInfo | null {
+/* `disabled` (#1676 part c) — while the checkbox multi-select mode is
+   active, the text-range split-selection affordance must not fire: a
+   gutter/shift-click could otherwise leave a stray DOM text selection
+   that this hook would pick up and surface via SelectionPopover,
+   contending with the multi-select gesture. Rather than filtering inside
+   the handler, the listener is never attached at all while disabled —
+   and any selection captured before entering multi-select is cleared. */
+function useSentenceSelection(
+  containerRef: RefObject<HTMLElement | null>,
+  disabled = false,
+): SelectionInfo | null {
   const [sel, setSel] = useState<SelectionInfo | null>(null);
   useEffect(() => {
+    if (disabled) {
+      setSel(null);
+      return;
+    }
     const handler = () => {
       const s = window.getSelection();
       if (!s || s.isCollapsed || s.rangeCount === 0) {
@@ -2202,7 +2414,7 @@ function useSentenceSelection(containerRef: RefObject<HTMLElement | null>): Sele
     };
     document.addEventListener('selectionchange', handler);
     return () => document.removeEventListener('selectionchange', handler);
-  }, [containerRef]);
+  }, [containerRef, disabled]);
   return sel;
 }
 

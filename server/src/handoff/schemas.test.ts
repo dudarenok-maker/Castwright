@@ -448,6 +448,24 @@ describe('scriptReviewSchema — validate_instruct (fs-58)', () => {
   });
 });
 
+describe('sentenceSchema — sceneBreakBefore (scene separator)', () => {
+  const base = { id: 1, chapterId: 1, characterId: 'narrator', text: 'A line.' };
+
+  it('accepts sceneBreakBefore: true (additive-optional)', () => {
+    const parsed = sentenceSchema.parse({ ...base, sceneBreakBefore: true });
+    expect(parsed.sceneBreakBefore).toBe(true);
+  });
+
+  it('accepts a sentence WITHOUT the field (absent = undefined)', () => {
+    const parsed = sentenceSchema.parse(base);
+    expect(parsed.sceneBreakBefore).toBeUndefined();
+  });
+
+  it('rejects a non-boolean sceneBreakBefore', () => {
+    expect(() => sentenceSchema.parse({ ...base, sceneBreakBefore: 'yes' })).toThrow();
+  });
+});
+
 describe('escalationSchema (srv-59 Task 9) — inner assignment tolerance', () => {
   it('parses a normal reply', () => {
     const parsed = escalationSchema.parse({ assignments: [{ line: 4, characterId: 'anton' }] });

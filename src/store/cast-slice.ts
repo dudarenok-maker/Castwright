@@ -305,8 +305,8 @@ export const castSlice = createSlice({
        (case-insensitive, trim-tolerant), then append the new character
        at the end (matches the analyser fold + cast-merge convention of
        appending freshly-minted entries). No sentence reassignment here
-       — the Reattribute Lines modal handles those via the existing
-       per-sentence picker dispatching manuscriptActions.setSentenceCharacter. */
+       — the Reassign Lines modal (unlink source) handles those via
+       manuscriptActions.setSentencesCharacterBulk. */
     applyUnlinkAlias: (
       s,
       a: PayloadAction<{
@@ -347,6 +347,30 @@ export const castSlice = createSlice({
       const existing = target.aliases ?? [];
       if (existing.some((n) => n.trim().toLowerCase() === key)) return;
       target.aliases = [...existing, trimmed];
+    },
+    /* From POST /api/books/:bookId/cast/repoint-alias — move an alias string
+       off `sourceCharacterId` and onto `targetCharacterId`. Strip is
+       unconditional; append is case-insensitive-idempotent and skipped when the
+       alias equals the target's own name (the name already covers it). Idempotent
+       under double-dispatch. Line movement is handled separately by the reassign
+       modal, exactly as in the unlink flow. */
+    applyRepointAlias: (
+      s,
+      a: PayloadAction<{ sourceCharacterId: string; aliasName: string; targetCharacterId: string }>,
+    ) => {
+      const { sourceCharacterId, aliasName, targetCharacterId } = a.payload;
+      const key = aliasName.trim().toLowerCase();
+      if (!key) return;
+      if (sourceCharacterId === targetCharacterId) return;
+      const source = s.characters.find((c) => c.id === sourceCharacterId);
+      const target = s.characters.find((c) => c.id === targetCharacterId);
+      if (!source || !target) return;
+      source.aliases = (source.aliases ?? []).filter((n) => n.trim().toLowerCase() !== key);
+      if (key === target.name.trim().toLowerCase()) return;
+      const existing = target.aliases ?? [];
+      if (!existing.some((n) => n.trim().toLowerCase() === key)) {
+        target.aliases = [...existing, aliasName.trim()];
+      }
     },
     /* Set a character's primary display name. Serves two drawer affordances:
        free-text rename ("Dame Linnet" → "Councilor Linnet") and promoting an

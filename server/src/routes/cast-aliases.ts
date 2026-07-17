@@ -193,6 +193,102 @@ castAliasesRouter.post(
   },
 );
 
+interface RepointBody {
+  sourceCharacterId?: unknown;
+  aliasName?: unknown;
+  targetCharacterId?: unknown;
+}
+
+interface RepointResponse {
+  impactedChapters: ImpactedChapter[];
+  /** True when the target already carried the alias (or it equals the
+      target's own name) — the append was a no-op, but the source strip
+      still happened. Mirrors add-alias' idempotency flag. */
+  alreadyPresent: boolean;
+}
+
+castAliasesRouter.post(
+  '/:bookId/cast/repoint-alias',
+  async (req: Request, res: Response<RepointResponse | { error: string }>) => {
+    const { bookId } = req.params;
+    const body = (req.body ?? {}) as RepointBody;
+    const sourceCharacterId = normaliseAlias(body.sourceCharacterId);
+    const aliasName = normaliseAlias(body.aliasName);
+    const targetCharacterId = normaliseAlias(body.targetCharacterId);
+
+    if (!sourceCharacterId || !aliasName || !targetCharacterId) {
+      return res.status(400).json({
+        error: 'sourceCharacterId, aliasName and targetCharacterId are required.',
+      });
+    }
+    if (sourceCharacterId === targetCharacterId) {
+      return res.status(400).json({ error: 'Source and target must differ.' });
+    }
+
+    const located = await findBookByBookId(bookId);
+    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    const { bookDir, state } = located;
+
+    const cast = await readJson<CastFile>(castJsonPath(bookDir));
+    if (!cast?.characters?.length) {
+      return res.status(409).json({
+        error: 'Book has no cast on disk yet. Run analysis before editing aliases.',
+      });
+    }
+
+    const source = cast.characters.find((c) => c.id === sourceCharacterId);
+    if (!source) return res.status(404).json({ error: `Character "${sourceCharacterId}" not found.` });
+    const target = cast.characters.find((c) => c.id === targetCharacterId);
+    if (!target) return res.status(404).json({ error: `Character "${targetCharacterId}" not found.` });
+
+    const aliasKey = aliasName.toLowerCase();
+    const aliasIdx = (source.aliases ?? []).findIndex((a) => a.trim().toLowerCase() === aliasKey);
+    if (aliasIdx === -1) {
+      return res.status(404).json({ error: `Alias "${aliasName}" is not on character "${source.name}".` });
+    }
+    /* Preserve the chip's display casing when appending to the target. */
+    const displayName = (source.aliases ?? [])[aliasIdx];
+
+    /* Always strip from source. Append to target unless it already carries the
+       alias OR the alias equals the target's own name (the name already covers
+       it) — in either case, append is a no-op and alreadyPresent is true. */
+    const nextSourceAliases = (source.aliases ?? []).filter((a) => a.trim().toLowerCase() !== aliasKey);
+    const targetAliases = target.aliases ?? [];
+    const alreadyPresent =
+      aliasKey === target.name.trim().toLowerCase() ||
+      targetAliases.some((a) => a.trim().toLowerCase() === aliasKey);
+    const nextTargetAliases = alreadyPresent ? targetAliases : [...targetAliases, displayName];
+
+    const nextCharacters: CharacterOutput[] = cast.characters.map((c) => {
+      if (c.id === sourceCharacterId) return { ...c, aliases: nextSourceAliases };
+      if (c.id === targetCharacterId) return { ...c, aliases: nextTargetAliases };
+      return c;
+    });
+
+    await writeJsonAtomic(castJsonPath(bookDir), { characters: nextCharacters });
+
+    /* Lineage is identical to unlink — same source-attributed candidate lines.
+       Only the destination differs, and that never touches manuscript-edits. */
+    const edits = await readJson<EditsFile>(manuscriptEditsJsonPath(bookDir));
+    let impactedChapters = await impactedChaptersFromJournal(bookDir, sourceCharacterId, aliasKey, edits);
+    if (!impactedChapters) {
+      impactedChapters = await impactedChaptersFromChapterCast(
+        state.manuscriptId,
+        sourceCharacterId,
+        edits,
+        aliasKey,
+      );
+    }
+
+    console.log(
+      `[cast-aliases] book=${bookId} repointed alias "${aliasName}" from ${sourceCharacterId}` +
+        ` → ${targetCharacterId} (${impactedChapters.length} impacted chapters, alreadyPresent=${alreadyPresent})`,
+    );
+
+    return res.json({ impactedChapters, alreadyPresent });
+  },
+);
+
 interface AddResponse {
   /** Echo of the alias addition so the frontend can dispatch a delta
       reducer instead of replacing the whole cast. Mirrors the shape
