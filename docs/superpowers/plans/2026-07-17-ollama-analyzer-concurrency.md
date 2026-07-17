@@ -200,24 +200,40 @@ git commit -m "feat(server): add global analyzer concurrency limiter"
 - Consumes: `analyzerConcurrency` from `./analyzer-concurrency.js`.
 - Produces: no signature change to `chat`; adds an outer limiter acquire/release wrapping the existing `gpuSemaphore` try/finally.
 
-- [ ] **Step 1: Write the failing test** — append to `server/src/analyzer/ollama.test.ts`. (Follow the file's existing fetch-mock pattern; the snippet below assumes the helper the other tests use — reuse whatever `mockOllamaFetch`/`vi.stubGlobal('fetch', …)` shape the file already has to return one valid stage-1 JSON body.)
+- [ ] **Step 1: Write the failing test** — append to `server/src/analyzer/ollama.test.ts`. `chat` is **private** (`ollama.ts:565`), so drive it through the public `runStage1Chapter`, reusing the file's existing `fetchMock` / `okResponse` / `ndjsonStream` / `VALID_RESPONSE` / `chunksOf` helpers (defined at the top of the file; the happy-path test at `:127` is the template). Add the import at the top with the other imports:
 
 ```ts
 import { analyzerConcurrency } from './analyzer-concurrency.js';
+```
 
-it('acquires the analyzer concurrency limiter around a chat call and releases it', async () => {
-  const acquireSpy = vi.spyOn(analyzerConcurrency, 'acquire');
-  // ... arrange the same mocked fetch + OllamaAnalyzer the other tests use ...
-  await analyzer.chat(/* the same args a neighbouring passing test uses */);
-  expect(acquireSpy).toHaveBeenCalledTimes(1);
-  expect(analyzerConcurrency.inFlight).toBe(0); // released in finally
-  acquireSpy.mockRestore();
-});
+Then add:
 
-it('releases the limiter even when the chat call throws', async () => {
-  // arrange fetch to return a non-2xx (reuse the file's existing error-path mock)
-  await expect(analyzer.chat(/* args */)).rejects.toThrow();
-  expect(analyzerConcurrency.inFlight).toBe(0);
+```ts
+describe('OllamaAnalyzer — analyzer concurrency limiter', () => {
+  it('acquires the analyzer concurrency limiter around a chat call and releases it', async () => {
+    const acquireSpy = vi.spyOn(analyzerConcurrency, 'acquire');
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+    await analyzer.runStage1Chapter('m_ollama_limiter_ok', 1, '# stage1 prompt', {});
+
+    expect(acquireSpy).toHaveBeenCalledTimes(1);
+    expect(analyzerConcurrency.inFlight).toBe(0); // released in finally
+    acquireSpy.mockRestore();
+  });
+
+  it('releases the limiter even when the chat call throws', async () => {
+    fetchMock.mockResolvedValue(new Response('boom', { status: 500 }));
+
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+    await expect(
+      analyzer.runStage1Chapter('m_ollama_limiter_err', 1, '# stage1 prompt', {}),
+    ).rejects.toThrow();
+
+    expect(analyzerConcurrency.inFlight).toBe(0);
+  });
 });
 ```
 
@@ -286,12 +302,13 @@ git commit -m "feat(server): gate OllamaAnalyzer.chat on the analyzer concurrenc
 - Consumes: `analyzerConcurrency` (already imported in Task 3).
 - Produces: `generatePersonaViaOllama` now also passes through the limiter (it is a *separate* fetch path from `chat`, so without this the global cap leaks by one caller).
 
-- [ ] **Step 1: Write the failing test** — append to `server/src/analyzer/ollama.test.ts` (reuse the file's existing `generatePersonaViaOllama` test mocks; there is already a GPU-path test near `:814`):
+- [ ] **Step 1: Write the failing test** — add inside the existing `describe('generatePersonaViaOllama', …)` block (`ollama.test.ts:811`), which already has `afterEach(() => vi.restoreAllMocks())` and the `mockChatResponse` helper (`:803`) in scope. Each test **must** mock `global.fetch` or it hits a real daemon (`LocalUnreachableError`). `analyzerConcurrency` is imported in Task 3:
 
 ```ts
-it('generatePersonaViaOllama passes through the analyzer concurrency limiter', async () => {
+it('generatePersonaViaOllama passes through the analyzer concurrency limiter (GPU path)', async () => {
   const acquireSpy = vi.spyOn(analyzerConcurrency, 'acquire');
-  // reuse the existing persona-gen mock fetch that returns { message: { content } }
+  vi.spyOn(global, 'fetch').mockResolvedValue(mockChatResponse('A warm voice.'));
+  const { generatePersonaViaOllama } = await import('./ollama.js');
   await generatePersonaViaOllama('PROMPT', 'qwen3.5:9b', { onCpu: false, keepAlive: '5m' });
   expect(acquireSpy).toHaveBeenCalledTimes(1);
   expect(analyzerConcurrency.inFlight).toBe(0);
@@ -300,8 +317,10 @@ it('generatePersonaViaOllama passes through the analyzer concurrency limiter', a
 
 it('generatePersonaViaOllama takes the limiter even on the CPU path (Ollama-slot pressure, not VRAM)', async () => {
   const acquireSpy = vi.spyOn(analyzerConcurrency, 'acquire');
+  vi.spyOn(global, 'fetch').mockResolvedValue(mockChatResponse('A cool voice.'));
+  const { generatePersonaViaOllama } = await import('./ollama.js');
   await generatePersonaViaOllama('PROMPT', 'qwen3.5:4b', { onCpu: true });
-  expect(acquireSpy).toHaveBeenCalledTimes(1); // limiter is independent of the onCpu gpu-gate skip
+  expect(acquireSpy).toHaveBeenCalledTimes(1); // limiter independent of the onCpu gpu-gate skip
   acquireSpy.mockRestore();
 });
 ```
@@ -320,12 +339,14 @@ Expected: FAIL — `acquireSpy` called 0 times.
     try {
       // ↓ existing body (fetch, ok-check, json parse, return) unchanged ↓
     } finally {
-      release();
+      release?.(); // ← nullable: acquireGpuTokenIfOnGpu returns null on the CPU path (unchanged from today)
     }
   } finally {
     releaseSlot();
   }
 ```
+
+> **Note:** keep the inner finally exactly as today — `release?.()`, **not** `release()`. `acquireGpuTokenIfOnGpu` returns `(() => void) | null` and is null when `onCpu`, so `release()` would throw `TypeError` on the CPU path. Only the new outer `releaseSlot()` is non-nullable.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -477,6 +498,6 @@ git commit -m "feat(server): log effective analyzer concurrency at startup; note
 - M5 (vram-trim race) → Task 6 Step 2 comment. ✔
 - KV calibration → ops procedure in the spec; no code (documented in knob help). ✔
 
-**Placeholder scan:** The only intentional "reuse the file's existing mock" notes are in Tasks 3/4 tests, because `ollama.test.ts` has an established fetch-mock harness the new tests must match rather than re-invent — the assertions themselves are concrete. No `TBD`/`add error handling`/`similar to Task N`.
+**Placeholder scan:** Tasks 3/4 tests now cite the exact existing harness helpers by name (`fetchMock`, `okResponse`, `ndjsonStream`, `chunksOf`, `VALID_RESPONSE`, `mockChatResponse`) and drive the **public** `runStage1Chapter` (since `chat` is private) — fully concrete, copy-runnable. No `TBD`/`add error handling`/`similar to Task N`. (Corrected after plan review: T3-a private-method, T4-a nullable `release?.()`, T4-b CPU-test fetch mock.)
 
 **Type consistency:** `analyzerConcurrency` (GpuSemaphore) exposes `.acquire()`, `.inFlight`, `.queueDepth`, `.budget` — all real `GpuSemaphore` members (`semaphore.ts:62/135/141/148`). `describeAnalyzerConcurrency(analyzerCost, gpuBudget)` signature is identical in Task 2 definition, its test, and Task 6 call site. `readStage2Concurrency` return type `number` unchanged; now exported.
