@@ -22,6 +22,7 @@ import {
   type SidecarHealthResult,
 } from './sidecar-health.js';
 import { getResolvedOllamaUrl } from '../workspace/user-settings.js';
+import { resolveKeepAliveSeconds, hasKeepAliveOverride } from '../analyzer/ollama.js';
 import {
   getResolvedTtsModelKey,
   getResolvedOllamaModel,
@@ -85,6 +86,10 @@ export interface ModelInventoryItem {
   updatable: boolean;
   /* ops-7 (Phase C) — re-hash-vs-manifest verdict for pinned weights. */
   integrity?: 'verified' | 'unpinned' | 'mismatch';
+  /* Analyzer-only: resolved per-model keep-alive (seconds) and whether the
+     value is a user override (vs coded default). Absent for tts/asr rows. */
+  keepAliveSeconds?: number;
+  keepAliveIsOverride?: boolean;
 }
 
 export interface ModelInventoryResponse {
@@ -311,6 +316,8 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
       isFallbackEngine: false,
       removable: true,
       updatable: true,
+      keepAliveSeconds: resolveKeepAliveSeconds(m.name),
+      keepAliveIsOverride: hasKeepAliveOverride(m.name),
     });
   }
 

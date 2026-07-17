@@ -13,9 +13,10 @@ import {
   _resetOllamaBootstraps,
   warmOllamaModel,
 } from './ollama-health.js';
-import { _resetUserSettingsCache } from '../workspace/user-settings.js';
+import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
 import { InstallBootstrap } from '../ollama/install-bootstrap.js';
 import { PullBootstrap } from '../ollama/pull-bootstrap.js';
+import { setLastKnownVram } from '../gpu/vram-state.js';
 
 function makeApp() {
   const app = express();
@@ -271,7 +272,9 @@ describe('warmOllamaModel (Part 2 — patient warm)', () => {
     expect(res.ok).toBe(true);
     const body = generateCallBody();
     expect(body?.model).toBe('qwen3.5:9b');
-    expect(body?.keep_alive).toBe('5m');
+    // 300 = the coded DEFAULT_KEEP_ALIVE_SECONDS for qwen3.5:9b (analyzer/ollama.ts),
+    // resolved via resolveKeepAliveSeconds — no longer a hardcoded '5m'.
+    expect(body?.keep_alive).toBe(300);
     expect(body?.prompt).toBe('');
     expect((body?.options as { num_ctx?: number })?.num_ctx).toBe(32768);
     expect((body?.options as { num_gpu?: number })?.num_gpu).toBe(999);
@@ -333,10 +336,44 @@ describe('warmOllamaModel (Part 2 — patient warm)', () => {
     const res = await warmOllamaModel('qwen3.5:9b', { signal: controller.signal });
     expect(res.ok).toBe(true);
   });
+
+  it('warms with the model\'s configured keep-alive, not a hardcoded 5m', async () => {
+    _setUserSettingsCacheForTest({
+      analyzerKeepAliveByModel: { 'qwen36-castwright:latest': 1800 },
+    });
+    fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+    await warmOllamaModel('qwen36-castwright:latest');
+    const body = generateCallBody();
+    expect(body?.keep_alive).toBe(1800);
+  });
+
+  it('clamps a RAM-heavy model\'s warm keep_alive to 0 on a CPU accelerator (not the unclamped 300)', async () => {
+    setLastKnownVram({ totalMb: null }); // -> accelerator: 'cpu' (see vram-state.ts)
+    try {
+      fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+      await warmOllamaModel('qwen3.5:9b');
+      const body = generateCallBody();
+      expect(body?.keep_alive).toBe(0);
+    } finally {
+      setLastKnownVram(null); // reset to 'unknown' so later tests aren't affected
+    }
+  });
+
+  it('does NOT clamp a RAM-heavy model\'s warm keep_alive on cuda/unknown (stays 300)', async () => {
+    setLastKnownVram({ totalMb: 8188 }); // -> accelerator: 'cuda'
+    try {
+      fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+      await warmOllamaModel('qwen3.5:9b');
+      const body = generateCallBody();
+      expect(body?.keep_alive).toBe(300);
+    } finally {
+      setLastKnownVram(null); // reset to 'unknown'
+    }
+  });
 });
 
 describe('POST /api/ollama/load', () => {
-  it('POSTs /api/generate with keep_alive: "5m", empty prompt, and the analyzer num_ctx → ready', async () => {
+  it('POSTs /api/generate with the resolved keep_alive, empty prompt, and the analyzer num_ctx → ready', async () => {
     fetchMock.mockResolvedValue(new Response('', { status: 200 }));
 
     const res = await request(makeApp()).post('/api/ollama/load');
@@ -348,7 +385,9 @@ describe('POST /api/ollama/load', () => {
     const body = generateCallBody();
     expect(body?.prompt).toBe('');
     expect(body?.stream).toBe(false);
-    expect(body?.keep_alive).toBe('5m');
+    // 300 = the coded DEFAULT_KEEP_ALIVE_SECONDS for the default analysis
+    // model qwen3.5:4b (analyzer/ollama.ts), resolved via resolveKeepAliveSeconds.
+    expect(body?.keep_alive).toBe(300);
     /* CRITICAL: warming must use the same num_ctx AND num_gpu the
        analyzer's runStage path passes (ANALYZER_NUM_CTX, ANALYZER_NUM_GPU
        in server/src/analyzer/ollama.ts). Either drifting triggers a
@@ -391,7 +430,8 @@ describe('POST /api/ollama/load', () => {
     expect(res.status).toBe(200);
     const body = generateCallBody();
     expect(body?.model).toBe('llama3.1:8b');
-    expect(body?.keep_alive).toBe('5m');
+    // 300 = the coded DEFAULT_KEEP_ALIVE_SECONDS for llama3.1:8b (analyzer/ollama.ts).
+    expect(body?.keep_alive).toBe(300);
     expect((body?.options as { num_ctx?: number })?.num_ctx).toBe(32768);
     expect((body?.options as { num_gpu?: number })?.num_gpu).toBe(999);
   });

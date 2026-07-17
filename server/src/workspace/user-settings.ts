@@ -241,6 +241,14 @@ export const userSettingsSchema = z.object({
      tour. Suppresses the empty-library invitation. Kept out of the general
      PUT via FORBIDDEN_KEYS and written only by writeTourCompletedAt. */
   tourCompletedAt: z.string().nullable().optional(),
+  /* Per-model Ollama analyzer keep-alive (seconds). Sparse override map:
+     model tag → seconds (0 = unload immediately, -1 = pin, N = resident N s).
+     Absent tags fall through to DEFAULT_KEEP_ALIVE_SECONDS in analyzer/ollama.ts
+     and then to 0. NOT in FORBIDDEN_KEYS — the general Account/Model-Manager
+     PUT is the sanctioned write path (mirrors configOverrides). Read
+     synchronously by resolveKeepAliveSeconds. Optional-with-default so legacy
+     files load unchanged. */
+  analyzerKeepAliveByModel: z.record(z.string(), z.number().int()).default({}),
 });
 
 export type UserSettings = z.infer<typeof userSettingsSchema>;
@@ -319,6 +327,9 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   geminiApiKey: null,
   /* config-override store — empty by default; populated by writeConfigOverride. */
   configOverrides: {},
+  /* Per-model analyzer keep-alive — empty by default; every model falls
+     through to its coded default (see DEFAULT_KEEP_ALIVE_SECONDS). */
+  analyzerKeepAliveByModel: {},
   /* srv-2 — auto-backup ON by default (disaster recovery without manual
      intervention), daily, keep the last 14 snapshots. Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */

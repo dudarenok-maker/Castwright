@@ -3,7 +3,8 @@
    JSONL line. Append-only (mirrors resource-telemetry.ts) because a
    read-modify-write JSON object loses concurrent updates.
    fs-45 v1 is RECORD-ONLY: nothing reads this store for a decision (the
-   analyzer's keepAliveFor() uses the flat RESIDENT_MODELS logic, unchanged).
+   analyzer's keepAliveFor() resolves per-model keep-alive seconds and does
+   not consult this store).
    The EMA read below — computed at read time by folding the log in
    chronological (file) order — is the DEFERRED v2 consumer: an adaptive
    keepAliveFor() that would evict a model too big to stay resident. Dormant. */

@@ -18,6 +18,10 @@ import {
 } from './models-inventory.js';
 import { dirSizeBytes, totalSizeBytes } from '../tts/model-paths.js';
 import type { SidecarHealthResult } from './sidecar-health.js';
+import {
+  _setUserSettingsCacheForTest,
+  _resetUserSettingsCache,
+} from '../workspace/user-settings.js';
 
 let repoRoot: string;
 let hfCache: string;
@@ -112,6 +116,8 @@ describe('dirSizeBytes', () => {
 });
 
 describe('buildModelInventory', () => {
+  afterEach(() => _resetUserSettingsCache()); // don't leak the seeded override into later cases
+
   function installKokoro() {
     writeFile(join(repoRoot, 'server', 'tts-sidecar', 'voices', 'kokoro', 'kokoro-v1.0.onnx'), 1000);
     writeFile(join(repoRoot, 'server', 'tts-sidecar', 'voices', 'kokoro', 'voices-v1.0.bin'), 200);
@@ -349,6 +355,25 @@ describe('buildModelInventory', () => {
     const row = inv.items.find((i) => i.id === 'kokoro')!;
     // Node probe sees the package on disk → should be 'ready' (weights present, package installed)
     expect(row.installState).toBe('ready');
+  });
+
+  it('analyzer items carry resolved keepAliveSeconds and override flag', () => {
+    _setUserSettingsCacheForTest({ analyzerKeepAliveByModel: { 'qwen36-castwright:latest': 300 } });
+    const res = buildModelInventory(
+      baseDeps({
+        ollama: {
+          reachable: true,
+          models: [{ name: 'qwen36-castwright:latest', size: 1 }, { name: 'qwen3.5:4b', size: 1 }],
+          resident: [],
+        },
+      }),
+    );
+    const custom = res.items.find((i) => i.id === 'ollama:qwen36-castwright:latest');
+    const supported = res.items.find((i) => i.id === 'ollama:qwen3.5:4b');
+    expect(custom?.keepAliveSeconds).toBe(300);
+    expect(custom?.keepAliveIsOverride).toBe(true);
+    expect(supported?.keepAliveSeconds).toBe(300); // coded default
+    expect(supported?.keepAliveIsOverride).toBe(false);
   });
 });
 

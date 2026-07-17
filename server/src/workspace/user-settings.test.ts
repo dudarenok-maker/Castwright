@@ -719,3 +719,28 @@ describe('userSettingsSchema — fs-1 upgrade bookkeeping', () => {
     expect(after.showWhatsNew).toBe(true);
   });
 });
+
+describe('analyzerKeepAliveByModel', () => {
+  it('defaults to an empty object when absent', () => {
+    const parsed = userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS });
+    expect(parsed.analyzerKeepAliveByModel).toEqual({});
+  });
+  it('accepts a sparse integer map', () => {
+    const parsed = userSettingsSchema.parse({
+      ...DEFAULT_USER_SETTINGS,
+      analyzerKeepAliveByModel: { 'qwen36-castwright:latest': 300, 'foo:bar': 0 },
+    });
+    expect(parsed.analyzerKeepAliveByModel['qwen36-castwright:latest']).toBe(300);
+  });
+  it('rejects a non-integer keep-alive', () => {
+    expect(() =>
+      userSettingsSchema.parse({
+        ...DEFAULT_USER_SETTINGS,
+        analyzerKeepAliveByModel: { 'foo:bar': 1.5 },
+      }),
+    ).toThrow();
+  });
+  it('is present in DEFAULT_USER_SETTINGS', () => {
+    expect(DEFAULT_USER_SETTINGS.analyzerKeepAliveByModel).toEqual({});
+  });
+});

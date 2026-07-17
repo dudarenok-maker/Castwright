@@ -2519,6 +2519,10 @@ export interface components {
              *     generation run; no server restart required.
              */
             dualModelEnabled?: boolean;
+            /** @description Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin). */
+            analyzerKeepAliveByModel?: {
+                [key: string]: number;
+            };
             /**
              * @description Number of chapters the generation queue synthesises concurrently
              *     (queue-worker concurrency). Default 1. Pulled from the flat queue
@@ -2593,6 +2597,10 @@ export interface components {
             analyzerPhase1Model?: string | null;
             analyzerPhase1MinLagChapters?: number | null;
             dualModelEnabled?: boolean;
+            /** @description Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin). */
+            analyzerKeepAliveByModel?: {
+                [key: string]: number;
+            };
             generationWorkers?: number;
             /** @description srv-2 — auto-snapshot this book's state.json on the cadence below. Default true. */
             backupEnabled?: boolean;

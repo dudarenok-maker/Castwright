@@ -115,6 +115,9 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
   chunk and asserts the estimate stays ≤ 14.5k, and re-trips if a skill grows.
   Throughput note: the reservation splits a Night-Watch-sized (~600-sentence)
   chapter into a few more calls; typical chapters stay one call. (Refs #1682)
+- Per-model Ollama analyzer keep-alive (seconds) in the Model Manager; retired
+  the hardcoded `RESIDENT_MODELS` allowlist and the `analyzer.ollama.keepAlive`
+  knob (#1696).
 
 ---
 

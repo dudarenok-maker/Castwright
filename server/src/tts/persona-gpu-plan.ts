@@ -5,8 +5,13 @@ import { shouldEvictBeforeSidecarLoad } from '../gpu/residency.js';
 import { getLastKnownVram } from '../gpu/vram-state.js';
 import { engineDeviceIsGpu } from '../gpu/engine-device.js';
 import { isOtherBookDesignBusy, isAnyAnalysisBusy } from './design-lock.js';
-import { resolveAnalyzerKeepAlive } from '../analyzer/ollama.js';
 import { resolvePersonaEngine } from '../analyzer/voice-style.js';
+
+/* Voice-design (persona) keep-alive is a fixed window, independent of the
+   per-model analyzer map: the persona local model is kept warm across a
+   cast-review session (back-to-back designs) then freed by the design idle
+   watchdog. 300 s preserves the historical '5m'. */
+const PERSONA_KEEP_ALIVE_SECONDS = 300;
 
 /** Thrown when the sidecar can't be safely unloaded for a persona run because a
     render is active. The caller falls back to CPU persona generation. */
@@ -71,7 +76,7 @@ export function resolvePersonaGpuPlan(bookDir: string): PersonaGpuPlan {
 
   return busy
     ? { onCpu: true, evict: false, keepAlive: 0 }
-    : { onCpu: false, evict: true, keepAlive: resolveAnalyzerKeepAlive() };
+    : { onCpu: false, evict: true, keepAlive: PERSONA_KEEP_ALIVE_SECONDS };
 }
 
 /** Resolve the GPU plan for a persona batch on `bookDir` and perform the
