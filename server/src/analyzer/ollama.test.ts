@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { mkdir, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as conc from './analyzer-concurrency.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HANDOFF_ROOT = resolve(__dirname, '..', '..', 'handoff');
@@ -186,6 +187,30 @@ describe('OllamaAnalyzer — happy path streaming', () => {
     /* Parsed payload comes through. */
     expect(result.characters).toHaveLength(2);
     expect(result.characters.map((c) => c.id)).toEqual(['narrator', 'wren']);
+  });
+});
+
+describe('OllamaAnalyzer — analyzer slot (limiter + model lease)', () => {
+  it('acquires an analyzer slot around a chat call and releases it', async () => {
+    const spy = vi.spyOn(conc, 'acquireAnalyzerSlot');
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+    await analyzer.runStage1Chapter('m_ollama_slot_ok', 1, '# stage1 prompt', {});
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0]).toBe('qwen3.5:9b'); // keyed on this.model
+    expect(conc.analyzerConcurrency.inFlight).toBe(0); // released in finally
+    spy.mockRestore();
+  });
+
+  it('releases the slot even when the chat call throws', async () => {
+    fetchMock.mockResolvedValue(new Response('boom', { status: 500 }));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+    await expect(
+      analyzer.runStage1Chapter('m_ollama_slot_err', 1, '# stage1 prompt', {}),
+    ).rejects.toThrow();
+    expect(conc.analyzerConcurrency.inFlight).toBe(0);
   });
 });
 
@@ -872,6 +897,8 @@ afterAll(async () => {
     'm_ollama_raw_attempt1',
     'm_ollama_raw_both',
     'm_ollama_two_schema',
+    'm_ollama_slot_ok',
+    'm_ollama_slot_err',
   ]) {
     await rm(resolve(HANDOFF_ROOT, 'inbox', `${id}-stage1-ch1.md`), { force: true });
     await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage1-ch1.json`), { force: true });

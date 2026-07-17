@@ -16,6 +16,8 @@ import { sampleAndRecordVram } from './model-vram-stats.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from '../tts/engine-vram-cost.js';
 import { acquireGpuTokenIfOnGpu } from '../gpu/gpu-semaphore-gate.js';
+import { acquireAnalyzerSlot } from './analyzer-concurrency.js';
+import { getLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { getResolvedOllamaUrl } from '../workspace/user-settings.js';
 import { configValue } from '../config/resolver.js';
 import type { Accelerator } from '../gpu/vram-state.js';
@@ -624,15 +626,10 @@ export class OllamaAnalyzer implements Analyzer {
       );
     }
 
-    /* GPU arbitration — acquire a slot before the fetch so two parallel
-       Claude Code sessions don't fight over VRAM on an 8 GB GPU. The
-       slot is held across the full streamed response (fetch + read
-       loop) and released in the outer `finally` below; that covers
-       abort paths, fetch-throws, non-2xx responses, and mid-stream
-       errors equally well. The analyzer's VRAM weight (engine-vram-cost.ts)
-       is large enough to serialise it against any TTS op — they already
-       evict each other on the GPU. See server/src/gpu/semaphore.ts. */
-    const releaseGpu = await gpuSemaphore.acquire(costForEngine('analyzer'));
+    /* Analyzer concurrency: width-K limiter + per-model GPU lease
+       (analyzer-concurrency.ts). Replaces the old per-call gpuSemaphore acquire;
+       the lease holds one cross-engine slot per resident model. */
+    const releaseSlot = await acquireAnalyzerSlot(this.model, getLastKnownAnalyzerDevice() === 'cpu');
 
     try {
       let response: Response;
@@ -777,7 +774,7 @@ export class OllamaAnalyzer implements Analyzer {
       }
       return buf;
     } finally {
-      releaseGpu();
+      releaseSlot();
     }
   }
 }
