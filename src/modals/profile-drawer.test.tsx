@@ -1095,6 +1095,24 @@ describe('ProfileDrawer alias chip editing', () => {
     expect(within(dialog).queryByText(/Add boom/)).toBeNull();
   });
 
+  it('reopens the unlink dialog after Cancel (chip ✕ is not disabled post-cancel)', async () => {
+    const onUnlinkAlias = vi.fn().mockResolvedValue(undefined);
+    renderDrawer(charWithAliases, { onUnlinkAlias, mergeCandidates: [{ id: 'wren', name: 'Wren' }] as never });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink Garrow' }));
+    await screen.findByRole('dialog', { name: 'Unlink alias' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Unlink alias' })).toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink Garrow' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Unlink alias' });
+    // No stale error banner in the reopened dialog.
+    expect(within(dialog).queryByText(/⚠/)).toBeNull();
+  });
+
   it('shows the "+ Add alias" button when onAddAlias is provided', () => {
     renderDrawer(charWithAliases, { onAddAlias: vi.fn().mockResolvedValue(undefined) });
     expect(screen.getByRole('button', { name: 'Add alias' })).toBeTruthy();

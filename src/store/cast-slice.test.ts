@@ -847,6 +847,18 @@ describe('castSlice — applyRepointAlias (POST /cast/repoint-alias response)', 
     expect(next.characters.find((c) => c.id === 'egor')!.aliases).toEqual(['Я', 'Sior']);
     expect(next.characters.some((c) => (c.aliases ?? []).includes('Я') && c.id !== 'egor')).toBe(false);
   });
+
+  it('is a full no-op when source and target are the same character', () => {
+    const start = baseState([
+      makeChar('egor', { name: 'Егор', aliases: ['Я', 'Sior'] }),
+      makeChar('anton', { name: 'Антон', aliases: [] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyRepointAlias({ sourceCharacterId: 'egor', aliasName: 'Я', targetCharacterId: 'egor' }),
+    );
+    expect(next.characters.find((c) => c.id === 'egor')!.aliases).toEqual(['Я', 'Sior']);
+  });
 });
 
 describe('castSlice — setVoiceStyle (plan 108)', () => {

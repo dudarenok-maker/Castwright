@@ -361,6 +361,7 @@ export const castSlice = createSlice({
       const { sourceCharacterId, aliasName, targetCharacterId } = a.payload;
       const key = aliasName.trim().toLowerCase();
       if (!key) return;
+      if (sourceCharacterId === targetCharacterId) return;
       const source = s.characters.find((c) => c.id === sourceCharacterId);
       const target = s.characters.find((c) => c.id === targetCharacterId);
       if (!source || !target) return;
