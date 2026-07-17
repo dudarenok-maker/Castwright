@@ -44,6 +44,9 @@
   calls by several names (a title, a first name, a nickname) no longer splits
   into duplicate cast rows with duplicate voices — Castwright now recognises
   them as one, and offers a one-tap merge when it's unsure.
+- **Big books on the free tier no longer stall.** Castwright now paces cloud
+  analysis to the free plan's per-minute limits, so a long book finishes —
+  slower, but complete — instead of dropping chapters.
 
 # Castwright 1.13.0
 

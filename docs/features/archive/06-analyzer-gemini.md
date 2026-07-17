@@ -34,11 +34,12 @@ Opt-in analyzer mode that hits the Gemini free-tier API directly. Same Zod schem
   | `gemini-3.5-flash`       | 5   | 250,000   | 20    |
   | `gemini-3-flash-preview` | 5   | 250,000   | 20    |
   | `gemini-2.5-flash`       | 5   | 250,000   | 20    |
-  | `gemma-4-31b-it`         | 15  | Unlimited | 1,500 |
-  | `gemma-4-26b-a4b-it`     | 15  | Unlimited | 1,500 |
+  | `gemma-4-31b-it`         | 15  | 16,000/min (free tier) | 1,500 |
+  | `gemma-4-26b-a4b-it`     | 15  | 16,000/min (free tier) | 1,500 |
   | unknown (fallback)       | 5   | 100,000   | 50    |
 
 - TPM is **input** tokens per minute (output doesn't count). Estimate is `Math.ceil(promptChars / 4) + 1_000`; reconciled against `usageMetadata.promptTokenCount` once the SDK returns it so persistent estimation drift doesn't accumulate.
+- **Cloud requests are sized to the free-tier TPM (#1682).** Gemma's free-tier TPM is a finite **16,000 input-tokens/minute** (not unlimited) — override to `Infinity` via `GEMINI_TPM_<slug>=0` or `=unlimited` for a paid key. A per-request **input-token cap**, `analyzer.gemini.maxInputTokensPerRequest` (env `ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST`, default **12,000**), keeps every cloud analyzer call — stage-1 cast detection, stage-2 attribution, and the output-heavy passes (script review, emotion detection, instruct annotation) — comfortably under that ceiling once the system prompt + roster are added, sized off the same script-aware char↔token budget used for chunking. A per-minute 429 (Google's `GenerateContentInputTokensPerModelPerMinute-FreeTier` quota) is now classified as **retryable**, distinct from a genuine daily-quota 429 (`per_day` marker) — previously the `free_tier` substring in the per-minute message's metric name also matched the daily-quota heuristic, so a throttle-and-retry case was mistaken for `DailyQuotaExhaustedError` and failed the run outright (see `gemini.ts`, `failure-taxonomy.ts`). Finally, `GeminiRateLimiter.acquire()` fails fast with `RequestExceedsTpmError` when a single request's estimated tokens exceed the model's whole finite TPM budget — no amount of waiting can free enough headroom, so the limiter throws immediately instead of spinning its wait loop forever.
 - When the limiter has to delay a call (>1 s wait), the analyzer's `onThrottle(waitMs, reason)` fires. The route layer maps that to an SSE `{ kind: 'throttle', model, waitMs, reason }` event; the analysing view renders a "Throttling Gemini … · resuming in Ns" pill on the affected per-chapter row (replaces the heartbeat row while active). Reasons: `'rpm' | 'tpm' | 'rpd' | 'retry-after'`.
 - Rate-limit / quota / auth errors are mapped to `AnalysisError` with a structured `detail` field carrying Google's `status` + `details[]` envelope (`src/lib/api.ts:407-410` consumes this and renders the collapsible detail block).
 - **`parseAndValidate` rescues four classes of malformed model output** (shared with the Ollama analyzer via `repairUnescapedQuotes` / `trimTrailingProse` / `repairStructuralPunctuation` exports from `gemini.ts`):
@@ -65,6 +66,7 @@ Run server with `ANALYZER=gemini`, `GEMINI_API_KEY=<key>` in `server/.env`.
 8. **Large manuscript** — feed a 200k-word manuscript; per-chapter mode keeps each request under ~30k tokens. UI live ETA updates per chapter.
 9. **Stream-idle watchdog tears down a wedged stream** — set `GEMINI_STREAM_IDLE_MS=1000` in `server/.env` and run analysis against a model that's intermittently slow (e.g. `gemini-3-flash-preview`). When a chapter's stream goes silent past the window, server log shows `[gemini] stream idle 1000ms — retrying in Nms (attempt …)`. After 3 idle retries the chapter surfaces as a normal chapter failure (retry button in the panel), not a hang. The "Paused: Parsing and attribution" stall this fix targets cannot recur — there is no code path that waits past `STREAM_IDLE_TIMEOUT_MS` for a single chunk.
 10. **Pause tears down an in-flight stream** — kick a fresh analysis on a slow model; click Pause in the top-bar pill while a chapter is mid-stream. The SSE feed surfaces a clean `error: aborted` (not a `5xx` / `internal`), the pill renders the Resume affordance, and exactly one upstream `generateContentStream` call was made for the cancelled chapter (no retry burn). Same behaviour as the Ollama analyzer — both engines route through `AnalysisAbortedError`.
+11. **Manual (on-box):** free-tier Gemma analysis of a large Russian book completes throttled, no dropped chapters, no hang.
 
 ## Out of scope
 
