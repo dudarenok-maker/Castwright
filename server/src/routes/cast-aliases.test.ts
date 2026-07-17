@@ -19,7 +19,7 @@
    Mirrors cast-merge.test.ts's lazy-import pattern: defer module imports
    until WORKSPACE_DIR is set so paths.ts captures the right root. */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -342,6 +342,93 @@ describe('cast-aliases router — add-alias', () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/add-alias`)
       .send({ characterId: 'ghost', aliasName: 'Foo' });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('cast-aliases router — repoint-alias', () => {
+  beforeEach(() => {
+    /* Re-seed a clean two-character cast (Garrow on Saltgrave, Wren empty)
+       so this block is independent of the unlink block's mutations. */
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: [sourceCharacter, otherCharacter] }),
+    );
+  });
+
+  it('moves the alias from source to target, returns impacted chapters, does not mutate edits', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/repoint-alias`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceCharacterId: 'saltgrave-figure', aliasName: 'Garrow', targetCharacterId: 'wren' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.alreadyPresent).toBe(false);
+    expect(res.body.impactedChapters.map((c: { chapterId: number }) => c.chapterId)).toEqual([1, 4]);
+    expect(res.body.impactedChapters[0].candidateSentenceIds).toEqual([1, 2, 3]);
+
+    const cast = readDisk<{ characters: Array<{ id: string; name: string; aliases?: string[] }> }>('cast.json');
+    // No new character minted — roster length unchanged.
+    expect(cast.characters.map((c) => c.id)).toEqual(['saltgrave-figure', 'wren']);
+    expect(cast.characters.find((c) => c.id === 'saltgrave-figure')!.aliases).toEqual(['Sior', 'Jurek', 'Shopkeeper']);
+    expect(cast.characters.find((c) => c.id === 'wren')!.aliases).toEqual(['Garrow']);
+
+    const edits = readDisk<{ sentences: Array<{ id: number; characterId: string }> }>('manuscript-edits.json');
+    expect(edits.sentences.find((s) => s.id === 1)!.characterId).toBe('saltgrave-figure');
+  });
+
+  it('is idempotent when the target already carries the alias (alreadyPresent, still strips source)', async () => {
+    // Pre-seed Garrow onto wren too.
+    const cast = readDisk<{ characters: Array<{ id: string; aliases?: string[] }> }>('cast.json');
+    cast.characters.find((c) => c.id === 'wren')!.aliases = ['Garrow'];
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/repoint-alias`)
+      .send({ sourceCharacterId: 'saltgrave-figure', aliasName: 'Garrow', targetCharacterId: 'wren' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.alreadyPresent).toBe(true);
+    const after = readDisk<{ characters: Array<{ id: string; aliases?: string[] }> }>('cast.json');
+    expect(after.characters.find((c) => c.id === 'saltgrave-figure')!.aliases).toEqual(['Sior', 'Jurek', 'Shopkeeper']);
+    expect(after.characters.find((c) => c.id === 'wren')!.aliases).toEqual(['Garrow']); // no dup
+  });
+
+  it('treats alias === target primary name as alreadyPresent (strip, no 400)', async () => {
+    // Rename wren's alias case: move "Wren" (matches wren.name) — strip from source, no append, no error.
+    const cast = readDisk<{ characters: Array<{ id: string; name: string; aliases?: string[] }> }>('cast.json');
+    cast.characters.find((c) => c.id === 'saltgrave-figure')!.aliases = ['Sior', 'Wren'];
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/repoint-alias`)
+      .send({ sourceCharacterId: 'saltgrave-figure', aliasName: 'Wren', targetCharacterId: 'wren' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.alreadyPresent).toBe(true);
+    const after = readDisk<{ characters: Array<{ id: string; name: string; aliases?: string[] }> }>('cast.json');
+    expect(after.characters.find((c) => c.id === 'saltgrave-figure')!.aliases).toEqual(['Sior']);
+    expect(after.characters.find((c) => c.id === 'wren')!.aliases ?? []).toEqual([]); // name already covers it
+  });
+
+  it('400s when target === source', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/repoint-alias`)
+      .send({ sourceCharacterId: 'saltgrave-figure', aliasName: 'Garrow', targetCharacterId: 'saltgrave-figure' });
+    expect(res.status).toBe(400);
+  });
+
+  it('404s on unknown target', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/repoint-alias`)
+      .send({ sourceCharacterId: 'saltgrave-figure', aliasName: 'Garrow', targetCharacterId: 'ghost' });
+    expect(res.status).toBe(404);
+  });
+
+  it('404s when the alias is not on the source', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/repoint-alias`)
+      .send({ sourceCharacterId: 'saltgrave-figure', aliasName: 'Nobody', targetCharacterId: 'wren' });
     expect(res.status).toBe(404);
   });
 });
