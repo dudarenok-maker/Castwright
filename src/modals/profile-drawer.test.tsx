@@ -1065,6 +1065,36 @@ describe('ProfileDrawer alias chip editing', () => {
     expect(screen.getByRole('button', { name: /continue/i })).toBeTruthy();
   });
 
+  it('does not leak a stale add-alias error into a freshly-opened unlink dialog', async () => {
+    /* Regression for a task-5 review finding: aliasError is shared between
+       the add-alias and unlink-alias failure paths. A failed "+ Add alias"
+       attempt used to leave its error message visible when the unlink
+       dialog was opened right after, via the dialog's error={aliasError}
+       prop. Opening the dialog must clear it, same as the "+ Add alias"
+       open-handler already does. */
+    const onAddAlias = vi.fn().mockRejectedValue(new Error('Add boom'));
+    const onUnlinkAlias = vi.fn().mockResolvedValue(undefined);
+    renderDrawer(charWithAliases, {
+      onAddAlias,
+      onUnlinkAlias,
+      mergeCandidates: [{ id: 'wren', name: 'Wren' }] as never,
+    });
+
+    // Fail an add-alias attempt so `aliasError` gets set.
+    fireEvent.click(screen.getByRole('button', { name: 'Add alias' }));
+    const input = screen.getByRole('textbox', { name: 'New alias name' });
+    fireEvent.change(input, { target: { value: 'Captain' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await screen.findByText(/Add boom/);
+
+    // Now open the unlink dialog for a chip.
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink Garrow' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Unlink alias' });
+
+    // The stale add-alias error must not have leaked into the dialog.
+    expect(within(dialog).queryByText(/Add boom/)).toBeNull();
+  });
+
   it('shows the "+ Add alias" button when onAddAlias is provided', () => {
     renderDrawer(charWithAliases, { onAddAlias: vi.fn().mockResolvedValue(undefined) });
     expect(screen.getByRole('button', { name: 'Add alias' })).toBeTruthy();
