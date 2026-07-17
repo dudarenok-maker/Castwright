@@ -30,6 +30,7 @@ import type { CharacterOutput } from '../handoff/schemas.js';
 import { AnalyzerTruncatedError } from './errors.js';
 import { configValue } from '../config/resolver.js';
 import { splitBodyIntoChunks, splitParagraphIntoSentences } from './stage2-chunk.js';
+import { cloudBodyCharBudget } from './token-budget.js';
 
 /* Per-chunk INPUT char budget. Stage-1 output is small (a roster, not a
    per-sentence list), so the binding constraint is the input fitting num_ctx
@@ -38,32 +39,55 @@ import { splitBodyIntoChunks, splitParagraphIntoSentences } from './stage2-chunk
    from num_ctx. */
 export const DEFAULT_STAGE1_CHUNK_CHAR_BUDGET = 24000;
 
+/* Cloud stage-1 fixed per-request overhead, reserved in TOKEN space so the whole
+   request (system instruction + inbox scaffold + running roster + body) clears
+   the finite Gemma TPM guard (`RequestExceedsTpmError`, 16000/min) — NOT just
+   the body. Stage-1 is the worst offender: the per-chapter cast-detection skill
+   is the largest analyzer system instruction (~15.8 KB ≈ 5.4k tokens), and the
+   inbox adds a ~1k-token Phase-0a preamble + the running-roster JSON on top. A
+   0-reservation body (the prior behaviour) sized itself to the FULL 12k-token
+   cap, so a dense Cyrillic chapter (~2.5 chars/token) estimated at ~18-20k
+   tokens and tripped the guard — dropping the chapter, since RequestExceedsTpm
+   is not an AnalyzerTruncatedError the adaptive re-split can catch. Reserving
+   7000 tokens keeps the worst-case Cyrillic request (full body + a ~60-80 char
+   running roster) at ~13-14k estimated tokens, comfortably below 16000. Measured
+   in stage1-chunk.test.ts against the real prompt so a future skill growth
+   re-trips the guard test. Token-space (not char-space) so it is script-correct:
+   the reservation is the same token cost whether the body is Latin or Cyrillic;
+   only the REMAINING budget is converted to chars at the body's own rate. */
+export const STAGE1_CLOUD_RESERVED_TOKENS = 7000;
+
 /* Derive a safe per-chunk char budget from the local model's context window.
-   Reserve ~30% of num_ctx for the prompt header + roster + output, and assume a
-   pessimistic ~2 chars/token (Cyrillic and other non-Latin scripts tokenise far
-   denser than English's ~4 — budgeting for the dense case keeps a non-Latin
-   chapter from overflowing). Take the MIN with the configured default so this
-   only ever LOWERS the budget. Cloud engines keep the configured value. A
+   Reserve `localInputFraction` (default 0.7) of num_ctx for stage-1 INPUT and
+   assume a pessimistic ~2 chars/token (Cyrillic and other non-Latin scripts
+   tokenise far denser than English's ~4 — budgeting for the dense case keeps a
+   non-Latin chapter from overflowing). Take the MIN with the configured
+   default so this only ever LOWERS the budget. This helper is local-only —
+   cloud sizing lives in the resolver below via cloudBodyCharBudget. A
    residual overflow is still caught by the adaptive re-split below. */
 export function stage1ChunkBudgetForEngine(
   configured: number,
   numCtxTokens: number,
   engine: 'gemini' | 'local',
+  localInputFraction = 0.7, // OPTIONAL: existing 3-arg callers/tests keep the prior 0.7 behavior
 ): number {
-  /* Cloud engines have a huge context window and a small stage-1 output, so
-     there is no input-overflow to guard against — never chunk (one call per
-     chapter, unchanged). Only the local model has a tight `num_ctx`. */
-  if (engine !== 'local') return Number.MAX_SAFE_INTEGER;
-  const numCtxDerived = Math.floor(numCtxTokens * 0.7 * 2);
+  if (engine !== 'local') return Number.MAX_SAFE_INTEGER; // helper unchanged; cloud sizing is in the resolver
+  const numCtxDerived = Math.floor(numCtxTokens * localInputFraction * 2);
   return Math.max(2000, Math.min(configured, numCtxDerived));
 }
 
-export function resolveStage1ChunkCharBudget(engine?: 'gemini' | 'local'): number {
-  if (engine !== 'local') return Number.MAX_SAFE_INTEGER; // cloud: never chunk stage-1
+export function resolveStage1ChunkCharBudget(engine?: 'gemini' | 'local', body?: string): number {
+  if (engine !== 'local') {
+    // Cloud: size the BODY to the per-request token cap MINUS stage-1's fixed
+    // system-instruction + scaffold overhead (reserved in token space so the
+    // full request — not just the body — stays under the finite TPM guard).
+    return cloudBodyCharBudget(body ?? '', 0, STAGE1_CLOUD_RESERVED_TOKENS);
+  }
   return stage1ChunkBudgetForEngine(
     configValue<number>('analyzer.stage1.chunkCharBudget'),
     configValue<number>('analyzer.ollama.numCtx'),
     'local',
+    configValue<number>('analyzer.stage1.localInputFraction'),
   );
 }
 

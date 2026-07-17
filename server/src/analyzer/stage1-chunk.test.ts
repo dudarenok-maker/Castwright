@@ -12,10 +12,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   runStage1ChapterChunked,
+  resolveStage1ChunkCharBudget,
   stage1ChunkBudgetForEngine,
+  STAGE1_CLOUD_RESERVED_TOKENS,
   type Stage1ChunkRunOptions,
 } from './stage1-chunk.js';
 import { AnalyzerTruncatedError } from './errors.js';
+import { buildSystemInstruction, loadSkill, estimateInputTokens } from './gemini.js';
+import { cloudBodyCharBudget } from './token-budget.js';
+import { buildStage1ChapterInbox } from '../routes/analysis.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 
 const char = (id: string, extra: Partial<CharacterOutput> = {}): CharacterOutput => ({
@@ -126,5 +131,89 @@ describe('stage1ChunkBudgetForEngine', () => {
 
   it('never chunks cloud engines (huge budget)', () => {
     expect(stage1ChunkBudgetForEngine(24000, 8192, 'gemini')).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('cloud stage-1 sizes to the token cap, not MAX_SAFE_INTEGER', () => {
+    const ruBody = 'а'.repeat(60000);
+    const budget = resolveStage1ChunkCharBudget('gemini', ruBody);
+    expect(budget).toBeLessThan(60000);
+    expect(budget).toBeGreaterThan(2000);
+  });
+
+  it('local stage-1 input fraction knob lowers the budget', () => {
+    // large `configured` so the num_ctx-derived value (not the min clamp) decides.
+    const hi = stage1ChunkBudgetForEngine(100000, 16384, 'local', 0.7); // floor(16384*1.4)=22937
+    const lo = stage1ChunkBudgetForEngine(100000, 16384, 'local', 0.4); // floor(16384*0.8)=13107
+    expect(lo).toBeLessThan(hi);
+  });
+});
+
+/* #1682 REGRESSION LOCK — a worst-case Cyrillic stage-1 request must clear the
+   finite Gemma TPM guard (RequestExceedsTpmError fires when the ESTIMATED input
+   tokens exceed the model TPM, 16000/min). This reconstructs the REAL call the
+   route makes — the actual per-chapter cast-detection system instruction
+   (`buildSystemInstruction` over `loadSkill('per_chapter_stage1')`, the largest
+   analyzer skill) + the actual Phase-0a inbox (`buildStage1ChapterInbox`) with a
+   full body sized by `resolveStage1ChunkCharBudget('gemini', …)` and a
+   conservative running roster — and asserts the same `estimateInputTokens` the
+   limiter uses stays under the guard with margin.
+
+   Using the REAL prompt (not a hand-faked string) is the point: if the skill or
+   inbox scaffold grows, this test re-trips and forces the reservation to be
+   re-tuned instead of silently dropping chapters again.
+
+   RED/GREEN: with the prior 0-token reservation the body filled the full 12k
+   cap and this construction estimated ~19.8k tokens (roster=60) — well OVER the
+   16000 guard. With STAGE1_CLOUD_RESERVED_TOKENS=7000 it estimates ~13.2k. */
+describe('#1682 — worst-case Cyrillic stage-1 request clears the Gemma TPM guard', () => {
+  const GEMMA_TPM = 16000;
+  const MARGIN_CEILING = 14500; // 16000 − 1500 safety margin
+
+  /* A conservative running roster for a single book: 60 characters, Cyrillic
+     names, in the compact {id,name,role} shape buildStage1ChapterInbox renders. */
+  const worstCaseRoster = (n: number): CharacterOutput[] =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `personazh-imya-familiya-${i}`,
+      name: `Антон Сергеевич Городецкий ${i}`,
+      role: 'второстепенный персонаж',
+      color: '#ffffff',
+    }));
+
+  it('the full request (system + scaffold + roster + body) estimates under the guard', async () => {
+    const skill = await loadSkill('per_chapter_stage1');
+    const systemInstruction = buildSystemInstruction(skill, 'ru', 'per_chapter_stage1');
+
+    // Body sized exactly the way the route sizes it for a huge Cyrillic chapter.
+    const bodyBudget = resolveStage1ChunkCharBudget('gemini', 'а'.repeat(120000));
+    const body = 'а'.repeat(bodyBudget);
+
+    const inbox = buildStage1ChapterInbox(
+      'm_1682',
+      'Ночной дозор',
+      { id: 12, title: 'Глава двенадцатая', body },
+      worstCaseRoster(60),
+      [],
+      'Сергей Лукьяненко',
+    );
+
+    const estimated = estimateInputTokens(systemInstruction, [
+      { role: 'user', parts: [{ text: inbox }] },
+    ]);
+
+    // Primary invariant: clears the hard limiter guard.
+    expect(estimated).toBeLessThanOrEqual(GEMMA_TPM);
+    // Stronger lock: stays under the guard with the intended safety margin.
+    expect(estimated).toBeLessThanOrEqual(MARGIN_CEILING);
+  });
+
+  it('proves the reservation is load-bearing: it shrinks the body budget by the reserved tokens', () => {
+    // With reservedTokens=0 (the pre-#1682 behaviour) the body alone fills the
+    // full cap, leaving no room for system+scaffold+roster — which is what blew
+    // the guard. The reservation removes 7000 tokens' worth of Cyrillic chars.
+    const zeroReserveBudget = cloudBodyCharBudget('а'.repeat(120000), 0, 0);
+    const reservedBudget = cloudBodyCharBudget('а'.repeat(120000), 0, STAGE1_CLOUD_RESERVED_TOKENS);
+    // The reservation genuinely shrinks the body budget by ~7000 tokens worth of
+    // Cyrillic chars (7000 × 2.5), which is what buys back the TPM headroom.
+    expect(reservedBudget).toBe(zeroReserveBudget - STAGE1_CLOUD_RESERVED_TOKENS * 2.5);
   });
 });

@@ -12,17 +12,20 @@
    every retry attempts re-acquires.
 
    Limits pulled from aistudio.google.com/app/rate-limit (free tier,
-   2026-05-16). RPM is the typical binding constraint for all but Gemma
-   (Unlimited TPM); RPD is the binding constraint for Gemini 2.5 Flash
-   and 3 Flash preview (20/day). TPM rarely bites on Flash Lite under
-   normal use but is the safety net against outlier long chapters and
-   burst-retry pathology. */
+   2026-05-16). RPM is the typical binding constraint for the Gemini
+   models; RPD is the binding constraint for Gemini 2.5 Flash and 3
+   Flash preview (20/day). Gemma defaults to a finite 16000 TPM (only
+   Infinity when explicitly overridden via env with `0`/"unlimited").
+   TPM rarely bites on Flash Lite under normal use but is the safety net
+   against outlier long chapters and burst-retry pathology. */
 
 import { AnalysisAbortedError } from './ollama.js';
 
 interface ModelLimits {
   rpm: number;
-  /** Total input tokens per minute. `Infinity` for Gemma's "Unlimited". */
+  /** Total input tokens per minute. `Infinity` only when a model's TPM is
+      explicitly overridden to "unlimited" (e.g. Gemma via env `0`/"unlimited");
+      otherwise always a finite cap. */
   tpm: number;
   rpd: number;
 }
@@ -38,8 +41,8 @@ const BUILTIN_LIMITS: Record<string, ModelLimits> = {
   'gemini-3.5-flash': { rpm: 5, tpm: 250_000, rpd: 20 },
   'gemini-3-flash-preview': { rpm: 5, tpm: 250_000, rpd: 20 },
   'gemini-2.5-flash': { rpm: 5, tpm: 250_000, rpd: 20 },
-  'gemma-4-31b-it': { rpm: 15, tpm: Infinity, rpd: 1500 },
-  'gemma-4-26b-a4b-it': { rpm: 15, tpm: Infinity, rpd: 1500 },
+  'gemma-4-31b-it': { rpm: 15, tpm: 16_000, rpd: 1500 },
+  'gemma-4-26b-a4b-it': { rpm: 15, tpm: 16_000, rpd: 1500 },
 };
 
 /* Slug-ify a model id for env-var lookup: lowercase non-alphanum → `_`,
@@ -56,12 +59,24 @@ function readEnvNumber(name: string): number | undefined {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
+/* TPM-only sentinel: 0 (and "unlimited") mean "no per-minute gate" (Infinity).
+   Needed now that the Gemma builtin TPM is a finite 16000 — otherwise env 0
+   would resolve to 16000, not unlimited. RPM/RPD keep readEnvNumber (0 → builtin). */
+function readTpmEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined) return undefined;
+  const t = raw.trim().toLowerCase();
+  if (t === 'unlimited' || t === '0') return Infinity;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
 function resolveLimits(model: string): ModelLimits {
   const base = BUILTIN_LIMITS[model] ?? FALLBACK_LIMITS;
   const slug = envSlug(model);
   return {
     rpm: readEnvNumber(`GEMINI_RPM_${slug}`) ?? base.rpm,
-    tpm: readEnvNumber(`GEMINI_TPM_${slug}`) ?? base.tpm,
+    tpm: readTpmEnv(`GEMINI_TPM_${slug}`) ?? base.tpm,
     rpd: readEnvNumber(`GEMINI_RPD_${slug}`) ?? base.rpd,
   };
 }
@@ -78,6 +93,25 @@ export class DailyQuotaExhaustedError extends Error {
   ) {
     super(`Gemini ${model} daily quota exhausted — resets at ${resetAt.toISOString()}.`);
     this.name = 'DailyQuotaExhaustedError';
+  }
+}
+
+/** A single request whose estimated tokens exceed the model's whole finite
+    TPM budget can never be satisfied — no amount of waiting frees enough
+    headroom. `acquire()` throws this immediately instead of spinning its
+    wait loop forever (RC5). */
+export class RequestExceedsTpmError extends Error {
+  readonly code = 'REQUEST_EXCEEDS_TPM';
+  constructor(
+    public readonly model: string,
+    public readonly estimated: number,
+    public readonly cap: number,
+  ) {
+    super(
+      `Gemini ${model}: request estimate ${estimated} tokens exceeds the ${cap} tokens/min cap — ` +
+        `no single request can fit. Lower analyzer.gemini.maxInputTokensPerRequest or raise TPM.`,
+    );
+    this.name = 'RequestExceedsTpmError';
   }
 }
 
@@ -165,6 +199,12 @@ export class GeminiRateLimiter {
     }
 
     const limits = resolveLimits(model);
+
+    // Fail fast: a single request larger than the whole per-minute budget can
+    // never be satisfied — do not spin the wait loop forever (RC5).
+    if (Number.isFinite(limits.tpm) && estimatedTokens > limits.tpm) {
+      throw new RequestExceedsTpmError(model, estimatedTokens, limits.tpm);
+    }
 
     while (true) {
       const s = this.getState(model);

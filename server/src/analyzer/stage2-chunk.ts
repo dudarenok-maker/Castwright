@@ -27,6 +27,7 @@ import type { SentenceOutput } from '../handoff/schemas.js';
 import type { EngineReport } from './dialogue-structure/types.js';
 import { AnalyzerTruncatedError } from './errors.js';
 import { configValue } from '../config/resolver.js';
+import { cloudBodyCharBudget } from './token-budget.js';
 import {
   runStage2WithCoverageGuard,
   validateStage2Coverage,
@@ -59,19 +60,24 @@ export function stage2ChunkBudgetForEngine(
   configured: number,
   numCtxTokens: number,
   engine: 'gemini' | 'local',
+  localInputFraction = 0.3, // OPTIONAL: existing 3-arg callers/tests keep the prior 0.3 behavior
 ): number {
   if (engine !== 'local') return configured;
-  const numCtxDerived = Math.floor(numCtxTokens * 2 * 0.3);
+  const numCtxDerived = Math.floor(numCtxTokens * 2 * localInputFraction);
   return Math.max(1000, Math.min(configured, numCtxDerived));
 }
 
-export function resolveStage2ChunkCharBudget(engine?: 'gemini' | 'local'): number {
+export function resolveStage2ChunkCharBudget(engine?: 'gemini' | 'local', body?: string): number {
   const configured = configValue<number>('analyzer.stage2.chunkCharBudget');
-  if (engine !== 'local') return configured;
+  if (engine !== 'local') {
+    // Cloud: min(configured, token-cap-derived).
+    return Math.min(configured, cloudBodyCharBudget(body ?? ''));
+  }
   return stage2ChunkBudgetForEngine(
     configured,
     configValue<number>('analyzer.ollama.numCtx'),
     'local',
+    configValue<number>('analyzer.stage2.localInputFraction'),
   );
 }
 

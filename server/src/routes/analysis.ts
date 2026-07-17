@@ -1752,7 +1752,7 @@ export async function attributeChapterStage2(opts: {
   };
   const result = await runStage2ChapterChunked({
     body: opts.chapter.body,
-    charBudget: resolveStage2ChunkCharBudget(opts.engine),
+    charBudget: resolveStage2ChunkCharBudget(opts.engine, opts.chapter.body),
     coverageRetries: resolveStage2CoverageRetries(),
     callForBody,
     onRetry: opts.onCoverageRetry,
@@ -3156,7 +3156,7 @@ export async function runMainAnalyzerJob(
             call: () =>
               runStage1ChapterChunked({
                 body: ch.body,
-                charBudget: resolveStage1ChunkCharBudget(selection.engine),
+                charBudget: resolveStage1ChunkCharBudget(selection.engine, ch.body),
                 mergeRosters: mergeRosterChapter,
                 onChunk: (sec) => {
                   /* Feed section progress into the live ETA so the first
@@ -5116,7 +5116,7 @@ export async function runSubsetAnalyzerJob(
           call: () =>
             runStage1ChapterChunked({
               body: ch.body,
-              charBudget: resolveStage1ChunkCharBudget(selection.engine),
+              charBudget: resolveStage1ChunkCharBudget(selection.engine, ch.body),
               mergeRosters: mergeRosterChapter,
               onChunk: (sec) =>
                 log(

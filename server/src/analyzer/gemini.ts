@@ -40,6 +40,12 @@ import { AnalysisAbortedError } from './ollama.js';
 import { AnalyzerTruncatedError } from './errors.js';
 import { geminiRateLimiter, DailyQuotaExhaustedError } from './rate-limit.js';
 import { countCjkChars } from '../util/cjk.js';
+import {
+  LATIN_CHARS_PER_TOKEN,
+  CYRILLIC_CHARS_PER_TOKEN,
+  HAN_KANA_CHARS_PER_TOKEN,
+  countCyrillic,
+} from './token-budget.js';
 
 /* Idle-chunk watchdog: if the SDK stream goes more than this long between
    chunks (or before the first chunk), assume the upstream is wedged and
@@ -587,8 +593,16 @@ export class GeminiAnalyzer implements Analyzer {
           /* Daily-quota markers: same regex as routes/analysis.ts so
              classification stays in lockstep. No retry. Also block the
              limiter for the rest of the day so concurrent workers
-             short-circuit instead of round-tripping. */
-          if (/free[_-]?tier|quotaValue":"\d{1,3}"/i.test(message)) {
+             short-circuit instead of round-tripping.
+             NOTE: `free[_-]?tier` alone is NOT a valid marker here — the
+             per-minute input-token quota's message also contains
+             "free_tier" (via the metric name
+             generate_content_free_tier_input_token_count), so that
+             alternative used to false-positive-match a retryable
+             per-minute 429 as fatal daily exhaustion (#1682). Require a
+             genuine `per_day` marker instead; keep the small-value
+             heuristic for quotaValue. */
+          if (/per[_-]?day|quotaValue":"\d{1,3}"/i.test(message)) {
             const resetAt = nextUtcMidnight();
             geminiRateLimiter.recordRejection(this.model, resetAt.getTime() - Date.now());
             throw new DailyQuotaExhaustedError(this.model, resetAt);
@@ -897,9 +911,6 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
    same additive interpolation — Cyrillic and CJK never overlap in the same
    codepoint, so each fraction pulls the divisor down from the Latin baseline
    independently. */
-const LATIN_CHARS_PER_TOKEN = 4;
-const CYRILLIC_CHARS_PER_TOKEN = 2.5;
-const HAN_KANA_CHARS_PER_TOKEN = 1.2;
 
 export function estimateInputTokens(
   systemInstruction: string,
@@ -908,10 +919,6 @@ export function estimateInputTokens(
   let chars = systemInstruction.length;
   let cyrillic = 0;
   let hanKana = 0;
-  const countCyrillic = (s: string): number => {
-    const m = s.match(/[Ѐ-ӿ]/g);
-    return m ? m.length : 0;
-  };
   cyrillic += countCyrillic(systemInstruction);
   hanKana += countCjkChars(systemInstruction);
   for (const turn of contents) {

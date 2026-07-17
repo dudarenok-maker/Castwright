@@ -5,13 +5,14 @@
    renumbers contiguously, later chunks carry preceding context, a chunk that
    truncates is adaptively re-split, and a per-chunk coverage miss retries. */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { SentenceOutput } from '../handoff/schemas.js';
 import { AnalyzerTruncatedError } from './errors.js';
 import {
   splitBodyIntoChunks,
   splitParagraphIntoSentences,
   stage2ChunkBudgetForEngine,
+  resolveStage2ChunkCharBudget,
   tailParagraphs,
   runStage2ChapterChunked,
 } from './stage2-chunk.js';
@@ -153,6 +154,65 @@ describe('stage2ChunkBudgetForEngine (num_ctx-aware budget sizing)', () => {
   });
   it('keeps a sane floor for a tiny num_ctx', () => {
     expect(stage2ChunkBudgetForEngine(9000, 512, 'local')).toBe(1000);
+  });
+
+  it('cloud stage-2 caps to min(configured, token-derived)', () => {
+    const ruBody = 'а'.repeat(60000);
+    const budget = resolveStage2ChunkCharBudget('gemini', ruBody);
+    expect(budget).toBeLessThanOrEqual(9000); // configured default
+    expect(budget).toBeGreaterThan(0);
+  });
+
+  it('local stage-2 input fraction knob lowers the budget', () => {
+    // large `configured` so the num_ctx-derived value (not the min clamp) decides.
+    const hi = stage2ChunkBudgetForEngine(100000, 32768, 'local', 0.3); // floor(32768*2*0.3)=19660
+    const lo = stage2ChunkBudgetForEngine(100000, 32768, 'local', 0.15); // floor(32768*2*0.15)=9830
+    expect(lo).toBeLessThan(hi);
+  });
+});
+
+describe('resolveStage2ChunkCharBudget (cloud min() wiring lock, #1682)', () => {
+  /* The existing 'cloud stage-2 caps to min(configured, token-derived)' test above
+     only asserts `<= 9000`, which ALSO passes against the pre-#1682 code (cloud
+     branch returning `configured` unconditionally) — it doesn't lock the min()
+     wiring. First established the actual contract at default config: cloudBodyCharBudget
+     = maxInputTokensPerRequest(12000) * charsPerToken, whose SMALLEST value (pure
+     CJK, 1.2 chars/token) is 12000*1.2=14400 — always >= the stage-2 configured
+     default (9000). So min(9000, >=14400) picks the configured 9000 for ANY body,
+     regardless of script: the token-derived term can never bind at default config,
+     making a body-varying assertion at default config impossible to write honestly.
+     The two tests below instead lock the honest contract: (1) default-config
+     behaviour is genuinely body-invariant (documents the min() is inert today), and
+     (2) a focused case that lowers the per-request token cap so the token-derived
+     term DOES bind, proving the min() actually routes through cloudBodyCharBudget
+     (script-aware) rather than a flat `configured` — pre-#1682 code would still
+     return 9000 in that case, so this is the assertion that would catch a revert. */
+  afterEach(() => {
+    delete process.env.ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST;
+  });
+
+  it('at default config, the token-derived term never binds — cloud returns the configured cap regardless of script', () => {
+    const cyrillicBody = 'а'.repeat(60000);
+    const latinBody = 'a'.repeat(60000);
+    expect(resolveStage2ChunkCharBudget('gemini', cyrillicBody)).toBe(9000);
+    expect(resolveStage2ChunkCharBudget('gemini', latinBody)).toBe(9000);
+  });
+
+  it('LOCK: once the per-request token cap is lowered enough to bind, cloud routes through cloudBodyCharBudget (script-aware) — a flat `configured` return would not vary by script', () => {
+    // Lower analyzer.gemini.maxInputTokensPerRequest via its env override so
+    // cloudBodyCharBudget falls below the stage-2 configured 9000, forcing the
+    // min() to actually pick the token-derived term.
+    process.env.ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST = '1000';
+    const cyrillicBody = 'а'.repeat(60000);
+    const latinBody = 'a'.repeat(60000);
+    const cyrillicBudget = resolveStage2ChunkCharBudget('gemini', cyrillicBody);
+    const latinBudget = resolveStage2ChunkCharBudget('gemini', latinBody);
+    expect(cyrillicBudget).toBeLessThan(9000); // token-derived term now binds
+    expect(latinBudget).toBeLessThan(9000);
+    // Script-aware: Cyrillic (2.5 chars/token) yields a SMALLER budget than an
+    // equal-length Latin body (4 chars/token) — only true if the cloud branch
+    // actually calls cloudBodyCharBudget(body), not `configured` unconditionally.
+    expect(cyrillicBudget).toBeLessThan(latinBudget);
   });
 });
 

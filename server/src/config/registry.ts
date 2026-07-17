@@ -57,6 +57,16 @@ export const KNOBS: ConfigKnob[] = [
     default: 8192, // ← DEFAULT_MAX_OUTPUT_TOKENS in analyzer/gemini.ts
     apply: 'live', risk: 'medium',
   },
+  {
+    key: 'analyzer.gemini.maxInputTokensPerRequest',
+    env: 'ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST',
+    group: 'analyzer-sampling',
+    label: 'Gemini max input tokens per request',
+    help: 'Per-request INPUT-token cap for cloud analyzer passes (stage-1, stage-2, script-review/emotion/instruct). Body chunks are sized to this; must stay below the model TPM (Gemma free tier = 16000/min) so the system prompt + roster fit. Default 12000.',
+    type: 'integer', min: 1000, max: 60000,
+    default: 12000,
+    apply: 'live', risk: 'medium',
+  },
 
   // ── analyzer-chunking ─────────────────────────────────────────────────────
   {
@@ -70,6 +80,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'medium',
   },
   {
+    key: 'analyzer.stage2.localInputFraction',
+    env: 'ANALYZER_STAGE2_LOCAL_INPUT_FRACTION',
+    group: 'analyzer-chunking',
+    label: 'Stage-2 local input fraction',
+    help: 'Fraction of local num_ctx reserved for stage-2 INPUT (rest is output — per-sentence JSON, which scales with section size). Lower it for a verbose local model whose output overflows the window (qwen3.5:4b / gemma4-e4b). Default 0.3.',
+    type: 'number', min: 0.1, max: 0.9, step: 0.05,
+    default: 0.3,
+    apply: 'live', risk: 'medium',
+  },
+  {
     key: 'analyzer.stage1.chunkCharBudget',
     env: 'STAGE1_CHUNK_CHAR_BUDGET',
     group: 'analyzer-chunking',
@@ -77,6 +97,16 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Maximum characters per stage-1 cast-detection chunk before the chapter is split. For local engines the effective budget is derived (lowered) from Ollama num_ctx so a large or non-Latin chapter can never overflow the context window.',
     type: 'integer',
     default: 24000, // ← DEFAULT_STAGE1_CHUNK_CHAR_BUDGET in analyzer/stage1-chunk.ts
+    apply: 'live', risk: 'medium',
+  },
+  {
+    key: 'analyzer.stage1.localInputFraction',
+    env: 'ANALYZER_STAGE1_LOCAL_INPUT_FRACTION',
+    group: 'analyzer-chunking',
+    label: 'Stage-1 local input fraction',
+    help: 'Fraction of local num_ctx reserved for stage-1 INPUT (rest is prompt+output). Lower it for a verbose local model that overflows the window. Default 0.7.',
+    type: 'number', min: 0.1, max: 0.9, step: 0.05,
+    default: 0.7,
     apply: 'live', risk: 'medium',
   },
   {
@@ -862,9 +892,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'GEMINI_TPM_GEMMA_4_31B_IT',
     group: 'rate-limits',
     label: 'Gemma 4 31B TPM',
-    help: 'Input-tokens-per-minute cap for gemma-4-31b-it. Set to 0 here to represent the free-tier "Unlimited" TPM — the limiter treats 0 as Infinity (no TPM gate). Override with a positive number to impose a local cap.',
+    help: 'Input-tokens/min for gemma-4-31b-it (free tier 16000). Set 0 (or "unlimited") for a paid key.',
     type: 'integer', min: 0,
-    default: 0, // ← BUILTIN_LIMITS['gemma-4-31b-it'].tpm = Infinity in analyzer/rate-limit.ts (line 41); 0 = "unlimited" sentinel
+    default: 16000, // ← BUILTIN_LIMITS['gemma-4-31b-it'].tpm in analyzer/rate-limit.ts (line 41); 0/"unlimited" = Infinity sentinel
     apply: 'restart-server', risk: 'low',
   },
   {
@@ -875,6 +905,36 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Requests-per-day cap for gemma-4-31b-it. Default 1500 (free-tier from AI Studio 2026-05-16). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
     type: 'integer', min: 1,
     default: 1500, // ← BUILTIN_LIMITS['gemma-4-31b-it'].rpd in analyzer/rate-limit.ts (line 41)
+    apply: 'restart-server', risk: 'low',
+  },
+  {
+    key: 'rate.rpm.gemma26',
+    env: 'GEMINI_RPM_GEMMA_4_26B_A4B_IT',
+    group: 'rate-limits',
+    label: 'Gemma 4 26B A4B RPM',
+    help: 'Requests-per-minute cap for gemma-4-26b-a4b-it (free tier 15). The limiter waits proactively so no 429s are issued.',
+    type: 'integer', min: 1,
+    default: 15,
+    apply: 'restart-server', risk: 'low',
+  },
+  {
+    key: 'rate.tpm.gemma26',
+    env: 'GEMINI_TPM_GEMMA_4_26B_A4B_IT',
+    group: 'rate-limits',
+    label: 'Gemma 4 26B A4B TPM',
+    help: 'Input-tokens/min for gemma-4-26b-a4b-it (free tier 16000). Set 0 (or "unlimited") for a paid key.',
+    type: 'integer', min: 0,
+    default: 16000,
+    apply: 'restart-server', risk: 'low',
+  },
+  {
+    key: 'rate.rpd.gemma26',
+    env: 'GEMINI_RPD_GEMMA_4_26B_A4B_IT',
+    group: 'rate-limits',
+    label: 'Gemma 4 26B A4B RPD',
+    help: 'Requests-per-day cap for gemma-4-26b-a4b-it (free tier 1500). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
+    type: 'integer', min: 1,
+    default: 1500,
     apply: 'restart-server', risk: 'low',
   },
 
