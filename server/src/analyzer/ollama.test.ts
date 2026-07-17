@@ -872,6 +872,25 @@ describe('generatePersonaViaOllama', () => {
       LocalUnreachableError,
     );
   });
+
+  it('persona gen goes through the analyzer slot, keyed on its model (GPU path)', async () => {
+    const spy = vi.spyOn(conc, 'acquireAnalyzerSlot');
+    vi.spyOn(global, 'fetch').mockResolvedValue(mockChatResponse('A warm voice.'));
+    const { generatePersonaViaOllama } = await import('./ollama.js');
+    await generatePersonaViaOllama('PROMPT', 'qwen3.5:9b', { onCpu: false, keepAlive: '5m' });
+    expect(spy).toHaveBeenCalledWith('qwen3.5:9b', false);
+    expect(conc.analyzerConcurrency.inFlight).toBe(0);
+    spy.mockRestore();
+  });
+
+  it('persona gen on CPU takes the limiter but no GPU slot', async () => {
+    const spy = vi.spyOn(conc, 'acquireAnalyzerSlot');
+    vi.spyOn(global, 'fetch').mockResolvedValue(mockChatResponse('A cool voice.'));
+    const { generatePersonaViaOllama } = await import('./ollama.js');
+    await generatePersonaViaOllama('PROMPT', 'qwen3.5:4b', { onCpu: true });
+    expect(spy).toHaveBeenCalledWith('qwen3.5:4b', true); // onCpu forwarded → lease no-ops
+    spy.mockRestore();
+  });
 });
 
 afterAll(async () => {

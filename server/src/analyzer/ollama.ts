@@ -15,7 +15,6 @@ import { z } from 'zod';
 import { sampleAndRecordVram } from './model-vram-stats.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from '../tts/engine-vram-cost.js';
-import { acquireGpuTokenIfOnGpu } from '../gpu/gpu-semaphore-gate.js';
 import { acquireAnalyzerSlot } from './analyzer-concurrency.js';
 import { getLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { getResolvedOllamaUrl } from '../workspace/user-settings.js';
@@ -806,7 +805,7 @@ export async function generatePersonaViaOllama(
     },
   };
 
-  const release = await acquireGpuTokenIfOnGpu(!onCpu, costForEngine('analyzer'));
+  const releaseSlot = await acquireAnalyzerSlot(model, onCpu);
   try {
     let response: Response;
     try {
@@ -825,7 +824,7 @@ export async function generatePersonaViaOllama(
     const json = (await response.json().catch(() => ({}))) as { message?: { content?: string } };
     return json.message?.content ?? '';
   } finally {
-    release?.();
+    releaseSlot(); // non-nullable (unlike the old acquireGpuTokenIfOnGpu release)
   }
 }
 
