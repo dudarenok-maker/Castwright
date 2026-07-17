@@ -91,7 +91,7 @@ import {
   type BookSeriesInfo,
   type DuplicateCandidate,
 } from '../lib/cross-book-duplicates';
-import { ReattributeLinesModal } from '../modals/reattribute-lines';
+import { ReassignLinesModal, type ReassignSource } from '../modals/reassign-lines';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { QueueModalContainer } from '../modals/queue-modal';
 import { loadQueue, enqueueQueueEntries } from '../store/queue-thunks';
@@ -421,18 +421,12 @@ export function Layout() {
     primaryLabel?: string;
     onPrimary?: () => void;
   } | null>(null);
-  /* Reattribute Lines modal state — populated by the ProfileDrawer's
+  /* Reassign Lines modal state — populated by the ProfileDrawer's
      unlink-alias callback after the server returns its `impactedChapters`
-     payload. The modal renders one card per impacted chapter and reuses
-     `manuscriptActions.setSentenceCharacter` for reassignment. Closing
-     resets to null. */
-  const [reattributeModal, setReattributeModal] = useState<{
-    sourceCharacterId: string;
-    sourceCharacterName: string;
-    newCharacterId: string;
-    aliasName: string;
-    impactedChapters: { chapterId: number; candidateSentenceIds: number[] }[];
-  } | null>(null);
+     payload (source.kind === 'unlink'), or by the roster/script-view entry
+     points (source.kind === 'character' | 'selection'). Closing resets to
+     null. */
+  const [reassignSource, setReassignSource] = useState<ReassignSource | null>(null);
   /* fs-26 — per-character "Fix audio" (loudness/re-record splice) modal.
      Holds the characterId opened from the ProfileDrawer; null = closed. */
   const [fixAudioFor, setFixAudioFor] = useState<string | null>(null);
@@ -2123,17 +2117,15 @@ export function Layout() {
                           newCharacter: res.newCharacter,
                         }),
                       );
-                      /* Open the Reattribute Lines modal so the user can move
+                      /* Open the Reassign Lines modal so the user can move
                          the freed-up alias's lines off the source character. The
                          drawer stays open behind it — closing the modal returns
                          the user to the drawer where they can confirm the chip
                          is gone. */
-                      setReattributeModal({
-                        sourceCharacterId,
-                        sourceCharacterName: profileCharacter.name,
-                        newCharacterId: res.newCharacter.id,
-                        aliasName,
+                      setReassignSource({
+                        kind: 'unlink',
                         impactedChapters: res.impactedChapters,
+                        aliasCharacterId: res.newCharacter.id,
                       });
                     }
                   : undefined
@@ -2277,15 +2269,8 @@ export function Layout() {
         }}
       />
 
-      {reattributeModal && (
-        <ReattributeLinesModal
-          sourceCharacterId={reattributeModal.sourceCharacterId}
-          sourceCharacterName={reattributeModal.sourceCharacterName}
-          newCharacterId={reattributeModal.newCharacterId}
-          aliasName={reattributeModal.aliasName}
-          impactedChapters={reattributeModal.impactedChapters}
-          onClose={() => setReattributeModal(null)}
-        />
+      {reassignSource && (
+        <ReassignLinesModal source={reassignSource} onClose={() => setReassignSource(null)} />
       )}
 
       {/* fs-26 — per-character "Fix audio" (loudness boost / re-record splice). */}
