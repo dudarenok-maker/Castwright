@@ -73,9 +73,9 @@ describe('annotateSceneBreaks (#1679, marker-anchored binding)', () => {
   it('does not mutate text, characterId, id, or order', () => {
     const body = 'One.\n\n* * *\n\nTwo.';
     const s = sents('One.', 'Two.');
-    const before = JSON.parse(JSON.stringify(s.map(({ sceneBreakBefore, ...rest }) => rest)));
+    const before = JSON.parse(JSON.stringify(s.map(({ sceneBreakBefore: _sceneBreakBefore, ...rest }) => rest)));
     annotateSceneBreaks(s, body);
-    const after = s.map(({ sceneBreakBefore, ...rest }) => rest);
+    const after = s.map(({ sceneBreakBefore: _sceneBreakBefore, ...rest }) => rest);
     expect(after).toEqual(before);
   });
 });
