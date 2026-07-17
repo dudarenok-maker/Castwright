@@ -5,174 +5,151 @@ _Date: 2026-07-17 · Issue: TBD (filed at handover) · Status: draft (awaiting u
 ## Problem
 
 The analyzer processes an entire book **one Ollama request at a time**, even
-though book analysis is embarrassingly parallel (chapters and chunks are
-independent LLM calls). On the target hardware Ollama decode is
-**memory-bandwidth-bound**: producing each token for one request reads all
-~11 GB of model weights, and that read is the bottleneck. With
+though book analysis is embarrassingly parallel. On the target hardware Ollama
+decode is **memory-bandwidth-bound**: producing each token for one request reads
+all ~11 GB of model weights, and that read is the bottleneck. With
 `OLLAMA_NUM_PARALLEL = N`, the *same* weight read serves N tokens across N
-concurrent requests — throughput (chapters/hour), the metric that matters for
-an overnight batch, rises an estimated **2–3×** for effectively no extra VRAM
-beyond a larger KV cache. See
-`Downloads/ollama-gpu-split-context.md` (hardware/measurement handoff) for the
-bandwidth analysis and the GPU-split context.
+concurrent requests — throughput (chapters/hour), the metric that matters for an
+overnight batch, rises an estimated **2–3×** for effectively no extra VRAM beyond
+a larger KV cache. See `Downloads/ollama-gpu-split-context.md` for the bandwidth
+analysis and the two-GPU split context.
 
-**The lever is not `OLLAMA_NUM_PARALLEL` alone.** Two app-level facts block it:
-
-1. Every analyzer `/api/chat` call acquires
-   `gpuSemaphore.acquire(costForEngine('analyzer'))` (`server/src/analyzer/ollama.ts:635`).
-   The analyzer costs **4** tokens (`server/src/tts/engine-vram-cost.ts:20`)
-   against a **default budget of 1** (`gpu.concurrency` default 1;
-   `gpu.vramBudget` default 0 → falls back — `registry.ts:656/666`), so
-   `clampCost(4)` pins to the whole budget and the analyzer **runs alone**.
-   Even the existing stage-2 fan-out (`STAGE2_CONCURRENCY` default 2,
-   `routes/analysis.ts:917`) serializes underneath it — the extra Ollama slots
-   sit idle no matter what `OLLAMA_NUM_PARALLEL` is set to.
-
-2. The weighted semaphore **mismodels intra-model concurrency.** It charges 4
-   tokens per analyzer call on the assumption each call is an independent heavy
-   VRAM consumer that evicts the others — true for analyzer-vs-TTS or
-   analyzer-vs-second-session, **false** for two chunks hitting the *same
-   resident Ollama model*: that is 1× shared weights + N× (smaller) KV cache.
-   The architecture has no concept of "these N GPU ops share one model's
-   weights," so it serializes precisely the case that is cheap.
+**The lever is not `OLLAMA_NUM_PARALLEL` alone.** Every analyzer `/api/chat` call
+acquires `gpuSemaphore.acquire(costForEngine('analyzer'))` per-call
+(`server/src/analyzer/ollama.ts:635`, released in the `finally` ~`:779`). The
+analyzer costs **4** (`server/src/tts/engine-vram-cost.ts:20`) against a
+**default budget of 1** (`gpu.concurrency` default 1; `gpu.vramBudget` default 0
+→ falls back — `registry.ts:656/666`), so `clampCost(4)` pins to the whole budget
+and the analyzer **runs alone**. The existing stage-2 fan-out
+(`STAGE2_CONCURRENCY` default 2, `routes/analysis.ts:917`) spawns 2 workers, but
+each worker's chat call clamps to budget-1 and serializes — the extra Ollama
+slots sit idle no matter what `OLLAMA_NUM_PARALLEL` is.
 
 ## Goal
 
-Let the analyzer issue **K concurrent Ollama `/api/chat` calls** within a
-single book's analysis, where K is a configured knob, while preserving the
-cross-engine arbitration the `gpuSemaphore` exists to provide (analysis still
-serializes against TTS and a second session). Local Ollama path only.
+Let up to **K analyzer `/api/chat` calls run concurrently**, where K is a
+configured knob, **without changing the cross-engine arbitration the
+`gpuSemaphore` already does correctly per-call** (analyzer vs TTS vs a second
+session/book still interleave at call granularity via FIFO). Local Ollama path
+only.
 
-## Non-goals / already-handled
+## Design evolution (why the simple design)
 
-Stated explicitly so scope cannot silently expand:
+Two richer schemes were designed and **rejected under adversarial review**;
+recorded here so the plan doesn't re-propose them:
 
-| Item | Disposition |
-|---|---|
-| `keep_alive` (8h for batch) | **Out.** Owned by a separate parallel workstream; `keepAliveFor` untouched. |
-| `think: false` | **Already done.** Sent unconditionally on every analyzer call (`ollama.ts:593`); Ollama ignores it on non-thinking models. No change. |
-| Registering `qwen36-cw-iq3-32k` | **No work.** Ollama models are auto-discovered on next call; the model appears without a registry entry. |
-| Cloud / Gemini path | **Untouched.** `costForEngine('gemini') = 0` — not semaphore-gated; its concurrency is bounded by `rate-limit.ts`, not the GPU. |
-| Auto-derived K from VRAM headroom | **Out (YAGNI).** VRAM weights are provisional/unmeasured; K is a configured knob. A future auto-sizer can compute K without touching the fan-out plumbing. |
+- **Whole-book outer reservation** (hold one `gpuSemaphore` slot for the entire
+  analysis job): rejected — monopolizes the budget-1 slot for ~30 min, starving a
+  concurrently-analysing second book or a concurrent TTS generation. Regresses
+  the first-class **concurrent-multi-book / concurrent-generation invariant**
+  (today's per-call acquire interleaves those; the reservation would not).
+- **Per-wave reservation** (hold the slot around each batch of ≤K calls):
+  rejected — a chapter is *not* one chat call. `runStage2ChapterChunked`
+  (`stage2-chunk.ts`) loops internally over chunks + coverage-guard retries +
+  recursive truncation-splits + escalation, each its own chat call. "Wave =
+  chapter" holds the slot for minutes (starvation again); "wave = one chat call"
+  requires inverting those internal loops (a large control-flow refactor).
 
-## Approach — per-wave two-level concurrency
+Both failed for the same root reason: **a held cross-engine reservation of any
+duration trades away the per-call interleaving the semaphore already gets right.**
+The `gpuSemaphore`'s per-call FIFO arbitration is not the problem — the only
+defect is that it admits **1** analyzer call by default. So this design adds a
+concurrency *ceiling* and lets the operator raise the *budget*; it adds **no
+reservation abstraction at all.**
 
-> **Revised after adversarial review (F1/F2).** An earlier draft held the outer
-> reservation for the **whole book**. That was wrong: `gpuSemaphore` is budget-1
-> / analyzer-cost-4, and today's acquire/release is **per `/api/chat` call**
-> (`ollama.ts:635` / release `~779`), so two concurrent books — or a book plus a
-> TTS generation on another — **interleave at call granularity** under FIFO
-> drain. Holding one budget-1 slot for a ~30-min run would starve the second
-> book and any TTS op for the entire run, regressing the first-class
-> concurrent-multi-book / concurrent-generation invariant (pills must reflect
-> real-time progress). The design below holds the slot **per wave**, not per
-> book.
+## Approach — global analyzer concurrency limiter + widened worker pool
 
-The single `gpuSemaphore` conflates cross-engine VRAM arbitration with per-call
-serialization. Add a second level, held at wave granularity:
+Three parts, each small and independently testable:
 
-- **Outer (cross-engine, coarse) — held per WAVE.** The analyzer dispatches work
-  in waves of up to K calls. Around each wave it acquires
-  `gpuSemaphore.acquire(costForEngine('analyzer'))` **once**, runs the wave's
-  ≤K calls concurrently under that single held slot, then **releases before the
-  next wave**. Between waves, FIFO drain (`semaphore.ts:121-131`) grants a
-  queued second-book wave or a TTS op, so cross-engine / cross-book work
-  interleaves at **wave granularity** — coarser than today's per-call, but
-  bounded to ~one chunk's runtime, never the whole book. On an uncontended
-  overnight batch the analyzer simply re-acquires immediately and runs waves
-  back-to-back (≈ continuous K-concurrency).
+1. **Global analyzer concurrency limiter, width K.** A single process-wide FIFO
+   count semaphore (`analyzerConcurrency`). Every analyzer `/api/chat` acquires
+   it **before** the existing `gpuSemaphore` acquire, releases it in the same
+   `finally`. It caps **total in-flight analyzer chat calls at K across all jobs**
+   (main + subset + any out-of-band caller), so two concurrent job bodies can
+   never exceed K combined and overrun `OLLAMA_NUM_PARALLEL`. It is analyzer-only
+   — it never gates TTS.
 
-- **Inner (intra-analyzer) — the wave width K.** Up to K `/api/chat` calls run
-  concurrently within a wave; the one held outer slot covers all K, because
-  they share the resident model's weights and so do **not** overcommit VRAM
-  beyond the single slot's accounting (1× weights + K× smaller KV). `think:false`
-  and identical `num_ctx`/`num_gpu` are already sent per call, so the slots are
-  homogeneous. `OLLAMA_NUM_PARALLEL` (Ollama-side) must be ≥ K.
+2. **Widen the analysis worker pool to K.** The stage-2 worker count
+   (`STAGE2_CONCURRENCY`, `analysis.ts:917`) is generalized to
+   `analyzer.ollama.concurrency` (= K) and applied to **stage-1 as well**, so a
+   book's chapters/chunks are dispatched K-wide. Each chapter pipeline keeps its
+   existing **sequential** internal fan-out (chunks, coverage retries,
+   escalation) — no internal-loop inversion. K chapters in flight ⇒ ≤ K analyzer
+   calls in flight, which the global limiter (1) also enforces as a ceiling.
 
-Because the outer acquire is per-wave (not per-book), the **two** analyzer job
-bodies — the main job (`runMainAnalyzerJob`, `analysis.ts:2487`) and the
-subset/retry job (`POST /:id/analysis/chapters`, `:4714`, its own
-`inFlightSubsetByManuscript` map, designed to run **alongside** a main run) —
-both dispatch through the same per-wave mechanism and interleave cleanly. There
-is no "single wrappable whole-book scope," which is correct because none exists
-(F2).
+3. **`gpuSemaphore` unchanged; operator sizes the budget.** The per-call
+   `gpuSemaphore.acquire/release` in `ollama.ts` is **untouched** — cross-engine
+   fairness stays byte-for-byte today's behavior. For K analyzer calls to
+   actually run concurrently rather than clamp to budget-1, the operator raises
+   `GPU_VRAM_BUDGET` so `K × costForEngine('analyzer')` fits (calibrated
+   empirically — see below). On the default budget-1 box, K collapses to an
+   effective 1: **no regression, no concurrency until opted in.**
 
-**Known throughput tradeoff:** a wave barrier means each wave waits for its
-slowest-of-K call before the next wave starts. For similarly-sized chunks at
-K=2–4 the overhead is small; a future optimization could pipeline wave refills.
-Acceptable for v1.
+### Why this preserves every invariant
 
-### Unified work queue
-
-Stage-1 chunks, stage-2 chunks, and whole chapters are all "one LLM call" fed
-to the wave dispatcher — no distinction (the "both, unified" decision). The
-existing `STAGE2_CONCURRENCY` knob (a no-op today because the per-call semaphore
-serializes underneath it) is **superseded** by the single width-K wave, so
-there is one concurrency number rather than two fighting.
-
-### Call-site inventory (deadlock- and starvation-critical)
-
-Every analyzer `/api/chat` reaches `ollama.ts`'s chat path. Each call is one of
-two kinds, threaded by an explicit context flag (not ambient state) so both
-modes are unambiguous and unit-testable:
-
-**In-job (dispatched via the wave mechanism; must NOT take `gpuSemaphore`
-per-call — the wave already holds it).** A missed conversion here is a **hard
-deadlock**: a per-call `acquire(4)` can never be granted while its own wave
-holds the only slot. Full set the plan MUST cover:
-- `runStage1Chapter` → `runStage` (Phase 0a cast) — `ollama.ts:263-279, ~456/516`
-- `runStage2Chapter` / `runStage2ChapterChunked` (Phase 1) — `analysis.ts:1746/1753/4060`
-- `runAttributionEscalation` **local** path — a *separate* chat path
-  (`ollama.ts:374-417`), taken when `analyzer.structure.escalation` ≠ `'cloud'`
-  (`analysis.ts:2553-2554`); easy to miss
-- `runNonStoryClassification` — main job (`analysis.ts:4357-4361`) **and** subset
-  job (`:5471`)
-- subset job's `attributeChapterStage2` (`:5361`)
-
-A test MUST fail if any in-job local call path takes `gpuSemaphore` directly.
-
-**Out-of-band (single detached route calls; keep per-call `gpuSemaphore` — under
-the per-wave outer this no longer stalls, it just queues one wave):**
-- persona generation (`voice-style.ts`) — routes through
-  `acquireGpuTokenIfOnGpu` (`gpu-semaphore-gate.ts:20-26`), which **skips** the
-  semaphore entirely when `onCpu`; preserve that.
-- script-review, annotate-emotion (`runEmotionChapter`, `annotate-emotion.ts:186`),
-  instruct-annotation (`runStage3Chapter`, `instruct-annotation.ts:185`)
-
-**CPU-analyzer preservation.** A confirmed-CPU analyzer costs 0
-(`engine-vram-cost.ts:52-57`) and must **not** be gated by the wave/inner width
-either — the wave mechanism applies only when the analyzer is on the GPU, or CPU
-throughput regresses.
+- **Concurrent multi-book / TTS:** `gpuSemaphore` is still acquired and released
+  **per call**, so a second book's or a TTS op's queued acquire is granted at the
+  very next per-call release under strict FIFO (`semaphore.ts:121-131`) —
+  identical interleaving cadence to today. The analyzer just contributes up to K
+  calls to the same fair queue instead of 1.
+- **No hard-deadlock surface:** no held outer slot exists, so no in-job call can
+  deadlock against "the job's own reservation." Every call self-acquires and
+  self-releases in one `try/finally`, exactly as today. The F2/F3/NEW-1/NEW-2
+  hazards of the reservation schemes simply do not arise.
+- **Two job bodies (main + subset):** both are naturally bounded by the *global*
+  limiter (1); nothing special is needed for main-alongside-subset.
+- **CPU analyzer:** a confirmed-CPU analyzer costs 0 on `gpuSemaphore`
+  (`engine-vram-cost.ts:52-57`) and takes **zero GPU**; it may still pass through
+  the width-K limiter (which is about Ollama-slot pressure, not VRAM) — the plan
+  confirms the CPU path's limiter behavior does not throttle CPU throughput below
+  today's.
 
 ## Configuration
 
 | Knob | Env | Type | Default | Apply | Notes |
 |---|---|---|---|---|---|
-| `analyzer.ollama.concurrency` (new) | `ANALYZER_OLLAMA_CONCURRENCY` | integer ≥ 1 | **2** | restart-server | This is K. Every new env var is a registry knob + `.env.example` entry. |
+| `analyzer.ollama.concurrency` (new) | `ANALYZER_OLLAMA_CONCURRENCY` | integer ≥ 1 | **2** | restart-server | K: the width of both the global limiter and the worker pool. Supersedes `STAGE2_CONCURRENCY` (which is folded in / kept as a back-compat alias per the plan). |
+| `gpu.vramBudget` (exists) | `GPU_VRAM_BUDGET` | integer | 0 (→ falls back to `gpu.concurrency` 1) | restart-server | Operator raises this so `K × 4` analyzer tokens fit for real concurrency. Coupling documented (below). |
 | `analyzer.ollama.numCtx` (exists) | — | integer | 32768 | — | Reused for KV calibration below. |
 
-- **K default 2** preserves today's stage-2 fan-out *width* (which currently
-  serializes) — a modest, safe improvement on any box, including single-GPU
-  8 GB. The operator walks K up to ~4 empirically.
-- **`OLLAMA_NUM_PARALLEL ≥ K` coupling** is Ollama-side (server-external), so
-  it lives in `.env.example` guidance plus a **startup warning** if a mismatch
-  is detectable.
+- **K default 2** preserves today's stage-2 worker width while being safe on any
+  box: at default budget-1 the extra workers still serialize on `gpuSemaphore`
+  (no behavior change) until the operator raises `GPU_VRAM_BUDGET`.
+- **`OLLAMA_NUM_PARALLEL ≥ K`** (Ollama-side, server-external): `.env.example`
+  guidance + a startup warning if a mismatch is detectable.
+- **Budget-coupling caveat (documented, not hidden):** `GPU_VRAM_BUDGET` is a
+  *global* token budget across all engines, and the analyzer's flat cost (4)
+  **overcounts** K shared-weight calls (they are 1× weights + K× KV, not K× the
+  full footprint). So the operator sizes the budget **empirically** (below), not
+  by arithmetic; and raising it also loosens TTS co-residency (correct on a box
+  that genuinely has the VRAM). A precise marginal-cost model is a deliberate
+  **non-goal for v1** (YAGNI) — the empirical walk is sufficient.
+
+## Non-goals / already-handled
+
+| Item | Disposition |
+|---|---|
+| `keep_alive` (8h for batch) | **Out.** Separate parallel workstream; `keepAliveFor` untouched. |
+| `think: false` | **Already done.** Sent unconditionally (`ollama.ts:593`). |
+| Registering `qwen36-cw-iq3-32k` | **No work.** Ollama models auto-discovered on next call. |
+| Cloud / Gemini path | **Untouched.** `costForEngine('gemini') = 0`; concurrency bounded by `rate-limit.ts`. |
+| Marginal shared-weight VRAM cost model | **Out (YAGNI).** Flat cost + empirical budget for v1. |
+| Auto-derived K from VRAM headroom | **Out (YAGNI).** K is a configured knob. |
 
 ## KV-cache calibration (ops step, not a code branch)
 
-Ollama's `num_ctx` is **per slot** (leading theory; confirmed empirically
-below), so total KV ≈ `num_ctx × OLLAMA_NUM_PARALLEL`. No code decision hangs
-on the answer — only the default values of K and `num_ctx`. The spec ships a
-procedure, run once per box:
+Ollama's `num_ctx` is **per slot** (leading theory), so total KV ≈
+`num_ctx × OLLAMA_NUM_PARALLEL`. No code decision hangs on the answer — only the
+operator's chosen K / `num_ctx` / budget. Procedure, run once per box:
 
 1. Set `OLLAMA_NUM_PARALLEL=2`, restart Ollama, load the model.
 2. `GET /api/ps`, read `size`; compare to the single-slot baseline (~12.7 GB
    @ 32K on the target box).
-3. If KV scales per-slot and pressures VRAM, drop `num_ctx` to **16384** and
-   rely on the existing stage-1/stage-2 chunkers (which already size inputs to
-   a *fraction* of `num_ctx`).
-4. Walk `OLLAMA_NUM_PARALLEL`/K up (2 → 4) measuring **chapters/hour**, not
-   tok/s. Stop when `/api/ps size` approaches VRAM or throughput plateaus.
+3. If KV scales per-slot and pressures VRAM, drop `num_ctx` to **16384** and rely
+   on the existing stage-1/stage-2 chunkers.
+4. Walk `OLLAMA_NUM_PARALLEL` / K / `GPU_VRAM_BUDGET` up together (2 → 4) measuring
+   **chapters/hour**, not tok/s. Stop when `/api/ps size` approaches VRAM or
+   throughput plateaus.
 
 On the target two-card box (~7 GB idle on the 5070 Ti) the per-slot KV likely
 just fits at 32K × 2.
@@ -180,51 +157,48 @@ just fits at 32K × 2.
 ## Determinism invariant
 
 Roster merge and cross-chapter carry-forward must remain **order-independent**
-under concurrency. Stage-2 already runs at concurrency 2, so the merge path is
+under concurrency. Stage-2 already runs at worker width 2, so the merge path is
 *already* exercised concurrently — the spec calls this out as an invariant to
-**re-verify**, not assume, when the wave width K grows beyond 2.
+**re-verify**, not assume, when K grows beyond 2 and stage-1 also widens.
 
 ## Testing
 
-- **Unit — wave dispatcher:** caps in-flight at K; acquires exactly **one**
-  `gpuSemaphore` slot per wave and **releases it between waves** (mirrors the
+- **Unit — global limiter:** caps in-flight analyzer calls at K across
+  interleaved acquire/release; releases on success, throw, and abort (mirrors the
   FIFO/abort tests in `server/src/gpu/semaphore.ts`).
-- **Unit — interleave (guards F1):** while a wave holds the slot, a second
-  waiter (second book / TTS op) is granted on the **wave's release**, not held
-  for the run's duration. This is the regression test for the concurrent-
-  multi-book invariant.
-- **Unit — in-job flag coverage (guards F3):** every in-job local chat path
-  (stage1, stage2, chunked internals, attribution-escalation-local,
-  non-story, subset) does **not** take `gpuSemaphore` per-call. Test fails if
-  any in-job path acquires the semaphore directly (the hard-deadlock trap).
-- **Unit — out-of-band unchanged:** a standalone call still takes per-call
-  `gpuSemaphore`; a CPU persona-gen call still **skips** it via
-  `acquireGpuTokenIfOnGpu`.
-- **Integration (mocked Ollama):** N chapter calls under one job run ≤ K in
-  flight, each response is its own (no cross-request bleed) — mirrors the
-  sidecar contract in `server/tts-sidecar/tests/test_concurrent_synthesis.py`.
+- **Unit — acquire order:** an analyzer call acquires the width-K limiter
+  **before** `gpuSemaphore` and releases both in one `finally` (guards against a
+  half-held slot on the error path).
+- **Unit — cross-engine unchanged (guards fairness/F1):** with K>1 and a budget
+  admitting >1 analyzer call, a queued TTS/second acquire is still granted at the
+  next per-call release — i.e. the analyzer contributes K entries to the same
+  FIFO, it does not hold a slot across calls.
+- **Unit — CPU analyzer not throttled:** a confirmed-CPU analyzer's throughput is
+  not reduced below today's by the width-K limiter.
+- **Integration (mocked Ollama):** with K workers, N chapter calls run ≤ K in
+  flight, each response is its own (no cross-request bleed) — mirrors
+  `server/tts-sidecar/tests/test_concurrent_synthesis.py`.
 - **Regression — behavior-preserving at K=1 (stubbed analyzer):** with a
   **deterministic stubbed analyzer**, single-book analysis output is
-  byte-identical to pre-change at K=1 (wave width 1 = strictly serial = same
+  byte-identical to pre-change at K=1 (limiter width 1 = strictly serial = same
   merge order). *Not* a live-model assertion — first-attempt temperature is 0.2
-  with a temperature-bumping retry loop (`ollama.ts:110, 502-522`), so real
-  output is non-deterministic (F5).
+  with a temperature-bumping retry loop (`ollama.ts:110, 502-522`), so real output
+  is non-deterministic.
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| **Concurrent-book / TTS starvation (F1)** | Per-**wave** hold (not per-book) + FIFO release between waves; interleave unit test guards it. |
-| **Missed in-job call site → hard deadlock (F3)** | Full call-site inventory above; a test fails if any in-job local path takes `gpuSemaphore` directly. |
-| Two job bodies, no single scope (F2) | Both main and subset jobs dispatch through the same per-wave mechanism; no whole-book wrap needed. |
-| `num_ctx × K` VRAM overflow on smaller/single-GPU boxes | K default 2 + the calibration step; `numCtx` drop to 16K as the escape valve. |
+| Concurrency silently does nothing (operator raised K but not `GPU_VRAM_BUDGET`) | Startup log states the effective analyzer concurrency = `min(K, floor(budget / analyzerCost))`; `.env.example` documents the trio (K, budget, `OLLAMA_NUM_PARALLEL`). |
+| `num_ctx × K` VRAM overflow | K default 2 + calibration; `numCtx` drop to 16K escape valve. |
 | Merge non-determinism surfacing only at K>2 | Determinism invariant re-verified as K widens; K=1 stubbed regression anchors correctness. |
-| Wave-barrier throughput loss (slowest-of-K per wave) | Accepted for v1; K=2 default keeps barrier cheap; pipelined refill noted as a future optimization. |
+| Raising the global budget loosens TTS co-residency too | Documented budget-coupling caveat; correct on a box with the VRAM, and the width-K limiter still caps analyzer calls independently. |
 
 ## Rollout
 
-Ship with **K=2**. The operator raises `ANALYZER_OLLAMA_CONCURRENCY` and
-`OLLAMA_NUM_PARALLEL` together after the calibration walk. If concurrency
-proves insufficient for a commercial production batch, **vLLM** (continuous
-batching, paged attention, native FP4 on Blackwell) is the documented v2 path —
-out of scope here.
+Ship with **K=2** and **budget unchanged** — a no-op by default. The batch
+operator raises `ANALYZER_OLLAMA_CONCURRENCY`, `GPU_VRAM_BUDGET`, and
+`OLLAMA_NUM_PARALLEL` together after the calibration walk. If concurrency proves
+insufficient for a commercial production batch, **vLLM** (continuous batching,
+paged attention, native FP4 on Blackwell) is the documented v2 path — out of
+scope here.
