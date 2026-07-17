@@ -57,6 +57,13 @@ import type { SeriesRosterEntry } from '../lib/api';
    defeat the useMemo hooks keyed on `sentences` below. */
 const EMPTY_SENTENCES: Sentence[] = [];
 
+/* #1679 — a "separator-only" sentence has no letters or digits (the analyzer
+   emits scene-break glyph lines — `* * *`, dinkus `⁂`, `<hr>`-derived `* * *`,
+   dash rules — as their own word-free sentences). The scene divider represents
+   them, so they are skipped from the manuscript display rather than shown as a
+   redundant glyph text row. Display-only; the sentence still exists in the data. */
+const isSeparatorOnly = (text: string): boolean => !/[\p{L}\p{N}]/u.test(text);
+
 interface Props {
   characters: Character[];
   chapters: Chapter[];
@@ -271,6 +278,10 @@ export function ManuscriptView({
     for (let i = 0; i < sentences.length; i++) {
       const s = sentences[i];
       if (currentChapterId != null && s.chapterId !== currentChapterId) continue;
+      // #1679 — don't render the scene-break glyph line as a text row; the
+      // divider (flagged on the following opener) represents it. absIdx still
+      // uses the real index i, so drag/boundary edits on other rows are unaffected.
+      if (isSeparatorOnly(s.text)) continue;
       const last = segs[segs.length - 1];
       if (last && last.characterId === s.characterId && !s.sceneBreakBefore)
         last.sentences.push({ ...s, absIdx: i });

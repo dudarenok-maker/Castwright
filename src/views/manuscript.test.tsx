@@ -2655,4 +2655,25 @@ describe('ManuscriptView — scene divider (#1679)', () => {
     ]);
     expect(screen.getAllByTestId('scene-divider')).toHaveLength(1);
   });
+
+  // #1679 — the separator glyph sentence must NOT render as a text row; the divider represents it
+  it('suppresses the separator-only sentence row and shows the divider above the opener', () => {
+    renderScene([
+      { id: 1, chapterId: 2, characterId: 'narrator', text: 'Prose before the break.' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: '* * *' },
+      {
+        id: 3,
+        chapterId: 2,
+        characterId: 'narrator',
+        text: 'Prose after the break.',
+        sceneBreakBefore: true,
+      },
+    ]);
+    // the glyph row is gone
+    expect(screen.queryByText('* * *')).not.toBeInTheDocument();
+    // but the divider and the real prose are present
+    expect(screen.getByTestId('scene-divider')).toBeInTheDocument();
+    expect(screen.getByText(/Prose before the break/)).toBeInTheDocument();
+    expect(screen.getByText(/Prose after the break/)).toBeInTheDocument();
+  });
 });
