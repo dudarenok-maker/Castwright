@@ -12,6 +12,7 @@ import {
   splitBodyIntoChunks,
   splitParagraphIntoSentences,
   stage2ChunkBudgetForEngine,
+  resolveStage2ChunkCharBudget,
   tailParagraphs,
   runStage2ChapterChunked,
 } from './stage2-chunk.js';
@@ -153,6 +154,20 @@ describe('stage2ChunkBudgetForEngine (num_ctx-aware budget sizing)', () => {
   });
   it('keeps a sane floor for a tiny num_ctx', () => {
     expect(stage2ChunkBudgetForEngine(9000, 512, 'local')).toBe(1000);
+  });
+
+  it('cloud stage-2 caps to min(configured, token-derived)', () => {
+    const ruBody = 'а'.repeat(60000);
+    const budget = resolveStage2ChunkCharBudget('gemini', ruBody);
+    expect(budget).toBeLessThanOrEqual(9000); // configured default
+    expect(budget).toBeGreaterThan(0);
+  });
+
+  it('local stage-2 input fraction knob lowers the budget', () => {
+    // large `configured` so the num_ctx-derived value (not the min clamp) decides.
+    const hi = stage2ChunkBudgetForEngine(100000, 32768, 'local', 0.3); // floor(32768*2*0.3)=19660
+    const lo = stage2ChunkBudgetForEngine(100000, 32768, 'local', 0.15); // floor(32768*2*0.15)=9830
+    expect(lo).toBeLessThan(hi);
   });
 });
 

@@ -1751,7 +1751,7 @@ export async function attributeChapterStage2(opts: {
   };
   const result = await runStage2ChapterChunked({
     body: opts.chapter.body,
-    charBudget: resolveStage2ChunkCharBudget(opts.engine),
+    charBudget: resolveStage2ChunkCharBudget(opts.engine, opts.chapter.body),
     coverageRetries: resolveStage2CoverageRetries(),
     callForBody,
     onRetry: opts.onCoverageRetry,

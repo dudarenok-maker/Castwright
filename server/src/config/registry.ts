@@ -80,6 +80,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'medium',
   },
   {
+    key: 'analyzer.stage2.localInputFraction',
+    env: 'ANALYZER_STAGE2_LOCAL_INPUT_FRACTION',
+    group: 'analyzer-chunking',
+    label: 'Stage-2 local input fraction',
+    help: 'Fraction of local num_ctx reserved for stage-2 INPUT (rest is output — per-sentence JSON, which scales with section size). Lower it for a verbose local model whose output overflows the window (qwen3.5:4b / gemma4-e4b). Default 0.3.',
+    type: 'number', min: 0.1, max: 0.9, step: 0.05,
+    default: 0.3,
+    apply: 'live', risk: 'medium',
+  },
+  {
     key: 'analyzer.stage1.chunkCharBudget',
     env: 'STAGE1_CHUNK_CHAR_BUDGET',
     group: 'analyzer-chunking',
