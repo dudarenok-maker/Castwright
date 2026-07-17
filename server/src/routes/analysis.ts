@@ -3148,7 +3148,7 @@ export async function runMainAnalyzerJob(
             call: () =>
               runStage1ChapterChunked({
                 body: ch.body,
-                charBudget: resolveStage1ChunkCharBudget(selection.engine),
+                charBudget: resolveStage1ChunkCharBudget(selection.engine, ch.body),
                 mergeRosters: mergeRosterChapter,
                 onChunk: (sec) => {
                   /* Feed section progress into the live ETA so the first
@@ -5108,7 +5108,7 @@ export async function runSubsetAnalyzerJob(
           call: () =>
             runStage1ChapterChunked({
               body: ch.body,
-              charBudget: resolveStage1ChunkCharBudget(selection.engine),
+              charBudget: resolveStage1ChunkCharBudget(selection.engine, ch.body),
               mergeRosters: mergeRosterChapter,
               onChunk: (sec) =>
                 log(

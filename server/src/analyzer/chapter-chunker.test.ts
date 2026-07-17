@@ -21,9 +21,8 @@ describe('chapterChunkBudget (Part 4 — finite Gemini budget for output-heavy p
     expect(chapterChunkBudget('local')).toBe(resolveStage1ChunkCharBudget('local'));
   });
 
-  it('stage-1 cast detection keeps MAX_SAFE_INTEGER on gemini (separate seam, never chunks)', () => {
-    // The output-heavy budget changing must NOT touch stage-1's direct resolver.
-    expect(resolveStage1ChunkCharBudget('gemini')).toBe(Number.MAX_SAFE_INTEGER);
+  it('stage-1 cast detection now sizes gemini to a finite token-derived budget (no longer MAX_SAFE_INTEGER)', () => {
+    expect(resolveStage1ChunkCharBudget('gemini', 'x'.repeat(200000))).toBeLessThan(200000);
   });
 
   it('a Night-Watch-sized chapter yields >=2 gemini chunks (was exactly 1 under MAX_SAFE_INTEGER)', () => {

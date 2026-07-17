@@ -12,6 +12,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   runStage1ChapterChunked,
+  resolveStage1ChunkCharBudget,
   stage1ChunkBudgetForEngine,
   type Stage1ChunkRunOptions,
 } from './stage1-chunk.js';
@@ -126,5 +127,19 @@ describe('stage1ChunkBudgetForEngine', () => {
 
   it('never chunks cloud engines (huge budget)', () => {
     expect(stage1ChunkBudgetForEngine(24000, 8192, 'gemini')).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('cloud stage-1 sizes to the token cap, not MAX_SAFE_INTEGER', () => {
+    const ruBody = 'а'.repeat(60000);
+    const budget = resolveStage1ChunkCharBudget('gemini', ruBody);
+    expect(budget).toBeLessThan(60000);
+    expect(budget).toBeGreaterThan(2000);
+  });
+
+  it('local stage-1 input fraction knob lowers the budget', () => {
+    // large `configured` so the num_ctx-derived value (not the min clamp) decides.
+    const hi = stage1ChunkBudgetForEngine(100000, 16384, 'local', 0.7); // floor(16384*1.4)=22937
+    const lo = stage1ChunkBudgetForEngine(100000, 16384, 'local', 0.4); // floor(16384*0.8)=13107
+    expect(lo).toBeLessThan(hi);
   });
 });

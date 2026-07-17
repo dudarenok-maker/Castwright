@@ -95,9 +95,9 @@ export function primarySentenceId(op: { id: number; op: string; mergeIds?: numbe
      NOT the Number.MAX_SAFE_INTEGER stage-1 keeps: a Night-Watch-sized chapter's
      per-sentence output would otherwise overrun Gemini's output-token cap and
      stop at MAX_TOKENS with an empty/partial buffer (the 2026-07-14 incident).
-   Stage-1 cast detection calls resolveStage1ChunkCharBudget DIRECTLY, so its
-   gemini ⇒ MAX_SAFE_INTEGER (tiny roster output, correct — never chunk) is a
-   clean, separate seam untouched by this. */
+   Stage-1 cast detection calls resolveStage1ChunkCharBudget DIRECTLY (passing
+   the chapter body so gemini sizes to the per-request token cap) — a clean,
+   separate seam untouched by this. */
 export function chapterChunkBudget(engine: 'gemini' | 'local'): number {
   if (engine === 'local') return resolveStage1ChunkCharBudget('local');
   return configValue<number>('analyzer.gemini.outputHeavyChunkChars');

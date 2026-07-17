@@ -90,6 +90,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'medium',
   },
   {
+    key: 'analyzer.stage1.localInputFraction',
+    env: 'ANALYZER_STAGE1_LOCAL_INPUT_FRACTION',
+    group: 'analyzer-chunking',
+    label: 'Stage-1 local input fraction',
+    help: 'Fraction of local num_ctx reserved for stage-1 INPUT (rest is prompt+output). Lower it for a verbose local model that overflows the window. Default 0.7.',
+    type: 'number', min: 0.1, max: 0.9, step: 0.05,
+    default: 0.7,
+    apply: 'live', risk: 'medium',
+  },
+  {
     key: 'analyzer.gemini.outputHeavyChunkChars',
     env: 'ANALYZER_GEMINI_OUTPUT_HEAVY_CHUNK_CHARS',
     group: 'analyzer-chunking',

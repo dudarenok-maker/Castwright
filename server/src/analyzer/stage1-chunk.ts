@@ -30,6 +30,7 @@ import type { CharacterOutput } from '../handoff/schemas.js';
 import { AnalyzerTruncatedError } from './errors.js';
 import { configValue } from '../config/resolver.js';
 import { splitBodyIntoChunks, splitParagraphIntoSentences } from './stage2-chunk.js';
+import { cloudBodyCharBudget } from './token-budget.js';
 
 /* Per-chunk INPUT char budget. Stage-1 output is small (a roster, not a
    per-sentence list), so the binding constraint is the input fitting num_ctx
@@ -39,31 +40,34 @@ import { splitBodyIntoChunks, splitParagraphIntoSentences } from './stage2-chunk
 export const DEFAULT_STAGE1_CHUNK_CHAR_BUDGET = 24000;
 
 /* Derive a safe per-chunk char budget from the local model's context window.
-   Reserve ~30% of num_ctx for the prompt header + roster + output, and assume a
-   pessimistic ~2 chars/token (Cyrillic and other non-Latin scripts tokenise far
-   denser than English's ~4 — budgeting for the dense case keeps a non-Latin
-   chapter from overflowing). Take the MIN with the configured default so this
-   only ever LOWERS the budget. Cloud engines keep the configured value. A
+   Reserve `localInputFraction` (default 0.7) of num_ctx for stage-1 INPUT and
+   assume a pessimistic ~2 chars/token (Cyrillic and other non-Latin scripts
+   tokenise far denser than English's ~4 — budgeting for the dense case keeps a
+   non-Latin chapter from overflowing). Take the MIN with the configured
+   default so this only ever LOWERS the budget. This helper is local-only —
+   cloud sizing lives in the resolver below via cloudBodyCharBudget. A
    residual overflow is still caught by the adaptive re-split below. */
 export function stage1ChunkBudgetForEngine(
   configured: number,
   numCtxTokens: number,
   engine: 'gemini' | 'local',
+  localInputFraction = 0.7, // OPTIONAL: existing 3-arg callers/tests keep the prior 0.7 behavior
 ): number {
-  /* Cloud engines have a huge context window and a small stage-1 output, so
-     there is no input-overflow to guard against — never chunk (one call per
-     chapter, unchanged). Only the local model has a tight `num_ctx`. */
-  if (engine !== 'local') return Number.MAX_SAFE_INTEGER;
-  const numCtxDerived = Math.floor(numCtxTokens * 0.7 * 2);
+  if (engine !== 'local') return Number.MAX_SAFE_INTEGER; // helper unchanged; cloud sizing is in the resolver
+  const numCtxDerived = Math.floor(numCtxTokens * localInputFraction * 2);
   return Math.max(2000, Math.min(configured, numCtxDerived));
 }
 
-export function resolveStage1ChunkCharBudget(engine?: 'gemini' | 'local'): number {
-  if (engine !== 'local') return Number.MAX_SAFE_INTEGER; // cloud: never chunk stage-1
+export function resolveStage1ChunkCharBudget(engine?: 'gemini' | 'local', body?: string): number {
+  if (engine !== 'local') {
+    // Cloud: size to the per-request token cap (was MAX_SAFE_INTEGER = never chunk).
+    return cloudBodyCharBudget(body ?? '');
+  }
   return stage1ChunkBudgetForEngine(
     configValue<number>('analyzer.stage1.chunkCharBudget'),
     configValue<number>('analyzer.ollama.numCtx'),
     'local',
+    configValue<number>('analyzer.stage1.localInputFraction'),
   );
 }
 
