@@ -15,7 +15,8 @@ import { z } from 'zod';
 import { sampleAndRecordVram } from './model-vram-stats.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from '../tts/engine-vram-cost.js';
-import { acquireGpuTokenIfOnGpu } from '../gpu/gpu-semaphore-gate.js';
+import { acquireAnalyzerSlot, describeAnalyzerConcurrency } from './analyzer-concurrency.js';
+import { getLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { getResolvedOllamaUrl, getCachedUserSettings } from '../workspace/user-settings.js';
 import { configValue } from '../config/resolver.js';
 import type { Accelerator } from '../gpu/vram-state.js';
@@ -53,6 +54,10 @@ import {
   loadSkill,
   type SkillName,
 } from './gemini.js';
+
+if (process.env.VITEST !== 'true' && process.env.NODE_ENV !== 'test') {
+  console.log(describeAnalyzerConcurrency(costForEngine('analyzer'), gpuSemaphore.budget));
+}
 
 /** Sentinel error class. The FallbackAnalyzer decorator in index.ts uses
     `err instanceof LocalUnreachableError` as the SOLE trigger for Gemini
@@ -609,15 +614,10 @@ export class OllamaAnalyzer implements Analyzer {
       );
     }
 
-    /* GPU arbitration — acquire a slot before the fetch so two parallel
-       Claude Code sessions don't fight over VRAM on an 8 GB GPU. The
-       slot is held across the full streamed response (fetch + read
-       loop) and released in the outer `finally` below; that covers
-       abort paths, fetch-throws, non-2xx responses, and mid-stream
-       errors equally well. The analyzer's VRAM weight (engine-vram-cost.ts)
-       is large enough to serialise it against any TTS op — they already
-       evict each other on the GPU. See server/src/gpu/semaphore.ts. */
-    const releaseGpu = await gpuSemaphore.acquire(costForEngine('analyzer'));
+    /* Analyzer concurrency: width-K limiter + per-model GPU lease
+       (analyzer-concurrency.ts). Replaces the old per-call gpuSemaphore acquire;
+       the lease holds one cross-engine slot per resident model. */
+    const releaseSlot = await acquireAnalyzerSlot(this.model, getLastKnownAnalyzerDevice() === 'cpu');
 
     try {
       let response: Response;
@@ -784,7 +784,7 @@ export class OllamaAnalyzer implements Analyzer {
       }
       return buf;
     } finally {
-      releaseGpu();
+      releaseSlot();
     }
   }
 }
@@ -816,7 +816,7 @@ export async function generatePersonaViaOllama(
     },
   };
 
-  const release = await acquireGpuTokenIfOnGpu(!onCpu, costForEngine('analyzer'));
+  const releaseSlot = await acquireAnalyzerSlot(model, onCpu);
   try {
     let response: Response;
     try {
@@ -835,7 +835,7 @@ export async function generatePersonaViaOllama(
     const json = (await response.json().catch(() => ({}))) as { message?: { content?: string } };
     return json.message?.content ?? '';
   } finally {
-    release?.();
+    releaseSlot(); // non-nullable (unlike the old acquireGpuTokenIfOnGpu release)
   }
 }
 
