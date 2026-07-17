@@ -19,6 +19,7 @@ import type { ChangeLogState } from './change-log-slice';
 import type { BookMetaState } from './book-meta-slice';
 import type { StateSlice } from '../lib/types';
 import { api } from '../lib/api';
+import { notificationsActions } from './notifications-slice';
 
 /* Locally-typed shape of the store the middleware reads, declared without
    importing RootState to avoid a circular type reference back through the
@@ -37,6 +38,16 @@ interface PersistableRootState {
 }
 
 const DEFAULT_DEBOUNCE_MS = 500;
+
+/* #1676(c) — action types whose persist failure the user MUST see: a silent
+   swallow would leave redux showing the move applied while disk holds the prior
+   attribution. Scoped to the two bulk actions only — broadening to every
+   manuscript flush (let alone every slice) would change long-standing swallow
+   behaviour for unrelated edits. */
+const TOAST_ON_PERSIST_FAILURE = new Set<string>([
+  'manuscript/setSentencesCharacterBulk',
+  'manuscript/undoBulkReassign',
+]);
 
 /* Read the user-tuned autosave debounce (fe-2) at flush-scheduling time so a
    change in the Account → Advanced panel takes effect on the next edit, with no
@@ -79,6 +90,19 @@ const PERSIST_RULES: Record<
   'cast/lockVoice': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
 
   'manuscript/setSentenceCharacter': {
+    slice: 'manuscript',
+    build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
+  },
+  /* #1676(c) — cross-chapter bulk reassignment persists the full manuscript
+     patch like every other reassignment. */
+  'manuscript/setSentencesCharacterBulk': {
+    slice: 'manuscript',
+    build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
+  },
+  /* #1676(c) — the undo restore is a committed edit like any reassignment;
+     persist the full manuscript patch so the reverted attribution survives a
+     reload. */
+  'manuscript/undoBulkReassign': {
     slice: 'manuscript',
     build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
   },
@@ -286,14 +310,30 @@ function bookIdFromState(s: PersistableRootState): string | null {
 export const persistenceMiddleware: Middleware = (store) => {
   const timers = new Map<StateSlice, ReturnType<typeof setTimeout>>();
   const pending = new Map<StateSlice, unknown>();
+  /* Slices whose currently-pending write was (at least once this debounce
+     window) triggered by a toast-worthy bulk action. Last-wins on the patch
+     means the flush persists the latest manuscript state regardless, so if it
+     fails the bulk move didn't land — toasting is correct even if a non-bulk
+     edit also rode along in the same window. */
+  const toastPending = new Set<StateSlice>();
 
   const flush = (bookId: string, slice: StateSlice) => {
     const patch = pending.get(slice);
     pending.delete(slice);
     timers.delete(slice);
+    const shouldToast = toastPending.delete(slice);
     if (patch === undefined) return;
     api.putBookState(bookId, { slice, patch }).catch((err) => {
       console.error(`[persist] PUT /api/books/${bookId}/state slice=${slice} failed`, err);
+      if (shouldToast) {
+        store.dispatch(
+          notificationsActions.pushToast({
+            kind: 'error',
+            message: 'Line reassignment could not be saved. Check your connection and try again.',
+            dedupeKey: 'bulk-reassign-persist-failed',
+          }),
+        );
+      }
     });
   };
 
@@ -310,6 +350,7 @@ export const persistenceMiddleware: Middleware = (store) => {
     if (!bookId) return result;
 
     pending.set(rule.slice, rule.build(after, bookId));
+    if (TOAST_ON_PERSIST_FAILURE.has(type)) toastPending.add(rule.slice);
     const prev = timers.get(rule.slice);
     if (prev) clearTimeout(prev);
     timers.set(
