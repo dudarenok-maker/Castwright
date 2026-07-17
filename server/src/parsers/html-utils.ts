@@ -36,6 +36,11 @@ function codePointOr(original: string, codePoint: number): string {
 export function stripHtml(html: string): string {
   let s = tagHtmlEmphasis(html)
     .replace(/<\s*br\s*\/?>/gi, '\n')
+    /* #1679 — <hr> is the most common EPUB/MOBI scene-break glyph; the generic
+       <[^>]+> strip below would erase it. Emit the canonical word-free line
+       with surrounding blank lines so the later \n{3,}->\n\n collapse leaves it
+       a standalone paragraph unit rather than gluing it to adjacent prose. */
+    .replace(/<\s*hr\s*[^>]*\/?>/gi, '\n\n* * *\n\n')
     .replace(/<\/p>/gi, '\n\n');
   // Replace-until-stable: a single `<[^>]+>` pass can leave a reconstructed tag.
   let prev: string;
