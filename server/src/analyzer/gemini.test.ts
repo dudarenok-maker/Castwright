@@ -488,10 +488,16 @@ describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
   }, 30_000);
 
   it('throws DailyQuotaExhaustedError on a daily-quota 429, no retry', async () => {
+    /* Genuine per-day exhaustion: quotaId carries a `per_day` marker. This
+       must stay distinct from the per-minute input-token 429 below — both
+       mention "free_tier" in their message, which is why the daily-quota
+       classifier can't key off that alone (see the retry test below). */
     const dailyQuota = apiError(429, {
       error: {
         code: 429,
-        message: 'You exceeded your current quota. free_tier ...',
+        message:
+          'Quota exceeded for metric: generativelanguage.googleapis.com/generate_requests_per_model_per_day_free_tier, ' +
+          'quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier',
         status: 'RESOURCE_EXHAUSTED',
         details: [{ '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [] }],
       },
@@ -508,6 +514,38 @@ describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
     /* Daily 429 must NOT retry — exactly one upstream call. */
     expect(generateContentStream).toHaveBeenCalledTimes(1);
   }, 10_000);
+
+  it('retries a per-minute input-token 429 (not DailyQuotaExhaustedError)', async () => {
+    /* Real-world envelope observed in production (#1682): the per-minute
+       input-token quota's message ALSO contains "free_tier" (via the metric
+       name generate_content_free_tier_input_token_count), which used to
+       false-positive-match the daily-quota classifier and drop the whole
+       chapter instead of retrying a minute later. */
+    const perMinute = apiError(429, {
+      error: {
+        message:
+          'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, ' +
+          'quotaId: GenerateContentInputTokensPerModelPerMinute-FreeTier, retryDelay: 49s',
+        status: 'RESOURCE_EXHAUSTED',
+      },
+    });
+    const ok = chunksOf(STAGE1_RESPONSE, 256);
+    generateContentStream
+      .mockRejectedValueOnce(perMinute)
+      .mockResolvedValueOnce(asyncFromArray(ok.map((text) => ({ text }))));
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+
+    const onThrottle = vi.fn();
+    const result = await analyzer.runStage1('m_perminute_retry', '# prompt', { onThrottle });
+
+    /* Retried instead of throwing DailyQuotaExhaustedError — two upstream
+       calls, and the second one's success flows through. */
+    expect(generateContentStream).toHaveBeenCalledTimes(2);
+    expect(result.characters).toHaveLength(3);
+    expect(onThrottle).toHaveBeenCalled();
+  }, 30_000);
 
   /* Idle-chunk watchdog + abort wiring — fix for the "Paused: Parsing and
      attribution" stall where a slow Gemini stream blocked the per-chapter

@@ -593,8 +593,16 @@ export class GeminiAnalyzer implements Analyzer {
           /* Daily-quota markers: same regex as routes/analysis.ts so
              classification stays in lockstep. No retry. Also block the
              limiter for the rest of the day so concurrent workers
-             short-circuit instead of round-tripping. */
-          if (/free[_-]?tier|quotaValue":"\d{1,3}"/i.test(message)) {
+             short-circuit instead of round-tripping.
+             NOTE: `free[_-]?tier` alone is NOT a valid marker here — the
+             per-minute input-token quota's message also contains
+             "free_tier" (via the metric name
+             generate_content_free_tier_input_token_count), so that
+             alternative used to false-positive-match a retryable
+             per-minute 429 as fatal daily exhaustion (#1682). Require a
+             genuine `per_day` marker instead; keep the small-value
+             heuristic for quotaValue. */
+          if (/per[_-]?day|quotaValue":"\d{1,3}"/i.test(message)) {
             const resetAt = nextUtcMidnight();
             geminiRateLimiter.recordRejection(this.model, resetAt.getTime() - Date.now());
             throw new DailyQuotaExhaustedError(this.model, resetAt);
