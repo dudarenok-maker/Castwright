@@ -124,6 +124,25 @@ describe('ReassignLinesModal — Narrator confirm', () => {
   });
 });
 
+describe('ReassignLinesModal — unlink source', () => {
+  it('resolves candidate rows from impactedChapters and defaults the target to the alias character', () => {
+    renderModal({
+      kind: 'unlink',
+      impactedChapters: [
+        { chapterId: 1, candidateSentenceIds: [1, 2] },
+        { chapterId: 2, candidateSentenceIds: [1] },
+      ],
+      aliasCharacterId: 'anton',
+    });
+    // Candidate rows resolve from the impacted-chapter sentence ids.
+    expect(screen.getByText('Alpha line.')).toBeInTheDocument();
+    expect(screen.getByText('Beta line.')).toBeInTheDocument();
+    expect(screen.getByText('Gamma line.')).toBeInTheDocument();
+    // Default target is the freshly-split alias character.
+    expect(screen.getByLabelText(/reassign to/i)).toHaveValue('anton');
+  });
+});
+
 describe('ReassignLinesModal — key drift at apply (m9)', () => {
   it('skips keys that no longer resolve and reports the count', async () => {
     const store = makeStore();
