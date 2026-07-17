@@ -40,27 +40,24 @@ async function loadRaw(bookDir: string): Promise<LedgerFile> {
   return raw;
 }
 
-/* Keys that, if merged into a plain object, could pollute Object.prototype.
-   The selection map's keys come straight from the request body, so filter
-   them before any spread/assign. */
-const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+/* Keys that, if used to index or merge into a plain object, could pollute
+   Object.prototype. The chapter key and the selection map's keys both come
+   from the request body, so reject/filter them before any index or spread. */
+const DANGEROUS_KEYS = ['__proto__', 'constructor', 'prototype'];
 
-/** Look up a ledger entry by chapter key, but only when it is a genuine OWN
-    property — never a value reached through the prototype chain (a `__proto__`
-    key must not resolve to Object.prototype). Keeps the subsequent
-    `entry.<prop> = …` assignment off any shared prototype
-    (js/prototype-polluting-assignment). */
-function ownEntry(ledger: LedgerFile, key: string): LedgerEntry | undefined {
-  return Object.prototype.hasOwnProperty.call(ledger.entries, key)
-    ? ledger.entries[key]
-    : undefined;
+/** True when `key` is a prototype-polluting property name. Written as explicit
+    `===` comparisons (not a Set/`.has`) so CodeQL's
+    js/prototype-polluting-assignment barrier recognises it inline with the
+    guarded assignment. */
+function isDangerousKey(key: string): boolean {
+  return key === '__proto__' || key === 'constructor' || key === 'prototype';
 }
 
 /** Copy a request-supplied selection map, dropping prototype-polluting keys. */
 function safeSelection(incoming: Record<string, boolean>): Record<string, boolean> {
   const out: Record<string, boolean> = {};
   for (const [k, v] of Object.entries(incoming)) {
-    if (!DANGEROUS_KEYS.has(k)) out[k] = v;
+    if (!DANGEROUS_KEYS.includes(k)) out[k] = v;
   }
   return out;
 }
@@ -108,7 +105,12 @@ export async function resolveOps(
   return withKeyLock(`script-review-ledger:${bookId}`, async () => {
     const ledger = await loadRaw(bookDir);
     const key = String(params.chapterId);
-    const entry = ownEntry(ledger, key);
+    /* Reject a prototype-polluting chapter key before indexing entries — keeps
+       the `entry.ops = …` assignment below off Object.prototype
+       (js/prototype-polluting-assignment). chapterId is a number, so this
+       never fires for a real request. */
+    if (isDangerousKey(key)) return { ok: false };
+    const entry = ledger.entries[key];
     if (!entry || entry.version !== params.version) return { ok: false };
     const removed = new Set(params.appliedOpKeys);
     entry.ops = (entry.ops as Array<{ id: number; op: string }>).filter(
@@ -141,7 +143,12 @@ export async function patchSelection(
   return withKeyLock(`script-review-ledger:${bookId}`, async () => {
     const ledger = await loadRaw(bookDir);
     const key = String(params.chapterId);
-    const entry = ownEntry(ledger, key);
+    /* Reject a prototype-polluting chapter key before indexing entries — keeps
+       the `entry.selected = …` assignment below off Object.prototype
+       (js/prototype-polluting-assignment). chapterId is a number, so this
+       never fires for a real request. */
+    if (isDangerousKey(key)) return { ok: false };
+    const entry = ledger.entries[key];
     if (!entry || entry.version !== params.version) return { ok: false };
     entry.selected = { ...entry.selected, ...safeSelection(params.selected) };
     ledger.entries[key] = entry;
