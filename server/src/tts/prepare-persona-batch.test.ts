@@ -45,12 +45,6 @@ vi.mock('../workspace/user-settings.js', async (importOriginal) => {
   return { ...actual, getResolvedSidecarUrl: vi.fn(() => 'http://localhost:9000') };
 });
 
-/* ollama.js is needed by resolvePersonaGpuPlan (resolveAnalyzerKeepAlive) */
-vi.mock('../analyzer/ollama.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../analyzer/ollama.js')>();
-  return { ...actual, resolveAnalyzerKeepAlive: vi.fn(() => '5m') };
-});
-
 /* --------------------------------------------------------------------------- */
 
 describe('preparePersonaBatch', () => {
@@ -72,7 +66,7 @@ describe('preparePersonaBatch', () => {
     );
 
     const result = await preparePersonaBatch('/a');
-    expect(result).toEqual({ onCpu: false, keepAlive: '5m' });
+    expect(result).toEqual({ onCpu: false, keepAlive: 300 });
     /* /unload must have been called exactly once */
     const unloadCalls = fetchSpy.mock.calls.filter((c) => String(c[0]).endsWith('/unload'));
     expect(unloadCalls).toHaveLength(1);

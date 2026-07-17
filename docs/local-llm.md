@@ -71,11 +71,15 @@ before generation starts. So the question is **not** "fit both at once" but
 
 We mediate the switch in two places:
 
-1. **`keepAliveFor()`** at `server/src/analyzer/ollama.ts:104`. The 4B sits in
-   `RESIDENT_MODELS` and gets `keep_alive: '5m'` — Ollama holds it across the
-   Stage 1 → Stage 2 → next-chapter loop, avoiding a multi-second weight
-   reload between every call. The 9B / 8B fall through to `keep_alive: 0`,
-   which unloads them as soon as the call returns.
+1. **`keepAliveFor()`** at `server/src/analyzer/ollama.ts`. Each model's
+   `keep_alive` (an integer number of seconds) is resolved per model —
+   a user override set in the Model Manager, else a coded default
+   (`DEFAULT_KEEP_ALIVE_SECONDS`, `300` for the four models Castwright ships
+   suggestions for), else `0`. `300` holds a model across the Stage 1 →
+   Stage 2 → next-chapter loop, avoiding a multi-second weight reload between
+   every call; `0` (the fallback for an unconfigured custom tag) unloads it
+   as soon as the call returns. See
+   [docs/features/263-per-model-keepalive.md](features/263-per-model-keepalive.md).
 2. **The in-app Load/Stop pill.** `ModelControlPill` on the Analysing screen
    calls `POST /api/ollama/load` (warm) or `/unload` (evict). Loading the
    analyzer auto-evicts XTTS first via `api.unloadSidecar()` (see
@@ -91,8 +95,9 @@ no other signal. The reasoning is at `server/src/routes/ollama-health.ts:161`.
 
 ### Keeping the analyzer warm + the analyzer↔TTS / two-model-split gotcha (plan 222)
 
-The analyzer model is kept **resident** across the chapter loop (`keep_alive: '5m'`)
-so it isn't unloaded+reloaded between sections — reloading a multi-GB model every
+The analyzer model is kept **resident** across the chapter loop (`keep_alive`,
+seconds, configured per model in the Model Manager — default `300` for the
+supported models) so it isn't unloaded+reloaded between sections — reloading a multi-GB model every
 section is the "VRAM sawtooth" / mid-stream stall that hurts large (especially
 Cyrillic) books. A resident analyzer can't co-reside with a TTS/voice-design load
 on a small GPU, so the server **evicts the resident analyzer before any sidecar
@@ -277,17 +282,19 @@ in memory for the deferred root-cause measurement pass.
 > the curated `MODEL_OPTIONS` below and whatever you've actually pulled into
 > Ollama (live, via `/api/ollama/health`). So you can `ollama pull` any tag and
 > select it without editing this list; the curated entries below are the
-> suggestions + their VRAM notes. `keepAliveFor` still uses `RESIDENT_MODELS`
-> for the resident set, but the `'5m'` window is now the `ANALYZER_KEEP_ALIVE`
-> knob. Cross-engine eviction before a TTS load is plan 222's `withGpuLoad`.
+> suggestions + their VRAM notes. Since plan 263, `keepAliveFor` resolves
+> `keep_alive` per model (seconds) from a Model Manager-configured override
+> or a coded default — there is no hardcoded resident-set list to edit.
+> Cross-engine eviction before a TTS load is plan 222's `withGpuLoad`.
 
 The curated candidates in the model picker (`src/lib/models.ts`):
 
 - **qwen3.5:9b** — ~6.6 GB resident. Strongest on edge cases in my testing.
-  Leaves ~1 GB of headroom for KV cache at 16K context, which is tight. Right
-  now we set its `keep_alive` to 0 so it doesn't squat between chapters; that
-  means a multi-second reload between Stage 1 / Stage 2 / next chapter,
-  which is real wall-clock overhead.
+  Leaves ~1 GB of headroom for KV cache at 16K context, which is tight. It
+  ships with the same `300`s coded default as the other supported models
+  (Model Manager → keep-alive field); on a tight 8 GB card, set it to `0`
+  there so it doesn't squat between chapters — that trades a multi-second
+  reload between Stage 1 / Stage 2 / next chapter for the freed headroom.
 - **llama3.1:8b** — ~5.0 GB resident. Middle ground. Probably the sweet spot
   for "8B class, but with room for the KV cache and headroom".
 
@@ -295,9 +302,10 @@ If the goal is **"keep the analyzer resident across the loop, with a real
 8B-class model"**, the lever is short:
 
 1. **Pick llama3.1:8b** (or any 8B-class GGUF at Q4_K_M).
-2. **Add the tag to `RESIDENT_MODELS`** in `server/src/analyzer/ollama.ts:94`.
-   That flips `keep_alive` from 0 to `5m`, keeping the model in VRAM across
-   the Stage 1 → Stage 2 → next-chapter loop the same way the 4B is held.
+2. **Set the model's keep-alive (seconds) in the Model Manager** — `llama3.1:8b`
+   already ships a coded default of `300`; a custom/renamed tag defaults to
+   `0` until you set it there. That keeps the model in VRAM across the
+   Stage 1 → Stage 2 → next-chapter loop the same way the 4B is held.
 3. **Verify under load.** Run a chapter analysis with `nvidia-smi -l 1` open
    alongside. Resident should sit around 5–6.5 GB (weights + KV) and stay
    stable across chapter boundaries (no reload pulse). If you see the
@@ -338,8 +346,8 @@ necessarily the best quality/throughput trade. Before changing
 1. **First-attempt validation rate** per model on Stage 2 across the
    canonical e2e manuscript (`server/src/__fixtures__/the-coalfall-commission.md`). A model
    that's "smarter" but burns a retry every chapter loses on wall-clock.
-2. **Wall-clock per chapter** with `keep_alive: '5m'` active. The reload tax
-   is what dominates if the model isn't held resident.
+2. **Wall-clock per chapter** with a `300`s keep-alive active (Model Manager).
+   The reload tax is what dominates if the model isn't held resident.
 3. **Resident size under real chapter load.** Long-chapter KV-cache spikes
    are the thing that pushes a "fits in theory" model into OOM territory.
    `nvidia-smi` during a Stage-2 pass on the longest chapter is the truth.

@@ -68,14 +68,6 @@ describe('config registry', () => {
     }
   });
 
-  it('registers ANALYZER_KEEP_ALIVE with a 5m default', () => {
-    const k = getKnob('analyzer.ollama.keepAlive');
-    expect(k).toBeDefined();
-    expect(k?.env).toBe('ANALYZER_KEEP_ALIVE');
-    expect(k?.default).toBe('5m');
-    expect(k?.apply).toBe('live');
-  });
-
   it('registers the lan-access group', () => {
     const g = GROUPS.find((x) => x.id === 'lan-access');
     expect(g).toBeDefined();

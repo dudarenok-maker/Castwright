@@ -270,6 +270,9 @@ describe('user-settings router', () => {
       backupCadence: 'weekly',
       backupRetention: 30,
       configOverrides: { 'analyzer.stage2.minCoverage': 0.7 },
+      /* Sparse per-model keep-alive override map (seconds). A non-empty map
+         proves the field round-trips; the value is a plain integer-second. */
+      analyzerKeepAliveByModel: { 'qwen3.5:4b': 300 },
     };
 
     /* Guard: every writable schema field has a sample value here. A field

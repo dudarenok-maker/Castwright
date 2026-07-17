@@ -5991,6 +5991,10 @@ export interface ModelInventoryItem {
   removable: boolean;
   updatable: boolean;
   integrity?: 'verified' | 'unpinned' | 'mismatch';
+  /* Analyzer-only: resolved per-model keep-alive (seconds) and whether the
+     value is a user override (vs coded default). Absent for tts/asr rows. */
+  keepAliveSeconds?: number;
+  keepAliveIsOverride?: boolean;
 }
 
 export interface ModelInventoryResponse {
@@ -6273,6 +6277,7 @@ const MOCK_USER_SETTINGS: UserSettings = {
   apiKeyStatus: 'unset',
   workspaceRoot: '(mock)/audiobook-workspace',
   workspaceSource: 'default',
+  analyzerKeepAliveByModel: {},
 };
 
 async function realGetUserSettings(): Promise<UserSettings> {
@@ -6657,6 +6662,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
     analyzerPhase1Model,
     analyzerPhase1MinLagChapters,
     dualModelEnabled,
+    analyzerKeepAliveByModel,
   } = patch;
   Object.assign(
     MOCK_USER_SETTINGS,
@@ -6673,6 +6679,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         analyzerPhase1Model,
         analyzerPhase1MinLagChapters,
         dualModelEnabled,
+        analyzerKeepAliveByModel,
       }).filter(([, v]) => v !== undefined),
     ),
   );
@@ -7551,6 +7558,8 @@ async function mockGetModelInventory(): Promise<ModelInventoryResponse> {
       isFallbackEngine: false,
       removable: true,
       updatable: true,
+      keepAliveSeconds: 300,
+      keepAliveIsOverride: false,
     },
     {
       id: 'ollama:llama3.1:8b',
@@ -7564,6 +7573,8 @@ async function mockGetModelInventory(): Promise<ModelInventoryResponse> {
       isFallbackEngine: false,
       removable: true,
       updatable: true,
+      keepAliveSeconds: 300,
+      keepAliveIsOverride: false,
     },
   ];
   return {
@@ -8951,17 +8962,6 @@ const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = [
     risk: 'medium',
     isPrompt: false,
     default: 10,
-  },
-  {
-    key: 'analyzer.ollama.keepAlive',
-    group: 'analyzer-models',
-    label: 'Analyzer keep-alive',
-    help: 'How long Ollama holds a resident analyzer model in VRAM after a call (Ollama keep_alive: \'5m\', \'1m\', \'0\' to unload immediately, \'-1\' to pin). Applied to the RESIDENT_MODELS the analyzer keeps warm across the analysis loop; non-resident tags always unload immediately. \'5m\' bridges the gap between back-to-back chapter calls. Cross-engine eviction before a TTS/voice-design load is handled separately by the GPU load chokepoint (gpu.safeCoexistMb).',
-    type: 'string',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: '5m',
   },
   {
     key: 'prompt.castDetection',

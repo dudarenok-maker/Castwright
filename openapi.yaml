@@ -3228,6 +3228,11 @@ components:
             headroom), so a mixed-engine book still generates with this off,
             it just pays the swap latency. Takes effect on the next
             generation run; no server restart required.
+        analyzerKeepAliveByModel:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin).
         generationWorkers:
           type: integer
           minimum: 1
@@ -3330,6 +3335,11 @@ components:
           nullable: true
         dualModelEnabled:
           type: boolean
+        analyzerKeepAliveByModel:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin).
         generationWorkers:
           type: integer
           minimum: 1
