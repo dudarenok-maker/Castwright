@@ -16,6 +16,7 @@ import {
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
 import { InstallBootstrap } from '../ollama/install-bootstrap.js';
 import { PullBootstrap } from '../ollama/pull-bootstrap.js';
+import { setLastKnownVram } from '../gpu/vram-state.js';
 
 function makeApp() {
   const app = express();
@@ -344,6 +345,30 @@ describe('warmOllamaModel (Part 2 — patient warm)', () => {
     await warmOllamaModel('qwen36-castwright:latest');
     const body = generateCallBody();
     expect(body?.keep_alive).toBe(1800);
+  });
+
+  it('clamps a RAM-heavy model\'s warm keep_alive to 0 on a CPU accelerator (not the unclamped 300)', async () => {
+    setLastKnownVram({ totalMb: null }); // -> accelerator: 'cpu' (see vram-state.ts)
+    try {
+      fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+      await warmOllamaModel('qwen3.5:9b');
+      const body = generateCallBody();
+      expect(body?.keep_alive).toBe(0);
+    } finally {
+      setLastKnownVram(null); // reset to 'unknown' so later tests aren't affected
+    }
+  });
+
+  it('does NOT clamp a RAM-heavy model\'s warm keep_alive on cuda/unknown (stays 300)', async () => {
+    setLastKnownVram({ totalMb: 8188 }); // -> accelerator: 'cuda'
+    try {
+      fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+      await warmOllamaModel('qwen3.5:9b');
+      const body = generateCallBody();
+      expect(body?.keep_alive).toBe(300);
+    } finally {
+      setLastKnownVram(null); // reset to 'unknown'
+    }
   });
 });
 

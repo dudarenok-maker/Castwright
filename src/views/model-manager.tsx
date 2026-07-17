@@ -576,6 +576,7 @@ function ModelRow({
             <label className="flex items-center gap-1 text-[11px] text-ink/60">
               keep-alive
               <input
+                key={`keepalive-${item.id}-${item.keepAliveSeconds ?? 0}`}
                 type="number"
                 data-testid={`keepalive-${item.id}`}
                 defaultValue={item.keepAliveSeconds ?? 0}

@@ -119,10 +119,13 @@ owner: null
    `DEFAULT_KEEP_ALIVE_SECONDS` or `normalizeModelTag` under `src/` — the
    server is the only place that resolver logic lives.
 8. `POST /api/ollama/load` (`server/src/routes/ollama-health.ts:410`,
-   `warmOllamaModel`) warms with `keep_alive: resolveKeepAliveSeconds(model)`
-   — not a hardcoded `'5m'`. A model configured to `0` warms once and does not
-   persist, consistent with its own setting; the Model Manager row's keep-alive
-   field is the only signal a user needs to understand why a Load didn't stick.
+   `warmOllamaModel`) warms with `keep_alive: keepAliveFor(model,
+   getLastKnownVram().accelerator)` — not a hardcoded `'5m'`, and honoring the
+   same `RAM_HEAVY_MODELS` CPU-clamp as the analyzer chat path (Invariant 1),
+   not the unclamped `resolveKeepAliveSeconds`. A model configured to `0` warms
+   once and does not persist, consistent with its own setting; the Model
+   Manager row's keep-alive field is the only signal a user needs to
+   understand why a Load didn't stick.
 9. No live **code** symbol `RESIDENT_MODELS` or `resolveAnalyzerKeepAlive`
    remains under `server/src` or `src`; `.env.example` no longer generates an
    `ANALYZER_KEEP_ALIVE` block; `docs/local-llm.md` no longer instructs editing
@@ -160,8 +163,10 @@ owner: null
   and `keepAliveIsOverride` (`true` only when a user override exists for that
   tag).
 - Vitest server (`server/src/routes/ollama-health.test.ts`) — the `/load`
-  warm route sends `keep_alive: resolveKeepAliveSeconds(model)`, not a
-  hardcoded `'5m'`.
+  warm route sends `keep_alive: keepAliveFor(model, accelerator)`, not a
+  hardcoded `'5m'` and not the unclamped `resolveKeepAliveSeconds`; a
+  RAM-heavy model (`qwen3.5:9b`) clamps to `0` on a `cpu` accelerator and
+  stays at the coded `300` on `cuda`/`unknown`.
 - Vitest server (`server/src/routes/user-settings.test.ts`) — the settings PUT
   route round-trips `analyzerKeepAliveByModel`.
 - Vitest frontend (`src/views/model-manager.test.tsx`) — an analyzer row
@@ -195,10 +200,16 @@ is a convenient real analysis to drive while observing `ollama ps`).
    `0`.
 2. **Set `qwen36-castwright:latest`'s keep-alive field to `300`** and blur the
    field (tab or click away). Expect a `PUT /api/user/settings` carrying the
-   full `analyzerKeepAliveByModel` map with `{ "qwen36-castwright": 300, ... }`
-   (normalized, no `:latest`), and every previously-configured model's entry
-   still present unchanged. A ↺ reset button now appears next to the field
-   (since `keepAliveIsOverride` is now `true` for this tag).
+   full `analyzerKeepAliveByModel` map with `{ "qwen36-castwright:latest": 300,
+   ... }` — the client keys the map with the **raw inventory tag**
+   (`item.id.slice('ollama:'.length)`), `:latest` and all, since the frontend
+   deliberately does not import `normalizeModelTag` (Invariant 7). The server
+   resolver tolerates either form: `resolveKeepAliveSeconds` checks the raw-key
+   override first, then the normalized-key override (Invariant 2), so a raw
+   `qwen36-castwright:latest` key resolves correctly without any client-side
+   normalization. Every previously-configured model's entry stays present
+   unchanged. A ↺ reset button now appears next to the field (since
+   `keepAliveIsOverride` is now `true` for this tag).
 3. **Run an analysis** (or the manual "Load" pill) against that model, then in
    PowerShell run `ollama ps` repeatedly across a chapter boundary or two.
    Expect the model's `UNTIL` column to show a real countdown (e.g.
