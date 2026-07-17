@@ -7,7 +7,7 @@ owner: null
 # "Needs regeneration" indicator after reassigning sentences (Bug 2)
 
 > Status: active (landing on `fix/frontend-stale-chapter-reassign-indicator`)
-> Key files: `src/lib/stale-chapters.ts`, `src/views/generation.tsx`, `src/modals/reattribute-lines.tsx`, `src/views/manuscript.tsx`
+> Key files: `src/lib/stale-chapters.ts`, `src/views/generation.tsx`, `src/modals/reassign-lines.tsx`, `src/views/manuscript.tsx`
 > URL surface: `#/books/<id>/generate`
 > OpenAPI ops: none (frontend-only, derived from existing persisted state)
 
@@ -24,7 +24,7 @@ owner: null
   `audioRenderedAt` render stamp.
 - **Architectural:** Establishes the rule that **every** sentence-reassignment
   path must emit a `boundary_move` (the durable signal depends on it). Closed the
-  one path that didn't (`reattribute-lines` modal).
+  one path that didn't (`reassign-lines` modal).
 
 ## Architectural impact
 
@@ -42,7 +42,7 @@ owner: null
 - **Every reassignment path emits a `boundary_move`.** Verified sites:
   `manuscript.tsx` drag (`commitBoundaryMove`), segment reassign (`reassignSegment`),
   per-sentence inspector (`onReassignSentence`), selection popover whole-sentence +
-  split (`assignSelectionTo`), and the `reattribute-lines` modal (added here). A new
+  split (`assignSelectionTo`), and the `reassign-lines` modal (added here). A new
   reassignment path MUST emit one or it won't flag staleness.
 - **Stale requires `state === 'done'` AND `audioRenderedAt`** — a queued/legacy
   chapter is never flagged.
@@ -56,7 +56,7 @@ owner: null
   not-stale before render / non-done / no-stamp / no-reassignment).
 - Vitest (`src/views/generation.test.tsx`) — the caption renders on a done chapter
   reassigned after render; hidden when never reassigned; hidden on a queued chapter.
-- Vitest (`src/modals/reattribute-lines.test.tsx`) — the modal's reassign logs a
+- Vitest (`src/modals/reassign-lines.test.tsx`) — the modal's reassign logs a
   `boundary_move` (the staleness precondition).
 
 ### Documented coverage gap (deliberate)
