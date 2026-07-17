@@ -166,11 +166,6 @@ function renderManager(initial: Partial<UserSettings> = {}) {
     localAnalyzerModels: [],
     pullableModels: [],
   };
-  /* ModelManagerView dispatches fetchAccountSettings() on mount (per-model
-     keep-alive control) — mirror the same merged settings here so that
-     round-trip is a no-op against the preloadedState below rather than
-     clobbering test-specific overrides once it resolves. */
-  vi.mocked(api.getUserSettings).mockResolvedValue({ ...SETTINGS_FIXTURE, ...initial });
   const store = configureStore({
     reducer: {
       account: accountSlice.reducer,
@@ -196,10 +191,6 @@ beforeEach(() => {
   mockLoad.mockResolvedValue({ status: 'ready' });
   mockUnload.mockResolvedValue({ status: 'idle' });
   mockRemove.mockResolvedValue({ ok: true, id: 'qwen-base', removed: true, freedBytes: 1_000 });
-  /* ModelManagerView now dispatches fetchAccountSettings() on mount (per-model
-     keep-alive control) — give it a resolved value so the round-trip doesn't
-     throw in ui-slice's applyAccountDefaults extraReducer. */
-  vi.mocked(api.getUserSettings).mockResolvedValue(SETTINGS_FIXTURE);
   /* The moved installers + ModelsCard fetch on mount; keep them quiet. */
   vi.stubGlobal(
     'fetch',

@@ -12,7 +12,7 @@ import { MixedHeading } from '../components/primitives';
 import { DevicePanel } from '../components/device-panel';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
-import { fetchAccountSettings, saveAccountSettings } from '../store/account-slice';
+import { saveAccountSettings } from '../store/account-slice';
 import {
   ModelControlPill,
   type ModelControlState,
@@ -74,9 +74,6 @@ function renderInstaller(id: string, modelsStatus: ModelsStatus | null, onInstal
 export function ModelManagerView() {
   const dispatch = useAppDispatch();
   const keepAliveMap = useAppSelector((s) => s.account.analyzerKeepAliveByModel ?? {});
-  useEffect(() => {
-    void dispatch(fetchAccountSettings());
-  }, [dispatch]);
   return (
     <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-10">
       <div className="mb-8">
@@ -601,7 +598,7 @@ function ModelRow({
                     delete next[analyzerModel];
                     void dispatch(saveAccountSettings({ analyzerKeepAliveByModel: next })).then(onChanged);
                   }}
-                  className="min-h-[44px] fine-pointer:min-h-0 text-ink/45 hover:text-ink"
+                  className="min-h-[44px] fine-pointer:min-h-0 min-w-[44px] fine-pointer:min-w-0 flex items-center justify-center text-ink/45 hover:text-ink"
                   aria-label="Reset to default"
                 >
                   ↺
