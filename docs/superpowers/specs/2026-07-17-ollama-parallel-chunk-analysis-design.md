@@ -1,6 +1,6 @@
 # Design: concurrent Ollama calls in the analyzer (overnight-batch throughput)
 
-_Date: 2026-07-17 · Issue: TBD (filed at handover) · Status: draft (awaiting user review)_
+_Date: 2026-07-17 · Issue: TBD (filed at handover) · Status: green (3 adversarial-review rounds; M1–M5 folded)_
 
 ## Problem
 
@@ -65,44 +65,65 @@ Three parts, each small and independently testable:
    count semaphore (`analyzerConcurrency`). Every analyzer `/api/chat` acquires
    it **before** the existing `gpuSemaphore` acquire, releases it in the same
    `finally`. It caps **total in-flight analyzer chat calls at K across all jobs**
-   (main + subset + any out-of-band caller), so two concurrent job bodies can
-   never exceed K combined and overrun `OLLAMA_NUM_PARALLEL`. It is analyzer-only
-   — it never gates TTS.
+   (main + subset), so two concurrent job bodies can never exceed K combined and
+   overrun `OLLAMA_NUM_PARALLEL`. It is analyzer-only — it never gates TTS.
+   **Coverage note (M3):** all `OllamaAnalyzer.chat` callers (stage-1/2,
+   script-review, emotion, instruct, escalation) are gated by acquiring inside
+   `chat`. `generatePersonaViaOllama` (`ollama.ts:793`) is a **separate** function
+   with its own `fetch` — the plan MUST add the limiter there too, or the global
+   cap leaks by one caller.
 
-2. **Widen the analysis worker pool to K.** The stage-2 worker count
-   (`STAGE2_CONCURRENCY`, `analysis.ts:917`) is generalized to
-   `analyzer.ollama.concurrency` (= K) and applied to **stage-1 as well**, so a
-   book's chapters/chunks are dispatched K-wide. Each chapter pipeline keeps its
-   existing **sequential** internal fan-out (chunks, coverage retries,
-   escalation) — no internal-loop inversion. K chapters in flight ⇒ ≤ K analyzer
-   calls in flight, which the global limiter (1) also enforces as a ceiling.
+2. **Unify the analysis worker pool under one K.** Both stage-2
+   (`STAGE2_CONCURRENCY`, `analysis.ts:917`) **and stage-1 / Phase 0a** already
+   run at `readStage2Concurrency()` width today (`castConcurrency`,
+   `analysis.ts:3060`); this change renames that shared knob to
+   `analyzer.ollama.concurrency` (= K) so both stages are driven by one value.
+   Each chapter pipeline keeps its existing **sequential** internal fan-out
+   (chunks, coverage retries, escalation) — no internal-loop inversion. K
+   chapters in flight ⇒ ≤ K analyzer calls in flight, which the global limiter
+   (1) also enforces as a ceiling. (Because stage-1 already fans out at width 2
+   today, the determinism invariant below is already exercised at width 2 — this
+   change widens it, it does not introduce concurrency to a serial path.)
 
 3. **`gpuSemaphore` unchanged; operator sizes the budget.** The per-call
-   `gpuSemaphore.acquire/release` in `ollama.ts` is **untouched** — cross-engine
-   fairness stays byte-for-byte today's behavior. For K analyzer calls to
-   actually run concurrently rather than clamp to budget-1, the operator raises
-   `GPU_VRAM_BUDGET` so `K × costForEngine('analyzer')` fits (calibrated
-   empirically — see below). On the default budget-1 box, K collapses to an
-   effective 1: **no regression, no concurrency until opted in.**
+   `gpuSemaphore.acquire/release` in `ollama.ts` is **untouched**. Cross-engine
+   fairness is preserved: a queued TTS / second-book acquire is still granted at
+   the next per-call release under FIFO, so the analyzer contributes ≤K entries
+   to the same fair queue and **never holds a slot across calls** — any reordering
+   is bounded to ~one analyzer-call duration and cannot starve (M1). For K
+   analyzer calls to actually run concurrently rather than clamp to budget-1, the
+   operator raises `GPU_VRAM_BUDGET` so `K × costForEngine('analyzer')` fits
+   (calibrated empirically — see below). On the default budget-1 box, K collapses
+   to an effective 1: **no regression, no concurrency until opted in.**
 
 ### Why this preserves every invariant
 
 - **Concurrent multi-book / TTS:** `gpuSemaphore` is still acquired and released
   **per call**, so a second book's or a TTS op's queued acquire is granted at the
-  very next per-call release under strict FIFO (`semaphore.ts:121-131`) —
-  identical interleaving cadence to today. The analyzer just contributes up to K
-  calls to the same fair queue instead of 1.
+  very next per-call release under strict FIFO (`semaphore.ts:121-131`). The
+  analyzer contributes up to K calls to the same fair queue instead of 1.
+  Cadence is *near*-identical to today, not byte-identical (M1): because the
+  width-K limiter is taken **before** `gpuSemaphore`, up to K−1 analyzer calls
+  can sit in limiter slots blocked pre-`gpuSemaphore`, which can reorder a second
+  book's call behind a later TTS op **by at most one slot**. Bounded to one
+  analyzer-call duration; no starvation — limiter slots free serially as calls
+  complete, so the second book always makes progress with live pills.
 - **No hard-deadlock surface:** no held outer slot exists, so no in-job call can
   deadlock against "the job's own reservation." Every call self-acquires and
   self-releases in one `try/finally`, exactly as today. The F2/F3/NEW-1/NEW-2
   hazards of the reservation schemes simply do not arise.
 - **Two job bodies (main + subset):** both are naturally bounded by the *global*
   limiter (1); nothing special is needed for main-alongside-subset.
-- **CPU analyzer:** a confirmed-CPU analyzer costs 0 on `gpuSemaphore`
-  (`engine-vram-cost.ts:52-57`) and takes **zero GPU**; it may still pass through
-  the width-K limiter (which is about Ollama-slot pressure, not VRAM) — the plan
-  confirms the CPU path's limiter behavior does not throttle CPU throughput below
-  today's.
+- **CPU analyzer (M2):** `costForEngine('analyzer')` returns 0 for a confirmed-CPU
+  analyzer (`engine-vram-cost.ts:52-57`), but `clampCost(0)` **floors to 1**
+  (`semaphore.ts:98`) and `chat()` acquires `gpuSemaphore` unconditionally
+  (`ollama.ts:635` — the zero-skip only exists in `generatePersonaViaOllama` via
+  `acquireGpuTokenIfOnGpu`). So a CPU analyzer call already takes 1 token and
+  serializes at budget-1 **today**. The width-K limiter (K ≥ 1) never restricts
+  below that effective floor, so it does **not** throttle CPU below today's — and
+  it incidentally *protects* the CPU box: raising `GPU_VRAM_BUDGET` there would
+  otherwise admit budget-many 1-token CPU calls and thrash; the limiter caps them
+  at K.
 
 ## Configuration
 
@@ -189,10 +210,11 @@ under concurrency. Stage-2 already runs at worker width 2, so the merge path is
 
 | Risk | Mitigation |
 |---|---|
-| Concurrency silently does nothing (operator raised K but not `GPU_VRAM_BUDGET`) | Startup log states the effective analyzer concurrency = `min(K, floor(budget / analyzerCost))`; `.env.example` documents the trio (K, budget, `OLLAMA_NUM_PARALLEL`). |
+| Concurrency silently does nothing (operator raised K but not `GPU_VRAM_BUDGET`) | Startup log states the effective analyzer concurrency = `min(K, max(1, floor(budget / analyzerCost)))` (M4 — the `max(1,…)` matches `clampCost`'s ≥1 floor, so it never logs a misleading "0"); `.env.example` documents the trio (K, budget, `OLLAMA_NUM_PARALLEL`). |
 | `num_ctx × K` VRAM overflow | K default 2 + calibration; `numCtx` drop to 16K escape valve. |
-| Merge non-determinism surfacing only at K>2 | Determinism invariant re-verified as K widens; K=1 stubbed regression anchors correctness. |
+| Merge non-determinism surfacing only at K>2 | Determinism invariant re-verified as K widens; K=1 stubbed regression anchors correctness (stage-1 already runs width-2 today, so this is widening a concurrent path, not making a serial one concurrent). |
 | Raising the global budget loosens TTS co-residency too | Documented budget-coupling caveat; correct on a box with the VRAM, and the width-K limiter still caps analyzer calls independently. |
+| VRAM-sampler over-cap trim race (M5, NIT) | `model-vram-stats.ts:76-91` read-then-`writeFile` is not concurrency-safe; K-wide calls make interleaved rewrites likelier. Best-effort telemetry, try/catch-wrapped, never throws — worst case a torn/dropped sample line. No correctness impact; plan notes it, no fix required for v1. |
 
 ## Rollout
 
