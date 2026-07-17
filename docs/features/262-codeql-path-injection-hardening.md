@@ -98,5 +98,12 @@ pipeline (1 reflected-XSS dismissed with justification).
 
 ## Ship notes
 
-- Shipped: _pending merge of PR for #1690._
-- Commit: _pending._
+- Shipped: 2026-07-17 (PR #1692, merge commit `1f62dd3a`, closed #1690).
+- **Follow-up (same plan):** the post-merge CodeQL re-scan cleared 33 of 35
+  alerts but left the two `js/prototype-polluting-assignment` findings open —
+  the `hasOwnProperty`-in-`ownEntry` indirection wasn't recognised as a barrier
+  because the query wants the property-name checked **inline, in the same
+  function as the assignment**. Fixed by replacing `ownEntry` with an explicit
+  `isDangerousKey(key)` guard (`key === '__proto__' || …`, not a `Set.has`)
+  placed directly before each `entry.<prop> = …` in `resolveOps` /
+  `patchSelection`. Shipped in the follow-up PR; re-scan confirmed 0 open.

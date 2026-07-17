@@ -121,6 +121,19 @@ describe('script-review-ledger', () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
+  it('patchSelection rejects a prototype-polluting chapter key without touching Object.prototype', async () => {
+    /* chapterId is typed number, so a real caller can't reach this — but a
+       tampered/untyped call must not index entries with `__proto__`. Cast to
+       bypass the type and assert the guard rejects it. */
+    const result = await patchSelection(bookDir, 'book-1', {
+      chapterId: '__proto__' as unknown as number,
+      version: 1,
+      selected: { polluted: true } as Record<string, boolean>,
+    });
+    expect(result.ok).toBe(false);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
   it('loadRaw returns an empty envelope when the ledger file contains syntactically invalid JSON (no throw)', async () => {
     const ledgerPath = scriptReviewLedgerJsonPath(bookDir);
     const ledgerDir = dirname(ledgerPath);
