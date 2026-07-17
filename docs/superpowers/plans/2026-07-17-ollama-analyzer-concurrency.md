@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-17-ollama-parallel-chunk-analysis-design.md` (green after 3 review rounds; M1–M5 folded).
 
+**Plan review:** GREEN — production-code changes verified against real anchors; test snippets corrected (T3-a/T4-a/T4-b) and re-confirmed.
+
 ## Global Constraints
 
 - **Node 20.6+**, no new dependencies (reuse `GpuSemaphore`).
@@ -222,6 +224,9 @@ describe('OllamaAnalyzer — analyzer concurrency limiter', () => {
     expect(analyzerConcurrency.inFlight).toBe(0); // released in finally
     acquireSpy.mockRestore();
   });
+  // Hygiene: add 'm_ollama_limiter_ok' and 'm_ollama_limiter_err' to the file's
+  // afterAll handoff-cleanup id list (~ollama.test.ts:852-887) so these two runs
+  // don't leave stray inbox/outbox files. Non-blocking (writes are idempotent).
 
   it('releases the limiter even when the chat call throws', async () => {
     fetchMock.mockResolvedValue(new Response('boom', { status: 500 }));
