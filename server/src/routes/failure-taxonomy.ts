@@ -113,6 +113,13 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
       ctx.status === 429 && /free[_-]?tier|quotaValue":"\d{1,3}"/i.test(raw),
   },
   {
+    code: 'analyzer-rate-limit',
+    fatal: false,
+    source: 'analysis',
+    matchName: 'RequestExceedsTpmError',
+    match: () => false,
+  },
+  {
     code: 'analyzer-unreachable',
     fatal: true,
     source: 'analysis',

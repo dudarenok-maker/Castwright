@@ -203,4 +203,13 @@ describe('GeminiRateLimiter', () => {
     // 40k-token request must acquire immediately (unlimited), no throw
     return expect(limiter.acquire('gemma-4-31b-it', 40000)).resolves.toBeUndefined();
   });
+
+  it('fails fast when a single request exceeds a finite TPM (never spins)', async () => {
+    const limiter = new GeminiRateLimiter();
+    const start = Date.now();
+    await expect(limiter.acquire('gemma-4-31b-it', 25000)).rejects.toMatchObject({
+      code: 'REQUEST_EXCEEDS_TPM',
+    });
+    expect(Date.now() - start).toBeLessThan(1000); // did NOT wait 60s
+  });
 });

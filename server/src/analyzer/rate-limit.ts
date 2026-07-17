@@ -12,17 +12,20 @@
    every retry attempts re-acquires.
 
    Limits pulled from aistudio.google.com/app/rate-limit (free tier,
-   2026-05-16). RPM is the typical binding constraint for all but Gemma
-   (Unlimited TPM); RPD is the binding constraint for Gemini 2.5 Flash
-   and 3 Flash preview (20/day). TPM rarely bites on Flash Lite under
-   normal use but is the safety net against outlier long chapters and
-   burst-retry pathology. */
+   2026-05-16). RPM is the typical binding constraint for the Gemini
+   models; RPD is the binding constraint for Gemini 2.5 Flash and 3
+   Flash preview (20/day). Gemma defaults to a finite 16000 TPM (only
+   Infinity when explicitly overridden via env with `0`/"unlimited").
+   TPM rarely bites on Flash Lite under normal use but is the safety net
+   against outlier long chapters and burst-retry pathology. */
 
 import { AnalysisAbortedError } from './ollama.js';
 
 interface ModelLimits {
   rpm: number;
-  /** Total input tokens per minute. `Infinity` for Gemma's "Unlimited". */
+  /** Total input tokens per minute. `Infinity` only when a model's TPM is
+      explicitly overridden to "unlimited" (e.g. Gemma via env `0`/"unlimited");
+      otherwise always a finite cap. */
   tpm: number;
   rpd: number;
 }
@@ -90,6 +93,25 @@ export class DailyQuotaExhaustedError extends Error {
   ) {
     super(`Gemini ${model} daily quota exhausted — resets at ${resetAt.toISOString()}.`);
     this.name = 'DailyQuotaExhaustedError';
+  }
+}
+
+/** A single request whose estimated tokens exceed the model's whole finite
+    TPM budget can never be satisfied — no amount of waiting frees enough
+    headroom. `acquire()` throws this immediately instead of spinning its
+    wait loop forever (RC5). */
+export class RequestExceedsTpmError extends Error {
+  readonly code = 'REQUEST_EXCEEDS_TPM';
+  constructor(
+    public readonly model: string,
+    public readonly estimated: number,
+    public readonly cap: number,
+  ) {
+    super(
+      `Gemini ${model}: request estimate ${estimated} tokens exceeds the ${cap} tokens/min cap — ` +
+        `no single request can fit. Lower analyzer.gemini.maxInputTokensPerRequest or raise TPM.`,
+    );
+    this.name = 'RequestExceedsTpmError';
   }
 }
 
@@ -177,6 +199,12 @@ export class GeminiRateLimiter {
     }
 
     const limits = resolveLimits(model);
+
+    // Fail fast: a single request larger than the whole per-minute budget can
+    // never be satisfied — do not spin the wait loop forever (RC5).
+    if (Number.isFinite(limits.tpm) && estimatedTokens > limits.tpm) {
+      throw new RequestExceedsTpmError(model, estimatedTokens, limits.tpm);
+    }
 
     while (true) {
       const s = this.getState(model);
