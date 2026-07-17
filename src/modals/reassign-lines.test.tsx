@@ -82,6 +82,11 @@ describe('ReassignLinesModal — character source', () => {
       (c) => (c[0] as { type?: string })?.type === 'changeLog/bumpBoundaryMove',
     );
     expect(bumps).toHaveLength(2); // chapters 1 and 2
+    // Per-chapter counts, not a flat 1 per chapter (#1676(c) review fold):
+    // chapter 1 has 2 Егор lines (Alpha, Beta), chapter 2 has 1 (Gamma).
+    const payloads = bumps.map((c) => (c[0] as unknown as { payload: { chapterId: number; count: number } }).payload);
+    expect(payloads).toContainEqual({ chapterId: 1, count: 2 });
+    expect(payloads).toContainEqual({ chapterId: 2, count: 1 });
   });
 
   it('disables the source character in the target picker', () => {
@@ -164,5 +169,74 @@ describe('ReassignLinesModal — key drift at apply (m9)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^reassign/i }));
     fireEvent.click(await screen.findByRole('button', { name: /confirm/i }));
     expect(await screen.findByText(/no longer existed|were skipped/i)).toBeInTheDocument();
+  });
+
+  it('skips the bulk dispatch entirely when every selected key has drifted', async () => {
+    // Dedicated store with a THIRD chapter-1 line that stays live and
+    // unselected, so `rows` isn't empty post-drift (which would otherwise
+    // swap in the "Nothing to reassign here" empty state and hide the
+    // footer's result message this test asserts on).
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        cast: castSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          manuscriptId: 'm1',
+          bookId: 'b1',
+          sentences: [
+            { chapterId: 1, id: 1, text: 'Alpha line.', characterId: 'egor' },
+            { chapterId: 1, id: 2, text: 'Beta line.', characterId: 'egor' },
+            { chapterId: 1, id: 3, text: 'Delta line.', characterId: 'egor' },
+          ] as never,
+        },
+        cast: {
+          ...castSlice.getInitialState(),
+          characters: [
+            { id: 'egor', name: 'Егор' },
+            { id: 'anton', name: 'Антон' },
+            { id: 'narrator', name: 'Narrator' },
+          ] as never,
+        },
+        chapters: {
+          ...chaptersSlice.getInitialState(),
+          chapters: [{ id: 1, title: 'One' }] as never,
+        },
+      },
+    });
+    const onClose = vi.fn();
+    const spy = vi.spyOn(store, 'dispatch');
+    render(
+      <Provider store={store}>
+        <ReassignLinesModal source={{ kind: 'selection', keys: [
+          { chapterId: 1, sentenceId: 1 },
+          { chapterId: 1, sentenceId: 2 },
+          { chapterId: 1, sentenceId: 3 },
+        ] }} onClose={onClose} />
+      </Provider>,
+    );
+    // Deselect the row that will survive — only the two doomed rows (1, 2)
+    // stay checked.
+    fireEvent.click(screen.getByText('Delta line.').closest('label')!.querySelector('input')!);
+    // Both selected rows drift away entirely (tombstoned individually, same
+    // mechanism promoteSentenceToTitle uses); the unselected row 3 survives.
+    store.dispatch(manuscriptActions.promoteSentenceToTitle({ chapterId: 1, sentenceId: 1 }));
+    store.dispatch(manuscriptActions.promoteSentenceToTitle({ chapterId: 1, sentenceId: 2 }));
+    fireEvent.change(screen.getByLabelText(/reassign to/i), { target: { value: 'anton' } });
+    fireEvent.click(screen.getByRole('button', { name: /^reassign/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /confirm/i }));
+    expect(await screen.findByText(/no longer existed|were skipped/i)).toBeInTheDocument();
+    expect(
+      spy.mock.calls.some((c) => (c[0] as { type?: string })?.type === 'manuscript/setSentencesCharacterBulk'),
+    ).toBe(false);
+    expect(
+      spy.mock.calls.some((c) => (c[0] as { type?: string })?.type === 'changeLog/bumpBoundaryMove'),
+    ).toBe(false);
+    // Modal stays open (onClose not called) so the user sees the result message.
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

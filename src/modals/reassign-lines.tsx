@@ -170,6 +170,15 @@ export function ReassignLinesModal({ source, onClose }: Props) {
       const [c, s] = k.split(':');
       return { chapterId: Number(c), sentenceId: Number(s) };
     });
+    if (keys.length === 0) {
+      // Every selected key drifted away — nothing left to move. Skip the bulk
+      // dispatch entirely (an empty-keys bulk would still set lastBulkReassign
+      // and surface a hollow "Reassigned 0 lines" undo banner) and just report
+      // why, with the modal left open so the user can see the empty result.
+      setResult(`${skipped} no longer existed and were skipped.`);
+      setConfirming(false);
+      return;
+    }
     dispatch(
       manuscriptActions.setSentencesCharacterBulk({
         keys,
@@ -177,8 +186,10 @@ export function ReassignLinesModal({ source, onClose }: Props) {
         targetLabel: nameById.get(targetId) ?? 'Character',
       }),
     );
-    for (const chapterId of new Set(keys.map((k) => k.chapterId))) {
-      dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 }));
+    const countByChapter = new Map<number, number>();
+    for (const k of keys) countByChapter.set(k.chapterId, (countByChapter.get(k.chapterId) ?? 0) + 1);
+    for (const [chapterId, count] of countByChapter) {
+      dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count }));
     }
     if (skipped > 0) {
       setResult(`Moved ${keys.length} lines; ${skipped} no longer existed and were skipped.`);
