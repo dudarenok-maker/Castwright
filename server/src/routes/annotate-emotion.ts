@@ -163,7 +163,7 @@ annotateEmotionRouter.post(
         const chapterStartedAt = Date.now();
         const sentences = byChapter.get(chapterId) ?? [];
         const chunks = chunkSentencesByBudget(sentences, {
-          charBudget: chapterChunkBudget(selection.engine),
+          charBudget: chapterChunkBudget(selection.engine, 0, sentences.map((s) => s.text).join(' ')),
           overlap: 3,
           serialize: (s) =>
             JSON.stringify({ sentenceId: s.id, characterId: s.characterId, text: s.text }),

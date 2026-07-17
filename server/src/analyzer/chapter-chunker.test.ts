@@ -35,6 +35,22 @@ describe('chapterChunkBudget (Part 4 — finite Gemini budget for output-heavy p
     const oneCall = chunkSentencesByBudget(sentences, { charBudget: Number.MAX_SAFE_INTEGER, overlap: 3, serialize: (s) => s.text });
     expect(oneCall.length).toBe(1);
   });
+
+  it('gemini output-heavy budget shrinks as reserved (roster) chars grow', () => {
+    const sample = 'а'.repeat(5000);
+    const noRoster = chapterChunkBudget('gemini', 0, sample);
+    const bigRoster = chapterChunkBudget('gemini', 14000, sample);
+    expect(bigRoster).toBeLessThan(noRoster);
+  });
+
+  it('gemini output-heavy budget never exceeds outputHeavyChunkChars', () => {
+    const sample = 'a'.repeat(5000);
+    expect(chapterChunkBudget('gemini', 0, sample)).toBeLessThanOrEqual(32000);
+  });
+
+  it('local output-heavy budget is unchanged (num_ctx-derived, roster ignored)', () => {
+    expect(chapterChunkBudget('local', 14000, 'x')).toBe(resolveStage1ChunkCharBudget('local'));
+  });
 });
 
 describe('chunkSentencesByBudget', () => {

@@ -17,8 +17,10 @@
    budgeted chunks. Each chunk carries an OWNED CORE plus overlap CONTEXT; an op
    is emitted only by the chunk whose core contains its primary sentence
    (`ownsOp` / `primarySentenceId`), so every sentence is reviewed exactly once
-   across the overlapping chunks. Cloud engines get a MAX_SAFE_INTEGER budget
-   from `chapterChunkBudget`, so they stay one call per chapter. */
+   across the overlapping chunks. Cloud engines get a FINITE budget from
+   `chapterChunkBudget`, sized to the per-request token cap minus the roster
+   overhead — so a large chapter chunks across several calls instead of
+   overrunning the cloud output-token cap in one. */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -792,7 +794,11 @@ async function runScriptReviewJob(
         ? buildStructureEvidence(bodyByChapter.get(chapterId) ?? '', byChapter.get(chapterId) ?? [], roster, reviewLanguage)
         : undefined;
       const chunks = chunkSentencesByBudget(byChapter.get(chapterId) ?? [], {
-        charBudget: chapterChunkBudget(activeSelection.engine),
+        charBudget: chapterChunkBudget(
+          activeSelection.engine,
+          JSON.stringify(roster).length + 800, // roster payload + fixed template scaffold
+          (byChapter.get(chapterId) ?? []).map((s) => s.text).join(' '), // sample → chars/token
+        ),
         overlap: CHUNK_OVERLAP,
         serialize: (s) => JSON.stringify({ id: s.id, characterId: s.characterId, text: s.text }),
       });

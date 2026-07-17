@@ -19,6 +19,7 @@
 
 import { resolveStage1ChunkCharBudget } from './stage1-chunk.js';
 import { configValue } from '../config/resolver.js';
+import { cloudBodyCharBudget } from './token-budget.js';
 
 export interface SentenceChunk<S> {
   core: S[];
@@ -98,7 +99,12 @@ export function primarySentenceId(op: { id: number; op: string; mergeIds?: numbe
    Stage-1 cast detection calls resolveStage1ChunkCharBudget DIRECTLY (passing
    the chapter body so gemini sizes to the per-request token cap) — a clean,
    separate seam untouched by this. */
-export function chapterChunkBudget(engine: 'gemini' | 'local'): number {
-  if (engine === 'local') return resolveStage1ChunkCharBudget('local');
-  return configValue<number>('analyzer.gemini.outputHeavyChunkChars');
+export function chapterChunkBudget(
+  engine: 'gemini' | 'local',
+  reservedChars = 0,
+  sampleText = '',
+): number {
+  if (engine === 'local') return resolveStage1ChunkCharBudget('local'); // roster rides on num_ctx; local truncation is the stage-2 fraction knob's domain
+  const outputCap = configValue<number>('analyzer.gemini.outputHeavyChunkChars');
+  return Math.min(outputCap, cloudBodyCharBudget(sampleText, reservedChars));
 }
