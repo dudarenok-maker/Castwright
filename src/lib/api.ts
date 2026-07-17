@@ -8953,17 +8953,6 @@ const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = [
     default: 10,
   },
   {
-    key: 'analyzer.ollama.keepAlive',
-    group: 'analyzer-models',
-    label: 'Analyzer keep-alive',
-    help: 'How long Ollama holds a resident analyzer model in VRAM after a call (Ollama keep_alive: \'5m\', \'1m\', \'0\' to unload immediately, \'-1\' to pin). Applied to the RESIDENT_MODELS the analyzer keeps warm across the analysis loop; non-resident tags always unload immediately. \'5m\' bridges the gap between back-to-back chapter calls. Cross-engine eviction before a TTS/voice-design load is handled separately by the GPU load chokepoint (gpu.safeCoexistMb).',
-    type: 'string',
-    apply: 'live',
-    risk: 'medium',
-    isPrompt: false,
-    default: '5m',
-  },
-  {
     key: 'prompt.castDetection',
     group: 'analyzer-prompts',
     label: 'Cast detection prompt',
