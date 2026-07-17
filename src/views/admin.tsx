@@ -749,7 +749,7 @@ function AnalyzerTrends() {
       {loaded && groups.length > 0 && (
         <div
           data-testid="analyzer-trends-scroll"
-          className="max-h-[28rem] overflow-y-auto scrollbar-thin rounded-3xl border border-ink/10 bg-white shadow-card"
+          className="max-h-[28rem] overflow-y-auto overflow-x-auto scrollbar-thin rounded-3xl border border-ink/10 bg-white shadow-card"
         >
           {groups.map((g) => (
             <div
@@ -782,7 +782,7 @@ function AnalyzerTrends() {
                     <AnalyzerRow
                       key={`${r.at}:${r.chapterId}:${r.stage}`}
                       row={r}
-                      newerTokS={g.rows[i - 1]?.evalTokS}
+                      olderTokS={g.rows[i + 1]?.evalTokS}
                     />
                   ))}
                 </tbody>
@@ -795,11 +795,11 @@ function AnalyzerTrends() {
   );
 }
 
-function AnalyzerRow({ row, newerTokS }: { row: AnalyzerEvalRecord; newerTokS?: number | null }) {
-  /* Falling tok/s vs the NEWER neighbour = deteriorating (rows are newest-first,
-     so "newer" is the row above). Load spike + failure get their own tint. */
+function AnalyzerRow({ row, olderTokS }: { row: AnalyzerEvalRecord; olderTokS?: number | null }) {
+  /* Falling tok/s vs the OLDER neighbour = deteriorating (rows are newest-first,
+     so "older" is the row below). Load spike + failure get their own tint. */
   const dropped =
-    row.evalTokS != null && newerTokS != null && newerTokS < row.evalTokS - ANALYZER_TOKS_EPSILON;
+    row.evalTokS != null && olderTokS != null && row.evalTokS < olderTokS - ANALYZER_TOKS_EPSILON;
   const loadSpike = row.loadMs > 200;
   return (
     <tr className={row.outcome === 'failed' ? 'text-magenta' : undefined} data-testid="analyzer-trends-row">

@@ -458,6 +458,27 @@ describe('AdminView — AnalyzerTrends panel', () => {
     renderAdmin();
     expect(await screen.findByText(/No analyzer telemetry recorded yet/i)).toBeInTheDocument();
   });
+
+  it('flags the newest (degraded) row, not the older (better) row, on a real slowdown', async () => {
+    // Newest-first: throughput fell 40 -> 20 over time. The NEWEST row (24 t/s
+    // slower than its older neighbour) must carry the ▼/magenta deterioration
+    // marker; the OLDER row (the one before the slowdown) must not.
+    mockAnalyzerStats.mockResolvedValue({
+      records: [
+        mk({ manuscriptId: 'A', model: 'qwen:latest', chapterId: 2, evalTokS: 20 }),
+        mk({ manuscriptId: 'A', model: 'qwen:latest', chapterId: 1, evalTokS: 40 }),
+      ],
+    });
+    renderAdmin();
+    const rows = await screen.findAllByTestId('analyzer-trends-row');
+    expect(rows).toHaveLength(2);
+    const droppedRow = rows.find((r) => within(r).queryByText(/20\.0 t\/s/));
+    const olderRow = rows.find((r) => within(r).queryByText(/40\.0 t\/s/));
+    expect(droppedRow).toBeDefined();
+    expect(olderRow).toBeDefined();
+    expect(within(droppedRow!).getByText(/▼/)).toBeInTheDocument();
+    expect(within(olderRow!).queryByText(/▼/)).toBeNull();
+  });
 });
 
 describe('AdminView — table scroll regions + header alignment', () => {
