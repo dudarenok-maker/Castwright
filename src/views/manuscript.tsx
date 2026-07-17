@@ -84,6 +84,8 @@ interface Segment {
   id: string;
   characterId: string;
   sentences: IndexedSentence[];
+  /** #1679 — true when this segment opens on a source scene break. */
+  sceneBreakBefore?: boolean;
 }
 interface Drag {
   boundaryIdx: number;
@@ -270,11 +272,13 @@ export function ManuscriptView({
       const s = sentences[i];
       if (currentChapterId != null && s.chapterId !== currentChapterId) continue;
       const last = segs[segs.length - 1];
-      if (last && last.characterId === s.characterId) last.sentences.push({ ...s, absIdx: i });
+      if (last && last.characterId === s.characterId && !s.sceneBreakBefore)
+        last.sentences.push({ ...s, absIdx: i });
       else
         segs.push({
           id: `seg_${segs.length}`,
           characterId: s.characterId,
+          sceneBreakBefore: s.sceneBreakBefore,
           sentences: [{ ...s, absIdx: i }],
         });
     }
@@ -1183,6 +1187,7 @@ export function ManuscriptView({
                           transform: `translateY(${virtualItem.start - virtualizer.options.scrollMargin}px)`,
                         }}
                       >
+                        {virtualItem.index > 0 && seg.sceneBreakBefore && <SceneDivider />}
                         <SegmentRow
                           seg={seg}
                           characters={characters}
@@ -1200,7 +1205,7 @@ export function ManuscriptView({
                           onOpenProfile={onOpenProfile}
                           findChar={findChar}
                         />
-                        {!isLast && (
+                        {!isLast && !segments[virtualItem.index + 1]?.sceneBreakBefore && (
                           <BoundaryHandle
                             boundaryIdx={virtualItem.index + 1}
                             drag={drag}
@@ -1214,6 +1219,7 @@ export function ManuscriptView({
               ) : (
                 segments.map((seg, segIdx) => (
                   <Fragment key={seg.id}>
+                    {segIdx > 0 && seg.sceneBreakBefore && <SceneDivider />}
                     <SegmentRow
                       seg={seg}
                       characters={characters}
@@ -1231,13 +1237,14 @@ export function ManuscriptView({
                       onOpenProfile={onOpenProfile}
                       findChar={findChar}
                     />
-                    {segIdx < segments.length - 1 && (
-                      <BoundaryHandle
-                        boundaryIdx={segIdx + 1}
-                        drag={drag}
-                        onPointerDown={onBoundaryPointerDown}
-                      />
-                    )}
+                    {segIdx < segments.length - 1 &&
+                      !segments[segIdx + 1]?.sceneBreakBefore && (
+                        <BoundaryHandle
+                          boundaryIdx={segIdx + 1}
+                          drag={drag}
+                          onPointerDown={onBoundaryPointerDown}
+                        />
+                      )}
                   </Fragment>
                 ))
               )}
@@ -1840,6 +1847,22 @@ function SegmentRow({
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* #1679 — read-only scene-change divider. Two faint --ink hairlines flanking a
+   Lora-serif ornament; non-interactive, generous vertical spacing. */
+function SceneDivider() {
+  return (
+    <div
+      data-testid="scene-divider"
+      aria-hidden="true"
+      className="flex items-center gap-4 my-8 select-none text-ink/40"
+    >
+      <span className="h-px flex-1 bg-ink/15" />
+      <span className="font-serif text-lg leading-none">&#10022;</span>
+      <span className="h-px flex-1 bg-ink/15" />
     </div>
   );
 }
