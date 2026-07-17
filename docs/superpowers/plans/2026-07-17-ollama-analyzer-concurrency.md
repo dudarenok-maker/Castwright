@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-17-ollama-parallel-chunk-analysis-design.md` (green v3; per-model lease; deadlock-free confirmed).
 
+**Plan review:** GREEN — lease code verified correct on both concurrency cruxes + refcount; 6 hygiene nits folded (import churn, spy pattern, stale comment, :814/:829 clarity, K=2 test assumption, catch symmetry).
+
 ## Global Constraints
 
 - **Node 20.6+**, no new dependencies (reuse `GpuSemaphore`).
@@ -223,6 +225,7 @@ async function enterModelLease(key: string, onCpu: boolean): Promise<() => void>
       await lease.p; // join: block until holder's acquire resolves
     } catch (e) {
       lease.count--;
+      if (lease.count === 0) leases.delete(key); // symmetry with the holder catch (dead path today)
       throw e;
     }
   }
@@ -277,7 +280,7 @@ export function __resetAnalyzerLeasesForTest(): void {
 ```
 
 - [ ] **Step 4: Run — expect PASS.** `cd server && npx vitest run src/analyzer/analyzer-concurrency.test.ts`
-  (The two-different-models test relies on the test-env `gpuSemaphore.budget === 1`: registry `gpu.vramBudget` default 0 → falls back to `gpu.concurrency` 1. If a local `server/.env` sets `GPU_VRAM_BUDGET`, run with it unset.)
+  Test-env assumptions: (a) `gpuSemaphore.budget === 1` (registry `gpu.vramBudget` default 0 → falls back to `gpu.concurrency` 1) — if a local `server/.env` sets `GPU_VRAM_BUDGET`, run with it unset; (b) the limiter default **K=2** (`ANALYZER_OLLAMA_CONCURRENCY` unset at module load) — the "same model" (r2 must *join* concurrently) and "two models" tests need width ≥ 2, or at K=1 the limiter blocks r2/p2 and they hang.
 
 - [ ] **Step 5: Commit**
 
@@ -294,7 +297,9 @@ git commit -m "feat(server): width-K limiter + per-model GPU lease for analyzer 
 
 **Interfaces:** Consumes `acquireAnalyzerSlot`; the confirmed-CPU signal `getLastKnownAnalyzerDevice` (`../gpu/analyzer-device-state.js`).
 
-- [ ] **Step 1: Write the failing test** — append to `ollama.test.ts`, driving the public `runStage1Chapter` (the happy-path template is at `:127`; `chat` is private). Import at top: `import { acquireAnalyzerSlot } from './analyzer-concurrency.js';` and `import * as conc from './analyzer-concurrency.js';`
+- [ ] **Step 1: Write the failing test** — append to `ollama.test.ts`, driving the public `runStage1Chapter` (the happy-path template is at `:127`; `chat` is private). Import at top the namespace only (the tests use `conc.*`): `import * as conc from './analyzer-concurrency.js';`
+
+> **Spy note:** `vi.spyOn(conc, 'acquireAnalyzerSlot')` spies a module-function export (supported by vitest; the SUT's named import sees the spy). If this repo's vitest config doesn't transform it (the existing tests only spy object methods like `gpuSemaphore.acquire`), fall back to `vi.spyOn(conc.analyzerConcurrency, 'acquire')` (guaranteed object-method spy) for the call-count/release assertions, and drop the model-key `calls[0][0]` assertion (or assert the key via a lease-observable). Confirm the pattern works on first run.
 
 ```ts
 describe('OllamaAnalyzer — analyzer slot (limiter + model lease)', () => {
@@ -349,7 +354,7 @@ import { getLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
     }
 ```
 
-Remove the now-unused `gpuSemaphore` import from `ollama.ts` **only if** no other reference remains (grep first: `grep -n gpuSemaphore server/src/analyzer/ollama.ts`); `costForEngine` is still used by the persona path — keep it.
+**Keep** the `gpuSemaphore` and `costForEngine` imports — Task 6's startup log reuses **both** (`describeAnalyzerConcurrency(costForEngine('analyzer'), gpuSemaphore.budget)`), so removing them here just forces a re-add. The only import that genuinely orphans is `acquireGpuTokenIfOnGpu`, and only **after Task 4** removes its last use — drop it then, not now.
 
 - [ ] **Step 5: Run — expect PASS** (whole `ollama.test.ts` green, incl. the existing body-shape assertions).
 - [ ] **Step 6: Commit**
@@ -402,9 +407,9 @@ it('persona gen on CPU takes the limiter but no GPU slot', async () => {
   }
 ```
 
-Grep `server/src/analyzer/ollama.ts` for other `acquireGpuTokenIfOnGpu` uses; if none remain, drop its import. (`costForEngine` may now be unused in `ollama.ts` — grep and drop if so.)
+Grep `server/src/analyzer/ollama.ts` for other `acquireGpuTokenIfOnGpu` uses; if none remain, drop **its** import only. (Keep `gpuSemaphore`/`costForEngine` — Task 6 uses them.)
 
-- [ ] **Step 4: Run — expect PASS** (full file green — the pre-existing persona tests at `:814/:829` still pass; note they asserted `gpuSemaphore.acquire` was/ wasn't called — update those two to assert via `acquireAnalyzerSlot`/the slot behavior instead, since the direct gpuSemaphore call is gone).
+- [ ] **Step 4: Run — expect PASS** (full file green). Note: the pre-existing persona tests at `:814/:829` **do not break** — `:829` (CPU) still passes because the CPU lease skips `gpuSemaphore` (the limiter is a *different* object), and `:814` (GPU) still passes because the lease's 0→1 calls `gpuSemaphore.acquire` exactly once and self-deletes on release. Updating them to assert via `acquireAnalyzerSlot`/the slot is a clarity improvement, not a break-fix — do it if convenient, but they stay green either way.
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -442,7 +447,7 @@ describe('analyzerPoolWidth (live from analyzer.ollama.concurrency)', () => {
 
 - [ ] **Step 2: Run — expect FAIL** (`analyzerPoolWidth` not exported).
 
-- [ ] **Step 3: Replace `readStage2Concurrency`** (`analysis.ts:917-921`) with a live, exported reader — delete the `STAGE2_CONCURRENCY` env read entirely:
+- [ ] **Step 3: Replace `readStage2Concurrency` AND its stale doc comment** (`analysis.ts:912-921` — the comment block above the function references the removed `STAGE2_CONCURRENCY` env; delete it too so nothing lingers pointing at the dead var) with a live, exported reader:
 
 ```ts
 /* Analyzer chapter-pool width (stage-1 cast + stage-2 attribution), = K, read
