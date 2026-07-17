@@ -115,6 +115,26 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
   chunk and asserts the estimate stays ≤ 14.5k, and re-trips if a skill grows.
   Throughput note: the reservation splits a Night-Watch-sized (~600-sentence)
   chapter into a few more calls; typical chapters stay one call. (Refs #1682)
+- **Analyzer: local Ollama analysis can now run K chapters/chunks concurrently
+  for ~2–3× overnight-batch throughput — safe on 6/8 GB cards and decoupled
+  from TTS.** A new width-K limiter (`analyzer.ollama.concurrency` /
+  `ANALYZER_OLLAMA_CONCURRENCY`, default 2, restart-server) bounds total
+  in-flight analyzer `/api/chat` calls, and a per-resident-model refcounted GPU
+  lease holds exactly one cross-engine `gpuSemaphore` slot while a model has any
+  call in flight: K same-model calls share that one slot (real concurrency —
+  Ollama serves K decode streams from a single weight read), two *different*
+  local models serialize on a small budget (no co-residence OOM), and cloud
+  passes overlap freely. The limiter is independent of `GPU_VRAM_BUDGET`, so
+  raising K never widens TTS synthesis, and the fixed acquire order
+  (limiter → model-lease → gpuSemaphore) is deadlock-free. Both analyzer→Ollama
+  paths (`OllamaAnalyzer.chat` and `generatePersonaViaOllama`) are gated;
+  behavior-preserving at the default (budget-1 → still effectively serial, as
+  before), K>1 opt-in. Retires the never-really-used `STAGE2_CONCURRENCY` env —
+  the chapter-pool width now reads K live via `analyzerPoolWidth()`, stage
+  pipelining (Phase 0 ‖ 1, per-stage models, cloud/local shift) unchanged. Set
+  Ollama-side `OLLAMA_NUM_PARALLEL >= K`. New `analyzer-concurrency.ts` +
+  8/8-case suite; whole-branch Opus review confirmed all six concurrency
+  invariants and complete call-site coverage. (#1702)
 
 ---
 
