@@ -17,7 +17,7 @@ import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from '../tts/engine-vram-cost.js';
 import { acquireAnalyzerSlot, describeAnalyzerConcurrency } from './analyzer-concurrency.js';
 import { getLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
-import { getResolvedOllamaUrl } from '../workspace/user-settings.js';
+import { getResolvedOllamaUrl, getCachedUserSettings } from '../workspace/user-settings.js';
 import { configValue } from '../config/resolver.js';
 import type { Accelerator } from '../gpu/vram-state.js';
 import { getLastKnownVram } from '../gpu/vram-state.js';
@@ -43,6 +43,7 @@ import {
   type NonStoryClassificationOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
+import type { RawEvalTiming } from './analyzer-eval-stats.js';
 import { AnalyzerTruncatedError } from './errors.js';
 import {
   buildSystemInstruction,
@@ -126,69 +127,51 @@ export function resolveOllamaRetryTemperature(): number {
   return configValue<number>('analyzer.ollama.retryTemperature');
 }
 
-/* Models we want Ollama to hold in VRAM between back-to-back analysis
-   calls. Stage 1 → Stage 2 → next chapter happens on a tight loop, and
-   reloading a multi-GB weight set between each one would dominate
-   wall-clock time — the 9B otherwise unloads+reloads ~6.35 GB on every
-   chapter section, which surfaces as a VRAM sawtooth and mid-stream
-   "no response" stalls. The 4B (~3 GB), Llama-8B (~5 GB), and 9B
-   (~6.6 GB) all fit resident on an 8 GB box alongside the KV cache at
-   ANALYZER_NUM_CTX: the chunker caps each section to ~24k chars so the
-   KV cache never reaches the 32k worst case (confirmed live — the 9B
-   ran ~6.25 GB / 8 GB resident).
+/* Coded keep-alive defaults (seconds) for the analyzer models Castwright
+   supports out of the box. Keyed on the NORMALIZED (bare, no ':latest') tag.
+   User overrides in userSettings.analyzerKeepAliveByModel win; anything not
+   listed and not overridden falls to 0 (unload immediately). 300 = the former
+   global '5m' the retired RESIDENT_MODELS allowlist applied. */
+const DEFAULT_KEEP_ALIVE_SECONDS: Record<string, number> = {
+  'qwen3.5:4b': 300,
+  'qwen3.5:9b': 300,
+  'llama3.1:8b': 300,
+  'gemma4-e4b-8gb': 300,
+};
 
-   The cross-engine handoff is the load-bearing assumption: a resident 9B
-   CANNOT co-reside with Qwen TTS / XTTS, so we rely on the generation
-   engine's auto-evict to drop a resident Ollama model before it loads.
-   With that protection in place, keeping the 9B warm across the analysis
-   loop is safe and removes the reload tax.
-
-   NOTE: this does NOT hold for a LOCAL-MODEL SPLIT (a run that uses two
-   different local models across phase0/phase1). Two large local models
-   resident at once would exceed the 8 GB budget — that path must keep
-   its non-resident eviction; do not naively add both to this set.
-   Tune the allowlist in lockstep with src/lib/models.ts MODEL_OPTIONS.
-   `gemma4-e4b-8gb` is the local alias for the Gemma 4 E4B edge model (~5 GB
-   resident, fits 8 GB alongside the KV cache); both the bare name and the
-   `:latest` form Ollama reports in /api/tags are listed so the exact-match
-   lookup hits however the picker/env passes it. NOTE: this is a per-box local
-   name — model-agnostic measured residency is the deferred #845 work. */
-const RESIDENT_MODELS = new Set([
-  'qwen3.5:4b',
-  'qwen3.5:9b',
-  'llama3.1:8b',
-  'gemma4-e4b-8gb',
-  'gemma4-e4b-8gb:latest',
-]);
-
-/* Models that are only safe to keep resident where the constraint is VRAM
-   (GPU box). On a CPU-only machine the same model would pin ~6.4 GB of
-   system RAM for 5 min with no eviction guard, so we unload immediately
-   when the accelerator is 'cpu'. Small models (4B/8B) fit comfortably in
-   either context and are NOT in this set. */
+/* Models unsafe to keep resident on CPU (would pin ~6.4 GB system RAM for the
+   whole window). Clamped to 0 on a CPU-only box regardless of the configured
+   value. Orthogonal to the per-model map — a deliberate safety rail. */
 const RAM_HEAVY_MODELS = new Set(['qwen3.5:9b']);
 
-/** Live-read the resident-model keep-alive window (registry wins; default '5m'). */
-export function resolveAnalyzerKeepAlive(): string {
-  return configValue<string>('analyzer.ollama.keepAlive');
+/** Strip a trailing ':latest' only (Ollama treats bare == :latest). Leaves real
+    tags like 'qwen3.5:9b' untouched. */
+export function normalizeModelTag(tag: string): string {
+  return tag.endsWith(':latest') ? tag.slice(0, -':latest'.length) : tag;
 }
 
-/** Picks the `keep_alive` value for an Ollama /api/chat call:
-    - models in RESIDENT_MODELS → ANALYZER_KEEP_ALIVE knob (default '5m', stay
-                                  loaded for the analysis loop)
-    - RAM_HEAVY_MODELS on CPU   → 0   (would pin ~6.4 GB in system RAM)
-    - everything else            → 0   (unload immediately after the call,
-                                        matching `keep_alive: 0` in Ollama's
-                                        own unload pattern — see
-                                        https://github.com/ollama/ollama/blob/main/docs/api.md#keep-alive).
-    The `accelerator` parameter defaults to 'unknown', which is treated as
-    GPU (the common case + the perf win), so existing 1-arg callers are
-    unaffected. Cross-engine eviction before a TTS load is handled separately
-    by withGpuLoad (gpu.safeCoexistMb), not here. */
-export function keepAliveFor(model: string, accelerator: Accelerator = 'unknown'): string | number {
-  if (!RESIDENT_MODELS.has(model)) return 0;
+/** Resolved keep-alive (seconds) for `model`: user override (raw or normalized
+    key) → coded default (normalized) → 0. Reads the settings cache synchronously
+    so it is safe at the request-body build site. */
+export function resolveKeepAliveSeconds(model: string): number {
+  const map = getCachedUserSettings().analyzerKeepAliveByModel ?? {};
+  const norm = normalizeModelTag(model);
+  const override = map[model] ?? map[norm];
+  if (override !== undefined) return override;
+  return DEFAULT_KEEP_ALIVE_SECONDS[norm] ?? 0;
+}
+
+/** True when the user has an explicit override for `model` (either key form). */
+export function hasKeepAliveOverride(model: string): boolean {
+  const map = getCachedUserSettings().analyzerKeepAliveByModel ?? {};
+  return map[model] !== undefined || map[normalizeModelTag(model)] !== undefined;
+}
+
+/** `keep_alive` (integer seconds) for an Ollama /api/chat call. Per-model via
+    resolveKeepAliveSeconds; RAM-heavy models clamp to 0 on CPU. */
+export function keepAliveFor(model: string, accelerator: Accelerator = 'unknown'): number {
   if (RAM_HEAVY_MODELS.has(model) && accelerator === 'cpu') return 0;
-  return resolveAnalyzerKeepAlive();
+  return resolveKeepAliveSeconds(model);
 }
 
 /* num_ctx the analyzer hands Ollama on every /api/chat call (see the
@@ -467,6 +450,7 @@ export class OllamaAnalyzer implements Analyzer {
         resolveOllamaTemperature(),
         call.onChunk,
         call.signal,
+        call.onEvalTiming,
       );
 
       const firstAttempt = parseAndValidate(firstText, validationSchema);
@@ -524,6 +508,7 @@ export class OllamaAnalyzer implements Analyzer {
         retryTemperature,
         call.onChunk,
         call.signal,
+        call.onEvalTiming,
       );
 
       const secondAttempt = parseAndValidate(secondText, validationSchema);
@@ -573,6 +558,7 @@ export class OllamaAnalyzer implements Analyzer {
     temperature: number,
     onChunk?: (info: StageChunkInfo) => void,
     signal?: AbortSignal,
+    onEvalTiming?: (t: RawEvalTiming) => void,
   ): Promise<string> {
     const body = {
       model: this.model,
@@ -587,10 +573,9 @@ export class OllamaAnalyzer implements Analyzer {
          extra fields. The existing validation-retry loop below still guards
          against semantic violations the schema can't express. */
       format: responseFormat,
-      /* Per-model keep_alive — see keepAliveFor + RESIDENT_MODELS above.
-         The 4B and Llama-8B stay resident across the analysis loop; the
-         9B unloads immediately so its 6.6 GB doesn't squat on VRAM that
-         XTTS needs after analysis. */
+      /* Per-model keep_alive — see keepAliveFor + DEFAULT_KEEP_ALIVE_SECONDS
+         above; a user override in analyzerKeepAliveByModel wins over the
+         coded default. */
       keep_alive: keepAliveFor(this.model, getLastKnownVram().accelerator),
       /* Suppress qwen3.5's thinking tokens — they'd appear as
          `<think>…</think>` ahead of the JSON and break the parser. Ollama
@@ -674,6 +659,10 @@ export class OllamaAnalyzer implements Analyzer {
          'stop' (clean), 'length' (hit num_ctx/num_predict — truncated),
          'load'. Captured here, asserted after the stream drains (#528). */
       let doneReason: string | undefined;
+      /* Raw decode timing off the `done:true` line — see analyzer-eval-stats.ts.
+         Fired via onEvalTiming after the stream drains (best-effort telemetry,
+         gated by the analyzer.evalStats.enabled knob below). */
+      let timing: RawEvalTiming | null = null;
       const start = Date.now();
       let lastChunkAt = start;
 
@@ -717,6 +706,9 @@ export class OllamaAnalyzer implements Analyzer {
               done?: boolean;
               done_reason?: string;
               error?: string;
+              eval_count?: number; eval_duration?: number;
+              prompt_eval_count?: number; prompt_eval_duration?: number;
+              load_duration?: number;
             };
             try {
               parsed = JSON.parse(line);
@@ -731,7 +723,17 @@ export class OllamaAnalyzer implements Analyzer {
             if (parsed.error) {
               throw new Error(`Ollama ${this.url} stream error: ${parsed.error}`);
             }
-            if (parsed.done && parsed.done_reason) doneReason = parsed.done_reason;
+            if (parsed.done) {
+              if (parsed.done_reason) doneReason = parsed.done_reason;
+              timing = {
+                model: this.model,
+                evalCount: parsed.eval_count ?? 0,
+                evalDuration: parsed.eval_duration ?? 0,
+                promptEvalCount: parsed.prompt_eval_count ?? 0,
+                promptEvalDuration: parsed.prompt_eval_duration ?? 0,
+                loadDuration: parsed.load_duration ?? 0,
+              };
+            }
 
             const piece = parsed.message?.content;
             if (piece) {
@@ -774,6 +776,11 @@ export class OllamaAnalyzer implements Analyzer {
       // Env-gated (Global Constraints) so fetch-count tests can opt out; best-effort.
       if (process.env.CASTWRIGHT_VRAM_SAMPLE !== '0') {
         await sampleAndRecordVram(this.url, this.model, resolveAnalyzerNumCtx());
+      }
+      /* fs-analyzer-eval-telemetry: best-effort decode-timing capture, gated
+         by the analyzer.evalStats.enabled knob so an operator can disable it. */
+      if (timing && onEvalTiming && configValue<boolean>('analyzer.evalStats.enabled')) {
+        onEvalTiming(timing);
       }
       return buf;
     } finally {

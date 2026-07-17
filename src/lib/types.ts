@@ -73,6 +73,24 @@ export type TtsModelKey = NonNullable<VoiceSampleRequest['modelKey']>;
 
 /* ── App-domain types not modelled in the OpenAPI spec ────────────────── */
 
+/** Analyzer eval-rate telemetry row (server: analyzer-eval-stats.ts). One per
+    (manuscript, chapter, analysis pass). Hand-kept mirror — not OpenAPI-gen. */
+export interface AnalyzerEvalRecord {
+  at: string;
+  manuscriptId: string;
+  bookTitle: string | null;
+  model: string;
+  stage: string;
+  chapterId: number | 'book';
+  evalTokS: number | null;
+  promptTokS: number | null;
+  evalCount: number;
+  loadMs: number;
+  subCalls: number;
+  chunkCount: number | null;
+  outcome: 'ok' | 'failed';
+}
+
 /* Named palette keys live in src/lib/colors.ts (CHAR_COLORS). Widened to
    string because the analysis backend emits 30 procedural slot names
    (`slot-4`..`slot-30`) — see colors.ts CHARACTER_SLOTS and the server's

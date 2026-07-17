@@ -15,6 +15,12 @@ import { mkdir, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as conc from './analyzer-concurrency.js';
+import type { RawEvalTiming } from './analyzer-eval-stats.js';
+import {
+  _setUserSettingsCacheForTest,
+  _resetUserSettingsCache,
+  DEFAULT_USER_SETTINGS,
+} from '../workspace/user-settings.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HANDOFF_ROOT = resolve(__dirname, '..', '..', 'handoff');
@@ -104,6 +110,41 @@ function ndjsonStreamWithDoneReason(
   });
 }
 
+/* Like ndjsonStream but the terminating `done:true` line also carries
+   Ollama's real decode-timing fields (eval_count/eval_duration/
+   prompt_eval_count/prompt_eval_duration/load_duration) — used to test
+   the onEvalTiming capture seam (analyzer-eval-telemetry). */
+function ndjsonStreamWithTiming(
+  chunks: string[],
+  timing: Record<string, number>,
+): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let i = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (i < chunks.length) {
+        const line = JSON.stringify({
+          message: { role: 'assistant', content: chunks[i] },
+          done: false,
+        });
+        controller.enqueue(encoder.encode(line + '\n'));
+        i += 1;
+      } else if (i === chunks.length) {
+        const done = JSON.stringify({
+          message: { role: 'assistant', content: '' },
+          done: true,
+          done_reason: 'stop',
+          ...timing,
+        });
+        controller.enqueue(encoder.encode(done + '\n'));
+        i += 1;
+      } else {
+        controller.close();
+      }
+    },
+  });
+}
+
 function okResponse(stream: ReadableStream<Uint8Array>): Response {
   return new Response(stream, { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } });
 }
@@ -152,14 +193,9 @@ describe('OllamaAnalyzer — happy path streaming', () => {
      * the string sentinel. */
     expect(body.format).not.toBe('json');
     expect(typeof body.format).toBe('object');
-    /* 9B now holds the resident keep_alive: '5m' slot alongside the 4B and
-       llama3.1:8b. The chunker caps each section so weights + KV stay within
-       the 8 GB budget; the old keep_alive: 0 unloaded+reloaded ~6.35 GB
-       between every section, which dominated wall-clock — badly so on
-       Cyrillic manuscripts that need the larger model. The generation
-       engine's auto-evict frees it before Qwen TTS / XTTS load. See
-       RESIDENT_MODELS in ollama.ts; unknown tags still get 0. */
-    expect(body.keep_alive).toBe('5m');
+    /* qwen3.5:9b resolves to its coded default keep-alive (300 s) — see
+       DEFAULT_KEEP_ALIVE_SECONDS in ollama.ts; unknown tags get 0. */
+    expect(body.keep_alive).toBe(300);
     expect(body.options.num_ctx).toBe(32768);
     /* Pin all layers to GPU — see ANALYZER_NUM_GPU in ollama.ts. 999 is
        the standard "all layers" idiom; without this, Ollama auto-splits
@@ -214,65 +250,40 @@ describe('OllamaAnalyzer — analyzer slot (limiter + model lease)', () => {
   });
 });
 
-describe('OllamaAnalyzer — keep_alive policy (per-model VRAM residency)', () => {
-  /* Direct pure-function check on keepAliveFor — guards the allowlist
-     contract independent of the wire format. */
-  it('returns "5m" for the resident-allowlisted models and 0 for the rest', async () => {
+describe('OllamaAnalyzer — keep_alive policy (per-model seconds)', () => {
+  afterEach(() => _resetUserSettingsCache());
+
+  it('returns the coded default (300) for supported models, 0 for unknown', async () => {
     const { keepAliveFor } = await import('./ollama.js');
-    /* 4B (~3 GB) and llama3.1:8b (~5 GB) both fit resident with the KV
-       cache at ANALYZER_NUM_CTX on an 8 GB box, so they hold across the
-       Stage 1 → Stage 2 → next-chapter loop. */
-    expect(keepAliveFor('qwen3.5:4b')).toBe('5m');
-    expect(keepAliveFor('llama3.1:8b')).toBe('5m');
-    /* 9B (~6.6 GB) is now resident too: it fits within budget with the
-       chunker-capped KV cache, and dropping ~6.35 GB between every section
-       was crippling analysis (especially Cyrillic, which needs the larger
-       model). The generation-phase auto-evict frees it before Qwen TTS /
-       XTTS load. */
-    expect(keepAliveFor('qwen3.5:9b')).toBe('5m');
-    /* The Gemma 4 E4B edge model (~5 GB resident) stays warm across the loop —
-       both the bare alias and the `:latest` form Ollama reports in /api/tags. */
-    expect(keepAliveFor('gemma4-e4b-8gb')).toBe('5m');
-    expect(keepAliveFor('gemma4-e4b-8gb:latest')).toBe('5m');
-    /* An unknown model id defaults to 0 — the conservative choice is
-       "unload immediately" so we never accidentally pin a model the
-       allowlist hasn't been tuned for. */
+    expect(keepAliveFor('qwen3.5:4b')).toBe(300);
+    expect(keepAliveFor('llama3.1:8b')).toBe(300);
+    expect(keepAliveFor('qwen3.5:9b')).toBe(300);
+    expect(keepAliveFor('gemma4-e4b-8gb')).toBe(300);
+    expect(keepAliveFor('gemma4-e4b-8gb:latest')).toBe(300); // normalized to bare
     expect(keepAliveFor('placeholder:test-7b')).toBe(0);
   });
 
-  it('pins the heavy 9B resident only on a GPU; CPU unloads it to spare RAM', async () => {
+  it('lets a user override win, including -1 (pin) and 0 (evict)', async () => {
     const { keepAliveFor } = await import('./ollama.js');
-    expect(keepAliveFor('qwen3.5:9b', 'cuda')).toBe('5m');
+    _setUserSettingsCacheForTest({
+      ...DEFAULT_USER_SETTINGS,
+      analyzerKeepAliveByModel: { 'qwen36-castwright:latest': 600, 'qwen3.5:4b': 0, 'llama3.1:8b': -1 },
+    });
+    expect(keepAliveFor('qwen36-castwright:latest')).toBe(600);
+    expect(keepAliveFor('qwen3.5:4b')).toBe(0); // override beats the 300 default
+    expect(keepAliveFor('llama3.1:8b')).toBe(-1);
+  });
+
+  it('clamps RAM-heavy 9B to 0 on CPU even with a positive override', async () => {
+    const { keepAliveFor } = await import('./ollama.js');
+    _setUserSettingsCacheForTest({
+      ...DEFAULT_USER_SETTINGS,
+      analyzerKeepAliveByModel: { 'qwen3.5:9b': 900 },
+    });
+    expect(keepAliveFor('qwen3.5:9b', 'cuda')).toBe(900);
     expect(keepAliveFor('qwen3.5:9b', 'cpu')).toBe(0);
-    expect(keepAliveFor('qwen3.5:4b', 'cpu')).toBe('5m'); // small model: stays
-    expect(keepAliveFor('qwen3.5:9b', 'unknown')).toBe('5m'); // unprobed: assume GPU (the perf win)
-  });
-
-  it('threads keep_alive: "5m" into the /api/chat body when the model is qwen3.5:4b', async () => {
-    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
-    const { OllamaAnalyzer } = await import('./ollama.js');
-    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
-    await analyzer.runStage1Chapter('m_ollama_keepalive_4b', 1, '# prompt', {});
-    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
-    expect(body.keep_alive).toBe('5m');
-  });
-
-  it('threads keep_alive: "5m" into the /api/chat body for llama3.1:8b (resident across the analysis loop)', async () => {
-    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
-    const { OllamaAnalyzer } = await import('./ollama.js');
-    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'llama3.1:8b' });
-    await analyzer.runStage1Chapter('m_ollama_keepalive_llama', 1, '# prompt', {});
-    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
-    expect(body.keep_alive).toBe('5m');
-  });
-
-  it('threads keep_alive: "5m" into the /api/chat body for qwen3.5:9b (resident — reload tax removed)', async () => {
-    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
-    const { OllamaAnalyzer } = await import('./ollama.js');
-    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
-    await analyzer.runStage1Chapter('m_ollama_keepalive_9b', 1, '# prompt', {});
-    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
-    expect(body.keep_alive).toBe('5m');
+    expect(keepAliveFor('qwen3.5:9b', 'unknown')).toBe(900);
+    expect(keepAliveFor('qwen3.5:4b', 'cpu')).toBe(300); // small model unaffected
   });
 });
 
@@ -711,6 +722,66 @@ describe('OllamaAnalyzer — output truncation (#528)', () => {
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
     const result = await analyzer.runStage1Chapter('m_ollama_stopreason', 1, '# prompt', {});
     expect(result.characters).toHaveLength(2);
+  });
+});
+
+describe('OllamaAnalyzer — onEvalTiming sink (analyzer-eval-telemetry)', () => {
+  afterEach(() => {
+    delete process.env.CASTWRIGHT_EVAL_SAMPLE;
+  });
+
+  it('fires onEvalTiming with raw counts + model off the done line', async () => {
+    const timings: RawEvalTiming[] = [];
+    fetchMock.mockResolvedValue(
+      okResponse(
+        ndjsonStreamWithTiming(chunksOf(VALID_RESPONSE, 32), {
+          eval_count: 120,
+          eval_duration: 4_000_000_000,
+          prompt_eval_count: 800,
+          prompt_eval_duration: 2_000_000_000,
+          load_duration: 0,
+        }),
+      ),
+    );
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_ollama_eval_timing', 1, '# prompt', {
+      onEvalTiming: (t) => timings.push(t),
+    });
+
+    expect(timings).toHaveLength(1);
+    expect(timings[0]).toMatchObject({
+      model: expect.any(String),
+      evalCount: 120,
+      evalDuration: 4_000_000_000,
+      promptEvalCount: 800,
+      loadDuration: 0,
+    });
+  });
+
+  it('does not fire onEvalTiming when analyzer.evalStats.enabled is false', async () => {
+    process.env.CASTWRIGHT_EVAL_SAMPLE = '0';
+    const timings: RawEvalTiming[] = [];
+    fetchMock.mockResolvedValue(
+      okResponse(
+        ndjsonStreamWithTiming(chunksOf(VALID_RESPONSE, 32), {
+          eval_count: 120,
+          eval_duration: 4_000_000_000,
+          prompt_eval_count: 800,
+          prompt_eval_duration: 2_000_000_000,
+          load_duration: 0,
+        }),
+      ),
+    );
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_ollama_eval_timing_disabled', 1, '# prompt', {
+      onEvalTiming: (t) => timings.push(t),
+    });
+
+    expect(timings).toHaveLength(0);
   });
 });
 

@@ -885,6 +885,17 @@ export const KNOBS: ConfigKnob[] = [
     default: 120_000, // ← WARM_TIMEOUT_MS fallback in routes/ollama-health.ts
     apply: 'live', risk: 'low',
   },
+  {
+    key: 'analyzer.evalStats.enabled',
+    env: 'CASTWRIGHT_EVAL_SAMPLE',
+    group: 'analyzer-sampling',
+    label: 'Analyzer eval-rate telemetry',
+    help: 'Record per-pass Ollama decode speed (tok/s) to a JSONL log shown in '
+        + "the Admin analyzer-throughput panel. Best-effort; turn off to disable capture.",
+    type: 'boolean',
+    default: true,
+    apply: 'live', risk: 'low',
+  },
 
   // ── rate-limits ───────────────────────────────────────────────────────────
   {
@@ -1092,16 +1103,6 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Minimum number of Phase-0 chapters that must complete ahead of any Phase-1 dispatch. Ensures the roster is populated before attribution starts. Set to 0 to release the lag entirely. Only active when the per-phase model split is configured.',
     type: 'integer', min: 0,
     default: 10, // ← DEFAULT_PHASE1_MIN_LAG_CHAPTERS in analyzer/select-analyzer.ts (line 111)
-    apply: 'live', risk: 'medium',
-  },
-  {
-    key: 'analyzer.ollama.keepAlive',
-    env: 'ANALYZER_KEEP_ALIVE',
-    group: 'analyzer-models',
-    label: 'Analyzer keep-alive',
-    help: "How long Ollama holds a resident analyzer model in VRAM after a call (Ollama keep_alive: '5m', '1m', '0' to unload immediately, '-1' to pin). Applied to the RESIDENT_MODELS the analyzer keeps warm across the analysis loop; non-resident tags always unload immediately. '5m' bridges the gap between back-to-back chapter calls. Cross-engine eviction before a TTS/voice-design load is handled separately by the GPU load chokepoint (gpu.safeCoexistMb).",
-    type: 'string',
-    default: '5m', // ← resolveAnalyzerKeepAlive() default in analyzer/ollama.ts
     apply: 'live', risk: 'medium',
   },
 

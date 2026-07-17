@@ -560,6 +560,88 @@ describe('ModelManagerView — per-row install (fs-23 follow-up)', () => {
   });
 });
 
+const ANALYZER_ITEM_FIXTURE = {
+  id: 'ollama:qwen36-castwright:latest' as const,
+  kind: 'analyzer' as const,
+  label: 'qwen36-castwright:latest',
+  present: true,
+  sizeBytes: 4_700_000_000,
+  diskPath: null,
+  loaded: false,
+  isDefaultEngine: false,
+  isFallbackEngine: false,
+  removable: true,
+  updatable: true,
+};
+
+describe('ModelManagerView — per-model keep-alive control', () => {
+  it('renders the analyzer keep-alive and saves the full merged map on edit', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        ...INVENTORY.items,
+        { ...ANALYZER_ITEM_FIXTURE, keepAliveSeconds: 0, keepAliveIsOverride: false },
+      ],
+    });
+    putUserSettings.mockResolvedValue(SETTINGS_FIXTURE);
+
+    renderManager({ analyzerKeepAliveByModel: { 'qwen3.5:4b': 120 } });
+
+    const field = (await screen.findByTestId(
+      'keepalive-ollama:qwen36-castwright:latest',
+    )) as HTMLInputElement;
+    expect(field).toHaveValue(0);
+    fireEvent.change(field, { target: { value: '300' } });
+    fireEvent.blur(field);
+
+    await waitFor(() =>
+      expect(putUserSettings).toHaveBeenCalledWith({
+        analyzerKeepAliveByModel: { 'qwen3.5:4b': 120, 'qwen36-castwright:latest': 300 },
+      }),
+    );
+  });
+
+  it('shows no reset button when keepAliveIsOverride is false', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        ...INVENTORY.items,
+        { ...ANALYZER_ITEM_FIXTURE, keepAliveSeconds: 300, keepAliveIsOverride: false },
+      ],
+    });
+    renderManager();
+    await screen.findByTestId('keepalive-ollama:qwen36-castwright:latest');
+    expect(
+      screen.queryByTestId('keepalive-reset-ollama:qwen36-castwright:latest'),
+    ).toBeNull();
+  });
+
+  it('reset button deletes the model key from the map and saves', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        ...INVENTORY.items,
+        { ...ANALYZER_ITEM_FIXTURE, keepAliveSeconds: 300, keepAliveIsOverride: true },
+      ],
+    });
+    putUserSettings.mockResolvedValue(SETTINGS_FIXTURE);
+    renderManager({
+      analyzerKeepAliveByModel: { 'qwen36-castwright:latest': 300, 'qwen3.5:4b': 120 },
+    });
+
+    const resetBtn = await screen.findByTestId(
+      'keepalive-reset-ollama:qwen36-castwright:latest',
+    );
+    fireEvent.click(resetBtn);
+
+    await waitFor(() =>
+      expect(putUserSettings).toHaveBeenCalledWith({
+        analyzerKeepAliveByModel: { 'qwen3.5:4b': 120 },
+      }),
+    );
+  });
+});
+
 describe('ModelManagerView — back-to-Admin breadcrumb', () => {
   it('renders the back-to-Admin button', async () => {
     renderManager();

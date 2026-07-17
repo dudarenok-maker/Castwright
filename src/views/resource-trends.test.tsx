@@ -26,6 +26,7 @@ vi.mock('../lib/api', () => ({
     }),
     getDiagnostics: vi.fn().mockResolvedValue({ ts: new Date().toISOString(), overall: 'ok', checks: [] }),
     getResourceTelemetry: vi.fn(),
+    getAnalyzerStats: vi.fn().mockResolvedValue({ records: [] }),
     listDevices: vi.fn().mockResolvedValue({ devices: [] }),
     // LanAccessCard now renders <LanCertStatus>, which fetches on mount (ops-28).
     getLanCertStatus: vi.fn().mockResolvedValue({
