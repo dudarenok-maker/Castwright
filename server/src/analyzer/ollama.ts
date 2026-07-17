@@ -42,6 +42,7 @@ import {
   type NonStoryClassificationOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
+import type { RawEvalTiming } from './analyzer-eval-stats.js';
 import { AnalyzerTruncatedError } from './errors.js';
 import {
   buildSystemInstruction,
@@ -462,6 +463,7 @@ export class OllamaAnalyzer implements Analyzer {
         resolveOllamaTemperature(),
         call.onChunk,
         call.signal,
+        call.onEvalTiming,
       );
 
       const firstAttempt = parseAndValidate(firstText, validationSchema);
@@ -519,6 +521,7 @@ export class OllamaAnalyzer implements Analyzer {
         retryTemperature,
         call.onChunk,
         call.signal,
+        call.onEvalTiming,
       );
 
       const secondAttempt = parseAndValidate(secondText, validationSchema);
@@ -568,6 +571,7 @@ export class OllamaAnalyzer implements Analyzer {
     temperature: number,
     onChunk?: (info: StageChunkInfo) => void,
     signal?: AbortSignal,
+    onEvalTiming?: (t: RawEvalTiming) => void,
   ): Promise<string> {
     const body = {
       model: this.model,
@@ -674,6 +678,10 @@ export class OllamaAnalyzer implements Analyzer {
          'stop' (clean), 'length' (hit num_ctx/num_predict — truncated),
          'load'. Captured here, asserted after the stream drains (#528). */
       let doneReason: string | undefined;
+      /* Raw decode timing off the `done:true` line — see analyzer-eval-stats.ts.
+         Fired via onEvalTiming after the stream drains (best-effort telemetry,
+         gated by the analyzer.evalStats.enabled knob below). */
+      let timing: RawEvalTiming | null = null;
       const start = Date.now();
       let lastChunkAt = start;
 
@@ -717,6 +725,9 @@ export class OllamaAnalyzer implements Analyzer {
               done?: boolean;
               done_reason?: string;
               error?: string;
+              eval_count?: number; eval_duration?: number;
+              prompt_eval_count?: number; prompt_eval_duration?: number;
+              load_duration?: number;
             };
             try {
               parsed = JSON.parse(line);
@@ -731,7 +742,17 @@ export class OllamaAnalyzer implements Analyzer {
             if (parsed.error) {
               throw new Error(`Ollama ${this.url} stream error: ${parsed.error}`);
             }
-            if (parsed.done && parsed.done_reason) doneReason = parsed.done_reason;
+            if (parsed.done) {
+              if (parsed.done_reason) doneReason = parsed.done_reason;
+              timing = {
+                model: this.model,
+                evalCount: parsed.eval_count ?? 0,
+                evalDuration: parsed.eval_duration ?? 0,
+                promptEvalCount: parsed.prompt_eval_count ?? 0,
+                promptEvalDuration: parsed.prompt_eval_duration ?? 0,
+                loadDuration: parsed.load_duration ?? 0,
+              };
+            }
 
             const piece = parsed.message?.content;
             if (piece) {
@@ -774,6 +795,11 @@ export class OllamaAnalyzer implements Analyzer {
       // Env-gated (Global Constraints) so fetch-count tests can opt out; best-effort.
       if (process.env.CASTWRIGHT_VRAM_SAMPLE !== '0') {
         await sampleAndRecordVram(this.url, this.model, resolveAnalyzerNumCtx());
+      }
+      /* fs-analyzer-eval-telemetry: best-effort decode-timing capture, gated
+         by the analyzer.evalStats.enabled knob so an operator can disable it. */
+      if (timing && onEvalTiming && configValue<boolean>('analyzer.evalStats.enabled')) {
+        onEvalTiming(timing);
       }
       return buf;
     } finally {
