@@ -38,8 +38,8 @@ const BUILTIN_LIMITS: Record<string, ModelLimits> = {
   'gemini-3.5-flash': { rpm: 5, tpm: 250_000, rpd: 20 },
   'gemini-3-flash-preview': { rpm: 5, tpm: 250_000, rpd: 20 },
   'gemini-2.5-flash': { rpm: 5, tpm: 250_000, rpd: 20 },
-  'gemma-4-31b-it': { rpm: 15, tpm: Infinity, rpd: 1500 },
-  'gemma-4-26b-a4b-it': { rpm: 15, tpm: Infinity, rpd: 1500 },
+  'gemma-4-31b-it': { rpm: 15, tpm: 16_000, rpd: 1500 },
+  'gemma-4-26b-a4b-it': { rpm: 15, tpm: 16_000, rpd: 1500 },
 };
 
 /* Slug-ify a model id for env-var lookup: lowercase non-alphanum → `_`,
@@ -56,12 +56,24 @@ function readEnvNumber(name: string): number | undefined {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
+/* TPM-only sentinel: 0 (and "unlimited") mean "no per-minute gate" (Infinity).
+   Needed now that the Gemma builtin TPM is a finite 16000 — otherwise env 0
+   would resolve to 16000, not unlimited. RPM/RPD keep readEnvNumber (0 → builtin). */
+function readTpmEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined) return undefined;
+  const t = raw.trim().toLowerCase();
+  if (t === 'unlimited' || t === '0') return Infinity;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
 function resolveLimits(model: string): ModelLimits {
   const base = BUILTIN_LIMITS[model] ?? FALLBACK_LIMITS;
   const slug = envSlug(model);
   return {
     rpm: readEnvNumber(`GEMINI_RPM_${slug}`) ?? base.rpm,
-    tpm: readEnvNumber(`GEMINI_TPM_${slug}`) ?? base.tpm,
+    tpm: readTpmEnv(`GEMINI_TPM_${slug}`) ?? base.tpm,
     rpd: readEnvNumber(`GEMINI_RPD_${slug}`) ?? base.rpd,
   };
 }

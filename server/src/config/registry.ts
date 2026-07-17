@@ -892,9 +892,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'GEMINI_TPM_GEMMA_4_31B_IT',
     group: 'rate-limits',
     label: 'Gemma 4 31B TPM',
-    help: 'Input-tokens-per-minute cap for gemma-4-31b-it. Set to 0 here to represent the free-tier "Unlimited" TPM — the limiter treats 0 as Infinity (no TPM gate). Override with a positive number to impose a local cap.',
+    help: 'Input-tokens/min for gemma-4-31b-it (free tier 16000). Set 0 (or "unlimited") for a paid key.',
     type: 'integer', min: 0,
-    default: 0, // ← BUILTIN_LIMITS['gemma-4-31b-it'].tpm = Infinity in analyzer/rate-limit.ts (line 41); 0 = "unlimited" sentinel
+    default: 16000, // ← BUILTIN_LIMITS['gemma-4-31b-it'].tpm in analyzer/rate-limit.ts (line 41); 0/"unlimited" = Infinity sentinel
     apply: 'restart-server', risk: 'low',
   },
   {
@@ -905,6 +905,36 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Requests-per-day cap for gemma-4-31b-it. Default 1500 (free-tier from AI Studio 2026-05-16). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
     type: 'integer', min: 1,
     default: 1500, // ← BUILTIN_LIMITS['gemma-4-31b-it'].rpd in analyzer/rate-limit.ts (line 41)
+    apply: 'restart-server', risk: 'low',
+  },
+  {
+    key: 'rate.rpm.gemma26',
+    env: 'GEMINI_RPM_GEMMA_4_26B_A4B_IT',
+    group: 'rate-limits',
+    label: 'Gemma 4 26B A4B RPM',
+    help: 'Requests-per-minute cap for gemma-4-26b-a4b-it (free tier 15). The limiter waits proactively so no 429s are issued.',
+    type: 'integer', min: 1,
+    default: 15,
+    apply: 'restart-server', risk: 'low',
+  },
+  {
+    key: 'rate.tpm.gemma26',
+    env: 'GEMINI_TPM_GEMMA_4_26B_A4B_IT',
+    group: 'rate-limits',
+    label: 'Gemma 4 26B A4B TPM',
+    help: 'Input-tokens/min for gemma-4-26b-a4b-it (free tier 16000). Set 0 (or "unlimited") for a paid key.',
+    type: 'integer', min: 0,
+    default: 16000,
+    apply: 'restart-server', risk: 'low',
+  },
+  {
+    key: 'rate.rpd.gemma26',
+    env: 'GEMINI_RPD_GEMMA_4_26B_A4B_IT',
+    group: 'rate-limits',
+    label: 'Gemma 4 26B A4B RPD',
+    help: 'Requests-per-day cap for gemma-4-26b-a4b-it (free tier 1500). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
+    type: 'integer', min: 1,
+    default: 1500,
     apply: 'restart-server', risk: 'low',
   },
 

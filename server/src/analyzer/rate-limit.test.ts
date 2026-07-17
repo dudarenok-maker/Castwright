@@ -24,6 +24,7 @@ describe('GeminiRateLimiter', () => {
     delete process.env.GEMINI_RPM_GEMINI_3_1_FLASH_LITE;
     delete process.env.GEMINI_TPM_GEMINI_3_1_FLASH_LITE;
     delete process.env.GEMINI_RPD_GEMINI_3_1_FLASH_LITE;
+    delete process.env.GEMINI_TPM_GEMMA_4_31B_IT;
   });
 
   it('acquires up to the model RPM without waiting, then blocks until the window slides', async () => {
@@ -179,13 +180,27 @@ describe('GeminiRateLimiter', () => {
     await pending;
   });
 
-  it('treats Gemma TPM as Unlimited — large prompts never trip TPM', async () => {
-    /* 100 acquires of 1M tokens each — no TPM wait should ever fire. */
-    const onWait = vi.fn();
-    for (let i = 0; i < 14; i += 1) {
-      await limiter.acquire('gemma-4-31b-it', 1_000_000, { onWait });
-    }
-    /* RPM is 15 so we should be under and never blocked. */
-    expect(onWait).not.toHaveBeenCalled();
+  it('paces a second Gemma request against the finite 16000 TPM', async () => {
+    /* Real timers for this one: the assertion only needs onWait to have
+       fired (it fires synchronously before the internal sleep()), but the
+       Promise.race needs its setTimeout to actually elapse, which fake
+       timers (active via the outer beforeEach) never do without an
+       explicit advance. afterEach() unconditionally calls
+       vi.useRealTimers(), so this doesn't leak into sibling tests. */
+    vi.useRealTimers();
+    const limiter = new GeminiRateLimiter();
+    const waits: number[] = [];
+    await limiter.acquire('gemma-4-31b-it', 12000, { onWait: (ms) => waits.push(ms) });
+    // second 12k request cannot fit alongside the first in a 16k window → must wait
+    const p = limiter.acquire('gemma-4-31b-it', 12000, { onWait: (ms) => waits.push(ms) });
+    await Promise.race([p, new Promise((r) => setTimeout(r, 20))]);
+    expect(waits.some((w) => w > 0)).toBe(true);
+  });
+
+  it('treats env TPM 0 as unlimited even though the builtin is finite', () => {
+    process.env.GEMINI_TPM_GEMMA_4_31B_IT = '0';
+    const limiter = new GeminiRateLimiter();
+    // 40k-token request must acquire immediately (unlimited), no throw
+    return expect(limiter.acquire('gemma-4-31b-it', 40000)).resolves.toBeUndefined();
   });
 });
