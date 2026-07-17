@@ -1,51 +1,51 @@
-# Ollama Analyzer Concurrency Implementation Plan
+# Ollama Analyzer Concurrency Implementation Plan (v3 — per-model lease)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let up to K analyzer Ollama `/api/chat` calls run concurrently (overnight-batch throughput) via a global width-K limiter, without changing the per-call cross-engine `gpuSemaphore` behavior.
+**Goal:** Let up to K analyzer Ollama `/api/chat` calls run concurrently (overnight-batch throughput), safe by construction on 6/8 GB cards and decoupled from TTS, via a width-K limiter + a per-resident-model GPU lease. Delete `STAGE2_CONCURRENCY`; K drives the pool.
 
-**Architecture:** Add a process-global width-K FIFO count semaphore (`analyzerConcurrency`, a `GpuSemaphore` instance sized from a new registry knob). Every analyzer chat call acquires it *before* the existing per-call `gpuSemaphore` and releases both in reverse order. Unify the stage-1 + stage-2 worker-pool width under the same knob. Leave `gpuSemaphore` untouched, so concurrency only materializes when the operator raises `GPU_VRAM_BUDGET` to fit `K × 4` analyzer tokens.
+**Architecture:** A process-global width-K count semaphore (`analyzerConcurrency`) bounds total in-flight analyzer calls. A **per-model refcounted lease** holds exactly one cross-engine `gpuSemaphore` slot (cost 4) while a given resident model has any call in flight — so K same-model calls share one slot (concurrency), two different local models serialize on a small budget (no co-residence OOM), and cloud stages (cost 0) overlap freely. Both are wrapped by one helper `acquireAnalyzerSlot(model, onCpu)`, called in `OllamaAnalyzer.chat` and `generatePersonaViaOllama`. `gpuSemaphore` budget and TTS width are untouched.
 
-**Tech Stack:** TypeScript (Node 20.6+), Vitest (server, node env), the existing `GpuSemaphore` primitive (`server/src/gpu/semaphore.ts`), the registry/config system (`server/src/config/`).
+**Tech Stack:** TypeScript (Node 20.6+), Vitest (server, node env), the existing `GpuSemaphore` primitive (`server/src/gpu/semaphore.ts`), the registry/config system.
 
-**Spec:** `docs/superpowers/specs/2026-07-17-ollama-parallel-chunk-analysis-design.md` (green after 3 review rounds; M1–M5 folded).
-
-**Plan review:** GREEN — production-code changes verified against real anchors; test snippets corrected (T3-a/T4-a/T4-b) and re-confirmed.
+**Spec:** `docs/superpowers/specs/2026-07-17-ollama-parallel-chunk-analysis-design.md` (green v3; per-model lease; deadlock-free confirmed).
 
 ## Global Constraints
 
 - **Node 20.6+**, no new dependencies (reuse `GpuSemaphore`).
-- **Every new env var is a registry knob + regenerated `.env.example`.** After editing `server/src/config/registry.ts`, run `npm run config:sync` (regenerates `server/.env.example` from the registry) and commit the regenerated file in the same commit; `npm run config:check` must pass.
-- **The knob `apply` is `restart-server`** — the `analyzerConcurrency` singleton and `gpuSemaphore` are both created at Node module-load; changing width needs a restart. Mirror the `gpu.concurrency` knob's `apply`/`risk`.
-- **Acquire order is fixed: limiter FIRST, then `gpuSemaphore`.** The limiter is analyzer-only; nothing else acquires it, so there is no opposite-order cross-lock. Release in reverse (gpuSemaphore, then limiter).
-- **Worker-pool width stays capped at 6** (existing `readStage2Concurrency` cap — per-call overhead dominates beyond that).
-- **TDD, frequent commits.** Server tests: `npm run test:server` (from repo root) or `cd server && npx vitest run <file>` for one file. Commit-message convention: `<type>(<scope>): <subject>` (e.g. `feat(server): …`).
-- **Do not touch `keepAliveFor`, `think:false`, or the Gemini path** (spec non-goals).
+- **Every new env var is a registry knob + regenerated `.env.example`.** After editing `registry.ts`, run `npm run config:sync` and commit the regenerated `server/.env.example`; `npm run config:check` must pass.
+- **Two CONCURRENCY CRUXES the reviewer flagged — the impl MUST preserve them or it reintroduces a race/deadlock:**
+  1. In the lease `enter()`, the `gpuSemaphore.acquire(...)` promise MUST be stored on the lease **synchronously, before any `await`** (a joiner that hits `await lease.p` while `p` is still `undefined` would proceed with no slot held).
+  2. The lease `leave()` MUST be **fully synchronous** (no `await`), and `enter()`'s count-mutation MUST stay in the pre-`await` prefix — an `await` inserted in either critical section reintroduces the enter/leave delete race.
+- **Fixed acquire order everywhere: limiter → model-lease → (gpuSemaphore inside the lease).** Never the reverse.
+- **`GPU_VRAM_BUDGET` / `gpuSemaphore` are NOT touched.** Decoupling from TTS depends on this.
+- **The knob `apply` is `restart-server`** (mirror `gpu.concurrency`); the pool width is read **live** via `configValue`, but the limiter singleton is module-load.
+- Worker-pool width clamped to **[1, 6]**.
+- **TDD, frequent commits.** Server tests: `npm run test:server`; one file: `cd server && npx vitest run <file>`.
+- **Do not touch** `keepAliveFor`, `think:false`, the Gemini path, or stage pipelining (Phase 0 ‖ Phase 1).
 
 ## File Structure
 
-- **Create** `server/src/analyzer/analyzer-concurrency.ts` — the global width-K limiter singleton + its resolver. One responsibility: cap concurrent analyzer Ollama calls.
-- **Create** `server/src/analyzer/analyzer-concurrency.test.ts` — unit tests for the limiter.
-- **Modify** `server/src/config/registry.ts` — add the `analyzer.ollama.concurrency` knob.
-- **Modify** `server/.env.example` — regenerated by `config:sync` (not hand-edited).
-- **Modify** `server/src/analyzer/ollama.ts` — gate `OllamaAnalyzer.chat` (~635/779) and `generatePersonaViaOllama` (~812) on the limiter; add the guarded startup log.
-- **Modify** `server/src/analyzer/ollama.test.ts` — assert both gates.
-- **Modify** `server/src/routes/analysis.ts` — point `readStage2Concurrency` (~917) at the new knob with a legacy `STAGE2_CONCURRENCY` fallback; export it for test.
-- **Modify** `server/src/routes/analysis.test.ts` (or a small new `analysis-concurrency.test.ts`) — assert `readStage2Concurrency` reads the knob.
+- **Create** `server/src/analyzer/analyzer-concurrency.ts` — the width-K limiter, the per-model lease, the `acquireAnalyzerSlot` helper, `canonicalLeaseKey`, `describeAnalyzerConcurrency`.
+- **Create** `server/src/analyzer/analyzer-concurrency.test.ts`.
+- **Modify** `server/src/config/registry.ts` — add `analyzer.ollama.concurrency`.
+- **Modify** `server/.env.example` — regenerated by `config:sync`.
+- **Modify** `server/src/analyzer/ollama.ts` — `chat` (~635/779) and `generatePersonaViaOllama` (~812/832) call `acquireAnalyzerSlot`; startup log.
+- **Modify** `server/src/analyzer/ollama.test.ts` — assert both gates + release.
+- **Modify** `server/src/routes/analysis.ts` — delete `readStage2Concurrency` (`:917`); add a live `analyzerPoolWidth()`; update `:3060` and `~:3775`.
+- **Modify** `server/src/routes/analysis-pipelining.test.ts` — migrate the 7 `STAGE2_CONCURRENCY` refs.
+- **Modify** `server/src/analyzer/model-vram-stats.ts` — M5 comment.
+- **Modify** `docs/superpowers/specs/2026-06-17-flaky-test-release-hardening-design.md` — update orphaned `STAGE2_CONCURRENCY` mentions.
 
 ---
 
-### Task 1: Add the `analyzer.ollama.concurrency` registry knob
+### Task 1: Add the `analyzer.ollama.concurrency` knob
 
-**Files:**
-- Modify: `server/src/config/registry.ts` (insert after the `analyzer.ollama.numGpu` knob, ~`:867`)
-- Modify: `server/.env.example` (regenerated by `config:sync`)
-- Test: `server/src/config/registry.test.ts` (if present) or rely on `config:check`
+**Files:** Modify `server/src/config/registry.ts` (after the `analyzer.ollama.numGpu` knob, ~`:867`); regenerate `.env.example`.
 
-**Interfaces:**
-- Produces: registry key `analyzer.ollama.concurrency` (env `ANALYZER_OLLAMA_CONCURRENCY`), integer ≥ 1, default 2. Read via `configValue<number>('analyzer.ollama.concurrency')`.
+**Interfaces:** Produces registry key `analyzer.ollama.concurrency` (env `ANALYZER_OLLAMA_CONCURRENCY`), integer ≥ 1, default 2.
 
-- [ ] **Step 1: Add the knob object** after the `analyzer.ollama.numGpu` entry (`registry.ts:867`):
+- [ ] **Step 1: Add the knob** after the `analyzer.ollama.numGpu` entry:
 
 ```ts
   {
@@ -53,438 +53,459 @@
     env: 'ANALYZER_OLLAMA_CONCURRENCY',
     group: 'analyzer-sampling',
     label: 'Ollama analyzer concurrency (K)',
-    help: 'Max analyzer /api/chat calls in flight at once (the width of both the global analyzer limiter and the chapter worker pool). Default 2. Raising it ONLY produces real parallelism if you ALSO (a) raise GPU_VRAM_BUDGET so K*4 analyzer tokens fit, and (b) set Ollama-side OLLAMA_NUM_PARALLEL >= K. At the default budget of 1 the extra calls still serialise on the GPU semaphore (no behaviour change). Overnight-batch lever; walk K, GPU_VRAM_BUDGET, and OLLAMA_NUM_PARALLEL up together while watching /api/ps size.',
+    help: 'Max analyzer /api/chat calls in flight at once — the width of both the global analyzer limiter and the chapter/chunk worker pool, replacing the old STAGE2_CONCURRENCY. Concurrency is bounded per resident model by a GPU lease, so raising K is safe (no cross-engine OOM) and does NOT change TTS width. Set K to what the resident model'"'"'s spare VRAM fits: 6GB big-model 1, 8GB small-model 2, dual-card 4. Also set Ollama-side OLLAMA_NUM_PARALLEL >= K.',
     type: 'integer', min: 1,
     default: 2,
-    apply: 'restart-server', risk: 'high', // analyzerConcurrency singleton created at module-load; mirror gpu.concurrency
+    apply: 'restart-server', risk: 'high',
   },
 ```
 
-- [ ] **Step 2: Regenerate `.env.example`**
-
-Run: `npm run config:sync`
-Expected: `server/.env.example` gains an `ANALYZER_OLLAMA_CONCURRENCY` block with the help text above.
-
-- [ ] **Step 3: Validate config**
-
-Run: `npm run config:check`
-Expected: PASS (no drift between registry and `.env.example`).
-
-- [ ] **Step 4: Verify the knob resolves**
-
-Run: `cd server && npx tsx -e "import('./src/config/resolver.js').then(m=>console.log(m.configValue('analyzer.ollama.concurrency')))"`
-Expected: prints `2`.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 2:** `npm run config:sync` → `server/.env.example` gains the block.
+- [ ] **Step 3:** `npm run config:check` → PASS.
+- [ ] **Step 4: Commit**
 
 ```bash
 git add server/src/config/registry.ts server/.env.example
-git commit -m "feat(server): add analyzer.ollama.concurrency knob (K, default 2)"
+git commit -m "feat(server): add analyzer.ollama.concurrency knob (K, replaces STAGE2_CONCURRENCY)"
 ```
 
 ---
 
-### Task 2: Create the global analyzer concurrency limiter
+### Task 2: The limiter + per-model lease + `acquireAnalyzerSlot`
 
-**Files:**
-- Create: `server/src/analyzer/analyzer-concurrency.ts`
-- Test: `server/src/analyzer/analyzer-concurrency.test.ts`
+**Files:** Create `server/src/analyzer/analyzer-concurrency.ts` + `.test.ts`.
 
 **Interfaces:**
-- Consumes: `GpuSemaphore` from `../gpu/semaphore.js`; `configValue` from `../config/resolver.js`.
-- Produces: `export const analyzerConcurrency: GpuSemaphore` (singleton, budget = K). Callers use `await analyzerConcurrency.acquire()` → returns a release fn; `.inFlight`, `.queueDepth`, `.budget` getters (from `GpuSemaphore`). Also `export function describeAnalyzerConcurrency(analyzerCost: number, gpuBudget: number): string` for the startup log (Task 6).
+- Consumes: `GpuSemaphore`, `gpuSemaphore` (`../gpu/semaphore.js`); `costForEngine` (`../tts/engine-vram-cost.js`); `configValue`.
+- Produces:
+  - `analyzerConcurrency: GpuSemaphore` (width-K limiter singleton).
+  - `acquireAnalyzerSlot(model: string, onCpu: boolean): Promise<() => void>` — acquires limiter then the per-model lease; returns a single release fn (idempotent) that releases both in reverse.
+  - `canonicalLeaseKey(model: string): string`.
+  - `describeAnalyzerConcurrency(analyzerCost: number, gpuBudget: number): string`.
+  - `__resetAnalyzerLeasesForTest()` — clears the lease map (test hygiene).
 
-- [ ] **Step 1: Write the failing test** `server/src/analyzer/analyzer-concurrency.test.ts`:
+- [ ] **Step 1: Write the failing tests** `server/src/analyzer/analyzer-concurrency.test.ts`:
 
 ```ts
-import { describe, it, expect } from 'vitest';
-import { analyzerConcurrency, describeAnalyzerConcurrency } from './analyzer-concurrency.js';
+import { describe, it, expect, afterEach } from 'vitest';
+import { gpuSemaphore } from '../gpu/semaphore.js';
+import {
+  analyzerConcurrency,
+  acquireAnalyzerSlot,
+  canonicalLeaseKey,
+  describeAnalyzerConcurrency,
+  __resetAnalyzerLeasesForTest,
+} from './analyzer-concurrency.js';
 
-describe('analyzerConcurrency limiter', () => {
+afterEach(() => __resetAnalyzerLeasesForTest());
+
+describe('width-K limiter', () => {
   it('is sized from analyzer.ollama.concurrency (default 2)', () => {
     expect(analyzerConcurrency.budget).toBe(2);
   });
+});
 
-  it('caps concurrent acquires at the configured width and queues the rest FIFO', async () => {
-    const r1 = await analyzerConcurrency.acquire();
-    const r2 = await analyzerConcurrency.acquire();
-    expect(analyzerConcurrency.inFlight).toBe(2);
+describe('canonicalLeaseKey', () => {
+  it('appends :latest to a bare tag so one model has one key', () => {
+    expect(canonicalLeaseKey('qwen3.5')).toBe(canonicalLeaseKey('qwen3.5:latest'));
+  });
+});
 
-    let granted3 = false;
-    const p3 = analyzerConcurrency.acquire().then((r) => { granted3 = true; return r; });
+describe('per-model lease', () => {
+  it('same model: two concurrent calls share ONE gpuSemaphore slot', async () => {
+    const before = gpuSemaphore.usedTokens;
+    const r1 = await acquireAnalyzerSlot('gemma:latest', false);
+    const r2 = await acquireAnalyzerSlot('gemma:latest', false); // joins, no 2nd acquire
+    expect(gpuSemaphore.usedTokens).toBe(before + gpuSemaphore.budget); // one lease = whole (budget-1 test env)
+    r1(); r2();
+    expect(gpuSemaphore.usedTokens).toBe(before);
+  });
+
+  it('two DIFFERENT models serialize (budget cannot hold both) — the L2 fix', async () => {
+    const r1 = await acquireAnalyzerSlot('gemma:latest', false); // takes the whole budget-1
+    let granted = false;
+    const p2 = acquireAnalyzerSlot('qwen:latest', false).then((r) => { granted = true; return r; });
     await Promise.resolve();
-    expect(granted3).toBe(false);
-    expect(analyzerConcurrency.queueDepth).toBe(1);
+    expect(granted).toBe(false);                 // qwen queued on gpuSemaphore
+    expect(gpuSemaphore.queueDepth).toBe(1);
+    r1();                                         // frees the slot
+    const r2 = await p2;
+    expect(granted).toBe(true);
+    r2();
+  });
 
-    r1();
-    const r3 = await p3;
-    expect(granted3).toBe(true);
-
-    r2(); r3();
+  it('CPU call takes NO gpuSemaphore slot (but still the limiter)', async () => {
+    const before = gpuSemaphore.usedTokens;
+    const r = await acquireAnalyzerSlot('gemma:latest', true);
+    expect(gpuSemaphore.usedTokens).toBe(before); // no slot
+    expect(analyzerConcurrency.inFlight).toBe(1); // limiter still taken
+    r();
     expect(analyzerConcurrency.inFlight).toBe(0);
+  });
+
+  it('releases the slot when only the LAST same-model call leaves', async () => {
+    const before = gpuSemaphore.usedTokens;
+    const r1 = await acquireAnalyzerSlot('gemma:latest', false);
+    const r2 = await acquireAnalyzerSlot('gemma:latest', false);
+    r1();
+    expect(gpuSemaphore.usedTokens).toBe(before + gpuSemaphore.budget); // still held (r2 in flight)
+    r2();
+    expect(gpuSemaphore.usedTokens).toBe(before);                       // now freed
   });
 });
 
 describe('describeAnalyzerConcurrency', () => {
-  it('floors effective concurrency at 1 even when budget < cost (M4)', () => {
-    // budget 1, cost 4 -> floor(1/4)=0 -> max(1,0)=1
+  it('floors effective at 1 when budget < cost (M4)', () => {
     expect(describeAnalyzerConcurrency(4, 1)).toContain('effective 1');
   });
-  it('reports min(K, floor(budget/cost)) when budget admits more than one', () => {
-    // K=2 (default), budget 16, cost 4 -> min(2, 4) = 2
+  it('reports min(K, floor(budget/cost)) otherwise', () => {
     expect(describeAnalyzerConcurrency(4, 16)).toContain('effective 2');
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run — expect FAIL** (`Cannot find module './analyzer-concurrency.js'`):
+`cd server && npx vitest run src/analyzer/analyzer-concurrency.test.ts`
 
-Run: `cd server && npx vitest run src/analyzer/analyzer-concurrency.test.ts`
-Expected: FAIL — module `./analyzer-concurrency.js` not found.
-
-- [ ] **Step 3: Write the implementation** `server/src/analyzer/analyzer-concurrency.ts`:
+- [ ] **Step 3: Implement** `server/src/analyzer/analyzer-concurrency.ts`:
 
 ```ts
-/* Global analyzer concurrency limiter. A width-K FIFO count semaphore that caps
-   the number of analyzer Ollama /api/chat calls in flight at once, ACROSS every
-   analysis job (main + subset) and every out-of-band analyzer caller. It exists
-   purely to bound Ollama-slot pressure (OLLAMA_NUM_PARALLEL) — it is analyzer-only
-   and never gates TTS. Every analyzer call acquires this BEFORE the per-call
-   gpuSemaphore (which is left unchanged for cross-engine arbitration) and
-   releases both in reverse order.
-
-   Reuses GpuSemaphore as the primitive: a width-K limiter is a GpuSemaphore with
-   budget K where each caller takes cost 1. Sized once at module-load from the
-   analyzer.ollama.concurrency knob; changing K needs a server restart (matching
-   gpuSemaphore's own singleton contract). */
-import { GpuSemaphore } from '../gpu/semaphore.js';
+/* Analyzer concurrency control. Two primitives + one helper:
+   - analyzerConcurrency: a width-K FIFO count semaphore capping TOTAL in-flight
+     analyzer /api/chat calls across all jobs/models (bounds Ollama-slot pressure).
+     Independent of GPU_VRAM_BUDGET, so raising K never changes TTS width.
+   - a per-RESIDENT-MODEL refcounted lease that holds ONE cross-engine gpuSemaphore
+     slot (cost 4) while a given model has any call in flight: K same-model calls
+     share one slot (concurrency); two different local models each take a slot and
+     serialize on a small budget (no co-residence OOM); cloud (cost 0) overlaps.
+   Every analyzer call goes through acquireAnalyzerSlot(model, onCpu): limiter FIRST,
+   then the model-lease. See the spec's two concurrency cruxes — the sync-store in
+   enter() and the fully-synchronous leave() are load-bearing. */
+import { GpuSemaphore, gpuSemaphore } from '../gpu/semaphore.js';
+import { costForEngine } from '../tts/engine-vram-cost.js';
 import { configValue } from '../config/resolver.js';
 
-function resolveAnalyzerConcurrency(): number {
+function resolveK(): number {
   const k = configValue<number>('analyzer.ollama.concurrency');
   return Number.isFinite(k) && k > 0 ? Math.floor(k) : 1;
 }
 
-export const analyzerConcurrency = new GpuSemaphore(resolveAnalyzerConcurrency());
+export const analyzerConcurrency = new GpuSemaphore(resolveK());
 
-/** One-line human-readable summary of the *effective* analyzer concurrency for
-    the startup log (M4). The GPU semaphore clamps a per-call cost of `analyzerCost`
-    to at least 1, so the effective ceiling is min(K, max(1, floor(budget/cost))). */
+/** Canonicalise a model tag so one physical model has one lease key
+    (mirrors canonicalVramKey: a bare tag gets ':latest'). */
+export function canonicalLeaseKey(model: string): string {
+  return model.includes(':') ? model : `${model}:latest`;
+}
+
+type Lease = { count: number; p: Promise<() => void> | null; release: (() => void) | null };
+const leases = new Map<string, Lease>();
+
+/* Enter the per-model lease. CPU calls take NO gpuSemaphore slot (mirrors
+   acquireGpuTokenIfOnGpu). CRUX 1: store `lease.p` synchronously before await.
+   CRUX 2: this function's count mutation stays in the pre-await prefix. */
+async function enterModelLease(key: string, onCpu: boolean): Promise<() => void> {
+  if (onCpu) return () => {}; // no GPU slot; limiter (taken by caller) still bounds it
+  let lease = leases.get(key);
+  if (!lease) { lease = { count: 0, p: null, release: null }; leases.set(key, lease); }
+  lease.count++;
+  if (lease.count === 1) {
+    lease.p = gpuSemaphore.acquire(costForEngine('analyzer')); // ← sync store BEFORE await
+    try {
+      lease.release = await lease.p;
+    } catch (e) {
+      lease.count--;
+      if (lease.count === 0) leases.delete(key);
+      throw e; // unreachable today (acquire w/o signal never rejects); defensive
+    }
+  } else {
+    try {
+      await lease.p; // join: block until holder's acquire resolves
+    } catch (e) {
+      lease.count--;
+      throw e;
+    }
+  }
+  return () => leaveModelLease(key);
+}
+
+/* CRUX 2: fully synchronous — no await. */
+function leaveModelLease(key: string): void {
+  const lease = leases.get(key);
+  if (!lease) return;
+  lease.count--;
+  if (lease.count === 0) {
+    const r = lease.release;
+    leases.delete(key);
+    r?.();
+  }
+}
+
+/** The one entry point for every analyzer Ollama call. limiter → model-lease.
+    Returns a single idempotent release that frees both in reverse order. */
+export async function acquireAnalyzerSlot(model: string, onCpu: boolean): Promise<() => void> {
+  const releaseLimiter = await analyzerConcurrency.acquire();
+  let releaseLease: () => void;
+  try {
+    releaseLease = await enterModelLease(canonicalLeaseKey(model), onCpu);
+  } catch (e) {
+    releaseLimiter();
+    throw e;
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    releaseLease();
+    releaseLimiter();
+  };
+}
+
+/** Effective analyzer concurrency for the startup log (M4). The gpuSemaphore
+    clamps the per-call cost to ≥1, so the ceiling is min(K, max(1, floor(budget/cost))). */
 export function describeAnalyzerConcurrency(analyzerCost: number, gpuBudget: number): string {
   const k = analyzerConcurrency.budget;
   const admits = Math.max(1, Math.floor(gpuBudget / Math.max(1, analyzerCost)));
   const effective = Math.min(k, admits);
-  return `[analyzer] concurrency K=${k}, GPU budget=${gpuBudget}, analyzer cost=${analyzerCost} -> effective ${effective} concurrent call(s). For real parallelism ensure OLLAMA_NUM_PARALLEL >= ${k}.`;
+  return `[analyzer] concurrency K=${k}, GPU budget=${gpuBudget}, analyzer cost=${analyzerCost} -> effective ${effective} concurrent GPU call(s). Ensure OLLAMA_NUM_PARALLEL >= ${k}.`;
+}
+
+/** Test-only: clear the lease map between cases. */
+export function __resetAnalyzerLeasesForTest(): void {
+  leases.clear();
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `cd server && npx vitest run src/analyzer/analyzer-concurrency.test.ts`
-Expected: PASS (4 assertions).
+- [ ] **Step 4: Run — expect PASS.** `cd server && npx vitest run src/analyzer/analyzer-concurrency.test.ts`
+  (The two-different-models test relies on the test-env `gpuSemaphore.budget === 1`: registry `gpu.vramBudget` default 0 → falls back to `gpu.concurrency` 1. If a local `server/.env` sets `GPU_VRAM_BUDGET`, run with it unset.)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add server/src/analyzer/analyzer-concurrency.ts server/src/analyzer/analyzer-concurrency.test.ts
-git commit -m "feat(server): add global analyzer concurrency limiter"
+git commit -m "feat(server): width-K limiter + per-model GPU lease for analyzer concurrency"
 ```
 
 ---
 
-### Task 3: Gate `OllamaAnalyzer.chat` on the limiter
+### Task 3: Gate `OllamaAnalyzer.chat` on `acquireAnalyzerSlot`
 
-**Files:**
-- Modify: `server/src/analyzer/ollama.ts` (~`:635`–`:781`)
-- Test: `server/src/analyzer/ollama.test.ts`
+**Files:** Modify `server/src/analyzer/ollama.ts` (~`:635`–`:781`); test in `ollama.test.ts`.
 
-**Interfaces:**
-- Consumes: `analyzerConcurrency` from `./analyzer-concurrency.js`.
-- Produces: no signature change to `chat`; adds an outer limiter acquire/release wrapping the existing `gpuSemaphore` try/finally.
+**Interfaces:** Consumes `acquireAnalyzerSlot`; the confirmed-CPU signal `getLastKnownAnalyzerDevice` (`../gpu/analyzer-device-state.js`).
 
-- [ ] **Step 1: Write the failing test** — append to `server/src/analyzer/ollama.test.ts`. `chat` is **private** (`ollama.ts:565`), so drive it through the public `runStage1Chapter`, reusing the file's existing `fetchMock` / `okResponse` / `ndjsonStream` / `VALID_RESPONSE` / `chunksOf` helpers (defined at the top of the file; the happy-path test at `:127` is the template). Add the import at the top with the other imports:
+- [ ] **Step 1: Write the failing test** — append to `ollama.test.ts`, driving the public `runStage1Chapter` (the happy-path template is at `:127`; `chat` is private). Import at top: `import { acquireAnalyzerSlot } from './analyzer-concurrency.js';` and `import * as conc from './analyzer-concurrency.js';`
 
 ```ts
-import { analyzerConcurrency } from './analyzer-concurrency.js';
-```
-
-Then add:
-
-```ts
-describe('OllamaAnalyzer — analyzer concurrency limiter', () => {
-  it('acquires the analyzer concurrency limiter around a chat call and releases it', async () => {
-    const acquireSpy = vi.spyOn(analyzerConcurrency, 'acquire');
+describe('OllamaAnalyzer — analyzer slot (limiter + model lease)', () => {
+  it('acquires an analyzer slot around a chat call and releases it', async () => {
+    const spy = vi.spyOn(conc, 'acquireAnalyzerSlot');
     fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
-
     const { OllamaAnalyzer } = await import('./ollama.js');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
-    await analyzer.runStage1Chapter('m_ollama_limiter_ok', 1, '# stage1 prompt', {});
-
-    expect(acquireSpy).toHaveBeenCalledTimes(1);
-    expect(analyzerConcurrency.inFlight).toBe(0); // released in finally
-    acquireSpy.mockRestore();
+    await analyzer.runStage1Chapter('m_ollama_slot_ok', 1, '# stage1 prompt', {});
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0]).toBe('qwen3.5:9b'); // keyed on this.model
+    expect(conc.analyzerConcurrency.inFlight).toBe(0); // released in finally
+    spy.mockRestore();
   });
-  // Hygiene: add 'm_ollama_limiter_ok' and 'm_ollama_limiter_err' to the file's
-  // afterAll handoff-cleanup id list (~ollama.test.ts:852-887) so these two runs
-  // don't leave stray inbox/outbox files. Non-blocking (writes are idempotent).
 
-  it('releases the limiter even when the chat call throws', async () => {
+  it('releases the slot even when the chat call throws', async () => {
     fetchMock.mockResolvedValue(new Response('boom', { status: 500 }));
-
     const { OllamaAnalyzer } = await import('./ollama.js');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
     await expect(
-      analyzer.runStage1Chapter('m_ollama_limiter_err', 1, '# stage1 prompt', {}),
+      analyzer.runStage1Chapter('m_ollama_slot_err', 1, '# stage1 prompt', {}),
     ).rejects.toThrow();
-
-    expect(analyzerConcurrency.inFlight).toBe(0);
+    expect(conc.analyzerConcurrency.inFlight).toBe(0);
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+Add `'m_ollama_slot_ok'` / `'m_ollama_slot_err'` to the file's `afterAll` handoff-cleanup id list.
 
-Run: `cd server && npx vitest run src/analyzer/ollama.test.ts -t "analyzer concurrency limiter"`
-Expected: FAIL — `acquireSpy` called 0 times (not yet wired).
+- [ ] **Step 2: Run — expect FAIL** (`acquireAnalyzerSlot` spy called 0 times).
 
-- [ ] **Step 3: Add the import** near the other analyzer imports (`ollama.ts:16-18`):
+- [ ] **Step 3: Add imports** near `ollama.ts:16-18`:
 
 ```ts
-import { analyzerConcurrency } from './analyzer-concurrency.js';
+import { acquireAnalyzerSlot } from './analyzer-concurrency.js';
+import { getLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 ```
 
-- [ ] **Step 4: Wrap the existing gpuSemaphore acquire.** Replace the block at `ollama.ts:635` (`const releaseGpu = await gpuSemaphore.acquire(costForEngine('analyzer'));`) and its closing `finally` at `:779-781`.
-
-Change the acquire site to acquire the limiter first:
+- [ ] **Step 4: Replace the per-call gpuSemaphore acquire.** At `ollama.ts:635`, replace `const releaseGpu = await gpuSemaphore.acquire(costForEngine('analyzer'));` and its closing `finally { releaseGpu(); }` (`:779-781`) with:
 
 ```ts
-    /* Global analyzer concurrency limiter (analyzer-concurrency.ts): bound the
-       number of in-flight analyzer /api/chat calls to K BEFORE taking the
-       per-call GPU slot. Acquire-order limiter->gpuSemaphore is fixed; the
-       limiter is analyzer-only so there is no opposite-order cross-lock. */
-    const releaseSlot = await analyzerConcurrency.acquire();
+    /* Analyzer concurrency: width-K limiter + per-model GPU lease
+       (analyzer-concurrency.ts). Replaces the old per-call gpuSemaphore acquire;
+       the lease holds one cross-engine slot per resident model. */
+    const releaseSlot = await acquireAnalyzerSlot(this.model, getLastKnownAnalyzerDevice() === 'cpu');
     try {
-      const releaseGpu = await gpuSemaphore.acquire(costForEngine('analyzer'));
-      try {
-        // ↓↓↓ the entire existing body that was inside the old `try {` stays here ↓↓↓
-```
-
-and change the tail so the old `finally { releaseGpu(); }` is nested inside a new `finally { releaseSlot(); }`:
-
-```ts
-        return buf;
-      } finally {
-        releaseGpu();
-      }
+      // ↓↓↓ the existing body from old :637 `try {` through `return buf;` is unchanged ↓↓↓
+      ...
+      return buf;
     } finally {
       releaseSlot();
     }
 ```
 
-(The existing body between `try {` at old `:637` and `return buf;` at old `:778` is unchanged — only the surrounding acquire/try/finally layering changes.)
+Remove the now-unused `gpuSemaphore` import from `ollama.ts` **only if** no other reference remains (grep first: `grep -n gpuSemaphore server/src/analyzer/ollama.ts`); `costForEngine` is still used by the persona path — keep it.
 
-- [ ] **Step 5: Run test to verify it passes**
-
-Run: `cd server && npx vitest run src/analyzer/ollama.test.ts`
-Expected: PASS — the whole `ollama.test.ts` file green (new limiter tests + all existing tests, including the `keep_alive`/`num_ctx` body assertions, still pass).
-
+- [ ] **Step 5: Run — expect PASS** (whole `ollama.test.ts` green, incl. the existing body-shape assertions).
 - [ ] **Step 6: Commit**
 
 ```bash
 git add server/src/analyzer/ollama.ts server/src/analyzer/ollama.test.ts
-git commit -m "feat(server): gate OllamaAnalyzer.chat on the analyzer concurrency limiter"
+git commit -m "feat(server): route OllamaAnalyzer.chat through the analyzer concurrency slot"
 ```
 
 ---
 
-### Task 4: Gate `generatePersonaViaOllama` on the limiter (M3)
+### Task 4: Gate `generatePersonaViaOllama` on `acquireAnalyzerSlot`
 
-**Files:**
-- Modify: `server/src/analyzer/ollama.ts` (~`:812`)
-- Test: `server/src/analyzer/ollama.test.ts`
+**Files:** Modify `ollama.ts` (~`:812`/`:830-832`); test in `ollama.test.ts`.
 
-**Interfaces:**
-- Consumes: `analyzerConcurrency` (already imported in Task 3).
-- Produces: `generatePersonaViaOllama` now also passes through the limiter (it is a *separate* fetch path from `chat`, so without this the global cap leaks by one caller).
-
-- [ ] **Step 1: Write the failing test** — add inside the existing `describe('generatePersonaViaOllama', …)` block (`ollama.test.ts:811`), which already has `afterEach(() => vi.restoreAllMocks())` and the `mockChatResponse` helper (`:803`) in scope. Each test **must** mock `global.fetch` or it hits a real daemon (`LocalUnreachableError`). `analyzerConcurrency` is imported in Task 3:
+- [ ] **Step 1: Write the failing test** — inside the existing `describe('generatePersonaViaOllama', …)` block (`:811`, has `afterEach(vi.restoreAllMocks)` + `mockChatResponse`):
 
 ```ts
-it('generatePersonaViaOllama passes through the analyzer concurrency limiter (GPU path)', async () => {
-  const acquireSpy = vi.spyOn(analyzerConcurrency, 'acquire');
+it('persona gen goes through the analyzer slot, keyed on its model (GPU path)', async () => {
+  const spy = vi.spyOn(conc, 'acquireAnalyzerSlot');
   vi.spyOn(global, 'fetch').mockResolvedValue(mockChatResponse('A warm voice.'));
   const { generatePersonaViaOllama } = await import('./ollama.js');
   await generatePersonaViaOllama('PROMPT', 'qwen3.5:9b', { onCpu: false, keepAlive: '5m' });
-  expect(acquireSpy).toHaveBeenCalledTimes(1);
-  expect(analyzerConcurrency.inFlight).toBe(0);
-  acquireSpy.mockRestore();
+  expect(spy).toHaveBeenCalledWith('qwen3.5:9b', false);
+  expect(conc.analyzerConcurrency.inFlight).toBe(0);
+  spy.mockRestore();
 });
 
-it('generatePersonaViaOllama takes the limiter even on the CPU path (Ollama-slot pressure, not VRAM)', async () => {
-  const acquireSpy = vi.spyOn(analyzerConcurrency, 'acquire');
+it('persona gen on CPU takes the limiter but no GPU slot', async () => {
+  const spy = vi.spyOn(conc, 'acquireAnalyzerSlot');
   vi.spyOn(global, 'fetch').mockResolvedValue(mockChatResponse('A cool voice.'));
   const { generatePersonaViaOllama } = await import('./ollama.js');
   await generatePersonaViaOllama('PROMPT', 'qwen3.5:4b', { onCpu: true });
-  expect(acquireSpy).toHaveBeenCalledTimes(1); // limiter independent of the onCpu gpu-gate skip
-  acquireSpy.mockRestore();
+  expect(spy).toHaveBeenCalledWith('qwen3.5:4b', true); // onCpu forwarded → lease no-ops
+  spy.mockRestore();
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run — expect FAIL.**
 
-Run: `cd server && npx vitest run src/analyzer/ollama.test.ts -t "generatePersonaViaOllama passes through"`
-Expected: FAIL — `acquireSpy` called 0 times.
-
-- [ ] **Step 3: Wrap the persona fetch.** At `ollama.ts:812`, the current line is `const release = await acquireGpuTokenIfOnGpu(!onCpu, costForEngine('analyzer'));` followed by `try { … } finally { release(); }` (release at the function's existing finally). Acquire the limiter *outside* that, unconditionally (both GPU and CPU):
+- [ ] **Step 3: Replace `acquireGpuTokenIfOnGpu`.** At `ollama.ts:812`, replace `const release = await acquireGpuTokenIfOnGpu(!onCpu, costForEngine('analyzer'));` and its `finally { release?.(); }` (`:830-832`) with:
 
 ```ts
-  const releaseSlot = await analyzerConcurrency.acquire();
+  const releaseSlot = await acquireAnalyzerSlot(model, onCpu);
   try {
-    const release = await acquireGpuTokenIfOnGpu(!onCpu, costForEngine('analyzer'));
-    try {
-      // ↓ existing body (fetch, ok-check, json parse, return) unchanged ↓
-    } finally {
-      release?.(); // ← nullable: acquireGpuTokenIfOnGpu returns null on the CPU path (unchanged from today)
-    }
+    // ↓ existing body (fetch, ok-check, json parse, return) unchanged ↓
+    ...
   } finally {
-    releaseSlot();
+    releaseSlot(); // non-nullable (unlike the old acquireGpuTokenIfOnGpu release)
   }
 ```
 
-> **Note:** keep the inner finally exactly as today — `release?.()`, **not** `release()`. `acquireGpuTokenIfOnGpu` returns `(() => void) | null` and is null when `onCpu`, so `release()` would throw `TypeError` on the CPU path. Only the new outer `releaseSlot()` is non-nullable.
+Grep `server/src/analyzer/ollama.ts` for other `acquireGpuTokenIfOnGpu` uses; if none remain, drop its import. (`costForEngine` may now be unused in `ollama.ts` — grep and drop if so.)
 
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `cd server && npx vitest run src/analyzer/ollama.test.ts`
-Expected: PASS — full file green.
-
+- [ ] **Step 4: Run — expect PASS** (full file green — the pre-existing persona tests at `:814/:829` still pass; note they asserted `gpuSemaphore.acquire` was/ wasn't called — update those two to assert via `acquireAnalyzerSlot`/the slot behavior instead, since the direct gpuSemaphore call is gone).
 - [ ] **Step 5: Commit**
 
 ```bash
 git add server/src/analyzer/ollama.ts server/src/analyzer/ollama.test.ts
-git commit -m "feat(server): gate persona generation on the analyzer concurrency limiter"
+git commit -m "feat(server): route persona generation through the analyzer concurrency slot"
 ```
 
 ---
 
-### Task 5: Unify the worker-pool width under the knob
+### Task 5: Delete `STAGE2_CONCURRENCY`; pool reads K live
 
-**Files:**
-- Modify: `server/src/routes/analysis.ts` (`readStage2Concurrency`, `:917-921`)
-- Test: `server/src/routes/analysis.test.ts` (or new `server/src/routes/analysis-concurrency.test.ts`)
+**Files:** Modify `analysis.ts` (`:917`, `:3060`, `~:3775`); `analysis-pipelining.test.ts`; the flaky-hardening doc.
 
-**Interfaces:**
-- Consumes: `configValue<number>('analyzer.ollama.concurrency')` (already imported in `analysis.ts`).
-- Produces: `export function readStage2Concurrency(): number` — now sourced from the knob, capped at 6, with a legacy `STAGE2_CONCURRENCY` env fallback. Used by both the stage-1 `castConcurrency` (`:3060`) and the stage-2 pool (unchanged call sites).
+**Interfaces:** Produces `analyzerPoolWidth(): number` (live knob read, clamped [1,6]) replacing `readStage2Concurrency`.
 
-- [ ] **Step 1: Write the failing test** in `server/src/routes/analysis-concurrency.test.ts`:
+- [ ] **Step 1: Write/adjust the failing test** in a new `server/src/routes/analysis-concurrency.test.ts`:
 
 ```ts
 import { describe, it, expect, afterEach } from 'vitest';
-import { readStage2Concurrency } from './analysis.js';
+import { analyzerPoolWidth } from './analysis.js';
 
-describe('readStage2Concurrency (knob-sourced)', () => {
-  afterEach(() => { delete process.env.STAGE2_CONCURRENCY; });
-
-  it('defaults to the analyzer.ollama.concurrency knob (2)', () => {
-    expect(readStage2Concurrency()).toBe(2);
+describe('analyzerPoolWidth (live from analyzer.ollama.concurrency)', () => {
+  afterEach(() => { delete process.env.ANALYZER_OLLAMA_CONCURRENCY; });
+  it('defaults to the knob (2)', () => { expect(analyzerPoolWidth()).toBe(2); });
+  it('reads the env live and clamps to 6', () => {
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '9';
+    expect(analyzerPoolWidth()).toBe(6);
   });
-
-  it('honours the legacy STAGE2_CONCURRENCY env as a capped override', () => {
-    process.env.STAGE2_CONCURRENCY = '4';
-    expect(readStage2Concurrency()).toBe(4);
-  });
-
-  it('caps at 6', () => {
-    process.env.STAGE2_CONCURRENCY = '99';
-    expect(readStage2Concurrency()).toBe(6);
+  it('floors at 1', () => {
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
+    expect(analyzerPoolWidth()).toBe(1);
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run — expect FAIL** (`analyzerPoolWidth` not exported).
 
-Run: `cd server && npx vitest run src/routes/analysis-concurrency.test.ts`
-Expected: FAIL — `readStage2Concurrency` not exported (or returns the wrong value).
-
-- [ ] **Step 3: Update the function** at `analysis.ts:917`. Add `export`, read the knob, keep the legacy env fallback:
+- [ ] **Step 3: Replace `readStage2Concurrency`** (`analysis.ts:917-921`) with a live, exported reader — delete the `STAGE2_CONCURRENCY` env read entirely:
 
 ```ts
-/* Analyzer chapter-pool width (stage-1 cast + stage-2 attribution). Sourced from
-   the analyzer.ollama.concurrency knob (= K, the same value the global analyzer
-   limiter uses), so one number drives both stages. The legacy STAGE2_CONCURRENCY
-   env still works as a capped override for back-compat. Capped at 6 — beyond that
-   per-call overhead dominates. */
-export function readStage2Concurrency(): number {
-  const legacy = Number(process.env.STAGE2_CONCURRENCY);
-  if (Number.isFinite(legacy) && legacy >= 1) return Math.min(6, Math.floor(legacy));
+/* Analyzer chapter-pool width (stage-1 cast + stage-2 attribution), = K, read
+   LIVE from the analyzer.ollama.concurrency knob so tests can set it per-case.
+   Replaces the removed STAGE2_CONCURRENCY env. Capped at 6 (per-call overhead
+   dominates beyond that). The width-K limiter (analyzer-concurrency.ts) is the
+   hard cap on in-flight calls; this only governs how many chapters are dispatched. */
+export function analyzerPoolWidth(): number {
   const k = configValue<number>('analyzer.ollama.concurrency');
   return Math.min(6, Math.max(1, Math.floor(k)));
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Update the two call sites.** `analysis.ts:3060` `const castConcurrency = readStage2Concurrency();` → `= analyzerPoolWidth();`. At the Phase 1 stage-2 pool (`~:3775`, the other `readStage2Concurrency()` call) → `analyzerPoolWidth()`. (Grep `readStage2Concurrency` to confirm exactly these two production call sites, then delete the old function.)
 
-Run: `cd server && npx vitest run src/routes/analysis-concurrency.test.ts`
-Expected: PASS (3 assertions).
+- [ ] **Step 5: Migrate the pipelining tests.** In `server/src/routes/analysis-pipelining.test.ts`: delete the `STAGE2_CONCURRENCY` reference at `:52`; at each **set** site — `'1'` at 407/484/562/744 and `'2'` at 628/687 — replace `process.env.STAGE2_CONCURRENCY = '1'` (resp. `'2'`) with `process.env.ANALYZER_OLLAMA_CONCURRENCY = '1'` (resp. `'2'`), and update the matching `delete process.env.STAGE2_CONCURRENCY` cleanups to the new var. (Live `configValue` makes these pins take effect at dispatch time — verified.)
 
-- [ ] **Step 5: Guard against regressions in the analysis suite**
+- [ ] **Step 6: Update the orphaned doc.** In `docs/superpowers/specs/2026-06-17-flaky-test-release-hardening-design.md`, replace the `STAGE2_CONCURRENCY=1` determinism mentions (`:31/107/242`) with `ANALYZER_OLLAMA_CONCURRENCY=1`.
 
-Run: `cd server && npx vitest run src/routes/analysis.test.ts`
-Expected: PASS — existing stage-1/stage-2 concurrency behavior unchanged at default (K=2, same as the old default 2).
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Run** `cd server && npx vitest run src/routes/analysis-concurrency.test.ts src/routes/analysis-pipelining.test.ts` → PASS (pipelining behavior unchanged; the migrated pins still force serial/2-wide dispatch).
+- [ ] **Step 8: Commit**
 
 ```bash
-git add server/src/routes/analysis.ts server/src/routes/analysis-concurrency.test.ts
-git commit -m "feat(server): drive analyzer worker-pool width from the concurrency knob"
+git add server/src/routes/analysis.ts server/src/routes/analysis-concurrency.test.ts server/src/routes/analysis-pipelining.test.ts docs/superpowers/specs/2026-06-17-flaky-test-release-hardening-design.md
+git commit -m "feat(server): drive analyzer pool from the K knob; remove STAGE2_CONCURRENCY"
 ```
 
 ---
 
-### Task 6: Startup log (M4) + full-suite regression + M5 note
+### Task 6: Startup log + regression + UX/telemetry notes
 
-**Files:**
-- Modify: `server/src/analyzer/ollama.ts` (module-load log, guarded)
-- Modify: `server/src/analyzer/model-vram-stats.ts` (comment only — M5 note)
+**Files:** Modify `ollama.ts` (module-load log); `model-vram-stats.ts` (comment); regression plan note.
 
-**Interfaces:**
-- Consumes: `describeAnalyzerConcurrency` (Task 2), `gpuSemaphore.budget`, `costForEngine('analyzer')`.
-
-- [ ] **Step 1: Add a guarded startup log.** Near the top-level of `ollama.ts` (module scope, after imports), emit the effective-concurrency summary once, skipped under test to avoid noise:
+- [ ] **Step 1: Guarded startup log.** At `ollama.ts` module scope (after imports), skipped under test:
 
 ```ts
-/* One-time startup breadcrumb: prints the effective analyzer concurrency so an
-   operator who raised K but not GPU_VRAM_BUDGET (or OLLAMA_NUM_PARALLEL) sees why
-   nothing got faster. Skipped under Vitest to keep test output clean. */
 if (process.env.VITEST !== 'true' && process.env.NODE_ENV !== 'test') {
   console.log(describeAnalyzerConcurrency(costForEngine('analyzer'), gpuSemaphore.budget));
 }
 ```
 
-Add the import: `import { describeAnalyzerConcurrency } from './analyzer-concurrency.js';` (or extend the Task 3 import).
+Import `describeAnalyzerConcurrency` (extend Task 3's import) and, if the earlier grep removed `gpuSemaphore`/`costForEngine`, re-add just what this line needs.
 
-- [ ] **Step 2: Add the M5 telemetry-race comment** at `model-vram-stats.ts:76` (above the over-cap trim `writeFile`):
+- [ ] **Step 2: M5 telemetry comment** at `model-vram-stats.ts:76` (above the over-cap trim `writeFile`):
 
 ```ts
   /* NOTE (M5): this read-then-writeFile trim is not concurrency-safe; K-wide
      analyzer calls make interleaved rewrites likelier. Best-effort telemetry,
-     try/catch-wrapped and never thrown — worst case a torn/dropped sample line.
-     No correctness impact; a lock is out of scope for the concurrency work. */
+     try/catch-wrapped, never thrown — worst case a torn/dropped sample line.
+     No correctness impact; out of scope for the concurrency work. */
 ```
 
-- [ ] **Step 3: Typecheck + full server suite**
+- [ ] **Step 3: UX acceptance note.** In the analysing regression plan (`docs/features/216-analysing-local-analyzer-honesty.md` or the analysing plan), add: "Under K>1, `LiveChapterTicker` renders every in-flight chapter (already 2-wide today); verify it reads well at K=4 and the per-phase progress bar stays monotonic (server completed-count must not regress). One e2e/screenshot check." (No code change — the ticker already handles concurrent chapters.)
 
-Run: `npm run typecheck` then `npm run test:server`
-Expected: PASS. (If `test:server` excludes the analyzer-heavy files, also run `npm run test:server-slow`.)
+- [ ] **Step 4: Typecheck + suites.** `npm run typecheck`; `npm run test:server`; `npm run test:server-slow` (analyzer-heavy files). Expect PASS.
 
-- [ ] **Step 4: Manual determinism acceptance (documented, not a new automated test).** At default config the change is behavior-preserving (limiter width 2 but budget-1 → effective serial → identical to today's default). Record in the PR/ship notes: a live K=1 byte-identical assertion is a placebo (temp 0.2 + retries, `ollama.ts:110/502-522`); the existing analysis suite staying green at default config is the regression evidence. Re-verify roster-merge order-independence by eye when first running K>2 on the box (stage-1 already runs width-2 today, so the merge path is already concurrency-exercised).
+- [ ] **Step 5: Determinism acceptance (documented).** At default config the change is behavior-preserving (limiter 2 but budget-1 → effective serial → today). Record: a live K=1 byte-identical assertion is a placebo (temp 0.2 + retries); the green suite is the regression evidence. Re-verify roster-merge order-independence by eye at first K>2 run (stage-1 already runs width-2).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add server/src/analyzer/ollama.ts server/src/analyzer/model-vram-stats.ts
-git commit -m "feat(server): log effective analyzer concurrency at startup; note vram-trim race"
+git add server/src/analyzer/ollama.ts server/src/analyzer/model-vram-stats.ts docs/features/216-analysing-local-analyzer-honesty.md
+git commit -m "feat(server): log effective analyzer concurrency; UX + telemetry notes"
 ```
 
 ---
@@ -492,17 +513,16 @@ git commit -m "feat(server): log effective analyzer concurrency at startup; note
 ## Self-Review
 
 **Spec coverage:**
-- Global width-K limiter → Task 2 (module) + Task 3/4 (gated on `chat` and persona). ✔
-- Widen worker pool / unify knob → Task 5. ✔ (Correctly reflects that stage-1 already runs width-2 today — Task 5 unifies the source, doesn't add concurrency to a serial path.)
-- `gpuSemaphore` unchanged / operator sizes budget → no task touches `gpuSemaphore`; knob help documents the trio; Task 6 logs effective concurrency. ✔
-- Config knob + `.env.example` → Task 1. ✔
-- M1 (fairness bound) → preserved structurally (per-call gpuSemaphore untouched); no code beyond Task 3's ordering. ✔
-- M2 (CPU not throttled) → Task 4's CPU-path test asserts the limiter is taken independently of the gpu-gate skip; limiter width ≥ effective floor so no throttle. ✔
-- M3 (persona gate) → Task 4. ✔
-- M4 (log formula `min(K, max(1, floor(budget/cost)))`) → Task 2 `describeAnalyzerConcurrency` + Task 6 wiring + Task 2 test. ✔
-- M5 (vram-trim race) → Task 6 Step 2 comment. ✔
-- KV calibration → ops procedure in the spec; no code (documented in knob help). ✔
+- Width-K limiter → Task 2. ✔  Per-model lease (L2 fix) → Task 2 (`enterModelLease`, keyed by `canonicalLeaseKey`; two-model serialize test). ✔
+- Sync-store crux + fully-sync leave (reviewer cruxes) → Task 2 impl comments + Global Constraints. ✔
+- CPU skip → Task 2 (`onCpu` no-op) + Task 3 (`getLastKnownAnalyzerDevice`). ✔
+- Gate chat + persona (call-site coverage, incl. the separate persona fetch) → Tasks 3, 4. ✔
+- Decoupling (gpuSemaphore/budget untouched) → no task touches them; only the analyzer acquire path changes. ✔
+- Delete STAGE2_CONCURRENCY + live pool read + 7 test refs + doc (L3) → Task 5. ✔
+- Budget-4 / L1 behavior → documented in spec §3; no code (it's cross-engine admission, unchanged). ✔
+- Canonicalize lease key (Q1 nit) → Task 2 `canonicalLeaseKey`. ✔
+- M4 log formula, M5 telemetry, UX → Task 6. ✔
 
-**Placeholder scan:** Tasks 3/4 tests now cite the exact existing harness helpers by name (`fetchMock`, `okResponse`, `ndjsonStream`, `chunksOf`, `VALID_RESPONSE`, `mockChatResponse`) and drive the **public** `runStage1Chapter` (since `chat` is private) — fully concrete, copy-runnable. No `TBD`/`add error handling`/`similar to Task N`. (Corrected after plan review: T3-a private-method, T4-a nullable `release?.()`, T4-b CPU-test fetch mock.)
+**Placeholder scan:** Tasks 3/4 tests cite the real harness helpers by name and drive public `runStage1Chapter`/`generatePersonaViaOllama`; the "existing body unchanged" markers in Tasks 3/4 refer to a verified-contiguous block. No `TBD`/vague steps.
 
-**Type consistency:** `analyzerConcurrency` (GpuSemaphore) exposes `.acquire()`, `.inFlight`, `.queueDepth`, `.budget` — all real `GpuSemaphore` members (`semaphore.ts:62/135/141/148`). `describeAnalyzerConcurrency(analyzerCost, gpuBudget)` signature is identical in Task 2 definition, its test, and Task 6 call site. `readStage2Concurrency` return type `number` unchanged; now exported.
+**Type consistency:** `acquireAnalyzerSlot(model: string, onCpu: boolean): Promise<() => void>` identical across Task 2 definition, Task 3/4 call sites and spies. `analyzerConcurrency` exposes `.budget/.inFlight` (real `GpuSemaphore` members). `analyzerPoolWidth(): number` exported, replaces `readStage2Concurrency`. `canonicalLeaseKey`/`describeAnalyzerConcurrency` signatures match their tests.
