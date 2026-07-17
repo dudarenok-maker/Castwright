@@ -89,12 +89,6 @@ _Full detail + acceptance:_ [#464](https://github.com/dudarenok-maker/Castwright
 - _Benefit:_ Graceful re-entry into a long book after days away. _Net-new from the 2026-06-02 backlog brainstorm (Listener / Reliability / Distribution / Net-new / Sharing lenses). MoSCoW `should` is a placeholder — to be re-bucketed in the upcoming whole-backlog priority pass._
 _Full detail + acceptance:_ [#481](https://github.com/dudarenok-maker/Castwright/issues/481).
 
-#### `fs-76` — Analyzer eval-rate telemetry (Ollama tok/s trend in Admin) ([#1698](https://github.com/dudarenok-maker/Castwright/issues/1698))
-
-- _What:_ Capture real Ollama decode timing (tok/s eval rate, prompt-ingest rate, load duration) per analysis pass and surface a persisted, trend-over-time view in the Admin console — a drift canary for spotting analyzer decode-speed decline across a long run without grepping logs. Models the existing TTS/RTF `ResourceTrends` pattern.
-- _Benefit:_ Makes analyzer throughput drift observable over a long multi-chapter/multi-book run — the operator sees a slowdown in the Admin panel instead of it being invisible in logs.
-_Full detail + acceptance:_ [#1698](https://github.com/dudarenok-maker/Castwright/issues/1698).
-
 #### `fe-26` — Marker export + shareable notes ([#461](https://github.com/dudarenok-maker/Castwright/issues/461))
 
 - _What:_ Per-book markers (note + re-record kinds) already live in `src/store/listen-progress-slice.ts` and render in the markers panel (`src/components/listen/listen-player-region.tsx`). Add an export affordance that writes the marker list (timestamp · chapter · label · kind) to a text/JSON file the user can save or share.
