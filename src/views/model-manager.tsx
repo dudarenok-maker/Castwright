@@ -10,8 +10,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { MixedHeading } from '../components/primitives';
 import { DevicePanel } from '../components/device-panel';
-import { useAppDispatch } from '../store';
+import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
+import { fetchAccountSettings, saveAccountSettings } from '../store/account-slice';
 import {
   ModelControlPill,
   type ModelControlState,
@@ -72,6 +73,10 @@ function renderInstaller(id: string, modelsStatus: ModelsStatus | null, onInstal
 
 export function ModelManagerView() {
   const dispatch = useAppDispatch();
+  const keepAliveMap = useAppSelector((s) => s.account.analyzerKeepAliveByModel ?? {});
+  useEffect(() => {
+    void dispatch(fetchAccountSettings());
+  }, [dispatch]);
   return (
     <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-10">
       <div className="mb-8">
@@ -108,7 +113,7 @@ export function ModelManagerView() {
           <DevicePanel />
         </div>
         <div id="cfg-section-mm-models">
-          <ModelInventory />
+          <ModelInventory keepAliveMap={keepAliveMap} />
         </div>
         <ModelSettingsForm embedded />
       </SettingsAccordion>
@@ -116,7 +121,7 @@ export function ModelManagerView() {
   );
 }
 
-function ModelInventory() {
+function ModelInventory({ keepAliveMap }: { keepAliveMap: Record<string, number> }) {
   const [inv, setInv] = useState<ModelInventoryResponse | null>(null);
   const [modelsStatus, setModelsStatus] = useState<ModelsStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -203,6 +208,7 @@ function ModelInventory() {
           sidecarReachable: inv.sidecarReachable,
           modelsStatus,
           refetchModelsStatus,
+          keepAliveMap,
           busy: busyId === item.id,
           onAction: async (action: () => Promise<unknown>) => {
             setBusyId(item.id);
@@ -266,6 +272,9 @@ function ModelInventory() {
                     <ModelRow key={item.id} {...rowProps(item)} />
                   ))}
                 </ul>
+                <p className="mt-2 text-[11px] text-ink/45">
+                  0 = unload now · -1 = keep forever · RAM-heavy models unload on CPU regardless
+                </p>
               </div>
             )}
             {asrRows.length > 0 && (
@@ -460,6 +469,7 @@ function ModelRow({
   sidecarReachable,
   modelsStatus,
   refetchModelsStatus,
+  keepAliveMap,
   busy,
   onAction,
   onChanged,
@@ -469,11 +479,13 @@ function ModelRow({
   sidecarReachable: boolean;
   modelsStatus: ModelsStatus | null;
   refetchModelsStatus: () => void;
+  keepAliveMap: Record<string, number>;
   busy: boolean;
   onAction: (action: () => Promise<unknown>) => Promise<void>;
   onChanged: () => void;
   onRemove: () => void;
 }) {
+  const dispatch = useAppDispatch();
   const [installerOpen, setInstallerOpen] = useState(false);
   const hasInstaller = INSTALLER_IDS.has(item.id);
   const engine = TTS_ENGINE_BY_ID[item.id];
@@ -562,6 +574,40 @@ function ModelRow({
               onLoad={doLoad}
               onStop={doStop}
             />
+          )}
+          {isAnalyzer && analyzerModel && (
+            <label className="flex items-center gap-1 text-[11px] text-ink/60">
+              keep-alive
+              <input
+                type="number"
+                data-testid={`keepalive-${item.id}`}
+                defaultValue={item.keepAliveSeconds ?? 0}
+                onBlur={(e) => {
+                  const secs = Math.trunc(Number(e.currentTarget.value));
+                  if (!Number.isFinite(secs)) return;
+                  const next = { ...keepAliveMap, [analyzerModel]: secs };
+                  void dispatch(saveAccountSettings({ analyzerKeepAliveByModel: next })).then(onChanged);
+                }}
+                className="w-16 min-h-[44px] fine-pointer:min-h-0 rounded-md border border-ink/15 bg-white px-2 text-right text-ink"
+                aria-label={`Keep-alive seconds for ${item.label}`}
+              />
+              s
+              {item.keepAliveIsOverride && (
+                <button
+                  type="button"
+                  data-testid={`keepalive-reset-${item.id}`}
+                  onClick={() => {
+                    const next = { ...keepAliveMap };
+                    delete next[analyzerModel];
+                    void dispatch(saveAccountSettings({ analyzerKeepAliveByModel: next })).then(onChanged);
+                  }}
+                  className="min-h-[44px] fine-pointer:min-h-0 text-ink/45 hover:text-ink"
+                  aria-label="Reset to default"
+                >
+                  ↺
+                </button>
+              )}
+            </label>
           )}
           {hasInstaller && (
             <button
