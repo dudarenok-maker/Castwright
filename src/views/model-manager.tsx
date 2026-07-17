@@ -484,6 +484,7 @@ function ModelRow({
 }) {
   const dispatch = useAppDispatch();
   const [installerOpen, setInstallerOpen] = useState(false);
+  const [keepAliveSaved, setKeepAliveSaved] = useState(false);
   const hasInstaller = INSTALLER_IDS.has(item.id);
   const engine = TTS_ENGINE_BY_ID[item.id];
   const loadModel = TTS_LOAD_MODEL_BY_ID[item.id];
@@ -514,6 +515,27 @@ function ModelRow({
   /* Ollama tags contain colons (ollama:qwen3.5:4b) — slice the prefix, never
      split(':'). Mirrors performRemoval in models-inventory.ts. */
   const analyzerModel = isAnalyzer ? item.id.slice('ollama:'.length) : undefined;
+
+  /* Persist the keep-alive map and flash a 'Saved' confirmation. The field is
+     a silent per-row autosave with no Save button of its own, so the number
+     input (blur / Enter) and the reset pill all route through here — otherwise
+     a save gives no visible signal at all. */
+  const saveKeepAlive = (next: Record<string, number>) => {
+    void dispatch(saveAccountSettings({ analyzerKeepAliveByModel: next })).then(() => {
+      setKeepAliveSaved(true);
+      window.setTimeout(() => setKeepAliveSaved(false), 2000);
+      onChanged();
+    });
+  };
+  /* Commit the typed value. Called on blur AND on Enter — Enter is the natural
+     "commit" gesture, and without it a typed value is silently lost on the
+     next reload (the input never blurred, so nothing saved). */
+  const commitKeepAlive = (raw: string) => {
+    if (!analyzerModel) return;
+    const secs = Math.trunc(Number(raw));
+    if (!Number.isFinite(secs)) return;
+    saveKeepAlive({ ...keepAliveMap, [analyzerModel]: secs });
+  };
   const doLoad = () =>
     onAction(() =>
       engine
@@ -580,11 +602,9 @@ function ModelRow({
                 type="number"
                 data-testid={`keepalive-${item.id}`}
                 defaultValue={item.keepAliveSeconds ?? 0}
-                onBlur={(e) => {
-                  const secs = Math.trunc(Number(e.currentTarget.value));
-                  if (!Number.isFinite(secs)) return;
-                  const next = { ...keepAliveMap, [analyzerModel]: secs };
-                  void dispatch(saveAccountSettings({ analyzerKeepAliveByModel: next })).then(onChanged);
+                onBlur={(e) => commitKeepAlive(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitKeepAlive(e.currentTarget.value);
                 }}
                 className="w-16 min-h-[44px] fine-pointer:min-h-0 rounded-md border border-ink/15 bg-white px-2 text-right text-ink"
                 aria-label={`Keep-alive seconds for ${item.label}`}
@@ -597,13 +617,21 @@ function ModelRow({
                   onClick={() => {
                     const next = { ...keepAliveMap };
                     delete next[analyzerModel];
-                    void dispatch(saveAccountSettings({ analyzerKeepAliveByModel: next })).then(onChanged);
+                    saveKeepAlive(next);
                   }}
                   className="min-h-[44px] fine-pointer:min-h-0 min-w-[44px] fine-pointer:min-w-0 flex items-center justify-center text-ink/45 hover:text-ink"
                   aria-label="Reset to default"
                 >
                   ↺
                 </button>
+              )}
+              {keepAliveSaved && (
+                <span
+                  data-testid={`keepalive-saved-${item.id}`}
+                  className="text-[10px] font-semibold text-magenta"
+                >
+                  Saved
+                </span>
               )}
             </label>
           )}

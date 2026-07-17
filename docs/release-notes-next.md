@@ -118,6 +118,15 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
 - Per-model Ollama analyzer keep-alive (seconds) in the Model Manager; retired
   the hardcoded `RESIDENT_MODELS` allowlist and the `analyzer.ollama.keepAlive`
   knob (#1696).
+- **Fix (keep-alive, pre-release): the per-model keep-alive field now saves on
+  Enter and confirms with a "Saved" flash.** The field was a `blur`-only
+  autosave with no Save button of its own — typing a value and pressing Enter
+  (or reloading) without first tabbing/clicking away silently discarded it, so
+  the value "reverted to 0 on reload." `onKeyDown` Enter now routes through the
+  same commit path as blur, and every save (field + reset pill) flashes a
+  transient "Saved" so the autosave is no longer invisible. Regression tests in
+  `src/views/model-manager.test.tsx` pin both the Enter-save and the Saved
+  affordance.
 - **Analyzer: local Ollama analysis can now run K chapters/chunks concurrently
   for ~2–3× overnight-batch throughput — safe on 6/8 GB cards and decoupled
   from TTS.** A new width-K limiter (`analyzer.ollama.concurrency` /
