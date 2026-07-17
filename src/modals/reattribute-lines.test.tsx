@@ -39,6 +39,7 @@ function makeStore({
         importCandidate: null,
         pendingReupload: null,
         mergedAwayKeys: [],
+        lastBulkReassign: null,
       },
     },
   });
