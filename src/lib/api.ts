@@ -6277,6 +6277,7 @@ const MOCK_USER_SETTINGS: UserSettings = {
   apiKeyStatus: 'unset',
   workspaceRoot: '(mock)/audiobook-workspace',
   workspaceSource: 'default',
+  analyzerKeepAliveByModel: {},
 };
 
 async function realGetUserSettings(): Promise<UserSettings> {
@@ -6661,6 +6662,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
     analyzerPhase1Model,
     analyzerPhase1MinLagChapters,
     dualModelEnabled,
+    analyzerKeepAliveByModel,
   } = patch;
   Object.assign(
     MOCK_USER_SETTINGS,
@@ -6677,6 +6679,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         analyzerPhase1Model,
         analyzerPhase1MinLagChapters,
         dualModelEnabled,
+        analyzerKeepAliveByModel,
       }).filter(([, v]) => v !== undefined),
     ),
   );
