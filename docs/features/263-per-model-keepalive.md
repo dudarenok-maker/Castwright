@@ -118,14 +118,25 @@ owner: null
    reads these two fields directly and contains **no** mirror of
    `DEFAULT_KEEP_ALIVE_SECONDS` or `normalizeModelTag` under `src/` — the
    server is the only place that resolver logic lives.
-8. `POST /api/ollama/load` (`server/src/routes/ollama-health.ts:410`,
-   `warmOllamaModel`) warms with `keep_alive: keepAliveFor(model,
-   getLastKnownVram().accelerator)` — not a hardcoded `'5m'`, and honoring the
-   same `RAM_HEAVY_MODELS` CPU-clamp as the analyzer chat path (Invariant 1),
-   not the unclamped `resolveKeepAliveSeconds`. A model configured to `0` warms
-   once and does not persist, consistent with its own setting; the Model
-   Manager row's keep-alive field is the only signal a user needs to
-   understand why a Load didn't stick.
+8. `POST /api/ollama/load` (`server/src/routes/ollama-health.ts`,
+   `warmOllamaModel`) warms with `keep_alive:
+   floorWarmKeepAlive(keepAliveFor(model, getLastKnownVram().accelerator))` — not
+   a hardcoded `'5m'`. An **explicit Load means "hold it resident"**, so a
+   resolved keep-alive of `0` (a custom tag with no override, OR the
+   `RAM_HEAVY_MODELS` CPU clamp) is **floored up to `WARM_MIN_KEEP_ALIVE_SECONDS`
+   (30)** rather than warming-and-evicting in the same call. A positive per-model
+   value is honored as-is; a negative keep-forever (`-1`) override passes through
+   untouched (floor fires only on exactly `0`). This is the ONE place the warm
+   path diverges from the analyzer chat path (Invariant 1), which still sends the
+   unfloored, CPU-clamped value — the clamp's RAM-safety concern is about a model
+   pinned across a long analysis loop, not a single 30s manual warm.
+   **Supersedes this plan's original intent** that a `0`-keep-alive model "warms
+   once and does not persist": warming with `keep_alive: 0` is Ollama's
+   evict-immediately idiom, so it loaded the model and dropped it in the same
+   call — the Analysing Load button looked dead and the pill snapped straight
+   back to "Analyzer idle" for every non-defaulted custom tag (the reported
+   regression). The 30s floor is a short bridge until analysis starts and takes
+   over with its own per-call keep-alive.
 9. No live **code** symbol `RESIDENT_MODELS` or `resolveAnalyzerKeepAlive`
    remains under `server/src` or `src`; `.env.example` no longer generates an
    `ANALYZER_KEEP_ALIVE` block; `docs/local-llm.md` no longer instructs editing
@@ -163,10 +174,12 @@ owner: null
   and `keepAliveIsOverride` (`true` only when a user override exists for that
   tag).
 - Vitest server (`server/src/routes/ollama-health.test.ts`) — the `/load`
-  warm route sends `keep_alive: keepAliveFor(model, accelerator)`, not a
-  hardcoded `'5m'` and not the unclamped `resolveKeepAliveSeconds`; a
-  RAM-heavy model (`qwen3.5:9b`) clamps to `0` on a `cpu` accelerator and
-  stays at the coded `300` on `cuda`/`unknown`.
+  warm route sends `floorWarmKeepAlive(keepAliveFor(model, accelerator))`, not
+  a hardcoded `'5m'`: a supported model stays at its coded `300`; a **custom tag
+  with no override is floored from `0` to `30`** (the regression test — Load must
+  hold, not evict); a RAM-heavy model (`qwen3.5:9b`) is also floored to `30` on a
+  `cpu` accelerator (explicit Load overrides the runtime clamp) while its
+  `cuda`/`unknown` warm stays at the coded `300`.
 - Vitest server (`server/src/routes/user-settings.test.ts`) — the settings PUT
   route round-trips `analyzerKeepAliveByModel`.
 - Vitest frontend (`src/views/model-manager.test.tsx`) — an analyzer row
@@ -216,9 +229,15 @@ is a convenient real analysis to drive while observing `ollama ps`).
    `4 minutes from now`) that keeps refreshing on each new call, **not** an
    immediate `Stopping…` between requests — the behavior the old
    `RESIDENT_MODELS` allowlist could never grant to a non-listed tag.
-4. **Set the same field to `0`** and blur. Expect the next call's `keep_alive`
-   to be `0` and `ollama ps` to show the model evicting immediately after the
-   call completes — reproducing the pre-configured-tag behavior on demand.
+4. **Set the same field to `0`** and blur. Expect the next **analysis** call's
+   `keep_alive` to be `0` and `ollama ps` to show the model evicting immediately
+   after the call completes — reproducing the pre-configured-tag behavior on
+   demand. **But an explicit "Load" pill on the Analysing screen still warms it:**
+   clicking Load warms with `keep_alive: 30` (the floor, Invariant 8), so
+   `ollama ps` shows the model resident with an ~30s `UNTIL` countdown and the
+   pill goes green — Load never load-then-evicts. This is the regression fix:
+   before the floor, a `0`-resolving tag (default for any custom quant) made the
+   Load button appear to do nothing.
 5. **Set the field to `-1`.** Expect the model to stay resident indefinitely
    (`ollama ps` shows no eviction countdown) until manually unloaded.
 6. **Click ↺ (reset)** on an overridden row. Expect the field to fall back to
