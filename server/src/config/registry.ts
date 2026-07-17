@@ -57,6 +57,16 @@ export const KNOBS: ConfigKnob[] = [
     default: 8192, // ← DEFAULT_MAX_OUTPUT_TOKENS in analyzer/gemini.ts
     apply: 'live', risk: 'medium',
   },
+  {
+    key: 'analyzer.gemini.maxInputTokensPerRequest',
+    env: 'ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST',
+    group: 'analyzer-sampling',
+    label: 'Gemini max input tokens per request',
+    help: 'Per-request INPUT-token cap for cloud analyzer passes (stage-1, stage-2, script-review/emotion/instruct). Body chunks are sized to this; must stay below the model TPM (Gemma free tier = 16000/min) so the system prompt + roster fit. Default 12000.',
+    type: 'integer', min: 1000, max: 60000,
+    default: 12000,
+    apply: 'live', risk: 'medium',
+  },
 
   // ── analyzer-chunking ─────────────────────────────────────────────────────
   {
