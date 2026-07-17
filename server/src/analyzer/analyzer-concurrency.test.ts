@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import {
   analyzerConcurrency,
@@ -23,6 +23,19 @@ describe('canonicalLeaseKey', () => {
 });
 
 describe('per-model lease', () => {
+  beforeAll(() => {
+    // These assertions assume the test-env gpuSemaphore budget is 1 (the
+    // "budget-1 test env" the inline comments below rely on). A dev box with
+    // GPU_VRAM_BUDGET >= 2 in server/.env would otherwise fail these tests
+    // with a confusing serialize-assertion mismatch — fail loudly here
+    // instead so the real cause is obvious.
+    expect(
+      gpuSemaphore.budget,
+      'per-model lease tests assume gpuSemaphore.budget === 1 (unset GPU_VRAM_BUDGET/GPU_CONCURRENCY); ' +
+        'a server/.env with GPU_VRAM_BUDGET >= 2 will make these assertions fail confusingly — unset it to run this suite',
+    ).toBe(1);
+  });
+
   it('same model: two concurrent calls share ONE gpuSemaphore slot', async () => {
     const before = gpuSemaphore.usedTokens;
     const r1 = await acquireAnalyzerSlot('gemma:latest', false);
@@ -66,10 +79,26 @@ describe('per-model lease', () => {
 });
 
 describe('describeAnalyzerConcurrency', () => {
-  it('floors effective at 1 when budget < cost (M4)', () => {
-    expect(describeAnalyzerConcurrency(4, 1)).toContain('effective 1');
+  it('reports the same-model call ceiling as K, separately from distinct-model co-residency (M4)', () => {
+    // budget=1, cost=4 -> distinct-model co-residency floors at 1, but the
+    // same-model call ceiling is STILL K=2 — these are different axes and
+    // must not collapse into one misleading "effective N".
+    const msg = describeAnalyzerConcurrency(4, 1);
+    expect(msg).toContain('K=2');
+    expect(msg).toContain('same-model');
+    expect(msg).toContain('OLLAMA_NUM_PARALLEL >= 2');
+    expect(msg).toContain('distinct-model co-residency');
+    expect(msg).toContain('co-residency ceiling (GPU budget=1 / analyzer cost=4) = 1');
+    expect(msg).not.toMatch(/effective \d/);
   });
-  it('reports min(K, floor(budget/cost)) otherwise', () => {
-    expect(describeAnalyzerConcurrency(4, 16)).toContain('effective 2');
+  it('reports distinct-model co-residency as floor(budget/cost), still separate from K', () => {
+    // budget=16, cost=4 -> co-residency=4, independent of K.
+    const msg = describeAnalyzerConcurrency(4, 16);
+    expect(msg).toContain('K=2');
+    expect(msg).toContain('same-model');
+    expect(msg).toContain('OLLAMA_NUM_PARALLEL >= 2');
+    expect(msg).toContain('distinct-model co-residency');
+    expect(msg).toContain('co-residency ceiling (GPU budget=16 / analyzer cost=4) = 4');
+    expect(msg).not.toMatch(/effective \d/);
   });
 });

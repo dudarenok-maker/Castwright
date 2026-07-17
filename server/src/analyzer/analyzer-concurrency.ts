@@ -18,6 +18,11 @@ function resolveK(): number {
   return Number.isFinite(k) && k > 0 ? Math.floor(k) : 1;
 }
 
+// K is captured once, at module load, via resolveK() above — a test (or
+// caller) that flips ANALYZER_OLLAMA_CONCURRENCY after this module has
+// already been imported will NOT resize this limiter without a fresh module
+// import (contrast analyzerPoolWidth()-style helpers that re-read config
+// live on every call).
 export const analyzerConcurrency = new GpuSemaphore(resolveK());
 
 /** Canonicalise a model tag so one physical model has one lease key
@@ -90,13 +95,25 @@ export async function acquireAnalyzerSlot(model: string, onCpu: boolean): Promis
   };
 }
 
-/** Effective analyzer concurrency for the startup log (M4). The gpuSemaphore
-    clamps the per-call cost to ≥1, so the ceiling is min(K, max(1, floor(budget/cost))). */
+/** Startup log for analyzer concurrency (M4). Reports TWO independent axes —
+    collapsing them into one "effective N" number (as an earlier version did)
+    misleads operators into raising GPU_VRAM_BUDGET to "fix" a low number,
+    which instead just enables distinct-model co-residence and risks the OOM
+    this feature exists to prevent:
+      1. Same-model call concurrency, bounded by K (the limiter budget) and
+         OLLAMA_NUM_PARALLEL — this is what acquireAnalyzerSlot actually
+         delivers for repeated calls to the SAME resident model.
+      2. Distinct-model co-residency, bounded by floor(gpuBudget / cost) — how
+         many DIFFERENT local models can hold a gpuSemaphore slot at once.
+         This is a ceiling on co-residence, not on same-model call throughput. */
 export function describeAnalyzerConcurrency(analyzerCost: number, gpuBudget: number): string {
   const k = analyzerConcurrency.budget;
-  const admits = Math.max(1, Math.floor(gpuBudget / Math.max(1, analyzerCost)));
-  const effective = Math.min(k, admits);
-  return `[analyzer] concurrency K=${k}, GPU budget=${gpuBudget}, analyzer cost=${analyzerCost} -> effective ${effective} concurrent GPU call(s). Ensure OLLAMA_NUM_PARALLEL >= ${k}.`;
+  const coResidency = Math.max(1, Math.floor(gpuBudget / Math.max(1, analyzerCost)));
+  return (
+    `[analyzer] up to K=${k} same-model analyzer calls run concurrently ` +
+    `(Ensure OLLAMA_NUM_PARALLEL >= ${k}); ` +
+    `distinct-model co-residency ceiling (GPU budget=${gpuBudget} / analyzer cost=${analyzerCost}) = ${coResidency}.`
+  );
 }
 
 /** Test-only: clear the lease map between cases. */
