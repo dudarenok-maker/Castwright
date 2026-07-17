@@ -125,13 +125,13 @@ git commit -m "feat(server): add analyzerKeepAliveByModel to user settings schem
 
 - [ ] **Step 1: Rewrite the `keepAliveFor` unit-test block**
 
-Replace `ollama.test.ts` lines 192-218 (the `keep_alive policy` describe) with:
+Replace the **entire** `keep_alive policy` describe (`ollama.test.ts` lines **192-252** — it contains two pure-function `it`s at 195/218 **and three wire-level `expect(body.keep_alive).toBe('5m')` tests** at 232/241/250, all of which must go) with the block below. Wire-level coverage is retained by the happy-path assertion (line 161, updated further down).
 
 ```ts
-import { getCachedUserSettings, _setUserSettingsCacheForTest, DEFAULT_USER_SETTINGS } from '../workspace/user-settings.js';
+import { _setUserSettingsCacheForTest, _resetUserSettingsCache, DEFAULT_USER_SETTINGS } from '../workspace/user-settings.js';
 
 describe('OllamaAnalyzer — keep_alive policy (per-model seconds)', () => {
-  afterEach(() => _setUserSettingsCacheForTest(null));
+  afterEach(() => _resetUserSettingsCache());
 
   it('returns the coded default (300) for supported models, 0 for unknown', async () => {
     const { keepAliveFor } = await import('./ollama.js');
@@ -168,7 +168,7 @@ describe('OllamaAnalyzer — keep_alive policy (per-model seconds)', () => {
 });
 ```
 
-Also update the happy-path wire assertion at **line 158** (`body.keep_alive`), and replace the stale `RESIDENT_MODELS` comment at 152-157:
+Also update the happy-path wire assertion at **line 161** (`body.keep_alive`, model `qwen3.5:9b`), and replace the stale `RESIDENT_MODELS` comment at 152-157:
 
 ```ts
     /* qwen3.5:9b resolves to its coded default keep-alive (300 s) — see
@@ -249,7 +249,7 @@ import { getCachedUserSettings } from '../workspace/user-settings.js';
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `cd server && npx vitest run src/analyzer/ollama.test.ts`
-Expected: PASS (keep_alive policy block + happy-path stream). If `_setUserSettingsCacheForTest` doesn't exist, add a tiny test-only setter next to `getCachedUserSettings` in `user-settings.ts`: `export function _setUserSettingsCacheForTest(v: UserSettings | null) { cached = v ?? undefined; }` and re-run.
+Expected: PASS (keep_alive policy block + happy-path stream). NOTE: `_setUserSettingsCacheForTest(partial)` and `_resetUserSettingsCache()` already exist in `user-settings.ts` (`~745`/`~756`) — the setter merges the partial over `DEFAULT_USER_SETTINGS`, the reset nulls the cache. No new helper needed; do NOT call the setter with `null`.
 
 - [ ] **Step 5: Commit**
 
@@ -325,7 +325,7 @@ git commit -m "feat(server): pin persona keep-alive to a fixed 300s, drop resolv
 - Modify: `server/src/config/registry.ts` (1088-1096)
 - Modify: `server/src/config/registry.test.ts` (71-77)
 - Modify: `src/lib/api.ts` (mock registry mirror ~8956)
-- Regenerated: `.env.example` (via `npm run config:sync`)
+- Regenerated: `server/.env.example` (via `npm run config:sync` — it writes `server/.env.example`, NOT a root file; the `ANALYZER_KEEP_ALIVE` block is at `server/.env.example:517`)
 
 - [ ] **Step 1: Update the registry test**
 
@@ -343,7 +343,7 @@ In `registry.ts`, delete the whole knob object at 1088-1096 (`key: 'analyzer.oll
 - [ ] **Step 4: Regenerate `.env.example`**
 
 Run: `npm run config:sync`
-Then verify: `git diff --stat .env.example` shows the `ANALYZER_KEEP_ALIVE` block removed.
+Then verify: `git diff --stat server/.env.example` shows the `ANALYZER_KEEP_ALIVE` block removed.
 
 - [ ] **Step 5: Verify the config gate is green**
 
@@ -353,7 +353,7 @@ Expected: PASS (no drift). Then `cd server && npx vitest run src/config/registry
 - [ ] **Step 6: Commit**
 
 ```bash
-git add server/src/config/registry.ts server/src/config/registry.test.ts src/lib/api.ts .env.example
+git add server/src/config/registry.ts server/src/config/registry.test.ts src/lib/api.ts server/.env.example
 git commit -m "chore(server): retire analyzer.ollama.keepAlive knob (superseded by per-model map)"
 ```
 
@@ -372,15 +372,22 @@ git commit -m "chore(server): retire analyzer.ollama.keepAlive knob (superseded 
 
 - [ ] **Step 1: Write the failing test**
 
-In `models-inventory.test.ts`, add (adapt to the file's existing builder-invocation helper):
+In `models-inventory.test.ts`: `buildModelInventory(deps)` is **synchronous** and takes injected deps via the file's existing `baseDeps(over)` helper (`~line 75`), invoked as `baseDeps({ ollama: { reachable, models: [{name,size}], resident } })`. Add the imports `_setUserSettingsCacheForTest, _resetUserSettingsCache, DEFAULT_USER_SETTINGS` from `../workspace/user-settings.js` (not currently imported here), then add:
 
 ```ts
-it('analyzer items carry resolved keepAliveSeconds and override flag', async () => {
-  _setUserSettingsCacheForTest({
-    ...DEFAULT_USER_SETTINGS,
-    analyzerKeepAliveByModel: { 'qwen36-castwright:latest': 300 },
-  });
-  const res = await buildModelInventory(/* existing deps fixture */);
+afterEach(() => _resetUserSettingsCache()); // don't leak the seeded override into later cases
+
+it('analyzer items carry resolved keepAliveSeconds and override flag', () => {
+  _setUserSettingsCacheForTest({ analyzerKeepAliveByModel: { 'qwen36-castwright:latest': 300 } });
+  const res = buildModelInventory(
+    baseDeps({
+      ollama: {
+        reachable: true,
+        models: [{ name: 'qwen36-castwright:latest', size: 1 }, { name: 'qwen3.5:4b', size: 1 }],
+        resident: [],
+      },
+    }),
+  );
   const custom = res.items.find((i) => i.id === 'ollama:qwen36-castwright:latest');
   const supported = res.items.find((i) => i.id === 'ollama:qwen3.5:4b');
   expect(custom?.keepAliveSeconds).toBe(300);
@@ -389,6 +396,8 @@ it('analyzer items carry resolved keepAliveSeconds and override flag', async () 
   expect(supported?.keepAliveIsOverride).toBe(false);
 });
 ```
+
+(Confirm the real `baseDeps` `ollama` shape and adjust field names if they differ.)
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -519,29 +528,42 @@ git commit -m "feat(frontend): thread analyzerKeepAliveByModel through the setti
 - Test: `src/views/model-manager.test.tsx`
 
 **Interfaces:**
-- Consumes: `item.keepAliveSeconds`, `item.keepAliveIsOverride` (Task 5); `account.settings.analyzerKeepAliveByModel` (Task 1/6); `saveAccountSettings` (existing).
+- Consumes: `item.keepAliveSeconds`, `item.keepAliveIsOverride` (Task 5); the override map at `s.account.analyzerKeepAliveByModel` — the account slice is **flat** (`AccountState extends UserSettings`, `account-slice.ts:22`), there is **no** `s.account.settings` sub-object; `saveAccountSettings` (existing, `account-slice.ts:53`).
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `model-manager.test.tsx` (follow the file's existing render+mock harness):
+The real harness in `model-manager.test.tsx` is: `vi.mock('../lib/api', …)` with `putUserSettings: vi.fn()` and `getModelInventory: vi.fn()` (spy via `vi.mocked(api.putUserSettings)` / `vi.mocked(api.getModelInventory)`), inline `configureStore` + `<Provider>` to render, and fixtures `SETTINGS_FIXTURE` / `INVENTORY`. Account state is preloaded **flat** via `preloadedState`. Add:
 
 ```tsx
-it('renders the analyzer keep-alive value and saves the full merged map on edit', async () => {
-  // seed account settings with an existing override for another model
-  preloadAccount({ analyzerKeepAliveByModel: { 'qwen3.5:4b': 120 } });
-  renderModelManager({ items: [analyzerItem({ id: 'ollama:qwen36-castwright:latest', keepAliveSeconds: 0, keepAliveIsOverride: false })] });
+it('renders the analyzer keep-alive and saves the full merged map on edit', async () => {
+  vi.mocked(api.getModelInventory).mockResolvedValue({
+    ts: 't', sidecarReachable: true,
+    items: [{ ...ANALYZER_ITEM_FIXTURE, id: 'ollama:qwen36-castwright:latest',
+              label: 'qwen36-castwright:latest', keepAliveSeconds: 0, keepAliveIsOverride: false }],
+  });
+  const putSpy = vi.mocked(api.putUserSettings).mockResolvedValue({} as never);
+
+  const store = configureStore({
+    reducer: rootReducer,
+    // account is flat: AccountState extends UserSettings — seed an existing override
+    preloadedState: { account: { ...ACCOUNT_DEFAULTS, analyzerKeepAliveByModel: { 'qwen3.5:4b': 120 } } },
+  });
+  render(<Provider store={store}><ModelManagerView /></Provider>);
 
   const field = await screen.findByTestId('keepalive-ollama:qwen36-castwright:latest');
   expect(field).toHaveValue(0);
-
   fireEvent.change(field, { target: { value: '300' } });
   fireEvent.blur(field);
 
-  await waitFor(() => expect(putUserSettingsSpy).toHaveBeenCalledWith({
-    analyzerKeepAliveByModel: { 'qwen3.5:4b': 120, 'qwen36-castwright:latest': 300 },
-  }));
+  await waitFor(() =>
+    expect(putSpy).toHaveBeenCalledWith({
+      analyzerKeepAliveByModel: { 'qwen3.5:4b': 120, 'qwen36-castwright:latest': 300 },
+    }),
+  );
 });
 ```
+
+(Adapt `ANALYZER_ITEM_FIXTURE` / `ACCOUNT_DEFAULTS` / `rootReducer` to the file's actual fixture + store-setup names.)
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -550,15 +572,15 @@ Expected: FAIL (no field).
 
 - [ ] **Step 3: Load account settings into the view**
 
-In `ModelManagerView`, dispatch the fetch on mount and select the map:
+`model-manager.tsx` already imports `useAppDispatch` (line 13) — **add `useAppSelector`** to that import. In `ModelManagerView`, dispatch the fetch on mount and select the map from the **flat** account slice:
 
 ```tsx
 const dispatch = useAppDispatch();
-const keepAliveMap = useAppSelector((s) => s.account.settings?.analyzerKeepAliveByModel ?? {});
+const keepAliveMap = useAppSelector((s) => s.account.analyzerKeepAliveByModel ?? {});
 useEffect(() => { void dispatch(fetchAccountSettings()); }, [dispatch]);
 ```
 
-Pass `keepAliveMap` down to `ModelInventory` → `ModelRow`.
+Pass `keepAliveMap` down to `ModelInventory` → `ModelRow`. (`fetchAccountSettings` is imported from `../store/account-slice`.)
 
 - [ ] **Step 4: Add the control to `ModelRow`**
 
