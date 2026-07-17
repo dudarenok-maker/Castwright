@@ -5991,6 +5991,10 @@ export interface ModelInventoryItem {
   removable: boolean;
   updatable: boolean;
   integrity?: 'verified' | 'unpinned' | 'mismatch';
+  /* Analyzer-only: resolved per-model keep-alive (seconds) and whether the
+     value is a user override (vs coded default). Absent for tts/asr rows. */
+  keepAliveSeconds?: number;
+  keepAliveIsOverride?: boolean;
 }
 
 export interface ModelInventoryResponse {
@@ -7551,6 +7555,8 @@ async function mockGetModelInventory(): Promise<ModelInventoryResponse> {
       isFallbackEngine: false,
       removable: true,
       updatable: true,
+      keepAliveSeconds: 300,
+      keepAliveIsOverride: false,
     },
     {
       id: 'ollama:llama3.1:8b',
@@ -7564,6 +7570,8 @@ async function mockGetModelInventory(): Promise<ModelInventoryResponse> {
       isFallbackEngine: false,
       removable: true,
       updatable: true,
+      keepAliveSeconds: 300,
+      keepAliveIsOverride: false,
     },
   ];
   return {
