@@ -10,7 +10,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../workspace/user-settings.js';
-import { resolveAnalyzerNumCtx, resolveAnalyzerNumGpu } from '../analyzer/ollama.js';
+import { resolveAnalyzerNumCtx, resolveAnalyzerNumGpu, resolveKeepAliveSeconds } from '../analyzer/ollama.js';
 import { configValue } from '../config/resolver.js';
 import {
   installBootstrap as defaultInstallBootstrap,
@@ -363,7 +363,8 @@ async function probeOllamaReachable(
   }
 }
 
-/** Warm `model` into VRAM via the keep_alive:'5m' empty-prompt idiom, using the
+/** Warm `model` into VRAM via the resolveKeepAliveSeconds()+empty-prompt idiom
+    (the model's configured keep-alive, not a hardcoded '5m'), using the
     same num_ctx/num_gpu the analyzer's runStage path uses (see the CRITICAL
     note above). Extracted so the script-review job can warm the analyzer model
     in-process, not just via the /load route below.
@@ -406,7 +407,7 @@ export async function warmOllamaModel(
       {
         model,
         prompt: '',
-        keep_alive: '5m',
+        keep_alive: resolveKeepAliveSeconds(model),
         stream: false,
         options: { num_ctx: resolveAnalyzerNumCtx(), num_gpu: resolveAnalyzerNumGpu() },
       },
