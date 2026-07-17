@@ -1409,7 +1409,7 @@ export function ProfileDrawer({
                         <button
                           aria-label={`Unlink ${a}`}
                           onClick={() => setUnlinkDialogAlias(a)}
-                          className="inline-flex items-center justify-center w-5 h-5 rounded-full text-ink/55 hover:bg-ink/10 hover:text-ink disabled:opacity-50 disabled:cursor-wait coarse-pointer:opacity-100"
+                          className="inline-flex items-center justify-center w-5 h-5 rounded-full text-ink/55 hover:bg-ink/10 hover:text-ink coarse-pointer:opacity-100"
                         >
                           <IconClose className="w-3 h-3" />
                         </button>
