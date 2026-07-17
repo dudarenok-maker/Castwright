@@ -37,5 +37,9 @@ describe('BulkReassignUndoBanner', () => {
     expect(s.manuscript.sentences[0].characterId).toBe('egor');
     expect(s.manuscript.lastBulkReassign).toBeNull();
     expect(s.changeLog.events.some((e) => /revert/i.test(e.note ?? ''))).toBe(true);
+    const revertEvent = s.changeLog.events.find((e) => /revert/i.test(e.note ?? ''));
+    expect(revertEvent?.title).toBe('Reverted bulk line reassignment');
+    expect(revertEvent?.title).not.toMatch(/-1/);
+    expect(revertEvent?.title).not.toMatch(/Chapter/);
   });
 });
