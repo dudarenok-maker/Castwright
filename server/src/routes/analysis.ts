@@ -148,6 +148,7 @@ import { parseChapterStructure } from '../analyzer/dialogue-structure/parser.js'
 import { resolveWindows, type WindowRoster } from '../analyzer/dialogue-structure/windows.js';
 import { alignSentences } from '../analyzer/dialogue-structure/aligner.js';
 import { crossExamine } from '../analyzer/dialogue-structure/cross-examine.js';
+import { annotateSceneBreaks } from '../analyzer/scene-breaks.js';
 import { escalateFlaggedWindows } from '../analyzer/dialogue-structure/escalation.js';
 import type { EngineReport, LanguageConventions } from '../analyzer/dialogue-structure/types.js';
 import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
@@ -1785,6 +1786,13 @@ export async function attributeChapterStage2(opts: {
        verdict is unchanged) and UPSTREAM of fold/reconcile. */
     result.sentences = applyNarratorDefault(result.sentences);
   }
+
+  /* #1679 — read-only scene-break display flags, computed once on the FINAL
+     post-attribution sentences. Placed here (after BOTH the conventions and
+     applyNarratorDefault branches converge) so dividers populate on every
+     chapter regardless of language or structure-engine state. Mutates only the
+     sceneBreakBefore flag. */
+  annotateSceneBreaks(result.sentences, opts.chapter.body);
   return result;
 }
 
