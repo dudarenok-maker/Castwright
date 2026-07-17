@@ -360,18 +360,17 @@ git commit -m "feat(frontend): add api.repointAlias client + types (#1676 b)"
 
 - [ ] **Step 1: Write failing reducer tests.** Append to `src/store/cast-slice.test.ts` (mirror the `applyAddAlias` block at ~line 729). Use the same `makeState`/initial-cast helpers the neighboring tests use:
 
+Uses the file's real idiom: `castSlice.reducer(start, action)` (NOT a bare `castReducer`) and `baseState([makeChar(id, { name, aliases })])` — copy the exact form from the `applyAddAlias` block at ~line 729.
+
 ```ts
 describe('castSlice — applyRepointAlias (POST /cast/repoint-alias response)', () => {
-  const base = () => ({
-    characters: [
-      { id: 'egor', name: 'Егор', aliases: ['Я', 'Sior'] },
-      { id: 'anton', name: 'Антон', aliases: [] as string[] },
-    ],
-  });
-
   it('strips the alias off the source and appends it to the target', () => {
-    const next = castReducer(
-      base() as never,
+    const start = baseState([
+      makeChar('egor', { name: 'Егор', aliases: ['Я', 'Sior'] }),
+      makeChar('anton', { name: 'Антон', aliases: [] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
       castActions.applyRepointAlias({ sourceCharacterId: 'egor', aliasName: 'Я', targetCharacterId: 'anton' }),
     );
     expect(next.characters.find((c) => c.id === 'egor')!.aliases).toEqual(['Sior']);
@@ -379,10 +378,12 @@ describe('castSlice — applyRepointAlias (POST /cast/repoint-alias response)', 
   });
 
   it('dedups case-insensitively on the target (no double add)', () => {
-    const s = base();
-    s.characters[1].aliases = ['я'];
-    const next = castReducer(
-      s as never,
+    const start = baseState([
+      makeChar('egor', { name: 'Егор', aliases: ['Я', 'Sior'] }),
+      makeChar('anton', { name: 'Антон', aliases: ['я'] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
       castActions.applyRepointAlias({ sourceCharacterId: 'egor', aliasName: 'Я', targetCharacterId: 'anton' }),
     );
     expect(next.characters.find((c) => c.id === 'anton')!.aliases).toEqual(['я']);
@@ -390,10 +391,12 @@ describe('castSlice — applyRepointAlias (POST /cast/repoint-alias response)', 
   });
 
   it('does not append when the alias equals the target primary name (still strips source)', () => {
-    const s = base();
-    s.characters[0].aliases = ['Антон', 'Sior'];
-    const next = castReducer(
-      s as never,
+    const start = baseState([
+      makeChar('egor', { name: 'Егор', aliases: ['Антон', 'Sior'] }),
+      makeChar('anton', { name: 'Антон', aliases: [] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
       castActions.applyRepointAlias({ sourceCharacterId: 'egor', aliasName: 'Антон', targetCharacterId: 'anton' }),
     );
     expect(next.characters.find((c) => c.id === 'anton')!.aliases).toEqual([]);
@@ -401,16 +404,18 @@ describe('castSlice — applyRepointAlias (POST /cast/repoint-alias response)', 
   });
 
   it('is a no-op when the source or target is missing', () => {
-    const next = castReducer(
-      base() as never,
+    const start = baseState([
+      makeChar('egor', { name: 'Егор', aliases: ['Я', 'Sior'] }),
+      makeChar('anton', { name: 'Антон', aliases: [] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
       castActions.applyRepointAlias({ sourceCharacterId: 'ghost', aliasName: 'Я', targetCharacterId: 'anton' }),
     );
     expect(next.characters.find((c) => c.id === 'anton')!.aliases).toEqual([]);
   });
 });
 ```
-
-> Match the exact `castReducer`/`castActions` import names + state-shaping idiom used by the existing `applyAddAlias` block; the snippet above is illustrative of the assertions, not the imports.
 
 - [ ] **Step 2: Run to verify failure.**
 
@@ -452,18 +457,24 @@ Expected: PASS (4 tests).
 
 - [ ] **Step 5: Write failing persist-rule test.** In `src/store/persistence-middleware.test.ts`, mirror the `applyAddAlias` test at ~line 163:
 
+Mirror the `applyAddAlias` persist test at ~line 163 EXACTLY — real symbols are `baseState({ cast: {...} })`, `putBookState`, `advance(500)`, and the `{ slice: 'cast', patch: { characters } }` shape (NOT a bare `{ characters }`):
+
 ```ts
 it('persists the full cast on applyRepointAlias so the moved alias is the authoritative last write', async () => {
-  const state = makeCastState(); // same helper the applyAddAlias test uses
-  const put = vi.fn();
-  // ...wire the same fake api.putCast the neighboring test uses...
+  const next = vi.fn((x) => x);
+  const state = baseState({
+    cast: { characters: [{ id: 'egor', aliases: [] }, { id: 'anton', aliases: ['Я'] }] },
+  });
   persistenceMiddleware(makeStore(state))(next)({ type: 'cast/applyRepointAlias' });
-  await flush();
-  expect(put).toHaveBeenCalledWith(expect.objectContaining({ characters: state.cast.characters }));
+  await advance(500);
+  expect(putBookState).toHaveBeenCalledWith('book-1', {
+    slice: 'cast',
+    patch: { characters: [{ id: 'egor', aliases: [] }, { id: 'anton', aliases: ['Я'] }] },
+  });
 });
 ```
 
-> Copy the exact fixture/mock wiring from the `applyAddAlias` persist test above it — same `makeStore`, `next`, and put-spy plumbing.
+> The middleware serializes current state on the action type — it does not run the reducer — so `state` is the post-repoint shape (source emptied, target holding the alias).
 
 - [ ] **Step 6: Run to verify failure.**
 
@@ -689,7 +700,7 @@ git commit -m "feat(frontend): unlink destination dialog (#1676 b)"
 - Consumes: `UnlinkAliasDialog`, `UnlinkDestination` (Task 4); existing `mergeCandidates?: Character[]` prop (= cast \ this).
 - Produces: widened `onUnlinkAlias?: (sourceCharacterId: string, aliasName: string, destination: UnlinkDestination) => Promise<void>`.
 
-- [ ] **Step 1: Rewrite the three existing unlink tests** in `src/modals/profile-drawer.test.tsx` to go through the dialog. The `onUnlinkAlias` test-double type widens to 3 args. `renderDrawer` must pass a non-empty `mergeCandidates` so the move option has targets (add e.g. `[{ id: 'wren', name: 'Wren' }]` — check the helper's existing signature and thread it through):
+- [ ] **Step 1: Rewrite the three existing unlink tests** in `src/modals/profile-drawer.test.tsx` to go through the dialog. **Widen the `renderDrawer` helper's `onUnlinkAlias` type at ~line 117** from the 2-arg `(sourceCharacterId, aliasName) => Promise<void>` to the 3-arg form carrying `destination` — editing only the `vi.fn()` call sites is not enough, the helper's declared type must widen too. `renderDrawer` already threads `mergeCandidates` (verified ~line 147); pass a non-empty `mergeCandidates` so the move option has targets (e.g. `[{ id: 'wren', name: 'Wren' }]`):
 
 ```tsx
 it('clicking the X opens the dialog; confirming split dispatches onUnlinkAlias', async () => {
@@ -923,6 +934,8 @@ test('user can move an alias onto another character (repoint), which opens the r
 
 Run: `npx playwright test e2e/cast-alias-edit.spec.ts --project=chromium`
 Expected: PASS (2 tests). (Requires `npx playwright install chromium` once.)
+
+> **Portal watch (finding from plan review):** the dialog renders inline in `ProfileDrawer`, whose root is `fixed … overflow-y-auto` with a slide animation. A `position: fixed` child should escape the clip at rest, but the repo has a prior "modal clipped by clip-path → portal to body" incident. If this e2e shows the dialog clipped/off-center, wrap it in `createPortal(…, document.body)` (mirror the existing `createPortal` usage in `profile-drawer.tsx`). jsdom unit tests (Task 4) are unaffected either way.
 
 - [ ] **Step 4: Commit.**
 
