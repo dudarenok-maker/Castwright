@@ -140,10 +140,15 @@ export function splitBodyIntoChunks(body: string, charBudget: number): string[] 
   for (let i = 0; i < parts.length; i += 2) {
     units.push(parts[i] + (parts[i + 1] ?? ''));
   }
+  const isSceneSeparatorUnit = (u: string): boolean =>
+    u.trim().length > 0 && attributableWordCount(u) === 0;
   const chunks: string[] = [];
   let cur = '';
   for (const u of units) {
-    if (cur && cur.length + u.length > charBudget) {
+    // A scene-separator paragraph forces a boundary BEFORE it, so the separator
+    // (and the scene that follows) starts a fresh chunk — no chunk straddles a
+    // scene break. Size overflow breaks too, as before.
+    if (cur && (isSceneSeparatorUnit(u) || cur.length + u.length > charBudget)) {
       chunks.push(cur);
       cur = u;
     } else {

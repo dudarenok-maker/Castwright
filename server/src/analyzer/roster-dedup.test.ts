@@ -285,6 +285,42 @@ describe('dedupeRosterByName Tier-3 (alias coreference — strong merge)', () =>
   });
 });
 
+describe('dedupeRosterByName — first-person pronoun phantom (RC1)', () => {
+  it('force-merges a bare «Я» character into the char that lists «Я» as an alias', () => {
+    const chars = [
+      c({ id: 'антон', name: 'Антон', gender: 'male', aliases: ['Антон Городецкий', 'Я'] }),
+      c({ id: 'я', name: 'Я', gender: 'male', aliases: [] }),
+    ];
+    const r = dedupeRosterByName(chars as any, [...sent('антон', 196), ...sent('я', 7)], { language: 'ru' });
+    expect(r.characters.map((x) => x.id)).toEqual(['антон']); // phantom gone, Антон survives (more lines)
+    expect(r.rewrites['я']).toBe('антон');
+  });
+
+  it('routes a bare «Я» to the narrator when NO character claims it as an alias (fallback)', () => {
+    const chars = [
+      c({ id: 'антон', name: 'Антон', gender: 'male', aliases: [] }),
+      c({ id: 'я', name: 'Я', gender: 'male', aliases: [] }),
+    ];
+    const r = dedupeRosterByName(chars as any, [...sent('антон', 196), ...sent('я', 7)], { language: 'ru' });
+    // A bare pronoun is NEVER a real character: with no alias-holder to absorb
+    // it, it routes to the narrator (first-person-with-no-owner = narrator voice).
+    expect(r.characters.map((x) => x.id)).toEqual(['антон']);
+    expect(r.rewrites['я']).toBe('narrator');
+  });
+
+  it('a phantom «Я» with MORE lines than the real protagonist does NOT dissolve the protagonist into narrator', () => {
+    const chars = [
+      c({ id: 'антон', name: 'Антон', gender: 'male', aliases: ['Я'] }),
+      c({ id: 'я', name: 'Я', gender: 'male', aliases: [] }),
+    ];
+    // phantom has FAR more lines than антон — this is what triggers the inversion.
+    const r = dedupeRosterByName(chars as any, [...sent('антон', 20), ...sent('я', 300)], { language: 'ru' });
+    expect(r.characters.map((x) => x.id)).toEqual(['антон']); // real protagonist survives, keeps id антон
+    expect(r.rewrites['я']).toBe('антон');                    // phantom merged INTO антон
+    expect(Object.values(r.rewrites)).not.toContain('narrator'); // антон NOT dissolved to narrator
+  });
+});
+
 describe('dedupeRosterByName Tier-3 (alias coreference — weak suggestions)', () => {
   it('suggests (does not merge) a one-sided bare-word link on exactly two rows', () => {
     const chars = [

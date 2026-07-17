@@ -31,6 +31,7 @@ import {
   runMainAnalyzerJob,
   runSubsetAnalyzerJob,
   aggregateStructureReports,
+  buildStage2ChapterInbox,
   type AnalysisJob,
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput, Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
@@ -3456,4 +3457,25 @@ describe('#1447 third-party front-matter guard — main-route integration', () =
     },
     60_000,
   );
+});
+
+describe('stage-2 prompt first-person anchor (RC3)', () => {
+  const stage1 = {
+    characters: [
+      { id: 'антон', name: 'Антон', role: 'Colleague', aliases: ['Антон Городецкий', 'Я'] },
+      { id: 'егор', name: 'Егор', role: 'Protagonist / Observer' },
+    ],
+  } as any;
+  const chapter = { id: 1, title: 'Ch1', body: 'Я кивнул.' };
+
+  it('emits the first-person anchor naming the narrator id when one is provided', () => {
+    const prompt = buildStage2ChapterInbox('m', 'Title', stage1, chapter, 'антон');
+    expect(prompt).toContain('First-person narrator');
+    expect(prompt).toContain('`антон`');
+  });
+
+  it('omits the anchor block when firstPersonId is null', () => {
+    const prompt = buildStage2ChapterInbox('m', 'Title', stage1, chapter, null);
+    expect(prompt).not.toContain('First-person narrator');
+  });
 });

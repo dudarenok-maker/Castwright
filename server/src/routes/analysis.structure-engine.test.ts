@@ -126,6 +126,39 @@ describe('attributeChapterStage2 — structure engine wiring (srv-59)', () => {
   });
 });
 
+describe('attributeChapterStage2 — Task 9 roster consolidation before stage-2', () => {
+  it('hands the model a consolidated roster (bare «Я» phantom + fragmented Антон merged) and fires the «я» anchor', async () => {
+    // Raw stage-1 the model would otherwise see: a bare pronoun «Я» char, Антон
+    // split across two ids, and Ольга. `anton` carries «Я» as an alias (the model
+    // volunteered it) so the phantom folds into Антон and the anchor can fire.
+    const rawChars: CharacterOutput[] = [
+      { id: 'anton', name: 'Антон', role: 'lead', color: '#111111', gender: 'male', aliases: ['Я'] },
+      { id: 'anton-gorodetsky', name: 'Антон Городецкий', role: 'lead', color: '#112222', gender: 'male' },
+      { id: 'я', name: 'Я', role: 'char', color: '#113333', gender: 'male' },
+      { id: 'olga', name: 'Ольга', role: 'lead', color: '#222222', gender: 'female' },
+    ];
+    let captured = '';
+    const analyzer: Analyzer = {
+      ...fakeAnalyzer(mockSentences()),
+      runStage2Chapter: (_m: string, _c: number, prompt: string) => {
+        captured = prompt;
+        return Promise.resolve({ sentences: mockSentences() });
+      },
+    };
+    await attributeChapterStage2({
+      ...baseOpts('ru', mockSentences()),
+      analyzer,
+      stage1: { characters: rawChars, chapters: [{ id: 1, title: 'Chapter One' }] },
+    });
+
+    expect(captured).not.toContain('"id": "я"'); // bare pronoun phantom gone from the prompt
+    // Антон is ONE row now (Городецкий fragment merged), not two competing ids.
+    expect(captured.match(/"id": "anton(-gorodetsky)?"/g) ?? []).toHaveLength(1);
+    // …and the «я» prompt-anchor fires because the surviving Антон row carries «Я».
+    expect(captured).toContain('First-person narrator');
+  });
+});
+
 /* srv-59 Task 9b — the escalation WIRING inside attributeChapterStage2:
    reading the `analyzer.structure.escalation` knob, routing 'off'/'local',
    calling escalateFlaggedWindows, and folding `escalated`/`escalationAccepted`
