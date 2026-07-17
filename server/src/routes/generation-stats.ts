@@ -9,6 +9,7 @@
 import { Router } from 'express';
 import { getGenerationStats } from '../tts/generation-stats.js';
 import { readTelemetry } from '../tts/resource-telemetry.js';
+import { readAnalyzerEvalRecords } from '../analyzer/analyzer-eval-stats.js';
 
 export const generationStatsRouter = Router();
 
@@ -25,5 +26,15 @@ generationStatsRouter.get('/telemetry', async (req, res) => {
   const rawLimit = Number(req.query.limit);
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : undefined;
   const records = await readTelemetry(limit).catch(() => []);
+  res.json({ records });
+});
+
+/* Analyzer eval-rate telemetry (tok/s per pass), newest-first. Best-effort:
+   a read failure surfaces as an empty list, not a 500 (the admin panel keeps
+   its last-good snapshot — same contract as /telemetry). */
+generationStatsRouter.get('/analyzer-stats', async (req, res) => {
+  const rawLimit = Number(req.query.limit);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : undefined;
+  const records = await readAnalyzerEvalRecords(limit).catch(() => []);
   res.json({ records });
 });
