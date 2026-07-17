@@ -12,6 +12,7 @@ import { ZipFile } from 'yazl';
 import { audioDir, castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { sanitizeIdSegment } from '../util/safe-path.js';
 import { probeDurationSec } from './build-m4b.js';
 import { ExportIncompleteError, sanitiseForZip, pad2 } from './build-mp3-zip.js';
 import { loadManuscriptSentencesByChapter } from './manuscript-sentences.js';
@@ -131,7 +132,9 @@ export async function buildCaptions(opts: BuildCaptionsOptions): Promise<BuildCa
   for (let i = 0; i < resolved.length; i++) {
     signal?.throwIfAborted();
     const { chapter, audioPath } = resolved[i];
-    const segFile = await readJson<ChapterSegmentsFile>(join(root, `${chapter.slug}.segments.json`));
+    const segFile = await readJson<ChapterSegmentsFile>(
+      join(root, `${sanitizeIdSegment(chapter.slug)}.segments.json`),
+    );
     if (!segFile) throw new Error(`No segments.json found for rendered chapter ${chapter.slug}.`);
     const text = sentencesByChapter[chapter.id] ?? {};
     const sentenceText: Record<number, string> = {};
