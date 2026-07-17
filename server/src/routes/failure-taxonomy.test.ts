@@ -240,6 +240,24 @@ describe('source gating (spec A2)', () => {
     const err = Object.assign(new Error(raw), { status: 429 });
     expect(classifyAnalysisError(err).code).toBe('analyzer-rate-limit');
   });
+  it('classifies a genuine per_day 429 as analyzer-daily-quota via the raw-matcher regex (#1682)', () => {
+    /* Same production envelope shape as the "Google envelope 429 free-tier"
+       case below (classifyAnalysisFailure test at ~:352), but routed through
+       classifyAnalysisError/scanSignatures with NO err.name set — so the
+       matchName short-circuit for 'DailyQuotaExhaustedError' can't fire and
+       Site 1's narrowed /per[_-]?day|quotaValue":"\d{1,3}"/i regex (line
+       ~113) is the only thing that can classify this as daily.
+       quotaValue is deliberately 5 digits (not e.g. "250") so the OTHER half
+       of that alternation can't rescue a broken per_day: a typo in per_day
+       (e.g. -> per_dat) must make THIS test fail on its own, the same way
+       the per-minute negative test above avoids a false quotaValue match. */
+    const raw =
+      'got status: 429. {"error":{"code":429,"message":"You exceeded your current quota: ' +
+      'generate_requests_per_model_per_day_free_tier. GenerateRequestsPerDayPerProjectPerModel-FreeTier.",' +
+      '"status":"RESOURCE_EXHAUSTED","details":[{"quotaValue":"12500"}]}}';
+    const err = Object.assign(new Error(raw), { status: 429 });
+    expect(classifyAnalysisError(err).code).toBe('analyzer-daily-quota');
+  });
   it('analysis path still sees the both-gated disk-full signature', () => {
     expect(classifyAnalysisError(new Error('ENOSPC: no space left on device')).code).toBe('disk-full');
   });
