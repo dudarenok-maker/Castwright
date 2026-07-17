@@ -1,6 +1,6 @@
 # Design: concurrent Ollama calls in the analyzer (overnight-batch throughput)
 
-_Date: 2026-07-17 · Issue: TBD (filed at handover) · Status: draft v3 (per-model lease — awaiting re-review)_
+_Date: 2026-07-17 · Issue: TBD (filed at handover) · Status: green v3 (per-model lease; deadlock-free confirmed; 3 nits → plan)_
 
 ## Problem
 
@@ -108,15 +108,20 @@ wedge the lease at count 1.)
 
 ### 3. Cross-engine hold behavior — surfaced and decided (L1)
 At K≥2 a model's lease is held ~continuously during that model's active span
-(as one call finishes another enters). Consequence, stated plainly:
+(as one call finishes another enters). What that means, **by budget** (the
+distinction is budget-driven, not physics-driven):
 
-- **Small card (budget 2):** while analysis runs, a concurrent TTS generation (or
-  a *different*-model analysis) **waits** until the active model drains. This is
-  **correct** — those models physically can't co-reside on the card; today's
-  per-call interleave "works" only by evict-thrashing (reloading the model on
-  every switch), which is slower. Clean serialization is the better trade.
-- **Big card (budget ≥ 5):** the lease holds 4; TTS (cost 1) co-admits (4+1 ≤
-  budget) → no starvation, same as today.
+- **Budget 2 (box current) or 4 (`DEFAULT_GPU_VRAM_BUDGET`, the 8 GB value in
+  `.env.example`):** the lease (cost 4 → clamped to the whole budget) holds all of
+  it, so while analysis runs a concurrent TTS generation — or a *different*-model
+  analysis — **waits** until the active model drains. Note this is the semaphore
+  *budget* not admitting 4+1, **not** a claim the models can't physically fit: a
+  small analyzer (gemma-4b ~3 GB) + Kokoro (~1 GB resident) *do* fit 8 GB. It is
+  **safe** (no OOM — goal #2) and beats today's evict-thrash (each engine switch
+  reloads the model). To actually co-run analyzer + TTS on a card that fits both,
+  size the budget for it (next row).
+- **Budget ≥ 5:** the lease holds 4; TTS (cost 1) co-admits (4+1 ≤ budget) → no
+  starvation, same as today.
 - **K=1:** identical to today (release between every call).
 
 So the earlier "cross-engine arbitration unchanged in effect" claim is **not**
