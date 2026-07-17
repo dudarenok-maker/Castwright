@@ -114,7 +114,11 @@ function renderDrawer(
       targetBookId: string,
       targetCharacterId: string,
     ) => Promise<void>;
-    onUnlinkAlias?: (sourceCharacterId: string, aliasName: string) => Promise<void>;
+    onUnlinkAlias?: (
+      sourceCharacterId: string,
+      aliasName: string,
+      destination: { mode: 'split' } | { mode: 'move'; targetCharacterId: string },
+    ) => Promise<void>;
     onAddAlias?: (characterId: string, aliasName: string) => Promise<void>;
     onRename?: (characterId: string, name: string) => void;
     voice?: Voice;
@@ -1016,44 +1020,49 @@ describe('ProfileDrawer alias chip editing', () => {
     expect(screen.queryByRole('button', { name: 'Unlink Sior' })).toBeNull();
   });
 
-  it('clicking the X dispatches onUnlinkAlias with the chip name', async () => {
+  it('clicking the X opens the dialog; confirming split dispatches onUnlinkAlias', async () => {
     const onUnlinkAlias = vi.fn().mockResolvedValue(undefined);
-    renderDrawer(charWithAliases, { onUnlinkAlias });
+    renderDrawer(charWithAliases, { onUnlinkAlias, mergeCandidates: [{ id: 'wren', name: 'Wren' }] as never });
     fireEvent.click(screen.getByRole('button', { name: 'Unlink Garrow' }));
+    // Dialog opens; default = split.
+    fireEvent.click(await screen.findByRole('button', { name: /continue/i }));
     await waitFor(() => {
-      expect(onUnlinkAlias).toHaveBeenCalledWith('halloran', 'Garrow');
+      expect(onUnlinkAlias).toHaveBeenCalledWith('halloran', 'Garrow', { mode: 'split' });
     });
   });
 
-  it('disables every X button while an unlink is in flight (no double-fire)', async () => {
-    let resolveIt!: () => void;
-    const onUnlinkAlias = vi.fn(
-      () =>
-        new Promise<void>((r) => {
-          resolveIt = r;
-        }),
-    );
-    renderDrawer(charWithAliases, { onUnlinkAlias });
+  it('choosing "move to X" dispatches onUnlinkAlias with the move destination', async () => {
+    const onUnlinkAlias = vi.fn().mockResolvedValue(undefined);
+    renderDrawer(charWithAliases, { onUnlinkAlias, mergeCandidates: [{ id: 'wren', name: 'Wren' }] as never });
     fireEvent.click(screen.getByRole('button', { name: 'Unlink Garrow' }));
-    /* While the promise is pending, every chip's X is disabled. */
+    fireEvent.click(await screen.findByRole('radio', { name: /move/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /move .* to/i }), { target: { value: 'wren' } });
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Unlink Sior' })).toHaveProperty('disabled', true);
+      expect(onUnlinkAlias).toHaveBeenCalledWith('halloran', 'Garrow', { mode: 'move', targetCharacterId: 'wren' });
+    });
+  });
+
+  it('disables the dialog buttons while the unlink is in flight (no double-fire)', async () => {
+    let resolveIt!: () => void;
+    const onUnlinkAlias = vi.fn(() => new Promise<void>((r) => { resolveIt = r; }));
+    renderDrawer(charWithAliases, { onUnlinkAlias, mergeCandidates: [{ id: 'wren', name: 'Wren' }] as never });
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink Garrow' }));
+    fireEvent.click(await screen.findByRole('button', { name: /continue/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /continue/i })).toHaveProperty('disabled', true);
     });
     resolveIt();
-    /* Re-enabled after settle so the user can chain unlinks. */
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Unlink Sior' })).toHaveProperty('disabled', false);
-    });
   });
 
-  it('surfaces a server error inline without closing the chip row', async () => {
+  it('surfaces a server error inside the dialog without closing it', async () => {
     const onUnlinkAlias = vi.fn().mockRejectedValue(new Error('Backend exploded'));
-    renderDrawer(charWithAliases, { onUnlinkAlias });
+    renderDrawer(charWithAliases, { onUnlinkAlias, mergeCandidates: [{ id: 'wren', name: 'Wren' }] as never });
     fireEvent.click(screen.getByRole('button', { name: 'Unlink Garrow' }));
+    fireEvent.click(await screen.findByRole('button', { name: /continue/i }));
     await screen.findByText(/Backend exploded/);
-    /* Chips still rendered (chip removal is the layout's job via the
-       store dispatch; on error nothing changed). */
-    expect(screen.getByRole('button', { name: 'Unlink Garrow' })).toBeTruthy();
+    // Dialog still open (Continue button still present).
+    expect(screen.getByRole('button', { name: /continue/i })).toBeTruthy();
   });
 
   it('shows the "+ Add alias" button when onAddAlias is provided', () => {

@@ -38,6 +38,7 @@ import { VoicePreviewButton } from '../components/voice-preview-button';
 import { VoiceOverridePicker } from '../components/voice-override-picker';
 import { VoiceEnginePicker, type EngineChoice } from '../components/voice-engine-picker';
 import { EmotionVariantDesigner } from '../components/emotion-variant-designer';
+import { UnlinkAliasDialog, type UnlinkDestination } from './unlink-alias-dialog';
 import { VoiceCompareModal } from './voice-compare-modal';
 import { CharacterSearchPicker } from '../components/character-search-picker';
 import { castActions } from '../store/cast-slice';
@@ -127,7 +128,11 @@ interface Props {
       delta reducer, and opens the reassign-lines flow seeded with
       the server-returned impacted chapters so the user can move the
       right sentences to the new character. */
-  onUnlinkAlias?: (sourceCharacterId: string, aliasName: string) => Promise<void>;
+  onUnlinkAlias?: (
+    sourceCharacterId: string,
+    aliasName: string,
+    destination: UnlinkDestination,
+  ) => Promise<void>;
   /** Append a typed name to this character's aliases array. No sentence
       movement — this is for stitching in a name the analyzer missed.
       Used by the Profile Drawer's "+ Add alias" affordance. */
@@ -409,15 +414,21 @@ export function ProfileDrawer({
     }
   }
 
-  /* Alias chip management. `aliasBusy` gates both the X-on-chip click
-     and the +Add alias submit so a fast double-click can't double-fire.
-     `aliasError` surfaces server errors (e.g. self-alias-rejected) under
-     the chip row without an interruptive modal. `addAliasInput` /
+  /* Alias chip management. The chip ✕ opens the unlink-destination dialog
+     (#1676(b)) rather than firing the unlink directly; `aliasBusy` gates the
+     dialog's own Continue button (and the +Add alias submit) so a fast
+     double-click can't double-fire. `aliasError` surfaces server errors
+     (e.g. self-alias-rejected) inside the dialog without an interruptive
+     modal on top of a modal. `addAliasInput` /
      `showAddAlias` back the inline "+ Add alias" text input.
      Imperative focus on input mount mirrors edit-chapter-title.tsx —
      JSX `autoFocus` would trip jsx-a11y/no-autofocus. */
   const [aliasBusy, setAliasBusy] = useState(false);
   const [aliasError, setAliasError] = useState<string | null>(null);
+  /* #1676(b) — the alias currently targeted by the unlink-destination dialog
+     (the ✕ button opens this rather than firing the unlink directly). Null
+     when the dialog is closed. */
+  const [unlinkDialogAlias, setUnlinkDialogAlias] = useState<string | null>(null);
   const [showAddAlias, setShowAddAlias] = useState(false);
   const [addAliasInput, setAddAliasInput] = useState('');
   const addAliasInputRef = useRef<HTMLInputElement | null>(null);
@@ -460,12 +471,13 @@ export function ProfileDrawer({
     setNameError(null);
   }
 
-  async function runUnlinkAlias(aliasName: string) {
+  async function runUnlinkAlias(aliasName: string, destination: UnlinkDestination) {
     if (!onUnlinkAlias || aliasBusy) return;
     setAliasBusy(true);
     setAliasError(null);
     try {
-      await onUnlinkAlias(character.id, aliasName);
+      await onUnlinkAlias(character.id, aliasName, destination);
+      setUnlinkDialogAlias(null); // close only on success
     } catch (e) {
       setAliasError((e as Error).message || 'Unlink failed.');
     } finally {
@@ -1396,8 +1408,7 @@ export function ProfileDrawer({
                       {onUnlinkAlias && (
                         <button
                           aria-label={`Unlink ${a}`}
-                          disabled={aliasBusy}
-                          onClick={() => void runUnlinkAlias(a)}
+                          onClick={() => setUnlinkDialogAlias(a)}
                           className="inline-flex items-center justify-center w-5 h-5 rounded-full text-ink/55 hover:bg-ink/10 hover:text-ink disabled:opacity-50 disabled:cursor-wait coarse-pointer:opacity-100"
                         >
                           <IconClose className="w-3 h-3" />
@@ -1455,7 +1466,7 @@ export function ProfileDrawer({
                       </button>
                     ))}
                 </div>
-                {aliasError && (
+                {aliasError && !unlinkDialogAlias && (
                   <p className="mt-1.5 text-[11px] text-red-600/90 font-medium">⚠ {aliasError}</p>
                 )}
               </div>
@@ -1819,6 +1830,21 @@ export function ProfileDrawer({
           </PrimaryButton>
         </div>
       </aside>
+      {unlinkDialogAlias && onUnlinkAlias && (
+        <UnlinkAliasDialog
+          aliasName={unlinkDialogAlias}
+          sourceName={character.name}
+          targets={mergeCandidates ?? []}
+          busy={aliasBusy}
+          error={aliasError}
+          onCancel={() => {
+            if (aliasBusy) return;
+            setUnlinkDialogAlias(null);
+            setAliasError(null);
+          }}
+          onConfirm={(destination) => void runUnlinkAlias(unlinkDialogAlias, destination)}
+        />
+      )}
     </>
   );
 }
