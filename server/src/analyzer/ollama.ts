@@ -161,12 +161,6 @@ export function hasKeepAliveOverride(model: string): boolean {
   return map[model] !== undefined || map[normalizeModelTag(model)] !== undefined;
 }
 
-/** Live-read the resident-model keep-alive window (registry wins; default '5m').
-    DEPRECATED — retained only until the persona path (Task 3) stops calling it. */
-export function resolveAnalyzerKeepAlive(): string {
-  return configValue<string>('analyzer.ollama.keepAlive');
-}
-
 /** `keep_alive` (integer seconds) for an Ollama /api/chat call. Per-model via
     resolveKeepAliveSeconds; RAM-heavy models clamp to 0 on CPU. */
 export function keepAliveFor(model: string, accelerator: Accelerator = 'unknown'): number {

@@ -1091,7 +1091,7 @@ export const KNOBS: ConfigKnob[] = [
     label: 'Analyzer keep-alive',
     help: "How long Ollama holds a resident analyzer model in VRAM after a call (Ollama keep_alive: '5m', '1m', '0' to unload immediately, '-1' to pin). Applied to the RESIDENT_MODELS the analyzer keeps warm across the analysis loop; non-resident tags always unload immediately. '5m' bridges the gap between back-to-back chapter calls. Cross-engine eviction before a TTS/voice-design load is handled separately by the GPU load chokepoint (gpu.safeCoexistMb).",
     type: 'string',
-    default: '5m', // ← resolveAnalyzerKeepAlive() default in analyzer/ollama.ts
+    default: '5m',
     apply: 'live', risk: 'medium',
   },
 
