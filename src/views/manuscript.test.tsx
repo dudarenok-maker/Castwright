@@ -23,6 +23,7 @@ import { uiSlice, uiActions } from '../store/ui-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { castSlice } from '../store/cast-slice';
+import { chaptersSlice } from '../store/chapters-slice';
 import { accountSlice } from '../store/account-slice';
 import type { Toast } from '../store/notifications-slice';
 import { TOUR_STEPS } from '../lib/tour-steps';
@@ -2599,5 +2600,140 @@ describe('ManuscriptView — re-run confirm gate (fs-58 Task 11)', () => {
     expect(screen.queryByTestId('review-script-confirm-gate')).toBeNull();
     // A fresh run must NOT have started when the discard itself failed.
     expect(reviewScript).not.toHaveBeenCalled();
+  });
+});
+
+/* #1676 part c — script/review-view entry point for bulk line
+   reassignment. A checkbox multi-select mode (gutter checkboxes +
+   shift-click range), distinct from and mutually exclusive with the
+   existing text-range split-selection (`useSentenceSelection` /
+   SelectionPopover), feeding a floating "Reassign N selected…" bar that
+   opens ReassignLinesModal with a `{ kind: 'selection' }` source built
+   from local component state. */
+describe('ManuscriptView — checkbox multi-select → bulk reassign', () => {
+  const msCharacters: Character[] = [
+    { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+    { id: 'egor', name: 'Егор', role: 'Supporting', color: 'peach' },
+  ];
+  const msChapter: Chapter = {
+    id: 1,
+    title: 'Chapter One',
+    duration: '10:00',
+    state: 'done',
+    progress: 1,
+    characters: { narrator: 'done', egor: 'done' },
+  };
+  const msSentences: Sentence[] = [
+    { id: 1, chapterId: 1, characterId: 'narrator', text: 'Alpha line.' },
+    { id: 2, chapterId: 1, characterId: 'narrator', text: 'Beta line.' },
+    { id: 3, chapterId: 1, characterId: 'egor', text: 'Gamma line.' },
+  ];
+
+  function renderManuscript() {
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        chapters: chaptersSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          manuscriptId: 'm1',
+          sentences: msSentences as never,
+        },
+        cast: {
+          ...castSlice.getInitialState(),
+          characters: msCharacters as never,
+        },
+        chapters: {
+          ...chaptersSlice.getInitialState(),
+          chapters: [msChapter] as never,
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={msCharacters}
+          chapters={[msChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={msSentences}
+        />
+      </Provider>,
+    );
+    return { store };
+  }
+
+  it('enters multi-select and opens the reassign form for the checked lines', async () => {
+    renderManuscript();
+    fireEvent.click(screen.getByRole('button', { name: /select lines|multi-select/i }));
+    const checks = screen.getAllByRole('checkbox');
+    fireEvent.click(checks[0]);
+    fireEvent.click(checks[1]);
+    fireEvent.click(screen.getByRole('button', { name: /reassign 2 selected/i }));
+    expect(await screen.findByRole('dialog', { name: /reassign lines/i })).toBeInTheDocument();
+  });
+
+  it('shift-click extends the checked range over the ordered sentence list', () => {
+    renderManuscript();
+    fireEvent.click(screen.getByRole('button', { name: /select lines|multi-select/i }));
+    const checks = screen.getAllByRole('checkbox');
+    expect(checks).toHaveLength(3);
+    fireEvent.click(checks[0]);
+    fireEvent.click(checks[2], { shiftKey: true });
+    // Range [0, 2] covers all three lines, including the un-clicked middle one.
+    expect(checks[0]).toBeChecked();
+    expect(checks[1]).toBeChecked();
+    expect(checks[2]).toBeChecked();
+  });
+
+  it('cancelling the floating bar clears the selection and exits multi-select', () => {
+    renderManuscript();
+    fireEvent.click(screen.getByRole('button', { name: /select lines|multi-select/i }));
+    const checks = screen.getAllByRole('checkbox');
+    fireEvent.click(checks[0]);
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+    expect(screen.queryByText(/selected$/i)).toBeNull();
+  });
+
+  /* The integration hazard this task exists to close: the checkbox
+     multi-select mode must not let a stray text-range selection (the
+     split-sentence affordance) surface its own popover while multi-select
+     is active — the two selection mechanisms must never both fire off the
+     same click/gesture. We simulate a would-be-valid text-range selection
+     (the exact shape `useSentenceSelection`'s `selectionchange` handler
+     expects) landing on the first sentence, and confirm the split popover
+     ("Assign selection to") never appears while multi-select is on. */
+  it('suppresses the text-range split-selection popover while multi-select is active', () => {
+    renderManuscript();
+    fireEvent.click(screen.getByRole('button', { name: /select lines|multi-select/i }));
+
+    const sentenceSpan = document.querySelector('[data-sentence-id="1"]') as HTMLElement;
+    const textOffsetSpan = sentenceSpan.querySelector('[data-text-offset]') as HTMLElement;
+    const textNode = textOffsetSpan.firstChild as Text;
+    const fakeRange = {
+      startContainer: textNode,
+      endContainer: textNode,
+      startOffset: 0,
+      endOffset: 5,
+      getBoundingClientRect: () => ({ top: 0, left: 0, width: 0, height: 0, bottom: 0, right: 0 }),
+    };
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 1,
+      getRangeAt: () => fakeRange,
+    } as unknown as Selection);
+
+    const checks = screen.getAllByRole('checkbox');
+    fireEvent.click(checks[0]);
+    fireEvent(document, new Event('selectionchange'));
+
+    expect(screen.queryByText(/assign selection to/i)).not.toBeInTheDocument();
+
+    vi.restoreAllMocks();
   });
 });
