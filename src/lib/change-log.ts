@@ -388,3 +388,18 @@ export function buildBoundaryMoveEvent(args: {
     chapterId,
   };
 }
+
+/** User-emitted event: a bulk line reassignment was undone via the layout-level
+    banner. Spreads `buildBoundaryMoveEvent`'s timestamp/id scaffolding and its
+    valid `type: 'boundary_move'` (ChangeLogType has no dedicated revert
+    variant), overriding only `note` (must read as a revert, distinct from a
+    forward boundary edit) and `chapterId` (undefined — this is a book-level
+    audit line, not scoped to the placeholder chapter id the reuse requires). */
+export function buildBulkReassignRevertEvent(args: { count: number; now?: Date }): ChangeLogEvent {
+  const { count } = args;
+  return {
+    ...buildBoundaryMoveEvent({ chapterId: -1, count, now: args.now }),
+    chapterId: undefined,
+    note: `Reverted reassignment of ${count} line${count === 1 ? '' : 's'}.`,
+  };
+}
