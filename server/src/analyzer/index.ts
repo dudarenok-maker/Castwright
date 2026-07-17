@@ -21,6 +21,7 @@ import type {
 } from '../handoff/schemas.js';
 import { GeminiAnalyzer } from './gemini.js';
 import { OllamaAnalyzer, LocalUnreachableError, AnalysisAbortedError } from './ollama.js';
+import type { RawEvalTiming } from './analyzer-eval-stats.js';
 import {
   getResolvedAnalysisEngine,
   getResolvedOllamaUrl,
@@ -46,6 +47,10 @@ export interface StageCall {
   onWaiting?: (elapsedMs: number) => void;
   /** Fired per streamed chunk from the model. */
   onChunk?: (info: StageChunkInfo) => void;
+  /** Fired once per Ollama chat() call with that call's decode timing. The
+      analysis route accumulates these per pass (see withPassEval). Only the
+      local Ollama analyzer fires it; Gemini never does. */
+  onEvalTiming?: (t: RawEvalTiming) => void;
   /** Optional abort signal — when the caller (the analysis route) sees its
       SSE client disconnect, it aborts the controller so the analyzer can
       tear down the in-flight Ollama/Gemini request instead of running on

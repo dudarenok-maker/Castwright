@@ -54,6 +54,7 @@ import {
   resolveStage2ChunkCharBudget,
   type Stage2ChunkRunResult,
 } from '../analyzer/stage2-chunk.js';
+import { withPassEval } from '../analyzer/analyzer-eval-stats.js';
 import {
   countSentencesHeuristic,
   countStreamedSentences,
@@ -1845,6 +1846,25 @@ export async function attributeChapterStage2(opts: {
   return result;
 }
 
+/** Wrap attributeChapterStage2 so its many chat() sub-calls fold into ONE
+    per-(chapter, pass) eval-rate record. Exported so the wiring test can drive
+    it directly. `runChapter` calls this instead of attributeChapterStage2. */
+export function attributeChapterStage2WithEval(
+  opts: Parameters<typeof attributeChapterStage2>[0],
+): Promise<Stage2ChunkRunResult> {
+  return withPassEval(
+    opts.stageCall,
+    {
+      manuscriptId: opts.manuscriptId,
+      bookTitle: opts.title ?? null,
+      stage: 'stage2-ch',
+      chapterId: opts.chapter.id,
+    },
+    () => attributeChapterStage2(opts),
+    (r) => r.chunkCount ?? null,
+  );
+}
+
 /** srv-59 Task 11 — roll up every chapter's `structureReport` (set only when
     the dialogue-structure engine actually ran for that chapter — see
     `attributeChapterStage2` above) into the single `report` slice persisted
@@ -3146,108 +3166,124 @@ export async function runMainAnalyzerJob(
           `Chapter ${i + 1}/${totalCastChapters} cast — ${ch.title} (${ch.body.length.toLocaleString()} chars) via ${analyzerLabel}…`,
         );
         let result;
+        /* Lifted to a named const (Task 3) so the SAME StageCall object is
+           handed to both the runner (analyzer.runStage1Chapter, below) and
+           withPassEval — required for withPassEval's fresh-per-call
+           accumulator to attach to the call this chapter actually uses. */
+        const castCall: StageCall = {
+          signal: abortController.signal,
+          language: bookLanguage,
+          onWaiting: () => {
+            /* elapsed is now derived chapter-wide in sendCastLiveTick (the
+       chunker calls the model per section, so the per-call elapsed
+       would reset mid-chapter). */
+            sendCastLiveTick();
+            /* Silence watchdog. Without this the user has no idea
+       whether a slow Phase 0a call is rate-limited, hung, or
+       just slow on free-tier Gemma. Warn once per silence
+       stretch, re-arm on the next chunk. */
+            const sinceLastChunk = Date.now() - lastChunkAt;
+            if (sinceLastChunk > SILENCE_THRESHOLD_MS) {
+              if (
+                warnedSilenceAt === null ||
+                Date.now() - warnedSilenceAt > SILENCE_THRESHOLD_MS
+              ) {
+                warnedSilenceAt = Date.now();
+                log(
+                  0,
+                  `Chapter ${i + 1}/${totalCastChapters} — no response from ${analyzerLabel} in ${humanSeconds(sinceLastChunk)}, still waiting.`,
+                );
+              }
+            } else {
+              warnedSilenceAt = null;
+            }
+          },
+          onChunk: (info) => {
+            lastChunkAt = Date.now();
+            const now = lastChunkAt;
+            if (now - lastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
+            lastHeartbeatAt = now;
+            const charsPerSec =
+              info.elapsedMs > 0
+                ? Math.round((info.receivedBytes * 1000) / info.elapsedMs)
+                : 0;
+            send({
+              kind: 'heartbeat',
+              phaseId: 0,
+              receivedBytes: info.receivedBytes,
+              charsPerSec,
+              elapsedMs: info.elapsedMs,
+              sinceLastChunkMs: info.sinceLastChunkMs,
+              chapterIndex: i + 1,
+            });
+          },
+          onThrottle: (waitMs, reason) => {
+            send({
+              kind: 'throttle',
+              phaseId: 0,
+              chapterIndex: i + 1,
+              model: activeModelId,
+              waitMs,
+              reason,
+            });
+          },
+        };
         try {
-          result = await runStage1Guarded({
-            body: ch.body,
-            runningRoster: Array.from(rebuildRoster().values()),
-            chapterId: ch.id,
-            log,
-            language: bookLanguage,
-            call: () =>
-              runStage1ChapterChunked({
+          result = await withPassEval(
+            castCall,
+            {
+              manuscriptId,
+              bookTitle: recordRef.title ?? null,
+              stage: 'stage1-ch',
+              chapterId: ch.id,
+            },
+            () =>
+              runStage1Guarded({
                 body: ch.body,
-                charBudget: resolveStage1ChunkCharBudget(selection.engine, ch.body),
-                mergeRosters: mergeRosterChapter,
-                onChunk: (sec) => {
-                  /* Feed section progress into the live ETA so the first
-                     chapter (no observed rate yet) projects from real pace
-                     instead of the static fallback. */
-                  const slot = castInFlight.get(i);
-                  if (slot) {
-                    slot.sectionsDone = sec.index;
-                    slot.sectionsTotal = sec.total;
-                  }
-                  log(
-                    0,
-                    `Chapter ${i + 1}/${totalCastChapters} cast — large chapter, section ${
-                      sec.index + 1
-                    }/${sec.total} (${sec.chars.toLocaleString()} chars) to fit the model context…`,
-                  );
-                  sendCastLiveTick();
-                },
-                callForBody: (subBody) =>
-                  analyzer.runStage1Chapter(
-                    manuscriptId,
-                    ch.id,
-                    buildStage1ChapterInbox(
-                      manuscriptId,
-                      recordRef.title,
-                      { ...ch, body: subBody },
-                      Array.from(rebuildRoster().values()),
-                      seriesPrior,
-                      bookAuthor,
-                    ),
-                    {
-                      signal: abortController.signal,
-                      language: bookLanguage,
-                      onWaiting: () => {
-                        /* elapsed is now derived chapter-wide in sendCastLiveTick (the
-                   chunker calls the model per section, so the per-call elapsed
-                   would reset mid-chapter). */
-                        sendCastLiveTick();
-                        /* Silence watchdog. Without this the user has no idea
-                   whether a slow Phase 0a call is rate-limited, hung, or
-                   just slow on free-tier Gemma. Warn once per silence
-                   stretch, re-arm on the next chunk. */
-                        const sinceLastChunk = Date.now() - lastChunkAt;
-                        if (sinceLastChunk > SILENCE_THRESHOLD_MS) {
-                          if (
-                            warnedSilenceAt === null ||
-                            Date.now() - warnedSilenceAt > SILENCE_THRESHOLD_MS
-                          ) {
-                            warnedSilenceAt = Date.now();
-                            log(
-                              0,
-                              `Chapter ${i + 1}/${totalCastChapters} — no response from ${analyzerLabel} in ${humanSeconds(sinceLastChunk)}, still waiting.`,
-                            );
-                          }
-                        } else {
-                          warnedSilenceAt = null;
-                        }
-                      },
-                      onChunk: (info) => {
-                        lastChunkAt = Date.now();
-                        const now = lastChunkAt;
-                        if (now - lastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
-                        lastHeartbeatAt = now;
-                        const charsPerSec =
-                          info.elapsedMs > 0
-                            ? Math.round((info.receivedBytes * 1000) / info.elapsedMs)
-                            : 0;
-                        send({
-                          kind: 'heartbeat',
-                          phaseId: 0,
-                          receivedBytes: info.receivedBytes,
-                          charsPerSec,
-                          elapsedMs: info.elapsedMs,
-                          sinceLastChunkMs: info.sinceLastChunkMs,
-                          chapterIndex: i + 1,
-                        });
-                      },
-                      onThrottle: (waitMs, reason) => {
-                        send({
-                          kind: 'throttle',
-                          phaseId: 0,
-                          chapterIndex: i + 1,
-                          model: activeModelId,
-                          waitMs,
-                          reason,
-                        });
-                      },
+                runningRoster: Array.from(rebuildRoster().values()),
+                chapterId: ch.id,
+                log,
+                language: bookLanguage,
+                call: () =>
+                  runStage1ChapterChunked({
+                    body: ch.body,
+                    charBudget: resolveStage1ChunkCharBudget(selection.engine, ch.body),
+                    mergeRosters: mergeRosterChapter,
+                    onChunk: (sec) => {
+                      /* Feed section progress into the live ETA so the first
+                         chapter (no observed rate yet) projects from real pace
+                         instead of the static fallback. */
+                      const slot = castInFlight.get(i);
+                      if (slot) {
+                        slot.sectionsDone = sec.index;
+                        slot.sectionsTotal = sec.total;
+                      }
+                      log(
+                        0,
+                        `Chapter ${i + 1}/${totalCastChapters} cast — large chapter, section ${
+                          sec.index + 1
+                        }/${sec.total} (${sec.chars.toLocaleString()} chars) to fit the model context…`,
+                      );
+                      sendCastLiveTick();
                     },
-                  ),
-              }).then((r) => ({ characters: r.characters })),
-          });
+                    callForBody: (subBody) =>
+                      analyzer.runStage1Chapter(
+                        manuscriptId,
+                        ch.id,
+                        buildStage1ChapterInbox(
+                          manuscriptId,
+                          recordRef.title,
+                          { ...ch, body: subBody },
+                          Array.from(rebuildRoster().values()),
+                          seriesPrior,
+                          bookAuthor,
+                        ),
+                        castCall,
+                      ),
+                  }).then((r) => ({ characters: r.characters })),
+              }),
+            () => null,
+          );
         } catch (chErr) {
           /* Client disconnect propagates up — let the route's outer catch
              land us back at res.end() without a "failed" SSE event. */
@@ -4057,7 +4093,7 @@ export async function runMainAnalyzerJob(
         coverage: coverageVerdict,
         chunkCount: stage2ChunkCount,
         structureReport: stage2StructureReport,
-      } = await attributeChapterStage2({
+      } = await attributeChapterStage2WithEval({
         analyzer: phase1Analyzer,
         manuscriptId,
         title: recordRef.title,
@@ -4357,10 +4393,19 @@ export async function runMainAnalyzerJob(
     const classifyNonStory = analyzer.runNonStoryClassification
       ? async (ch: ThirdPartyGuardChapter): Promise<boolean> => {
           const promptMd = `Title: ${ch.title ?? '(untitled)'}\n\n${ch.body}`;
+          const nonStoryCall: StageCall = { language: bookLanguage };
           try {
-            const out = await analyzer.runNonStoryClassification!(manuscriptId, ch.id, promptMd, {
-              language: bookLanguage,
-            });
+            const out = await withPassEval(
+              nonStoryCall,
+              {
+                manuscriptId,
+                bookTitle: recordRef.title ?? null,
+                stage: 'nonstory',
+                chapterId: ch.id,
+              },
+              () => analyzer.runNonStoryClassification!(manuscriptId, ch.id, promptMd, nonStoryCall),
+              () => null,
+            );
             return out.nonStory;
           } catch (err) {
             if (err instanceof AnalysisAbortedError) throw err;

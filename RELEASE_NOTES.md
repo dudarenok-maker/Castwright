@@ -55,6 +55,7 @@
 - **When a chapter fails cast detection, you can read what to do about it — in dark mode.** The amber "1 chapter failed cast detection" panel on the analysis screen was painting its explanation and its "What to do:" steps dark-on-dark in dark mode, leaving the advice — and the retry instructions — hard to read. The text now shows in a legible amber, so you can see exactly why a chapter needs another pass and how to retry it.
 - **Find help faster.** Troubleshooting is now sorted into clear, searchable sections instead of one long list — and Help and Admin link straight out to the matching guide in the wiki.
 - **Fixed a rare developer-mode glitch where flipping between a book and its script review too quickly could make the review progress jump around.** (#1496)
+- See how fast your local analyzer is really going: a new Admin panel tracks decode speed across a run and flags when it slows down.
 
 # Castwright 1.13.0
 

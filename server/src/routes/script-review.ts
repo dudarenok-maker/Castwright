@@ -29,7 +29,8 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js';
 import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
-import { selectAnalyzer } from '../analyzer/index.js';
+import { selectAnalyzer, type StageCall } from '../analyzer/index.js';
+import { withPassEval } from '../analyzer/analyzer-eval-stats.js';
 import { getResolvedGeminiApiKey, getResolvedAllowCloudFallback } from '../workspace/user-settings.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { warmOllamaModel } from './ollama-health.js';
@@ -820,6 +821,17 @@ async function runScriptReviewJob(
          split further → it re-throws and surfaces as chapter-failed (Part 3).
          Returns the owned ops for `core`. */
       const OVERLAP = CHUNK_OVERLAP;
+      /* Lifted to a named per-chapter const (Task 3) so every reviewCore
+         invocation for this chapter — across chunks AND recursive force-split
+         retries — shares the SAME StageCall. withPassEval (below) folds all
+         their onEvalTiming sub-calls into one record. */
+      const reviewCall: StageCall = {
+        signal: job.controller.signal,
+        language: bookStateLanguage(located.state),
+        onChunk: (info) => heartbeat(0, chapterId, { receivedBytes: info.receivedBytes, elapsedMs: info.elapsedMs, sinceLastChunkMs: info.sinceLastChunkMs }),
+        onThrottle: (waitMs, reason) => send({ kind: 'throttle', phaseId: 0, chapterIndex: chapterId, model: activeSelection.model, waitMs, reason }),
+        onFallback: ({ reason }) => switchToFallback(reason),
+      };
       const reviewCore = async (
         core: SentenceOutput[],
         contextBefore: SentenceOutput[],
@@ -832,13 +844,7 @@ async function runScriptReviewJob(
           manuscriptId, chapterId, [...contextBefore, ...core, ...contextAfter], roster, withPrior ? priorExchange : null, structureEvidence,
         );
         try {
-          const result = await activeSelection.analyzer.runScriptReviewChapter(manuscriptId, chapterId, prompt, {
-            signal: job.controller.signal,
-            language: bookStateLanguage(located.state),
-            onChunk: (info) => heartbeat(0, chapterId, { receivedBytes: info.receivedBytes, elapsedMs: info.elapsedMs, sinceLastChunkMs: info.sinceLastChunkMs }),
-            onThrottle: (waitMs, reason) => send({ kind: 'throttle', phaseId: 0, chapterIndex: chapterId, model: activeSelection.model, waitMs, reason }),
-            onFallback: ({ reason }) => switchToFallback(reason),
-          });
+          const result = await activeSelection.analyzer.runScriptReviewChapter(manuscriptId, chapterId, prompt, reviewCall);
           return result.ops.filter((op) => ownsOp(coreIds, primarySentenceId(op)));
         } catch (err) {
           if (err instanceof AnalyzerTruncatedError && depth < MAX_FORCE_SPLIT_DEPTH && core.length > 1) {
@@ -861,37 +867,60 @@ async function runScriptReviewJob(
       // job-lifetime opsEvents array after every chapter (O(n^2) over a
       // long book) — see chapterOps below.
       const chapterOpsAccum: ScriptReviewOp[] = [];
-      for (let index = 0; index < chunks.length; index += 1) {
-        const chunk = chunks[index];
-        if (job.controller.signal.aborted) break;
-        try {
-          const owned = await reviewCore(chunk.core, chunk.contextBefore, chunk.contextAfter, index === 0, 0);
-          if (owned.length) {
-            send({ kind: 'ops', chapterId, ops: owned });
-            totalOps += owned.length;
-            chapterOpsAccum.push(...owned);
+      // A DailyQuotaExhaustedError used to `return` straight out of this
+      // function from inside the loop below. Now that the loop runs inside
+      // the withPassEval closure, a `return` there would only exit the
+      // closure — so it's captured here and re-checked right after, in the
+      // exact same spot the original early-return left off (before this
+      // chapter's pacing/checkpoint bookkeeping).
+      let quotaErr: DailyQuotaExhaustedError | null = null;
+      await withPassEval(
+        reviewCall,
+        {
+          manuscriptId,
+          bookTitle: located.state.title ?? null,
+          stage: 'review',
+          chapterId,
+        },
+        async () => {
+          for (let index = 0; index < chunks.length; index += 1) {
+            const chunk = chunks[index];
+            if (job.controller.signal.aborted) break;
+            try {
+              const owned = await reviewCore(chunk.core, chunk.contextBefore, chunk.contextAfter, index === 0, 0);
+              if (owned.length) {
+                send({ kind: 'ops', chapterId, ops: owned });
+                totalOps += owned.length;
+                chapterOpsAccum.push(...owned);
+              }
+            } catch (err) {
+              if (err instanceof AnalysisAbortedError) break;
+              if (err instanceof DailyQuotaExhaustedError) {
+                quotaErr = err;
+                break;
+              }
+              send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
+            }
+            // Intra-chapter creep: only advances the bar for multi-chunk (local)
+            // chapters; single-chunk / cloud chapters rely on the client timer.
+            if (!job.controller.signal.aborted) {
+              lastEmittedProgress = (i + (index + 1) / chunks.length) / chapterIds.length;
+              send({
+                kind: 'phase',
+                phaseId: 0,
+                progress: lastEmittedProgress,
+                label: 'Reviewing script',
+                chapterId,
+              });
+            }
           }
-        } catch (err) {
-          if (err instanceof AnalysisAbortedError) break;
-          if (err instanceof DailyQuotaExhaustedError) {
-            send({ kind: 'error', code: 'quota_exhausted', message: 'Daily analyzer quota exhausted. Already-reviewed chapters are streamed — re-run to finish.', resetAt: err.resetAt instanceof Date ? err.resetAt.toISOString() : undefined });
-            for (const sub of job.subscribers) sub.res.end();
-            return;
-          }
-          send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
-        }
-        // Intra-chapter creep: only advances the bar for multi-chunk (local)
-        // chapters; single-chunk / cloud chapters rely on the client timer.
-        if (!job.controller.signal.aborted) {
-          lastEmittedProgress = (i + (index + 1) / chunks.length) / chapterIds.length;
-          send({
-            kind: 'phase',
-            phaseId: 0,
-            progress: lastEmittedProgress,
-            label: 'Reviewing script',
-            chapterId,
-          });
-        }
+        },
+        () => null,
+      );
+      if (quotaErr) {
+        send({ kind: 'error', code: 'quota_exhausted', message: 'Daily analyzer quota exhausted. Already-reviewed chapters are streamed — re-run to finish.', resetAt: (quotaErr as DailyQuotaExhaustedError).resetAt instanceof Date ? (quotaErr as DailyQuotaExhaustedError).resetAt.toISOString() : undefined });
+        for (const sub of job.subscribers) sub.res.end();
+        return;
       }
       if (job.controller.signal.aborted) {
         // Cancelled mid-chapter: skip the checkpoint for this one chapter

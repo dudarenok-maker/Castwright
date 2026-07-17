@@ -875,6 +875,17 @@ export const KNOBS: ConfigKnob[] = [
     default: 120_000, // ← WARM_TIMEOUT_MS fallback in routes/ollama-health.ts
     apply: 'live', risk: 'low',
   },
+  {
+    key: 'analyzer.evalStats.enabled',
+    env: 'CASTWRIGHT_EVAL_SAMPLE',
+    group: 'analyzer-sampling',
+    label: 'Analyzer eval-rate telemetry',
+    help: 'Record per-pass Ollama decode speed (tok/s) to a JSONL log shown in '
+        + "the Admin analyzer-throughput panel. Best-effort; turn off to disable capture.",
+    type: 'boolean',
+    default: true,
+    apply: 'live', risk: 'low',
+  },
 
   // ── rate-limits ───────────────────────────────────────────────────────────
   {

@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { mkdir, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { RawEvalTiming } from './analyzer-eval-stats.js';
 import {
   _setUserSettingsCacheForTest,
   _resetUserSettingsCache,
@@ -98,6 +99,41 @@ function ndjsonStreamWithDoneReason(
           message: { role: 'assistant', content: '' },
           done: true,
           done_reason: doneReason,
+        });
+        controller.enqueue(encoder.encode(done + '\n'));
+        i += 1;
+      } else {
+        controller.close();
+      }
+    },
+  });
+}
+
+/* Like ndjsonStream but the terminating `done:true` line also carries
+   Ollama's real decode-timing fields (eval_count/eval_duration/
+   prompt_eval_count/prompt_eval_duration/load_duration) — used to test
+   the onEvalTiming capture seam (analyzer-eval-telemetry). */
+function ndjsonStreamWithTiming(
+  chunks: string[],
+  timing: Record<string, number>,
+): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let i = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (i < chunks.length) {
+        const line = JSON.stringify({
+          message: { role: 'assistant', content: chunks[i] },
+          done: false,
+        });
+        controller.enqueue(encoder.encode(line + '\n'));
+        i += 1;
+      } else if (i === chunks.length) {
+        const done = JSON.stringify({
+          message: { role: 'assistant', content: '' },
+          done: true,
+          done_reason: 'stop',
+          ...timing,
         });
         controller.enqueue(encoder.encode(done + '\n'));
         i += 1;
@@ -661,6 +697,66 @@ describe('OllamaAnalyzer — output truncation (#528)', () => {
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
     const result = await analyzer.runStage1Chapter('m_ollama_stopreason', 1, '# prompt', {});
     expect(result.characters).toHaveLength(2);
+  });
+});
+
+describe('OllamaAnalyzer — onEvalTiming sink (analyzer-eval-telemetry)', () => {
+  afterEach(() => {
+    delete process.env.CASTWRIGHT_EVAL_SAMPLE;
+  });
+
+  it('fires onEvalTiming with raw counts + model off the done line', async () => {
+    const timings: RawEvalTiming[] = [];
+    fetchMock.mockResolvedValue(
+      okResponse(
+        ndjsonStreamWithTiming(chunksOf(VALID_RESPONSE, 32), {
+          eval_count: 120,
+          eval_duration: 4_000_000_000,
+          prompt_eval_count: 800,
+          prompt_eval_duration: 2_000_000_000,
+          load_duration: 0,
+        }),
+      ),
+    );
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_ollama_eval_timing', 1, '# prompt', {
+      onEvalTiming: (t) => timings.push(t),
+    });
+
+    expect(timings).toHaveLength(1);
+    expect(timings[0]).toMatchObject({
+      model: expect.any(String),
+      evalCount: 120,
+      evalDuration: 4_000_000_000,
+      promptEvalCount: 800,
+      loadDuration: 0,
+    });
+  });
+
+  it('does not fire onEvalTiming when analyzer.evalStats.enabled is false', async () => {
+    process.env.CASTWRIGHT_EVAL_SAMPLE = '0';
+    const timings: RawEvalTiming[] = [];
+    fetchMock.mockResolvedValue(
+      okResponse(
+        ndjsonStreamWithTiming(chunksOf(VALID_RESPONSE, 32), {
+          eval_count: 120,
+          eval_duration: 4_000_000_000,
+          prompt_eval_count: 800,
+          prompt_eval_duration: 2_000_000_000,
+          load_duration: 0,
+        }),
+      ),
+    );
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_ollama_eval_timing_disabled', 1, '# prompt', {
+      onEvalTiming: (t) => timings.push(t),
+    });
+
+    expect(timings).toHaveLength(0);
   });
 });
 

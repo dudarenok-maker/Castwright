@@ -46,6 +46,7 @@ import type {
   TtsEngine,
   ChapterLoudness,
   ResourceTelemetryRecord,
+  AnalyzerEvalRecord,
   ConfigResponse,
   ConfigValues,
   PromptState,
@@ -9647,6 +9648,17 @@ const real = {
     }
     return res.json();
   },
+  /* Analyzer eval-rate telemetry for the Admin analyzer-throughput panel
+     (GET /api/generation/analyzer-stats). Newest-first; empty when none. */
+  getAnalyzerStats: async (limit?: number): Promise<{ records: AnalyzerEvalRecord[] }> => {
+    const qs = limit != null ? `?limit=${limit}` : '';
+    const res = await fetch(`/api/generation/analyzer-stats${qs}`);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`Analyzer stats fetch failed (${res.status}): ${detail || res.statusText}`);
+    }
+    return res.json();
+  },
   getConfig: realGetConfig,
   putConfig: realPutConfig,
   resetConfig: realResetConfig,
@@ -9915,6 +9927,17 @@ const mock = {
     );
     return { records: limit != null ? records.slice(0, limit) : records };
   },
+  getAnalyzerStats: async (limit?: number): Promise<{ records: AnalyzerEvalRecord[] }> => {
+    const base = [29.4, 28.9, 27.4, 26.0, 25.3, 24.1];
+    const records: AnalyzerEvalRecord[] = base.map((tps, i) => ({
+      at: new Date(Date.now() - i * 60_000).toISOString(),
+      manuscriptId: 'mock-nd', bookTitle: 'Ночной дозор', model: 'qwen36-castwright:latest',
+      stage: i % 3 === 0 ? 'stage1-ch' : 'stage2-ch', chapterId: base.length - i,
+      evalTokS: tps, promptTokS: tps * 12, evalCount: 1800, loadMs: i === 4 ? 610 : 0,
+      subCalls: i % 3 === 0 ? 1 : 3, chunkCount: i % 3 === 0 ? null : 3, outcome: 'ok',
+    }));
+    return { records: limit != null ? records.slice(0, limit) : records };
+  },
   getConfig: mockGetConfig,
   putConfig: mockPutConfig,
   resetConfig: mockResetConfig,
@@ -9930,7 +9953,7 @@ const mock = {
 
 /* fs-20 — re-export so the Admin trend panel + its tests import the telemetry
    record type from the same `../lib/api` surface as the other admin types. */
-export type { ResourceTelemetryRecord } from './types';
+export type { ResourceTelemetryRecord, AnalyzerEvalRecord } from './types';
 /* Device-auth — re-export so consumers import from one surface. */
 export type { PublicDevice } from './types';
 /* Re-export config types so the config slice + view import from a single source. */
