@@ -364,20 +364,6 @@ async function probeOllamaReachable(
   }
 }
 
-/** Warm `model` into VRAM via the keepAliveFor()+empty-prompt idiom
-    (the model's configured keep-alive, RAM-heavy-clamped on CPU, not a
-    hardcoded '5m'), using the
-    same num_ctx/num_gpu the analyzer's runStage path uses (see the CRITICAL
-    note above). Extracted so the script-review job can warm the analyzer model
-    in-process, not just via the /load route below.
-
-    Patient by design (Part 2): a merely-SLOW cold load is waited out to the
-    analyzer.ollama.warmTimeoutMs budget (default 120s) — only a genuine
-    connection refusal is 'unreachable'. `onProgress(elapsedMs)` fires on a 1s
-    ticker while the blocking POST is in flight (liveness the keep_alive call
-    can't emit itself; an /api/ps poll can't help because /api/ps lists only
-    already-resident models). An external `signal` short-circuits to
-    'cancelled'. */
 /* Minimum keep-alive (seconds) an explicit warm/Load holds a model for. A
    resolved 0 (unknown tag / runtime CPU clamp) is floored to this so Load can
    never evict-on-warm; a positive per-model value is honored as-is, and a
@@ -388,6 +374,20 @@ function floorWarmKeepAlive(resolvedSeconds: number): number {
   return resolvedSeconds === 0 ? WARM_MIN_KEEP_ALIVE_SECONDS : resolvedSeconds;
 }
 
+/** Warm `model` into VRAM via the keepAliveFor()+empty-prompt idiom (the
+    model's configured keep-alive, floored to WARM_MIN_KEEP_ALIVE_SECONDS when it
+    resolves to 0 so an explicit Load always holds — not a hardcoded '5m'), using
+    the same num_ctx/num_gpu the analyzer's runStage path uses (see the CRITICAL
+    note above). Extracted so the script-review job can warm the analyzer model
+    in-process, not just via the /load route below.
+
+    Patient by design (Part 2): a merely-SLOW cold load is waited out to the
+    analyzer.ollama.warmTimeoutMs budget (default 120s) — only a genuine
+    connection refusal is 'unreachable'. `onProgress(elapsedMs)` fires on a 1s
+    ticker while the blocking POST is in flight (liveness the keep_alive call
+    can't emit itself; an /api/ps poll can't help because /api/ps lists only
+    already-resident models). An external `signal` short-circuits to
+    'cancelled'. */
 export async function warmOllamaModel(
   model: string,
   opts: { signal?: AbortSignal; onProgress?: (elapsedMs: number) => void } = {},
