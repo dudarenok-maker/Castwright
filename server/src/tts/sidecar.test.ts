@@ -18,6 +18,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { fetch as undiciFetch } from 'undici';
 import { SidecarTtsProvider } from './sidecar.js';
+import { NoCapacityError } from './tts-errors.js';
+import { isTransient } from './retry.js';
 import type { SynthesizeInput } from './index.js';
 
 /* The provider posts via undici's OWN `fetch` (plan 137 — so the no-timeout
@@ -476,108 +478,174 @@ describe('SidecarTtsProvider error classification', () => {
   });
 });
 
-describe('device-aware GPU semaphore gating', () => {
-  /* The first two tests below vi.spyOn `engineDeviceIsGpu` with a fixed
-     mockReturnValue. Without restoring it, that spy leaks into later tests
-     in this describe block (vi.spyOn mocks persist until restored) — the
-     third test, which deliberately does NOT mock this module so it can
-     exercise the REAL ground-truth-first logic, would otherwise silently
-     inherit the second test's `mockReturnValue(true)` and pass for the
-     wrong reason. Scoped to this describe so it doesn't affect the mockFetch
-     module mock the rest of the file relies on. */
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('skips the GPU semaphore entirely when the engine is confirmed off-GPU', async () => {
-    const { engineDeviceIsGpu } = await import('../gpu/engine-device.js');
-    vi.spyOn(await import('../gpu/engine-device.js'), 'engineDeviceIsGpu').mockReturnValue(false);
-    const { GpuSemaphore } = await import('../gpu/semaphore.js');
-    const fakeGpuSem = new GpuSemaphore(4);
-    const acquireSpy = vi.spyOn(fakeGpuSem, 'acquire');
-
-    stubFetch(async () => {
-      const pcm = Buffer.alloc(4, 0);
-      return new Response(pcm, {
-        status: 200,
-        headers: { 'content-type': 'audio/L16;codec=pcm;rate=24000' },
-      });
+describe('capacity-aware admission retry (vram-aware placement, Task 8b)', () => {
+  /* The sidecar returns this shape on a 503 when SEG_CAPACITY_ADMISSION
+     decides an op can't fit. `postWithCapacityRetry` peeks for it before
+     the generic throwForResponse classification. */
+  function noCapacityResponse(neededMb: number, deviceKey: string): Response {
+    return new Response(JSON.stringify({ noCapacity: true, neededMb, deviceKey }), {
+      status: 503,
+      statusText: 'Service Unavailable',
+      headers: { 'content-type': 'application/json' },
     });
+  }
 
+  function okResponse(): Response {
+    const pcm = Buffer.from([0x01, 0x02, 0x03, 0x04]);
+    return new Response(pcm, {
+      status: 200,
+      headers: { 'content-type': 'audio/L16;codec=pcm;rate=24000', 'x-sample-rate': '24000' },
+    });
+  }
+
+  function fakeDevices(deviceKey: string, freeMb: number) {
+    const [kind, indexStr] = deviceKey.split(':');
+    return [
+      {
+        kind: kind as 'cuda' | 'rocm' | 'mps' | 'cpu',
+        index: Number(indexStr),
+        label: deviceKey,
+        totalMb: 8_000,
+        freeMb,
+      },
+    ];
+  }
+
+  it('(a) a plain 200 returns audio unchanged — no capacity path taken', async () => {
+    stubFetch(async () => okResponse());
+    const capacityProbeRead = vi.fn();
     const provider = new SidecarTtsProvider({
       url: 'http://localhost:6006/',
       engine: 'coqui',
-      gpuSem: fakeGpuSem,
+      capacityProbe: { read: capacityProbeRead },
     });
-    await provider.synthesize(SYNTH_INPUT);
 
-    expect(acquireSpy).not.toHaveBeenCalled();
-    void engineDeviceIsGpu; // keep the import referenced for the mock above
+    const result = await provider.synthesize(SYNTH_INPUT);
+
+    expect(result.pcm.equals(Buffer.from([0x01, 0x02, 0x03, 0x04]))).toBe(true);
+    expect(capacityProbeRead).not.toHaveBeenCalled();
   });
 
-  it('still acquires a token when the engine is confirmed on-GPU', async () => {
-    vi.spyOn(await import('../gpu/engine-device.js'), 'engineDeviceIsGpu').mockReturnValue(true);
-    const { GpuSemaphore } = await import('../gpu/semaphore.js');
-    const fakeGpuSem = new GpuSemaphore(4);
-    const acquireSpy = vi.spyOn(fakeGpuSem, 'acquire');
-
+  it('(b) noCapacity 503 then, when analysis is idle and eviction would help, evicts Ollama once and retries to success', async () => {
+    let calls = 0;
     stubFetch(async () => {
-      const pcm = Buffer.alloc(4, 0);
-      return new Response(pcm, {
-        status: 200,
-        headers: { 'content-type': 'audio/L16;codec=pcm;rate=24000' },
-      });
+      calls += 1;
+      return calls === 1 ? noCapacityResponse(2_000, 'cuda:0') : okResponse();
     });
-
+    const evictOllama = vi.fn(async () => {});
+    const analyzerEvictWouldHelp = vi.fn(async () => true);
     const provider = new SidecarTtsProvider({
       url: 'http://localhost:6006/',
       engine: 'coqui',
-      gpuSem: fakeGpuSem,
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
+      evictOllama,
+      analyzerEvictWouldHelp,
+      isAnalysisInFlight: () => false,
+      capacityPollMs: 1,
+      maxCapacityAttempts: 5,
     });
-    await provider.synthesize(SYNTH_INPUT);
 
-    expect(acquireSpy).toHaveBeenCalledTimes(1);
+    const result = await provider.synthesize(SYNTH_INPUT);
+
+    expect(calls).toBe(2);
+    expect(evictOllama).toHaveBeenCalledTimes(1);
+    expect(analyzerEvictWouldHelp).toHaveBeenCalledWith(2_000, 500);
+    expect(result.pcm.equals(Buffer.from([0x01, 0x02, 0x03, 0x04]))).toBe(true);
   });
 
-  it('end-to-end with the REAL engineDeviceIsGpu: ground truth mps wins over an auto knob that would say GPU', async () => {
-    /* No mocking of engine-device.js here — this proves Task 3's ground-truth-
-       first logic is what actually causes the skip, not just a spied return
-       value. Without Task 3 (i.e. engineDeviceIsGpu only reading the config
-       knob), this test would fail: COQUI_DEVICE is unset ('auto'), which the
-       knob-only logic treats as "assume GPU" — the real-world Apple Silicon
-       case this whole design exists to fix. */
-    const { setLastKnownEngineDevices, _resetEngineDevicesForTests } = await import(
-      '../gpu/engine-device-state.js'
+  it('(c) noCapacity 503 while analysis is in flight does NOT evict; it polls and a later 200 succeeds', async () => {
+    let calls = 0;
+    stubFetch(async () => {
+      calls += 1;
+      return calls === 1 ? noCapacityResponse(2_000, 'cuda:0') : okResponse();
+    });
+    const evictOllama = vi.fn(async () => {});
+    const analyzerEvictWouldHelp = vi.fn(async () => true);
+    const provider = new SidecarTtsProvider({
+      url: 'http://localhost:6006/',
+      engine: 'coqui',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
+      evictOllama,
+      analyzerEvictWouldHelp,
+      isAnalysisInFlight: () => true,
+      capacityPollMs: 1,
+      maxCapacityAttempts: 5,
+    });
+
+    const result = await provider.synthesize(SYNTH_INPUT);
+
+    expect(calls).toBe(2);
+    expect(evictOllama).not.toHaveBeenCalled();
+    expect(analyzerEvictWouldHelp).not.toHaveBeenCalled();
+    expect(result.pcm.equals(Buffer.from([0x01, 0x02, 0x03, 0x04]))).toBe(true);
+  });
+
+  it('(d) noCapacity 503 persisting past maxCapacityAttempts throws NoCapacityError, not treated as transient', async () => {
+    stubFetch(async () => noCapacityResponse(4_000, 'cuda:0'));
+    const provider = new SidecarTtsProvider({
+      url: 'http://localhost:6006/',
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+      evictOllama: vi.fn(async () => {}),
+      analyzerEvictWouldHelp: vi.fn(async () => false), // eviction never helps → always exhausts via polling
+      isAnalysisInFlight: () => false,
+      capacityPollMs: 1,
+      maxCapacityAttempts: 3,
+    });
+
+    const err = await provider.synthesize(SYNTH_INPUT).then(
+      () => null,
+      (e) => e,
     );
-    _resetEngineDevicesForTests();
-    setLastKnownEngineDevices({ kokoro: 'mps', coqui: 'mps', qwen: 'mps' });
-    const prevDevice = process.env.COQUI_DEVICE;
-    delete process.env.COQUI_DEVICE; // unset → knob defaults to 'auto'
 
-    const { GpuSemaphore } = await import('../gpu/semaphore.js');
-    const fakeGpuSem = new GpuSemaphore(4);
-    const acquireSpy = vi.spyOn(fakeGpuSem, 'acquire');
+    expect(err).toBeInstanceOf(NoCapacityError);
+    expect(err.engine).toBe('qwen');
+    expect(err.neededMb).toBe(4_000);
+    expect(err.deviceKey).toBe('cuda:0');
+    expect(err.message).toMatch(/Not enough GPU memory for qwen \(4000MB\)/);
+    expect(isTransient(err)).toBe(false);
+  });
 
-    stubFetch(async () => {
-      const pcm = Buffer.alloc(4, 0);
-      return new Response(pcm, {
-        status: 200,
-        headers: { 'content-type': 'audio/L16;codec=pcm;rate=24000' },
-      });
+  it('(e) a poisoned 503 (not a noCapacity shape) still goes through throwForResponse, never swallowed as noCapacity', async () => {
+    const body = JSON.stringify({ detail: 'CUDA crashed', poisoned: true });
+    stubFetch(async () => new Response(body, { status: 503, headers: { 'content-type': 'application/json' } }));
+    const capacityProbeRead = vi.fn();
+    const evictOllama = vi.fn(async () => {});
+    const provider = new SidecarTtsProvider({
+      url: 'http://localhost:6006/',
+      engine: 'coqui',
+      capacityProbe: { read: capacityProbeRead },
+      evictOllama,
     });
 
-    try {
-      const provider = new SidecarTtsProvider({
-        url: 'http://localhost:6006/',
-        engine: 'coqui',
-        gpuSem: fakeGpuSem,
-      });
-      await provider.synthesize(SYNTH_INPUT);
-      expect(acquireSpy).not.toHaveBeenCalled();
-    } finally {
-      _resetEngineDevicesForTests();
-      if (prevDevice === undefined) delete process.env.COQUI_DEVICE;
-      else process.env.COQUI_DEVICE = prevDevice;
-    }
+    const err = await provider.synthesize(SYNTH_INPUT).then(
+      () => null,
+      (e) => e,
+    );
+
+    expect(err.poisoned).toBe(true);
+    expect(err.transient).toBe(false);
+    expect(err.status).toBe(503);
+    expect(capacityProbeRead).not.toHaveBeenCalled();
+    expect(evictOllama).not.toHaveBeenCalled();
+  });
+
+  it('(e continued) a plain 500 (not a noCapacity shape) is classified transient as before, capacity path never engaged', async () => {
+    stubFetch(async () => new Response('internal error', { status: 500 }));
+    const capacityProbeRead = vi.fn();
+    const provider = new SidecarTtsProvider({
+      url: 'http://localhost:6006/',
+      engine: 'coqui',
+      capacityProbe: { read: capacityProbeRead },
+    });
+
+    const err = await provider.synthesize(SYNTH_INPUT).then(
+      () => null,
+      (e) => e,
+    );
+
+    expect(err.transient).toBe(true);
+    expect(err.status).toBe(500);
+    expect(capacityProbeRead).not.toHaveBeenCalled();
   });
 });
