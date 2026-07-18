@@ -123,6 +123,16 @@ def test_resident_device_still_fit_checked():
     assert "noCapacity" in a and a["noCapacity"]["deviceKey"] == "cuda:0"
 
 
+def test_resident_no_fit_reports_resident_device_not_roomier_one():
+    """Multi-GPU: a resident engine that can't fit its pinned device must report
+    THAT device as deviceKey (where Node should evict), NOT a roomier
+    non-resident GPU where an evict can't help — the model can't migrate."""
+    devices = [dev(index=0, free=1000, total=8192), dev(index=1, free=15000, total=16384)]
+    pc = make(devices, peak=5600, resident=lambda e: "cuda:0")
+    a = pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+    assert "noCapacity" in a and a["noCapacity"]["deviceKey"] == "cuda:0"
+
+
 def test_resident_device_admits_when_peak_fits():
     devices = [dev(index=0, free=8000, total=8192)]
     pc = make(devices, peak=5600, resident=lambda e: "cuda:0")

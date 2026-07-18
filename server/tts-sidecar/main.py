@@ -2110,7 +2110,11 @@ class PlacementController:
             if key is not None:
                 return {"device": key}
             worst = self._worst_device_key(devices)
-        return {"noCapacity": {"neededMb": peak, "deviceKey": worst}}
+        # A resident engine can only ever run on its own device, so point Node
+        # at THAT device to evict from — not a roomier non-resident GPU where an
+        # evict wouldn't let this (non-migratable) model fit.
+        device_key = resident if resident is not None else worst
+        return {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
 
     @staticmethod
     def _observed_mb(device_key: Optional[str]) -> int:
@@ -2162,7 +2166,8 @@ class PlacementController:
         elif cpu_capable and not heavy:
             admission = {"device": "cpu"}
         else:
-            admission = {"noCapacity": {"neededMb": peak, "deviceKey": self._worst_device_key(devices)}}
+            device_key = resident if resident is not None else self._worst_device_key(devices)
+            admission = {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
 
         try:
             yield admission
