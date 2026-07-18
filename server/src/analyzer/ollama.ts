@@ -18,7 +18,7 @@ import { costForEngine } from '../tts/engine-vram-cost.js';
 import { acquireAnalyzerSlot, describeAnalyzerConcurrency } from './analyzer-concurrency.js';
 import { getLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { getResolvedOllamaUrl, getCachedUserSettings } from '../workspace/user-settings.js';
-import { isAnyAnalysisBusy } from '../tts/design-lock.js';
+import { isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { configValue } from '../config/resolver.js';
 import type { Accelerator } from '../gpu/vram-state.js';
 import { getLastKnownVram } from '../gpu/vram-state.js';
@@ -170,7 +170,7 @@ export function hasKeepAliveOverride(model: string): boolean {
 }
 
 /** `keep_alive` (integer seconds, or -1 to pin) for an Ollama analyzer call.
-    While ANY analysis run is in flight the model is PINNED (-1); otherwise
+    While ANY analyzer run (analysis OR script review) is in flight the model is PINNED (-1); otherwise
     per-model via resolveKeepAliveSeconds, with RAM-heavy models clamped to 0
     on CPU. */
 export function keepAliveFor(model: string, accelerator: Accelerator = 'unknown'): number {
@@ -183,7 +183,7 @@ export function keepAliveFor(model: string, accelerator: Accelerator = 'unknown'
      failure. The run's teardown (routes/analysis.ts endJob) issues the matching
      keep_alive:0 evict once no run remains, so the pin is strictly run-scoped
      and the per-model value keeps its meaning as the POST-run idle retention. */
-  if (isAnyAnalysisBusy()) return -1;
+  if (isAnyAnalyzerRunBusy()) return -1;
   if (RAM_HEAVY_MODELS.has(model) && accelerator === 'cpu') return 0;
   return resolveKeepAliveSeconds(model);
 }
@@ -838,7 +838,7 @@ export async function generatePersonaViaOllama(
     think: false,
     /* Pin during an active analysis run (same rationale as keepAliveFor); the
        caller-supplied keepAlive is the post-run idle window otherwise. */
-    keep_alive: isAnyAnalysisBusy() ? -1 : (opts.keepAlive ?? 0),
+    keep_alive: isAnyAnalyzerRunBusy() ? -1 : (opts.keepAlive ?? 0),
     options: {
       temperature: resolveOllamaTemperature(),
       ...(onCpu ? { num_gpu: 0 } : {}),

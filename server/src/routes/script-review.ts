@@ -30,6 +30,8 @@ import { readJson } from '../workspace/state-io.js';
 import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js';
 import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
 import { selectAnalyzer, type StageCall } from '../analyzer/index.js';
+import { markReviewBusy, clearReviewBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
+import { unloadResidentOllama } from './ollama-health.js';
 import { withPassEval } from '../analyzer/analyzer-eval-stats.js';
 import { getResolvedGeminiApiKey, getResolvedAllowCloudFallback } from '../workspace/user-settings.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
@@ -766,7 +768,16 @@ async function runScriptReviewJob(
   const record = structureEnabled ? await getOrHydrateManuscript(manuscriptId) : undefined;
   const bodyByChapter = new Map<number, string>((record?.chapterHints ?? []).map((h) => [h.id, h.body]));
   const reviewLanguage = bookStateLanguage(located.state);
+  /* Pin the local analyzer resident for the whole review run. Review calls land
+     minutes apart per chapter — the same cadence as attribution — so a finite
+     keep-alive would let Ollama evict the model between chapters and cold-reload
+     on the next (keepAliveFor pins while isAnyReviewBusy, via isAnyAnalyzerRunBusy).
+     Only a local run loads a model; balanced by the clearReviewBusy + evict in
+     the finally below. Marked INSIDE the try so a warm-step early-return can't
+     leak the ref. */
+  const pinnedLocal = selection.engine === 'local';
   try {
+    if (pinnedLocal) markReviewBusy(located.bookDir);
     for (let i = 0; i < chapterIds.length; i += 1) {
       if (job.controller.signal.aborted) break;
       const chapterId = chapterIds[i];
@@ -962,6 +973,18 @@ async function runScriptReviewJob(
     }
   } finally {
     for (const sub of job.subscribers) clearInterval(sub.keepAlive);
+    /* Release the run-scoped analyzer pin: clear this run's busy ref and, once
+       no analysis/other review still needs the model (ref-counted), evict it
+       (keep_alive:0) so the pinned model doesn't sit resident forever.
+       Best-effort — a failed evict just leaves it to idle per its own value. */
+    if (pinnedLocal) {
+      clearReviewBusy(located.bookDir);
+      if (!isAnyAnalyzerRunBusy()) {
+        void unloadResidentOllama().catch(() => {
+          /* Ollama unreachable / already evicted — nothing to release. */
+        });
+      }
+    }
   }
   if (job.controller.signal.aborted) {
     send({ kind: 'error', code: 'cancelled', message: 'Review cancelled.' });
