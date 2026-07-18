@@ -2177,6 +2177,91 @@ class PlacementController:
                 self.footprints.record(engine, model, cfg, self._observed_mb(held[0]))
 
 
+# Task 4 (vram-aware-placement plan) — /synthesize capacity-aware admission,
+# default OFF. `SEG_CAPACITY_ADMISSION=1` is the opt-in; unset/anything-else
+# keeps today's behaviour byte-for-byte (the rollback path).
+def _capacity_admission_enabled() -> bool:
+    return os.environ.get("SEG_CAPACITY_ADMISSION", "0") == "1"
+
+
+# Per-engine admission profile for the three /synthesize engines: qwen/coqui
+# are GPU-heavy bespoke models with no meaningful CPU path; kokoro is cheap
+# enough to run on CPU in a pinch and never counts as "heavy". Engines not
+# listed here (shouldn't happen — /synthesize 400s on an unknown engine_id
+# before this is ever consulted) default to the conservative heavy/no-cpu case.
+_ENGINE_CAPACITY_PROFILE: dict[str, dict[str, bool]] = {
+    "qwen": {"cpu_capable": False, "heavy": True},
+    "coqui": {"cpu_capable": False, "heavy": True},
+    "kokoro": {"cpu_capable": True, "heavy": False},
+}
+
+
+def _is_resident(engine_id: str) -> Optional[str]:
+    """PlacementController.is_resident: the device_key ("cuda:N"/"rocm:N")
+    `engine_id` is currently loaded on, or None when unloaded / on cpu / not
+    cheaply knowable. Reuses `_engine_actual_card` (the same loaded-model
+    probe /health's `gpus` payload already relies on) rather than duplicating
+    the per-engine attribute digging here."""
+    named: dict[str, Any] = dict(ENGINES)
+    named["asr"] = ASR
+    named["spk"] = SPK
+    engine = named.get(engine_id)
+    if engine is None:
+        return None
+    card = _engine_actual_card(engine)
+    if card is None or card["family"] not in ("cuda", "rocm"):
+        return None
+    index = card["index"] if card["index"] is not None else 0
+    return f"{card['family']}:{index}"
+
+
+def _idle_evict(device_key: str) -> bool:
+    """PlacementController.idle_evict: best-effort attempt to free idle
+    transient GPU state to make room for the admitting op. Tries every
+    idle-evictable engine (Qwen VoiceDesign, Qwen 1.7B-Base, ASR, ECAPA) with
+    ttl=0 (evict now regardless of recent use) and returns True if anything
+    freed.
+
+    Deliberately does NOT target `device_key` specifically — reasonable on
+    today's single-practical-GPU boxes; a genuinely multi-GPU box would
+    over-evict engines resident on a DIFFERENT card too. See the task-4
+    report for this call-out."""
+    freed = False
+    qwen = ENGINES.get("qwen")
+    if isinstance(qwen, QwenEngine):
+        try:
+            freed = qwen.maybe_free_idle_design(0.0) or freed
+        except Exception:
+            pass
+        try:
+            freed = qwen.maybe_free_idle_base17(0.0) or freed
+        except Exception:
+            pass
+    try:
+        freed = ASR.maybe_free_idle(0.0) or freed
+    except Exception:
+        pass
+    try:
+        freed = SPK.maybe_free_idle(0.0) or freed
+    except Exception:
+        pass
+    return freed
+
+
+# Module-level admission instance /synthesize reserves against when the flag
+# is on. `probe`/`idle_evict`/`is_resident` are real deps (not test doubles);
+# tests monkeypatch `_placement.probe` (and the env flag) for determinism —
+# see test_devices.py.
+_placement = PlacementController(
+    probe=probe_capacity,
+    footprints=FootprintTable(),
+    ledger=ReservationLedger(),
+    reserve_mb=lambda: int(os.environ.get("GPU_RESERVE_MB", 768)),
+    idle_evict=_idle_evict,
+    is_resident=_is_resident,
+)
+
+
 def _kokoro_provider_options(device: Optional[str], providers: list[str]):
     """ORT provider_options for an indexed Kokoro CUDA pin (KOKORO_DEVICE=cuda:1).
 
@@ -6571,7 +6656,30 @@ async def synthesize(req: Request) -> Response:
         # asyncio.to_thread runs the sync call on a worker thread and yields
         # control back to the event loop, so /health stays sub-50ms during
         # synthesis. This is the single biggest UX fix in the sidecar.
-        result = await asyncio.to_thread(engine.synthesize, model, voice, text, language)
+        #
+        # SEG_CAPACITY_ADMISSION (task 4, vram-aware-placement plan, default
+        # OFF): when on, hold a peak-VRAM reservation across the forward so a
+        # concurrent op can't double-book the same headroom, and refuse with a
+        # `noCapacity` 503 up front rather than let the forward OOM. This ALSO
+        # covers any lazy cold-load inside engine.synthesize, since the peak is
+        # held before the call starts. Off (the default): unchanged behaviour.
+        if _capacity_admission_enabled():
+            cap = _ENGINE_CAPACITY_PROFILE.get(engine_id, {"cpu_capable": False, "heavy": True})
+            with _placement.reservation(
+                engine_id, model, {}, cpu_capable=cap["cpu_capable"], heavy=cap["heavy"]
+            ) as adm:
+                if "noCapacity" in adm:
+                    return JSONResponse(
+                        {
+                            "noCapacity": True,
+                            "neededMb": adm["noCapacity"]["neededMb"],
+                            "deviceKey": adm["noCapacity"]["deviceKey"],
+                        },
+                        status_code=503,
+                    )
+                result = await asyncio.to_thread(engine.synthesize, model, voice, text, language)
+        else:
+            result = await asyncio.to_thread(engine.synthesize, model, voice, text, language)
     except VoiceNotDesignedError as exc:
         # #1063 — the requested voice/variant has no cached embedding on disk.
         # That's a bad-input condition (design the voice/variant first), not an
