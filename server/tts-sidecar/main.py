@@ -1940,6 +1940,153 @@ class FootprintTable:
         self._learned[key] = max(self._learned.get(key, 0), observed_mb)
 
 
+class ReservationLedger:
+    """Per-device VRAM reservations held for the duration of a load/synth
+    op. All mutation and reads go through this class's own `threading.Lock`
+    — callers never hold it across a model load or synth forward."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._by_device: dict[str, dict[int, int]] = {}
+        self._next_token_id = 1
+
+    def reserved_mb(self, device_key: str) -> int:
+        with self._lock:
+            return sum(self._by_device.get(device_key, {}).values())
+
+    def hold(self, device_key: str, mb: int) -> tuple[str, int]:
+        """Reserve `mb` on `device_key`; returns an opaque token (which
+        encodes the device) that `release` needs to give it back."""
+        with self._lock:
+            token_id = self._next_token_id
+            self._next_token_id += 1
+            self._by_device.setdefault(device_key, {})[token_id] = mb
+            return (device_key, token_id)
+
+    def release(self, token: tuple[str, int]) -> None:
+        device_key, token_id = token
+        with self._lock:
+            self._by_device.get(device_key, {}).pop(token_id, None)
+
+
+class PlacementController:
+    """Capacity-aware admission: decides which device (or cpu, or no
+    capacity) a model load / synth op may proceed on, and reserves the
+    FootprintTable's peak-mb estimate for the winning device so a second
+    concurrent op can't double-book VRAM the first one already claimed."""
+
+    def __init__(
+        self,
+        probe: Callable[[], list[dict]] = probe_capacity,
+        footprints: Optional["FootprintTable"] = None,
+        ledger: Optional["ReservationLedger"] = None,
+        reserve_mb: Optional[Callable[[], int]] = None,
+        idle_evict: Optional[Callable[[str], bool]] = None,
+        is_resident: Optional[Callable[[str], Optional[str]]] = None,
+    ) -> None:
+        self.probe = probe
+        self.footprints = footprints if footprints is not None else FootprintTable()
+        self.ledger = ledger if ledger is not None else ReservationLedger()
+        self.reserve_mb = reserve_mb if reserve_mb is not None else (lambda: int(os.environ.get("GPU_RESERVE_MB", 768)))
+        self.idle_evict = idle_evict if idle_evict is not None else (lambda device_key: False)
+        self.is_resident = is_resident if is_resident is not None else (lambda engine: None)
+
+    @staticmethod
+    def _device_key(d: dict) -> str:
+        return "cpu" if d["kind"] == "cpu" else f"{d['kind']}:{d['index']}"
+
+    def _best_gpu_headroom(self, peak: int) -> Optional[tuple[str, int]]:
+        """(device_key, headroom_mb) for the GPU device with the most
+        available headroom — whether or not that's enough to fit `peak` —
+        or None if the probe reports no GPU devices at all. Since every
+        candidate is judged against the same `peak`, this device is also
+        the ONLY one that could possibly fit it: if it doesn't, none do."""
+        reserve = self.reserve_mb()
+        best: Optional[tuple[str, int]] = None
+        for d in self.probe():
+            if d["kind"] == "cpu":
+                continue
+            key = self._device_key(d)
+            headroom = min(d["freeMb"], d["totalMb"] - self.ledger.reserved_mb(key)) - reserve
+            if best is None or headroom > best[1]:
+                best = (key, headroom)
+        return best
+
+    def admit(
+        self,
+        engine: str,
+        model: Optional[str],
+        cfg: Optional[dict],
+        cpu_capable: bool,
+        heavy: bool,
+    ) -> dict:
+        peak = self.footprints.peak_mb(engine, model, cfg)
+
+        resident = self.is_resident(engine)
+        if resident is not None:
+            # Already resident somewhere — target only that device, no
+            # migration.
+            token = self.ledger.hold(resident, peak)
+            return {"device": resident, "_token": token}
+
+        best = self._best_gpu_headroom(peak)
+        if best is not None and best[1] >= peak:
+            key, _headroom = best
+            token = self.ledger.hold(key, peak)
+            return {"device": key, "_token": token}
+
+        if cpu_capable and not heavy:
+            return {"device": "cpu"}
+
+        if best is not None and self.idle_evict(best[0]):
+            best = self._best_gpu_headroom(peak)
+            if best is not None and best[1] >= peak:
+                key, _headroom = best
+                token = self.ledger.hold(key, peak)
+                return {"device": key, "_token": token}
+
+        return {"noCapacity": {"neededMb": peak, "deviceKey": best[0] if best is not None else None}}
+
+    @staticmethod
+    def _observed_mb(device_key: Optional[str]) -> int:
+        """Best-effort peak VRAM observed for the just-finished op, used to
+        ratchet FootprintTable's learned estimate. Guarded: returns 0 when
+        torch/CUDA isn't available (unit tests, cpu-only boxes) or the
+        device wasn't a CUDA one."""
+        if not device_key or not device_key.startswith(("cuda:", "rocm:")):
+            return 0
+        try:
+            import torch  # type: ignore
+
+            index = int(device_key.split(":", 1)[1])
+            return int(torch.cuda.max_memory_allocated(index) // 1_048_576)
+        except Exception:
+            return 0
+
+    @contextmanager
+    def reservation(
+        self,
+        engine: str,
+        model: Optional[str],
+        cfg: Optional[dict],
+        cpu_capable: bool = False,
+        heavy: bool = False,
+    ):
+        """Admits the op, yields the Admission, and on exit (success OR
+        exception) releases any held reservation and records the observed
+        peak — VRAM bookkeeping only; callers still take their own
+        `_synth_lock`/`_infer_lock`/load lock around the actual forward."""
+        admission = self.admit(engine, model, cfg, cpu_capable, heavy)
+        token = admission.pop("_token", None)
+        try:
+            yield admission
+        finally:
+            if token is not None:
+                device_key, _token_id = token
+                self.ledger.release(token)
+                self.footprints.record(engine, model, cfg, self._observed_mb(device_key))
+
+
 def _kokoro_provider_options(device: Optional[str], providers: list[str]):
     """ORT provider_options for an indexed Kokoro CUDA pin (KOKORO_DEVICE=cuda:1).
 
