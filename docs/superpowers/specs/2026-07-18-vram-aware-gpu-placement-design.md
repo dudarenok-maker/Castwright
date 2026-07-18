@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 date: 2026-07-18
 revised: 2026-07-18 (Option A + THREE adversarial-review rounds folded)
 supersedes:
