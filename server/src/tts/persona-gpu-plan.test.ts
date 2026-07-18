@@ -28,9 +28,7 @@ describe('unloadResidentSidecar', () => {
 describe('resolvePersonaGpuPlan', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  async function setup({ constrained, gen }: { constrained: boolean; gen: string[] }) {
-    const residency = await import('../gpu/residency.js');
-    vi.spyOn(residency, 'shouldEvictBeforeSidecarLoad').mockReturnValue(constrained);
+  async function setup({ gen }: { gen: string[] }) {
     const gen2 = await import('../routes/generation.js');
     vi.spyOn(gen2, 'activeGenerationBooks').mockReturnValue(gen);
     const dl = await import('./design-lock.js');
@@ -39,21 +37,14 @@ describe('resolvePersonaGpuPlan', () => {
     return import('./persona-gpu-plan.js');
   }
 
-  it('roomy card → GPU, no evict', async () => {
-    const mod = await setup({ constrained: false, gen: [] });
-    expect(mod.resolvePersonaGpuPlan('/a')).toMatchObject({ onCpu: false, evict: false, keepAlive: 0 });
+  it('idle → GPU with the resident persona keepAlive window', async () => {
+    const mod = await setup({ gen: [] });
+    expect(mod.resolvePersonaGpuPlan('/a')).toEqual({ onCpu: false, keepAlive: 300 });
   });
 
-  it('constrained + idle → evict + GPU + resident keepAlive', async () => {
-    const mod = await setup({ constrained: true, gen: [] });
-    const plan = mod.resolvePersonaGpuPlan('/a');
-    expect(plan).toMatchObject({ onCpu: false, evict: true });
-    expect(plan.keepAlive).not.toBe(0);
-  });
-
-  it('constrained + durable render active → CPU, no evict', async () => {
-    const mod = await setup({ constrained: true, gen: ['book-2'] });
-    expect(mod.resolvePersonaGpuPlan('/a')).toMatchObject({ onCpu: true, evict: false });
+  it('durable render active → CPU, no keepAlive', async () => {
+    const mod = await setup({ gen: ['book-2'] });
+    expect(mod.resolvePersonaGpuPlan('/a')).toEqual({ onCpu: true, keepAlive: 0 });
   });
 });
 

@@ -212,10 +212,13 @@ function endJob(job: DesignJob, finalEv?: unknown): void {
 const PERSONA_HEARTBEAT_MS = 6000;
 
 /** LOCAL-engine only: generate `voiceStyle` personas for all base-task
-    characters that lack one, BEFORE the design loop touches the sidecar.
-    On a constrained GPU this lets `preparePersonaBatch` evict the idle
-    resident model once (instead of once-per-character interleaved with
-    VoiceDesign), preventing thrash and OOM.
+    characters that lack one, BEFORE the design loop touches the sidecar —
+    so persona generation (Ollama) and VoiceDesign (sidecar) don't interleave
+    per-character. (Historically this pre-pass also let `preparePersonaBatch`
+    reverse-evict the idle resident sidecar model once on a constrained GPU;
+    that eviction step is retired — VRAM arbitration for the sidecar's own
+    engines now lives in its capacity admission when SEG_CAPACITY_ADMISSION
+    is on, or the sequential cast-review/render workflow when it's off.)
 
     The `gemini` engine keeps its existing lazy-interleaved persona-gen
     inside `runDesignJob` unchanged — this function returns immediately for

@@ -126,4 +126,45 @@ describe('config registry', () => {
     expect(k?.env).toBe('PRELOAD_KOKORO');
     expect(k?.default).toBe(false);
   });
+
+  it('the retired GPU token-budget knobs are gone (replaced by gpu.reserveMb — capacity-aware placement retires the weighted GPU semaphore)', () => {
+    const retiredKeys = [
+      'gpu.concurrency',
+      'gpu.vramBudget',
+      'gpu.weight.kokoro',
+      'gpu.weight.qwen',
+      'gpu.weight.coqui',
+      'gpu.weight.analyzer',
+      'gpu.weight.asr',
+      'gpu.weight.spk',
+      'gpu.safeCoexistMb',
+    ];
+    const retiredEnvs = [
+      'GPU_CONCURRENCY',
+      'GPU_VRAM_BUDGET',
+      'GPU_WEIGHT_KOKORO',
+      'GPU_WEIGHT_QWEN',
+      'GPU_WEIGHT_COQUI',
+      'GPU_WEIGHT_ANALYZER',
+      'GPU_WEIGHT_ASR',
+      'GPU_WEIGHT_SPK',
+      'GPU_SAFE_COEXIST_MB',
+    ];
+    for (const key of retiredKeys) {
+      expect(getKnob(key), `${key} should have been removed from the registry`).toBeUndefined();
+    }
+    for (const env of retiredEnvs) {
+      expect(knobByEnv(env), `${env} should have been removed from the registry`).toBeUndefined();
+    }
+  });
+
+  it('registers gpu.reserveMb — the VRAM safety cushion replacing the deleted budget knobs', () => {
+    const k = getKnob('gpu.reserveMb');
+    expect(k).toBeDefined();
+    expect(k?.env).toBe('GPU_RESERVE_MB');
+    expect(k?.group).toBe('gpu-lifecycle');
+    expect(k?.type).toBe('integer');
+    expect(k?.default).toBe(768);
+    expect(k?.apply).toBe('live');
+  });
 });

@@ -1,8 +1,5 @@
 import { activeGenerationBooks } from '../routes/generation.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
-import { shouldEvictBeforeSidecarLoad } from '../gpu/residency.js';
-import { getLastKnownVram } from '../gpu/vram-state.js';
-import { engineDeviceIsGpu } from '../gpu/engine-device.js';
 import { isOtherBookDesignBusy, isAnyAnalysisBusy } from './design-lock.js';
 import { resolvePersonaEngine } from '../analyzer/voice-style.js';
 
@@ -28,7 +25,12 @@ export class GpuBusyForPersonaError extends Error {
     `activeGenerationBooks` flag. No longer holds a full-budget gpuSemaphore
     lock around the unload — same-engine/cross-book serialization against a
     concurrent render now lives in the sidecar (`_synth_lock` + the sidecar
-    load locks), not a Node-side mutex. */
+    load locks), not a Node-side mutex.
+
+    Not currently called from `preparePersonaBatch` below — the card-size-
+    gated pre-load reverse-evict it used to run for (the now-retired
+    `gpu.safeCoexistMb` heuristic) is gone; kept as a standalone,
+    independently-tested primitive for a future direct caller. */
 export async function unloadResidentSidecar(): Promise<void> {
   if (activeGenerationBooks().length > 0) {
     throw new GpuBusyForPersonaError('A render is active — skip the GPU persona pre-pass.');
@@ -49,56 +51,50 @@ export async function unloadResidentSidecar(): Promise<void> {
 
 export interface PersonaGpuPlan {
   onCpu: boolean;
-  evict: boolean;
   keepAlive: string | number;
 }
 
-/** Decide how the local persona call should use the GPU for `bookDir`. See the
-    spec's decision table. "Busy" is the durable render flag (a render is
-    mid-job for its whole duration, not just between per-chunk GPU holds). */
-export function resolvePersonaGpuPlan(bookDir: string): PersonaGpuPlan {
-  const constrained = shouldEvictBeforeSidecarLoad(getLastKnownVram(), engineDeviceIsGpu('qwen'));
-  if (!constrained) return { onCpu: false, evict: false, keepAlive: 0 };
+/** Decide how the local persona call should use the GPU for `bookDir`. "Busy"
+    is the durable render flag (a render is mid-job for its whole duration,
+    not just between per-chunk GPU holds), another book's design in flight, or
+    the analyzer.
 
+    Reverse-eviction of the sidecar's resident Qwen models to make room for
+    the persona Ollama call on a constrained GPU — gated on the now-retired
+    `gpu.safeCoexistMb` heuristic — is gone: VRAM arbitration for the
+    sidecar's own engines now lives in its capacity admission
+    (SEG_CAPACITY_ADMISSION) when that flag is on; when it's off, the
+    sequential workflow (design happens in cast-review, render happens after)
+    keeps them from actually overlapping, so no proactive Node-side eviction
+    is needed here any more — busy still falls back to CPU, idle just runs on
+    GPU directly. */
+export function resolvePersonaGpuPlan(bookDir: string): PersonaGpuPlan {
   const busy =
     activeGenerationBooks().length > 0 ||
     isOtherBookDesignBusy(bookDir) ||
     isAnyAnalysisBusy();
 
   return busy
-    ? { onCpu: true, evict: false, keepAlive: 0 }
-    : { onCpu: false, evict: true, keepAlive: PERSONA_KEEP_ALIVE_SECONDS };
+    ? { onCpu: true, keepAlive: 0 }
+    : { onCpu: false, keepAlive: PERSONA_KEEP_ALIVE_SECONDS };
 }
 
-/** Resolve the GPU plan for a persona batch on `bookDir` and perform the
-    one-shot reverse-evict if needed, returning the per-call args to thread
-    into generateVoiceStylePersona. Used by both voice-style routes and the
-    bulk pre-pass so the evict dance lives in exactly one place.
+/** Resolve the GPU plan for a persona batch on `bookDir`, returning the
+    per-call args to thread into generateVoiceStylePersona. Used by both
+    voice-style routes and the bulk pre-pass so the decision lives in exactly
+    one place.
 
-    - gemini engine → `{ onCpu: false, keepAlive: 0 }` (off-GPU, no evict).
-    - local engine → resolve the plan; if evict, unload once; on
-      GpuBusyForPersonaError (a render slipped in) fall back to CPU.
+    - gemini engine → `{ onCpu: false, keepAlive: 0 }` (off-GPU).
+    - local engine → resolve the plan directly; no more reverse-evict dance
+      (see `resolvePersonaGpuPlan`).
 
     `_signal` is kept in the signature for call-site compatibility
     (`routes/cast-design.ts` still passes its job's AbortSignal), but is
-    unused now that `unloadResidentSidecar` no longer waits on a full-budget
-    gpuSemaphore acquire — there is nothing left to abort. */
+    unused — there is nothing here to abort. */
 export async function preparePersonaBatch(
   bookDir: string,
   _signal?: AbortSignal,
 ): Promise<{ onCpu: boolean; keepAlive: string | number }> {
   if (resolvePersonaEngine() !== 'local') return { onCpu: false, keepAlive: 0 };
-  const plan = resolvePersonaGpuPlan(bookDir);
-  if (plan.evict) {
-    try {
-      await unloadResidentSidecar();
-    } catch (err) {
-      // Render slipped in (GpuBusy) → fall back to CPU.
-      if (err instanceof GpuBusyForPersonaError) {
-        return { onCpu: true, keepAlive: 0 };
-      }
-      throw err;
-    }
-  }
-  return { onCpu: plan.onCpu, keepAlive: plan.keepAlive };
+  return resolvePersonaGpuPlan(bookDir);
 }

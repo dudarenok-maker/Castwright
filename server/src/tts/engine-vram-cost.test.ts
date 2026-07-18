@@ -5,7 +5,6 @@
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { ENGINE_VRAM_COST, costForEngine, DEFAULT_GPU_VRAM_BUDGET } from './engine-vram-cost.js';
-import { configValue } from '../config/resolver.js';
 import { setLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 
 describe('engine-vram-cost', () => {
@@ -44,21 +43,12 @@ describe('engine-vram-cost', () => {
 });
 
 describe('engine-vram-cost: spk (srv-47)', () => {
-  afterEach(() => {
-    delete process.env.GPU_WEIGHT_SPK;
-  });
-
   it('registers spk at cost 1 in the static map', () => {
     expect(ENGINE_VRAM_COST.spk).toBe(1);
   });
 
-  it('costForEngine("spk") reads the live gpu.weight.spk knob (default 1)', () => {
+  it('costForEngine("spk") returns the static weight (default 1)', () => {
     expect(costForEngine('spk')).toBe(1);
-  });
-
-  it('costForEngine("spk") honours a GPU_WEIGHT_SPK override', () => {
-    process.env.GPU_WEIGHT_SPK = '2';
-    expect(costForEngine('spk')).toBe(2);
   });
 });
 
@@ -72,13 +62,13 @@ describe('costForEngine — analyzer cross-charge guard (W2.6)', () => {
     expect(costForEngine('analyzer')).toBe(0);
   });
 
-  it('returns the configured weight when the analyzer is confirmed on GPU', () => {
+  it('returns the static weight when the analyzer is confirmed on GPU', () => {
     setLastKnownAnalyzerDevice('cuda');
-    expect(costForEngine('analyzer')).toBe(configValue<number>('gpu.weight.analyzer'));
+    expect(costForEngine('analyzer')).toBe(ENGINE_VRAM_COST.analyzer);
   });
 
-  it('returns the configured weight when the analyzer placement is unknown (conservative)', () => {
+  it('returns the static weight when the analyzer placement is unknown (conservative)', () => {
     setLastKnownAnalyzerDevice('unknown');
-    expect(costForEngine('analyzer')).toBe(configValue<number>('gpu.weight.analyzer'));
+    expect(costForEngine('analyzer')).toBe(ENGINE_VRAM_COST.analyzer);
   });
 });
