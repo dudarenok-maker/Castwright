@@ -1,12 +1,14 @@
-/* transcribe-client (srv-31) — transport + GPU-arbitration contract.
+/* transcribe-client (srv-31) — transport contract.
  *
  * Like sidecar.test.ts, the client posts via undici's OWN `fetch`, so we mock
  * the `undici` module's `fetch` export (real `Agent` preserved so the module-
  * level dispatcher still constructs). The load-bearing assertions:
  *   - raw PCM body + X-Sample-Rate (+ optional X-Language) reach /transcribe,
  *   - the JSON response maps to the camelCase TranscribeResult,
- *   - a GPU token is acquired ONLY when ASR_DEVICE=cuda (CPU path is free),
  *   - a 5xx is annotated transient.
+ * VRAM arbitration for the GPU path no longer happens here — it lives in the
+ * sidecar's capacity admission (SEG_CAPACITY_ADMISSION) — so this file no
+ * longer asserts a GPU token is acquired.
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -16,11 +18,6 @@ vi.mock('undici', async (importOriginal) => {
   const actual = await importOriginal<typeof import('undici')>();
   return { ...actual, fetch: vi.fn() };
 });
-
-/* Spy the GPU semaphore so we can assert ASR only takes a token on cuda.
-   Hoisted so the const is initialised before the (also-hoisted) vi.mock factory. */
-const { acquire } = vi.hoisted(() => ({ acquire: vi.fn(async () => vi.fn()) }));
-vi.mock('../gpu/semaphore.js', () => ({ gpuSemaphore: { acquire } }));
 
 import { transcribeSegment, asrRunsOnGpu, normalizeWhisperLanguage } from './transcribe-client.js';
 
@@ -37,7 +34,6 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 afterEach(() => {
   mockFetch.mockReset();
-  acquire.mockClear();
   delete process.env.ASR_DEVICE;
 });
 
@@ -87,22 +83,6 @@ describe('transcribeSegment', () => {
     expect(normalizeWhisperLanguage('ru')).toBe('ru');
     expect(normalizeWhisperLanguage(undefined)).toBeUndefined();
     expect(normalizeWhisperLanguage('Russian')).toBeUndefined();
-  });
-
-  it('does NOT acquire a GPU token on the CPU default path', async () => {
-    delete process.env.ASR_DEVICE;
-    mockFetch.mockImplementation((async () => jsonResponse({ text: 'x' })) as unknown as typeof undiciFetch);
-    await transcribeSegment(PCM, 24000, { sidecarUrl: URL });
-    expect(acquire).not.toHaveBeenCalled();
-    expect(asrRunsOnGpu()).toBe(false);
-  });
-
-  it('acquires a GPU token when ASR_DEVICE=cuda', async () => {
-    process.env.ASR_DEVICE = 'cuda';
-    mockFetch.mockImplementation((async () => jsonResponse({ text: 'x' })) as unknown as typeof undiciFetch);
-    await transcribeSegment(PCM, 24000, { sidecarUrl: URL });
-    expect(acquire).toHaveBeenCalledOnce();
-    expect(asrRunsOnGpu()).toBe(true);
   });
 
   it('annotates a 5xx as transient', async () => {

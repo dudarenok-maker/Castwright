@@ -8,17 +8,14 @@
                emits), `X-Sample-Rate` header (required).
      response: application/json  { embedding: number[], dim: 192, sample_rate }
 
-   VRAM arbitration (srv-47): ONLY when the embed runs on the GPU
-   (`SPK_DEVICE=cuda`) does this acquire a weighted GPU token (cost `spk`,
-   engine-vram-cost.ts) so ECAPA + synth stay within the budget. The CPU-default
-   path (`SPK_DEVICE=cpu`) costs zero VRAM, so taking a token would needlessly
-   serialise it behind synth — we skip the semaphore there. */
+   VRAM arbitration (srv-47 follow-up): this is a sidecar op — VRAM arbitration
+   now lives in the sidecar's capacity admission (behind SEG_CAPACITY_ADMISSION),
+   not a Node-side GPU token here. Flag off: this runs in the normal sequential
+   workflow (embeds happen in cast-review/QA phases, poolWidth=1 renders
+   serialize), matching the whole feature's flag-off model. */
 
 import { fetch as undiciFetch, Agent } from 'undici';
-import { gpuSemaphore } from '../gpu/semaphore.js';
-import { costForEngine } from './engine-vram-cost.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
-import { acquireGpuTokenIfOnGpu } from '../gpu/gpu-semaphore-gate.js';
 
 export interface EmbedOptions {
   signal?: AbortSignal;
@@ -35,26 +32,11 @@ const EMBED_DISPATCHER = new Agent({
   connectTimeout: 10_000,
 });
 
-/** True when the embed runs on the GPU and must arbitrate for VRAM. Reads the
-    SAME `SPK_DEVICE` env the sidecar reads (shared env under `npm start`), so it
-    stays in lockstep with where ECAPA actually runs. */
+/** True when the embed runs on the GPU. Reads the SAME `SPK_DEVICE` env the
+    sidecar reads (shared env under `npm start`), so it stays in lockstep with
+    where ECAPA actually runs. */
 export function spkRunsOnGpu(): boolean {
   return (process.env.SPK_DEVICE ?? 'cpu').trim().toLowerCase().startsWith('cuda');
-}
-
-/* R2-A guard: at the default budget of 1, an spk token consumes the whole
-   budget and the cuda embed serialises behind synth — likely slower than the
-   free, parallel cpu embed. Warn ONCE so a misconfiguration is visible without
-   changing behaviour. */
-let budgetWarned = false;
-function warnIfBudgetTooLow(): void {
-  if (budgetWarned || gpuSemaphore.budget >= 2) return;
-  budgetWarned = true;
-  console.warn(
-    'SPK_DEVICE=cuda but GPU budget < 2: the speaker embed will serialise ' +
-      'behind synth and may be slower than the free cpu path; set ' +
-      'GPU_VRAM_BUDGET >= 2.',
-  );
 }
 
 export async function embedSegment(
@@ -65,37 +47,32 @@ export async function embedSegment(
   if (pcm.length === 0) throw new Error('embedSegment: empty PCM buffer.');
   const url = (opts.sidecarUrl ?? getResolvedSidecarUrl()).replace(/\/+$/, '');
 
-  const onGpu = spkRunsOnGpu();
-  if (onGpu) warnIfBudgetTooLow();
-  const release = await acquireGpuTokenIfOnGpu(onGpu, costForEngine('spk'));
+  // Sidecar op — VRAM arbitration now lives in the sidecar's capacity admission
+  // (SEG_CAPACITY_ADMISSION); no Node-side GPU token here (see file header).
+  let response: Response;
   try {
-    let response: Response;
-    try {
-      response = (await undiciFetch(`${url}/embed`, {
-        method: 'POST',
-        headers: { 'content-type': 'audio/L16', 'x-sample-rate': String(sampleRate) },
-        body: pcm,
-        signal: opts.signal,
-        dispatcher: EMBED_DISPATCHER,
-      })) as unknown as Response;
-    } catch (e) {
-      if ((e as { name?: string })?.name === 'AbortError') throw e;
-      const msg = (e as Error).message || String(e);
-      throw Object.assign(
-        new Error(`TTS sidecar not reachable at ${url} for /embed. (${msg})`),
-        { transient: true as const },
-      );
-    }
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      throw Object.assign(
-        new Error(`TTS sidecar /embed returned ${response.status}: ${text.slice(0, 240)}`),
-        { transient: response.status >= 500 && response.status < 600 },
-      );
-    }
-    const body = (await response.json()) as { embedding: number[] };
-    return Float32Array.from(body.embedding);
-  } finally {
-    release?.();
+    response = (await undiciFetch(`${url}/embed`, {
+      method: 'POST',
+      headers: { 'content-type': 'audio/L16', 'x-sample-rate': String(sampleRate) },
+      body: pcm,
+      signal: opts.signal,
+      dispatcher: EMBED_DISPATCHER,
+    })) as unknown as Response;
+  } catch (e) {
+    if ((e as { name?: string })?.name === 'AbortError') throw e;
+    const msg = (e as Error).message || String(e);
+    throw Object.assign(
+      new Error(`TTS sidecar not reachable at ${url} for /embed. (${msg})`),
+      { transient: true as const },
+    );
   }
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw Object.assign(
+      new Error(`TTS sidecar /embed returned ${response.status}: ${text.slice(0, 240)}`),
+      { transient: response.status >= 500 && response.status < 600 },
+    );
+  }
+  const body = (await response.json()) as { embedding: number[] };
+  return Float32Array.from(body.embedding);
 }
