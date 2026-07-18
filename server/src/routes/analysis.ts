@@ -115,7 +115,7 @@ import {
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, bookStateLanguage } from '../workspace/scan.js';
-import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy, isAnyAnalysisBusy } from '../tts/design-lock.js';
+import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import { dedupSeriesPrior } from '../workspace/series-prior-dedup.js';
 import { linkSeriesReuseAtAnalysis, pruneStaleReuseLinks } from '../workspace/series-reuse-link.js';
@@ -2305,7 +2305,7 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
      isAnyAnalysisBusy) is still running — otherwise we'd evict a model that
      run still needs. Best-effort and fire-and-forget: a failed evict just means
      the model idles per its own keep_alive, and the next run re-warms it. */
-  if (job.engine === 'local' && !isAnyAnalysisBusy()) {
+  if (job.engine === 'local' && !isAnyAnalyzerRunBusy()) {
     void unloadResidentOllama().catch(() => {
       /* Ollama unreachable / already evicted — nothing to release. */
     });

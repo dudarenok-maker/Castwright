@@ -49,6 +49,7 @@ export async function withDesignLock<T>(bookDir: string, fn: () => Promise<T>): 
 /* ── Cross-operation busy registry (mutual exclusion) ───────────────────── */
 
 const analysisBusy = new Map<string, number>(); // bookDir → ref count (main + subset)
+const reviewBusy = new Map<string, number>(); // bookDir → ref count (script-review runs)
 const designBusy = new Set<string>(); // bookDir of an active bulk-design job
 
 export function markAnalysisBusy(bookDir: string): void {
@@ -90,4 +91,28 @@ export function isOtherBookDesignBusy(bookDir: string): boolean {
 /** True when ANY book has an analysis job in flight (main or subset). */
 export function isAnyAnalysisBusy(): boolean {
   return analysisBusy.size > 0;
+}
+
+/* ── Script-review runs (separate from analysisBusy so a review does NOT trip
+      the analysis↔design mutual exclusion, but DOES drive the analyzer
+      keep-alive pin — a review re-runs the local analyzer per chapter with the
+      same minutes-apart call cadence as analysis). ─────────────────────────── */
+export function markReviewBusy(bookDir: string): void {
+  reviewBusy.set(bookDir, (reviewBusy.get(bookDir) ?? 0) + 1);
+}
+export function clearReviewBusy(bookDir: string): void {
+  const n = (reviewBusy.get(bookDir) ?? 0) - 1;
+  if (n <= 0) reviewBusy.delete(bookDir);
+  else reviewBusy.set(bookDir, n);
+}
+export function isAnyReviewBusy(): boolean {
+  return reviewBusy.size > 0;
+}
+
+/** True while ANY local-analyzer run — main/subset analysis OR script review —
+    is in flight. Drives the analyzer keep-alive pin (analyzer/ollama.ts
+    keepAliveFor): both send /api/chat calls minutes apart, so any finite idle
+    TTL lets Ollama evict the model between calls and cold-reload on the next. */
+export function isAnyAnalyzerRunBusy(): boolean {
+  return analysisBusy.size > 0 || reviewBusy.size > 0;
 }

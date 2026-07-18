@@ -291,24 +291,32 @@ describe('OllamaAnalyzer — keep_alive policy (per-model seconds)', () => {
     expect(keepAliveFor('qwen3.5:4b', 'cpu')).toBe(30); // small model → fallback, unaffected by CPU clamp
   });
 
-  it('PINS the model (-1) while an analysis run is in flight, overriding fallback / override / CPU-clamp', async () => {
+  it('PINS the model (-1) while an analysis OR review run is in flight, overriding fallback / override / CPU-clamp', async () => {
     const { keepAliveFor } = await import('./ollama.js');
-    const { markAnalysisBusy, clearAnalysisBusy } = await import('../tts/design-lock.js');
+    const { markAnalysisBusy, clearAnalysisBusy, markReviewBusy, clearReviewBusy } = await import(
+      '../tts/design-lock.js'
+    );
     _setUserSettingsCacheForTest({
       ...DEFAULT_USER_SETTINGS,
       analyzerKeepAliveByModel: { 'qwen3.5:4b': 120 }, // a positive override…
     });
-    markAnalysisBusy('/book/pinned');
-    try {
-      // …is superseded by the run-scoped pin. Calls land minutes apart, so any
-      // finite TTL would let Ollama evict between them mid-run.
-      expect(keepAliveFor('qwen36-cw-iq4-32k:latest')).toBe(-1); // uncurated fallback → pinned
-      expect(keepAliveFor('qwen3.5:4b')).toBe(-1); // override → pinned
-      expect(keepAliveFor('qwen3.5:9b', 'cpu')).toBe(-1); // RAM-heavy CPU clamp → pinned
-    } finally {
-      clearAnalysisBusy('/book/pinned');
+    // …is superseded by the run-scoped pin. Calls land minutes apart, so any
+    // finite TTL would let Ollama evict between them mid-run. Both a main
+    // analysis run and a script-review run pin the model.
+    for (const [mark, clear] of [
+      [markAnalysisBusy, clearAnalysisBusy],
+      [markReviewBusy, clearReviewBusy],
+    ] as const) {
+      mark('/book/pinned');
+      try {
+        expect(keepAliveFor('qwen36-cw-iq4-32k:latest')).toBe(-1); // uncurated fallback → pinned
+        expect(keepAliveFor('qwen3.5:4b')).toBe(-1); // override → pinned
+        expect(keepAliveFor('qwen3.5:9b', 'cpu')).toBe(-1); // RAM-heavy CPU clamp → pinned
+      } finally {
+        clear('/book/pinned');
+      }
     }
-    // Run over → normal resolution resumes (teardown issues the keep_alive:0 evict).
+    // Both runs over → normal resolution resumes (teardown issues the keep_alive:0 evict).
     expect(keepAliveFor('qwen36-cw-iq4-32k:latest')).toBe(30);
     expect(keepAliveFor('qwen3.5:4b')).toBe(120);
     expect(keepAliveFor('qwen3.5:9b', 'cpu')).toBe(0);
