@@ -1742,6 +1742,148 @@ def _read_device_env(var_name: str) -> Optional[str]:
     return resolved
 
 
+# --- Cross-vendor capacity probe (task 1, vram-aware-placement) ---
+#
+# GET /capacity feeds the capacity-aware placement admission check: before
+# routing a job to a device, the caller wants an honest "what's free where"
+# snapshot across every vendor this sidecar can target, not just CUDA. Every
+# helper below is individually monkeypatchable (that's the whole point — the
+# per-device try/except in probe_capacity is exercised in tests without a
+# real GPU) and never raises; a broken device is omitted, never fatal.
+
+
+def _cuda_device_count() -> int:
+    """Visible CUDA-API device count (0 when torch/CUDA is unavailable).
+    Never raises — a torch import failure reads the same as "no GPU"."""
+    try:
+        import torch  # type: ignore
+
+        if not torch.cuda.is_available():
+            return 0
+        return torch.cuda.device_count()
+    except Exception:
+        return 0
+
+
+def _cuda_mem_get_info(index: int) -> tuple[int, int]:
+    """(free_bytes, total_bytes) for one CUDA-API device index — driver truth,
+    same primitive `_sample_card` uses. Deliberately allowed to raise (a
+    poisoned context, a vanished card): probe_capacity's per-device
+    try/except is what turns that into "omit this device", not this
+    function itself."""
+    import torch  # type: ignore
+
+    return torch.cuda.mem_get_info(index)
+
+
+def _cuda_label(index: int) -> str:
+    """Human-readable label for a CUDA-API device index. Falls back to a
+    generic 'cuda:<n>' string if the driver properties can't be read."""
+    try:
+        import torch  # type: ignore
+
+        return torch.cuda.get_device_properties(index).name
+    except Exception:
+        return f"cuda:{index}"
+
+
+def _cuda_is_rocm() -> bool:
+    """True when the visible CUDA-API device is actually an AMD ROCm/HIP
+    build (torch aliases HIP under torch.cuda — same vendor-neutral note as
+    `_cuda_vram_mb`'s docstring). Never raises."""
+    try:
+        import torch  # type: ignore
+
+        return bool(getattr(torch.version, "hip", None))
+    except Exception:
+        return False
+
+
+def _mps_available() -> bool:
+    """True on an Apple-Silicon box with a torch MPS backend visible.
+    Never raises."""
+    try:
+        import torch  # type: ignore
+
+        return bool(torch.backends.mps.is_available())
+    except Exception:
+        return False
+
+
+def _host_mem_mb() -> tuple[int, int]:
+    """(total_mb, free_mb) host RAM for the mps/cpu capacity rows. Prefers
+    the module-level `psutil` (guarded import near the process-memory
+    instrumentation above, ~line 780) since it's already a hard transitive
+    dep in practice; degrades to a platform syscall when psutil is None (a
+    stripped install) so the cpu row is still a real reading, never a raise
+    and never a made-up sentinel."""
+    if psutil is not None:
+        vm = psutil.virtual_memory()
+        return int(vm.total // 1_048_576), int(vm.available // 1_048_576)
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            class _MemoryStatusEx(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_uint64),
+                    ("ullAvailPhys", ctypes.c_uint64),
+                    ("ullTotalPageFile", ctypes.c_uint64),
+                    ("ullAvailPageFile", ctypes.c_uint64),
+                    ("ullTotalVirtual", ctypes.c_uint64),
+                    ("ullAvailVirtual", ctypes.c_uint64),
+                    ("sullAvailExtendedVirtual", ctypes.c_uint64),
+                ]
+
+            stat = _MemoryStatusEx()
+            stat.dwLength = ctypes.sizeof(_MemoryStatusEx)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))  # type: ignore[attr-defined]
+            return int(stat.ullTotalPhys // 1_048_576), int(stat.ullAvailPhys // 1_048_576)
+        except Exception:
+            return (0, 0)
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        total_pages = os.sysconf("SC_PHYS_PAGES")
+        avail_pages = os.sysconf("SC_AVPHYS_PAGES")
+        return int(page_size * total_pages // 1_048_576), int(page_size * avail_pages // 1_048_576)
+    except Exception:
+        return (0, 0)
+
+
+def probe_capacity() -> list[dict]:
+    """Cross-vendor VRAM/RAM inventory: [{kind, index, label, totalMb,
+    freeMb}]. `kind` is 'cuda'/'rocm'/'mps'/'cpu'; always ends with a `cpu`
+    row so a placement decision always has somewhere to fall back to.
+
+    NEVER raises. Each CUDA/ROCm device is probed independently — a single
+    poisoned context or vanished card (the 'GPU is lost' failure mode) is
+    caught and that device is simply omitted, not fatal to the whole probe."""
+    devices: list[dict] = []
+    kind = "rocm" if _cuda_is_rocm() else "cuda"
+    for i in range(_cuda_device_count()):
+        try:
+            free_b, total_b = _cuda_mem_get_info(i)
+            devices.append(
+                {
+                    "kind": kind,
+                    "index": i,
+                    "label": _cuda_label(i),
+                    "totalMb": total_b // 1_048_576,
+                    "freeMb": free_b // 1_048_576,
+                }
+            )
+        except Exception:
+            continue
+    if _mps_available():
+        total_mb, free_mb = _host_mem_mb()
+        devices.append({"kind": "mps", "index": 0, "label": "apple-mps", "totalMb": total_mb, "freeMb": free_mb})
+    total_mb, free_mb = _host_mem_mb()
+    devices.append({"kind": "cpu", "index": 0, "label": "cpu", "totalMb": total_mb, "freeMb": free_mb})
+    return devices
+
+
 def _kokoro_provider_options(device: Optional[str], providers: list[str]):
     """ORT provider_options for an indexed Kokoro CUDA pin (KOKORO_DEVICE=cuda:1).
 
@@ -5508,9 +5650,123 @@ def health() -> dict[str, Any]:
     }
 
 
+# --- Capacity-aware placement: cross-vendor free/total memory probe ---------
+# Powers GET /capacity (consumed by the Node CapacityProbe for capacity-aware
+# model placement). Each torch call is wrapped in a tiny named helper so tests
+# can monkeypatch device state without a real GPU; probe_capacity() NEVER raises.
+def _cuda_device_count() -> int:
+    try:
+        import torch  # type: ignore
+
+        return int(torch.cuda.device_count())
+    except Exception:
+        return 0
+
+
+def _cuda_mem_get_info(index: int) -> tuple[int, int]:
+    """(free_bytes, total_bytes) for CUDA/ROCm device `index`. May raise (a
+    vanished eGPU / poisoned context) — probe_capacity() omits that device."""
+    import torch  # type: ignore
+
+    return torch.cuda.mem_get_info(index)
+
+
+def _cuda_is_rocm() -> bool:
+    try:
+        import torch  # type: ignore
+
+        return bool(getattr(torch.version, "hip", None))
+    except Exception:
+        return False
+
+
+def _cuda_label(index: int) -> str:
+    try:
+        import torch  # type: ignore
+
+        return str(torch.cuda.get_device_name(index))
+    except Exception:
+        return f"cuda:{index}"
+
+
+def _mps_available() -> bool:
+    try:
+        import torch  # type: ignore
+
+        return bool(torch.backends.mps.is_available())
+    except Exception:
+        return False
+
+
+def _host_memory_mb() -> tuple[int, int]:
+    """(totalMb, availableMb) for system RAM, for the mps + cpu rows. Prefers
+    psutil; degrades to an os-level readout, then a conservative floor, so it
+    never raises even when psutil is None (a stripped install)."""
+    if psutil is not None:
+        try:
+            vm = psutil.virtual_memory()
+            return vm.total // 1048576, vm.available // 1048576
+        except Exception:
+            pass
+    try:  # POSIX; no portable "available" without psutil, so report total for both
+        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+        return total // 1048576, total // 1048576
+    except (ValueError, AttributeError, OSError):
+        return 4096, 2048  # last-resort floor (e.g. Windows w/o psutil): never starve cpu fallback
+
+
+def probe_capacity() -> list[dict]:
+    """Live per-device free/total memory across CUDA/ROCm, Apple MPS, and CPU.
+    NEVER raises: a per-device exception omits only that device, and the list
+    always ends with a `cpu` row so a placement decision always has a fallback.
+    torch's mem_get_info is driver-global, so the CUDA rows already reflect any
+    external consumer (e.g. Ollama self-splitting across cards)."""
+    devices: list[dict] = []
+    kind = "rocm" if _cuda_is_rocm() else "cuda"
+    for i in range(_cuda_device_count()):
+        try:
+            free_b, total_b = _cuda_mem_get_info(i)
+            devices.append(
+                {
+                    "kind": kind,
+                    "index": i,
+                    "label": _cuda_label(i),
+                    "totalMb": total_b // 1048576,
+                    "freeMb": free_b // 1048576,
+                }
+            )
+        except Exception:
+            continue  # dead/vanished device — omit it, keep probing the rest
+    if _mps_available():
+        total_mb, free_mb = _host_memory_mb()
+        devices.append(
+            {"kind": "mps", "index": 0, "label": "apple-mps", "totalMb": total_mb, "freeMb": free_mb}
+        )
+    total_mb, free_mb = _host_memory_mb()
+    devices.append(
+        {"kind": "cpu", "index": 0, "label": "cpu", "totalMb": total_mb, "freeMb": free_mb}
+    )
+    return devices
+
+
+@app.get("/capacity")
+def capacity() -> dict:
+    """Cross-vendor live capacity for the Node CapacityProbe (capacity-aware
+    placement). See probe_capacity(): never raises, always includes a cpu row."""
+    return {"devices": probe_capacity()}
+
+
 @app.get("/devices")
 def devices() -> dict:
     return {"devices": _enumerate_cuda_devices(), "cpu": True}
+
+
+@app.get("/capacity")
+def capacity() -> dict:
+    """Cross-vendor VRAM/RAM inventory for capacity-aware placement (task 1,
+    vram-aware-placement plan). See probe_capacity()'s docstring for the
+    per-device contract."""
+    return {"devices": probe_capacity()}
 
 
 @app.get("/debug/memory")
