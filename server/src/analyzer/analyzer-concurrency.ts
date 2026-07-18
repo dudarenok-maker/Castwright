@@ -1,16 +1,11 @@
-/* Analyzer concurrency control. Two primitives + one helper:
-   - analyzerConcurrency: a width-K FIFO count semaphore capping TOTAL in-flight
-     analyzer /api/chat calls across all jobs/models (bounds Ollama-slot pressure).
-     Independent of GPU_VRAM_BUDGET, so raising K never changes TTS width.
-   - a per-RESIDENT-MODEL refcounted lease that holds ONE cross-engine gpuSemaphore
-     slot (cost 4) while a given model has any call in flight: K same-model calls
-     share one slot (concurrency); two different local models each take a slot and
-     serialize on a small budget (no co-residence OOM); cloud (cost 0) overlaps.
-   Every analyzer call goes through acquireAnalyzerSlot(model, onCpu): limiter FIRST,
-   then the model-lease. See the spec's two concurrency cruxes — the sync-store in
-   enter() and the fully-synchronous leave() are load-bearing. */
-import { GpuSemaphore, gpuSemaphore } from '../gpu/semaphore.js';
-import { costForEngine } from '../tts/engine-vram-cost.js';
+/* Analyzer concurrency control: a width-K FIFO count semaphore capping TOTAL
+   in-flight analyzer /api/chat calls across all jobs/models (bounds
+   Ollama-slot pressure). The VRAM co-residence gate (a per-resident-model
+   lease on a cross-engine GPU token budget) has been removed — the GPU VRAM
+   budget concept is retired; the K limiter here plus Ollama's own residency
+   (via /api/ps, elsewhere) are what remain. Every analyzer call goes through
+   acquireAnalyzerSlot(model, onCpu). */
+import { CountSemaphore } from '../gpu/count-semaphore.js';
 import { configValue } from '../config/resolver.js';
 
 function resolveK(): number {
@@ -23,57 +18,7 @@ function resolveK(): number {
 // already been imported will NOT resize this limiter without a fresh module
 // import (contrast analyzerPoolWidth()-style helpers that re-read config
 // live on every call).
-export const analyzerConcurrency = new GpuSemaphore(resolveK());
-
-/** Canonicalise a model tag so one physical model has one lease key
-    (mirrors canonicalVramKey: a bare tag gets ':latest'). */
-export function canonicalLeaseKey(model: string): string {
-  return model.includes(':') ? model : `${model}:latest`;
-}
-
-type Lease = { count: number; p: Promise<() => void> | null; release: (() => void) | null };
-const leases = new Map<string, Lease>();
-
-/* Enter the per-model lease. CPU calls take NO gpuSemaphore slot (mirrors
-   acquireGpuTokenIfOnGpu). CRUX 1: store `lease.p` synchronously before await.
-   CRUX 2: this function's count mutation stays in the pre-await prefix. */
-async function enterModelLease(key: string, onCpu: boolean): Promise<() => void> {
-  if (onCpu) return () => {}; // no GPU slot; limiter (taken by caller) still bounds it
-  let lease = leases.get(key);
-  if (!lease) { lease = { count: 0, p: null, release: null }; leases.set(key, lease); }
-  lease.count++;
-  if (lease.count === 1) {
-    lease.p = gpuSemaphore.acquire(costForEngine('analyzer')); // ← sync store BEFORE await
-    try {
-      lease.release = await lease.p;
-    } catch (e) {
-      lease.count--;
-      if (lease.count === 0) leases.delete(key);
-      throw e; // unreachable today (acquire w/o signal never rejects); defensive
-    }
-  } else {
-    try {
-      await lease.p; // join: block until holder's acquire resolves
-    } catch (e) {
-      lease.count--;
-      if (lease.count === 0) leases.delete(key); // symmetry with the holder catch (dead path today)
-      throw e;
-    }
-  }
-  return () => leaveModelLease(key);
-}
-
-/* CRUX 2: fully synchronous — no await. */
-function leaveModelLease(key: string): void {
-  const lease = leases.get(key);
-  if (!lease) return;
-  lease.count--;
-  if (lease.count === 0) {
-    const r = lease.release;
-    leases.delete(key);
-    r?.();
-  }
-}
+export const analyzerConcurrency = new CountSemaphore(resolveK());
 
 /* Re-resolve K live and resize the limiter to match. The singleton is built at
    module-load (above), but K can legitimately differ from that captured value:
@@ -90,7 +35,7 @@ export function syncAnalyzerConcurrency(): void {
 }
 
 /* Honest observability (M3 follow-up): the peak number of analyzer calls that
-   were simultaneously past BOTH gates (limiter + lease) — i.e. genuinely
+   were simultaneously past the limiter — i.e. genuinely
    in-flight to Ollama at once. A run that fired K-wide reaches peak=K even if
    Ollama's own n_slots serialised the decodes, so peak<K localises the cap to
    the APP (a limiter/pool bug) while peak==K with no wall-clock speedup
@@ -99,7 +44,7 @@ export function syncAnalyzerConcurrency(): void {
 let inFlightCount = 0;
 let peakInFlight = 0;
 export function getAnalyzerConcurrencyStats(): { inFlight: number; peak: number; limiter: number } {
-  return { inFlight: inFlightCount, peak: peakInFlight, limiter: analyzerConcurrency.budget };
+  return { inFlight: inFlightCount, peak: peakInFlight, limiter: analyzerConcurrency.max };
 }
 /** Reset the peak watermark to the CURRENT in-flight count (not 0) so a
     mid-run reset — e.g. at a phase boundary while calls from the prior phase
@@ -108,18 +53,13 @@ export function resetAnalyzerConcurrencyPeak(): void {
   peakInFlight = inFlightCount;
 }
 
-/** The one entry point for every analyzer Ollama call. limiter → model-lease.
-    Returns a single idempotent release that frees both in reverse order. */
-export async function acquireAnalyzerSlot(model: string, onCpu: boolean): Promise<() => void> {
+/** The one entry point for every analyzer Ollama call: the width-K limiter.
+    `model`/`onCpu` are unused now that the VRAM co-residence lease is gone —
+    kept so call sites don't need to change. Returns a single idempotent
+    release. */
+export async function acquireAnalyzerSlot(_model: string, _onCpu: boolean): Promise<() => void> {
   syncAnalyzerConcurrency(); // adopt persisted/current K before gating
   const releaseLimiter = await analyzerConcurrency.acquire();
-  let releaseLease: () => void;
-  try {
-    releaseLease = await enterModelLease(canonicalLeaseKey(model), onCpu);
-  } catch (e) {
-    releaseLimiter();
-    throw e;
-  }
   inFlightCount++;
   if (inFlightCount > peakInFlight) peakInFlight = inFlightCount;
   let released = false;
@@ -127,7 +67,6 @@ export async function acquireAnalyzerSlot(model: string, onCpu: boolean): Promis
     if (released) return;
     released = true;
     inFlightCount--;
-    releaseLease();
     releaseLimiter();
   };
 }
@@ -141,11 +80,11 @@ export async function acquireAnalyzerSlot(model: string, onCpu: boolean): Promis
          OLLAMA_NUM_PARALLEL — this is what acquireAnalyzerSlot actually
          delivers for repeated calls to the SAME resident model.
       2. Distinct-model co-residency, bounded by floor(gpuBudget / cost) — how
-         many DIFFERENT local models can hold a gpuSemaphore slot at once.
+         many DIFFERENT local models can hold a GPU token at once.
          This is a ceiling on co-residence, not on same-model call throughput. */
 export function describeAnalyzerConcurrency(analyzerCost: number, gpuBudget: number): string {
   syncAnalyzerConcurrency(); // report live K, not the possibly-cold module-load value
-  const k = analyzerConcurrency.budget;
+  const k = analyzerConcurrency.max;
   const coResidency = Math.max(1, Math.floor(gpuBudget / Math.max(1, analyzerCost)));
   return (
     `[analyzer] up to K=${k} same-model analyzer calls run concurrently ` +
@@ -154,7 +93,3 @@ export function describeAnalyzerConcurrency(analyzerCost: number, gpuBudget: num
   );
 }
 
-/** Test-only: clear the lease map between cases. */
-export function __resetAnalyzerLeasesForTest(): void {
-  leases.clear();
-}
