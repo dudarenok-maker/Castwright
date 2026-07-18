@@ -384,14 +384,31 @@ const patchSchema = userSettingsSchema.partial();
 export async function writeUserSettings(patch: unknown): Promise<UserSettings> {
   const sanitised = stripForbiddenKeys(patch);
   const validated = patchSchema.parse(sanitised);
+  /* Merge ONLY the keys the caller actually sent. `patchSchema`
+     (userSettingsSchema.partial()) still applies every field's `.default()` for
+     keys the PUT OMITTED — Zod fires defaults even under `.partial()`, so the
+     parsed object carries e.g. `analyzerKeepAliveByModel: {}`,
+     `configOverrides: {}`, `analysisEngine: 'local'` even when the request never
+     mentioned them. The old `{ ...current, ...validated }` therefore RESET every
+     default-carrying field on any targeted save — the analysing-screen
+     phase-model dropdown sends just `analyzerPhase0Model`, which silently wiped
+     the user's per-model keep-alive map and registry overrides on disk. Keying
+     the merge off the sanitised INPUT keys makes an omitted field mean
+     "leave as-is", matching the mock save path (mockPutUserSettings). */
+  const sentKeys = Object.keys(sanitised as Record<string, unknown>);
+  const validatedRecord = validated as Record<string, unknown>;
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
-    const merged: UserSettings = { ...current, ...validated };
+    const merged: UserSettings = { ...current };
+    for (const key of sentKeys) {
+      if (key in validatedRecord) (merged as Record<string, unknown>)[key] = validatedRecord[key];
+    }
     /* A genuine change to the default TTS model is an explicit user choice —
        latch the sentinel so getResolvedTtsModelKey honours it instead of
        preferring Qwen. (GET returns the STORED key, so a no-op round-trip
        sends the same value back and never trips this.) */
     if (
+      sentKeys.includes('defaultTtsModelKey') &&
       validated.defaultTtsModelKey !== undefined &&
       validated.defaultTtsModelKey !== current.defaultTtsModelKey
     ) {
