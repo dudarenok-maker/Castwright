@@ -1968,6 +1968,51 @@ class ReservationLedger:
         with self._lock:
             self._by_device.get(device_key, {}).pop(token_id, None)
 
+    def _headroom(self, key: str, free_mb: int, total_mb: int, reserve: int) -> int:
+        """Available headroom for `key` given its live free/total and the
+        reservations already held on it. Caller MUST hold `self._lock`."""
+        reserved = sum(self._by_device.get(key, {}).values())
+        return min(free_mb, total_mb - reserved) - reserve
+
+    def try_hold(
+        self, candidates: list[tuple[str, int, int]], peak: int, reserve: int
+    ) -> Optional[tuple[str, int]]:
+        """Atomically pick the roomiest candidate that fits `peak` and hold it.
+        `candidates` = [(device_key, freeMb, totalMb), ...]. Returns the token
+        or None if none fit. The fit-check AND the hold happen under a SINGLE
+        lock acquisition, so two concurrent admits can't both pass the check
+        and double-book the same VRAM — the TOCTOU the per-op reservation
+        exists to prevent (decide+hold atomic, per the design)."""
+        with self._lock:
+            best_key: Optional[str] = None
+            best_headroom = -1
+            for key, free_mb, total_mb in candidates:
+                headroom = self._headroom(key, free_mb, total_mb, reserve)
+                if headroom >= peak and headroom > best_headroom:
+                    best_key, best_headroom = key, headroom
+            if best_key is None:
+                return None
+            token_id = self._next_token_id
+            self._next_token_id += 1
+            self._by_device.setdefault(best_key, {})[token_id] = peak
+            return (best_key, token_id)
+
+    def best_fit(
+        self, candidates: list[tuple[str, int, int]], peak: int, reserve: int
+    ) -> Optional[str]:
+        """Read-only twin of `try_hold`: the device_key that would win, or None,
+        WITHOUT holding. For the pure `admit()` decision (e.g. /load placement) —
+        advisory only; the binding decision is `reservation()`'s atomic
+        `try_hold`."""
+        with self._lock:
+            best_key: Optional[str] = None
+            best_headroom = -1
+            for key, free_mb, total_mb in candidates:
+                headroom = self._headroom(key, free_mb, total_mb, reserve)
+                if headroom >= peak and headroom > best_headroom:
+                    best_key, best_headroom = key, headroom
+            return best_key
+
 
 class PlacementController:
     """Capacity-aware admission: decides which device (or cpu, or no
@@ -1995,22 +2040,39 @@ class PlacementController:
     def _device_key(d: dict) -> str:
         return "cpu" if d["kind"] == "cpu" else f"{d['kind']}:{d['index']}"
 
-    def _best_gpu_headroom(self, peak: int) -> Optional[tuple[str, int]]:
-        """(device_key, headroom_mb) for the GPU device with the most
-        available headroom — whether or not that's enough to fit `peak` —
-        or None if the probe reports no GPU devices at all. Since every
-        candidate is judged against the same `peak`, this device is also
-        the ONLY one that could possibly fit it: if it doesn't, none do."""
+    def _gpu_candidates(
+        self, devices: list[dict], resident: Optional[str]
+    ) -> list[tuple[str, int, int]]:
+        """[(device_key, freeMb, totalMb)] to consider. A resident engine is
+        pinned to ONLY its own device (no migration) — and only if that device
+        is still present in the probe (a dropped eGPU yields no candidates →
+        noCapacity). Otherwise every GPU device is a candidate."""
+        gpus = [
+            (self._device_key(d), d["freeMb"], d["totalMb"])
+            for d in devices
+            if d["kind"] != "cpu"
+        ]
+        if resident is not None:
+            return [c for c in gpus if c[0] == resident]
+        return gpus
+
+    def _worst_device_key(self, devices: list[dict]) -> Optional[str]:
+        """The GPU device with the MOST headroom (closest to fitting) — the one
+        Node should try to free the analyzer's share from, since it's where an
+        evict is likeliest to cross the threshold. None if the probe shows no
+        GPU. (Diverges deliberately from an earlier 'largest shortfall' note:
+        max-headroom is the recoverable device, not the least-recoverable one.)"""
         reserve = self.reserve_mb()
-        best: Optional[tuple[str, int]] = None
-        for d in self.probe():
+        best_key: Optional[str] = None
+        best_headroom: Optional[int] = None
+        for d in devices:
             if d["kind"] == "cpu":
                 continue
             key = self._device_key(d)
             headroom = min(d["freeMb"], d["totalMb"] - self.ledger.reserved_mb(key)) - reserve
-            if best is None or headroom > best[1]:
-                best = (key, headroom)
-        return best
+            if best_headroom is None or headroom > best_headroom:
+                best_key, best_headroom = key, headroom
+        return best_key
 
     def admit(
         self,
@@ -2020,32 +2082,35 @@ class PlacementController:
         cpu_capable: bool,
         heavy: bool,
     ) -> dict:
+        """PURE placement DECISION — holds NO reservation (that is
+        `reservation()`'s job). Returns `{"device": key}` | `{"device": "cpu"}`
+        | `{"noCapacity": {"neededMb", "deviceKey"}}`. Fit-checks the resident
+        device too: a resident model's transient decode peak must still fit
+        alongside whatever (e.g. a co-resident analyzer) grew into its VRAM —
+        being resident is not a free pass. `deviceKey`/`analyzerEvictWouldHelp`
+        note: the sidecar reports only `{neededMb, deviceKey}`; Node computes
+        `evictWouldHelp` from /api/ps."""
         peak = self.footprints.peak_mb(engine, model, cfg)
-
         resident = self.is_resident(engine)
-        if resident is not None:
-            # Already resident somewhere — target only that device, no
-            # migration.
-            token = self.ledger.hold(resident, peak)
-            return {"device": resident, "_token": token}
+        reserve = self.reserve_mb()
+        devices = self.probe()
+        candidates = self._gpu_candidates(devices, resident)
 
-        best = self._best_gpu_headroom(peak)
-        if best is not None and best[1] >= peak:
-            key, _headroom = best
-            token = self.ledger.hold(key, peak)
-            return {"device": key, "_token": token}
-
+        key = self.ledger.best_fit(candidates, peak, reserve)
+        if key is not None:
+            return {"device": key}
         if cpu_capable and not heavy:
             return {"device": "cpu"}
 
-        if best is not None and self.idle_evict(best[0]):
-            best = self._best_gpu_headroom(peak)
-            if best is not None and best[1] >= peak:
-                key, _headroom = best
-                token = self.ledger.hold(key, peak)
-                return {"device": key, "_token": token}
-
-        return {"noCapacity": {"neededMb": peak, "deviceKey": best[0] if best is not None else None}}
+        worst = self._worst_device_key(devices)
+        if worst is not None and self.idle_evict(worst):
+            devices = self.probe()
+            candidates = self._gpu_candidates(devices, resident)
+            key = self.ledger.best_fit(candidates, peak, reserve)
+            if key is not None:
+                return {"device": key}
+            worst = self._worst_device_key(devices)
+        return {"noCapacity": {"neededMb": peak, "deviceKey": worst}}
 
     @staticmethod
     def _observed_mb(device_key: Optional[str]) -> int:
@@ -2072,19 +2137,39 @@ class PlacementController:
         cpu_capable: bool = False,
         heavy: bool = False,
     ):
-        """Admits the op, yields the Admission, and on exit (success OR
-        exception) releases any held reservation and records the observed
-        peak — VRAM bookkeeping only; callers still take their own
-        `_synth_lock`/`_infer_lock`/load lock around the actual forward."""
-        admission = self.admit(engine, model, cfg, cpu_capable, heavy)
-        token = admission.pop("_token", None)
+        """Atomically admits AND holds the peak reservation for the op, yields
+        the Admission, and on exit (success OR exception) releases the hold and
+        records the observed peak — VRAM bookkeeping only; callers still take
+        their own `_synth_lock`/`_infer_lock`/load lock around the actual
+        forward. Unlike `admit()`, this path performs the hold (via the ledger's
+        atomic `try_hold`), so two concurrent reservations can't double-book."""
+        peak = self.footprints.peak_mb(engine, model, cfg)
+        resident = self.is_resident(engine)
+        reserve = self.reserve_mb()
+        devices = self.probe()
+        candidates = self._gpu_candidates(devices, resident)
+
+        held = self.ledger.try_hold(candidates, peak, reserve)
+        if held is None and not (cpu_capable and not heavy):
+            worst = self._worst_device_key(devices)
+            if worst is not None and self.idle_evict(worst):
+                devices = self.probe()
+                candidates = self._gpu_candidates(devices, resident)
+                held = self.ledger.try_hold(candidates, peak, reserve)
+
+        if held is not None:
+            admission: dict = {"device": held[0]}
+        elif cpu_capable and not heavy:
+            admission = {"device": "cpu"}
+        else:
+            admission = {"noCapacity": {"neededMb": peak, "deviceKey": self._worst_device_key(devices)}}
+
         try:
             yield admission
         finally:
-            if token is not None:
-                device_key, _token_id = token
-                self.ledger.release(token)
-                self.footprints.record(engine, model, cfg, self._observed_mb(device_key))
+            if held is not None:
+                self.ledger.release(held)
+                self.footprints.record(engine, model, cfg, self._observed_mb(held[0]))
 
 
 def _kokoro_provider_options(device: Optional[str], providers: list[str]):
