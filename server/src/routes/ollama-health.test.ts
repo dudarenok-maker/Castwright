@@ -272,9 +272,9 @@ describe('warmOllamaModel (Part 2 — patient warm)', () => {
     expect(res.ok).toBe(true);
     const body = generateCallBody();
     expect(body?.model).toBe('qwen3.5:9b');
-    // 300 = the coded DEFAULT_KEEP_ALIVE_SECONDS for qwen3.5:9b (analyzer/ollama.ts),
-    // resolved via resolveKeepAliveSeconds — no longer a hardcoded '5m'.
-    expect(body?.keep_alive).toBe(300);
+    // 30 = the flat fallback (no override) resolved via resolveKeepAliveSeconds
+    // — no longer a hardcoded '5m'.
+    expect(body?.keep_alive).toBe(30);
     expect(body?.prompt).toBe('');
     expect((body?.options as { num_ctx?: number })?.num_ctx).toBe(32768);
     expect((body?.options as { num_gpu?: number })?.num_gpu).toBe(999);
@@ -347,14 +347,14 @@ describe('warmOllamaModel (Part 2 — patient warm)', () => {
     expect(body?.keep_alive).toBe(1800);
   });
 
-  it('floors a custom local tag\'s warm keep_alive to 30s when it resolves to 0 (Load must HOLD, not evict)', async () => {
-    /* Regression: qwen36-cw-* is a custom local tag — not in
-       DEFAULT_KEEP_ALIVE_SECONDS and with no user override, so
-       resolveKeepAliveSeconds() returns 0. But 0 is Ollama's EVICT-now idiom
-       (see the /unload route), so the per-model warm change (7b87221f) made the
-       Load button load-then-immediately-unload: the pill snapped back to
-       "Analyzer idle" and analysis never started. An explicit Load means "hold
-       it resident" — the warm floor turns a resolved 0 into 30s. */
+  it('warms a custom local tag with the 30s fallback (no override, curated map removed → Load HOLDS, not evicts)', async () => {
+    /* Regression that drove the whole keep-alive saga: qwen36-cw-* is a custom
+       local tag with no user override. It used to fall through the (now-removed)
+       curated map to 0 — Ollama's EVICT-now idiom — so the runtime chat path
+       unloaded the model after every call and the Load button loaded-then-
+       immediately-unloaded. resolveKeepAliveSeconds now returns the flat 30s
+       fallback for any uncurated tag, so warm (and every runtime call) sends 30
+       and the model stays resident through a run. */
     fetchMock.mockResolvedValue(new Response('', { status: 200 }));
     await warmOllamaModel('qwen36-cw-iq3-64k:latest');
     const body = generateCallBody();
@@ -363,7 +363,7 @@ describe('warmOllamaModel (Part 2 — patient warm)', () => {
 
   it('floors a RAM-heavy model\'s warm keep_alive to 30s on CPU too — explicit Load overrides the runtime CPU clamp', async () => {
     /* The RAM_HEAVY-on-CPU clamp (keepAliveFor → 0) is a runtime-chat safety
-       rail so a big model isn't pinned in system RAM for the whole 300s window.
+       rail so a big model isn't pinned in system RAM for the whole hold window.
        On an EXPLICIT Load the user is asking to hold it, so the warm floor
        still applies (30s, not the runtime-chat 0) — a short, deliberate hold
        rather than a no-op Load. */
@@ -378,13 +378,13 @@ describe('warmOllamaModel (Part 2 — patient warm)', () => {
     }
   });
 
-  it('does NOT clamp a RAM-heavy model\'s warm keep_alive on cuda/unknown (stays 300)', async () => {
+  it('does NOT clamp a RAM-heavy model\'s warm keep_alive on cuda/unknown (stays at the 30s fallback)', async () => {
     setLastKnownVram({ totalMb: 8188 }); // -> accelerator: 'cuda'
     try {
       fetchMock.mockResolvedValue(new Response('', { status: 200 }));
       await warmOllamaModel('qwen3.5:9b');
       const body = generateCallBody();
-      expect(body?.keep_alive).toBe(300);
+      expect(body?.keep_alive).toBe(30);
     } finally {
       setLastKnownVram(null); // reset to 'unknown'
     }
@@ -404,9 +404,9 @@ describe('POST /api/ollama/load', () => {
     const body = generateCallBody();
     expect(body?.prompt).toBe('');
     expect(body?.stream).toBe(false);
-    // 300 = the coded DEFAULT_KEEP_ALIVE_SECONDS for the default analysis
-    // model qwen3.5:4b (analyzer/ollama.ts), resolved via resolveKeepAliveSeconds.
-    expect(body?.keep_alive).toBe(300);
+    // 30 = the flat DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS fallback for the default
+    // analysis model qwen3.5:4b (no override), resolved via resolveKeepAliveSeconds.
+    expect(body?.keep_alive).toBe(30);
     /* CRITICAL: warming must use the same num_ctx AND num_gpu the
        analyzer's runStage path passes (ANALYZER_NUM_CTX, ANALYZER_NUM_GPU
        in server/src/analyzer/ollama.ts). Either drifting triggers a
@@ -449,8 +449,8 @@ describe('POST /api/ollama/load', () => {
     expect(res.status).toBe(200);
     const body = generateCallBody();
     expect(body?.model).toBe('llama3.1:8b');
-    // 300 = the coded DEFAULT_KEEP_ALIVE_SECONDS for llama3.1:8b (analyzer/ollama.ts).
-    expect(body?.keep_alive).toBe(300);
+    // 30 = the flat fallback (no override) for llama3.1:8b, via resolveKeepAliveSeconds.
+    expect(body?.keep_alive).toBe(30);
     expect((body?.options as { num_ctx?: number })?.num_ctx).toBe(32768);
     expect((body?.options as { num_gpu?: number })?.num_gpu).toBe(999);
   });

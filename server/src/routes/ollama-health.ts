@@ -421,7 +421,7 @@ export async function warmOllamaModel(
         prompt: '',
         /* An explicit Load means "hold this model resident" — so warm with the
            model's configured keep-alive, but FLOOR a resolved 0 up to 30s.
-           keepAliveFor() returns 0 for any tag not in DEFAULT_KEEP_ALIVE_SECONDS
+           keepAliveFor() returns 0 only for a RAM-heavy model on CPU or an explicit 0 override
            without a user override (e.g. a custom `qwen36-cw-*` quant), and 0 is
            Ollama's evict-immediately idiom — warming with it loaded the model and
            dropped it in the same call, so the Load button looked dead and the

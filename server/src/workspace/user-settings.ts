@@ -243,8 +243,8 @@ export const userSettingsSchema = z.object({
   tourCompletedAt: z.string().nullable().optional(),
   /* Per-model Ollama analyzer keep-alive (seconds). Sparse override map:
      model tag → seconds (0 = unload immediately, -1 = pin, N = resident N s).
-     Absent tags fall through to DEFAULT_KEEP_ALIVE_SECONDS in analyzer/ollama.ts
-     and then to 0. NOT in FORBIDDEN_KEYS — the general Account/Model-Manager
+     Absent tags fall through to the flat DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS
+     (30s) in analyzer/ollama.ts. NOT in FORBIDDEN_KEYS — the general Account/Model-Manager
      PUT is the sanctioned write path (mirrors configOverrides). Read
      synchronously by resolveKeepAliveSeconds. Optional-with-default so legacy
      files load unchanged. */
@@ -328,7 +328,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   /* config-override store — empty by default; populated by writeConfigOverride. */
   configOverrides: {},
   /* Per-model analyzer keep-alive — empty by default; every model falls
-     through to its coded default (see DEFAULT_KEEP_ALIVE_SECONDS). */
+     through to the flat DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS (30s). */
   analyzerKeepAliveByModel: {},
   /* srv-2 — auto-backup ON by default (disaster recovery without manual
      intervention), daily, keep the last 14 snapshots. Flip in lockstep with

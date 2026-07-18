@@ -127,17 +127,18 @@ export function resolveOllamaRetryTemperature(): number {
   return configValue<number>('analyzer.ollama.retryTemperature');
 }
 
-/* Coded keep-alive defaults (seconds) for the analyzer models Castwright
-   supports out of the box. Keyed on the NORMALIZED (bare, no ':latest') tag.
-   User overrides in userSettings.analyzerKeepAliveByModel win; anything not
-   listed and not overridden falls to 0 (unload immediately). 300 = the former
-   global '5m' the retired RESIDENT_MODELS allowlist applied. */
-const DEFAULT_KEEP_ALIVE_SECONDS: Record<string, number> = {
-  'qwen3.5:4b': 300,
-  'qwen3.5:9b': 300,
-  'llama3.1:8b': 300,
-  'gemma4-e4b-8gb': 300,
-};
+/* Fallback keep-alive (seconds) for any analyzer model WITHOUT an explicit
+   per-model override in userSettings.analyzerKeepAliveByModel. Deliberately a
+   single flat value — the previous per-model curated map (qwen3.5:4b→300 etc.)
+   was removed: it left every UNCURATED tag (a Castwright fine-tune like
+   qwen36-cw-iq4-32k, any pulled community model) falling through to 0, which is
+   Ollama's EVICT-IMMEDIATELY idiom — so the analyzer unloaded after every
+   /api/chat call and cold-reloaded on the next, thrashing a whole run. 30s
+   comfortably bridges the gap between back-to-back attribution calls (which
+   refresh the timer) so the model stays resident through a run, while still
+   idling out ~30s after the run ends. Raise per-model in Model Manager for a
+   longer hold; 0 (evict) / -1 (pin) remain available as explicit overrides. */
+const DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS = 30;
 
 /* Models unsafe to keep resident on CPU (would pin ~6.4 GB system RAM for the
    whole window). Clamped to 0 on a CPU-only box regardless of the configured
@@ -151,14 +152,14 @@ export function normalizeModelTag(tag: string): string {
 }
 
 /** Resolved keep-alive (seconds) for `model`: user override (raw or normalized
-    key) → coded default (normalized) → 0. Reads the settings cache synchronously
-    so it is safe at the request-body build site. */
+    key) → flat DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS (30). Reads the settings
+    cache synchronously so it is safe at the request-body build site. */
 export function resolveKeepAliveSeconds(model: string): number {
   const map = getCachedUserSettings().analyzerKeepAliveByModel ?? {};
   const norm = normalizeModelTag(model);
   const override = map[model] ?? map[norm];
   if (override !== undefined) return override;
-  return DEFAULT_KEEP_ALIVE_SECONDS[norm] ?? 0;
+  return DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS;
 }
 
 /** True when the user has an explicit override for `model` (either key form). */
@@ -573,9 +574,9 @@ export class OllamaAnalyzer implements Analyzer {
          extra fields. The existing validation-retry loop below still guards
          against semantic violations the schema can't express. */
       format: responseFormat,
-      /* Per-model keep_alive — see keepAliveFor + DEFAULT_KEEP_ALIVE_SECONDS
-         above; a user override in analyzerKeepAliveByModel wins over the
-         coded default. */
+      /* Per-model keep_alive — see keepAliveFor + resolveKeepAliveSeconds
+         above; a user override in analyzerKeepAliveByModel wins over the flat
+         DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS fallback. */
       keep_alive: keepAliveFor(this.model, getLastKnownVram().accelerator),
       /* Suppress qwen3.5's thinking tokens — they'd appear as
          `<think>…</think>` ahead of the JSON and break the parser. Ollama

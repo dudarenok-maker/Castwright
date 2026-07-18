@@ -193,9 +193,10 @@ describe('OllamaAnalyzer — happy path streaming', () => {
      * the string sentinel. */
     expect(body.format).not.toBe('json');
     expect(typeof body.format).toBe('object');
-    /* qwen3.5:9b resolves to its coded default keep-alive (300 s) — see
-       DEFAULT_KEEP_ALIVE_SECONDS in ollama.ts; unknown tags get 0. */
-    expect(body.keep_alive).toBe(300);
+    /* qwen3.5:9b has no override, so it resolves to the flat 30s fallback
+       (DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS) — the curated per-model map was
+       removed. accel is 'unknown' here so the RAM-heavy CPU clamp doesn't fire. */
+    expect(body.keep_alive).toBe(30);
     expect(body.options.num_ctx).toBe(32768);
     /* Pin all layers to GPU — see ANALYZER_NUM_GPU in ollama.ts. 999 is
        the standard "all layers" idiom; without this, Ollama auto-splits
@@ -253,14 +254,18 @@ describe('OllamaAnalyzer — analyzer slot (limiter + model lease)', () => {
 describe('OllamaAnalyzer — keep_alive policy (per-model seconds)', () => {
   afterEach(() => _resetUserSettingsCache());
 
-  it('returns the coded default (300) for supported models, 0 for unknown', async () => {
+  it('returns the flat 30s fallback for ANY model without an override (curated map removed)', async () => {
     const { keepAliveFor } = await import('./ollama.js');
-    expect(keepAliveFor('qwen3.5:4b')).toBe(300);
-    expect(keepAliveFor('llama3.1:8b')).toBe(300);
-    expect(keepAliveFor('qwen3.5:9b')).toBe(300);
-    expect(keepAliveFor('gemma4-e4b-8gb')).toBe(300);
-    expect(keepAliveFor('gemma4-e4b-8gb:latest')).toBe(300); // normalized to bare
-    expect(keepAliveFor('placeholder:test-7b')).toBe(0);
+    // Formerly-curated tags no longer get a special 300 — they share the fallback.
+    expect(keepAliveFor('qwen3.5:4b')).toBe(30);
+    expect(keepAliveFor('llama3.1:8b')).toBe(30);
+    expect(keepAliveFor('qwen3.5:9b')).toBe(30);
+    expect(keepAliveFor('gemma4-e4b-8gb')).toBe(30);
+    expect(keepAliveFor('gemma4-e4b-8gb:latest')).toBe(30); // normalized to bare
+    // The regression that started this: an uncurated fine-tune used to fall to 0
+    // (evict-per-call). It now gets the 30s fallback so a run stays resident.
+    expect(keepAliveFor('qwen36-cw-iq4-32k:latest')).toBe(30);
+    expect(keepAliveFor('placeholder:test-7b')).toBe(30);
   });
 
   it('lets a user override win, including -1 (pin) and 0 (evict)', async () => {
@@ -270,7 +275,7 @@ describe('OllamaAnalyzer — keep_alive policy (per-model seconds)', () => {
       analyzerKeepAliveByModel: { 'qwen36-castwright:latest': 600, 'qwen3.5:4b': 0, 'llama3.1:8b': -1 },
     });
     expect(keepAliveFor('qwen36-castwright:latest')).toBe(600);
-    expect(keepAliveFor('qwen3.5:4b')).toBe(0); // override beats the 300 default
+    expect(keepAliveFor('qwen3.5:4b')).toBe(0); // override beats the 30s fallback
     expect(keepAliveFor('llama3.1:8b')).toBe(-1);
   });
 
@@ -283,7 +288,7 @@ describe('OllamaAnalyzer — keep_alive policy (per-model seconds)', () => {
     expect(keepAliveFor('qwen3.5:9b', 'cuda')).toBe(900);
     expect(keepAliveFor('qwen3.5:9b', 'cpu')).toBe(0);
     expect(keepAliveFor('qwen3.5:9b', 'unknown')).toBe(900);
-    expect(keepAliveFor('qwen3.5:4b', 'cpu')).toBe(300); // small model unaffected
+    expect(keepAliveFor('qwen3.5:4b', 'cpu')).toBe(30); // small model → fallback, unaffected by CPU clamp
   });
 });
 

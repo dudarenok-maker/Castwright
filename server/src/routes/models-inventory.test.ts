@@ -372,7 +372,7 @@ describe('buildModelInventory', () => {
     const supported = res.items.find((i) => i.id === 'ollama:qwen3.5:4b');
     expect(custom?.keepAliveSeconds).toBe(300);
     expect(custom?.keepAliveIsOverride).toBe(true);
-    expect(supported?.keepAliveSeconds).toBe(300); // coded default
+    expect(supported?.keepAliveSeconds).toBe(30); // flat fallback (no override)
     expect(supported?.keepAliveIsOverride).toBe(false);
   });
 });
