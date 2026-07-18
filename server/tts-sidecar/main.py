@@ -1884,6 +1884,62 @@ def probe_capacity() -> list[dict]:
     return devices
 
 
+# Peak-under-load VRAM seeds (MB) per engine/tier — mirrors the maintained
+# table in docs/local-llm.md (parity enforced by test_footprints.py). These
+# are the true DECODE PEAK, not the smaller resident/weight size: e.g. qwen's
+# 6144 is the measured ~5.6 GB decode peak rounded up, not the ~4 GB resident
+# footprint — do not "correct" it down.
+SEED_FOOTPRINTS_MB: dict[str, int] = {
+    "kokoro": 1200,
+    "qwen": 6144,
+    "qwen.1.7b": 7168,
+    "coqui": 3584,
+    "asr": 400,
+    "spk": 200,
+}
+
+# A wide Qwen batch (large tokenBudget) has a higher true decode peak than the
+# default-config seed above.
+_QWEN_WIDE_TOKEN_BUDGET = 4800
+_QWEN_WIDE_PEAK_MB = 7168
+
+
+class FootprintTable:
+    """Per-(engine, model, config) peak-under-load VRAM estimate that
+    capacity-aware admission reserves. `peak_mb` returns `max(seed, learned)`
+    for the key; `record` ratchets the learned estimate up only — a lower
+    on-box observation never lowers what's reserved next time."""
+
+    def __init__(self) -> None:
+        self._learned: dict[str, int] = {}
+
+    @staticmethod
+    def _key(engine: str, model: Optional[str], cfg: Optional[dict]) -> str:
+        model_str = (model or "").lower()
+        cfg = cfg or {}
+        if engine == "qwen" and "1.7b" in model_str:
+            return "qwen.1.7b"
+        return engine
+
+    @staticmethod
+    def _seed_mb(key: str, engine: str, cfg: Optional[dict]) -> int:
+        seed = SEED_FOOTPRINTS_MB.get(key, 0)
+        cfg = cfg or {}
+        if engine == "qwen" and key == "qwen" and cfg.get("tokenBudget", 0) >= _QWEN_WIDE_TOKEN_BUDGET:
+            seed = max(seed, _QWEN_WIDE_PEAK_MB)
+        return seed
+
+    def peak_mb(self, engine: str, model: Optional[str], cfg: Optional[dict] = None) -> int:
+        key = self._key(engine, model, cfg)
+        seed = self._seed_mb(key, engine, cfg)
+        learned = self._learned.get(key, 0)
+        return max(seed, learned)
+
+    def record(self, engine: str, model: Optional[str], cfg: Optional[dict], observed_mb: int) -> None:
+        key = self._key(engine, model, cfg)
+        self._learned[key] = max(self._learned.get(key, 0), observed_mb)
+
+
 def _kokoro_provider_options(device: Optional[str], providers: list[str]):
     """ORT provider_options for an indexed Kokoro CUDA pin (KOKORO_DEVICE=cuda:1).
 
