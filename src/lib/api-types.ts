@@ -1739,21 +1739,16 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GPU semaphore state for the top-bar pill
-         * @description Returns the live state of the server's GpuSemaphore — the FIFO
-         *     queue that serialises GPU-heavy operations (Ollama analyzer
-         *     chat completions + sidecar /synthesize) so two parallel Claude
-         *     Code sessions don't fight over VRAM on an 8 GB GPU.
+         * GPU capacity-wait queue state for the top-bar pill
+         * @description Returns the number of sidecar synth ops currently parked behind a
+         *     no-capacity 503 (waiting for VRAM to free up — vram-aware placement
+         *     admission now lives in the sidecar itself), plus a live per-device
+         *     VRAM reading.
          *
          *     Polled by `useTtsLifecycle()` on the same 30 s cadence as
-         *     `/api/sidecar/health`. When `depth > 0` the frontend prefixes
+         *     `/api/sidecar/health`. When `queueDepth > 0` the frontend prefixes
          *     the top-bar pill label with `"GPU busy · N waiting ·"` so the
          *     waiting session can see why it's not starting.
-         *
-         *     `max` is the configured `GPU_CONCURRENCY` ceiling (default 1,
-         *     configurable via server env var). `inFlight` is bounded by
-         *     `max`; `depth` is the number of waiters queued behind. The
-         *     endpoint is cheap (no I/O) and safe to poll.
          */
         get: operations["getGpuQueueState"];
         put?: never;
@@ -4271,13 +4266,21 @@ export interface components {
             /** @description True once revoked — the guard then rejects its token. */
             revoked: boolean;
         };
+        /** @description One compute device as read from server/src/gpu/capacity-probe.ts (sidecar /capacity, or an nvidia-smi/rocm-smi fallback). */
+        GpuQueueDevice: {
+            /** @enum {string} */
+            kind: "cuda" | "rocm" | "mps" | "cpu";
+            index: number;
+            /** @description e.g. 'cuda:0'. */
+            label: string;
+            totalMb: number;
+            freeMb: number;
+        };
         GpuQueueState: {
-            /** @description Number of acquires waiting in the FIFO queue behind the in-flight ops. The frontend pill renders 'GPU busy · N waiting ·' when this is > 0. */
-            depth: number;
-            /** @description Number of GPU ops currently holding a slot (analyzer + sidecar combined). Capped at `max`. */
-            inFlight: number;
-            /** @description Configured concurrency ceiling — the GPU_CONCURRENCY env var (default 1). Bump only after measuring VRAM headroom on the target GPU. */
-            max: number;
+            /** @description Number of sidecar synth ops currently parked behind a no-capacity 503, waiting for VRAM to free up. The frontend pill renders 'GPU busy · N waiting ·' when this is > 0. */
+            queueDepth: number;
+            /** @description Live per-device VRAM reading at response time. */
+            devices: components["schemas"]["GpuQueueDevice"][];
         };
         /**
          * @description One finished chapter's own throughput, for the history ring. `rtf` is

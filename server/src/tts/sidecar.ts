@@ -69,6 +69,20 @@ const GPU_CAPACITY_MAX_ATTEMPTS = (() => {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 30;
 })();
 
+/* GPU-queue status surface (server/src/routes/gpu-queue.ts) — counts ops
+   currently parked in the no-capacity poll-wait below, giving the frontend
+   "Queued (N ahead)" pill something to read now that gpuSemaphore is gone.
+   Incremented just before an op's first poll wait; decremented once that op
+   leaves the wait, however it resolves (succeeds, evicts-then-retries-ok, or
+   throws NoCapacityError). */
+let _capacityWaiters = 0;
+
+/** Current count of ops parked in the no-capacity poll-wait. Read by
+    server/src/routes/gpu-queue.ts for the /api/gpu/queue payload. */
+export function getCapacityWaiterCount(): number {
+  return _capacityWaiters;
+}
+
 /* TTS synth legitimately runs for minutes — a wide Qwen batch (plan 136) can
    exceed 5 minutes of GPU decode, and the sidecar is NON-streaming so it holds
    the connection open computing the whole batch before sending any response
@@ -314,38 +328,47 @@ export class SidecarTtsProvider implements TtsProvider {
     signal?: AbortSignal,
   ): Promise<Response> {
     let evicted = false;
-    for (let attempt = 0; ; attempt++) {
-      const response = await this.post(path, body, signal);
-      if (response.ok) return response;
+    let waiting = false;
+    try {
+      for (let attempt = 0; ; attempt++) {
+        const response = await this.post(path, body, signal);
+        if (response.ok) return response;
 
-      const noCap = await parseNoCapacity(response.clone());
-      if (!noCap) {
-        // Poisoned / other 5xx / 4xx — classify + throw exactly as before.
-        // throwForResponse always throws; the trailing `throw` is dead code
-        // that only exists so TS narrows `noCap` to non-null below.
-        await throwForResponse(response);
-        throw new Error('unreachable');
+        const noCap = await parseNoCapacity(response.clone());
+        if (!noCap) {
+          // Poisoned / other 5xx / 4xx — classify + throw exactly as before.
+          // throwForResponse always throws; the trailing `throw` is dead code
+          // that only exists so TS narrows `noCap` to non-null below.
+          await throwForResponse(response);
+          throw new Error('unreachable');
+        }
+
+        const devices = await this.capacityProbe.read({ fresh: true });
+        const freeMb =
+          devices.find((d) => d.kind !== 'cpu' && `${d.kind}:${d.index}` === noCap.deviceKey)
+            ?.freeMb ?? 0;
+
+        if (
+          !evicted &&
+          !this.isAnalysisInFlight() &&
+          (await this.analyzerEvictWouldHelp(noCap.neededMb, freeMb))
+        ) {
+          await this.evictOllama();
+          evicted = true;
+          continue; // immediate retry after freeing the analyzer
+        }
+
+        if (attempt + 1 >= this.maxCapacityAttempts) {
+          throw new NoCapacityError(this.engine, noCap.neededMb, noCap.deviceKey);
+        }
+        if (!waiting) {
+          waiting = true;
+          _capacityWaiters++;
+        }
+        await abortableDelay(this.capacityPollMs, signal); // bounded wait; rejects if the caller aborts
       }
-
-      const devices = await this.capacityProbe.read({ fresh: true });
-      const freeMb =
-        devices.find((d) => d.kind !== 'cpu' && `${d.kind}:${d.index}` === noCap.deviceKey)
-          ?.freeMb ?? 0;
-
-      if (
-        !evicted &&
-        !this.isAnalysisInFlight() &&
-        (await this.analyzerEvictWouldHelp(noCap.neededMb, freeMb))
-      ) {
-        await this.evictOllama();
-        evicted = true;
-        continue; // immediate retry after freeing the analyzer
-      }
-
-      if (attempt + 1 >= this.maxCapacityAttempts) {
-        throw new NoCapacityError(this.engine, noCap.neededMb, noCap.deviceKey);
-      }
-      await abortableDelay(this.capacityPollMs, signal); // bounded wait; rejects if the caller aborts
+    } finally {
+      if (waiting) _capacityWaiters--;
     }
   }
 }

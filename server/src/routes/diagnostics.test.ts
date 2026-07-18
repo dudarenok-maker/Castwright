@@ -58,7 +58,7 @@ beforeEach(() => {
     modelPulled: true,
     modelResident: true,
   });
-  readGpuQueueState.mockReturnValue({ depth: 0, inFlight: 0, max: 1, budget: 0, usedTokens: 0 });
+  readGpuQueueState.mockResolvedValue({ queueDepth: 0, devices: [] });
   probeFfmpeg.mockReturnValue({ ffmpeg: true, ffprobe: true });
   probeDiskSpace.mockResolvedValue({ status: 'ok', freeGb: 142, path: '/workspace' });
   getResolvedAnalysisEngine.mockReturnValue('local');

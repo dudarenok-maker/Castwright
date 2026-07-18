@@ -1,43 +1,34 @@
-/* GET /api/gpu/queue — surfaces the GpuSemaphore's current state so the
-   frontend top-bar pill can prefix "Queued (N ahead) ·" when a session
-   is waiting behind another's analyzer or sidecar call. Polled on the
-   same 30 s cadence as /api/sidecar/health by useTtsLifecycle().
+/* GET /api/gpu/queue — surfaces GPU queue depth + live per-device VRAM so the
+   frontend top-bar pill can prefix "Queued (N ahead) ·" when a session is
+   waiting behind another's synth call for GPU capacity. Polled on the same
+   30 s cadence as /api/sidecar/health by useTtsLifecycle().
 
-   Concerns are deliberately split from /api/sidecar/health: the
-   semaphore covers BOTH analyzer (Ollama chat) and sidecar
-   (/synthesize) ops, so a sidecar-health response can't represent its
-   full state. A separate endpoint keeps each surface answering exactly
-   one question. */
+   vram-aware placement (Task 10) migrated this off the deleted gpuSemaphore:
+   `queueDepth` now comes from the sidecar client's no-capacity poll-wait
+   counter (server/src/tts/sidecar.ts, getCapacityWaiterCount()), and
+   `devices` is a live read of server/src/gpu/capacity-probe.ts. */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { gpuSemaphore } from '../gpu/semaphore.js';
+import { getCapacityWaiterCount } from '../tts/sidecar.js';
+import { capacityProbe, type ComputeDevice } from '../gpu/capacity-probe.js';
 
 export const gpuQueueRouter = Router();
 
 export interface GpuQueueState {
-  depth: number;
-  inFlight: number;
-  max: number;
-  budget: number;
-  usedTokens: number;
+  queueDepth: number;
+  devices: ComputeDevice[];
 }
 
-/* Pure synchronous read of the GpuSemaphore singleton. Extracted so the
-   /api/diagnostics aggregator (fs-18) can reuse it in-process. */
-export function readGpuQueueState(): GpuQueueState {
+/* Extracted so the /api/diagnostics aggregator (fs-18) can reuse it
+   in-process. */
+export async function readGpuQueueState(): Promise<GpuQueueState> {
   return {
-    depth: gpuSemaphore.queueDepth,
-    inFlight: gpuSemaphore.inFlight,
-    /* `max` is the legacy field the frontend pill reads; kept aliased to the
-       token budget so the existing shape never breaks. `budget`/`usedTokens`
-       are additive — the VRAM-weighted view for diagnostics. */
-    max: gpuSemaphore.maxConcurrency,
-    budget: gpuSemaphore.budget,
-    usedTokens: gpuSemaphore.usedTokens,
+    queueDepth: getCapacityWaiterCount(),
+    devices: await capacityProbe.read(),
   };
 }
 
-gpuQueueRouter.get('/queue', (_req: Request, res: Response) => {
-  res.json(readGpuQueueState());
+gpuQueueRouter.get('/queue', async (_req: Request, res: Response) => {
+  res.json(await readGpuQueueState());
 });

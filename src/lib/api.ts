@@ -7092,17 +7092,26 @@ export async function mockCreatePairSession(_label?: string): Promise<PairSessio
   };
 }
 
-/* GPU semaphore state — surfaces the depth/inFlight/max triple from the
-   server's GpuSemaphore so the top-bar pill can prefix "GPU busy · N waiting ·"
-   when a session is waiting behind another's analyzer / sidecar call.
-   See server/src/gpu/semaphore.ts + server/src/routes/gpu-queue.ts. */
+/* GPU queue state — surfaces the capacity-wait depth + live per-device VRAM
+   from the server so the top-bar pill can prefix "GPU busy · N waiting ·"
+   when a session is waiting behind another's sidecar call for GPU capacity.
+   See server/src/tts/sidecar.ts (getCapacityWaiterCount) +
+   server/src/gpu/capacity-probe.ts + server/src/routes/gpu-queue.ts. */
+export interface GpuQueueDevice {
+  kind: 'cuda' | 'rocm' | 'mps' | 'cpu';
+  index: number;
+  label: string;
+  totalMb: number;
+  freeMb: number;
+}
+
 export interface GpuQueueState {
-  /** Number of acquires waiting in the FIFO queue behind in-flight ops. */
-  depth: number;
-  /** Number of GPU ops currently holding a slot (analyzer + sidecar combined). */
-  inFlight: number;
-  /** Configured concurrency ceiling (GPU_CONCURRENCY env var, default 1). */
-  max: number;
+  /** Number of synth ops currently parked behind a no-capacity 503, waiting
+      for VRAM to free up. */
+  queueDepth: number;
+  /** Live per-device VRAM reading, same shape the sidecar's /capacity
+      reports. */
+  devices: GpuQueueDevice[];
 }
 
 async function realGetGpuQueueState(): Promise<GpuQueueState> {
@@ -7118,13 +7127,13 @@ async function realGetGpuQueueState(): Promise<GpuQueueState> {
 }
 
 async function mockGetGpuQueueState(): Promise<GpuQueueState> {
-  /* Mocks don't run a real semaphore — generation is local + synchronous
-     under VITE_USE_MOCKS=true, so the queue is always empty. The shape
-     stays contract-correct so any future visual regression on the pill's
-     "GPU busy · N waiting ·" prefix can be exercised by stubbing the api
-     surface in tests. */
+  /* Mocks don't run a real capacity-wait loop — generation is local +
+     synchronous under VITE_USE_MOCKS=true, so the queue is always empty.
+     The shape stays contract-correct so any future visual regression on
+     the pill's "GPU busy · N waiting ·" prefix can be exercised by
+     stubbing the api surface in tests. */
   await wait(20);
-  return { depth: 0, inFlight: 0, max: 1 };
+  return { queueDepth: 0, devices: [] };
 }
 
 /* fs-18 — one-shot diagnostics board for the Admin watch console. Mirrors the

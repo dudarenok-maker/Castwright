@@ -93,7 +93,7 @@ export async function buildDiagnostics(opts?: { skip?: CheckId[] }): Promise<Dia
     body: () => Promise<DiagnosticsCheck> | DiagnosticsCheck;
   }[] = [
     // GPU / VRAM headroom — derived from the sidecar's torch CUDA figures.
-    { id: 'gpu', label: 'GPU / VRAM', body: () => {
+    { id: 'gpu', label: 'GPU / VRAM', body: async () => {
       if (sidecar.status !== 'reachable') {
         return {
           id: 'gpu',
@@ -119,12 +119,12 @@ export async function buildDiagnostics(opts?: { skip?: CheckId[] }): Promise<Dia
           detail: device ? `device: ${device}` : 'CPU — no GPU detected',
         };
       }
-      const queue = readGpuQueueState();
+      const queue = await readGpuQueueState();
       const ratio = reserved != null && total != null && total > 0 ? reserved / total : null;
       const status: CheckStatus = ratio != null && ratio > 0.85 ? 'warn' : 'ok';
       const detail =
         `cuda · ${fmtGb(reserved)} / ${fmtGb(total)} GB reserved` +
-        (queue.inFlight > 0 ? ` · ${queue.inFlight} in-flight` : '');
+        (queue.queueDepth > 0 ? ` · ${queue.queueDepth} queued` : '');
       return {
         id: 'gpu',
         label: 'GPU / VRAM',

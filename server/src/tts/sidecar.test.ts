@@ -17,7 +17,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { fetch as undiciFetch } from 'undici';
-import { SidecarTtsProvider } from './sidecar.js';
+import { SidecarTtsProvider, getCapacityWaiterCount } from './sidecar.js';
 import { NoCapacityError } from './tts-errors.js';
 import { isTransient } from './retry.js';
 import type { SynthesizeInput } from './index.js';
@@ -580,6 +580,34 @@ describe('capacity-aware admission retry (vram-aware placement, Task 8b)', () =>
     expect(result.pcm.equals(Buffer.from([0x01, 0x02, 0x03, 0x04]))).toBe(true);
   });
 
+  it('(c continued) getCapacityWaiterCount() reflects an op parked in the poll-wait, and resets once it resolves', async () => {
+    expect(getCapacityWaiterCount()).toBe(0);
+    let calls = 0;
+    stubFetch(async () => {
+      calls += 1;
+      if (calls === 2) {
+        // The retry after the poll wait — the waiter count should already be up.
+        expect(getCapacityWaiterCount()).toBe(1);
+      }
+      return calls === 1 ? noCapacityResponse(2_000, 'cuda:0') : okResponse();
+    });
+    const provider = new SidecarTtsProvider({
+      url: 'http://localhost:6006/',
+      engine: 'coqui',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
+      evictOllama: vi.fn(async () => {}),
+      analyzerEvictWouldHelp: vi.fn(async () => false), // no eviction path — forces the poll wait
+      isAnalysisInFlight: () => false,
+      capacityPollMs: 1,
+      maxCapacityAttempts: 5,
+    });
+
+    await provider.synthesize(SYNTH_INPUT);
+
+    expect(calls).toBe(2);
+    expect(getCapacityWaiterCount()).toBe(0);
+  });
+
   it('(d) noCapacity 503 persisting past maxCapacityAttempts throws NoCapacityError, not treated as transient', async () => {
     stubFetch(async () => noCapacityResponse(4_000, 'cuda:0'));
     const provider = new SidecarTtsProvider({
@@ -604,6 +632,7 @@ describe('capacity-aware admission retry (vram-aware placement, Task 8b)', () =>
     expect(err.deviceKey).toBe('cuda:0');
     expect(err.message).toMatch(/Not enough GPU memory for qwen \(4000MB\)/);
     expect(isTransient(err)).toBe(false);
+    expect(getCapacityWaiterCount()).toBe(0);
   });
 
   it('(e) a poisoned 503 (not a noCapacity shape) still goes through throwForResponse, never swallowed as noCapacity', async () => {
