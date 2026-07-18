@@ -117,7 +117,14 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
   chapter into a few more calls; typical chapters stay one call. (Refs #1682)
 - Per-model Ollama analyzer keep-alive (seconds) in the Model Manager; retired
   the hardcoded `RESIDENT_MODELS` allowlist and the `analyzer.ollama.keepAlive`
-  knob (#1696).
+  knob (#1696). In-cycle fix: the manual **Load** on the Analysing screen was
+  warming with the resolved keep-alive, which is `0` for any tag not in the
+  coded defaults (e.g. a custom `qwen36-cw-*` quant) — and `0` is Ollama's
+  evict-immediately idiom, so Load loaded-then-dropped the model in the same
+  call and the pill snapped straight back to "Analyzer idle." An explicit Load
+  now floors a resolved `0` up to a 30s hold (`floorWarmKeepAlive` in
+  `ollama-health.ts`) so the model actually stays resident and analysis can
+  start; the runtime chat path (and its CPU clamp) is unchanged. (#1706)
 - **Fix (keep-alive, pre-release): the per-model keep-alive field now saves on
   Enter and confirms with a "Saved" flash.** The field was a `blur`-only
   autosave with no Save button of its own — typing a value and pressing Enter

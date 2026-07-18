@@ -364,10 +364,20 @@ async function probeOllamaReachable(
   }
 }
 
-/** Warm `model` into VRAM via the keepAliveFor()+empty-prompt idiom
-    (the model's configured keep-alive, RAM-heavy-clamped on CPU, not a
-    hardcoded '5m'), using the
-    same num_ctx/num_gpu the analyzer's runStage path uses (see the CRITICAL
+/* Minimum keep-alive (seconds) an explicit warm/Load holds a model for. A
+   resolved 0 (unknown tag / runtime CPU clamp) is floored to this so Load can
+   never evict-on-warm; a positive per-model value is honored as-is, and a
+   negative keep-forever override is left untouched. */
+const WARM_MIN_KEEP_ALIVE_SECONDS = 30;
+
+function floorWarmKeepAlive(resolvedSeconds: number): number {
+  return resolvedSeconds === 0 ? WARM_MIN_KEEP_ALIVE_SECONDS : resolvedSeconds;
+}
+
+/** Warm `model` into VRAM via the keepAliveFor()+empty-prompt idiom (the
+    model's configured keep-alive, floored to WARM_MIN_KEEP_ALIVE_SECONDS when it
+    resolves to 0 so an explicit Load always holds — not a hardcoded '5m'), using
+    the same num_ctx/num_gpu the analyzer's runStage path uses (see the CRITICAL
     note above). Extracted so the script-review job can warm the analyzer model
     in-process, not just via the /load route below.
 
@@ -409,7 +419,16 @@ export async function warmOllamaModel(
       {
         model,
         prompt: '',
-        keep_alive: keepAliveFor(model, getLastKnownVram().accelerator),
+        /* An explicit Load means "hold this model resident" — so warm with the
+           model's configured keep-alive, but FLOOR a resolved 0 up to 30s.
+           keepAliveFor() returns 0 for any tag not in DEFAULT_KEEP_ALIVE_SECONDS
+           without a user override (e.g. a custom `qwen36-cw-*` quant), and 0 is
+           Ollama's evict-immediately idiom — warming with it loaded the model and
+           dropped it in the same call, so the Load button looked dead and the
+           pill snapped back to idle. A short positive hold bridges the gap until
+           analysis starts (which then sets its own per-call keep-alive). Negative
+           values (keep-forever overrides) are preserved as-is. */
+        keep_alive: floorWarmKeepAlive(keepAliveFor(model, getLastKnownVram().accelerator)),
         stream: false,
         options: { num_ctx: resolveAnalyzerNumCtx(), num_gpu: resolveAnalyzerNumGpu() },
       },

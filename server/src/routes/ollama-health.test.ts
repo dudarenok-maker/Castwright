@@ -347,13 +347,32 @@ describe('warmOllamaModel (Part 2 — patient warm)', () => {
     expect(body?.keep_alive).toBe(1800);
   });
 
-  it('clamps a RAM-heavy model\'s warm keep_alive to 0 on a CPU accelerator (not the unclamped 300)', async () => {
+  it('floors a custom local tag\'s warm keep_alive to 30s when it resolves to 0 (Load must HOLD, not evict)', async () => {
+    /* Regression: qwen36-cw-* is a custom local tag — not in
+       DEFAULT_KEEP_ALIVE_SECONDS and with no user override, so
+       resolveKeepAliveSeconds() returns 0. But 0 is Ollama's EVICT-now idiom
+       (see the /unload route), so the per-model warm change (7b87221f) made the
+       Load button load-then-immediately-unload: the pill snapped back to
+       "Analyzer idle" and analysis never started. An explicit Load means "hold
+       it resident" — the warm floor turns a resolved 0 into 30s. */
+    fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+    await warmOllamaModel('qwen36-cw-iq3-64k:latest');
+    const body = generateCallBody();
+    expect(body?.keep_alive).toBe(30);
+  });
+
+  it('floors a RAM-heavy model\'s warm keep_alive to 30s on CPU too — explicit Load overrides the runtime CPU clamp', async () => {
+    /* The RAM_HEAVY-on-CPU clamp (keepAliveFor → 0) is a runtime-chat safety
+       rail so a big model isn't pinned in system RAM for the whole 300s window.
+       On an EXPLICIT Load the user is asking to hold it, so the warm floor
+       still applies (30s, not the runtime-chat 0) — a short, deliberate hold
+       rather than a no-op Load. */
     setLastKnownVram({ totalMb: null }); // -> accelerator: 'cpu' (see vram-state.ts)
     try {
       fetchMock.mockResolvedValue(new Response('', { status: 200 }));
       await warmOllamaModel('qwen3.5:9b');
       const body = generateCallBody();
-      expect(body?.keep_alive).toBe(0);
+      expect(body?.keep_alive).toBe(30);
     } finally {
       setLastKnownVram(null); // reset to 'unknown' so later tests aren't affected
     }
