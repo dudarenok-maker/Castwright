@@ -2,42 +2,54 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **⚠ ROUND-2 HARDENING — these override the task bodies below where they differ.**
-> A second adversarial gate found real holes; the corrected mechanics live in the
-> spec, and these overrides win over any stale task text:
+> **⚠ ROUND-3 HARDENING (kickoff gate DONE) — these override the task bodies below
+> where they differ, and supersede round-2 items #5 and #8.** The third gate
+> verified the sidecar locking against `main.py` and reshaped the concurrency model;
+> the corrected mechanics live in the spec (§Locking & concurrency, §Evict & wake,
+> Resolved decisions). Where a task body still says `_synth_lock`-wrapped admission
+> or an `_admission_lock`, these win:
+>
+> **Still binding from round 2:**
 > 1. **Seed is the DECODE PEAK, not 4 GB.** `qwen` (0.6B @ default 32/3600) seed =
->    **6144** (measured ~5.6 GB, rounded up), not 4096 — the operator's "≈4 GB" was
->    resident size. The **primary acceptance test drives the real `FootprintTable`**,
+>    **6144**; the **primary acceptance test drives the real `FootprintTable`**,
 >    never an injected `peak=5600`.
 > 2. **Thread `batchWidth`+`tokenBudget`** from Node into BOTH `/synthesize` and
->    `/synthesize-batch` so a wide Qwen batch reserves its true (wider) peak.
-> 3. **Node computes the evict decision**, not the sidecar. The 503 body is
->    `{noCapacity:true, neededMb, deviceKey}`; Node reads Ollama `/api/ps` +
->    `/capacity` and computes `evictWouldHelp = analyzerMbOnDevice + freeOnDevice ≥
->    neededMb`. (The sidecar can't see Ollama.) This is also the analyzer-vs-TTS
->    protection that replaces the deleted lease.
-> 4. **Node needs a wake loop.** A queued TTS op retries on a bounded `/capacity`
->    poll (≈2 s, capped) + on each synth completion — the sidecar frees VRAM on its
->    own watchdogs invisibly, so Node polls; it is never pushed.
-> 5. **`_synth_lock` is Qwen-only.** Add a NEW per-engine `_admission_lock[engine]`
->    in the sidecar that wraps admission + the forward for ALL three engines (Coqui
->    and Kokoro have no serializer today); cross-engine parallelism preserved. Do
->    NOT wrap the existing non-reentrant deep `_synth_lock`.
-> 6. **`ReservationLedger` needs its own lock** (the GIL doesn't make
->    read-decide-hold atomic across worker threads).
-> 7. **503 interception:** parse the `noCapacity:true` body BEFORE
->    `sidecar.ts`'s `throwForResponse` throws all 5xx; disambiguate from the
->    existing poison (`{poisoned:true}`) and recycle 503s.
-> 8. **Cross-book eviction barrier** (`synthesise-chapter.ts:819`,
->    `persona-gpu-plan.ts:36`) must be re-established via the sidecar `_load_lock`
->    covering the admission-driven evict — it is NOT a free deletion.
-> 9. **`poolWidth` for GPU engines stays the constant 1** (not `generationWorkers`);
->    the Qwen throughput lever is `/synthesize-batch`, not concurrent `/synthesize`.
-> 10. **`psutil` is already module-level** (guarded, may be `None`) — guard the
->    CPU/mps rows so the probe never raises.
+>    `/synthesize-batch` so a wide Qwen batch reserves its true peak.
+> 3. **Node computes the evict decision.** 503 body `{noCapacity:true, neededMb,
+>    deviceKey}`; Node reads Ollama `/api/ps` + `/capacity` and computes
+>    `evictWouldHelp = analyzerMbOnDevice + freeOnDevice ≥ neededMb`.
+> 4. **Node wake loop:** a queued TTS op retries on a bounded `/capacity` poll
+>    (≈2 s, capped) + on each synth completion.
+> 6. **`ReservationLedger` needs its own lock.**
+> 7. **503 interception** before `throwForResponse`; disambiguate from poison
+>    (`{poisoned:true}`) / recycle 503s.
+> 9. **`poolWidth` for GPU engines stays the constant 1.**
+> 10. **`psutil` is already module-level** (guarded) — guard CPU/mps rows.
 >
-> A THIRD gate should run at implementation kickoff on the sidecar locking
-> re-entrancy and the wake-loop termination. See the spec's Resolved decisions.
+> **Round-3 corrections (SUPERSEDE the task text):**
+> 5′. **NO `_admission_lock`.** Admission (`PlacementController.admit` /
+>    `reservation()`) is a **short critical section under the `ReservationLedger`'s
+>    own lock** — decide + `hold` the peak, then RELEASE the lock before the forward.
+>    Admission NEVER holds `_synth_lock` (non-reentrant `threading.Lock` at
+>    `main.py:2071`; unload/evict paths re-acquire it → self-deadlock) and NEVER the
+>    `asyncio` `_load_lock` (a `to_thread` worker can't acquire it — `main.py:2074`).
+>    Same-engine thread-safety stays as-is: Qwen forward keeps `_synth_lock`;
+>    Coqui/Kokoro forwards stay **parallel** (the `test_concurrent_synthesis`
+>    contract — do NOT serialize them). Concurrent same-engine double-book is
+>    prevented by the **ledger reservation** (each admit sees the other's peak in
+>    `Σ reserved`), not a mutex.
+> 8′. **Eviction barrier uses the THREADING load locks** `_base_load_lock`
+>    (`main.py:2328`) / `_base17_load_lock` (`2346`), NOT the `asyncio` `_load_lock`.
+> 11. **Published global lock order** (admit never up-orders): `ReservationLedger`
+>    lock → threading load lock → `_synth_lock`/`_infer_lock`.
+> 12. **Analyzer ↔ heavy TTS take turns per device (the OOM-window fix).** Node
+>    does not start a new Ollama load on a device while a heavy TTS forward is
+>    ramping there, and holds heavy TTS off a loading/resident analyzer — the two
+>    big consumers never ramp concurrently on one 8 GB card. Per-call granularity;
+>    a render does NOT preempt an in-flight analysis (it queues behind it).
+> 13. **Wake-loop terminal state:** at the poll cap, when nothing will free VRAM,
+>    **fail the op with an actionable toast** (not a permanent "Queued" pill). The
+>    frontend e2e asserts the terminal toast.
 
 **Goal:** Replace Castwright's hand-set GPU token budget with live per-device capacity measurement plus a per-call peak reservation, so model placement/eviction is driven by real free VRAM (and RAM), never a config guess — no OOM on a 1-card (8 GB) or 2-card (8 + 16 GB eGPU) box, no config change between them.
 
@@ -55,6 +67,8 @@
 - **`local-llm.md` is the maintained seed source of truth.** The sidecar seed map is a **parity-tested mirror** that parses the doc's numbers — not a keyword match.
 - **On-box history is up-only:** `estimate = max(seed, observed)`.
 - **TTS admission lives in the sidecar; the analyzer stays Node-gated.** A resident model is never migrated; device is chosen only on a cold load.
+- **Admission is a short ledger-lock critical section, never a forward-spanning lock** (override 5′). Global lock order: ledger → threading load lock → `_synth_lock`/`_infer_lock`.
+- **Analyzer and heavy TTS take turns per device** (override 12) — never ramp concurrently on one card; closes the Ollama admit→peak OOM window without inflating `GPU_RESERVE_MB`.
 - **Every registry change runs `npm run config:sync` in the same commit.**
 - **Commit convention** `<type>(<scope>): <subject>`, scopes `sidecar`/`server`/`frontend`. Frequent commits, one deliverable per task.
 
@@ -63,7 +77,7 @@
 ## File Structure
 
 **Sidecar (Python):**
-- `server/tts-sidecar/main.py` — `GET /capacity`, `probe_capacity()`; `FootprintTable`, `ReservationLedger`, `PlacementController`; wire admission into the real load/synth handlers (`_ensure_*_loaded`, ORT session pin, Coqui `.to`) under the existing `_synth_lock`.
+- `server/tts-sidecar/main.py` — `GET /capacity`, `probe_capacity()`; `FootprintTable`, `ReservationLedger`, `PlacementController`; wire admission into the real load/synth handlers (`_ensure_*_loaded`, ORT session pin, Coqui `.to`) as a **short `ReservationLedger`-lock critical section** (override 5′) — the forward then runs under the existing engine locks (Qwen `_synth_lock`; Coqui/Kokoro parallel).
 - `server/tts-sidecar/tests/test_capacity.py`, `test_footprints.py`, `test_placement.py` (new); extend `test_devices.py`.
 
 **Server (Node):**
@@ -196,7 +210,7 @@ def test_seed_parity_with_local_llm_doc():
 **Interfaces:** Produces
 - `class ReservationLedger: reserved_mb(device_key)`, `hold(device_key, mb) -> token`, `release(token)`.
 - `class PlacementController(probe=probe_capacity, footprints=FootprintTable(), ledger=ReservationLedger(), reserve_mb=lambda: int(os.environ.get("GPU_RESERVE_MB", 768)), idle_evict=..., is_resident=...)`.
-  `admit(engine, model, cfg, cpu_capable, heavy) -> Admission` where `Admission` is `{"device": "cuda:1"}` | `{"device": "cpu"}` | `{"noCapacity": {"neededMb", "deviceKey", "analyzerEvictWouldHelp"}}`, and a context-manager `reservation(engine, model, cfg, ...)` that holds the peak for the op and releases on exit. `admit` is called under the caller's `_synth_lock`.
+  `admit(engine, model, cfg, cpu_capable, heavy) -> Admission` where `Admission` is `{"device": "cuda:1"}` | `{"device": "cpu"}` | `{"noCapacity": {"neededMb", "deviceKey"}}` (the sidecar does NOT set `analyzerEvictWouldHelp` — Node computes it from `/api/ps`, override 3), and a context-manager `reservation(engine, model, cfg, ...)` that holds the peak for the op and releases on exit. **`admit`/`reservation` take ONLY the `ReservationLedger`'s own lock, briefly, for the decide+`hold` (override 5′) — never `_synth_lock`, never the `asyncio` `_load_lock`.** `ReservationLedger` has its own `threading.Lock` guarding `reserved_mb`+`hold`+`release` (override 6).
 
 - [ ] **Step 1: Failing tests (the OOM invariant)**
 
@@ -249,7 +263,7 @@ def test_idle_evict_then_place():
 ```
 
 - [ ] **Step 2: Run — FAIL.**
-- [ ] **Step 3: Implement** — `ReservationLedger` (dict of device→{token: mb}, incrementing int token id, `reserved_mb` sums). `PlacementController.admit`: `peak = footprints.peak_mb(...)`; if `is_resident(engine)` returns a device, target it; else pick the max-headroom device where `min(freeMb, totalMb − ledger.reserved_mb(key)) − reserve_mb() >= peak`; on fit `ledger.hold` + return `{"device": key}`; else if `cpu_capable and not heavy` → `{"device":"cpu"}`; else try `idle_evict(worst_key)` once and re-run the fit; else return `{"noCapacity": {"neededMb": peak, "deviceKey": worst_short_device, "analyzerEvictWouldHelp": <shortfall covered by analyzer's share — computed by the caller from /api/ps, defaulted False here>}}`. `reservation(...)` is a `contextlib.contextmanager` that calls `admit`, yields it, and in `finally` releases the held token and `footprints.record(...)` the observed `torch.cuda.max_memory_allocated`. **Wire it into the real handlers**: in `_ensure_base_loaded/_ensure_base17_loaded/_ensure_design_loaded` + the Coqui `.to` + the ORT session device pin, use the admitted device on a cold load; wrap each `/synthesize` body in `with pc.reservation(...)` inside the existing `_synth_lock(engine)`.
+- [ ] **Step 3: Implement** — `ReservationLedger` (dict of device→{token: mb}, incrementing int token id, `reserved_mb` sums). `PlacementController.admit`: `peak = footprints.peak_mb(...)`; if `is_resident(engine)` returns a device, target it; else pick the max-headroom device where `min(freeMb, totalMb − ledger.reserved_mb(key)) − reserve_mb() >= peak`; on fit `ledger.hold` + return `{"device": key}`; else if `cpu_capable and not heavy` → `{"device":"cpu"}`; else try `idle_evict(worst_key)` once and re-run the fit; else return `{"noCapacity": {"neededMb": peak, "deviceKey": worst_short_device, "analyzerEvictWouldHelp": <shortfall covered by analyzer's share — computed by the caller from /api/ps, defaulted False here>}}`. `reservation(...)` is a `contextlib.contextmanager` that calls `admit` (ledger lock held only for the decide+`hold`, then released), yields it, and in `finally` releases the held token and `footprints.record(...)` the observed `torch.cuda.max_memory_allocated`. The `idle_evict` callback acquires the **threading** `_base_load_lock`/`_base17_load_lock` (override 8′), never the ledger lock or `_synth_lock`. **Wire it into the real handlers**: in `_ensure_base_loaded/_ensure_base17_loaded/_ensure_design_loaded` + the Coqui `.to` + the ORT session device pin, use the admitted device on a cold load; wrap each `/synthesize` body in `with pc.reservation(...)` **around** the existing forward — the reservation is held as VRAM bookkeeping while the forward runs under its normal locks (Qwen `_synth_lock`; Coqui/Kokoro parallel). Do NOT hold the ledger lock across the forward, and do NOT add any new lock around Coqui/Kokoro (override 5′ — preserve their tested parallelism). Global lock order (override 11): ledger → threading load lock → `_synth_lock`/`_infer_lock`.
 - [ ] **Step 4: Run — PASS** (`npm run test:sidecar -- -k placement`).
 - [ ] **Step 5: Commit** — `git commit -m "feat(sidecar): PlacementController peak-reservation admission + 503 no-capacity"`
 
@@ -257,7 +271,7 @@ def test_idle_evict_then_place():
 
 **Files:** Modify `main.py` (route glue); Test `server/tts-sidecar/tests/test_devices.py`.
 
-- [ ] **Step 1: Failing test** — a `/synthesize` that can't fit returns HTTP `503` with `{neededMb, deviceKey, analyzerEvictWouldHelp}`; a cold `/load` places on the admitted device; a resident engine is not moved. Target the real FastAPI handlers via the test client used elsewhere in the suite.
+- [ ] **Step 1: Failing test** — a `/synthesize` that can't fit returns HTTP `503` with `{noCapacity: true, neededMb, deviceKey}` (NO `analyzerEvictWouldHelp` — Node computes that, override 3); a cold `/load` places on the admitted device; a resident engine is not moved. Target the real FastAPI handlers via the test client used elsewhere in the suite.
 - [ ] **Step 2: Run — FAIL.**
 - [ ] **Step 3: Implement** — map `admit`'s `noCapacity` to a `JSONResponse(status_code=503, content={...})`; on `{"device": ...}` proceed as today. Preserve the `device` env fallback when the controller is disabled (feature flag `SEG_CAPACITY_ADMISSION`, default on) so a rollback path exists.
 - [ ] **Step 4: Run — PASS.**
@@ -309,11 +323,11 @@ def test_idle_evict_then_place():
 
 **Files:** Modify `server/src/tts/sidecar.ts`; Tests alongside.
 
-**Interfaces:** Consumes the sidecar `503 {neededMb, deviceKey, analyzerEvictWouldHelp}` (Task 4), `CapacityProbe` (Task 6), `residency.ts` evict (Task 9).
+**Interfaces:** Consumes the sidecar `503 {noCapacity: true, neededMb, deviceKey}` (Task 4 — Node computes `evictWouldHelp` itself from `/api/ps`, override 3), `CapacityProbe` (Task 6), `residency.ts` evict (Task 10).
 
-- [ ] **Step 1: Failing test** — (a) a `200` synth returns audio unchanged; (b) a `503 analyzerEvictWouldHelp=true` with no analysis in flight triggers `evictOllama()` then one retry; (c) a `503` with analysis in flight enqueues (surfaces queue depth) and retries on release, never throws.
+- [ ] **Step 1: Failing test** — (a) a `200` synth returns audio unchanged; (b) a `503 noCapacity` where Node-computed `evictWouldHelp=true` with no analysis in flight triggers `evictOllama()` then one retry; (c) a `503` with analysis in flight enqueues (surfaces queue depth) and retries via the bounded poll/on-completion wake loop, never throws; (d) **at the poll cap with nothing to free, the op fails with an actionable toast** (`noCapacity` surfaced to the user), NOT an infinite wait (override 13).
 - [ ] **Step 2: Run — FAIL.**
-- [ ] **Step 3: Implement** — replace the per-engine `GpuSemaphore(1)` acquire (`sidecar.ts:40-49,121`) and the `acquireGpuTokenIfOnGpu` gate with: call `/synthesize`; on `503`, branch evict-or-enqueue; a small FIFO waiter set (reuse `CountSemaphore` for the *queue-depth surface only*, or a minimal in-file queue) drives the pill. Same-engine serialization now lives in the sidecar `_synth_lock` — do **not** re-add a Node lock.
+- [ ] **Step 3: Implement** — replace the per-engine `GpuSemaphore(1)` acquire (`sidecar.ts:40-49,121`) and the `acquireGpuTokenIfOnGpu` gate with: call `/synthesize`; parse the `noCapacity:true` body before `throwForResponse` (override 7); on it, branch evict-or-enqueue; a bounded wake loop (≈2 s poll, capped + wake on each synth completion) drives retries and a small FIFO waiter set (reuse `CountSemaphore` for the *queue-depth surface only*, or a minimal in-file queue) drives the pill; at the cap, reject with a user-facing no-capacity error (override 13). Same-engine serialization for Qwen lives in the sidecar `_synth_lock`; Coqui/Kokoro stay parallel — do **not** re-add a Node lock (override 5′).
 - [ ] **Step 4: Run — PASS** (`cd server && npm run test -- sidecar`).
 - [ ] **Step 5: Commit** — `git commit -m "refactor(server): TTS synth handles sidecar 503 with evict-or-queue"`
 
@@ -335,7 +349,7 @@ def test_idle_evict_then_place():
 
 **Files:** Modify `server/src/gpu/residency.ts`, `server/src/routes/gpu-queue.ts` (+ test), `server/src/routes/diagnostics.ts` (+ test), `src/components/layout.tsx` (+ slice + test), `e2e/gpu-queue-state.spec.ts` (new).
 
-- [ ] **Step 1: Failing tests** — (a) `residency.ts` evicts the analyzer only when a sidecar 503 says `analyzerEvictWouldHelp` and no analysis is mid-flight (replacing the `safeCoexistMb` threshold); (b) `gpu-queue.ts` returns `{devices, residentByDevice, queueDepth}` and `diagnostics.ts` reads the migrated shape (update `diagnostics.test.ts:61`); (c) the pill renders per-device free + "Queued (N ahead)"; (d) e2e: a queued heavy op shows the pill, never a spinner-forever; eGPU-drop dispatches a toast + re-queue.
+- [ ] **Step 1: Failing tests** — (a) `residency.ts` evicts the analyzer only when Node-computed `evictWouldHelp` (from `/api/ps`+`/capacity`) and no analysis is mid-flight (replacing the `safeCoexistMb` threshold); (a′) **temporal separation (override 12):** Node holds a new Ollama load off a device while a heavy TTS forward is reserved there (and heavy TTS off a loading/resident analyzer) — assert the two never co-admit on one card; (b) `gpu-queue.ts` returns `{devices, residentByDevice, queueDepth}` and `diagnostics.ts` reads the migrated shape (update `diagnostics.test.ts:61`); (c) the pill renders per-device free + "Queued (N ahead)"; (d) e2e: a queued heavy op shows the pill and, when capacity never frees, **ends on the actionable no-capacity toast** (override 13) — never a spinner-forever; eGPU-drop dispatches a toast + re-queue.
 - [ ] **Step 2: Run — FAIL.**
 - [ ] **Step 3: Implement** per above; keep `readGpuQueueState`'s name, change its return type and every caller in one commit.
 - [ ] **Step 4: Run — PASS** (`cd server && npm run test -- "gpu-queue|diagnostics"`; `npm run test -- layout`; `npm run test:e2e -- gpu-queue-state`).
@@ -355,7 +369,7 @@ def test_idle_evict_then_place():
 
 **Files:** Create `docs/features/<n>-vram-aware-gpu-placement.md` (from `TEMPLATE.md`); update `docs/features/INDEX.md`, `docs/release-notes-next.md`, `RELEASE_NOTES.md`; set the spec `status: active`.
 
-- [ ] **Step 1:** Write the regression plan — invariants (per-call peak reservation, `min(...)` admit formula, up-only ratchet, sidecar-down fallback, eGPU-drop reconcile, analyzer-evict-only-when-it-helps) + the manual acceptance walkthrough on the 1-card and 2-card boxes (attach eGPU mid-run, drop it mid-run, confirm no OOM + no hang).
+- [ ] **Step 1:** Write the regression plan — invariants (per-call peak reservation held only as ledger bookkeeping, `min(...)` admit formula, up-only ratchet, sidecar-down fallback, eGPU-drop reconcile, analyzer-evict-only-when-it-helps, **analyzer↔heavy-TTS temporal separation per device**, **poll-cap fails with a toast not a hang**, and the **global lock order** ledger→threading-load-lock→`_synth_lock`) + the manual acceptance walkthrough on the 1-card and 2-card boxes (attach eGPU mid-run, drop it mid-run; run an analysis and a render together on the 8 GB card and confirm they take turns with no OOM and no permanent hang).
 - [ ] **Step 2:** Append the technical + brand-voice release-notes lines.
 - [ ] **Step 3:** `npm run verify:fast:branch`; then `npm run test:sidecar` (the new pytest tiers).
 - [ ] **Step 4:** Push the branch, open the PR (`Closes #<issue>`), run the mandatory `code-review` gate (`high` — multi-scope refactor).
@@ -366,6 +380,7 @@ def test_idle_evict_then_place():
 ## Self-review notes
 
 - **Spec coverage:** `/capacity` (T1), Python footprints + parity + up-only (T2), reservation ledger + placement controller + 503 (T3), device honoring on real endpoints (T4), CountSemaphore extraction (T5), Node capacity client + fallback (T6), analyzer limiter/lease cutover (T7), TTS 503 orchestration + per-engine-lock removal (T8), **all** other budget consumers (T9), evict + queue payload + diagnostics + frontend (T10), knob/file deletion + verified migration (T11), docs/release/verify/ship (T12).
-- **Review fixes applied:** reservation lifetime now per-call in the sidecar where residency lives (crit-1/crit-2); `CountSemaphore` extracted not deleted (sig-1); every direct consumer has a task, no "fix imports" hand-wave (sig-2); sidecar tests target real handlers, parity test parses real numbers (sig-3, sig-5); `diagnostics.ts` migrated in T10 (sig-4); probe off the synth hot path, resident models never re-probe (min-1); registry migration verified against the real `ANALYZER` mechanism (min-2); same-model double-peak covered by the sidecar `_synth_lock` (sig-6).
+- **Review fixes applied (rounds 1–2):** reservation lifetime now per-call in the sidecar where residency lives (crit-1/crit-2); `CountSemaphore` extracted not deleted (sig-1); every direct consumer has a task, no "fix imports" hand-wave (sig-2); sidecar tests target real handlers, parity test parses real numbers (sig-3, sig-5); `diagnostics.ts` migrated in T10 (sig-4); probe off the synth hot path, resident models never re-probe (min-1); registry migration verified against the real `ANALYZER` mechanism (min-2).
+- **Round-3 (kickoff gate) fixes applied:** dropped `_admission_lock` — admission is a short ledger-lock critical section, forward under existing engine locks, double-book prevented by the ledger reservation not a mutex (5′); eviction barrier uses the threading `_base_load_lock`/`_base17_load_lock`, not the `asyncio` `_load_lock` a worker can't acquire (8′); published global lock order (11); analyzer↔heavy-TTS temporal separation closes the Ollama admit→peak OOM window (12); wake-loop fails with a toast at the cap (13); 503 body is `{noCapacity,neededMb,deviceKey}`, Node computes `evictWouldHelp`.
 - **Ordering:** T8+T9+T11 must land in one PR (the shim removal + deletions are interdependent). T1–T4 (sidecar) can land as a first PR behind the `SEG_CAPACITY_ADMISSION` flag before the Node cutover.
 - **Acceptance:** the "no OOM" invariant is T3 step 1 (peak reservation) exercised across all four hardware states.
