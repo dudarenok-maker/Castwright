@@ -743,4 +743,30 @@ describe('analyzerKeepAliveByModel', () => {
   it('is present in DEFAULT_USER_SETTINGS', () => {
     expect(DEFAULT_USER_SETTINGS.analyzerKeepAliveByModel).toEqual({});
   });
+
+  it('survives a targeted save of an UNRELATED field (partial-patch default-clobber regression)', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    try {
+      // 1. Save a per-model keep-alive override.
+      await mod.writeUserSettings({
+        analyzerKeepAliveByModel: { 'qwen36-cw-iq4-32k:latest': 90 },
+      });
+      // 2. Save an UNRELATED field with NO keep-alive key — mirrors the
+      //    analysing-screen phase-model dropdown (saves just analyzerPhase0Model).
+      //    Before the fix, patchSchema (userSettingsSchema.partial()) applied
+      //    analyzerKeepAliveByModel's `.default({})` and the wholesale merge
+      //    wiped the saved 90 back to {}.
+      const after = await mod.writeUserSettings({ analyzerPhase0Model: 'qwen3.5:4b' });
+      expect(after.analyzerKeepAliveByModel).toEqual({ 'qwen36-cw-iq4-32k:latest': 90 });
+      expect(after.analyzerPhase0Model).toBe('qwen3.5:4b');
+      // 3. And it survives a reload from disk (not just the in-memory cache).
+      mod._resetUserSettingsCache();
+      const reread = await mod.readUserSettings();
+      expect(reread.analyzerKeepAliveByModel).toEqual({ 'qwen36-cw-iq4-32k:latest': 90 });
+    } finally {
+      await mod.writeUserSettings({ analyzerKeepAliveByModel: {}, analyzerPhase0Model: null });
+      mod._resetUserSettingsCache();
+    }
+  });
 });
