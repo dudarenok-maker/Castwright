@@ -5,14 +5,61 @@ import {
   acquireAnalyzerSlot,
   canonicalLeaseKey,
   describeAnalyzerConcurrency,
+  syncAnalyzerConcurrency,
+  getAnalyzerConcurrencyStats,
+  resetAnalyzerConcurrencyPeak,
   __resetAnalyzerLeasesForTest,
 } from './analyzer-concurrency.js';
 
-afterEach(() => __resetAnalyzerLeasesForTest());
+afterEach(() => {
+  __resetAnalyzerLeasesForTest();
+  // Never let a per-test K override bleed into the next case (or the
+  // "default 2" assertions above): clear the env and re-sync back to default.
+  delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
+  syncAnalyzerConcurrency();
+  resetAnalyzerConcurrencyPeak();
+});
 
 describe('width-K limiter', () => {
   it('is sized from analyzer.ollama.concurrency (default 2)', () => {
     expect(analyzerConcurrency.budget).toBe(2);
+  });
+});
+
+describe('syncAnalyzerConcurrency (live K)', () => {
+  it('resizes the limiter to the current K — the persisted/changed value takes effect without a restart', () => {
+    expect(analyzerConcurrency.budget).toBe(2); // module-load default
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '4';
+    syncAnalyzerConcurrency();
+    expect(analyzerConcurrency.budget).toBe(4); // adopted live, no re-import
+    delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
+    syncAnalyzerConcurrency();
+    expect(analyzerConcurrency.budget).toBe(2); // falls back to default
+  });
+
+  it('acquireAnalyzerSlot adopts the current K before gating (was frozen at module-load before)', async () => {
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '3';
+    const r = await acquireAnalyzerSlot('gemma:latest', true); // onCpu → limiter only
+    expect(analyzerConcurrency.budget).toBe(3);
+    r();
+  });
+});
+
+describe('peak-in-flight telemetry', () => {
+  it('tracks the max simultaneous in-flight calls and resets to current', async () => {
+    resetAnalyzerConcurrencyPeak();
+    expect(getAnalyzerConcurrencyStats().peak).toBe(0);
+    const r1 = await acquireAnalyzerSlot('gemma:latest', true); // CPU → limiter only, no gpuSemaphore
+    const r2 = await acquireAnalyzerSlot('gemma:latest', true);
+    expect(getAnalyzerConcurrencyStats().inFlight).toBe(2);
+    expect(getAnalyzerConcurrencyStats().peak).toBe(2);
+    r1();
+    expect(getAnalyzerConcurrencyStats().inFlight).toBe(1);
+    expect(getAnalyzerConcurrencyStats().peak).toBe(2); // watermark holds after one leaves
+    r2();
+    expect(getAnalyzerConcurrencyStats().inFlight).toBe(0);
+    resetAnalyzerConcurrencyPeak();
+    expect(getAnalyzerConcurrencyStats().peak).toBe(0); // reset to current (0) in-flight
   });
 });
 

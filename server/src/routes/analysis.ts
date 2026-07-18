@@ -11,6 +11,7 @@ import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { safeBookId } from '../util/safe-id.js';
 import { runStage1ChapterChunked, resolveStage1ChunkCharBudget } from '../analyzer/stage1-chunk.js';
 import { applyNarratorDefault } from '../analyzer/narrator-default.js';
+import { resetAnalyzerConcurrencyPeak, getAnalyzerConcurrencyStats } from '../analyzer/analyzer-concurrency.js';
 import { applyNarratorIdentity } from '../analyzer/narrator-identity.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
@@ -918,6 +919,27 @@ export function refineCastChapterEstMs(
 export function analyzerPoolWidth(): number {
   const k = configValue<number>('analyzer.ollama.concurrency');
   return Math.min(6, Math.max(1, Math.floor(k)));
+}
+
+/* Honest end-of-phase concurrency readout. `peak` is the most analyzer calls
+   that were simultaneously in-flight (past the limiter+lease, awaiting Ollama)
+   during the phase; K is the limiter budget. Peak measures APP-side dispatch
+   only — if the app fires K requests they all count as in-flight while awaiting
+   Ollama, so peak reaches K even when Ollama's n_slots serialises the decodes.
+   Hence: peak==K proves the app dispatched K-wide (if wall-clock didn't improve,
+   the cap is OLLAMA's slot count — raise OLLAMA_NUM_PARALLEL / lower num_ctx so
+   K slots fit VRAM); peak<K means the app pool never filled. Only meaningful
+   with >1 task; a single-chapter phase can never exceed peak 1. */
+export function analyzerConcurrencyPeakLine(label: string, taskCount: number): string {
+  const { peak, limiter } = getAnalyzerConcurrencyStats();
+  let note = '';
+  if (taskCount > 1 && limiter > 1) {
+    note =
+      peak >= limiter
+        ? ` — app dispatched K=${limiter}-wide; if wall-clock didn't improve, Ollama is serving <K slots (raise OLLAMA_NUM_PARALLEL and/or lower num_ctx so K slots fit VRAM).`
+        : ` — only ${peak} of K=${limiter} ran at once; the app pool never filled (few chapters left, or calls finished before overlapping).`;
+  }
+  return `${label}: peaked at ${peak} concurrent analyzer call${peak === 1 ? '' : 's'} (K=${limiter}).${note}`;
 }
 
 /* Stage-2 coverage guard retry budget. The attribution model occasionally
@@ -3454,10 +3476,12 @@ export async function runMainAnalyzerJob(
             }
           }
         };
+        resetAnalyzerConcurrencyPeak();
         for (let w = 0; w < Math.min(castConcurrency, castTaskIndices.length); w++) {
           castWorkers.push(launchNextCast());
         }
         await Promise.all(castWorkers);
+        log(0, analyzerConcurrencyPeakLine('Cast detection', castTaskIndices.length));
 
         /* Phase 1+ MUST NOT advance while any chapter is missing its cast —
            otherwise attribution / voice matching run against a partial
@@ -3672,7 +3696,7 @@ export async function runMainAnalyzerJob(
     const totalChapters = record.chapterHints.length;
     log(
       1,
-      `Attributing ${totalChapters} chapter${totalChapters === 1 ? '' : 's'} with ${phase1AnalyzerLabel}, one at a time…`,
+      `Attributing ${totalChapters} chapter${totalChapters === 1 ? '' : 's'} with ${phase1AnalyzerLabel}…`,
     );
     log(1, `Estimated stage time: ~${humanSeconds(stage2EstMs)} (based on stage 1 rate)`);
     if (cachedChapterCount > 0) {
@@ -4269,10 +4293,12 @@ export async function runMainAnalyzerJob(
           }
         }
       };
+      resetAnalyzerConcurrencyPeak();
       for (let w = 0; w < Math.min(concurrency, taskIndices.length); w++) {
         workers.push(launchNext());
       }
       await Promise.all(workers);
+      log(1, analyzerConcurrencyPeakLine('Attribution', taskIndices.length));
     };
 
     /* Plan 88 follow-up — Phase 0 and Phase 1 pools run concurrently in

@@ -397,3 +397,56 @@ describe('GpuSemaphore — abortable acquire', () => {
     expect(sem.inFlight).toBe(0);
   });
 });
+
+describe('GpuSemaphore.resize', () => {
+  it('growing the budget immediately drains a queued waiter that now fits', async () => {
+    const sem = new GpuSemaphore(1);
+    const r1 = await sem.acquire(1); // used=1, full
+    let granted = false;
+    const p2 = sem.acquire(1).then((rel) => { granted = true; return rel; }); // queues (1+1 > 1)
+    await flush();
+    expect(granted).toBe(false);
+    expect(sem.queueDepth).toBe(1);
+
+    sem.resize(2); // now 1+1 <= 2 → waiter granted without any release
+    await flush();
+    expect(granted).toBe(true);
+    expect(sem.inFlight).toBe(2);
+    expect(sem.budget).toBe(2);
+
+    r1();
+    (await p2)();
+    expect(sem.inFlight).toBe(0);
+  });
+
+  it('shrinking leaves in-flight holders untouched; new acquires wait until it drains under', async () => {
+    const sem = new GpuSemaphore(2);
+    const r1 = await sem.acquire(1);
+    const r2 = await sem.acquire(1); // used=2
+    sem.resize(1);                   // capacity=1 but used stays 2 (holders untouched)
+    expect(sem.budget).toBe(1);
+    expect(sem.usedTokens).toBe(2);
+
+    let granted = false;
+    const p3 = sem.acquire(1).then((rel) => { granted = true; return rel; });
+    await flush();
+    expect(granted).toBe(false);     // 2 > 1 → must wait
+    r1();
+    await flush();
+    expect(granted).toBe(false);     // still 1 in flight == capacity 1
+    r2();
+    await flush();
+    expect(granted).toBe(true);      // now under capacity
+    (await p3)();
+  });
+
+  it('clamps to >= 1 and is a no-op when unchanged', async () => {
+    const sem = new GpuSemaphore(2);
+    sem.resize(2);
+    expect(sem.budget).toBe(2);
+    sem.resize(0);
+    expect(sem.budget).toBe(1);
+    sem.resize(-5);
+    expect(sem.budget).toBe(1);
+  });
+});
