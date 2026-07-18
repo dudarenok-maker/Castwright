@@ -37,7 +37,7 @@ import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
 import { isNonEnglish, normaliseBookLanguage } from '../tts/language.js';
 import { getLanguageEntry } from '../tts/language-registry.js';
 import { AnalysisAbortedError } from './ollama.js';
-import { AnalyzerTruncatedError } from './errors.js';
+import { AnalyzerTruncatedError, GeminiContentBlockedError } from './errors.js';
 import { geminiRateLimiter, DailyQuotaExhaustedError } from './rate-limit.js';
 import { countCjkChars } from '../util/cjk.js';
 import {
@@ -781,16 +781,13 @@ export class GeminiAnalyzer implements Analyzer {
            (no retry, no chunk-split) and NAME the reason so the operator can
            act. Reordered ahead of nothing — historically this branch threw a
            bare "empty response" and discarded the reason captured below. */
+        /* Typed sentinel — carries the model + reason so the run-level consumers
+           (analysis, script-review) fast-fail the whole run and the taxonomy
+           matches by name. The message text is built inside the error VERBATIM
+           (same reason suffix + remediation hint), so log-greps and the taxonomy
+           regex still match. */
         const stopReason = finishReason ?? blockReason;
-        const named =
-          stopReason && stopReason !== 'FINISH_REASON_UNSPECIFIED' ? ` (reason=${stopReason})` : '';
-        const hint =
-          stopReason && stopReason !== 'FINISH_REASON_UNSPECIFIED'
-            ? ' A content filter blocked the text — gemini-* models block copyrighted' +
-              ' source via RECITATION. Switch GEMINI_MODEL to a gemma-* model or set' +
-              ' ANALYZER=local (Ollama).'
-            : '';
-        throw new Error(`Gemini ${this.model} returned an empty response${named}.${hint}`);
+        throw new GeminiContentBlockedError(this.model, stopReason);
       }
       /* Truncation gate (#528): the stream completed but the model stopped
          because it hit the output cap (or a safety/recitation block), not

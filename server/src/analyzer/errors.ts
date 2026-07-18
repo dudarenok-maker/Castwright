@@ -36,3 +36,42 @@ export class AnalyzerTruncatedError extends Error {
     this.name = 'AnalyzerTruncatedError';
   }
 }
+
+/* Thrown by GeminiAnalyzer when the stream finishes with ZERO text — the
+   signature of a content-filter block. On a `gemini-*` model the usual cause is
+   RECITATION (Google refuses memorised/copyrighted source) or SAFETY; the model
+   returns a candidate carrying only the stop reason, or rejects the prompt via
+   promptFeedback.blockReason.
+
+   This is a DETERMINISTIC, WHOLE-BOOK-FATAL condition: the same filter blocks
+   every chapter identically, so retrying or splitting is futile. The run-level
+   consumers key off this TYPE to fail fast with one actionable terminal error
+   instead of grinding chapter-by-chapter:
+     - analysis.ts rethrows it from the per-chapter catch to its terminal handler,
+     - script-review.ts breaks the chunk loop and emits a terminal error,
+     - failure-taxonomy.ts matches it by `name` → `analyzer-content-blocked`.
+
+   The message reproduces the pre-typed-error string VERBATIM (same reason suffix
+   + remediation hint) so existing log-greps and the taxonomy regex still match.
+   Mirrors the sentinel shape of `AnalyzerTruncatedError` above. */
+export class GeminiContentBlockedError extends Error {
+  readonly code = 'GEMINI_CONTENT_BLOCKED';
+  constructor(
+    /** The Gemini model id that returned the empty/blocked response. */
+    public readonly model: string,
+    /** The stop/block reason (RECITATION / SAFETY / PROHIBITED_CONTENT), or
+        undefined when the stream ended empty without one. */
+    public readonly reason?: string,
+  ) {
+    const named =
+      reason && reason !== 'FINISH_REASON_UNSPECIFIED' ? ` (reason=${reason})` : '';
+    const hint =
+      reason && reason !== 'FINISH_REASON_UNSPECIFIED'
+        ? ' A content filter blocked the text — gemini-* models block copyrighted' +
+          ' source via RECITATION. Switch GEMINI_MODEL to a gemma-* model or set' +
+          ' ANALYZER=local (Ollama).'
+        : '';
+    super(`Gemini ${model} returned an empty response${named}.${hint}`);
+    this.name = 'GeminiContentBlockedError';
+  }
+}

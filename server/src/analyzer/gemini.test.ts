@@ -11,6 +11,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { geminiRateLimiter } from './rate-limit.js';
+import { GeminiContentBlockedError } from './errors.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HANDOFF_ROOT = resolve(__dirname, '..', '..', 'handoff');
@@ -164,6 +165,13 @@ describe('GeminiAnalyzer.runStage1 — streaming chunk feedback', () => {
     );
     expect(err?.message).toMatch(/empty response/); // back-compat with the generic branch
     expect(err?.message).toMatch(/RECITATION/); // the actionable reason
+    /* Typed sentinel — the run-level consumers (analysis + script-review) key
+       off the type to fast-fail the whole run instead of grinding chapter by
+       chapter, and the taxonomy matches it by name. Survives message rewording. */
+    expect(err).toBeInstanceOf(GeminiContentBlockedError);
+    expect((err as GeminiContentBlockedError).name).toBe('GeminiContentBlockedError');
+    expect((err as GeminiContentBlockedError).model).toBe('gemini-3.1-flash-lite');
+    expect((err as GeminiContentBlockedError).reason).toBe('RECITATION');
   });
 
   it('surfaces a prompt-level blockReason (SAFETY) on an empty response', async () => {

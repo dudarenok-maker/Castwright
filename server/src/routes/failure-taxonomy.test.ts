@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { classifyFailure, classifyAnalysisError, classifyAnalysisFailure } from './failure-taxonomy.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
-import { AnalyzerTruncatedError } from '../analyzer/errors.js';
+import { AnalyzerTruncatedError, GeminiContentBlockedError } from '../analyzer/errors.js';
 
 /* No copy should leak raw stack/jargon at the user — assert the message reads
    like a sentence (starts uppercase, ends with punctuation, no "Traceback"
@@ -294,6 +294,21 @@ describe('analysis-side codes (spec A2)', () => {
     expect(classifyAnalysisFailure(err, 'Gemini (gemini-3.1-flash-lite)').code).toBe(
       'analyzer-content-blocked',
     );
+  });
+  it('classifies a real GeminiContentBlockedError instance as analyzer-content-blocked', () => {
+    const err = new GeminiContentBlockedError('gemini-3.1-flash-lite', 'RECITATION');
+    expect(classifyAnalysisError(err).code).toBe('analyzer-content-blocked');
+    expect(classifyAnalysisFailure(err, 'Gemini (gemini-3.1-flash-lite)').code).toBe(
+      'analyzer-content-blocked',
+    );
+  });
+  it('classifies GeminiContentBlockedError by name even if the message is reworded', () => {
+    /* Name-driven match survives a future message reword — the regex is the
+       fallback, the typed name is the primary matcher (mirrors AnalyzerTruncatedError). */
+    const err = Object.assign(new Error('totally different future wording'), {
+      name: 'GeminiContentBlockedError',
+    });
+    expect(classifyAnalysisError(err).code).toBe('analyzer-content-blocked');
   });
   it("does NOT blame Ollama's same-worded empty response on the recitation filter", () => {
     const err = new Error('Ollama qwen3.5:4b returned an empty response.');

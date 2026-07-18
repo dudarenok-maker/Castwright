@@ -140,6 +140,9 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     code: 'analyzer-content-blocked',
     fatal: true,
     source: 'analysis',
+    /* Typed-error match first (survives message rewording), regex as fallback
+       for any bare Error carrying the same wording. */
+    matchName: 'GeminiContentBlockedError',
     match: (raw) => /Gemini\b.*\breturned an empty response\b/i.test(raw),
   },
   {

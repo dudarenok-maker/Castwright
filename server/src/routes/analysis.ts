@@ -26,6 +26,7 @@ import {
   type PhaseWatermark,
 } from '../analyzer/phase-watermark.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
+import { GeminiContentBlockedError } from '../analyzer/errors.js';
 import { detectOllamaDevice, unloadResidentOllama } from './ollama-health.js';
 import { setLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
@@ -2561,7 +2562,10 @@ export async function runMainAnalyzerJob(
   const abortController = job.controller;
   const analyzer = selection.analyzer;
   const recordRef = record;
-  const activeModelId = selection.model;
+  /* Mutable — a local→Gemini fallback (announced via StageCall.onFallback below)
+     reassigns this to the effective Gemini model so subsequent phase events name
+     the model that's actually running, not the dead local primary. */
+  let activeModelId = selection.model;
   const analyzerLabel = engineLabel(selection.engine, activeModelId);
   /* Read-once user-settings snapshot — the handler passes one in; legacy
      callers / tests fall back to the in-process cache. Drives both the
@@ -2593,7 +2597,9 @@ export async function runMainAnalyzerJob(
     userSettings,
   });
   const phase1Analyzer = phase1Selection.analyzer;
-  const phase1ModelId = phase1Selection.model;
+  /* Mutable for the same reason as activeModelId — Phase 1's stage2Call.onFallback
+     reassigns it to the effective Gemini model on a local→Gemini switch. */
+  let phase1ModelId = phase1Selection.model;
   const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1ModelId);
   /* srv-59 Task 9b — ONE escalation-window budget shared across every
      chapter's attributeChapterStage2 call below, so the cap is per-BOOK
@@ -3262,6 +3268,20 @@ export async function runMainAnalyzerJob(
               reason,
             });
           },
+          /* Local analyzer went unreachable → the FallbackAnalyzer switched to
+             Gemini. Re-label so the pill names the model actually running (all
+             later phase-0 events read the reassigned `activeModelId`). */
+          onFallback: () => {
+            activeModelId = selection.fallbackModel ?? activeModelId;
+            send({
+              kind: 'phase',
+              phaseId: 0,
+              progress: phase0Progress(),
+              label: PHASES[0].label,
+              model: activeModelId,
+              engine: 'gemini',
+            });
+          },
         };
         try {
           result = await withPassEval(
@@ -3323,6 +3343,12 @@ export async function runMainAnalyzerJob(
           /* Client disconnect propagates up — let the route's outer catch
              land us back at res.end() without a "failed" SSE event. */
           if (chErr instanceof AnalysisAbortedError) throw chErr;
+          /* A gemini-* content-filter block (RECITATION/SAFETY) is deterministic
+             and whole-book-fatal — the same filter blocks every chapter. Rethrow
+             to the route's terminal handler (classifies as analyzer-content-blocked
+             with remediation) instead of swallowing it into a per-chapter
+             chapter-failed that grinds on and ends in an empty roster. */
+          if (chErr instanceof GeminiContentBlockedError) throw chErr;
           /* Per-chapter failure (malformed JSON after retry, validation
              miss, model truncation, …) is NON-FATAL for the run. The
              chapter is dropped from cast detection; the rest of the
@@ -4048,6 +4074,13 @@ export async function runMainAnalyzerJob(
         signal: abortController.signal,
         language: bookLanguage,
         onWaiting: () => tickOverall(),
+        /* Local analyzer unreachable → switched to Gemini. Re-label so the pill
+           names the effective model (later phase-1 events read the reassigned
+           `phase1ModelId`; tickOverall re-emits now for immediate feedback). */
+        onFallback: () => {
+          phase1ModelId = phase1Selection.fallbackModel ?? phase1ModelId;
+          tickOverall();
+        },
         /* Per-chunk heartbeat so the user sees evidence of model output
            on each chapter. Stage 2's existing wall-clock heartbeat log
            lines already cover the silence-watchdog purpose. */
@@ -5278,6 +5311,10 @@ export async function runSubsetAnalyzerJob(
         emitCastUpdate();
       } catch (chErr) {
         if (chErr instanceof AnalysisAbortedError) throw chErr;
+        /* Whole-book-fatal content-filter block — rethrow to the terminal
+           handler rather than grinding chapter-by-chapter (see the main-loop
+           sibling above). */
+        if (chErr instanceof GeminiContentBlockedError) throw chErr;
         chapterCast[ch.id] = [];
         cache.chapterCast = chapterCast;
         const classified = classifyAnalysisFailure(chErr, analyzerLabel);

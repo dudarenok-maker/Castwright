@@ -16,6 +16,9 @@ import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.j
 import type { Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { ChapterHint } from '../store/manuscripts.js';
 import { putManuscript, removeManuscript } from '../store/manuscripts.js';
+import { GeminiContentBlockedError } from '../analyzer/errors.js';
+import { LocalUnreachableError } from '../analyzer/ollama.js';
+import { FallbackAnalyzer } from '../analyzer/index.js';
 
 /* ── spy analyzer / selection helpers (mirrors analysis-pipelining.test.ts) */
 
@@ -272,6 +275,115 @@ describe('phase events carry the resolved model id', () => {
       for (const ev of phase1Events) {
         expect(ev.model, `phase-1 event missing model: ${JSON.stringify(ev)}`).toBe(PHASE1_MODEL);
       }
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+    }
+  }, 60_000);
+});
+
+/* ── Suite: a Gemini content-block fails fast with a terminal error ────── */
+
+function buildContentBlockedPhase0Analyzer(model: string): Analyzer {
+  return {
+    ...buildSpyPhase0Analyzer(),
+    async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+      /* Deterministic, whole-book-fatal filter block — must NOT be swallowed
+         into a per-chapter chapter-failed + empty roster (the "0%, no error"
+         symptom). It must reach the route's terminal error handler. */
+      throw new GeminiContentBlockedError(model, 'RECITATION');
+    },
+  };
+}
+
+describe('a Gemini content-block surfaces a terminal error', () => {
+  it('phase-0 per-chapter content-block → terminal analyzer-content-blocked error, not a silent empty roster', async () => {
+    const MODEL = 'gemini-3.1-flash-lite';
+    const manuscriptId = `test-content-blocked-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+
+    const phase0Selection = buildSelection(buildContentBlockedPhase0Analyzer(MODEL), MODEL);
+    const job = buildStubJob(manuscriptId);
+    const events = attachEventCapture(job);
+
+    try {
+      const { getManuscript } = await import('../store/manuscripts.js');
+      const recordRef = getManuscript(manuscriptId);
+      if (!recordRef) throw new Error('stub manuscript not found');
+
+      await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+        requestedFresh: true,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+
+      const errorEvent = events.find((e) => e.kind === 'error') as
+        | (CapturedEvent & { code?: string; message?: string })
+        | undefined;
+      expect(errorEvent, 'a terminal error event must be emitted, not a silent all-chapters-failed run').toBeDefined();
+      expect(errorEvent?.code).toBe('analyzer-content-blocked');
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+    }
+  }, 60_000);
+});
+
+/* ── Suite: the pill shows the EFFECTIVE model after a local→gemini fallback ── */
+
+describe('phase events name the effective model after a silent local→gemini fallback (Bug 2)', () => {
+  it('phase-0 events switch from the dead local primary to the Gemini fallback model', async () => {
+    const LOCAL_MODEL = 'qwen-local-test';
+    const FALLBACK_MODEL = 'gemini-3.1-flash-lite';
+    const manuscriptId = `test-fallback-model-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+
+    /* Primary (local) is unreachable on every chapter; the Gemini fallback works.
+       The FallbackAnalyzer must ANNOUNCE the switch (call.onFallback) so the route
+       re-labels the pill — otherwise it keeps naming the local model that isn't
+       running (the "wrong model in the pill" bug). */
+    const primary: Analyzer = {
+      ...buildSpyPhase0Analyzer(),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        throw new LocalUnreachableError('Ollama down');
+      },
+    };
+    const selection: AnalyzerSelection = {
+      analyzer: new FallbackAnalyzer(primary, buildSpyPhase0Analyzer()),
+      engine: 'local',
+      model: LOCAL_MODEL,
+      fallbackModel: FALLBACK_MODEL,
+    };
+    /* phase-1 uses a plain working spy so the test never touches a real backend. */
+    setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
+
+    const job = buildStubJob(manuscriptId);
+    const events = attachEventCapture(job);
+    try {
+      const { getManuscript } = await import('../store/manuscripts.js');
+      const recordRef = getManuscript(manuscriptId);
+      if (!recordRef) throw new Error('stub manuscript not found');
+
+      await runMainAnalyzerJob(job, recordRef as never, selection, {
+        requestedFresh: true,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+
+      const phase0Models = (
+        events.filter((e) => e.kind === 'phase' && e.phaseId === 0) as Array<
+          CapturedEvent & { model?: string }
+        >
+      ).map((e) => e.model);
+      expect(phase0Models, 'phase-0 events must name the effective Gemini fallback model').toContain(
+        FALLBACK_MODEL,
+      );
     } finally {
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
