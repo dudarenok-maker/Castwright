@@ -18,6 +18,7 @@ import { costForEngine } from '../tts/engine-vram-cost.js';
 import { acquireAnalyzerSlot, describeAnalyzerConcurrency } from './analyzer-concurrency.js';
 import { getLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { getResolvedOllamaUrl, getCachedUserSettings } from '../workspace/user-settings.js';
+import { isAnyAnalysisBusy } from '../tts/design-lock.js';
 import { configValue } from '../config/resolver.js';
 import type { Accelerator } from '../gpu/vram-state.js';
 import { getLastKnownVram } from '../gpu/vram-state.js';
@@ -168,9 +169,21 @@ export function hasKeepAliveOverride(model: string): boolean {
   return map[model] !== undefined || map[normalizeModelTag(model)] !== undefined;
 }
 
-/** `keep_alive` (integer seconds) for an Ollama /api/chat call. Per-model via
-    resolveKeepAliveSeconds; RAM-heavy models clamp to 0 on CPU. */
+/** `keep_alive` (integer seconds, or -1 to pin) for an Ollama analyzer call.
+    While ANY analysis run is in flight the model is PINNED (-1); otherwise
+    per-model via resolveKeepAliveSeconds, with RAM-heavy models clamped to 0
+    on CPU. */
 export function keepAliveFor(model: string, accelerator: Accelerator = 'unknown'): number {
+  /* Pin the analyzer resident for the whole run. Attribution calls land minutes
+     apart — measured 120–200 s gaps between /api/chat calls on a 100k-word book
+     — so ANY finite idle TTL (even the 30 s fallback, or a user's 90) lets
+     Ollama evict the model between calls and cold-reload on the next. That
+     thrash both slows the run and opens a window where a transient
+     unreachable-during-reload trips the cloud (Gemini) fallback into a hard
+     failure. The run's teardown (routes/analysis.ts endJob) issues the matching
+     keep_alive:0 evict once no run remains, so the pin is strictly run-scoped
+     and the per-model value keeps its meaning as the POST-run idle retention. */
+  if (isAnyAnalysisBusy()) return -1;
   if (RAM_HEAVY_MODELS.has(model) && accelerator === 'cpu') return 0;
   return resolveKeepAliveSeconds(model);
 }
@@ -823,7 +836,9 @@ export async function generatePersonaViaOllama(
     messages: [{ role: 'user' as const, content: prompt }],
     stream: false,
     think: false,
-    keep_alive: opts.keepAlive ?? 0,
+    /* Pin during an active analysis run (same rationale as keepAliveFor); the
+       caller-supplied keepAlive is the post-run idle window otherwise. */
+    keep_alive: isAnyAnalysisBusy() ? -1 : (opts.keepAlive ?? 0),
     options: {
       temperature: resolveOllamaTemperature(),
       ...(onCpu ? { num_gpu: 0 } : {}),

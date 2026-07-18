@@ -26,7 +26,7 @@ import {
   type PhaseWatermark,
 } from '../analyzer/phase-watermark.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
-import { detectOllamaDevice } from './ollama-health.js';
+import { detectOllamaDevice, unloadResidentOllama } from './ollama-health.js';
 import { setLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
 import {
@@ -115,7 +115,7 @@ import {
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, bookStateLanguage } from '../workspace/scan.js';
-import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy } from '../tts/design-lock.js';
+import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy, isAnyAnalysisBusy } from '../tts/design-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import { dedupSeriesPrior } from '../workspace/series-prior-dedup.js';
 import { linkSeriesReuseAtAnalysis, pruneStaleReuseLinks } from '../workspace/series-reuse-link.js';
@@ -2296,6 +2296,20 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
      start once analysis is done (mutual exclusion — re-analysis rewrites the
      whole cast). Ref-counted, so a sibling main/subset job keeps it held. */
   if (job.bookDir) clearAnalysisBusy(job.bookDir);
+  /* Release the run-scoped analyzer PIN. keepAliveFor() returned -1 for every
+     Ollama call while a run was in flight (see analyzer/ollama.ts) so the model
+     couldn't idle out between the minutes-apart attribution calls. Now that this
+     run is over, issue the matching keep_alive:0 evict so the pinned model
+     doesn't sit resident forever. Guarded: only a local Ollama run loaded a
+     model, and only when NO sibling analysis (main+subset, ref-counted via
+     isAnyAnalysisBusy) is still running — otherwise we'd evict a model that
+     run still needs. Best-effort and fire-and-forget: a failed evict just means
+     the model idles per its own keep_alive, and the next run re-warms it. */
+  if (job.engine === 'local' && !isAnyAnalysisBusy()) {
+    void unloadResidentOllama().catch(() => {
+      /* Ollama unreachable / already evicted — nothing to release. */
+    });
+  }
 }
 
 analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
