@@ -2,6 +2,43 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **⚠ ROUND-2 HARDENING — these override the task bodies below where they differ.**
+> A second adversarial gate found real holes; the corrected mechanics live in the
+> spec, and these overrides win over any stale task text:
+> 1. **Seed is the DECODE PEAK, not 4 GB.** `qwen` (0.6B @ default 32/3600) seed =
+>    **6144** (measured ~5.6 GB, rounded up), not 4096 — the operator's "≈4 GB" was
+>    resident size. The **primary acceptance test drives the real `FootprintTable`**,
+>    never an injected `peak=5600`.
+> 2. **Thread `batchWidth`+`tokenBudget`** from Node into BOTH `/synthesize` and
+>    `/synthesize-batch` so a wide Qwen batch reserves its true (wider) peak.
+> 3. **Node computes the evict decision**, not the sidecar. The 503 body is
+>    `{noCapacity:true, neededMb, deviceKey}`; Node reads Ollama `/api/ps` +
+>    `/capacity` and computes `evictWouldHelp = analyzerMbOnDevice + freeOnDevice ≥
+>    neededMb`. (The sidecar can't see Ollama.) This is also the analyzer-vs-TTS
+>    protection that replaces the deleted lease.
+> 4. **Node needs a wake loop.** A queued TTS op retries on a bounded `/capacity`
+>    poll (≈2 s, capped) + on each synth completion — the sidecar frees VRAM on its
+>    own watchdogs invisibly, so Node polls; it is never pushed.
+> 5. **`_synth_lock` is Qwen-only.** Add a NEW per-engine `_admission_lock[engine]`
+>    in the sidecar that wraps admission + the forward for ALL three engines (Coqui
+>    and Kokoro have no serializer today); cross-engine parallelism preserved. Do
+>    NOT wrap the existing non-reentrant deep `_synth_lock`.
+> 6. **`ReservationLedger` needs its own lock** (the GIL doesn't make
+>    read-decide-hold atomic across worker threads).
+> 7. **503 interception:** parse the `noCapacity:true` body BEFORE
+>    `sidecar.ts`'s `throwForResponse` throws all 5xx; disambiguate from the
+>    existing poison (`{poisoned:true}`) and recycle 503s.
+> 8. **Cross-book eviction barrier** (`synthesise-chapter.ts:819`,
+>    `persona-gpu-plan.ts:36`) must be re-established via the sidecar `_load_lock`
+>    covering the admission-driven evict — it is NOT a free deletion.
+> 9. **`poolWidth` for GPU engines stays the constant 1** (not `generationWorkers`);
+>    the Qwen throughput lever is `/synthesize-batch`, not concurrent `/synthesize`.
+> 10. **`psutil` is already module-level** (guarded, may be `None`) — guard the
+>    CPU/mps rows so the probe never raises.
+>
+> A THIRD gate should run at implementation kickoff on the sidecar locking
+> re-entrancy and the wake-loop termination. See the spec's Resolved decisions.
+
 **Goal:** Replace Castwright's hand-set GPU token budget with live per-device capacity measurement plus a per-call peak reservation, so model placement/eviction is driven by real free VRAM (and RAM), never a config guess — no OOM on a 1-card (8 GB) or 2-card (8 + 16 GB eGPU) box, no config change between them.
 
 **Architecture (Option A — sidecar-owned TTS admission):** The Python sidecar is the placement authority for its own resident models (`GET /capacity`, a Python `FootprintTable` + `ReservationLedger`, a `PlacementController` that reserves each op's decode peak for the op's duration and returns a structured `503` when a device can't fit). Node owns the analyzer (a `CountSemaphore` width-K limiter + the Ollama `/api/ps` read + the evict decision), orchestrates the TTS retry/queue loop off the sidecar's `503`, and deletes the old budget knobs + weighted semaphore. Chosen after an adversarial review showed a Node-only reservation ledger can't safely gate sidecar-resident models it never observes.
@@ -127,7 +164,7 @@ import server.tts_sidecar.main as main
 
 def test_peak_is_above_weight_size():
     t = main.FootprintTable()
-    assert t.peak_mb("qwen", "qwen-0.6b", {"batch": 32, "tokenBudget": 3600}) >= 4096
+    assert t.peak_mb("qwen", "qwen-0.6b", {"batch": 32, "tokenBudget": 3600}) >= 5600  # real decode peak, not weight size
 
 def test_ratchets_up_only():
     t = main.FootprintTable()
@@ -140,7 +177,7 @@ def test_ratchets_up_only():
 def test_seed_parity_with_local_llm_doc():
     # REAL parity: parse the numbers out of the maintained doc and compare.
     doc = pathlib.Path(__file__).parents[3].joinpath("docs/local-llm.md").read_text(encoding="utf8")
-    # the doc carries a machine-parseable block, e.g. "<!-- footprint:qwen=4096 -->"
+    # the doc carries a machine-parseable block, e.g. "<!-- footprint:qwen=6144 -->"
     parsed = {m[0]: int(m[1]) for m in re.findall(r"<!--\s*footprint:([\w.]+)=(\d+)\s*-->", doc)}
     assert parsed, "doc must carry footprint:<engine>=<mb> anchors"
     for k, v in parsed.items():
@@ -148,7 +185,7 @@ def test_seed_parity_with_local_llm_doc():
 ```
 
 - [ ] **Step 2: Run — FAIL.**
-- [ ] **Step 3: Implement** — add `SEED_FOOTPRINTS_MB = {"kokoro":1200,"qwen":4096,"qwen.1.7b":7168,"coqui":3584,"asr":400,"spk":200}`; `FootprintTable` keying `f"{engine}.{model_tier}"` with the Qwen token-budget bump (`>=4800 → 7168`), an in-memory learned map, `peak_mb = max(seed, learned)`, `record = learned[k]=max(existing, observed)`. **Add matching `<!-- footprint:qwen=4096 -->` anchors to `docs/local-llm.md`** next to the sidecar table so the parity test has ground truth.
+- [ ] **Step 3: Implement** — add `SEED_FOOTPRINTS_MB = {"kokoro":1200,"qwen":6144,"qwen.1.7b":7168,"coqui":3584,"asr":400,"spk":200}` (qwen = the measured ~5.6 GB decode peak rounded up, NOT the 4 GB resident/weight size); `FootprintTable` keying `f"{engine}.{model_tier}"` with the Qwen token-budget bump (`>=4800 → 7168`), an in-memory learned map, `peak_mb = max(seed, learned)`, `record = learned[k]=max(existing, observed)`. **Add matching `<!-- footprint:qwen=6144 -->` anchors to `docs/local-llm.md`** next to the sidecar table so the parity test has ground truth.
 - [ ] **Step 4: Run — PASS.**
 - [ ] **Step 5: Commit** — `git commit -m "feat(sidecar): FootprintTable peak seeds mirror local-llm.md, up-only ratchet"`
 
