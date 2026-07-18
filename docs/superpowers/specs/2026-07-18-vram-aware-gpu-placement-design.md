@@ -1,14 +1,15 @@
 ---
 status: draft
 date: 2026-07-18
+revised: 2026-07-18 (Option A — sidecar-owned TTS admission, after adversarial review)
 supersedes:
   - docs/superpowers/specs/2026-06-16-vram-budget-aware-gpu-policy-design.md (deferred MB-accounting — this reverses that deferral)
 related:
   - docs/superpowers/specs/2026-07-17-ollama-parallel-chunk-analysis-design.md (per-model lease / K limiter)
-  - docs/features/223-vram-telemetry-substrate.md (fs-45 telemetry this consumes)
+  - docs/features/223-vram-telemetry-substrate.md (fs-45 telemetry)
   - docs/superpowers/plans/2026-06-14-amd-gpu-phase2-enablement.md (AMD groundwork)
-  - docs/local-llm.md (measured analyzer + sidecar footprints — the seed table)
-  - docs/tts-performance.md (measured peak-under-load VRAM)
+  - docs/local-llm.md (maintained seed footprints)
+  - docs/tts-performance.md (measured decode-peak VRAM)
 ---
 
 # Capacity-aware model placement — replace the hand-set GPU budget with live measurement
@@ -26,7 +27,7 @@ hardware. An operator is expected to hand-tune **four overlapping knobs**:
   measured** (`server/src/tts/engine-vram-cost.ts`).
 - `ANALYZER_OLLAMA_CONCURRENCY` (K, default `2`) — a separate analyzer limiter.
 
-None of these read the hardware. The one `nvidia-smi` probe that exists
+None read the hardware. The one `nvidia-smi` probe that exists
 (`getDeviceTotalVramMb()`) is "recorded but unconsumed"; the only knob tied to
 detected VRAM is a coarse evict threshold (`GPU_SAFE_COEXIST_MB`).
 
@@ -39,400 +40,302 @@ hardware and the product's target hardware:
   poison/hang). A boot-time snapshot or a static per-machine profile is wrong the
   moment the hardware changes.
 - **Ollama self-distributes** the analyzer model's layers across *both* cards
-  when the eGPU is present. The weighted-token model charges the analyzer a
-  single "cost 4" against one pooled budget — it structurally **cannot represent
-  an opaque process that spreads itself across two physical cards.**
+  when the eGPU is present. A single pooled token budget structurally **cannot
+  represent an opaque process that spreads itself across two physical cards.**
 - **Non-NVIDIA hardware.** Castwright must also run on AMD (ROCm) and Apple
-  Silicon (Metal/unified memory), plus pure CPU. `nvidia-smi` and a token budget
-  say nothing about those.
+  Silicon (Metal/unified memory), plus pure CPU.
 
 The result is a per-machine hand-tuning treadmill with no upside, and a
-"effective N" number that actively misleads operators into raising the budget —
-which enables model co-residence and causes the exact OOM the feature exists to
+"effective N" number that misleads operators into raising the budget — which
+enables model co-residence and causes the exact OOM the feature exists to
 prevent.
 
 ## Goals
 
 1. **No OOM in any hardware state** — 1-card (8 GB), 2-card (8 + 16 GB), AMD,
-   Apple, or CPU-only — **without any config change between them.** This is the
-   primary acceptance criterion.
+   Apple, or CPU-only — **without any config change between them.** Primary
+   acceptance criterion.
 2. **Zero hand-tuning.** The system reads real free capacity per device and its
    own measured footprint history; the operator sets nothing per machine.
-3. **Cross-vendor.** NVIDIA (VRAM), AMD (ROCm VRAM), Apple (unified memory),
-   and CPU fallback are all first-class.
-4. **Survive eGPU hot-plug/unplug.** An attached eGPU is used automatically; a
-   dropped eGPU degrades to the remaining device without a restart.
-5. **Use every available device** — heavy models prefer the roomier one — rather
-   than piling onto the smallest card.
-6. **Delete the confusing surface.** Remove `GPU_VRAM_BUDGET`, `GPU_CONCURRENCY`,
-   and all six `GPU_WEIGHT_*` knobs plus the weighted-token math. Keep exactly
-   **one** safety knob.
+3. **Cross-vendor.** NVIDIA, AMD (ROCm), Apple (unified memory), and CPU are all
+   first-class.
+4. **Survive eGPU hot-plug/unplug** without a restart.
+5. **Use every available device** — heavy models prefer the roomier one.
+6. **Delete the confusing surface.** Remove the four budget knobs + the six
+   weights + the weighted-token math. Keep exactly **one** safety knob.
 
 ## Non-goals
 
-- **Controlling Ollama's placement.** Analyzer layer-splitting across cards is
-  fine for analysis and stays as-is. We read the capacity it leaves behind; we
-  never pin or reshape it.
+- **Controlling Ollama's placement.** Its layer-splitting stays as-is; we read
+  the capacity it leaves behind, never pin or reshape it.
 - **Rebalancing already-resident models.** Placement is decided at *load* time;
-  we do not migrate a loaded model between devices.
+  a resident model is not migrated between devices. A per-synth call runs the
+  model on the device it's already resident on.
 - **Perfect footprint prediction.** Estimates are measured-then-learned and
-  deliberately conservative, not exact. The reserve knob + measured-truth
-  admission absorb the slack.
-- **Replacing the analyzer K limiter** (`ANALYZER_OLLAMA_CONCURRENCY`). That
-  governs *how many analyzer calls* run against a resident model; orthogonal to
-  *where models are placed*, and it stays (its per-model GPU lease is re-pointed
-  at the new admission controller — see Migration).
-- **Making every engine run on every accelerator.** Where an engine can't use
-  the local accelerator (e.g. faster-whisper has no Metal path), it degrades to
-  CPU — the placement layer just needs to *know* that and account it as a CPU op.
+  deliberately conservative; the reserve knob + the reservation ledger absorb the
+  slack.
+- **Replacing the analyzer K limiter** (`ANALYZER_OLLAMA_CONCURRENCY`); it stays.
+- **Making every engine run on every accelerator.** Where an engine can't use the
+  local accelerator (e.g. faster-whisper has no Metal path), it degrades to CPU.
 
 ## Governing principle
 
 > **Real free capacity per compute device, measured live, is the only source of
 > truth. Every external process (Ollama especially) is an opaque consumer we read
-> but never model. We never start a model load unless its measured
-> peak-under-load footprint provably fits the real free capacity on some device,
-> minus a reserve.**
+> but never model. No model load or synth starts unless its measured
+> peak-under-load footprint provably fits the real free capacity on its device,
+> minus a reserve — and the decision is made where the model's residency lives.**
 
-Everything below follows from that sentence.
+That last clause is the outcome of the adversarial review (below): the TTS
+engines are **resident singletons owned by the Python sidecar**, which evicts
+them on its own idle watchdogs invisibly to Node. A Node-held reservation for
+them would either leak or reserve the wrong device. So **TTS admission lives in
+the sidecar**, co-located with residency and eviction. The **analyzer** is
+Node-observable (Ollama `/api/ps`) and stays Node-gated.
+
+## Ownership split
+
+| Concern | Owner | Why |
+|---|---|---|
+| Per-device free VRAM (`/capacity`) | **Sidecar** (torch), Node client + `nvidia-smi`/`rocm-smi` fallback | torch gives portable global-free across CUDA/ROCm; sidecar is where models load |
+| TTS/ASR/embed placement + reservation + own-idle-evict | **Sidecar** (`PlacementController`) | residency + eviction live here; only place a per-device reservation is safe |
+| TTS peak footprints | **Sidecar** (`FootprintTable`, Python) | placement needs them in-process; seeded from `local-llm.md`, up-only from torch `max_memory_allocated` |
+| Same-engine synth thread-safety serialization | **Sidecar** (`_synth_lock`, existing) | the Qwen forward is not thread-safe (`tts-performance.md`) |
+| Analyzer width-K limiter + per-model GPU lease | **Node** (`CountSemaphore`) | analyzer is Node-observable via `/api/ps`; K governs call concurrency |
+| Evict the Ollama analyzer to free room for TTS | **Node** (`residency.ts`) | Node owns the Ollama lifecycle |
+| The "Queued (N ahead)" surface | **Node** (`/api/gpu/queue`) | Node orchestrates the TTS retry/queue loop |
 
 ## Architecture
 
-### Components
+### Sidecar (Python) — the TTS admission authority
 
-- **`CapacityProbe` — sidecar-hosted, exposed via `GET /capacity`.** The probe
-  lives in the Python sidecar (`server/tts-sidecar/main.py`) because torch gives
-  a *portable* global-free read across CUDA and ROCm in one API; the server (and
-  any other consumer) reads it over HTTP. It returns a live list of
-  `ComputeDevice`: `{ kind: 'cuda'|'rocm'|'mps'|'cpu', index, label, totalMb,
-  freeMb }`. Backends:
-  - **NVIDIA / AMD-ROCm** — `torch.cuda.mem_get_info(i)` per device (driver-global
-    free, so it sees Ollama too); torch reports ROCm as `cuda`. `nvidia-smi` /
-    `rocm-smi` are a fallback when torch isn't the loader for a device.
-  - **Apple** — unified memory: one `mps` device whose `freeMb` is *available
-    system RAM* (there is no separate VRAM); OS memory APIs.
-  - **CPU** — always present; `freeMb` = available system RAM.
+- **`GET /capacity`** — a vendor-abstracted probe returning a live
+  `ComputeDevice[]`: `{ kind: 'cuda'|'rocm'|'mps'|'cpu', index, label, totalMb,
+  freeMb }`. Backends: `torch.cuda.mem_get_info(i)` per device (driver-global
+  free, so it sees Ollama too; torch reports ROCm as `cuda`); Apple = one `mps`
+  device whose free is available system RAM; CPU always present. A per-device
+  exception (dropped eGPU / "GPU is lost") **omits** that device, never fatal.
 
-  Re-enumerates every call (server-side ~1–2 s cache, forced-fresh at a heavy
-  load's decision point), so an attached eGPU appears as a new device and a
-  dropped one disappears — no boot-time snapshot. A thin server client caches the
-  last-known-good read the same way `sidecar-health.ts` already does. Supersedes
-  the single-GPU `device-total.ts`. `GET /capacity` is a public sidecar endpoint
-  other tools (admin console, benchmarks) can consult too.
+- **`FootprintTable` (Python)** — **peak-under-load** MB per (engine, model,
+  run-config) for the sidecar engines only. `local-llm.md` is the maintained seed
+  source of truth; the Python seed map is a **parity-tested mirror** (a pytest
+  parses the doc's numbers and asserts equality — not a keyword regex). At the end
+  of each synth the controller reads `torch.cuda.max_memory_allocated(device)` and
+  **ratchets the stored estimate up-only** (`max(seed, observed)`); a lower
+  observation never lowers the guard.
 
-  **Sidecar-down fallback (important).** The TTS sidecar is *not* always up — it's
-  button-driven during the analysis phase and transiently down during an RSS
-  process-recycle (plan 143). GPU truth is still needed then (the analyzer is on
-  the card; an evict decision may be pending). So when `/capacity` is unreachable
-  the server does **not** collapse to CPU-only — it falls back to a **server-side
-  vendor probe** (`nvidia-smi` / `rocm-smi`, the NVIDIA/AMD common case) for the
-  device totals/free, and only degrades to CPU-only when *no* probe of any kind
-  succeeds. This keeps GPU decisions correct during sidecar churn instead of
-  silently disabling the feature exactly when the analyzer owns the card.
+- **`PlacementController` (Python)** — the admission authority for the sidecar's
+  own models. For a `/load` or `/synthesize`, under the per-engine synth lock:
+  1. **Target device.** Resident engine → its current device (no migration).
+     New load → the device with the most headroom that fits.
+  2. **Peak.** `peak = FootprintTable.peak(engine, model, cfg)`.
+  3. **Reserve.** Hold `peak` in a Python `ReservationLedger` for **this op's
+     duration only** (released in a `finally`). Admit against
+     `min(torch_free(device), total(device) − Σ reserved(device)) − reserve`.
+     Per-call because the peak is a decode-time spike; an idle resident model's
+     weights are already in `torch_free`, so only in-flight peaks need reserving.
+  4. **If it doesn't fit:** try the sidecar's own idle-evict (Qwen VoiceDesign /
+     Base17 past idle-TTL, idle ASR/ECAPA), re-check. Cheap CPU-capable engines
+     (Kokoro/ASR/embed) fall back to `cpu`.
+  5. **If it still doesn't fit:** return **`503` `{ neededMb, deviceKey,
+     analyzerEvictWouldHelp }`** — a structured no-capacity, not a hang.
+     `analyzerEvictWouldHelp` is true when the shortfall on `deviceKey` would be
+     covered by whatever the Ollama analyzer holds there.
 
-- **`GpuAdmission`** (`server/src/gpu/admission.ts`, new) — the single authority
-  that replaces `GpuSemaphore` + the weighted-token math. Given an engine and run
-  config, it decides **place-here / evict-then-place / run-on-CPU / queue**, and
-  serializes concurrent decisions so two loads can't both claim the same free
-  capacity (the placement mutex — see Races).
+- **Device honoring on load** (`main.py`) — the real load handlers
+  (`_ensure_base_loaded` / `_ensure_base17_loaded` / `_ensure_design_loaded` /
+  the ORT `InferenceSession` device pin / Coqui `.to`) accept the
+  `PlacementController`'s chosen device instead of the fixed `QWEN_DEVICE` /
+  `COQUI_DEVICE` env. Since a resident model is never migrated, device selection
+  happens only on a cold load, honoring the non-goal.
 
-- **`ReservationLedger`** (inside `GpuAdmission`) — the fix for the transient-peak
-  hazard. **Measured free VRAM alone is NOT a safe admission signal**, because a
-  model's peak is a *decode-time* spike (Qwen 0.6B: ~1.2 GB weights at load, but
-  ~5.6 GB peak during synthesis). If admission read only instantaneous free, a
-  second op admitted between the first's load and its decode peak would see room
-  that doesn't exist once both peak → OOM. So each admitted op **holds a
-  reservation of its full `peak` MB on its device for its whole
-  resident-and-callable lifetime** (not released at load). Admission fits against
-  the **more conservative of measured and reserved**:
+### Server (Node) — analyzer gate + evict + queue
 
-  > `admittable(device) = min(measured_free, total − Σ held_reservations) − GPU_RESERVE_MB`
+- **`CountSemaphore`** (`server/src/gpu/count-semaphore.ts`, new) — the **count**
+  core extracted from today's `GpuSemaphore` (FIFO, `acquire`/release,
+  `resize()`, `queueDepth`, `inFlight`), *without* the token/cost weighting.
+  Backs the analyzer width-K limiter (`analyzer-concurrency.ts`, unchanged
+  behavior — it was already a `GpuSemaphore` used as a count limiter with live
+  `resize()`).
 
-  `min(...)` (not a sum) avoids double-counting a peak that measured free already
-  reflects, while still guarding a peak that hasn't spiked yet. The ledger is
-  reconciled on **evict** (release the reservation) and on **device
-  disappearance** (eGPU drop → drop that device's reservations so the ledger
-  can't leak into permanent under-admission).
+- **`CapacityProbe`** (`server/src/gpu/capacity-probe.ts`, new) — a thin client
+  of the sidecar `/capacity`, last-known-good cached like `sidecar-health.ts`.
+  **Sidecar-down fallback:** when `/capacity` is unreachable (analysis phase,
+  RSS recycle) the server shells its own `nvidia-smi` / `rocm-smi` so GPU truth
+  survives sidecar churn; only when *no* probe of any kind succeeds does it report
+  CPU-only. Consumed by the evict decision and the status display — **not** on the
+  TTS synth hot path.
 
-- **`FootprintTable`** (`server/src/gpu/footprints.ts`, new) — **peak-under-load**
-  MB per (engine, model, run-config), *not* resident weight size (see below).
-  **Covers only the sidecar-loaded engines** (Qwen / Coqui / Kokoro / ASR / spk),
-  whose peak can't be known until the model loads. The **analyzer is never
-  estimated**: Ollama reports its true resident size live via `/api/ps` (already
-  surfaced by `server/src/routes/ollama-health.ts`), so both its live footprint
-  (for the evict-gain decision) and its effect on free capacity (for placement)
-  are *read*, not predicted — which is why the 3.0 → 6.6 GB model-swing + KV
-  variance needs no table entry. Seeded from the **measured** tables already in
-  the repo, refined from on-box history when present:
-  - Seed: **`docs/local-llm.md` is the maintained source of truth** for per-model
-    VRAM (the analyzer weights+KV table and the sidecar-engine resident-size
-    table). The `footprints.ts` seed is a **code mirror of those tables, held in
-    parity by a test** — same discipline as the "sidecar `main.py` default MUST
-    match the registry default" rule — so when a measured size changes, the doc
-    is updated and the mirror (and its test) move with it; neither drifts.
-    `docs/tts-performance.md` supplies the measured decode-*peak* rows (batch /
-    token-budget) that turn a resident size into a peak, and the operator-confirmed
-    peaks — **Qwen 0.6B ≈ 4 GB, Qwen 1.7B ≈ 7 GB max** — are reconciled into the
-    same table (seed rounds up to the higher of doc vs. operator number).
-  - Refine — **up-only ratchet.** The on-box `resource-telemetry.jsonl`
-    (`vramReservedMb`/`vramTotalMb`, `server/src/tts/resource-telemetry.ts`) and
-    `model-vram-stats.ts` (fs-45) give the learned per-box high-water mark. The
-    effective estimate is **`max(committed_seed, on-box_high_water)`** — history
-    can only push the guard *up*, never below the `local-llm.md` seed. A low
-    observation (a small batch that never reached true peak) therefore cannot
-    weaken the guard; only a *higher* observed peak moves it. The seed is the
-    floor; on-box history is the upward correction (the capture plumbing already
-    exists, so a runtime peak is cheap to record). `local-llm.md` is the initial
-    seed, not the runtime authority once history exists.
+- **TTS call sites** (`server/src/tts/sidecar.ts`) — a synth calls the sidecar and
+  handles its response: `200` → done; `503 no-capacity` → if
+  `analyzerEvictWouldHelp` **and** no analysis is mid-flight, evict the Ollama
+  analyzer (`residency.ts`) and retry once; else **enqueue** the op (visible in
+  the pill) and retry when a release signal fires. The old per-engine
+  `GpuSemaphore(1)` synth lock here is **removed** — same-engine serialization is
+  the sidecar's `_synth_lock`.
 
-- **Sidecar device honoring** (`server/tts-sidecar/main.py`) — the synth/load
-  path accepts an assigned `device` and loads the model there instead of choosing
-  on its own.
+- **Analyzer GPU lease** (`analyzer-concurrency.ts`) — the per-model lease that
+  today takes a weighted `gpuSemaphore` slot no longer touches a VRAM budget; the
+  analyzer's actual footprint is read from Ollama `/api/ps`
+  (`server/src/routes/ollama-health.ts`), and the K limiter runs on the extracted
+  `CountSemaphore`. Node's only VRAM action for the analyzer is the evict.
 
-- **Server-owned analyzer evict** (`server/src/gpu/residency.ts`) — unchanged
-  ownership, new trigger: evict the analyzer only when `GpuAdmission` reports no
-  device can fit an incoming heavy model, replacing the blunt `SAFE_COEXIST_MB`
-  "8 GB → always evict" rule.
+- **`GET /api/gpu/queue`** — payload becomes `{ devices: ComputeDevice[],
+  residentByDevice, queueDepth }`. The existing `diagnostics.ts` consumer
+  (`readGpuQueueState`) and the frontend pill's `max`/depth contract are migrated
+  in the same change, not left dangling.
 
 ### Why footprint = peak-under-load, not weight size
 
-The number we admit against must be the model's **peak VRAM under its actual run
-config**, because that is what OOMs. Measured evidence already in the repo:
+The number admitted against must be the model's **peak under its run config**,
+because that is what OOMs:
 
-- Qwen 0.6B **weights ~1.2 GB**, but **decode peak** at the shipped
-  `QWEN_BATCH_SIZE=32 / QWEN_BATCH_TOKEN_BUDGET=3600` is **~5.6 GB**; at 4800
-  it's ~6.9 GB — "too hot" on 8 GB (`docs/tts-performance.md`). Activation + KV
-  dominate, not weights.
-- Analyzer weights + KV: qwen3.5:4b ~3.0 GB + ~1.0–1.5 GB KV at 16K ctx
-  (`docs/local-llm.md`).
+- Qwen 0.6B **weights ~1.2 GB**, but **decode peak** at
+  `QWEN_BATCH_SIZE=32/QWEN_BATCH_TOKEN_BUDGET=3600` is **~5.6 GB**; 4800 → ~6.9 GB
+  ("too hot" on 8 GB) — `tts-performance.md`. Operator-confirmed: 0.6B ≈ 4 GB,
+  1.7B ≈ 7 GB max. The seed rounds up to the higher of doc vs. operator.
+- Analyzer weights + KV: qwen3.5:4b ~3.0 GB + ~1.0–1.5 GB KV — `local-llm.md`
+  (but the analyzer is read from `/api/ps`, not seeded).
 
-So `FootprintTable` is keyed by the levers that move the peak (engine, model, and
-for Qwen the batch/token-budget), seeded from those measured rows, and the reserve
-knob covers the residual.
+### Data flow
 
-### Data flow (one GPU op)
-
+**TTS/ASR/embed op (sidecar-authoritative):**
 ```
-op needs GPU (engine E, resident? R)
-      │
-      ▼
-GpuAdmission.admit(E, runConfig)  ── acquires placement mutex ──┐
-      │                                                         │
-   peak = max(FootprintTable.seed(E,model,cfg), onBoxHighWater) │
-      │                                                         │
-      ├─ R resident on device D? ─ yes ─► ensure a peak reservation is held
-      │                                    on D (place it if not); admit on D
-      ▼ no                                                      │
-   devices = CapacityProbe.fresh()   (per-device measured freeMb)
-   admittable(D) = min(freeMb(D), total(D) − Σ reserved(D)) − RESERVE
-      │                                                         │
-      ├─ some device D: admittable(D) ≥ peak ─► reserve peak on D, assign, load
-      │                                                         │
-      ├─ E is cheap+CPU-capable (kokoro/asr/spk) ─► assign cpu, admit
-      │                                                         │
-      ├─ an evictable resident model exists ──────► evict (release its
-      │        reservation), re-probe, retry        │
-      │        (idle transient → analyzer → never the actively-generating model)
-      │                                                         │
-      └─ else ──────────────────────────────────► queue; wake on next release
-                                                                │
-   ◄── release mutex ────────────────────────────────────────────┘
-   reservation is HELD for the model's resident-and-callable lifetime;
-   released on evict or on device disappearance (eGPU drop).
-   (after a real synth, record the actual peak → up-only ratchet the estimate)
+Node synth request ─► sidecar /synthesize (device unset; sidecar decides)
+                         │  under _synth_lock(engine):
+                         │   peak = FootprintTable.peak(engine, model, cfg)
+                         │   dev  = resident_device(engine) or best_fit()
+                         │   if min(torch_free(dev), total(dev)-Σreserved(dev)) - reserve >= peak:
+                         │        reserve(dev, peak); place/run; record peak up-only; release
+                         │   else: idle_evict() and retry; cpu-fallback if cheap
+                         │   else: 503 { neededMb, deviceKey, analyzerEvictWouldHelp }
+                         ▼
+Node handles 503: analyzerEvictWouldHelp && !analysisInFlight ? evictOllama()+retry
+                  : enqueue (pill), retry on release
 ```
 
-## Admission algorithm (detail)
-
-For a GPU op of engine `E` under `runConfig`:
-
-1. **Resident short-circuit — only safe because the reservation is held.** If
-   `E`'s model is loaded on device `D` *and* its peak reservation is still held
-   on `D`, run there directly. The short-circuit is safe **only** because that
-   reservation was never released (it guards the decode peak of this very
-   re-invocation); it is not "skip the capacity check because it's already
-   loaded." If the model is resident but somehow unreserved (edge case after a
-   ledger reconcile), fall through to step 2.
-2. **Estimate peak.** `peak = max(FootprintTable.seed(E, model, runConfig),
-   onBoxHighWater)` — the up-only ratchet. Seeds round *up* so a cold engine
-   never under-counts into an OOM.
-3. **Probe.** `CapacityProbe.fresh()` → per-device measured `freeMb`. Admittable
-   per device = `min(freeMb, total − Σ held_reservations) − GPU_RESERVE_MB`. The
-   `min` guards a not-yet-spiked peak (via reservations) without double-counting
-   one already reflected in measured free.
-4. **Fit.** Choose the device with the **most headroom** among those where
-   admittable ≥ `peak` (heavy models gravitate to the 16 GB eGPU when present,
-   leaving the 8 GB card for the analyzer split + Kokoro). **Reserve `peak` on the
-   chosen device**, then assign, load, admit. On Apple there is one `mps` device;
-   the same test applies to unified memory.
-5. **CPU fallback (cheap engines only).** If nothing fits and `E ∈ {kokoro, asr,
-   spk}`, assign `cpu`. Slower but low memory, and these are CPU-capable.
-6. **Evict-then-retry (heavy engines).** If nothing fits and `E ∈ {qwen, coqui}`,
-   evict the lowest-priority evictable resident model (**release its
-   reservation**), re-probe, retry from (4). Eviction priority: **idle transient
-   first** (Qwen VoiceDesign / Base17 past idle-TTL, idle ASR/ECAPA) → **then the
-   analyzer** → **never the model actively generating.** **The analyzer cannot be
-   evicted while an analysis is mid-flight** (`local-llm.md`: the load path returns
-   409). So on a single small card, a heavy TTS op that can't fit alongside a
-   running analysis neither evicts nor fits → it **queues until analysis
-   completes** (step 7). That is correct and OOM-safe, but it is a behavior change
-   from the old "semaphore just serializes" and must be surfaced to the user as a
-   queued state, not a hang.
-7. **Queue.** If nothing is evictable, queue; re-run admission when any holder
-   releases (a load finishes / a model is evicted / an analysis completes / an
-   eGPU attaches). The queued op shows in the existing "Queued (N ahead)" pill.
-8. **Record truth (up-only).** After a real synth, measure the actual peak; if it
-   exceeds the current estimate for that (engine, model, runConfig), ratchet the
-   stored high-water mark **up**. A lower measurement never lowers the guard.
+**Analyzer op (Node-authoritative):** width-K `CountSemaphore` + per-model lease;
+footprint read from `/api/ps`; Node evicts Ollama before a TTS load only when the
+sidecar's `503.analyzerEvictWouldHelp` says it would help.
 
 ## Multi-device & eGPU hot-plug
 
-- **Detection is live, never cached across the decision.** Each heavy admission
-  forces a fresh probe, so an attached eGPU (two devices) or a docked/dropped one
-  (one device) is picked up with no restart.
-- **eGPU attach** → a new device with ~16 GB free appears; the next heavy
-  admission places there and queued ops wake.
-- **eGPU drop mid-session** (the "GPU is lost" poison) → the device vanishes from
-  the probe. Any op *in flight* on it is already dead; the sidecar's existing
-  meta-tensor / "GPU is lost" handling reports the failure, the op is marked
-  failed (not silently retried into a wedge), and subsequent admissions see only
-  the remaining device. We do **not** try to rescue in-flight work off a vanished
-  bus — that is the documented hang.
-- **Apple / CPU-only** collapse to a single device; the algorithm is unchanged
-  (one candidate, unified-memory or RAM free).
+- **Live enumeration.** Each cold-load decision re-reads `/capacity`, so an
+  attached eGPU (two devices) or a dropped one (one device) is picked up with no
+  restart. Per-synth calls on a resident model do **not** re-probe (residency is
+  fixed) — the probe is off the hot path.
+- **eGPU attach** → new device with ~16 GB free; the next cold load prefers it.
+- **eGPU drop mid-session** → the device vanishes from `/capacity`; any op in
+  flight on it is already dead (existing "GPU is lost" handling fails it fast);
+  the sidecar's ledger reservation for that op is released in its `finally`; new
+  placement sees only the remaining device. Node surfaces a toast + re-queues.
+- **Apple / CPU-only** collapse to a single device; unchanged algorithm.
 
 ## Ollama as an opaque consumer
 
-- We **never** set `CUDA_VISIBLE_DEVICES`, `OLLAMA_SCHED_SPREAD`, or `num_gpu`
-  for placement purposes. The analyzer splits as it sees fit.
-- Its footprint is invisible to torch's *own* allocation accounting but **fully
-  visible to the capacity probe** (`nvidia-smi`/`rocm-smi` see every process;
-  `torch.cuda.mem_get_info` reports driver-global free, which also includes it).
-  So the per-device `freeMb` we admit against already reflects Ollama's split. No
-  modeling required.
-- The only lever we keep over Ollama is **eviction** (server-owned, already
-  exists), triggered only at admission step (6). With a roomy device present this
-  rarely fires — the heavy model just lands on the device with room.
+We never set `CUDA_VISIBLE_DEVICES` / `OLLAMA_SCHED_SPREAD` / `num_gpu` for
+placement. Ollama's split is invisible to torch's own accounting but **included
+in `torch.cuda.mem_get_info` driver-global free**, so `/capacity` already
+reflects it. Our only lever is eviction (Node-owned), fired only when the
+sidecar's `503` says it would help and no analysis is mid-flight.
 
 ## Failure modes & mitigations
 
 | Failure | Mitigation |
 |---|---|
-| **Transient decode-peak double-book** (the killer) | Each op holds a `peak` **reservation** for its resident lifetime; admission fits against `min(measured_free, total − Σreserved) − reserve`, so a peak that hasn't spiked yet is still reserved. This is the core invariant — see `ReservationLedger`. |
-| **Probe unreachable because the sidecar is down** (analysis phase / RSS recycle) | Server-side vendor fallback (`nvidia-smi`/`rocm-smi`) keeps GPU truth; CPU-only only when *no* probe succeeds. |
-| **Free MB non-contiguous (fragmentation OOM despite "fit")** | `GPU_RESERVE_MB` headroom per device, **plus** the sidecar's already-shipped `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (plan 144) — the reserve alone is not the frag fix, `expandable_segments` is; the reserve is the last-MB cushion on top. |
-| **Two concurrent admissions race on the same free capacity** | Placement mutex serializes probe→decide→reserve→load; the second decision re-probes *and* sees the first's reservation. |
-| **Peak estimate too low → OOM** | Seed = measured, rounded up; on-box history ratchets the guard **up-only** (a lower observation never lowers it). |
-| **eGPU drops mid-load / mid-session** | Vanished device removed from enumeration; in-flight op fails fast via existing poison handling; **its reservations are dropped from the ledger** so the freed-by-loss capacity can't leak into permanent under-admission; no new placement on a non-enumerated device. |
-| **Apple unified memory pressure** | `freeMb` = live available RAM, so admission tightens as the OS eats RAM; CPU and `mps` draw the same pool, modeled as one device. |
-| **Queue starvation** (a heavy op never fits — incl. can't-evict-mid-analysis) | FIFO head-of-line fairness (inherited from the semaphore's drain discipline); the op sits in the visible "Queued (N ahead)" pill until analysis/eviction frees room — a queued state, never a silent hang. |
+| **Transient decode-peak double-book** (the killer) | Sidecar holds a `peak` reservation **for the op's duration** (released in `finally`); admits against `min(torch_free, total−Σreserved) − reserve`. Per-call + co-located with residency ⇒ never leaks, always the right device. |
+| **Sidecar evicts its own model mid-run** (idle watchdog) | The reservation is the sidecar's own and per-call; there is no cross-process ledger to go stale. |
+| **Probe unreachable (sidecar down: analysis phase / RSS recycle)** | Node shells `nvidia-smi`/`rocm-smi`; CPU-only only when no probe works. TTS admission isn't needed while the sidecar is down anyway. |
+| **Fragmentation OOM despite "fit"** | `GPU_RESERVE_MB` (768) **plus** the shipped `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (plan 144). The reserve is the last-MB cushion, not the frag fix. |
+| **Same-model concurrent peaks** (`generationWorkers=2`) | The sidecar `_synth_lock` serializes same-engine forwards (thread-safety, `tts-performance.md`); two peaks never co-run on one engine regardless of VRAM. |
+| **Peak estimate too low** | Seed = measured, rounded up; up-only ratchet from `torch.cuda.max_memory_allocated`. |
+| **eGPU drops mid-load** | Device omitted from `/capacity`; in-flight op fails fast; its per-call reservation releases; toast + re-queue. |
+| **Queue starvation / can't-evict-mid-analysis** | Node queue (FIFO); a heavy op that can't fit and can't evict the mid-flight analyzer sits in the visible pill until analysis frees room — a queued state, never a silent hang. |
 
 ## The one knob
 
 - **`GPU_RESERVE_MB`** — per-device capacity held back from admission (default
-  `768`). `apply: live`. The only GPU-arbitration knob that survives. Default is
-  `768`, not a token 512: `tts-performance.md` shows peaks brushing 6.9 GB on an
-  8 GB card, and the codec-GPU experiment poisoned the CUDA context near the
-  ceiling — the cushion has to be real. It works *with*, not instead of, the
-  shipped `expandable_segments` frag mitigation. Registry help: "Headroom kept
-  free on each device so a load never fills memory to the brim and trips
-  fragmentation OOM. Raise if you still see OOM despite apparently-free memory."
+  `768`). `apply: live`. Read by **both** the sidecar (its env) and Node. The only
+  GPU-arbitration knob that survives. Default is a real cushion, not a token 512:
+  peaks brush 6.9 GB on an 8 GB card and the codec-GPU experiment poisoned the
+  context near the ceiling. Works with, not instead of, `expandable_segments`.
 
 ## What gets deleted / migrated
 
-**Deleted** (registry knobs + code):
-- `gpu.vramBudget` / `GPU_VRAM_BUDGET`
-- `gpu.concurrency` / `GPU_CONCURRENCY`
-- `gpu.weight.{kokoro,qwen,coqui,analyzer,asr,spk}` (all six)
-- `gpu.safeCoexistMb` / `GPU_SAFE_COEXIST_MB` (superseded by "evict only when
-  nothing fits")
-- The weighted-token math in `GpuSemaphore` + `engine-vram-cost.ts`
-  (`ENGINE_VRAM_COST` / `costForEngine` / `DEFAULT_GPU_VRAM_BUDGET`), and
-  `scripts/check-no-budget-poll.mjs` (the lint guard that existed only because
-  the budget was a footgun).
+**Deleted** (registry knobs + code): `gpu.vramBudget`, `gpu.concurrency`, the six
+`gpu.weight.*`, `gpu.safeCoexistMb`; the weighted-token math in `GpuSemaphore`,
+all of `engine-vram-cost.ts` (`ENGINE_VRAM_COST` / `costForEngine` /
+`DEFAULT_GPU_VRAM_BUDGET`), `gpu-semaphore-gate.ts` (`acquireGpuTokenIfOnGpu`),
+`device-total.ts`, and `scripts/check-no-budget-poll.mjs`.
 
-**Kept / re-pointed:**
-- `ANALYZER_OLLAMA_CONCURRENCY` (K) and its limiter stay; its per-model GPU
-  **lease** re-points from the weighted `gpuSemaphore` slot to `GpuAdmission`
-  (the analyzer "is resident" rather than "costs 4 tokens").
-- Existing per-engine device pins (`tts.{coqui,kokoro,qwen}.device`) become an
-  **optional manual override** that auto-placement honors when set, and ignores
-  (auto-picks) when left at `auto`.
-- `acquireGpuTokenIfOnGpu` / the off-GPU-skip idiom becomes
-  `GpuAdmission.admit`; call sites in `tts/sidecar.ts` updated in place.
-- `GET /api/gpu/queue` + the "Queued" pill stay; the status payload gains
-  **per-device free capacity + what's resident where** (read-only), replacing the
-  now-meaningless "budget / effective N" display.
+**Extracted, not deleted:** the FIFO count core of `GpuSemaphore` becomes
+`CountSemaphore` (no weighting) for the analyzer K limiter and any remaining
+count-only use.
 
-**Registry migration:** deleted knobs get a `removed`/alias entry so a stray
-`GPU_VRAM_BUDGET=4` in an old `.env` is inert (same pattern as the retired
-`ANALYZER=gemini`), not a hard error.
+**All direct consumers reconciled (explicit tasks):** `synthesise-chapter.ts`
+(the `gpuSemaphore.acquire(budget)` barrier + the `maxConcurrency` pool-width
+default), `persona-gpu-plan.ts` (VoiceDesign barrier), `embed-client.ts` (`budget
+>= 2` gate), `ollama.ts` (the module-load `describeAnalyzerConcurrency` log),
+`diagnostics.ts` + `diagnostics.test.ts` (the `readGpuQueueState` shape). None are
+left to a "fix imports" hand-wave.
+
+**Kept / re-pointed:** the analyzer K limiter + `syncAnalyzerConcurrency` (now on
+`CountSemaphore`); the per-engine `tts.{coqui,kokoro,qwen}.device` pins as an
+optional manual override the sidecar honors; `GET /api/gpu/queue` (payload
+migrated). Deleted knobs get inert `removed` handling verified against how
+`ANALYZER` was actually retired.
 
 ## Testing
 
-- **Primary acceptance (the goal):** a server-side integration test with a
-  **mocked `CapacityProbe`** driving each hardware state — (a) single 8 GB CUDA
-  card, (b) 8 GB + 16 GB, (c) single Apple `mps` device, (d) CPU-only — asserts a
-  sequence of loads (Kokoro + analyzer + Qwen + Coqui) is **never admitted past
-  real free capacity** on any device — the invariant is **Σ held peak
-  reservations per device ≤ `total − reserve`**, checked at every admission, not
-  merely "instantaneous measured free ≥ next peak." This is the "no OOM anywhere"
-  guarantee, made mechanical.
-- **Transient-peak reservation (the OOM regression that motivated the rework):**
-  two heavy ops (the `generationWorkers=2` case) admit sequentially onto one 8 GB
-  card while their *loads* fit but their *peaks* don't; assert the second is
-  queued, **not** admitted — i.e. admission counts the first's held `peak`
-  reservation even before it has spiked. This is the test that would fail against
-  a naive "read free at load time" implementation.
-- **Reservation lifecycle:** reservation released on evict; reservation for a
-  vanished (eGPU-dropped) device dropped from the ledger; resident short-circuit
-  only fires while the reservation is held.
-- **Sidecar-down capacity:** `/capacity` unreachable → server vendor-probe
-  fallback still reports the GPU (not CPU-only); only no-probe-at-all → CPU-only.
-- **eGPU hot-plug:** probe flips 2 devices → 1 between admissions; assert
-  queue/fail handling, ledger reconcile, and no placement on the vanished index.
-- **Ollama opacity:** probe reports a device with reduced free (an Ollama split);
-  assert admission respects the *reduced* free, not a modeled cost.
-- **Can't-evict-mid-analysis:** heavy TTS op + mid-flight analysis on one small
-  card → op queues (not 500, not hang), then admits when analysis completes.
-- **Eviction ladder:** idle-transient evicts before the analyzer; the
-  actively-generating model is never chosen.
-- **CPU fallback:** heavy engine with no room → queue; cheap engine with no room
-  → CPU.
-- **Footprint peak vs weight:** assert Qwen at 32/3600 admits against the ~5.6 GB
-  measured peak, not the ~1.2 GB weight size (guards the exact under-count OOM).
-- **Footprint learning (up-only):** a *higher* measured peak raises the estimate
-  for the next admission of the same (engine, model, runConfig); a *lower* one
-  leaves the guard unchanged. Seed floor from `local-llm.md` is enforced by the
-  parity test.
-- **Sidecar:** pytest that `device=cuda:N` / `mps` / `cpu` is honored on load
-  (extends `test_runtime_wiring.py` / `test_devices.py`).
-- Regression plan under `docs/features/` created per the before-shipping checklist.
+- **Primary acceptance (no OOM):** a **sidecar** pytest with a mocked capacity
+  probe drives each hardware state — (a) 8 GB CUDA, (b) 8 + 16 GB, (c) Apple
+  `mps`, (d) CPU-only — and asserts `Σ held reservations per device ≤ total −
+  reserve` at every admission, across a Kokoro + Qwen + Coqui sequence. The
+  reservation-holds-the-peak case (two ops whose loads fit but peaks don't) is the
+  test a naive free-read fails.
+- **Reservation lifecycle (sidecar):** reservation released in `finally` on
+  success, error, and mid-run idle-evict; no leak across a synth loop.
+- **Device honoring (sidecar):** a cold load places on the assigned device;
+  resident models are not migrated per synth. Tests target the **real** load
+  handlers, not fictional stubs.
+- **Footprint parity (sidecar pytest):** parse the numbers out of `local-llm.md`
+  and assert the Python seed map equals them (real parity, not a keyword match).
+- **Footprint up-only:** a higher `max_memory_allocated` raises the estimate; a
+  lower one doesn't.
+- **503 orchestration (Node):** sidecar `503 analyzerEvictWouldHelp=true` + no
+  analysis → Node evicts Ollama + retries; `=false` or analysis-in-flight →
+  queued (pill), never 500/hang.
+- **CountSemaphore:** the analyzer K limiter still resizes live and FIFO-drains
+  (port the existing `GpuSemaphore` count tests).
+- **Consumer migrations:** `synthesise-chapter` pool-width, `diagnostics` payload,
+  `embed-client` gate each keep a green test after the cutover.
+- **Capacity fallback (Node):** `/capacity` down → `nvidia-smi` fallback reports
+  the GPU; no probe → CPU-only.
+- **Frontend e2e:** a queued heavy op shows "Queued (N ahead)", never a
+  spinner-forever; eGPU-drop dispatches a toast + re-queue.
+- Regression plan under `docs/features/` per the before-shipping checklist.
 
 ## Implementation notes
 
-- **Runs on its own worktree + branch off `main`** (`feat/server-…`) — no direct
-  work on `main`, per the operator's standing instruction and the branching
-  workflow.
-- This reverses the 2026-06-16 deferral of MB-accounting; that doc's reasoning
-  ("on 8 GB the answer is always evict") was correct *for a fixed single 8 GB
-  card* and no longer holds once a 16 GB eGPU / AMD / Apple device is in play.
+- **Own worktree + `feat/…` branch off `main`.** No direct work on `main`.
+- Reverses the 2026-06-16 MB-accounting deferral — correct then for a fixed 8 GB
+  card, void once a 16 GB eGPU / AMD / Apple device is in play.
 
 ## Resolved decisions
 
-1. **Capacity read is sidecar-owned, exposed via `GET /capacity`** for the server
-   and any other consumer (admin console, benchmarks). The sidecar's torch view
-   is the portable cross-vendor read; the server still owns the evict decision.
-2. **Footprint keyed by (engine, model) — plus the Qwen batch/token-budget
-   levers**, which measurably swing its peak (5.6 → 6.9 GB). All other engines
-   stay flat (engine, model). On-box telemetry history refines every entry.
-3. **eGPU drop → toast + auto-requeue.** The in-flight op fails fast (no rescue
-   off a vanished bus), a toast tells the user the eGPU disconnected, and the
-   chapter auto-requeues onto the remaining device.
+1. **Capacity read is sidecar-owned** (`GET /capacity`, torch), with a Node
+   `nvidia-smi`/`rocm-smi` fallback for sidecar-down.
+2. **TTS admission is sidecar-owned (Option A).** Placement, per-call peak
+   reservation, and own-idle-evict live in the sidecar where residency lives;
+   Node orchestrates evict-Ollama-or-queue off the sidecar's `503`. Chosen after
+   the adversarial review showed a Node-only ledger can't safely gate
+   sidecar-resident models it never observes.
+3. **Footprint keyed by (engine, model) + the Qwen batch/token-budget levers**;
+   seeded from the maintained `local-llm.md` (parity-tested), ratcheted up-only.
+4. **eGPU drop → toast + auto-requeue.**
 
 ## Remaining open questions
 
-- None blocking the plan. Two tuning details deferred to implementation: the
-  exact `/capacity` cache TTL, and whether a first-run micro-probe should
-  pre-populate `FootprintTable` before the first real load (vs. relying on the
-  committed seed until telemetry accrues).
+- Non-blocking: the exact `/capacity` cache TTL; whether the sidecar persists the
+  learned footprint high-water across restarts or re-learns each boot from the
+  seed (either is OOM-safe — the seed is the floor).
