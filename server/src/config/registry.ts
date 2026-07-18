@@ -657,10 +657,10 @@ export const KNOBS: ConfigKnob[] = [
     env: 'GPU_RESERVE_MB',
     group: 'gpu-lifecycle',
     label: 'GPU VRAM reserve (MB)',
-    help: 'VRAM safety cushion (MB) held back from every capacity admission; also read by the sidecar via GPU_RESERVE_MB.',
+    help: 'VRAM safety cushion (MB) held back from every capacity admission. Read by the sidecar (its primary consumer) at process start, so a change needs a sidecar restart to fully take effect.',
     type: 'integer', min: 0,
     default: 768,
-    apply: 'live', risk: 'high',
+    apply: 'restart-sidecar', risk: 'high',
   },
   {
     key: 'sidecar.qwenDesignIdleTtl',

@@ -54,10 +54,14 @@ owner: null
   vars are inert on read (unknown vars are simply never consumed — same mechanism
   that retired `ANALYZER`), so a stale `.env` doesn't error.
 - **Reversibility:** `SEG_CAPACITY_ADMISSION=0` (the default) makes the sidecar
-  never emit the no-capacity 503, so the Node evict-or-poll orchestration is
-  dormant and `/synthesize` behaves as before. There is no fallback to the old
-  budget — it is deleted; "off" means "no admission", relying on the sequential
-  workflow + `poolWidth=1` (below).
+  never emit the no-capacity 503, so the Node evict-or-poll orchestration on the
+  *synth* path is dormant. The **load** path is still protected in both flag
+  states: `withGpuLoad` (`gpu-load.ts`) reads measured free VRAM
+  (`capacityProbe`) and, on a tight card with an idle analyzer, evicts the
+  resident Ollama before a heavy TTS load — the capacity-based replacement for
+  the retired `safeCoexistMb` heuristic, so a default (flag-OFF) 8 GB render
+  does NOT OOM on a resident analyzer. There is no fallback to the old budget;
+  `poolWidth=1` (below) keeps a render serialized.
 
 ## Invariants to preserve
 
@@ -133,9 +137,8 @@ the flag is OFF) should close so admission covers everything the budget did:
 - **`_observed_mb` reads `max_memory_allocated` without `reset_peak_memory_stats`**
   → the learned footprint drifts to the device-wide high-water (over-conservative,
   never an OOM).
-- **`gpu-load.ts` now busy-checks unconditionally** (dropped the card-size-gated
-  pre-load evict) — large-card users may see `GpuBusyError` where they didn't;
-  `persona-gpu-plan.ts`'s `unloadResidentSidecar` is now dead code.
+- **`persona-gpu-plan.ts`'s `unloadResidentSidecar` + `GpuBusyForPersonaError`
+  are now dead code** (the reverse-evict was removed); deletion candidates.
 - **`engine-vram-cost.ts` is provably dead** (its registry weights are deleted) —
   a candidate for deletion in a follow-up.
 - **Per-device pill + eGPU-drop toast e2e** are deferred polish.

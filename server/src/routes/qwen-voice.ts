@@ -290,10 +290,12 @@ qwenVoiceRouter.get(
 /* Shared design core — the sidecar `/qwen/design-voice` call + audition-cache
    write, extracted so BOTH the single-design route below and the bulk
    "Design full cast" job (server/src/routes/cast-design.ts) run the exact same
-   path in-process (no HTTP-to-self). Serialized per book (`withDesignLock`) and
-   GPU-fair (`gpuSemaphore`) so two designs for one book can't corrupt the
-   shared `.pt`/audition-cache, and a bulk run can't oversubscribe the card
-   against a concurrent generation/analysis. Throws on sidecar/encode failure
+   path in-process (no HTTP-to-self). Serialized per book (`withDesignLock`) so
+   two designs for one book can't corrupt the shared `.pt`/audition-cache. (VRAM
+   arbitration against a concurrent generation/analysis is no longer a Node-side
+   gate — the retired weighted `gpuSemaphore` is replaced by the sidecar's own
+   capacity admission when SEG_CAPACITY_ADMISSION is on; wrapping design_voice in
+   that admission is a flag-on-readiness follow-up, see plan 264.) Throws on sidecar/encode failure
    with a user-facing message; the caller maps it (502 for the route, a
    per-character failure for the bulk job). Does NOT persist the per-character
    override or the emotion variant — that stays with the callers. */
