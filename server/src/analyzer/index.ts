@@ -273,6 +273,10 @@ export class FallbackAnalyzer implements Analyzer {
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
       if (err instanceof LocalUnreachableError) {
+        /* Announce the switch so the route re-labels the pill with the effective
+           Gemini model (mirrors runScriptReviewChapter) — otherwise the UI keeps
+           naming the local model that isn't running. */
+        call.onFallback?.({ reason: 'Ollama unreachable' });
         return await this.fallback.runStage1Chapter(manuscriptId, chapterId, promptMd, call);
       }
       throw err;
@@ -290,6 +294,8 @@ export class FallbackAnalyzer implements Analyzer {
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
       if (err instanceof LocalUnreachableError) {
+        /* Announce the switch so the route re-labels the pill (see runStage1Chapter). */
+        call.onFallback?.({ reason: 'Ollama unreachable' });
         return await this.fallback.runStage2Chapter(manuscriptId, chapterId, promptMd, call);
       }
       throw err;

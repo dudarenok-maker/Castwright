@@ -336,6 +336,33 @@ describe('POST /api/books/:bookId/script-review', () => {
     expect(events.some((e) => e.kind === 'result')).toBe(false);
   });
 
+  it('a Gemini content-block (RECITATION) fast-fails the whole pass with content_blocked — no per-chapter grind', async () => {
+    /* A gemini-* content-filter block is deterministic and whole-book-fatal:
+       the same filter blocks every chapter identically. So the FIRST block must
+       stop the run with one actionable terminal error, NOT emit a chapter-failed
+       for chapter 1 and grind on to chapter 2 (the "frozen at 0%, no error"
+       symptom this fixes). */
+    writeBook(SENTENCES);
+    const { GeminiContentBlockedError } = await import('../analyzer/errors.js');
+    runReview.mockImplementation((): Promise<ScriptReviewOutput> =>
+      Promise.reject(new GeminiContentBlockedError('gemini-3.1-flash-lite', 'RECITATION')),
+    );
+
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    const events = parseSse(res.text);
+
+    const err = events.find((e) => e.kind === 'error') as
+      | { code?: string; message?: string; model?: string; remediation?: string }
+      | undefined;
+    expect(err?.code).toBe('content_blocked');
+    expect(err?.message).toMatch(/RECITATION/); // the actionable reason
+    expect(err?.model).toBe('gemini-3.1-flash-lite'); // the model that actually ran
+    // No success result, and — crucially — no chapter-failed grind: it stopped at
+    // the first block, so chapter 2 was never even attempted.
+    expect(events.some((e) => e.kind === 'result')).toBe(false);
+    expect(events.some((e) => e.kind === 'chapter-failed')).toBe(false);
+  });
+
   /* Round-3 review Important Finding 5 — the detached job launch
      (`void runScriptReviewJob(...).finally(...)`) had no `.catch`, so a
      SYNCHRONOUS throw inside runScriptReviewJob (e.g. selectAnalyzerForPhase

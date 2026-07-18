@@ -37,8 +37,9 @@ import { getResolvedGeminiApiKey, getResolvedAllowCloudFallback } from '../works
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { warmOllamaModel } from './ollama-health.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
-import { AnalyzerTruncatedError } from '../analyzer/errors.js';
+import { AnalyzerTruncatedError, GeminiContentBlockedError } from '../analyzer/errors.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
+import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { upsertChapterEntry, readLedger, discardChapters, resolveOps, patchSelection } from '../workspace/script-review-ledger.js';
 import {
   chunkSentencesByBudget,
@@ -885,6 +886,11 @@ async function runScriptReviewJob(
       // exact same spot the original early-return left off (before this
       // chapter's pacing/checkpoint bookkeeping).
       let quotaErr: DailyQuotaExhaustedError | null = null;
+      /* A gemini-* content-filter block (RECITATION/SAFETY) is deterministic and
+         whole-book-fatal — the same filter blocks every chapter. Capture it and
+         fail the whole pass fast (mirrors quotaErr) instead of emitting a
+         chapter-failed and grinding through the remaining chapters. */
+      let blockedErr: GeminiContentBlockedError | null = null;
       await withPassEval(
         reviewCall,
         {
@@ -910,6 +916,10 @@ async function runScriptReviewJob(
                 quotaErr = err;
                 break;
               }
+              if (err instanceof GeminiContentBlockedError) {
+                blockedErr = err;
+                break;
+              }
               send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
             }
             // Intra-chapter creep: only advances the bar for multi-chunk (local)
@@ -928,6 +938,22 @@ async function runScriptReviewJob(
         },
         () => null,
       );
+      if (blockedErr) {
+        /* Terminal, actionable error. The message already names the model +
+           reason + remediation ("switch GEMINI_MODEL to a gemma-* model or set
+           ANALYZER=local"); `model` drives the status pill, `remediation` the
+           panel copy. Renders generically in the frontend else-branch toast (no
+           Retry — retrying the same model is futile). */
+        send({
+          kind: 'error',
+          code: 'content_blocked',
+          message: (blockedErr as GeminiContentBlockedError).message,
+          model: (blockedErr as GeminiContentBlockedError).model,
+          remediation: FAILURE_REMEDIATIONS['analyzer-content-blocked'].remediation,
+        });
+        for (const sub of job.subscribers) sub.res.end();
+        return;
+      }
       if (quotaErr) {
         send({ kind: 'error', code: 'quota_exhausted', message: 'Daily analyzer quota exhausted. Already-reviewed chapters are streamed — re-run to finish.', resetAt: (quotaErr as DailyQuotaExhaustedError).resetAt instanceof Date ? (quotaErr as DailyQuotaExhaustedError).resetAt.toISOString() : undefined });
         for (const sub of job.subscribers) sub.res.end();
