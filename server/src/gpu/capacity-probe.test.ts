@@ -12,7 +12,7 @@ vi.mock('node:child_process', () => ({
   execFile: (...args: unknown[]) => execFileMock(...args),
 }));
 
-import { capacityProbe, type ComputeDevice } from './capacity-probe.js';
+import { capacityProbe, __resetCapacityCacheForTest, type ComputeDevice } from './capacity-probe.js';
 
 const fetchMock = vi.fn();
 
@@ -34,6 +34,7 @@ function mockExecFile(handlers: Record<string, { stdout?: string; err?: Error }>
 beforeEach(() => {
   fetchMock.mockReset();
   execFileMock.mockReset();
+  __resetCapacityCacheForTest(); // cold cache per test — the module cache is shared
   vi.stubGlobal('fetch', fetchMock);
   mockExecFile({}); // default: every vendor probe ENOENTs
 });
@@ -111,5 +112,49 @@ describe('CapacityProbe.read', () => {
     const third = await capacityProbe.read({ fresh: true });
     expect(third).toEqual(devices);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('unreachable probe preserves the last-known-good GPU reading (no CPU-only overwrite)', async () => {
+    const gpu: ComputeDevice[] = [
+      { kind: 'cuda', index: 0, label: 'gpu0', totalMb: 8188, freeMb: 6000 },
+    ];
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ devices: gpu }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    // A good reading lands in the cache.
+    const good = await capacityProbe.read({ fresh: true });
+    expect(good).toEqual(gpu);
+
+    // Now every source fails at once (sidecar rejects, both vendor tools ENOENT).
+    fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
+    mockExecFile({});
+
+    // A forced re-probe must return the last-known-good GPU devices, NOT a
+    // fabricated cpu-only floor — otherwise admission sees a false "no GPU".
+    const afterHiccup = await capacityProbe.read({ fresh: true });
+    expect(afterHiccup).toEqual(gpu);
+    expect(afterHiccup[0].kind).toBe('cuda');
+  });
+
+  it('returns defensive copies so a caller mutating a device cannot corrupt the cache', async () => {
+    const gpu: ComputeDevice[] = [
+      { kind: 'cuda', index: 0, label: 'gpu0', totalMb: 8188, freeMb: 6000 },
+    ];
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ devices: gpu }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    );
+    const first = await capacityProbe.read({ fresh: true });
+    first[0].freeMb = -999; // caller mutates its own copy
+
+    // A cache-hit read (within the TTL) must still see the original value.
+    const second = await capacityProbe.read();
+    expect(second[0].freeMb).toBe(6000);
   });
 });

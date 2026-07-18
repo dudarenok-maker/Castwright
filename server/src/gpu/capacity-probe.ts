@@ -30,6 +30,12 @@ const CACHE_TTL_MS = 1_500;
 
 let cache: { at: number; devices: ComputeDevice[] } | null = null;
 
+/** Test-only: clear the module-level last-known-good cache so each test starts
+    from a cold probe. Never called in production. */
+export function __resetCapacityCacheForTest(): void {
+  cache = null;
+}
+
 /** GET `<sidecarUrl>/capacity` — same URL resolution as sidecar-health.ts.
     Returns null on any failure (timeout, unreachable, non-2xx, bad body). */
 async function fetchSidecar(): Promise<ComputeDevice[] | null> {
@@ -131,22 +137,43 @@ function cpuOnlyDevice(): ComputeDevice {
   };
 }
 
-async function probe(): Promise<ComputeDevice[]> {
+/** Probe the live sources in order. `reachable` is true when a real source
+    (the sidecar or a vendor tool) actually answered; false when every source
+    failed and we fell to the local CPU-only floor. A `reachable: false` result
+    must NOT overwrite a prior good reading — see read()'s last-known-good
+    handling below. */
+async function probe(): Promise<{ devices: ComputeDevice[]; reachable: boolean }> {
   const sidecarDevices = await fetchSidecar();
-  if (sidecarDevices) return sidecarDevices;
+  if (sidecarDevices) return { devices: sidecarDevices, reachable: true };
   const vendorDevices = await vendorProbe();
-  if (vendorDevices) return vendorDevices;
-  return [cpuOnlyDevice()];
+  if (vendorDevices) return { devices: vendorDevices, reachable: true };
+  return { devices: [cpuOnlyDevice()], reachable: false };
+}
+
+/** Copy each device so a caller that mutates a returned ComputeDevice (e.g.
+    decrementing freeMb for a tentative reservation) can't corrupt the cache. */
+function copyDevices(devices: ComputeDevice[]): ComputeDevice[] {
+  return devices.map((d) => ({ ...d }));
 }
 
 export const capacityProbe: CapacityProbe = {
   async read(opts?: { fresh?: boolean }): Promise<ComputeDevice[]> {
     const now = Date.now();
     if (!opts?.fresh && cache && now - cache.at < CACHE_TTL_MS) {
-      return cache.devices;
+      return copyDevices(cache.devices);
     }
-    const devices = await probe();
-    cache = { at: now, devices };
-    return devices;
+    const { devices, reachable } = await probe();
+    if (reachable) {
+      cache = { at: now, devices };
+      return copyDevices(devices);
+    }
+    // Unreachable: preserve the last-known-good reading rather than clobbering
+    // it with the CPU-only floor for the next TTL window (mirrors the
+    // reachable-only-updates idiom in vram-state.ts). A one-off sidecar+vendor
+    // hiccup must not make admission see a false "no GPU". Only when there's no
+    // prior reading at all do we return the floor — and we still don't cache it,
+    // so the next call re-probes for a real source.
+    if (cache) return copyDevices(cache.devices);
+    return copyDevices(devices);
   },
 };
