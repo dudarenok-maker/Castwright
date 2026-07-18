@@ -105,27 +105,19 @@ describe('peak-in-flight telemetry', () => {
 });
 
 describe('describeAnalyzerConcurrency', () => {
-  it('reports the same-model call ceiling as K, separately from distinct-model co-residency (M4)', () => {
-    // budget=1, cost=4 -> distinct-model co-residency floors at 1, but the
-    // same-model call ceiling is STILL K=2 — these are different axes and
-    // must not collapse into one misleading "effective N".
-    const msg = describeAnalyzerConcurrency(4, 1);
+  it('reports the same-model call ceiling as K (K-only — the distinct-model co-residency axis is gone with the GPU semaphore)', () => {
+    const msg = describeAnalyzerConcurrency();
     expect(msg).toContain('K=2');
     expect(msg).toContain('same-model');
     expect(msg).toContain('OLLAMA_NUM_PARALLEL >= 2');
-    expect(msg).toContain('distinct-model co-residency');
-    expect(msg).toContain('co-residency ceiling (GPU budget=1 / analyzer cost=4) = 1');
+    expect(msg).not.toContain('co-residency');
     expect(msg).not.toMatch(/effective \d/);
   });
-  it('reports distinct-model co-residency as floor(budget/cost), still separate from K', () => {
-    // budget=16, cost=4 -> co-residency=4, independent of K.
-    const msg = describeAnalyzerConcurrency(4, 16);
-    expect(msg).toContain('K=2');
-    expect(msg).toContain('same-model');
-    expect(msg).toContain('OLLAMA_NUM_PARALLEL >= 2');
-    expect(msg).toContain('distinct-model co-residency');
-    expect(msg).toContain('co-residency ceiling (GPU budget=16 / analyzer cost=4) = 4');
-    expect(msg).not.toMatch(/effective \d/);
+  it('reflects a live K override', () => {
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '5';
+    const msg = describeAnalyzerConcurrency();
+    expect(msg).toContain('K=5');
+    expect(msg).toContain('OLLAMA_NUM_PARALLEL >= 5');
   });
 });
 

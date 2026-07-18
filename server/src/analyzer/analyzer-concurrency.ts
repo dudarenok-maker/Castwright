@@ -71,25 +71,19 @@ export async function acquireAnalyzerSlot(_model: string, _onCpu: boolean): Prom
   };
 }
 
-/** Startup log for analyzer concurrency (M4). Reports TWO independent axes —
-    collapsing them into one "effective N" number (as an earlier version did)
-    misleads operators into raising GPU_VRAM_BUDGET to "fix" a low number,
-    which instead just enables distinct-model co-residence and risks the OOM
-    this feature exists to prevent:
-      1. Same-model call concurrency, bounded by K (the limiter budget) and
-         OLLAMA_NUM_PARALLEL — this is what acquireAnalyzerSlot actually
-         delivers for repeated calls to the SAME resident model.
-      2. Distinct-model co-residency, bounded by floor(gpuBudget / cost) — how
-         many DIFFERENT local models can hold a GPU token at once.
-         This is a ceiling on co-residence, not on same-model call throughput. */
-export function describeAnalyzerConcurrency(analyzerCost: number, gpuBudget: number): string {
+/** Startup log for analyzer concurrency (M4, K-only since the GPU VRAM budget
+    concept was retired). Reports same-model call concurrency, bounded by K
+    (the limiter budget) and OLLAMA_NUM_PARALLEL — this is what
+    acquireAnalyzerSlot actually delivers for repeated calls to the SAME
+    resident model. The distinct-model co-residency ceiling this used to also
+    report (floor(gpuBudget / cost)) is gone along with the GPU semaphore it
+    was computed from. */
+export function describeAnalyzerConcurrency(): string {
   syncAnalyzerConcurrency(); // report live K, not the possibly-cold module-load value
   const k = analyzerConcurrency.max;
-  const coResidency = Math.max(1, Math.floor(gpuBudget / Math.max(1, analyzerCost)));
   return (
     `[analyzer] up to K=${k} same-model analyzer calls run concurrently ` +
-    `(Ensure OLLAMA_NUM_PARALLEL >= ${k}); ` +
-    `distinct-model co-residency ceiling (GPU budget=${gpuBudget} / analyzer cost=${analyzerCost}) = ${coResidency}.`
+    `(Ensure OLLAMA_NUM_PARALLEL >= ${k}).`
   );
 }
 
