@@ -75,9 +75,43 @@ function leaveModelLease(key: string): void {
   }
 }
 
+/* Re-resolve K live and resize the limiter to match. The singleton is built at
+   module-load (above), but K can legitimately differ from that captured value:
+   (a) the persisted analyzer.ollama.concurrency override often isn't in the
+   user-settings cache yet when this module is first imported during boot, so
+   the constructor reads the bare default — this is why a saved K never used to
+   take effect; and (b) the knob is `live`, so an operator can change K between
+   runs. Calling this at the head of every acquire means the FIRST call after
+   the settings cache warms adopts the persisted value, and a later change
+   applies on the next run — with no restart. resize() is a no-op when K is
+   unchanged, so the steady-state cost is one cached configValue read. */
+export function syncAnalyzerConcurrency(): void {
+  analyzerConcurrency.resize(resolveK());
+}
+
+/* Honest observability (M3 follow-up): the peak number of analyzer calls that
+   were simultaneously past BOTH gates (limiter + lease) — i.e. genuinely
+   in-flight to Ollama at once. A run that fired K-wide reaches peak=K even if
+   Ollama's own n_slots serialised the decodes, so peak<K localises the cap to
+   the APP (a limiter/pool bug) while peak==K with no wall-clock speedup
+   localises it to OLLAMA (n_slots below K — raise OLLAMA_NUM_PARALLEL / lower
+   num_ctx so the KV for K slots fits). The route logs this at each phase end. */
+let inFlightCount = 0;
+let peakInFlight = 0;
+export function getAnalyzerConcurrencyStats(): { inFlight: number; peak: number; limiter: number } {
+  return { inFlight: inFlightCount, peak: peakInFlight, limiter: analyzerConcurrency.budget };
+}
+/** Reset the peak watermark to the CURRENT in-flight count (not 0) so a
+    mid-run reset — e.g. at a phase boundary while calls from the prior phase
+    are still draining — stays truthful rather than under-reporting. */
+export function resetAnalyzerConcurrencyPeak(): void {
+  peakInFlight = inFlightCount;
+}
+
 /** The one entry point for every analyzer Ollama call. limiter → model-lease.
     Returns a single idempotent release that frees both in reverse order. */
 export async function acquireAnalyzerSlot(model: string, onCpu: boolean): Promise<() => void> {
+  syncAnalyzerConcurrency(); // adopt persisted/current K before gating
   const releaseLimiter = await analyzerConcurrency.acquire();
   let releaseLease: () => void;
   try {
@@ -86,10 +120,13 @@ export async function acquireAnalyzerSlot(model: string, onCpu: boolean): Promis
     releaseLimiter();
     throw e;
   }
+  inFlightCount++;
+  if (inFlightCount > peakInFlight) peakInFlight = inFlightCount;
   let released = false;
   return () => {
     if (released) return;
     released = true;
+    inFlightCount--;
     releaseLease();
     releaseLimiter();
   };
@@ -107,6 +144,7 @@ export async function acquireAnalyzerSlot(model: string, onCpu: boolean): Promis
          many DIFFERENT local models can hold a gpuSemaphore slot at once.
          This is a ceiling on co-residence, not on same-model call throughput. */
 export function describeAnalyzerConcurrency(analyzerCost: number, gpuBudget: number): string {
+  syncAnalyzerConcurrency(); // report live K, not the possibly-cold module-load value
   const k = analyzerConcurrency.budget;
   const coResidency = Math.max(1, Math.floor(gpuBudget / Math.max(1, analyzerCost)));
   return (

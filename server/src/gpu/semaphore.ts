@@ -42,7 +42,7 @@ type Waiter = {
 export class GpuSemaphore {
   private used = 0;
   private holders = 0;
-  private readonly capacity: number;
+  private capacity: number;
   private readonly queue: Waiter[] = [];
 
   constructor(budget: number) {
@@ -91,6 +91,22 @@ export class GpuSemaphore {
       }
       this.queue.push(waiter);
     });
+  }
+
+  /** Live-resize the token budget. Used by the analyzer width-K limiter so a
+      changed `analyzer.ollama.concurrency` (or a persisted override that
+      wasn't in the settings cache at module-load) takes effect WITHOUT a
+      process restart. Clamps to >= 1 (same as the constructor). Growing the
+      budget immediately drains any FIFO waiters that now fit; shrinking leaves
+      in-flight holders untouched — `used` may briefly exceed the new capacity,
+      and new acquires simply wait until releases bring it back under. No-op
+      when unchanged. Only ever called on the analyzer limiter, never on the
+      shared `gpuSemaphore` singleton (whose budget stays restart-scoped). */
+  resize(newBudget: number): void {
+    const next = Math.max(1, Math.floor(newBudget));
+    if (next === this.capacity) return;
+    this.capacity = next;
+    this.drain(); // a grown budget may now admit queued waiters
   }
 
   private clampCost(cost: number): number {

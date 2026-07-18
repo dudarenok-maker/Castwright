@@ -870,10 +870,10 @@ export const KNOBS: ConfigKnob[] = [
     env: 'ANALYZER_OLLAMA_CONCURRENCY',
     group: 'analyzer-sampling',
     label: 'Ollama analyzer concurrency (K)',
-    help: 'Max analyzer /api/chat calls in flight at once — the width of both the global analyzer limiter and the chapter/chunk worker pool. Concurrency is bounded per resident model by a GPU lease, so raising K is safe (no cross-engine OOM) and does NOT change TTS width. Set K to what the resident model\'s spare VRAM fits: 6GB big-model 1, 8GB small-model 2, dual-card 4. Also set Ollama-side OLLAMA_NUM_PARALLEL >= K.',
+    help: 'Max analyzer /api/chat calls in flight at once — the width of both the global analyzer limiter and the chapter/chunk worker pool. Takes effect on the NEXT analysis run (no restart). Concurrency is bounded per resident model by a GPU lease, so raising K is safe (no cross-engine OOM) and does NOT change TTS width. Set K to what the resident model\'s spare VRAM fits: 6GB big-model 1, 8GB small-model 2, dual-card 4. CRITICAL: also set Ollama-side OLLAMA_NUM_PARALLEL >= K — otherwise Ollama serves 1 slot and the calls serialise regardless of K.',
     type: 'integer', min: 1,
     default: 2,
-    apply: 'restart-server', risk: 'high',
+    apply: 'live', risk: 'high',
   },
   {
     key: 'analyzer.ollama.warmTimeoutMs',
