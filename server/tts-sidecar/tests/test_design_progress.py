@@ -67,6 +67,10 @@ def test_mint_variant_reports_phases_in_order(monkeypatch):
 
     class _FakeBase17:
         model = _Model()
+        # The real Qwen3TTSModel wrapper caches its device at `.device`; the
+        # mint forward now moves ref_code onto it (#1730 gap 1), so the double
+        # exposes it too.
+        device = "cpu"
 
         def create_voice_clone_prompt(self, ref_audio, ref_text):
             return {"prompt": True}

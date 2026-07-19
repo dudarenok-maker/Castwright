@@ -153,3 +153,58 @@ def test_auto_cuda_available_now_resolves_to_indexed_cuda_zero(monkeypatch):
     assert opts["device"] == "cuda:0"
     assert opts["half"] is True
     assert opts["deepspeed"] is True
+
+
+# ── admitted-device consistency: self._device tracks the resolved card while
+#    resident, and is restored to the pref on unload (#1730 gap 3) ────────────
+
+
+def _stub_coqui_load(monkeypatch) -> dict:
+    """Neutralise the heavy XTTS load so `_ensure_loaded` can run headless, and
+    return a dict the fake TTS records the `.to(device)` target into."""
+    moved: dict = {}
+    monkeypatch.setattr(main, "_apply_torch_perf_flags", lambda t: None)
+    monkeypatch.setattr(main, "_validate_cuda_index", lambda d, t: None)
+
+    class _FakeTTS:
+        synthesizer = types.SimpleNamespace(
+            tts_model=types.SimpleNamespace(
+                gpt=types.SimpleNamespace(init_gpt_for_inference=lambda **k: None),
+                speaker_manager=types.SimpleNamespace(name_to_id={"speaker": 0}),
+            )
+        )
+
+        def __init__(self, model_id):
+            self.model_id = model_id
+
+        def to(self, device):
+            moved["device"] = device
+
+    fake_pkg = types.ModuleType("TTS")
+    fake_api = types.ModuleType("TTS.api")
+    fake_api.TTS = _FakeTTS
+    monkeypatch.setitem(sys.modules, "TTS", fake_pkg)
+    monkeypatch.setitem(sys.modules, "TTS.api", fake_api)
+    monkeypatch.setitem(sys.modules, "torch", _torch_stub())
+    return moved
+
+
+def test_admitted_device_updates_self_device_and_unload_restores(monkeypatch):
+    """An admitted `device` override drives the load AND leaves `self._device`
+    reflecting the resolved card — not stale at the env pref — so nothing that
+    reads `self._device` sees a card the model isn't on (#1730 gap 3). Pre-fix
+    `self._device` stayed 'auto' while the model sat on cuda:1. `unload()`
+    restores the requested pref so a later flag-off reload re-resolves cleanly."""
+    monkeypatch.setenv("COQUI_DEVICE", "auto")  # env pref, unresolved
+    eng = main.CoquiEngine()
+    assert eng._device == "auto" and eng._requested_device == "auto"
+
+    moved = _stub_coqui_load(monkeypatch)
+    eng._ensure_loaded("xtts_v2", device="cuda:1")
+
+    assert moved["device"] == "cuda:1"       # model loaded on the admitted card
+    assert eng._resolved_device == "cuda:1"  # concrete truth
+    assert eng._device == "cuda:1"           # no longer stale at 'auto' (the fix)
+
+    eng.unload()
+    assert eng._device == "auto"             # pref restored for re-resolution
