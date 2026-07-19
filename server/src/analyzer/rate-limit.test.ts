@@ -4,7 +4,7 @@
    doesn't actually take 60 s. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { GeminiRateLimiter, DailyQuotaExhaustedError } from './rate-limit.js';
+import { GeminiRateLimiter, DailyQuotaExhaustedError, computeTpmWait } from './rate-limit.js';
 import { AnalysisAbortedError } from './ollama.js';
 
 describe('GeminiRateLimiter', () => {
@@ -211,5 +211,47 @@ describe('GeminiRateLimiter', () => {
       code: 'REQUEST_EXCEEDS_TPM',
     });
     expect(Date.now() - start).toBeLessThan(1000); // did NOT wait 60s
+  });
+});
+
+describe('computeTpmWait', () => {
+  const state = (entries: Array<{ ts: number; tokens: number }>) => ({
+    rpmWindow: [],
+    tpmWindow: entries.map((e) => ({ ...e, pending: false })),
+    rpdCount: 0,
+    rpdDayKey: '2026-05-16',
+    blockUntil: 0,
+  });
+
+  it('returns the wait until the oldest entry frees enough headroom', () => {
+    /* cap 250K, needed 30K, window 240K (two 120K entries). surplus = 20K,
+       freed by the first (oldest) entry, which expires 60 s after its ts. */
+    const now = 1_000_000;
+    const wait = computeTpmWait(
+      state([
+        { ts: now - 40_000, tokens: 120_000 },
+        { ts: now - 20_000, tokens: 120_000 },
+      ]),
+      now,
+      30_000,
+      250_000,
+    );
+    // oldest entry expires at (now - 40_000) + 60_000 = now + 20_000.
+    expect(wait).toBe(20_000);
+  });
+
+  it('returns 0 when the request already fits (no surplus)', () => {
+    const now = 1_000_000;
+    expect(computeTpmWait(state([{ ts: now, tokens: 10_000 }]), now, 30_000, 250_000)).toBe(0);
+  });
+
+  it('throws the invariant tripwire if reached with needed > cap (guard bypassed)', () => {
+    /* acquire's RC5 guard makes this unreachable in production; assert the
+       tripwire fires so a future caller that bypasses it fails loudly
+       instead of silently soft-capping. */
+    const now = 1_000_000;
+    expect(() =>
+      computeTpmWait(state([{ ts: now, tokens: 10_000 }]), now, 300_000, 250_000),
+    ).toThrow(/invariant violated/);
   });
 });
