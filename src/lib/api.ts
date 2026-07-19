@@ -7348,9 +7348,15 @@ export async function mockGetModelsStatus(): Promise<ModelsStatus> {
   return {
     runtime: { installedOnDisk: true, pythonFound: true, process: 'ready' },
     engines: {
+      // Consistent with mockGetModelInventory (all three present + installState
+      // 'ready'): a real backend derives both from the same disk state, so
+      // models-status must not report an on-disk engine as 'not-installed'.
+      // The Model Manager's row toggle label is now single-sourced from here
+      // (see engineInstallLabel in model-manager.tsx), so any drift from the
+      // inventory would surface as a label/card mismatch.
       kokoro: { state: 'ready', packageBroken: false },
-      qwen: { state: 'not-installed', packageBroken: false },
-      coqui: { state: 'not-installed', packageBroken: false },
+      qwen: { state: 'ready', packageBroken: false },
+      coqui: { state: 'ready', packageBroken: false },
     },
     info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
     recommendation: {

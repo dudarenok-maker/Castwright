@@ -78,13 +78,15 @@ test.describe('Model Manager — Qwen install (per-row)', () => {
     await waitForRouteReady(page);
 
     /* fs-23 follow-up: the installer is no longer a passive bottom card — it
-       expands from the Qwen Base inventory row's Install/Update toggle. The
-       /api/qwen/detect probe is stubbed not-installed (stubAccountModelProbes),
-       so the "Install Qwen3-TTS" card renders once expanded. */
+       expands from the Qwen Base inventory row's toggle. The controlled card
+       reads /api/setup/models-status; the mock reports qwen 'ready' (consistent
+       with the inventory row's "Installed" badge — a real backend derives both
+       from the same disk state), so the ready card renders once expanded. The
+       not-installed install-CTA rendering is covered by qwen-install.test.tsx. */
     const row = page.getByTestId('model-row-qwen-base');
     await row.getByTestId('model-install-toggle-qwen-base').click();
-    await expect(page.getByTestId('qwen-install-not-detected')).toBeVisible();
-    await expect(page.getByRole('button', { name: /Install Qwen3-TTS/i })).toBeVisible();
+    await expect(page.getByTestId('qwen-install-ready')).toBeVisible();
+    await expect(page.getByText(/Qwen3-TTS is installed/i)).toBeVisible();
   });
 });
 
@@ -93,12 +95,13 @@ test.describe('Model Manager — Coqui install (per-row)', () => {
     await page.goto('/#/models');
     await waitForRouteReady(page);
 
-    /* fs-23 follow-up: expand the Coqui row's Install/Update toggle. The
-       /api/coqui/detect probe is stubbed weights-missing
-       (stubAccountModelProbes), so the "Install Coqui XTTS v2" card renders. */
+    /* fs-23 follow-up: expand the Coqui row's toggle. The controlled card reads
+       /api/setup/models-status; the mock reports coqui 'ready' (consistent with
+       the inventory row's "Installed" badge), so the ready card renders. The
+       not-installed install-CTA rendering is covered by coqui-install.test.tsx. */
     const row = page.getByTestId('model-row-coqui');
     await row.getByTestId('model-install-toggle-coqui').click();
-    await expect(page.getByTestId('coqui-install-not-detected')).toBeVisible();
-    await expect(page.getByRole('button', { name: /Install Coqui XTTS v2/i })).toBeVisible();
+    await expect(page.getByTestId('coqui-install-ready')).toBeVisible();
+    await expect(page.getByText(/Coqui XTTS v2 is installed/i)).toBeVisible();
   });
 });
