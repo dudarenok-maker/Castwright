@@ -2227,6 +2227,17 @@ def _capacity_admission_enabled() -> bool:
     return os.environ.get("SEG_CAPACITY_ADMISSION", "0") == "1"
 
 
+def _no_capacity(adm: dict) -> JSONResponse:
+    return JSONResponse(
+        {
+            "noCapacity": True,
+            "neededMb": adm["noCapacity"]["neededMb"],
+            "deviceKey": adm["noCapacity"]["deviceKey"],
+        },
+        status_code=503,
+    )
+
+
 # Per-engine admission profile for the three /synthesize engines: qwen/coqui
 # are GPU-heavy bespoke models with no meaningful CPU path; kokoro is cheap
 # enough to run on CPU in a pinch and never counts as "heavy". Engines not
@@ -3467,6 +3478,7 @@ class QwenEngine(Engine):
         report_progress: Optional[Callable[[str], None]] = None,
         mint_method: Optional[str] = None,
         fallback_for: Optional[dict] = None,
+        device: Optional[str] = None,
     ) -> SynthResult:
         """Design + cache a reusable bespoke voice from a persona `instruct`.
         Returns an audition preview (the calibration line spoken in the new
@@ -3536,6 +3548,18 @@ class QwenEngine(Engine):
                     log.info("Evicting resident Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
                     self.unload_base17()
                 _phase("loading-model")
+                # Capacity-aware placement (task 3, vram-aware-placement plan):
+                # a concrete `device` from an admitted reservation overrides the
+                # env-derived pref for this design, set once under the same lock
+                # `_ensure_base_loaded` uses so a concurrent cold load can't race
+                # the assignment. `None` leaves `_device_pref` untouched (flag-off
+                # byte-for-byte). `_ensure_design_loaded` has no device param of
+                # its own — it resolves off `self._device_pref` via
+                # `_ensure_device_resolved`, so setting the pref here is enough to
+                # steer it too.
+                if device is not None:
+                    with self._base_load_lock:
+                        self._device_pref = device
                 self._ensure_design_loaded()
                 self._ensure_base_loaded()
                 # Phase boundary: everything above is Kokoro-evict + (cold) model
@@ -3652,6 +3676,7 @@ class QwenEngine(Engine):
         calibration_text: Optional[str],
         voice_uuid: Optional[str] = None,
         report_progress: Optional[Callable[[str], None]] = None,
+        device: Optional[str] = None,
     ) -> "SynthResult":
         """Mint an emotion variant anchored to `base_voice_id`'s identity.
 
@@ -3720,6 +3745,15 @@ class QwenEngine(Engine):
                 log.info("Evicting resident Qwen VoiceDesign to free VRAM for 1.7B-Base mint.")
                 self.unload_design()
             _phase("loading-model")
+            # Capacity-aware placement (task 3, vram-aware-placement plan):
+            # mirrors design_voice — a concrete `device` from an admitted
+            # reservation overrides the env-derived pref for this mint, set
+            # once under `_base17_load_lock` (the lock `_ensure_base17_loaded`
+            # uses) before the first `_ensure_base17_for_mint` call.  `None`
+            # leaves `_device_pref` untouched (flag-off byte-for-byte).
+            if device is not None:
+                with self._base17_load_lock:
+                    self._device_pref = device
             self._ensure_base17_for_mint()
             # Phase boundary: Kokoro-evict + (cold) 1.7B-Base load above.
             load_ms = (time.perf_counter() - t0) * 1000.0
@@ -6224,16 +6258,6 @@ async def load_model(req: Request) -> JSONResponse:
     # transient VRAM spike, not just steady-state residency) and released on
     # exit either way. Flag-OFF/`None` device leaves env resolution
     # byte-for-byte unchanged.
-    def _no_capacity(adm: dict) -> JSONResponse:
-        return JSONResponse(
-            {
-                "noCapacity": True,
-                "neededMb": adm["noCapacity"]["neededMb"],
-                "deviceKey": adm["noCapacity"]["deviceKey"],
-            },
-            status_code=503,
-        )
-
     if engine_id == "kokoro":
         kokoro = ENGINES.get("kokoro")
         if not isinstance(kokoro, KokoroEngine):
@@ -6516,17 +6540,43 @@ async def qwen_design_voice(req: Request) -> Response:
     global _inflight_synth
     _inflight_synth += 1
     try:
-        result = await asyncio.to_thread(
-            qwen.design_voice,
-            voice_id.strip(),
-            instruct.strip(),
-            language if isinstance(language, str) else None,
-            calibration_text if isinstance(calibration_text, str) else None,
-            voice_uuid,
-            _report,
-            mint_method,
-            fallback_for,
-        )
+        # Capacity-aware placement (task 3, vram-aware-placement plan): mirrors
+        # /qwen/load's admission wrapping (`SEG_CAPACITY_ADMISSION`, default
+        # OFF). Held across the (possibly cold) VoiceDesign + Base load AND the
+        # design forward, released on exit either way. Flag-OFF leaves the call
+        # byte-for-byte unchanged (no device arg).
+        if _capacity_admission_enabled():
+            with _placement.reservation(
+                "qwen", "1.7b", {},
+                cpu_capable=False, heavy=True,
+                pinned=_engine_env_pin("qwen"),
+            ) as adm:
+                if "noCapacity" in adm:
+                    return _no_capacity(adm)
+                result = await asyncio.to_thread(
+                    qwen.design_voice,
+                    voice_id.strip(),
+                    instruct.strip(),
+                    language if isinstance(language, str) else None,
+                    calibration_text if isinstance(calibration_text, str) else None,
+                    voice_uuid,
+                    _report,
+                    mint_method,
+                    fallback_for,
+                    adm["device"],
+                )
+        else:
+            result = await asyncio.to_thread(
+                qwen.design_voice,
+                voice_id.strip(),
+                instruct.strip(),
+                language if isinstance(language, str) else None,
+                calibration_text if isinstance(calibration_text, str) else None,
+                voice_uuid,
+                _report,
+                mint_method,
+                fallback_for,
+            )
     except Exception as e:
         err_str = f"{e}"
         if _CUDA_POISON_RE.search(err_str):
@@ -6608,16 +6658,40 @@ async def qwen_mint_variant(req: Request) -> Response:
     global _inflight_synth
     _inflight_synth += 1
     try:
-        result = await asyncio.to_thread(
-            qwen.mint_variant,
-            base_voice_id.strip(),
-            variant_voice_id.strip(),
-            emotion_instruct.strip(),
-            language if isinstance(language, str) else None,
-            calibration_text if isinstance(calibration_text, str) else None,
-            voice_uuid,
-            _report,
-        )
+        # Capacity-aware placement (task 3, vram-aware-placement plan): mirrors
+        # /qwen/design-voice above — mint also runs on the 1.7B-Base, so it
+        # reserves the same `qwen.1.7b` footprint. Flag-OFF leaves the call
+        # byte-for-byte unchanged (no device arg).
+        if _capacity_admission_enabled():
+            with _placement.reservation(
+                "qwen", "1.7b", {},
+                cpu_capable=False, heavy=True,
+                pinned=_engine_env_pin("qwen"),
+            ) as adm:
+                if "noCapacity" in adm:
+                    return _no_capacity(adm)
+                result = await asyncio.to_thread(
+                    qwen.mint_variant,
+                    base_voice_id.strip(),
+                    variant_voice_id.strip(),
+                    emotion_instruct.strip(),
+                    language if isinstance(language, str) else None,
+                    calibration_text if isinstance(calibration_text, str) else None,
+                    voice_uuid,
+                    _report,
+                    adm["device"],
+                )
+        else:
+            result = await asyncio.to_thread(
+                qwen.mint_variant,
+                base_voice_id.strip(),
+                variant_voice_id.strip(),
+                emotion_instruct.strip(),
+                language if isinstance(language, str) else None,
+                calibration_text if isinstance(calibration_text, str) else None,
+                voice_uuid,
+                _report,
+            )
     except VoiceNotDesignedError as exc:
         log.warning("/qwen/mint-variant: base voice not designed — %s", exc)
         return JSONResponse(
