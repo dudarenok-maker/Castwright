@@ -186,6 +186,11 @@ export function ManuscriptView({
         // instead of swallowing: the findings are safe on the server ledger and
         // reload once the underlying throw is fixed.
         console.error('[script-review] hydration failed', err);
+        // Cross-book race guard (mirrors the .finally below): only surface the
+        // toast for the book still on screen. A stale rejection for a book the
+        // user already switched away from must not pop a misleading load-failure
+        // toast over a different, healthy book that hydrated fine.
+        if (scriptReviewHydrationGenerationRef.current !== generation) return;
         dispatch(
           notificationsActions.pushToast({
             kind: 'error',

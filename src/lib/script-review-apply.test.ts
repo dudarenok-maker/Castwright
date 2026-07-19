@@ -81,6 +81,11 @@ describe('planApply', () => {
     expect(() =>
       planApply([{ id: 6, op: 'merge', rationale: 'meant to merge but emitted no ids' }], live),
     ).not.toThrow();
+    // A non-array mergeIds (e.g. the analyzer emits a bare number) must not
+    // throw on the `[...mergeIds]` spread either — same crash class.
+    expect(() =>
+      planApply([{ id: 6, op: 'merge', mergeIds: 5 as unknown as number[], rationale: 'non-array' }], live),
+    ).not.toThrow();
     const r = planApply([
       { id: 6, op: 'merge', mergeIds: [], rationale: 'empty' },
       { id: 5, op: 'merge', mergeIds: [5], rationale: 'single member' },

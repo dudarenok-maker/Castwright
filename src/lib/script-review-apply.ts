@@ -114,7 +114,11 @@ export function planApply(
 
   for (const op of ops.filter((o) => STRUCTURAL.has(o.op))) {
     if (op.op === 'merge') {
-      const ids = [...(op.mergeIds ?? [])].sort((a, b) => a - b);
+      // `Array.isArray` (not just `?? []`) so a non-array mergeIds the analyzer
+      // might emit (e.g. a bare number) can't throw on the spread below — same
+      // "malformed op must be unappliable, never crash" contract as the arity
+      // guard a few lines down.
+      const ids = [...(Array.isArray(op.mergeIds) ? op.mergeIds : [])].sort((a, b) => a - b);
       if (ids.some((id) => structTargets.has(id))) { unappliable.push({ op, reason: 'second structural op on the same id' }); continue; }
       const members = ids.map((id) => byId.get(id));
       // A `merge` the analyzer emitted with missing/empty/single mergeIds must

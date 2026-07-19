@@ -2247,6 +2247,114 @@ describe('ManuscriptView — cross-book mount hydration race (fs-58 PR review ro
   });
 });
 
+/* PR review 2026-07-20 (script-review hydration-crash fix) — the mount-time
+   hydration `.catch` is the user-visible half of the fix: a hydration throw
+   (e.g. a malformed merge op planApply can't apply) must SURFACE a toast
+   instead of being silently swallowed, AND that toast must respect the same
+   cross-book generation guard the sibling `.finally` uses, so a stale
+   rejection for a since-switched book can't pop a misleading error over a
+   different, healthy current book. */
+describe('ManuscriptView — hydration-failure toast + cross-book guard', () => {
+  const chapter: Chapter = {
+    id: 1,
+    title: 'Chapter One',
+    duration: '10:00',
+    state: 'done',
+    progress: 1,
+    characters: {},
+  };
+
+  afterEach(() => {
+    getScriptReviewState.mockReset().mockResolvedValue({ kind: 'ledger', entries: {} });
+  });
+
+  function makeStore(bookId: string) {
+    return configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: {
+            kind: 'ready',
+            bookId,
+            view: 'manuscript',
+            currentChapterId: 1,
+            openProfileId: null,
+          } as never,
+        },
+      },
+    });
+  }
+
+  function renderView(store: ReturnType<typeof configureStore>) {
+    return render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[chapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[]}
+        />
+      </Provider>,
+    );
+  }
+
+  it('surfaces an error toast when the mount-time hydration rejects (was silently swallowed)', async () => {
+    getScriptReviewState.mockReset().mockRejectedValue(new Error('planApply threw on a malformed op'));
+    const store = makeStore('bk-fail');
+    renderView(store);
+    await waitFor(() => {
+      const toasts = store.getState().notifications.toasts;
+      expect(
+        toasts.some((t) => t.kind === 'error' && t.dedupeKey === 'script-review-hydrate-failed:bk-fail'),
+      ).toBe(true);
+    });
+  });
+
+  it('a stale hydration rejection for a switched-away book does not toast over the current book', async () => {
+    const rejecters: Array<(e: Error) => void> = [];
+    getScriptReviewState.mockReset().mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejecters.push(reject);
+        }),
+    );
+    const store = makeStore('bk-A');
+    renderView(store);
+    expect(rejecters).toHaveLength(1);
+
+    // Switch to book B before A's hydration settles — bumps the generation.
+    await act(async () => {
+      store.dispatch(uiActions.openBook({ id: 'bk-B', status: 'complete' }));
+    });
+    expect(rejecters).toHaveLength(2);
+
+    // Book A's STALE hydration now rejects — must NOT toast (guard suppresses).
+    await act(async () => {
+      rejecters[0](new Error('stale book A failure'));
+      await Promise.resolve();
+    });
+    expect(store.getState().notifications.toasts).toHaveLength(0);
+
+    // Book B's (current-generation) hydration rejects — THIS one toasts.
+    await act(async () => {
+      rejecters[1](new Error('current book B failure'));
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(store.getState().notifications.toasts.some((t) => t.kind === 'error')).toBe(true);
+    });
+  });
+});
+
 describe('ManuscriptView — re-run confirm gate (fs-58 Task 11)', () => {
   const gateChapter: Chapter = {
     id: 1,
