@@ -14,6 +14,39 @@ import { ModelManagerView } from './model-manager';
 import { api, type ModelInventoryResponse } from '../lib/api';
 import type { UserSettings } from '../lib/types';
 
+/* Hoisted so individual tests can override just the engine states (spread
+   MODELS_STATUS, replace .engines) — the toggle label now derives from this same
+   models-status the card body reads (#1647). */
+const { MODELS_STATUS } = vi.hoisted(() => ({
+  MODELS_STATUS: {
+    runtime: { installedOnDisk: true, pythonFound: true, process: 'ready' },
+    engines: {
+      kokoro: { state: 'ready', packageBroken: false },
+      qwen: { state: 'ready', packageBroken: false },
+      coqui: { state: 'not-installed', packageBroken: false },
+    },
+    info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
+    recommendation: {
+      expressiveOrMultilingual: {
+        engine: 'qwen',
+        modelKey: 'qwen3-tts-0.6b',
+        reason: 'Expressive and multilingual — the multi-cast default.',
+        // keep in sync with server CAVEAT_VRAM (server/src/tts/engine-recommendation.ts)
+        caveat:
+          "May not fit this GPU's memory — you can run Qwen on CPU (slower) via the voice-engine device setting, or pick Kokoro below for fast English-only voices.",
+        alternate: 'coqui',
+      },
+      simpleEnglish: {
+        engine: 'kokoro',
+        modelKey: 'kokoro-v1',
+        reason: 'Fast and light — runs comfortably on low VRAM or CPU.',
+        caveat: null,
+        alternate: null,
+      },
+    },
+  } as const,
+}));
+
 vi.mock('../lib/api', () => ({
   api: {
     getModelInventory: vi.fn(),
@@ -26,33 +59,7 @@ vi.mock('../lib/api', () => ({
     putUserSettings: vi.fn(),
     putGeminiKey: vi.fn(),
     restartSidecar: vi.fn(),
-    getModelsStatus: vi.fn().mockResolvedValue({
-      runtime: { installedOnDisk: true, pythonFound: true, process: 'ready' },
-      engines: {
-        kokoro: { state: 'ready', packageBroken: false },
-        qwen: { state: 'ready', packageBroken: false },
-        coqui: { state: 'not-installed', packageBroken: false },
-      },
-      info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
-      recommendation: {
-        expressiveOrMultilingual: {
-          engine: 'qwen',
-          modelKey: 'qwen3-tts-0.6b',
-          reason: 'Expressive and multilingual — the multi-cast default.',
-          // keep in sync with server CAVEAT_VRAM (server/src/tts/engine-recommendation.ts)
-          caveat:
-            "May not fit this GPU's memory — you can run Qwen on CPU (slower) via the voice-engine device setting, or pick Kokoro below for fast English-only voices.",
-          alternate: 'coqui',
-        },
-        simpleEnglish: {
-          engine: 'kokoro',
-          modelKey: 'kokoro-v1',
-          reason: 'Fast and light — runs comfortably on low VRAM or CPU.',
-          caveat: null,
-          alternate: null,
-        },
-      },
-    }),
+    getModelsStatus: vi.fn().mockResolvedValue(MODELS_STATUS),
     getOllamaHealth: vi.fn().mockResolvedValue({
       status: 'reachable',
       url: '(mock)',
@@ -187,6 +194,7 @@ function renderManager(initial: Partial<UserSettings> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.getModelsStatus).mockResolvedValue(MODELS_STATUS);
   mockInventory.mockResolvedValue(INVENTORY);
   mockLoad.mockResolvedValue({ status: 'ready' });
   mockUnload.mockResolvedValue({ status: 'idle' });
@@ -777,9 +785,52 @@ describe('ModelManagerView — health honesty + repair + tier grouping', () => {
         },
       ],
     });
+    /* The toggle label now derives from models-status (the same source the card
+       body reads, #1647) — set qwen package-missing there too so it stays Repair. */
+    vi.mocked(api.getModelsStatus).mockResolvedValue({
+      ...MODELS_STATUS,
+      engines: { ...MODELS_STATUS.engines, qwen: { state: 'package-missing', packageBroken: false } },
+    });
     renderManager();
     const row = await screen.findByTestId('model-row-qwen-base');
     expect(within(row).getByTestId('model-install-toggle-qwen-base')).toHaveTextContent(/Repair/);
+  });
+
+  /* Regression (#1647): the toggle label and the installer card body must derive
+     from ONE source (models-status) so the two 30s polls can't momentarily
+     disagree on wording. Here the inventory poll says qwen is 'ready' (which the
+     old inventory-sourced label rendered as "Update") while models-status reports
+     'package-missing' — the label must follow models-status ("Repair"). */
+  it('toggle label follows models-status, not a lagging inventory poll', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        {
+          id: 'qwen-base',
+          kind: 'tts',
+          label: 'Qwen3-TTS Base (0.6B)',
+          present: true,
+          sizeBytes: 1_283_457_024,
+          diskPath: 'hub/models--Qwen',
+          loaded: false,
+          installState: 'ready',
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+        },
+      ],
+    });
+    vi.mocked(api.getModelsStatus).mockResolvedValue({
+      ...MODELS_STATUS,
+      engines: { ...MODELS_STATUS.engines, qwen: { state: 'package-missing', packageBroken: false } },
+    });
+    renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base');
+    await waitFor(() =>
+      expect(within(row).getByTestId('model-install-toggle-qwen-base')).toHaveTextContent(/Repair/),
+    );
+    expect(within(row).getByTestId('model-install-toggle-qwen-base')).not.toHaveTextContent(/Update/);
   });
 
   it('Repair→onInstalled triggers api.restartSidecar for a package-missing row', async () => {

@@ -101,8 +101,10 @@ export function VenvBootstrap({
     );
   }
 
-  // Job error
-  if (job && job.status === 'error') {
+  // Job error — but the disk truth wins: if the venv is actually present on disk
+  // (observed by the parent's status refetch), a stale error job must not keep
+  // "Setup failed" up over the green ready state below.
+  if (job && job.status === 'error' && !status.installedOnDisk) {
     return (
       <div
         data-testid="venv-bootstrap-error"

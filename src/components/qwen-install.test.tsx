@@ -29,6 +29,15 @@ describe('QwenInstall — controlled idle states', () => {
     expect(screen.getByText(/Qwen3-TTS is installed/i)).toBeInTheDocument();
   });
 
+  it('Re-check on the ready card calls onInstalled (parent refetches models-status)', () => {
+    const onInstalled = vi.fn();
+    render(
+      <QwenInstall status={{ state: 'ready', packageBroken: false }} onInstalled={onInstalled} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /re-check/i }));
+    expect(onInstalled).toHaveBeenCalledTimes(1);
+  });
+
   it('renders weights-missing distinctly (not "not installed")', () => {
     render(<QwenInstall status={{ state: 'weights-missing', packageBroken: false }} />);
     expect(screen.getByText(/voice weights not downloaded/i)).toBeInTheDocument();

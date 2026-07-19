@@ -100,6 +100,19 @@ rather than re-deriving.
   all", not "are all engines healthy"); the **per-engine card** is the surface that must never
   mask (`setup-readiness.orchestration.test.ts:180` for the aggregate; `models-status.test.ts:49`
   for the per-engine guarantee this plan adds).
+- **Ready-on-disk wins over a stale error job** in `VenvBootstrap`: a failed bootstrap job must
+  not keep "Setup failed" up once `status.installedOnDisk` is observed true (the disk truth
+  arrives on the parent's next status refetch). The error branch is gated on
+  `!status.installedOnDisk` so the green ready card takes precedence
+  (`venv-bootstrap.test.tsx` — "ready-on-disk takes precedence over a stale error job"). Post-#1644
+  review follow-up (#1647).
+- **Model Manager's row toggle label is single-sourced from models-status**, the same fetch the
+  installer card body reads — `engineInstallLabel(modelsStatus.engines[engine])` for the three
+  models-status-backed engines (kokoro/qwen-base/coqui), falling back to the inventory-derived
+  word only for Whisper (no models-status entry) and the pre-fetch window. The label
+  (Repair/Update/Install) and the card can no longer momentarily disagree across the two 30 s
+  polls (`model-manager.test.tsx` — "toggle label follows models-status, not a lagging inventory
+  poll"). Post-#1644 review follow-up (#1647).
 
 ## Test plan
 
@@ -131,7 +144,9 @@ rather than re-deriving.
   `src/components/venv-bootstrap.test.tsx`) — rewritten as controlled components: render
   purely off the `status` prop (no self-fetch), call `onInstalled` after a successful
   install/repair, and (Coqui) gate the broken-state card on `!packageBroken` the same way as
-  Kokoro/Qwen.
+  Kokoro/Qwen. #1647 follow-ups: the ready-card **Re-check → onInstalled** wiring is now locked
+  for Qwen and Coqui (mirroring the Kokoro assertion), and `venv-bootstrap.test.tsx` covers
+  ready-on-disk taking precedence over a stale error job.
 - Vitest unit (`src/components/setup/step-voice.test.tsx`) — one `models-status` fetch feeds
   the runtime badge/liveness pill AND the controlled cards so they can't disagree;
   weights-missing card wording matches the badge (never "not installed" while installed);
@@ -140,7 +155,9 @@ rather than re-deriving.
 - Vitest unit (`src/components/setup/setup-wizard.test.tsx`) — summary board treats a
   transiently-starting voice engine as neutral, not "needs attention" (#1612 regression case).
 - Vitest unit (`src/views/model-manager.test.tsx`) — voice-engine cards render from the same
-  controlled `status`/`onInstalled` contract as the wizard (migrated off self-fetching).
+  controlled `status`/`onInstalled` contract as the wizard (migrated off self-fetching). #1647:
+  the row toggle label is asserted to follow models-status (not a lagging inventory poll) so the
+  label and card body can't disagree.
 - Playwright e2e (`e2e/setup-models-status.spec.ts`) — ready-state golden path: drives the
   wizard to the Voice step (step 4 of 7) under the mock (`kokoro: ready`,
   `runtime: installedOnDisk/process ready`) and asserts the runtime badge reads green "Runtime
