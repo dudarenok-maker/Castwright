@@ -555,6 +555,35 @@ describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
     expect(onThrottle).toHaveBeenCalled();
   }, 30_000);
 
+  it('retries a per-minute RPM 429 (quotaValue":"15") — not DailyQuotaExhaustedError (#1695)', async () => {
+    /* The free-tier per-MINUTE request cap is 15 requests/min — a 2-digit
+       quotaValue that the old `quotaValue":"\d{1,3}"` heuristic mis-read as
+       fatal daily exhaustion, dropping the chapter instead of retrying. The
+       PerMinute quotaId carries no per_day marker, so this must retry. */
+    const perMinuteRpm = apiError(429, {
+      error: {
+        message:
+          'Quota exceeded for metric: generativelanguage.googleapis.com/generate_requests_per_model_per_minute, ' +
+          'quotaId: GenerateRequestsPerMinutePerProjectPerModel-FreeTier',
+        status: 'RESOURCE_EXHAUSTED',
+        details: [{ quotaValue: '15' }],
+      },
+    });
+    const ok = chunksOf(STAGE1_RESPONSE, 256);
+    generateContentStream
+      .mockRejectedValueOnce(perMinuteRpm)
+      .mockResolvedValueOnce(asyncFromArray(ok.map((text) => ({ text }))));
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+
+    const result = await analyzer.runStage1('m_rpm_retry', '# prompt', {});
+
+    /* Retried instead of throwing DailyQuotaExhaustedError. */
+    expect(generateContentStream).toHaveBeenCalledTimes(2);
+    expect(result.characters).toHaveLength(3);
+  }, 30_000);
+
   /* Idle-chunk watchdog + abort wiring — fix for the "Paused: Parsing and
      attribution" stall where a slow Gemini stream blocked the per-chapter
      pipeline indefinitely. The watchdog converts a wedged stream into a

@@ -245,18 +245,30 @@ describe('source gating (spec A2)', () => {
        case below (classifyAnalysisFailure test at ~:352), but routed through
        classifyAnalysisError/scanSignatures with NO err.name set — so the
        matchName short-circuit for 'DailyQuotaExhaustedError' can't fire and
-       Site 1's narrowed /per[_-]?day|quotaValue":"\d{1,3}"/i regex (line
-       ~113) is the only thing that can classify this as daily.
-       quotaValue is deliberately 5 digits (not e.g. "250") so the OTHER half
-       of that alternation can't rescue a broken per_day: a typo in per_day
-       (e.g. -> per_dat) must make THIS test fail on its own, the same way
-       the per-minute negative test above avoids a false quotaValue match. */
+       Site 1's /per[_-]?day/i marker regex (line ~113) is the only thing that
+       can classify this as daily. Post-#1695 the daily classifier keys SOLELY
+       on the per_day/PerDay marker (the small-quotaValue clause was dropped),
+       so a typo in per_day (e.g. -> per_dat) must make THIS test fail on its
+       own — nothing else can rescue it. */
     const raw =
       'got status: 429. {"error":{"code":429,"message":"You exceeded your current quota: ' +
       'generate_requests_per_model_per_day_free_tier. GenerateRequestsPerDayPerProjectPerModel-FreeTier.",' +
       '"status":"RESOURCE_EXHAUSTED","details":[{"quotaValue":"12500"}]}}';
     const err = Object.assign(new Error(raw), { status: 429 });
     expect(classifyAnalysisError(err).code).toBe('analyzer-daily-quota');
+  });
+  it('classifies a per-minute RPM 429 (quotaValue":"15") as analyzer-rate-limit, not daily (#1695)', () => {
+    /* The free-tier per-MINUTE request-rate cap is 15 (a 2-digit quotaValue),
+       so the old `quotaValue":"\d{1,3}"` heuristic mis-classified this
+       retryable RPM 429 as fatal daily-quota exhaustion. Discriminate on the
+       PerMinute quotaId instead: no per_day/PerDay marker → rate-limit. */
+    const raw =
+      'got status: 429. {"error":{"message":"Quota exceeded for metric: ' +
+      'generativelanguage.googleapis.com/generate_requests_per_model_per_minute, ' +
+      'quotaId: GenerateRequestsPerMinutePerProjectPerModel-FreeTier","status":"RESOURCE_EXHAUSTED",' +
+      '"details":[{"quotaValue":"15"}]}}';
+    const err = Object.assign(new Error(raw), { status: 429 });
+    expect(classifyAnalysisError(err).code).toBe('analyzer-rate-limit');
   });
   it('analysis path still sees the both-gated disk-full signature', () => {
     expect(classifyAnalysisError(new Error('ENOSPC: no space left on device')).code).toBe('disk-full');
@@ -394,13 +406,26 @@ describe('classifyAnalysisFailure (run-level, ports describeError verbatim — s
     /* Same production envelope as above, routed through the message matcher
        (statusToFailureCode) instead of the raw one — "free_tier" appears here
        too (generate_content_free_tier_input_token_count) but there is no
-       per_day marker and quotaValue is 5 digits, so this must NOT classify
-       as analyzer-daily-quota. */
+       per_day marker, so this must NOT classify as analyzer-daily-quota
+       (post-#1695 the quotaValue digit-count no longer influences it). */
     const raw =
       'got status: 429. {"error":{"code":429,"message":"Quota exceeded for metric: ' +
       'generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, ' +
       'quotaId: GenerateContentInputTokensPerModelPerMinute-FreeTier","status":"RESOURCE_EXHAUSTED",' +
       '"details":[{"quotaValue":"16000"}]}}';
+    const r = classifyAnalysisFailure(new Error(raw), 'Gemini (gemma-4-31b-it)');
+    expect(r.code).toBe('analyzer-rate-limit');
+  });
+  it('Google envelope 429 per-minute RPM (quotaValue":"15" in message) → analyzer-rate-limit, not daily (#1695)', () => {
+    /* The free-tier per-MINUTE request cap is 15 — a 2-digit quotaValue that
+       the old `quotaValue":"\d{1,3}"` heuristic false-positive-matched as
+       daily. Here the message inlines the violation (some 429 bodies do), so
+       the message-matcher (statusToFailureCode) would have mis-fired. With no
+       per_day marker it must classify retryable rate-limit. */
+    const raw =
+      'got status: 429. {"error":{"code":429,"message":"Quota exceeded for quota metric ' +
+      'GenerateRequestsPerMinutePerProjectPerModel-FreeTier with limit quotaValue\\":\\"15\\" ' +
+      'for the free tier.","status":"RESOURCE_EXHAUSTED"}}';
     const r = classifyAnalysisFailure(new Error(raw), 'Gemini (gemma-4-31b-it)');
     expect(r.code).toBe('analyzer-rate-limit');
   });
