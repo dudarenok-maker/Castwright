@@ -18,7 +18,13 @@ import {
   type ModelControlState,
   type ModelKind,
 } from '../components/ModelControlPill';
-import { api, type ModelInventoryItem, type ModelInventoryResponse, type ModelsStatus } from '../lib/api';
+import {
+  api,
+  type EngineHealthState,
+  type ModelInventoryItem,
+  type ModelInventoryResponse,
+  type ModelsStatus,
+} from '../lib/api';
 import { formatBytes } from '../lib/bytes';
 import { ModelSettingsForm, MODEL_SETTINGS_SECTIONS } from '../components/model-settings-form';
 import { SettingsAccordion } from '../components/settings/settings-accordion';
@@ -51,15 +57,31 @@ const TTS_LOAD_MODEL_BY_ID: Partial<Record<string, '1.7b'>> = {
    section below — neither gets a row installer here. */
 const INSTALLER_IDS = new Set(['kokoro', 'coqui', 'qwen-base', 'whisper']);
 
+/* Inventory id → models-status engine key, for the three models-status-backed
+   voice engines. Whisper (ASR) has no models-status entry and self-fetches. */
+const MODELS_STATUS_ENGINE_BY_ID = { kokoro: 'kokoro', coqui: 'coqui', 'qwen-base': 'qwen' } as const;
+
+/* Toggle-label word for a models-status-backed engine row. Derived from the SAME
+   models-status entry the installer card reads, so the row label and the card body
+   can never momentarily disagree — they used to read two independent 30s polls
+   (inventory for the label, models-status for the body). Mirrors the card's own
+   state decision (see kokoro-install.tsx). */
+function engineInstallLabel(status: {
+  state: EngineHealthState;
+  packageBroken: boolean;
+}): 'Repair' | 'Update' | 'Install' {
+  if (status.packageBroken || status.state === 'package-missing') return 'Repair';
+  if (status.state === 'not-installed') return 'Install';
+  return 'Update'; // ready | loaded | weights-missing → present; an update/complete action
+}
+
 /* The three voice-engine cards are CONTROLLED — their status comes from the
    shared models-status fetch. Whisper (ASR) is excluded from models-status and
    stays self-fetching. Returns the installer element (or null while models-status
    is still loading for a voice engine). `onInstalled` is the CALLER'S wrapped
    callback (see the render site, which preserves package-missing → restartSidecar). */
 function renderInstaller(id: string, modelsStatus: ModelsStatus | null, onInstalled: () => void) {
-  const engineKey = ({ kokoro: 'kokoro', coqui: 'coqui', 'qwen-base': 'qwen' } as const)[
-    id as 'kokoro' | 'coqui' | 'qwen-base'
-  ];
+  const engineKey = MODELS_STATUS_ENGINE_BY_ID[id as keyof typeof MODELS_STATUS_ENGINE_BY_ID];
   if (engineKey) {
     if (!modelsStatus) return null; // until the first models-status load resolves
     const status = modelsStatus.engines[engineKey];
@@ -498,6 +520,20 @@ function ModelRow({
   const hasControl = usable && (engine !== undefined || isAnalyzer);
   const isPackageMissing = item.installState === 'package-missing';
 
+  /* Toggle-label word. For a models-status-backed engine row, source it from the
+     SAME models-status entry the installer card reads so the label and the card
+     body can't momentarily disagree (#1647). Whisper (no models-status entry) and
+     the pre-load window fall back to the inventory-derived word. */
+  const engineStatusKey = MODELS_STATUS_ENGINE_BY_ID[item.id as keyof typeof MODELS_STATUS_ENGINE_BY_ID];
+  const engineStatus = engineStatusKey && modelsStatus ? modelsStatus.engines[engineStatusKey] : null;
+  const installLabel: 'Repair' | 'Update' | 'Install' = engineStatus
+    ? engineInstallLabel(engineStatus)
+    : isPackageMissing
+      ? 'Repair'
+      : item.present
+        ? 'Update'
+        : 'Install';
+
   /* Analyzer residency depends on the Ollama daemon, not the voice engine
      (sidecar) — an unreachable daemon already yields zero analyzer rows, so
      analyzer rows are never 'unreachable' here. Only TTS rows gate on sidecar
@@ -653,7 +689,7 @@ function ModelRow({
               aria-expanded={installerOpen}
               className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1 rounded-full border border-ink/15 bg-white text-[11px] font-semibold text-ink/70 hover:bg-ink/5"
             >
-              {isPackageMissing ? 'Repair' : item.present ? 'Update' : 'Install'}{' '}
+              {installLabel}{' '}
               {installerOpen ? '▴' : '▾'}
             </button>
           )}

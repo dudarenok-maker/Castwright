@@ -29,6 +29,15 @@ describe('CoquiInstall — controlled idle states', () => {
     expect(screen.getByText(/Coqui XTTS v2 is installed/i)).toBeInTheDocument();
   });
 
+  it('Re-check on the ready card calls onInstalled (parent refetches models-status)', () => {
+    const onInstalled = vi.fn();
+    render(
+      <CoquiInstall status={{ state: 'ready', packageBroken: false }} onInstalled={onInstalled} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /re-check/i }));
+    expect(onInstalled).toHaveBeenCalledTimes(1);
+  });
+
   it('renders the install card (with value/difference copy) when not installed', () => {
     render(<CoquiInstall status={{ state: 'not-installed', packageBroken: false }} />);
     expect(screen.getByRole('button', { name: /install coqui xtts v2/i })).toBeInTheDocument();

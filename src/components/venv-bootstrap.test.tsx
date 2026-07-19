@@ -122,4 +122,29 @@ describe('VenvBootstrap — bootstrap job', () => {
     expect(screen.getByText(/pip install failed/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
   });
+
+  /* Regression (#1647): a failed bootstrap job while the venv is actually present
+     on disk must show the green ready state, not "Setup failed". The disk truth
+     (observed on the next 30s status refetch) wins over the stale error job. */
+  it('ready-on-disk takes precedence over a stale error job', async () => {
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/bootstrap') && init?.method === 'POST') {
+        return Promise.resolve(
+          jsonResponse({ id: '1', status: 'error', step: null, error: 'pip install failed' }),
+        );
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    const { rerender } = render(
+      <VenvBootstrap status={{ installedOnDisk: false, pythonFound: true, process: 'down' }} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /set up the voice engine runtime/i }));
+    await waitFor(() => expect(screen.getByTestId('venv-bootstrap-error')).toBeInTheDocument());
+
+    rerender(
+      <VenvBootstrap status={{ installedOnDisk: true, pythonFound: true, process: 'ready' }} />,
+    );
+    expect(screen.getByTestId('venv-bootstrap-ready')).toBeInTheDocument();
+    expect(screen.queryByTestId('venv-bootstrap-error')).not.toBeInTheDocument();
+  });
 });

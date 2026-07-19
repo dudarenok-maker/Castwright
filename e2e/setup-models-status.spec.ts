@@ -33,9 +33,9 @@ test('Voice step: runtime badge and Kokoro card agree on ready state', async ({ 
   await expect(page.getByText(/runtime needed/i)).toHaveCount(0);
 
   // Kokoro card: "Kokoro is installed", not the not-installed empty state —
-  // the badge/card-consistency invariant for the ready engine. (Qwen and
-  // Coqui legitimately show "not installed" in this fixture — they aren't
-  // ready — so the assertion is scoped to Kokoro's own card, not the page.)
+  // the badge/card-consistency invariant for the ready engine. (All three
+  // engines read 'ready' in this fixture, consistent with the inventory; the
+  // assertion is scoped to Kokoro's own card, not the page.)
   await expect(page.getByText(/kokoro is installed/i)).toBeVisible();
   await expect(page.getByText(/kokoro is not installed/i)).toHaveCount(0);
 });
