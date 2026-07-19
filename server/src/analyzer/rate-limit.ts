@@ -311,11 +311,14 @@ export class GeminiRateLimiter {
    `needed`. Walks entries from oldest to newest summing freed tokens;
    returns the wait until the entry whose expiry frees enough.
 
-   Edge case: if `needed` exceeds the model's TPM cap entirely (e.g. a
-   400K-token prompt against a 250K cap), no wait will ever free enough.
-   We return 60_000 in that case as a soft cap — the retry loop will hit
-   its own ceiling and give up cleanly. */
-function computeTpmWait(s: ModelState, now: number, needed: number, cap: number): number {
+   Invariant (upheld by acquire's RC5 fail-fast guard): `needed <= cap`.
+   So `surplus = current + needed - cap <= current`, and the running
+   `freed` sum reaches `current` — hence `surplus` — before the window is
+   exhausted; the in-loop return always fires. Falling out of the loop
+   means a caller reached here with `needed > cap` (an unsatisfiable
+   request that bypassed the guard); throw as a tripwire rather than
+   masking it as a soft-capped wait. Exported for that invariant test. */
+export function computeTpmWait(s: ModelState, now: number, needed: number, cap: number): number {
   const current = s.tpmWindow.reduce((sum, e) => sum + e.tokens, 0);
   const surplus = current + needed - cap;
   if (surplus <= 0) return 0; // shouldn't happen — caller already checked
@@ -327,7 +330,10 @@ function computeTpmWait(s: ModelState, now: number, needed: number, cap: number)
       return Math.max(0, expiresAt - now);
     }
   }
-  return 60_000;
+  throw new Error(
+    `computeTpmWait invariant violated: needed ${needed} exceeds cap ${cap} — ` +
+      `acquire's fail-fast guard should have rejected this request before the wait loop.`,
+  );
 }
 
 /** Module-level singleton. RPM/TPM/RPD are global per process — sharing
