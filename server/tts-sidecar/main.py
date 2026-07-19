@@ -1141,6 +1141,12 @@ class CoquiEngine(Engine):
         self._tts = tts
         self._torch = torch
         self._resolved_device = device
+        # Keep the shared `self._device` in step with the card the model is
+        # ACTUALLY on (#1730 gap 3): an admitted `device` override resolves here
+        # but previously left `self._device` stale at the env pref, so any reader
+        # of `self._device` saw a card the model wasn't on. `unload()` restores
+        # the requested pref so a later flag-off reload still re-resolves cleanly.
+        self._device = device
         self._use_half = bool(want_half and _parse_device(device)[0] == "cuda")
         if self._use_half:
             log.info("fp16 autocast enabled for /synthesize.")
@@ -1178,6 +1184,10 @@ class CoquiEngine(Engine):
         self._torch = None
         self._speakers = []
         self._resolved_device = "cpu"
+        # Restore the env pref (#1730 gap 3): `_ensure_loaded` overwrote
+        # `self._device` with the resolved card, so a later flag-off reload must
+        # re-resolve from the ORIGINAL request (e.g. 'auto'), not the last card.
+        self._device = self._requested_device
         self._use_half = False
         # Break the dropped model's reference cycles NOW (see
         # _reclaim_host_and_vram) — nn.Module graphs aren't refcount-freed, and
@@ -3798,7 +3808,13 @@ class QwenEngine(Engine):
             with self._synth_lock:
                 self._ensure_base17_for_mint(device=device)
                 rc = base_item.ref_code
-                rc = rc.to(self._device) if hasattr(rc, "to") else rc
+                # Move onto the card the resident 1.7B is ACTUALLY on, read off
+                # the wrapper itself (published atomically with the model at load
+                # — the same value it feeds its own `input_ids.to(...)`). NOT the
+                # shared engine-wide `self._device`, which a concurrent
+                # design/mint admitted to another card can clobber in the
+                # unlocked gap between load and this forward (#1730 gap 1).
+                rc = rc.to(self._base17.device) if hasattr(rc, "to") else rc
                 _t = time.perf_counter()
                 _phase("anchoring")
                 ref_wavs, ref_sr = self._base17.model.speech_tokenizer.decode(
@@ -3997,8 +4013,11 @@ class QwenEngine(Engine):
 
         # Decode ref_code through the 1.7B speech_tokenizer to get a waveform,
         # then re-derive a 1.7B-native clone prompt (mirrors mint_variant ~1831-1836).
+        # Move onto the resident 1.7B's OWN card (read off the wrapper, immune to
+        # a concurrent clobber of the shared `self._device` — #1730 gap 1; see
+        # mint_variant's matching forward for the full rationale).
         rc = base_item.ref_code
-        rc = rc.to(self._device) if hasattr(rc, "to") else rc
+        rc = rc.to(self._base17.device) if hasattr(rc, "to") else rc
         ref_wavs, ref_sr = self._base17.model.speech_tokenizer.decode(
             [{"audio_codes": rc}]
         )
@@ -4415,16 +4434,25 @@ class WhisperEngine:
         self._requested_device = self._device  # preserved for /health fell_back detection
         self._model_name = (os.environ.get("ASR_MODEL", "base").strip() or "base")
 
-    def _compute_type(self) -> str:
+    def _compute_type(self, device: Optional[str] = None) -> str:
         """int8 on CPU (fast, tiny); int8_float16 on GPU (small VRAM, fast).
-        Override via ASR_COMPUTE_TYPE for a roomier card."""
-        family, _ = _parse_device(self._device)
+        Override via ASR_COMPUTE_TYPE for a roomier card. `device` (#1730 gap 2)
+        computes the type off the load's threaded card rather than the shared
+        `self._device`; `None` falls back to it (the pre-admission behaviour)."""
+        family, _ = _parse_device(device if device is not None else self._device)
         default = "int8_float16" if family == "cuda" else "int8"
         return (os.environ.get("ASR_COMPUTE_TYPE", default).strip() or default)
 
-    def _ensure_loaded(self) -> None:
+    def _ensure_loaded(self, device: Optional[str] = None) -> None:
         if self._model is not None:
             return
+        # Capacity-aware placement (#1730 gap 2): the admitted card threads in as
+        # a PARAMETER and drives THIS cold load — mirroring the /load path —
+        # rather than the route pre-mutating the shared `self._device` before an
+        # unlocked load, where a concurrent multi-GPU first cold-load admitted to
+        # another card could clobber it. `None` keeps the env-derived default
+        # byte-for-byte.
+        dev = device if device is not None else self._device
         try:
             from faster_whisper import WhisperModel  # type: ignore
         except ImportError as e:
@@ -4435,10 +4463,12 @@ class WhisperEngine:
             ) from e
         log.info(
             "Loading Whisper ASR model=%s device=%s compute=%s ...",
-            self._model_name, self._device, self._compute_type(),
+            self._model_name, dev, self._compute_type(dev),
         )
-        self._model = WhisperModel(self._model_name, **_ct2_kwargs(self._device, self._compute_type()))
-        log.info("Whisper ASR loaded (model=%s device=%s).", self._model_name, self._device)
+        self._model = WhisperModel(self._model_name, **_ct2_kwargs(dev, self._compute_type(dev)))
+        # Reflect the resolved card for /health fell_back detection once loaded.
+        self._device = dev
+        log.info("Whisper ASR loaded (model=%s device=%s).", self._model_name, dev)
 
     @staticmethod
     def _pcm_to_float32_16k(pcm: bytes, sample_rate: int) -> Any:
@@ -4457,7 +4487,7 @@ class WhisperEngine:
 
     def transcribe(
         self, pcm: bytes, sample_rate: int, language: Optional[str] = None,
-        word_timestamps: bool = False,
+        word_timestamps: bool = False, device: Optional[str] = None,
     ) -> dict[str, Any]:
         """Transcribe one clip's PCM. Returns the text plus Whisper's
         intrinsic signals — `avg_logprob` (lower = less confident),
@@ -4474,8 +4504,12 @@ class WhisperEngine:
         wants no cross-sentence hallucination carryover on an isolated clip.
         The two call sites never overlap (only the caption export path ever
         sets word_timestamps), so this is additive, not a behaviour change
-        for the existing QA caller."""
-        self._ensure_loaded()
+        for the existing QA caller.
+
+        `device` (#1730 gap 2) threads an admitted card straight into the cold
+        load, so nothing reads the shared `self._device` across the unlocked
+        route→load gap; `None` is the pre-admission path."""
+        self._ensure_loaded(device=device)
         assert self._model is not None
         audio = self._pcm_to_float32_16k(pcm, sample_rate)
         with self._infer_lock:
@@ -4560,12 +4594,18 @@ class SpeakerEngine:
             run_opts={"device": device},
         )
 
-    async def ensure_loaded(self):
+    async def ensure_loaded(self, device: Optional[str] = None):
         if self._model is not None:
             return
         async with self._load_lock:
             if self._model is not None:
                 return
+            # Capacity-aware placement (#1730 gap 2): apply the admitted card
+            # UNDER the load lock, threaded in as a parameter — not mutated by
+            # the route before the lock, where a concurrent multi-GPU first
+            # cold-load could clobber it. `None` keeps the env-derived default.
+            if device is not None:
+                self.device = device
             # srv-47: a requested cuda device that isn't actually present
             # degrades to cpu rather than crashing.  Use _parse_device so an
             # indexed pin (cuda:1) is treated the same as plain 'cuda'.
@@ -7034,9 +7074,12 @@ async def transcribe(req: Request) -> Response:
             ) as adm:
                 if "noCapacity" in adm:
                     return _no_capacity(adm)
-                ASR._device = adm["device"]  # steer the (possibly cold) load
+                # Thread the admitted card as a param (#1730 gap 2) — the load
+                # honours it under the lock; nothing pre-mutates the shared
+                # ASR._device across the unlocked gap.
                 result = await asyncio.to_thread(
-                    ASR.transcribe, pcm, sample_rate, language, word_timestamps
+                    ASR.transcribe, pcm, sample_rate, language, word_timestamps,
+                    adm["device"],
                 )
         else:
             result = await asyncio.to_thread(
@@ -7106,8 +7149,9 @@ async def embed(req: Request) -> Response:
             ) as adm:
                 if "noCapacity" in adm:
                     return _no_capacity(adm)
-                SPK.device = adm["device"]  # steer the (possibly cold) load
-                await SPK.ensure_loaded()  # srv-47 R2-B: a cuda LOAD poison must be fenced too
+                # Thread the admitted card as a param (#1730 gap 2) — applied
+                # under ensure_loaded()'s load lock, not pre-mutated outside it.
+                await SPK.ensure_loaded(adm["device"])  # srv-47 R2-B: a cuda LOAD poison must be fenced too
                 embedding = await asyncio.to_thread(SPK.embed, pcm, int(sample_rate))
         else:
             await SPK.ensure_loaded()  # srv-47 R2-B: a cuda LOAD poison must be fenced too

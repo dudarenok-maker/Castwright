@@ -15,7 +15,7 @@ from __future__ import annotations
 import sys
 import types
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import pytest
@@ -126,25 +126,26 @@ def test_transcribe_gpu_no_fit_returns_503(monkeypatch, asr_client) -> None:
 
 def test_transcribe_gpu_steers_to_roomier_device(monkeypatch, asr_client) -> None:
     """ASR_DEVICE=cuda (unindexed, so unpinned) + flag ON + a probe favouring
-    cuda:1 -> the reservation admits onto cuda:1 and ASR._device is steered
-    there BEFORE the transcribe call runs."""
+    cuda:1 -> the reservation admits onto cuda:1 and that card is threaded into
+    the cold load as a `device` PARAMETER (#1730 gap 2), not pre-mutated onto
+    the shared ASR._device. Post-load ASR._device reflects it for /health."""
     _swap_asr(monkeypatch, "cuda")
     monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
     monkeypatch.setattr(main._placement, "probe", lambda: ROOMY_PROBE)
-    seen_device: dict[str, str] = {}
-    orig_transcribe = main.WhisperEngine.transcribe
+    seen_device: dict[str, Optional[str]] = {}
+    orig_ensure = main.WhisperEngine._ensure_loaded
 
-    def _spy_transcribe(self, *a, **k):
-        seen_device["device"] = self._device
-        return orig_transcribe(self, *a, **k)
+    def _spy_ensure(self, device=None):
+        seen_device["device"] = device
+        return orig_ensure(self, device)
 
-    monkeypatch.setattr(main.WhisperEngine, "transcribe", _spy_transcribe)
+    monkeypatch.setattr(main.WhisperEngine, "_ensure_loaded", _spy_ensure)
 
     r = asr_client.post("/transcribe", content=_pcm(), headers={"X-Sample-Rate": "24000"})
 
     assert r.status_code == 200
-    assert seen_device["device"] == "cuda:1"
-    assert main.ASR._device == "cuda:1"
+    assert seen_device["device"] == "cuda:1"  # admitted card arrives as a PARAM
+    assert main.ASR._device == "cuda:1"        # load reflected it for /health
 
 
 # ── /embed ───────────────────────────────────────────────────────────────
@@ -233,19 +234,20 @@ def test_embed_gpu_no_fit_returns_503(monkeypatch, embed_client) -> None:
 
 def test_embed_gpu_steers_to_roomier_device(monkeypatch, embed_client) -> None:
     """SPK_DEVICE=cuda (unindexed, so unpinned) + flag ON + a probe favouring
-    cuda:1 -> the reservation admits onto cuda:1 and SPK.device is steered
-    there BEFORE ensure_loaded()/embed run."""
+    cuda:1 -> the reservation admits onto cuda:1 and that card is threaded into
+    ensure_loaded() as a `device` PARAMETER (#1730 gap 2), applied under its
+    load lock rather than pre-mutated onto the shared SPK.device."""
     _install_speechbrain_stub(monkeypatch)
     _stub_torch_cuda(monkeypatch)
     _swap_spk(monkeypatch, "cuda")
     monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
     monkeypatch.setattr(main._placement, "probe", lambda: ROOMY_PROBE)
-    seen_device: dict[str, str] = {}
+    seen_device: dict[str, Optional[str]] = {}
     orig_ensure_loaded = main.SpeakerEngine.ensure_loaded
 
-    async def _spy_ensure_loaded(self):
-        seen_device["device"] = self.device
-        return await orig_ensure_loaded(self)
+    async def _spy_ensure_loaded(self, device=None):
+        seen_device["device"] = device
+        return await orig_ensure_loaded(self, device)
 
     monkeypatch.setattr(main.SpeakerEngine, "ensure_loaded", _spy_ensure_loaded)
     monkeypatch.setattr(main.SpeakerEngine, "embed", lambda self, pcm, sr: [0.0] * 192)
@@ -253,5 +255,68 @@ def test_embed_gpu_steers_to_roomier_device(monkeypatch, embed_client) -> None:
     r = embed_client.post("/embed", content=_pcm(seconds=0.5, sample_rate=16000), headers={"X-Sample-Rate": "16000"})
 
     assert r.status_code == 200
-    assert seen_device["device"] == "cuda:1"
+    assert seen_device["device"] == "cuda:1"  # admitted card arrives as a PARAM
     assert main.SPK.device == "cuda:1"
+
+
+# ── device-steer atomicity: the load honours the threaded `device` param, not a
+#    stale shared `self._device`/`self.device` (#1730 gap 2) ─────────────────
+#
+# The route no longer mutates the engine's device attr before an unlocked cold
+# load; it threads the admitted card in as a call PARAMETER (mirroring the
+# `/load` path). These prove the load derives its card from that param even when
+# the shared attr has been left stale by a concurrent op — so a concurrent
+# multi-GPU FIRST cold-load can't land on the wrong card.
+
+
+def test_asr_ensure_loaded_uses_device_param_not_stale_self_device(
+    monkeypatch, fake_whisper_module
+) -> None:
+    """ASR: `_ensure_loaded(device="cuda:1")` must build the CT2 model from the
+    cuda:1 PARAM even though `self._device` is a stale cuda:0 (as if a concurrent
+    first cold-load clobbered it in the gap). Pre-fix `_ensure_loaded` took no
+    device and read `self._device`, landing the load on the wrong card."""
+    monkeypatch.setenv("ASR_DEVICE", "cuda:0")
+    eng = main.WhisperEngine()
+    eng._device = "cuda:0"  # stale shared attr
+
+    seen: dict[str, str] = {}
+    orig_ct2 = main._ct2_kwargs
+
+    def _spy_ct2(device: str, compute_type: str) -> dict:
+        seen["device"] = device
+        return orig_ct2(device, compute_type)
+
+    monkeypatch.setattr(main, "_ct2_kwargs", _spy_ct2)
+
+    eng._ensure_loaded(device="cuda:1")
+
+    assert seen["device"] == "cuda:1"  # load derived from the PARAM, not self._device
+    assert eng._device == "cuda:1"     # reflected post-load for /health fell_back
+
+
+def test_spk_ensure_loaded_uses_device_param_not_stale_self_device(monkeypatch) -> None:
+    """SPK: `ensure_loaded(device="cuda:1")` must load ECAPA on the cuda:1 PARAM
+    under the load lock even though `self.device` is a stale cuda:0. Pre-fix
+    `ensure_loaded` took no device and the route pre-mutated `self.device`
+    outside the lock, so a concurrent first cold-load could clobber it."""
+    import asyncio
+
+    _install_speechbrain_stub(monkeypatch)
+    _stub_torch_cuda(monkeypatch)
+    monkeypatch.setenv("SPK_DEVICE", "cuda:0")
+    eng = main.SpeakerEngine()
+    eng.device = "cuda:0"  # stale shared attr
+
+    captured: dict[str, str] = {}
+
+    def _spy_load_on(self, device: str):
+        captured["device"] = device
+        return _FakeSpkModel()
+
+    monkeypatch.setattr(main.SpeakerEngine, "_load_on", _spy_load_on)
+
+    asyncio.run(eng.ensure_loaded(device="cuda:1"))
+
+    assert captured["device"] == "cuda:1"  # _load_on got the PARAM's card
+    assert eng.device == "cuda:1"

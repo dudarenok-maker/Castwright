@@ -231,6 +231,18 @@ the flag is OFF) should close so admission covers everything the budget did:
 The three flag-ON stale-`self._device` items above (Qwen forward, ASR/SPK
 cold-load, Coqui load-steer) are tracked together in **#1730**.
 
+> **CLOSED (#1730).** All three are fixed: the Qwen 1.7B forward now moves its
+> ref_code onto the resident wrapper's own `self._base17.device` (published with
+> the model at load, immune to a shared-field clobber); `/transcribe` + `/embed`
+> thread the admitted card into `transcribe`/`_ensure_loaded` / `ensure_loaded`
+> as a parameter (applied under the load lock, no pre-mutation across the
+> unlocked gap); and Coqui's `_ensure_loaded` keeps `self._device` in step with
+> the card the model is actually on (restored to the requested pref on
+> `unload()`). Regression coverage: `test_design_mint_admission.py`,
+> `test_transcribe_embed_admission.py`, `test_coqui_device.py`. On-box 2-card
+> acceptance (with `SEG_CAPACITY_ADMISSION=1`) still owed before the
+> concurrent-multi-card flag flip.
+
 ## Ship notes
 
 (Filled when status flips to `stable` after the on-box acceptance above passes and

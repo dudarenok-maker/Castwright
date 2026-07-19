@@ -12,6 +12,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 from typing import Optional
 
@@ -330,3 +331,71 @@ def test_device_none_leaves_device_pref_untouched(monkeypatch, _stub_codec):
     pref_before2 = eng2._device_pref
     eng2._ensure_base17_for_mint()  # device=None
     assert eng2._device_pref == pref_before2
+
+
+# --- forward-clobber: the 1.7B FORWARD must target the resident model's OWN
+#     card, not the shared engine-wide `self._device` (#1730 gap 1) ------------
+#
+# The load-atomicity tests above prove the two cold loads don't clobber each
+# other's `self._device` DURING the load (under `_cold_load_lock`). But the
+# later FORWARD (`rc.to(...)` before the 1.7B speech_tokenizer decode) runs
+# outside that lock, so on a genuine multi-card box a concurrent design/mint
+# admitted to a different card can overwrite the single `self._device` field in
+# the gap between load and forward. The fix reads the device off the resident
+# 1.7B wrapper (`self._base17.device`, published atomically with the model at
+# load and the same value the wrapper feeds its own `input_ids.to(...)`), which
+# travels WITH that model and is immune to the shared-field clobber.
+
+
+class _RecordingRefCode:
+    """A ref_code stand-in that records the device its `.to(...)` was moved to
+    and returns itself (so the downstream decode still gets a codes object)."""
+
+    def __init__(self) -> None:
+        self.moved_to: Optional[str] = None
+
+    def to(self, device):  # noqa: D401 — test double
+        self.moved_to = device
+        return self
+
+
+def _fake_base17_on(device: str):
+    """A minimal 1.7B wrapper stand-in resident on `device`, exposing the two
+    attributes `_load_voice_prompt_17b`'s forward touches: `.device` and
+    `.model.speech_tokenizer.decode` + `.create_voice_clone_prompt`."""
+    speech_tokenizer = types.SimpleNamespace(decode=lambda payload: ([object()], 24000))
+    return types.SimpleNamespace(
+        device=device,
+        model=types.SimpleNamespace(speech_tokenizer=speech_tokenizer),
+        create_voice_clone_prompt=lambda **kwargs: object(),
+    )
+
+
+def test_load_voice_prompt_17b_forward_targets_resident_card_not_clobbered_device(
+    monkeypatch, tmp_path
+):
+    """THE forward-clobber regression: the 1.7B ref_code forward must move onto
+    the card the resident 1.7B is ACTUALLY on, even if a concurrent op has since
+    overwritten the shared `self._device`. Resident 1.7B lives on cuda:0; a
+    concurrent design clobbered `self._device` to cuda:1 — the forward must still
+    target cuda:0. (Pre-fix `rc.to(self._device)` moved it to the wrong card.)"""
+    eng = main.QwenEngine()
+    eng._voices_dir = str(tmp_path)
+    eng._base17 = _fake_base17_on("cuda:0")
+    eng._device = "cuda:1"  # simulate the concurrent clobber
+
+    rc = _RecordingRefCode()
+    base_item = types.SimpleNamespace(ref_code=rc, ref_text="calibration line")
+    monkeypatch.setattr(eng, "_load_voice_prompt", lambda voice: ([base_item], "en", False))
+
+    # `import torch` inside the method is function-local, so inject via sys.modules;
+    # only `torch.save` is exercised on the re-derive path (persist step).
+    fake_torch = types.SimpleNamespace(save=lambda obj, path: Path(path).write_bytes(b""))
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    eng._load_voice_prompt_17b("qwen-voice")
+
+    assert rc.moved_to == "cuda:0", (
+        "1.7B forward must target the resident model's card (cuda:0), not the "
+        f"clobbered engine-wide self._device (cuda:1); got {rc.moved_to!r}"
+    )
