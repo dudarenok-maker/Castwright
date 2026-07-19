@@ -2643,20 +2643,34 @@ class QwenEngine(Engine):
         # engine instance, separate lock). Batching — not concurrency — is the
         # throughput lever on a single autoregressive model anyway.
         self._synth_lock = threading.Lock()
-        # Serialises the COLD model load. `_ensure_base_loaded` runs on
-        # asyncio.to_thread worker threads (both the synth path and the /load
-        # route offload it there), so a plain threading.Lock — NOT the asyncio
-        # `_load_lock` above, which a worker thread can't acquire — is what makes
-        # the load single-flight. Without it, two workers that both observe
-        # `_base is None` on a cold start each call `from_pretrained` +
-        # `.to(device)`, and the racing loads leave the model in a half-cast
-        # dtype state → every later forward dies with "expected mat1 and mat2 to
-        # have the same dtype, float != BFloat16". Double-checked inside.
-        self._base_load_lock = threading.Lock()
-        # Same pattern for the 1.7B-Base single-flight load (fs-55). Mirrors
-        # _base_load_lock above; separate lock so a 0.6B-Base load and a
-        # 1.7B-Base load can proceed in parallel if both are needed at once.
-        self._base17_load_lock = threading.Lock()
+        # Serialises EVERY cold Qwen model load — 0.6B-Base, 1.7B-Base (fs-55),
+        # AND the transient VoiceDesign — under ONE lock. `_ensure_*_loaded` run
+        # on asyncio.to_thread worker threads (the synth path, the /load route,
+        # design_voice and mint_variant all offload there), so a plain
+        # threading.Lock — NOT the asyncio `_load_lock` above, which a worker
+        # thread can't acquire — is what makes the loads single-flight. Two
+        # reasons ONE lock, not per-model:
+        #   1. Single-flight per model: without it, two workers that both observe
+        #      `self._base is None` on a cold start each call `from_pretrained` +
+        #      `.to(device)`, and the racing loads leave the model in a half-cast
+        #      dtype state → every later forward dies with "expected mat1 and mat2
+        #      to have the same dtype, float != BFloat16". Double-checked inside.
+        #   2. Capacity-aware device-steer (task 3, vram-aware-placement plan):
+        #      the set-pref + `_ensure_device_resolved` + load all read/write the
+        #      SINGLE engine-wide `self._device`/`self._device_pref`. A design and
+        #      a mint admitted to DIFFERENT cards (the concurrent-multi-GPU
+        #      scenario admission targets) would, under SEPARATE per-model locks,
+        #      interleave: A resolves `_device=cuda:1`, B overwrites it to
+        #      `cuda:0` before A's `_load_qwen_model` reads it, and A's model lands
+        #      on the wrong card the reservation ledger didn't book (verified by
+        #      the interleaving test in test_design_mint_admission.py). Only a lock
+        #      shared across ALL three cold loads makes set-pref→resolve→load
+        #      atomic against the shared device fields. A concurrent Kokoro/Coqui
+        #      load stays parallel — those are separate engine instances with their
+        #      own `_device`. Deadlock-free: no `_ensure_*_loaded` calls another
+        #      while holding this lock, and neither `_ensure_device_resolved` nor
+        #      `_load_qwen_model` re-acquires it.
+        self._cold_load_lock = threading.Lock()
         # Idle-lifecycle bookkeeping for the resident 1.7B-Base (issue #1024).
         # mint_variant() + the 1.7B synth/batch paths keep it WARM across
         # back-to-back calls (the old per-mint unload/reload fragmented the CUDA
@@ -2896,10 +2910,10 @@ class QwenEngine(Engine):
         # only writer and it publishes a fully-built model).
         if self._base is not None:
             return
-        # Single-flight the cold load — see `_base_load_lock`. Double-checked so
+        # Single-flight the cold load — see `_cold_load_lock`. Double-checked so
         # the loser of the race returns the winner's model instead of loading a
         # second copy (which would corrupt the dtype state).
-        with self._base_load_lock:
+        with self._cold_load_lock:
             if self._base is None:
                 # Capacity-aware placement (task 2, vram-aware-placement
                 # plan): a concrete `device` from an admitted reservation
@@ -2919,12 +2933,14 @@ class QwenEngine(Engine):
     def _ensure_base17_loaded(self, device: Optional[str] = None) -> None:
         """Load the 1.7B-Base model (fs-55 anchored variant workflow).
 
-        Mirrors `_ensure_base_loaded` with its own single-flight lock so a
-        0.6B-Base load and a 1.7B-Base load can proceed concurrently if both
-        are needed at once. Double-checked inside to avoid a second copy."""
+        Mirrors `_ensure_base_loaded`, sharing the single `_cold_load_lock` so the
+        device-steer (set-pref + resolve + load) stays atomic against a concurrent
+        0.6B-Base or VoiceDesign cold load over the shared `self._device` (task 3,
+        vram-aware-placement plan — see the lock's definition). Double-checked
+        inside to avoid a second copy."""
         if self._base17 is not None:
             return
-        with self._base17_load_lock:
+        with self._cold_load_lock:
             if self._base17 is None:
                 if device is not None:
                     self._device_pref = device
@@ -2939,17 +2955,22 @@ class QwenEngine(Engine):
                 _maybe_compile_codec(self._base17, torch)
                 log.info("Qwen 1.7B-Base loaded.")
 
-    def _ensure_base17_for_mint(self) -> None:
+    def _ensure_base17_for_mint(self, device: Optional[str] = None) -> None:
         """Mint-only: ensure the 1.7B-Base is available, raising a typed
         Base17UnavailableError the mint route maps to the 503 fallback signal.
         A CUDA OOM is re-raised unchanged (generic 500, no fallback). Other
-        callers keep using _ensure_base17_loaded() and are unaffected."""
+        callers keep using _ensure_base17_loaded() and are unaffected.
+
+        `device` (task 3, vram-aware-placement plan) forwards an admitted
+        reservation's card straight into `_ensure_base17_loaded`, which sets the
+        pref + resolves + loads atomically under its own load lock (task 2). `None`
+        is byte-for-byte the pre-admission path."""
         import torch  # type: ignore
 
         if not _qwen_base17_weights_present():
             raise Base17UnavailableError("not-installed")
         try:
-            self._ensure_base17_loaded()
+            self._ensure_base17_loaded(device=device)
         except Exception as e:  # noqa: BLE001 — classify then re-raise
             msg = str(e).lower()  # exc-text-safe: OOM-branch classification only, never returned
             if "out of memory" in msg or isinstance(
@@ -3260,17 +3281,34 @@ class QwenEngine(Engine):
         eb = m.extract_speaker_embedding(audio=_resample24k(wav_b, sr_b), sr=24000)
         return cosine_distance(ea.detach().cpu().float().numpy(), eb.detach().cpu().float().numpy())
 
-    def _ensure_design_loaded(self) -> None:
-        if self._design is None:
-            self._ensure_device_resolved()
-            log.info(
-                "Loading Qwen VoiceDesign model=%s on %s (transient) …",
-                self.VOICEDESIGN_MODEL, self._device,
-            )
-            self._design = self._load_qwen_model(self.VOICEDESIGN_MODEL)
-            global _QWEN_DESIGN_EVER_LOADED
-            _QWEN_DESIGN_EVER_LOADED = True
-            log.info("Qwen VoiceDesign loaded.")
+    def _ensure_design_loaded(self, device: Optional[str] = None) -> None:
+        # Fast path: already loaded, no lock needed (the assignment below is the
+        # only writer and it publishes a fully-built model).
+        if self._design is not None:
+            return
+        # Single-flight the cold load under the shared `_cold_load_lock` so the
+        # set-pref + resolve + load are ONE atomic acquisition (task 3,
+        # vram-aware-placement plan): a concrete `device` from an admitted
+        # reservation overrides the env-derived pref for THIS cold load without a
+        # concurrent mint/base cold load on a DIFFERENT admitted card being able to
+        # clobber the shared `self._device`/`self._device_pref` between this
+        # resolve and `_load_qwen_model`'s read of it (the TOCTOU this fix closes —
+        # see the lock's definition). `None` leaves `_device_pref` untouched
+        # (flag-off byte-for-byte). Double-checked so the loser of a race returns
+        # the winner's model instead of loading a second copy.
+        with self._cold_load_lock:
+            if self._design is None:
+                if device is not None:
+                    self._device_pref = device
+                self._ensure_device_resolved()
+                log.info(
+                    "Loading Qwen VoiceDesign model=%s on %s (transient) …",
+                    self.VOICEDESIGN_MODEL, self._device,
+                )
+                self._design = self._load_qwen_model(self.VOICEDESIGN_MODEL)
+                global _QWEN_DESIGN_EVER_LOADED
+                _QWEN_DESIGN_EVER_LOADED = True
+                log.info("Qwen VoiceDesign loaded.")
 
     def _voice_paths(self, voice_id: str) -> tuple[str, str]:
         # Filename-safe id. For an already-ASCII voice_id this is the identity
@@ -3550,18 +3588,17 @@ class QwenEngine(Engine):
                 _phase("loading-model")
                 # Capacity-aware placement (task 3, vram-aware-placement plan):
                 # a concrete `device` from an admitted reservation overrides the
-                # env-derived pref for this design, set once under the same lock
-                # `_ensure_base_loaded` uses so a concurrent cold load can't race
-                # the assignment. `None` leaves `_device_pref` untouched (flag-off
-                # byte-for-byte). `_ensure_design_loaded` has no device param of
-                # its own — it resolves off `self._device_pref` via
-                # `_ensure_device_resolved`, so setting the pref here is enough to
-                # steer it too.
-                if device is not None:
-                    with self._base_load_lock:
-                        self._device_pref = device
-                self._ensure_design_loaded()
-                self._ensure_base_loaded()
+                # env-derived pref for this design. `device` is threaded straight
+                # into each ensure call so the set-pref + resolve + load are ONE
+                # atomic acquisition under that model's own load lock — a
+                # concurrent design/mint admitted to a DIFFERENT card can't clobber
+                # `_device_pref` in the gap between set and resolve (the TOCTOU
+                # this closes). The design load runs first and sets `_device_pref`,
+                # so the base load inherits the same card; passing it here too is
+                # belt-and-suspenders for the warm-design / cold-base case. `None`
+                # leaves `_device_pref` untouched (flag-off byte-for-byte).
+                self._ensure_design_loaded(device=device)
+                self._ensure_base_loaded(device=device)
                 # Phase boundary: everything above is Kokoro-evict + (cold) model
                 # load; everything below is GPU forwards. `load_ms` isolates the
                 # cold-start cost (the transient 1.7B VoiceDesign load the operator
@@ -3747,18 +3784,19 @@ class QwenEngine(Engine):
             _phase("loading-model")
             # Capacity-aware placement (task 3, vram-aware-placement plan):
             # mirrors design_voice — a concrete `device` from an admitted
-            # reservation overrides the env-derived pref for this mint, set
-            # once under `_base17_load_lock` (the lock `_ensure_base17_loaded`
-            # uses) before the first `_ensure_base17_for_mint` call.  `None`
+            # reservation overrides the env-derived pref for this mint. `device`
+            # is threaded into `_ensure_base17_for_mint`, which forwards it to
+            # `_ensure_base17_loaded` where set-pref + resolve + load are ONE
+            # atomic acquisition under the shared `_cold_load_lock` — so a
+            # concurrent design/mint/base cold load admitted to a DIFFERENT card
+            # can't clobber the shared `self._device` between this resolve and
+            # `_load_qwen_model`'s read of it (the TOCTOU this closes). `None`
             # leaves `_device_pref` untouched (flag-off byte-for-byte).
-            if device is not None:
-                with self._base17_load_lock:
-                    self._device_pref = device
-            self._ensure_base17_for_mint()
+            self._ensure_base17_for_mint(device=device)
             # Phase boundary: Kokoro-evict + (cold) 1.7B-Base load above.
             load_ms = (time.perf_counter() - t0) * 1000.0
             with self._synth_lock:
-                self._ensure_base17_for_mint()
+                self._ensure_base17_for_mint(device=device)
                 rc = base_item.ref_code
                 rc = rc.to(self._device) if hasattr(rc, "to") else rc
                 _t = time.perf_counter()

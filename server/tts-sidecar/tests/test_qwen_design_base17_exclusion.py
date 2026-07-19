@@ -75,8 +75,8 @@ def test_design_voice_evicts_resident_base17(monkeypatch):
 
     qeng._design = _FakeDesign()
     qeng._base = _FakeBase()
-    monkeypatch.setattr(qeng, "_ensure_design_loaded", lambda: None)
-    monkeypatch.setattr(qeng, "_ensure_base_loaded", lambda: None)
+    monkeypatch.setattr(qeng, "_ensure_design_loaded", lambda device=None: None)
+    monkeypatch.setattr(qeng, "_ensure_base_loaded", lambda device=None: None)
     qeng._voices_dir = tempfile.mkdtemp()
     monkeypatch.setattr("torch.save", lambda *a, **k: None)
 
@@ -121,7 +121,7 @@ def test_mint_variant_evicts_resident_design(monkeypatch):
         def create_voice_clone_prompt(self, ref_audio, ref_text):
             return {"prompt17": True}
 
-    def _fake_ensure_base17_for_mint():
+    def _fake_ensure_base17_for_mint(device=None):
         # The eviction must already have happened by the time the 1.7B-Base loads.
         if captured["design_resident_at_base17_load"] is None:
             captured["design_resident_at_base17_load"] = qeng._design is not None
@@ -137,7 +137,7 @@ def test_mint_variant_evicts_resident_design(monkeypatch):
             return [np.zeros(10, dtype="float32")], 24000
 
     qeng._base = _FakeBase()
-    monkeypatch.setattr(qeng, "_ensure_base_loaded", lambda: None)
+    monkeypatch.setattr(qeng, "_ensure_base_loaded", lambda device=None: None)
     monkeypatch.setattr(
         qeng,
         "_icl_instruct_synth",

@@ -353,8 +353,8 @@ def test_design_voice_survives_design_model_freed_in_the_gap(
     orig_ensure_base = engine._ensure_base_loaded
     fired = {"n": 0}
 
-    def racing_ensure_base() -> None:
-        orig_ensure_base()
+    def racing_ensure_base(device=None) -> None:
+        orig_ensure_base(device=device)
         if fired["n"] == 0:  # only the pre-lock ensure, not the in-lock re-ensure
             fired["n"] += 1
             engine._design = None  # a watchdog free lands in the gap
@@ -529,7 +529,7 @@ def test_mint_variant_keeps_base17_warm_across_mints(fake_qwen_runtime, monkeypa
     )
     warm = type(eng._base)("1.7b")
     eng._base17 = warm
-    monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda: None)  # already warm
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda device=None: None)  # already warm
     eng.mint_variant("v1", "v1__angry", "Angrily.", "English", None, None)
     eng.mint_variant("v1", "v1__sad", "Sadly.", "English", None, None)
     assert eng._base17 is warm         # same object across both mints — no reload churn
@@ -1302,7 +1302,7 @@ def test_mint_variant_anchors_to_base_and_marks_json(fake_qwen_runtime, monkeypa
     # base voice exists on disk (design it via the fake path)
     eng.design_voice("v1", "A warm narrator.", "English", None, None)
     calls: list[str] = []
-    monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda: calls.append("load17"))
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda device=None: calls.append("load17"))
     monkeypatch.setattr(
         eng,
         "_icl_instruct_synth",
@@ -1887,7 +1887,7 @@ def test_ensure_base17_for_mint_corrupt_on_nonoom(fake_qwen_runtime, monkeypatch
     import main
     eng = fake_qwen_runtime["engine"]
     monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
-    def boom(): raise RuntimeError("bad safetensors header")
+    def boom(device=None): raise RuntimeError("bad safetensors header")
     monkeypatch.setattr(eng, "_ensure_base17_loaded", boom)
     with pytest.raises(main.Base17UnavailableError) as ei:
         eng._ensure_base17_for_mint()
@@ -1898,7 +1898,7 @@ def test_ensure_base17_for_mint_reraises_oom(fake_qwen_runtime, monkeypatch):
     import main
     eng = fake_qwen_runtime["engine"]
     monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
-    def oom(): raise RuntimeError("CUDA out of memory: tried to allocate 2 GiB")
+    def oom(device=None): raise RuntimeError("CUDA out of memory: tried to allocate 2 GiB")
     monkeypatch.setattr(eng, "_ensure_base17_loaded", oom)
     with pytest.raises(RuntimeError) as ei:   # NOT Base17UnavailableError
         eng._ensure_base17_for_mint()
@@ -1944,7 +1944,7 @@ def test_mint_variant_route_503_poisoned_on_oom(fake_qwen_runtime, monkeypatch):
     # Design the base voice so the 409 path isn't hit.
     eng.design_voice("v1", "A warm narrator.", "English", None)
     monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
-    def oom(): raise RuntimeError("CUDA out of memory")
+    def oom(device=None): raise RuntimeError("CUDA out of memory")
     monkeypatch.setattr(eng, "_ensure_base17_loaded", oom)
     client = TestClient(main.app)
     r = client.post("/qwen/mint-variant", json={
@@ -1972,7 +1972,7 @@ def test_mint_variant_route_500_on_postload_failure_not_corrupt(fake_qwen_runtim
     eng.design_voice("v1", "A warm narrator.", "English", None)
     # Make _ensure_base17_for_mint succeed: weights present + load is a no-op.
     monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
-    monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda: None)
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda device=None: None)
     # Provision a fake _base17 with a speech_tokenizer whose decode() raises.
     fake_b17 = _FakeQwenModel("1.7b")
     fake_b17.model.speech_tokenizer = _types.SimpleNamespace(

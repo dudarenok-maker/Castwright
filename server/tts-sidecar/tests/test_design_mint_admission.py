@@ -10,6 +10,8 @@ engine is ever asked to design/mint."""
 from __future__ import annotations
 
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -201,3 +203,130 @@ def test_mint_nocapacity_returns_503_needed_7168(monkeypatch, design_client):
     assert body["deviceKey"] == "cuda:0"
     fake = design_client.fake_qwen
     assert fake.mint_calls == []
+
+
+# --- device-steer atomicity (the task-3 TOCTOU fix) -------------------------
+#
+# The route tests above stub design_voice/mint_variant wholesale, so they can't
+# see the ENGINE-INTERNAL device-steer. These drive the real
+# `_ensure_design_loaded`/`_ensure_base17_loaded` cold-load machinery with an
+# observable `_load_qwen_model` to prove the admitted card is honoured — and,
+# under concurrency, that the shared `_cold_load_lock` serialises the two cold
+# loads so a design admitted to cuda:1 and a mint admitted to cuda:0 can't
+# clobber the single engine-wide `self._device` mid-load.
+
+
+class _FakeLoadRecorder(main.QwenEngine):
+    """Real QwenEngine cold-load path, but `_load_qwen_model` is an observable
+    stub: it records the device `self._device` carried at load time and tracks
+    the peak number of loads running at once. The shared `_cold_load_lock`
+    guarantees that peak is 1; the pre-fix per-model locks let two cold loads
+    overlap (peak 2) and clobber the shared device field."""
+
+    def __init__(self, overlap_delay: float = 0.03) -> None:
+        super().__init__()
+        self.loaded: list[tuple[str, str]] = []
+        self._in_load = 0
+        self.peak_in_load = 0
+        self._counter_lock = threading.Lock()
+        self._overlap_delay = overlap_delay
+
+    def _load_qwen_model(self, model_id: str):  # noqa: D401 — test double
+        with self._counter_lock:
+            self._in_load += 1
+            self.peak_in_load = max(self.peak_in_load, self._in_load)
+        # Widen the window so a per-model-lock regression reliably interleaves;
+        # the shared lock keeps the two loads strictly sequential (peak == 1).
+        time.sleep(self._overlap_delay)
+        # Read LATE, mirroring `_load_qwen_model`'s `inner.to(self._device)` — a
+        # concurrent load that overwrote `self._device` in the gap would be seen
+        # here.
+        dev = self._device
+        with self._counter_lock:
+            self._in_load -= 1
+        self.loaded.append((model_id, dev))
+        return object()
+
+
+@pytest.fixture
+def _stub_codec(monkeypatch):
+    """The base/base17 cold paths call these post-load hooks on the loaded
+    model; the recorder returns a bare sentinel, so no-op them."""
+    monkeypatch.setattr(main, "_install_codec_timing", lambda *a, **k: None)
+    monkeypatch.setattr(main, "_maybe_compile_codec", lambda *a, **k: False)
+    monkeypatch.delenv("QWEN_DEVICE", raising=False)
+
+
+def test_concurrent_design_and_mint_each_load_own_admitted_device(monkeypatch, _stub_codec):
+    """THE regression: a design admitted to cuda:1 and a 1.7B/mint admitted to
+    cuda:0, started together, must EACH load on their own card. With the shared
+    `_cold_load_lock` the two cold loads never overlap (peak_in_load == 1) and
+    neither clobbers the other's `self._device`. (Pre-fix, with a dedicated
+    per-model lock each, they interleave: peak 2 and the design lands on
+    cuda:0.)"""
+    eng = _FakeLoadRecorder(overlap_delay=0.03)
+    ready = threading.Barrier(2)
+
+    def run_design():
+        ready.wait()
+        eng._ensure_design_loaded(device="cuda:1")
+
+    def run_mint():
+        ready.wait()
+        eng._ensure_base17_loaded(device="cuda:0")
+
+    ta = threading.Thread(target=run_design)
+    tb = threading.Thread(target=run_mint)
+    ta.start()
+    tb.start()
+    ta.join(5)
+    tb.join(5)
+    assert not ta.is_alive() and not tb.is_alive(), "a cold load deadlocked"
+
+    by_model = dict(eng.loaded)
+    assert by_model[eng.VOICEDESIGN_MODEL] == "cuda:1"
+    assert by_model[eng.BASE17_MODEL] == "cuda:0"
+    assert eng.peak_in_load == 1  # the shared lock serialised the two cold loads
+
+
+def test_ensure_design_and_base17_for_mint_steer_own_device(monkeypatch, _stub_codec):
+    """Sequential: `_ensure_design_loaded(cuda:1)` resolves+loads on cuda:1, and
+    `_ensure_base17_for_mint(cuda:0)` FORWARDS its device into
+    `_ensure_base17_loaded`, resolving+loading on cuda:0."""
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
+    eng = _FakeLoadRecorder(overlap_delay=0.0)
+
+    eng._ensure_design_loaded(device="cuda:1")
+    assert eng._device == "cuda:1"
+    assert (eng.VOICEDESIGN_MODEL, "cuda:1") in eng.loaded
+
+    eng._ensure_base17_for_mint(device="cuda:0")
+    assert eng._device == "cuda:0"
+    assert (eng.BASE17_MODEL, "cuda:0") in eng.loaded
+
+
+def test_design_path_threads_same_device_into_design_and_base(monkeypatch, _stub_codec):
+    """design_voice steers BOTH its VoiceDesign and its 0.6B-Base cold loads to
+    the one admitted card — mirror that: `_ensure_design_loaded(cuda:1)` then
+    `_ensure_base_loaded(cuda:1)` both land on cuda:1."""
+    eng = _FakeLoadRecorder(overlap_delay=0.0)
+    eng._ensure_design_loaded(device="cuda:1")
+    eng._ensure_base_loaded(device="cuda:1")
+    assert (eng.VOICEDESIGN_MODEL, "cuda:1") in eng.loaded
+    assert (eng.BASE_MODEL, "cuda:1") in eng.loaded
+
+
+def test_device_none_leaves_device_pref_untouched(monkeypatch, _stub_codec):
+    """Flag-off parity: a `device=None` cold load never mutates `_device_pref`
+    (the admission override is the ONLY writer of that field)."""
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
+
+    eng = _FakeLoadRecorder(overlap_delay=0.0)
+    pref_before = eng._device_pref
+    eng._ensure_design_loaded()  # device=None
+    assert eng._device_pref == pref_before
+
+    eng2 = _FakeLoadRecorder(overlap_delay=0.0)
+    pref_before2 = eng2._device_pref
+    eng2._ensure_base17_for_mint()  # device=None
+    assert eng2._device_pref == pref_before2
