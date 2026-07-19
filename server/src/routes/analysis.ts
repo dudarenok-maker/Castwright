@@ -5223,56 +5223,73 @@ export async function runSubsetAnalyzerJob(
          the batch. On success we also clear the id from
          cache.failedChapterIds so the analysing view's Retry row
          disappears on reload. */
+      /* srv-61 — lift the per-chapter opts into a named StageCall so the SAME
+         object is handed to both the runner (analyzer.runStage1Chapter) and
+         withPassEval, whose fresh-per-call accumulator attaches to it. Without
+         this a retried chapter's stage-1 chat() sub-calls emit no eval-rate
+         record. Mirrors the main route's castCall wiring. */
+      const stage1Call: StageCall = {
+        signal: abortController.signal,
+        language: bookLanguage,
+        onWaiting: () => emitHeartbeat(0, ch.id),
+        onChunk: (info) => emitHeartbeat(0, ch.id, info),
+        onThrottle: (waitMs, reason) => {
+          send({
+            kind: 'throttle',
+            phaseId: 0,
+            chapterIndex: ch.id,
+            model: subsetModelId,
+            waitMs,
+            reason,
+          });
+        },
+      };
       try {
-        const result = await runStage1Guarded({
-          body: ch.body,
-          runningRoster: Array.from(rebuildRoster().values()),
-          chapterId: ch.id,
-          log,
-          language: bookLanguage,
-          call: () =>
-            runStage1ChapterChunked({
+        const result = await withPassEval(
+          stage1Call,
+          {
+            manuscriptId,
+            bookTitle: record.title ?? null,
+            stage: 'stage1-ch',
+            chapterId: ch.id,
+          },
+          () =>
+            runStage1Guarded({
               body: ch.body,
-              charBudget: resolveStage1ChunkCharBudget(selection.engine, ch.body),
-              mergeRosters: mergeRosterChapter,
-              onChunk: (sec) =>
-                log(
-                  0,
-                  `Chapter ${ch.id} cast — large chapter, section ${sec.index + 1}/${
-                    sec.total
-                  } (${sec.chars.toLocaleString()} chars) to fit the model context…`,
-                ),
-              callForBody: (subBody) =>
-                analyzer.runStage1Chapter(
-                  manuscriptId,
-                  ch.id,
-                  buildStage1ChapterInbox(
-                    manuscriptId,
-                    record.title,
-                    { ...ch, body: subBody },
-                    Array.from(rebuildRoster().values()),
-                    subsetSeriesPrior,
-                    bookAuthor,
-                  ),
-                  {
-                    signal: abortController.signal,
-                    language: bookLanguage,
-                    onWaiting: () => emitHeartbeat(0, ch.id),
-                    onChunk: (info) => emitHeartbeat(0, ch.id, info),
-                    onThrottle: (waitMs, reason) => {
-                      send({
-                        kind: 'throttle',
-                        phaseId: 0,
-                        chapterIndex: ch.id,
-                        model: subsetModelId,
-                        waitMs,
-                        reason,
-                      });
-                    },
-                  },
-                ),
-            }).then((r) => ({ characters: r.characters })),
-        });
+              runningRoster: Array.from(rebuildRoster().values()),
+              chapterId: ch.id,
+              log,
+              language: bookLanguage,
+              call: () =>
+                runStage1ChapterChunked({
+                  body: ch.body,
+                  charBudget: resolveStage1ChunkCharBudget(selection.engine, ch.body),
+                  mergeRosters: mergeRosterChapter,
+                  onChunk: (sec) =>
+                    log(
+                      0,
+                      `Chapter ${ch.id} cast — large chapter, section ${sec.index + 1}/${
+                        sec.total
+                      } (${sec.chars.toLocaleString()} chars) to fit the model context…`,
+                    ),
+                  callForBody: (subBody) =>
+                    analyzer.runStage1Chapter(
+                      manuscriptId,
+                      ch.id,
+                      buildStage1ChapterInbox(
+                        manuscriptId,
+                        record.title,
+                        { ...ch, body: subBody },
+                        Array.from(rebuildRoster().values()),
+                        subsetSeriesPrior,
+                        bookAuthor,
+                      ),
+                      stage1Call,
+                    ),
+                }).then((r) => ({ characters: r.characters })),
+            }),
+          () => null,
+        );
         chapterCast[ch.id] = result.characters;
         cache.chapterCast = chapterCast;
         const wasFailed = clearFailedChapterId(cache, ch.id);
@@ -5479,7 +5496,7 @@ export async function runSubsetAnalyzerJob(
         sentences: chapterSentences,
         chunkCount: subsetChunkCount,
         structureReport: subsetStructureReport,
-      } = await attributeChapterStage2({
+      } = await attributeChapterStage2WithEval({
           analyzer: phase1Analyzer,
           manuscriptId,
           title: record.title,
@@ -5588,10 +5605,23 @@ export async function runSubsetAnalyzerJob(
     const classifyNonStory = analyzer.runNonStoryClassification
       ? async (ch: ThirdPartyGuardChapter): Promise<boolean> => {
           const promptMd = `Title: ${ch.title ?? '(untitled)'}\n\n${ch.body}`;
+          /* srv-61 — wrap the classification chat() sub-calls in withPassEval so a
+             subset retry's nonstory pass emits an eval-rate record too (mirrors the
+             main route). The SAME StageCall is passed to both the runner and
+             withPassEval so its fresh-per-call accumulator attaches to this call. */
+          const nonStoryCall: StageCall = { language: bookLanguage };
           try {
-            const out = await analyzer.runNonStoryClassification!(manuscriptId, ch.id, promptMd, {
-              language: bookLanguage,
-            });
+            const out = await withPassEval(
+              nonStoryCall,
+              {
+                manuscriptId,
+                bookTitle: record.title ?? null,
+                stage: 'nonstory',
+                chapterId: ch.id,
+              },
+              () => analyzer.runNonStoryClassification!(manuscriptId, ch.id, promptMd, nonStoryCall),
+              () => null,
+            );
             return out.nonStory;
           } catch (err) {
             if (err instanceof AnalysisAbortedError) throw err;

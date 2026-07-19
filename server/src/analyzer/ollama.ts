@@ -790,9 +790,16 @@ export class OllamaAnalyzer implements Analyzer {
         await sampleAndRecordVram(this.url, this.model, resolveAnalyzerNumCtx());
       }
       /* fs-analyzer-eval-telemetry: best-effort decode-timing capture, gated
-         by the analyzer.evalStats.enabled knob so an operator can disable it. */
+         by the analyzer.evalStats.enabled knob so an operator can disable it.
+         Wrapped so the sink can NEVER turn a clean decode into a stage failure —
+         the sole consumer today is an inert array push, but "never throws on the
+         hot path" must hold by construction for any future sink (srv-61). */
       if (timing && onEvalTiming && configValue<boolean>('analyzer.evalStats.enabled')) {
-        onEvalTiming(timing);
+        try {
+          onEvalTiming(timing);
+        } catch (evalSinkErr) {
+          console.warn('[ollama] onEvalTiming sink threw (ignored, telemetry is best-effort):', evalSinkErr);
+        }
       }
       return buf;
     } finally {
