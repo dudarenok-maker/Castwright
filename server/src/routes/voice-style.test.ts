@@ -31,7 +31,6 @@ import request from 'supertest';
 const mockPreparePersonaBatch = vi.fn<() => Promise<{ onCpu: boolean; keepAlive: string | number }>>();
 vi.mock('../tts/persona-gpu-plan.js', () => ({
   preparePersonaBatch: mockPreparePersonaBatch,
-  GpuBusyForPersonaError: class GpuBusyForPersonaError extends Error {},
 }));
 
 /* Mock the generator so the route test never touches Gemini. Default
