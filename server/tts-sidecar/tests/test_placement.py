@@ -11,6 +11,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add the sidecar root to sys.path so `import main` works regardless of
 # pytest's collection directory — same pattern as test_capacity.py.
 SIDECAR_ROOT = Path(__file__).resolve().parent.parent
@@ -176,3 +178,46 @@ def test_pinned_full_card_yields_nocapacity_even_with_room_elsewhere():
     pc = make(devices, peak=5600)
     adm = pc.admit("coqui", "xtts_v2", {}, cpu_capable=False, heavy=True, pinned="cuda:1")
     assert "noCapacity" in adm and adm["noCapacity"]["deviceKey"] == "cuda:1"
+
+
+# --- _engine_env_pin ------------------------------------------------------
+#
+# `_engine_env_pin` is the seam PlacementController's callers use to derive
+# `pinned=` above from an engine's *_DEVICE env knob: a concrete "cuda:N" key
+# when the knob names an indexed CUDA device, else None (auto/unset/cpu/mps/
+# malformed index) so admission falls back to picking the roomiest device.
+
+
+def test_engine_env_pin_unknown_engine_returns_none(monkeypatch):
+    monkeypatch.setenv("COQUI_DEVICE", "cuda:1")  # present but irrelevant — wrong engine id
+    assert main._engine_env_pin("nope") is None
+
+
+@pytest.mark.parametrize(
+    "env_var,engine_id",
+    [
+        ("COQUI_DEVICE", "coqui"),
+        ("KOKORO_DEVICE", "kokoro"),
+        ("QWEN_DEVICE", "qwen"),
+        ("ASR_DEVICE", "asr"),
+        ("SPK_DEVICE", "spk"),
+    ],
+)
+def test_engine_env_pin_unset_returns_none(monkeypatch, env_var, engine_id):
+    monkeypatch.delenv(env_var, raising=False)
+    assert main._engine_env_pin(engine_id) is None
+
+
+def test_engine_env_pin_cpu_returns_none(monkeypatch):
+    monkeypatch.setenv("QWEN_DEVICE", "cpu")
+    assert main._engine_env_pin("qwen") is None
+
+
+def test_engine_env_pin_indexed_cuda_returns_concrete_key(monkeypatch):
+    monkeypatch.setenv("QWEN_DEVICE", "cuda:1")
+    assert main._engine_env_pin("qwen") == "cuda:1"
+
+
+def test_engine_env_pin_cuda_without_index_returns_none(monkeypatch):
+    monkeypatch.setenv("QWEN_DEVICE", "cuda")
+    assert main._engine_env_pin("qwen") is None
