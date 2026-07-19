@@ -219,6 +219,17 @@ the flag is OFF) should close so admission covers everything the budget did:
   pins subsequent calls to the same card). Deferred remedy: thread the device
   into transcribe/embed/`ensure_loaded` under the engine load lock. Gates the
   concurrent-multi-card flag flip.
+- **(#1720, flag-ON only, flag-OFF safe) Coqui load-steer leaves `self._device`
+  stale:** `CoquiEngine._resolve_runtime_options(device_override=…)` uses the
+  admitted device for the local load (`.to(device)`) but never updates
+  `self._device`. On a multi-GPU box with `COQUI_DEVICE` unset/`auto` and the
+  flag ON, a later forward referencing `self._device` for input-tensor placement
+  could mismatch the model's actual card — the same stale-device class as the
+  Qwen/ASR/SPK items above (benign single-GPU; a pinned `COQUI_DEVICE=cuda:N`
+  aligns via `_engine_env_pin`). Deferred remedy: same as the others.
+
+The three flag-ON stale-`self._device` items above (Qwen forward, ASR/SPK
+cold-load, Coqui load-steer) are tracked together in **#1730**.
 
 ## Ship notes
 

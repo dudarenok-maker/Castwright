@@ -344,8 +344,8 @@ def test_design_voice_holds_arbiter_and_evicts_resident_kokoro(monkeypatch):
 
     qeng._design = _FakeDesign()
     qeng._base = _FakeBase()
-    monkeypatch.setattr(qeng, "_ensure_design_loaded", lambda: None)
-    monkeypatch.setattr(qeng, "_ensure_base_loaded", lambda: None)
+    monkeypatch.setattr(qeng, "_ensure_design_loaded", lambda device=None: None)
+    monkeypatch.setattr(qeng, "_ensure_base_loaded", lambda device=None: None)
 
     import tempfile
     qeng._voices_dir = tempfile.mkdtemp()
@@ -385,8 +385,8 @@ def test_design_voice_emits_phase_timing_line(monkeypatch, caplog):
 
     qeng._design = _FakeDesign()
     qeng._base = _FakeBase()
-    monkeypatch.setattr(qeng, "_ensure_design_loaded", lambda: None)
-    monkeypatch.setattr(qeng, "_ensure_base_loaded", lambda: None)
+    monkeypatch.setattr(qeng, "_ensure_design_loaded", lambda device=None: None)
+    monkeypatch.setattr(qeng, "_ensure_base_loaded", lambda device=None: None)
     qeng._voices_dir = tempfile.mkdtemp()
     monkeypatch.setattr("torch.save", lambda *a, **k: None)
 
