@@ -16,6 +16,8 @@
 
 import { fetch as undiciFetch, Agent } from 'undici';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { withCapacityRetry } from '../gpu/capacity-retry.js';
+import { NoCapacityError } from './tts-errors.js';
 
 export interface EmbedOptions {
   signal?: AbortSignal;
@@ -49,17 +51,26 @@ export async function embedSegment(
 
   // Sidecar op — VRAM arbitration now lives in the sidecar's capacity admission
   // (SEG_CAPACITY_ADMISSION); no Node-side GPU token here (see file header).
-  let response: Response;
-  try {
-    response = (await undiciFetch(`${url}/embed`, {
+  // Only wrap in the evict-and-retry helper when the embed actually runs on
+  // the GPU — on CPU the sidecar never emits a noCapacity 503, so wrapping
+  // would be pure overhead.
+  const doFetch = (signal?: AbortSignal) =>
+    undiciFetch(`${url}/embed`, {
       method: 'POST',
       headers: { 'content-type': 'audio/L16', 'x-sample-rate': String(sampleRate) },
       body: pcm,
-      signal: opts.signal,
+      signal,
       dispatcher: EMBED_DISPATCHER,
-    })) as unknown as Response;
+    }) as unknown as Promise<Response>;
+
+  let response: Response;
+  try {
+    response = spkRunsOnGpu()
+      ? await withCapacityRetry(doFetch, { engine: 'spk', signal: opts.signal })
+      : await doFetch(opts.signal);
   } catch (e) {
     if ((e as { name?: string })?.name === 'AbortError') throw e;
+    if (e instanceof NoCapacityError) throw e;
     const msg = (e as Error).message || String(e);
     throw Object.assign(
       new Error(`TTS sidecar not reachable at ${url} for /embed. (${msg})`),

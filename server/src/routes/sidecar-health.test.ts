@@ -19,6 +19,17 @@ vi.mock('../tts/sidecar-supervisor.js', () => ({
 }));
 import * as supervisorMod from '../tts/sidecar-supervisor.js';
 
+/* #1720 Task 7 — withCapacityRetry is mocked wholesale rather than exercised
+   for real (its retry/evict/exhaustion policy is already covered by
+   server/src/gpu/capacity-retry.test.ts). The default implementation below
+   is a plain passthrough — one doPost call — so every PRE-EXISTING /load
+   test in this file keeps exercising exactly the same single-fetch behavior
+   it did before this wiring landed. Tests that care about the retry/throw
+   wiring itself override the implementation locally. */
+vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
+import { withCapacityRetry } from '../gpu/capacity-retry.js';
+import { NoCapacityError } from '../tts/tts-errors.js';
+
 function makeApp() {
   const app = express();
   app.use(express.json());
@@ -27,11 +38,14 @@ function makeApp() {
 }
 
 const fetchMock = vi.fn();
+const mockWithCapacityRetry = vi.mocked(withCapacityRetry);
 
 beforeEach(() => {
   fetchMock.mockReset();
   vi.stubGlobal('fetch', fetchMock);
   _resetUserSettingsCache();
+  mockWithCapacityRetry.mockReset();
+  mockWithCapacityRetry.mockImplementation((doPost, opts) => doPost(opts.signal));
 });
 
 afterEach(() => {
@@ -551,6 +565,84 @@ describe('POST /api/sidecar/load', () => {
     /* The bare undici string must NOT be the whole message (the ECONNREFUSED
        code may still appear in the diagnostic parens). */
     expect(res.body.error).not.toBe('fetch failed');
+  });
+
+  it('passes the request body engine through to withCapacityRetry (#1720 Task 7), defaulting to coqui when absent', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ status: 'ready' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await request(makeApp()).post('/api/sidecar/load').send({ engine: 'qwen' });
+    expect(mockWithCapacityRetry).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ engine: 'qwen' }),
+    );
+
+    await request(makeApp()).post('/api/sidecar/load').send({});
+    expect(mockWithCapacityRetry).toHaveBeenLastCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ engine: 'coqui' }),
+    );
+  });
+
+  it('a doPost that returns a noCapacity 503 once then ok succeeds after the (simulated) evict/retry', async () => {
+    let calls = 0;
+    fetchMock.mockImplementation(async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response(JSON.stringify({ noCapacity: true, neededMb: 2_000, deviceKey: 'cuda:0' }), {
+            status: 503,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        : new Response(JSON.stringify({ status: 'ready' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+    });
+    // Stand-in mirroring withCapacityRetry's real evict-then-retry contract:
+    // retry the SAME doPost once more on a non-ok first response.
+    mockWithCapacityRetry.mockImplementation(async (doPost, opts) => {
+      const first = await doPost(opts.signal);
+      if (first.ok) return first;
+      return doPost(opts.signal);
+    });
+
+    const res = await request(makeApp()).post('/api/sidecar/load').send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'ready' });
+    expect(calls).toBe(2);
+  });
+
+  it('a non-noCapacity 503 returned by withCapacityRetry still hits the existing status-passthrough', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ status: 'error', error: 'sidecar overloaded' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const res = await request(makeApp()).post('/api/sidecar/load').send({});
+
+    expect(res.status).toBe(503);
+    expect(res.body.status).toBe('error');
+    expect(res.body.error).toMatch(/sidecar overloaded/);
+  });
+
+  it('maps a thrown NoCapacityError to a capacity-specific 503 message', async () => {
+    mockWithCapacityRetry.mockImplementation(async () => {
+      throw new NoCapacityError('coqui', 3_000, 'cuda:0');
+    });
+
+    const res = await request(makeApp()).post('/api/sidecar/load').send({});
+
+    expect(res.status).toBe(503);
+    expect(res.body.status).toBe('error');
+    expect(res.body.error).toMatch(/no capacity/i);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

@@ -51,6 +51,8 @@ import {
 } from '../tts/voice-sample-cache.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
 import { nanoid } from 'nanoid';
+import { withCapacityRetry } from '../gpu/capacity-retry.js';
+import { NoCapacityError } from '../tts/tts-errors.js';
 
 export class SidecarDesignError extends Error {
   status: number;
@@ -374,11 +376,21 @@ export async function designQwenVoiceForCharacter(
         try {
           let upstream: Awaited<ReturnType<typeof fetch>>;
           try {
-            upstream = await fetch(target, {
-              method: 'POST', signal: controller.signal,
-              headers: { 'Content-Type': 'application/json' }, body: fetchBody,
-            });
+            upstream = await withCapacityRetry(
+              (signal) =>
+                fetch(target, {
+                  method: 'POST', signal,
+                  headers: { 'Content-Type': 'application/json' }, body: fetchBody,
+                }),
+              { engine: 'qwen', signal: controller.signal },
+            );
           } catch (e) {
+            if (e instanceof NoCapacityError) {
+              throw new SidecarDesignError(
+                'GPU has no capacity for voice design right now — free VRAM and retry.',
+                503,
+              );
+            }
             const err = e as { name?: string; message?: string };
             if (err.name === 'AbortError') {
               if (p.signal?.aborted) throw new SidecarDesignError('Voice design was cancelled.', 0);
