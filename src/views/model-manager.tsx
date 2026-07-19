@@ -595,7 +595,17 @@ function ModelRow({
             />
           )}
           {isAnalyzer && analyzerModel && (
-            <label className="flex items-center gap-1 text-[11px] text-ink/60">
+            <label
+              className="flex items-center gap-1 text-[11px] text-ink/60"
+              title={
+                'Seconds the model stays resident after a call. Defaults to 30 if unset — ' +
+                'enough to bridge back-to-back analysis calls so the model is not cold-loaded ' +
+                'per chunk. 0 = evict immediately, -1 = pin forever. During an analysis or ' +
+                'script-review run the model is pinned regardless, so this value governs only ' +
+                'the post-run idle hold. On a CPU-only box, RAM-heavy models (qwen3.5:9b) are ' +
+                'clamped to 0.'
+              }
+            >
               keep-alive
               <input
                 key={`keepalive-${item.id}-${item.keepAliveSeconds ?? 0}`}

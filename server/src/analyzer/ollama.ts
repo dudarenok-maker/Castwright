@@ -617,19 +617,6 @@ export class OllamaAnalyzer implements Analyzer {
       },
     };
 
-    /* TEMP DIAGNOSTIC (keep-alive eviction hunt) — logs the EXACT keep_alive on
-       the wire per /api/chat call, plus the model string, the accelerator, the
-       override-map keys, and the cache-key values (num_ctx/num_gpu). Remove once
-       the root cause is confirmed. */
-    console.log(
-      `[keepalive-probe] model=${JSON.stringify(this.model)} ` +
-        `keep_alive=${body.keep_alive} ` +
-        `accel=${getLastKnownVram().accelerator} ` +
-        `resolveKeepAliveSeconds=${resolveKeepAliveSeconds(this.model)} ` +
-        `overrideKeys=${JSON.stringify(Object.keys(getCachedUserSettings().analyzerKeepAliveByModel ?? {}))} ` +
-        `num_ctx=${body.options.num_ctx} num_gpu=${body.options.num_gpu}`,
-    );
-
     /* Short-circuit if the caller has already aborted (e.g. the SSE client
        disconnected while a previous chapter was still running). Saves a
        wasted Ollama round-trip and lets the route loop bail immediately. */

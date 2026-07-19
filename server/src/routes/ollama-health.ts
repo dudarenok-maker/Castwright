@@ -476,12 +476,6 @@ ollamaHealthRouter.post('/load', async (req: Request, res: Response) => {
     `.status` for the HTTP response code). */
 export async function unloadResidentOllama(targets?: string[]): Promise<string[]> {
   const url = getResolvedOllamaUrl();
-  /* TEMP DIAGNOSTIC (keep-alive eviction hunt) — records EVERY explicit evict
-     (keep_alive:0) with its caller stack, so a mid-run eviction is traceable to
-     whatever triggered it. Remove once the root cause is confirmed. */
-  console.log(
-    `[evict-probe] unloadResidentOllama targets=${JSON.stringify(targets ?? null)}\n${new Error('evict call site').stack}`,
-  );
   const list = targets && targets.length > 0 ? targets : (await probeOllamaHealth()).resident ?? [];
   for (const model of list) {
     const result = await callOllamaGenerate(url, { model, prompt: '', keep_alive: 0, stream: false }, PROBE_TIMEOUT_MS);
