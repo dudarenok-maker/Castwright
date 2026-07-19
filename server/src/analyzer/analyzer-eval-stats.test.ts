@@ -6,6 +6,30 @@ import { join } from 'node:path';
 const dir = mkdtempSync(join(tmpdir(), 'aes-'));
 vi.mock('../workspace/paths.js', () => ({ telemetryDir: () => dir }));
 
+/* Count readFile calls so the srv-61 test can prove appendAndTrim no longer
+   re-reads the whole JSONL on every append. Hoisted (vi.mock is hoisted above
+   imports; a plain top-level const would be in the TDZ inside the factory). The
+   mock passes every fs/promises export through untouched — only readFile is
+   wrapped with a counter — so every other test keeps its real IO behaviour. */
+const io = vi.hoisted(() => ({ readFileCalls: 0, failAppendOnce: false }));
+vi.mock('node:fs/promises', async (orig) => {
+  const real = await orig<typeof import('node:fs/promises')>();
+  return {
+    ...real,
+    readFile: (...args: Parameters<typeof real.readFile>) => {
+      io.readFileCalls++;
+      return (real.readFile as (...a: unknown[]) => unknown)(...args);
+    },
+    appendFile: (...args: Parameters<typeof real.appendFile>) => {
+      if (io.failAppendOnce) {
+        io.failAppendOnce = false;
+        return Promise.reject(new Error('disk full'));
+      }
+      return (real.appendFile as (...a: unknown[]) => unknown)(...args);
+    },
+  };
+});
+
 import {
   foldPassTiming, canonicalModel, recordPassEval, withPassEval,
   readAnalyzerEvalRecords, appendAnalyzerEval, analyzerEvalStatsFilePath,
@@ -109,5 +133,52 @@ describe('store IO', () => {
     const recs = await readAnalyzerEvalRecords();
     expect(recs).toHaveLength(ANALYZER_EVAL_MAX_LINES);
     expect(recs[0].chapterId).toBe(9999); // newest kept
+  });
+});
+
+describe('appendAndTrim — in-memory line-count tracking (srv-61)', () => {
+  const rec = (chapterId: number): AnalyzerEvalRecord => ({
+    at: new Date().toISOString(), manuscriptId: 'm', bookTitle: null, model: 'x:latest',
+    stage: 'stage2-ch', chapterId, evalTokS: 1, promptTokS: null, evalCount: 1, loadMs: 0,
+    subCalls: 1, chunkCount: 1, outcome: 'ok',
+  });
+
+  it('does not re-read the whole file on every append (tracks the count in memory)', async () => {
+    // First append establishes the count from disk — exactly ONE read. Asserting
+    // this proves the counter mock is actually intercepting the module's readFile,
+    // so the no-further-reads assertion below can't be a placebo pass.
+    io.readFileCalls = 0;
+    await appendAnalyzerEval(rec(1));
+    const afterFirst = io.readFileCalls;
+    expect(afterFirst).toBeGreaterThanOrEqual(1);
+    // Subsequent below-cap appends must NOT re-read the whole file.
+    await appendAnalyzerEval(rec(2));
+    await appendAnalyzerEval(rec(3));
+    expect(io.readFileCalls).toBe(afterFirst);
+  });
+
+  it('resets the in-memory count on an IO error so the next append re-establishes from disk', async () => {
+    await appendAnalyzerEval(rec(1)); // establishes the count from disk
+    await appendAnalyzerEval(rec(2)); // steady increment — no read
+    io.readFileCalls = 0;
+    io.failAppendOnce = true;
+    await appendAnalyzerEval(rec(3)); // appendFile throws → catch resets count to null
+    expect(io.readFileCalls).toBe(0); // the failed append never reached the read
+    await appendAnalyzerEval(rec(4)); // count was null → MUST re-establish from disk
+    expect(io.readFileCalls).toBe(1);
+    // Store stays consistent: 3 failed to append, 1/2/4 landed.
+    const recs = await readAnalyzerEvalRecords();
+    expect(recs.map((r) => r.chapterId).sort((a, b) => Number(a) - Number(b))).toEqual([1, 2, 4]);
+  });
+
+  it('trims via the in-memory counter as appends cross the cap, keeping newest', async () => {
+    // Pre-fill just under the cap so a handful of real appends cross it and
+    // exercise the establish → increment → trim → post-trim-increment path.
+    const base = Array.from({ length: ANALYZER_EVAL_MAX_LINES - 2 }, (_, i) => JSON.stringify(rec(i))).join('\n') + '\n';
+    writeFileSync(analyzerEvalStatsFilePath(), base);
+    for (let i = 0; i < 5; i++) await appendAnalyzerEval(rec(1000 + i)); // MAX-2+5 = MAX+3
+    const recs = await readAnalyzerEvalRecords();
+    expect(recs).toHaveLength(ANALYZER_EVAL_MAX_LINES);
+    expect(recs[0].chapterId).toBe(1004); // newest kept after repeated trims
   });
 });

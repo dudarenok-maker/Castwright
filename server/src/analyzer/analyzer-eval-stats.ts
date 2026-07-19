@@ -86,8 +86,23 @@ export function foldPassTiming(acc: RawEvalTiming[]): {
    append and drops lines (N pipelined analysis workers append concurrently). */
 let writeQueue: Promise<void> = Promise.resolve();
 
+/* In-memory line count so the append hot path doesn't re-read the whole JSONL
+   every time just to enforce the cap. `null` = unknown (process start, or after
+   an IO error); the next append establishes it from disk ONCE, then tracks it
+   incrementally. Safe as a module singleton because every append is serialized
+   through `writeQueue` — appendAndTrim never overlaps itself.
+
+   Assumes this process is the sole writer of the file — the same assumption the
+   old read-modify-write trim already relied on (that rewrite was never atomic
+   across processes). A second process sharing telemetryDir (only under the
+   recycle-storm defect — see project_sidecar_recycle_storm_two_supervisors)
+   would go uncounted here until the next trim re-reads; acceptable for
+   best-effort telemetry. Any drift also self-heals whenever a trim re-reads. */
+let cachedLineCount: number | null = null;
+
 export function __resetAnalyzerEvalQueueForTest(): void {
   writeQueue = Promise.resolve();
+  cachedLineCount = null;
 }
 
 export function appendAnalyzerEval(rec: AnalyzerEvalRecord): Promise<void> {
@@ -95,17 +110,34 @@ export function appendAnalyzerEval(rec: AnalyzerEvalRecord): Promise<void> {
   return writeQueue;
 }
 
+/* Trim `lines` (the file's current non-empty lines) down to the cap, writing
+   only when a trim is actually needed. Returns the resulting line count. */
+async function trimToCap(path: string, lines: string[]): Promise<number> {
+  if (lines.length <= ANALYZER_EVAL_MAX_LINES) return lines.length;
+  const kept = lines.slice(lines.length - ANALYZER_EVAL_MAX_LINES);
+  await writeFile(path, `${kept.join('\n')}\n`, 'utf8');
+  return kept.length;
+}
+
 async function appendAndTrim(rec: AnalyzerEvalRecord): Promise<void> {
   const path = analyzerEvalStatsFilePath();
   try {
     await mkdir(telemetryDir(), { recursive: true });
     await appendFile(path, `${JSON.stringify(rec)}\n`, 'utf8');
-    const lines = (await readFile(path, 'utf8')).split('\n').filter((l) => l.trim().length > 0);
-    if (lines.length > ANALYZER_EVAL_MAX_LINES) {
-      await writeFile(path, `${lines.slice(lines.length - ANALYZER_EVAL_MAX_LINES).join('\n')}\n`, 'utf8');
+    /* Steady state: the count is known and this append kept us under the cap —
+       just increment, no read. This is the whole point of the counter. */
+    if (cachedLineCount !== null && cachedLineCount + 1 <= ANALYZER_EVAL_MAX_LINES) {
+      cachedLineCount += 1;
+      return;
     }
+    /* Otherwise the count is unknown (first append this process, or after an
+       error reset) OR this append crosses the cap. Read the file ONCE and reuse
+       that read for the trim — no double read on the first at-cap append. */
+    const lines = (await readFile(path, 'utf8')).split('\n').filter((l) => l.trim().length > 0);
+    cachedLineCount = await trimToCap(path, lines);
   } catch {
     /* observability, not correctness — never break a run */
+    cachedLineCount = null; // truth unknown after a failed write; re-establish next time
   }
 }
 

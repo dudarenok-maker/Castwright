@@ -819,6 +819,32 @@ describe('OllamaAnalyzer — onEvalTiming sink (analyzer-eval-telemetry)', () =>
 
     expect(timings).toHaveLength(0);
   });
+
+  it('a throwing onEvalTiming sink never fails an otherwise-successful decode (srv-61)', async () => {
+    // The sink is best-effort telemetry on the hot path; a future non-inert sink
+    // must not be able to turn a clean decode into a stage failure.
+    fetchMock.mockResolvedValue(
+      okResponse(
+        ndjsonStreamWithTiming(chunksOf(VALID_RESPONSE, 32), {
+          eval_count: 120,
+          eval_duration: 4_000_000_000,
+          prompt_eval_count: 800,
+          prompt_eval_duration: 2_000_000_000,
+          load_duration: 0,
+        }),
+      ),
+    );
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    const result = await analyzer.runStage1Chapter('m_ollama_eval_timing_throws', 1, '# prompt', {
+      onEvalTiming: () => {
+        throw new Error('sink boom');
+      },
+    });
+
+    expect(result.characters).toBeDefined();
+  });
 });
 
 /* srv-59 Task 9 — the escalation primitive is deliberately NOT built on
