@@ -7021,9 +7021,27 @@ async def transcribe(req: Request) -> Response:
     word_timestamps = req.headers.get("X-Word-Timestamps") is not None
 
     try:
-        result = await asyncio.to_thread(
-            ASR.transcribe, pcm, sample_rate, language, word_timestamps
-        )
+        # Capacity-aware placement (task 4, vram-aware-placement plan): only
+        # when ASR is GPU-configured (ASR_DEVICE=cuda/rocm) — the cpu-default
+        # path (zero VRAM) never touches _placement, flag-on or off. A no-fit
+        # probe 503s before the (possibly cold) load ever runs.
+        on_gpu = _parse_device(ASR._device)[0] in ("cuda", "rocm")
+        if on_gpu and _capacity_admission_enabled():
+            with _placement.reservation(
+                "asr", None, {},
+                cpu_capable=False, heavy=False,
+                pinned=_engine_env_pin("asr"),
+            ) as adm:
+                if "noCapacity" in adm:
+                    return _no_capacity(adm)
+                ASR._device = adm["device"]  # steer the (possibly cold) load
+                result = await asyncio.to_thread(
+                    ASR.transcribe, pcm, sample_rate, language, word_timestamps
+                )
+        else:
+            result = await asyncio.to_thread(
+                ASR.transcribe, pcm, sample_rate, language, word_timestamps
+            )
     except Exception as e:
         # Internal-only — CUDA-poison detection + server-side log, never a body.
         err_str = f"{e}"
@@ -7074,8 +7092,26 @@ async def embed(req: Request) -> Response:
         raise HTTPException(status_code=400, detail="X-Sample-Rate header (>0) is required.")
 
     try:
-        await SPK.ensure_loaded()  # srv-47 R2-B: a cuda LOAD poison must be fenced too
-        embedding = await asyncio.to_thread(SPK.embed, pcm, int(sample_rate))
+        # Capacity-aware placement (task 4, vram-aware-placement plan): only
+        # when SPK is GPU-configured (SPK_DEVICE=cuda/rocm) — the cpu-default
+        # path never touches _placement. The cold load happens inside
+        # ensure_loaded(), so the reservation must wrap BOTH the load and the
+        # embed call.
+        on_gpu = _parse_device(SPK.device)[0] in ("cuda", "rocm")
+        if on_gpu and _capacity_admission_enabled():
+            with _placement.reservation(
+                "spk", None, {},
+                cpu_capable=False, heavy=False,
+                pinned=_engine_env_pin("spk"),
+            ) as adm:
+                if "noCapacity" in adm:
+                    return _no_capacity(adm)
+                SPK.device = adm["device"]  # steer the (possibly cold) load
+                await SPK.ensure_loaded()  # srv-47 R2-B: a cuda LOAD poison must be fenced too
+                embedding = await asyncio.to_thread(SPK.embed, pcm, int(sample_rate))
+        else:
+            await SPK.ensure_loaded()  # srv-47 R2-B: a cuda LOAD poison must be fenced too
+            embedding = await asyncio.to_thread(SPK.embed, pcm, int(sample_rate))
     except Exception as e:
         err_str = f"{e}"
         log.exception("embed failed (sample_rate=%d bytes=%d)", sample_rate, len(pcm))
