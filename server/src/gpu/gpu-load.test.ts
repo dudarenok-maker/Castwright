@@ -1,14 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { busyMock, probeMock, evictMock } = vi.hoisted(() => ({
+const { busyMock, probeMock, evictMock, lockMock } = vi.hoisted(() => ({
   busyMock: vi.fn(() => false),
   probeMock: vi.fn(async () => [{ kind: 'cpu', index: 0, label: 'cpu', totalMb: 32000, freeMb: 16000 }]),
   evictMock: vi.fn(async () => {}),
+  lockMock: vi.fn((fn: () => unknown) => fn()),
 }));
 
 vi.mock('../tts/design-lock.js', () => ({ isAnyAnalysisBusy: busyMock }));
 vi.mock('./capacity-probe.js', () => ({ capacityProbe: { read: probeMock } }));
 vi.mock('../analyzer/ollama-residency.js', () => ({ evictOllama: evictMock }));
+vi.mock('./load-mutex.js', () => ({ withGpuLoadLock: lockMock }));
 
 import { withGpuLoad, GpuBusyError } from './gpu-load.js';
 
@@ -22,6 +24,11 @@ beforeEach(() => {
   probeMock.mockClear();
   probeMock.mockResolvedValue([{ kind: 'cpu', index: 0, label: 'cpu', totalMb: 32000, freeMb: 16000 }]);
   evictMock.mockClear();
+  lockMock.mockClear();
+});
+
+afterEach(() => {
+  delete process.env.SEG_CAPACITY_ADMISSION;
 });
 
 describe('withGpuLoad', () => {
@@ -61,5 +68,24 @@ describe('withGpuLoad — engineOnGpu passthrough (W2.6)', () => {
     expect(busyMock).not.toHaveBeenCalled();
     expect(probeMock).not.toHaveBeenCalled();
     expect(evictMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('withGpuLoad — SEG_CAPACITY_ADMISSION flag (#1720)', () => {
+  it('flag ON: runs the load directly, without probe/evict/lock, even on a tight+busy card', async () => {
+    process.env.SEG_CAPACITY_ADMISSION = '1';
+    probeMock.mockResolvedValue(tightGpu);
+    busyMock.mockReturnValue(true);
+    // A probe that throws if called — belt-and-suspenders on top of the call-count assertion.
+    probeMock.mockImplementation(async () => {
+      throw new Error('capacityProbe.read should not be called when SEG_CAPACITY_ADMISSION=1');
+    });
+    const load = vi.fn(async () => 'ok');
+    const out = await withGpuLoad(load, true);
+    expect(out).toBe('ok');
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(probeMock).not.toHaveBeenCalled();
+    expect(evictMock).not.toHaveBeenCalled();
+    expect(lockMock).not.toHaveBeenCalled();
   });
 });
