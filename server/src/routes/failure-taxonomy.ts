@@ -107,10 +107,14 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     fatal: true,
     source: 'analysis',
     matchName: 'DailyQuotaExhaustedError',
-    /* Same per_day regex as statusToFailureCode, but applied to the RAW string —
-       the two paths see different inputs; do not unify. */
-    match: (raw, ctx) =>
-      ctx.status === 429 && /per[_-]?day|quotaValue":"\d{1,3}"/i.test(raw),
+    /* Same per_day marker as statusToFailureCode, but applied to the RAW string —
+       the two paths see different inputs; do not unify. Keys on the daily
+       quotaId marker (`per_day` / `PerDay` — the latter matched by `[_-]?`
+       allowing zero separators under /i). The old `quotaValue":"\d{1,3}"`
+       companion clause was DROPPED (#1695): the free-tier per-MINUTE request
+       cap is 15 (a 2-digit quotaValue), so a retryable RPM 429 collided with
+       the digit heuristic and mis-classified as fatal daily exhaustion. */
+    match: (raw, ctx) => ctx.status === 429 && /per[_-]?day/i.test(raw),
   },
   {
     code: 'analyzer-rate-limit',
@@ -419,9 +423,11 @@ export function tryParseApiError(
 function statusToFailureCode(status: number | undefined, message?: string): FailureCode {
   if (!status) return 'unknown';
   if (status === 429) {
-    /* Same per_day regex as the analyzer-daily-quota signature, but applied to the parsed envelope MESSAGE
-       only (raw would false-positive on per-minute quotaValue details). Do not unify. */
-    if (message && /per[_-]?day|quotaValue":"\d{1,3}"/i.test(message)) return 'analyzer-daily-quota';
+    /* Same per_day marker as the analyzer-daily-quota signature, but applied to the parsed envelope MESSAGE
+       only (raw would false-positive on per-minute quotaValue details). Do not unify. The
+       `quotaValue":"\d{1,3}"` clause was DROPPED (#1695) — a per-minute RPM 429 carries the
+       2-digit free-tier cap (quotaValue":"15") and would mis-classify as daily. */
+    if (message && /per[_-]?day/i.test(message)) return 'analyzer-daily-quota';
     return 'analyzer-rate-limit';
   }
   if (status === 503 || status === 500) return 'analyzer-unreachable';

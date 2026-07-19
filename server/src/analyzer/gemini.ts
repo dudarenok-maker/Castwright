@@ -600,9 +600,12 @@ export class GeminiAnalyzer implements Analyzer {
              generate_content_free_tier_input_token_count), so that
              alternative used to false-positive-match a retryable
              per-minute 429 as fatal daily exhaustion (#1682). Require a
-             genuine `per_day` marker instead; keep the small-value
-             heuristic for quotaValue. */
-          if (/per[_-]?day|quotaValue":"\d{1,3}"/i.test(message)) {
+             genuine `per_day` marker (matches `per_day` and the `PerDay`
+             quotaId under /i). The old small-value `quotaValue":"\d{1,3}"`
+             companion clause was DROPPED (#1695): the free-tier per-MINUTE
+             request cap is 15 (a 2-digit quotaValue), so an RPM 429 collided
+             with the digit heuristic and was mis-read as daily exhaustion. */
+          if (/per[_-]?day/i.test(message)) {
             const resetAt = nextUtcMidnight();
             geminiRateLimiter.recordRejection(this.model, resetAt.getTime() - Date.now());
             throw new DailyQuotaExhaustedError(this.model, resetAt);
