@@ -236,39 +236,6 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     expect(withGpuLoadMock.mock.calls[0][1]).toBe(true);
   });
 
-  it('skips the GPU semaphore for the design call when QWEN_DEVICE is pinned off-GPU', async () => {
-    const { gpuSemaphore } = await import('../gpu/semaphore.js');
-    const acquireSpy = vi.spyOn(gpuSemaphore, 'acquire');
-    const prevDevice = process.env.QWEN_DEVICE;
-    process.env.QWEN_DEVICE = 'cpu';
-
-    try {
-      const res = await request(app)
-        .post(`/api/books/${bookId}/cast/maerin/design-voice`)
-        .send(designBody);
-
-      expect(res.status).toBe(200);
-      expect(acquireSpy).not.toHaveBeenCalled();
-    } finally {
-      acquireSpy.mockRestore();
-      if (prevDevice === undefined) delete process.env.QWEN_DEVICE;
-      else process.env.QWEN_DEVICE = prevDevice;
-    }
-  });
-
-  it('still acquires a token for the design call on the default (GPU-assumed) auto knob', async () => {
-    const { gpuSemaphore } = await import('../gpu/semaphore.js');
-    const acquireSpy = vi.spyOn(gpuSemaphore, 'acquire');
-
-    const res = await request(app)
-      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
-      .send(designBody);
-
-    expect(res.status).toBe(200);
-    expect(acquireSpy).toHaveBeenCalledTimes(1);
-    acquireSpy.mockRestore();
-  });
-
   it('forwards persona + a calibrationText from the character line, caches the MP3, returns {voiceId,url}', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/design-voice`)

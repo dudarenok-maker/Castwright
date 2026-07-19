@@ -2,6 +2,9 @@ import importlib, os, sys, types
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 main = importlib.import_module("main")
 
+import pytest
+from fastapi.testclient import TestClient
+
 def _fake_torch():
     def props(i):
         return types.SimpleNamespace(name=["RTX 4070","RTX 5070 Ti"][i],
@@ -188,3 +191,85 @@ def test_build_gpus_payload_unindexed_row_also_carries_free_floor(monkeypatch):
     assert len(unindexed) == 1
     assert unindexed[0]["free_floor_mb"] == 2048.0
     assert unindexed[0]["reserved_ceiling_mb"] == 0.0
+
+
+# --- /synthesize capacity admission (SEG_CAPACITY_ADMISSION, task 4) ---
+
+
+class _FakeSynthEngine(main.CoquiEngine):
+    """Minimal Coqui stand-in so /synthesize never touches the real
+    multi-gigabyte XTTS model — same shape as test_smoke.py's _FakeEngine,
+    duplicated locally to keep this file's admission tests self-contained."""
+
+    name = "coqui"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[tuple[str, str, str]] = []
+
+    def synthesize(self, model, voice, text, language=None):
+        self.calls.append((model, voice, text))
+        return main.SynthResult(pcm=b"\x00\x00", sample_rate=24000, substituted_from=None)
+
+
+@pytest.fixture
+def synth_client(monkeypatch):
+    fake = _FakeSynthEngine()
+    monkeypatch.setitem(main.ENGINES, "coqui", fake)
+    # Drop the real Kokoro engine so TestClient's startup event doesn't try
+    # to eager-preload it (mirrors test_smoke.py's `client` fixture).
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    main._reset_poison_for_test()
+    with TestClient(main.app) as c:
+        yield c
+    main._reset_poison_for_test()
+
+
+def _synth_body():
+    return {"engine": "coqui", "model": "xtts_v2", "voice": "v", "text": "hi"}
+
+
+def test_synthesize_flag_off_ignores_full_device(monkeypatch, synth_client):
+    """Default (flag unset): /synthesize behaves exactly as today — no
+    admission check runs at all — even when the probe reports a device with
+    no free room. This is the rollback path."""
+    monkeypatch.delenv("SEG_CAPACITY_ADMISSION", raising=False)
+    monkeypatch.setattr(
+        main._placement,
+        "probe",
+        lambda: [{"kind": "cuda", "index": 0, "label": "g", "totalMb": 8192, "freeMb": 50}],
+    )
+    r = synth_client.post("/synthesize", json=_synth_body())
+    assert r.status_code == 200
+    assert r.content == b"\x00\x00"
+
+
+def test_synthesize_flag_on_no_capacity_returns_503(monkeypatch, synth_client):
+    """Flag ON + a probe that can't fit the peak -> 503 noCapacity, engine
+    never called."""
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
+    monkeypatch.setattr(
+        main._placement,
+        "probe",
+        lambda: [{"kind": "cuda", "index": 0, "label": "g", "totalMb": 8192, "freeMb": 50}],
+    )
+    r = synth_client.post("/synthesize", json=_synth_body())
+    assert r.status_code == 503
+    body = r.json()
+    assert body["noCapacity"] is True
+    assert body["neededMb"] > 0
+    assert body["deviceKey"] == "cuda:0"
+
+
+def test_synthesize_flag_on_fits_proceeds(monkeypatch, synth_client):
+    """Flag ON + a roomy probe -> the reservation admits and /synthesize
+    proceeds as normal."""
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
+    monkeypatch.setattr(
+        main._placement,
+        "probe",
+        lambda: [{"kind": "cuda", "index": 0, "label": "g", "totalMb": 16384, "freeMb": 16000}],
+    )
+    r = synth_client.post("/synthesize", json=_synth_body())
+    assert r.status_code == 200
+    assert r.content == b"\x00\x00"

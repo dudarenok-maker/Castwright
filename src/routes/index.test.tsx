@@ -74,7 +74,7 @@ vi.mock('../lib/api', () => ({
     /* useTtsLifecycle also polls /api/gpu/queue on the same tick. Stub
        to an empty queue so the "GPU busy · N waiting ·" prefix stays
        hidden in these tests. */
-    getGpuQueueState: () => Promise.resolve({ depth: 0, inFlight: 0, max: 1 }),
+    getGpuQueueState: () => Promise.resolve({ queueDepth: 0, devices: [] }),
     loadSidecar: () => Promise.resolve({ status: 'idle' }),
     unloadSidecar: () => Promise.resolve({ status: 'idle' }),
     loadAnalyzer: () => Promise.resolve({ status: 'ready' }),

@@ -1,7 +1,8 @@
-/* Per-engine VRAM cost weights for the GPU semaphore (server/src/gpu/
-   semaphore.ts). Each TTS engine — plus the analyzer (Ollama) — takes a
-   number of tokens proportional to its VRAM footprint, so the semaphore
-   admits a combination of ops only when their summed cost fits the budget.
+/* Per-engine VRAM cost weights, historically charged against the GPU token-
+   budget semaphore (retired — see costForEngine's docstring below). Each
+   TTS engine — plus the analyzer (Ollama) — had a number of tokens
+   proportional to its VRAM footprint, so the semaphore admitted a
+   combination of ops only when their summed cost fit the budget.
 
    PROVISIONAL VALUES — these are first-cut estimates, not measured. They
    WILL be tuned once we have real VRAM telemetry on the target 8 GB box;
@@ -31,38 +32,36 @@ export const ENGINE_VRAM_COST: Record<string, number> = {
   spk: 1,
 };
 
-import { configValue } from '../config/resolver.js';
 import { getLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 
-/** VRAM token cost for an engine name (or 'analyzer'). For the six engines
-    with registered gpu.weight.* knobs (kokoro/qwen/coqui/analyzer/asr/spk) the
-    value is read live through the registry so env vars and app overrides take
-    effect. Gemini has no VRAM cost and stays at 0. Unknown engines fall back
-    to cost 1 so a new engine never silently grabs the whole budget. The
-    analyzer is an exception (W2.6): a CONFIRMED-cpu analyzer can't contend
-    for GPU memory at all, so it's charged 0 instead of its configured weight. */
+/** VRAM token cost for an engine name (or 'analyzer'). Historically read live
+    through the registry's gpu.weight.* knobs so an env var / app override
+    could retune it without a restart — those knobs were deleted along with
+    the GPU token-budget semaphore they fed (capacity-aware placement now
+    arbitrates VRAM on the sidecar side, see docs/features/vram-aware-
+    placement), so this now returns the static ENGINE_VRAM_COST weight
+    directly. Gemini has no VRAM cost and stays at 0. Unknown engines fall
+    back to cost 1. The analyzer is an exception (W2.6): a CONFIRMED-cpu
+    analyzer can't contend for GPU memory at all, so it's charged 0 instead
+    of its static weight.
+
+    NOTE: costForEngine has no live caller left in the codebase — the GPU
+    semaphore it fed was removed in the capacity-aware-placement cutover.
+    Kept (per this delete task's explicit instruction) rather than removed;
+    flagged for the whole-branch review to decide whether this module is now
+    safe to retire outright. */
 export function costForEngine(engine: string): number {
   switch (engine) {
-    case 'kokoro':
-      return configValue<number>('gpu.weight.kokoro');
-    case 'qwen':
-      return configValue<number>('gpu.weight.qwen');
-    case 'coqui':
-      return configValue<number>('gpu.weight.coqui');
     case 'analyzer':
       // W2.6 "don't cross-charge": a CONFIRMED-cpu analyzer can't contend for
       // GPU memory at all, so it shouldn't consume semaphore budget. An
-      // UNKNOWN placement stays charged (conservative — matches residency.ts's
-      // "unknown → assume GPU" convention).
-      return getLastKnownAnalyzerDevice() === 'cpu' ? 0 : configValue<number>('gpu.weight.analyzer');
-    case 'asr':
-      return configValue<number>('gpu.weight.asr');
-    case 'spk':
-      return configValue<number>('gpu.weight.spk');
+      // UNKNOWN placement stays charged (conservative — matches the old
+      // residency.ts "unknown → assume GPU" convention).
+      return getLastKnownAnalyzerDevice() === 'cpu' ? 0 : ENGINE_VRAM_COST.analyzer;
     case 'gemini':
       return 0; // no VRAM: always free
     default:
-      return 1; // safe fallback
+      return ENGINE_VRAM_COST[engine] ?? 1; // safe fallback for an unknown engine
   }
 }
 

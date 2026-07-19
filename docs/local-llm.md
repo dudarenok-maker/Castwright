@@ -137,6 +137,21 @@ speaker-embedding model (`SPK`) are standalone singletons outside that map
 watchdog wiring: `main.py:3416-3538`. Correction vs. an old note that had
 floated around as `autoPreloadKokoro`: the real var is `PRELOAD_KOKORO`.)
 
+**Peak-under-load footprints (capacity-aware admission).** The resident
+sizes in the table above are steady-state; admission needs the true DECODE
+PEAK, which is higher (e.g. Qwen's ~4 GB resident weight size peaks at
+~5.6 GB during decode). `FootprintTable` in `main.py` seeds these peaks —
+the anchors below are the machine-parseable ground truth a parity test
+(`test_footprints.py`) checks against `SEED_FOOTPRINTS_MB`; an on-box
+observation can only ratchet a seed up, never down.
+
+<!-- footprint:kokoro=1200 -->
+<!-- footprint:qwen=6144 -->
+<!-- footprint:qwen.1.7b=7168 -->
+<!-- footprint:coqui=3584 -->
+<!-- footprint:asr=400 -->
+<!-- footprint:spk=200 -->
+
 **Load/unload path.** `POST /api/sidecar/load` (Node proxy
 `server/src/routes/sidecar-health.ts:325`, 90s budget) and `POST
 /api/sidecar/unload` (same file, `:368`, 2s budget) front the sidecar's own

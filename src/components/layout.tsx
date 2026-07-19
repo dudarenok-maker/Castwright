@@ -1193,13 +1193,13 @@ export function Layout() {
   const showTtsControls = enginesToShow.size > 0;
   /* GPU semaphore badge — prefixes the TTS pill cluster with
      "GPU busy · N waiting ·" when this session is waiting behind another
-     session's analyzer / sidecar call. Worded to NOT collide with the
+     session's sidecar call for GPU capacity. Worded to NOT collide with the
      generation queue (the "Queue · N" chip / queue modal) — this is GPU
      resource contention, a different thing. Hidden when depth is 0 or
      undefined (older server that doesn't expose /api/gpu/queue). The
-     server-side semaphore in server/src/gpu/semaphore.ts serialises
-     GPU-heavy ops at GPU_CONCURRENCY=1 so two parallel Claude Code
-     sessions don't thrash an 8 GB GPU's VRAM. */
+     depth comes from the sidecar client's no-capacity poll-wait counter
+     (server/src/tts/sidecar.ts getCapacityWaiterCount()) — capacity
+     admission is the sidecar's own job now (vram-aware placement). */
   const gpuQueueDepth = ttsLifecycle.gpuQueueDepth;
   const showGpuQueueBadge = typeof gpuQueueDepth === 'number' && gpuQueueDepth > 0;
   /* Only suppress the pill's own Retry when the sidecar diagnosis has a

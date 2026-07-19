@@ -2,22 +2,21 @@
  * side so at most ONE synth call per engine is in flight at a time, while
  * DIFFERENT engines (e.g. Kokoro narrator + Qwen dialogue) can still overlap.
  *
- * Motivation: with GPU_VRAM_BUDGET=2 and Qwen cost=1, TWO Qwen calls fit the
- * global VRAM semaphore and both get dispatched simultaneously. They then
- * serialize on the sidecar's _synth_lock but double transient VRAM use,
- * accelerating the leak. Clamping at the Node layer prevents this.
+ * Motivation: without this clamp, TWO calls to the same engine could both be
+ * dispatched to the sidecar at once. They'd then serialize on the sidecar's
+ * _synth_lock anyway but double transient VRAM use in the meantime,
+ * accelerating a leak. Clamping at the Node layer prevents this.
  *
- * Both `engineSynths` (per-engine semaphore map) and `gpuSem` (global VRAM
- * semaphore) are injectable via SidecarOptions so each test uses fresh,
- * isolated instances rather than the module-level singletons.  The global
- * semaphore is injected with budget-2 so two simultaneous same-engine calls
- * would BOTH fit it — making the per-engine gate the only thing that could
- * serialize them.
+ * `engineSynths` (per-engine CountSemaphore(1) map) is injectable via
+ * SidecarOptions so each test uses a fresh, isolated instance rather than the
+ * module-level singleton. GPU admission itself is no longer arbitrated here
+ * (vram-aware placement, Task 8b moved that to the sidecar's capacity-based
+ * 503 admission) — this file covers ONLY the per-engine clamp.
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { fetch as undiciFetch } from 'undici';
-import { GpuSemaphore } from '../gpu/semaphore.js';
+import { CountSemaphore } from '../gpu/count-semaphore.js';
 import { SidecarTtsProvider } from './sidecar.js';
 import type { SynthesizeInput } from './index.js';
 
@@ -66,16 +65,13 @@ afterEach(() => {
 
 describe('per-engine synth clamp', () => {
   it('serialises two SAME-engine (qwen) synth calls — the 2nd waits for the 1st', async () => {
-    /* Fresh, isolated semaphore instances injected via SidecarOptions:
-       - gpuSem budget=2: both cost-1 Qwen calls fit the global sem, so the
-         ONLY gate serialising them is the per-engine semaphore.
-       - engineSynths: empty fresh map, isolated from the global singleton. */
-    const gpuSem = new GpuSemaphore(2);
-    const engineSynths = new Map<string, GpuSemaphore>();
+    /* Fresh, isolated engineSynths map injected via SidecarOptions — empty,
+       isolated from the module-level singleton, so this test never shares
+       state with other tests/files. */
+    const engineSynths = new Map<string, CountSemaphore>();
     const provider = new SidecarTtsProvider({
       url: 'http://localhost:6006/',
       engine: 'qwen',
-      gpuSem,
       engineSynths,
     });
 
@@ -116,21 +112,18 @@ describe('per-engine synth clamp', () => {
   });
 
   it('allows DIFFERENT engines (qwen + kokoro) to overlap', async () => {
-    /* Both providers share SAME injected gpuSem (budget=2, fits both cost-1
-       calls) and SAME engineSynths map — they get DIFFERENT per-engine
-       semaphores keyed by engine name, so neither blocks the other. */
-    const gpuSem = new GpuSemaphore(2);
-    const engineSynths = new Map<string, GpuSemaphore>();
+    /* Both providers share the SAME engineSynths map — they get DIFFERENT
+       per-engine semaphores keyed by engine name, so neither blocks the
+       other. */
+    const engineSynths = new Map<string, CountSemaphore>();
     const qwenProvider = new SidecarTtsProvider({
       url: 'http://localhost:6006/',
       engine: 'qwen',
-      gpuSem,
       engineSynths,
     });
     const kokoroProvider = new SidecarTtsProvider({
       url: 'http://localhost:6006/',
       engine: 'kokoro',
-      gpuSem,
       engineSynths,
     });
 

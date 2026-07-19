@@ -25,27 +25,62 @@ import type {
 } from './index.js';
 import { fetch as undiciFetch, Agent } from 'undici';
 import { sidecarModelId } from './model-keys.js';
-import { gpuSemaphore, GpuSemaphore } from '../gpu/semaphore.js';
-import { costForEngine } from './engine-vram-cost.js';
-import { engineDeviceIsGpu } from '../gpu/engine-device.js';
-import { acquireGpuTokenIfOnGpu } from '../gpu/gpu-semaphore-gate.js';
+import { CountSemaphore } from '../gpu/count-semaphore.js';
+import { capacityProbe as defaultCapacityProbe, type CapacityProbe } from '../gpu/capacity-probe.js';
+import {
+  evictOllama as defaultEvictOllama,
+  analyzerEvictWouldHelp as defaultAnalyzerEvictWouldHelp,
+} from '../analyzer/ollama-residency.js';
+import { getAnalyzerConcurrencyStats } from '../analyzer/analyzer-concurrency.js';
+import { NoCapacityError } from './tts-errors.js';
 import { coquiLanguageCode } from './voice-mapping.js';
 
 /* Per-engine serialisation: at most ONE synth call per engine in-flight at a
-   time, mirroring the sidecar's own _synth_lock.  With a VRAM budget > 1, two
-   same-engine calls can both pass the global semaphore and race to the sidecar
-   — where they serialize on _synth_lock but double transient memory (accelerating
-   the leak).  This gate prevents that while still letting DIFFERENT engines
-   (e.g. Kokoro narrator + Qwen dialogue) overlap freely. */
-const defaultEngineSynths = new Map<string, GpuSemaphore>();
+   time, mirroring the sidecar's own _synth_lock. Two same-engine calls
+   racing to the sidecar would serialize on _synth_lock anyway but double
+   transient memory in the meantime (accelerating the leak). This gate
+   prevents that while still letting DIFFERENT engines (e.g. Kokoro narrator
+   + Qwen dialogue) overlap freely. Capacity-aware placement (vram-aware
+   placement, Task 8b) replaced the weighted cross-engine VRAM gate that used
+   to sit alongside this one — admission is now the sidecar's job (it answers
+   503 `{ noCapacity: true }` when an op can't fit), so this serializer no
+   longer needs VRAM-cost weighting: a plain count of 1 is enough. */
+const defaultEngineSynths = new Map<string, CountSemaphore>();
 
-function engineSynthSem(map: Map<string, GpuSemaphore>, engine: string): GpuSemaphore {
+function engineSynthSem(map: Map<string, CountSemaphore>, engine: string): CountSemaphore {
   let sem = map.get(engine);
   if (!sem) {
-    sem = new GpuSemaphore(1);
+    sem = new CountSemaphore(1);
     map.set(engine, sem);
   }
   return sem;
+}
+
+/* Bounded poll for the no-capacity retry loop (postWithCapacityRetry below).
+   GPU_CAPACITY_POLL_MS is the wait between admission checks;
+   GPU_CAPACITY_MAX_ATTEMPTS bounds the total wait (default 30 * 2s = ~60s)
+   before giving up and surfacing NoCapacityError. */
+const GPU_CAPACITY_POLL_MS = (() => {
+  const raw = Number(process.env.GPU_CAPACITY_POLL_MS);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2_000;
+})();
+const GPU_CAPACITY_MAX_ATTEMPTS = (() => {
+  const raw = Number(process.env.GPU_CAPACITY_MAX_ATTEMPTS);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 30;
+})();
+
+/* GPU-queue status surface (server/src/routes/gpu-queue.ts) — counts ops
+   currently parked in the no-capacity poll-wait below, giving the frontend
+   "Queued (N ahead)" pill something to read now that gpuSemaphore is gone.
+   Incremented just before an op's first poll wait; decremented once that op
+   leaves the wait, however it resolves (succeeds, evicts-then-retries-ok, or
+   throws NoCapacityError). */
+let _capacityWaiters = 0;
+
+/** Current count of ops parked in the no-capacity poll-wait. Read by
+    server/src/routes/gpu-queue.ts for the /api/gpu/queue payload. */
+export function getCapacityWaiterCount(): number {
+  return _capacityWaiters;
 }
 
 /* TTS synth legitimately runs for minutes — a wide Qwen batch (plan 136) can
@@ -72,23 +107,49 @@ interface SidecarOptions {
   engine: TtsEngine;
   /** Injected per-engine semaphore map — for testing only. Defaults to the
       module-level `defaultEngineSynths` singleton. */
-  engineSynths?: Map<string, GpuSemaphore>;
-  /** Injected global VRAM semaphore — for testing only. Defaults to the
-      module-level `gpuSemaphore` singleton. */
-  gpuSem?: GpuSemaphore;
+  engineSynths?: Map<string, CountSemaphore>;
+  /** Injected capacity probe — for testing only. Defaults to the shared
+      `capacityProbe` singleton (server/src/gpu/capacity-probe.ts). */
+  capacityProbe?: CapacityProbe;
+  /** Injected Ollama-eviction action — for testing only. Defaults to
+      `evictOllama` (server/src/analyzer/ollama-residency.ts). */
+  evictOllama?: () => Promise<void>;
+  /** Injected "would evicting Ollama free enough VRAM" check — for testing
+      only. Defaults to `analyzerEvictWouldHelp`. */
+  analyzerEvictWouldHelp?: (neededMb: number, freeOnDeviceMb: number) => Promise<boolean>;
+  /** Injected "is the analyzer mid-run" check — for testing only. Defaults
+      to reading `getAnalyzerConcurrencyStats().inFlight > 0`. */
+  isAnalysisInFlight?: () => boolean;
+  /** Injected poll interval (ms) between no-capacity admission retries —
+      for testing only, so a test doesn't have to sleep the real default. */
+  capacityPollMs?: number;
+  /** Injected cap on no-capacity retry attempts before giving up with
+      `NoCapacityError` — for testing only. */
+  maxCapacityAttempts?: number;
 }
 
 export class SidecarTtsProvider implements TtsProvider {
   private readonly url: string;
   private readonly engine: TtsEngine;
-  private readonly engineSynths: Map<string, GpuSemaphore>;
-  private readonly gpuSem: GpuSemaphore;
+  private readonly engineSynths: Map<string, CountSemaphore>;
+  private readonly capacityProbe: CapacityProbe;
+  private readonly evictOllama: () => Promise<void>;
+  private readonly analyzerEvictWouldHelp: (neededMb: number, freeOnDeviceMb: number) => Promise<boolean>;
+  private readonly isAnalysisInFlight: () => boolean;
+  private readonly capacityPollMs: number;
+  private readonly maxCapacityAttempts: number;
 
   constructor(opts: SidecarOptions) {
     this.url = opts.url.replace(/\/+$/, '');
     this.engine = opts.engine;
     this.engineSynths = opts.engineSynths ?? defaultEngineSynths;
-    this.gpuSem = opts.gpuSem ?? gpuSemaphore;
+    this.capacityProbe = opts.capacityProbe ?? defaultCapacityProbe;
+    this.evictOllama = opts.evictOllama ?? defaultEvictOllama;
+    this.analyzerEvictWouldHelp = opts.analyzerEvictWouldHelp ?? defaultAnalyzerEvictWouldHelp;
+    this.isAnalysisInFlight =
+      opts.isAnalysisInFlight ?? (() => getAnalyzerConcurrencyStats().inFlight > 0);
+    this.capacityPollMs = opts.capacityPollMs ?? GPU_CAPACITY_POLL_MS;
+    this.maxCapacityAttempts = opts.maxCapacityAttempts ?? GPU_CAPACITY_MAX_ATTEMPTS;
   }
 
   async synthesize({
@@ -114,65 +175,45 @@ export class SidecarTtsProvider implements TtsProvider {
     });
 
     /* Per-engine serialisation — at most ONE synth call per engine in-flight.
-       Acquired BEFORE the global GPU semaphore (outer-before-inner) to avoid
-       priority inversion: if the per-engine gate were inner, a waiting
-       same-engine call could hold a global token while blocked, starving
-       unrelated engines. */
+       GPU admission itself is now the sidecar's job (capacity-aware
+       placement): it answers 503 `{ noCapacity: true }` when an op can't
+       fit, and `postWithCapacityRetry` below decides whether to nudge the
+       analyzer out of the way or wait and retry. */
     const releaseEngine = await engineSynthSem(this.engineSynths, this.engine).acquire();
     try {
-      /* GPU arbitration — acquire a slot before the fetch so the synth
-         doesn't race the analyzer (or another concurrent synth) for VRAM
-         on an 8 GB GPU. Held across the buffered arrayBuffer() read
-         below; the sidecar response is NOT streaming, so a single
-         release after the read covers the whole GPU op. Cost is the engine's
-         VRAM weight (engine-vram-cost.ts) so a heavy engine takes more of the
-         budget than a light one. See server/src/gpu/semaphore.ts. */
-      /* Skipped entirely (releaseGpu = null) when this.engine is confirmed
-         running off-GPU (cpu/mps) — see server/src/gpu/gpu-semaphore-gate.ts. */
-      const releaseGpu = await acquireGpuTokenIfOnGpu(
-        engineDeviceIsGpu(this.engine),
-        costForEngine(this.engine),
-        this.gpuSem,
-      );
+      const response = await this.postWithCapacityRetry('/synthesize', body, signal);
 
-      try {
-        const response = await this.post('/synthesize', body, signal);
-        if (!response.ok) await throwForResponse(response);
-
-        const buf = Buffer.from(await response.arrayBuffer());
-        if (buf.length === 0) {
-          throw new Error('Local voice engine returned an empty audio body.');
-        }
-
-        const mimeType = response.headers.get('content-type') ?? 'audio/L16;codec=pcm;rate=24000';
-        const headerRate = response.headers.get('x-sample-rate');
-        const sampleRate = headerRate ? Number(headerRate) : parseRateFromMime(mimeType);
-
-        /* When the sidecar's speaker manifest doesn't contain the voice we
-           asked for, it substitutes a safe fallback and tells us via this
-           header. The synth still completed (so we don't fail the chapter),
-           but the user's chapter ends up speaking in a different voice than
-           the cast view shows. Log loudly so we can fix server/src/tts/
-           voice-mapping.ts when this happens — the catalog and the model's
-           actual speaker list have drifted. */
-        const substitutedFrom = response.headers.get('x-voice-substituted-from');
-        if (substitutedFrom) {
-          console.warn(
-            `[tts] Sidecar substituted voice: requested "${substitutedFrom}" not in XTTS v2 manifest. ` +
-              `Update server/src/tts/voice-mapping.ts to remove this name. ` +
-              `Run \`curl ${this.url}/speakers\` to see the model's actual speaker list.`,
-          );
-        }
-
-        return {
-          pcm: buf,
-          sampleRate,
-          mimeType,
-          ...(substitutedFrom ? { voiceSubstitutedFrom: substitutedFrom } : {}),
-        };
-      } finally {
-        releaseGpu?.();
+      const buf = Buffer.from(await response.arrayBuffer());
+      if (buf.length === 0) {
+        throw new Error('Local voice engine returned an empty audio body.');
       }
+
+      const mimeType = response.headers.get('content-type') ?? 'audio/L16;codec=pcm;rate=24000';
+      const headerRate = response.headers.get('x-sample-rate');
+      const sampleRate = headerRate ? Number(headerRate) : parseRateFromMime(mimeType);
+
+      /* When the sidecar's speaker manifest doesn't contain the voice we
+         asked for, it substitutes a safe fallback and tells us via this
+         header. The synth still completed (so we don't fail the chapter),
+         but the user's chapter ends up speaking in a different voice than
+         the cast view shows. Log loudly so we can fix server/src/tts/
+         voice-mapping.ts when this happens — the catalog and the model's
+         actual speaker list have drifted. */
+      const substitutedFrom = response.headers.get('x-voice-substituted-from');
+      if (substitutedFrom) {
+        console.warn(
+          `[tts] Sidecar substituted voice: requested "${substitutedFrom}" not in XTTS v2 manifest. ` +
+            `Update server/src/tts/voice-mapping.ts to remove this name. ` +
+            `Run \`curl ${this.url}/speakers\` to see the model's actual speaker list.`,
+        );
+      }
+
+      return {
+        pcm: buf,
+        sampleRate,
+        mimeType,
+        ...(substitutedFrom ? { voiceSubstitutedFrom: substitutedFrom } : {}),
+      };
     } finally {
       releaseEngine();
     }
@@ -181,9 +222,8 @@ export class SidecarTtsProvider implements TtsProvider {
   /* TRUE batching (plan 112) — synth N sentences in ONE sidecar call. Only
      reached for engines whose sidecar exposes /synthesize-batch (Qwen today);
      the dispatcher feature-detects this method and falls back to per-call
-     `synthesize` otherwise. Acquires ONE GPU token for the whole batch (it's a
-     single model forward, same VRAM lifetime as a single call) and forwards
-     the abort signal so an in-flight batch cancels mid-call. */
+     `synthesize` otherwise. Forwards the abort signal so an in-flight batch
+     cancels mid-call. */
   async synthesizeBatch({
     items,
     modelKey,
@@ -209,33 +249,23 @@ export class SidecarTtsProvider implements TtsProvider {
     /* Per-engine serialisation — outer gate, same rationale as synthesize(). */
     const releaseEngine = await engineSynthSem(this.engineSynths, this.engine).acquire();
     try {
-      const releaseGpu = await acquireGpuTokenIfOnGpu(
-        engineDeviceIsGpu(this.engine),
-        costForEngine(this.engine),
-        this.gpuSem,
-      );
-      try {
-        const response = await this.post('/synthesize-batch', body, signal);
-        if (!response.ok) await throwForResponse(response);
+      const response = await this.postWithCapacityRetry('/synthesize-batch', body, signal);
 
-        const buf = Buffer.from(await response.arrayBuffer());
-        if (buf.length === 0) {
-          throw new Error('Local voice engine returned an empty batch body.');
-        }
-
-        const { sampleRate, pcms, genMs, audioMs } = parseBatchFrame(buf);
-        /* Hard invariant — one PCM chunk per requested item. A mismatch means the
-           sidecar demux drifted; fail loudly rather than scatter misaligned audio
-           back onto the wrong sentences. */
-        if (pcms.length !== items.length) {
-          throw new Error(
-            `Local TTS sidecar batch returned ${pcms.length} chunks for ${items.length} items.`,
-          );
-        }
-        return { pcms, sampleRate, genMs, audioMs };
-      } finally {
-        releaseGpu?.();
+      const buf = Buffer.from(await response.arrayBuffer());
+      if (buf.length === 0) {
+        throw new Error('Local voice engine returned an empty batch body.');
       }
+
+      const { sampleRate, pcms, genMs, audioMs } = parseBatchFrame(buf);
+      /* Hard invariant — one PCM chunk per requested item. A mismatch means the
+         sidecar demux drifted; fail loudly rather than scatter misaligned audio
+         back onto the wrong sentences. */
+      if (pcms.length !== items.length) {
+        throw new Error(
+          `Local TTS sidecar batch returned ${pcms.length} chunks for ${items.length} items.`,
+        );
+      }
+      return { pcms, sampleRate, genMs, audioMs };
     } finally {
       releaseEngine();
     }
@@ -276,6 +306,120 @@ export class SidecarTtsProvider implements TtsProvider {
       );
     }
   }
+
+  /* Capacity-aware admission (vram-aware placement, Task 8b). POSTs and, on a
+     non-ok response, peeks at the body BEFORE `throwForResponse` consumes it
+     (via `response.clone()`) to distinguish "no GPU capacity for this op"
+     (503 `{ noCapacity: true, neededMb, deviceKey }`) from every other
+     failure (poisoned CUDA, 5xx, 4xx) — those still go through
+     `throwForResponse` unchanged, so their existing transient/poisoned
+     classification for `withTtsRetry` is untouched.
+
+     On a genuine no-capacity 503: re-probe live capacity for the reported
+     device, and — ONLY the first time, and ONLY when the analyzer isn't
+     mid-run — ask whether evicting the resident Ollama analyzer would free
+     enough VRAM; if so, evict it and retry immediately. Otherwise (already
+     evicted once, analyzer busy, or eviction wouldn't help), wait
+     `capacityPollMs` and retry, up to `maxCapacityAttempts` total attempts,
+     then give up with `NoCapacityError`. */
+  private async postWithCapacityRetry(
+    path: string,
+    body: string,
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    let evicted = false;
+    let waiting = false;
+    try {
+      for (let attempt = 0; ; attempt++) {
+        const response = await this.post(path, body, signal);
+        if (response.ok) return response;
+
+        const noCap = await parseNoCapacity(response.clone());
+        if (!noCap) {
+          // Poisoned / other 5xx / 4xx — classify + throw exactly as before.
+          // throwForResponse always throws; the trailing `throw` is dead code
+          // that only exists so TS narrows `noCap` to non-null below.
+          await throwForResponse(response);
+          throw new Error('unreachable');
+        }
+
+        const devices = await this.capacityProbe.read({ fresh: true });
+        const freeMb =
+          devices.find((d) => d.kind !== 'cpu' && `${d.kind}:${d.index}` === noCap.deviceKey)
+            ?.freeMb ?? 0;
+
+        if (
+          !evicted &&
+          !this.isAnalysisInFlight() &&
+          (await this.analyzerEvictWouldHelp(noCap.neededMb, freeMb))
+        ) {
+          await this.evictOllama();
+          evicted = true;
+          continue; // immediate retry after freeing the analyzer
+        }
+
+        if (attempt + 1 >= this.maxCapacityAttempts) {
+          throw new NoCapacityError(this.engine, noCap.neededMb, noCap.deviceKey);
+        }
+        if (!waiting) {
+          waiting = true;
+          _capacityWaiters++;
+        }
+        await abortableDelay(this.capacityPollMs, signal); // bounded wait; rejects if the caller aborts
+      }
+    } finally {
+      if (waiting) _capacityWaiters--;
+    }
+  }
+}
+
+/* Parse the sidecar's no-capacity admission-refusal body:
+   `{ "noCapacity": true, "neededMb": N, "deviceKey": "cuda:0" }` on a 503.
+   Never throws — a non-503 status, an unreadable body, or a body that
+   doesn't match this shape all return null so the caller falls back to the
+   normal `throwForResponse` classification. */
+async function parseNoCapacity(
+  response: Response,
+): Promise<{ neededMb: number; deviceKey: string } | null> {
+  if (response.status !== 503) return null;
+  const text = await safeReadText(response);
+  if (!text) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const body = parsed as { noCapacity?: unknown; neededMb?: unknown; deviceKey?: unknown };
+  if (
+    body?.noCapacity === true &&
+    typeof body.neededMb === 'number' &&
+    typeof body.deviceKey === 'string'
+  ) {
+    return { neededMb: body.neededMb, deviceKey: body.deviceKey };
+  }
+  return null;
+}
+
+/* Resolves after `ms`, or rejects with the signal's abort reason (AbortError)
+   if `signal` fires first — so a cancelled synth stops polling for capacity
+   instead of waiting out the full interval. Mirrors retry.ts's `sleep`. */
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new DOMException('capacity poll aborted', 'AbortError'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason ?? new DOMException('capacity poll aborted', 'AbortError'));
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 /* Classify a non-ok sidecar response for the retry wrapper and throw.

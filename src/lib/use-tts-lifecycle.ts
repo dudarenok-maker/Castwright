@@ -71,19 +71,15 @@ export interface TtsLifecycle {
       notice state because both pills share it; either surface clearing it
       should clear it everywhere. */
   dismissNotices: () => void;
-  /** GPU semaphore queue depth — number of GPU ops queued behind the
-      in-flight ones. Drives the "GPU busy · N waiting ·" prefix on the
-      top-bar pill so a session waiting on another's analyzer / sidecar
-      call can see why it's not starting. `undefined` when the server
-      doesn't expose `/api/gpu/queue` (older builds / partial deploys)
-      — UI degrades to no prefix in that case. */
+  /** GPU capacity-wait queue depth — number of synth ops currently parked
+      behind a no-capacity 503, waiting for VRAM to free up (vram-aware
+      placement, Task 10 — server/src/tts/sidecar.ts getCapacityWaiterCount()).
+      Drives the "GPU busy · N waiting ·" prefix on the top-bar pill so a
+      session waiting on another's sidecar call can see why it's not
+      starting. `undefined` when the server doesn't expose `/api/gpu/queue`
+      (older builds / partial deploys) — UI degrades to no prefix in that
+      case. */
   gpuQueueDepth?: number;
-  /** Companion to `gpuQueueDepth` — number of GPU ops currently
-      holding a slot. Exposed for diagnostics; not currently rendered
-      anywhere but cheap to keep on the shape so future surfaces (a
-      developer-tools view, a metric overlay) can read it without a
-      second poll. */
-  gpuInFlight?: number;
 }
 
 type EngineId = 'coqui' | 'kokoro' | 'qwen' | 'qwen1_7b';
@@ -128,8 +124,8 @@ export function useTtsLifecycle(): TtsLifecycle {
       /* GPU queue state — same cadence, separate endpoint. Permissive
          error handling: an older server (or a transient 404 / 5xx) just
          clears the depth so the pill drops back to its default label;
-         it does NOT surface as a user-facing error. The semaphore is
-         opportunistic UX, not a hard contract. */
+         it does NOT surface as a user-facing error. This is opportunistic
+         UX, not a hard contract. */
       api
         .getGpuQueueState()
         .then((q) => {
@@ -303,7 +299,6 @@ export function useTtsLifecycle(): TtsLifecycle {
     evictionNotice,
     loadErrorNotice,
     dismissNotices,
-    gpuQueueDepth: gpuQueue?.depth,
-    gpuInFlight: gpuQueue?.inFlight,
+    gpuQueueDepth: gpuQueue?.queueDepth,
   };
 }

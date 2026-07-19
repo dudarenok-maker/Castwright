@@ -11,16 +11,14 @@
      response: application/json
                { text, language, avg_logprob, no_speech_prob, compression_ratio }
 
-   VRAM arbitration: ONLY when ASR runs on the GPU (`ASR_DEVICE=cuda`) does this
-   acquire a weighted GPU token (cost `asr`, engine-vram-cost.ts) so Whisper +
-   synth stay within the budget. The CPU-default path (`ASR_DEVICE=cpu`) costs
-   zero VRAM, so taking a token would needlessly serialise it behind synth —
-   we skip the semaphore entirely there. */
+   VRAM arbitration follow-up: this is a sidecar op — VRAM arbitration now
+   lives in the sidecar's capacity admission (behind SEG_CAPACITY_ADMISSION),
+   not a Node-side GPU token here. Flag off: this runs in the normal sequential
+   workflow (ASR happens in the QA phase, poolWidth=1 renders serialize),
+   matching the whole feature's flag-off model. */
 
 import { fetch as undiciFetch, Agent } from 'undici';
-import { costForEngine } from './engine-vram-cost.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
-import { acquireGpuTokenIfOnGpu } from '../gpu/gpu-semaphore-gate.js';
 
 export interface TranscribeResult {
   text: string;
@@ -59,9 +57,9 @@ const TRANSCRIBE_DISPATCHER = new Agent({
   connectTimeout: 10_000,
 });
 
-/** True when ASR runs on the GPU and must arbitrate for VRAM. The server reads
-    the SAME `ASR_DEVICE` env the sidecar process reads (they share the env under
-    `npm start`), so this stays in lockstep with where Whisper actually runs. */
+/** True when ASR runs on the GPU. The server reads the SAME `ASR_DEVICE` env
+    the sidecar process reads (they share the env under `npm start`), so this
+    stays in lockstep with where Whisper actually runs. */
 export function asrRunsOnGpu(): boolean {
   return (process.env.ASR_DEVICE ?? 'cpu').trim().toLowerCase().startsWith('cuda');
 }
@@ -82,51 +80,48 @@ export async function transcribeSegment(
   if (lang) headers['x-language'] = lang;
   if (opts.wordTimestamps) headers['x-word-timestamps'] = '1';
 
-  const release = await acquireGpuTokenIfOnGpu(asrRunsOnGpu(), costForEngine('asr'));
+  // Sidecar op — VRAM arbitration now lives in the sidecar's capacity admission
+  // (SEG_CAPACITY_ADMISSION); no Node-side GPU token here (see file header).
+  let response: Response;
   try {
-    let response: Response;
-    try {
-      response = (await undiciFetch(`${url}/transcribe`, {
-        method: 'POST',
-        headers,
-        body: pcm,
-        signal: opts.signal,
-        dispatcher: TRANSCRIBE_DISPATCHER,
-      })) as unknown as Response;
-    } catch (e) {
-      if ((e as { name?: string })?.name === 'AbortError') throw e;
-      const msg = (e as Error).message || String(e);
-      throw Object.assign(
-        new Error(`TTS sidecar not reachable at ${url} for /transcribe. (${msg})`),
-        { transient: true as const },
-      );
-    }
-    if (!response.ok) {
-      const text = await safeReadText(response);
-      throw Object.assign(
-        new Error(`TTS sidecar /transcribe returned ${response.status}: ${text.slice(0, 240)}`),
-        { transient: response.status >= 500 && response.status < 600 },
-      );
-    }
-    const body = (await response.json()) as {
-      text?: unknown;
-      language?: unknown;
-      avg_logprob?: unknown;
-      no_speech_prob?: unknown;
-      compression_ratio?: unknown;
-      words?: unknown;
-    };
-    return {
-      text: typeof body.text === 'string' ? body.text : '',
-      language: typeof body.language === 'string' ? body.language : null,
-      avgLogprob: numOrNull(body.avg_logprob),
-      noSpeechProb: numOrNull(body.no_speech_prob),
-      compressionRatio: numOrNull(body.compression_ratio),
-      words: Array.isArray(body.words) ? body.words.filter(isWellFormedWord) : null,
-    };
-  } finally {
-    release?.();
+    response = (await undiciFetch(`${url}/transcribe`, {
+      method: 'POST',
+      headers,
+      body: pcm,
+      signal: opts.signal,
+      dispatcher: TRANSCRIBE_DISPATCHER,
+    })) as unknown as Response;
+  } catch (e) {
+    if ((e as { name?: string })?.name === 'AbortError') throw e;
+    const msg = (e as Error).message || String(e);
+    throw Object.assign(
+      new Error(`TTS sidecar not reachable at ${url} for /transcribe. (${msg})`),
+      { transient: true as const },
+    );
   }
+  if (!response.ok) {
+    const text = await safeReadText(response);
+    throw Object.assign(
+      new Error(`TTS sidecar /transcribe returned ${response.status}: ${text.slice(0, 240)}`),
+      { transient: response.status >= 500 && response.status < 600 },
+    );
+  }
+  const body = (await response.json()) as {
+    text?: unknown;
+    language?: unknown;
+    avg_logprob?: unknown;
+    no_speech_prob?: unknown;
+    compression_ratio?: unknown;
+    words?: unknown;
+  };
+  return {
+    text: typeof body.text === 'string' ? body.text : '',
+    language: typeof body.language === 'string' ? body.language : null,
+    avgLogprob: numOrNull(body.avg_logprob),
+    noSpeechProb: numOrNull(body.no_speech_prob),
+    compressionRatio: numOrNull(body.compression_ratio),
+    words: Array.isArray(body.words) ? body.words.filter(isWellFormedWord) : null,
+  };
 }
 
 /** Normalise a BCP-47-ish tag to the base language subtag Whisper expects

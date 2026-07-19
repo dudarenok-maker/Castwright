@@ -198,7 +198,7 @@ app.use('/api/coqui', coquiInstallRouter); // in-app Coqui XTTS v2 installer (de
 app.use('/api/kokoro', kokoroInstallRouter); // in-app Kokoro ONNX installer (fs-21: detect/install/poll/recheck)
 app.use('/api/whisper', whisperInstallRouter); // in-app Whisper ASR installer (srv-31: detect/install/poll/recheck)
 app.use('/api/models', modelsInventoryRouter); // fs-23 — in-app Model Manager: inventory + remove
-app.use('/api/gpu', gpuQueueRouter); // mounts GET /queue (semaphore depth + inFlight for the top-bar pill)
+app.use('/api/gpu', gpuQueueRouter); // mounts GET /queue (capacity-wait depth + live devices for the top-bar pill)
 app.use('/api/gpu', gpuDevicesRouter); // mounts GET /devices (CUDA card discovery for the admin picker)
 app.use('/api/diagnostics', diagnosticsRouter); // fs-18 — GET / one-shot health board (admin console)
 app.use('/api/setup', setupReadinessRouter); // fs-21 — first-run readiness probe

@@ -81,7 +81,7 @@ vi.mock('../lib/api', () => ({
     /* useTtsLifecycle also polls /api/gpu/queue on the same tick.
        Stub to an empty queue so the "GPU busy · N waiting ·" pill prefix
        stays hidden in these tests. */
-    getGpuQueueState: () => Promise.resolve({ depth: 0, inFlight: 0, max: 1 }),
+    getGpuQueueState: () => Promise.resolve({ queueDepth: 0, devices: [] }),
     /* The Generate-screen Load TTS button checks analyzer health to decide
        whether to surface the auto-evict banner — wire a controllable stub
        so each test can simulate "analyzer loaded" vs "nothing to evict". */

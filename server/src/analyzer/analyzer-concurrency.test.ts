@@ -1,18 +1,15 @@
-import { describe, it, expect, afterEach, beforeAll } from 'vitest';
-import { gpuSemaphore } from '../gpu/semaphore.js';
+import { describe, it, expect, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   analyzerConcurrency,
   acquireAnalyzerSlot,
-  canonicalLeaseKey,
   describeAnalyzerConcurrency,
   syncAnalyzerConcurrency,
   getAnalyzerConcurrencyStats,
   resetAnalyzerConcurrencyPeak,
-  __resetAnalyzerLeasesForTest,
 } from './analyzer-concurrency.js';
 
 afterEach(() => {
-  __resetAnalyzerLeasesForTest();
   // Never let a per-test K override bleed into the next case (or the
   // "default 2" assertions above): clear the env and re-sync back to default.
   delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
@@ -22,26 +19,64 @@ afterEach(() => {
 
 describe('width-K limiter', () => {
   it('is sized from analyzer.ollama.concurrency (default 2)', () => {
-    expect(analyzerConcurrency.budget).toBe(2);
+    expect(analyzerConcurrency.max).toBe(2);
+  });
+
+  it('FIFO: queued acquires are granted in arrival order as slots free', async () => {
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
+    syncAnalyzerConcurrency();
+    const order: string[] = [];
+    const r1 = await acquireAnalyzerSlot('gemma:latest', true);
+    const p2 = acquireAnalyzerSlot('gemma:latest', true).then((r) => {
+      order.push('a');
+      return r;
+    });
+    const p3 = acquireAnalyzerSlot('gemma:latest', true).then((r) => {
+      order.push('b');
+      return r;
+    });
+    await Promise.resolve();
+    expect(analyzerConcurrency.queueDepth).toBe(2); // both waiting behind r1
+    r1();
+    const r2 = await p2;
+    r2();
+    const r3 = await p3;
+    r3();
+    expect(order).toEqual(['a', 'b']); // FIFO, not release-order-dependent
   });
 });
 
 describe('syncAnalyzerConcurrency (live K)', () => {
   it('resizes the limiter to the current K — the persisted/changed value takes effect without a restart', () => {
-    expect(analyzerConcurrency.budget).toBe(2); // module-load default
+    expect(analyzerConcurrency.max).toBe(2); // module-load default
     process.env.ANALYZER_OLLAMA_CONCURRENCY = '4';
     syncAnalyzerConcurrency();
-    expect(analyzerConcurrency.budget).toBe(4); // adopted live, no re-import
+    expect(analyzerConcurrency.max).toBe(4); // adopted live, no re-import
     delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
     syncAnalyzerConcurrency();
-    expect(analyzerConcurrency.budget).toBe(2); // falls back to default
+    expect(analyzerConcurrency.max).toBe(2); // falls back to default
   });
 
   it('acquireAnalyzerSlot adopts the current K before gating (was frozen at module-load before)', async () => {
     process.env.ANALYZER_OLLAMA_CONCURRENCY = '3';
     const r = await acquireAnalyzerSlot('gemma:latest', true); // onCpu → limiter only
-    expect(analyzerConcurrency.budget).toBe(3);
+    expect(analyzerConcurrency.max).toBe(3);
     r();
+  });
+
+  it('grows and drains a queued waiter when K is raised live', async () => {
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
+    syncAnalyzerConcurrency();
+    const r1 = await acquireAnalyzerSlot('gemma:latest', true);
+    const p2 = acquireAnalyzerSlot('gemma:latest', true); // K=1, slot held by r1 → queues
+    await Promise.resolve();
+    expect(analyzerConcurrency.queueDepth).toBe(1);
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '2';
+    syncAnalyzerConcurrency(); // grows to 2 — should drain the queued waiter immediately
+    const r2 = await p2; // resolves now that a second slot exists, no r1 release needed
+    expect(analyzerConcurrency.inFlight).toBe(2);
+    r1();
+    r2();
   });
 });
 
@@ -49,7 +84,7 @@ describe('peak-in-flight telemetry', () => {
   it('tracks the max simultaneous in-flight calls and resets to current', async () => {
     resetAnalyzerConcurrencyPeak();
     expect(getAnalyzerConcurrencyStats().peak).toBe(0);
-    const r1 = await acquireAnalyzerSlot('gemma:latest', true); // CPU → limiter only, no gpuSemaphore
+    const r1 = await acquireAnalyzerSlot('gemma:latest', true);
     const r2 = await acquireAnalyzerSlot('gemma:latest', true);
     expect(getAnalyzerConcurrencyStats().inFlight).toBe(2);
     expect(getAnalyzerConcurrencyStats().peak).toBe(2);
@@ -61,91 +96,34 @@ describe('peak-in-flight telemetry', () => {
     resetAnalyzerConcurrencyPeak();
     expect(getAnalyzerConcurrencyStats().peak).toBe(0); // reset to current (0) in-flight
   });
-});
 
-describe('canonicalLeaseKey', () => {
-  it('appends :latest to a bare tag so one model has one key', () => {
-    expect(canonicalLeaseKey('qwen3.5')).toBe(canonicalLeaseKey('qwen3.5:latest'));
-  });
-});
-
-describe('per-model lease', () => {
-  beforeAll(() => {
-    // These assertions assume the test-env gpuSemaphore budget is 1 (the
-    // "budget-1 test env" the inline comments below rely on). A dev box with
-    // GPU_VRAM_BUDGET >= 2 in server/.env would otherwise fail these tests
-    // with a confusing serialize-assertion mismatch — fail loudly here
-    // instead so the real cause is obvious.
-    expect(
-      gpuSemaphore.budget,
-      'per-model lease tests assume gpuSemaphore.budget === 1 (unset GPU_VRAM_BUDGET/GPU_CONCURRENCY); ' +
-        'a server/.env with GPU_VRAM_BUDGET >= 2 will make these assertions fail confusingly — unset it to run this suite',
-    ).toBe(1);
-  });
-
-  it('same model: two concurrent calls share ONE gpuSemaphore slot', async () => {
-    const before = gpuSemaphore.usedTokens;
-    const r1 = await acquireAnalyzerSlot('gemma:latest', false);
-    const r2 = await acquireAnalyzerSlot('gemma:latest', false); // joins, no 2nd acquire
-    expect(gpuSemaphore.usedTokens).toBe(before + gpuSemaphore.budget); // one lease = whole (budget-1 test env)
-    r1(); r2();
-    expect(gpuSemaphore.usedTokens).toBe(before);
-  });
-
-  it('two DIFFERENT models serialize (budget cannot hold both) — the L2 fix', async () => {
-    const r1 = await acquireAnalyzerSlot('gemma:latest', false); // takes the whole budget-1
-    let granted = false;
-    const p2 = acquireAnalyzerSlot('qwen:latest', false).then((r) => { granted = true; return r; });
-    await Promise.resolve();
-    expect(granted).toBe(false);                 // qwen queued on gpuSemaphore
-    expect(gpuSemaphore.queueDepth).toBe(1);
-    r1();                                         // frees the slot
-    const r2 = await p2;
-    expect(granted).toBe(true);
-    r2();
-  });
-
-  it('CPU call takes NO gpuSemaphore slot (but still the limiter)', async () => {
-    const before = gpuSemaphore.usedTokens;
-    const r = await acquireAnalyzerSlot('gemma:latest', true);
-    expect(gpuSemaphore.usedTokens).toBe(before); // no slot
-    expect(analyzerConcurrency.inFlight).toBe(1); // limiter still taken
-    r();
-    expect(analyzerConcurrency.inFlight).toBe(0);
-  });
-
-  it('releases the slot when only the LAST same-model call leaves', async () => {
-    const before = gpuSemaphore.usedTokens;
-    const r1 = await acquireAnalyzerSlot('gemma:latest', false);
-    const r2 = await acquireAnalyzerSlot('gemma:latest', false);
-    r1();
-    expect(gpuSemaphore.usedTokens).toBe(before + gpuSemaphore.budget); // still held (r2 in flight)
-    r2();
-    expect(gpuSemaphore.usedTokens).toBe(before);                       // now freed
+  it('getAnalyzerConcurrencyStats reports the limiter width from .max', () => {
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '5';
+    syncAnalyzerConcurrency();
+    expect(getAnalyzerConcurrencyStats().limiter).toBe(5);
   });
 });
 
 describe('describeAnalyzerConcurrency', () => {
-  it('reports the same-model call ceiling as K, separately from distinct-model co-residency (M4)', () => {
-    // budget=1, cost=4 -> distinct-model co-residency floors at 1, but the
-    // same-model call ceiling is STILL K=2 — these are different axes and
-    // must not collapse into one misleading "effective N".
-    const msg = describeAnalyzerConcurrency(4, 1);
+  it('reports the same-model call ceiling as K (K-only — the distinct-model co-residency axis is gone with the GPU semaphore)', () => {
+    const msg = describeAnalyzerConcurrency();
     expect(msg).toContain('K=2');
     expect(msg).toContain('same-model');
     expect(msg).toContain('OLLAMA_NUM_PARALLEL >= 2');
-    expect(msg).toContain('distinct-model co-residency');
-    expect(msg).toContain('co-residency ceiling (GPU budget=1 / analyzer cost=4) = 1');
+    expect(msg).not.toContain('co-residency');
     expect(msg).not.toMatch(/effective \d/);
   });
-  it('reports distinct-model co-residency as floor(budget/cost), still separate from K', () => {
-    // budget=16, cost=4 -> co-residency=4, independent of K.
-    const msg = describeAnalyzerConcurrency(4, 16);
-    expect(msg).toContain('K=2');
-    expect(msg).toContain('same-model');
-    expect(msg).toContain('OLLAMA_NUM_PARALLEL >= 2');
-    expect(msg).toContain('distinct-model co-residency');
-    expect(msg).toContain('co-residency ceiling (GPU budget=16 / analyzer cost=4) = 4');
-    expect(msg).not.toMatch(/effective \d/);
+  it('reflects a live K override', () => {
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '5';
+    const msg = describeAnalyzerConcurrency();
+    expect(msg).toContain('K=5');
+    expect(msg).toContain('OLLAMA_NUM_PARALLEL >= 5');
+  });
+});
+
+describe('VRAM co-residence gate removal', () => {
+  it('analyzer-concurrency.ts no longer imports gpuSemaphore/GpuSemaphore (deleted VRAM budget)', () => {
+    const src = readFileSync(new URL('./analyzer-concurrency.ts', import.meta.url), 'utf8');
+    expect(src).not.toMatch(/gpuSemaphore|GpuSemaphore/);
   });
 });

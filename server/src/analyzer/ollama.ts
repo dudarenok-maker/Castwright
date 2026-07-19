@@ -13,8 +13,6 @@
 import { writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { sampleAndRecordVram } from './model-vram-stats.js';
-import { gpuSemaphore } from '../gpu/semaphore.js';
-import { costForEngine } from '../tts/engine-vram-cost.js';
 import { acquireAnalyzerSlot, describeAnalyzerConcurrency } from './analyzer-concurrency.js';
 import { getLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { getResolvedOllamaUrl, getCachedUserSettings } from '../workspace/user-settings.js';
@@ -57,7 +55,7 @@ import {
 } from './gemini.js';
 
 if (process.env.VITEST !== 'true' && process.env.NODE_ENV !== 'test') {
-  console.log(describeAnalyzerConcurrency(costForEngine('analyzer'), gpuSemaphore.budget));
+  console.log(describeAnalyzerConcurrency());
 }
 
 /** Sentinel error class. The FallbackAnalyzer decorator in index.ts uses

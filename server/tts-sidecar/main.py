@@ -1742,6 +1742,526 @@ def _read_device_env(var_name: str) -> Optional[str]:
     return resolved
 
 
+# --- Cross-vendor capacity probe (task 1, vram-aware-placement) ---
+#
+# GET /capacity feeds the capacity-aware placement admission check: before
+# routing a job to a device, the caller wants an honest "what's free where"
+# snapshot across every vendor this sidecar can target, not just CUDA. Every
+# helper below is individually monkeypatchable (that's the whole point — the
+# per-device try/except in probe_capacity is exercised in tests without a
+# real GPU) and never raises; a broken device is omitted, never fatal.
+
+
+def _cuda_device_count() -> int:
+    """Visible CUDA-API device count (0 when torch/CUDA is unavailable).
+    Never raises — a torch import failure reads the same as "no GPU"."""
+    try:
+        import torch  # type: ignore
+
+        if not torch.cuda.is_available():
+            return 0
+        return torch.cuda.device_count()
+    except Exception:
+        return 0
+
+
+def _cuda_mem_get_info(index: int) -> tuple[int, int]:
+    """(free_bytes, total_bytes) for one CUDA-API device index — driver truth,
+    same primitive `_sample_card` uses. Deliberately allowed to raise (a
+    poisoned context, a vanished card): probe_capacity's per-device
+    try/except is what turns that into "omit this device", not this
+    function itself."""
+    import torch  # type: ignore
+
+    return torch.cuda.mem_get_info(index)
+
+
+def _cuda_label(index: int) -> str:
+    """Human-readable label for a CUDA-API device index. Falls back to a
+    generic 'cuda:<n>' string if the driver properties can't be read."""
+    try:
+        import torch  # type: ignore
+
+        return torch.cuda.get_device_properties(index).name
+    except Exception:
+        return f"cuda:{index}"
+
+
+def _cuda_is_rocm() -> bool:
+    """True when the visible CUDA-API device is actually an AMD ROCm/HIP
+    build (torch aliases HIP under torch.cuda — same vendor-neutral note as
+    `_cuda_vram_mb`'s docstring). Never raises."""
+    try:
+        import torch  # type: ignore
+
+        return bool(getattr(torch.version, "hip", None))
+    except Exception:
+        return False
+
+
+def _mps_available() -> bool:
+    """True on an Apple-Silicon box with a torch MPS backend visible.
+    Never raises."""
+    try:
+        import torch  # type: ignore
+
+        return bool(torch.backends.mps.is_available())
+    except Exception:
+        return False
+
+
+def _host_mem_mb() -> tuple[int, int]:
+    """(total_mb, free_mb) host RAM for the mps/cpu capacity rows. Prefers
+    the module-level `psutil` (guarded import near the process-memory
+    instrumentation above, ~line 780) since it's already a hard transitive
+    dep in practice; degrades to a platform syscall when psutil is None (a
+    stripped install) so the cpu row is still a real reading, never a raise
+    and never a made-up sentinel."""
+    if psutil is not None:
+        vm = psutil.virtual_memory()
+        return int(vm.total // 1_048_576), int(vm.available // 1_048_576)
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            class _MemoryStatusEx(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_uint64),
+                    ("ullAvailPhys", ctypes.c_uint64),
+                    ("ullTotalPageFile", ctypes.c_uint64),
+                    ("ullAvailPageFile", ctypes.c_uint64),
+                    ("ullTotalVirtual", ctypes.c_uint64),
+                    ("ullAvailVirtual", ctypes.c_uint64),
+                    ("sullAvailExtendedVirtual", ctypes.c_uint64),
+                ]
+
+            stat = _MemoryStatusEx()
+            stat.dwLength = ctypes.sizeof(_MemoryStatusEx)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))  # type: ignore[attr-defined]
+            return int(stat.ullTotalPhys // 1_048_576), int(stat.ullAvailPhys // 1_048_576)
+        except Exception:
+            return (0, 0)
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        total_pages = os.sysconf("SC_PHYS_PAGES")
+        avail_pages = os.sysconf("SC_AVPHYS_PAGES")
+        return int(page_size * total_pages // 1_048_576), int(page_size * avail_pages // 1_048_576)
+    except Exception:
+        return (0, 0)
+
+
+def probe_capacity() -> list[dict]:
+    """Cross-vendor VRAM/RAM inventory: [{kind, index, label, totalMb,
+    freeMb}]. `kind` is 'cuda'/'rocm'/'mps'/'cpu'; always ends with a `cpu`
+    row so a placement decision always has somewhere to fall back to.
+
+    NEVER raises. Each CUDA/ROCm device is probed independently — a single
+    poisoned context or vanished card (the 'GPU is lost' failure mode) is
+    caught and that device is simply omitted, not fatal to the whole probe."""
+    devices: list[dict] = []
+    kind = "rocm" if _cuda_is_rocm() else "cuda"
+    for i in range(_cuda_device_count()):
+        try:
+            free_b, total_b = _cuda_mem_get_info(i)
+            devices.append(
+                {
+                    "kind": kind,
+                    "index": i,
+                    "label": _cuda_label(i),
+                    "totalMb": total_b // 1_048_576,
+                    "freeMb": free_b // 1_048_576,
+                }
+            )
+        except Exception:
+            continue
+    if _mps_available():
+        total_mb, free_mb = _host_mem_mb()
+        devices.append({"kind": "mps", "index": 0, "label": "apple-mps", "totalMb": total_mb, "freeMb": free_mb})
+    total_mb, free_mb = _host_mem_mb()
+    devices.append({"kind": "cpu", "index": 0, "label": "cpu", "totalMb": total_mb, "freeMb": free_mb})
+    return devices
+
+
+# Peak-under-load VRAM seeds (MB) per engine/tier — mirrors the maintained
+# table in docs/local-llm.md (parity enforced by test_footprints.py). These
+# are the true DECODE PEAK, not the smaller resident/weight size: e.g. qwen's
+# 6144 is the measured ~5.6 GB decode peak rounded up, not the ~4 GB resident
+# footprint — do not "correct" it down.
+SEED_FOOTPRINTS_MB: dict[str, int] = {
+    "kokoro": 1200,
+    "qwen": 6144,
+    "qwen.1.7b": 7168,
+    "coqui": 3584,
+    "asr": 400,
+    "spk": 200,
+}
+
+# A wide Qwen batch (large tokenBudget) has a higher true decode peak than the
+# default-config seed above.
+_QWEN_WIDE_TOKEN_BUDGET = 4800
+_QWEN_WIDE_PEAK_MB = 7168
+
+
+class FootprintTable:
+    """Per-(engine, model, config) peak-under-load VRAM estimate that
+    capacity-aware admission reserves. `peak_mb` returns `max(seed, learned)`
+    for the key; `record` ratchets the learned estimate up only — a lower
+    on-box observation never lowers what's reserved next time."""
+
+    def __init__(self) -> None:
+        self._learned: dict[str, int] = {}
+
+    @staticmethod
+    def _key(engine: str, model: Optional[str], cfg: Optional[dict]) -> str:
+        model_str = (model or "").lower()
+        cfg = cfg or {}
+        if engine == "qwen" and "1.7b" in model_str:
+            return "qwen.1.7b"
+        return engine
+
+    @staticmethod
+    def _seed_mb(key: str, engine: str, cfg: Optional[dict]) -> int:
+        seed = SEED_FOOTPRINTS_MB.get(key, 0)
+        cfg = cfg or {}
+        if engine == "qwen" and key == "qwen" and cfg.get("tokenBudget", 0) >= _QWEN_WIDE_TOKEN_BUDGET:
+            seed = max(seed, _QWEN_WIDE_PEAK_MB)
+        return seed
+
+    def peak_mb(self, engine: str, model: Optional[str], cfg: Optional[dict] = None) -> int:
+        key = self._key(engine, model, cfg)
+        seed = self._seed_mb(key, engine, cfg)
+        learned = self._learned.get(key, 0)
+        return max(seed, learned)
+
+    def record(self, engine: str, model: Optional[str], cfg: Optional[dict], observed_mb: int) -> None:
+        key = self._key(engine, model, cfg)
+        self._learned[key] = max(self._learned.get(key, 0), observed_mb)
+
+
+class ReservationLedger:
+    """Per-device VRAM reservations held for the duration of a load/synth
+    op. All mutation and reads go through this class's own `threading.Lock`
+    — callers never hold it across a model load or synth forward."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._by_device: dict[str, dict[int, int]] = {}
+        self._next_token_id = 1
+
+    def reserved_mb(self, device_key: str) -> int:
+        with self._lock:
+            return sum(self._by_device.get(device_key, {}).values())
+
+    def hold(self, device_key: str, mb: int) -> tuple[str, int]:
+        """Reserve `mb` on `device_key`; returns an opaque token (which
+        encodes the device) that `release` needs to give it back."""
+        with self._lock:
+            token_id = self._next_token_id
+            self._next_token_id += 1
+            self._by_device.setdefault(device_key, {})[token_id] = mb
+            return (device_key, token_id)
+
+    def release(self, token: tuple[str, int]) -> None:
+        device_key, token_id = token
+        with self._lock:
+            self._by_device.get(device_key, {}).pop(token_id, None)
+
+    def _headroom(self, key: str, free_mb: int, total_mb: int, reserve: int) -> int:
+        """Available headroom for `key` given its live free/total and the
+        reservations already held on it. Caller MUST hold `self._lock`."""
+        reserved = sum(self._by_device.get(key, {}).values())
+        return min(free_mb, total_mb - reserved) - reserve
+
+    def try_hold(
+        self, candidates: list[tuple[str, int, int]], peak: int, reserve: int
+    ) -> Optional[tuple[str, int]]:
+        """Atomically pick the roomiest candidate that fits `peak` and hold it.
+        `candidates` = [(device_key, freeMb, totalMb), ...]. Returns the token
+        or None if none fit. The fit-check AND the hold happen under a SINGLE
+        lock acquisition, so two concurrent admits can't both pass the check
+        and double-book the same VRAM — the TOCTOU the per-op reservation
+        exists to prevent (decide+hold atomic, per the design)."""
+        with self._lock:
+            best_key: Optional[str] = None
+            best_headroom = -1
+            for key, free_mb, total_mb in candidates:
+                headroom = self._headroom(key, free_mb, total_mb, reserve)
+                if headroom >= peak and headroom > best_headroom:
+                    best_key, best_headroom = key, headroom
+            if best_key is None:
+                return None
+            token_id = self._next_token_id
+            self._next_token_id += 1
+            self._by_device.setdefault(best_key, {})[token_id] = peak
+            return (best_key, token_id)
+
+    def best_fit(
+        self, candidates: list[tuple[str, int, int]], peak: int, reserve: int
+    ) -> Optional[str]:
+        """Read-only twin of `try_hold`: the device_key that would win, or None,
+        WITHOUT holding. For the pure `admit()` decision (e.g. /load placement) —
+        advisory only; the binding decision is `reservation()`'s atomic
+        `try_hold`."""
+        with self._lock:
+            best_key: Optional[str] = None
+            best_headroom = -1
+            for key, free_mb, total_mb in candidates:
+                headroom = self._headroom(key, free_mb, total_mb, reserve)
+                if headroom >= peak and headroom > best_headroom:
+                    best_key, best_headroom = key, headroom
+            return best_key
+
+
+class PlacementController:
+    """Capacity-aware admission: decides which device (or cpu, or no
+    capacity) a model load / synth op may proceed on, and reserves the
+    FootprintTable's peak-mb estimate for the winning device so a second
+    concurrent op can't double-book VRAM the first one already claimed."""
+
+    def __init__(
+        self,
+        probe: Callable[[], list[dict]] = probe_capacity,
+        footprints: Optional["FootprintTable"] = None,
+        ledger: Optional["ReservationLedger"] = None,
+        reserve_mb: Optional[Callable[[], int]] = None,
+        idle_evict: Optional[Callable[[str], bool]] = None,
+        is_resident: Optional[Callable[[str], Optional[str]]] = None,
+    ) -> None:
+        self.probe = probe
+        self.footprints = footprints if footprints is not None else FootprintTable()
+        self.ledger = ledger if ledger is not None else ReservationLedger()
+        self.reserve_mb = reserve_mb if reserve_mb is not None else (lambda: int(os.environ.get("GPU_RESERVE_MB", 768)))
+        self.idle_evict = idle_evict if idle_evict is not None else (lambda device_key: False)
+        self.is_resident = is_resident if is_resident is not None else (lambda engine: None)
+
+    @staticmethod
+    def _device_key(d: dict) -> str:
+        return "cpu" if d["kind"] == "cpu" else f"{d['kind']}:{d['index']}"
+
+    def _gpu_candidates(
+        self, devices: list[dict], resident: Optional[str]
+    ) -> list[tuple[str, int, int]]:
+        """[(device_key, freeMb, totalMb)] to consider. A resident engine is
+        pinned to ONLY its own device (no migration) — and only if that device
+        is still present in the probe (a dropped eGPU yields no candidates →
+        noCapacity). Otherwise every GPU device is a candidate."""
+        gpus = [
+            (self._device_key(d), d["freeMb"], d["totalMb"])
+            for d in devices
+            if d["kind"] != "cpu"
+        ]
+        if resident is not None:
+            return [c for c in gpus if c[0] == resident]
+        return gpus
+
+    def _worst_device_key(self, devices: list[dict]) -> Optional[str]:
+        """The GPU device with the MOST headroom (closest to fitting) — the one
+        Node should try to free the analyzer's share from, since it's where an
+        evict is likeliest to cross the threshold. None if the probe shows no
+        GPU. (Diverges deliberately from an earlier 'largest shortfall' note:
+        max-headroom is the recoverable device, not the least-recoverable one.)"""
+        reserve = self.reserve_mb()
+        best_key: Optional[str] = None
+        best_headroom: Optional[int] = None
+        for d in devices:
+            if d["kind"] == "cpu":
+                continue
+            key = self._device_key(d)
+            headroom = min(d["freeMb"], d["totalMb"] - self.ledger.reserved_mb(key)) - reserve
+            if best_headroom is None or headroom > best_headroom:
+                best_key, best_headroom = key, headroom
+        return best_key
+
+    def admit(
+        self,
+        engine: str,
+        model: Optional[str],
+        cfg: Optional[dict],
+        cpu_capable: bool,
+        heavy: bool,
+    ) -> dict:
+        """PURE placement DECISION — holds NO reservation (that is
+        `reservation()`'s job). Returns `{"device": key}` | `{"device": "cpu"}`
+        | `{"noCapacity": {"neededMb", "deviceKey"}}`. Fit-checks the resident
+        device too: a resident model's transient decode peak must still fit
+        alongside whatever (e.g. a co-resident analyzer) grew into its VRAM —
+        being resident is not a free pass. `deviceKey`/`analyzerEvictWouldHelp`
+        note: the sidecar reports only `{neededMb, deviceKey}`; Node computes
+        `evictWouldHelp` from /api/ps."""
+        peak = self.footprints.peak_mb(engine, model, cfg)
+        resident = self.is_resident(engine)
+        reserve = self.reserve_mb()
+        devices = self.probe()
+        candidates = self._gpu_candidates(devices, resident)
+
+        key = self.ledger.best_fit(candidates, peak, reserve)
+        if key is not None:
+            return {"device": key}
+        if cpu_capable and not heavy:
+            return {"device": "cpu"}
+
+        worst = self._worst_device_key(devices)
+        if worst is not None and self.idle_evict(worst):
+            devices = self.probe()
+            candidates = self._gpu_candidates(devices, resident)
+            key = self.ledger.best_fit(candidates, peak, reserve)
+            if key is not None:
+                return {"device": key}
+            worst = self._worst_device_key(devices)
+        # A resident engine can only ever run on its own device, so point Node
+        # at THAT device to evict from — not a roomier non-resident GPU where an
+        # evict wouldn't let this (non-migratable) model fit.
+        device_key = resident if resident is not None else worst
+        return {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
+
+    @staticmethod
+    def _observed_mb(device_key: Optional[str]) -> int:
+        """Best-effort peak VRAM observed for the just-finished op, used to
+        ratchet FootprintTable's learned estimate. Guarded: returns 0 when
+        torch/CUDA isn't available (unit tests, cpu-only boxes) or the
+        device wasn't a CUDA one."""
+        if not device_key or not device_key.startswith(("cuda:", "rocm:")):
+            return 0
+        try:
+            import torch  # type: ignore
+
+            index = int(device_key.split(":", 1)[1])
+            return int(torch.cuda.max_memory_allocated(index) // 1_048_576)
+        except Exception:
+            return 0
+
+    @contextmanager
+    def reservation(
+        self,
+        engine: str,
+        model: Optional[str],
+        cfg: Optional[dict],
+        cpu_capable: bool = False,
+        heavy: bool = False,
+    ):
+        """Atomically admits AND holds the peak reservation for the op, yields
+        the Admission, and on exit (success OR exception) releases the hold and
+        records the observed peak — VRAM bookkeeping only; callers still take
+        their own `_synth_lock`/`_infer_lock`/load lock around the actual
+        forward. Unlike `admit()`, this path performs the hold (via the ledger's
+        atomic `try_hold`), so two concurrent reservations can't double-book."""
+        peak = self.footprints.peak_mb(engine, model, cfg)
+        resident = self.is_resident(engine)
+        reserve = self.reserve_mb()
+        devices = self.probe()
+        candidates = self._gpu_candidates(devices, resident)
+
+        held = self.ledger.try_hold(candidates, peak, reserve)
+        if held is None and not (cpu_capable and not heavy):
+            worst = self._worst_device_key(devices)
+            if worst is not None and self.idle_evict(worst):
+                devices = self.probe()
+                candidates = self._gpu_candidates(devices, resident)
+                held = self.ledger.try_hold(candidates, peak, reserve)
+
+        if held is not None:
+            admission: dict = {"device": held[0]}
+        elif cpu_capable and not heavy:
+            admission = {"device": "cpu"}
+        else:
+            device_key = resident if resident is not None else self._worst_device_key(devices)
+            admission = {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
+
+        try:
+            yield admission
+        finally:
+            if held is not None:
+                self.ledger.release(held)
+                self.footprints.record(engine, model, cfg, self._observed_mb(held[0]))
+
+
+# Task 4 (vram-aware-placement plan) — /synthesize capacity-aware admission,
+# default OFF. `SEG_CAPACITY_ADMISSION=1` is the opt-in; unset/anything-else
+# keeps today's behaviour byte-for-byte (the rollback path).
+def _capacity_admission_enabled() -> bool:
+    return os.environ.get("SEG_CAPACITY_ADMISSION", "0") == "1"
+
+
+# Per-engine admission profile for the three /synthesize engines: qwen/coqui
+# are GPU-heavy bespoke models with no meaningful CPU path; kokoro is cheap
+# enough to run on CPU in a pinch and never counts as "heavy". Engines not
+# listed here (shouldn't happen — /synthesize 400s on an unknown engine_id
+# before this is ever consulted) default to the conservative heavy/no-cpu case.
+_ENGINE_CAPACITY_PROFILE: dict[str, dict[str, bool]] = {
+    "qwen": {"cpu_capable": False, "heavy": True},
+    "coqui": {"cpu_capable": False, "heavy": True},
+    "kokoro": {"cpu_capable": True, "heavy": False},
+}
+
+
+def _is_resident(engine_id: str) -> Optional[str]:
+    """PlacementController.is_resident: the device_key ("cuda:N"/"rocm:N")
+    `engine_id` is currently loaded on, or None when unloaded / on cpu / not
+    cheaply knowable. Reuses `_engine_actual_card` (the same loaded-model
+    probe /health's `gpus` payload already relies on) rather than duplicating
+    the per-engine attribute digging here."""
+    named: dict[str, Any] = dict(ENGINES)
+    named["asr"] = ASR
+    named["spk"] = SPK
+    engine = named.get(engine_id)
+    if engine is None:
+        return None
+    card = _engine_actual_card(engine)
+    if card is None or card["family"] not in ("cuda", "rocm"):
+        return None
+    index = card["index"] if card["index"] is not None else 0
+    return f"{card['family']}:{index}"
+
+
+def _idle_evict(device_key: str) -> bool:
+    """PlacementController.idle_evict: best-effort attempt to free idle
+    transient GPU state to make room for the admitting op. Tries every
+    idle-evictable engine (Qwen VoiceDesign, Qwen 1.7B-Base, ASR, ECAPA) with
+    ttl=0 (evict now regardless of recent use) and returns True if anything
+    freed.
+
+    Deliberately does NOT target `device_key` specifically — reasonable on
+    today's single-practical-GPU boxes; a genuinely multi-GPU box would
+    over-evict engines resident on a DIFFERENT card too. See the task-4
+    report for this call-out."""
+    freed = False
+    qwen = ENGINES.get("qwen")
+    if isinstance(qwen, QwenEngine):
+        try:
+            freed = qwen.maybe_free_idle_design(0.0) or freed
+        except Exception:
+            pass
+        try:
+            freed = qwen.maybe_free_idle_base17(0.0) or freed
+        except Exception:
+            pass
+    try:
+        freed = ASR.maybe_free_idle(0.0) or freed
+    except Exception:
+        pass
+    try:
+        freed = SPK.maybe_free_idle(0.0) or freed
+    except Exception:
+        pass
+    return freed
+
+
+# Module-level admission instance /synthesize reserves against when the flag
+# is on. `probe`/`idle_evict`/`is_resident` are real deps (not test doubles);
+# tests monkeypatch `_placement.probe` (and the env flag) for determinism —
+# see test_devices.py.
+_placement = PlacementController(
+    probe=probe_capacity,
+    footprints=FootprintTable(),
+    ledger=ReservationLedger(),
+    reserve_mb=lambda: int(os.environ.get("GPU_RESERVE_MB", 768)),
+    idle_evict=_idle_evict,
+    is_resident=_is_resident,
+)
+
+
 def _kokoro_provider_options(device: Optional[str], providers: list[str]):
     """ORT provider_options for an indexed Kokoro CUDA pin (KOKORO_DEVICE=cuda:1).
 
@@ -5513,6 +6033,14 @@ def devices() -> dict:
     return {"devices": _enumerate_cuda_devices(), "cpu": True}
 
 
+@app.get("/capacity")
+def capacity() -> dict:
+    """Cross-vendor VRAM/RAM inventory for capacity-aware placement (task 1,
+    vram-aware-placement plan). See probe_capacity()'s docstring for the
+    per-device contract."""
+    return {"devices": probe_capacity()}
+
+
 @app.get("/debug/memory")
 def debug_memory() -> dict[str, Any]:
     """On-demand memory readout for leak diagnosis — pairs with the per-tick
@@ -6128,7 +6656,30 @@ async def synthesize(req: Request) -> Response:
         # asyncio.to_thread runs the sync call on a worker thread and yields
         # control back to the event loop, so /health stays sub-50ms during
         # synthesis. This is the single biggest UX fix in the sidecar.
-        result = await asyncio.to_thread(engine.synthesize, model, voice, text, language)
+        #
+        # SEG_CAPACITY_ADMISSION (task 4, vram-aware-placement plan, default
+        # OFF): when on, hold a peak-VRAM reservation across the forward so a
+        # concurrent op can't double-book the same headroom, and refuse with a
+        # `noCapacity` 503 up front rather than let the forward OOM. This ALSO
+        # covers any lazy cold-load inside engine.synthesize, since the peak is
+        # held before the call starts. Off (the default): unchanged behaviour.
+        if _capacity_admission_enabled():
+            cap = _ENGINE_CAPACITY_PROFILE.get(engine_id, {"cpu_capable": False, "heavy": True})
+            with _placement.reservation(
+                engine_id, model, {}, cpu_capable=cap["cpu_capable"], heavy=cap["heavy"]
+            ) as adm:
+                if "noCapacity" in adm:
+                    return JSONResponse(
+                        {
+                            "noCapacity": True,
+                            "neededMb": adm["noCapacity"]["neededMb"],
+                            "deviceKey": adm["noCapacity"]["deviceKey"],
+                        },
+                        status_code=503,
+                    )
+                result = await asyncio.to_thread(engine.synthesize, model, voice, text, language)
+        else:
+            result = await asyncio.to_thread(engine.synthesize, model, voice, text, language)
     except VoiceNotDesignedError as exc:
         # #1063 — the requested voice/variant has no cached embedding on disk.
         # That's a bad-input condition (design the voice/variant first), not an

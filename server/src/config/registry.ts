@@ -345,9 +345,9 @@ export const KNOBS: ConfigKnob[] = [
     group: 'qa-gates',
     label: 'Voice-QA device',
     help: '"cpu" (default) uses zero VRAM and never competes with synthesis. '
-        + '"cuda" runs the embed on the GPU — only worthwhile with '
-        + 'GPU_VRAM_BUDGET >= 2 (at the default budget of 1 it serialises '
-        + 'behind synth and is likely slower than cpu). Changing the device '
+        + '"cuda" runs the embed on the GPU — only worthwhile when there is '
+        + 'spare capacity, since it otherwise contends with synth for the '
+        + 'same device and is likely slower than cpu. Changing the device '
         + 'restarts the sidecar.',
     type: 'string',
     default: 'cpu',
@@ -513,7 +513,7 @@ export const KNOBS: ConfigKnob[] = [
     env: 'GEN_WORKERS',
     group: 'tts-batching',
     label: 'Generation workers',
-    help: 'Number of chapters the generation queue synthesises concurrently. Queue/synthesis concurrency only — the GPU semaphore is the VRAM guard. Default 1: the Qwen forward is serialised, so a 2nd same-book worker just contends on the lock, doubles per-chapter RTF, and accelerates the host-memory leak toward a recycle. Raise only on a multi-GPU / non-Qwen setup.',
+    help: 'Number of chapters the generation queue synthesises concurrently. Queue/synthesis concurrency only — VRAM is guarded elsewhere (per-engine concurrency limiter, sidecar capacity admission). Default 1: the Qwen forward is serialised, so a 2nd same-book worker just contends on the lock, doubles per-chapter RTF, and accelerates the host-memory leak toward a recycle. Raise only on a multi-GPU / non-Qwen setup.',
     type: 'integer', min: 1, max: 4,
     default: 1, // ← getResolvedGenerationWorkers() default in workspace/user-settings.ts
     apply: 'restart-server', risk: 'medium', // GEN_WORKERS is a Node-server knob, not sidecar — needs an app restart
@@ -653,94 +653,14 @@ export const KNOBS: ConfigKnob[] = [
 
   // ── gpu-lifecycle ─────────────────────────────────────────────────────────
   {
-    key: 'gpu.concurrency',
-    env: 'GPU_CONCURRENCY',
+    key: 'gpu.reserveMb',
+    env: 'GPU_RESERVE_MB',
     group: 'gpu-lifecycle',
-    label: 'GPU concurrency',
-    help: 'Max concurrent GPU ops (analyzer + all TTS engines combined) when GPU_VRAM_BUDGET is not set. When GPU_VRAM_BUDGET IS set, this becomes the fallback budget. Bump only after measuring VRAM headroom.',
-    type: 'integer', min: 1,
-    default: 1, // ← RAW_CONCURRENCY default in gpu/semaphore.ts (line 142, '1')
-    apply: 'restart-server', risk: 'high', // GpuSemaphore singleton created at Node module-load; changing needs a server restart
-  },
-  {
-    key: 'gpu.vramBudget',
-    env: 'GPU_VRAM_BUDGET',
-    group: 'gpu-lifecycle',
-    label: 'GPU VRAM token budget',
-    help: 'Total VRAM token budget for the weighted semaphore. Each GPU op costs tokens equal to its engine weight (kokoro 1, qwen 1, coqui 3, analyzer 4, asr 1). The semaphore admits combinations only when their summed cost fits this budget. Set to 0 (default) to disable the VRAM budget and fall back to GPU_CONCURRENCY. On an 8 GB box, 4 lets Kokoro+Qwen (1+1) run together while Coqui (3) or the analyzer (4) serialise.',
+    label: 'GPU VRAM reserve (MB)',
+    help: 'VRAM safety cushion (MB) held back from every capacity admission. Read by the sidecar (its primary consumer) at process start, so a change needs a sidecar restart to fully take effect.',
     type: 'integer', min: 0,
-    default: 0, // ← GPU_VRAM_BUDGET unset by default (semaphore.ts falls back to GPU_CONCURRENCY); 0 = "disabled/fall back to GPU_CONCURRENCY"
-    apply: 'restart-server', risk: 'high', // GpuSemaphore singleton created at Node module-load; changing needs a server restart
-  },
-  {
-    key: 'gpu.weight.kokoro',
-    env: 'GPU_WEIGHT_KOKORO',
-    group: 'gpu-lifecycle',
-    label: 'GPU weight: Kokoro',
-    help: 'VRAM token cost for a Kokoro synthesis op. Lower values let Kokoro share the budget alongside other engines. Read live per-op via costForEngine(); changes take effect on the next synthesis without a restart.',
-    type: 'integer', min: 0,
-    default: 1, // ← ENGINE_VRAM_COST.kokoro in tts/engine-vram-cost.ts (line 16)
-    apply: 'live', risk: 'high', // read per-op via costForEngine() in tts/engine-vram-cost.ts
-  },
-  {
-    key: 'gpu.weight.qwen',
-    env: 'GPU_WEIGHT_QWEN',
-    group: 'gpu-lifecycle',
-    label: 'GPU weight: Qwen',
-    help: 'VRAM token cost for a Qwen synthesis op. Read live per-op via costForEngine(); changes take effect on the next synthesis without a restart.',
-    type: 'integer', min: 0,
-    default: 1, // ← ENGINE_VRAM_COST.qwen in tts/engine-vram-cost.ts (line 17)
-    apply: 'live', risk: 'high', // read per-op via costForEngine() in tts/engine-vram-cost.ts
-  },
-  {
-    key: 'gpu.weight.coqui',
-    env: 'GPU_WEIGHT_COQUI',
-    group: 'gpu-lifecycle',
-    label: 'GPU weight: Coqui',
-    help: 'VRAM token cost for a Coqui XTTS v2 synthesis op. Read live per-op via costForEngine(); changes take effect on the next synthesis without a restart.',
-    type: 'integer', min: 0,
-    default: 3, // ← ENGINE_VRAM_COST.coqui in tts/engine-vram-cost.ts (line 18)
-    apply: 'live', risk: 'high', // read per-op via costForEngine() in tts/engine-vram-cost.ts
-  },
-  {
-    key: 'gpu.weight.analyzer',
-    env: 'GPU_WEIGHT_ANALYZER',
-    group: 'gpu-lifecycle',
-    label: 'GPU weight: Analyzer',
-    help: 'VRAM token cost for an Ollama analyzer op. At the default budget of 4 the analyzer consumes the whole budget, serialising it against any TTS op. Read live per-op via costForEngine(); changes take effect on the next synthesis without a restart.',
-    type: 'integer', min: 0,
-    default: 4, // ← ENGINE_VRAM_COST.analyzer in tts/engine-vram-cost.ts (line 20)
-    apply: 'live', risk: 'high', // read per-op via costForEngine() in tts/engine-vram-cost.ts
-  },
-  {
-    key: 'gpu.weight.asr',
-    env: 'GPU_WEIGHT_ASR',
-    group: 'gpu-lifecycle',
-    label: 'GPU weight: ASR (Whisper)',
-    help: 'VRAM token cost for a Whisper ASR op. Only charged when ASR_DEVICE=cuda; the CPU-default path takes no token. Read live per-op via costForEngine(); changes take effect on the next transcription without a restart.',
-    type: 'integer', min: 0,
-    default: 1, // ← ENGINE_VRAM_COST.asr in tts/engine-vram-cost.ts (line 26)
-    apply: 'live', risk: 'high', // read per-op via costForEngine() in tts/engine-vram-cost.ts
-  },
-  {
-    key: 'gpu.weight.spk',
-    env: 'GPU_WEIGHT_SPK',
-    group: 'gpu-lifecycle',
-    label: 'GPU weight: Speaker embed (ECAPA)',
-    help: 'VRAM token cost for a render-integrity ECAPA speaker-embed op. Only charged when SPK_DEVICE=cuda; the CPU-default path takes no token. Read live per-op via costForEngine(); changes take effect on the next embed without a restart.',
-    type: 'integer', min: 0,
-    default: 1, // ← ENGINE_VRAM_COST.spk in tts/engine-vram-cost.ts
-    apply: 'live', risk: 'high', // read per-op via costForEngine() in tts/engine-vram-cost.ts
-  },
-  {
-    key: 'gpu.safeCoexistMb',
-    env: 'GPU_SAFE_COEXIST_MB',
-    group: 'gpu-lifecycle',
-    label: 'Safe analyzer+TTS coexistence VRAM (MB)',
-    help: 'If detected GPU VRAM is below this, evict the resident Ollama analyzer before loading a sidecar TTS/voice-design model. 8 GB cards evict; 12/16 GB coexist. 0 = always evict.',
-    type: 'integer', min: 0,
-    default: 11000, // ← gpu/residency.ts: below this threshold Ollama is evicted before sidecar load
-    apply: 'live', risk: 'high',
+    default: 768,
+    apply: 'restart-sidecar', risk: 'high',
   },
   {
     key: 'sidecar.qwenDesignIdleTtl',

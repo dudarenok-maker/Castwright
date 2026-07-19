@@ -38,8 +38,6 @@ import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import { encodePcmToAudio } from '../tts/mp3.js';
-import { costForEngine } from '../tts/engine-vram-cost.js';
-import { acquireGpuTokenIfOnGpu } from '../gpu/gpu-semaphore-gate.js';
 import { withDesignLock, isDesignBusy } from '../tts/design-lock.js';
 import { buildHintFromCast, toVoiceLike, type CastCharacter } from '../tts/synthesise-chapter.js';
 import { forEachMatchingCastCharacter } from './voices.js';
@@ -292,10 +290,12 @@ qwenVoiceRouter.get(
 /* Shared design core — the sidecar `/qwen/design-voice` call + audition-cache
    write, extracted so BOTH the single-design route below and the bulk
    "Design full cast" job (server/src/routes/cast-design.ts) run the exact same
-   path in-process (no HTTP-to-self). Serialized per book (`withDesignLock`) and
-   GPU-fair (`gpuSemaphore`) so two designs for one book can't corrupt the
-   shared `.pt`/audition-cache, and a bulk run can't oversubscribe the card
-   against a concurrent generation/analysis. Throws on sidecar/encode failure
+   path in-process (no HTTP-to-self). Serialized per book (`withDesignLock`) so
+   two designs for one book can't corrupt the shared `.pt`/audition-cache. (VRAM
+   arbitration against a concurrent generation/analysis is no longer a Node-side
+   gate — the retired weighted `gpuSemaphore` is replaced by the sidecar's own
+   capacity admission when SEG_CAPACITY_ADMISSION is on; wrapping design_voice in
+   that admission is a flag-on-readiness follow-up, see plan 264.) Throws on sidecar/encode failure
    with a user-facing message; the caller maps it (502 for the route, a
    per-character failure for the bulk job). Does NOT persist the per-character
    override or the emotion variant — that stays with the callers. */
@@ -333,13 +333,13 @@ export async function designQwenVoiceForCharacter(
   return withDesignLock(p.bookDir, async () => {
     const { withGpuLoad } = await import('../gpu/gpu-load.js');
     const { engineDeviceIsGpu } = await import('../gpu/engine-device.js');
-    /* Computed once, reused both as withGpuLoad's eviction-guard hint AND to
-       gate this function's own semaphore acquire below — an earlier pass of
-       this design only wired the eviction guard and left this acquire
-       unconditional, still charging a token for VoiceDesign on cpu/mps. */
+    /* withGpuLoad's eviction-guard hint. Sidecar op — VRAM arbitration now
+       lives in the sidecar's capacity admission (behind SEG_CAPACITY_ADMISSION),
+       not a Node-side GPU token here; flag off, this runs in the normal
+       sequential workflow (design happens in cast-review, poolWidth=1 renders
+       serialize), matching the whole feature's flag-off model. */
     const onGpu = engineDeviceIsGpu('qwen');
     return withGpuLoad(async () => {
-      const releaseGpu = await acquireGpuTokenIfOnGpu(onGpu, costForEngine('qwen'));
       const sidecarUrl = getResolvedSidecarUrl();
 
       const postDesignAndCache = async (
@@ -422,63 +422,59 @@ export async function designQwenVoiceForCharacter(
         }
       };
 
+      /* AR2 design-progress: forward the token so the sidecar can POST phase
+         progress back to this server. Spread into every body (base, mint,
+         fallback) so progress works on all paths. */
+      const progressFields =
+        p.progressToken && p.progressUrl
+          ? { progressToken: p.progressToken, progressUrl: p.progressUrl }
+          : {};
+      if (!p.emotion) {
+        return await postDesignAndCache(`${sidecarUrl}/qwen/design-voice`, JSON.stringify({
+          voiceId, voiceUuid: p.character.voiceUuid ?? null, instruct: p.persona, language: p.language, calibrationText,
+          ...progressFields,
+        }), voiceId);
+      }
+
+      // Variant: try the anchored mint, fall back on a deterministic 1.7B-Base failure.
+      const mintBody = JSON.stringify({
+        baseVoiceId, variantVoiceId: voiceId, emotionInstruct: EMOTION_INSTRUCT[p.emotion],
+        voiceUuid: p.character.voiceUuid ?? null, language: p.language, calibrationText,
+        ...progressFields,
+      });
       try {
-        /* AR2 design-progress: forward the token so the sidecar can POST phase
-           progress back to this server. Spread into every body (base, mint,
-           fallback) so progress works on all paths. */
-        const progressFields =
-          p.progressToken && p.progressUrl
-            ? { progressToken: p.progressToken, progressUrl: p.progressUrl }
-            : {};
-        if (!p.emotion) {
-          return await postDesignAndCache(`${sidecarUrl}/qwen/design-voice`, JSON.stringify({
-            voiceId, voiceUuid: p.character.voiceUuid ?? null, instruct: p.persona, language: p.language, calibrationText,
-            ...progressFields,
-          }), voiceId);
+        return await postDesignAndCache(`${sidecarUrl}/qwen/mint-variant`, mintBody, voiceId);
+      } catch (e) {
+        const err = e as SidecarDesignError;
+        const isFallback = err?.name === 'SidecarDesignError' && err.status === 503 && err.code === 'base17-unavailable'
+          && (err.reason === 'not-installed' || err.reason === 'corrupt');
+        if (!isFallback) throw e;  // OOM/500, cancel, unreachable, 409 → propagate
+
+        // Resolve a persona: p.persona → base voice's sidecar .json instruct → decline.
+        let persona = (p.persona ?? '').trim();
+        if (!persona) {
+          const baseVoiceName = p.character.overrideTtsVoices?.qwen?.name ?? qwenStorageKey(p.character, p.characterId);
+          const sidecarJson = await readJson<{ instruct?: string }>(qwenVoiceSidecarPath(baseVoiceName)).catch(() => null);
+          persona = (typeof sidecarJson?.instruct === 'string' ? sidecarJson.instruct : '').trim();
+        }
+        if (!persona) {
+          throw new Error('1.7B-Base unavailable and no persona on disk to fall back with — design the base voice\'s persona first.');
         }
 
-        // Variant: try the anchored mint, fall back on a deterministic 1.7B-Base failure.
-        const mintBody = JSON.stringify({
-          baseVoiceId, variantVoiceId: voiceId, emotionInstruct: EMOTION_INSTRUCT[p.emotion],
-          voiceUuid: p.character.voiceUuid ?? null, language: p.language, calibrationText,
+        const reason = err.reason as 'not-installed' | 'corrupt';
+        console.warn(
+          `[qwen-voice] 1.7B-Base unavailable (reason=${reason}) — minted ${p.emotion} variant for ${p.characterId} via design-voice fallback (lower fidelity).`,
+        );
+        const fallbackBody = JSON.stringify({
+          voiceId, voiceUuid: p.character.voiceUuid ?? null,
+          instruct: `${persona} ${EMOTION_INSTRUCT[p.emotion]}`,
+          language: p.language, calibrationText,
+          mintMethod: 'design-voice-fallback',
+          fallbackFor: { baseVoiceId, emotion: p.emotion },
           ...progressFields,
         });
-        try {
-          return await postDesignAndCache(`${sidecarUrl}/qwen/mint-variant`, mintBody, voiceId);
-        } catch (e) {
-          const err = e as SidecarDesignError;
-          const isFallback = err?.name === 'SidecarDesignError' && err.status === 503 && err.code === 'base17-unavailable'
-            && (err.reason === 'not-installed' || err.reason === 'corrupt');
-          if (!isFallback) throw e;  // OOM/500, cancel, unreachable, 409 → propagate
-
-          // Resolve a persona: p.persona → base voice's sidecar .json instruct → decline.
-          let persona = (p.persona ?? '').trim();
-          if (!persona) {
-            const baseVoiceName = p.character.overrideTtsVoices?.qwen?.name ?? qwenStorageKey(p.character, p.characterId);
-            const sidecarJson = await readJson<{ instruct?: string }>(qwenVoiceSidecarPath(baseVoiceName)).catch(() => null);
-            persona = (typeof sidecarJson?.instruct === 'string' ? sidecarJson.instruct : '').trim();
-          }
-          if (!persona) {
-            throw new Error('1.7B-Base unavailable and no persona on disk to fall back with — design the base voice\'s persona first.');
-          }
-
-          const reason = err.reason as 'not-installed' | 'corrupt';
-          console.warn(
-            `[qwen-voice] 1.7B-Base unavailable (reason=${reason}) — minted ${p.emotion} variant for ${p.characterId} via design-voice fallback (lower fidelity).`,
-          );
-          const fallbackBody = JSON.stringify({
-            voiceId, voiceUuid: p.character.voiceUuid ?? null,
-            instruct: `${persona} ${EMOTION_INSTRUCT[p.emotion]}`,
-            language: p.language, calibrationText,
-            mintMethod: 'design-voice-fallback',
-            fallbackFor: { baseVoiceId, emotion: p.emotion },
-            ...progressFields,
-          });
-          const out = await postDesignAndCache(`${sidecarUrl}/qwen/design-voice`, fallbackBody, voiceId);
-          return { ...out, fellBackToDesignVoice: true, fallbackReason: reason };
-        }
-      } finally {
-        releaseGpu?.();
+        const out = await postDesignAndCache(`${sidecarUrl}/qwen/design-voice`, fallbackBody, voiceId);
+        return { ...out, fellBackToDesignVoice: true, fallbackReason: reason };
       }
     }, onGpu);
   });

@@ -41,10 +41,10 @@ beforeEach(() => {
     qwenLoaded: false,
     qwenLoading: false,
   });
-  /* GPU semaphore queue probe — runs on the same 30 s tick as /health.
+  /* GPU capacity-wait queue probe — runs on the same 30 s tick as /health.
      Default to an empty queue so the "GPU busy · N waiting ·" pill prefix
      stays hidden in tests that don't exercise contention. */
-  mocks.getGpuQueueState.mockResolvedValue({ depth: 0, inFlight: 0, max: 1 });
+  mocks.getGpuQueueState.mockResolvedValue({ queueDepth: 0, devices: [] });
   mocks.getOllamaHealth.mockResolvedValue({
     status: 'reachable',
     modelResident: true,
@@ -361,15 +361,14 @@ describe('useTtsLifecycle', () => {
     });
   });
 
-  it('exposes the GPU semaphore queue depth from /api/gpu/queue on the same tick', async () => {
+  it('exposes the GPU capacity-wait queue depth from /api/gpu/queue on the same tick', async () => {
     /* Hook polls /api/gpu/queue alongside /api/sidecar/health so the
-       top-bar pill can prefix "GPU busy · N waiting ·". When depth > 0 the
-       hook surfaces it on TtsLifecycle.gpuQueueDepth; consumer
+       top-bar pill can prefix "GPU busy · N waiting ·". When queueDepth > 0
+       the hook surfaces it on TtsLifecycle.gpuQueueDepth; consumer
        (layout.tsx) decides whether to render the prefix. */
-    mocks.getGpuQueueState.mockResolvedValueOnce({ depth: 2, inFlight: 1, max: 1 });
+    mocks.getGpuQueueState.mockResolvedValueOnce({ queueDepth: 2, devices: [] });
     const { result } = renderHook(() => useTtsLifecycle());
     await waitFor(() => expect(result.current.gpuQueueDepth).toBe(2));
-    expect(result.current.gpuInFlight).toBe(1);
   });
 
   it('clears gpuQueueDepth to undefined when /api/gpu/queue rejects (older server graceful-degrade)', async () => {
@@ -383,7 +382,6 @@ describe('useTtsLifecycle', () => {
        its initial mount before we assert on the queue field. */
     await waitFor(() => expect(result.current.coqui.state).toBe('idle'));
     expect(result.current.gpuQueueDepth).toBeUndefined();
-    expect(result.current.gpuInFlight).toBeUndefined();
   });
 
   it('dismissNotices clears both banner strings without calling the API', async () => {

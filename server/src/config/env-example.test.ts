@@ -7,7 +7,7 @@ describe('.env.example managed block', () => {
     expect(block.startsWith(BEGIN)).toBe(true);
     expect(block.trimEnd().endsWith(END)).toBe(true);
     expect(block).toContain('STAGE2_MIN_COVERAGE=');
-    expect(block).toContain('GPU_WEIGHT_COQUI=');
+    expect(block).toContain('GPU_RESERVE_MB=');
     // prompts have no env → must NOT appear
     expect(block).not.toContain('prompt.castDetection');
   });

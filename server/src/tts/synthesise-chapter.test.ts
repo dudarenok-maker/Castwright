@@ -891,12 +891,11 @@ describe('buildSentenceGroups (plan 70d — per-sentence)', () => {
 });
 
 /* ── plan 107 — within-chapter sentence parallelism ──────────────────────
-   The body-group dispatch is now a bounded-concurrency worker pool whose
-   width defaults to `gpuSemaphore.maxConcurrency` (1 at the conservative
-   `GPU_CONCURRENCY=1` default, so production behaviour is unchanged). When an
-   operator raises the cap, a single chapter can fan its sentence groups out
-   across idle GPU slots. The semaphore inside every provider.synthesize keeps
-   real GPU work bounded; this pool only governs Node-layer in-flight count.
+   The body-group dispatch is a bounded-concurrency worker pool whose width
+   defaults to `DEFAULT_SENTENCE_CONCURRENCY` (1), the flag-OFF safety
+   invariant — one synth call in flight at a time per render, so production
+   behaviour is unchanged unless a caller passes an explicit width (mainly
+   tests). This pool only governs Node-layer in-flight count.
 
    These tests pin the three determinism invariants the parallel dispatch must
    never break, using a deterministic fake provider whose PCM is derived from
@@ -1022,6 +1021,25 @@ describe('synthesiseChapter within-chapter parallelism (plan 107)', () => {
         expect(parallel.segments[i].startSec).toBe(parallel.segments[i - 1].endSec);
       }
     }
+  });
+
+  it('defaults poolWidth to 1 for a GPU engine when sentenceConcurrency is omitted (flag-OFF safety invariant)', async () => {
+    /* No `sentenceConcurrency` passed — this pins the module's default width
+       for a GPU engine (kokoro here) at exactly 1, the safety invariant the
+       whole capacity-aware-placement feature's flag-OFF path relies on: one
+       synth call in flight at a time per render. A delay makes overlap
+       observable (peakInFlight > 1) if the default ever crept above 1. */
+    const provider = makeDeterministicProvider({ delayForText: () => 20 });
+    await synthesiseChapter({
+      sentences: SENTENCES,
+      cast,
+      provider,
+      modelKey: 'kokoro-v1',
+      engine: 'kokoro',
+    });
+
+    expect(provider.peakInFlight).toBe(1);
+    expect(provider.completionOrder).toEqual(provider.startOrder);
   });
 
   it('anchors the sample rate on the lowest-index group, not the first to complete (deterministic anchor)', async () => {

@@ -37,8 +37,20 @@ import { MIN_DURATION_SEC } from '../audio/render-integrity/constants.js';
 import { textHashForStale } from '../audio/segments-io.js';
 import { resamplePcm16 } from './resample-pcm16.js';
 import { withTtsRetry, isTransient } from './retry.js';
-import { gpuSemaphore } from '../gpu/semaphore.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+
+/* Default body-group dispatch width for a GPU engine (kokoro/coqui/qwen), and
+   the flag-OFF safety invariant for the whole capacity-aware-placement
+   feature: ONE synth call in flight at a time per render. This used to
+   default to `gpuSemaphore.maxConcurrency` (the now-removed process-wide
+   weighted VRAM semaphore); admission/serialization against other renders and
+   engines lives in the sidecar now (`_synth_lock` + the sidecar load locks),
+   so this module has no cross-book coordination left to lean on — a width > 1
+   here would let a single render's OWN groups race each other against that
+   per-process GPU. The Qwen throughput lever is `/synthesize-batch` (packing
+   many sentences into one call), NOT raising concurrent `/synthesize` calls —
+   do not raise this default. */
+const DEFAULT_SENTENCE_CONCURRENCY = 1;
 
 /* How many Qwen sentences to pack into one batched `generate_voice_clone`
    call (plan 112 — true batching). Read once at module load; `=1` is an
@@ -576,15 +588,11 @@ export interface SynthesiseChapterOpts {
       duration is the audio time at the end of the title segment (i.e. the
       moment the post-title silence begins). */
   onTitleComplete?: (e: { accumulatedSec: number }) => void;
-  /** How many sentence groups to *attempt* concurrently (plan 107). Each
-      `provider.synthesize` already acquires the global `gpuSemaphore`
-      (`server/src/tts/sidecar.ts`), so this width never oversubscribes the
-      GPU — it only governs how many groups are dispatched before we await
-      results. Defaults to `gpuSemaphore.maxConcurrency` (read from
-      `GPU_CONCURRENCY` once at module load), so at the conservative default
-      `GPU_CONCURRENCY=1` the width is 1 and dispatch is byte-identical to the
-      old serial loop. An explicit value is mainly for tests, which need to
-      exercise width>1 without touching process env. Clamped to >= 1. */
+  /** How many sentence groups to *attempt* concurrently (plan 107). Defaults
+      to `DEFAULT_SENTENCE_CONCURRENCY` (1) — see that constant's comment for
+      why this is the flag-OFF safety invariant, not a tunable production
+      knob. An explicit value is mainly for tests, which need to exercise
+      width>1 without touching process env. Clamped to >= 1. */
   sentenceConcurrency?: number;
   /** Heartbeat cadence for the GPU-FIFO false-stall guard (queue-sole). The
       GPU token is acquired INSIDE `provider.synthesize`
@@ -809,26 +817,22 @@ export function buildHintFromCast(c: CastCharacter): CharacterHint {
    retuning that shared budget table (a separate, riskier change affecting
    every existing Qwen-concurrency decision), a mixed Qwen+Coqui chapter is
    partitioned into two serial phases with an explicit evict between them.
-   Holds the FULL gpu semaphore budget during the unload (mirrors
-   tts/persona-gpu-plan.ts's unloadResidentSidecar pattern) so a concurrent
-   synth call from another book can't race the eviction — but, unlike that
-   function, this one does NOT check activeGenerationBooks/refuse when a
-   render is active: it's deliberately called *during* an active render, as
-   part of this chapter's own sequencing. */
+   No longer holds a full-budget gpuSemaphore lock during the unload —
+   same-engine/cross-book serialization against a concurrent synth call from
+   another book now lives in the sidecar (`_synth_lock` + the sidecar load
+   locks), not a Node-side mutex. Like `persona-gpu-plan.ts`'s
+   `unloadResidentSidecar`, this does NOT check activeGenerationBooks/refuse
+   when a render is active: it's deliberately called *during* an active
+   render, as part of this chapter's own sequencing. */
 async function evictQwenForCoquiPhase(): Promise<void> {
-  const release = await gpuSemaphore.acquire(gpuSemaphore.budget);
-  try {
-    const url = getResolvedSidecarUrl();
-    const res = await fetch(`${url}/unload`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ engine: 'qwen' }),
-    });
-    if (!res.ok) {
-      throw new Error(`Sidecar /unload returned ${res.status} ${res.statusText}`);
-    }
-  } finally {
-    release();
+  const url = getResolvedSidecarUrl();
+  const res = await fetch(`${url}/unload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ engine: 'qwen' }),
+  });
+  if (!res.ok) {
+    throw new Error(`Sidecar /unload returned ${res.status} ${res.statusText}`);
   }
 }
 
@@ -856,7 +860,7 @@ export async function synthesiseChapter(
     narratorCharacterId = 'narrator',
     onTitleStart,
     onTitleComplete,
-    sentenceConcurrency = gpuSemaphore.maxConcurrency,
+    sentenceConcurrency = DEFAULT_SENTENCE_CONCURRENCY,
     groupHeartbeatMs = 10_000,
     callTimeoutMs = SYNTH_CALL_TIMEOUT_MS,
     qwenBatchSize = QWEN_BATCH_SIZE,
@@ -977,11 +981,10 @@ export async function synthesiseChapter(
      chapter. */
   const warnedUnknownCharacterIds = new Set<string>();
 
-  /* Pool width — how many groups we *attempt* at once. Real GPU concurrency
-     is still capped by the global `gpuSemaphore` each `synthesize` acquires,
-     so a width > the semaphore cap just queues; it never oversubscribes. At
-     the default `GPU_CONCURRENCY=1` this is 1 → byte-identical to the old
-     serial loop. Clamp to >= 1 (a width of 0 would dispatch nothing). */
+  /* Pool width — how many groups we *attempt* at once. At the default
+     `DEFAULT_SENTENCE_CONCURRENCY` (1) this is 1 → byte-identical to the old
+     serial loop, the flag-OFF safety invariant this module's default exists
+     to preserve. Clamp to >= 1 (a width of 0 would dispatch nothing). */
   const poolWidth = Math.max(1, Math.floor(sentenceConcurrency));
 
   const chunks: Buffer[] = [];
