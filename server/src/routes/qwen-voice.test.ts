@@ -35,6 +35,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { withCapacityRetry } from '../gpu/capacity-retry.js';
+import { NoCapacityError } from '../tts/tts-errors.js';
 
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
@@ -51,6 +53,7 @@ let app: Express;
 let bookId: string;
 
 const fetchMock = vi.fn();
+const mockWithCapacityRetry = vi.mocked(withCapacityRetry);
 /* selectTtsProvider stub — the /sample coherence test asserts synthesize is
    NEVER called (the design route already wrote the file). */
 const { synthesize } = vi.hoisted(() => ({ synthesize: vi.fn() }));
@@ -81,6 +84,15 @@ const { maybeSampleSidecarEngineMock } = vi.hoisted(() => ({
 vi.mock('../gpu/sidecar-vram-sample.js', () => ({
   maybeSampleSidecarEngine: (key: string) => maybeSampleSidecarEngineMock(key),
 }));
+
+/* #1720 Task 7 — withCapacityRetry is mocked wholesale rather than exercised
+   for real (its retry/evict/exhaustion policy is already covered by
+   server/src/gpu/capacity-retry.test.ts). The root beforeEach below resets
+   it to a plain single-call passthrough so every PRE-EXISTING test in this
+   file keeps exercising exactly the same single-fetch behavior it did before
+   this wiring landed; the "capacity-aware retry wiring" describe block below
+   overrides the implementation locally to pin the new behavior. */
+vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
 
 const characters = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
@@ -199,6 +211,8 @@ beforeEach(() => {
   synthesize.mockReset();
   synthesize.mockResolvedValue({ pcm: Buffer.alloc(24_000 * 2 * 0.3, 0), sampleRate: 24_000 });
   maybeSampleSidecarEngineMock.mockClear();
+  mockWithCapacityRetry.mockReset();
+  mockWithCapacityRetry.mockImplementation((doPost, opts) => doPost(opts.signal));
   for (const f of readdirSync(audioDir)) rmSync(join(audioDir, f), { force: true });
   /* Wipe designed-voice sidecars between tests so the persona GET cases stay
      isolated (a sidecar written by one test must not leak into the next). */
@@ -1078,6 +1092,105 @@ describe('SidecarDesignError', () => {
     const dvCall = fetchSpy.mock.calls.find((c) => String(c[0]).includes('/qwen/design-voice'))!;
     const sentBody = JSON.parse(String((dvCall[1] as RequestInit).body));
     expect(sentBody.instruct.startsWith('a warm narrator from disk ')).toBe(true);
+  });
+
+  describe('capacity-aware retry wiring (#1720 Task 7)', () => {
+    /* withCapacityRetry is mocked wholesale rather than exercised for real
+       (its retry/evict/exhaustion policy is already covered by
+       server/src/gpu/capacity-retry.test.ts). The file-level beforeEach
+       resets it back to a plain single-call passthrough; these tests
+       override that locally to pin postDesignAndCache's wiring. */
+    function makeBaseParams(opts: { persona?: string } = {}): import('./qwen-voice.js').DesignQwenVoiceParams {
+      return {
+        bookDir: sdeBookDir,
+        character: {
+          id: 'char1',
+          name: 'Char One',
+          voiceId: 'v_char1',
+          voiceUuid: 'uuid-char1',
+          voiceStyle: 'a warm narrator',
+          evidence: [{ quote: '"Hello there."' }],
+          role: 'supporting',
+        },
+        characterId: 'char1',
+        persona: opts.persona !== undefined ? opts.persona : 'a warm narrator',
+        sampleVoiceId: 'v_char1',
+        modelKey: QWEN_KEY,
+        language: 'English',
+      };
+    }
+
+    it('wraps the design POST in withCapacityRetry(engine: "qwen")', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response(Buffer.from([0, 0]), { status: 200, headers: { 'X-Sample-Rate': '24000' } }),
+      );
+      mockWithCapacityRetry.mockImplementation(async (doPost, opts) => {
+        expect(opts.engine).toBe('qwen');
+        return doPost(opts.signal);
+      });
+
+      const r = await designQwenVoiceForCharacter(makeBaseParams());
+
+      expect(r.voiceId).toBeTruthy();
+      expect(mockWithCapacityRetry).toHaveBeenCalledTimes(1);
+    });
+
+    it('a doPost that returns a noCapacity 503 once then ok succeeds after the (simulated) evict/retry', async () => {
+      let calls = 0;
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        calls += 1;
+        return calls === 1
+          ? new Response(JSON.stringify({ noCapacity: true, neededMb: 4_000, deviceKey: 'cuda:0' }), {
+              status: 503,
+            })
+          : new Response(Buffer.from([0, 0]), { status: 200, headers: { 'X-Sample-Rate': '24000' } });
+      });
+      // Stand-in mirroring withCapacityRetry's real evict-then-retry contract:
+      // retry the SAME doPost once more on a non-ok first response.
+      mockWithCapacityRetry.mockImplementation(async (doPost, opts) => {
+        const first = await doPost(opts.signal);
+        if (first.ok) return first;
+        return doPost(opts.signal);
+      });
+
+      const r = await designQwenVoiceForCharacter(makeBaseParams());
+
+      expect(calls).toBe(2);
+      expect(r.voiceId).toBeTruthy();
+    });
+
+    it('a non-noCapacity 503 returned by withCapacityRetry still becomes a SidecarDesignError with the base17-unavailable code (fallback path untouched)', async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ code: 'base17-unavailable', reason: 'not-installed', detail: 'x' }), {
+            status: 503,
+          }),
+        )
+        .mockResolvedValueOnce(new Response(Buffer.from([0, 0]), { status: 200, headers: { 'X-Sample-Rate': '24000' } }));
+      mockWithCapacityRetry.mockImplementation(async (doPost, opts) => doPost(opts.signal));
+
+      const r = await designQwenVoiceForCharacter(makeVariantParams({ persona: 'a warm narrator' }));
+
+      // Same assertion as the existing "falls back to design-voice on 503
+      // not-installed" test above — proves withCapacityRetry's passthrough of
+      // a non-noCapacity 503 doesn't disturb the mint→fallback flow.
+      expect(r.fellBackToDesignVoice).toBe(true);
+      expect(r.fallbackReason).toBe('not-installed');
+      expect(fetchSpy.mock.calls.filter((c) => String(c[0]).includes('/qwen/mint-variant'))).toHaveLength(1);
+    });
+
+    it('maps a thrown NoCapacityError to a SidecarDesignError with a capacity-specific message', async () => {
+      mockWithCapacityRetry.mockImplementation(async () => {
+        throw new NoCapacityError('qwen', 5_000, 'cuda:0');
+      });
+
+      await expect(designQwenVoiceForCharacter(makeBaseParams())).rejects.toMatchObject({
+        name: 'SidecarDesignError',
+        status: 503,
+        message: expect.stringMatching(/no capacity/i),
+      });
+    });
   });
 });
 

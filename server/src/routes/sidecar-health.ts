@@ -17,6 +17,8 @@ import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
 import { setLastKnownVram } from '../gpu/vram-state.js';
 import { setLastKnownEngineDevices } from '../gpu/engine-device-state.js';
 import { TRACKED_ENGINES, type TrackedEngine } from '../gpu/tracked-engines.js';
+import { withCapacityRetry } from '../gpu/capacity-retry.js';
+import { NoCapacityError } from '../tts/tts-errors.js';
 
 export const sidecarHealthRouter = Router();
 
@@ -337,12 +339,17 @@ sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), LOAD_TIMEOUT_MS);
   try {
-    const upstream = await fetch(target, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body ?? {}),
-    });
+    const engine = (((req.body ?? {}) as { engine?: unknown }).engine as string) || 'coqui';
+    const upstream = await withCapacityRetry(
+      (signal) =>
+        fetch(target, {
+          method: 'POST',
+          signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(req.body ?? {}),
+        }),
+      { engine, signal: controller.signal },
+    );
     clearTimeout(timer);
     const body = (await upstream.json().catch(() => ({}))) as { status?: string; error?: string };
     if (!upstream.ok) {
@@ -354,6 +361,12 @@ sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
     return res.json(body);
   } catch (e) {
     clearTimeout(timer);
+    if (e instanceof NoCapacityError) {
+      return res.status(503).json({
+        status: 'error',
+        error: 'GPU has no capacity to load this model right now — free VRAM (e.g. stop the analyzer) and retry.',
+      });
+    }
     const err = e as { name?: string; message?: string; cause?: unknown };
     const isTimeout = err.name === 'AbortError';
     return res.status(503).json({

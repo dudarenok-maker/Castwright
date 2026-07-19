@@ -155,7 +155,14 @@ function okSidecarResponse(pcm = new Uint8Array(24_000 * 2 * 0.3)) {
   };
 }
 function badSidecarResponse() {
-  return {
+  /* #1720 Task 7 — postDesignAndCache now routes its fetch through
+     withCapacityRetry, which calls `.clone()` on any non-ok response to peek
+     at the body before deciding whether it's a noCapacity 503 (this one is a
+     plain 500, so parseNoCapacity bails on the status check without reading
+     the clone further). A real Response has `.clone()`; this fixture is a
+     plain object standing in for one, so it needs its own — returning the
+     same fake is sufficient since nothing reads the clone's body here. */
+  const response = {
     ok: false,
     status: 500,
     statusText: 'Internal Server Error',
@@ -163,6 +170,7 @@ function badSidecarResponse() {
     arrayBuffer: async () => new ArrayBuffer(0),
     json: async () => ({ detail: 'model exploded' }),
   };
+  return Object.assign(response, { clone: () => response });
 }
 
 /** Parse an SSE response body into the list of JSON `data:` events. */

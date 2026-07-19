@@ -19,9 +19,21 @@ vi.mock('undici', async (importOriginal) => {
   return { ...actual, fetch: vi.fn() };
 });
 
+/* #1720 Task 7 — withCapacityRetry is mocked wholesale rather than exercised
+   for real: the retry/evict/exhaustion policy itself is already covered by
+   server/src/gpu/capacity-retry.test.ts. What THIS file needs to pin is the
+   WIRING — transcribeSegment only wraps the fetch in withCapacityRetry when
+   asrRunsOnGpu() is true, passes engine 'asr' + the caller's signal, and
+   handles whatever withCapacityRetry returns/throws exactly like it did the
+   bare fetch before. */
+vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
+
 import { transcribeSegment, asrRunsOnGpu, normalizeWhisperLanguage } from './transcribe-client.js';
+import { withCapacityRetry } from '../gpu/capacity-retry.js';
+import { NoCapacityError } from './tts-errors.js';
 
 const mockFetch = vi.mocked(undiciFetch);
+const mockWithCapacityRetry = vi.mocked(withCapacityRetry);
 const URL = 'http://sidecar.test:9000';
 const PCM = Buffer.from([0, 0, 1, 0, 2, 0, 3, 0]);
 
@@ -34,6 +46,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 afterEach(() => {
   mockFetch.mockReset();
+  mockWithCapacityRetry.mockReset();
   delete process.env.ASR_DEVICE;
 });
 
@@ -164,6 +177,88 @@ describe('transcribeSegment', () => {
 
     expect(captured.value?.init.headers['x-word-timestamps']).toBeUndefined();
     expect(result.words).toBeNull();
+  });
+});
+
+describe('transcribeSegment — capacity-aware retry wiring (#1720 Task 7)', () => {
+  it('wraps the fetch in withCapacityRetry(engine: "asr") when ASR runs on GPU, and resolves an ok response normally', async () => {
+    process.env.ASR_DEVICE = 'cuda:0';
+    let fetchCalls = 0;
+    mockFetch.mockImplementation((async () => {
+      fetchCalls += 1;
+      return jsonResponse({ text: 'hi', language: 'en' });
+    }) as unknown as typeof undiciFetch);
+    mockWithCapacityRetry.mockImplementation(async (doPost, opts) => {
+      expect(opts.engine).toBe('asr');
+      return doPost(opts.signal);
+    });
+
+    const out = await transcribeSegment(PCM, 24000, { sidecarUrl: URL });
+
+    expect(mockWithCapacityRetry).toHaveBeenCalledTimes(1);
+    expect(fetchCalls).toBe(1);
+    expect(out.text).toBe('hi');
+  });
+
+  it('a doPost that returns a noCapacity 503 once then ok succeeds after the (simulated) evict/retry', async () => {
+    process.env.ASR_DEVICE = 'cuda:0';
+    let calls = 0;
+    mockFetch.mockImplementation((async () => {
+      calls += 1;
+      return calls === 1
+        ? (new Response(JSON.stringify({ noCapacity: true, neededMb: 1000, deviceKey: 'cuda:0' }), {
+            status: 503,
+          }) as unknown as Response)
+        : jsonResponse({ text: 'after retry', language: 'en' });
+    }) as unknown as typeof undiciFetch);
+    // Stand-in mirroring withCapacityRetry's real evict-then-retry contract:
+    // retry the SAME doPost once more on a non-ok first response.
+    mockWithCapacityRetry.mockImplementation(async (doPost, opts) => {
+      const first = await doPost(opts.signal);
+      if (first.ok) return first;
+      return doPost(opts.signal);
+    });
+
+    const out = await transcribeSegment(PCM, 24000, { sidecarUrl: URL });
+
+    expect(calls).toBe(2);
+    expect(out.text).toBe('after retry');
+  });
+
+  it('a non-noCapacity 503 returned by withCapacityRetry still hits the existing transient-503 error path', async () => {
+    process.env.ASR_DEVICE = 'cuda:0';
+    mockWithCapacityRetry.mockImplementation(
+      async () => new Response('boom', { status: 503 }) as unknown as Response,
+    );
+
+    const err = await transcribeSegment(PCM, 24000, { sidecarUrl: URL }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as { transient?: boolean }).transient).toBe(true);
+  });
+
+  it('propagates a thrown NoCapacityError as-is rather than wrapping it as "not reachable"', async () => {
+    process.env.ASR_DEVICE = 'cuda:0';
+    const capacityErr = new NoCapacityError('coqui', 1200, 'cuda:0');
+    mockWithCapacityRetry.mockImplementation(async () => {
+      throw capacityErr;
+    });
+
+    const err = await transcribeSegment(PCM, 24000, { sidecarUrl: URL }).catch((e) => e);
+
+    expect(err).toBe(capacityErr);
+  });
+
+  it('is INERT when ASR runs on CPU — fetch is called directly, withCapacityRetry never invoked', async () => {
+    process.env.ASR_DEVICE = 'cpu';
+    mockFetch.mockImplementation((async () =>
+      jsonResponse({ text: 'cpu path', language: 'en' })) as unknown as typeof undiciFetch);
+
+    const out = await transcribeSegment(PCM, 24000, { sidecarUrl: URL });
+
+    expect(out.text).toBe('cpu path');
+    expect(mockWithCapacityRetry).not.toHaveBeenCalled();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });
 

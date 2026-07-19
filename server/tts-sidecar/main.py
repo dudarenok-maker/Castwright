@@ -1029,12 +1029,20 @@ class CoquiEngine(Engine):
         # `_mark_cuda_poisoned`. Any engine's context-fatal CUDA error fast-fails
         # all engines + schedules one supervised self-exit.
 
-    def _resolve_runtime_options(self, torch_module: Any) -> dict[str, Any]:
+    def _resolve_runtime_options(
+        self, torch_module: Any, device_override: Optional[str] = None
+    ) -> dict[str, Any]:
         """Resolve device + fp16 + deepspeed knobs into a concrete config dict.
         Lifted out of `_ensure_loaded` so the env-driven branching is
         unit-testable without instantiating the real ~3 GB XTTS model — tests
-        inject a torch stub that controls `cuda.is_available()`."""
-        device = self._device
+        inject a torch stub that controls `cuda.is_available()`.
+
+        `device_override` (capacity-aware placement, task 2 of the
+        vram-aware-placement plan): when the caller has already admitted this
+        load onto a concrete device (e.g. "cuda:1"), use that in place of the
+        env-derived `self._device` for THIS cold load. `None` (the default)
+        leaves env resolution byte-for-byte unchanged."""
+        device = device_override if device_override is not None else self._device
         if device == "auto":
             device = _resolve_torch_device(device, torch_module)
         # On CUDA (any index — cuda, cuda:0, cuda:1, …), default both extras ON
@@ -1053,7 +1061,7 @@ class CoquiEngine(Engine):
             deepspeed = False
         return {"device": device, "half": half, "deepspeed": deepspeed}
 
-    def _ensure_loaded(self, model: str) -> None:
+    def _ensure_loaded(self, model: str, device: Optional[str] = None) -> None:
         if self._tts is not None:
             return
         # Importing lazily so the process can start (and /health respond)
@@ -1087,7 +1095,7 @@ class CoquiEngine(Engine):
             "xtts_v2": "tts_models/multilingual/multi-dataset/xtts_v2",
         }.get(model, model)
 
-        opts = self._resolve_runtime_options(torch)
+        opts = self._resolve_runtime_options(torch, device_override=device)
         device, want_half, want_deepspeed = opts["device"], opts["half"], opts["deepspeed"]
         _validate_cuda_index(device, torch)
         # Single startup log line — `npm run tts:sidecar` users can grep
@@ -1358,9 +1366,16 @@ class KokoroEngine(Engine):
             pass
         return kokoro
 
-    def _ensure_loaded(self, model: str) -> None:
+    def _ensure_loaded(self, model: str, device: Optional[str] = None) -> None:
         if self._kokoro is not None:
             return
+        # Capacity-aware placement (task 2, vram-aware-placement plan): a
+        # concrete `device` from an admitted reservation overrides the
+        # env-derived pin for THIS cold load; `None` leaves
+        # `_requested_device` (already set from KOKORO_DEVICE at __init__)
+        # untouched, so env resolution stays byte-for-byte unchanged.
+        if device is not None:
+            self._requested_device = device
         try:
             from kokoro_onnx import Kokoro  # type: ignore
         except ImportError as e:
@@ -1742,6 +1757,23 @@ def _read_device_env(var_name: str) -> Optional[str]:
     return resolved
 
 
+def _engine_env_pin(engine_id: str) -> Optional[str]:
+    """Concrete device key an engine's env pins it to, or None for auto/unset/cpu."""
+    env_var = {
+        "coqui": "COQUI_DEVICE",
+        "kokoro": "KOKORO_DEVICE",
+        "qwen": "QWEN_DEVICE",
+        "asr": "ASR_DEVICE",
+        "spk": "SPK_DEVICE",
+    }.get(engine_id)
+    if env_var is None:
+        return None
+    fam, idx = _parse_device(_read_device_env(env_var))
+    if fam in ("cuda", "rocm") and idx is not None:
+        return f"{fam}:{idx}"
+    return None
+
+
 # --- Cross-vendor capacity probe (task 1, vram-aware-placement) ---
 #
 # GET /capacity feeds the capacity-aware placement admission check: before
@@ -2041,19 +2073,20 @@ class PlacementController:
         return "cpu" if d["kind"] == "cpu" else f"{d['kind']}:{d['index']}"
 
     def _gpu_candidates(
-        self, devices: list[dict], resident: Optional[str]
+        self, devices: list[dict], resident_or_pinned: Optional[str]
     ) -> list[tuple[str, int, int]]:
-        """[(device_key, freeMb, totalMb)] to consider. A resident engine is
-        pinned to ONLY its own device (no migration) — and only if that device
-        is still present in the probe (a dropped eGPU yields no candidates →
-        noCapacity). Otherwise every GPU device is a candidate."""
+        """[(device_key, freeMb, totalMb)] to consider. A resident engine (or
+        one pinned by operator env config) is restricted to ONLY that device
+        (no migration) — and only if that device is still present in the
+        probe (a dropped eGPU yields no candidates → noCapacity). Otherwise
+        every GPU device is a candidate."""
         gpus = [
             (self._device_key(d), d["freeMb"], d["totalMb"])
             for d in devices
             if d["kind"] != "cpu"
         ]
-        if resident is not None:
-            return [c for c in gpus if c[0] == resident]
+        if resident_or_pinned is not None:
+            return [c for c in gpus if c[0] == resident_or_pinned]
         return gpus
 
     def _worst_device_key(self, devices: list[dict]) -> Optional[str]:
@@ -2081,6 +2114,7 @@ class PlacementController:
         cfg: Optional[dict],
         cpu_capable: bool,
         heavy: bool,
+        pinned: Optional[str] = None,
     ) -> dict:
         """PURE placement DECISION — holds NO reservation (that is
         `reservation()`'s job). Returns `{"device": key}` | `{"device": "cpu"}`
@@ -2089,12 +2123,16 @@ class PlacementController:
         alongside whatever (e.g. a co-resident analyzer) grew into its VRAM —
         being resident is not a free pass. `deviceKey`/`analyzerEvictWouldHelp`
         note: the sidecar reports only `{neededMb, deviceKey}`; Node computes
-        `evictWouldHelp` from /api/ps."""
+        `evictWouldHelp` from /api/ps. `pinned` is an operator-configured
+        device key (e.g. from an engine's *_DEVICE env) restricting candidates
+        to that one device when the engine isn't already resident — residency
+        always takes precedence since the model is already loaded there."""
         peak = self.footprints.peak_mb(engine, model, cfg)
         resident = self.is_resident(engine)
+        constraint = resident if resident is not None else pinned
         reserve = self.reserve_mb()
         devices = self.probe()
-        candidates = self._gpu_candidates(devices, resident)
+        candidates = self._gpu_candidates(devices, constraint)
 
         key = self.ledger.best_fit(candidates, peak, reserve)
         if key is not None:
@@ -2105,15 +2143,16 @@ class PlacementController:
         worst = self._worst_device_key(devices)
         if worst is not None and self.idle_evict(worst):
             devices = self.probe()
-            candidates = self._gpu_candidates(devices, resident)
+            candidates = self._gpu_candidates(devices, constraint)
             key = self.ledger.best_fit(candidates, peak, reserve)
             if key is not None:
                 return {"device": key}
             worst = self._worst_device_key(devices)
         # A resident engine can only ever run on its own device, so point Node
         # at THAT device to evict from — not a roomier non-resident GPU where an
-        # evict wouldn't let this (non-migratable) model fit.
-        device_key = resident if resident is not None else worst
+        # evict wouldn't let this (non-migratable) model fit. A pinned (but not
+        # yet resident) op needs Node to evict from ITS pinned card too.
+        device_key = resident if resident is not None else (pinned if pinned is not None else worst)
         return {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
 
     @staticmethod
@@ -2140,25 +2179,29 @@ class PlacementController:
         cfg: Optional[dict],
         cpu_capable: bool = False,
         heavy: bool = False,
+        pinned: Optional[str] = None,
     ):
         """Atomically admits AND holds the peak reservation for the op, yields
         the Admission, and on exit (success OR exception) releases the hold and
         records the observed peak — VRAM bookkeeping only; callers still take
         their own `_synth_lock`/`_infer_lock`/load lock around the actual
         forward. Unlike `admit()`, this path performs the hold (via the ledger's
-        atomic `try_hold`), so two concurrent reservations can't double-book."""
+        atomic `try_hold`), so two concurrent reservations can't double-book.
+        `pinned` mirrors `admit()`'s operator-pin constraint (residency still
+        takes precedence)."""
         peak = self.footprints.peak_mb(engine, model, cfg)
         resident = self.is_resident(engine)
+        constraint = resident if resident is not None else pinned
         reserve = self.reserve_mb()
         devices = self.probe()
-        candidates = self._gpu_candidates(devices, resident)
+        candidates = self._gpu_candidates(devices, constraint)
 
         held = self.ledger.try_hold(candidates, peak, reserve)
         if held is None and not (cpu_capable and not heavy):
             worst = self._worst_device_key(devices)
             if worst is not None and self.idle_evict(worst):
                 devices = self.probe()
-                candidates = self._gpu_candidates(devices, resident)
+                candidates = self._gpu_candidates(devices, constraint)
                 held = self.ledger.try_hold(candidates, peak, reserve)
 
         if held is not None:
@@ -2166,7 +2209,7 @@ class PlacementController:
         elif cpu_capable and not heavy:
             admission = {"device": "cpu"}
         else:
-            device_key = resident if resident is not None else self._worst_device_key(devices)
+            device_key = resident if resident is not None else (pinned if pinned is not None else self._worst_device_key(devices))
             admission = {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
 
         try:
@@ -2182,6 +2225,17 @@ class PlacementController:
 # keeps today's behaviour byte-for-byte (the rollback path).
 def _capacity_admission_enabled() -> bool:
     return os.environ.get("SEG_CAPACITY_ADMISSION", "0") == "1"
+
+
+def _no_capacity(adm: dict) -> JSONResponse:
+    return JSONResponse(
+        {
+            "noCapacity": True,
+            "neededMb": adm["noCapacity"]["neededMb"],
+            "deviceKey": adm["noCapacity"]["deviceKey"],
+        },
+        status_code=503,
+    )
 
 
 # Per-engine admission profile for the three /synthesize engines: qwen/coqui
@@ -2589,20 +2643,34 @@ class QwenEngine(Engine):
         # engine instance, separate lock). Batching — not concurrency — is the
         # throughput lever on a single autoregressive model anyway.
         self._synth_lock = threading.Lock()
-        # Serialises the COLD model load. `_ensure_base_loaded` runs on
-        # asyncio.to_thread worker threads (both the synth path and the /load
-        # route offload it there), so a plain threading.Lock — NOT the asyncio
-        # `_load_lock` above, which a worker thread can't acquire — is what makes
-        # the load single-flight. Without it, two workers that both observe
-        # `_base is None` on a cold start each call `from_pretrained` +
-        # `.to(device)`, and the racing loads leave the model in a half-cast
-        # dtype state → every later forward dies with "expected mat1 and mat2 to
-        # have the same dtype, float != BFloat16". Double-checked inside.
-        self._base_load_lock = threading.Lock()
-        # Same pattern for the 1.7B-Base single-flight load (fs-55). Mirrors
-        # _base_load_lock above; separate lock so a 0.6B-Base load and a
-        # 1.7B-Base load can proceed in parallel if both are needed at once.
-        self._base17_load_lock = threading.Lock()
+        # Serialises EVERY cold Qwen model load — 0.6B-Base, 1.7B-Base (fs-55),
+        # AND the transient VoiceDesign — under ONE lock. `_ensure_*_loaded` run
+        # on asyncio.to_thread worker threads (the synth path, the /load route,
+        # design_voice and mint_variant all offload there), so a plain
+        # threading.Lock — NOT the asyncio `_load_lock` above, which a worker
+        # thread can't acquire — is what makes the loads single-flight. Two
+        # reasons ONE lock, not per-model:
+        #   1. Single-flight per model: without it, two workers that both observe
+        #      `self._base is None` on a cold start each call `from_pretrained` +
+        #      `.to(device)`, and the racing loads leave the model in a half-cast
+        #      dtype state → every later forward dies with "expected mat1 and mat2
+        #      to have the same dtype, float != BFloat16". Double-checked inside.
+        #   2. Capacity-aware device-steer (task 3, vram-aware-placement plan):
+        #      the set-pref + `_ensure_device_resolved` + load all read/write the
+        #      SINGLE engine-wide `self._device`/`self._device_pref`. A design and
+        #      a mint admitted to DIFFERENT cards (the concurrent-multi-GPU
+        #      scenario admission targets) would, under SEPARATE per-model locks,
+        #      interleave: A resolves `_device=cuda:1`, B overwrites it to
+        #      `cuda:0` before A's `_load_qwen_model` reads it, and A's model lands
+        #      on the wrong card the reservation ledger didn't book (verified by
+        #      the interleaving test in test_design_mint_admission.py). Only a lock
+        #      shared across ALL three cold loads makes set-pref→resolve→load
+        #      atomic against the shared device fields. A concurrent Kokoro/Coqui
+        #      load stays parallel — those are separate engine instances with their
+        #      own `_device`. Deadlock-free: no `_ensure_*_loaded` calls another
+        #      while holding this lock, and neither `_ensure_device_resolved` nor
+        #      `_load_qwen_model` re-acquires it.
+        self._cold_load_lock = threading.Lock()
         # Idle-lifecycle bookkeeping for the resident 1.7B-Base (issue #1024).
         # mint_variant() + the 1.7B synth/batch paths keep it WARM across
         # back-to-back calls (the old per-mint unload/reload fragmented the CUDA
@@ -2837,16 +2905,23 @@ class QwenEngine(Engine):
         import torch  # type: ignore
         self._device = _resolve_torch_device(self._device_pref, torch)
 
-    def _ensure_base_loaded(self) -> None:
+    def _ensure_base_loaded(self, device: Optional[str] = None) -> None:
         # Fast path: already loaded, no lock needed (the assignment below is the
         # only writer and it publishes a fully-built model).
         if self._base is not None:
             return
-        # Single-flight the cold load — see `_base_load_lock`. Double-checked so
+        # Single-flight the cold load — see `_cold_load_lock`. Double-checked so
         # the loser of the race returns the winner's model instead of loading a
         # second copy (which would corrupt the dtype state).
-        with self._base_load_lock:
+        with self._cold_load_lock:
             if self._base is None:
+                # Capacity-aware placement (task 2, vram-aware-placement
+                # plan): a concrete `device` from an admitted reservation
+                # overrides the env-derived pref for THIS cold load, done
+                # under the lock (same as the resolve call it precedes).
+                # `None` leaves `_device_pref` untouched.
+                if device is not None:
+                    self._device_pref = device
                 self._ensure_device_resolved()
                 log.info("Loading Qwen Base model=%s on %s …", self.BASE_MODEL, self._device)
                 self._base = self._load_qwen_model(self.BASE_MODEL)
@@ -2855,16 +2930,20 @@ class QwenEngine(Engine):
                 _maybe_compile_codec(self._base, torch)
                 log.info("Qwen Base loaded.")
 
-    def _ensure_base17_loaded(self) -> None:
+    def _ensure_base17_loaded(self, device: Optional[str] = None) -> None:
         """Load the 1.7B-Base model (fs-55 anchored variant workflow).
 
-        Mirrors `_ensure_base_loaded` with its own single-flight lock so a
-        0.6B-Base load and a 1.7B-Base load can proceed concurrently if both
-        are needed at once. Double-checked inside to avoid a second copy."""
+        Mirrors `_ensure_base_loaded`, sharing the single `_cold_load_lock` so the
+        device-steer (set-pref + resolve + load) stays atomic against a concurrent
+        0.6B-Base or VoiceDesign cold load over the shared `self._device` (task 3,
+        vram-aware-placement plan — see the lock's definition). Double-checked
+        inside to avoid a second copy."""
         if self._base17 is not None:
             return
-        with self._base17_load_lock:
+        with self._cold_load_lock:
             if self._base17 is None:
+                if device is not None:
+                    self._device_pref = device
                 self._ensure_device_resolved()
                 log.info(
                     "Loading Qwen 1.7B-Base model=%s on %s …",
@@ -2876,17 +2955,22 @@ class QwenEngine(Engine):
                 _maybe_compile_codec(self._base17, torch)
                 log.info("Qwen 1.7B-Base loaded.")
 
-    def _ensure_base17_for_mint(self) -> None:
+    def _ensure_base17_for_mint(self, device: Optional[str] = None) -> None:
         """Mint-only: ensure the 1.7B-Base is available, raising a typed
         Base17UnavailableError the mint route maps to the 503 fallback signal.
         A CUDA OOM is re-raised unchanged (generic 500, no fallback). Other
-        callers keep using _ensure_base17_loaded() and are unaffected."""
+        callers keep using _ensure_base17_loaded() and are unaffected.
+
+        `device` (task 3, vram-aware-placement plan) forwards an admitted
+        reservation's card straight into `_ensure_base17_loaded`, which sets the
+        pref + resolves + loads atomically under its own load lock (task 2). `None`
+        is byte-for-byte the pre-admission path."""
         import torch  # type: ignore
 
         if not _qwen_base17_weights_present():
             raise Base17UnavailableError("not-installed")
         try:
-            self._ensure_base17_loaded()
+            self._ensure_base17_loaded(device=device)
         except Exception as e:  # noqa: BLE001 — classify then re-raise
             msg = str(e).lower()  # exc-text-safe: OOM-branch classification only, never returned
             if "out of memory" in msg or isinstance(
@@ -3197,17 +3281,34 @@ class QwenEngine(Engine):
         eb = m.extract_speaker_embedding(audio=_resample24k(wav_b, sr_b), sr=24000)
         return cosine_distance(ea.detach().cpu().float().numpy(), eb.detach().cpu().float().numpy())
 
-    def _ensure_design_loaded(self) -> None:
-        if self._design is None:
-            self._ensure_device_resolved()
-            log.info(
-                "Loading Qwen VoiceDesign model=%s on %s (transient) …",
-                self.VOICEDESIGN_MODEL, self._device,
-            )
-            self._design = self._load_qwen_model(self.VOICEDESIGN_MODEL)
-            global _QWEN_DESIGN_EVER_LOADED
-            _QWEN_DESIGN_EVER_LOADED = True
-            log.info("Qwen VoiceDesign loaded.")
+    def _ensure_design_loaded(self, device: Optional[str] = None) -> None:
+        # Fast path: already loaded, no lock needed (the assignment below is the
+        # only writer and it publishes a fully-built model).
+        if self._design is not None:
+            return
+        # Single-flight the cold load under the shared `_cold_load_lock` so the
+        # set-pref + resolve + load are ONE atomic acquisition (task 3,
+        # vram-aware-placement plan): a concrete `device` from an admitted
+        # reservation overrides the env-derived pref for THIS cold load without a
+        # concurrent mint/base cold load on a DIFFERENT admitted card being able to
+        # clobber the shared `self._device`/`self._device_pref` between this
+        # resolve and `_load_qwen_model`'s read of it (the TOCTOU this fix closes —
+        # see the lock's definition). `None` leaves `_device_pref` untouched
+        # (flag-off byte-for-byte). Double-checked so the loser of a race returns
+        # the winner's model instead of loading a second copy.
+        with self._cold_load_lock:
+            if self._design is None:
+                if device is not None:
+                    self._device_pref = device
+                self._ensure_device_resolved()
+                log.info(
+                    "Loading Qwen VoiceDesign model=%s on %s (transient) …",
+                    self.VOICEDESIGN_MODEL, self._device,
+                )
+                self._design = self._load_qwen_model(self.VOICEDESIGN_MODEL)
+                global _QWEN_DESIGN_EVER_LOADED
+                _QWEN_DESIGN_EVER_LOADED = True
+                log.info("Qwen VoiceDesign loaded.")
 
     def _voice_paths(self, voice_id: str) -> tuple[str, str]:
         # Filename-safe id. For an already-ASCII voice_id this is the identity
@@ -3415,6 +3516,7 @@ class QwenEngine(Engine):
         report_progress: Optional[Callable[[str], None]] = None,
         mint_method: Optional[str] = None,
         fallback_for: Optional[dict] = None,
+        device: Optional[str] = None,
     ) -> SynthResult:
         """Design + cache a reusable bespoke voice from a persona `instruct`.
         Returns an audition preview (the calibration line spoken in the new
@@ -3484,8 +3586,19 @@ class QwenEngine(Engine):
                     log.info("Evicting resident Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
                     self.unload_base17()
                 _phase("loading-model")
-                self._ensure_design_loaded()
-                self._ensure_base_loaded()
+                # Capacity-aware placement (task 3, vram-aware-placement plan):
+                # a concrete `device` from an admitted reservation overrides the
+                # env-derived pref for this design. `device` is threaded straight
+                # into each ensure call so the set-pref + resolve + load are ONE
+                # atomic acquisition under that model's own load lock — a
+                # concurrent design/mint admitted to a DIFFERENT card can't clobber
+                # `_device_pref` in the gap between set and resolve (the TOCTOU
+                # this closes). The design load runs first and sets `_device_pref`,
+                # so the base load inherits the same card; passing it here too is
+                # belt-and-suspenders for the warm-design / cold-base case. `None`
+                # leaves `_device_pref` untouched (flag-off byte-for-byte).
+                self._ensure_design_loaded(device=device)
+                self._ensure_base_loaded(device=device)
                 # Phase boundary: everything above is Kokoro-evict + (cold) model
                 # load; everything below is GPU forwards. `load_ms` isolates the
                 # cold-start cost (the transient 1.7B VoiceDesign load the operator
@@ -3600,6 +3713,7 @@ class QwenEngine(Engine):
         calibration_text: Optional[str],
         voice_uuid: Optional[str] = None,
         report_progress: Optional[Callable[[str], None]] = None,
+        device: Optional[str] = None,
     ) -> "SynthResult":
         """Mint an emotion variant anchored to `base_voice_id`'s identity.
 
@@ -3668,11 +3782,21 @@ class QwenEngine(Engine):
                 log.info("Evicting resident Qwen VoiceDesign to free VRAM for 1.7B-Base mint.")
                 self.unload_design()
             _phase("loading-model")
-            self._ensure_base17_for_mint()
+            # Capacity-aware placement (task 3, vram-aware-placement plan):
+            # mirrors design_voice — a concrete `device` from an admitted
+            # reservation overrides the env-derived pref for this mint. `device`
+            # is threaded into `_ensure_base17_for_mint`, which forwards it to
+            # `_ensure_base17_loaded` where set-pref + resolve + load are ONE
+            # atomic acquisition under the shared `_cold_load_lock` — so a
+            # concurrent design/mint/base cold load admitted to a DIFFERENT card
+            # can't clobber the shared `self._device` between this resolve and
+            # `_load_qwen_model`'s read of it (the TOCTOU this closes). `None`
+            # leaves `_device_pref` untouched (flag-off byte-for-byte).
+            self._ensure_base17_for_mint(device=device)
             # Phase boundary: Kokoro-evict + (cold) 1.7B-Base load above.
             load_ms = (time.perf_counter() - t0) * 1000.0
             with self._synth_lock:
-                self._ensure_base17_for_mint()
+                self._ensure_base17_for_mint(device=device)
                 rc = base_item.ref_code
                 rc = rc.to(self._device) if hasattr(rc, "to") else rc
                 _t = time.perf_counter()
@@ -6166,6 +6290,12 @@ async def load_model(req: Request) -> JSONResponse:
             status_code=503,
         )
 
+    # Capacity-aware placement (task 2, vram-aware-placement plan): mirrors
+    # /synthesize's admission wrapping (`SEG_CAPACITY_ADMISSION`, default
+    # OFF). Held ACROSS the cold load (peak reservation covers the load's own
+    # transient VRAM spike, not just steady-state residency) and released on
+    # exit either way. Flag-OFF/`None` device leaves env resolution
+    # byte-for-byte unchanged.
     if engine_id == "kokoro":
         kokoro = ENGINES.get("kokoro")
         if not isinstance(kokoro, KokoroEngine):
@@ -6179,7 +6309,18 @@ async def load_model(req: Request) -> JSONResponse:
                 return JSONResponse({"status": "ready"})
             kokoro._loading = True
             try:
-                await asyncio.to_thread(kokoro._ensure_loaded, "v1")
+                if _capacity_admission_enabled():
+                    cap = _ENGINE_CAPACITY_PROFILE.get("kokoro", {"cpu_capable": True, "heavy": False})
+                    with _placement.reservation(
+                        "kokoro", None, {},
+                        cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
+                        pinned=_engine_env_pin("kokoro"),
+                    ) as adm:
+                        if "noCapacity" in adm:
+                            return _no_capacity(adm)
+                        await asyncio.to_thread(kokoro._ensure_loaded, "v1", device=adm["device"])
+                else:
+                    await asyncio.to_thread(kokoro._ensure_loaded, "v1")
             except Exception as e:
                 return error_response(e, log, status=500)
             finally:
@@ -6203,7 +6344,18 @@ async def load_model(req: Request) -> JSONResponse:
                     return JSONResponse({"status": "ready"})
                 qwen._loading = True
                 try:
-                    await asyncio.to_thread(qwen._ensure_base17_loaded)
+                    if _capacity_admission_enabled():
+                        cap = _ENGINE_CAPACITY_PROFILE.get("qwen", {"cpu_capable": False, "heavy": True})
+                        with _placement.reservation(
+                            "qwen", "1.7b", {},
+                            cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
+                            pinned=_engine_env_pin("qwen"),
+                        ) as adm:
+                            if "noCapacity" in adm:
+                                return _no_capacity(adm)
+                            await asyncio.to_thread(qwen._ensure_base17_loaded, device=adm["device"])
+                    else:
+                        await asyncio.to_thread(qwen._ensure_base17_loaded)
                 except Exception as e:
                     return error_response(e, log, status=500)
                 finally:
@@ -6217,9 +6369,23 @@ async def load_model(req: Request) -> JSONResponse:
                 return JSONResponse({"status": "ready"})
             qwen._loading = True
             try:
-                # Warms the resident Base (clone/synth) model only; the heavy
-                # VoiceDesign model loads transiently during design_voice.
-                await asyncio.to_thread(qwen._ensure_base_loaded)
+                if _capacity_admission_enabled():
+                    cap = _ENGINE_CAPACITY_PROFILE.get("qwen", {"cpu_capable": False, "heavy": True})
+                    with _placement.reservation(
+                        "qwen", None, {},
+                        cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
+                        pinned=_engine_env_pin("qwen"),
+                    ) as adm:
+                        if "noCapacity" in adm:
+                            return _no_capacity(adm)
+                        # Warms the resident Base (clone/synth) model only;
+                        # the heavy VoiceDesign model loads transiently
+                        # during design_voice.
+                        await asyncio.to_thread(qwen._ensure_base_loaded, device=adm["device"])
+                else:
+                    # Warms the resident Base (clone/synth) model only; the heavy
+                    # VoiceDesign model loads transiently during design_voice.
+                    await asyncio.to_thread(qwen._ensure_base_loaded)
             except Exception as e:
                 return error_response(e, log, status=500)
             finally:
@@ -6244,7 +6410,18 @@ async def load_model(req: Request) -> JSONResponse:
             return JSONResponse({"status": "ready"})
         coqui._loading = True
         try:
-            await asyncio.to_thread(coqui._ensure_loaded, model)
+            if _capacity_admission_enabled():
+                cap = _ENGINE_CAPACITY_PROFILE.get("coqui", {"cpu_capable": False, "heavy": True})
+                with _placement.reservation(
+                    "coqui", None, {},
+                    cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
+                    pinned=_engine_env_pin("coqui"),
+                ) as adm:
+                    if "noCapacity" in adm:
+                        return _no_capacity(adm)
+                    await asyncio.to_thread(coqui._ensure_loaded, model, device=adm["device"])
+            else:
+                await asyncio.to_thread(coqui._ensure_loaded, model)
         except Exception as e:
             return error_response(e, log, status=500)
         finally:
@@ -6401,17 +6578,43 @@ async def qwen_design_voice(req: Request) -> Response:
     global _inflight_synth
     _inflight_synth += 1
     try:
-        result = await asyncio.to_thread(
-            qwen.design_voice,
-            voice_id.strip(),
-            instruct.strip(),
-            language if isinstance(language, str) else None,
-            calibration_text if isinstance(calibration_text, str) else None,
-            voice_uuid,
-            _report,
-            mint_method,
-            fallback_for,
-        )
+        # Capacity-aware placement (task 3, vram-aware-placement plan): mirrors
+        # /qwen/load's admission wrapping (`SEG_CAPACITY_ADMISSION`, default
+        # OFF). Held across the (possibly cold) VoiceDesign + Base load AND the
+        # design forward, released on exit either way. Flag-OFF leaves the call
+        # byte-for-byte unchanged (no device arg).
+        if _capacity_admission_enabled():
+            with _placement.reservation(
+                "qwen", "1.7b", {},
+                cpu_capable=False, heavy=True,
+                pinned=_engine_env_pin("qwen"),
+            ) as adm:
+                if "noCapacity" in adm:
+                    return _no_capacity(adm)
+                result = await asyncio.to_thread(
+                    qwen.design_voice,
+                    voice_id.strip(),
+                    instruct.strip(),
+                    language if isinstance(language, str) else None,
+                    calibration_text if isinstance(calibration_text, str) else None,
+                    voice_uuid,
+                    _report,
+                    mint_method,
+                    fallback_for,
+                    adm["device"],
+                )
+        else:
+            result = await asyncio.to_thread(
+                qwen.design_voice,
+                voice_id.strip(),
+                instruct.strip(),
+                language if isinstance(language, str) else None,
+                calibration_text if isinstance(calibration_text, str) else None,
+                voice_uuid,
+                _report,
+                mint_method,
+                fallback_for,
+            )
     except Exception as e:
         err_str = f"{e}"
         if _CUDA_POISON_RE.search(err_str):
@@ -6493,16 +6696,40 @@ async def qwen_mint_variant(req: Request) -> Response:
     global _inflight_synth
     _inflight_synth += 1
     try:
-        result = await asyncio.to_thread(
-            qwen.mint_variant,
-            base_voice_id.strip(),
-            variant_voice_id.strip(),
-            emotion_instruct.strip(),
-            language if isinstance(language, str) else None,
-            calibration_text if isinstance(calibration_text, str) else None,
-            voice_uuid,
-            _report,
-        )
+        # Capacity-aware placement (task 3, vram-aware-placement plan): mirrors
+        # /qwen/design-voice above — mint also runs on the 1.7B-Base, so it
+        # reserves the same `qwen.1.7b` footprint. Flag-OFF leaves the call
+        # byte-for-byte unchanged (no device arg).
+        if _capacity_admission_enabled():
+            with _placement.reservation(
+                "qwen", "1.7b", {},
+                cpu_capable=False, heavy=True,
+                pinned=_engine_env_pin("qwen"),
+            ) as adm:
+                if "noCapacity" in adm:
+                    return _no_capacity(adm)
+                result = await asyncio.to_thread(
+                    qwen.mint_variant,
+                    base_voice_id.strip(),
+                    variant_voice_id.strip(),
+                    emotion_instruct.strip(),
+                    language if isinstance(language, str) else None,
+                    calibration_text if isinstance(calibration_text, str) else None,
+                    voice_uuid,
+                    _report,
+                    adm["device"],
+                )
+        else:
+            result = await asyncio.to_thread(
+                qwen.mint_variant,
+                base_voice_id.strip(),
+                variant_voice_id.strip(),
+                emotion_instruct.strip(),
+                language if isinstance(language, str) else None,
+                calibration_text if isinstance(calibration_text, str) else None,
+                voice_uuid,
+                _report,
+            )
     except VoiceNotDesignedError as exc:
         log.warning("/qwen/mint-variant: base voice not designed — %s", exc)
         return JSONResponse(
@@ -6794,9 +7021,27 @@ async def transcribe(req: Request) -> Response:
     word_timestamps = req.headers.get("X-Word-Timestamps") is not None
 
     try:
-        result = await asyncio.to_thread(
-            ASR.transcribe, pcm, sample_rate, language, word_timestamps
-        )
+        # Capacity-aware placement (task 4, vram-aware-placement plan): only
+        # when ASR is GPU-configured (ASR_DEVICE=cuda/rocm) — the cpu-default
+        # path (zero VRAM) never touches _placement, flag-on or off. A no-fit
+        # probe 503s before the (possibly cold) load ever runs.
+        on_gpu = _parse_device(ASR._device)[0] in ("cuda", "rocm")
+        if on_gpu and _capacity_admission_enabled():
+            with _placement.reservation(
+                "asr", None, {},
+                cpu_capable=False, heavy=False,
+                pinned=_engine_env_pin("asr"),
+            ) as adm:
+                if "noCapacity" in adm:
+                    return _no_capacity(adm)
+                ASR._device = adm["device"]  # steer the (possibly cold) load
+                result = await asyncio.to_thread(
+                    ASR.transcribe, pcm, sample_rate, language, word_timestamps
+                )
+        else:
+            result = await asyncio.to_thread(
+                ASR.transcribe, pcm, sample_rate, language, word_timestamps
+            )
     except Exception as e:
         # Internal-only — CUDA-poison detection + server-side log, never a body.
         err_str = f"{e}"
@@ -6847,8 +7092,26 @@ async def embed(req: Request) -> Response:
         raise HTTPException(status_code=400, detail="X-Sample-Rate header (>0) is required.")
 
     try:
-        await SPK.ensure_loaded()  # srv-47 R2-B: a cuda LOAD poison must be fenced too
-        embedding = await asyncio.to_thread(SPK.embed, pcm, int(sample_rate))
+        # Capacity-aware placement (task 4, vram-aware-placement plan): only
+        # when SPK is GPU-configured (SPK_DEVICE=cuda/rocm) — the cpu-default
+        # path never touches _placement. The cold load happens inside
+        # ensure_loaded(), so the reservation must wrap BOTH the load and the
+        # embed call.
+        on_gpu = _parse_device(SPK.device)[0] in ("cuda", "rocm")
+        if on_gpu and _capacity_admission_enabled():
+            with _placement.reservation(
+                "spk", None, {},
+                cpu_capable=False, heavy=False,
+                pinned=_engine_env_pin("spk"),
+            ) as adm:
+                if "noCapacity" in adm:
+                    return _no_capacity(adm)
+                SPK.device = adm["device"]  # steer the (possibly cold) load
+                await SPK.ensure_loaded()  # srv-47 R2-B: a cuda LOAD poison must be fenced too
+                embedding = await asyncio.to_thread(SPK.embed, pcm, int(sample_rate))
+        else:
+            await SPK.ensure_loaded()  # srv-47 R2-B: a cuda LOAD poison must be fenced too
+            embedding = await asyncio.to_thread(SPK.embed, pcm, int(sample_rate))
     except Exception as e:
         err_str = f"{e}"
         log.exception("embed failed (sample_rate=%d bytes=%d)", sample_rate, len(pcm))
