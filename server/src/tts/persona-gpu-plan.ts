@@ -1,5 +1,4 @@
 import { activeGenerationBooks } from '../routes/generation.js';
-import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { isOtherBookDesignBusy, isAnyAnalysisBusy } from './design-lock.js';
 import { resolvePersonaEngine } from '../analyzer/voice-style.js';
 
@@ -8,46 +7,6 @@ import { resolvePersonaEngine } from '../analyzer/voice-style.js';
    cast-review session (back-to-back designs) then freed by the design idle
    watchdog. 300 s preserves the historical '5m'. */
 const PERSONA_KEEP_ALIVE_SECONDS = 300;
-
-/** Thrown when the sidecar can't be safely unloaded for a persona run because a
-    render is active. The caller falls back to CPU persona generation. */
-export class GpuBusyForPersonaError extends Error {
-  readonly code = 'GPU_BUSY_FOR_PERSONA';
-  constructor(message: string) {
-    super(message);
-    this.name = 'GpuBusyForPersonaError';
-  }
-}
-
-/** Reverse-evict: free the sidecar's resident Qwen models so a local persona
-    Ollama model fits on a constrained GPU. Refuses (throwing
-    GpuBusyForPersonaError) if a render is active, checked via the durable
-    `activeGenerationBooks` flag. No longer holds a full-budget gpuSemaphore
-    lock around the unload — same-engine/cross-book serialization against a
-    concurrent render now lives in the sidecar (`_synth_lock` + the sidecar
-    load locks), not a Node-side mutex.
-
-    Not currently called from `preparePersonaBatch` below — the card-size-
-    gated pre-load reverse-evict it used to run for (the now-retired
-    `gpu.safeCoexistMb` heuristic) is gone; kept as a standalone,
-    independently-tested primitive for a future direct caller. */
-export async function unloadResidentSidecar(): Promise<void> {
-  if (activeGenerationBooks().length > 0) {
-    throw new GpuBusyForPersonaError('A render is active — skip the GPU persona pre-pass.');
-  }
-  const url = getResolvedSidecarUrl();
-  const res = await fetch(`${url}/unload`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ engine: 'qwen' }), // frees Qwen Base + VoiceDesign
-  });
-  if (!res.ok) {
-    throw new Error(`Sidecar /unload returned ${res.status} ${res.statusText}`);
-  }
-  // Best-effort health verify — /health is the sidecar's own endpoint (not the Node proxy).
-  const health = await fetch(`${url}/health`).then((r) => r.json()).catch((e) => { console.warn('[persona-gpu-plan] sidecar /health probe failed after /unload (best-effort):', (e as Error).message); return {}; });
-  void health; // idempotent; /unload 200 is sufficient; health is diagnostic only.
-}
 
 export interface PersonaGpuPlan {
   onCpu: boolean;

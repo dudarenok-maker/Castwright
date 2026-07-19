@@ -1,30 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
-describe('unloadResidentSidecar', () => {
-  afterEach(() => vi.restoreAllMocks());
-
-  it('refuses (no /unload) while a render is active', async () => {
-    const mod = await import('./persona-gpu-plan.js');
-    const gen = await import('../routes/generation.js');
-    vi.spyOn(gen, 'activeGenerationBooks').mockReturnValue(['book-1']);
-    const fetchSpy = vi.spyOn(global, 'fetch');
-    await expect(mod.unloadResidentSidecar()).rejects.toBeInstanceOf(mod.GpuBusyForPersonaError);
-    expect(fetchSpy).not.toHaveBeenCalled(); // never sent /unload
-  });
-
-  it('unloads the qwen engine when idle and verifies health', async () => {
-    const mod = await import('./persona-gpu-plan.js');
-    const gen = await import('../routes/generation.js');
-    vi.spyOn(gen, 'activeGenerationBooks').mockReturnValue([]);
-    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ status: 'idle' }), { status: 200 }),
-    );
-    await mod.unloadResidentSidecar();
-    const call = fetchSpy.mock.calls.find((c) => String(c[0]).endsWith('/unload'))!;
-    expect(JSON.parse((call[1] as RequestInit).body as string).engine).toBe('qwen');
-  });
-});
-
 describe('resolvePersonaGpuPlan', () => {
   afterEach(() => vi.restoreAllMocks());
 

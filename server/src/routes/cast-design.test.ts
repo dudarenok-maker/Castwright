@@ -53,11 +53,6 @@ vi.mock('../analyzer/voice-style.js', () => ({
 vi.mock('../tts/persona-gpu-plan.js', () => ({
   preparePersonaBatch: vi.fn().mockResolvedValue({ onCpu: false, keepAlive: 0 }),
   resolvePersonaGpuPlan: vi.fn().mockReturnValue({ onCpu: false, evict: false, keepAlive: 0 }),
-  unloadResidentSidecar: vi.fn().mockResolvedValue(undefined),
-  GpuBusyForPersonaError: class GpuBusyForPersonaError extends Error {
-    code = 'GPU_BUSY_FOR_PERSONA';
-    constructor(m: string) { super(m); this.name = 'GpuBusyForPersonaError'; }
-  },
 }));
 
 /* Passthrough mock — keeps withGpuLoad a no-op in tests so the unit boundary

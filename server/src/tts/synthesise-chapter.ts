@@ -812,17 +812,16 @@ export function buildHintFromCast(c: CastCharacter): CharacterHint {
 }
 
 /* fs-60 — Qwen and Coqui are both VRAM-heavy engines whose real footprints
-   can co-exceed an 8 GB card even though the abstract ENGINE_VRAM_COST budget
+   can co-exceed an 8 GB card even though a naive per-engine VRAM budget
    check would admit them together (see the design spec §4). Rather than
-   retuning that shared budget table (a separate, riskier change affecting
+   retuning such a shared budget table (a separate, riskier change affecting
    every existing Qwen-concurrency decision), a mixed Qwen+Coqui chapter is
    partitioned into two serial phases with an explicit evict between them.
    No longer holds a full-budget gpuSemaphore lock during the unload —
    same-engine/cross-book serialization against a concurrent synth call from
    another book now lives in the sidecar (`_synth_lock` + the sidecar load
-   locks), not a Node-side mutex. Like `persona-gpu-plan.ts`'s
-   `unloadResidentSidecar`, this does NOT check activeGenerationBooks/refuse
-   when a render is active: it's deliberately called *during* an active
+   locks), not a Node-side mutex. This does NOT check activeGenerationBooks/
+   refuse when a render is active: it's deliberately called *during* an active
    render, as part of this chapter's own sequencing. */
 async function evictQwenForCoquiPhase(): Promise<void> {
   const url = getResolvedSidecarUrl();

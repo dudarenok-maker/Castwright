@@ -43,8 +43,7 @@ export function setLastKnownEngineDevices(devices: SidecarDeviceMap | null | und
 
 /** Synchronous read. Any engine outside {kokoro, coqui, qwen} (e.g. the
     cloud-only 'gemini') always reads back 'unknown' — matches
-    costForEngine/engineDeviceIsGpu's existing "no registered device knob"
-    convention. */
+    engineDeviceIsGpu's existing "no registered device knob" convention. */
 export function getLastKnownEngineDevice(engine: string): EngineDeviceFamily {
   return isTrackedEngine(engine) ? lastKnown[engine] : 'unknown';
 }

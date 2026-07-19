@@ -813,7 +813,7 @@ export class OllamaAnalyzer implements Analyzer {
     does not stream, and is GPU-plan aware:
       - onCpu  → num_gpu:0 (system RAM only) AND skip the GPU semaphore
                  (a CPU call must not queue behind GPU synthesis).
-      - !onCpu → acquire gpuSemaphore(costForEngine('analyzer')) around the fetch.
+      - !onCpu → acquire an analyzer GPU slot around the fetch.
       - keepAlive is caller-controlled (resident window for a bulk pre-pass; 0
         for one-shot / CPU). */
 export async function generatePersonaViaOllama(
