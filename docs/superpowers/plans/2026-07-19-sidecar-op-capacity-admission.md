@@ -88,7 +88,7 @@ def _gpu_candidates(self, devices, resident_or_pinned):
     return gpus
 ```
 
-In `admit`/`reservation`, compute `constraint = resident if resident is not None else pinned` and pass `constraint` where `resident` was passed to `_gpu_candidates`. Keep the existing `resident`-based `noCapacity.deviceKey` logic, but fall back to `pinned` when neither resident nor a worst-device is available. Add:
+In `admit`/`reservation`, compute `constraint = resident if resident is not None else pinned` and pass `constraint` where `resident` was passed to `_gpu_candidates`. **The `noCapacity.deviceKey` must prefer the constraint over the roomiest card** — a pinned op that can't fit needs Node to evict from *its* card, not the roomiest one: `device_key = resident if resident is not None else (pinned if pinned is not None else worst)` (was `resident if resident is not None else worst`). Add:
 
 ```python
 def _engine_env_pin(engine_id: str) -> Optional[str]:
@@ -134,7 +134,12 @@ def test_load_nocapacity_returns_503(monkeypatch, client):
 
 - [ ] **Step 2: Run to verify fail** — `pytest tests/test_load_admission.py -v` → FAIL (200/ready instead of 503; engine loaded with no device).
 
-- [ ] **Step 3: Implement.** Add `device=None` params (thread into the concrete device resolution each method already does — e.g. Coqui: when `device` given, use it in place of `self._device`; Qwen: set `self._device_pref`/`self._device` to `device` under the load lock before resolving). Then in `load_model`, mirror `/synthesize`: after the idempotent-`ready` short-circuit, when `_capacity_admission_enabled()`, compute `pinned = _engine_env_pin(engine_id)`, enter `with _placement.reservation(engine_id, model_key, {}, cpu_capable=<kokoro:True else False>, heavy=<not kokoro>, pinned=pinned) as adm:`; on `noCapacity` return the 503; else pass `device=adm["device"]` into the `to_thread(ensure_loaded, …)` call. `model_key`: `"1.7b"` for the qwen 1.7b branch, else `None`. Kokoro is always wrapped (`cpu_capable=True`).
+- [ ] **Step 3: Implement.** Add `device=None` params, threaded into each engine's existing resolution at these exact points (all read the engine's device attr today):
+  - **Coqui** (`_ensure_loaded`): add `device_override` to `_resolve_runtime_options(self, torch_module, device_override=None)` (`main.py:1032`) and use it in place of `self._device` when set.
+  - **Qwen** (`_ensure_base_loaded`/`_ensure_base17_loaded`): when `device` is given, set `self._device_pref = device` before calling `_ensure_device_resolved()` (`main.py:2830`, which resolves `self._device` from `_device_pref`) — do this under the threading `_base_load_lock`/`_base17_load_lock` already held.
+  - **Kokoro** (`_ensure_loaded`, `main.py:1361`): set `self._requested_device = device` before its resolution when given.
+
+  In every case `device=None` leaves the attr untouched → env resolution unchanged. Then in `load_model`, mirror `/synthesize`: after the idempotent-`ready` short-circuit, when `_capacity_admission_enabled()`, compute `pinned = _engine_env_pin(engine_id)`, enter `with _placement.reservation(engine_id, model_key, {}, cpu_capable=<kokoro:True else False>, heavy=<not kokoro>, pinned=pinned) as adm:`; on `noCapacity` return the 503; else pass `device=adm["device"]` into the `to_thread(ensure_loaded, …)` call. `model_key`: `"1.7b"` for the qwen 1.7b branch, else `None`. Kokoro is always wrapped (`cpu_capable=True`).
 
 - [ ] **Step 4: Run to verify pass** — all three tests PASS; run `pytest tests/test_synthesize.py tests/test_kokoro.py -v` to confirm no load-path regression.
 
@@ -145,12 +150,12 @@ def test_load_nocapacity_returns_503(monkeypatch, client):
 ## Task 3 — Sidecar: `design_voice` + `mint_variant` device plumbing + admission
 
 **Files:**
-- Modify: `server/tts-sidecar/main.py` — `QwenEngine.design_voice(..., device=None)` and the mint-variant path (`_load_voice_prompt_17b`/mint entry) to route their internal `_ensure_design_loaded`/`_ensure_base17_loaded`/`_ensure_base_loaded` to `device`; `/qwen/design-voice` and `/qwen/mint-variant` handlers.
+- Modify: `server/tts-sidecar/main.py` — `QwenEngine.design_voice(..., device=None)` (`main.py:3412`) and `QwenEngine.mint_variant(..., device=None)` (`main.py:3594`) to route their internal `_ensure_design_loaded`/`_ensure_base17_loaded`/`_ensure_base_loaded` to `device` (all resolve off the shared `self._device`, so setting `self._device_pref = device` once under the load lock steers every internal load); `/qwen/design-voice` and `/qwen/mint-variant` handlers.
 - Test: `server/tts-sidecar/tests/test_placement.py` / `test_qwen3.py` sibling.
 
 **Interfaces:**
 - Consumes: Task 1 `reservation(..., pinned=)`, Task 2 Qwen `_ensure_*` device params.
-- Produces: `design_voice(self, voice_id, instruct, language, calibration_text, voice_uuid, report, mint_method, fallback_for, device=None)` (append `device` LAST to preserve positional callers); mint path accepts `device`.
+- Produces: `design_voice(self, voice_id, instruct, language, calibration_text, voice_uuid, report, mint_method, fallback_for, device=None)` and `mint_variant(self, base_voice_id, variant_voice_id, emotion_instruct, language, calibration_text, …, device=None)` — append `device` LAST on both to preserve the positional handler callers (`qwen_design_voice` at `main.py:6405`, `qwen_mint_variant` at ~`6497`).
 
 - [ ] **Step 1: Write failing tests** — flag-ON `/qwen/design-voice` and `/qwen/mint-variant` reserve the `qwen.1.7b` footprint (7168) and 503 when it doesn't fit; flag-OFF both unchanged. Assert the reservation key via a spy on `_placement.footprints.peak_mb` or by observing the 503 `neededMb == 7168`.
 
@@ -271,7 +276,7 @@ return withGpuLoadLock(async () => { /* existing coarse probe/evict/refuse */ })
 
 - [ ] **Step 2: Run to verify fail** → FAIL (503 not retried).
 
-- [ ] **Step 3: Implement.** In each caller, replace the bare `fetch(url, init)` with `withCapacityRetry((signal) => undiciFetch(url, {...init, signal}), { engine: '<coqui|qwen|asr|spk>', signal: <existing signal> })`, then keep the caller's existing `if (!response.ok)` handling on the returned Response. In `transcribe-client`/`embed-client` only wrap when the GPU-gate is true (else call `undiciFetch` directly). In `qwen-voice.ts`, wrap inside `postDesignAndCache` around the design + mint POSTs; the `base17-unavailable` branch is unaffected (helper returns that 503).
+- [ ] **Step 3: Implement.** In each caller, replace the bare fetch call with `withCapacityRetry((signal) => <caller's fetch>(url, {...init, signal}), { engine: '<coqui|qwen|asr|spk>', signal: <existing signal> })`, then keep the caller's existing `if (!response.ok)` handling on the returned Response. Note the fetch impl differs per caller — `qwen-voice.ts` and `sidecar-health.ts` use the global `fetch`; `transcribe-client.ts`/`embed-client.ts` use `undiciFetch` — and `withCapacityRetry` is thunk-agnostic, so pass whichever the caller already uses. In `transcribe-client`/`embed-client` only wrap when the GPU-gate (`asrRunsOnGpu()`/`spkRunsOnGpu()`) is true (else call the fetch directly). In `qwen-voice.ts`, wrap inside `postDesignAndCache` around the design + mint POSTs; the `base17-unavailable` branch is unaffected (helper returns that 503 for the existing `SidecarDesignError` path).
 
 - [ ] **Step 4: Run to verify pass** — `npm run test:server -- qwen-voice sidecar-health transcribe-client embed-client` → PASS.
 
