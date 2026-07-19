@@ -1029,12 +1029,20 @@ class CoquiEngine(Engine):
         # `_mark_cuda_poisoned`. Any engine's context-fatal CUDA error fast-fails
         # all engines + schedules one supervised self-exit.
 
-    def _resolve_runtime_options(self, torch_module: Any) -> dict[str, Any]:
+    def _resolve_runtime_options(
+        self, torch_module: Any, device_override: Optional[str] = None
+    ) -> dict[str, Any]:
         """Resolve device + fp16 + deepspeed knobs into a concrete config dict.
         Lifted out of `_ensure_loaded` so the env-driven branching is
         unit-testable without instantiating the real ~3 GB XTTS model — tests
-        inject a torch stub that controls `cuda.is_available()`."""
-        device = self._device
+        inject a torch stub that controls `cuda.is_available()`.
+
+        `device_override` (capacity-aware placement, task 2 of the
+        vram-aware-placement plan): when the caller has already admitted this
+        load onto a concrete device (e.g. "cuda:1"), use that in place of the
+        env-derived `self._device` for THIS cold load. `None` (the default)
+        leaves env resolution byte-for-byte unchanged."""
+        device = device_override if device_override is not None else self._device
         if device == "auto":
             device = _resolve_torch_device(device, torch_module)
         # On CUDA (any index — cuda, cuda:0, cuda:1, …), default both extras ON
@@ -1053,7 +1061,7 @@ class CoquiEngine(Engine):
             deepspeed = False
         return {"device": device, "half": half, "deepspeed": deepspeed}
 
-    def _ensure_loaded(self, model: str) -> None:
+    def _ensure_loaded(self, model: str, device: Optional[str] = None) -> None:
         if self._tts is not None:
             return
         # Importing lazily so the process can start (and /health respond)
@@ -1087,7 +1095,7 @@ class CoquiEngine(Engine):
             "xtts_v2": "tts_models/multilingual/multi-dataset/xtts_v2",
         }.get(model, model)
 
-        opts = self._resolve_runtime_options(torch)
+        opts = self._resolve_runtime_options(torch, device_override=device)
         device, want_half, want_deepspeed = opts["device"], opts["half"], opts["deepspeed"]
         _validate_cuda_index(device, torch)
         # Single startup log line — `npm run tts:sidecar` users can grep
@@ -1358,9 +1366,16 @@ class KokoroEngine(Engine):
             pass
         return kokoro
 
-    def _ensure_loaded(self, model: str) -> None:
+    def _ensure_loaded(self, model: str, device: Optional[str] = None) -> None:
         if self._kokoro is not None:
             return
+        # Capacity-aware placement (task 2, vram-aware-placement plan): a
+        # concrete `device` from an admitted reservation overrides the
+        # env-derived pin for THIS cold load; `None` leaves
+        # `_requested_device` (already set from KOKORO_DEVICE at __init__)
+        # untouched, so env resolution stays byte-for-byte unchanged.
+        if device is not None:
+            self._requested_device = device
         try:
             from kokoro_onnx import Kokoro  # type: ignore
         except ImportError as e:
@@ -2865,7 +2880,7 @@ class QwenEngine(Engine):
         import torch  # type: ignore
         self._device = _resolve_torch_device(self._device_pref, torch)
 
-    def _ensure_base_loaded(self) -> None:
+    def _ensure_base_loaded(self, device: Optional[str] = None) -> None:
         # Fast path: already loaded, no lock needed (the assignment below is the
         # only writer and it publishes a fully-built model).
         if self._base is not None:
@@ -2875,6 +2890,13 @@ class QwenEngine(Engine):
         # second copy (which would corrupt the dtype state).
         with self._base_load_lock:
             if self._base is None:
+                # Capacity-aware placement (task 2, vram-aware-placement
+                # plan): a concrete `device` from an admitted reservation
+                # overrides the env-derived pref for THIS cold load, done
+                # under the lock (same as the resolve call it precedes).
+                # `None` leaves `_device_pref` untouched.
+                if device is not None:
+                    self._device_pref = device
                 self._ensure_device_resolved()
                 log.info("Loading Qwen Base model=%s on %s …", self.BASE_MODEL, self._device)
                 self._base = self._load_qwen_model(self.BASE_MODEL)
@@ -2883,7 +2905,7 @@ class QwenEngine(Engine):
                 _maybe_compile_codec(self._base, torch)
                 log.info("Qwen Base loaded.")
 
-    def _ensure_base17_loaded(self) -> None:
+    def _ensure_base17_loaded(self, device: Optional[str] = None) -> None:
         """Load the 1.7B-Base model (fs-55 anchored variant workflow).
 
         Mirrors `_ensure_base_loaded` with its own single-flight lock so a
@@ -2893,6 +2915,8 @@ class QwenEngine(Engine):
             return
         with self._base17_load_lock:
             if self._base17 is None:
+                if device is not None:
+                    self._device_pref = device
                 self._ensure_device_resolved()
                 log.info(
                     "Loading Qwen 1.7B-Base model=%s on %s …",
@@ -6194,6 +6218,22 @@ async def load_model(req: Request) -> JSONResponse:
             status_code=503,
         )
 
+    # Capacity-aware placement (task 2, vram-aware-placement plan): mirrors
+    # /synthesize's admission wrapping (`SEG_CAPACITY_ADMISSION`, default
+    # OFF). Held ACROSS the cold load (peak reservation covers the load's own
+    # transient VRAM spike, not just steady-state residency) and released on
+    # exit either way. Flag-OFF/`None` device leaves env resolution
+    # byte-for-byte unchanged.
+    def _no_capacity(adm: dict) -> JSONResponse:
+        return JSONResponse(
+            {
+                "noCapacity": True,
+                "neededMb": adm["noCapacity"]["neededMb"],
+                "deviceKey": adm["noCapacity"]["deviceKey"],
+            },
+            status_code=503,
+        )
+
     if engine_id == "kokoro":
         kokoro = ENGINES.get("kokoro")
         if not isinstance(kokoro, KokoroEngine):
@@ -6207,7 +6247,18 @@ async def load_model(req: Request) -> JSONResponse:
                 return JSONResponse({"status": "ready"})
             kokoro._loading = True
             try:
-                await asyncio.to_thread(kokoro._ensure_loaded, "v1")
+                if _capacity_admission_enabled():
+                    cap = _ENGINE_CAPACITY_PROFILE.get("kokoro", {"cpu_capable": True, "heavy": False})
+                    with _placement.reservation(
+                        "kokoro", None, {},
+                        cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
+                        pinned=_engine_env_pin("kokoro"),
+                    ) as adm:
+                        if "noCapacity" in adm:
+                            return _no_capacity(adm)
+                        await asyncio.to_thread(kokoro._ensure_loaded, "v1", device=adm["device"])
+                else:
+                    await asyncio.to_thread(kokoro._ensure_loaded, "v1")
             except Exception as e:
                 return error_response(e, log, status=500)
             finally:
@@ -6231,7 +6282,18 @@ async def load_model(req: Request) -> JSONResponse:
                     return JSONResponse({"status": "ready"})
                 qwen._loading = True
                 try:
-                    await asyncio.to_thread(qwen._ensure_base17_loaded)
+                    if _capacity_admission_enabled():
+                        cap = _ENGINE_CAPACITY_PROFILE.get("qwen", {"cpu_capable": False, "heavy": True})
+                        with _placement.reservation(
+                            "qwen", "1.7b", {},
+                            cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
+                            pinned=_engine_env_pin("qwen"),
+                        ) as adm:
+                            if "noCapacity" in adm:
+                                return _no_capacity(adm)
+                            await asyncio.to_thread(qwen._ensure_base17_loaded, device=adm["device"])
+                    else:
+                        await asyncio.to_thread(qwen._ensure_base17_loaded)
                 except Exception as e:
                     return error_response(e, log, status=500)
                 finally:
@@ -6245,9 +6307,23 @@ async def load_model(req: Request) -> JSONResponse:
                 return JSONResponse({"status": "ready"})
             qwen._loading = True
             try:
-                # Warms the resident Base (clone/synth) model only; the heavy
-                # VoiceDesign model loads transiently during design_voice.
-                await asyncio.to_thread(qwen._ensure_base_loaded)
+                if _capacity_admission_enabled():
+                    cap = _ENGINE_CAPACITY_PROFILE.get("qwen", {"cpu_capable": False, "heavy": True})
+                    with _placement.reservation(
+                        "qwen", None, {},
+                        cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
+                        pinned=_engine_env_pin("qwen"),
+                    ) as adm:
+                        if "noCapacity" in adm:
+                            return _no_capacity(adm)
+                        # Warms the resident Base (clone/synth) model only;
+                        # the heavy VoiceDesign model loads transiently
+                        # during design_voice.
+                        await asyncio.to_thread(qwen._ensure_base_loaded, device=adm["device"])
+                else:
+                    # Warms the resident Base (clone/synth) model only; the heavy
+                    # VoiceDesign model loads transiently during design_voice.
+                    await asyncio.to_thread(qwen._ensure_base_loaded)
             except Exception as e:
                 return error_response(e, log, status=500)
             finally:
@@ -6272,7 +6348,18 @@ async def load_model(req: Request) -> JSONResponse:
             return JSONResponse({"status": "ready"})
         coqui._loading = True
         try:
-            await asyncio.to_thread(coqui._ensure_loaded, model)
+            if _capacity_admission_enabled():
+                cap = _ENGINE_CAPACITY_PROFILE.get("coqui", {"cpu_capable": False, "heavy": True})
+                with _placement.reservation(
+                    "coqui", None, {},
+                    cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
+                    pinned=_engine_env_pin("coqui"),
+                ) as adm:
+                    if "noCapacity" in adm:
+                        return _no_capacity(adm)
+                    await asyncio.to_thread(coqui._ensure_loaded, model, device=adm["device"])
+            else:
+                await asyncio.to_thread(coqui._ensure_loaded, model)
         except Exception as e:
             return error_response(e, log, status=500)
         finally:
