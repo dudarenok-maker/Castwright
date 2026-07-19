@@ -32,8 +32,13 @@ import {
   analyzerEvictWouldHelp as defaultAnalyzerEvictWouldHelp,
 } from '../analyzer/ollama-residency.js';
 import { getAnalyzerConcurrencyStats } from '../analyzer/analyzer-concurrency.js';
-import { NoCapacityError } from './tts-errors.js';
+import { withCapacityRetry, getCapacityWaiterCount } from '../gpu/capacity-retry.js';
 import { coquiLanguageCode } from './voice-mapping.js';
+
+/* Re-exported from ../gpu/capacity-retry.ts (the no-capacity poll-wait counter
+   moved there in Task 5, #1720) so server/src/routes/gpu-queue.ts's import
+   from this module stays valid. */
+export { getCapacityWaiterCount };
 
 /* Per-engine serialisation: at most ONE synth call per engine in-flight at a
    time, mirroring the sidecar's own _synth_lock. Two same-engine calls
@@ -56,32 +61,11 @@ function engineSynthSem(map: Map<string, CountSemaphore>, engine: string): Count
   return sem;
 }
 
-/* Bounded poll for the no-capacity retry loop (postWithCapacityRetry below).
-   GPU_CAPACITY_POLL_MS is the wait between admission checks;
-   GPU_CAPACITY_MAX_ATTEMPTS bounds the total wait (default 30 * 2s = ~60s)
-   before giving up and surfacing NoCapacityError. */
-const GPU_CAPACITY_POLL_MS = (() => {
-  const raw = Number(process.env.GPU_CAPACITY_POLL_MS);
-  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2_000;
-})();
-const GPU_CAPACITY_MAX_ATTEMPTS = (() => {
-  const raw = Number(process.env.GPU_CAPACITY_MAX_ATTEMPTS);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 30;
-})();
-
-/* GPU-queue status surface (server/src/routes/gpu-queue.ts) — counts ops
-   currently parked in the no-capacity poll-wait below, giving the frontend
-   "Queued (N ahead)" pill something to read now that gpuSemaphore is gone.
-   Incremented just before an op's first poll wait; decremented once that op
-   leaves the wait, however it resolves (succeeds, evicts-then-retries-ok, or
-   throws NoCapacityError). */
-let _capacityWaiters = 0;
-
-/** Current count of ops parked in the no-capacity poll-wait. Read by
-    server/src/routes/gpu-queue.ts for the /api/gpu/queue payload. */
-export function getCapacityWaiterCount(): number {
-  return _capacityWaiters;
-}
+/* The no-capacity poll-wait constants (GPU_CAPACITY_POLL_MS /
+   GPU_CAPACITY_MAX_ATTEMPTS), the parked-waiter counter, and the retry loop
+   itself moved to ../gpu/capacity-retry.ts (Task 5, #1720) so both the synth
+   path and the sidecar-load admission path share one policy. Per-provider
+   overrides still flow through the SidecarOptions below into that helper. */
 
 /* TTS synth legitimately runs for minutes — a wide Qwen batch (plan 136) can
    exceed 5 minutes of GPU decode, and the sidecar is NON-streaming so it holds
@@ -136,8 +120,10 @@ export class SidecarTtsProvider implements TtsProvider {
   private readonly evictOllama: () => Promise<void>;
   private readonly analyzerEvictWouldHelp: (neededMb: number, freeOnDeviceMb: number) => Promise<boolean>;
   private readonly isAnalysisInFlight: () => boolean;
-  private readonly capacityPollMs: number;
-  private readonly maxCapacityAttempts: number;
+  /* Left undefined unless injected — withCapacityRetry applies the
+     GPU_CAPACITY_POLL_MS / GPU_CAPACITY_MAX_ATTEMPTS defaults. */
+  private readonly capacityPollMs: number | undefined;
+  private readonly maxCapacityAttempts: number | undefined;
 
   constructor(opts: SidecarOptions) {
     this.url = opts.url.replace(/\/+$/, '');
@@ -148,8 +134,8 @@ export class SidecarTtsProvider implements TtsProvider {
     this.analyzerEvictWouldHelp = opts.analyzerEvictWouldHelp ?? defaultAnalyzerEvictWouldHelp;
     this.isAnalysisInFlight =
       opts.isAnalysisInFlight ?? (() => getAnalyzerConcurrencyStats().inFlight > 0);
-    this.capacityPollMs = opts.capacityPollMs ?? GPU_CAPACITY_POLL_MS;
-    this.maxCapacityAttempts = opts.maxCapacityAttempts ?? GPU_CAPACITY_MAX_ATTEMPTS;
+    this.capacityPollMs = opts.capacityPollMs;
+    this.maxCapacityAttempts = opts.maxCapacityAttempts;
   }
 
   async synthesize({
@@ -307,119 +293,31 @@ export class SidecarTtsProvider implements TtsProvider {
     }
   }
 
-  /* Capacity-aware admission (vram-aware placement, Task 8b). POSTs and, on a
-     non-ok response, peeks at the body BEFORE `throwForResponse` consumes it
-     (via `response.clone()`) to distinguish "no GPU capacity for this op"
-     (503 `{ noCapacity: true, neededMb, deviceKey }`) from every other
-     failure (poisoned CUDA, 5xx, 4xx) — those still go through
-     `throwForResponse` unchanged, so their existing transient/poisoned
-     classification for `withTtsRetry` is untouched.
-
-     On a genuine no-capacity 503: re-probe live capacity for the reported
-     device, and — ONLY the first time, and ONLY when the analyzer isn't
-     mid-run — ask whether evicting the resident Ollama analyzer would free
-     enough VRAM; if so, evict it and retry immediately. Otherwise (already
-     evicted once, analyzer busy, or eviction wouldn't help), wait
-     `capacityPollMs` and retry, up to `maxCapacityAttempts` total attempts,
-     then give up with `NoCapacityError`. */
+  /* Capacity-aware admission (vram-aware placement, Task 8b) — thin wrapper over
+     the shared `withCapacityRetry` helper (../gpu/capacity-retry.ts, Task 5).
+     The helper retries a genuine no-capacity 503 (evict-once-then-bounded-poll)
+     and RETURNS any other response untouched; this wrapper preserves the synth
+     path's existing contract by running `throwForResponse` on a non-ok result,
+     so poisoned/5xx/4xx keep their transient/poisoned classification for
+     `withTtsRetry`. */
   private async postWithCapacityRetry(
     path: string,
     body: string,
     signal?: AbortSignal,
   ): Promise<Response> {
-    let evicted = false;
-    let waiting = false;
-    try {
-      for (let attempt = 0; ; attempt++) {
-        const response = await this.post(path, body, signal);
-        if (response.ok) return response;
-
-        const noCap = await parseNoCapacity(response.clone());
-        if (!noCap) {
-          // Poisoned / other 5xx / 4xx — classify + throw exactly as before.
-          // throwForResponse always throws; the trailing `throw` is dead code
-          // that only exists so TS narrows `noCap` to non-null below.
-          await throwForResponse(response);
-          throw new Error('unreachable');
-        }
-
-        const devices = await this.capacityProbe.read({ fresh: true });
-        const freeMb =
-          devices.find((d) => d.kind !== 'cpu' && `${d.kind}:${d.index}` === noCap.deviceKey)
-            ?.freeMb ?? 0;
-
-        if (
-          !evicted &&
-          !this.isAnalysisInFlight() &&
-          (await this.analyzerEvictWouldHelp(noCap.neededMb, freeMb))
-        ) {
-          await this.evictOllama();
-          evicted = true;
-          continue; // immediate retry after freeing the analyzer
-        }
-
-        if (attempt + 1 >= this.maxCapacityAttempts) {
-          throw new NoCapacityError(this.engine, noCap.neededMb, noCap.deviceKey);
-        }
-        if (!waiting) {
-          waiting = true;
-          _capacityWaiters++;
-        }
-        await abortableDelay(this.capacityPollMs, signal); // bounded wait; rejects if the caller aborts
-      }
-    } finally {
-      if (waiting) _capacityWaiters--;
-    }
+    const response = await withCapacityRetry((s) => this.post(path, body, s), {
+      engine: this.engine,
+      signal,
+      capacityProbe: this.capacityProbe,
+      evictOllama: this.evictOllama,
+      analyzerEvictWouldHelp: this.analyzerEvictWouldHelp,
+      isAnalysisInFlight: this.isAnalysisInFlight,
+      pollMs: this.capacityPollMs,
+      maxAttempts: this.maxCapacityAttempts,
+    });
+    if (!response.ok) await throwForResponse(response);
+    return response;
   }
-}
-
-/* Parse the sidecar's no-capacity admission-refusal body:
-   `{ "noCapacity": true, "neededMb": N, "deviceKey": "cuda:0" }` on a 503.
-   Never throws — a non-503 status, an unreadable body, or a body that
-   doesn't match this shape all return null so the caller falls back to the
-   normal `throwForResponse` classification. */
-async function parseNoCapacity(
-  response: Response,
-): Promise<{ neededMb: number; deviceKey: string } | null> {
-  if (response.status !== 503) return null;
-  const text = await safeReadText(response);
-  if (!text) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  const body = parsed as { noCapacity?: unknown; neededMb?: unknown; deviceKey?: unknown };
-  if (
-    body?.noCapacity === true &&
-    typeof body.neededMb === 'number' &&
-    typeof body.deviceKey === 'string'
-  ) {
-    return { neededMb: body.neededMb, deviceKey: body.deviceKey };
-  }
-  return null;
-}
-
-/* Resolves after `ms`, or rejects with the signal's abort reason (AbortError)
-   if `signal` fires first — so a cancelled synth stops polling for capacity
-   instead of waiting out the full interval. Mirrors retry.ts's `sleep`. */
-function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(signal.reason ?? new DOMException('capacity poll aborted', 'AbortError'));
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal?.reason ?? new DOMException('capacity poll aborted', 'AbortError'));
-    };
-    if (signal) signal.addEventListener('abort', onAbort, { once: true });
-  });
 }
 
 /* Classify a non-ok sidecar response for the retry wrapper and throw.
