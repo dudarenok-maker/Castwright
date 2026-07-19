@@ -117,30 +117,55 @@ owner: null
 
 ### Manual acceptance walkthrough (owed on-box — the "no OOM" bar)
 
-Run with `SEG_CAPACITY_ADMISSION=1` on the real hardware. **This is the
-acceptance the whole feature exists to satisfy.**
+Run with `SEG_CAPACITY_ADMISSION=1` on current `main`, where admission covers
+**every heavy GPU op** — synth, cold `/load`, `design_voice`, `mint_variant`,
+ASR `/transcribe`, SPK `/embed` (#1720 / PR #1731) — and the multi-GPU
+device-steer is atomic through both the load **and** the forward (#1730 /
+PR #1732). So an OOM, a wrong-card op, or a silent CPU demotion in *any* of those
+paths is now a real failure here, not an expected gap. **This is the acceptance
+the whole feature exists to satisfy.**
+
+> **Hardware note (OcuLink eGPU).** The 16 GB eGPU is added/removed only across a
+> **reboot** — it is not hot-pluggable like Thunderbolt. So the everyday config is
+> the 8 GB card alone, and the 2-card config is a separate boot with the card
+> connected. The steps below are written for reboot-to-switch hardware — there is
+> no live attach (old step 2) or forced live drop (old step 3).
 
 1. **8 GB card alone, render a book** → no OOM; if the analyzer is resident, a
-   heavy synth 503s → Node evicts Ollama (idle) → retries → succeeds; the pill
-   shows "Queued" briefly, never spins forever.
-2. **Attach the 16 GB eGPU mid-session, render again** → next cold load prefers
-   the roomier card (`GET /capacity` shows both); no config change.
-3. **Drop the eGPU mid-run** → the in-flight op fails fast ("GPU is lost"), its
-   reservation releases, a toast fires, the op re-queues onto the remaining card.
+   heavy synth (or a cold `/load` / `design_voice`) 503s → Node evicts Ollama
+   (idle) → retries → succeeds; the pill shows "Queued" briefly, never spins forever.
+2. **Boot with the 16 GB eGPU attached (2-card), render with no config change** →
+   `GET /capacity` lists both cards; the next cold load steers to the roomier
+   (16 GB) device — **no env/settings change vs. the 1-card run** (the headline
+   goal). *OcuLink: reach this state by rebooting with the card connected; there
+   is no hot-attach.*
+3. **eGPU fault-drop — observe-only (cannot be forced on OcuLink)** → IF the eGPU
+   ever drops off the CUDA bus on its own mid-run ("GPU is lost"), the in-flight
+   op fails fast, its reservation releases, a toast fires, and it re-queues onto
+   the 8 GB card. You **cannot** safely trigger this on OcuLink (add/remove is
+   reboot-only; yanking the cable is a hard crash) — mark it **Blocked / N-A**.
+   The recovery path is unit-covered; it is not required for sign-off.
 4. **Analysis + render pressure** → analyzer and heavy TTS take turns per device;
    no OOM, no permanent hang; at the poll cap an actionable toast, not a spinner.
 5. **Flip `SEG_CAPACITY_ADMISSION=0`** → generation behaves exactly as before the
-   feature (dormant admission), `poolWidth=1` keeps a single render serialized.
-6. **(#1720) 2-card box, cold `/load`** → loading Coqui (or Kokoro/Qwen) steers
-   to the roomier of the two cards; `GET /capacity` shows the reservation
-   landing on the expected device.
-7. **(#1720) `design_voice` on a full 8 GB card** → the idle Ollama analyzer
-   is evicted and the design proceeds; if there's still no room, the actionable
+   feature (dormant admission); `poolWidth=1` keeps a single render serialized and
+   the flag-OFF `withGpuLoad` evict still prevents an 8 GB OOM on a resident analyzer.
+6. **2-card boot, cold `/load`** → loading Coqui (or Kokoro/Qwen) steers to the
+   roomier of the two cards; `GET /capacity` shows the reservation landing on the
+   expected device.
+7. **`design_voice` on a full 8 GB card** → the idle Ollama analyzer is evicted
+   and the design proceeds; if there's still no room, the actionable
    busy/no-capacity toast surfaces instead of a hang.
-8. **(#1720) GPU-configured ASR (`ASR_DEVICE=cuda`) `/transcribe` under
-   contention** → 503s with `noCapacity`, Node evicts the idle analyzer and
-   retries, and the transcription completes rather than silently falling back
-   to CPU.
+8. **GPU-configured ASR (`ASR_DEVICE=cuda`) `/transcribe` under contention** →
+   503s with `noCapacity`, Node evicts the idle analyzer and retries, and the
+   transcription completes rather than silently falling back to CPU.
+9. **(#1730) 2-card boot, concurrent cross-card ops keep to their card** → with
+   both cards up, run `design_voice` + `mint_variant` (and, if `ASR_DEVICE=cuda`,
+   a `/transcribe` + `/embed`) concurrently so they land on *different* admitted
+   cards. Each op's entire run — load **and** forward — stays on its own card; no
+   cross-card clobber, no OOM. This is the on-box confirmation of the #1730 fix
+   still owed before the concurrent-multi-card flag flip. *Single-8 GB-card runs
+   never hit this path — it is a 2-card-only check.*
 
 ## Op admission (#1720)
 
