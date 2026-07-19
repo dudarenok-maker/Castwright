@@ -105,6 +105,13 @@ owner: null
   `analyzer-concurrency.test.ts` (K limiter on CountSemaphore),
   `gpu-queue.test.ts` / `diagnostics.test.ts` (new payload), `registry.test.ts`
   (budget knobs absent, `gpu.reserveMb` present).
+- **Op admission (#1720):** `test_load_admission.py` (cold `/load` across
+  coqui/kokoro/qwen-0.6b/qwen-1.7b), `test_design_mint_admission.py`
+  (`design_voice` + `mint_variant`), `test_transcribe_embed_admission.py`
+  (GPU-configured ASR/SPK), and `_engine_env_pin` cases in `test_placement.py`
+  (the `pinned` operator-device constraint) — all sidecar (pytest). Server:
+  `src/gpu/capacity-retry.test.ts` (the extracted retry helper) plus the five
+  updated callers.
 - **Frontend (Vitest):** `layout.test.tsx` (the "Queued (N ahead)" pill on
   `queueDepth>0`), `api`/`use-tts-lifecycle` payload consumers.
 
@@ -124,15 +131,70 @@ acceptance the whole feature exists to satisfy.**
    no OOM, no permanent hang; at the poll cap an actionable toast, not a spinner.
 5. **Flip `SEG_CAPACITY_ADMISSION=0`** → generation behaves exactly as before the
    feature (dormant admission), `poolWidth=1` keeps a single render serialized.
+6. **(#1720) 2-card box, cold `/load`** → loading Coqui (or Kokoro/Qwen) steers
+   to the roomier of the two cards; `GET /capacity` shows the reservation
+   landing on the expected device.
+7. **(#1720) `design_voice` on a full 8 GB card** → the idle Ollama analyzer
+   is evicted and the design proceeds; if there's still no room, the actionable
+   busy/no-capacity toast surfaces instead of a hang.
+8. **(#1720) GPU-configured ASR (`ASR_DEVICE=cuda`) `/transcribe` under
+   contention** → 503s with `noCapacity`, Node evicts the idle analyzer and
+   retries, and the transcription completes rather than silently falling back
+   to CPU.
+
+## Op admission (#1720)
+
+Capacity admission originally covered `/synthesize` only; #1720 extends it to
+every heavy GPU op:
+
+- **Five op families (+ `mint_variant`) now admitted:** cold `/load`
+  (coqui/kokoro/qwen-0.6b/qwen-1.7b), `design_voice`, `mint_variant`,
+  `/transcribe` (ASR, GPU-configured only), and `/embed` (SPK, GPU-configured
+  only) all run inside `PlacementController.reservation()` with multi-GPU
+  device steering — the admitted card is threaded into the cold load. The
+  three Qwen cold-loads (design/mint/synth) share one `_cold_load_lock` so
+  device-steer set→resolve→load is atomic.
+- **`pinned` operator-device constraint:** an `ASR_DEVICE=cuda:1`-style env
+  pin restricts admission to that card; `noCapacity.deviceKey` prefers the
+  pin over the general placement search.
+- **Single admission authority, single eviction authority:** `withGpuLoad`
+  (`server/src/gpu/gpu-load.ts`) defers to sidecar admission (a lock-free
+  passthrough) when `SEG_CAPACITY_ADMISSION` is ON, so Node no longer runs a
+  second, independent admission check on top of the sidecar's — one source of
+  truth for "does it fit," one source of truth for "who gets evicted." The
+  retry/eviction logic itself was extracted into `withCapacityRetry`
+  (`server/src/gpu/capacity-retry.ts`): retry a `noCapacity` 503 (evict idle
+  Ollama once, then bounded poll), pass through every other response. Wired
+  into all five callers (design, mint, the `/api/sidecar/load` proxy,
+  transcribe-client, embed-client).
+- **Flag-ON behavior change:** a tight card + analysis-in-flight now yields a
+  bounded-poll → `NoCapacityError` (an actionable 503/toast) instead of the
+  instant `GpuBusyError` 409 the old coarse `withGpuLoad` produced.
+- **`cpu_capable=False` for asr/spk:** a GPU-configured ASR/SPK that can't fit
+  returns a 503 → Node evicts the idle analyzer and retries (honoring the
+  explicit `ASR_DEVICE=cuda` opt-in), rather than silently demoting to CPU.
 
 ## Out of scope (flag-on-readiness follow-ups)
 
 Before `SEG_CAPACITY_ADMISSION` is flipped ON by default, these gaps (safe while
 the flag is OFF) should close so admission covers everything the budget did:
 
-- **Cold `/load` + `design_voice` (VoiceDesign) + `/transcribe` (ASR) + spk embed
-  are not yet wrapped in the sidecar reservation** — only `/synthesize` is. When
-  the flag is on, these ops aren't admitted; they rely on the sequential workflow.
+- **CLOSED by #1720:** cold `/load` (coqui/kokoro/qwen-0.6b/qwen-1.7b),
+  `design_voice`, `mint_variant`, `/transcribe` (ASR), and `/embed` (SPK) are
+  now all wrapped in the sidecar's `PlacementController.reservation()` with
+  multi-GPU device steering, alongside `/synthesize`. Node handles the
+  `noCapacity` 503 for every one of these callers via the extracted
+  `withCapacityRetry` (`server/src/gpu/capacity-retry.ts`), and `withGpuLoad`
+  now defers to sidecar admission (lock-free passthrough) when the flag is
+  ON — one admission authority (sidecar), one eviction authority (Node). A
+  new `pinned` operator-device constraint (an `ASR_DEVICE=cuda:1`-style env
+  pin) restricts admission to that card, with `noCapacity.deviceKey`
+  preferring the pin. Flag-ON behavior change: a tight card now yields a
+  bounded-poll → `NoCapacityError` (actionable 503/toast) instead of the old
+  coarse `withGpuLoad`'s instant `GpuBusyError` 409. asr/spk decisions are
+  `cpu_capable=False`, so a GPU-configured ASR/SPK that can't fit 503s →
+  Node evicts the idle analyzer and retries, rather than silently demoting
+  to CPU.
 - **`idle_evict` ignores the target device** (over-evicts on a true multi-GPU box).
 - **`_observed_mb` reads `max_memory_allocated` without `reset_peak_memory_stats`**
   → the learned footprint drifts to the device-wide high-water (over-conservative,
@@ -142,6 +204,21 @@ the flag is OFF) should close so admission covers everything the budget did:
 - **`engine-vram-cost.ts` is provably dead** (its registry weights are deleted) —
   a candidate for deletion in a follow-up.
 - **Per-device pill + eGPU-drop toast e2e** are deferred polish.
+- **(#1720, flag-ON only, flag-OFF safe) Qwen forward-clobber:** device-steer
+  is atomic through the model LOAD but not the later FORWARD —
+  `QwenEngine._device` is one field per engine, read unlocked at synthesis
+  time (e.g. mint's `rc.to(self._device)`). A concurrent flag-ON
+  design(card1) + mint(card0) against the single Qwen engine can land a
+  *forward* on the wrong card. Deferred remedy: thread the resolved device
+  into `_load_qwen_model`/the forward instead of reading the shared
+  `self._device`. Gates the concurrent-multi-card flag flip.
+- **(#1720, flag-ON only, flag-OFF safe) ASR/SPK cold-load steer unlocked:**
+  the `/transcribe` + `/embed` handlers set the engine device attr unlocked
+  before the cold load; a concurrent multi-GPU *first* cold-load could land
+  on the wrong card (benign on a single-GPU box; once resident, `is_resident`
+  pins subsequent calls to the same card). Deferred remedy: thread the device
+  into transcribe/embed/`ensure_loaded` under the engine load lock. Gates the
+  concurrent-multi-card flag flip.
 
 ## Ship notes
 

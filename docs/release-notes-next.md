@@ -155,6 +155,15 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
   Ollama-side `OLLAMA_NUM_PARALLEL >= K`. New `analyzer-concurrency.ts` +
   8/8-case suite; whole-branch Opus review confirmed all six concurrency
   invariants and complete call-site coverage. (#1702)
+- **Capacity-aware GPU admission now covers every heavy op, not just
+  synthesis.** Model loading (`/load`), voice design + emotion-variant
+  minting, ASR transcription, and speaker-embedding now all run through the
+  sidecar's free-VRAM reservation with multi-GPU device steering, and the
+  Node side evicts an idle analyzer and retries on a no-capacity refusal —
+  so with the (still default-OFF) `SEG_CAPACITY_ADMISSION` flag on, a heavy
+  op on a tight card yields a bounded wait and an actionable no-capacity
+  signal instead of an instant busy error. Still shipped OFF while validated
+  on real hardware. Refs #1720.
 
 ---
 
