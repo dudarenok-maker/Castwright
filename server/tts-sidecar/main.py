@@ -1742,6 +1742,23 @@ def _read_device_env(var_name: str) -> Optional[str]:
     return resolved
 
 
+def _engine_env_pin(engine_id: str) -> Optional[str]:
+    """Concrete device key an engine's env pins it to, or None for auto/unset/cpu."""
+    env_var = {
+        "coqui": "COQUI_DEVICE",
+        "kokoro": "KOKORO_DEVICE",
+        "qwen": "QWEN_DEVICE",
+        "asr": "ASR_DEVICE",
+        "spk": "SPK_DEVICE",
+    }.get(engine_id)
+    if env_var is None:
+        return None
+    fam, idx = _parse_device(_read_device_env(env_var))
+    if fam in ("cuda", "rocm") and idx is not None:
+        return f"{fam}:{idx}"
+    return None
+
+
 # --- Cross-vendor capacity probe (task 1, vram-aware-placement) ---
 #
 # GET /capacity feeds the capacity-aware placement admission check: before
@@ -2041,19 +2058,20 @@ class PlacementController:
         return "cpu" if d["kind"] == "cpu" else f"{d['kind']}:{d['index']}"
 
     def _gpu_candidates(
-        self, devices: list[dict], resident: Optional[str]
+        self, devices: list[dict], resident_or_pinned: Optional[str]
     ) -> list[tuple[str, int, int]]:
-        """[(device_key, freeMb, totalMb)] to consider. A resident engine is
-        pinned to ONLY its own device (no migration) — and only if that device
-        is still present in the probe (a dropped eGPU yields no candidates →
-        noCapacity). Otherwise every GPU device is a candidate."""
+        """[(device_key, freeMb, totalMb)] to consider. A resident engine (or
+        one pinned by operator env config) is restricted to ONLY that device
+        (no migration) — and only if that device is still present in the
+        probe (a dropped eGPU yields no candidates → noCapacity). Otherwise
+        every GPU device is a candidate."""
         gpus = [
             (self._device_key(d), d["freeMb"], d["totalMb"])
             for d in devices
             if d["kind"] != "cpu"
         ]
-        if resident is not None:
-            return [c for c in gpus if c[0] == resident]
+        if resident_or_pinned is not None:
+            return [c for c in gpus if c[0] == resident_or_pinned]
         return gpus
 
     def _worst_device_key(self, devices: list[dict]) -> Optional[str]:
@@ -2081,6 +2099,7 @@ class PlacementController:
         cfg: Optional[dict],
         cpu_capable: bool,
         heavy: bool,
+        pinned: Optional[str] = None,
     ) -> dict:
         """PURE placement DECISION — holds NO reservation (that is
         `reservation()`'s job). Returns `{"device": key}` | `{"device": "cpu"}`
@@ -2089,12 +2108,16 @@ class PlacementController:
         alongside whatever (e.g. a co-resident analyzer) grew into its VRAM —
         being resident is not a free pass. `deviceKey`/`analyzerEvictWouldHelp`
         note: the sidecar reports only `{neededMb, deviceKey}`; Node computes
-        `evictWouldHelp` from /api/ps."""
+        `evictWouldHelp` from /api/ps. `pinned` is an operator-configured
+        device key (e.g. from an engine's *_DEVICE env) restricting candidates
+        to that one device when the engine isn't already resident — residency
+        always takes precedence since the model is already loaded there."""
         peak = self.footprints.peak_mb(engine, model, cfg)
         resident = self.is_resident(engine)
+        constraint = resident if resident is not None else pinned
         reserve = self.reserve_mb()
         devices = self.probe()
-        candidates = self._gpu_candidates(devices, resident)
+        candidates = self._gpu_candidates(devices, constraint)
 
         key = self.ledger.best_fit(candidates, peak, reserve)
         if key is not None:
@@ -2105,15 +2128,16 @@ class PlacementController:
         worst = self._worst_device_key(devices)
         if worst is not None and self.idle_evict(worst):
             devices = self.probe()
-            candidates = self._gpu_candidates(devices, resident)
+            candidates = self._gpu_candidates(devices, constraint)
             key = self.ledger.best_fit(candidates, peak, reserve)
             if key is not None:
                 return {"device": key}
             worst = self._worst_device_key(devices)
         # A resident engine can only ever run on its own device, so point Node
         # at THAT device to evict from — not a roomier non-resident GPU where an
-        # evict wouldn't let this (non-migratable) model fit.
-        device_key = resident if resident is not None else worst
+        # evict wouldn't let this (non-migratable) model fit. A pinned (but not
+        # yet resident) op needs Node to evict from ITS pinned card too.
+        device_key = resident if resident is not None else (pinned if pinned is not None else worst)
         return {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
 
     @staticmethod
@@ -2140,25 +2164,29 @@ class PlacementController:
         cfg: Optional[dict],
         cpu_capable: bool = False,
         heavy: bool = False,
+        pinned: Optional[str] = None,
     ):
         """Atomically admits AND holds the peak reservation for the op, yields
         the Admission, and on exit (success OR exception) releases the hold and
         records the observed peak — VRAM bookkeeping only; callers still take
         their own `_synth_lock`/`_infer_lock`/load lock around the actual
         forward. Unlike `admit()`, this path performs the hold (via the ledger's
-        atomic `try_hold`), so two concurrent reservations can't double-book."""
+        atomic `try_hold`), so two concurrent reservations can't double-book.
+        `pinned` mirrors `admit()`'s operator-pin constraint (residency still
+        takes precedence)."""
         peak = self.footprints.peak_mb(engine, model, cfg)
         resident = self.is_resident(engine)
+        constraint = resident if resident is not None else pinned
         reserve = self.reserve_mb()
         devices = self.probe()
-        candidates = self._gpu_candidates(devices, resident)
+        candidates = self._gpu_candidates(devices, constraint)
 
         held = self.ledger.try_hold(candidates, peak, reserve)
         if held is None and not (cpu_capable and not heavy):
             worst = self._worst_device_key(devices)
             if worst is not None and self.idle_evict(worst):
                 devices = self.probe()
-                candidates = self._gpu_candidates(devices, resident)
+                candidates = self._gpu_candidates(devices, constraint)
                 held = self.ledger.try_hold(candidates, peak, reserve)
 
         if held is not None:
@@ -2166,7 +2194,7 @@ class PlacementController:
         elif cpu_capable and not heavy:
             admission = {"device": "cpu"}
         else:
-            device_key = resident if resident is not None else self._worst_device_key(devices)
+            device_key = resident if resident is not None else (pinned if pinned is not None else self._worst_device_key(devices))
             admission = {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
 
         try:

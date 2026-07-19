@@ -157,3 +157,22 @@ def test_resident_reservation_holds_on_its_device():
         assert a["device"] == "cuda:0"
         assert ledger.reserved_mb("cuda:0") == 5600
     assert ledger.reserved_mb("cuda:0") == 0  # released on exit
+
+
+def test_pinned_restricts_candidates_to_one_device():
+    """Two roomy GPUs; pinning to cuda:1 must restrict candidates to exactly
+    that device, even though cuda:0 is equally (or more) roomy."""
+    devices = [dev(index=0, free=20000, total=24000), dev(index=1, free=20000, total=24000)]
+    pc = make(devices, peak=5600)
+    adm = pc.admit("coqui", "xtts_v2", {}, cpu_capable=False, heavy=True, pinned="cuda:1")
+    assert adm == {"device": "cuda:1"}
+
+
+def test_pinned_full_card_yields_nocapacity_even_with_room_elsewhere():
+    """A pinned op whose pinned device can't fit must report noCapacity with
+    THAT device as deviceKey — not the roomier cuda:0 — so Node evicts from
+    the pinned card, not wherever has the most headroom."""
+    devices = [dev(index=0, free=20000, total=24000), dev(index=1, free=500, total=24000)]
+    pc = make(devices, peak=5600)
+    adm = pc.admit("coqui", "xtts_v2", {}, cpu_capable=False, heavy=True, pinned="cuda:1")
+    assert "noCapacity" in adm and adm["noCapacity"]["deviceKey"] == "cuda:1"
