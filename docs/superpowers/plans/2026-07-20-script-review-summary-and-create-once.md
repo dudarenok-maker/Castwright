@@ -527,7 +527,7 @@ function renderDiff(opts: {
 }
 ```
 
-Match the exact store/stage/manuscript seed idioms already used by the other tests in this file (the method names above — `makeStore`, `uiActions.openBook`, `manuscriptActions.setSentences` — are placeholders for whatever that file already uses; reuse them, don't invent new ones). `render` must import `fireEvent` too (used by the fake-timer test in Task 6).
+**Important — the method names above are placeholders; match the file's REAL idioms:** the file's existing `makeStore()` is an unparametrized factory (hardcodes its own book/bucket) and **there is no `manuscriptActions.setSentences` reducer**. So write a small *parametrized* store factory for these tests and seed sentences via `configureStore`'s `preloadedState.manuscript.sentences` (not a dispatch). `uiActions.openBook` and `castActions.addCharacter` are real and correctly shaped. `render` must import `fireEvent` (used by the Task 6 fake-timer test). Expect harmless `act(...)` warnings from the direct `store.dispatch(toggleKeys)` baseline-clear — react-redux still re-renders synchronously before the next query, so results are correct; no fix needed.
 
 - [ ] **Step 2: Run test to verify it fails**
 
