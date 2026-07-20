@@ -270,15 +270,6 @@ mismatches) — the table's risk column shows each correctly.
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
-| GPU concurrency | Max concurrent GPU ops (fallback when VRAM budget unset) | 1 | integer, min 1 | restart · app | high |
-| GPU VRAM token budget | Total token budget for the weighted semaphore; 0 disables | 0 | integer, min 0 | restart · app | high |
-| GPU weight: Kokoro | VRAM token cost per Kokoro op | 1 | integer, min 0 | live | high |
-| GPU weight: Qwen | VRAM token cost per Qwen op | 1 | integer, min 0 | live | high |
-| GPU weight: Coqui | VRAM token cost per Coqui op | 3 | integer, min 0 | live | high |
-| GPU weight: Analyzer | VRAM token cost per Ollama op | 4 | integer, min 0 | live | high |
-| GPU weight: ASR (Whisper) | VRAM token cost per Whisper op (cuda only) | 1 | integer, min 0 | live | high |
-| GPU weight: Speaker embed (ECAPA) | VRAM token cost per ECAPA op (cuda only) | 1 | integer, min 0 | live | high |
-| Safe analyzer+TTS coexistence VRAM (MB) | Below this, evict resident Ollama before sidecar TTS load; 0 = always evict | 11000 | integer, min 0 | live | high |
 | Qwen VoiceDesign idle TTL (s) | Idle secs before freeing transient VoiceDesign model (~4-5GB) | 120 | integer, min 0 | restart · sidecar | high |
 | Qwen 1.7B-Base idle TTL (s) | Idle secs before freeing resident 1.7B-Base (~3.4GB) | 120 | integer, min 0 | restart · sidecar | high |
 | ASR (Whisper) idle TTL (s) | Idle secs before freeing Whisper model | 120 | integer, min 0 | restart · sidecar | high |
@@ -295,7 +286,8 @@ mismatches) — the table's risk column shows each correctly.
 an alternate admission path for every heavy GPU op — synthesis, engine loads,
 voice design, ASR transcription, speaker embedding — that reserves each op's
 own **measured VRAM footprint** against a card's actual free memory before
-letting it start, instead of the fixed knobs above. On a multi-GPU box it
+letting it start, rather than capping GPU work at a fixed global concurrency
+limit. On a multi-GPU box it
 steers each op to whichever card has the most free headroom, so moving
 between a single 8 GB card and an 8+16 GB two-card setup needs no settings
 change. Each engine/tier's footprint starts from a seeded cold-start estimate
@@ -307,8 +299,11 @@ pinned to a single worst-case spike forever. The **GPU VRAM reserve cap
 held back on any one card is 5% of *that card's* VRAM, capped at this value —
 sized to the device rather than a flat subtraction that over-provisions a
 small card and under-provisions a large one. While `SEG_CAPACITY_ADMISSION`
-is off, this path is dormant and GPU access falls back to the serialized
-behaviour the rest of this group configures. See
+is off (the default), this path is dormant: heavy GPU work runs one op at a
+time (a simple serialized fallback — the earlier weighted-VRAM-budget and
+per-engine-cost knobs it replaced have been retired), and only the lifecycle
+knobs in the rest of this group still apply — the idle-eviction TTLs and the
+RAM/VRAM recycle-and-restart thresholds. See
 [Troubleshooting](Troubleshooting#gpu-capacity--vram-placement) if an op
 won't place on a card it should fit, or the eGPU drops off the bus.
 
