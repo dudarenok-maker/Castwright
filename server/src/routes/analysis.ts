@@ -153,7 +153,7 @@ import { alignSentences } from '../analyzer/dialogue-structure/aligner.js';
 import { crossExamine } from '../analyzer/dialogue-structure/cross-examine.js';
 import { annotateSceneBreaks } from '../analyzer/scene-breaks.js';
 import { escalateFlaggedWindows } from '../analyzer/dialogue-structure/escalation.js';
-import type { EngineReport, LanguageConventions } from '../analyzer/dialogue-structure/types.js';
+import type { DecisionBucket, EngineReport, LanguageConventions } from '../analyzer/dialogue-structure/types.js';
 import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import { GeminiAnalyzer } from '../analyzer/gemini.js';
 
@@ -1727,6 +1727,16 @@ export async function attributeChapterStage2(opts: {
      per-call construction for any caller that hasn't been migrated. Only
      consulted when `analyzer.structure.escalation === 'cloud'`. */
   escalationAnalyzer?: Analyzer | null;
+  /* Attribution-eval hook (Task 5) — when provided, called exactly once per
+     chapter with structured-clone snapshots of the raw model output and the
+     deterministic (post-crossExamine) pass, plus the per-sentence `reasons`
+     from CrossExamineResult. Purely additive: with no callback, no clones
+     are taken and runtime behaviour is byte-identical. */
+  onStages?: (stages: {
+    raw: SentenceOutput[];
+    deterministic: SentenceOutput[];
+    reasons: Array<{ index: number; reason: string; bucket: DecisionBucket }>;
+  }) => void;
 }): Promise<Stage2ChunkRunResult> {
   /* Task 9 — consolidate the roster BEFORE stage-2 so the model sees CLEAN ids.
      The raw stage-1 roster routinely hands the model a bare first-person-pronoun
@@ -1782,6 +1792,9 @@ export async function attributeChapterStage2(opts: {
     onChunk: opts.onChunk,
     onSectionDone: opts.onSectionDone,
   });
+  const rawSnapshot = opts.onStages ? structuredClone(result.sentences) : null;
+  let detSnapshot: SentenceOutput[] | null = null;
+  let detReasons: Array<{ index: number; reason: string; bucket: DecisionBucket }> = [];
   /* srv-59 — deterministic dialogue-structure engine: replays the model's
      per-sentence attribution against the chapter's structural evidence (dash/
      quote dialogue tags, conversation-window alternation, pronoun resolution)
@@ -1806,6 +1819,7 @@ export async function attributeChapterStage2(opts: {
       alignmentFloorPct: 80,
     });
     result.sentences = examined.sentences;
+    if (opts.onStages) { detSnapshot = structuredClone(examined.sentences); detReasons = examined.reasons; }
 
     /* Task 9b — second-pass re-query of the windows crossExamine couldn't
        resolve. 'off' disables the model re-query entirely (the deterministic
@@ -1857,6 +1871,7 @@ export async function attributeChapterStage2(opts: {
        languages, AFTER coverage (coverage keys on text, not characterId, so the
        verdict is unchanged) and UPSTREAM of fold/reconcile. */
     result.sentences = applyNarratorDefault(result.sentences);
+    if (opts.onStages) { detSnapshot = structuredClone(result.sentences); detReasons = []; }
   }
 
   /* #1679 — read-only scene-break display flags, computed once on the FINAL
@@ -1865,6 +1880,13 @@ export async function attributeChapterStage2(opts: {
      chapter regardless of language or structure-engine state. Mutates only the
      sceneBreakBefore flag. */
   annotateSceneBreaks(result.sentences, opts.chapter.body);
+  if (opts.onStages && rawSnapshot) {
+    opts.onStages({
+      raw: rawSnapshot,
+      deterministic: detSnapshot ?? structuredClone(result.sentences),
+      reasons: detReasons,
+    });
+  }
   return result;
 }
 
