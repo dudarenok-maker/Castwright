@@ -1,6 +1,6 @@
 # Script-review: per-chapter/per-type summary review + create-once speakers
 
-- **Status:** draft
+- **Status:** active
 - **Date:** 2026-07-20
 - **Feature area:** fs-58 (script review)
 - **Related:** `docs/superpowers/specs/2026-07-09-script-review-persistence-design.md`,
