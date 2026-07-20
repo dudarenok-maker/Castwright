@@ -11,12 +11,17 @@ import { useAppDispatch, useAppSelector } from '../store';
 import {
   scriptReviewActions,
   selectActiveReview,
+  selectReviewSummary,
   opKey,
   type ReviewOpWithChapter,
 } from '../store/script-review-slice';
 import { planApply, dispatchAcceptedOps } from '../lib/script-review-apply';
 import { discardReview } from '../store/script-review-thunk';
-import { applyProposedReattributions } from '../lib/apply-proposed';
+import {
+  applyProposedReattributions,
+  consolidateProposedByName,
+  type ProposedNameGroup,
+} from '../lib/apply-proposed';
 import { changeLogActions } from '../store/change-log-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { castActions } from '../store/cast-slice';
@@ -262,16 +267,37 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
   stageBookIdRef.current = stageBookId;
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
 
-  /* The confirm queue. While `confirm` is non-null we overlay a
-     CreateCharacterForm for `confirm.queue[confirm.index]`. Direct ops are
-     already applied by the time this is set; only the off-roster reattributes
-     are pending here. */
+  /* The create-once confirm queue. While `confirm` is non-null we overlay a
+     CreateCharacterForm for `confirm.groups[confirm.index]` — ONE form per
+     NEW unique proposed name (not per line). Direct ops are already applied
+     by the time this is set; only the off-roster reattributes are pending. */
   const [confirm, setConfirm] = useState<{
-    queue: ReviewOpWithChapter[];
+    groups: ProposedNameGroup[];
     index: number;
     finalized: FinalizedProposed[];
     startBookId: string;
   } | null>(null);
+
+  /* Accordion expand state — collapsed by default so a whole-book run opens as
+     a scannable per-chapter summary, not a wall of cards. `expandedTypes` keys
+     are `${chapterId}:${op}`. Both are view-only local UI state. */
+  const [expandedChapters, setExpandedChapters] = useState<Set<number>>(new Set());
+  const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
+  const toggleChapterExpand = (chapterId: number) =>
+    setExpandedChapters((prev) => {
+      const next = new Set(prev);
+      if (next.has(chapterId)) next.delete(chapterId);
+      else next.add(chapterId);
+      return next;
+    });
+  const toggleTypeExpand = (chapterId: number, op: string) =>
+    setExpandedTypes((prev) => {
+      const next = new Set(prev);
+      const k = `${chapterId}:${op}`;
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
 
   /* fs-58 persistence Task 12 — "Dismiss all" is destructive (discards the
      persisted ledger via discardReview), so it requires this confirm step
@@ -300,13 +326,11 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
 
   const { ops, selected, unappliable } = bucket;
 
-  /* Group ops by their class. Preserve insertion order so the class list is
-     deterministic. */
-  const classes = [...new Set(ops.map((o) => o.op))];
-  const byClass = new Map<string, ReviewOpWithChapter[]>();
-  for (const cls of classes) {
-    byClass.set(cls, ops.filter((o) => o.op === cls));
-  }
+  /* Per-chapter/per-type aggregation — the collapsed summary the accordion
+     renders (chapters ascending, mechanical types bulk-approvable). Each
+     ReviewTypeGroup carries its own ops, so the accordion never re-scans
+     bucket.ops per visible type. */
+  const summary = selectReviewSummary(bucket);
 
   const selectedCount = ops.filter((o) => selected[opKey(o.chapterId, o.id, o.op)]).length;
 
@@ -416,47 +440,44 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
     // failed) stays, unresolved.
   }
 
-  /* Advance the confirm queue by one finalized op. A "create new" decision is
-     queued into `finalized` for the dedupe-aware helper; a "reattribute to an
-     existing roster member" decision is an on-roster reassign, so it dispatches
-     immediately and never enters the helper batch (the helper only handles
-     proposed-name creates). When the queue is exhausted, hand the collected
-     proposed batch to the helper exactly once. */
-  function advanceConfirm(finalizedOp: FinalizedProposed) {
-    if (finalizedOp.characterId) {
-      // Reattribute-to-existing: apply directly, like an on-roster reattribute.
-      dispatch(
-        manuscriptActions.setSentenceCharacter({
-          chapterId: finalizedOp.chapterId,
-          sentenceId: finalizedOp.id,
-          characterId: finalizedOp.characterId,
-        }),
-      );
-      dispatch(changeLogActions.bumpBoundaryMove({ chapterId: finalizedOp.chapterId, count: 1 }));
-      // This op bypasses the batched off-roster helper entirely (it's an
-      // immediate on-roster reassign, not a create-new-character), so it must
-      // be resolved server-side here — the same per-op resolve
-      // applyProposedReattributions' onOpApplied does for every other applied
-      // op (design spec §6.5). Without this it never leaves the ledger: it
-      // keeps counting toward the unresolved badge and reappears on every
-      // reopen/reload even though it was already actioned.
+  /* Advance the per-NAME confirm queue by one group's decision. "Create new"
+     stamps the (possibly edited) proposed fields onto EVERY line of the group
+     and defers them to the dedupe-aware helper; "reattribute to existing"
+     applies all the group's lines to that id immediately (on-roster reassign)
+     and resolves them server-side one at a time (design spec §6.5). When the
+     LAST group is decided, hand the collected create-batch to runProposed
+     exactly once. */
+  function advanceGroup(
+    group: ProposedNameGroup,
+    decision: { characterId?: string; proposed?: { name: string; gender?: string; ageRange?: string } },
+  ) {
+    if (decision.characterId) {
+      for (const op of group.ops) {
+        dispatch(
+          manuscriptActions.setSentenceCharacter({
+            chapterId: op.chapterId,
+            sentenceId: op.id,
+            characterId: decision.characterId,
+          }),
+        );
+        dispatch(changeLogActions.bumpBoundaryMove({ chapterId: op.chapterId, count: 1 }));
+      }
       if (bucket) {
         const startBookId = confirm?.startBookId ?? bookId;
-        void resolveAppliedOps(dispatch, startBookId, bucket, [finalizedOp]);
+        void resolveAppliedOps(dispatch, startBookId, bucket, group.ops);
       }
     }
     setConfirm((prev) => {
       if (!prev) return prev;
-      const finalized = finalizedOp.characterId
+      const finalized = decision.characterId
         ? prev.finalized
-        : [...prev.finalized, finalizedOp];
+        : [...prev.finalized, ...group.ops.map((op) => ({ ...op, characterId: undefined, proposed: decision.proposed }))];
       const nextIndex = prev.index + 1;
-      if (nextIndex >= prev.queue.length) {
+      if (nextIndex >= prev.groups.length) {
         void runProposed(finalized, prev.startBookId);
         // Keep `confirm` populated until runProposed resolves — every applied
-        // op is resolved per-op via onOpApplied as it happens, so there's no
-        // whole-bucket action to wait on; runProposed itself calls
-        // setConfirm(null) once it's done (success, abort, or failure).
+        // op is resolved per-op via onOpApplied as it happens; runProposed
+        // itself calls setConfirm(null) once done (success, abort, or failure).
       }
       return { ...prev, finalized, index: nextIndex };
     });
@@ -489,7 +510,31 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
     }));
 
     const roster = new Set(cast.map((c) => c.id));
-    const { appliable } = planApply(selectedOps, live, roster);
+    const { appliable, unappliable: planUnappliable } = planApply(selectedOps, live, roster);
+
+    // D2 — surface partial application: with the summary's bulk-approve it's
+    // easy to select ~1000 ops at once, and planApply drops any that no longer
+    // validate (stale text, one-structural-op-per-id collisions). Count the
+    // GENUINE conflicts planApply reports as unappliable — NOT
+    // selectedOps.length - appliable.length, which also counts benign no-ops
+    // (e.g. a validate_instruct strip on an instruct-less sentence, dropped
+    // without conflict) and off-roster reattributes still pending the confirm
+    // queue (which may yet be applied or cancelled), both of which would make
+    // the warning fire falsely / overstate the count.
+    if (planUnappliable.length > 0) {
+      const n = planUnappliable.length;
+      // "stale or invalid" (matching the unappliable-notice copy), NOT
+      // "conflicting edits": planApply drops ops for reasons well beyond edit
+      // conflicts — a malformed analyzer op (invalid emotion, bad merge arity),
+      // a stale target id, a reattribute to a since-deleted character.
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'warn',
+          message: `${n} suggestion${n === 1 ? '' : 's'} couldn't be applied (stale or invalid)`,
+          dedupeKey: `script-review-partial-${startBookId}`,
+        }),
+      );
+    }
 
     // Off-roster reattributes (a proposed new name, no characterId) defer to
     // the create→reassign confirm queue; everything else applies synchronously.
@@ -518,8 +563,17 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
     }
 
     if (proposedOps.length > 0) {
-      setConfirm({ queue: proposedOps, index: 0, finalized: [], startBookId });
-      return; // the confirm queue's own cleanup (Task 14) handles this path
+      // Create-once: consolidate the off-roster proposals by normalized name so
+      // a speaker on N lines prompts ONE confirm, not N. Every unique name gets
+      // a confirm group — including one that collides with a live cast member
+      // (the form detects the match and offers "Reattribute to «X»"), so a new
+      // speaker can't be silently misattributed, and there are no pre-approved
+      // ops to drop if the operator cancels partway.
+      const groups = consolidateProposedByName(proposedOps);
+      if (groups.length > 0) {
+        setConfirm({ groups, index: 0, finalized: [], startBookId });
+      }
+      return; // the confirm queue handles the rest (Task 14 cleanup path)
     }
 
     // fs-58 persistence Task 13 — hide the modal, don't wipe the bucket.
@@ -535,19 +589,74 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
     dispatch(scriptReviewActions.hideReview({ bookId: startBookId }));
   }
 
-  // fs-58 Unit B — the active confirm-queue op (off-roster reattribute), if any.
-  const confirmOp =
-    confirm && confirm.index < confirm.queue.length ? confirm.queue[confirm.index] : null;
+  // Create-once — the active confirm group (one per new unique name), if any.
+  const confirmGroup =
+    confirm && confirm.index < confirm.groups.length ? confirm.groups[confirm.index] : null;
   const confirmRosterByName = new Map(
     cast.map((c) => [c.name.trim().toLowerCase(), { id: c.id, name: c.name }]),
   );
 
+  /* Tick/untick an explicit key set and mirror the post-toggle snapshot to the
+     server (stale-safe: builds nextSelected locally, since `selected` in this
+     closure predates the dispatch). All keys here belong to one chapter. */
+  function approveKeys(chapterId: number, keys: string[], nextValue: boolean) {
+    if (keys.length === 0) return;
+    dispatch(scriptReviewActions.toggleKeys({ bookId, keys, value: nextValue }));
+    const nextSelected = { ...selected };
+    for (const k of keys) if (k in nextSelected) nextSelected[k] = nextValue;
+    scheduleSelectionSync(chapterId, nextSelected);
+  }
+
+  /* One op card — the leaf of the accordion. Extracted so the summary body and
+     its tests share one render path. */
+  function renderOpCard(op: ReviewOpWithChapter) {
+    const key = opKey(op.chapterId, op.id, op.op);
+    const isSelected = !!selected[key];
+    const liveSentence = sentences.find((s) => s.chapterId === op.chapterId && s.id === op.id);
+    return (
+      <div key={key} className="flex items-start gap-3 p-3 rounded-2xl border border-ink/10 bg-canvas/50">
+        <label
+          htmlFor={`op-toggle-${key}`}
+          className="flex items-center min-h-[44px] fine-pointer:min-h-0 cursor-pointer"
+        >
+          <Checkbox
+            id={`op-toggle-${key}`}
+            data-testid={`op-toggle-${key}`}
+            checked={isSelected}
+            accent="ink"
+            onChange={() => {
+              dispatch(scriptReviewActions.toggleOp({ bookId, key }));
+              scheduleSelectionSync(op.chapterId, { ...selected, [key]: !selected[key] });
+            }}
+            aria-label={`Toggle this ${op.op} suggestion`}
+          />
+        </label>
+        <div className="flex-1 min-w-0 space-y-1">
+          <OpPreview
+            op={op}
+            before={liveSentence?.text}
+            liveInstruct={liveSentence?.instruct}
+            liveVocalization={liveSentence?.vocalization}
+          />
+          <p className="text-xs text-ink/55 leading-relaxed">{op.rationale}</p>
+          {op.confidence !== undefined && (
+            <p className="text-[10px] text-ink/40 tabular-nums">
+              Confidence: {Math.round(op.confidence * 100)}%
+            </p>
+          )}
+        </div>
+        <span className="text-[10px] text-ink/35 tabular-nums shrink-0 mt-0.5">#{op.id}</span>
+      </div>
+    );
+  }
+
   return (
     <>
-      {/* fs-58 Unit B — per-op confirm step for off-roster reattributes. The
-          operator can edit the proposed name (→ create) or, if the typed name
-          matches a roster member, reattribute to the existing one instead. */}
-      {confirmOp && (
+      {/* Create-once — one confirm step per NEW unique proposed name, applied
+          to every line that named it. The operator can edit the proposed name
+          (→ create) or, if the typed name matches a roster member, reattribute
+          to the existing one instead. */}
+      {confirmGroup && (
         <>
           <div className="fixed inset-0 bg-ink/50 z-[60]" aria-hidden="true" />
           <div className="fixed inset-0 z-[60] grid place-items-center p-4 pointer-events-none">
@@ -557,26 +666,21 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
             >
               <div>
                 <p className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">
-                  Confirm new speaker ({(confirm?.index ?? 0) + 1} of {confirm?.queue.length})
+                  New speaker ({(confirm?.index ?? 0) + 1} of {confirm?.groups.length})
                 </p>
                 <h3 className="text-base font-bold text-ink leading-tight">
-                  Reattribute ch{confirmOp.chapterId} · #{confirmOp.id}
+                  «{confirmGroup.name}» — {confirmGroup.ops.length} line{confirmGroup.ops.length === 1 ? '' : 's'}
                 </h3>
               </div>
               <CreateCharacterForm
-                // #1480 — keyed on the op's identity so React remounts the form
-                // (and resets its internal name/gender/ageRange state) on every
-                // confirm-queue advance, instead of reusing the same instance
-                // and carrying the prior op's typed values into this one.
-                key={opKey(confirmOp.chapterId, confirmOp.id, confirmOp.op)}
-                initial={confirmOp.proposed}
+                // #1480 — keyed on the unique name so React remounts the form
+                // (resetting its internal name/gender/ageRange state) on every
+                // group advance instead of carrying the prior name's values.
+                key={confirmGroup.name.trim().toLowerCase()}
+                initial={confirmGroup.proposed}
                 rosterByName={confirmRosterByName}
-                onSubmit={(f) =>
-                  advanceConfirm({ ...confirmOp, characterId: undefined, proposed: f })
-                }
-                onReattributeExisting={(characterId) =>
-                  advanceConfirm({ ...confirmOp, proposed: undefined, characterId })
-                }
+                onSubmit={(f) => advanceGroup(confirmGroup, { proposed: f })}
+                onReattributeExisting={(characterId) => advanceGroup(confirmGroup, { characterId })}
                 onCancel={cancelConfirm}
               />
             </div>
@@ -665,7 +769,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                 {' '}(stale text or invalid)
               </div>
             )}
-            {classes.length === 0 && (
+            {summary.chapters.length === 0 && (
               <div
                 data-testid="script-review-empty"
                 className="rounded-2xl border border-ink/10 bg-canvas/50 px-6 py-10 text-center"
@@ -678,89 +782,106 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                 </p>
               </div>
             )}
-            {classes.map((cls) => {
-              const classOps = byClass.get(cls) ?? [];
-              const allClassSelected = classOps.every(
-                (o) => selected[opKey(o.chapterId, o.id, o.op)],
-              );
-
+            {summary.chapters.map((chapter) => {
+              const chapterOpen = expandedChapters.has(chapter.chapterId);
+              const allChapterSel =
+                chapter.selectableKeys.length > 0 && chapter.selectableKeys.every((k) => selected[k]);
               return (
-                <section key={cls} className="space-y-2">
-                  {/* Class header */}
+                <section
+                  key={chapter.chapterId}
+                  data-testid={`chapter-section-${chapter.chapterId}`}
+                  className="space-y-2"
+                >
+                  {/* Chapter row — approve-all checkbox + clickable expand button.
+                      BLOCKER-2: the chapter-row testid sits on the expand BUTTON
+                      (clickable, carries the "N to review" text), never the wrapper. */}
                   <div className="flex items-center gap-3 pb-1 border-b border-ink/10">
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-ink/60 flex-1">
-                      {classLabel(cls)}
-                    </h4>
-                    <label
-                      htmlFor={`class-toggle-${cls}`}
-                      className="flex items-center gap-1.5 text-xs text-ink/55 cursor-pointer select-none min-h-[44px] fine-pointer:min-h-0"
-                    >
-                      <Checkbox
-                        id={`class-toggle-${cls}`}
-                        data-testid={`class-toggle-${cls}`}
-                        checked={allClassSelected}
-                        accent="ink"
-                        onChange={() => {
-                          dispatch(scriptReviewActions.toggleClass({ bookId, op: cls as ReviewOpWithChapter['op'] }));
-                          const nextSelected = { ...selected };
-                          for (const o of classOps) nextSelected[opKey(o.chapterId, o.id, o.op)] = !allClassSelected;
-                          for (const chapterId of new Set(classOps.map((o) => o.chapterId))) {
-                            scheduleSelectionSync(chapterId, nextSelected);
-                          }
-                        }}
-                      />
-                      Select all
-                    </label>
+                    {chapter.selectableKeys.length > 0 && (
+                      <label className="flex items-center gap-1.5 text-[11px] text-ink/55 cursor-pointer select-none min-h-[44px] fine-pointer:min-h-0">
+                        <Checkbox
+                          data-testid={`chapter-approve-${chapter.chapterId}`}
+                          checked={allChapterSel}
+                          accent="ink"
+                          onChange={() => approveKeys(chapter.chapterId, chapter.selectableKeys, !allChapterSel)}
+                          aria-label={`Approve all mechanical suggestions in chapter ${chapter.chapterId}`}
+                        />
+                        Approve {chapter.selectableKeys.length}
+                      </label>
+                    )}
+                    {/* Heading WRAPS the button (WAI-ARIA accordion pattern) so
+                        the heading role survives — a role="heading" nested INSIDE
+                        the button would be stripped by ARIA's presentational-
+                        children rule, killing heading navigation. */}
+                    <span role="heading" aria-level={3} className="flex-1">
+                      <button
+                        type="button"
+                        data-testid={`chapter-row-${chapter.chapterId}`}
+                        onClick={() => toggleChapterExpand(chapter.chapterId)}
+                        className="w-full flex items-center gap-3 text-left min-h-[44px] fine-pointer:min-h-0"
+                      >
+                        <span className="text-xs font-bold uppercase tracking-wider text-ink/60 flex-1">
+                          Chapter {chapter.chapterId}
+                        </span>
+                        <span className="text-xs text-ink/45 tabular-nums">
+                          {chapter.total}
+                          {chapter.toReview > 0 ? ` · ${chapter.toReview} to review` : ''}
+                        </span>
+                        <span aria-hidden className="text-ink/40">
+                          {chapterOpen ? '▾' : '▸'}
+                        </span>
+                      </button>
+                    </span>
                   </div>
 
-                  {/* Op rows */}
-                  {classOps.map((op) => {
-                    const key = opKey(op.chapterId, op.id, op.op);
-                    const isSelected = !!selected[key];
-                    const liveSentence = sentences.find(
-                      (s) => s.chapterId === op.chapterId && s.id === op.id,
-                    );
-                    return (
-                      <div
-                        key={key}
-                        className="flex items-start gap-3 p-3 rounded-2xl border border-ink/10 bg-canvas/50"
-                      >
-                        <label
-                          htmlFor={`op-toggle-${key}`}
-                          className="flex items-center min-h-[44px] fine-pointer:min-h-0 cursor-pointer"
+                  {chapterOpen &&
+                    chapter.byType.map((type) => {
+                      const typeOpen = expandedTypes.has(`${chapter.chapterId}:${type.op}`);
+                      const allTypeSel =
+                        type.selectableKeys.length > 0 && type.selectableKeys.every((k) => selected[k]);
+                      const typeOps = type.ops;
+                      return (
+                        <div
+                          key={type.op}
+                          data-testid={`type-group-${chapter.chapterId}-${type.op}`}
+                          className="pl-3 space-y-2"
                         >
-                          <Checkbox
-                            id={`op-toggle-${key}`}
-                            data-testid={`op-toggle-${key}`}
-                            checked={isSelected}
-                            accent="ink"
-                            onChange={() => {
-                              dispatch(scriptReviewActions.toggleOp({ bookId, key }));
-                              scheduleSelectionSync(op.chapterId, { ...selected, [key]: !selected[key] });
-                            }}
-                            aria-label={`Toggle this ${op.op} suggestion`}
-                          />
-                        </label>
-                        <div className="flex-1 min-w-0 space-y-1">
-                          <OpPreview
-                            op={op}
-                            before={liveSentence?.text}
-                            liveInstruct={liveSentence?.instruct}
-                            liveVocalization={liveSentence?.vocalization}
-                          />
-                          <p className="text-xs text-ink/55 leading-relaxed">{op.rationale}</p>
-                          {op.confidence !== undefined && (
-                            <p className="text-[10px] text-ink/40 tabular-nums">
-                              Confidence: {Math.round(op.confidence * 100)}%
-                            </p>
-                          )}
+                          <div className="flex items-center gap-2">
+                            {type.selectableKeys.length > 0 ? (
+                              // Self-labeled via aria-label — no wrapping <label> needed.
+                              <span className="flex items-center justify-center min-h-[44px] fine-pointer:min-h-0 min-w-[44px] fine-pointer:min-w-0">
+                                <Checkbox
+                                  data-testid={`type-approve-${chapter.chapterId}-${type.op}`}
+                                  checked={allTypeSel}
+                                  accent="ink"
+                                  onChange={() => approveKeys(chapter.chapterId, type.selectableKeys, !allTypeSel)}
+                                  aria-label={`Approve ${classLabel(type.op)} in chapter ${chapter.chapterId}`}
+                                />
+                              </span>
+                            ) : (
+                              <span className="text-[10px] uppercase tracking-wider text-magenta/70">review</span>
+                            )}
+                            {/* Heading WRAPS the button (see chapter row note). */}
+                            <span role="heading" aria-level={4} className="flex-1">
+                              <button
+                                type="button"
+                                data-testid={`type-row-${chapter.chapterId}-${type.op}`}
+                                onClick={() => toggleTypeExpand(chapter.chapterId, type.op)}
+                                className="w-full flex items-center gap-2 text-left min-h-[44px] fine-pointer:min-h-0"
+                              >
+                                <span className="text-xs font-semibold text-ink/70 flex-1">
+                                  {classLabel(type.op)}
+                                </span>
+                                <span className="text-[11px] text-ink/45 tabular-nums">{type.count}</span>
+                                <span aria-hidden className="text-ink/40">
+                                  {typeOpen ? '▾' : '▸'}
+                                </span>
+                              </button>
+                            </span>
+                          </div>
+                          {typeOpen && <div className="space-y-2">{typeOps.map(renderOpCard)}</div>}
                         </div>
-                        <span className="text-[10px] text-ink/35 tabular-nums shrink-0 mt-0.5">
-                          ch{op.chapterId} · #{op.id}
-                        </span>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
                 </section>
               );
             })}

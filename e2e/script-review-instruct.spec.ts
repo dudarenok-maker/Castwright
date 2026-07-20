@@ -6,18 +6,15 @@
  *     it, T7's apply guard drops the repair and the diff row never renders (the
  *     fixture sentences ship with zero instruct fields).
  *  3. Click the per-chapter "Review Script" button.
- *  4. The ScriptReviewDiff modal opens with the mock validate_instruct suggestion;
- *     its class heading is "Instruct".
+ *  4. The ScriptReviewDiff modal opens (collapsed summary) with the mock
+ *     validate_instruct suggestion; expanding chapter 3 reveals its "Instruct"
+ *     type row.
  *  5. Accept (Apply) — sentence id:1's instruct becomes "a calm tone" via
  *     dispatchAcceptedOps → setSentenceInstruct.
  *
  * Mock contract: `mockReviewScript` returns a deterministic op envelope including
  *   { id: 1, op: 'validate_instruct', newInstruct: 'a calm tone', rationale: '…' }
  * resolving against sentence id:1 in chapter 3 (initialSentences[0]).
- *
- * Heading disambiguation: the class heading is the literal text "Instruct"
- * (CLASS_LABELS.validate_instruct). We match it with an EXACT role/text matcher,
- * NOT a substring `getByText('Instruct')`, which would also match "Live instruct".
  */
 
 import { test, expect } from '@playwright/test';
@@ -70,9 +67,16 @@ test.describe('fs-58 — validate_instruct per-chapter accept flow (#1041)', () 
       timeout: 10_000,
     });
 
-    /* The validate_instruct class heading is the literal "Instruct" (an <h4>).
-       Match it EXACTLY by role+name so it can't substring-match "Live instruct". */
-    await expect(page.getByRole('heading', { name: 'Instruct', exact: true })).toBeVisible();
+    /* The summary opens collapsed. Expand every chapter row (the appliable
+       validate_instruct op lands under whichever chapter the review tagged it),
+       then assert its "Instruct" type row surfaces — chapter-agnostic so the
+       test doesn't couple to the mock's chapter bookkeeping. */
+    for (const row of await page.getByTestId(/^chapter-row-\d+$/).all()) {
+      await row.click();
+    }
+    const instructType = page.getByTestId(/^type-row-\d+-validate_instruct$/);
+    await expect(instructType).toBeVisible();
+    await expect(instructType).toContainText('Instruct');
 
     /* The "Apply N selected" button is present and enabled. */
     const applyBtn = page.getByTestId('apply-button');

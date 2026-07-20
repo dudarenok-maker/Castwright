@@ -48,3 +48,32 @@ export async function applyProposedReattributions(
   }
   return { created, createdCharacters, aborted: false };
 }
+
+export interface ProposedNameGroup {
+  /** First-seen display form of the name (for the form header). */
+  name: string;
+  /** The proposed fields to seed the create form with (first op's proposal). */
+  proposed: { name: string; gender?: string; ageRange?: string };
+  /** Every off-roster reattribute line sharing this normalized name. */
+  ops: ReviewOpWithChapter[];
+}
+
+/** Consolidate a batch of off-roster `reattribute` ops (each carrying
+    `op.proposed`) into one group per unique normalized name — the create-once
+    guarantee: a speaker on N lines yields ONE confirm group, not N. Every
+    group (whether its name is genuinely new OR happens to collide with a live
+    cast member) still surfaces a confirm form: `CreateCharacterForm` detects
+    the roster match and offers "Reattribute to «X»", so a new speaker whose
+    name coincides with an existing member can't be silently misattributed.
+    Pure. */
+export function consolidateProposedByName(proposed: ReviewOpWithChapter[]): ProposedNameGroup[] {
+  const groups = new Map<string, ProposedNameGroup>();
+  for (const op of proposed) {
+    if (!op.proposed) continue;
+    const key = norm(op.proposed.name);
+    const g = groups.get(key);
+    if (g) g.ops.push(op);
+    else groups.set(key, { name: op.proposed.name, proposed: op.proposed, ops: [op] });
+  }
+  return [...groups.values()];
+}
