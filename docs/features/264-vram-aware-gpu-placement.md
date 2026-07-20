@@ -6,9 +6,19 @@ owner: null
 
 # Capacity-aware GPU placement (replaces the hand-set GPU token budget)
 
-> Status: KNOWN: operational dependency — the capacity-admission path is behind
-> `SEG_CAPACITY_ADMISSION` (default OFF); flip on after the on-box acceptance
-> walkthrough below.
+> Status: ACTIVE — capacity admission is now default-ON, but one readiness
+> follow-up (#1721) is still open, so this plan stays `active` (not yet
+> archivable). `SEG_CAPACITY_ADMISSION` defaults **ON** as of the #1720 flag
+> flip (2026-07-20); `=0` is the opt-out that restores the pre-admission
+> serialized path. The flip was made on the strength of the full automated
+> admission coverage (sidecar + Node) plus the on-box **synthesis-path**
+> acceptance (S1/S2/S4/S6 below). The manual **evict-under-contention** rows
+> (6–8: cold `/load` steer, `design_voice` evicts Ollama, GPU-ASR 503→evict→retry)
+> were **not** force-driven on-box — they rest on automated coverage for now.
+> Remaining flag-on readiness gap: multi-GPU `idle_evict` over-eviction, tracked
+> in **#1721** (efficiency only — over-evicts an idle engine on the wrong card,
+> never OOMs). This plan flips to `stable` (and archives) once #1721 lands and
+> the evict-under-contention rows are driven on-box.
 > Key files (sidecar): `server/tts-sidecar/main.py` (`probe_capacity`,
 > `FootprintTable`, `ReservationLedger`, `PlacementController`).
 > Key files (server): `server/src/gpu/count-semaphore.ts`,
@@ -42,7 +52,7 @@ owner: null
   `PlacementController`; Node `CountSemaphore` (count core of the old semaphore),
   `CapacityProbe` (sidecar `/capacity` client + `nvidia-smi`/`rocm-smi` fallback),
   `ollama-residency.ts` (`/api/ps` read + `evictOllama` via the keep_alive:0
-  idiom); env flag `SEG_CAPACITY_ADMISSION` (default OFF); env knob
+  idiom); env flag `SEG_CAPACITY_ADMISSION` (default ON since #1720; `=0` opts out); env knob
   `GPU_RESERVE_MB`.
 - **Invariants preserved:** the discriminated `ui.stage`, the hash router, and
   OpenAPI-as-type-source are untouched. The sidecar's own `_synth_lock` (Qwen
@@ -201,8 +211,11 @@ every heavy GPU op:
 
 ## Out of scope (flag-on-readiness follow-ups)
 
-Before `SEG_CAPACITY_ADMISSION` is flipped ON by default, these gaps (safe while
-the flag is OFF) should close so admission covers everything the budget did:
+`SEG_CAPACITY_ADMISSION` was flipped ON by default in #1720 (2026-07-20). These
+gaps (safe while the flag is off) were the readiness checklist for that flip;
+the items below marked "CLOSED by #1720" landed with it, and the remaining open
+one (multi-GPU `idle_evict` over-eviction, #1721) is efficiency-only, never an
+OOM — see the status header:
 
 - **CLOSED by #1720:** cold `/load` (coqui/kokoro/qwen-0.6b/qwen-1.7b),
   `design_voice`, `mint_variant`, `/transcribe` (ASR), and `/embed` (SPK) are

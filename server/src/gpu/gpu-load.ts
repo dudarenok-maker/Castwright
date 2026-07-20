@@ -46,7 +46,9 @@ function reserveMb(): number {
     - Tight device, analysis idle: evict the resident Ollama analyzer first, so a
       heavy TTS model can't land on top of it and OOM an 8 GB card (the #1155/#1388
       co-residence class). This is the proactive evict the old `withGpuLoad` did on
-      small cards; without it, a default (flag-OFF) 8 GB render OOMs.
+      small cards; without it, an 8 GB render under the `SEG_CAPACITY_ADMISSION=0`
+      opt-out OOMs (this coarse path only runs under that opt-out now — admission
+      is ON by default since #1720).
     - Tight device, analysis in flight: refuse (GpuBusyError → 409) — we can't
       evict a live analyzer, so the caller retries once analysis finishes.
 
@@ -57,8 +59,9 @@ export async function withGpuLoad<T>(loadFn: () => Promise<T>, engineOnGpu = tru
   // When capacity admission is on, the sidecar's PlacementController is the single
   // admission authority and Node's withCapacityRetry is the single eviction authority —
   // running this coarse Node probe/evict/lock too would triple-evict and let a bounded
-  // poll hold the load mutex. Skip straight to the load.
-  if (process.env.SEG_CAPACITY_ADMISSION === '1') return loadFn();
+  // poll hold the load mutex. Skip straight to the load. Default ON since #1720
+  // shipped; only an explicit SEG_CAPACITY_ADMISSION=0 opt-out drops to the coarse path.
+  if (process.env.SEG_CAPACITY_ADMISSION !== '0') return loadFn();
   return withGpuLoadLock(async () => {
     const devices = await capacityProbe.read({ fresh: true });
     const gpuFree = devices.filter((d) => d.kind !== 'cpu').map((d) => d.freeMb);

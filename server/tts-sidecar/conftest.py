@@ -15,6 +15,15 @@ os.environ.setdefault("PRELOAD_COQUI", "0")
 # regression test (test_qwen_degeneracy_guard.py) re-enables it explicitly.
 os.environ.setdefault("QWEN_DEGEN_GUARD", "0")
 
+# Capacity-aware GPU admission (main.py `_capacity_admission_enabled`) defaults ON
+# in production (#1720), but most route tests exercise a GPU-configured engine
+# with a faked/absent CUDA runtime, so the real free-VRAM probe can't fit them and
+# they'd get a `503 noCapacity` before reaching the route logic under test (poison
+# fencing, OOM classification, preview PCM, 409s). Default it OFF suite-wide — the
+# dedicated admission tests (test_devices / test_*_admission) opt back IN with "1",
+# and test_capacity_admission_default_on delenv's to assert the production default.
+os.environ.setdefault("SEG_CAPACITY_ADMISSION", "0")
+
 
 def _qwen_weights_present() -> bool:
     """True only when the real qwen-tts + Qwen3-TTS weights are importable/loadable.

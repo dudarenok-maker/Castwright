@@ -230,10 +230,10 @@ def _synth_body():
 
 
 def test_synthesize_flag_off_ignores_full_device(monkeypatch, synth_client):
-    """Default (flag unset): /synthesize behaves exactly as today — no
-    admission check runs at all — even when the probe reports a device with
-    no free room. This is the rollback path."""
-    monkeypatch.delenv("SEG_CAPACITY_ADMISSION", raising=False)
+    """Explicit opt-out (SEG_CAPACITY_ADMISSION=0): /synthesize behaves exactly
+    as the pre-admission build — no admission check runs at all — even when the
+    probe reports a device with no free room. This is the rollback path."""
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "0")
     monkeypatch.setattr(
         main._placement,
         "probe",
@@ -242,6 +242,18 @@ def test_synthesize_flag_off_ignores_full_device(monkeypatch, synth_client):
     r = synth_client.post("/synthesize", json=_synth_body())
     assert r.status_code == 200
     assert r.content == b"\x00\x00"
+
+
+def test_capacity_admission_default_on(monkeypatch):
+    """Regression for the #1720 flag flip: capacity admission is ON by default
+    (unset), stays ON for any value that isn't the explicit "0" opt-out, and
+    only "0" turns it off (the rollback path)."""
+    monkeypatch.delenv("SEG_CAPACITY_ADMISSION", raising=False)
+    assert main._capacity_admission_enabled() is True
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
+    assert main._capacity_admission_enabled() is True
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "0")
+    assert main._capacity_admission_enabled() is False
 
 
 def test_synthesize_flag_on_no_capacity_returns_503(monkeypatch, synth_client):

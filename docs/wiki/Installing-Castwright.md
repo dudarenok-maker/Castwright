@@ -257,10 +257,11 @@ steps above). All knobs have safe defaults — set only what you need.
 - `WORKSPACE_DIR` — where your per-book library lives (set this to a writable
   folder).
 - `GEN_WORKERS` — how many chapters synthesise at once (default `2`).
-- `SEG_CAPACITY_ADMISSION` — `0` (default) runs heavy GPU ops one at a time (a
-  simple serialized fallback); `1` opts into measured-VRAM capacity admission
-  with multi-GPU device steering (see Advanced Settings §9). `GPU_RESERVE_MB`
-  (default `500`) caps the per-card VRAM safety cushion held back from admission.
+- `SEG_CAPACITY_ADMISSION` — default **on**: measured-VRAM capacity admission
+  with multi-GPU device steering (see Advanced Settings §9). Set to `0` to opt
+  out and run heavy GPU ops one at a time (a simple serialized fallback).
+  `GPU_RESERVE_MB` (default `500`) caps the per-card VRAM safety cushion held
+  back from admission.
 - `PRELOAD_COQUI` — `0` (default; Coqui loads on demand) or `1`.
 - `QWEN_BATCH_SIZE` (default `8`) and `QWEN_ATTN_IMPL` (default `sdpa`) — Qwen
   tuning knobs.
@@ -365,7 +366,7 @@ When a compatible build is present (however it got there), activate it via `QWEN
 
 **Switch a book to Qwen3.** Start the app and go to **Account → Defaults for new books → Voice engine** → "Local (free)" → **Voice model** → pick the Qwen3 entry. Save. For an existing book opened under Kokoro / Coqui, use the cast view's "Rebaseline the series" modal to design Qwen voices for the principal cast before regenerating.
 
-**Disk + VRAM.** Qwen Base ~1 GB on disk, Base + VoiceDesign together ~2.5 GB. At runtime Base resides at ~2 GB VRAM during synth and VoiceDesign loads transiently during a design (~4–5 GB on top of Base, freed on idle or at the next synth). By default heavy GPU work runs one op at a time, and the sidecar evicts a resident analyzer before a TTS load, so an 8 GB GPU won't double-book against the analyzer; opt into `SEG_CAPACITY_ADMISSION=1` (Advanced Settings §9) for measured-footprint admission with multi-GPU steering instead.
+**Disk + VRAM.** Qwen Base ~1 GB on disk, Base + VoiceDesign together ~2.5 GB. At runtime Base resides at ~2 GB VRAM during synth and VoiceDesign loads transiently during a design (~4–5 GB on top of Base, freed on idle or at the next synth). By default (`SEG_CAPACITY_ADMISSION` on) the sidecar reserves each op's measured VRAM footprint against a card's real free memory and steers across multiple GPUs, evicting a resident analyzer before a TTS load so an 8 GB GPU won't double-book against the analyzer (Advanced Settings §9); set `SEG_CAPACITY_ADMISSION=0` to opt out and run heavy GPU work one op at a time instead.
 
 ## Adding Coqui XTTS v2 (optional add-on)
 

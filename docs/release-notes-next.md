@@ -90,7 +90,7 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
 
 ## ⚙️ Engine & performance
 
-- **The hand-set GPU token budget is retired in favour of measured VRAM capacity admission (behind `SEG_CAPACITY_ADMISSION`, default OFF).** The four confusing GPU knobs (`GPU_VRAM_BUDGET`, `GPU_CONCURRENCY`, six `GPU_WEIGHT_*`, `GPU_SAFE_COEXIST_MB`) and the weighted `GpuSemaphore` are deleted. Replacement: the Python sidecar owns TTS admission — `GET /capacity` (cross-vendor free VRAM via `torch.cuda.mem_get_info`/psutil: CUDA/ROCm/Apple-MPS/CPU), a `FootprintTable` seeding each engine's measured **decode peak** (not weight size: `qwen=6144`≈5.6 GB, `qwen.1.7b=7168`, `coqui=3584`, `kokoro=1200`, `asr=400`, `spk=200`, parity-tested against `docs/local-llm.md` anchors, learned up-only), and a `PlacementController`/`ReservationLedger` that atomically fit-checks-and-reserves the op's peak against `min(free, total−Σreserved)−GPU_RESERVE_MB` per device (returns `503 {noCapacity,neededMb,deviceKey}` on no-fit). Node owns the analyzer (K limiter now on the extracted `CountSemaphore`), a `CapacityProbe` (sidecar-first, `nvidia-smi`/`rocm-smi` fallback, last-known-good cache), an Ollama `/api/ps` residency read + `evictOllama` (keep_alive:0 idiom), and the evict-or-bounded-poll orchestration on the 503 (fails with an actionable `NoCapacityError` toast at the cap, never a hang). `GET /api/gpu/queue` payload changed to `{queueDepth, devices}`; the only surviving knob is `GPU_RESERVE_MB` (768). The OOM invariant is proven by a 16-thread `test_placement.py` race + the atomic decide+hold; three adversarial review rounds folded (design), plus per-task + whole-branch reviews. Behind the flag until the on-box 1-card/2-card acceptance passes; when off, `poolWidth=1` keeps a render serialized. See [docs/features/264-vram-aware-gpu-placement.md](264-vram-aware-gpu-placement.md).
+- **The hand-set GPU token budget is retired in favour of measured VRAM capacity admission (`SEG_CAPACITY_ADMISSION`, now ON by default; `=0` opts out).** The four confusing GPU knobs (`GPU_VRAM_BUDGET`, `GPU_CONCURRENCY`, six `GPU_WEIGHT_*`, `GPU_SAFE_COEXIST_MB`) and the weighted `GpuSemaphore` are deleted. Replacement: the Python sidecar owns TTS admission — `GET /capacity` (cross-vendor free VRAM via `torch.cuda.mem_get_info`/psutil: CUDA/ROCm/Apple-MPS/CPU), a `FootprintTable` seeding each engine's measured **decode peak** (not weight size: `qwen=6144`≈5.6 GB, `qwen.1.7b=7168`, `coqui=3584`, `kokoro=1200`, `asr=400`, `spk=200`, parity-tested against `docs/local-llm.md` anchors, learned up-only), and a `PlacementController`/`ReservationLedger` that atomically fit-checks-and-reserves the op's peak against `min(free, total−Σreserved)−GPU_RESERVE_MB` per device (returns `503 {noCapacity,neededMb,deviceKey}` on no-fit). Node owns the analyzer (K limiter now on the extracted `CountSemaphore`), a `CapacityProbe` (sidecar-first, `nvidia-smi`/`rocm-smi` fallback, last-known-good cache), an Ollama `/api/ps` residency read + `evictOllama` (keep_alive:0 idiom), and the evict-or-bounded-poll orchestration on the 503 (fails with an actionable `NoCapacityError` toast at the cap, never a hang). `GET /api/gpu/queue` payload changed to `{queueDepth, devices}`; the only surviving knob is `GPU_RESERVE_MB` (768). The OOM invariant is proven by a 16-thread `test_placement.py` race + the atomic decide+hold; three adversarial review rounds folded (design), plus per-task + whole-branch reviews. Now ON by default after the on-box 1-card/2-card acceptance (see the flip entry below); set `SEG_CAPACITY_ADMISSION=0` to opt out, and `poolWidth=1` keeps a render serialized. See [docs/features/264-vram-aware-gpu-placement.md](264-vram-aware-gpu-placement.md).
 - **German dialogue attribution no longer collapses to the narrator — `de.ts` now pairs `„` with the ASCII `"` closer our books actually emit (#1598).** The deterministic dialogue-structure engine parses quote runs per-language from `LanguageConventions.quotePairs`; German declared `[['„','“'],['»','«']]` (open U+201E, close U+201C). But the fs-61 translated demo books — and real-world German manuscripts generally — close `„…"` with a plain ASCII `"` (U+0022), not the typographic U+201C. With no matching pair, `findQuoteRuns` found **zero** runs for every German paragraph, so `parseChapterStructure` classified each as a single `narration` span; alignment still cleared the 80% floor (the text matches fine), so `crossExamine`'s `decideNarrationOnly` then *demoted every non-narrator sentence to the narrator*. Net effect: the model attributed German dialogue correctly (~68% non-narrator on Coalfall ch.2), but the engine overwrote it down to ~3% — matching the issue's 12–17% and model-independent, since it's a post-model deterministic pass. Fix adds the real-world closers to German's `quotePairs` (`['„','“']`, `['„','”']`, `['„','"']`, `['»','«']`); `findQuoteRuns` resolves precedence positionally (`start` asc, `end` desc), not by array order. Measured on the real ch.2 body + cached model attribution: engine output rose from **2.7% → 60.8%** non-narrator, back in line with en/fr/ru (~50%). Per-language and isolated to `de.ts` — en (U+201C stays an OPENER there), fr/ru («…»), and zh/ja (「…」/"…") are untouched. Regression tests in `dialogue-structure/parser.test.ts`. (#1598)
 - **German quote runs with mixed closer glyphs in one paragraph no longer over-merge narration into speech (#1601).** Follow-up to #1598. Because German's `„` opener now maps to several closers (`“`/`”`/`"`), `findQuoteRuns` — which built one regex per `[open,close]` pair — could lazily run a `„` past a nearer closer of one glyph to a farther closer of another (`„Nein.“ Maerin schwieg. „Ein echter."` → one run swallowing the beat + second turn; a stray inch-mark `"` after `„Hallo.“` absorbed the trailing narration). `findQuoteRuns` now groups closers by opener and matches the **nearest** closer of any glyph (`„[\s\S]*?(“|”|")`), with `closeLen` taken from the captured closer so variable-length closers stay correct. German-only, single-closer languages are byte-identical. Regression tests for the mixed-closer and stray-closer paragraphs in `dialogue-structure/parser.test.ts`. (#1601)
 - **Qwen no longer ships silent/near-empty audio when the Base model degenerates under memory pressure (#1594).** A silent variant of the #1558 meta-tensor bad-load: under 8 GB VRAM churn (repeated 1.7B VoiceDesign cycling / model evictions) the Qwen Base model could enter a degenerate-load state where the forward runs *without error* but emits near-empty audio (~zero speech tokens, immediate EOS) — a broken/near-silent sentence that shipped silently, since the load-time meta-fault guard can't see a load that "succeeded." `QwenEngine`'s single-synth path (0.6B + 1.7B Base) now inspects the output: if a substantial line renders implausibly short (audio below a conservative ~20 ms per *speakable* character — letters/digits only, so long separator/ellipsis/markup lines never false-positive), it reloads the Base model in-process and retries once; if it's still degenerate, it escalates down the same supervised sidecar-recycle the persistent meta fault uses and fails the request loud rather than shipping the bad audio. Default-on, gated by `QWEN_DEGEN_GUARD` — now promoted from an env-only flag to the `tts.qwen.degenGuard` registry knob, so it renders as the **Qwen degeneracy guard** toggle in Advanced Settings (Voice engine & device) and is documented in the Advanced-Settings + Troubleshooting wiki pages, not just env (off in the test suite); the batch path is a follow-up (#1593). New GPU-free regression module `test_qwen_degeneracy_guard.py`.
@@ -161,10 +161,10 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
   minting, ASR transcription, and speaker-embedding now all run through the
   sidecar's free-VRAM reservation with multi-GPU device steering, and the
   Node side evicts an idle analyzer and retries on a no-capacity refusal —
-  so with the (still default-OFF) `SEG_CAPACITY_ADMISSION` flag on, a heavy
-  op on a tight card yields a bounded wait and an actionable no-capacity
-  signal instead of an instant busy error. Still shipped OFF while validated
-  on real hardware. Refs #1720.
+  so under `SEG_CAPACITY_ADMISSION`, a heavy op on a tight card yields a
+  bounded wait and an actionable no-capacity signal instead of an instant busy
+  error. (The flag was later flipped ON by default — see the flip entry below.)
+  Refs #1720.
 - **Capacity-aware footprint estimation now self-corrects instead of ratcheting
   to a one-off spike, and the VRAM reserve is per-device.** `_observed_mb` read
   `torch.cuda.max_memory_allocated` with no `reset_peak_memory_stats`, so every
@@ -183,8 +183,7 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
   now sized **per-device** — `min(5% of that card's VRAM, GPU_RESERVE_MB)` —
   with the default cap lowered 768→500. On-box: measured real per-op peaks
   (0.6B synth ~1952 MB, 1.7B mint ~5654 MB) now admit comfortably on an 8 GB
-  card, where the stale high-water estimate previously refused them. Still
-  behind the default-OFF `SEG_CAPACITY_ADMISSION` flag. (#1737)
+  card, where the stale high-water estimate previously refused them. (#1737)
 - **The rare, heavy 1.7B voice-design and emotion-mint ops now learn their own
   VRAM footprint instead of inheriting the frequent synth's.** Voice design and
   variant minting are far heavier than a plain 1.7B synth (~5654 MB measured vs
@@ -196,8 +195,19 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
   an `op` marker on the reservation) and learns its own windowed p95. Both
   cold-start seeds are 6144 MB, measured on-box (mint ~5654 MB, design ~5440 MB,
   #1742), so a first-ever design/mint still admits on a bare 8 GB card before
-  its window warms. Still behind the default-OFF `SEG_CAPACITY_ADMISSION` flag.
-  (#1738, #1742)
+  its window warms. (#1738, #1742)
+- **Capacity-aware GPU admission is now ON by default** (`SEG_CAPACITY_ADMISSION`,
+  default flipped OFF→ON; `=0` opts out to the pre-admission serialized path).
+  This supersedes the "shipped OFF while validated" notes on the entries above:
+  after the full sidecar+Node admission suites and the on-box synthesis-path
+  acceptance (single 8 GB card and dual 8 GB+16 GB, plan 264 S1/S2/S4/S6), the
+  flag now defaults on so real books get measured-footprint reservation and
+  multi-GPU steering out of the box. Both read sites flipped in lockstep
+  (`main.py:_capacity_admission_enabled`, `gpu-load.ts` coarse-path bypass);
+  new default-ON regression tests on each side; the OFF-path tests pin the `=0`
+  opt-out explicitly. Known flag-on-readiness gap (efficiency only, never an
+  OOM): multi-GPU `idle_evict` over-eviction, tracked in #1721. Closes #1720.
+  See [docs/features/264-vram-aware-gpu-placement.md](264-vram-aware-gpu-placement.md).
 
 ---
 

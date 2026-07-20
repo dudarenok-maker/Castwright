@@ -213,12 +213,13 @@ capacity-admission cutover (#1737). What replaced it:
 - **The analyzer's own concurrency** rides a plain `CountSemaphore`
   (`server/src/gpu/count-semaphore.ts`) — the extracted count core of the old
   semaphore, no VRAM weights.
-- **Per-op VRAM reservation** is opt-in via `SEG_CAPACITY_ADMISSION` (default
-  OFF): the sidecar reserves each op's measured `FootprintTable` peak against a
-  card's real free memory, with multi-GPU device steering. Flag OFF, heavy GPU
-  work runs **one op at a time** (a serialized fallback), and the only surviving
-  GPU *admission* knob is the per-device `GPU_RESERVE_MB` cushion (the weighted-
-  budget/concurrency knobs are gone). The §9 group still carries the sidecar
+- **Per-op VRAM reservation** rides `SEG_CAPACITY_ADMISSION` (**default ON** as
+  of #1720; set `=0` to opt out): the sidecar reserves each op's measured
+  `FootprintTable` peak against a card's real free memory, with multi-GPU device
+  steering. Opted out (`=0`), heavy GPU work runs **one op at a time** (a
+  serialized fallback), and the only surviving GPU *admission* knob is the
+  per-device `GPU_RESERVE_MB` cushion (the weighted-budget/concurrency knobs are
+  gone). The §9 group still carries the sidecar
   *lifecycle* knobs that outlived the cutover — idle-eviction TTLs and the
   RAM/VRAM recycle+restart thresholds. See §9 of the wiki's Advanced Settings
   and [docs/features/264](features/264-vram-aware-gpu-placement.md).
