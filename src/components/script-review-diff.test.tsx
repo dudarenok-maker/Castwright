@@ -1,15 +1,95 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { uiSlice } from '../store/ui-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { castSlice } from '../store/cast-slice';
-import { scriptReviewSlice, scriptReviewActions, opKey } from '../store/script-review-slice';
+import {
+  scriptReviewSlice,
+  scriptReviewActions,
+  opKey,
+  type ReviewOpWithChapter,
+} from '../store/script-review-slice';
 import { changeLogSlice } from '../store/change-log-slice';
-import { notificationsSlice, type Toast } from '../store/notifications-slice';
+import { notificationsSlice, notificationsActions, type Toast } from '../store/notifications-slice';
 import { api } from '../lib/api';
 import { ScriptReviewDiff } from './script-review-diff';
+
+// ---------------------------------------------------------------------------
+// Shared helpers for the summary-accordion + create-once tests (Tasks 5–8).
+// The file uses fireEvent (not userEvent) throughout; these match that.
+// ---------------------------------------------------------------------------
+
+// 4th `extra` arg spreads op-specific fields (mergeIds, proposed, newText…).
+const opWithCh = (
+  ch: number,
+  id: number,
+  op: ReviewOpWithChapter['op'],
+  extra: Partial<ReviewOpWithChapter> = {},
+): ReviewOpWithChapter => ({ chapterId: ch, id, op, rationale: 'x', ...extra }) as ReviewOpWithChapter;
+
+function renderDiff(opts: {
+  ops: ReviewOpWithChapter[];
+  cast?: { id: string; name: string }[];
+  sentences?: Array<{
+    id: number;
+    chapterId: number;
+    text: string;
+    characterId: string;
+    instruct?: string;
+    vocalization?: boolean;
+  }>;
+  versionByChapter?: Record<number, number>;
+}) {
+  const chapterIds = [...new Set(opts.ops.map((o) => o.chapterId))];
+  const store = configureStore({
+    reducer: {
+      ui: uiSlice.reducer,
+      manuscript: manuscriptSlice.reducer,
+      cast: castSlice.reducer,
+      scriptReview: scriptReviewSlice.reducer,
+      changeLog: changeLogSlice.reducer,
+      notifications: notificationsSlice.reducer,
+    },
+    preloadedState: {
+      ui: {
+        ...uiSlice.getInitialState(),
+        stage: {
+          kind: 'ready',
+          bookId: 'bk',
+          view: 'manuscript',
+          currentChapterId: 1,
+          openProfileId: null,
+        } as never,
+      },
+      manuscript: { ...manuscriptSlice.getInitialState(), sentences: (opts.sentences ?? []) as never },
+      cast: { ...castSlice.getInitialState(), characters: (opts.cast ?? []) as never },
+    },
+  });
+  store.dispatch(
+    scriptReviewActions.setReview({
+      bookId: 'bk',
+      ops: opts.ops,
+      unappliable: [],
+      manuscriptId: 'm',
+      versionByChapter: opts.versionByChapter ?? Object.fromEntries(chapterIds.map((c) => [c, 1])),
+    }),
+  );
+  render(
+    <Provider store={store}>
+      <ScriptReviewDiff bookId="bk" />
+    </Provider>,
+  );
+  return { store };
+}
+
+// Flip an explicit key set post-render, flushed so the component re-renders
+// before the next interaction reads its `selected` closure.
+const setSelected = (store: ReturnType<typeof renderDiff>['store'], keys: string[], value: boolean) =>
+  act(() => {
+    store.dispatch(scriptReviewActions.toggleKeys({ bookId: 'bk', keys, value }));
+  });
 
 function makeStore() {
   const store = configureStore({
@@ -122,7 +202,10 @@ describe('fs-58 — ScriptReviewDiff', () => {
     // Verify the modal is rendered with both ops shown
     expect(screen.getByText('Script review suggestions')).toBeTruthy();
 
-    // Toggle op 2 (fix_emotion) OFF by clicking its checkbox
+    // Expand chapter 1 → its fix_emotion type to reach the op card, then
+    // toggle op 2 (fix_emotion) OFF by clicking its checkbox.
+    fireEvent.click(screen.getByTestId('chapter-row-1'));
+    fireEvent.click(screen.getByTestId('type-row-1-fix_emotion'));
     const op2key = opKey(1, 2, 'fix_emotion');
     const checkbox = screen.getByTestId(`op-toggle-${op2key}`);
     fireEvent.click(checkbox);
@@ -540,6 +623,10 @@ describe('fs-58 — ScriptReviewDiff', () => {
         <ScriptReviewDiff bookId="book-A" />
       </Provider>,
     );
+    // 'Instruct' is the type-row label (visible collapsed); the before→after
+    // preview lives in the op card, so expand chapter 1 → its Instruct type.
+    fireEvent.click(screen.getByTestId('chapter-row-1'));
+    fireEvent.click(screen.getByTestId('type-row-1-validate_instruct'));
     expect(screen.getByText('Instruct', { exact: true })).toBeInTheDocument();
     expect(screen.getByText(/shouting/)).toBeInTheDocument();
     expect(screen.getByText(/a calm tone/)).toBeInTheDocument();
@@ -603,6 +690,8 @@ describe('fs-58 — ScriptReviewDiff', () => {
         <ScriptReviewDiff bookId="book-A" />
       </Provider>,
     );
+    fireEvent.click(screen.getByTestId('chapter-row-1'));
+    fireEvent.click(screen.getByTestId('type-row-1-reattribute'));
     expect(screen.getByText(/ferra/i)).toBeInTheDocument();
   });
 
@@ -653,6 +742,8 @@ describe('fs-58 — ScriptReviewDiff', () => {
         <ScriptReviewDiff bookId="book-A" />
       </Provider>,
     );
+    fireEvent.click(screen.getByTestId('chapter-row-1'));
+    fireEvent.click(screen.getByTestId('type-row-1-flag_nonstory'));
     expect(screen.getByText('p. 42')).toHaveClass('line-through');
   });
 
@@ -760,12 +851,9 @@ describe('fs-58 — ScriptReviewDiff', () => {
 
     fireEvent.click(screen.getByTestId('apply-button'));
 
-    // Confirm op 1 of 2 — the form is pre-filled with «Ferra».
+    // Create-once: ONE form for the shared name «Ferra», spanning both lines.
     expect(screen.getByTestId('confirm-reattribute')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('create-character-submit'));
-
-    // Confirm op 2 of 2 — pre-filled with «ferra ».
-    await waitFor(() => expect(screen.getByTestId('confirm-reattribute')).toBeInTheDocument());
+    expect(screen.getByTestId('confirm-reattribute')).toHaveTextContent('2 lines');
     fireEvent.click(screen.getByTestId('create-character-submit'));
 
     // Both ops resolve per-op (including the deduped one, which never calls
@@ -974,6 +1062,10 @@ describe('fs-58 — ScriptReviewDiff', () => {
       const bucket = store.getState().scriptReview.byBook['book-A'];
       expect(bucket?.ops.map((o) => o.id)).toEqual([7]);
     });
+    // Sol (#7) is still in the list for retry — expand chapter 1 → reattribute
+    // type to see its card (the accordion opens collapsed).
+    fireEvent.click(screen.getByTestId('chapter-row-1'));
+    fireEvent.click(screen.getByTestId('type-row-1-reattribute'));
     expect(screen.getByText(/#7/)).toBeInTheDocument();
 
     resolveSpy.mockRestore();
@@ -1043,14 +1135,11 @@ describe('fs-58 — ScriptReviewDiff', () => {
 
     fireEvent.click(screen.getByTestId('apply-button'));
 
-    // Confirm dialog is pre-filled with "Ferra", which matches the existing
-    // roster member — the submit button switches to the reattribute-existing
-    // label/handler instead of create.
-    expect(screen.getByTestId('confirm-reattribute')).toBeInTheDocument();
-    expect(screen.getByTestId('create-character-submit')).toHaveTextContent('Reattribute to «Ferra»');
-    fireEvent.click(screen.getByTestId('create-character-submit'));
+    // Create-once: the proposed name «Ferra» already matches a live cast
+    // member, so it routes straight through with NO confirm form.
+    expect(screen.queryByTestId('confirm-reattribute')).not.toBeInTheDocument();
 
-    // Manuscript mutation applies immediately (this part already worked pre-fix).
+    // Manuscript mutation applies (reassign to the existing member).
     await waitFor(() => {
       const sentences = store.getState().manuscript.sentences;
       expect(sentences.find((s) => s.id === 5)?.characterId).toBe('ferra-id');
@@ -1232,6 +1321,9 @@ describe('fs-58 — ScriptReviewDiff', () => {
         </Provider>,
       );
 
+      // Expand chapter 1 → strip_tag type to reach the op card.
+      fireEvent.click(screen.getByTestId('chapter-row-1'));
+      fireEvent.click(screen.getByTestId('type-row-1-strip_tag'));
       const key = opKey(1, 1, 'strip_tag');
       fireEvent.click(screen.getByTestId(`op-toggle-${key}`));
 
@@ -1529,5 +1621,161 @@ describe('fs-58 — ScriptReviewDiff', () => {
 
       resolveSpy.mockRestore();
     });
+  });
+});
+
+describe('ScriptReviewDiff — summary accordion (Task 5)', () => {
+  it('opens collapsed: chapter rows visible, no op cards until expanded', () => {
+    renderDiff({
+      ops: [opWithCh(5, 1, 'merge'), opWithCh(5, 2, 'strip_tag'), opWithCh(3, 9, 'fix_emotion')],
+    });
+    expect(screen.getByTestId('chapter-row-3')).toBeInTheDocument();
+    expect(screen.getByTestId('chapter-row-5')).toBeInTheDocument();
+    expect(screen.queryByTestId('op-toggle-5:1:merge')).not.toBeInTheDocument();
+  });
+
+  it('expands a chapter to its type rows, then a type to its op cards', () => {
+    renderDiff({ ops: [opWithCh(5, 1, 'merge'), opWithCh(5, 2, 'merge')] });
+    fireEvent.click(screen.getByTestId('chapter-row-5'));
+    expect(screen.getByTestId('type-row-5-merge')).toBeInTheDocument();
+    expect(screen.queryByTestId('op-toggle-5:1:merge')).not.toBeInTheDocument(); // type still collapsed
+    fireEvent.click(screen.getByTestId('type-row-5-merge'));
+    expect(screen.getByTestId('op-toggle-5:1:merge')).toBeInTheDocument();
+    expect(screen.getByTestId('op-toggle-5:2:merge')).toBeInTheDocument();
+  });
+});
+
+describe('ScriptReviewDiff — group approve (Task 6)', () => {
+  it('chapter Approve-all ticks only mechanical ops, leaves reattribute unticked', () => {
+    const { store } = renderDiff({
+      ops: [opWithCh(5, 1, 'merge'), opWithCh(5, 2, 'strip_tag'), opWithCh(5, 3, 'reattribute')],
+    });
+    // mechanical ops are selected by default — deselect first so the approve
+    // click SELECTS them (a toggle on a fresh bucket would deselect).
+    setSelected(store, ['5:1:merge', '5:2:strip_tag'], false);
+    fireEvent.click(screen.getByTestId('chapter-approve-5'));
+    const sel = store.getState().scriptReview.byBook.bk!.selected;
+    expect(sel['5:1:merge']).toBe(true);
+    expect(sel['5:2:strip_tag']).toBe(true);
+    expect(sel['5:3:reattribute']).toBe(false); // expand-only never bulk-approved
+  });
+
+  it('shows "N to review" when a chapter has expand-only ops', () => {
+    renderDiff({ ops: [opWithCh(5, 1, 'merge'), opWithCh(5, 3, 'reattribute')] });
+    expect(screen.getByTestId('chapter-row-5')).toHaveTextContent('1 to review');
+  });
+
+  it('type Approve ticks just that type', () => {
+    const { store } = renderDiff({ ops: [opWithCh(5, 1, 'merge'), opWithCh(5, 2, 'merge')] });
+    setSelected(store, ['5:1:merge', '5:2:merge'], false);
+    fireEvent.click(screen.getByTestId('chapter-row-5')); // expand to reveal type-approve
+    fireEvent.click(screen.getByTestId('type-approve-5-merge'));
+    const sel = store.getState().scriptReview.byBook.bk!.selected;
+    expect(sel['5:1:merge']).toBe(true);
+    expect(sel['5:2:merge']).toBe(true);
+  });
+
+  it('bulk approve schedules a selection sync with the POST-tick keys', () => {
+    const patch = vi.spyOn(api, 'patchScriptReviewSelection').mockResolvedValue({ ok: true } as never);
+    vi.useFakeTimers();
+    try {
+      const { store } = renderDiff({ ops: [opWithCh(5, 1, 'merge')], versionByChapter: { 5: 7 } });
+      setSelected(store, ['5:1:merge'], false);
+      fireEvent.click(screen.getByTestId('chapter-approve-5'));
+      vi.advanceTimersByTime(600);
+      expect(patch).toHaveBeenCalledWith(
+        'bk',
+        expect.objectContaining({
+          chapterId: 5,
+          version: 7,
+          selected: expect.objectContaining({ '5:1:merge': true }),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+      patch.mockRestore();
+    }
+  });
+});
+
+describe('ScriptReviewDiff — partial apply notice (Task 7)', () => {
+  it('warns when planApply drops some selected ops', () => {
+    const toast = vi.spyOn(notificationsActions, 'pushToast');
+    const resolve = vi.spyOn(api, 'resolveScriptReviewOps').mockResolvedValue({ ok: true });
+    // Two structural ops on the same sentence id → planApply keeps one, drops one.
+    renderDiff({
+      ops: [opWithCh(5, 1, 'merge', { mergeIds: [1, 2] }), opWithCh(5, 1, 'strip_tag', { newText: 'x' })],
+      sentences: [
+        { id: 1, chapterId: 5, text: 'a b', characterId: 'c1' },
+        { id: 2, chapterId: 5, text: 'c', characterId: 'c1' },
+      ],
+      versionByChapter: { 5: 1 },
+    });
+    // merge + strip_tag are mechanical → selected by default; apply directly.
+    fireEvent.click(screen.getByTestId('apply-button'));
+    expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("couldn't apply") }),
+    );
+    toast.mockRestore();
+    resolve.mockRestore();
+  });
+});
+
+describe('ScriptReviewDiff — create-once speakers (Task 8)', () => {
+  it('shows ONE create form for a new speaker spanning multiple lines', async () => {
+    const create = vi
+      .spyOn(api, 'createCharacter')
+      .mockResolvedValue({ character: { id: 'g1', name: 'Guard' } } as never);
+    const resolve = vi.spyOn(api, 'resolveScriptReviewOps').mockResolvedValue({ ok: true });
+    const { store } = renderDiff({
+      ops: [
+        opWithCh(3, 1, 'reattribute', { proposed: { name: 'Guard' } }),
+        opWithCh(3, 2, 'reattribute', { proposed: { name: 'Guard' } }),
+      ],
+      sentences: [
+        { id: 1, chapterId: 3, text: 'a', characterId: 'c0' },
+        { id: 2, chapterId: 3, text: 'b', characterId: 'c0' },
+      ],
+      versionByChapter: { 3: 1 },
+    });
+    // reattribute is expand-only → select both explicitly before applying.
+    setSelected(store, ['3:1:reattribute', '3:2:reattribute'], true);
+    fireEvent.click(screen.getByTestId('apply-button'));
+
+    // Exactly one confirm form, headed with the name + line count.
+    expect(screen.getByTestId('confirm-reattribute')).toHaveTextContent('Guard');
+    expect(screen.getByTestId('confirm-reattribute')).toHaveTextContent('2 lines');
+    fireEvent.click(screen.getByTestId('create-character-submit'));
+
+    // One POST despite two lines; both lines repointed to the created id.
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      const sentences = store.getState().manuscript.sentences;
+      expect(sentences.find((s) => s.id === 1)?.characterId).toBe('g1');
+      expect(sentences.find((s) => s.id === 2)?.characterId).toBe('g1');
+    });
+    create.mockRestore();
+    resolve.mockRestore();
+  });
+
+  it('a proposed name already in the roster needs no form', async () => {
+    const create = vi.spyOn(api, 'createCharacter');
+    const resolve = vi.spyOn(api, 'resolveScriptReviewOps').mockResolvedValue({ ok: true });
+    const { store } = renderDiff({
+      ops: [opWithCh(3, 1, 'reattribute', { proposed: { name: 'Existing' } })],
+      cast: [{ id: 'e1', name: 'Existing' }],
+      sentences: [{ id: 1, chapterId: 3, text: 'a', characterId: 'c0' }],
+      versionByChapter: { 3: 1 },
+    });
+    setSelected(store, ['3:1:reattribute'], true);
+    fireEvent.click(screen.getByTestId('apply-button'));
+    expect(screen.queryByTestId('confirm-reattribute')).not.toBeInTheDocument();
+    await waitFor(() => {
+      const sentences = store.getState().manuscript.sentences;
+      expect(sentences.find((s) => s.id === 1)?.characterId).toBe('e1');
+    });
+    expect(create).not.toHaveBeenCalled();
+    create.mockRestore();
+    resolve.mockRestore();
   });
 });
