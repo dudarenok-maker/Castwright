@@ -58,27 +58,22 @@ export interface ProposedNameGroup {
   ops: ReviewOpWithChapter[];
 }
 
-/** Split a batch of off-roster `reattribute` ops (each carrying `op.proposed`)
-    into (a) one group per NEW normalized name — the names that need a single
-    create-character confirm — and (b) the flat list of ops whose proposed name
-    already matches a live cast member, which need no form (applied straight
-    through the roster-seeded `applyProposedReattributions`). Pure. */
-export function consolidateProposedByName(
-  proposed: ReviewOpWithChapter[],
-  rosterNames: ReadonlySet<string>,
-): { newGroups: ProposedNameGroup[]; rosterMatchedOps: ReviewOpWithChapter[] } {
+/** Consolidate a batch of off-roster `reattribute` ops (each carrying
+    `op.proposed`) into one group per unique normalized name — the create-once
+    guarantee: a speaker on N lines yields ONE confirm group, not N. Every
+    group (whether its name is genuinely new OR happens to collide with a live
+    cast member) still surfaces a confirm form: `CreateCharacterForm` detects
+    the roster match and offers "Reattribute to «X»", so a new speaker whose
+    name coincides with an existing member can't be silently misattributed.
+    Pure. */
+export function consolidateProposedByName(proposed: ReviewOpWithChapter[]): ProposedNameGroup[] {
   const groups = new Map<string, ProposedNameGroup>();
-  const rosterMatchedOps: ReviewOpWithChapter[] = [];
   for (const op of proposed) {
     if (!op.proposed) continue;
     const key = norm(op.proposed.name);
-    if (rosterNames.has(key)) {
-      rosterMatchedOps.push(op);
-      continue;
-    }
     const g = groups.get(key);
     if (g) g.ops.push(op);
     else groups.set(key, { name: op.proposed.name, proposed: op.proposed, ops: [op] });
   }
-  return { newGroups: [...groups.values()], rosterMatchedOps };
+  return [...groups.values()];
 }

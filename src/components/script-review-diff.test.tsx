@@ -1135,9 +1135,12 @@ describe('fs-58 — ScriptReviewDiff', () => {
 
     fireEvent.click(screen.getByTestId('apply-button'));
 
-    // Create-once: the proposed name «Ferra» already matches a live cast
-    // member, so it routes straight through with NO confirm form.
-    expect(screen.queryByTestId('confirm-reattribute')).not.toBeInTheDocument();
+    // Create-once still shows ONE confirm form for the «Ferra» group; because
+    // the name matches a live cast member the form offers "Reattribute to
+    // «Ferra»" (not a silent apply — the review-gate collision guard).
+    expect(screen.getByTestId('confirm-reattribute')).toBeInTheDocument();
+    expect(screen.getByTestId('create-character-submit')).toHaveTextContent('Reattribute to «Ferra»');
+    fireEvent.click(screen.getByTestId('create-character-submit'));
 
     // Manuscript mutation applies (reassign to the existing member).
     await waitFor(() => {
@@ -1758,7 +1761,11 @@ describe('ScriptReviewDiff — create-once speakers (Task 8)', () => {
     resolve.mockRestore();
   });
 
-  it('a proposed name already in the roster needs no form', async () => {
+  it('a proposed name matching the roster still gets a one-click confirm (Reattribute to «X»), no silent apply', async () => {
+    // Review-gate fix: a proposed name that collides with a live cast member is
+    // NOT silently applied — it gets its own confirm group whose form detects
+    // the match and offers "Reattribute to «Existing»" (guarding against a new
+    // speaker being silently misattributed to a same-named existing character).
     const create = vi.spyOn(api, 'createCharacter');
     const resolve = vi.spyOn(api, 'resolveScriptReviewOps').mockResolvedValue({ ok: true });
     const { store } = renderDiff({
@@ -1769,12 +1776,15 @@ describe('ScriptReviewDiff — create-once speakers (Task 8)', () => {
     });
     setSelected(store, ['3:1:reattribute'], true);
     fireEvent.click(screen.getByTestId('apply-button'));
-    expect(screen.queryByTestId('confirm-reattribute')).not.toBeInTheDocument();
+    // The confirm form appears, offering reattribute-to-existing (not silent).
+    expect(screen.getByTestId('confirm-reattribute')).toBeInTheDocument();
+    expect(screen.getByTestId('create-character-submit')).toHaveTextContent('Reattribute to «Existing»');
+    fireEvent.click(screen.getByTestId('create-character-submit'));
     await waitFor(() => {
       const sentences = store.getState().manuscript.sentences;
       expect(sentences.find((s) => s.id === 1)?.characterId).toBe('e1');
     });
-    expect(create).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled(); // reattribute-to-existing never creates
     create.mockRestore();
     resolve.mockRestore();
   });

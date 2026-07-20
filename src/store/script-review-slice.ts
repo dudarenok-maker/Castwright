@@ -30,19 +30,29 @@ export function opKey(chapterId: number, id: number, op: string): string {
   return `${chapterId}:${id}:${op}`;
 }
 
+/** Every op class in canonical summary display order (mechanical first, then
+    the two expand-only classes). Single source for both the taxonomy split
+    below and selectReviewSummary's per-type ordering — a new op class is added
+    here (and to EXPAND_ONLY if high-stakes) and nowhere else. */
+const ALL_OP_TYPES: ReviewOp['op'][] = [
+  'merge',
+  'strip_tag',
+  'split',
+  'extract_dialogue',
+  'fix_emotion',
+  'validate_instruct',
+  'reattribute',
+  'flag_nonstory',
+];
 /** The high-stakes op classes: opt-in / unchecked by default, and never
     bulk-approvable from the summary (identity + story-exclusion edits). */
 export const EXPAND_ONLY: ReadonlySet<ReviewOp['op']> = new Set(['reattribute', 'flag_nonstory']);
 /** The mechanical op classes: checked by default and bulk-approvable per
-    chapter/type from the summary. The complement of EXPAND_ONLY. */
-export const BULK_APPROVABLE: ReadonlySet<ReviewOp['op']> = new Set([
-  'strip_tag',
-  'split',
-  'extract_dialogue',
-  'merge',
-  'fix_emotion',
-  'validate_instruct',
-]);
+    chapter/type from the summary — DERIVED as the complement of EXPAND_ONLY so
+    the two lists can't drift. */
+export const BULK_APPROVABLE: ReadonlySet<ReviewOp['op']> = new Set(
+  ALL_OP_TYPES.filter((op) => !EXPAND_ONLY.has(op)),
+);
 
 export interface ScriptReviewBucket {
   ops: ReviewOpWithChapter[];
@@ -400,19 +410,6 @@ export interface ReviewSummary {
   chapters: ReviewChapterSummary[];
 }
 
-/** Deterministic display order for the per-type rows: mechanical types first
-    (in a fixed order), then the expand-only types. */
-const TYPE_ORDER: ReviewOp['op'][] = [
-  'merge',
-  'strip_tag',
-  'split',
-  'extract_dialogue',
-  'fix_emotion',
-  'validate_instruct',
-  'reattribute',
-  'flag_nonstory',
-];
-
 /** Pure per-chapter/per-type aggregation over the flat appliable ops
     (`bucket.ops`, never `unappliable`) — the summary the accordion renders.
     No slice shape change; safe to recompute on every render. */
@@ -440,7 +437,7 @@ export function selectReviewSummary(bucket: ScriptReviewBucket | undefined): Rev
             ? ops.map((o) => opKey(o.chapterId, o.id, o.op))
             : [],
         }))
-        .sort((a, b) => TYPE_ORDER.indexOf(a.op) - TYPE_ORDER.indexOf(b.op));
+        .sort((a, b) => ALL_OP_TYPES.indexOf(a.op) - ALL_OP_TYPES.indexOf(b.op));
       const selectableKeys = byType.flatMap((t) => t.selectableKeys);
       const total = byType.reduce((n, t) => n + t.count, 0);
       return { chapterId, total, selectableKeys, toReview: total - selectableKeys.length, byType };

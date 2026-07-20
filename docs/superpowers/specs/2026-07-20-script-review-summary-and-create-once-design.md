@@ -110,11 +110,15 @@ roster first so it de-duplicates across chapters and across separate approve act
 When Apply runs and the selected set contains off-roster `reattribute` ops
 (`op.op === 'reattribute' && op.proposed && !op.characterId`):
 
-1. **Group the proposed ops by normalized `proposed.name`.** For each unique name:
-   - **Already in the live cast** (a real member, or one created earlier this session)
-     → no form; every line for that name is treated as a plain reattribute to that id.
-   - **Genuinely new** → show **one** `CreateCharacterForm`, headed
-     *"New speaker: «Name» — N lines"*.
+1. **Group the proposed ops by normalized `proposed.name`.** For each unique name,
+   show **one** `CreateCharacterForm`, headed *"New speaker: «Name» — N lines"*:
+   - **Genuinely new** → the form's default action is **Create**.
+   - **Name collides with a live cast member** → the form detects the match and
+     offers **"Reattribute to «X»"** instead. (Review-gate correction: an earlier
+     draft applied a roster-name match silently with no form — that risked a new
+     speaker being silently misattributed to a same-named existing character, and
+     dropped already-approved roster-matched ops if the operator cancelled an
+     unrelated new-name form mid-queue. Every unique name now gets its one confirm.)
 2. On create, all N lines for that name **apply together** in that one step
    (auto-apply). `apply-proposed.ts` already memoises the POST, so exactly one
    `createCharacter` fires per unique name; the memo is seeded from the live roster so
@@ -203,9 +207,9 @@ Either can merge alone. Default: one PR unless the diff argues for splitting.
   and `selectableKeys`); correct `selectableKeys` per group; the shared
   `BULK_APPROVABLE`/`EXPAND_ONLY` split; `toggleKeys` sets/clears exactly the given keys
   and nothing else.
-- **Unit — `apply-proposed.test.ts`**: two `proposed` ops with the same name → exactly
-  one `createCharacter` call, both lines repointed; a proposed name already in roster →
-  zero creates, line repointed to the existing id.
+- **Unit — `apply-proposed.test.ts`**: `consolidateProposedByName` groups by normalized
+  name (one group per unique name, every line kept); a roster-colliding name is grouped
+  too (not silently split out), so it still surfaces a confirm.
 - **Component — `script-review-diff.test.tsx`**: opens collapsed; `Approve all N` on a
   chapter ticks its mechanical ops, leaves reattribute/flag_nonstory unticked, shows the
   "N left to review" note; the post-Apply partial-apply notice fires when the ticked set

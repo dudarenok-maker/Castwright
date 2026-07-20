@@ -330,6 +330,17 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
      renders (chapters ascending, mechanical types bulk-approvable). */
   const summary = selectReviewSummary(bucket);
 
+  /* One pass to group ops by `${chapterId}:${op}` for the expanded-type op
+     cards — avoids an O(n) `ops.filter` per visible type group on every render
+     (a real cost at whole-book ~1000-op scale). */
+  const opsByChapterType = new Map<string, ReviewOpWithChapter[]>();
+  for (const o of ops) {
+    const k = `${o.chapterId}:${o.op}`;
+    const arr = opsByChapterType.get(k);
+    if (arr) arr.push(o);
+    else opsByChapterType.set(k, [o]);
+  }
+
   const selectedCount = ops.filter((o) => selected[opKey(o.chapterId, o.id, o.op)]).length;
 
   /* fs-58 persistence Task 13 — mirror the operator's checkbox state to the
@@ -508,18 +519,23 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
     }));
 
     const roster = new Set(cast.map((c) => c.id));
-    const { appliable } = planApply(selectedOps, live, roster);
+    const { appliable, unappliable: planUnappliable } = planApply(selectedOps, live, roster);
 
     // D2 — surface partial application: with the summary's bulk-approve it's
-    // easy to select ~1000 ops at once, and planApply silently drops any that
-    // no longer validate (stale text, one-structural-op-per-id collisions).
-    // Tell the operator how many of their selection actually landed.
-    const notApplied = selectedOps.length - appliable.length;
-    if (notApplied > 0) {
+    // easy to select ~1000 ops at once, and planApply drops any that no longer
+    // validate (stale text, one-structural-op-per-id collisions). Count the
+    // GENUINE conflicts planApply reports as unappliable — NOT
+    // selectedOps.length - appliable.length, which also counts benign no-ops
+    // (e.g. a validate_instruct strip on an instruct-less sentence, dropped
+    // without conflict) and off-roster reattributes still pending the confirm
+    // queue (which may yet be applied or cancelled), both of which would make
+    // the warning fire falsely / overstate the count.
+    if (planUnappliable.length > 0) {
+      const n = planUnappliable.length;
       dispatch(
         notificationsActions.pushToast({
           kind: 'warn',
-          message: `${appliable.length} applied · ${notApplied} couldn't apply (conflicting edits)`,
+          message: `${n} suggestion${n === 1 ? '' : 's'} couldn't apply (conflicting edits)`,
           dedupeKey: `script-review-partial-${startBookId}`,
         }),
       );
@@ -553,16 +569,16 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
 
     if (proposedOps.length > 0) {
       // Create-once: consolidate the off-roster proposals by normalized name so
-      // a speaker on N lines prompts a single create, not N. Names that already
-      // match a live cast member need no form — apply them straight through.
-      const rosterNames = new Set(cast.map((c) => c.name.trim().toLowerCase()));
-      const { newGroups, rosterMatchedOps } = consolidateProposedByName(proposedOps, rosterNames);
-      if (newGroups.length === 0) {
-        void runProposed(rosterMatchedOps, startBookId);
-      } else {
-        setConfirm({ groups: newGroups, index: 0, finalized: rosterMatchedOps, startBookId });
+      // a speaker on N lines prompts ONE confirm, not N. Every unique name gets
+      // a confirm group — including one that collides with a live cast member
+      // (the form detects the match and offers "Reattribute to «X»"), so a new
+      // speaker can't be silently misattributed, and there are no pre-approved
+      // ops to drop if the operator cancels partway.
+      const groups = consolidateProposedByName(proposedOps);
+      if (groups.length > 0) {
+        setConfirm({ groups, index: 0, finalized: [], startBookId });
       }
-      return; // the confirm queue / runProposed handle the rest (Task 14 cleanup path)
+      return; // the confirm queue handles the rest (Task 14 cleanup path)
     }
 
     // fs-58 persistence Task 13 — hide the modal, don't wipe the bucket.
@@ -803,7 +819,11 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                       onClick={() => toggleChapterExpand(chapter.chapterId)}
                       className="flex-1 flex items-center gap-3 text-left min-h-[44px] fine-pointer:min-h-0"
                     >
-                      <span className="text-xs font-bold uppercase tracking-wider text-ink/60 flex-1">
+                      <span
+                        role="heading"
+                        aria-level={3}
+                        className="text-xs font-bold uppercase tracking-wider text-ink/60 flex-1"
+                      >
                         Chapter {chapter.chapterId}
                       </span>
                       <span className="text-xs text-ink/45 tabular-nums">
@@ -821,9 +841,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                       const typeOpen = expandedTypes.has(`${chapter.chapterId}:${type.op}`);
                       const allTypeSel =
                         type.selectableKeys.length > 0 && type.selectableKeys.every((k) => selected[k]);
-                      const typeOps = ops.filter(
-                        (o) => o.chapterId === chapter.chapterId && o.op === type.op,
-                      );
+                      const typeOps = opsByChapterType.get(`${chapter.chapterId}:${type.op}`) ?? [];
                       return (
                         <div
                           key={type.op}
@@ -833,7 +851,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                           <div className="flex items-center gap-2">
                             {type.selectableKeys.length > 0 ? (
                               // Self-labeled via aria-label — no wrapping <label> needed.
-                              <span className="flex items-center min-h-[44px] fine-pointer:min-h-0">
+                              <span className="flex items-center justify-center min-h-[44px] fine-pointer:min-h-0 min-w-[44px] fine-pointer:min-w-0">
                                 <Checkbox
                                   data-testid={`type-approve-${chapter.chapterId}-${type.op}`}
                                   checked={allTypeSel}
@@ -851,7 +869,13 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                               onClick={() => toggleTypeExpand(chapter.chapterId, type.op)}
                               className="flex-1 flex items-center gap-2 text-left min-h-[44px] fine-pointer:min-h-0"
                             >
-                              <span className="text-xs font-semibold text-ink/70 flex-1">{classLabel(type.op)}</span>
+                              <span
+                                role="heading"
+                                aria-level={4}
+                                className="text-xs font-semibold text-ink/70 flex-1"
+                              >
+                                {classLabel(type.op)}
+                              </span>
                               <span className="text-[11px] text-ink/45 tabular-nums">{type.count}</span>
                               <span aria-hidden className="text-ink/40">
                                 {typeOpen ? '▾' : '▸'}

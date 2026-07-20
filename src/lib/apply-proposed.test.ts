@@ -95,25 +95,26 @@ describe('consolidateProposedByName', () => {
   const rop = (chapterId: number, id: number, name: string): ReviewOpWithChapter =>
     ({ chapterId, id, op: 'reattribute', rationale: 'x', proposed: { name } }) as ReviewOpWithChapter;
 
-  it('groups off-roster proposals by normalized name and keeps every line', () => {
-    const { newGroups, rosterMatchedOps } = consolidateProposedByName(
-      [rop(3, 1, 'Guard'), rop(3, 2, ' guard '), rop(12, 8, 'Guard'), rop(4, 5, 'Cook')],
-      new Set(), // empty roster → all new
-    );
-    expect(rosterMatchedOps).toEqual([]);
-    expect(newGroups.map((g) => g.name.toLowerCase()).sort()).toEqual(['cook', 'guard']);
-    const guard = newGroups.find((g) => g.name.trim().toLowerCase() === 'guard')!;
+  it('groups proposals by normalized name and keeps every line, one group per name', () => {
+    const groups = consolidateProposedByName([
+      rop(3, 1, 'Guard'),
+      rop(3, 2, ' guard '),
+      rop(12, 8, 'Guard'),
+      rop(4, 5, 'Cook'),
+    ]);
+    expect(groups.map((g) => g.name.toLowerCase()).sort()).toEqual(['cook', 'guard']);
+    const guard = groups.find((g) => g.name.trim().toLowerCase() === 'guard')!;
     expect(guard.ops).toHaveLength(3); // both spellings + ch12, one group
     expect(guard.proposed.name).toBe('Guard'); // first-seen display form
   });
 
-  it('routes names already in the roster to rosterMatchedOps (no form)', () => {
-    const { newGroups, rosterMatchedOps } = consolidateProposedByName(
-      [rop(3, 1, 'Guard'), rop(4, 5, 'Cook')],
-      new Set(['guard']), // Guard already exists
-    );
-    expect(rosterMatchedOps.map((o) => o.id)).toEqual([1]);
-    expect(newGroups.map((g) => g.name)).toEqual(['Cook']);
+  it('groups a roster-colliding name too — it still gets one confirm group (no silent apply)', () => {
+    // Roster state is intentionally NOT consulted here: every unique name
+    // becomes a group so the confirm form (which detects the roster match)
+    // always runs, preventing silent misattribution on a name collision.
+    const groups = consolidateProposedByName([rop(3, 1, 'Existing'), rop(4, 5, 'Cook')]);
+    expect(groups.map((g) => g.name).sort()).toEqual(['Cook', 'Existing']);
+    expect(groups.every((g) => g.ops.length === 1)).toBe(true);
   });
 });
 
