@@ -4,8 +4,9 @@ plan). Mirrors test_load_admission.py's fixture shape and the same
 `SEG_CAPACITY_ADMISSION` flag envelope: flag-OFF never probes and calls the
 engine method with no `device` arg (today's behaviour byte-for-byte);
 flag-ON reserves the heavy 1.7B design-family footprint (each route's own
-cold-start seed — mint 6144, design 7168), steers the admitted device into the
-engine call, and a no-fit probe returns 503 `{noCapacity, neededMb, deviceKey}`
+cold-start seed — both 6144, measured mint ~5654 / design ~5440), steers the
+admitted device into the engine call, and a no-fit probe returns 503
+`{noCapacity, neededMb, deviceKey}`
 before the engine is ever asked to design/mint. Each route tags its reservation
 cfg with an `op` (`design`/`mint`) so the two learn their OWN windowed p95
 rather than sharing the far-more-frequent plain-synth `qwen.1.7b` window

@@ -9,7 +9,7 @@ export const GROUPS: ConfigGroup[] = [
   { id: 'tts-batching', label: 'Voice batching & throughput', help: 'Batch sizing and generation concurrency.', risk: 'medium', collapsedByDefault: false },
   { id: 'qa-gates', label: 'Per-sentence QA gates', help: 'Acoustic and ASR checks applied before assembly.', risk: 'low', collapsedByDefault: false },
   { id: 'audio-loudness', label: 'Audio loudness targets', help: 'EBU R128 normalization targets.', risk: 'low', collapsedByDefault: false },
-  { id: 'gpu-lifecycle', label: 'GPU arbitration, memory & lifecycle', help: 'GPU concurrency, VRAM budgets, and sidecar recycling. Footguns live here.', risk: 'high', collapsedByDefault: true },
+  { id: 'gpu-lifecycle', label: 'GPU arbitration, memory & lifecycle', help: 'Idle-eviction TTLs, the per-device VRAM reserve, and sidecar recycle/restart thresholds. Footguns live here.', risk: 'high', collapsedByDefault: true },
   { id: 'rate-limits', label: 'Gemini rate limits', help: 'Per-model request/token/day caps for the Gemini API.', risk: 'low', collapsedByDefault: false },
   { id: 'lan-access', label: 'LAN access & device tokens', help: 'Lifetime of browser/device authorizations minted from Admin.', risk: 'low', collapsedByDefault: false },
   { id: 'analyzer-structure', label: 'Dialogue-structure attribution', help: 'Deterministic structure engine that corrects/flags stage-2 attributions.', risk: 'medium', collapsedByDefault: false },

@@ -47,11 +47,10 @@ and the policy is documented at the top of the same file.
 ## The VRAM budget — the actual constraint
 
 8 GB total on the dev box — the site's "sweet spot" tier (`HARDWARE_LINE` in
-`src/lib/brand.ts`). The site's entry-point tier is 6 GB (`GPU_VRAM_BUDGET`
-drops to `6` there, per INSTALL.md's config table); the budget below scales
-down accordingly — expect the 9B/8B analyzer options and Coqui to no longer
-co-reside with anything else, and more frequent cross-engine eviction via
-`withGpuLoad`. Three things compete for the 8 GB case:
+`src/lib/brand.ts`). The site's entry-point tier is 6 GB; with that much less
+headroom the budget below scales down accordingly — expect the 9B/8B analyzer
+options and Coqui to no longer co-reside with anything else, and more frequent
+cross-engine eviction via `withGpuLoad`. Three things compete for the 8 GB case:
 
 | Tenant                 | Resident size     | When it's loaded                    |
 | ---------------------- | ----------------- | ----------------------------------- |
@@ -102,8 +101,11 @@ section is the "VRAM sawtooth" / mid-stream stall that hurts large (especially
 Cyrillic) books. A resident analyzer can't co-reside with a TTS/voice-design load
 on a small GPU, so the server **evicts the resident analyzer before any sidecar
 TTS/voice-design load** (or returns a 409 if an analysis is mid-flight), then loads.
-On a roomy card (detected VRAM ≥ `GPU_SAFE_COEXIST_MB`, default 11000 MB) nothing
-is evicted — analyzer + TTS coexist. See `server/src/gpu/` + plan 222.
+On a roomy card (the roomiest device's *measured free* VRAM, minus the reserve,
+≥ a heavy TTS decode peak `HEAVY_TTS_DECODE_FLOOR_MB` in `gpu-load.ts`) nothing
+is evicted — analyzer + TTS coexist. That measured-free-VRAM test replaced the
+retired `GPU_SAFE_COEXIST_MB` total-card-size threshold in #1737. See
+`server/src/gpu/` + plan 222.
 
 **Two-model analysis split — troubleshooting.** If you set TWO *different local*
 models for the two analysis phases (`ANALYZER_PHASE0_MODEL` + `ANALYZER_PHASE1_MODEL`),
@@ -155,16 +157,16 @@ The two rare, heavy 1.7B **design-family** ops carry their own keys —
 `qwen.1.7b.design` (`/qwen/design-voice`'s VoiceDesign load) — so they learn
 their own p95 instead of being diluted by the far-more-frequent plain 1.7B
 synth (`qwen.1.7b`, ~3915 MB) and getting its under-sized reservation (#1738).
-Mint's seed (6144) sits just above its measured ~5654 MB peak; design's (7168)
-is deliberately higher and **unmeasured** — a VoiceDesign-1.7B + 0.6B-Base load
-whose real peak is still owed a measurement (#1742), so it errs toward
-refuse-not-OOM until the window learns the true value.
+Both are measured on-box (8 GB 4070, per-op allocated peak): mint ~5654 MB
+(base+base) and design ~5440 MB (VoiceDesign-1.7B + 0.6B-Base audition, #1742),
+so the shared 6144 seed keeps a ~9-13% margin over both and admits on a bare
+8 GB card before either window warms.
 
 <!-- footprint:kokoro=1200 -->
 <!-- footprint:qwen=3072 -->
 <!-- footprint:qwen.1.7b=6144 -->
 <!-- footprint:qwen.1.7b.mint=6144 -->
-<!-- footprint:qwen.1.7b.design=7168 -->
+<!-- footprint:qwen.1.7b.design=6144 -->
 <!-- footprint:coqui=3584 -->
 <!-- footprint:asr=400 -->
 <!-- footprint:spk=200 -->
@@ -189,31 +191,37 @@ unloaded — see the table above.
   design session — `_ensure_base_loaded()` runs alongside
   `_ensure_design_loaded()` (`main.py:2546`).
 - **Loading any TTS engine evicts the resident analyzer first**, unless the
-  card is roomy (`GPU_SAFE_COEXIST_MB`, default 11000 MB) — this is the
-  `withGpuLoad` path already covered above (`server/src/gpu/gpu-load.ts:28`).
+  roomiest card's measured free VRAM clears the coexist floor above — this is
+  the `withGpuLoad` path already covered (`server/src/gpu/gpu-load.ts`).
 - **VoiceDesign vs. ASR is *not* a hard sidecar-side exclusion.** There's no
   eviction code linking the two the way there is for VoiceDesign↔Base17 or
   VoiceDesign↔Kokoro — they're independent singletons with their own idle-TTL
-  watchdogs. Any serialization between them comes only from the Node-side
-  weighted semaphore below (or, if that's disabled, the blunt
-  `GPU_CONCURRENCY=1` fallback that serializes every GPU op process-wide). If
-  you've seen this written elsewhere as a guaranteed exclusion, treat it as
-  "governed by the semaphore," not as sidecar-enforced.
+  watchdogs. Any serialization between them comes from the serialized GPU
+  fallback (one heavy op at a time — see below) or, with
+  `SEG_CAPACITY_ADMISSION` on, the sidecar's per-op VRAM reservation. If you've
+  seen this written elsewhere as a guaranteed exclusion, treat it as "governed
+  by admission/serialization," not as sidecar-enforced.
 
-**The weighted VRAM semaphore.** `server/src/gpu/semaphore.ts:35`
-(`GpuSemaphore`, token-budget FIFO) gates concurrent GPU ops across *every*
-engine, not just ASR. Weights live in
-`server/src/tts/engine-vram-cost.ts:15-32`:
+**How concurrent GPU ops are gated (post-#1737).** The old hand-weighted
+`GpuSemaphore` (a token-budget FIFO in the deleted `server/src/gpu/semaphore.ts`,
+fed by per-engine costs in the deleted `server/src/tts/engine-vram-cost.ts` and
+tuned by `GPU_VRAM_BUDGET` / `GPU_CONCURRENCY`) is **gone** — retired in the
+capacity-admission cutover (#1737). What replaced it:
 
-```
-kokoro: 1   qwen: 1   coqui: 3   gemini: 0   analyzer: 4   asr: 1   spk: 1
-```
-
-Budget is `GPU_VRAM_BUDGET` (default `0` = disabled, which falls back to
-`GPU_CONCURRENCY`, default `1` — i.e. fully serial GPU access). The suggested
-budget for an 8 GB card is **4** (comment at `engine-vram-cost.ts:69-80`),
-which is enough for e.g. `asr(1) + qwen(1) + kokoro(1)` concurrently but not
-`analyzer(4) + anything`.
+- **Heavy TTS/voice-design loads** go through `withGpuLoad` (`gpu-load.ts`),
+  which coexists-or-evicts the analyzer from *measured* free VRAM (above).
+- **The analyzer's own concurrency** rides a plain `CountSemaphore`
+  (`server/src/gpu/count-semaphore.ts`) — the extracted count core of the old
+  semaphore, no VRAM weights.
+- **Per-op VRAM reservation** is opt-in via `SEG_CAPACITY_ADMISSION` (default
+  OFF): the sidecar reserves each op's measured `FootprintTable` peak against a
+  card's real free memory, with multi-GPU device steering. Flag OFF, heavy GPU
+  work runs **one op at a time** (a serialized fallback), and the only surviving
+  GPU *admission* knob is the per-device `GPU_RESERVE_MB` cushion (the weighted-
+  budget/concurrency knobs are gone). The §9 group still carries the sidecar
+  *lifecycle* knobs that outlived the cutover — idle-eviction TTLs and the
+  RAM/VRAM recycle+restart thresholds. See §9 of the wiki's Advanced Settings
+  and [docs/features/264](features/264-vram-aware-gpu-placement.md).
 
 Per-engine device pins (which physical GPU each engine targets, for
 multi-GPU boxes) are covered later in this doc under "Moving from

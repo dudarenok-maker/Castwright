@@ -580,14 +580,12 @@ export const SCENES: Scene[] = [
         .getByText('GPU arbitration, memory & lifecycle', { exact: true })
         .click({ timeout: 5000 });
     },
-    // Not "GPU concurrency" — this group's own `help` text ("GPU concurrency,
-    // VRAM budgets, and sidecar recycling. Footguns live here.") contains that
-    // exact phrase too, so `text=GPU concurrency` strict-mode-matches 2
-    // elements and silently fails to scroll (caught by the harness's
-    // best-effort `.catch()`), landing the shot on whatever section happened
-    // to be in view instead. "GPU VRAM token budget" is unique on the page.
-    waitForAfterAction: 'text=GPU VRAM token budget',
-    scrollTo: 'text=GPU VRAM token budget',
+    // The weighted-semaphore knobs (GPU concurrency / VRAM token budget / …)
+    // were retired in #1737, so target the surviving unique knob "GPU VRAM
+    // reserve cap (MB)" — the only remaining GPU admission knob and unique on
+    // the page (the group `help` no longer contains it).
+    waitForAfterAction: 'text=GPU VRAM reserve cap',
+    scrollTo: 'text=GPU VRAM reserve cap',
     strict: true,
   },
   {
