@@ -29,7 +29,7 @@
 - `server/src/analyzer/attribution-eval/run-eval.ts` — runner core (attribute one fixture, 3 stages, score, bucket, scorecard).
 - `server/src/analyzer/attribution-eval/run-eval-cli.ts` — runner CLI (gating, engine loop, print).
 - `server/src/analyzer/attribution-eval/diff-runs.ts` — whole-book baseline-vs-tuned diff (spec §3.7).
-- `server/src/analyzer/attribution-eval/__fixtures__/coalfall-ch1.roster.json` — committed Coalfall roster.
+- `server/src/analyzer/attribution-eval/__fixtures__/coalfall.roster.json` — committed Coalfall roster.
 - `scripts/run-attribution-eval.mjs` — root orchestrator (spawns `tsx`).
 - Test files colocated: `roster-schema.test.ts`, `capture.test.ts`, `capture-cli.test.ts`, `buckets.test.ts`, `run-eval.test.ts`, `diff-runs.test.ts`.
 
@@ -274,8 +274,9 @@ writeFileSync(
 vi.mock('../../workspace/scan.js', () => ({
   findBookByBookId: vi.fn(async () => ({
     bookDir, author: 'Derek Landy', title: 'Playing with Fire',
-    state: { manuscriptId: 'm_pwf', author: 'Derek Landy', title: 'Playing with Fire' },
+    state: { manuscriptId: 'm_pwf', author: 'Derek Landy', title: 'Playing with Fire', language: 'en' },
   })),
+  bookStateLanguage: (s: { language?: string }) => s.language ?? 'en',
 }));
 vi.mock('../../store/manuscripts.js', () => ({
   getOrHydrateManuscript: vi.fn(async () => ({
@@ -312,9 +313,9 @@ Expected: FAIL — cannot find module `./capture-cli.js`.
 ```ts
 // capture-cli.ts
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { findBookByBookId } from '../../workspace/scan.js';
+import { findBookByBookId, bookStateLanguage } from '../../workspace/scan.js';
 import { getOrHydrateManuscript } from '../../store/manuscripts.js';
 import { stripFrontMatterBoilerplate } from '../strip-front-matter.js';
 import { manuscriptEditsJsonPath, castJsonPath } from '../../workspace/paths.js';
@@ -340,6 +341,7 @@ export async function captureCorpus(opts: {
   const author = state.author;
   const title = state.title;
   const bookSlug = slug(title);
+  const lang = bookStateLanguage(state); // e.g. 'en' / 'ru' — stamped into the fixture filename
 
   const edits = JSON.parse(await readFile(manuscriptEditsJsonPath(bookDir), 'utf8')) as {
     sentences: Array<{ id: number; chapterId: number; characterId: string; text: string }>;
@@ -358,7 +360,7 @@ export async function captureCorpus(opts: {
     const chapterText = stripFrontMatterBoilerplate(hint.body, { author, title });
     const labelled = buildLabelledChapter(chapterText, edits.sentences as never, chapterId);
     const num = String(chapterId).padStart(2, '0');
-    const path = join(corpusDir, `${bookSlug}-ch${num}.labelled.json`);
+    const path = join(corpusDir, `${bookSlug}-ch${num}.${lang}.labelled.json`);
     await writeFile(path, JSON.stringify(labelled, null, 2));
     writtenFixtures.push(path);
   }
@@ -383,8 +385,10 @@ function parseArgs(argv: string[]): { bookId: string; chapters: number[] } {
   return { bookId, chapters };
 }
 
-// Run only when invoked directly (not when imported by tests).
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+// Run only when invoked directly (not when imported by tests). Normalise both
+// sides with resolve() — a bare string compare is Windows-brittle (drive-letter
+// casing / slash direction), matching the repo precedent (build-companion-apk.mjs).
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   const { bookId, chapters } = parseArgs(process.argv.slice(2));
   captureCorpus({ bookId, chapters })
     .then((r) => {
@@ -412,9 +416,9 @@ Append to `.gitignore`:
 server/src/analyzer/attribution-eval/corpus/
 ```
 
-Add to root `package.json` "scripts":
+Add to root `package.json` "scripts" (use `npx tsx` — `tsx` is a `server/` devDependency with no root bin, matching existing root scripts like `audit:stage2-coverage`):
 ```json
-"eval:attribution:capture": "tsx server/src/analyzer/attribution-eval/capture-cli.ts",
+"eval:attribution:capture": "npx tsx server/src/analyzer/attribution-eval/capture-cli.ts",
 ```
 
 - [ ] **Step 6: Verify gitignore + script**
@@ -447,22 +451,37 @@ git commit -m "feat(server): add capture CLI for attribution-eval corpus"
 
 ```ts
 // cross-examine-reasons.test.ts
+// AlignedSentence/SpanEvidence factories are the exact ones from
+// cross-examine.test.ts:19-50 (mkSentence/speechSpan/narrationSpan/aligned).
 import { describe, it, expect } from 'vitest';
 import { crossExamine } from './cross-examine.js';
-import type { AlignmentResult } from './aligner.js';
+import type { AlignedSentence, AlignmentResult } from './aligner.js';
+import type { EvidenceSource, SpanEvidence } from './types.js';
+import type { SentenceOutput } from '../../handoff/schemas.js';
 
-// Minimal alignment with one tag-confirmed line and one narration line.
-// (Reuse the builder pattern from cross-examine.test.ts §5.3 — construct an
-//  AlignmentResult with two aligned spans, one proven by tag-name, one narration.)
-function twoLineAlignment(): AlignmentResult {
-  // See cross-examine.test.ts for the exact AlignmentResult factory this mirrors.
-  // ... construct spans: [0]=speech tag→'alice', [1]=narration ...
-  throw new Error('replace with the shared factory from cross-examine.test.ts');
-}
+let nextId = 1;
+const mkSentence = (characterId: string): SentenceOutput => ({
+  id: nextId++, chapterId: 1, characterId, text: 'driven by aligned spans, not text',
+});
+const speechSpan = (speaker?: { characterId: string; source: EvidenceSource }): SpanEvidence => ({
+  kind: 'speech', start: 0, end: 1, speaker,
+});
+const narrationSpan = (): SpanEvidence => ({ kind: 'narration', start: 0, end: 1 });
+const aligned = (sentence: SentenceOutput, spans: SpanEvidence[]): AlignedSentence => ({
+  sentence, spans, lumped: false,
+});
 
 describe('crossExamine reasons', () => {
   it('emits a reason+bucket for EVERY sentence, not only flagged', () => {
-    const result = crossExamine(twoLineAlignment(), {
+    // Line 0: tag-name proves 'alice' (CONFIRMED, not flagged). Line 1: pure narration.
+    const alignment: AlignmentResult = {
+      aligned: [
+        aligned(mkSentence('alice'), [speechSpan({ characterId: 'alice', source: 'tag-name' })]),
+        aligned(mkSentence('narrator'), [narrationSpan()]),
+      ],
+      alignedPct: 100,
+    };
+    const result = crossExamine(alignment, {
       rosterIds: new Set(['alice', 'narrator']),
       unknownBucketIds: new Set(),
       alignmentFloorPct: 80,
@@ -473,11 +492,11 @@ describe('crossExamine reasons', () => {
       expect(typeof result.reasons[i].reason).toBe('string');
       expect(['confirmed', 'corrected', 'flagged', 'lumped']).toContain(result.reasons[i].bucket);
     }
+    // The confirmed line is NOT flagged, yet still carries a reason — the whole point.
+    expect(result.reasons[0].bucket).toBe('confirmed');
   });
 });
 ```
-
-> Implementer note: the `twoLineAlignment` factory is not invented here — copy the exact `AlignmentResult` construction helper already used in `cross-examine.test.ts` (§5.3 decision-matrix cases) so the test compiles against real types. This is a step, not a placeholder: read `cross-examine.test.ts`, lift its span factory, build a 2-span case.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -535,37 +554,61 @@ git commit -m "feat(server): expose per-sentence reasons from crossExamine (eval
 **Interfaces:**
 - Produces: `attributeChapterStage2` opts gains `onStages?: (stages: { raw: SentenceOutput[]; deterministic: SentenceOutput[]; reasons: Array<{ index: number; reason: string; bucket: DecisionBucket }> }) => void`. Called exactly once per chapter (when provided) with **structured clones** of (a) the raw model output and (b) the deterministic pass, **before** escalation mutates in place, plus the per-sentence `reasons` from Task 4's `CrossExamineResult` (empty array in the narrator-default branch, which has no evidence classes). `final` is the function's normal return `result.sentences`. Default (no callback) → zero behaviour change.
 
-- [ ] **Step 1: Write the failing test** — mock a tiny analyzer so `runStage2ChapterChunked` returns a fixed raw set, structure engine disabled (`analyzer.structure.enabled=false`) so the else branch runs `applyNarratorDefault`; assert the callback fires with raw + deterministic arrays.
+- [ ] **Step 1: Write the failing test** — use the full `Analyzer` stub pattern from `analysis.structure-engine.test.ts:52-70` (all seven methods; `runAttributionEscalation → null` so the real structure engine runs but escalation is a no-op). English `stageCall.language` → `conventionsFor('en')` is non-null, so the structure branch runs and `reasons` is populated. Assert the callback fires once with raw + deterministic + reasons.
 
 ```ts
 // attribute-chapter-stages.test.ts
-import { describe, it, expect, vi } from 'vitest';
-// NOTE: import the config setter used elsewhere in analysis tests to force
-// analyzer.structure.enabled=false (copy the pattern from
-// analysis.structure-engine.test.ts). Then call attributeChapterStage2 with a
-// stub analyzer whose runStage2Chapter yields two sentences (one spoken, one not).
-
+import { describe, it, expect } from 'vitest';
+import type { Analyzer } from '../analyzer/index.js';
+import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/schemas.js';
 import { attributeChapterStage2 } from './analysis.js';
 
+// Minimal English chapter: one tag-anchored speech line + one narration line.
+const CHAPTER_BODY = '"Are you sure?" asked Alice.\n\nBob nodded and turned away.';
+const CHARACTERS: CharacterOutput[] = [
+  { id: 'alice', name: 'Alice', role: 'lead', color: '#111111', gender: 'female' },
+  { id: 'bob', name: 'Bob', role: 'lead', color: '#222222', gender: 'male' },
+];
+const STAGE1: Stage1Output = { characters: CHARACTERS, chapters: [{ id: 1, title: 'Chapter One' }] };
+
+// Full Analyzer stub (mirrors analysis.structure-engine.test.ts). runStage2Chapter
+// returns a fixed raw attribution; runAttributionEscalation → null (escalation no-op).
+function fakeAnalyzer(sentences: SentenceOutput[]): Analyzer {
+  return {
+    runStage1: () => Promise.reject(new Error('not used')),
+    runStage1Chapter: () => Promise.reject(new Error('not used')),
+    runStage2Chapter: () => Promise.resolve({ sentences }),
+    runEmotionChapter: () => Promise.reject(new Error('not used')),
+    runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+    runStage3Chapter: () => Promise.reject(new Error('not used')),
+    runAttributionEscalation: () => Promise.resolve(null),
+  };
+}
+
 describe('attributeChapterStage2 onStages', () => {
-  it('invokes onStages with raw + deterministic snapshots (else branch)', async () => {
-    const captured: any[] = [];
-    // ... build stubAnalyzer + stage1 + chapter as analysis.structure-engine.test.ts does ...
+  it('invokes onStages once with raw + deterministic + reasons', async () => {
+    const captured: Array<{ raw: SentenceOutput[]; deterministic: SentenceOutput[]; reasons: unknown[] }> = [];
+    const raw: SentenceOutput[] = [
+      { id: 1, chapterId: 1, characterId: 'bob', confidence: 0.4, text: 'Are you sure?' },
+      { id: 2, chapterId: 1, characterId: 'narrator', confidence: 0.4, text: 'Bob nodded and turned away.' },
+    ];
     await attributeChapterStage2({
-      /* analyzer: stubAnalyzer, manuscriptId, title, stage1, chapter, stageCall, */
+      analyzer: fakeAnalyzer(raw),
+      manuscriptId: 'm1',
+      title: 'Test Book',
+      stage1: STAGE1,
+      chapter: { id: 1, title: 'Chapter One', body: CHAPTER_BODY },
+      stageCall: { language: 'en' } as never,
       onStages: (s) => captured.push(s),
-    } as never);
+    });
     expect(captured).toHaveLength(1);
     expect(Array.isArray(captured[0].raw)).toBe(true);
     expect(Array.isArray(captured[0].deterministic)).toBe(true);
-    // reasons align 1:1 with the deterministic snapshot (empty in narrator branch is allowed,
-    // but length must equal deterministic length whenever the structure engine ran).
-    expect(Array.isArray(captured[0].reasons)).toBe(true);
+    // structure branch ran (en supported) → reasons align 1:1 to the deterministic snapshot.
+    expect(captured[0].reasons).toHaveLength(captured[0].deterministic.length);
   });
 });
 ```
-
-> Implementer note: lift the stub-analyzer + `stage1` + chapter + `stageCall` construction verbatim from `server/src/routes/analysis.structure-engine.test.ts` (it already calls this pipeline). This is a real reconnaissance step.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -735,14 +778,18 @@ const truth: LabelledChapter = {
   ],
 };
 
-// Fake analyzer: returns both lines correctly attributed.
+// Full Analyzer stub (runAttributionEscalation → null so escalation is a no-op).
 const fakeAnalyzer: any = {
-  async runStage2Chapter() {
-    return { sentences: [
-      { id: 1, chapterId: 44, characterId: 'alice', text: 'Hi,' },
-      { id: 2, chapterId: 44, characterId: 'narrator', text: 'Alice said.' },
-    ] };
-  },
+  runStage1: () => Promise.reject(new Error('not used')),
+  runStage1Chapter: () => Promise.reject(new Error('not used')),
+  runStage2Chapter: () => Promise.resolve({ sentences: [
+    { id: 1, chapterId: 44, characterId: 'alice', text: 'Hi,' },
+    { id: 2, chapterId: 44, characterId: 'narrator', text: 'Alice said.' },
+  ] }),
+  runEmotionChapter: () => Promise.reject(new Error('not used')),
+  runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+  runStage3Chapter: () => Promise.reject(new Error('not used')),
+  runAttributionEscalation: () => Promise.resolve(null),
 };
 
 describe('rosterToStage1', () => {
@@ -755,9 +802,9 @@ describe('rosterToStage1', () => {
 });
 
 describe('evalFixture', () => {
-  it('scores three stages with structure engine disabled', async () => {
-    // Force analyzer.structure.enabled=false via the shared config test setter
-    // (copy from analysis.structure-engine.test.ts).
+  it('scores three stages against the real structure engine (en)', async () => {
+    // en is a supported language → the structure branch runs for real; the fake's
+    // runAttributionEscalation → null makes escalation a no-op. No config override needed.
     const res = await evalFixture({
       analyzer: fakeAnalyzer,
       manuscriptId: 'm', title: 'T', truth, roster, chapterId: 44,
@@ -812,7 +859,7 @@ export function rosterToStage1(roster: RosterSnapshot, chapterId: number): Stage
       ...(c.gender ? { gender: c.gender } : {}),
       ...(c.aliases ? { aliases: c.aliases } : {}),
     })),
-    chapters: [{ id: chapterId, title: `Chapter ${chapterId}`, characterIds: roster.characters.map((c) => c.id) }],
+    chapters: [{ id: chapterId, title: `Chapter ${chapterId}` }],
   } as Stage1Output;
 }
 
@@ -907,7 +954,7 @@ git commit -m "feat(server): attribution-eval runner core (three-stage scoring)"
 **Files:**
 - Create: `server/src/analyzer/attribution-eval/run-eval-cli.ts`
 - Create: `scripts/run-attribution-eval.mjs`
-- Create: `server/src/analyzer/attribution-eval/__fixtures__/coalfall-ch1.roster.json`
+- Create: `server/src/analyzer/attribution-eval/__fixtures__/coalfall.roster.json`
 - Modify: root `package.json` (`eval:attribution` script)
 - Test: `server/src/analyzer/attribution-eval/run-eval-cli.test.ts`
 
@@ -941,48 +988,71 @@ Expected: FAIL — cannot find module.
 
 - [ ] **Step 3: Implement CLI** (gating first; Coalfall roster + scorecard formatting)
 
+Escalation is controlled by the existing `ATTRIBUTION_ESCALATION` env/registry knob (`off|local|cloud`), NOT a new CLI flag — `--escalation off` would just duplicate it. Set `ATTRIBUTION_ESCALATION=off` to skip the second (cloud) pass while iterating.
+
 ```ts
-// run-eval-cli.ts  (abridged core — full body implements engine construction + printing)
+// run-eval-cli.ts
 import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseLabelledChapter } from './schema.js';
-import { parseRosterSnapshot } from './roster-schema.js';
+import { parseLabelledChapter, type LabelledChapter } from './schema.js';
+import { parseRosterSnapshot, type RosterSnapshot } from './roster-schema.js';
 import { evalFixture, type FixtureResult } from './run-eval.js';
 import { OllamaAnalyzer } from '../ollama.js';
 import { GeminiAnalyzer } from '../gemini.js';
+import type { Analyzer } from '../index.js';
 
 const DEFAULT_CORPUS = fileURLToPath(new URL('./corpus/', import.meta.url));
 const COMMITTED = fileURLToPath(new URL('./__fixtures__/', import.meta.url));
 
-export async function loadCorpus(dir: string) {
+// Fixture: <slug>-ch<NN>.<lang>.labelled.json ; roster (per book): <slug>.roster.json
+const FIXTURE_RE = /^(.+)-ch(\d+)\.([a-z]{2})\.labelled\.json$/;
+
+interface CorpusItem {
+  name: string; truth: LabelledChapter; roster: RosterSnapshot; chapterId: number; lang: string;
+}
+
+async function loadDir(dir: string): Promise<CorpusItem[]> {
   let files: string[] = [];
   try { files = await readdir(dir); } catch { return []; }
-  const labelled = files.filter((f) => f.endsWith('.labelled.json'));
-  const out = [];
-  for (const f of labelled) {
+  const out: CorpusItem[] = [];
+  for (const f of files) {
+    const m = FIXTURE_RE.exec(f);
+    if (!m) continue;
+    const [, slug, chap, lang] = m;
     const truth = parseLabelledChapter(JSON.parse(await readFile(join(dir, f), 'utf8')));
-    const slug = f.replace(/-ch\d+\.labelled\.json$/, '');
-    const chapterId = Number(f.match(/-ch(\d+)\.labelled\.json$/)?.[1] ?? 0);
-    const rosterPath = join(dir, `${slug}.roster.json`);
-    const roster = parseRosterSnapshot(JSON.parse(await readFile(rosterPath, 'utf8')));
-    out.push({ name: f, truth, roster, chapterId });
+    const roster = parseRosterSnapshot(JSON.parse(await readFile(join(dir, `${slug}.roster.json`), 'utf8')));
+    out.push({ name: f, truth, roster, chapterId: Number(chap), lang });
   }
   return out;
 }
 
-export async function runEval(opts: { engines: Array<'qwen' | 'gemma'>; corpusDir?: string }) {
-  const dir = opts.corpusDir ?? DEFAULT_CORPUS;
-  const corpus = await loadCorpus(dir);
-  if (corpus.length === 0) return { skipped: 'no corpus fixtures found', results: [] as FixtureResult[] };
+export async function loadCorpus(dir: string): Promise<CorpusItem[]> { return loadDir(dir); }
 
-  // Always add the committed Coalfall guardrail (fixture + roster in __fixtures__).
-  const coalfall = await loadCoalfallGuardrail();
-  const all = [...corpus, ...coalfall];
+async function buildAnalyzer(engine: 'qwen' | 'gemma'): Promise<Analyzer | null> {
+  if (engine === 'qwen') {
+    const url = process.env.OLLAMA_URL ?? 'http://localhost:11434';
+    try {
+      const res = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(2000) });
+      if (!res.ok) return null;
+    } catch { return null; }
+    return new OllamaAnalyzer({ url, model: process.env.EVAL_QWEN_MODEL ?? 'qwen3.5:9b' });
+  }
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+  return new GeminiAnalyzer({ apiKey, model: process.env.GEMINI_MODEL ?? 'gemma-4-31b-it' });
+}
+
+export async function runEval(opts: { engines: Array<'qwen' | 'gemma'>; corpusDir?: string }) {
+  const corpus = await loadCorpus(opts.corpusDir ?? DEFAULT_CORPUS);
+  if (corpus.length === 0) {
+    return { skipped: 'no corpus fixtures found', results: [] as Array<{ engine: string; fixtures: FixtureResult[] }> };
+  }
+  const all = [...corpus, ...(await loadDir(COMMITTED))]; // + committed Coalfall guardrail
 
   const results: Array<{ engine: string; fixtures: FixtureResult[] }> = [];
   for (const engine of opts.engines) {
-    const analyzer = buildAnalyzer(engine); // throws-free gate:
+    const analyzer = await buildAnalyzer(engine);
     if (!analyzer) return { skipped: `engine ${engine} unavailable (Ollama down / no GEMINI_API_KEY)`, results: [] };
     const fixtures: FixtureResult[] = [];
     for (const c of all) {
@@ -993,7 +1063,7 @@ export async function runEval(opts: { engines: Array<'qwen' | 'gemma'>; corpusDi
         truth: c.truth,
         roster: c.roster,
         chapterId: c.chapterId,
-        stageCall: { language: detectLang(c) } as never,
+        stageCall: { language: c.lang } as never,
         fixtureName: c.name,
       }));
     }
@@ -1001,18 +1071,44 @@ export async function runEval(opts: { engines: Array<'qwen' | 'gemma'>; corpusDi
   }
   return { skipped: null, results };
 }
-// buildAnalyzer, loadCoalfallGuardrail, detectLang, printScorecard, main() — see full impl.
-```
 
-> Implementer notes (each a concrete step, not a placeholder):
-> - `buildAnalyzer('qwen')` → `new OllamaAnalyzer({ url: process.env.OLLAMA_URL ?? 'http://localhost:11434', model: process.env.EVAL_QWEN_MODEL ?? 'qwen3.5:9b' })`; probe reachability with a short `fetch(url + '/api/tags')` and return `null` on failure. `buildAnalyzer('gemma')` → `null` if no `GEMINI_API_KEY`, else `new GeminiAnalyzer({ apiKey, model: process.env.GEMINI_MODEL ?? 'gemma-4-31b-it' })`.
-> - `loadCoalfallGuardrail()` reads `__fixtures__/coalfall-ch1.en.labelled.json` (exists) + `__fixtures__/coalfall-ch1.roster.json` (create in Step 4), chapterId 1.
-> - `printScorecard(results)` prints, per engine, a table of recall at raw/deterministic/final and a per-family breakdown for deterministic+final, plus a mispredicted-line list from `scoreAttribution`'s `perLine` (recompute for the final stage when `--verbose`).
-> - `main()` parses `--engine qwen|gemma|both` (default `both`) and `--escalation`, calls `runEval`, prints SKIP banner + `process.exit(0)` when `skipped`, else prints scorecard.
+const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
+
+function printScorecard(results: Array<{ engine: string; fixtures: FixtureResult[] }>): void {
+  for (const { engine, fixtures } of results) {
+    console.log(`\n=== engine: ${engine} ===`);
+    for (const f of fixtures) {
+      console.log(`  ${f.fixture}: raw ${pct(f.raw.recall)} → det ${pct(f.deterministic.recall)} → final ${pct(f.final.recall)} (n=${f.final.total}, seg-drift ${f.final.segMismatch})`);
+      for (const fam of Object.keys(f.final.byFamily).sort()) {
+        const b = f.final.byFamily[fam];
+        console.log(`      ${fam}: ${b.correct}/${b.total}`);
+      }
+    }
+  }
+}
+
+function parseEngines(argv: string[]): Array<'qwen' | 'gemma'> {
+  const i = argv.indexOf('--engine');
+  const v = i >= 0 ? argv[i + 1] : 'both';
+  if (v === 'qwen') return ['qwen'];
+  if (v === 'gemma') return ['gemma'];
+  return ['qwen', 'gemma'];
+}
+
+async function main(): Promise<void> {
+  const { skipped, results } = await runEval({ engines: parseEngines(process.argv.slice(2)) });
+  if (skipped) { console.log(`[SKIP] attribution eval: ${skipped}`); process.exit(0); }
+  printScorecard(results);
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+  main().catch((e) => { console.error(e); process.exit(1); });
+}
+```
 
 - [ ] **Step 4: Create the committed Coalfall roster**
 
-Read `__fixtures__/coalfall-ch1.en.labelled.json`, collect its distinct `speakerId`s, and hand-author `__fixtures__/coalfall-ch1.roster.json` with an entry per speaker:
+Read `__fixtures__/coalfall-ch1.en.labelled.json`, collect its distinct `speakerId`s, and hand-author `__fixtures__/coalfall.roster.json` with an entry per speaker:
 ```json
 {
   "characters": [
@@ -1042,7 +1138,7 @@ Expected: prints a SKIP banner ("no corpus fixtures found") and exits 0.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add server/src/analyzer/attribution-eval/run-eval-cli.ts server/src/analyzer/attribution-eval/run-eval-cli.test.ts server/src/analyzer/attribution-eval/__fixtures__/coalfall-ch1.roster.json scripts/run-attribution-eval.mjs package.json
+git add server/src/analyzer/attribution-eval/run-eval-cli.ts server/src/analyzer/attribution-eval/run-eval-cli.test.ts server/src/analyzer/attribution-eval/__fixtures__/coalfall.roster.json scripts/run-attribution-eval.mjs package.json
 git commit -m "feat(server): attribution-eval runner CLI + Coalfall guardrail + npm script"
 ```
 
