@@ -10,7 +10,7 @@
  *
  * Unit B (reattribute + flag_nonstory):
  *  1. Same setup as Unit A.
- *  2. Opt-in to the reattribute + flag_nonstory class-toggles (default OFF).
+ *  2. Opt-in to the reattribute + flag_nonstory ops (expand-only, default OFF).
  *  3. Apply (4 ops selected) → confirm-reattribute dialog for "Ferra".
  *  4. Submit create-character — off-roster create→reassign runs.
  *  5. Assert: "p. 42" sentence is struck in manuscript, "Ferra" in cast,
@@ -93,7 +93,9 @@ test.describe('fs-58 — script-review per-chapter accept flow', () => {
       timeout: 10_000,
     });
 
-    /* The mock op is strip_tag: the class heading "Strip tag" should be visible. */
+    /* The summary opens collapsed; expand chapter 3 to reveal its type rows.
+       The mock op is strip_tag → the "Strip tag" type label becomes visible. */
+    await page.getByTestId('chapter-row-3').click();
     await expect(page.getByText(/Strip tag/i)).toBeVisible();
 
     /* The "Apply N selected" button — 2 ops selected by default (strip_tag on
@@ -176,14 +178,14 @@ test.describe('fs-58 Unit B — reattribute + flag_nonstory accept flow', () => 
       timeout: 10_000,
     });
 
-    /* The reattribute and flag_nonstory class toggles are DEFAULT OFF (higher-risk
-       classes opt-in). Check them to include these ops in the Apply set. */
-    const reattributeToggle = page.getByTestId('class-toggle-reattribute');
-    const flagNonstoryToggle = page.getByTestId('class-toggle-flag_nonstory');
-    await expect(reattributeToggle).toBeVisible();
-    await expect(flagNonstoryToggle).toBeVisible();
-    await reattributeToggle.check();
-    await flagNonstoryToggle.check();
+    /* reattribute + flag_nonstory are expand-only (higher-risk, opt-in): there's
+       no bulk approve for them. Expand chapter 3, then each type, and tick the
+       individual op cards (reattribute ch3:id3, flag_nonstory ch3:id15). */
+    await page.getByTestId('chapter-row-3').click();
+    await page.getByTestId('type-row-3-reattribute').click();
+    await page.getByTestId('op-toggle-3:3:reattribute').check();
+    await page.getByTestId('type-row-3-flag_nonstory').click();
+    await page.getByTestId('op-toggle-3:15:flag_nonstory').check();
 
     /* Now 4 ops are selected (strip_tag ch3 + strip_tag ch1 + reattribute + flag_nonstory).
        The mock's validate_instruct on ch1:id1 is quarantined at seed time (no existing
@@ -269,9 +271,11 @@ test.describe('fs-63 — off-roster auto-voice nudge', () => {
       timeout: 10_000,
     });
 
-    const reattributeToggle = page.getByTestId('class-toggle-reattribute');
-    await expect(reattributeToggle).toBeVisible();
-    await reattributeToggle.check();
+    /* Opt into the off-roster reattribute (expand-only): expand chapter 3 → its
+       reattribute type → tick the op card (ch3:id3). */
+    await page.getByTestId('chapter-row-3').click();
+    await page.getByTestId('type-row-3-reattribute').click();
+    await page.getByTestId('op-toggle-3:3:reattribute').check();
 
     await page.getByTestId('apply-button').click();
 
