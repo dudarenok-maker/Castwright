@@ -832,7 +832,8 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                         >
                           <div className="flex items-center gap-2">
                             {type.selectableKeys.length > 0 ? (
-                              <label className="flex items-center gap-1.5 text-[11px] text-ink/55 cursor-pointer select-none min-h-[44px] fine-pointer:min-h-0">
+                              // Self-labeled via aria-label — no wrapping <label> needed.
+                              <span className="flex items-center min-h-[44px] fine-pointer:min-h-0">
                                 <Checkbox
                                   data-testid={`type-approve-${chapter.chapterId}-${type.op}`}
                                   checked={allTypeSel}
@@ -840,7 +841,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                                   onChange={() => approveKeys(chapter.chapterId, type.selectableKeys, !allTypeSel)}
                                   aria-label={`Approve ${classLabel(type.op)} in chapter ${chapter.chapterId}`}
                                 />
-                              </label>
+                              </span>
                             ) : (
                               <span className="text-[10px] uppercase tracking-wider text-magenta/70">review</span>
                             )}
