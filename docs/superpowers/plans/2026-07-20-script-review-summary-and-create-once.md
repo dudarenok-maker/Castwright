@@ -496,7 +496,38 @@ describe('ScriptReviewDiff — summary accordion', () => {
 });
 ```
 
-(If `renderDiff`/`opWithCh` helpers don't exist in the file, add them next to the existing setup: `opWithCh(ch,id,op) => ({chapterId:ch,id,op,rationale:'x'})` and a `renderDiff({ops}) ` that dispatches `setReview({bookId:'bk',ops,unappliable:[],manuscriptId:'m',versionByChapter:{5:1,3:1}})` then renders. Return `{ user: userEvent.setup() }`.)
+**Add these shared helpers** near the existing setup in the test file (they're used by Tasks 5–8):
+
+```ts
+// 4th `extra` arg spreads op-specific fields (mergeIds, proposed, newText…) —
+// Tasks 7 & 8 rely on it. Default it so 3-arg calls still work.
+const opWithCh = (ch: number, id: number, op: ReviewOpWithChapter['op'], extra: Partial<ReviewOpWithChapter> = {}) =>
+  ({ chapterId: ch, id, op, rationale: 'x', ...extra }) as ReviewOpWithChapter;
+
+function renderDiff(opts: {
+  ops: ReviewOpWithChapter[];
+  cast?: { id: string; name: string }[];
+  sentences?: Array<{ id: number; chapterId: number; text: string; characterId: string; instruct?: string; vocalization?: boolean }>;
+  versionByChapter?: Record<number, number>;
+}) {
+  const store = makeStore(); // the file's existing store factory
+  // NIT-9: seed the ready stage's bookId so runProposed's isSameBook() guard
+  // passes (else applyProposedReattributions aborts after the first create).
+  store.dispatch(uiActions.openBook({ id: 'bk', status: 'complete' })); // or the file's existing "enter ready stage" helper
+  if (opts.cast) for (const c of opts.cast) store.dispatch(castActions.addCharacter(c as never));
+  if (opts.sentences) store.dispatch(manuscriptActions.setSentences(opts.sentences as never)); // or the file's manuscript-seed helper
+  const chapterIds = [...new Set(opts.ops.map((o) => o.chapterId))];
+  store.dispatch(scriptReviewActions.setReview({
+    bookId: 'bk', ops: opts.ops, unappliable: [], manuscriptId: 'm',
+    versionByChapter: opts.versionByChapter ?? Object.fromEntries(chapterIds.map((c) => [c, 1])),
+  }));
+  const user = userEvent.setup();
+  render(<Provider store={store}><ScriptReviewDiff bookId="bk" /></Provider>);
+  return { store, user };
+}
+```
+
+Match the exact store/stage/manuscript seed idioms already used by the other tests in this file (the method names above — `makeStore`, `uiActions.openBook`, `manuscriptActions.setSentences` — are placeholders for whatever that file already uses; reuse them, don't invent new ones). `render` must import `fireEvent` too (used by the fake-timer test in Task 6).
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -512,11 +543,12 @@ import {
   scriptReviewActions,
   selectActiveReview,
   selectReviewSummary,
-  BULK_APPROVABLE,
   opKey,
   type ReviewOpWithChapter,
 } from '../store/script-review-slice';
 ```
+
+(Do **not** import `BULK_APPROVABLE` into the component — the taxonomy is consumed only inside `selectReviewSummary`; the component reads `summary.*.selectableKeys`. An unused import fails lint/typecheck.)
 
 Add local expand state next to the other `useState` hooks (~line 281):
 
@@ -577,8 +609,6 @@ Extract the existing per-op card JSX (lines ~723–761) into a local render help
       </div>
     );
   }
-
-  const opsByKey = new Map(ops.map((o) => [opKey(o.chapterId, o.id, o.op), o] as const));
 ```
 
 Replace the body's `{classes.map(...)}` block (lines ~681–766) with the accordion. Keep the existing `unappliable` notice (~657) and rewrite the empty state to key off `summary.chapters.length`:
@@ -640,7 +670,15 @@ Replace the body's `{classes.map(...)}` block (lines ~681–766) with the accord
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run src/components/script-review-diff.test.tsx`
-Expected: PASS for the new accordion tests. **Pre-existing tests that asserted the old flat `class-toggle-*` / section layout will need updating** — update them to drive the accordion (expand chapter → type) rather than deleting assertions; if a test only checked op-card content, wrap its setup in the two expand clicks. Do not `.skip` any.
+Expected: PASS for the new accordion tests. **Pre-existing tests break because op cards are now behind two collapse levels** — update each (expand its chapter → its type before querying the card), don't `.skip`. The ones to fix (verify line numbers at execution time — they drift):
+- `applies selected ops and skips deselected` (~:114, clicks `op-toggle-1:2:fix_emotion`)
+- `renders a validate_instruct row` (~:496)
+- `renders a reattribute row` (~:558)
+- `renders a flag_nonstory row struck` (~:609)
+- `toggling a checkbox schedules a debounced PATCH` (~:1236)
+- any test asserting the old `class-toggle-*` "Select all" checkbox — that control is gone; rewrite it against `type-approve-*`/`chapter-approve-*` (Task 6).
+
+The `apply-button`, `unappliable-notice`, and empty-state tests survive (those surfaces aren't inside the accordion). All of these depend on the BLOCKER-2 fix (chapter-row testid on the expand button) landing in Task 6 — until then the Task 5 "expands a chapter" test drives expansion via its own button testid.
 
 - [ ] **Step 5: Commit**
 
@@ -664,12 +702,17 @@ Add the bulk-approve checkboxes to the chapter and (bulk-type) rows from Task 5,
 
 - [ ] **Step 1: Write the failing test**
 
+**Note — mechanical ops are SELECTED by default** (`setReview` seeds `!EXPAND_ONLY.has(op)`). The approve checkbox is a toggle (`checked={allSel}`, sets `!allSel`), so on a fresh bucket clicking it *deselects*. Each test that asserts approve *selects* must first establish a deselected baseline via `toggleKeys(value:false)`.
+
 ```ts
+import { fireEvent } from '@testing-library/react';
+
 describe('ScriptReviewDiff — group approve', () => {
   it('chapter Approve-all ticks only mechanical ops, leaves reattribute unticked', async () => {
     const { store, user } = renderDiff({ ops: [
       opWithCh(5, 1, 'merge'), opWithCh(5, 2, 'strip_tag'), opWithCh(5, 3, 'reattribute'),
     ] });
+    store.dispatch(scriptReviewActions.toggleKeys({ bookId: 'bk', keys: ['5:1:merge', '5:2:strip_tag'], value: false }));
     await user.click(screen.getByTestId('chapter-approve-5'));
     const sel = store.getState().scriptReview.byBook.bk.selected;
     expect(sel['5:1:merge']).toBe(true);
@@ -682,30 +725,34 @@ describe('ScriptReviewDiff — group approve', () => {
     expect(screen.getByTestId('chapter-row-5')).toHaveTextContent('1 to review');
   });
 
-  it('type Approve ticks just that type; the chapter-approve reflects all-selected state', async () => {
+  it('type Approve ticks just that type', async () => {
     const { store, user } = renderDiff({ ops: [opWithCh(5, 1, 'merge'), opWithCh(5, 2, 'merge')] });
-    await user.click(screen.getByTestId('chapter-row-5'));
+    store.dispatch(scriptReviewActions.toggleKeys({ bookId: 'bk', keys: ['5:1:merge', '5:2:merge'], value: false }));
+    await user.click(screen.getByTestId('chapter-row-5')); // expand to reveal type-approve
     await user.click(screen.getByTestId('type-approve-5-merge'));
     const sel = store.getState().scriptReview.byBook.bk.selected;
     expect(sel['5:1:merge']).toBe(true);
     expect(sel['5:2:merge']).toBe(true);
   });
 
-  it('bulk approve schedules a selection sync with the POST-tick keys', async () => {
+  it('bulk approve schedules a selection sync with the POST-tick keys', () => {
     const patch = vi.spyOn(api, 'patchScriptReviewSelection').mockResolvedValue({ ok: true } as never);
     vi.useFakeTimers();
-    const { user } = renderDiff({ ops: [opWithCh(5, 1, 'merge')], versionByChapter: { 5: 7 } });
-    await user.click(screen.getByTestId('chapter-approve-5'));
-    vi.advanceTimersByTime(600);
-    expect(patch).toHaveBeenCalledWith('bk', expect.objectContaining({
-      chapterId: 5, version: 7, selected: expect.objectContaining({ '5:1:merge': true }),
-    }));
-    vi.useRealTimers();
+    try {
+      const { store } = renderDiff({ ops: [opWithCh(5, 1, 'merge')], versionByChapter: { 5: 7 } });
+      store.dispatch(scriptReviewActions.toggleKeys({ bookId: 'bk', keys: ['5:1:merge'], value: false }));
+      // fireEvent (not userEvent) under fake timers — matches the file's existing debounce test
+      fireEvent.click(screen.getByTestId('chapter-approve-5'));
+      vi.advanceTimersByTime(600);
+      expect(patch).toHaveBeenCalledWith('bk', expect.objectContaining({
+        chapterId: 5, version: 7, selected: expect.objectContaining({ '5:1:merge': true }),
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 ```
-
-(Extend `renderDiff` to also return `store`, and accept a `versionByChapter` override. For the fake-timer test, `userEvent.setup({ advanceTimers: vi.advanceTimersByTime })`.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -732,7 +779,7 @@ Add a shared handler above `return` (near `renderOpCard`):
 In the **chapter row**, add an approve checkbox (only when the chapter has mechanical ops). Put it just before the count `<span>`; make the row a `<div>` with the expand as its own button so the checkbox isn't nested in a button (invalid HTML):
 
 ```tsx
-                  <div data-testid={`chapter-row-${chapter.chapterId}`} className="flex items-center gap-3 pb-1 border-b border-ink/10">
+                  <div className="flex items-center gap-3 pb-1 border-b border-ink/10">
                     {chapter.selectableKeys.length > 0 && (() => {
                       const allSel = chapter.selectableKeys.every((k) => selected[k]);
                       return (
@@ -748,7 +795,10 @@ In the **chapter row**, add an approve checkbox (only when the chapter has mecha
                         </label>
                       );
                     })()}
-                    <button type="button" onClick={() => toggleChapterExpand(chapter.chapterId)} className="flex-1 flex items-center gap-3 text-left min-h-[44px] fine-pointer:min-h-0">
+                    {/* BLOCKER-2: the testid MUST sit on the clickable expand button,
+                        not the wrapper div — the "N to review" text lives inside it so
+                        the text-content assertion still resolves. */}
+                    <button type="button" data-testid={`chapter-row-${chapter.chapterId}`} onClick={() => toggleChapterExpand(chapter.chapterId)} className="flex-1 flex items-center gap-3 text-left min-h-[44px] fine-pointer:min-h-0">
                       <span className="text-xs font-bold uppercase tracking-wider text-ink/60 flex-1">Chapter {chapter.chapterId}</span>
                       <span className="text-xs text-ink/45 tabular-nums">
                         {chapter.total}{chapter.toReview > 0 ? ` · ${chapter.toReview} to review` : ''}
@@ -820,8 +870,8 @@ describe('ScriptReviewDiff — partial apply notice', () => {
       sentences: [{ id: 1, chapterId: 5, text: 'a b', characterId: 'c1' }, { id: 2, chapterId: 5, text: 'c', characterId: 'c1' }],
       versionByChapter: { 5: 1 },
     });
-    // select both via chapter approve, then apply
-    await user.click(screen.getByTestId('chapter-approve-5'));
+    // merge + strip_tag are mechanical → selected by default, so just apply
+    // (don't click chapter-approve — on a fresh bucket that would DESELECT).
     await user.click(screen.getByTestId('apply-button'));
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({
       message: expect.stringContaining("couldn't apply"),
@@ -1040,7 +1090,11 @@ Rewrite the confirm JSX (lines ~550–585) to be per-name:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run src/components/script-review-diff.test.tsx`
-Expected: PASS (new create-once tests + the pre-existing confirm-queue tests, updated for the per-name header/flow — update, don't skip).
+Expected: PASS (new create-once tests + the pre-existing confirm-queue tests, updated for the per-name header/flow — update, don't skip). **Two existing tests break *semantically* (not just cosmetically) and MUST be rewritten** (verify line numbers — they drift):
+- `reattribute-to-an-existing-cast-member op resolves server-side` (~:988) expects a confirm form headed "Reattribute to «Ferra»". Under per-name grouping a roster-matched name routes to `rosterMatchedOps` → `runProposed` with **no form**; `getByTestId('confirm-reattribute')` will throw. Rewrite to assert *no* form appears and the op still resolves (spy `manuscriptActions.setSentenceCharacter` / `api.resolveScriptReviewOps`).
+- `two same-name proposed ops create EXACTLY one character through the queue` (~:737) clicks `create-character-submit` **twice** (once per op). There is now **one** form for the shared name; the second `waitFor(getByTestId('confirm-reattribute'))` times out. Reduce to a single submit; keep the "createCharacter called once" assertion.
+
+The `#1480` form-reset test (~:806), the failed-create test (~:834), and the two cancel tests use single/distinct names and survive unchanged.
 
 - [ ] **Step 5: Commit**
 
