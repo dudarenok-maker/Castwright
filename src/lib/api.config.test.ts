@@ -13,6 +13,7 @@ import {
   mockRestartSidecar,
   _resetMockConfig,
 } from './api';
+import { knobsInGroup, GROUPS } from '../../server/src/config/registry';
 
 beforeEach(() => {
   _resetMockConfig();
@@ -148,5 +149,40 @@ describe('mockRestartSidecar', () => {
   it('returns ok:true', async () => {
     const result = await mockRestartSidecar();
     expect(result.ok).toBe(true);
+  });
+});
+
+describe('mock config parity with the server registry', () => {
+  /* Regression guard for the #1743 drift: the capacity-admission cutover
+     (#1737) deleted the weighted-semaphore knobs (gpu.concurrency /
+     gpu.vramBudget / gpu.weight.* / gpu.safeCoexistMb) from the server
+     registry.ts, but the hand-copied MOCK_CONFIG_DESCRIPTORS kept them and
+     never gained gpu.reserveMb — so mock mode (and the §9 wiki screenshots
+     captured from it) rendered retired knobs. The mock is deliberately a
+     SUBSET of the registry, so we don't assert full-catalog parity; but the
+     gpu-lifecycle group must mirror the registry exactly, or this class of
+     drift silently returns. */
+  it('gpu-lifecycle descriptor keys mirror the registry group', async () => {
+    const { descriptors } = await mockGetConfig();
+    const mockKeys = descriptors
+      .filter((d) => d.group === 'gpu-lifecycle')
+      .map((d) => d.key)
+      .sort();
+    const registryKeys = knobsInGroup('gpu-lifecycle')
+      .map((k) => k.key)
+      .sort();
+    expect(mockKeys).toEqual(registryKeys);
+    // The retired knobs must be gone from the mock specifically.
+    for (const dead of ['gpu.concurrency', 'gpu.vramBudget', 'gpu.safeCoexistMb']) {
+      expect(mockKeys).not.toContain(dead);
+    }
+    expect(mockKeys).toContain('gpu.reserveMb');
+  });
+
+  it('gpu-lifecycle group blurb matches the registry', async () => {
+    const { groups } = await mockGetConfig();
+    const mockGroup = groups.find((g) => g.id === 'gpu-lifecycle');
+    const registryGroup = GROUPS.find((g) => g.id === 'gpu-lifecycle');
+    expect(mockGroup?.help).toBe(registryGroup?.help);
   });
 });
