@@ -165,3 +165,6 @@ artifacts/
 # scripts/sync-wiki.mjs as its push staging area. Recreated fresh on every
 # `npm run wiki:sync` run; never committed.
 .wiki-sync-cache/
+
+# Attribution-eval corpus — copyrighted book text, local-only (spec 2026-07-20)
+server/src/analyzer/attribution-eval/corpus/
