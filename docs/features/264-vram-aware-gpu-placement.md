@@ -225,7 +225,7 @@ the flag is OFF) should close so admission covers everything the budget did:
   → the learned footprint drifts to the device-wide high-water (over-conservative,
   never an OOM).
 
-  > **CLOSED (#1734).** Fixed on branch `fix/sidecar-footprint-percentile`:
+  > **CLOSED (#1737).** Fixed on branch `fix/sidecar-footprint-percentile`:
   > `PlacementController._reset_peak_mb` calls `torch.cuda.reset_peak_memory_stats`
   > right before each op starts, so the paired `_observed_mb` read at release
   > reflects that op's own peak instead of the process-lifetime high-water mark

@@ -184,7 +184,7 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
   with the default cap lowered 768→500. On-box: measured real per-op peaks
   (0.6B synth ~1952 MB, 1.7B mint ~5654 MB) now admit comfortably on an 8 GB
   card, where the stale high-water estimate previously refused them. Still
-  behind the default-OFF `SEG_CAPACITY_ADMISSION` flag. (#1734)
+  behind the default-OFF `SEG_CAPACITY_ADMISSION` flag. (#1737)
 
 ---
 
