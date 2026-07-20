@@ -44,7 +44,7 @@ export async function captureCorpus(opts: {
     const hint = record.chapterHints.find((c) => c.id === chapterId);
     if (!hint) throw new Error(`Chapter ${chapterId} not found in manuscript ${state.manuscriptId}`);
     const chapterText = stripFrontMatterBoilerplate(hint.body, { author, title });
-    const labelled = buildLabelledChapter(chapterText, edits.sentences as never, chapterId);
+    const labelled = buildLabelledChapter(chapterText, edits.sentences, chapterId);
     const num = String(chapterId).padStart(2, '0');
     const path = join(corpusDir, `${bookSlug}-ch${num}.${lang}.labelled.json`);
     await writeFile(path, JSON.stringify(labelled, null, 2));
