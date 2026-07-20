@@ -57,8 +57,9 @@ export async function withGpuLoad<T>(loadFn: () => Promise<T>, engineOnGpu = tru
   // When capacity admission is on, the sidecar's PlacementController is the single
   // admission authority and Node's withCapacityRetry is the single eviction authority —
   // running this coarse Node probe/evict/lock too would triple-evict and let a bounded
-  // poll hold the load mutex. Skip straight to the load.
-  if (process.env.SEG_CAPACITY_ADMISSION === '1') return loadFn();
+  // poll hold the load mutex. Skip straight to the load. Default ON since #1720
+  // shipped; only an explicit SEG_CAPACITY_ADMISSION=0 opt-out drops to the coarse path.
+  if (process.env.SEG_CAPACITY_ADMISSION !== '0') return loadFn();
   return withGpuLoadLock(async () => {
     const devices = await capacityProbe.read({ fresh: true });
     const gpuFree = devices.filter((d) => d.kind !== 'cpu').map((d) => d.freeMb);

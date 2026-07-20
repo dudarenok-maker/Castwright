@@ -83,10 +83,10 @@ def _mint_body():
 
 
 def test_design_flag_off_never_probes_no_device_arg(monkeypatch, design_client):
-    """Default (flag unset): design-voice never calls the placement probe —
-    the engine method is called with the same positional args as before,
-    with no trailing device."""
-    monkeypatch.delenv("SEG_CAPACITY_ADMISSION", raising=False)
+    """Explicit opt-out (SEG_CAPACITY_ADMISSION=0): design-voice never calls the
+    placement probe — the engine method is called with the same positional args
+    as before, with no trailing device."""
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "0")
     probe_calls: list[int] = []
     monkeypatch.setattr(main._placement, "probe", lambda: probe_calls.append(1) or [])
 
@@ -180,7 +180,8 @@ def test_design_and_mint_reserve_their_own_op_keyed_footprint(monkeypatch, desig
 
 
 def test_mint_flag_off_never_probes_no_device_arg(monkeypatch, design_client):
-    monkeypatch.delenv("SEG_CAPACITY_ADMISSION", raising=False)
+    # Explicit opt-out (SEG_CAPACITY_ADMISSION=0): the rollback path.
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "0")
     probe_calls: list[int] = []
     monkeypatch.setattr(main._placement, "probe", lambda: probe_calls.append(1) or [])
 

@@ -2322,11 +2322,13 @@ class PlacementController:
                 self.footprints.record(engine, model, cfg, self._observed_mb(held[0]))
 
 
-# Task 4 (vram-aware-placement plan) — /synthesize capacity-aware admission,
-# default OFF. `SEG_CAPACITY_ADMISSION=1` is the opt-in; unset/anything-else
-# keeps today's behaviour byte-for-byte (the rollback path).
+# Task 4 (vram-aware-placement plan) — capacity-aware admission for every heavy
+# GPU op (#1720). Default ON since #1720 shipped and plan 264's acceptance
+# passed: unset/anything-but-"0" enables it; `SEG_CAPACITY_ADMISSION=0` is the
+# explicit opt-out that restores the pre-admission behaviour byte-for-byte (the
+# rollback path).
 def _capacity_admission_enabled() -> bool:
-    return os.environ.get("SEG_CAPACITY_ADMISSION", "0") == "1"
+    return os.environ.get("SEG_CAPACITY_ADMISSION", "1") != "0"
 
 
 def _no_capacity(adm: dict) -> JSONResponse:
@@ -6424,7 +6426,7 @@ async def load_model(req: Request) -> JSONResponse:
 
     # Capacity-aware placement (task 2, vram-aware-placement plan): mirrors
     # /synthesize's admission wrapping (`SEG_CAPACITY_ADMISSION`, default
-    # OFF). Held ACROSS the cold load (peak reservation covers the load's own
+    # ON, opt-out with =0). Held ACROSS the cold load (peak reservation covers the load's own
     # transient VRAM spike, not just steady-state residency) and released on
     # exit either way. Flag-OFF/`None` device leaves env resolution
     # byte-for-byte unchanged.
@@ -6712,7 +6714,7 @@ async def qwen_design_voice(req: Request) -> Response:
     try:
         # Capacity-aware placement (task 3, vram-aware-placement plan): mirrors
         # /qwen/load's admission wrapping (`SEG_CAPACITY_ADMISSION`, default
-        # OFF). Held across the (possibly cold) VoiceDesign + Base load AND the
+        # ON, opt-out with =0). Held across the (possibly cold) VoiceDesign + Base load AND the
         # design forward, released on exit either way. Flag-OFF leaves the call
         # byte-for-byte unchanged (no device arg).
         if _capacity_admission_enabled():
@@ -7019,7 +7021,7 @@ async def synthesize(req: Request) -> Response:
         # synthesis. This is the single biggest UX fix in the sidecar.
         #
         # SEG_CAPACITY_ADMISSION (task 4, vram-aware-placement plan, default
-        # OFF): when on, hold a peak-VRAM reservation across the forward so a
+        # ON, opt-out with =0): when on, hold a peak-VRAM reservation across the forward so a
         # concurrent op can't double-book the same headroom, and refuse with a
         # `noCapacity` 503 up front rather than let the forward OOM. This ALSO
         # covers any lazy cold-load inside engine.synthesize, since the peak is

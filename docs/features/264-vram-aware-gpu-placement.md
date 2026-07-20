@@ -6,9 +6,16 @@ owner: null
 
 # Capacity-aware GPU placement (replaces the hand-set GPU token budget)
 
-> Status: KNOWN: operational dependency — the capacity-admission path is behind
-> `SEG_CAPACITY_ADMISSION` (default OFF); flip on after the on-box acceptance
-> walkthrough below.
+> Status: SHIPPED default-ON — `SEG_CAPACITY_ADMISSION` now defaults **ON**
+> (#1720 flag flip, 2026-07-20); `=0` is the opt-out that restores the
+> pre-admission serialized path. The flip was made on the strength of the full
+> automated admission coverage (sidecar + Node) plus the on-box **synthesis-path**
+> acceptance (S1/S2/S4/S6 below). The manual **evict-under-contention** rows
+> (6–8: cold `/load` steer, `design_voice` evicts Ollama, GPU-ASR 503→evict→retry)
+> were **not** force-driven on-box — they rest on automated coverage for now.
+> Remaining flag-on readiness gap: multi-GPU `idle_evict` over-eviction, tracked
+> in **#1721** (efficiency only — over-evicts an idle engine on the wrong card,
+> never OOMs).
 > Key files (sidecar): `server/tts-sidecar/main.py` (`probe_capacity`,
 > `FootprintTable`, `ReservationLedger`, `PlacementController`).
 > Key files (server): `server/src/gpu/count-semaphore.ts`,

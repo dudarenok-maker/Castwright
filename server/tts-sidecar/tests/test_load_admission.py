@@ -55,9 +55,10 @@ def load_client(monkeypatch):
 
 
 def test_load_flag_off_never_probes(monkeypatch, load_client):
-    """Default (flag unset): /load never calls the placement probe at all —
-    this is the rollback path, today's behaviour byte-for-byte."""
-    monkeypatch.delenv("SEG_CAPACITY_ADMISSION", raising=False)
+    """Explicit opt-out (SEG_CAPACITY_ADMISSION=0): /load never calls the
+    placement probe at all — this is the rollback path, the pre-admission
+    behaviour byte-for-byte."""
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "0")
     probe_calls: list[int] = []
     monkeypatch.setattr(main._placement, "probe", lambda: probe_calls.append(1) or [])
 

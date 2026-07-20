@@ -282,9 +282,10 @@ mismatches) — the table's risk column shows each correctly.
 | Per-card VRAM free floor (MB) | Absolute free-VRAM floor before recycle | 1024 | integer, min 0 | restart · sidecar | **medium** |
 | GPU VRAM reserve cap (MB) | Ceiling on the per-device safety cushion held back from every capacity-aware GPU admission (actual cushion = min(5% of that device's own VRAM, this cap)) | 500 | integer, min 0 | restart · sidecar | high |
 
-**Capacity-aware GPU placement** (`SEG_CAPACITY_ADMISSION`, off by default) is
-an alternate admission path for every heavy GPU op — synthesis, engine loads,
-voice design, ASR transcription, speaker embedding — that reserves each op's
+**Capacity-aware GPU placement** (`SEG_CAPACITY_ADMISSION`, **on by default**;
+set it to `0` to opt out) is the admission path for every heavy GPU op —
+synthesis, engine loads, voice design, ASR transcription, speaker embedding —
+that reserves each op's
 own **measured VRAM footprint** against a card's actual free memory before
 letting it start, rather than capping GPU work at a fixed global concurrency
 limit. On a multi-GPU box it
@@ -298,9 +299,9 @@ pinned to a single worst-case spike forever. The **GPU VRAM reserve cap
 (MB)** knob above is a ceiling, not the reserve itself: the cushion actually
 held back on any one card is 5% of *that card's* VRAM, capped at this value —
 sized to the device rather than a flat subtraction that over-provisions a
-small card and under-provisions a large one. While `SEG_CAPACITY_ADMISSION`
-is off (the default), this path is dormant: heavy GPU work runs one op at a
-time (a simple serialized fallback — the earlier weighted-VRAM-budget and
+small card and under-provisions a large one. Setting `SEG_CAPACITY_ADMISSION`
+to `0` opts out and makes this path dormant: heavy GPU work then runs one op at
+a time (a simple serialized fallback — the earlier weighted-VRAM-budget and
 per-engine-cost knobs it replaced have been retired), and only the lifecycle
 knobs in the rest of this group still apply — the idle-eviction TTLs and the
 RAM/VRAM recycle-and-restart thresholds. See

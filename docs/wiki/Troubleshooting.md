@@ -163,7 +163,7 @@ The block is deterministic — retrying the same model on the same text fails id
 ## GPU capacity & VRAM placement
 
 Symptoms specific to **capacity-aware GPU placement** (`SEG_CAPACITY_ADMISSION`,
-off by default) — the alternate admission path that reserves each heavy GPU
+on by default; `=0` opts out) — the admission path that reserves each heavy GPU
 op's own measured VRAM footprint against a card's actual free memory. See
 [Advanced Settings → GPU arbitration, memory & lifecycle](Advanced-Settings#9-gpu-arbitration-memory--lifecycle)
 for how it works day to day.
