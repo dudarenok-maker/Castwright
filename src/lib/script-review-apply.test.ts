@@ -69,6 +69,32 @@ describe('planApply', () => {
     expect(r.unappliable[0].reason).toMatch(/same id|consumed|structural/i);
   });
 
+  // Regression (2026-07-20, "Playing with Fire" ch30 op6): the analyzer can
+  // emit a `merge` op with missing/empty mergeIds. `[].some(m => !m)` is
+  // vacuously false, so the member-missing guard was skipped and
+  // `members[0]!.chapterId` threw `Cannot read properties of undefined`. That
+  // throw aborted planApply mid-hydration and — swallowed by
+  // hydrateScriptReview's fire-and-forget `void …finally()` — silently wiped
+  // the WHOLE book's script-review view (1508 findings never rendered). A
+  // malformed merge (fewer than two members) must be unappliable, never throw.
+  it('does not throw on a merge op with missing/empty/single mergeIds — marks it unappliable', () => {
+    expect(() =>
+      planApply([{ id: 6, op: 'merge', rationale: 'meant to merge but emitted no ids' }], live),
+    ).not.toThrow();
+    // A non-array mergeIds (e.g. the analyzer emits a bare number) must not
+    // throw on the `[...mergeIds]` spread either — same crash class.
+    expect(() =>
+      planApply([{ id: 6, op: 'merge', mergeIds: 5 as unknown as number[], rationale: 'non-array' }], live),
+    ).not.toThrow();
+    const r = planApply([
+      { id: 6, op: 'merge', mergeIds: [], rationale: 'empty' },
+      { id: 5, op: 'merge', mergeIds: [5], rationale: 'single member' },
+    ], live);
+    expect(r.appliable).toHaveLength(0);
+    expect(r.unappliable).toHaveLength(2);
+    expect(r.unappliable.every((u) => /member|at least two/i.test(u.reason))).toBe(true);
+  });
+
   // M-3 extract_dialogue green path: both anchor and anchorEnd resolve
   it('extract_dialogue is appliable when both anchor and anchorEnd resolve uniquely', () => {
     const r = planApply([{

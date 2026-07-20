@@ -114,10 +114,20 @@ export function planApply(
 
   for (const op of ops.filter((o) => STRUCTURAL.has(o.op))) {
     if (op.op === 'merge') {
-      const ids = [...(op.mergeIds ?? [])].sort((a, b) => a - b);
+      // `Array.isArray` (not just `?? []`) so a non-array mergeIds the analyzer
+      // might emit (e.g. a bare number) can't throw on the spread below — same
+      // "malformed op must be unappliable, never crash" contract as the arity
+      // guard a few lines down.
+      const ids = [...(Array.isArray(op.mergeIds) ? op.mergeIds : [])].sort((a, b) => a - b);
       if (ids.some((id) => structTargets.has(id))) { unappliable.push({ op, reason: 'second structural op on the same id' }); continue; }
       const members = ids.map((id) => byId.get(id));
-      if (members.some((m) => !m)) { unappliable.push({ op, reason: 'merge member missing' }); continue; }
+      // A `merge` the analyzer emitted with missing/empty/single mergeIds must
+      // be rejected here: `[].some(m => !m)` is vacuously false, so an empty
+      // `members` slipped this guard and `members[0]!.chapterId` below threw
+      // `Cannot read properties of undefined` — a throw that aborted planApply
+      // mid-hydration and (swallowed by hydrateScriptReview's fire-and-forget
+      // dispatch) silently wiped the whole book's review view. Guard the arity.
+      if (ids.length < 2 || members.some((m) => !m)) { unappliable.push({ op, reason: 'merge needs at least two existing members' }); continue; }
       const ch = members[0]!.chapterId;
       const sameChar = members.every((m) => m!.characterId === members[0]!.characterId);
       const sameChapter = members.every((m) => m!.chapterId === ch);

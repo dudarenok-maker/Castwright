@@ -176,14 +176,37 @@ export function ManuscriptView({
     if (!bookId) return;
     const generation = ++scriptReviewHydrationGenerationRef.current;
     setScriptReviewHydrating(true);
-    void hydrateScriptReview(bookId, { dispatch, getState: store.getState, subscribe: store.subscribe }).finally(() => {
-      // Cross-book race guard (PR review round 4): only the MOST RECENT
-      // effect run for this component instance is allowed to clear the
-      // loading flag. If the user switched books while an older hydration
-      // was still in flight, that stale call's completion must not flip the
-      // flag off for whatever book is actually on screen now.
-      if (scriptReviewHydrationGenerationRef.current === generation) setScriptReviewHydrating(false);
-    });
+    void hydrateScriptReview(bookId, { dispatch, getState: store.getState, subscribe: store.subscribe })
+      .catch((err) => {
+        // Defense-in-depth (2026-07-20): hydration was fire-and-forget with no
+        // rejection handler, so a single malformed op (e.g. a `merge` with no
+        // mergeIds) threw deep in planApply and vanished — the review view went
+        // blank with NO error, and the empty bucket then read 0 unresolved,
+        // risking a fresh run that discards the persisted ledger. Surface it
+        // instead of swallowing: the findings are safe on the server ledger and
+        // reload once the underlying throw is fixed.
+        console.error('[script-review] hydration failed', err);
+        // Cross-book race guard (mirrors the .finally below): only surface the
+        // toast for the book still on screen. A stale rejection for a book the
+        // user already switched away from must not pop a misleading load-failure
+        // toast over a different, healthy book that hydrated fine.
+        if (scriptReviewHydrationGenerationRef.current !== generation) return;
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'error',
+            message: 'Couldn’t load pending script-review suggestions. They’re saved — reload to try again.',
+            dedupeKey: `script-review-hydrate-failed:${bookId}`,
+          }),
+        );
+      })
+      .finally(() => {
+        // Cross-book race guard (PR review round 4): only the MOST RECENT
+        // effect run for this component instance is allowed to clear the
+        // loading flag. If the user switched books while an older hydration
+        // was still in flight, that stale call's completion must not flip the
+        // flag off for whatever book is actually on screen now.
+        if (scriptReviewHydrationGenerationRef.current === generation) setScriptReviewHydrating(false);
+      });
     // Intentionally no cleanup/abort: hydration is a one-shot reconciliation
     // per mount, and a duplicate in-flight POST from attachToRunningReview is
     // safe to abandon in BOTH modes — real backend via the sticky server job
