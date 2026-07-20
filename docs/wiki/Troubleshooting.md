@@ -160,6 +160,68 @@ The block is deterministic — retrying the same model on the same text fails id
 
 **What to do:** Click Retry on this chapter. If it keeps failing, check the server / voice engine logs for the full error and report it.
 
+## GPU capacity & VRAM placement
+
+Symptoms specific to **capacity-aware GPU placement** (`SEG_CAPACITY_ADMISSION`,
+off by default) — the alternate admission path that reserves each heavy GPU
+op's own measured VRAM footprint against a card's actual free memory. See
+[Advanced Settings → GPU arbitration, memory & lifecycle](Advanced-Settings#9-gpu-arbitration-memory--lifecycle)
+for how it works day to day.
+
+### 503 "no capacity" — an op won't place on a small card that should fit it
+
+**What you saw:** A synth, model load, voice-design, or ASR/embed call
+refuses with a "no capacity" error (or waits and then fails) on a card
+that's otherwise idle and roomy enough for it — e.g. a Higher-quality (1.7B)
+Qwen op refused on an otherwise-empty 8 GB card.
+
+**What to do:** This was an over-conservative footprint bug (an early per-op
+VRAM reading could get poisoned by an unrelated memory spike and then never
+correct itself) and is fixed as of the footprint-percentile update. If you
+still see it: check that **GPU VRAM reserve cap (MB)** in Advanced Settings
+hasn't been pushed unusually high, and give the sidecar a few real ops on
+that engine/tier — the footprint estimate is most conservative right after a
+restart and relaxes to match real usage as it accumulates observations.
+
+### `/capacity`'s reported free VRAM doesn't match nvidia-smi's free
+
+**What you saw:** The sidecar's capacity probe (or the Device panel in Model
+Manager) reports noticeably less free VRAM than `nvidia-smi` shows for the
+same, idle card.
+
+**What to do:** Expected, not a bug. Roughly 1 GB is held by the CUDA
+runtime/context itself and is already excluded from what capacity-aware
+placement treats as free — an idle 8 GB card can show `nvidia-smi` used
+≈114 MB while the driver's own free-memory query reports ≈7068 MB free.
+Placement measures against the latter, so it isn't re-subtracting the
+context a second time; the gap you're seeing is the context, not a leak or a
+double-counted reserve.
+
+### "GPU is lost" / CUDA errors on an eGPU
+
+**What you saw:** The sidecar reports a lost or errored GPU, or wedges
+entirely, on a machine with an external GPU (e.g. over OcuLink).
+
+**What to do:** An OcuLink eGPU is not hot-swappable — adding or removing it
+needs a full reboot, not a cable pull; unplugging it live is a hard crash,
+not a supported operation. If it drops off the CUDA bus on its own mid-run,
+the CUDA context is corrupted process-wide — restart the voice engine to
+recover. If it doesn't come back, reboot with the card connected.
+
+### First concurrent burst of synth + transcribe + embed errors on a cold sidecar
+
+**What you saw:** Firing a `/synthesize`, `/transcribe`, and `/embed` call
+all at once against a **freshly started** sidecar process — before any of
+those three engines has handled a single call yet — can crash one of the
+calls outright.
+
+**What to do:** Known issue, not yet fixed — unrelated to capacity
+placement, it's three heavy engines racing to cold-import their model
+libraries at the same moment. Let each engine warm up with one call on its
+own first (one synth, one transcribe, one embed), then run them
+concurrently; a retry right after the crash also succeeds once the imports
+have settled.
+
 ## Common questions
 
 ### The app won't start

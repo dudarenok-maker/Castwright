@@ -289,6 +289,28 @@ mismatches) — the table's risk column shows each correctly.
 | Soft VRAM recycle threshold (MB reserved) | Recycle trigger; 0 = auto (90% of device VRAM) | 0 | integer, min 0 | restart · sidecar | high |
 | Hard VRAM restart threshold (MB reserved) | Self-exits to reset CUDA context; 0 = auto (98% of VRAM) | 0 | integer, min 0 | restart · sidecar | high |
 | Per-card VRAM free floor (MB) | Absolute free-VRAM floor before recycle | 1024 | integer, min 0 | restart · sidecar | **medium** |
+| GPU VRAM reserve cap (MB) | Ceiling on the per-device safety cushion held back from every capacity-aware GPU admission (actual cushion = min(5% of that device's own VRAM, this cap)) | 500 | integer, min 0 | restart · sidecar | high |
+
+**Capacity-aware GPU placement** (`SEG_CAPACITY_ADMISSION`, off by default) is
+an alternate admission path for every heavy GPU op — synthesis, engine loads,
+voice design, ASR transcription, speaker embedding — that reserves each op's
+own **measured VRAM footprint** against a card's actual free memory before
+letting it start, instead of the fixed knobs above. On a multi-GPU box it
+steers each op to whichever card has the most free headroom, so moving
+between a single 8 GB card and an 8+16 GB two-card setup needs no settings
+change. Each engine/tier's footprint starts from a seeded cold-start estimate
+and, once a handful of real ops have run, switches to a **self-correcting
+estimate** — the 95th percentile of its last 64 real observations — so an
+early conservative guess relaxes to match actual usage instead of staying
+pinned to a single worst-case spike forever. The **GPU VRAM reserve cap
+(MB)** knob above is a ceiling, not the reserve itself: the cushion actually
+held back on any one card is 5% of *that card's* VRAM, capped at this value —
+sized to the device rather than a flat subtraction that over-provisions a
+small card and under-provisions a large one. While `SEG_CAPACITY_ADMISSION`
+is off, this path is dormant and GPU access falls back to the serialized
+behaviour the rest of this group configures. See
+[Troubleshooting](Troubleshooting#gpu-capacity--vram-placement) if an op
+won't place on a card it should fit, or the eGPU drops off the bus.
 
 ## 10. Gemini rate limits
 
