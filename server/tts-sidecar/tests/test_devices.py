@@ -285,3 +285,109 @@ def test_synthesize_flag_on_fits_proceeds(monkeypatch, synth_client):
     r = synth_client.post("/synthesize", json=_synth_body())
     assert r.status_code == 200
     assert r.content == b"\x00\x00"
+
+
+# --- device-targeted idle_evict (#1721) ---
+
+
+def test_same_card_normalises_and_rejects_off_card():
+    """`_same_card` compares two concrete device strings by CUDA index only.
+    Unindexed "cuda" is card 0 (torch default); cpu/mps/auto/None never match a
+    GPU target — an engine off the target card holds no VRAM there to free."""
+    assert main._same_card("cuda:1", "cuda:1") is True
+    assert main._same_card("cuda", "cuda:0") is True  # unindexed -> card 0
+    assert main._same_card("cuda:0", "cuda:1") is False
+    assert main._same_card("cpu", "cuda:0") is False
+    assert main._same_card("auto", "cuda:0") is False
+    assert main._same_card(None, "cuda:0") is False
+
+
+class _FakeEvictQwen(main.QwenEngine):
+    """QwenEngine stand-in whose idle-evict methods just record they were
+    called (real QwenEngine() construction is cheap — no model I/O). Both the
+    VoiceDesign and 1.7B-Base models live on the shared `_device`, so one card
+    string gates both."""
+
+    name = "qwen"
+
+    def __init__(self, device):
+        super().__init__()
+        self._device = device
+        self._design = object()
+        self._base17 = object()
+        self.design_freed = 0
+        self.base17_freed = 0
+
+    def maybe_free_idle_design(self, ttl_seconds):
+        self.design_freed += 1
+        self._design = None
+        return True
+
+    def maybe_free_idle_base17(self, ttl_seconds):
+        self.base17_freed += 1
+        self._base17 = None
+        return True
+
+
+class _FakeEvictSingleton:
+    """ASR / SPK stand-in: carries a resolved device attr (name differs — ASR
+    uses `_device`, SPK uses `device`) and records `maybe_free_idle` calls."""
+
+    def __init__(self, device_attr, device_val):
+        setattr(self, device_attr, device_val)
+        self.freed = 0
+
+    def maybe_free_idle(self, ttl_seconds):
+        self.freed += 1
+        return True
+
+
+def _wire_evict_engines(monkeypatch, qwen_dev, asr_dev, spk_dev):
+    qwen = _FakeEvictQwen(qwen_dev)
+    asr = _FakeEvictSingleton("_device", asr_dev)
+    spk = _FakeEvictSingleton("device", spk_dev)
+    monkeypatch.setitem(main.ENGINES, "qwen", qwen)
+    monkeypatch.setattr(main, "ASR", asr)
+    monkeypatch.setattr(main, "SPK", spk)
+    return qwen, asr, spk
+
+
+def test_idle_evict_only_frees_engines_on_target_card(monkeypatch):
+    """Qwen on cuda:0, ASR on cuda:1, SPK on cuda:0. Admitting onto cuda:0 must
+    free Qwen (design + base17) and SPK, but NOT ASR (different card) — the
+    multi-GPU over-eviction #1721 fixes."""
+    qwen, asr, spk = _wire_evict_engines(monkeypatch, "cuda:0", "cuda:1", "cuda:0")
+    assert main._idle_evict("cuda:0") is True
+    assert (qwen.design_freed, qwen.base17_freed) == (1, 1)
+    assert spk.freed == 1
+    assert asr.freed == 0  # resident on the OTHER card — left alone
+
+
+def test_idle_evict_targets_the_other_card(monkeypatch):
+    """Same layout, admitting onto cuda:1 instead: only ASR (the cuda:1
+    resident) is freed; Qwen + SPK on cuda:0 are untouched."""
+    qwen, asr, spk = _wire_evict_engines(monkeypatch, "cuda:0", "cuda:1", "cuda:0")
+    assert main._idle_evict("cuda:1") is True
+    assert asr.freed == 1
+    assert (qwen.design_freed, qwen.base17_freed) == (0, 0)
+    assert spk.freed == 0
+
+
+def test_idle_evict_skips_cpu_resident_engines(monkeypatch):
+    """An engine resident on cpu holds no VRAM on any GPU, so a GPU admission
+    never evicts it (evicting would just cost a needless reload). ASR defaults
+    to cpu — admitting onto cuda:0 must leave it alone."""
+    qwen, asr, spk = _wire_evict_engines(monkeypatch, "cuda:0", "cpu", "cpu")
+    assert main._idle_evict("cuda:0") is True  # qwen still freed
+    assert asr.freed == 0
+    assert spk.freed == 0
+
+
+def test_idle_evict_unindexed_cuda_is_card_zero(monkeypatch):
+    """A resident engine reporting bare "cuda" (no index) normalises to card 0,
+    so it's freed for a cuda:0 admission and spared for cuda:1."""
+    qwen, asr, spk = _wire_evict_engines(monkeypatch, "cuda", "cuda", "cuda")
+    assert main._idle_evict("cuda:1") is False  # nothing on card 1
+    assert (qwen.design_freed, spk.freed, asr.freed) == (0, 0, 0)
+    assert main._idle_evict("cuda:0") is True
+    assert (qwen.design_freed, qwen.base17_freed, asr.freed, spk.freed) == (1, 1, 1, 1)

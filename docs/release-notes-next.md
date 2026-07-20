@@ -205,8 +205,19 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
   multi-GPU steering out of the box. Both read sites flipped in lockstep
   (`main.py:_capacity_admission_enabled`, `gpu-load.ts` coarse-path bypass);
   new default-ON regression tests on each side; the OFF-path tests pin the `=0`
-  opt-out explicitly. Known flag-on-readiness gap (efficiency only, never an
-  OOM): multi-GPU `idle_evict` over-eviction, tracked in #1721. Closes #1720.
+  opt-out explicitly. Closes #1720.
+  See [docs/features/264-vram-aware-gpu-placement.md](264-vram-aware-gpu-placement.md).
+- **Idle-engine eviction under capacity admission is now device-targeted.** When
+  a heavy GPU op can't fit and the sidecar tries to free idle engines
+  (`_idle_evict`, Qwen VoiceDesign + 1.7B-Base, ASR, ECAPA), it now only evicts
+  an engine resident on the *same* card as the admitting op — a new `_same_card`
+  check gates each candidate on its resolved device (`qwen._device` /
+  `ASR._device` / `SPK.device`). Previously it evicted every idle engine
+  process-wide regardless of card, so on a genuine multi-GPU box it could free an
+  engine sitting on a *different* GPU than the one that needed room (a needless
+  reload — efficiency only, never an OOM); a cpu-resident engine is now skipped
+  too, since freeing it can't add VRAM to a GPU. Regression coverage in
+  `test_devices.py`. Closes #1721.
   See [docs/features/264-vram-aware-gpu-placement.md](264-vram-aware-gpu-placement.md).
 
 ---
