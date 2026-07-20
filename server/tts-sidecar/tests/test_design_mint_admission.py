@@ -3,10 +3,13 @@
 plan). Mirrors test_load_admission.py's fixture shape and the same
 `SEG_CAPACITY_ADMISSION` flag envelope: flag-OFF never probes and calls the
 engine method with no `device` arg (today's behaviour byte-for-byte);
-flag-ON reserves the `qwen.1.7b` footprint (6144 MB — both design and mint
-run on the 1.7B model), steers the admitted device into the engine call, and
-a no-fit probe returns 503 `{noCapacity, neededMb, deviceKey}` before the
-engine is ever asked to design/mint."""
+flag-ON reserves the heavy 1.7B design-family footprint (each route's own
+cold-start seed — mint 6144, design 7168), steers the admitted device into the
+engine call, and a no-fit probe returns 503 `{noCapacity, neededMb, deviceKey}`
+before the engine is ever asked to design/mint. Each route tags its reservation
+cfg with an `op` (`design`/`mint`) so the two learn their OWN windowed p95
+rather than sharing the far-more-frequent plain-synth `qwen.1.7b` window
+(#1738)."""
 from __future__ import annotations
 
 import sys
@@ -123,10 +126,10 @@ def test_design_flag_on_favours_roomier_device(monkeypatch, design_client):
     assert args[-1] == "cuda:1"
 
 
-def test_design_nocapacity_returns_503_needed_6144(monkeypatch, design_client):
+def test_design_nocapacity_returns_503_needed_design_seed(monkeypatch, design_client):
     """Flag ON + a probe that can't fit the 1.7B footprint -> 503 noCapacity
-    with neededMb == 6144 (proves the qwen.1.7b footprint was reserved), and
-    design_voice is never called."""
+    with neededMb == the design seed (proves the split qwen.1.7b.design footprint
+    was reserved, NOT the shared synth key), and design_voice is never called."""
     monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
     monkeypatch.setattr(
         main._placement,
@@ -139,10 +142,37 @@ def test_design_nocapacity_returns_503_needed_6144(monkeypatch, design_client):
     assert r.status_code == 503
     body = r.json()
     assert body["noCapacity"] is True
-    assert body["neededMb"] == 6144
+    assert body["neededMb"] == main.SEED_FOOTPRINTS_MB["qwen.1.7b.design"]
     assert body["deviceKey"] == "cuda:0"
     fake = design_client.fake_qwen
     assert fake.design_calls == []
+
+
+def test_design_and_mint_reserve_their_own_op_keyed_footprint(monkeypatch, design_client):
+    """#1738 wiring: each route must pass an `op` tag in its reservation cfg so
+    FootprintTable keys it to qwen.1.7b.design / qwen.1.7b.mint — not the shared
+    synth window. Capture the (engine, model, cfg) each route hands reservation()
+    and confirm _key resolves them to the split keys."""
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
+    monkeypatch.setattr(
+        main._placement,
+        "probe",
+        lambda: [{"kind": "cuda", "index": 1, "label": "g1", "totalMb": 24000, "freeMb": 20000}],
+    )
+    seen: list[tuple] = []
+    real = main._placement.reservation
+
+    def _capture(engine, model, cfg, *a, **k):
+        seen.append((engine, model, dict(cfg or {})))
+        return real(engine, model, cfg, *a, **k)
+
+    monkeypatch.setattr(main._placement, "reservation", _capture)
+
+    assert design_client.post("/qwen/design-voice", json=_design_body()).status_code == 200
+    assert design_client.post("/qwen/mint-variant", json=_mint_body()).status_code == 200
+
+    assert main.FootprintTable._key(*seen[0]) == "qwen.1.7b.design"
+    assert main.FootprintTable._key(*seen[1]) == "qwen.1.7b.mint"
 
 
 # --- /qwen/mint-variant ------------------------------------------------------
@@ -187,7 +217,7 @@ def test_mint_flag_on_favours_roomier_device(monkeypatch, design_client):
     assert args[-1] == "cuda:1"
 
 
-def test_mint_nocapacity_returns_503_needed_6144(monkeypatch, design_client):
+def test_mint_nocapacity_returns_503_needed_mint_seed(monkeypatch, design_client):
     monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
     monkeypatch.setattr(
         main._placement,
@@ -200,7 +230,7 @@ def test_mint_nocapacity_returns_503_needed_6144(monkeypatch, design_client):
     assert r.status_code == 503
     body = r.json()
     assert body["noCapacity"] is True
-    assert body["neededMb"] == 6144
+    assert body["neededMb"] == main.SEED_FOOTPRINTS_MB["qwen.1.7b.mint"]
     assert body["deviceKey"] == "cuda:0"
     fake = design_client.fake_qwen
     assert fake.mint_calls == []

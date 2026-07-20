@@ -245,6 +245,23 @@ the flag is OFF) should close so admission covers everything the budget did:
   > observations ignored), `test_placement.py`, `test_design_mint_admission.py`.
   > The multi-op on-box acceptance walkthrough above is still owed before
   > `SEG_CAPACITY_ADMISSION` is defaulted ON.
+  >
+  > **Follow-up CLOSED (#1738).** #1737 left both 1.7B design-family ops
+  > (`design_voice`, `mint_variant`) sharing the plain-synth `qwen.1.7b`
+  > footprint key. Since synths outnumber designs/mints by orders of magnitude,
+  > the shared p95 window tracked the ~3915 MB synth and the far heavier mint
+  > (~5654 MB measured) inherited that under-sized reservation. Fixed on branch
+  > `fix/sidecar-mint-footprint-key`: each design-family route tags its
+  > reservation cfg with an `op` (`design`/`mint`) so `FootprintTable._key`
+  > routes them to their own `qwen.1.7b.design` / `qwen.1.7b.mint` keys, each
+  > learning an independent windowed p95. Mint's cold-start seed (6144 MB) sits
+  > above its measured ~5654 MB peak and still fits an 8 GB card's admission
+  > headroom (~6659 MB), so a first-ever mint on a bare card isn't spuriously
+  > refused; design's seed (7168 MB) is a deliberately conservative UNMEASURED
+  > prior (VoiceDesign-1.7B + 0.6B-Base — a different, un-measured load) that
+  > errs toward refuse-not-OOM until #1742 measures its real peak. Coverage:
+  > `test_footprints.py` (key separation, independent windows, bare-8 GB mint
+  > fit) + `test_design_mint_admission.py` (route-level `op`-tag wiring).
 - **`persona-gpu-plan.ts`'s `unloadResidentSidecar` + `GpuBusyForPersonaError`
   are now dead code** (the reverse-evict was removed); deletion candidates.
 - **`engine-vram-cost.ts` is provably dead** (its registry weights are deleted) —
