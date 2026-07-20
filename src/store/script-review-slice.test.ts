@@ -5,7 +5,10 @@ import {
   scriptReviewActions,
   selectActiveReview,
   selectVisibleReview,
+  selectReviewSummary,
   opKey,
+  BULK_APPROVABLE,
+  EXPAND_ONLY,
   type ReviewOpWithChapter,
 } from './script-review-slice';
 import type { RootState } from './index';
@@ -311,6 +314,99 @@ describe('scriptReviewSlice', () => {
     const afterToggle = selectReview(store.getState(), 'book-a')!;
     expect('nonexistent:99:strip_tag' in afterToggle.selected).toBe(false);
     expect(afterToggle.selected).toEqual(selectedBefore);
+  });
+});
+
+describe('script-review taxonomy', () => {
+  it('splits the 8 op classes into exactly the mechanical six and the high-stakes two', () => {
+    expect([...EXPAND_ONLY].sort()).toEqual(['flag_nonstory', 'reattribute']);
+    expect([...BULK_APPROVABLE].sort()).toEqual([
+      'extract_dialogue',
+      'fix_emotion',
+      'merge',
+      'split',
+      'strip_tag',
+      'validate_instruct',
+    ]);
+    for (const op of BULK_APPROVABLE) expect(EXPAND_ONLY.has(op)).toBe(false);
+  });
+});
+
+describe('selectReviewSummary', () => {
+  const sop = (chapterId: number, id: number, opName: ReviewOpWithChapter['op']): ReviewOpWithChapter =>
+    ({ chapterId, id, op: opName, rationale: 'x' }) as ReviewOpWithChapter;
+
+  it('returns an empty summary for no bucket', () => {
+    expect(selectReviewSummary(undefined)).toEqual({ totalOps: 0, chapters: [] });
+  });
+
+  it('aggregates appliable ops by chapter then type, chapters ascending', () => {
+    const bucket = {
+      ops: [
+        sop(5, 1, 'merge'),
+        sop(5, 2, 'merge'),
+        sop(5, 3, 'strip_tag'),
+        sop(5, 4, 'reattribute'),
+        sop(3, 9, 'fix_emotion'),
+      ],
+      unappliable: [{ op: sop(5, 99, 'merge'), reason: 'stale' }], // MUST be excluded
+      selected: {},
+      manuscriptId: 'm',
+      versionByChapter: {},
+      visible: true,
+    };
+    const summary = selectReviewSummary(bucket as never);
+    expect(summary.totalOps).toBe(5); // the unappliable op is not counted
+    expect(summary.chapters.map((c) => c.chapterId)).toEqual([3, 5]); // ascending
+
+    const ch5 = summary.chapters.find((c) => c.chapterId === 5)!;
+    expect(ch5.total).toBe(4);
+    expect(ch5.toReview).toBe(1); // the reattribute (expand-only)
+    expect(ch5.selectableKeys.sort()).toEqual(['5:1:merge', '5:2:merge', '5:3:strip_tag'].sort());
+
+    const reattr = ch5.byType.find((t) => t.op === 'reattribute')!;
+    expect(reattr.count).toBe(1);
+    expect(reattr.selectableKeys).toEqual([]); // expand-only → no bulk keys
+    const merge = ch5.byType.find((t) => t.op === 'merge')!;
+    expect(merge.selectableKeys.sort()).toEqual(['5:1:merge', '5:2:merge']);
+  });
+});
+
+describe('toggleKeys', () => {
+  const seed = () => ({
+    byBook: {
+      bk: {
+        ops: [],
+        unappliable: [],
+        manuscriptId: 'm',
+        versionByChapter: {},
+        visible: true,
+        selected: { '5:1:merge': false, '5:2:merge': false, '5:4:reattribute': false },
+      },
+    },
+    activeStreams: {},
+  });
+
+  it('sets only the given known keys to the given value, ignoring unknown keys', () => {
+    const next = scriptReviewSlice.reducer(
+      seed() as never,
+      scriptReviewActions.toggleKeys({ bookId: 'bk', keys: ['5:1:merge', '5:2:merge', '9:9:merge'], value: true }),
+    );
+    const sel = next.byBook.bk!.selected;
+    expect(sel['5:1:merge']).toBe(true);
+    expect(sel['5:2:merge']).toBe(true);
+    expect(sel['5:4:reattribute']).toBe(false); // untouched
+    expect('9:9:merge' in sel).toBe(false); // unknown key never added
+  });
+
+  it('clears keys when value is false', () => {
+    const start = seed();
+    start.byBook.bk.selected['5:1:merge'] = true;
+    const next = scriptReviewSlice.reducer(
+      start as never,
+      scriptReviewActions.toggleKeys({ bookId: 'bk', keys: ['5:1:merge'], value: false }),
+    );
+    expect(next.byBook.bk!.selected['5:1:merge']).toBe(false);
   });
 });
 

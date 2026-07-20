@@ -30,6 +30,20 @@ export function opKey(chapterId: number, id: number, op: string): string {
   return `${chapterId}:${id}:${op}`;
 }
 
+/** The high-stakes op classes: opt-in / unchecked by default, and never
+    bulk-approvable from the summary (identity + story-exclusion edits). */
+export const EXPAND_ONLY: ReadonlySet<ReviewOp['op']> = new Set(['reattribute', 'flag_nonstory']);
+/** The mechanical op classes: checked by default and bulk-approvable per
+    chapter/type from the summary. The complement of EXPAND_ONLY. */
+export const BULK_APPROVABLE: ReadonlySet<ReviewOp['op']> = new Set([
+  'strip_tag',
+  'split',
+  'extract_dialogue',
+  'merge',
+  'fix_emotion',
+  'validate_instruct',
+]);
+
 export interface ScriptReviewBucket {
   ops: ReviewOpWithChapter[];
   unappliable: Array<{ op: ReviewOpWithChapter; reason: string }>;
@@ -137,10 +151,10 @@ export const scriptReviewSlice = createSlice({
       }>,
     ) => {
       const { bookId, ops, unappliable, manuscriptId = '', versionByChapter = {} } = a.payload;
-      const DEFAULT_OFF = new Set(['reattribute', 'flag_nonstory']); // fs-58 Unit B — higher-risk classes opt-in
+      // fs-58 Unit B — higher-risk classes opt-in; taxonomy single-sourced as EXPAND_ONLY.
       const newSelected: Record<string, boolean> = {};
       for (const o of ops) {
-        newSelected[opKey(o.chapterId, o.id, o.op)] = !DEFAULT_OFF.has(o.op);
+        newSelected[opKey(o.chapterId, o.id, o.op)] = !EXPAND_ONLY.has(o.op);
       }
 
       const existing = s.byBook[bookId];
@@ -255,6 +269,18 @@ export const scriptReviewSlice = createSlice({
       }
     },
 
+    /** Set an explicit list of opKeys to `value` in one book's bucket — the
+        primitive behind the summary's chapter- and type-level "Approve"
+        controls. Only flips keys already present in `selected` (a key absent
+        from the bucket is never created). */
+    toggleKeys: (s, a: PayloadAction<{ bookId: string; keys: string[]; value: boolean }>) => {
+      const bucket = s.byBook[a.payload.bookId];
+      if (!bucket) return;
+      for (const key of a.payload.keys) {
+        if (key in bucket.selected) bucket.selected[key] = a.payload.value;
+      }
+    },
+
     /** Hide the modal without touching any data — the X button / backdrop
         click (design spec §6.2). */
     hideReview: (s, a: PayloadAction<{ bookId: string }>) => {
@@ -351,6 +377,75 @@ export function unresolvedCountForChapters(bucket: ScriptReviewBucket | undefine
   if (!bucket) return 0;
   const set = new Set(chapterIds);
   return bucket.ops.filter((o) => set.has(o.chapterId)).length;
+}
+
+export interface ReviewTypeGroup {
+  op: ReviewOp['op'];
+  count: number;
+  /** opKeys the type-level "Approve" ticks — empty for EXPAND_ONLY types. */
+  selectableKeys: string[];
+}
+export interface ReviewChapterSummary {
+  chapterId: number;
+  total: number;
+  /** Union of every mechanical op's key in this chapter — the chapter-level
+      "Approve all" set. Excludes EXPAND_ONLY ops. */
+  selectableKeys: string[];
+  /** Count of EXPAND_ONLY ops (reattribute/flag_nonstory) — the "N to review". */
+  toReview: number;
+  byType: ReviewTypeGroup[];
+}
+export interface ReviewSummary {
+  totalOps: number;
+  chapters: ReviewChapterSummary[];
+}
+
+/** Deterministic display order for the per-type rows: mechanical types first
+    (in a fixed order), then the expand-only types. */
+const TYPE_ORDER: ReviewOp['op'][] = [
+  'merge',
+  'strip_tag',
+  'split',
+  'extract_dialogue',
+  'fix_emotion',
+  'validate_instruct',
+  'reattribute',
+  'flag_nonstory',
+];
+
+/** Pure per-chapter/per-type aggregation over the flat appliable ops
+    (`bucket.ops`, never `unappliable`) — the summary the accordion renders.
+    No slice shape change; safe to recompute on every render. */
+export function selectReviewSummary(bucket: ScriptReviewBucket | undefined): ReviewSummary {
+  if (!bucket) return { totalOps: 0, chapters: [] };
+  const byChapter = new Map<number, Map<string, ReviewOpWithChapter[]>>();
+  for (const o of bucket.ops) {
+    let types = byChapter.get(o.chapterId);
+    if (!types) {
+      types = new Map();
+      byChapter.set(o.chapterId, types);
+    }
+    const arr = types.get(o.op);
+    if (arr) arr.push(o);
+    else types.set(o.op, [o]);
+  }
+  const chapters: ReviewChapterSummary[] = [...byChapter.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([chapterId, types]) => {
+      const byType: ReviewTypeGroup[] = [...types.entries()]
+        .map(([op, ops]) => ({
+          op: op as ReviewOp['op'],
+          count: ops.length,
+          selectableKeys: BULK_APPROVABLE.has(op as ReviewOp['op'])
+            ? ops.map((o) => opKey(o.chapterId, o.id, o.op))
+            : [],
+        }))
+        .sort((a, b) => TYPE_ORDER.indexOf(a.op) - TYPE_ORDER.indexOf(b.op));
+      const selectableKeys = byType.flatMap((t) => t.selectableKeys);
+      const total = byType.reduce((n, t) => n + t.count, 0);
+      return { chapterId, total, selectableKeys, toReview: total - selectableKeys.length, byType };
+    });
+  return { totalOps: bucket.ops.length, chapters };
 }
 
 /** Like selectActiveReview, but returns undefined for a hidden bucket — use
