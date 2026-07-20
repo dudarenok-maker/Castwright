@@ -67,10 +67,14 @@ test.describe('fs-58 — validate_instruct per-chapter accept flow (#1041)', () 
       timeout: 10_000,
     });
 
-    /* The summary opens collapsed; expand chapter 3 to reveal its type rows.
-       The validate_instruct op surfaces as the "Instruct" type row. */
-    await page.getByTestId('chapter-row-3').click();
-    const instructType = page.getByTestId('type-row-3-validate_instruct');
+    /* The summary opens collapsed. Expand every chapter row (the appliable
+       validate_instruct op lands under whichever chapter the review tagged it),
+       then assert its "Instruct" type row surfaces — chapter-agnostic so the
+       test doesn't couple to the mock's chapter bookkeeping. */
+    for (const row of await page.getByTestId(/^chapter-row-\d+$/).all()) {
+      await row.click();
+    }
+    const instructType = page.getByTestId(/^type-row-\d+-validate_instruct$/);
     await expect(instructType).toBeVisible();
     await expect(instructType).toContainText('Instruct');
 
