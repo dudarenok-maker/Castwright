@@ -1945,10 +1945,16 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
     # base+base co-load `mint_variant`) are far heavier than the plain 1.7B
     # synth hot path (~3915 MB) and vastly rarer, so they get their OWN keys
     # rather than being drowned in the synth-dominated p95 window (#1738).
-    # Cold-start priors only — each learns its own windowed p95 from real ops
-    # (measured mint ~5654 MB, so 6144 admits on an 8 GB card and learns down).
+    # Cold-start priors only — each learns its own windowed p95 from real ops.
+    #   mint: base(0.6B)+base(1.7B) co-load, measured ~5654 MB; 6144 keeps the
+    #     #1737-style margin over that and still admits on an 8 GB card.
+    #   design: VoiceDesign-1.7B + a 0.6B-Base audition — a DIFFERENT, UNMEASURED
+    #     load. Seeded conservatively HIGH (erring refuse-not-OOM, since an
+    #     under-seed lets a concurrent op double-book a card the design forward
+    #     then OOMs) until a real on-box design peak is measured (#1742); the
+    #     window learns the true value down once designs run.
     "qwen.1.7b.mint": 6144,
-    "qwen.1.7b.design": 6144,
+    "qwen.1.7b.design": 7168,
     "coqui": 3584,
     "asr": 400,
     "spk": 200,

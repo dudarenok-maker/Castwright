@@ -193,9 +193,12 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
   — under-reserving a real mint by ~1.7 GB and risking a co-resident op being
   admitted into space the mint actually occupies. Each design-family op now
   carries its own `qwen.1.7b.design` / `qwen.1.7b.mint` footprint key (tagged via
-  an `op` marker on the reservation) and learns its own windowed p95; the
-  cold-start seeds (6144 MB) still fit an 8 GB card's admission headroom. Still
-  behind the default-OFF `SEG_CAPACITY_ADMISSION` flag. (#1738)
+  an `op` marker on the reservation) and learns its own windowed p95. Mint's
+  cold-start seed (6144 MB) sits just above its measured ~5654 MB peak and still
+  fits an 8 GB card's admission headroom; design's (7168 MB) is a deliberately
+  conservative unmeasured prior that errs toward refuse-not-OOM until its real
+  peak is measured (#1742). Still behind the default-OFF
+  `SEG_CAPACITY_ADMISSION` flag. (#1738)
 
 ---
 
