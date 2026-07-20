@@ -921,7 +921,7 @@ export async function evalFixture(opts: {
     stageCall: opts.stageCall,
     escalationAnalyzer: opts.escalationAnalyzer ?? null,
     onStages: (s) => { stages = s; },
-  } as never);
+  }); // no `as never` — the opts object is fully typed, so `s` gets its proper type
 
   // `reasons` align 1:1 to the deterministic snapshot; reused for the final stage
   // because escalation changes ids on already-flagged lines but not the evidence class.
@@ -1121,7 +1121,22 @@ Read `__fixtures__/coalfall-ch1.en.labelled.json`, collect its distinct `speaker
 
 - [ ] **Step 5: Create the orchestrator + npm script**
 
-`scripts/run-attribution-eval.mjs` (mirror `scripts/run-golden-audio.mjs`): parse `--flags`, `spawnSync('npx', ['tsx', 'server/src/analyzer/attribution-eval/run-eval-cli.ts', ...flags], { stdio: 'inherit', cwd: ROOT, shell: true })`, exit with the child's code.
+`scripts/run-attribution-eval.mjs` (mirrors `scripts/run-golden-audio.mjs`'s spawn+exit pattern):
+```js
+#!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const flags = process.argv.slice(2);
+const res = spawnSync(
+  'npx',
+  ['tsx', 'server/src/analyzer/attribution-eval/run-eval-cli.ts', ...flags],
+  { stdio: 'inherit', cwd: ROOT, shell: true },
+);
+process.exit(res.status ?? 1);
+```
 
 Add to root `package.json` "scripts":
 ```json
