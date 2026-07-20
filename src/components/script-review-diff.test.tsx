@@ -1635,6 +1635,10 @@ describe('ScriptReviewDiff — summary accordion (Task 5)', () => {
     expect(screen.getByTestId('chapter-row-3')).toBeInTheDocument();
     expect(screen.getByTestId('chapter-row-5')).toBeInTheDocument();
     expect(screen.queryByTestId('op-toggle-5:1:merge')).not.toBeInTheDocument();
+    // Chapter rows are exposed as level-3 headings (the wrapping <span
+    // role="heading"> — NOT a role nested inside the button, which ARIA would
+    // strip — so screen-reader heading navigation works).
+    expect(screen.getByRole('heading', { name: /Chapter 5/, level: 3 })).toBeInTheDocument();
   });
 
   it('expands a chapter to its type rows, then a type to its op cards', () => {
@@ -1717,7 +1721,7 @@ describe('ScriptReviewDiff — partial apply notice (Task 7)', () => {
     // merge + strip_tag are mechanical → selected by default; apply directly.
     fireEvent.click(screen.getByTestId('apply-button'));
     expect(toast).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("couldn't apply") }),
+      expect.objectContaining({ message: expect.stringContaining("couldn't be applied") }),
     );
     toast.mockRestore();
     resolve.mockRestore();

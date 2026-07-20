@@ -327,19 +327,10 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
   const { ops, selected, unappliable } = bucket;
 
   /* Per-chapter/per-type aggregation — the collapsed summary the accordion
-     renders (chapters ascending, mechanical types bulk-approvable). */
+     renders (chapters ascending, mechanical types bulk-approvable). Each
+     ReviewTypeGroup carries its own ops, so the accordion never re-scans
+     bucket.ops per visible type. */
   const summary = selectReviewSummary(bucket);
-
-  /* One pass to group ops by `${chapterId}:${op}` for the expanded-type op
-     cards — avoids an O(n) `ops.filter` per visible type group on every render
-     (a real cost at whole-book ~1000-op scale). */
-  const opsByChapterType = new Map<string, ReviewOpWithChapter[]>();
-  for (const o of ops) {
-    const k = `${o.chapterId}:${o.op}`;
-    const arr = opsByChapterType.get(k);
-    if (arr) arr.push(o);
-    else opsByChapterType.set(k, [o]);
-  }
 
   const selectedCount = ops.filter((o) => selected[opKey(o.chapterId, o.id, o.op)]).length;
 
@@ -532,10 +523,14 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
     // the warning fire falsely / overstate the count.
     if (planUnappliable.length > 0) {
       const n = planUnappliable.length;
+      // "stale or invalid" (matching the unappliable-notice copy), NOT
+      // "conflicting edits": planApply drops ops for reasons well beyond edit
+      // conflicts — a malformed analyzer op (invalid emotion, bad merge arity),
+      // a stale target id, a reattribute to a since-deleted character.
       dispatch(
         notificationsActions.pushToast({
           kind: 'warn',
-          message: `${n} suggestion${n === 1 ? '' : 's'} couldn't apply (conflicting edits)`,
+          message: `${n} suggestion${n === 1 ? '' : 's'} couldn't be applied (stale or invalid)`,
           dedupeKey: `script-review-partial-${startBookId}`,
         }),
       );
@@ -813,27 +808,29 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                         Approve {chapter.selectableKeys.length}
                       </label>
                     )}
-                    <button
-                      type="button"
-                      data-testid={`chapter-row-${chapter.chapterId}`}
-                      onClick={() => toggleChapterExpand(chapter.chapterId)}
-                      className="flex-1 flex items-center gap-3 text-left min-h-[44px] fine-pointer:min-h-0"
-                    >
-                      <span
-                        role="heading"
-                        aria-level={3}
-                        className="text-xs font-bold uppercase tracking-wider text-ink/60 flex-1"
+                    {/* Heading WRAPS the button (WAI-ARIA accordion pattern) so
+                        the heading role survives — a role="heading" nested INSIDE
+                        the button would be stripped by ARIA's presentational-
+                        children rule, killing heading navigation. */}
+                    <span role="heading" aria-level={3} className="flex-1">
+                      <button
+                        type="button"
+                        data-testid={`chapter-row-${chapter.chapterId}`}
+                        onClick={() => toggleChapterExpand(chapter.chapterId)}
+                        className="w-full flex items-center gap-3 text-left min-h-[44px] fine-pointer:min-h-0"
                       >
-                        Chapter {chapter.chapterId}
-                      </span>
-                      <span className="text-xs text-ink/45 tabular-nums">
-                        {chapter.total}
-                        {chapter.toReview > 0 ? ` · ${chapter.toReview} to review` : ''}
-                      </span>
-                      <span aria-hidden className="text-ink/40">
-                        {chapterOpen ? '▾' : '▸'}
-                      </span>
-                    </button>
+                        <span className="text-xs font-bold uppercase tracking-wider text-ink/60 flex-1">
+                          Chapter {chapter.chapterId}
+                        </span>
+                        <span className="text-xs text-ink/45 tabular-nums">
+                          {chapter.total}
+                          {chapter.toReview > 0 ? ` · ${chapter.toReview} to review` : ''}
+                        </span>
+                        <span aria-hidden className="text-ink/40">
+                          {chapterOpen ? '▾' : '▸'}
+                        </span>
+                      </button>
+                    </span>
                   </div>
 
                   {chapterOpen &&
@@ -841,7 +838,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                       const typeOpen = expandedTypes.has(`${chapter.chapterId}:${type.op}`);
                       const allTypeSel =
                         type.selectableKeys.length > 0 && type.selectableKeys.every((k) => selected[k]);
-                      const typeOps = opsByChapterType.get(`${chapter.chapterId}:${type.op}`) ?? [];
+                      const typeOps = type.ops;
                       return (
                         <div
                           key={type.op}
@@ -863,24 +860,23 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
                             ) : (
                               <span className="text-[10px] uppercase tracking-wider text-magenta/70">review</span>
                             )}
-                            <button
-                              type="button"
-                              data-testid={`type-row-${chapter.chapterId}-${type.op}`}
-                              onClick={() => toggleTypeExpand(chapter.chapterId, type.op)}
-                              className="flex-1 flex items-center gap-2 text-left min-h-[44px] fine-pointer:min-h-0"
-                            >
-                              <span
-                                role="heading"
-                                aria-level={4}
-                                className="text-xs font-semibold text-ink/70 flex-1"
+                            {/* Heading WRAPS the button (see chapter row note). */}
+                            <span role="heading" aria-level={4} className="flex-1">
+                              <button
+                                type="button"
+                                data-testid={`type-row-${chapter.chapterId}-${type.op}`}
+                                onClick={() => toggleTypeExpand(chapter.chapterId, type.op)}
+                                className="w-full flex items-center gap-2 text-left min-h-[44px] fine-pointer:min-h-0"
                               >
-                                {classLabel(type.op)}
-                              </span>
-                              <span className="text-[11px] text-ink/45 tabular-nums">{type.count}</span>
-                              <span aria-hidden className="text-ink/40">
-                                {typeOpen ? '▾' : '▸'}
-                              </span>
-                            </button>
+                                <span className="text-xs font-semibold text-ink/70 flex-1">
+                                  {classLabel(type.op)}
+                                </span>
+                                <span className="text-[11px] text-ink/45 tabular-nums">{type.count}</span>
+                                <span aria-hidden className="text-ink/40">
+                                  {typeOpen ? '▾' : '▸'}
+                                </span>
+                              </button>
+                            </span>
                           </div>
                           {typeOpen && <div className="space-y-2">{typeOps.map(renderOpCard)}</div>}
                         </div>

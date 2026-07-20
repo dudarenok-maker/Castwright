@@ -394,6 +394,10 @@ export interface ReviewTypeGroup {
   count: number;
   /** opKeys the type-level "Approve" ticks — empty for EXPAND_ONLY types. */
   selectableKeys: string[];
+  /** The ops in this chapter+type group, in bucket order — the op cards the
+      accordion renders when the type is expanded. Carried here so the view
+      doesn't re-scan `bucket.ops` per visible type on every render. */
+  ops: ReviewOpWithChapter[];
 }
 export interface ReviewChapterSummary {
   chapterId: number;
@@ -436,6 +440,7 @@ export function selectReviewSummary(bucket: ScriptReviewBucket | undefined): Rev
           selectableKeys: BULK_APPROVABLE.has(op as ReviewOp['op'])
             ? ops.map((o) => opKey(o.chapterId, o.id, o.op))
             : [],
+          ops,
         }))
         .sort((a, b) => ALL_OP_TYPES.indexOf(a.op) - ALL_OP_TYPES.indexOf(b.op));
       const selectableKeys = byType.flatMap((t) => t.selectableKeys);
