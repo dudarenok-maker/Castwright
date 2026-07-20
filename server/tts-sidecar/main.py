@@ -2373,20 +2373,41 @@ def _is_resident(engine_id: str) -> Optional[str]:
     return f"{card['family']}:{index}"
 
 
+def _same_card(resident: Optional[str], target: str) -> bool:
+    """True when a resident engine's device string sits on the same CUDA card
+    as `target` (always a concrete "cuda:N" from `_worst_device_key`). cpu / mps
+    / auto / unparseable never match — an engine that isn't on the target card
+    holds no VRAM there, so evicting it couldn't help the admitting op. Unindexed
+    "cuda" normalises to card 0 (torch's default). This is `shares_device`'s
+    card-comparison tail without its auto-resolution / torch import: both inputs
+    here are already concrete (a resident engine's device + a probed device key),
+    so the "auto -> cuda:0" resolution `shares_device` does is unwanted, and the
+    hot admission path shouldn't import torch just to compare two strings."""
+    fam_r, idx_r = _parse_device(resident)
+    fam_t, idx_t = _parse_device(target)
+    if fam_r != "cuda" or fam_t != "cuda":
+        return False
+    return (idx_r or 0) == (idx_t or 0)
+
+
 def _idle_evict(device_key: str) -> bool:
     """PlacementController.idle_evict: best-effort attempt to free idle
-    transient GPU state to make room for the admitting op. Tries every
-    idle-evictable engine (Qwen VoiceDesign, Qwen 1.7B-Base, ASR, ECAPA) with
-    ttl=0 (evict now regardless of recent use) and returns True if anything
-    freed.
+    transient GPU state to make room for the admitting op on `device_key`.
+    Tries each idle-evictable engine (Qwen VoiceDesign + 1.7B-Base share the
+    Qwen engine's card; ASR; ECAPA) with ttl=0 (evict now regardless of recent
+    use) and returns True if anything freed.
 
-    Deliberately does NOT target `device_key` specifically — reasonable on
-    today's single-practical-GPU boxes; a genuinely multi-GPU box would
-    over-evict engines resident on a DIFFERENT card too. See the task-4
-    report for this call-out."""
+    Device-targeted (#1721): only evicts an engine whose resident card matches
+    `device_key`, so a genuine multi-GPU box never frees an idle engine sitting
+    on a DIFFERENT card than the one the op needs (over-eviction — efficiency
+    only, never an OOM). An engine on cpu is likewise skipped: it holds no VRAM
+    on the target card, so freeing it couldn't admit this op. The device strings
+    match how the rest of the sidecar reasons about residency (`_is_resident`,
+    `shares_device`) — Qwen's design/base17 both live on the shared
+    `qwen._device`, ASR on `ASR._device`, ECAPA on `SPK.device`."""
     freed = False
     qwen = ENGINES.get("qwen")
-    if isinstance(qwen, QwenEngine):
+    if isinstance(qwen, QwenEngine) and _same_card(qwen._device, device_key):
         try:
             freed = qwen.maybe_free_idle_design(0.0) or freed
         except Exception:
@@ -2395,14 +2416,16 @@ def _idle_evict(device_key: str) -> bool:
             freed = qwen.maybe_free_idle_base17(0.0) or freed
         except Exception:
             pass
-    try:
-        freed = ASR.maybe_free_idle(0.0) or freed
-    except Exception:
-        pass
-    try:
-        freed = SPK.maybe_free_idle(0.0) or freed
-    except Exception:
-        pass
+    if _same_card(getattr(ASR, "_device", None), device_key):
+        try:
+            freed = ASR.maybe_free_idle(0.0) or freed
+        except Exception:
+            pass
+    if _same_card(getattr(SPK, "device", None), device_key):
+        try:
+            freed = SPK.maybe_free_idle(0.0) or freed
+        except Exception:
+            pass
     return freed
 
 

@@ -6,19 +6,20 @@ owner: null
 
 # Capacity-aware GPU placement (replaces the hand-set GPU token budget)
 
-> Status: ACTIVE — capacity admission is now default-ON, but one readiness
-> follow-up (#1721) is still open, so this plan stays `active` (not yet
-> archivable). `SEG_CAPACITY_ADMISSION` defaults **ON** as of the #1720 flag
-> flip (2026-07-20); `=0` is the opt-out that restores the pre-admission
-> serialized path. The flip was made on the strength of the full automated
-> admission coverage (sidecar + Node) plus the on-box **synthesis-path**
-> acceptance (S1/S2/S4/S6 below). The manual **evict-under-contention** rows
-> (6–8: cold `/load` steer, `design_voice` evicts Ollama, GPU-ASR 503→evict→retry)
-> were **not** force-driven on-box — they rest on automated coverage for now.
-> Remaining flag-on readiness gap: multi-GPU `idle_evict` over-eviction, tracked
-> in **#1721** (efficiency only — over-evicts an idle engine on the wrong card,
-> never OOMs). This plan flips to `stable` (and archives) once #1721 lands and
-> the evict-under-contention rows are driven on-box.
+> Status: ACTIVE — capacity admission is now default-ON, and the last code-side
+> readiness follow-up (#1721, device-targeted `idle_evict`) has landed, but the
+> plan stays `active` (not yet archivable) pending on-box acceptance.
+> `SEG_CAPACITY_ADMISSION` defaults **ON** as of the #1720 flag flip
+> (2026-07-20); `=0` is the opt-out that restores the pre-admission serialized
+> path. The flip was made on the strength of the full automated admission
+> coverage (sidecar + Node) plus the on-box **synthesis-path** acceptance
+> (S1/S2/S4/S6 below). The manual **evict-under-contention** rows (6–8: cold
+> `/load` steer, `design_voice` evicts Ollama, GPU-ASR 503→evict→retry) were
+> **not** force-driven on-box — they rest on automated coverage for now. The
+> former multi-GPU `idle_evict` over-eviction gap is now fixed and covered
+> (**#1721** — it only ever over-evicted an idle engine on the wrong card, never
+> OOMed). This plan flips to `stable` (and archives) once the evict-under-contention
+> rows 6–8 are driven on-box on the dual-GPU box.
 > Key files (sidecar): `server/tts-sidecar/main.py` (`probe_capacity`,
 > `FootprintTable`, `ReservationLedger`, `PlacementController`).
 > Key files (server): `server/src/gpu/count-semaphore.ts`,
@@ -234,6 +235,17 @@ OOM — see the status header:
   Node evicts the idle analyzer and retries, rather than silently demoting
   to CPU.
 - **`idle_evict` ignores the target device** (over-evicts on a true multi-GPU box).
+
+  > **CLOSED (#1721).** Fixed on branch `fix/sidecar-idle-evict-device-target`:
+  > `_idle_evict(device_key)` now gates each candidate (Qwen VoiceDesign +
+  > 1.7B-Base share `qwen._device`, ASR on `ASR._device`, ECAPA on `SPK.device`)
+  > through a new `_same_card()` helper, so it only frees an engine whose resident
+  > card matches the admitting op's target — a multi-GPU box no longer evicts an
+  > idle engine on a *different* card, and a cpu-resident engine (which holds no
+  > VRAM on the target card) is skipped entirely. `_same_card` is `shares_device`'s
+  > card-comparison tail without the torch import / auto-resolution (both inputs
+  > are already concrete in this path). Regression coverage: `test_devices.py`
+  > (`test_idle_evict_*`, `test_same_card_*`). Efficiency-only, never an OOM.
 - **`_observed_mb` reads `max_memory_allocated` without `reset_peak_memory_stats`**
   → the learned footprint drifts to the device-wide high-water (over-conservative,
   never an OOM).
