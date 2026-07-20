@@ -48,3 +48,37 @@ export async function applyProposedReattributions(
   }
   return { created, createdCharacters, aborted: false };
 }
+
+export interface ProposedNameGroup {
+  /** First-seen display form of the name (for the form header). */
+  name: string;
+  /** The proposed fields to seed the create form with (first op's proposal). */
+  proposed: { name: string; gender?: string; ageRange?: string };
+  /** Every off-roster reattribute line sharing this normalized name. */
+  ops: ReviewOpWithChapter[];
+}
+
+/** Split a batch of off-roster `reattribute` ops (each carrying `op.proposed`)
+    into (a) one group per NEW normalized name — the names that need a single
+    create-character confirm — and (b) the flat list of ops whose proposed name
+    already matches a live cast member, which need no form (applied straight
+    through the roster-seeded `applyProposedReattributions`). Pure. */
+export function consolidateProposedByName(
+  proposed: ReviewOpWithChapter[],
+  rosterNames: ReadonlySet<string>,
+): { newGroups: ProposedNameGroup[]; rosterMatchedOps: ReviewOpWithChapter[] } {
+  const groups = new Map<string, ProposedNameGroup>();
+  const rosterMatchedOps: ReviewOpWithChapter[] = [];
+  for (const op of proposed) {
+    if (!op.proposed) continue;
+    const key = norm(op.proposed.name);
+    if (rosterNames.has(key)) {
+      rosterMatchedOps.push(op);
+      continue;
+    }
+    const g = groups.get(key);
+    if (g) g.ops.push(op);
+    else groups.set(key, { name: op.proposed.name, proposed: op.proposed, ops: [op] });
+  }
+  return { newGroups: [...groups.values()], rosterMatchedOps };
+}
