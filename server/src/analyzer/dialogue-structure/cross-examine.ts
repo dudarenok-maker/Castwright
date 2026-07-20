@@ -1,6 +1,6 @@
 import type { SentenceOutput } from '../../handoff/schemas.js';
 import type { AlignedSentence, AlignmentResult } from './aligner.js';
-import type { EngineReport, SpanEvidence } from './types.js';
+import type { DecisionBucket, EngineReport, SpanEvidence } from './types.js';
 
 /* Task 7 (spec §5.3). The cross-examiner: replays the model's per-sentence
    attribution against the structural evidence Tasks 4-6 derived (tag-name /
@@ -42,6 +42,8 @@ export interface CrossExamineResult {
   sentences: SentenceOutput[];
   /** indexes into sentences[] */
   flags: Array<{ index: number; reason: string }>;
+  /** one entry per output sentence, index-aligned to sentences[] */
+  reasons: Array<{ index: number; reason: string; bucket: DecisionBucket }>;
   report: EngineReport;
 }
 
@@ -284,6 +286,7 @@ export function crossExamine(alignment: AlignmentResult, opts: CrossExamineOpts)
 
   const sentences: SentenceOutput[] = [];
   const flags: Array<{ index: number; reason: string }> = [];
+  const reasons: CrossExamineResult['reasons'] = [];
   const block = { active: false };
 
   alignment.aligned.forEach((as, index) => {
@@ -304,7 +307,8 @@ export function crossExamine(alignment: AlignmentResult, opts: CrossExamineOpts)
     report[decision.bucket] += 1;
     if (decision.flagged) flags.push({ index, reason: decision.reason });
     sentences.push({ ...as.sentence, characterId: decision.characterId, confidence: decision.confidence });
+    reasons.push({ index: reasons.length, reason: decision.reason, bucket: decision.bucket });
   });
 
-  return { sentences, flags, report };
+  return { sentences, flags, reasons, report };
 }

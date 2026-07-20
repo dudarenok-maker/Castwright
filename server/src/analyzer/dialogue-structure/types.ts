@@ -33,6 +33,8 @@ export interface LanguageConventions {
   pronouns: { firstPerson: RegExp | null; male: RegExp | null; female: RegExp | null };
 }
 
+export type DecisionBucket = 'confirmed' | 'corrected' | 'flagged' | 'lumped';
+
 export interface EngineReport {
   language: string | null;
   alignedPct: number;
