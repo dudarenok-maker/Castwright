@@ -102,19 +102,18 @@ def test_design_family_windows_are_independent():
     assert t.peak_mb("qwen", "1.7b", {"op": "design"}) == main.SEED_FOOTPRINTS_MB["qwen.1.7b.design"]
 
 
-def test_mint_seed_fits_bare_8gb_headroom():
+def test_design_family_seeds_fit_bare_8gb_headroom():
     # LOWER-BOUND guard, not a production guarantee: on a BARE 8 GB card (free
-    # ~7068 MB idle, minus the ~409 MB 5%-reserve = ~6659 headroom) the measured
-    # mint (~5654 MB) must still admit at its cold-start seed, so a future seed
-    # bump can't silently push the first-ever mint over an empty card's headroom.
-    # A real box with a resident analyzer/Kokoro has LESS free than this — that
-    # case relies on idle-evict, not on the seed fitting outright.
+    # ~7068 MB idle, minus the ~409 MB 5%-reserve = ~6659 headroom) both
+    # design-family cold-start seeds must admit, so a first-ever design/mint on
+    # an empty 8 GB box isn't spuriously refused before its window warms. Both
+    # are measured-backed (mint ~5654 MB, design ~5440 MB, #1742), so 6144 fits
+    # with margin. A real box with a resident analyzer/Kokoro has LESS free than
+    # this — that case relies on idle-evict, not on the seed fitting outright;
+    # this guard just stops a future seed bump silently breaking the bare case.
     bare_headroom_8gb = 7068 - main._device_reserve_mb(8188, 500)
     assert main.SEED_FOOTPRINTS_MB["qwen.1.7b.mint"] < bare_headroom_8gb
-    # design is seeded ABOVE this headroom ON PURPOSE — it's an unmeasured heavy
-    # load, so it errs refuse-not-OOM on a tight card (idle-evict / a roomier
-    # card place it) rather than admitting against an under-sized reservation.
-    assert main.SEED_FOOTPRINTS_MB["qwen.1.7b.design"] >= main.SEED_FOOTPRINTS_MB["qwen.1.7b.mint"]
+    assert main.SEED_FOOTPRINTS_MB["qwen.1.7b.design"] < bare_headroom_8gb
 
 
 def test_seed_parity_with_local_llm_doc():
