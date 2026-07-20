@@ -27,6 +27,7 @@ import gc
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -34,6 +35,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from contextlib import contextmanager
 from typing import Any, Callable, Optional
 
@@ -1928,13 +1930,17 @@ def probe_capacity() -> list[dict]:
 
 # Peak-under-load VRAM seeds (MB) per engine/tier — mirrors the maintained
 # table in docs/local-llm.md (parity enforced by test_footprints.py). These
-# are the true DECODE PEAK, not the smaller resident/weight size: e.g. qwen's
-# 6144 is the measured ~5.6 GB decode peak rounded up, not the ~4 GB resident
-# footprint — do not "correct" it down.
+# are COLD-START PRIORS only: once FootprintTable has accumulated
+# >= _FOOTPRINT_MIN_SAMPLES real per-op observations for a key, the learned
+# windowed p95 (see FootprintTable.peak_mb) supersedes the seed entirely —
+# the seed is a starting point, not a floor. Values are measured real per-op
+# decode peaks (0.6B ~1952 MB, 1.7B mint ~5654 MB) rounded up with margin so
+# a cold start still fits the target card (0.6B on a 6 GB card, 1.7B on an
+# 8 GB card).
 SEED_FOOTPRINTS_MB: dict[str, int] = {
     "kokoro": 1200,
-    "qwen": 6144,
-    "qwen.1.7b": 7168,
+    "qwen": 3072,
+    "qwen.1.7b": 6144,
     "coqui": 3584,
     "asr": 400,
     "spk": 200,
@@ -1943,17 +1949,28 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
 # A wide Qwen batch (large tokenBudget) has a higher true decode peak than the
 # default-config seed above.
 _QWEN_WIDE_TOKEN_BUDGET = 4800
-_QWEN_WIDE_PEAK_MB = 7168
+_QWEN_WIDE_PEAK_MB = 6144
+
+# FootprintTable's learned-estimate tuning: a bounded ring of recent per-op
+# observations per key, and the percentile used to summarize it. p95 (not
+# max) so a single outlier spike ages out of the window instead of pinning
+# the reservation forever; MIN_SAMPLES gates the learned estimate behind
+# enough data to trust over the seed.
+_FOOTPRINT_WINDOW = 64
+_FOOTPRINT_MIN_SAMPLES = 5
+_FOOTPRINT_PERCENTILE = 95
 
 
 class FootprintTable:
     """Per-(engine, model, config) peak-under-load VRAM estimate that
-    capacity-aware admission reserves. `peak_mb` returns `max(seed, learned)`
-    for the key; `record` ratchets the learned estimate up only — a lower
-    on-box observation never lowers what's reserved next time."""
+    capacity-aware admission reserves. `peak_mb` returns the learned p95 of
+    the last `_FOOTPRINT_WINDOW` real per-op observations once at least
+    `_FOOTPRINT_MIN_SAMPLES` have been recorded; below that it falls back to
+    the seed (a cold-start prior only, not a floor — the learned estimate
+    can go below it)."""
 
     def __init__(self) -> None:
-        self._learned: dict[str, int] = {}
+        self._obs: dict[str, deque[int]] = {}
 
     @staticmethod
     def _key(engine: str, model: Optional[str], cfg: Optional[dict]) -> str:
@@ -1971,15 +1988,35 @@ class FootprintTable:
             seed = max(seed, _QWEN_WIDE_PEAK_MB)
         return seed
 
+    def _learned_mb(self, key: str) -> int:
+        dq = self._obs.get(key)
+        if dq is None or len(dq) < _FOOTPRINT_MIN_SAMPLES:
+            return 0
+        s = sorted(dq)
+        idx = min(len(s) - 1, int(math.ceil(_FOOTPRINT_PERCENTILE / 100 * len(s))) - 1)
+        return s[idx]
+
     def peak_mb(self, engine: str, model: Optional[str], cfg: Optional[dict] = None) -> int:
         key = self._key(engine, model, cfg)
-        seed = self._seed_mb(key, engine, cfg)
-        learned = self._learned.get(key, 0)
-        return max(seed, learned)
+        learned = self._learned_mb(key)
+        if learned > 0:
+            return learned
+        return self._seed_mb(key, engine, cfg)
 
     def record(self, engine: str, model: Optional[str], cfg: Optional[dict], observed_mb: int) -> None:
+        if observed_mb <= 0:
+            return
         key = self._key(engine, model, cfg)
-        self._learned[key] = max(self._learned.get(key, 0), observed_mb)
+        self._obs.setdefault(key, deque(maxlen=_FOOTPRINT_WINDOW)).append(int(observed_mb))
+
+
+def _device_reserve_mb(total_mb: int, cap: int) -> int:
+    """The VRAM safety cushion held back on a device with `total_mb` VRAM,
+    given the operator-configured ceiling `cap` (GPU_RESERVE_MB). 5% of the
+    card, capped at `cap` — right-sized to the device instead of a flat
+    number that over-provisions a small card (fragmentation risk there is
+    real but small) and under-provisions a large one relative to its size."""
+    return min(round(0.05 * total_mb), cap)
 
 
 class ReservationLedger:
@@ -2010,26 +2047,32 @@ class ReservationLedger:
         with self._lock:
             self._by_device.get(device_key, {}).pop(token_id, None)
 
-    def _headroom(self, key: str, free_mb: int, total_mb: int, reserve: int) -> int:
+    def _headroom(self, key: str, free_mb: int, total_mb: int, reserve_cap: int) -> int:
         """Available headroom for `key` given its live free/total and the
-        reservations already held on it. Caller MUST hold `self._lock`."""
+        reservations already held on it. The safety cushion subtracted is
+        PER-DEVICE — `_device_reserve_mb(total_mb, reserve_cap)`, i.e. 5% of
+        this device's own VRAM capped at `reserve_cap` — not a flat number
+        applied to every candidate regardless of size. Caller MUST hold
+        `self._lock`."""
         reserved = sum(self._by_device.get(key, {}).values())
-        return min(free_mb, total_mb - reserved) - reserve
+        return min(free_mb, total_mb - reserved) - _device_reserve_mb(total_mb, reserve_cap)
 
     def try_hold(
-        self, candidates: list[tuple[str, int, int]], peak: int, reserve: int
+        self, candidates: list[tuple[str, int, int]], peak: int, reserve_cap: int
     ) -> Optional[tuple[str, int]]:
         """Atomically pick the roomiest candidate that fits `peak` and hold it.
-        `candidates` = [(device_key, freeMb, totalMb), ...]. Returns the token
-        or None if none fit. The fit-check AND the hold happen under a SINGLE
-        lock acquisition, so two concurrent admits can't both pass the check
-        and double-book the same VRAM — the TOCTOU the per-op reservation
-        exists to prevent (decide+hold atomic, per the design)."""
+        `candidates` = [(device_key, freeMb, totalMb), ...]. `reserve_cap` is
+        the GPU_RESERVE_MB ceiling — each candidate's actual reserve is
+        computed per-device from its own totalMb (see `_headroom`). Returns
+        the token or None if none fit. The fit-check AND the hold happen
+        under a SINGLE lock acquisition, so two concurrent admits can't both
+        pass the check and double-book the same VRAM — the TOCTOU the per-op
+        reservation exists to prevent (decide+hold atomic, per the design)."""
         with self._lock:
             best_key: Optional[str] = None
             best_headroom = -1
             for key, free_mb, total_mb in candidates:
-                headroom = self._headroom(key, free_mb, total_mb, reserve)
+                headroom = self._headroom(key, free_mb, total_mb, reserve_cap)
                 if headroom >= peak and headroom > best_headroom:
                     best_key, best_headroom = key, headroom
             if best_key is None:
@@ -2040,17 +2083,18 @@ class ReservationLedger:
             return (best_key, token_id)
 
     def best_fit(
-        self, candidates: list[tuple[str, int, int]], peak: int, reserve: int
+        self, candidates: list[tuple[str, int, int]], peak: int, reserve_cap: int
     ) -> Optional[str]:
         """Read-only twin of `try_hold`: the device_key that would win, or None,
         WITHOUT holding. For the pure `admit()` decision (e.g. /load placement) —
         advisory only; the binding decision is `reservation()`'s atomic
-        `try_hold`."""
+        `try_hold`. `reserve_cap` mirrors `try_hold`'s (per-device reserve,
+        see `_headroom`)."""
         with self._lock:
             best_key: Optional[str] = None
             best_headroom = -1
             for key, free_mb, total_mb in candidates:
-                headroom = self._headroom(key, free_mb, total_mb, reserve)
+                headroom = self._headroom(key, free_mb, total_mb, reserve_cap)
                 if headroom >= peak and headroom > best_headroom:
                     best_key, best_headroom = key, headroom
             return best_key
@@ -2074,7 +2118,10 @@ class PlacementController:
         self.probe = probe
         self.footprints = footprints if footprints is not None else FootprintTable()
         self.ledger = ledger if ledger is not None else ReservationLedger()
-        self.reserve_mb = reserve_mb if reserve_mb is not None else (lambda: int(os.environ.get("GPU_RESERVE_MB", 768)))
+        # `reserve_mb` is the GPU_RESERVE_MB CAP/ceiling, not a flat reserve —
+        # the actual per-device cushion is `_device_reserve_mb(total, cap)`,
+        # min(5% of that device's own VRAM, this cap). See `_device_reserve_mb`.
+        self.reserve_mb = reserve_mb if reserve_mb is not None else (lambda: int(os.environ.get("GPU_RESERVE_MB", 500)))
         self.idle_evict = idle_evict if idle_evict is not None else (lambda device_key: False)
         self.is_resident = is_resident if is_resident is not None else (lambda engine: None)
 
@@ -2105,14 +2152,16 @@ class PlacementController:
         evict is likeliest to cross the threshold. None if the probe shows no
         GPU. (Diverges deliberately from an earlier 'largest shortfall' note:
         max-headroom is the recoverable device, not the least-recoverable one.)"""
-        reserve = self.reserve_mb()
+        reserve_cap = self.reserve_mb()
         best_key: Optional[str] = None
         best_headroom: Optional[int] = None
         for d in devices:
             if d["kind"] == "cpu":
                 continue
             key = self._device_key(d)
-            headroom = min(d["freeMb"], d["totalMb"] - self.ledger.reserved_mb(key)) - reserve
+            headroom = min(d["freeMb"], d["totalMb"] - self.ledger.reserved_mb(key)) - _device_reserve_mb(
+                d["totalMb"], reserve_cap
+            )
             if best_headroom is None or headroom > best_headroom:
                 best_key, best_headroom = key, headroom
         return best_key
@@ -2140,11 +2189,11 @@ class PlacementController:
         peak = self.footprints.peak_mb(engine, model, cfg)
         resident = self.is_resident(engine)
         constraint = resident if resident is not None else pinned
-        reserve = self.reserve_mb()
+        reserve_cap = self.reserve_mb()
         devices = self.probe()
         candidates = self._gpu_candidates(devices, constraint)
 
-        key = self.ledger.best_fit(candidates, peak, reserve)
+        key = self.ledger.best_fit(candidates, peak, reserve_cap)
         if key is not None:
             return {"device": key}
         if cpu_capable and not heavy:
@@ -2154,7 +2203,7 @@ class PlacementController:
         if worst is not None and self.idle_evict(worst):
             devices = self.probe()
             candidates = self._gpu_candidates(devices, constraint)
-            key = self.ledger.best_fit(candidates, peak, reserve)
+            key = self.ledger.best_fit(candidates, peak, reserve_cap)
             if key is not None:
                 return {"device": key}
             worst = self._worst_device_key(devices)
@@ -2181,6 +2230,23 @@ class PlacementController:
         except Exception:
             return 0
 
+    @staticmethod
+    def _reset_peak_mb(device_key: Optional[str]) -> None:
+        """Resets CUDA's peak-allocated counter for `device_key` right before
+        an op starts, so the paired `_observed_mb` read at release reflects
+        THIS op's peak rather than the process-lifetime high-water mark.
+        Guarded like `_observed_mb`: no-op when torch/CUDA isn't available or
+        the device isn't a CUDA one."""
+        if not device_key or not device_key.startswith(("cuda:", "rocm:")):
+            return
+        try:
+            import torch  # type: ignore
+
+            index = int(device_key.split(":", 1)[1])
+            torch.cuda.reset_peak_memory_stats(index)
+        except Exception:
+            pass
+
     @contextmanager
     def reservation(
         self,
@@ -2202,20 +2268,25 @@ class PlacementController:
         peak = self.footprints.peak_mb(engine, model, cfg)
         resident = self.is_resident(engine)
         constraint = resident if resident is not None else pinned
-        reserve = self.reserve_mb()
+        reserve_cap = self.reserve_mb()
         devices = self.probe()
         candidates = self._gpu_candidates(devices, constraint)
 
-        held = self.ledger.try_hold(candidates, peak, reserve)
+        held = self.ledger.try_hold(candidates, peak, reserve_cap)
         if held is None and not (cpu_capable and not heavy):
             worst = self._worst_device_key(devices)
             if worst is not None and self.idle_evict(worst):
                 devices = self.probe()
                 candidates = self._gpu_candidates(devices, constraint)
-                held = self.ledger.try_hold(candidates, peak, reserve)
+                held = self.ledger.try_hold(candidates, peak, reserve_cap)
 
         if held is not None:
             admission: dict = {"device": held[0]}
+            # Device-wide reset, not scoped to this op — a concurrent op on the
+            # same device can truncate the measurement window. Acceptable: it
+            # only ever UNDER-estimates the peak (never over-reserves), and the
+            # reserve cushion + p95 windowing absorb the noise.
+            self._reset_peak_mb(held[0])
         elif cpu_capable and not heavy:
             admission = {"device": "cpu"}
         else:
@@ -2320,7 +2391,7 @@ _placement = PlacementController(
     probe=probe_capacity,
     footprints=FootprintTable(),
     ledger=ReservationLedger(),
-    reserve_mb=lambda: int(os.environ.get("GPU_RESERVE_MB", 768)),
+    reserve_mb=lambda: int(os.environ.get("GPU_RESERVE_MB", 500)),
     idle_evict=_idle_evict,
     is_resident=_is_resident,
 )

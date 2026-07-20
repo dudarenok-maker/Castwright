@@ -27,8 +27,13 @@ export class GpuBusyError extends Error {
 const HEAVY_TTS_DECODE_FLOOR_MB = 6144;
 
 function reserveMb(): number {
+  // Flat cap for this COARSE load-path check (subtracted from the roomiest
+  // device's free VRAM). The sidecar admission path applies the same
+  // GPU_RESERVE_MB as a PER-DEVICE cap — min(5% of the card, this value) — but
+  // here we only have the roomiest free number, so the flat cap is the right
+  // conservative floor. Fallback matches the sidecar default (500).
   const n = Number(process.env.GPU_RESERVE_MB);
-  return Number.isFinite(n) && n > 0 ? n : 768;
+  return Number.isFinite(n) && n > 0 ? n : 500;
 }
 
 /** Run a sidecar model load safely w.r.t. VRAM.
