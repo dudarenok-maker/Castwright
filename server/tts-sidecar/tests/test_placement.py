@@ -26,13 +26,34 @@ def dev(kind="cuda", index=0, total=8192, free=8000):
     return {"kind": kind, "index": index, "label": "g", "totalMb": total, "freeMb": free}
 
 
-def make(devices, peak, reserve=768, idle_evict=None, resident=None):
+# --- _device_reserve_mb -----------------------------------------------------
+#
+# The per-device VRAM safety cushion: min(5% of that device's own VRAM, the
+# GPU_RESERVE_MB cap) — right-sizes the reserve to the card instead of
+# subtracting one flat number everywhere (over-provisions a small card,
+# under-provisions a large one relative to its size).
+
+
+@pytest.mark.parametrize(
+    "total_mb,cap,expected",
+    [
+        (8188, 500, 409),  # 5% of an ~8 GB card, under the cap
+        (6144, 500, 307),  # 5% of a 6 GB card, under the cap
+        (16302, 500, 500),  # 5% of a 16 GB card (815) exceeds the cap -> capped
+        (24576, 500, 500),  # 5% of a 24 GB card (1229) exceeds the cap -> capped
+    ],
+)
+def test_device_reserve_mb(total_mb, cap, expected):
+    assert main._device_reserve_mb(total_mb, cap) == expected
+
+
+def make(devices, peak, reserve_cap=768, idle_evict=None, resident=None):
     fp = type("F", (), {"peak_mb": lambda *_: peak, "record": lambda *_: None})()
     return main.PlacementController(
         probe=lambda: devices,
         footprints=fp,
         ledger=main.ReservationLedger(),
-        reserve_mb=lambda: reserve,
+        reserve_mb=lambda: reserve_cap,
         idle_evict=idle_evict or (lambda dk: False),
         is_resident=resident or (lambda e: None),
     )
@@ -43,7 +64,9 @@ def test_reserves_peak_so_second_op_cannot_double_book():
     pc = make(devices, peak=5600)
     with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as a1:
         assert a1["device"] == "cuda:0"
-        # second op: 8192 - 5600(reserved) - 768 = -176 < 5600 -> no capacity
+        # second op: the per-device reserve on an 8192 MB card is
+        # min(round(0.05*8192), 768) = 410, so headroom = min(8000, 8192 -
+        # 5600(reserved)) - 410 = 2592 - 410 = 2182 < 5600 -> no capacity
         a2 = pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
         assert "noCapacity" in a2 and a2["noCapacity"]["neededMb"] == 5600
     # after the first releases, it fits again
@@ -110,9 +133,10 @@ def test_try_hold_is_atomic_under_concurrency():
         t.join()
 
     assert len(granted) == 1, f"expected exactly one atomic grant, got {len(granted)}"
-    # The no-OOM invariant: Σ held ≤ total − reserve.
+    # The no-OOM invariant: Σ held ≤ total − per-device reserve (min(5% of
+    # this 8192 MB card, the 768 cap) = 410).
     assert ledger.reserved_mb("cuda:0") == 5600
-    assert ledger.reserved_mb("cuda:0") <= 8192 - 768
+    assert ledger.reserved_mb("cuda:0") <= 8192 - main._device_reserve_mb(8192, 768)
 
 
 def test_resident_device_still_fit_checked():

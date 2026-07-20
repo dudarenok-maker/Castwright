@@ -656,10 +656,10 @@ export const KNOBS: ConfigKnob[] = [
     key: 'gpu.reserveMb',
     env: 'GPU_RESERVE_MB',
     group: 'gpu-lifecycle',
-    label: 'GPU VRAM reserve (MB)',
-    help: 'VRAM safety cushion (MB) held back from every capacity admission. Read by the sidecar (its primary consumer) at process start, so a change needs a sidecar restart to fully take effect.',
+    label: 'GPU VRAM reserve cap (MB)',
+    help: 'Ceiling on the VRAM safety cushion held back from every capacity admission. The actual per-device cushion is min(5% of that device\'s own VRAM, this cap) — right-sized to the card rather than a flat subtraction. Read by the sidecar (its primary consumer) at process start, so a change needs a sidecar restart to fully take effect.',
     type: 'integer', min: 0,
-    default: 768,
+    default: 500,
     apply: 'restart-sidecar', risk: 'high',
   },
   {

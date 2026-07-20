@@ -139,15 +139,20 @@ floated around as `autoPreloadKokoro`: the real var is `PRELOAD_KOKORO`.)
 
 **Peak-under-load footprints (capacity-aware admission).** The resident
 sizes in the table above are steady-state; admission needs the true DECODE
-PEAK, which is higher (e.g. Qwen's ~4 GB resident weight size peaks at
-~5.6 GB during decode). `FootprintTable` in `main.py` seeds these peaks —
-the anchors below are the machine-parseable ground truth a parity test
-(`test_footprints.py`) checks against `SEED_FOOTPRINTS_MB`; an on-box
-observation can only ratchet a seed up, never down.
+PEAK, which is higher than the resident weight size. `FootprintTable` in
+`main.py` seeds these peaks as COLD-START PRIORS — the anchors below are the
+machine-parseable ground truth a parity test (`test_footprints.py`) checks
+against `SEED_FOOTPRINTS_MB`. They're measured real per-op decode peaks
+(0.6B ~1952 MB, 1.7B mint ~5654 MB) rounded up with margin, refined once the
+sidecar has real usage: once an engine/tier has accumulated >= 5 per-op
+observations (each op's own CUDA peak, reset right before the op starts —
+not the process-lifetime high-water mark), the seed is superseded by the
+windowed p95 of the last 64 observations, which tracks real usage up OR
+down instead of ratcheting to a single worst-case spike forever.
 
 <!-- footprint:kokoro=1200 -->
-<!-- footprint:qwen=6144 -->
-<!-- footprint:qwen.1.7b=7168 -->
+<!-- footprint:qwen=3072 -->
+<!-- footprint:qwen.1.7b=6144 -->
 <!-- footprint:coqui=3584 -->
 <!-- footprint:asr=400 -->
 <!-- footprint:spk=200 -->

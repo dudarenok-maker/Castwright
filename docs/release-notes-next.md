@@ -165,6 +165,26 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
   op on a tight card yields a bounded wait and an actionable no-capacity
   signal instead of an instant busy error. Still shipped OFF while validated
   on real hardware. Refs #1720.
+- **Capacity-aware footprint estimation now self-corrects instead of ratcheting
+  to a one-off spike, and the VRAM reserve is per-device.** `_observed_mb` read
+  `torch.cuda.max_memory_allocated` with no `reset_peak_memory_stats`, so every
+  per-op VRAM sample was the device's PROCESS-LIFETIME high-water mark — one
+  ~9 GB voice-design co-residency spike poisoned every later reading — and
+  `FootprintTable.record` only ever ratcheted that inflated number up, so a
+  1.7B Qwen op was refused with `503 noCapacity` on an 8 GB card it actually
+  fit, and being refused, could never run to self-correct. Fixed: (1)
+  `PlacementController._reset_peak_mb` resets CUDA's peak counter right before
+  each op starts, so `_observed_mb` reflects that op's own peak; (2)
+  `FootprintTable` now reserves the **windowed p95** of the last 64 real
+  per-op observations (once ≥5 samples exist) instead of an up-only max, so
+  the estimate tracks real usage up OR down; (3) the seeds are re-grounded on
+  measured real peaks (`qwen` 6144→3072, `qwen.1.7b` 7168→6144 — cold-start
+  priors only, not floors); (4) the VRAM safety cushion (`GPU_RESERVE_MB`) is
+  now sized **per-device** — `min(5% of that card's VRAM, GPU_RESERVE_MB)` —
+  with the default cap lowered 768→500. On-box: measured real per-op peaks
+  (0.6B synth ~1952 MB, 1.7B mint ~5654 MB) now admit comfortably on an 8 GB
+  card, where the stale high-water estimate previously refused them. Still
+  behind the default-OFF `SEG_CAPACITY_ADMISSION` flag. (#1737)
 
 ---
 

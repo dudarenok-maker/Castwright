@@ -164,7 +164,7 @@ describe('config registry', () => {
     expect(k?.env).toBe('GPU_RESERVE_MB');
     expect(k?.group).toBe('gpu-lifecycle');
     expect(k?.type).toBe('integer');
-    expect(k?.default).toBe(768);
+    expect(k?.default).toBe(500);
     // restart-sidecar, not live: the sidecar (its primary consumer) reads
     // GPU_RESERVE_MB from the environment at process start.
     expect(k?.apply).toBe('restart-sidecar');

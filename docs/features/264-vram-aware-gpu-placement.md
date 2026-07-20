@@ -224,6 +224,27 @@ the flag is OFF) should close so admission covers everything the budget did:
 - **`_observed_mb` reads `max_memory_allocated` without `reset_peak_memory_stats`**
   → the learned footprint drifts to the device-wide high-water (over-conservative,
   never an OOM).
+
+  > **CLOSED (#1737).** Fixed on branch `fix/sidecar-footprint-percentile`:
+  > `PlacementController._reset_peak_mb` calls `torch.cuda.reset_peak_memory_stats`
+  > right before each op starts, so the paired `_observed_mb` read at release
+  > reflects that op's own peak instead of the process-lifetime high-water mark
+  > (previously a one-off ~9 GB voice-design co-residency spike poisoned every
+  > later reading). `FootprintTable` also no longer ratchets up-only: it now
+  > reserves the **windowed p95** of the last 64 real per-op observations (once
+  > ≥5 samples exist), so a stale outlier ages out of the window instead of
+  > pinning the reservation forever, and the seed is a cold-start prior only
+  > (`qwen` 6144→3072, `qwen.1.7b` 7168→6144, re-grounded on measured real
+  > decode peaks: 0.6B synth ~1952 MB, 1.7B mint ~5654 MB). The VRAM reserve
+  > cushion also moved from a flat `GPU_RESERVE_MB` subtraction to a per-device
+  > one — `min(5% of that card's own VRAM, GPU_RESERVE_MB)`, cap lowered
+  > 768→500. On-box result: the 1.7B Qwen op that the stale high-water estimate
+  > previously refused with `503 noCapacity` on an 8 GB card now admits and
+  > runs, using the measured real peaks above. Regression coverage:
+  > `test_footprints.py` (p95 windowing, seed-as-prior-not-floor, non-positive
+  > observations ignored), `test_placement.py`, `test_design_mint_admission.py`.
+  > The multi-op on-box acceptance walkthrough above is still owed before
+  > `SEG_CAPACITY_ADMISSION` is defaulted ON.
 - **`persona-gpu-plan.ts`'s `unloadResidentSidecar` + `GpuBusyForPersonaError`
   are now dead code** (the reverse-evict was removed); deletion candidates.
 - **`engine-vram-cost.ts` is provably dead** (its registry weights are deleted) —

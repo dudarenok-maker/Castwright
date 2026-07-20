@@ -3,7 +3,7 @@
 plan). Mirrors test_load_admission.py's fixture shape and the same
 `SEG_CAPACITY_ADMISSION` flag envelope: flag-OFF never probes and calls the
 engine method with no `device` arg (today's behaviour byte-for-byte);
-flag-ON reserves the `qwen.1.7b` footprint (7168 MB — both design and mint
+flag-ON reserves the `qwen.1.7b` footprint (6144 MB — both design and mint
 run on the 1.7B model), steers the admitted device into the engine call, and
 a no-fit probe returns 503 `{noCapacity, neededMb, deviceKey}` before the
 engine is ever asked to design/mint."""
@@ -123,9 +123,9 @@ def test_design_flag_on_favours_roomier_device(monkeypatch, design_client):
     assert args[-1] == "cuda:1"
 
 
-def test_design_nocapacity_returns_503_needed_7168(monkeypatch, design_client):
+def test_design_nocapacity_returns_503_needed_6144(monkeypatch, design_client):
     """Flag ON + a probe that can't fit the 1.7B footprint -> 503 noCapacity
-    with neededMb == 7168 (proves the qwen.1.7b footprint was reserved), and
+    with neededMb == 6144 (proves the qwen.1.7b footprint was reserved), and
     design_voice is never called."""
     monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
     monkeypatch.setattr(
@@ -139,7 +139,7 @@ def test_design_nocapacity_returns_503_needed_7168(monkeypatch, design_client):
     assert r.status_code == 503
     body = r.json()
     assert body["noCapacity"] is True
-    assert body["neededMb"] == 7168
+    assert body["neededMb"] == 6144
     assert body["deviceKey"] == "cuda:0"
     fake = design_client.fake_qwen
     assert fake.design_calls == []
@@ -187,7 +187,7 @@ def test_mint_flag_on_favours_roomier_device(monkeypatch, design_client):
     assert args[-1] == "cuda:1"
 
 
-def test_mint_nocapacity_returns_503_needed_7168(monkeypatch, design_client):
+def test_mint_nocapacity_returns_503_needed_6144(monkeypatch, design_client):
     monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
     monkeypatch.setattr(
         main._placement,
@@ -200,7 +200,7 @@ def test_mint_nocapacity_returns_503_needed_7168(monkeypatch, design_client):
     assert r.status_code == 503
     body = r.json()
     assert body["noCapacity"] is True
-    assert body["neededMb"] == 7168
+    assert body["neededMb"] == 6144
     assert body["deviceKey"] == "cuda:0"
     fake = design_client.fake_qwen
     assert fake.mint_calls == []
