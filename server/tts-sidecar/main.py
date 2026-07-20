@@ -1941,6 +1941,14 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
     "kokoro": 1200,
     "qwen": 3072,
     "qwen.1.7b": 6144,
+    # The two 1.7B design-family ops (VoiceDesign `design_voice` and the
+    # base+base co-load `mint_variant`) are far heavier than the plain 1.7B
+    # synth hot path (~3915 MB) and vastly rarer, so they get their OWN keys
+    # rather than being drowned in the synth-dominated p95 window (#1738).
+    # Cold-start priors only — each learns its own windowed p95 from real ops
+    # (measured mint ~5654 MB, so 6144 admits on an 8 GB card and learns down).
+    "qwen.1.7b.mint": 6144,
+    "qwen.1.7b.design": 6144,
     "coqui": 3584,
     "asr": 400,
     "spk": 200,
@@ -1977,6 +1985,14 @@ class FootprintTable:
         model_str = (model or "").lower()
         cfg = cfg or {}
         if engine == "qwen" and "1.7b" in model_str:
+            # The design-family routes tag their reservation cfg with `op` so a
+            # rare heavy design/mint doesn't share the frequent synth's window
+            # and get its (under-)reservation (#1738). Plain synth passes no op.
+            op = cfg.get("op")
+            if op == "mint":
+                return "qwen.1.7b.mint"
+            if op == "design":
+                return "qwen.1.7b.design"
             return "qwen.1.7b"
         return engine
 
@@ -6696,7 +6712,7 @@ async def qwen_design_voice(req: Request) -> Response:
         # byte-for-byte unchanged (no device arg).
         if _capacity_admission_enabled():
             with _placement.reservation(
-                "qwen", "1.7b", {},
+                "qwen", "1.7b", {"op": "design"},
                 cpu_capable=False, heavy=True,
                 pinned=_engine_env_pin("qwen"),
             ) as adm:
@@ -6808,12 +6824,14 @@ async def qwen_mint_variant(req: Request) -> Response:
     _inflight_synth += 1
     try:
         # Capacity-aware placement (task 3, vram-aware-placement plan): mirrors
-        # /qwen/design-voice above — mint also runs on the 1.7B-Base, so it
-        # reserves the same `qwen.1.7b` footprint. Flag-OFF leaves the call
-        # byte-for-byte unchanged (no device arg).
+        # /qwen/design-voice above. Mint co-loads 0.6B-Base + 1.7B-Base (~5654 MB
+        # measured), heavier than the plain 1.7B synth (~3915 MB) and far rarer,
+        # so it reserves its OWN `qwen.1.7b.mint` footprint rather than sharing —
+        # and being drowned in — the synth-dominated window (#1738). Flag-OFF
+        # leaves the call byte-for-byte unchanged (no device arg).
         if _capacity_admission_enabled():
             with _placement.reservation(
-                "qwen", "1.7b", {},
+                "qwen", "1.7b", {"op": "mint"},
                 cpu_capable=False, heavy=True,
                 pinned=_engine_env_pin("qwen"),
             ) as adm:

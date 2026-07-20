@@ -185,6 +185,17 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
   (0.6B synth ~1952 MB, 1.7B mint ~5654 MB) now admit comfortably on an 8 GB
   card, where the stale high-water estimate previously refused them. Still
   behind the default-OFF `SEG_CAPACITY_ADMISSION` flag. (#1737)
+- **The rare, heavy 1.7B voice-design and emotion-mint ops now learn their own
+  VRAM footprint instead of inheriting the frequent synth's.** Voice design and
+  variant minting are far heavier than a plain 1.7B synth (~5654 MB measured vs
+  ~3915 MB) but happen thousands of times less often, so both were drowned in
+  the synth-dominated `qwen.1.7b` p95 window and reserved a synth-sized ~3900 MB
+  — under-reserving a real mint by ~1.7 GB and risking a co-resident op being
+  admitted into space the mint actually occupies. Each design-family op now
+  carries its own `qwen.1.7b.design` / `qwen.1.7b.mint` footprint key (tagged via
+  an `op` marker on the reservation) and learns its own windowed p95; the
+  cold-start seeds (6144 MB) still fit an 8 GB card's admission headroom. Still
+  behind the default-OFF `SEG_CAPACITY_ADMISSION` flag. (#1738)
 
 ---
 

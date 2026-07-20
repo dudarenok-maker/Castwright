@@ -150,9 +150,17 @@ not the process-lifetime high-water mark), the seed is superseded by the
 windowed p95 of the last 64 observations, which tracks real usage up OR
 down instead of ratcheting to a single worst-case spike forever.
 
+The two rare, heavy 1.7B **design-family** ops carry their own keys —
+`qwen.1.7b.mint` (the base+base co-load behind `/qwen/mint-variant`) and
+`qwen.1.7b.design` (`/qwen/design-voice`'s VoiceDesign load) — so they learn
+their own p95 instead of being diluted by the far-more-frequent plain 1.7B
+synth (`qwen.1.7b`, ~3915 MB) and getting its under-sized reservation (#1738).
+
 <!-- footprint:kokoro=1200 -->
 <!-- footprint:qwen=3072 -->
 <!-- footprint:qwen.1.7b=6144 -->
+<!-- footprint:qwen.1.7b.mint=6144 -->
+<!-- footprint:qwen.1.7b.design=6144 -->
 <!-- footprint:coqui=3584 -->
 <!-- footprint:asr=400 -->
 <!-- footprint:spk=200 -->

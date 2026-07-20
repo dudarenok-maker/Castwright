@@ -74,6 +74,44 @@ def test_nonpositive_observation_ignored():
     assert t.peak_mb("coqui", None, {}) == main.SEED_FOOTPRINTS_MB["coqui"]
 
 
+def test_design_family_keys_separate_from_synth():
+    # #1738: the rare heavy design-family ops (mint / design) must NOT share the
+    # frequent plain-synth 1.7B window. `_key` splits them by the `op` cfg tag;
+    # a plain synth (no `op`) stays on the shared `qwen.1.7b` key.
+    assert main.FootprintTable._key("qwen", "qwen3-tts-1.7b", {}) == "qwen.1.7b"
+    assert main.FootprintTable._key("qwen", "1.7b", {"op": "mint"}) == "qwen.1.7b.mint"
+    assert main.FootprintTable._key("qwen", "1.7b", {"op": "design"}) == "qwen.1.7b.design"
+    # An unknown op falls back to the shared synth key rather than inventing one.
+    assert main.FootprintTable._key("qwen", "1.7b", {"op": "bogus"}) == "qwen.1.7b"
+
+
+def test_design_family_windows_are_independent():
+    # #1738 core: a flood of light synth observations must NOT pull down the
+    # separately-learned mint reservation. Before the split both fed one window
+    # and the mint inherited the ~3900 synth p95 (under-reserving its ~5654 real
+    # peak); after the split each key learns its own.
+    t = main.FootprintTable()
+    for _ in range(main._FOOTPRINT_MIN_SAMPLES + 20):
+        t.record("qwen", "qwen3-tts-1.7b", {}, 3900)  # frequent light synth
+    for _ in range(main._FOOTPRINT_MIN_SAMPLES):
+        t.record("qwen", "1.7b", {"op": "mint"}, 5654)  # rare heavy mint
+    assert t.peak_mb("qwen", "qwen3-tts-1.7b", {}) == 3900
+    assert t.peak_mb("qwen", "1.7b", {"op": "mint"}) == 5654  # not dragged to 3900
+    # Design has seen nothing yet: still its own cold-start seed, untouched by
+    # either synth or mint traffic.
+    assert t.peak_mb("qwen", "1.7b", {"op": "design"}) == main.SEED_FOOTPRINTS_MB["qwen.1.7b.design"]
+
+
+def test_design_family_cold_start_admits_on_8gb():
+    # The mint/design seeds are cold-start priors that must fit an 8 GB card's
+    # admission headroom (free ~7068 MB minus the ~409 MB 5%-reserve = ~6659),
+    # so a first-ever mint on the 8 GB box isn't spuriously refused before its
+    # window warms. Guards against a future seed bump silently breaking that.
+    headroom_8gb = 7068 - main._device_reserve_mb(8188, 500)
+    assert main.SEED_FOOTPRINTS_MB["qwen.1.7b.mint"] < headroom_8gb
+    assert main.SEED_FOOTPRINTS_MB["qwen.1.7b.design"] < headroom_8gb
+
+
 def test_seed_parity_with_local_llm_doc():
     # REAL parity: parse the numbers out of the maintained doc and compare.
     doc = REPO_ROOT.joinpath("docs/local-llm.md").read_text(encoding="utf8")
