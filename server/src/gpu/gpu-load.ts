@@ -46,7 +46,9 @@ function reserveMb(): number {
     - Tight device, analysis idle: evict the resident Ollama analyzer first, so a
       heavy TTS model can't land on top of it and OOM an 8 GB card (the #1155/#1388
       co-residence class). This is the proactive evict the old `withGpuLoad` did on
-      small cards; without it, a default (flag-OFF) 8 GB render OOMs.
+      small cards; without it, an 8 GB render under the `SEG_CAPACITY_ADMISSION=0`
+      opt-out OOMs (this coarse path only runs under that opt-out now — admission
+      is ON by default since #1720).
     - Tight device, analysis in flight: refuse (GpuBusyError → 409) — we can't
       evict a live analyzer, so the caller retries once analysis finishes.
 

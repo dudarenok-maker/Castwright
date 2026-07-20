@@ -132,9 +132,14 @@ export async function ensureSidecarEngineReady(
   const deadline = Date.now() + timeoutMs;
   let lastReason = 'unknown';
 
-  /* withGpuLoad still wraps the wait so a live analysis on a constrained card
-     surfaces as a GpuBusyError → user-facing "Generation paused" (unchanged).
-     The poll itself is a cheap GET — it loads nothing. */
+  /* withGpuLoad wraps the wait. Under the `SEG_CAPACITY_ADMISSION=0` opt-out it
+     runs the coarse path, so a live analysis on a constrained card surfaces here
+     as a GpuBusyError → user-facing "Generation paused". With admission ON (the
+     default since #1720) withGpuLoad short-circuits to the callback — sidecar
+     admission is the single authority — so contention no longer surfaces at this
+     preload poll; it surfaces at synth time as a NoCapacityError (bounded poll →
+     evict-and-retry) instead. Either way the poll itself is a cheap GET — it
+     loads nothing. */
   await withGpuLoad(async () => {
     for (;;) {
       if (signal?.aborted) throw new DOMException('preload aborted', 'AbortError');
