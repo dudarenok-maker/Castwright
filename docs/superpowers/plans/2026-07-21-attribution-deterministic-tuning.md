@@ -26,7 +26,7 @@
 - `server/src/analyzer/attribution-eval/run-eval.ts` — Wave 1: `familyBreakdown` (new export) rewrites per-family scoring to `correct/attributed/drift`; `StageScore.byFamily` type change; `aggStage`/`aggregateFixture` (+ `StageAgg`/`FixtureAgg` types) for multi-run averaging.
 - `server/src/analyzer/attribution-eval/run-eval-cli.ts` — Wave 1: `runEval` gains `runs`; `main` parses `--runs`/`EVAL_RUNS`; `printScorecard` consumes the aggregate and prints mean±range.
 - `server/src/analyzer/attribution-eval/run-eval.test.ts` — Wave 1 unit tests: `familyBreakdown` (known-drift line), `aggStage` (missing-family case).
-- `server/src/analyzer/dialogue-structure/escalation.ts` — Wave 2: E-core fill-eligibility gate in the apply loop; E1 confident-neighbour context in `buildWindowText`; thread weak strength through the `hasTagName` guard (Wave 3 A2).
+- `server/src/analyzer/dialogue-structure/escalation.ts` — Wave 2 only: E-core fill-eligibility gate in the apply loop; E1 confident-neighbour context in `buildWindowText`. (Wave 3 A2 does NOT touch this file — see Task 6.)
 - `server/src/analyzer/dialogue-structure/escalation.test.ts` — Wave 2 unit tests: E-core (named answer protected, placeholder filled); E1 (confident neighbour labeled, low-confidence suppressed).
 - `server/src/analyzer/dialogue-structure/types.ts` — Wave 3 A1: `speaker.strength?: 'weak'`.
 - `server/src/analyzer/dialogue-structure/parser.ts` — Wave 3 A1: mark a beat-only quote-gap narration→tag reclassification as weak; stamp `strength: 'weak'` when anchoring it.
@@ -521,8 +521,12 @@ In `escalation.ts`, add the predicate near the top-level constants (after `SHORT
     placeholder line. `unanchored-narrator` is the sole flag class whose
     current answer is a non-committal placeholder; every other escalatable
     class (`unanchored-named:*`, `pronoun-keep-flag:*`, `alt-keep-flag:*`,
-    `alt-correct-flag:*`) already carries a named/structural answer that a
-    context-starved re-ask must never overwrite. */
+    `alt-correct-flag:*`, and Wave 3's `tag-weak-keep-flag:*`) already carries
+    a named/structural answer that a context-starved re-ask must never
+    overwrite. This predicate is deliberately NARROWER than "every flag class
+    that reaches escalation": `flag-only-floor` (sub-alignment-floor chapters)
+    and `lumped` lines are also skipped — consistent with the trust-the-first-
+    full-context-pass thesis; those chapters simply get no escalation fills. */
 function isFillEligible(reason: string): boolean {
   return reason === 'unanchored-narrator';
 }
@@ -551,7 +555,9 @@ Then, in the apply loop, gate on the flag's reason. Replace the block from `cons
 - [ ] **Step 4: Run the full escalation suite to verify green**
 
 Run: `cd server && npx vitest run src/analyzer/dialogue-structure/escalation.test.ts`
-Expected: PASS — the new E-core test passes; every pre-existing test (a)–(f), (c), (d) still green (their flags are `unanchored-narrator`, still fill-eligible; the adversarial tag-name line is blocked by both the new gate and the surviving `hasTagName` guard).
+Expected: PASS — the new E-core test passes; every pre-existing test (a)–(f), (c), (d) still green (their flags are `unanchored-narrator`, still fill-eligible). Note the adversarial test (d) is now blocked by the fill-eligibility gate — its reason `synthetic-adversarial-flag` isn't `unanchored-narrator`, so it's skipped *before* the `hasTagName` guard is reached; the `hasTagName` guard stays as defence-in-depth but is no longer the deciding branch for (d).
+
+> **§6(a) ch45 guard:** this E-core test doubles as the spec §6(a) guard that "an escalation-helped line stays resolved" — the `unanchored-narrator` line (id 5) is still *filled* (not blocked), pinning that E-core protects named answers without killing the placeholder fills that help ch45. Existing test (c) also exercises the fill path. (The chapter-level ch45 ≥ baseline check is the on-box eval's job, per §6.)
 
 - [ ] **Step 5: Commit**
 
@@ -744,7 +750,7 @@ In `types.ts`, change the `speaker` field:
 
 - [ ] **Step 4: Mark beat-only quote-gap reclassifications, stamp weak on anchor**
 
-In `parser.ts`, rewrite the reclassification loop in `parseQuoteParagraph` (currently the `if (runs.length > 0) { ... }` block, lines 239-244) so a gap reclassified on a BEAT verb *only* (no speech verb) is tagged with a transient `weakTag` marker:
+In `parser.ts`, rewrite ONLY the reclassification loop in `parseQuoteParagraph` — the `if (runs.length > 0) { ... }` block at lines **239-244** — so a gap reclassified on a BEAT verb *only* (no speech verb) is tagged with a transient `weakTag` marker. **Leave the existing `anchorSpansFromTags(...)` call at line 245 in place — do not duplicate it** (the snippet below shows it commented, only to mark where it already sits):
 
 ```ts
   if (runs.length > 0) {
@@ -761,7 +767,7 @@ In `parser.ts`, rewrite the reclassification loop in `parseQuoteParagraph` (curr
       if (!hasSpeechVerb) (s as SpanEvidence & { weakTag?: boolean }).weakTag = true;
     }
   }
-  anchorSpansFromTags(spans, line, base, index);
+  // (existing line 245 — leave in place, do NOT re-add) anchorSpansFromTags(spans, line, base, index);
 ```
 
 Then in `anchorSpansFromTags`, have `applyTag` propagate that marker onto the anchored `tag-name` speaker (transient-property pattern already used for `pendingPronoun`):
@@ -799,11 +805,14 @@ git commit -m "feat(server): mark beat-only quote-gap tag-name evidence as weak"
 
 ## Task 6: Wave 3 A2 — weak-tag disagreement flags, not force-corrects
 
-Spec §5.3. A **weak** tag that disagrees with the model **keeps the model id and flags** (bucket `flagged`, mirroring `pronoun-keep-flag`/`alt-keep-flag`) — removing the ch44 `tag-correct` false-positive corruption where a beat-gap stamped the wrong speaker onto a correct model answer. Thread strength through `escalation.ts`'s `hasTagName` guard so the two enforcers agree. A weak tag the model **agrees** with still confirms (the correct-beat guard, spec §6).
+Spec §5.3. A **weak** tag that disagrees with the model **keeps the model id and flags** (bucket `flagged`, mirroring `pronoun-keep-flag`/`alt-keep-flag`) — removing the ch44 `tag-correct` false-positive corruption where a beat-gap stamped the wrong speaker onto a correct model answer. A weak tag the model **agrees** with still confirms.
+
+> **Accepted tradeoff (spec §7 "A1 true-positive tension").** Making a weak-tag *disagreement* keep-and-flag means: in the case where the beat tag was actually *right* and the model was *wrong*, the previously-applied auto-correction is now forfeited (the line keeps the wrong model id, flagged for review; E-core will not re-fill it, since its reason `tag-weak-keep-flag` is not `unanchored-narrator`). This is deliberate — the spec chose to stop trusting beat-gap tags over the full-context model. It is a real risk, backstopped only at the integration level by the §6 per-fixture gates (ch44 must still move toward `raw`; ch45/Coalfall must not regress below baseline). It is NOT unit-guarded — see the Step 1 note.
+
+> **Spec deviation (surfaced for approval).** Spec §5.3 A2 also says to "thread strength through `escalation.ts`'s `hasTagName` guard so a weak tag is overridable there too." That change is **deliberately omitted**: under E-core (Task 3) the fill-eligibility gate already blocks any `tag-weak-keep-flag` line from reaching that guard (its reason isn't `unanchored-narrator`), so relaxing `hasTagName` there is provably inert — dead code that could carry no fails-before/passes-after test, violating this plan's "every change ships a paired test" constraint. E-core is the stronger enforcer that already makes the two agree. If you want the belt-and-suspenders relaxation anyway (future-proofing against a wider `isFillEligible`), say so and it returns as a documented semantics-only refactor.
 
 **Files:**
 - Modify: `server/src/analyzer/dialogue-structure/cross-examine.ts` (`decideAnchoredSpeech` tag-name case; `CONFIDENCE`)
-- Modify: `server/src/analyzer/dialogue-structure/escalation.ts` (`hasTagName` → strong-only)
 - Test: `server/src/analyzer/dialogue-structure/cross-examine.test.ts`
 
 **Interfaces:**
@@ -812,7 +821,7 @@ Spec §5.3. A **weak** tag that disagrees with the model **keeps the model id an
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `cross-examine.test.ts` (mirror the file's existing helpers for building an `AlignmentResult`; if it constructs `AlignedSentence` fixtures inline, follow that shape — a speech span with `speaker: { characterId: 'anton', source: 'tag-name', strength: 'weak' }`):
+Add to `cross-examine.test.ts`. **First read the file's existing fixture builders** (they are `mkSentence`, `speechSpan`, `aligned(sentence, spans, lumped?)`, `run(...)`) and reuse them — `alignedWith(id, spans)` below is shorthand for `aligned(mkSentence(id), spans)`. NOTE: the existing `speechSpan()` helper's param type omits `strength`, so it cannot build the weak span — hand-build `weakSpeechSpan` as the raw literal shown (this is intentional, not a helper miss):
 
 ```ts
 describe('A2 — weak tag-name is contestable', () => {
@@ -847,7 +856,7 @@ describe('A2 — weak tag-name is contestable', () => {
 });
 ```
 
-> **Implementer note:** `alignedWith(modelId, spans)` is the file's existing pattern for a minimal `AlignedSentence` (`{ sentence: { id, chapterId, characterId: modelId, text }, spans, lumped: false }`). Reuse the existing builder in `cross-examine.test.ts`; do not invent a new one. If none exists, add a tiny local one in this describe block — do not change other tests.
+> **Implementer note:** define `alignedWith` at the top of this `describe` as `const alignedWith = (id: string, spans) => aligned(mkSentence(id), spans);` using the file's real builders (confirm their exact signatures when you open the file). Do not change other tests. The three cases genuinely fail-before/pass-after only for case 1 (the disagreement path); cases 2 and 3 are invariant guards that must be green both before and after — they pin that the change did NOT alter the agree/strong paths.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -884,29 +893,17 @@ Then rewrite the `case 'tag-name':` in `decideAnchoredSpeech`:
       return { characterId: x, confidence: CONFIDENCE.TAG_CORRECT, reason: `tag-correct:${x}`, bucket: 'corrected', flagged: false };
 ```
 
-- [ ] **Step 4: Thread strength through the escalation `hasTagName` guard**
+(No escalation.ts change — see the "Spec deviation" note at the top of this task for why the §5.3 `hasTagName` relaxation is omitted as provably-inert dead code.)
 
-In `escalation.ts`, make the never-override guard apply only to a STRONG tag-name (so a weak tag isn't treated as the immutable invariant). Change the `hasTagName` line inside the apply loop:
-
-```ts
-      const as = alignment.aligned[idx];
-      const hasStrongTagName = as.spans.some(
-        (s) => s.kind === 'speech' && s.speaker?.source === 'tag-name' && s.speaker.strength !== 'weak',
-      );
-      if (hasStrongTagName) continue; // never override a STRONG tag-name — the one hard invariant
-```
-
-> **Note:** under E-core (Task 3) the fill-eligibility gate already blocks escalation from overwriting a `tag-weak-keep-flag` line (it is not `unanchored-narrator`), so this change does not alter eval outcomes — it keeps the invariant semantically precise (a weak tag is not the hard tag-name invariant) and keeps the cross-examine and escalation enforcers in agreement, per spec §5.3.
-
-- [ ] **Step 5: Run cross-examine + escalation suites + typecheck**
+- [ ] **Step 4: Run cross-examine + escalation suites + typecheck**
 
 Run: `cd server && npx vitest run src/analyzer/dialogue-structure/cross-examine.test.ts src/analyzer/dialogue-structure/escalation.test.ts && npm run -s typecheck`
-Expected: PASS — A2 cases green; all pre-existing cross-examine + escalation tests green; typecheck clean.
+Expected: PASS — A2 cases green; all pre-existing cross-examine + escalation tests green (escalation is unchanged by this task); typecheck clean.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add server/src/analyzer/dialogue-structure/cross-examine.ts server/src/analyzer/dialogue-structure/escalation.ts server/src/analyzer/dialogue-structure/cross-examine.test.ts
+git add server/src/analyzer/dialogue-structure/cross-examine.ts server/src/analyzer/dialogue-structure/cross-examine.test.ts
 git commit -m "feat(server): weak tag-name disagreement flags instead of force-correcting"
 ```
 
@@ -934,7 +931,9 @@ If a gate fails, that is diagnostic signal (per spec §7), not a silent pass —
 
 ## Self-Review
 
-**Spec coverage:** §5.1 harness honesty → Task 1; §5.1 `--runs` averaging → Task 2; §5.2 E-core → Task 3; §5.2 E1 → Task 4; §5.2 E2 → **deferred by design, no task** (correct — spec defers it); §5.3 A1 → Task 5; §5.3 A2 → Task 6; §6 acceptance → Final acceptance section + the per-task unit guards (correct-beat guard in Task 6 step 1 case 2). §8 Target C → out of scope (spec §3). All covered.
+**Spec coverage:** §5.1 harness honesty → Task 1; §5.1 `--runs` averaging → Task 2; §5.2 E-core → Task 3; §5.2 E1 → Task 4; §5.2 E2 → **deferred by design, no task** (correct — spec defers it); §5.3 A1 → Task 5; §5.3 A2 → Task 6 (the §5.3 escalation-`hasTagName` sub-clause is deliberately omitted as inert under E-core — documented deviation surfaced for approval in Task 6). §8 Target C → out of scope (spec §3).
+
+**§6 acceptance mapping (honest):** §6 per-fixture eval gates → Final acceptance section. §6(a) "ch45's escalation-helped line stays resolved" → pinned at unit level by Task 3's E-core test (the `unanchored-narrator` placeholder is still *filled*, not blocked) + the on-box ch45 ≥ baseline gate. §6(b) "a currently-correct English quote-gap beat-tag correction stays resolved" → Task 5's A1 tests pin the weak/strong classification, and Task 6 case 2 pins the *agree* path stays confirmed; the harder *disagreement* direction (beat tag right, model wrong) is an **accepted §7 forfeit**, eval-gated not unit-guarded, explicitly documented in Task 6. This is the one place the plan trades unit coverage for the spec's chosen tradeoff — flagged, not hidden.
 
 **Placeholder scan:** every code step carries complete code; no TBD/TODO; test steps show real assertions; the one prose-only note (Task 6 `alignedWith`) points at an existing test helper rather than hand-waving.
 
