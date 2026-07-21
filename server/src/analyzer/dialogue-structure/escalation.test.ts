@@ -134,6 +134,51 @@ function buildOversizedFixture() {
   return { body, paras, sentences: examined.sentences, flags: examined.flags };
 }
 
+/** Same body/paras as buildFixture, but sentence id 4 (index 3) carries a
+    NAMED model id ('anton') on its unanchored line → crossExamine flags it
+    `unanchored-named:anton`. Sentence id 5 stays 'narrator' →
+    `unanchored-narrator`. Lets us pin E-core: the named line is protected,
+    the placeholder line is filled. */
+function buildNamedFixture() {
+  const enIdx = buildNameIndex(
+    [
+      { id: 'anton', name: 'Anton' },
+      { id: 'olga', name: 'Olga' },
+      { id: 'boris', name: 'Boris' },
+    ],
+    conventionsFor('en')!,
+  );
+  const body = [
+    'He waited quietly.',
+    '"Ready?" said Anton.',
+    '"Ready," said Olga.',
+    '"Confirmed," said Boris.',
+    '"Then let\'s go."',
+    '"After you."',
+    'She smiled and walked ahead.',
+  ].join('\n');
+  const paras = parseChapterStructure(body, enIdx);
+  resolveWindows(paras, { anton: 'male', olga: 'female', boris: 'male' }, null);
+  const sentences: SentenceOutput[] = [
+    { id: 1, chapterId: 1, characterId: 'anton', text: 'Ready?' },
+    { id: 2, chapterId: 1, characterId: 'olga', text: 'Ready,' },
+    { id: 3, chapterId: 1, characterId: 'boris', text: 'Confirmed,' },
+    { id: 4, chapterId: 1, characterId: 'anton', text: "Then let's go." }, // NAMED guess
+    { id: 5, chapterId: 1, characterId: 'narrator', text: 'After you.' }, // placeholder
+  ];
+  const alignment = alignSentences(sentences, paras, body);
+  const examined = crossExamine(alignment, {
+    rosterIds: new Set(ROSTER),
+    unknownBucketIds: new Set([MALE_BUCKET_ID, FEMALE_BUCKET_ID]),
+    alignmentFloorPct: 80,
+  });
+  expect(examined.flags).toEqual([
+    { index: 3, reason: 'unanchored-named:anton' },
+    { index: 4, reason: 'unanchored-narrator' },
+  ]);
+  return { body, paras, sentences: examined.sentences, flags: examined.flags };
+}
+
 function fakeAnalyzer(impl: (prompt: string) => EscalationOutput | null): Analyzer {
   return {
     runStage1: () => Promise.reject(new Error('not used')),
@@ -414,5 +459,25 @@ describe('escalateFlaggedWindows', () => {
 
     expect(outcome).toEqual({ attempted: 0, applied: 0 });
     expect(runFn).not.toHaveBeenCalled();
+  });
+});
+
+describe('escalateFlaggedWindows — E-core (resolve, not override)', () => {
+  it('NEVER overwrites a named answer (unanchored-named) but DOES fill a placeholder (unanchored-narrator)', async () => {
+    const { body, paras, sentences, flags } = buildNamedFixture();
+    const analyzer = fakeAnalyzer(() => ({
+      assignments: [
+        { line: 4, characterId: 'olga' }, // tries to overwrite the NAMED 'anton' → must be REJECTED
+        { line: 5, characterId: 'boris' }, // fills the placeholder → applied
+      ],
+    }));
+
+    const outcome = await escalateFlaggedWindows({ ...baseOpts(), sentences, flags, paras, body, analyzer });
+
+    expect(outcome.applied).toBe(1);
+    expect(sentences.find((s) => s.id === 4)).toMatchObject({ characterId: 'anton' }); // untouched
+    expect(sentences.find((s) => s.id === 5)).toMatchObject({ characterId: 'boris', confidence: 0.8 });
+    // the protected named line's flag stays; the filled placeholder's flag is cleared
+    expect(flags).toEqual([{ index: 3, reason: 'unanchored-named:anton' }]);
   });
 });

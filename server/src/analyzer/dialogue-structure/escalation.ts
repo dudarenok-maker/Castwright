@@ -52,6 +52,20 @@ const NARRATOR_ID = 'narrator';
     long or longer is a real digression, not "short" context. */
 const SHORT_NARRATION_MAX_LEN = 200;
 
+/** E-core (spec §5.2): escalation may only FILL a genuinely-unresolved
+    placeholder line. `unanchored-narrator` is the sole flag class whose
+    current answer is a non-committal placeholder; every other escalatable
+    class (`unanchored-named:*`, `pronoun-keep-flag:*`, `alt-keep-flag:*`,
+    `alt-correct-flag:*`, and Wave 3's `tag-weak-keep-flag:*`) already carries
+    a named/structural answer that a context-starved re-ask must never
+    overwrite. This predicate is deliberately NARROWER than "every flag class
+    that reaches escalation": `flag-only-floor` (sub-alignment-floor chapters)
+    and `lumped` lines are also skipped — consistent with the trust-the-first-
+    full-context-pass thesis; those chapters simply get no escalation fills. */
+function isFillEligible(reason: string): boolean {
+  return reason === 'unanchored-narrator';
+}
+
 interface WindowGroup {
   windowId: number;
   /** indices into `sentences`/the alignment, ascending. */
@@ -226,14 +240,17 @@ export async function escalateFlaggedWindows(opts: EscalateFlaggedWindowsOpts): 
       if (appliedIdx.has(idx)) continue; // duplicate line entry — no-op
       if (!opts.rosterIds.has(assignment.characterId)) continue;
 
+      const flagPos = opts.flags.findIndex((f) => f.index === idx);
+      if (flagPos === -1) continue; // defensive: not currently flagged
+      if (!isFillEligible(opts.flags[flagPos].reason)) continue; // E-core: never overwrite a named answer
+
       const as = alignment.aligned[idx];
       const hasTagName = as.spans.some((s) => s.kind === 'speech' && s.speaker?.source === 'tag-name');
       if (hasTagName) continue; // never override tag-name — the one hard invariant
 
       opts.sentences[idx].characterId = assignment.characterId;
       opts.sentences[idx].confidence = ESCALATED_CONFIDENCE;
-      const flagPos = opts.flags.findIndex((f) => f.index === idx);
-      if (flagPos !== -1) opts.flags.splice(flagPos, 1);
+      opts.flags.splice(flagPos, 1);
       appliedIdx.add(idx);
       outcome.applied += 1;
     }
