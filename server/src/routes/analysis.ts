@@ -1671,8 +1671,6 @@ ${JSON.stringify(
 )}
 \`\`\`
 
-${STAGE2_ATTRIBUTION_RULES}
-
 ${contextBlock}${firstPersonBlock}## Section to attribute (Chapter ${chapter.id} — ${chapter.title})
 
 ${subBody}

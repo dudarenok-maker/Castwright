@@ -3504,15 +3504,23 @@ describe('stage-2 attribution rules block (Target C)', () => {
     expect(body).toBeGreaterThan(rules);
   });
 
-  it('renders the rules block in the chunk builder, before context/first-person/section body', () => {
+  it('does NOT render the rules block in the chunk builder — chunks deliberately omit it (chapter-only)', () => {
+    // The rules block is injected ONLY into the whole-chapter builder. The chunk
+    // builder omits it by design: the untagged-continuation / two-hander rules
+    // misfire across chunk boundaries on multi-speaker chapters — the on-box eval
+    // showed a ch44 raw regression (the sole chunked fixture) that this omission
+    // recovers, while every single-call chapter keeps the win. See the Target C
+    // ship note in docs/features/265-attribution-eval-tuning.md.
     const prompt = buildStage2ChunkInbox(
       'm', 'Title', stage1, chapter, 'section text', 'prior tail', null,
     );
-    const rules = prompt.indexOf('## Attribution rules');
+    expect(prompt).not.toContain('## Attribution rules');
+    // The rest of the chunk prompt still renders in order.
+    const characters = prompt.indexOf('## Characters (from stage 1)');
     const context = prompt.indexOf('## Preceding context');
     const section = prompt.indexOf('## Section to attribute');
-    expect(rules).toBeGreaterThan(prompt.indexOf('## Characters (from stage 1)'));
-    expect(context).toBeGreaterThan(rules);
+    expect(characters).toBeGreaterThanOrEqual(0);
+    expect(context).toBeGreaterThan(characters);
     expect(section).toBeGreaterThan(context);
   });
 
