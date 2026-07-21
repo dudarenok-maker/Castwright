@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { evalFixture, rosterToStage1 } from './run-eval.js';
+import { evalFixture, rosterToStage1, familyBreakdown } from './run-eval.js';
 import type { LabelledChapter } from './schema.js';
 import type { RosterSnapshot } from './roster-schema.js';
 
@@ -36,6 +36,32 @@ describe('rosterToStage1', () => {
     expect(s1.characters.map((c) => c.id)).toEqual(['narrator', 'alice']);
     expect(s1.characters[1].role).toBeTruthy();
     expect(s1.characters[1].color).toBeTruthy();
+  });
+});
+
+describe('familyBreakdown', () => {
+  it('excludes a drift line (truth === null) from attributed, counts it as drift', () => {
+    // 3 tag lines: one correct, one wrong, one drift (segmentation split).
+    const perLine = [
+      { truth: 'alice', correct: true },
+      { truth: 'bob', correct: false },
+      { truth: null, correct: false },
+    ];
+    const reasons = [
+      { reason: 'tag-confirm:alice' },
+      { reason: 'tag-correct:bob' },
+      { reason: 'tag-confirm:alice' },
+    ];
+    const fam = familyBreakdown(perLine, reasons, 3);
+    expect(fam.tag).toEqual({ correct: 1, attributed: 2, drift: 1 });
+  });
+
+  it('buckets by evidence family and tolerates a missing reason (→ other)', () => {
+    const perLine = [{ truth: 'x', correct: true }, { truth: 'y', correct: true }];
+    const reasons = [{ reason: 'unanchored-narrator' }];
+    const fam = familyBreakdown(perLine, reasons, 2);
+    expect(fam.unanchored).toEqual({ correct: 1, attributed: 1, drift: 0 });
+    expect(fam.other).toEqual({ correct: 1, attributed: 1, drift: 0 });
   });
 });
 

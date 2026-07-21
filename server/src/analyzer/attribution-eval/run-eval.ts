@@ -7,18 +7,49 @@ import type { SentenceOutput, Stage1Output } from '../../handoff/schemas.js';
 import type { Analyzer } from '../index.js';
 import type { StageCall } from '../index.js';
 
+export interface FamilyBreakdown {
+  correct: number;
+  attributed: number;
+  drift: number;
+}
+
 export interface StageScore {
   recall: number;
   precision: number;
   segMismatch: number;
   total: number;
-  byFamily: Record<string, { correct: number; total: number }>;
+  byFamily: Record<string, FamilyBreakdown>;
 }
 export interface FixtureResult {
   fixture: string;
   raw: StageScore;
   deterministic: StageScore;
   final: StageScore;
+}
+
+/** Per-evidence-family accuracy that EXCLUDES segmentation drift. `perLine[i]`
+    (predicted/sentence order, 1:1 with `reasons[i]` for i < n) with
+    `truth === null` is a drift line — the analyzer split an utterance
+    differently than truth, so its attribution can't be scored — counted as
+    `drift`, never `attributed`. */
+export function familyBreakdown(
+  perLine: Array<{ truth: string | null; correct: boolean }>,
+  reasons: Array<{ reason: string }>,
+  n: number,
+): Record<string, FamilyBreakdown> {
+  const out: Record<string, FamilyBreakdown> = {};
+  for (let i = 0; i < n; i++) {
+    const fam = evidenceFamily(reasons[i]?.reason ?? 'other');
+    out[fam] ??= { correct: 0, attributed: 0, drift: 0 };
+    const line = perLine[i];
+    if (!line || line.truth === null) {
+      out[fam].drift++;
+      continue;
+    }
+    out[fam].attributed++;
+    if (line.correct) out[fam].correct++;
+  }
+  return out;
 }
 
 export function rosterToStage1(roster: RosterSnapshot, chapterId: number): Stage1Output {
@@ -46,17 +77,9 @@ function scoreStage(
 ): StageScore {
   const s = scoreAttribution(truth, toPredicted(sentences));
   const total = s.truePositive + s.falseNegative;
-  const byFamily: StageScore['byFamily'] = {};
-  if (reasons) {
-    // perLine[0..sentences.length-1] is in predicted (sentence) order, 1:1.
-    for (let i = 0; i < sentences.length; i++) {
-      const fam = evidenceFamily(reasons[i]?.reason ?? 'other');
-      const line = s.perLine[i];
-      byFamily[fam] ??= { correct: 0, total: 0 };
-      byFamily[fam].total++;
-      if (line?.correct) byFamily[fam].correct++;
-    }
-  }
+  const byFamily: StageScore['byFamily'] = reasons
+    ? familyBreakdown(s.perLine, reasons, sentences.length)
+    : {};
   return {
     recall: s.recall,
     precision: s.precision,

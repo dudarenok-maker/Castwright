@@ -106,7 +106,8 @@ function printScorecard(results: Array<{ engine: string; fixtures: FixtureResult
       );
       for (const fam of Object.keys(f.final.byFamily).sort()) {
         const b = f.final.byFamily[fam];
-        console.log(`      ${fam}: ${b.correct}/${b.total}`);
+        const driftNote = b.drift > 0 ? ` (+${b.drift} drift)` : '';
+        console.log(`      ${fam}: ${b.correct}/${b.attributed}${driftNote}`);
       }
     }
   }
