@@ -1519,6 +1519,33 @@ ${chapter.body}
 `;
 }
 
+/* Target C — the shared stage-2 attribution rules, injected into both the
+   whole-chapter and the chunked stage-2 inbox builders. Language-/quote-agnostic
+   by construction (see the lead line) so it does not misfire on «…» / „…" or
+   non-English text. Kept deliberately short — every rule earns its tokens. */
+const STAGE2_ATTRIBUTION_RULES = `## Attribution rules
+
+Apply these when assigning each sentence's speaker. They hold whatever
+quotation marks the text uses — \`"…"\`, \`«…»\`, \`„…"\`, \`“…”\` — and in any
+language:
+
+1. A dialogue tag is decisive. When a quote carries an explicit speech tag —
+   \`"…," said X\` / \`"…," X asked\` / \`"…," whispered X\` — the speaker is X,
+   whatever the surrounding lines suggest.
+2. An action beat names the speaker. A quote sharing a paragraph with a
+   character's action belongs to that character: \`X folded her arms. "Get
+   out."\` and \`"Get out." X turned away.\` are both spoken by X.
+3. Untagged quotes continue, and two-handers alternate. An untagged quote keeps
+   the last established speaker. In a sustained back-and-forth between exactly
+   two characters, untagged quotes alternate between them.
+4. Narration is the narrator. Non-dialogue prose — description, action,
+   scene-setting — is \`narrator\`, even between two characters' lines. Only words
+   inside quote marks belong to a character (unless the whole chapter is a
+   first-person document).
+5. The addressee is not the speaker. A name spoken to someone ("Careful,
+   Anton.") marks who is addressed, not who speaks — never attribute the line to
+   the person being addressed.`;
+
 export function buildStage2ChapterInbox(
   manuscriptId: string,
   title: string,
@@ -1568,6 +1595,8 @@ ${JSON.stringify(
   2,
 )}
 \`\`\`
+
+${STAGE2_ATTRIBUTION_RULES}
 
 ${firstPersonBlock}## Chapter ${chapter.id} — ${chapter.title}
 
@@ -1641,6 +1670,8 @@ ${JSON.stringify(
   2,
 )}
 \`\`\`
+
+${STAGE2_ATTRIBUTION_RULES}
 
 ${contextBlock}${firstPersonBlock}## Section to attribute (Chapter ${chapter.id} — ${chapter.title})
 

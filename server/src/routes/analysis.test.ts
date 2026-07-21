@@ -32,6 +32,7 @@ import {
   runSubsetAnalyzerJob,
   aggregateStructureReports,
   buildStage2ChapterInbox,
+  buildStage2ChunkInbox,
   type AnalysisJob,
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput, Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
@@ -3477,5 +3478,50 @@ describe('stage-2 prompt first-person anchor (RC3)', () => {
   it('omits the anchor block when firstPersonId is null', () => {
     const prompt = buildStage2ChapterInbox('m', 'Title', stage1, chapter, null);
     expect(prompt).not.toContain('First-person narrator');
+  });
+});
+
+describe('stage-2 attribution rules block (Target C)', () => {
+  const stage1 = {
+    characters: [
+      { id: 'anton', name: 'Anton', role: 'Colleague' },
+      { id: 'egor', name: 'Egor', role: 'Protagonist' },
+    ],
+  } as any;
+  const chapter = { id: 1, title: 'Ch1', body: '"Get out." Anton turned away.' };
+
+  it('renders the rules block in the chapter builder, after the roster and before the body', () => {
+    const prompt = buildStage2ChapterInbox('m', 'Title', stage1, chapter, null);
+    expect(prompt).toContain('## Attribution rules');
+    expect(prompt).toContain('A dialogue tag is decisive');
+    expect(prompt).toContain('The addressee is not the speaker');
+    // Order: Characters roster → Attribution rules → Chapter body.
+    const roster = prompt.indexOf('## Characters (from stage 1)');
+    const rules = prompt.indexOf('## Attribution rules');
+    const body = prompt.indexOf('## Chapter 1 —');
+    expect(roster).toBeGreaterThanOrEqual(0);
+    expect(rules).toBeGreaterThan(roster);
+    expect(body).toBeGreaterThan(rules);
+  });
+
+  it('renders the rules block in the chunk builder, before context/first-person/section body', () => {
+    const prompt = buildStage2ChunkInbox(
+      'm', 'Title', stage1, chapter, 'section text', 'prior tail', null,
+    );
+    const rules = prompt.indexOf('## Attribution rules');
+    const context = prompt.indexOf('## Preceding context');
+    const section = prompt.indexOf('## Section to attribute');
+    expect(rules).toBeGreaterThan(prompt.indexOf('## Characters (from stage 1)'));
+    expect(context).toBeGreaterThan(rules);
+    expect(section).toBeGreaterThan(context);
+  });
+
+  it('still renders the first-person block after the rules block when a first-person id is present', () => {
+    const prompt = buildStage2ChapterInbox('m', 'Title', stage1, chapter, 'anton');
+    const rules = prompt.indexOf('## Attribution rules');
+    const firstPerson = prompt.indexOf('## First-person narrator');
+    expect(rules).toBeGreaterThan(0);
+    expect(firstPerson).toBeGreaterThan(rules);
+    expect(prompt).toContain('`anton`');
   });
 });
