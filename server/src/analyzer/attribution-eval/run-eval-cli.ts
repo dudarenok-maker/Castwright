@@ -124,6 +124,9 @@ function printScorecard(results: Array<{ engine: string; fixtures: FixtureAgg[] 
       console.log(
         `  ${f.fixture}: raw ${range(f.raw.recall, f.runs)} → det ${range(f.deterministic.recall, f.runs)} → final ${range(f.final.recall, f.runs)} (n=${f.final.total}, drift ${f.final.segDriftMean.toFixed(0)}, runs=${f.runs})`,
       );
+      for (const fam of Object.keys(f.raw.byFamily).sort()) {
+        console.log(`      raw · ${fam}: ${famLine(f.raw.byFamily[fam], f.runs)}`);
+      }
       for (const fam of Object.keys(f.final.byFamily).sort()) {
         console.log(`      ${fam}: ${famLine(f.final.byFamily[fam], f.runs)}`);
       }
