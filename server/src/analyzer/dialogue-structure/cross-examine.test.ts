@@ -298,3 +298,35 @@ describe('crossExamine — hard invariants', () => {
     expect(result.sentences[0].confidence).not.toBe(0.01);
   });
 });
+
+describe('A2 — weak tag-name is contestable', () => {
+  const opts = {
+    rosterIds: new Set(['anton', 'olga', 'narrator']),
+    unknownBucketIds: new Set([MALE_BUCKET_ID, FEMALE_BUCKET_ID]),
+    alignmentFloorPct: 80,
+  };
+  const alignedWith = (id: string, spans: SpanEvidence[]) => aligned(mkSentence(id), spans);
+  const weakSpeechSpan: SpanEvidence = { kind: 'speech', start: 0, end: 5, speaker: { characterId: 'anton', source: 'tag-name' as const, strength: 'weak' as const } };
+
+  it('a weak tag the model DISAGREES with keeps the model id and flags (no force-correct)', () => {
+    const aligned = alignedWith('olga', [weakSpeechSpan]); // model said olga, weak tag says anton
+    const res = crossExamine({ alignedPct: 100, aligned: [aligned] } as any, opts);
+    expect(res.sentences[0].characterId).toBe('olga');
+    expect(res.flags).toContainEqual({ index: 0, reason: 'tag-weak-keep-flag:olga-vs-anton' });
+  });
+
+  it('a weak tag the model AGREES with still confirms to the right speaker (correct-beat guard)', () => {
+    const aligned = alignedWith('anton', [weakSpeechSpan]);
+    const res = crossExamine({ alignedPct: 100, aligned: [aligned] } as any, opts);
+    expect(res.sentences[0].characterId).toBe('anton');
+    expect(res.flags).toEqual([]); // confirmed, not flagged
+  });
+
+  it('a STRONG tag disagreement still force-corrects (unchanged invariant)', () => {
+    const strong = { ...weakSpeechSpan, speaker: { characterId: 'anton', source: 'tag-name' as const } };
+    const aligned = alignedWith('olga', [strong]);
+    const res = crossExamine({ alignedPct: 100, aligned: [aligned] } as any, opts);
+    expect(res.sentences[0].characterId).toBe('anton'); // strong tag wins
+    expect(res.flags).toEqual([]);
+  });
+});

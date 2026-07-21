@@ -8,8 +8,10 @@ import type { DecisionBucket, EngineReport, SpanEvidence } from './types.js';
    and replaces the model's self-reported confidence with a DERIVED one on
    EVERY sentence. Pure: no I/O, no model calls.
 
-   Two hard invariants (spec §5.3): a `tag-name` attribution is never
-   overridden by anything (model, pronoun, alternation, escalation); and a
+   Two hard invariants (spec §5.3): a STRONG `tag-name` attribution is never
+   overridden by anything (model, pronoun, alternation, escalation) — a WEAK
+   one (Wave 3 A2, beat-only quote gap) is contestable: model disagreement
+   keeps the model id and flags instead of force-correcting; and a
    continuation sentence inside a speech span (no leading dash/quote of its
    own) is classified as speech, not narration, because it inherits the
    SPAN's evidence rather than being re-classified from its own bare text
@@ -24,6 +26,7 @@ export const CONFIDENCE = {
   PRONOUN_CONFIRM: 0.85,
   PRONOUN_CORRECT: 0.8,
   PRONOUN_KEEP_FLAG: 0.6,
+  TAG_WEAK_KEEP_FLAG: 0.6,
   ALT_CONFIRM: 0.8,
   ALT_CORRECT_FLAG: 0.7,
   ALT_KEEP_FLAG: 0.6,
@@ -108,17 +111,31 @@ function decideUnanchoredSpeech(modelId: string, opts: CrossExamineOpts): Decisi
 }
 
 /** A speech span WITH speaker evidence — the `tag-name` / `tag-pronoun` /
-    `alternation` rows. `tag-name` is never overridden: model agreement
-    confirms, disagreement always auto-corrects (no flag — this is the
-    strongest evidence there is). */
+    `alternation` rows. A STRONG `tag-name` is never overridden: model
+    agreement confirms, disagreement always auto-corrects (no flag — this is
+    the strongest evidence there is). A WEAK `tag-name` (Wave 3 A2) is
+    contestable on disagreement — see the `strength === 'weak'` branch below. */
 function decideAnchoredSpeech(modelId: string, span: SpanEvidence, opts: CrossExamineOpts): Decision {
   const { characterId: x, source } = span.speaker!;
 
   switch (source) {
     case 'tag-name':
-      return modelId === x
-        ? { characterId: x, confidence: CONFIDENCE.TAG_CONFIRM, reason: `tag-confirm:${x}`, bucket: 'confirmed', flagged: false }
-        : { characterId: x, confidence: CONFIDENCE.TAG_CORRECT, reason: `tag-correct:${x}`, bucket: 'corrected', flagged: false };
+      if (modelId === x) {
+        return { characterId: x, confidence: CONFIDENCE.TAG_CONFIRM, reason: `tag-confirm:${x}`, bucket: 'confirmed', flagged: false };
+      }
+      // A WEAK tag (beat-only quote-gap, Wave 3) is contestable: on model
+      // disagreement keep the model id and flag, mirroring pronoun-keep-flag —
+      // do NOT force-correct to a plausible-but-unauthoritative beat attribution.
+      if (span.speaker!.strength === 'weak') {
+        return {
+          characterId: modelId,
+          confidence: CONFIDENCE.TAG_WEAK_KEEP_FLAG,
+          reason: `tag-weak-keep-flag:${modelId}-vs-${x}`,
+          bucket: 'flagged',
+          flagged: true,
+        };
+      }
+      return { characterId: x, confidence: CONFIDENCE.TAG_CORRECT, reason: `tag-correct:${x}`, bucket: 'corrected', flagged: false };
 
     case 'tag-pronoun':
       if (modelId === x) {
