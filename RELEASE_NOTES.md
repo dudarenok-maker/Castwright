@@ -62,6 +62,7 @@
 - **Find help faster.** Troubleshooting is now sorted into clear, searchable sections instead of one long list — and Help and Admin link straight out to the matching guide in the wiki.
 - **Fixed a rare developer-mode glitch where flipping between a book and its script review too quickly could make the review progress jump around.** (#1496)
 - See how fast your local analyzer is really going: a new Admin panel tracks decode speed across a run and flags when it slows down.
+- **Castwright now spells out the rules of who's speaking to the analyzer — so it gets more lines right on its first read.** The very first pass that works out who says each line now carries a short, plain set of attribution rules (a dialogue tag wins; an action beat names the speaker; a name you're speaking *to* isn't the speaker) — in any language and any quotation style. On the harder single-scene chapters that lifts how often the cast lines up with the page, while the trickiest multi-speaker fight scenes are left exactly as they were.
 
 # Castwright 1.13.0
 

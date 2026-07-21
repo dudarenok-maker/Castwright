@@ -222,3 +222,29 @@ strength) lives in plan [247](247-dialogue-structure-attribution.md) (invariant 
 2026-07-21). On-box averaged result (3 runs): ch46 +11.1, Coalfall +4.6 vs prior baseline, ch45
 escalation gain preserved, no fixture regressed. Remaining ch44 gap (raw→det crossExamine on
 *strong* tags) is the deferred deterministic-first phase-2 / Target C lever.
+
+### Target C: stage-2 attribution prompt enrichment — chapter-builder-only (2026-07-22)
+
+The harness's third cycle enriched the stage-2 line→speaker prompt itself (the LLM's first,
+full-context "raw" pass) with a shared, language-safe `STAGE2_ATTRIBUTION_RULES` block, on branch
+`feat/server-stage2-attribution-prompt` under its own spec/plan
+(`docs/superpowers/{specs,plans}/2026-07-21-target-c-stage2-attribution-prompt*`). Two more harness
+tweaks landed to make the acceptance gate trustworthy: the scorecard labels the resolved model id
+(`slotLabel`) not the bare engine slot, and the **`raw` stage now carries its per-evidence-family
+breakdown** (it was scored without `reasons`, so `raw.byFamily` was empty — a rule that shuffles
+errors between families could otherwise pass a flat-aggregate gate invisibly).
+
+**On-box eval (English-scoped, `--runs 3`) drove a scope narrowing.** Injecting the block into
+BOTH stage-2 builders lifted the single-call chapters (Qwen raw: ch45 +3.5, ch46 +0.8) but
+**regressed ch44 −2.5** — the *only* chunked fixture — because the untagged-continuation /
+two-hander rules misfire across chunk boundaries on a multi-speaker chapter (the drop was broad
+across every speaker-inference family; narration held). A chapter-**builder-only** variant (rules
+in `buildStage2ChapterInbox`, omitted from `buildStage2ChunkInbox`) recovered ch44 to baseline
+(82.6 vs 82.5) while keeping the wins (ch45 +4.7 with a pinned floor, ch46 +0.8) — no fixture below
+its baseline min on Qwen, and flat-or-better on cloud Flash-lite/Gemma (ch44 was already flat there).
+
+**Shipped as chapter-builder-only.** Measured targets: local `qwen36-cw-iq4-32k`, cloud
+`gemma-4-31b-it` + `gemini-3.1-flash-lite`. English-only acceptance. Tracked follow-ups: a
+chunk-safe rules variant (to get the block into the chunk path without the boundary misfire), RU/DE
+eval fixtures, and pinning the cloud decoding temperature (the unpinned ~1.0 default drove the wide
+ch45 raw band on cloud vs the tight band on temp-0.2 Qwen).
