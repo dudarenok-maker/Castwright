@@ -5,8 +5,10 @@ export interface SpanEvidence {
   /** absolute offsets into the chapter body */
   start: number;
   end: number;
-  /** set on speech spans only */
-  speaker?: { characterId: string; source: EvidenceSource };
+  /** set on speech spans only. `strength: 'weak'` marks a low-confidence
+      tag-name (a beat-only quote-gap reclassification) that Wave 3 lets the
+      model contest; absence = strong (the immutable tag-name invariant). */
+  speaker?: { characterId: string; source: EvidenceSource; strength?: 'weak' };
   windowId?: number;
   turnIndex?: number;
 }
