@@ -179,27 +179,27 @@ git commit -m "feat(server): add stage-2 attribution rules block to both inbox b
 ### Task 2: Model-label honesty in the eval scorecard
 
 **Files:**
-- Modify: `server/src/analyzer/attribution-eval/run-eval-cli.ts` (add `engineLabel`, use it in `runEval`'s results push ~line 99)
+- Modify: `server/src/analyzer/attribution-eval/run-eval-cli.ts` (add `slotLabel`, use it in `runEval`'s results push ~line 99)
 - Test: `server/src/analyzer/attribution-eval/run-eval-cli.test.ts`
 
 **Why:** both Cloud models run through the single `gemma` engine slot keyed by `GEMINI_MODEL`, so `gemini-3.1-flash-lite` prints under the bare label `"gemma"` — misleading in the durable record. The scorecard should name the actual model id.
 
+**Note (naming):** `server/src/routes/analysis.ts` already has an unrelated two-arg `engineLabel(engine, model)`. To avoid a same-name shadow that would confuse a reviewer, the harness helper is named **`slotLabel`** (different module, no import path between them). Do not name it `engineLabel`.
+
 **Interfaces:**
-- Produces: `export function engineLabel(engine: 'qwen' | 'gemma'): string` — returns `qwen:<EVAL_QWEN_MODEL|default>` / `gemma:<GEMINI_MODEL|default>`. Used only for the display label in `runEval`'s returned `results[].engine`; the raw `'qwen'|'gemma'` value still drives `buildAnalyzer` and the skip messages.
+- Produces: `export function slotLabel(engine: 'qwen' | 'gemma'): string` — returns `qwen:<EVAL_QWEN_MODEL|default>` / `gemma:<GEMINI_MODEL|default>`. Used only for the display label in `runEval`'s returned `results[].engine`; the raw `'qwen'|'gemma'` value still drives `buildAnalyzer` and the skip messages.
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `run-eval-cli.test.ts`:
+In `run-eval-cli.test.ts`, **merge** `slotLabel` into the existing top import (it currently reads `import { runEval } from './run-eval-cli.js';` — change it to `import { runEval, slotLabel } from './run-eval-cli.js';`; do NOT add a second `import` line — a duplicate import trips the lint leg in cloud `verify.yml`). Then append:
 
 ```ts
-import { engineLabel } from './run-eval-cli.js'; // add to the existing import if present
-
-describe('engineLabel', () => {
+describe('slotLabel', () => {
   it('labels qwen with the resolved model id', () => {
     const prev = process.env.EVAL_QWEN_MODEL;
     process.env.EVAL_QWEN_MODEL = 'qwen36-cw-iq4-32k';
     try {
-      expect(engineLabel('qwen')).toBe('qwen:qwen36-cw-iq4-32k');
+      expect(slotLabel('qwen')).toBe('qwen:qwen36-cw-iq4-32k');
     } finally {
       if (prev === undefined) delete process.env.EVAL_QWEN_MODEL;
       else process.env.EVAL_QWEN_MODEL = prev;
@@ -210,7 +210,7 @@ describe('engineLabel', () => {
     const prev = process.env.GEMINI_MODEL;
     process.env.GEMINI_MODEL = 'gemini-3.1-flash-lite';
     try {
-      expect(engineLabel('gemma')).toBe('gemma:gemini-3.1-flash-lite');
+      expect(slotLabel('gemma')).toBe('gemma:gemini-3.1-flash-lite');
     } finally {
       if (prev === undefined) delete process.env.GEMINI_MODEL;
       else process.env.GEMINI_MODEL = prev;
@@ -221,7 +221,7 @@ describe('engineLabel', () => {
     const prev = process.env.GEMINI_MODEL;
     delete process.env.GEMINI_MODEL;
     try {
-      expect(engineLabel('gemma')).toBe('gemma:gemma-4-31b-it');
+      expect(slotLabel('gemma')).toBe('gemma:gemma-4-31b-it');
     } finally {
       if (prev !== undefined) process.env.GEMINI_MODEL = prev;
     }
@@ -231,15 +231,15 @@ describe('engineLabel', () => {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `cd server && npx vitest run src/analyzer/attribution-eval/run-eval-cli.test.ts -t engineLabel`
-Expected: FAIL — `engineLabel` is not exported.
+Run: `cd server && npx vitest run src/analyzer/attribution-eval/run-eval-cli.test.ts -t slotLabel`
+Expected: FAIL — `slotLabel` is not exported.
 
-- [ ] **Step 3: Add `engineLabel` and use it**
+- [ ] **Step 3: Add `slotLabel` and use it**
 
 In `run-eval-cli.ts`, add near the top (after imports), keeping the same defaults `buildAnalyzer` uses:
 
 ```ts
-export function engineLabel(engine: 'qwen' | 'gemma'): string {
+export function slotLabel(engine: 'qwen' | 'gemma'): string {
   if (engine === 'qwen') return `qwen:${process.env.EVAL_QWEN_MODEL ?? 'qwen3.5:9b'}`;
   return `gemma:${process.env.GEMINI_MODEL ?? 'gemma-4-31b-it'}`;
 }
@@ -248,12 +248,12 @@ export function engineLabel(engine: 'qwen' | 'gemma'): string {
 In `runEval`, change the results push (currently `results.push({ engine, fixtures })` ~line 99) to label the model while leaving the loop variable `engine` untouched for `buildAnalyzer`/skip:
 
 ```ts
-    results.push({ engine: engineLabel(engine), fixtures });
+    results.push({ engine: slotLabel(engine), fixtures });
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `cd server && npx vitest run src/analyzer/attribution-eval/run-eval-cli.test.ts -t engineLabel`
+Run: `cd server && npx vitest run src/analyzer/attribution-eval/run-eval-cli.test.ts -t slotLabel`
 Expected: PASS (3/3).
 
 - [ ] **Step 5: Commit**
@@ -365,6 +365,7 @@ Run from this worktree (corpus present); export `GEMINI_API_KEY` first (it lives
 
 ## Self-Review
 
-- **Spec coverage:** rules-block constant + both-builder injection (Task 1) ✓; language-safe block wording verbatim (Task 1 Step 3) ✓; model-label honesty harness change (Task 2) ✓; raw per-family breakdown harness change (Task 3) ✓; paired unit tests for all three (each task) ✓; English-scoped on-box gate + three-invocation procedure (acceptance section) ✓; RU/DE follow-up (after-acceptance section) ✓. The spec's "manual per-family eyeball fallback" is NOT needed — the families ARE cleanly available at raw-scoring time (reasons align 1:1 raw↔det), which Task 3's second assertion pins; noted so the reviewer knows the primary path was taken deliberately.
+- **Spec coverage:** rules-block constant + both-builder injection (Task 1) ✓; language-safe block wording verbatim (Task 1 Step 3) ✓; model-label honesty harness change (Task 2) ✓; raw per-family breakdown harness change (Task 3) ✓; English-scoped on-box gate + three-invocation procedure (acceptance section) ✓; RU/DE follow-up (after-acceptance section) ✓. The spec's "manual per-family eyeball fallback" is NOT needed — the families ARE cleanly available at raw-scoring time (reasons align 1:1 raw↔det, confirmed by Opus plan-review against `aligner.ts`/`cross-examine.ts`), which Task 3's second assertion pins; noted so the reviewer knows the primary path was taken deliberately.
+- **Test coverage — precise scope:** Task 1's three builder tests and Task 2's three `slotLabel` tests fully cover their production changes. Task 3's unit test covers the **data** change (`run-eval.ts` populating `raw.byFamily`); the **display** change (Task 3 Step 4's `raw ·`-prefixed loop in `printScorecard`) is display-only and stays untested, consistent with the already-untested `printScorecard`/`famLine`/`range` — call this out in the PR body rather than adding a console-capture test.
 - **Placeholder scan:** every code step shows the exact code; no TBD/TODO.
-- **Type consistency:** `engineLabel(engine: 'qwen'|'gemma'): string` used consistently; `scoreStage`'s optional third arg `reasons?: Array<{index:number;reason:string}>` matches `stages!.reasons` (`{index,reason,bucket}` — structurally compatible); `printScorecard` reads `f.raw.byFamily` which Task 3 populates.
+- **Type consistency:** `slotLabel(engine: 'qwen'|'gemma'): string` used consistently (named `slotLabel`, not `engineLabel`, to avoid shadowing the existing `analysis.ts` helper); `scoreStage`'s optional third arg `reasons?: Array<{index:number;reason:string}>` matches `stages!.reasons` (`{index,reason,bucket}` — structurally compatible); `printScorecard` reads `f.raw.byFamily` which Task 3 populates.
