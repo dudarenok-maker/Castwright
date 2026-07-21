@@ -1,189 +1,205 @@
-# Attribution deterministic-first tuning — design
+# Attribution accuracy tuning — design
 
-**Status:** design (approved for planning 2026-07-21)
+**Status:** design (v2, re-scoped after assumption-check 2026-07-21)
 **Author:** design thread, session 8e874d56
 **Corpus / measurement:** attribution-eval harness (shipped PR #1750), engine
 `qwen36-cw-iq4-32k:latest`, fixtures = Playing with Fire ch.43–46 (645
 hand-attributed sentences) + committed Coalfall guardrail.
-**Follow-up (out of scope here):** Target C — prompt-tuning exploration on the
-now-stronger model (sequenced after this lands; see §7).
+**Follow-up (out of scope here):** Target C — main stage-2 prompt exploration
+(sequenced after this lands; see §8).
+
+> **v2 note:** v1 of this spec asserted the escalation LLM re-ask was inactive in
+> the eval and blamed the `final`-stage regression on deterministic
+> post-processing. An adversarial assumption-check proved that wrong:
+> `analyzer.structure.escalation` defaults to `'local'` (registry.ts:1121) and in
+> local mode uses the main analyzer (analysis.ts:1835), so escalation **runs** in
+> every eval. This rewrite re-scopes around the corrected, empirically-confirmed
+> diagnosis below.
 
 ---
 
-## 1. Problem
+## 1. Problem — corrected & empirically confirmed
 
-The first real attribution baseline (2026-07-21, `qwen36-cw-iq4-32k`) shows the
-deterministic post-LLM passes **degrade** accuracy rather than help. Three-point
-scorecard (raw LLM → deterministic → final):
+Two eval runs against `qwen36-cw-iq4-32k`, escalation ON (default) and OFF
+(`ATTRIBUTION_ESCALATION=off`), isolate each stage's effect. The three-point
+scorecard already separates them: `raw` = pre-crossExamine LLM, `det` =
+post-crossExamine / **pre**-escalation, `final` = post-escalation.
 
-| Fixture | n | raw | det | final | seg-drift |
-|---|---|---|---|---|---|
-| PwF ch43 | 183 | 80.3% | 79.8% | 78.7% | 8 |
-| PwF ch44 | 328 | 83.2% | 80.5% | 79.9% | 50 |
-| PwF ch45 | 56 | 58.9% | 60.7% | 62.5% | 0 |
-| PwF ch46 | 78 | 61.5% | 61.5% | 51.3% | 34 |
-| Coalfall ch1 | 58 | 75.9% | 75.9% | 72.4% | 35 |
+| Fixture | raw | det=final (esc-OFF) | crossExamine (raw→det) | escalation cost (det→final, esc-ON) |
+|---|---|---|---|---|
+| ch43 | 80.3 | 79.8 | −0.5 | −1.1 |
+| ch44 | 83.2 | 80.2 | **−3.0** | −0.3 |
+| ch45 | 58.9 | 60.7 | **+1.8** | +1.8 (helped) |
+| ch46 | 64.1 | 64.1 | 0 | **−12.8** |
+| Coalfall | 75.9 | 75.9 | 0 | **−3.5** |
 
-`final < raw` on 4 of 5 fixtures — the pipeline ends **worse** than the raw LLM.
+**Escalation is the dominant regressor.** It wrecks ch46 (−12.8) and Coalfall
+(−3.5), mildly hurts ch43/ch44, and helps only ch45. **crossExamine** is a
+smaller, mixed lever — worst ch44 −3.0, helps ch45 +1.8, ~0 elsewhere.
 
-Per-line diagnosis (ch44 + ch46) isolated three distinct causes:
+**Escalation root cause (escalation.ts).** `escalateFlaggedWindows` re-queries
+each flagged conversation window with a **more context-starved** view than the
+original full-chapter pass (≤1500-char window + ≤2 short-narration paras,
+minimal prompt — buildWindowText/buildPrompt, escalation.ts:83-166), then
+**applies the re-ask answer with no quality gate** (escalation.ts:223-239: any
+roster id, non-`tag-name` line → overwrite at `confidence 0.8`). So on
+`unanchored-named` lines — where the full-context model already committed to a
+plausible named speaker — escalation replaces a good answer with a worse
+small-window guess. That is the ch46/Coalfall collapse (ch46 `unanchored`
+21/40 esc-off vs 12/48 esc-on).
 
-1. **seg-drift confounds the scorecard.** ~half of ch44's "tag" failures (17 of
-   34) are segmentation splits — the pipeline splits an utterance differently
-   from ground truth, so each sub-line (usually *correctly* attributed) fails to
-   text-match a truth line and scores as a failure. True attribution is higher
-   than the family percentages imply. `scoreAttribution` already tracks
-   `segMismatch` separately; the eval's per-family breakdown does not.
+**crossExamine root cause (parser.ts).** ch44's `tag-correct` false positives
+come from a beat-verb-bearing narration gap being reclassified `narration→tag`
+(parseQuoteParagraph, parser.ts:239-244) and `findRosterName` (name-matcher.ts,
+first roster stem left-to-right) stamping an authoritative `tag-name` speaker
+onto the adjacent quote. `crossExamine`'s `tag-name` branch (correctly, per its
+own invariant) then forces the quote onto that name over a correct LLM answer.
+The **same** path exists in the dash branch (parseDialogueSpans validates tags
+on the same speech-**or-beat** verb set, parser.ts:146) and is **amplified** by
+phase-2 multi-span anchoring (parser.ts:70-74).
 
-2. **`crossExamine` corrupts correct answers (primary).** ch44 raw→det is
-   **net −10** (12 correct→wrong, 2 wrong→correct). Culprit reason-codes, all
-   `corrected`-bucket: `tag-correct:*`, `tag-span-narrator`, `pronoun-correct:*`.
-   Root cause is upstream in `parser.ts`: `parseQuoteParagraph` reclassifies a
-   narration gap `narration→tag` when it contains **any** speech-*or-beat* verb
-   stem, then `anchorSpansFromTags` attaches it to the adjacent quote and
-   `findRosterName` takes the first roster name as an authoritative `tag-name`
-   speaker. So a narration beat that merely *mentions* a character and contains a
-   beat verb ("smiled", "watched", "turned") mints an unoverridable speech tag —
-   and `crossExamine`'s `tag-name` branch (correctly, per its own invariant)
-   forces the quote onto that name over a correct LLM answer. The decision matrix
-   is behaving to spec; it is being fed false tag evidence.
-
-3. **Final flagged-line resolution breaks dialogue alternation (secondary).**
-   ch46 det→final is **net −8, and every one** is
-   `unanchored-named:stephanie-edgley|flagged` where the deterministic stage had
-   Stephanie right and the post-cross-examine step flipped her short two-hander
-   lines ("*I promise.*", "*How's your arm?*", "*Thanks.*") to `dusk` or
-   `narrator`. The resolution mishandles a clean two-speaker Valkyrie↔Dusk
-   exchange.
-
-The escalation LLM re-ask was **not** active in the baseline
-(`runEval` passes no `escalationAnalyzer`), so the det→final delta is purely
-deterministic post-processing — not an LLM escalation problem.
+**⚠️ Measurement caveat — run-to-run LLM variance.** The raw stage-2 is
+non-deterministic: ch46 raw was 61.5 (run 1) → 64.1 (run 2); ch44 seg-drift
+50→47; pronoun 24→22. Single-run deltas under ~2–3% are noise. **Any acceptance
+judgement must average multiple runs** (or credit only deltas above the noise
+floor) — this is a first-class harness requirement, not an afterthought.
 
 ## 2. Goal
 
-The deterministic passes must stop degrading attribution and start helping, on
-the strong model, measured against the corpus.
+The full pipeline must not degrade attribution vs. the raw LLM on the strong
+model — measured across averaged runs against the corpus — while keeping the
+Coalfall guardrail from regressing.
 
 ## 3. Non-goals
 
-- Prompt-tuning the LLM stage (Target C — sequenced follow-up, §7).
+- Main stage-2 prompt-tuning (Target C — sequenced follow-up, §8). The
+  escalation re-ask *prompt/context* IS in scope here (it's a distinct, smaller
+  LLM call), but the primary stage-2 attribution prompt is not.
 - Cast discovery (stage-1); this is stage-2 attribution only.
-- Escalation-model behavior (inactive in the baseline).
-- Any behavior change on the default production path that the corpus does not
-  measure (multilingual prompt effects are explicitly deferred with Target C).
+- Segmentation drift: the harness will *measure* it (§5.1) but fixing
+  segmentation is a separate follow-up.
 
-## 4. Reframed thesis
+## 4. Thesis
 
-The model is now capable enough that the balance should shift **toward the LLM
-and away from aggressive deterministic correction**. Every fix points the same
-way: stop the alignment fabricating false tag-evidence (A1), and make
-deterministic corrections *defer* to the model unless the tag evidence is
-genuinely strong (A2).
+Trust the *first, full-context* model pass; make the deterministic and
+escalation layers **resolve, not override**. Escalation may fill in genuinely
+unresolved lines but must not overwrite a committed named answer with a
+worse-grounded re-ask; the deterministic layer must not mint false tag evidence.
 
-## 5. Design
+## 5. Design — waves (each independently shippable)
 
-### 5.0 Harness prerequisite — honest per-family scoring
+### 5.1 Wave 1 — harness honesty + variance (prerequisite)
 
-*Files: `server/src/analyzer/attribution-eval/run-eval.ts` (+ its test); possibly
-`scorer.ts` if a per-line drift flag must be surfaced.*
+*Files: `server/src/analyzer/attribution-eval/run-eval.ts`, `run-eval-cli.ts`,
+`scripts/run-attribution-eval.mjs` (+ tests). `scoreAttribution` already excludes
+`segMismatch` from recall (scorer.ts) — no scorer change expected.*
 
-`scoreAttribution` already separates `segMismatch` (predicted line whose text
-matches no remaining truth line) from mis-attribution. Change the `byFamily`
-accounting in `scoreStage` so each family reports **`correct / attributed /
-drift`** — drift lines excluded from the accuracy denominator, reported
-alongside. Update `printScorecard` to render the three counts. This lands
-**first**; A1/A2/B are measured through it.
+- **Per-family honesty:** `scoreStage`'s `byFamily` currently counts a
+  seg-drift line as a family `total` but never `correct`. Report each family as
+  **`correct / attributed / drift`**, drift excluded from the accuracy
+  denominator. Update `printScorecard`.
+- **Multi-run averaging:** add an `--runs N` (or `EVAL_RUNS`) option; each
+  fixture runs N times per engine and the scorecard reports **mean and range**
+  per stage and per family. Default N=1 (fast); acceptance uses N≥3.
 
-*Acceptance:* a family's `correct/attributed` no longer counts a seg-drift line
-as an attribution miss; drift is visible as its own count. Unit test on a
-synthetic fixture with a known drift line.
+*Acceptance:* drift no longer counts as an attribution miss; a family's number
+is drift-excluded; `--runs 3` prints mean±range. Unit tests on a synthetic
+fixture (known drift line) + the averaging reducer.
 
-### 5.1 Target A1 — tag strength in the parser
+### 5.2 Wave 2 — escalation redesign (primary)
 
-*Files: `server/src/analyzer/dialogue-structure/parser.ts` (+ `parser.test.ts`).*
+*Files: `server/src/analyzer/dialogue-structure/escalation.ts` (+ test); read
+context from `windows.ts`/`aligner.ts`; a new registry knob if a gate threshold
+is introduced.*
 
-Introduce a notion of tag **strength**:
-- **strong** — a genuine inline speech-verb tag ("said X") adjacent to its quote.
-- **weak** — a gap reclassified `narration→tag` only on a **beat** verb
-  ("smiled", "watched"), or a standalone narration sentence that merely mentions
-  a name.
+Two coupled changes:
 
-Tighten `parseQuoteParagraph`'s `narration→tag` reclassification and/or the
-`anchorSpansFromTags`/`findRosterName` path so a beat-only, name-mentioning
-narration gap no longer mints a **strong** `tag-name` speaker. The exact rule
-(e.g. speech-verb-required for strong; adjacency/length bound on the beat gap) is
-pinned by TDD against the reproduced ch44 false-positive paragraphs.
+- **E1 — better-grounded re-ask context.** Give the re-ask the confidently
+  **resolved** speakers of the surrounding lines (the alternation picture),
+  not just raw narration paras — so the model can infer a flagged line from its
+  neighbours instead of guessing from a starved window. Exact context shape
+  (resolved-neighbour annotation, window size) pinned by TDD against the ch46
+  two-hander.
+- **E2 — accept-only-if-better gate.** Escalation may **fill in** a genuinely
+  unresolved line (original id is `narrator`/unknown-placeholder) as today, but
+  may **override a committed named roster character** only when the re-ask meets
+  a stronger bar (starting hypothesis: the re-ask is *consistent across the
+  whole window* — e.g. yields a coherent alternation — rather than a lone
+  contradicting guess). The precise "better" predicate is a design sub-task
+  resolved by TDD against ch46 + Coalfall; the invariant is: **a bare re-ask
+  never overwrites a committed named answer.**
 
-*Acceptance:* the reproduced ch44 `tag-correct` false-positive paragraphs no
-longer produce a strong `tag-name` span for the wrong speaker; **all existing
-`parser.test.ts` cases stay green** (especially Russian/German dash-dialogue and
-the legitimate inline-beat-attribution cases).
+*Acceptance:* ch46 + Coalfall `final` no longer collapse vs. their `det`
+(averaged runs); ch45's escalation gain is preserved or not worsened; existing
+`escalation.test.ts` invariants (tag-name never overridden, budget accounting,
+dedup) stay green.
 
-### 5.2 Target A2 — gate silent correction on tag strength
+### 5.3 Wave 3 — crossExamine tag strength (secondary)
 
-*Files: `server/src/analyzer/dialogue-structure/cross-examine.ts`
-(+ `cross-examine.test.ts`); tag-strength consumed from A1.*
+*Files: `server/src/analyzer/dialogue-structure/parser.ts`, `cross-examine.ts`,
+`types.ts`, `escalation.ts` (+ tests).*
 
-`decideAnchoredSpeech`'s `tag-name` branch keeps its "strong tag wins silently"
-behavior **only for strong tags**. On a **weak**-tag disagreement with the model,
-it **keeps the model's id and flags** (a surfaced review-stop) instead of
-silently overwriting. No dependency on per-line `confidence` (which is optional
-in the stage-2 schema and may be absent). Whether a weak tag is
-*kept-and-flagged* vs *applied-and-flagged* is decided by TDD against the
-reproduced cases; the invariant is: **a weak tag never silently overrides the
-model.**
+Introduce tag **strength** and gate silent correction on it:
+- **A1 (parser.ts):** a `tag-name` minted from a **quote-paragraph
+  narration-gap** reclassified on a **beat** verb only (no speech verb) is
+  **weak**; a genuine inline speech-verb tag adjacent to its quote is **strong**.
+  This must distinguish the weak quote-gap case from the **legitimately strong
+  dash-interior beat tag** the Russian/German cases rely on (e.g.
+  `— Да, — кивнул Антон`) — so the rule keys off *path + verb class + adjacency*,
+  not "beat verb" alone. Cover the dash path and phase-2 anchoring, not just
+  `parseQuoteParagraph`.
+- **A2 (cross-examine.ts + escalation.ts):** a **weak**-tag disagreement with
+  the model **keeps the model id and flags** (bucket `flagged`, mirroring the
+  existing `pronoun-keep-flag`/`alt-keep-flag` rows) instead of silently
+  overriding. Strength threads through `SpanEvidence.speaker` in `types.ts`, and
+  **escalation.ts:230's `hasTagName` guard must honor the same strong/weak
+  distinction** so the two enforcers agree (a weak tag must be overridable by
+  the escalation pass too).
 
-*Acceptance:* on the reproduced ch44 cases, a weak-tag disagreement no longer
-silently flips a correct model answer; strong-tag corrections are unchanged;
-`cross-examine.test.ts` strong-tag invariants stay green.
+*Acceptance:* ch44 `tag-correct` false-positive paragraphs (reproduced as parser
+unit tests) no longer mint a strong `tag-name` for the wrong speaker; all
+existing `parser.test.ts` / `cross-examine.test.ts` cases stay green (esp.
+Russian/German dash beat-verb tags); ch44 `final` improves toward raw.
 
-### 5.3 Target B — flagged-line alternation resolution
+## 6. Acceptance criteria (verifiable, variance-aware)
 
-*Files: `server/src/routes/analysis.ts` (the post-cross-examine step —
-`applyNarratorDefault` / scene-break annotation) + its test.*
+Measured via `npm run eval:attribution -- --engine qwen --runs 3`
+(`EVAL_QWEN_MODEL=qwen36-cw-iq4-32k:latest`), mean over ≥3 runs:
 
-Trace the exact post-cross-examine step that reassigns
-`unanchored-named:*|flagged` lines, reproduce ch46's Stephanie→Dusk/narrator
-flip as a test, and fix the resolution so a clean two-speaker alternation
-preserves the correct deterministic assignment rather than defaulting it away.
-
-*Acceptance:* the reproduced ch46 two-hander lines keep their correct speaker
-through the final stage; no regression on existing analysis.ts tests.
-
-## 6. Acceptance criteria (verifiable bar)
-
-Measured via `npm run eval:attribution -- --engine qwen`
-(`EVAL_QWEN_MODEL=qwen36-cw-iq4-32k:latest`) against the recorded baseline:
-
-- **Primary:** `final ≥ raw` on **every** fixture.
-- **Tags (drift-excluded):** explicit-tag family ≥ **95%** correct.
-- **Coalfall guardrail:** no regression below its raw baseline (75.9%) —
-  anti-overfit tripwire.
-- **No net loss:** no fixture's `final` drops vs. the recorded baseline.
-- **Every code fix ships a paired unit test** reproducing its specific failing
-  case (fails before, passes after). The eval scorecard is the integration
+- **Primary:** every fixture's mean `final ≥ raw − noise` (no net degradation
+  from the deterministic+escalation layers), and the two large regressors
+  recovered: **ch46 and Coalfall `final` within noise of their `det`**.
+- **Coalfall guardrail:** mean `final ≥ raw` (75.9%) — anti-overfit tripwire.
+- **No fixture's mean `final` drops** vs. the recorded esc-off `det` baseline.
+- **Every code change ships a paired unit test** reproducing its specific case
+  (fails before / passes after). The averaged eval scorecard is the integration
   measure, not a substitute for unit tests.
 
-## 7. Follow-up — Target C (prompt exploration), sequenced
+## 7. Risks
+
+- **Escalation redesign blast radius:** escalation runs on every book/language
+  in `'local'` mode. Mitigated by the tag-name invariant staying intact, the
+  Coalfall guardrail, and `escalation.test.ts`.
+- **E2 "better" predicate is genuinely hard** (no runtime ground truth). Start
+  conservative (fill-unresolved-only; override only on window-consistency) and
+  let the averaged eval arbitrate; do not over-engineer a confidence model that
+  the schema can't feed (per-line `confidence` is optional/absent).
+- **A1 shared-code tension:** the same `anchorSpansFromTags` serves the
+  desired-strong dash beat tags and the desired-weak quote-gap tags. The rule
+  must not regress the multilingual dash cases — pinned by keeping their tests
+  green.
+- **Variance masking small wins:** ch45's +1.8 and ch43's −0.5 are near the
+  noise floor; do not chase or over-credit them. Averaged runs are the arbiter.
+
+## 8. Follow-up — Target C (main-prompt exploration), sequenced
 
 The "prompt-tuning is a dead end on small local models" conclusion (plan
-221/srv-59) predates the current model (~3× the size it was decided against).
-Re-test it **empirically** using the now-honest harness: A/B a stage-2 prompt
-change and read the **raw** delta, targeting the classes where the *model* is the
-bottleneck — `unanchored` (25–40%, pure model reasoning) and `pronoun`
-disambiguation (54% on ch44) — **not** tags (a deterministic problem, fixed
-here). Constraint: the stage-2 prompt is shared across languages, so any prompt
-change needs multilingual fixtures captured (or an explicit en-only caveat)
-before it can ship. Filed as its own backlog item; own branch/experiment.
-
-## 8. Risks
-
-- **A1 blast radius:** the parser feeds every language and book. Mitigated by
-  keeping all existing `parser.test.ts` green and by the Coalfall guardrail.
-- **Over-flagging (A2):** making weak-tag disagreements flag could add review
-  stops. Expected low once A1 removes the false weak tags; measured via the
-  flagged-count in the structure log.
-- **seg-drift is a separate lever:** honest scoring (5.0) reveals but does not
-  fix segmentation. If a large residual remains after A1/A2/B, segmentation is a
-  separate follow-up, not scope creep here.
+221/srv-59) predates the current model (~3× larger). Re-test empirically on the
+now-honest, variance-averaged harness: A/B a **main stage-2** prompt change and
+read the **raw** delta, targeting `unanchored` (pure model reasoning) and
+`pronoun` disambiguation — not tags (deterministic, fixed here). Constraint: the
+stage-2 prompt is shared across languages, so any change needs multilingual
+fixtures captured (or an explicit en-only caveat) before shipping. Own
+branch/experiment. Note the Wave-2 escalation re-ask prompt work is a smaller,
+adjacent instance of the same "does better prompting help the bigger model?"
+question and will be an early read on it.
