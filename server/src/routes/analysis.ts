@@ -222,7 +222,10 @@ async function logCarriedForwardCharacters(
 const MODEL_LABELS: Record<string, string> = {
   'gemini-2.5-flash': 'Gemini 2.5 Flash',
   'gemini-3-flash-preview': 'Gemini 3 Flash',
+  'gemini-3.5-flash': 'Gemini 3.5 Flash',
+  'gemini-3.6-flash': 'Gemini 3.6 Flash',
   'gemini-3.1-flash-lite': 'Gemini 3.1 Flash Lite',
+  'gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite',
   'gemma-4-31b-it': 'Gemma 4 31B',
   'gemma-4-26b-a4b-it': 'Gemma 4 26B',
 };
