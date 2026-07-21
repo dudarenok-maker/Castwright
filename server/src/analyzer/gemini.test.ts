@@ -790,6 +790,16 @@ describe('GeminiAnalyzer — output truncation (#528)', () => {
     const result = await analyzer.runStage1('m_stop', '# stage 1 prompt', {});
     expect(result.characters).toHaveLength(3);
   });
+
+  it('sets the pinned decoding temperature on the request', async () => {
+    generateContentStream.mockResolvedValue(asyncFromArray([{ text: STAGE1_RESPONSE }]));
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+    await analyzer.runStage1('m_temperature', '# stage 1 prompt', {});
+    expect(generateContentStream).toHaveBeenCalledWith(
+      expect.objectContaining({ config: expect.objectContaining({ temperature: 0.2 }) }),
+    );
+  });
 });
 
 afterAll(async () => {

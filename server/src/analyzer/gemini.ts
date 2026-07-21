@@ -90,6 +90,11 @@ export function resolveMaxOutputTokens(): number {
   return configValue<number>('analyzer.gemini.maxOutputTokens');
 }
 
+/** Live-read the cloud analyzer sampling temperature (registry wins). */
+export function resolveGeminiTemperature(): number {
+  return configValue<number>('analyzer.gemini.temperature');
+}
+
 /* Inter-attempt backoffs for the retry loop in generateWithLimiter.
    Exported so tests can shrink them via `GEMINI_RETRY_BACKOFFS_MS` — the
    1.5 s / 6 s production values plus 25% jitter would push a 3-attempt
@@ -725,6 +730,7 @@ export class GeminiAnalyzer implements Analyzer {
           systemInstruction,
           abortSignal: combined,
           maxOutputTokens: resolveMaxOutputTokens(),
+          temperature: resolveGeminiTemperature(),
         },
       });
       const start = Date.now();
