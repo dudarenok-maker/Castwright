@@ -481,3 +481,24 @@ describe('escalateFlaggedWindows — E-core (resolve, not override)', () => {
     expect(flags).toEqual([{ index: 3, reason: 'unanchored-named:anton' }]);
   });
 });
+
+describe('escalateFlaggedWindows — E1 (confident-neighbour context)', () => {
+  it('labels a confident neighbour line with its resolved speaker, leaves flagged lines unlabeled', async () => {
+    const { body, paras, sentences, flags } = buildFixture();
+    let capturedPrompt = '';
+    const analyzer = fakeAnalyzer((prompt) => {
+      capturedPrompt = prompt;
+      return { assignments: [] };
+    });
+
+    await escalateFlaggedWindows({ ...baseOpts(), sentences, flags, paras, body, analyzer });
+
+    const windowText = capturedPrompt.split('Text (>>N<< marks the lines to resolve):\n')[1];
+    // Confident tag-confirmed neighbours are surfaced as resolved anchors...
+    expect(windowText).toContain('[anton]');
+    expect(windowText).toContain('[boris]');
+    // ...the flagged placeholder lines are marked (>>id<<), never labeled with a guess.
+    expect(windowText).toContain('>>4<<');
+    expect(windowText).not.toContain('[narrator]');
+  });
+});

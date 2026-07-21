@@ -52,6 +52,13 @@ const NARRATOR_ID = 'narrator';
     long or longer is a real digression, not "short" context. */
 const SHORT_NARRATION_MAX_LEN = 200;
 
+/** E1 (spec §5.2): a neighbour line resolved by crossExamine at or above this
+    confidence is a high-confidence deterministic anchor (tag-confirm 0.95 /
+    tag-correct 0.9 / pronoun-confirm 0.85 / pronoun-correct 0.8 / alt-confirm
+    0.8) surfaced to ground the re-ask; below it (unanchored 0.5–0.65, keep-flag
+    guesses 0.6–0.7) is a guess and is suppressed. Starting value; TDD-pinned. */
+const CONFIDENT_ANCHOR_MIN = 0.8;
+
 /** E-core (spec §5.2): escalation may only FILL a genuinely-unresolved
     placeholder line. `unanchored-narrator` is the sole flag class whose
     current answer is a non-committal placeholder; every other escalatable
@@ -118,10 +125,28 @@ function buildWindowText(
     markersByPara.set(pIdx, list);
   }
 
+  // E1: label confident non-member neighbour dialogue lines with their resolved
+  // speaker; the flagged members stay unlabeled (they're what we're asking about).
+  const memberSet = new Set(memberIdx);
+  const labelsByPara = new Map<number, string>();
+  for (let idx = 0; idx < sentences.length; idx++) {
+    if (memberSet.has(idx)) continue;
+    const sent = sentences[idx];
+    if ((sent.confidence ?? 0) < CONFIDENT_ANCHOR_MIN) continue;
+    if (sent.characterId === NARRATOR_ID) continue; // a narrator label adds no attribution signal
+    const span = aligned[idx].spans.find((s) => s.kind === 'speech');
+    if (!span) continue;
+    const pIdx = corePara.find((k) => paras[k].start <= span.start && span.start < paras[k].end);
+    if (pIdx === undefined) continue;
+    if (!labelsByPara.has(pIdx)) labelsByPara.set(pIdx, sent.characterId); // first confident speaker wins
+  }
+
   const renderPara = (pIdx: number): string => {
     const markers = markersByPara.get(pIdx) ?? [];
     const prefix = markers.map((id) => `>>${id}<<`).join('') + (markers.length ? ' ' : '');
-    return prefix + body.slice(paras[pIdx].start, paras[pIdx].end);
+    const label = labelsByPara.get(pIdx);
+    const labelPrefix = label ? `[${label}] ` : '';
+    return prefix + labelPrefix + body.slice(paras[pIdx].start, paras[pIdx].end);
   };
 
   let selected = [...corePara];
@@ -164,7 +189,8 @@ function buildWindowText(
       }
     }
   }
-  for (const idx of memberIdx) participantIds.add(sentences[idx].characterId);
+  // E1: do NOT seed participants from the flagged members' own ids — those are
+  // the low-confidence guesses the re-ask must not be primed with.
   participantIds.delete(NARRATOR_ID);
 
   return { text, participantIds: [...participantIds] };
