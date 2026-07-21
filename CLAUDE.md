@@ -205,9 +205,10 @@ Design rationale:
     fallback when `GEMINI_API_KEY` is set, `allowCloudFallback` is on, and the
     daemon is unreachable).
   - **Gemini** (`GEMINI_API_KEY=…`) — calls the free-tier Gemini API
-    directly. Optional `GEMINI_MODEL` (default `gemma-4-31b-it` — separate
-    free-tier bucket from `gemini-*` and 1,500 RPD; flip to
-    `gemini-3.1-flash-lite` etc. via env). Every outbound call (primary
+    directly. Optional `GEMINI_MODEL` (ships defaulting to
+    `gemini-3.5-flash-lite`; code-level last-resort fallback stays
+    `gemma-4-31b-it` — its own free-tier bucket, 30 RPM / 14,400 RPD, and
+    RECITATION-filter-immune; flip via env). Every outbound call (primary
     AND retry) is gated through a per-model RPM/TPM/RPD limiter
     (`server/src/analyzer/rate-limit.ts`) so retries can't compound into
     429/500 storms. See `server/.env.example` for `GEMINI_RPM_*` /

@@ -47,13 +47,19 @@ export const MODEL_OPTIONS: ModelOption[] = [
   {
     id: 'gemma-4-31b-it',
     label: 'Gemma 4 31B',
-    hint: '15 RPM, unlimited TPM, 1,500/day — best fit for long-chapter books',
+    hint: '30 RPM, 16K TPM, 14,400/day — best fit for long-chapter books',
     engine: 'gemini',
   },
   {
     id: 'gemma-4-26b-a4b-it',
     label: 'Gemma 4 26B',
-    hint: '15 RPM, unlimited TPM, 1,500/day — lighter Gemma variant',
+    hint: '30 RPM, 16K TPM, 14,400/day — lighter Gemma variant',
+    engine: 'gemini',
+  },
+  {
+    id: 'gemini-3.5-flash-lite',
+    label: 'Gemini 3.5 Flash Lite',
+    hint: '15 RPM, 250K TPM, 500/day — newest lite, comfortably parses a novel',
     engine: 'gemini',
   },
   {
@@ -63,9 +69,15 @@ export const MODEL_OPTIONS: ModelOption[] = [
     engine: 'gemini',
   },
   {
+    id: 'gemini-3.6-flash',
+    label: 'Gemini 3.6 Flash',
+    hint: '5 RPM, 250K TPM, 20/day — newest & strongest Flash, but only enough for a short book',
+    engine: 'gemini',
+  },
+  {
     id: 'gemini-3.5-flash',
     label: 'Gemini 3.5 Flash',
-    hint: '5 RPM, 250K TPM, 20/day — strongest Flash, but only enough for a short book',
+    hint: '5 RPM, 250K TPM, 20/day — only enough for a short book',
     engine: 'gemini',
   },
   {

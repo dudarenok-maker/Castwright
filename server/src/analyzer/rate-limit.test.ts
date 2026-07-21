@@ -81,6 +81,30 @@ describe('GeminiRateLimiter', () => {
     expect(onWait).not.toHaveBeenCalled();
   });
 
+  it('applies the baked-in limits for gemini-3.5-flash-lite (15 RPM / 250K TPM, not the 5 RPM / 100K fallback)', async () => {
+    /* Registered in BUILTIN_LIMITS as 15 RPM / 250K TPM / 500 RPD. Six
+       immediate 1K acquires prove RPM > 5 (the unknown-model fallback would
+       block the 6th); a single 120K acquire proves TPM = 250K (the 100K
+       fallback would block it). Together they prove the entry is wired up,
+       not falling back — without it a book-length run would hit the 50 RPD
+       fallback cap and stall mid-analysis. */
+    const onWait = vi.fn();
+    for (let i = 0; i < 6; i += 1) {
+      await limiter.acquire('gemini-3.5-flash-lite', 1_000, { onWait });
+    }
+    await limiter.acquire('gemini-3.5-flash-lite', 120_000, { onWait });
+    expect(onWait).not.toHaveBeenCalled();
+  });
+
+  it('applies the baked-in limits for gemini-3.6-flash (250K TPM, not the 100K fallback)', async () => {
+    /* Registered in BUILTIN_LIMITS as 5 RPM / 250K TPM / 20 RPD (same tier as
+       3.5 Flash). A single 120K-token acquire fits the baked 250K cap without
+       waiting; under the unknown-model fallback (100K TPM) it would block. */
+    const onWait = vi.fn();
+    await limiter.acquire('gemini-3.6-flash', 120_000, { onWait });
+    expect(onWait).not.toHaveBeenCalled();
+  });
+
   it('reconciles an over-estimated entry via recordActualTokens', async () => {
     /* Reserve 50K; reconcile down to 10K — a follow-up 200K request
        must now fit (10K + 200K = 210K, under 250K). */
@@ -195,6 +219,18 @@ describe('GeminiRateLimiter', () => {
     const p = limiter.acquire('gemma-4-31b-it', 12000, { onWait: (ms) => waits.push(ms) });
     await Promise.race([p, new Promise((r) => setTimeout(r, 20))]);
     expect(waits.some((w) => w > 0)).toBe(true);
+  });
+
+  it('applies the corrected Gemma RPM of 30 (not the old 15)', async () => {
+    /* Gemma free tier is 30 RPM / 16000 TPM / 14400 RPD (AI Studio 2026). 16
+       tiny acquires (900 tok each = 14.4k, under the 16k TPM window) must all
+       clear without an RPM wait — the pre-correction 15 RPM cap would have
+       blocked the 16th. Locks the 15→30 correction in BUILTIN_LIMITS. */
+    const onWait = vi.fn();
+    for (let i = 0; i < 16; i += 1) {
+      await limiter.acquire('gemma-4-31b-it', 900, { onWait });
+    }
+    expect(onWait).not.toHaveBeenCalled();
   });
 
   it('treats env TPM 0 as unlimited even though the builtin is finite', () => {

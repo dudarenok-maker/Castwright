@@ -124,7 +124,7 @@ your own on-disk copy; nothing here changes until you explicitly edit.
 | Analyzer engine | "local" routes through Ollama (auto-falls back to Gemini when Ollama is unreachable and a key is set); "gemini" always goes direct | `local` | local / gemini | live | medium |
 | Ollama URL | Base URL of the local Ollama daemon | `http://localhost:11434` | string | live | medium |
 | Ollama model | Model tag for the /api/chat fallback | `qwen3.5:4b` | string | live | medium |
-| Gemini analyzer model | Model used directly or as Ollama-unreachable fallback | `gemma-4-31b-it` | string | live | medium |
+| Gemini analyzer model | Model used directly or as Ollama-unreachable fallback | `gemini-3.5-flash-lite` | string | live | medium |
 | Voice-style model | Model used to design each cast member's voice persona | `gemini-3.1-flash-lite` | string | live | medium |
 | Persona generation engine | gemini (default, locked quality) vs local persona design | `gemini` | local / gemini | live | medium |
 | Persona local model | Ollama tag when persona engine=local; blank inherits analyzer model | (blank) | string | live | low |
@@ -318,9 +318,9 @@ won't place on a card it should fit, or the eGPU drops off the bus.
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
-| Gemma 4 31B RPM | Requests-per-minute cap | 15 | integer, min 1 | restart · app | low |
-| Gemma 4 31B TPM | Input-tokens-per-minute cap; 0 = unlimited sentinel | 0 | integer, min 0 | restart · app | low |
-| Gemma 4 31B RPD | Requests-per-day cap | 1500 | integer, min 1 | restart · app | low |
+| Gemma 4 31B RPM | Requests-per-minute cap | 30 | integer, min 1 | restart · app | low |
+| Gemma 4 31B TPM | Input-tokens-per-minute cap; 0 = unlimited sentinel | 16000 | integer, min 0 | restart · app | low |
+| Gemma 4 31B RPD | Requests-per-day cap | 14400 | integer, min 1 | restart · app | low |
 
 ## 11. LAN access & device tokens
 

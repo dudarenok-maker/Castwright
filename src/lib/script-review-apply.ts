@@ -12,12 +12,14 @@ export const REVIEW_EMOTIONS = ['neutral', 'whisper', 'angry', 'excited', 'sad']
    client-side. A model absent from this map (notably any LOCAL Ollama model)
    has no daily cap → no warning. */
 export const REVIEW_MODEL_RPD: Record<string, number> = {
+  'gemini-3.5-flash-lite': 500,
   'gemini-3.1-flash-lite': 500,
+  'gemini-3.6-flash': 20,
   'gemini-3.5-flash': 20,
   'gemini-3-flash-preview': 20,
   'gemini-2.5-flash': 20,
-  'gemma-4-31b-it': 1500,
-  'gemma-4-26b-a4b-it': 1500,
+  'gemma-4-31b-it': 14400,
+  'gemma-4-26b-a4b-it': 14400,
 };
 
 export interface RpdWarning {
