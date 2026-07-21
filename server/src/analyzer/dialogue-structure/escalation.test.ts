@@ -179,6 +179,64 @@ function buildNamedFixture() {
   return { body, paras, sentences: examined.sentences, flags: examined.flags };
 }
 
+/** Same roster as ROSTER, plus 'dmitri' — a roster character who never
+    appears as a speaker anywhere in the fixture's text (no tag/pronoun/
+    alternation ever resolves to him). */
+const ROSTER_WITH_DMITRI = ['anton', 'olga', 'boris', 'dmitri', 'narrator'];
+
+/** Same body/paras as buildFixture, but sentence id 4 (index 3) carries a
+    NAMED model guess ('dmitri') instead of the placeholder 'narrator' ->
+    crossExamine flags it `unanchored-named:dmitri` (CONFIDENCE.UNANCH_NAMED_
+    FLAG = 0.65, well below E1's CONFIDENT_ANCHOR_MIN = 0.8, so it's never a
+    "confident neighbour" either). Critically, 'dmitri' is on the roster but
+    is NOT a span-speaker anywhere in this window (his name never appears in
+    the text) -- so the ONLY way his id could reach buildWindowText's
+    candidate `participantIds` set is via the removed E1 seed line
+    (`participantIds.add(sentences[idx].characterId)` for flagged members).
+    Every existing fixture's flagged-member ids are either 'narrator'
+    (stripped regardless) or already a genuine span-speaker in the window
+    (anton in buildNamedFixture), so none of them can tell the seed line
+    apart from its absence -- this one can. */
+function buildFlaggedGuessOffWindowFixture() {
+  const enIdx = buildNameIndex(
+    [
+      { id: 'anton', name: 'Anton' },
+      { id: 'olga', name: 'Olga' },
+      { id: 'boris', name: 'Boris' },
+    ],
+    conventionsFor('en')!,
+  );
+  const body = [
+    'He waited quietly.',
+    '"Ready?" said Anton.',
+    '"Ready," said Olga.',
+    '"Confirmed," said Boris.',
+    '"Then let\'s go."',
+    '"After you."',
+    'She smiled and walked ahead.',
+  ].join('\n');
+  const paras = parseChapterStructure(body, enIdx);
+  resolveWindows(paras, { anton: 'male', olga: 'female', boris: 'male' }, null);
+  const sentences: SentenceOutput[] = [
+    { id: 1, chapterId: 1, characterId: 'anton', text: 'Ready?' },
+    { id: 2, chapterId: 1, characterId: 'olga', text: 'Ready,' },
+    { id: 3, chapterId: 1, characterId: 'boris', text: 'Confirmed,' },
+    { id: 4, chapterId: 1, characterId: 'dmitri', text: "Then let's go." }, // NAMED guess, never a span-speaker
+    { id: 5, chapterId: 1, characterId: 'narrator', text: 'After you.' },
+  ];
+  const alignment = alignSentences(sentences, paras, body);
+  const examined = crossExamine(alignment, {
+    rosterIds: new Set(ROSTER_WITH_DMITRI),
+    unknownBucketIds: new Set([MALE_BUCKET_ID, FEMALE_BUCKET_ID]),
+    alignmentFloorPct: 80,
+  });
+  expect(examined.flags).toEqual([
+    { index: 3, reason: 'unanchored-named:dmitri' },
+    { index: 4, reason: 'unanchored-narrator' },
+  ]);
+  return { body, paras, sentences: examined.sentences, flags: examined.flags };
+}
+
 function fakeAnalyzer(impl: (prompt: string) => EscalationOutput | null): Analyzer {
   return {
     runStage1: () => Promise.reject(new Error('not used')),
@@ -500,5 +558,35 @@ describe('escalateFlaggedWindows — E1 (confident-neighbour context)', () => {
     // ...the flagged placeholder lines are marked (>>id<<), never labeled with a guess.
     expect(windowText).toContain('>>4<<');
     expect(windowText).not.toContain('[narrator]');
+  });
+
+  it("de-seed: a flagged member's own low-confidence guess is excluded from the candidate list when it is not otherwise a span-speaker in the window", async () => {
+    const { body, paras, sentences, flags } = buildFlaggedGuessOffWindowFixture();
+    let capturedPrompt = '';
+    const analyzer = fakeAnalyzer((prompt) => {
+      capturedPrompt = prompt;
+      return { assignments: [] };
+    });
+
+    await escalateFlaggedWindows({
+      ...baseOpts(),
+      rosterIds: new Set(ROSTER_WITH_DMITRI),
+      sentences,
+      flags,
+      paras,
+      body,
+      analyzer,
+    });
+
+    const presentedCandidates = capturedPrompt.split(' — full roster ids:')[0];
+    // The flagged member's OWN guessed id ('dmitri') must NOT leak into the
+    // candidate list -- with the seed line restored it would, since it's
+    // otherwise absent from this window as a genuine span-speaker.
+    expect(presentedCandidates).not.toContain('dmitri');
+    // Legitimately-present span-speakers are still listed -- this isn't
+    // just an (accidentally) empty candidate list.
+    expect(presentedCandidates).toContain('anton');
+    expect(presentedCandidates).toContain('olga');
+    expect(presentedCandidates).toContain('boris');
   });
 });
