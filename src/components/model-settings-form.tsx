@@ -43,7 +43,7 @@ const GROUP_DEFAULTS: ConfigGroup = {
 const GROUP_ANALYZER_SPLIT: ConfigGroup = {
   id: 'model-analyzer-split',
   label: 'Two-model analyzer split (advanced)',
-  help: 'Optional. By default both analysis passes run on your default analysis model. Pick a model for EACH phase to split the work: Phase 0 (cast detection) and Phase 1 (sentence attribution) then run on different models concurrently, with Phase 1 starting a few chapters behind Phase 0 (the minimum chapter lag below). This spreads load across two free-tier rate-limit buckets — e.g. Gemma 4 31B (1,500/day) for cast detection and Gemini 3.1 Flash Lite (500/day) for attribution — and finishes sooner. Leave both blank for the single-model default. Server env vars (ANALYZER_PHASE{0,1}_MODEL / ANALYZER_PHASE1_MIN_LAG_CHAPTERS) still override for ops triage.',
+  help: 'Optional. By default both analysis passes run on your default analysis model. Pick a model for EACH phase to split the work: Phase 0 (cast detection) and Phase 1 (sentence attribution) then run on different models concurrently, with Phase 1 starting a few chapters behind Phase 0 (the minimum chapter lag below). This spreads load across two free-tier rate-limit buckets — e.g. Gemma 4 31B (14,400/day) for cast detection and Gemini 3.1 Flash Lite (500/day) for attribution — and finishes sooner. Leave both blank for the single-model default. Server env vars (ANALYZER_PHASE{0,1}_MODEL / ANALYZER_PHASE1_MIN_LAG_CHAPTERS) still override for ops triage.',
   risk: 'low',
   collapsedByDefault: false,
 };
@@ -329,7 +329,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
         </p>
         <FieldRow
           label="Phase 0 model (cast detection)"
-          sublabel="Drives the cast-roster pass. Gemma 4 31B is the recommended default — high free-tier headroom (1,500/day) and strong at character identification."
+          sublabel="Drives the cast-roster pass. Gemma 4 31B is the recommended default — high free-tier headroom (14,400/day) and strong at character identification."
         >
           <select
             value={analyzerPhase0Model ?? ''}
