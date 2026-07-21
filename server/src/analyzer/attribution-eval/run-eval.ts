@@ -128,3 +128,73 @@ export async function evalFixture(opts: {
     final: scoreStage(opts.truth, result.sentences, reasons),
   };
 }
+
+export interface Stat {
+  mean: number;
+  min: number;
+  max: number;
+}
+
+export interface StageAgg {
+  recall: Stat;
+  segDriftMean: number;
+  total: number;
+  byFamily: Record<string, { acc: Stat; sampleRuns: number; driftMean: number }>;
+}
+
+export interface FixtureAgg {
+  fixture: string;
+  runs: number;
+  raw: StageAgg;
+  deterministic: StageAgg;
+  final: StageAgg;
+}
+
+function mean(xs: number[]): number {
+  return xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+function stat(xs: number[]): Stat {
+  if (xs.length === 0) return { mean: 0, min: 0, max: 0 };
+  return { mean: mean(xs), min: Math.min(...xs), max: Math.max(...xs) };
+}
+
+/** Average N per-run StageScores. Per-run RATIOS are averaged (recall directly;
+    family accuracy = correct/attributed per run). A family absent in a run, or
+    present with 0 attributed (all its lines drifted), contributes NO accuracy
+    sample — `sampleRuns` records how many runs actually contributed one. */
+export function aggStage(stages: StageScore[]): StageAgg {
+  const fams = new Set<string>();
+  for (const s of stages) for (const k of Object.keys(s.byFamily)) fams.add(k);
+
+  const byFamily: StageAgg['byFamily'] = {};
+  for (const fam of fams) {
+    const accs: number[] = [];
+    const drifts: number[] = [];
+    for (const s of stages) {
+      const b = s.byFamily[fam];
+      if (!b) continue; // family absent this run → no sample of any kind
+      drifts.push(b.drift);
+      if (b.attributed > 0) accs.push(b.correct / b.attributed);
+    }
+    byFamily[fam] = { acc: stat(accs), sampleRuns: accs.length, driftMean: mean(drifts) };
+  }
+
+  return {
+    recall: stat(stages.map((s) => s.recall)),
+    segDriftMean: mean(stages.map((s) => s.segMismatch)),
+    total: stages[0]?.total ?? 0,
+    byFamily,
+  };
+}
+
+/** Aggregate the N runs of ONE fixture (all same fixture name) into a FixtureAgg. */
+export function aggregateFixture(runs: FixtureResult[]): FixtureAgg {
+  return {
+    fixture: runs[0].fixture,
+    runs: runs.length,
+    raw: aggStage(runs.map((r) => r.raw)),
+    deterministic: aggStage(runs.map((r) => r.deterministic)),
+    final: aggStage(runs.map((r) => r.final)),
+  };
+}
