@@ -14,6 +14,11 @@ const COMMITTED = fileURLToPath(new URL('./__fixtures__/', import.meta.url));
 // Fixture: <slug>-ch<NN>.<lang>.labelled.json ; roster (per book): <slug>.roster.json
 const FIXTURE_RE = /^(.+)-ch(\d+)\.([a-z]{2})\.labelled\.json$/;
 
+export function slotLabel(engine: 'qwen' | 'gemma'): string {
+  if (engine === 'qwen') return `qwen:${process.env.EVAL_QWEN_MODEL ?? 'qwen3.5:9b'}`;
+  return `gemma:${process.env.GEMINI_MODEL ?? 'gemma-4-31b-it'}`;
+}
+
 interface CorpusItem {
   name: string;
   truth: LabelledChapter;
@@ -96,7 +101,7 @@ export async function runEval(opts: {
       }
       fixtures.push(aggregateFixture(perRun));
     }
-    results.push({ engine, fixtures });
+    results.push({ engine: slotLabel(engine), fixtures });
   }
   return { skipped: null, runs, results };
 }
