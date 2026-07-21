@@ -62,6 +62,7 @@
 - **Find help faster.** Troubleshooting is now sorted into clear, searchable sections instead of one long list — and Help and Admin link straight out to the matching guide in the wiki.
 - **Fixed a rare developer-mode glitch where flipping between a book and its script review too quickly could make the review progress jump around.** (#1496)
 - See how fast your local analyzer is really going: a new Admin panel tracks decode speed across a run and flags when it slows down.
+- **A long, dense chapter analysed in the cloud no longer fails the whole book.** When analysis runs on a Gemini or Gemma cloud model and a big, tightly-packed chapter's answer runs past the model's output limit before a single word comes back, Castwright now splits that chapter into smaller pieces and carries on — instead of stopping the entire book with a misleading "content blocked" error.
 
 # Castwright 1.13.0
 
