@@ -775,20 +775,26 @@ export class GeminiAnalyzer implements Analyzer {
         lastChunkAt = now;
       }
       if (!buf) {
-        /* The stream finished with zero text. The usual cause on a `gemini-*`
-           model is a content-filter block: the model emits a candidate carrying
-           the stop reason (RECITATION on memorised/copyrighted source text, or
-           SAFETY) but no text — or rejects the prompt outright with a
-           promptFeedback.blockReason. Splitting the chapter won't help (the
-           sub-bodies are still blocked), so we fail fast with a *plain* Error
-           (no retry, no chunk-split) and NAME the reason so the operator can
-           act. Reordered ahead of nothing — historically this branch threw a
-           bare "empty response" and discarded the reason captured below. */
-        /* Typed sentinel — carries the model + reason so the run-level consumers
-           (analysis, script-review) fast-fail the whole run and the taxonomy
-           matches by name. The message text is built inside the error VERBATIM
-           (same reason suffix + remediation hint), so log-greps and the taxonomy
-           regex still match. */
+        /* The stream finished with zero text. Two OPPOSITE causes hide here and
+           must be told apart by the stop reason — misclassifying one as the
+           other either fails a recoverable run or grinds a doomed one:
+
+           1. MAX_TOKENS — the model hit its OUTPUT cap before emitting any
+              decodable text (a dense / over-budget chunk on a small-cap model
+              like gemma-4-31b-it). This is a SIZE problem, not a content block:
+              splitting the input shrinks the required output until it fits.
+              Route it to AnalyzerTruncatedError — the SAME classified error the
+              non-empty-buffer truncation gate below throws — so the stage-2
+              chunker adaptively re-splits the span and recovers. Keyed on the
+              reason, not the model id, so it holds for every Gemini/Gemma model.
+           2. RECITATION / SAFETY / a promptFeedback.blockReason — a genuine
+              content-filter block. The same filter blocks every chapter
+              identically, so retry/split is futile: fail fast with a *plain*,
+              whole-book-fatal typed sentinel that NAMES the reason (run-level
+              consumers key off the type + the taxonomy matches by name). */
+        if (finishReason === 'MAX_TOKENS') {
+          throw new AnalyzerTruncatedError('gemini', finishReason, 0, candidatesTokenCount);
+        }
         const stopReason = finishReason ?? blockReason;
         throw new GeminiContentBlockedError(this.model, stopReason);
       }
