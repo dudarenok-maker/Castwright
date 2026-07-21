@@ -212,3 +212,31 @@ describe('anchorSpansFromTags — anchoring contract (Finding 3)', () => {
     expect(speechC.speaker).toEqual({ characterId: 'olga', source: 'tag-name' });
   });
 });
+
+describe('A1 — weak tag strength (beat-only quote gaps)', () => {
+  const enIdx = () =>
+    buildNameIndex([{ id: 'anton', name: 'Anton' }], conventionsFor('en')!);
+
+  const firstSpeaker = (paras: ReturnType<typeof parseChapterStructure>) =>
+    paras.flatMap((p) => p.spans).find((s) => s.kind === 'speech' && s.speaker)?.speaker;
+
+  it('a beat-only quote-gap tag is marked strength: weak', () => {
+    const paras = parseChapterStructure('"Stop." Anton frowned.', enIdx());
+    expect(firstSpeaker(paras)).toMatchObject({ characterId: 'anton', source: 'tag-name', strength: 'weak' });
+  });
+
+  it('a speech-verb quote tag stays strong (no strength field)', () => {
+    const paras = parseChapterStructure('"Hi," Anton said.', enIdx());
+    const sp = firstSpeaker(paras);
+    expect(sp).toMatchObject({ characterId: 'anton', source: 'tag-name' });
+    expect(sp?.strength).toBeUndefined();
+  });
+
+  it('a dash-interior beat tag stays strong (Russian кивнул path)', () => {
+    const ruIdx = buildNameIndex([{ id: 'anton', name: 'Антон' }], conventionsFor('ru')!);
+    const paras = parseChapterStructure('— Да, — кивнул Антон.', ruIdx);
+    const sp = firstSpeaker(paras);
+    expect(sp).toMatchObject({ characterId: 'anton', source: 'tag-name' });
+    expect(sp?.strength).toBeUndefined();
+  });
+});

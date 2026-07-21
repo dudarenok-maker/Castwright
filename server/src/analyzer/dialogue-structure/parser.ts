@@ -52,7 +52,8 @@ export function anchorSpansFromTags(spans: SpanEvidence[], line: string, base: n
     const text = line.slice(tag.start - base, tag.end - base);
     const name = findRosterName(text, index);
     if (name) {
-      sp.speaker = { characterId: name, source: 'tag-name' };
+      const weak = 'weakTag' in tag; // set only on beat-only quote-gap tags (parseQuoteParagraph)
+      sp.speaker = { characterId: name, source: 'tag-name', ...(weak ? { strength: 'weak' as const } : {}) };
     } else {
       const { pronoun } = classifyPronoun(text, conv.pronouns);
       if (pronoun) (sp as SpanEvidence & { pendingPronoun?: ParsedTag['pronoun'] }).pendingPronoun = pronoun;
@@ -237,9 +238,17 @@ function parseQuoteParagraph(line: string, base: number, index: NameIndex): Para
   // reclassified, however many verb/beat stems ("smiled", "added", …) it
   // happens to contain.
   if (runs.length > 0) {
-    const verbs = [...conv.speechVerbStems, ...conv.beatVerbStems];
     for (const s of spans) {
-      if (s.kind === 'narration' && hasStem(line.slice(s.start - base, s.end - base), verbs)) s.kind = 'tag';
+      if (s.kind !== 'narration') continue;
+      const gap = line.slice(s.start - base, s.end - base);
+      const hasSpeechVerb = hasStem(gap, conv.speechVerbStems);
+      const hasBeatVerb = hasStem(gap, conv.beatVerbStems);
+      if (!hasSpeechVerb && !hasBeatVerb) continue;
+      s.kind = 'tag';
+      // A beat-only reclassification is weak evidence: an English "Anton
+      // frowned." adjacent to a quote is a plausible beat attribution, but not
+      // an authoritative speech tag. A speech-verb tag stays strong.
+      if (!hasSpeechVerb) (s as SpanEvidence & { weakTag?: boolean }).weakTag = true;
     }
   }
   anchorSpansFromTags(spans, line, base, index);
