@@ -96,12 +96,27 @@ full commit history):
    outranks `alternation`, which outranks `unanchored` — and every flag-worthy case (anything the
    evidence could not prove) lands strictly below the manuscript view's existing `< 0.75`
    low-confidence triage threshold. Tuning the exact numbers is fine; reordering the tiers is not.
-2. **Tags outrank everything (hard invariant).** Nothing — not the model's own guess, not
-   alternation, not escalation (§6) — may override a `tag-name` attribution. Enforced in
-   `decideAnchoredSpeech`'s `tag-name` case (`cross-examine.ts:116-119`, confirm-or-correct, never
+2. **Strong tags outrank everything (hard invariant).** Nothing — not the model's own guess, not
+   alternation, not escalation (§6) — may override a *strong* `tag-name` attribution. Enforced in
+   `decideAnchoredSpeech`'s `tag-name` case (confirm-or-correct, never
    flag-and-keep-model) and independently re-asserted in the escalation acceptance rules
    (`escalation.ts` — a proposed id is rejected if it contradicts any `tag-name` evidence, per
    spec §6 "Acceptance rules").
+
+   > **Updated 2026-07-21 (deterministic tuning — spec/plan
+   > `docs/superpowers/{specs,plans}/2026-07-21-attribution-deterministic-tuning*`).** The
+   > invariant now holds for *strong* tags only. A `tag-name` minted from a **beat-only
+   > quote-paragraph narration gap** (e.g. `"Stop." Anton frowned.` — a beat verb, no speech
+   > verb) is marked `speaker.strength: 'weak'` in the parser (A1). A weak tag the model
+   > **disagrees** with now **keeps the model id and flags** (`tag-weak-keep-flag:<model>-vs-<tag>`,
+   > bucket `flagged`) instead of force-correcting (A2); a weak tag the model agrees with still
+   > confirms. Absence of `strength` = strong = the immutable behaviour above (a speech-verb tag
+   > and the dash/quote-interior beat tag the Russian/German `кивнул`-style cases rely on stay
+   > strong). Escalation's rejection rule was also **generalized** (E-core): escalation may now
+   > only *fill* a genuinely-unresolved `unanchored-narrator` placeholder and never overwrites
+   > **any** committed named answer (not just a `tag-name`), grounded with confident (≥0.8)
+   > neighbour anchors (E1). On-box averaged eval (qwen36-cw-iq4-32k, 3 runs) recovered the
+   > escalation regressors — ch46 +11.1, Coalfall +4.6 vs the prior baseline, no fixture regressed.
 3. **Continuation exemption (hard invariant).** A sentence inside a speech span — e.g. the
    second sentence of a multi-sentence dash-utterance, which has no leading dash of its own — is
    classified as *speech*, not narration: it inherits the enclosing span's speaker/evidence and is

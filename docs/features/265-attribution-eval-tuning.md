@@ -201,3 +201,24 @@ and/or a `GEMINI_API_KEY`.
 ## Ship notes
 
 (Fill in when status flips to `stable`.)
+
+### Follow-up: first deterministic-first tuning cycle (2026-07-21)
+
+The harness this plan built was used to run its first real tuning cycle against local
+Qwen (`qwen36-cw-iq4-32k`), delivered on branch `fix/server-attribution-deterministic-tuning`
+under its own spec/plan
+(`docs/superpowers/{specs,plans}/2026-07-21-attribution-deterministic-tuning*`). Two harness
+extensions landed here as part of it:
+
+- **Per-family accuracy excludes segmentation drift** — `familyBreakdown` reports each evidence
+  family as `correct / attributed / drift` (a `truth === null` drift line is a segmentation split,
+  not a mis-attribution, so it no longer deflates the family's accuracy denominator).
+- **`--runs N` multi-run averaging** (`aggStage`/`aggregateFixture`, env `EVAL_RUNS`) — averages
+  per-run ratios with mean±range, so sub-noise (±2–3%) single-run deltas can't be read as signal.
+  Acceptance uses N≥3.
+
+The tuning itself (E-core escalation fill-gate, E1 neighbour-grounded re-ask, A1/A2 weak-tag
+strength) lives in plan [247](247-dialogue-structure-attribution.md) (invariant #2, updated
+2026-07-21). On-box averaged result (3 runs): ch46 +11.1, Coalfall +4.6 vs prior baseline, ch45
+escalation gain preserved, no fixture regressed. Remaining ch44 gap (raw→det crossExamine on
+*strong* tags) is the deferred deterministic-first phase-2 / Target C lever.
