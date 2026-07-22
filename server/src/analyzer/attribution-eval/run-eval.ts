@@ -123,7 +123,7 @@ export async function evalFixture(opts: {
   const reasons = stages!.reasons;
   return {
     fixture: opts.fixtureName ?? `chapter-${opts.chapterId}`,
-    raw: scoreStage(opts.truth, stages!.raw),
+    raw: scoreStage(opts.truth, stages!.raw, reasons),
     deterministic: scoreStage(opts.truth, stages!.deterministic, reasons),
     final: scoreStage(opts.truth, result.sentences, reasons),
   };

@@ -14,6 +14,11 @@ const COMMITTED = fileURLToPath(new URL('./__fixtures__/', import.meta.url));
 // Fixture: <slug>-ch<NN>.<lang>.labelled.json ; roster (per book): <slug>.roster.json
 const FIXTURE_RE = /^(.+)-ch(\d+)\.([a-z]{2})\.labelled\.json$/;
 
+export function slotLabel(engine: 'qwen' | 'gemma'): string {
+  if (engine === 'qwen') return `qwen:${process.env.EVAL_QWEN_MODEL ?? 'qwen3.5:9b'}`;
+  return `gemma:${process.env.GEMINI_MODEL ?? 'gemma-4-31b-it'}`;
+}
+
 interface CorpusItem {
   name: string;
   truth: LabelledChapter;
@@ -96,7 +101,7 @@ export async function runEval(opts: {
       }
       fixtures.push(aggregateFixture(perRun));
     }
-    results.push({ engine, fixtures });
+    results.push({ engine: slotLabel(engine), fixtures });
   }
   return { skipped: null, runs, results };
 }
@@ -119,6 +124,9 @@ function printScorecard(results: Array<{ engine: string; fixtures: FixtureAgg[] 
       console.log(
         `  ${f.fixture}: raw ${range(f.raw.recall, f.runs)} → det ${range(f.deterministic.recall, f.runs)} → final ${range(f.final.recall, f.runs)} (n=${f.final.total}, drift ${f.final.segDriftMean.toFixed(0)}, runs=${f.runs})`,
       );
+      for (const fam of Object.keys(f.raw.byFamily).sort()) {
+        console.log(`      raw · ${fam}: ${famLine(f.raw.byFamily[fam], f.runs)}`);
+      }
       for (const fam of Object.keys(f.final.byFamily).sort()) {
         console.log(`      ${fam}: ${famLine(f.final.byFamily[fam], f.runs)}`);
       }

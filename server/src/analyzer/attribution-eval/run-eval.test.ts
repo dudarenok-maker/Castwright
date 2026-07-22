@@ -108,4 +108,18 @@ describe('evalFixture', () => {
     expect(res.final.recall).toBeCloseTo(1);
     expect(res.final.total).toBe(2);
   });
+
+  it('populates raw.byFamily so the per-family gate has data (Target C)', async () => {
+    const res = await evalFixture({
+      analyzer: fakeAnalyzer,
+      manuscriptId: 'm', title: 'T', truth, roster, chapterId: 44,
+      stageCall: { language: 'en' } as never,
+    });
+    // Before Target C this was {} (raw scored without reasons).
+    expect(Object.keys(res.raw.byFamily).length).toBeGreaterThan(0);
+    // Same family set as deterministic, since evidence family is a property of the text.
+    expect(Object.keys(res.raw.byFamily).sort()).toEqual(
+      Object.keys(res.deterministic.byFamily).sort(),
+    );
+  });
 });
