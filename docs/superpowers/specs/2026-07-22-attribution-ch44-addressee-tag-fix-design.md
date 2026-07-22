@@ -101,19 +101,26 @@ only when it is the **subject** of the speech/beat verb. A name in addressee or
 bystander position is not the speaker; the span falls through to the existing pronoun
 path.
 
-**Decided heuristic — addressee reject-list, resolved against the verb position:**
+**Decided heuristic — addressee reject-list, resolved against the verb position
+(language-general, per-language marker data):**
 
 - A roster name appearing **before** the speech/beat verb is *treated as* the subject →
   **accept** (`Anton said`, `Sanguine said, shaking his head`; adverb gaps like
-  `X slowly said` are before-verb, unaffected). **Caveat (acknowledged residual, not
-  "safe"):** before-verb is *not* a guarantee of subjecthood — perception-verb frames
-  like `"…," Valkyrie heard Skulduggery say.` put a non-speaker (`Valkyrie`) before the
-  verb. This class is **pre-existing and unchanged** by this fix (we do not make it
-  worse, and do not claim to fix it); it stays on the residual list.
+  `X slowly said` are before-verb, unaffected). We take the **nearest** name before the
+  verb — which as a bonus resolves perception frames (`"…," Valkyrie heard Skulduggery
+  say.` → nearest-before-`say` is `Skulduggery`, not the leftmost `Valkyrie`). Whether
+  it fully lands is confirmed at measure time; until then it stays on the residual list,
+  not claimed as fixed.
 - A roster name appearing **after** the verb is accepted only as a clean inverted
-  subject (`said Anton`) — i.e. **rejected** when separated from the verb by an
-  **addressee preposition** or a **bystander conjunction** (`and`/`but` + name + its own
-  verb, e.g. `a voice said and Valkyrie turned`).
+  subject (`said Anton`, `сказала Майрин`, `sagte Meister Oduvan`) — i.e. **rejected**
+  when separated from the verb by any of:
+  - an **addressee preposition** (`to`/`at`/… · de `zu`/`an` · es `a` · fr `à` · ru `к`),
+  - a **bystander conjunction** (`and`/`but` · `und`/`aber` · `y`/`pero` · `et`/`mais` ·
+    `и`/`но`), or
+  - a **subject pronoun** — the language-general clause that makes **Russian's caseless
+    dative** work: `сказал он Валери` ("said he Valkyrie[dat]") has no preposition, but
+    the pronoun `он` between the verb and `Валери` marks `Валери` as the non-subject.
+    Every `LanguageConventions` already carries `pronouns`, so this needs no new data.
 - On rejection, `applyTag` proceeds to `classifyPronoun` as if no name were found.
   **Honest fall-through semantics (correcting the earlier draft's false "worst case =
   flag" claim):** the rejected span becomes a *pronoun/alternation* attribution whose
@@ -141,11 +148,25 @@ path.
   `towards`, `for`; **no `…`, and explicitly excluding `from`/`of`**, which sit before
   real inverted subjects: `came a shout from Skulduggery`).
 
-**Extension point:** optional `addresseePrepositions?: string[]` (+ bystander
-conjunction set) on `LanguageConventions` (`types.ts`), **English-populated**; other
-languages default empty → **byte-identical to current behaviour** (the established
-empty-table degrade pattern). Reject logic lives in `parser.ts`. Rule #2 is untouched —
-a genuine subject-name tag stays strong.
+**Extension point:** optional `addresseePrepositions?` + `tagClauseConjunctions?` on
+`LanguageConventions` (`types.ts`), **populated for every supported language**
+(en/de/es/fr/ru) with its own markers. Presence of `addresseePrepositions` is the
+per-language opt-in; an **unsupported/unknown language resolves to the empty convention
+table** (no markers, no verbs) → `findSubjectName` finds no verb → legacy first-match →
+**byte-identical** (247 invariant #4 preserved). Reject logic lives in `parser.ts`. Rule
+#2 is untouched — a genuine subject-name tag stays strong.
+
+**Why language-general, not English-only:** the bug is not English-specific
+(`sagte er zu X`, `le dijo a X`, `dit-il à X`, `сказал он Валери` all mis-anchor a
+non-speaker today). The logic is one algorithm keyed on per-language marker data plus the
+shared `pronouns`; the existing dialogue-structure suite (incl. the RU dash fixture and
+the DE #1598 cases) uses only clean subject/inverted tags and stays green (verified: no
+test asserts the old addressee behaviour). **Measurement caveat:** the eval corpus is
+English-only, so the *quantified* lift is English; ru/de/es/fr correctness rests on
+per-language unit tests + the green existing suite, with real-book acceptance for those
+languages deferred to `#1759`'s fixtures. This is a correctness fix (removing a provable
+wrong-anchor), not model/language tuning — so shipping it for all languages now is
+right, even though only English is eval-measured.
 
 ## Measurement — frozen-raw A/B (the load-bearing methodology)
 
@@ -199,14 +220,16 @@ a genuine subject-name tag stays strong.
 ## Out of scope
 
 - Rule #2 / `crossExamine` force-correct **policy** changes (fix B).
-- RU / DE addressee handling — the eval corpus is English-only today; the convention
-  field ships empty for non-English (`#1759` will extend fixtures later).
+- **Non-English *measurement*** (not the fix itself) — the eval corpus is English-only,
+  so ru/de/es/fr get the same fix + unit tests now, but their *quantified* acceptance is
+  deferred to `#1759`'s fixtures. The convention markers ship populated for all five.
 - Escalation (`det → final` −0.6 is a separate, smaller lever).
 - **Residual checklist (post-measure, not designed-for blind):**
   - The `"Hey," → melissa-edgley` misfire (1 of 9, a name-bleed of a different shape) —
     confirm whether it survives the frozen-raw replay.
-  - The perception-verb before-verb class (`Valkyrie heard Skulduggery say`) — a
-    pre-existing mis-anchor this fix neither worsens nor resolves.
+  - The perception-verb frame (`Valkyrie heard Skulduggery say`) — nearest-name-before-
+    verb *should* now resolve it (→ `Skulduggery`); confirm at measure time before
+    claiming it fixed.
 
 ## Ship notes
 
