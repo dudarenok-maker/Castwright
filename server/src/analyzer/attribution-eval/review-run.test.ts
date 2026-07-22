@@ -1,0 +1,176 @@
+/* Task 5 — route-parity drift test for the thin review-core loop
+   (`runReviewOverChapter`). A STUB analyzer stands in for the model: its
+   `runScriptReviewChapter` keys off the sentenceIds present in the prompt it is
+   handed (every chunk sees its core + up to `overlap` context sentences), so a
+   deliberately multi-chunk chapter exercises the `ownsOp` de-dup — an op on a
+   sentence that is a given chunk's CONTEXT must be dropped there and emitted by
+   the chunk that OWNS it (its core), exactly once.
+
+   The reference in assertion (b) is NOT the route's `reviewCore` (a closure
+   inside runScriptReviewJob, not importable) — it is an independent single-pass
+   ownership computed over the SAME chunks using the SAME shared pure helpers
+   (`chunkSentencesByBudget`/`ownsOp`/`primarySentenceId`) production uses. So it
+   catches internal drift of THIS loop against its own ownership contract, which
+   is the strongest guard available under the no-extract stance. */
+import { describe, it, expect } from 'vitest';
+import { runReviewOverChapter } from './review-run.js';
+import {
+  chunkSentencesByBudget,
+  chunkWithContext,
+  ownsOp,
+  primarySentenceId,
+  chapterChunkBudget,
+  OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,
+} from '../chapter-chunker.js';
+import { buildReviewSentencesInput } from '../../routes/script-review.js';
+import type { Analyzer, StageCall } from '../index.js';
+import type { SentenceOutput, ScriptReviewOp, ScriptReviewOutput } from '../../handoff/schemas.js';
+
+const CHAPTER_ID = 1;
+const MANUSCRIPT_ID = 'm-review-run';
+const roster = [
+  { id: 'c1', name: 'Alice' },
+  { id: 'c2', name: 'Bob', role: 'narrator' },
+];
+
+/* Big enough sentences that the default local budget (24000 chars) packs them
+   into ≥2 cores — verified below, not assumed. `x`.repeat guarantees the bad
+   anchor `ZZZ_MISSING` never occurs in any sentence text. */
+function makeSentences(count: number, chars: number): SentenceOutput[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: i + 1,
+    chapterId: CHAPTER_ID,
+    characterId: 'c1',
+    text: 'x'.repeat(chars),
+  }));
+}
+
+// The exact serialize + budget the loop uses — so `refChunks` below is identical
+// to the chunking runReviewOverChapter performs internally.
+const serialize = (s: SentenceOutput): string =>
+  JSON.stringify(buildReviewSentencesInput([s], undefined)[0]);
+function refChunksFor(sentences: SentenceOutput[]) {
+  const charBudget = chapterChunkBudget(
+    'local',
+    JSON.stringify(roster).length + 800,
+    sentences.map((s) => s.text).join(' '),
+    OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,
+  );
+  return chunkSentencesByBudget(sentences, { charBudget, overlap: 3, serialize });
+}
+
+const rationale = 'stub';
+const presentIds = (prompt: string): number[] => {
+  const ids: number[] = [];
+  const re = /"sentenceId":\s*(\d+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(prompt)) !== null) ids.push(Number(m[1]));
+  return ids;
+};
+
+/* Stub analyzer: for every sentenceId visible in the prompt emit a valid
+   `strip_tag`; additionally, for a designated id, emit a `split` with a bad
+   anchor so planApply rejects it (assertion (c)). Ownership de-dup is the loop's
+   job — the stub returns the same op for a sentence whether it is that chunk's
+   core OR context. */
+function makeStub(badAnchorId: number): Analyzer {
+  const stub = {
+    async runScriptReviewChapter(
+      _manuscriptId: string,
+      _chapterId: number,
+      prompt: string,
+      _call: StageCall,
+    ): Promise<ScriptReviewOutput> {
+      const ops: ScriptReviewOp[] = [];
+      for (const id of presentIds(prompt)) {
+        ops.push({ id, op: 'strip_tag', anchor: 'x', rationale } as ScriptReviewOp);
+        if (id === badAnchorId) {
+          ops.push({ id, op: 'split', anchor: 'ZZZ_MISSING', rationale } as ScriptReviewOp);
+        }
+      }
+      return { ops };
+    },
+  } as unknown as Analyzer;
+  return stub;
+}
+
+describe('runReviewOverChapter — route-parity chunk loop', () => {
+  const sentences = makeSentences(10, 6000); // 10 × ~6k → ≥2 cores under a 24k budget
+  const call: StageCall = {};
+
+  it('splits into ≥2 chunks (test precondition)', () => {
+    expect(refChunksFor(sentences).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('(a) emits a context-region op exactly once, from the owning chunk', async () => {
+    const chunks = refChunksFor(sentences);
+    // The first sentence of chunk 1's core is ALSO chunk 0's contextAfter — a
+    // sentence the model "sees" in two chunks. It must be emitted exactly once.
+    const boundaryId = chunks[1].core[0].id;
+    expect(chunks[0].contextAfter.some((s) => s.id === boundaryId)).toBe(true);
+
+    const { ops } = await runReviewOverChapter({
+      analyzer: makeStub(-1),
+      engine: 'local',
+      manuscriptId: MANUSCRIPT_ID,
+      chapterId: CHAPTER_ID,
+      sentences,
+      roster,
+      call,
+    });
+
+    const stripsForBoundary = ops.filter((o) => o.op === 'strip_tag' && o.id === boundaryId);
+    expect(stripsForBoundary).toHaveLength(1);
+  });
+
+  it('(b) owned op set equals an independent single-pass ownership over the same chunks', async () => {
+    const chunks = refChunksFor(sentences);
+    // Reference: reproduce the ownership decision independently with the same
+    // pure helpers — for each chunk, keep only the ops whose primary sentence
+    // the chunk OWNS, over the ids the chunk's prompt would carry.
+    const refOwned = new Set<number>();
+    for (const chunk of chunks) {
+      for (const s of chunkWithContext(chunk)) {
+        if (ownsOp(chunk.coreIds, primarySentenceId({ id: s.id, op: 'strip_tag' }))) {
+          refOwned.add(s.id);
+        }
+      }
+    }
+
+    const { ops } = await runReviewOverChapter({
+      analyzer: makeStub(-1),
+      engine: 'local',
+      manuscriptId: MANUSCRIPT_ID,
+      chapterId: CHAPTER_ID,
+      sentences,
+      roster,
+      call,
+    });
+
+    const runOwned = new Set(ops.filter((o) => o.op === 'strip_tag').map((o) => o.id));
+    expect([...runOwned].sort((a, b) => a - b)).toEqual([...refOwned].sort((a, b) => a - b));
+    // Cores partition the chapter, so every sentence is owned exactly once.
+    expect(runOwned.size).toBe(sentences.length);
+  });
+
+  it('(c) accepted excludes an op planApply rejects (bad anchor)', async () => {
+    const badAnchorId = sentences[0].id; // a chunk-0 core sentence
+    const { ops, accepted } = await runReviewOverChapter({
+      analyzer: makeStub(badAnchorId),
+      engine: 'local',
+      manuscriptId: MANUSCRIPT_ID,
+      chapterId: CHAPTER_ID,
+      sentences,
+      roster,
+      call,
+    });
+
+    // The bad split IS produced (owned, once)…
+    const badSplits = ops.filter((o) => o.op === 'split' && o.id === badAnchorId);
+    expect(badSplits).toHaveLength(1);
+    // …but planApply rejects it (anchor not found), so it is NOT accepted…
+    expect(accepted.some((o) => o.op === 'split' && o.id === badAnchorId)).toBe(false);
+    // …while the same sentence's strip_tag (no anchor requirement) still is.
+    expect(accepted.some((o) => o.op === 'strip_tag' && o.id === badAnchorId)).toBe(true);
+  });
+});
