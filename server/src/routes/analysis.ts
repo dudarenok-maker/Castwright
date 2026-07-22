@@ -1519,10 +1519,13 @@ ${chapter.body}
 `;
 }
 
-/* Target C — the shared stage-2 attribution rules, injected into both the
-   whole-chapter and the chunked stage-2 inbox builders. Language-/quote-agnostic
-   by construction (see the lead line) so it does not misfire on «…» / „…" or
-   non-English text. Kept deliberately short — every rule earns its tokens. */
+/* Target C — the shared stage-2 attribution rules, injected into the
+   whole-chapter stage-2 inbox builder only. The chunk builder deliberately
+   omits it: the untagged-continuation / two-hander rules misfire across chunk
+   boundaries on multi-speaker chapters (on-box eval showed a ch44 raw
+   regression). Language-/quote-agnostic by construction (see the lead line) so
+   it does not misfire on «…» / „…" or non-English text. Kept deliberately
+   short — every rule earns its tokens. */
 const STAGE2_ATTRIBUTION_RULES = `## Attribution rules
 
 Apply these when assigning each sentence's speaker. They hold whatever
@@ -1605,7 +1608,8 @@ ${chapter.body}
 }
 
 /* Stage-2 inbox for ONE SECTION of a large chapter (#528 chunking). Same roster
-   + rules as buildStage2ChapterInbox, but the body is a sub-section and an
+   as buildStage2ChapterInbox (but NOT the attribution rules block — chapter-only,
+   see STAGE2_ATTRIBUTION_RULES), the body is a sub-section and an
    optional "preceding context" block carries the prior section's tail so an
    untagged quote keeps its speaker across the seam. The model must attribute
    ONLY the section, not the context. The chunk runner renumbers ids across
