@@ -21,4 +21,6 @@ export const en: LanguageConventions = {
     male: /(^|[^a-z])he([^a-z]|$)/iu,
     female: /(^|[^a-z])she([^a-z]|$)/iu,
   },
+  addresseePrepositions: ['to', 'at', 'toward', 'towards', 'for'],
+  tagClauseConjunctions: ['and', 'but'],
 };

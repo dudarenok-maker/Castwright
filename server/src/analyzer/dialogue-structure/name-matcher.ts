@@ -63,3 +63,70 @@ export function findRosterName(text: string, index: NameIndex): string | null {
   }
   return null;
 }
+
+/** Lowercased word tokens with their start offsets in `text`. */
+function tokenizeWithOffsets(text: string): Array<{ tok: string; start: number }> {
+  const out: Array<{ tok: string; start: number }> = [];
+  const re = /\p{L}+/gu;
+  const lower = text.toLowerCase();
+  for (let m = re.exec(lower); m; m = re.exec(lower)) out.push({ tok: m[0], start: m.index });
+  return out;
+}
+
+/** A token is a speech/beat verb when a convention stem is its PREFIX (stems are
+    word-initial). Prefix, not substring — `essay`.startsWith('say') is false.
+    Known limitation: a roster NAME sharing a verb-stem prefix (`Addison`⊃`add`,
+    `Rita`⊃`rit`) counts as both a verb and a name; acceptable — such a name in a
+    tag clause is rare, and the eval no-regression gate backstops it. */
+function isVerbToken(tok: string, index: NameIndex): boolean {
+  const { speechVerbStems, beatVerbStems } = index.conventions;
+  return [...speechVerbStems, ...beatVerbStems].some((s) => tok.startsWith(s));
+}
+
+function rosterIdOf(tok: string, index: NameIndex): string | null {
+  const stem = index.conventions.nameStemmer(tok);
+  if (stem.length < index.conventions.minStemLength) return null;
+  return index.stems.get(stem) ?? null;
+}
+
+/** A subject pronoun (per the language's `pronouns` regexes) — used to detect
+    that an after-verb name is NOT the inverted subject (`сказал он Валери`,
+    `sagte er zu X`, `dit-il à X`). The regexes want boundary context, so test
+    the token wrapped in spaces. */
+function isPronounToken(tok: string, index: NameIndex): boolean {
+  const p = index.conventions.pronouns;
+  const w = ` ${tok} `;
+  return [p.firstPerson, p.male, p.female].some((re) => re != null && re.test(w));
+}
+
+/** The subject-positioned roster name of a tag clause, or null when the only
+    roster match is an addressee (after an addressee preposition or the subject
+    pronoun) or a bystander (after a clause conjunction). Language-general:
+    keyed on per-language markers + the shared pronouns. Non-CJK opt-in path. */
+export function findSubjectName(text: string, index: NameIndex): { id: string; tokenStart: number } | null {
+  const toks = tokenizeWithOffsets(text);
+  const nameHits = toks
+    .map((t) => ({ start: t.start, id: rosterIdOf(t.tok, index) }))
+    .filter((t): t is { start: number; id: string } => t.id !== null);
+  if (nameHits.length === 0) return null;
+
+  const verbIdx = toks.findIndex((t) => isVerbToken(t.tok, index));
+  if (verbIdx < 0) return { id: nameHits[0].id, tokenStart: nameHits[0].start }; // no verb → legacy first-match parity
+  const verbStart = toks[verbIdx].start;
+
+  const before = nameHits.filter((n) => n.start < verbStart);
+  if (before.length) {
+    const nearest = before[before.length - 1]; // token order → last before the verb
+    return { id: nearest.id, tokenStart: nearest.start };
+  }
+
+  const cand = nameHits.find((n) => n.start > verbStart);
+  if (!cand) return null;
+  const between = toks.filter((t) => t.start > verbStart && t.start < cand.start);
+  const preps = new Set(index.conventions.addresseePrepositions ?? []);
+  const conjs = new Set(index.conventions.tagClauseConjunctions ?? []);
+  // addressee (preposition), bystander (conjunction), OR a subject pronoun between
+  // the verb and the name (caseless-dative addressee) → the name is not the subject.
+  if (between.some((t) => preps.has(t.tok) || conjs.has(t.tok) || isPronounToken(t.tok, index))) return null;
+  return { id: cand.id, tokenStart: cand.start };
+}

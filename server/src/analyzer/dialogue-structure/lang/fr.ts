@@ -16,4 +16,6 @@ export const fr: LanguageConventions = {
     male: /(^|[^\p{L}])il([^\p{L}]|$)/iu,
     female: /(^|[^\p{L}])elle([^\p{L}]|$)/iu,
   },
+  addresseePrepositions: ['à'],
+  tagClauseConjunctions: ['et', 'mais'],
 };
