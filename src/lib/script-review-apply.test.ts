@@ -1,5 +1,8 @@
 import { configureStore } from '@reduxjs/toolkit';
 import { vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import {
   resolveAnchorOffset,
   planApply,
@@ -19,6 +22,50 @@ describe('resolveAnchorOffset', () => {
   });
   it('null when not unique', () => expect(resolveAnchorOffset('he said, he said', 'he said')).toBeNull());
   it('null when absent (TOCTOU edit)', () => expect(resolveAnchorOffset('totally different', 'ran.')).toBeNull());
+});
+
+/* Shared no-drift vector (task-1, script-review-eval): the SAME fixture is
+   loaded server-side by server/src/analyzer/attribution-eval/review-apply-core.test.ts
+   against the ported `planApply`. Asserting both implementations against one
+   vector locks them against silently drifting apart. */
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SHARED_VECTORS_PATH = path.join(
+  __dirname,
+  '..',
+  '..',
+  'server',
+  'src',
+  'analyzer',
+  'attribution-eval',
+  '__fixtures__',
+  'review-apply-vectors.json',
+);
+
+interface SharedVector {
+  name: string;
+  ops: ReviewOp[];
+  live: Array<{ id: number; chapterId: number; text: string; characterId: string; instruct?: string; vocalization?: boolean }>;
+  roster: string[];
+  expected: {
+    appliableOpIndexes: number[];
+    unappliable: Array<{ opIndex: number; reason: string }>;
+  };
+}
+
+describe('planApply — shared no-drift vector (server review-apply-core)', () => {
+  const vectors: SharedVector[] = JSON.parse(readFileSync(SHARED_VECTORS_PATH, 'utf8'));
+
+  for (const vector of vectors) {
+    it(vector.name, () => {
+      const result = planApply(vector.ops, vector.live, new Set(vector.roster));
+
+      const appliableOpIndexes = result.appliable.map((op) => vector.ops.indexOf(op));
+      expect(appliableOpIndexes).toEqual(vector.expected.appliableOpIndexes);
+
+      const unappliable = result.unappliable.map((u) => ({ opIndex: vector.ops.indexOf(u.op), reason: u.reason }));
+      expect(unappliable).toEqual(vector.expected.unappliable);
+    });
+  }
 });
 
 describe('planApply', () => {
