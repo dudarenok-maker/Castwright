@@ -3506,24 +3506,50 @@ describe('stage-2 attribution rules block (Target C)', () => {
     expect(body).toBeGreaterThan(rules);
   });
 
-  it('does NOT render the rules block in the chunk builder — chunks deliberately omit it (chapter-only)', () => {
-    // The rules block is injected ONLY into the whole-chapter builder. The chunk
-    // builder omits it by design: the untagged-continuation / two-hander rules
-    // misfire across chunk boundaries on multi-speaker chapters — the on-box eval
-    // showed a ch44 raw regression (the sole chunked fixture) that this omission
-    // recovers, while every single-call chapter keeps the win. See the Target C
-    // ship note in docs/features/265-attribution-eval-tuning.md.
+  it('renders the chunk-variant rules block in the chunk builder (#1758)', () => {
     const prompt = buildStage2ChunkInbox(
-      'm', 'Title', stage1, chapter, 'section text', 'prior tail', null,
+      'm', 'Title', stage1, chapter, 'section text', 'prior tail', null, null,
     );
-    expect(prompt).not.toContain('## Attribution rules');
-    // The rest of the chunk prompt still renders in order.
+    expect(prompt).toContain('## Attribution rules');
+    expect(prompt).toContain('within this section'); // the rule-3 rewrite marker
+    // Order: roster → rules → preceding-context → section.
     const characters = prompt.indexOf('## Characters (from stage 1)');
+    const rules = prompt.indexOf('## Attribution rules');
     const context = prompt.indexOf('## Preceding context');
     const section = prompt.indexOf('## Section to attribute');
-    expect(characters).toBeGreaterThanOrEqual(0);
-    expect(context).toBeGreaterThan(characters);
+    expect(rules).toBeGreaterThan(characters);
+    expect(context).toBeGreaterThan(rules);
     expect(section).toBeGreaterThan(context);
+  });
+
+  it('renders the last-speaker seed only when lastSpeakerId is provided (#1758)', () => {
+    const seeded = buildStage2ChunkInbox(
+      'm', 'Title', stage1, chapter, 'section text', 'prior tail', null, 'egor',
+    );
+    expect(seeded).toContain('## Speaker at section start');
+    expect(seeded).toContain('`egor`');
+    // Seed sits after preceding-context and before the section body.
+    expect(seeded.indexOf('## Speaker at section start')).toBeGreaterThan(
+      seeded.indexOf('## Preceding context'),
+    );
+    expect(seeded.indexOf('## Section to attribute')).toBeGreaterThan(
+      seeded.indexOf('## Speaker at section start'),
+    );
+
+    const unseeded = buildStage2ChunkInbox(
+      'm', 'Title', stage1, chapter, 'section text', 'prior tail', null, null,
+    );
+    expect(unseeded).not.toContain('## Speaker at section start');
+  });
+
+  it('renders the first-person block after the seed when both apply (#1758)', () => {
+    const prompt = buildStage2ChunkInbox(
+      'm', 'Title', stage1, chapter, 'section text', 'prior tail', 'anton', 'egor',
+    );
+    const seed = prompt.indexOf('## Speaker at section start');
+    const firstPerson = prompt.indexOf('## First-person narrator');
+    expect(seed).toBeGreaterThan(0);
+    expect(firstPerson).toBeGreaterThan(seed);
   });
 
   it('still renders the first-person block after the rules block when a first-person id is present', () => {

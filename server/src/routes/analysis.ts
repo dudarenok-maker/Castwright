@@ -1645,12 +1645,13 @@ ${chapter.body}
 }
 
 /* Stage-2 inbox for ONE SECTION of a large chapter (#528 chunking). Same roster
-   as buildStage2ChapterInbox (but NOT the attribution rules block — chapter-only,
-   see STAGE2_ATTRIBUTION_RULES), the body is a sub-section and an
-   optional "preceding context" block carries the prior section's tail so an
-   untagged quote keeps its speaker across the seam. The model must attribute
-   ONLY the section, not the context. The chunk runner renumbers ids across
-   sections, so per-section 1-based numbering is fine. */
+   as buildStage2ChapterInbox, plus the chunk-variant attribution rules block
+   (STAGE2_ATTRIBUTION_RULES_CHUNK, #1758) and an optional last-speaker seed —
+   the body is a sub-section and an optional "preceding context" block carries
+   the prior section's tail so an untagged quote keeps its speaker across the
+   seam. The model must attribute ONLY the section, not the context. The chunk
+   runner renumbers ids across sections, so per-section 1-based numbering is
+   fine. */
 export function buildStage2ChunkInbox(
   manuscriptId: string,
   title: string,
@@ -1659,6 +1660,7 @@ export function buildStage2ChunkInbox(
   subBody: string,
   precedingContext: string | null,
   firstPersonId: string | null,
+  lastSpeakerId: string | null,
 ): string {
   const contextBlock = precedingContext
     ? `## Preceding context (already attributed — do NOT include in your output)
@@ -1668,6 +1670,15 @@ ONLY so you can carry a speaker across the boundary (e.g. an untagged quote
 whose speaker was named just before). Do NOT emit any sentences for this text.
 
 ${precedingContext}
+
+`
+    : '';
+  const seedBlock = lastSpeakerId
+    ? `## Speaker at section start
+
+The last character to speak before this section was \`${lastSpeakerId}\`. Treat the
+first untagged quote in this section as continuing \`${lastSpeakerId}\`, unless a
+dialogue tag or action beat names a different speaker.
 
 `
     : '';
@@ -1712,7 +1723,9 @@ ${JSON.stringify(
 )}
 \`\`\`
 
-${contextBlock}${firstPersonBlock}## Section to attribute (Chapter ${chapter.id} — ${chapter.title})
+${STAGE2_ATTRIBUTION_RULES_CHUNK}
+
+${contextBlock}${seedBlock}${firstPersonBlock}## Section to attribute (Chapter ${chapter.id} — ${chapter.title})
 
 ${subBody}
 `;
@@ -1845,6 +1858,7 @@ export async function attributeChapterStage2(opts: {
             subBody,
             preceding,
             firstPersonId,
+            null,
           );
     return opts.analyzer.runStage2Chapter(
       opts.manuscriptId,
