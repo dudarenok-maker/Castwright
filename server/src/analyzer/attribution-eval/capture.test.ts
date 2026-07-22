@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildLabelledChapter, buildRosterSnapshot } from './capture.js';
+import { buildLabelledChapter, buildRosterSnapshot, buildSilverSkeleton } from './capture.js';
+import { LabelledChapterSchema } from './schema.js';
 import type { SentenceOutput } from '../../handoff/schemas.js';
 
 const s = (id: number, chapterId: number, characterId: string, text: string): SentenceOutput => ({
@@ -34,5 +35,56 @@ describe('buildRosterSnapshot', () => {
       { id: 'valkyrie', name: 'Valkyrie Cain', gender: 'female', aliases: ['Val'] },
       { id: 'narrator', name: 'narrator' },
     ]);
+  });
+});
+
+describe('buildSilverSkeleton (Task 8)', () => {
+  const roster = [
+    { id: 'valkyrie', name: 'Valkyrie Cain' },
+    { id: 'skulduggery', name: 'Skulduggery Pleasant' },
+  ];
+
+  it('seeds lines from current attribution and schema-parses without priorExchange when none is supplied', () => {
+    const sentences = [
+      s(2, 44, 'skulduggery', 'Line B'),
+      s(1, 44, 'narrator', 'Line A'),
+    ];
+    const out = buildSilverSkeleton('CHAPTER BODY', sentences, roster);
+
+    expect(() => LabelledChapterSchema.parse(out)).not.toThrow();
+    expect(out.chapterText).toBe('CHAPTER BODY');
+    // seeded from current attribution, ordered by sentence id — no label
+    // corrections invented here, just the characterId→speakerId adapter map.
+    expect(out.lines).toEqual([
+      { text: 'Line A', speakerId: 'narrator' },
+      { text: 'Line B', speakerId: 'skulduggery' },
+    ]);
+    expect(out.priorExchange).toBeUndefined();
+  });
+
+  it('attaches the prior chapter final two-speaker exchange when prior-chapter sentences are supplied', () => {
+    const sentences = [s(1, 44, 'narrator', 'Line A')];
+    const priorSentences = [
+      s(1, 43, 'valkyrie', 'Are you coming?'),
+      s(2, 43, 'skulduggery', 'Right behind you.'),
+    ];
+    const out = buildSilverSkeleton('CHAPTER BODY', sentences, roster, priorSentences);
+    const parsed = LabelledChapterSchema.parse(out);
+
+    expect(parsed.priorExchange).toEqual({
+      turns: [
+        { speakerId: 'valkyrie', speakerName: 'Valkyrie Cain', text: 'Are you coming?' },
+        { speakerId: 'skulduggery', speakerName: 'Skulduggery Pleasant', text: 'Right behind you.' },
+      ],
+    });
+  });
+
+  it('omits priorExchange when the supplied prior-chapter sentences do not form a two-speaker exchange', () => {
+    const sentences = [s(1, 44, 'narrator', 'Line A')];
+    const priorSentences = [s(1, 43, 'valkyrie', 'Solo line, no reply.')];
+    const out = buildSilverSkeleton('CHAPTER BODY', sentences, roster, priorSentences);
+
+    expect(out.priorExchange).toBeUndefined();
+    expect(() => LabelledChapterSchema.parse(out)).not.toThrow();
   });
 });
