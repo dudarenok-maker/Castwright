@@ -14,10 +14,11 @@ inverted `said X` after it, **rejected** when an addressee preposition, a bystan
 conjunction, or a **subject pronoun** intervenes — the pronoun clause is
 language-general and makes Russian's caseless dative `сказал он Валери` work).
 `parser.ts:applyTag` uses it when the language convention opts in via a new
-`addresseePrepositions` field, **populated for all five supported languages**
-(en/de/es/fr/ru); an unsupported language resolves to the empty convention table → no
-verb → legacy first-match → byte-identical (247 invariant #4). Rule #2 (247 invariant
-#2) is untouched — a genuine subject-name tag stays strong. Two scoring-side fixes (a `canonicalId` alias
+`addresseePrepositions` field, populated for **five** Latin/Cyrillic tables
+(en/de/es/fr/ru); zh/ja stay opted-out (not CJK-aware). A non-opted-in language routes
+straight to legacy `findRosterName` (the gate never calls `findSubjectName`), and a
+truly-unknown language skips the engine — either way byte-identical (247 invariant #4).
+Rule #2 (247 invariant #2) is untouched — a genuine subject-name tag stays strong. Two scoring-side fixes (a `canonicalId` alias
 seam; ch44 label cleanup) de-noise the eval; a frozen-raw A/B measures the delta.
 
 **Tech Stack:** TypeScript (server, ESM NodeNext `.js` specifiers), Vitest (node env),
@@ -34,14 +35,19 @@ Every task's requirements implicitly include these:
 - **Rule #2 stays intact.** We narrow *evidence* (which name a tag anchors); we never
   weaken `crossExamine`'s strong-`tag-name` force-correction. Do not touch
   `cross-examine.ts` decision logic.
-- **Language-general logic; per-language markers; unsupported byte-identical.** The
-  subject-position path is gated on the convention carrying `addresseePrepositions`,
-  populated for all five supported languages. An **unsupported/unknown** language
-  resolves to the empty convention table (no verb stems), so `findSubjectName` finds no
-  verb and returns the first name = legacy `findRosterName` parity → byte-identical (247
-  invariant #4). The **existing dialogue-structure suite must stay green** (RU dash
-  fixture + DE #1598 cases use only clean subject/inverted tags) — that is the ru/de
-  regression guard, since the eval corpus is English-only.
+- **Language-general logic; per-language opt-in; everything else byte-identical.** The
+  subject-position path is gated in `applyTag` as `conv.addresseePrepositions ?
+  findSubjectName : findRosterName`. Opt in **exactly five** Latin/Cyrillic tables
+  (en/de/es/fr/ru). **zh/ja are supported (fs-59) but MUST stay opted-out** — they are
+  registered in `lang/index.ts` (7 tables total, not 5), and `findSubjectName` is **not
+  CJK-aware** (its `/\p{L}+/gu` tokenizer never splits `と田中は言った`); opting them in
+  would break the existing `parser.test.ts` ja case. Do **not** add `addresseePrepositions`
+  to `zh.ts`/`ja.ts`. Byte-identical mechanism, correctly stated: for any non-opted-in
+  language `findSubjectName` is **never called** (the gate routes to `findRosterName`
+  directly); a truly-unknown language has `conventions === null` and the engine is
+  skipped entirely (`analysis.ts:1893`). The **existing dialogue-structure suite must
+  stay green** (RU dash fixture + DE #1598 + ja cases) — the ru/de/ja regression guard,
+  since the eval corpus is English-only.
 - **Token-boundary matching, never substring.** Verb / preposition / conjunction /
   pronoun / name detection keys on tokenized words, not `String.includes` (`say`⊄"essay",
   `call`⊄"recalled", `add`⊄"saddle").
@@ -126,6 +132,11 @@ worktree has no corpus.
   tagClauseConjunctions: ['и', 'но'],
 ```
 
+> **Do NOT touch `zh.ts` / `ja.ts`.** They are supported but must keep the legacy
+> `findRosterName` (CJK substring) path — `findSubjectName` is not CJK-aware and would
+> break the `「わかった」と田中は言った。 → 田中` test. Leaving their `addresseePrepositions`
+> absent is exactly what keeps them on that path.
+
 - [ ] **Step 3: Write failing tests (name-matcher.test.ts).** Add a suite building an
   index from a small English roster via `buildNameIndex(roster, en)`. Roster:
   `Anton` (id `anton`), `Boris` (id `boris`), `Valkyrie` (id `valkyrie`),
@@ -135,6 +146,7 @@ worktree has no corpus.
 import { en } from './lang/en.js';
 import { de } from './lang/de.js';
 import { es } from './lang/es.js';
+import { fr } from './lang/fr.js';
 import { ru } from './lang/ru.js';
 import { buildNameIndex, findSubjectName } from './name-matcher.js';
 
@@ -212,6 +224,12 @@ describe('findSubjectName — other languages', () => {
     expect(findSubjectName('dijo a Ana', esIdx)).toBeNull();
     expect(findSubjectName('dijo Boris a Ana', esIdx)?.id).toBe('boris'); // Boris nearer, Ana is addressee
   });
+
+  const frIdx = buildNameIndex([{ id: 'marie', name: 'Marie' }, { id: 'paul', name: 'Paul' }], fr);
+  it('fr `à` addressee rejected; inverted subject accepted', () => {
+    expect(findSubjectName('dit à Marie', frIdx)).toBeNull();          // à → addressee
+    expect(findSubjectName('dit Paul', frIdx)?.id).toBe('paul');       // inverted subject
+  });
 });
 ```
 
@@ -231,7 +249,10 @@ function tokenizeWithOffsets(text: string): Array<{ tok: string; start: number }
 }
 
 /** A token is a speech/beat verb when a convention stem is its PREFIX (stems are
-    word-initial). Prefix, not substring — `essay`.startsWith('say') is false. */
+    word-initial). Prefix, not substring — `essay`.startsWith('say') is false.
+    Known limitation: a roster NAME sharing a verb-stem prefix (`Addison`⊃`add`,
+    `Rita`⊃`rit`) counts as both a verb and a name; acceptable — such a name in a
+    tag clause is rare, and the eval no-regression gate backstops it. */
 function isVerbToken(tok: string, index: NameIndex): boolean {
   const { speechVerbStems, beatVerbStems } = index.conventions;
   return [...speechVerbStems, ...beatVerbStems].some((s) => tok.startsWith(s));
@@ -455,7 +476,12 @@ Tasks 1–3 land on the branch.
 
 **B. Frozen-raw A/B (the load-bearing measurement).** A scratch script (delete after;
 record numbers in 265), mirroring the deterministic block at
-`server/src/routes/analysis.ts:1894-1906`:
+`server/src/routes/analysis.ts:1894-1906`. **Note:** most of that block's symbols are
+importable (`buildNameIndex`, `parseChapterStructure`, `resolveWindows`, `alignSentences`,
+`crossExamine`, `conventionsFor`, `MALE_BUCKET_ID`/`FEMALE_BUCKET_ID`), but
+`rosterGenderMap` (`analysis.ts:1751`) and `findFirstPersonCharacter` (`analysis.ts:1738`)
+are **module-private** — the scratch script must duplicate those two small pure helpers
+(or temporarily export them).
 1. Capture raw ONCE per fixture (N≥3 runs, real `qwen36-cw-iq4-32k`) via a mock/real
    `attributeChapterStage2` with `onStages`; persist each run's `raw` `SentenceOutput[]`.
 2. For each frozen raw run, run `buildNameIndex → parseChapterStructure → resolveWindows
