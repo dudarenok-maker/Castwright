@@ -278,3 +278,65 @@ both-builders, and it closes the "chunk path carries zero attribution rules" gap
 measured quality benefit**, so **no release-notes entry** (no user-visible delta). The seed/rule-#3
 machinery earned no lift here; whether to keep or drop it is folded into the deferred
 deterministic-first phase-2 / ch44-residual work, not re-litigated now.
+
+### Addressee-name tag fix — deterministic-first phase-2 (2026-07-22, #1763)
+
+The ch44 residual (#1758's floor-only result left the `unanchored`/continuation families
+un-lifted) was diagnosed to a real parser bug, not a policy problem: `findRosterName` resolved
+a speech tag's speaker as the *first* roster name in the clause — subject/object-blind — so an
+**addressee** or **bystander** name (`"…," he said to Valkyrie.`, `сказал он Валери`) was minted
+as a **strong `tag-name`** and force-corrected the line to the wrong voice. Fix = a new pure
+`findSubjectName` that resolves the tag's **subject by verb position** (nearest name before the
+speech/beat verb; inverted `said X` after it, **rejected** when an addressee preposition, a
+bystander conjunction, or a subject pronoun intervenes — the pronoun clause is language-general
+and handles Russian's caseless dative). `applyTag` uses it when the language opts in
+(`addresseePrepositions`, populated en/de/es/fr/ru; zh/ja stay on the legacy path). Rule #2 (247
+invariant #2) is preserved — a genuine subject-name tag still anchors strong. Built via SDD on
+`fix/server-attribution-addressee-tag` (Tasks 1–3: `findSubjectName` + 5 lang tables; the
+`applyTag` gate; a `canonicalId` scorer-alias seam de-duping `the_torment ≡ unknown-male`).
+
+**Measurement = frozen-raw A/B (English, `--runs 3`, `qwen36-cw-iq4-32k`).** To separate the
+engine lift from model-sampling noise, the raw model attribution was captured ONCE per fixture per
+run, then the deterministic pass (`buildNameIndex → parseChapterStructure → resolveWindows →
+alignSentences → crossExamine`) was replayed TWICE over that identical frozen raw — **baseline**
+(`{...en, addresseePrepositions: undefined}` → legacy `findRosterName`) vs **treatment** (real
+`en` → `findSubjectName`). Because both replays share one frozen raw, the treatment−baseline
+recall delta (③) carries zero sampling noise. A self-validation asserted the manual treatment
+replay reproduced the real pipeline's deterministic snapshot exactly — **mismatch = 0 on every
+fixture, including the chunked ch44** — so the replay is faithful.
+
+| Fixture | raw | base-det | treat-det | ③ engine lift (treat−base) | changed lines |
+|---|---|---|---|---|---|
+| **ch44** (target) | 84.9% | 82.6% | **84.6%** | **+1.93pp** [1.8, 1.8, 2.1] | 14 — all target bug cases |
+| ch43 | 80.3% | 79.8% | 80.3% | +0.55pp [0.5×3] | 1 (`[180]` china→Valkyrie) |
+| ch45 | 60.7% | 60.7% | 60.7% | 0.00pp | **none** |
+| ch46 | 63.2% | 63.2% | 63.2% | 0.00pp | **none** |
+| **coalfall-ch1** (guardrail) | — | 77.0% | 77.0% | **0.00pp** | **NONE** |
+
+On ch44 the deterministic pass no longer throws away correct raw attribution: baseline-det sat
+2.3pp **below** raw (82.6 vs 84.9), treatment-det sits only 0.3pp below (84.6 vs 84.9) — the fix
+recovers essentially all of the residual. The ch44 changed lines are exactly the target cases:
+`"Fireball,"` (the `he said to Valkyrie` case) → **skulduggery-pleasant**; `"I overestimated
+you,"` → **the_torment** (scored TP via the `canonicalId` alias); `"Hey,"` reassigned
+melissa→stephanie (Residual-D item — resolved by the subject-position rule, inside the
+net-positive lift). Per-run ③ is uniformly positive (never a per-run regression).
+
+**No-regression gate PASS.** The Opus whole-branch review named the frozen-raw no-regression
+numbers as the actual merge gate for the one residual risk (compound multi-clause tags could
+return `null` → pronoun fallthrough where legacy anchored). That risk **did not materialize**:
+ch45, ch46, and the committed **coalfall-ch1 guardrail all show 0.00pp and ZERO changed lines** —
+the specific assertion that must not move (Coalfall guardrail recall 77.0% baseline == treatment,
+no line reassigned) holds.
+
+**Measurement scope — English only.** The quantified lift is English (the sole eval corpus).
+ru/de/es/fr ship the same fix + per-language `findSubjectName` unit tests with the full
+dialogue-structure suite green (RU dash fixture + DE #1598 + ja cases), but their *quantified*
+real-book acceptance is deferred to `#1759`'s fixtures — this is not "measured across all
+languages." zh/ja are deliberately excluded from the fix (not CJK-aware).
+
+Corpus hygiene applied for this measurement (git-ignored corpus, not shipped): `the_torment`
+gained `"canonicalId": "unknown-male"` (entry kept, not deleted); nine ch44 continuation-as-
+`narrator` lines inside uninterrupted single-speaker quoted runs were relabelled to their speaker
+(5 diagnostic-confirmed from the plan table + 4 same-run siblings — `[309]`, `[317]`, `[318]`,
+`[319]` — added under the plan's own uninterrupted-run rule; label changes shift baseline and
+treatment scores equally and cannot distort the ③ delta).
