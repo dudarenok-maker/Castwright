@@ -184,6 +184,31 @@ describe('GeminiAnalyzer.runStage1 — streaming chunk feedback', () => {
 
     await expect(analyzer.runStage1('m_blocked', '# prompt', {})).rejects.toThrow(/SAFETY/);
   });
+
+  it('treats an EMPTY response with finishReason MAX_TOKENS as truncation (splittable), not a content block', async () => {
+    /* Regression: gemma-4-31b-it (and any small-output-cap Gemini model) can hit
+       its output cap on a dense chunk before emitting ANY decodable text — the
+       stream ends empty with finishReason MAX_TOKENS. That is a SIZE problem, not
+       a content filter: it must surface as AnalyzerTruncatedError so the stage-2
+       chunker adaptively re-splits and recovers, NOT as the whole-book-fatal
+       GeminiContentBlockedError (which historically killed the entire run). */
+    generateContentStream.mockResolvedValue(
+      asyncFromArray([{ text: '', candidates: [{ finishReason: 'MAX_TOKENS' }] }]),
+    );
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const { AnalyzerTruncatedError } = await import('./errors.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+
+    const err = await analyzer.runStage1('m_maxtokens_empty', '# prompt', {}).then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    expect(err).toBeInstanceOf(AnalyzerTruncatedError);
+    expect(err).not.toBeInstanceOf(GeminiContentBlockedError);
+    expect((err as InstanceType<typeof AnalyzerTruncatedError>).reason).toBe('MAX_TOKENS');
+    expect((err as InstanceType<typeof AnalyzerTruncatedError>).engine).toBe('gemini');
+  });
 });
 
 describe('GeminiAnalyzer.runStage1Chapter — Phase 0a per-chapter cast detection', () => {
@@ -764,6 +789,16 @@ describe('GeminiAnalyzer — output truncation (#528)', () => {
     const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
     const result = await analyzer.runStage1('m_stop', '# stage 1 prompt', {});
     expect(result.characters).toHaveLength(3);
+  });
+
+  it('sets the pinned decoding temperature on the request', async () => {
+    generateContentStream.mockResolvedValue(asyncFromArray([{ text: STAGE1_RESPONSE }]));
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+    await analyzer.runStage1('m_temperature', '# stage 1 prompt', {});
+    expect(generateContentStream).toHaveBeenCalledWith(
+      expect.objectContaining({ config: expect.objectContaining({ temperature: 0.2 }) }),
+    );
   });
 });
 

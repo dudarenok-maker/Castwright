@@ -58,6 +58,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'medium',
   },
   {
+    key: 'analyzer.gemini.temperature',
+    env: 'GEMINI_TEMPERATURE',
+    group: 'analyzer-sampling',
+    label: 'Gemini temperature',
+    help: 'Sampling temperature for cloud Gemini/Gemma analysis; lower values reduce run-to-run variance and stay closer to the schema.',
+    type: 'number', min: 0, max: 2, step: 0.1,
+    default: 0.2,
+    apply: 'live', risk: 'medium',
+  },
+  {
     key: 'analyzer.gemini.maxInputTokensPerRequest',
     env: 'ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST',
     group: 'analyzer-sampling',
