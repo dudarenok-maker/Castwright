@@ -23,6 +23,7 @@ import {
   OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,
 } from '../chapter-chunker.js';
 import { buildReviewSentencesInput } from '../../routes/script-review.js';
+import { AnalyzerTruncatedError } from '../errors.js';
 import type { Analyzer, StageCall } from '../index.js';
 import type { SentenceOutput, ScriptReviewOp, ScriptReviewOutput } from '../../handoff/schemas.js';
 
@@ -172,5 +173,104 @@ describe('runReviewOverChapter — route-parity chunk loop', () => {
     expect(accepted.some((o) => o.op === 'split' && o.id === badAnchorId)).toBe(false);
     // …while the same sentence's strip_tag (no anchor requirement) still is.
     expect(accepted.some((o) => o.op === 'strip_tag' && o.id === badAnchorId)).toBe(true);
+  });
+});
+
+describe('runReviewOverChapter — force-split retry on AnalyzerTruncatedError', () => {
+  const call: StageCall = {};
+
+  /* Stub: throws AnalyzerTruncatedError whenever the prompt it is handed
+     carries `sizeThreshold`-or-more distinct sentenceIds, and returns a valid
+     `strip_tag` per visible id otherwise. Paired with a chapter sized so the
+     UNSPLIT whole-chapter core is the only prompt that ever hits the
+     threshold — each half's retry prompt (core + up to CHUNK_OVERLAP=3
+     sentences of the other half as context) stays strictly under it — so
+     this reproduces "throws once on the oversized core, succeeds on both
+     halves" without a mutable call-order flag. */
+  function makeThrowAboveSize(sizeThreshold: number): Analyzer {
+    return {
+      async runScriptReviewChapter(
+        _manuscriptId: string,
+        _chapterId: number,
+        prompt: string,
+        _call: StageCall,
+      ): Promise<ScriptReviewOutput> {
+        const ids = presentIds(prompt);
+        if (ids.length >= sizeThreshold) {
+          throw new AnalyzerTruncatedError('ollama', 'length', 999);
+        }
+        return { ops: ids.map((id) => ({ id, op: 'strip_tag', anchor: 'x', rationale } as ScriptReviewOp)) };
+      },
+    } as unknown as Analyzer;
+  }
+
+  // Stub: ALWAYS throws AnalyzerTruncatedError, regardless of core size.
+  function makeAlwaysThrows(): Analyzer {
+    return {
+      async runScriptReviewChapter(): Promise<ScriptReviewOutput> {
+        throw new AnalyzerTruncatedError('ollama', 'length', 999);
+      },
+    } as unknown as Analyzer;
+  }
+
+  it('recovers via halve-and-retry: resolves, collects owned ops from BOTH halves, no duplicate ownership', async () => {
+    // 8 tiny sentences → one top-level chunk (verified below), so the retry
+    // logic under test is exercised in isolation from the top-level chunk loop.
+    const sentences = makeSentences(8, 50);
+    expect(refChunksFor(sentences).length).toBe(1); // precondition: single top-level core
+
+    // The whole (unsplit) core sees all 8 ids. After one halve (mid=4), each
+    // half's retry prompt is its own 4-sentence core plus up to 3 sentences of
+    // context bled in from the other half (CHUNK_OVERLAP) — 7 distinct ids at
+    // most, never all 8 — so the threshold below fires ONLY on the initial,
+    // unsplit call.
+    const stub = makeThrowAboveSize(sentences.length);
+
+    const { ops } = await runReviewOverChapter({
+      analyzer: stub,
+      engine: 'local',
+      manuscriptId: MANUSCRIPT_ID,
+      chapterId: CHAPTER_ID,
+      sentences,
+      roster,
+      call,
+    });
+
+    // (a) the retry recovered — the promise resolved at all (would otherwise
+    // reject, failing this `await`).
+    // (b) ops from BOTH halves were collected: an op owned by a left-half
+    // sentence (id 2, core [1,2,3,4]) AND one owned by a right-half sentence
+    // (id 6, core [5,6,7,8]) both appear.
+    expect(ops.some((o) => o.op === 'strip_tag' && o.id === 2)).toBe(true);
+    expect(ops.some((o) => o.op === 'strip_tag' && o.id === 6)).toBe(true);
+    // (c) no op is duplicated despite the overlap context bled into each
+    // half's retry prompt — ownership de-dup still holds through the split:
+    // exactly one strip_tag per sentence, ids 1..8, nothing more/less.
+    const stripIds = ops
+      .filter((o) => o.op === 'strip_tag')
+      .map((o) => o.id)
+      .sort((a, b) => a - b);
+    expect(stripIds).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  it('depth-exhaustion: an always-truncating analyzer eventually rejects with AnalyzerTruncatedError (no infinite loop)', async () => {
+    // 16 tiny sentences → one top-level chunk (verified below); halving
+    // 16→8→4→2 across 3 recursive splits still leaves a core of length 2
+    // (>1) at depth 3, so the rejection below is forced by the
+    // MAX_FORCE_SPLIT_DEPTH guard itself, not just the length===1 floor.
+    const sentences = makeSentences(16, 50);
+    expect(refChunksFor(sentences).length).toBe(1); // precondition: single top-level core
+
+    await expect(
+      runReviewOverChapter({
+        analyzer: makeAlwaysThrows(),
+        engine: 'local',
+        manuscriptId: MANUSCRIPT_ID,
+        chapterId: CHAPTER_ID,
+        sentences,
+        roster,
+        call,
+      }),
+    ).rejects.toBeInstanceOf(AnalyzerTruncatedError);
   });
 });
