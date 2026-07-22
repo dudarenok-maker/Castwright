@@ -1564,7 +1564,7 @@ language:
 export const STAGE2_ATTRIBUTION_RULES_CHUNK = `## Attribution rules
 
 Apply these when assigning each sentence's speaker. They hold whatever
-quotation marks the text uses — \`"…"\`, \`«…»\`, \`„…"\`, \`"…"\` — and in any
+quotation marks the text uses — \`"…"\`, \`«…»\`, \`„…"\`, \`“…”\` — and in any
 language:
 
 1. A dialogue tag is decisive. When a quote carries an explicit speech tag —

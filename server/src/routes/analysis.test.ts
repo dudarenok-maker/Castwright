@@ -3558,8 +3558,13 @@ describe('chunk-variant attribution rules (#1758)', () => {
     expect(chunk3).toContain('Do NOT assume');
   });
 
-  it('both blocks start with the same header', () => {
+  it('both blocks start with the same header, and the full header + lead-in span is byte-identical', () => {
     expect(STAGE2_ATTRIBUTION_RULES_CHUNK.startsWith('## Attribution rules')).toBe(true);
     expect(STAGE2_ATTRIBUTION_RULES.startsWith('## Attribution rules')).toBe(true);
+
+    // The entire span before rule 1 (header + lead-in paragraph) must be
+    // byte-identical between the two constants — not just share a prefix.
+    const leadIn = (block: string) => block.slice(0, block.indexOf('\n1. '));
+    expect(leadIn(STAGE2_ATTRIBUTION_RULES_CHUNK)).toBe(leadIn(STAGE2_ATTRIBUTION_RULES));
   });
 });
