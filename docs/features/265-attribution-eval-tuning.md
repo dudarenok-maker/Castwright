@@ -248,3 +248,33 @@ its baseline min on Qwen, and flat-or-better on cloud Flash-lite/Gemma (ch44 was
 chunk-safe rules variant (to get the block into the chunk path without the boundary misfire), RU/DE
 eval fixtures, and pinning the cloud decoding temperature (the unpinned ~1.0 default drove the wide
 ch45 raw band on cloud vs the tight band on temp-0.2 Qwen).
+
+### Chunk-safe rules variant — hybrid-C (#1758 / srv-63, 2026-07-22)
+
+The chunk-safe follow-up above. Branch `feat/server-chunk-safe-attribution-rules` under its own
+spec/plan (`docs/superpowers/{specs,plans}/2026-07-22-chunk-safe-attribution-rules*`). Adds a
+second rules constant `STAGE2_ATTRIBUTION_RULES_CHUNK` (rules 1/2/4/5 byte-identical to the chapter
+block — a drift-guard test pins that — with only rule #3 rewritten to scope continuation/alternation
+*within the section*), rendered in `buildStage2ChunkInbox` alongside a deterministic "last-speaker
+seed" threaded through the sequential chunk driver (last non-`narrator` id of each chunk's raw
+returned attributions, carried across all-narration chunks). The chapter builder is byte-identical.
+
+**On-box eval (English, `--runs 3`, `qwen36-cw-iq4-32k`) — floor-only, no lift.** The baseline was
+**reused** from the 2026-07-21 capture (not re-run): the chunk path — `stage2-chunk.ts`, stage-1,
+and `buildStage2ChunkInbox` — is unchanged from that baseline commit (`36f127ae`, an ancestor of
+`main`) through current `main` (#1761 touched only the *chapter* builder), so the ch44 baseline is
+byte-identical, on the same corpus (ch44 n=328). ch44 raw: **hybrid-C 81.8% [81.4–82.0]** vs
+**baseline 82.5% [80.5–83.5]** vs the rejected both-builders **80.0%**. So hybrid-C clears the
+no-regression floor (≥ baseline min 80.5) and beats both-builders by **+1.8** — the cross-boundary
+misfire is gone — but sits −0.7 below the baseline mean (inside the baseline's own band): a **flat,
+floor-only** result, not a lift. Family split explains the wash: rules 1/2 lifted `tag` (+1.1) and
+`pronoun` (+3.2), but `unanchored` (−4.6) and `unaligned` (−19.5, wide-CI/seg-drift-heavy) fell —
+i.e. the seed + rule-#3 rewrite did **not** pay off on the continuation cases they targeted. Every
+other fixture flat (chapter path untouched: ch43 80.3=80.3 exact, ch45/46/Coalfall within noise);
+`det`/`final` ticked down ~1pt.
+
+**Shipped as floor-only** (user decision, 2026-07-22): no regression, strictly better than
+both-builders, and it closes the "chunk path carries zero attribution rules" gap — but with **no
+measured quality benefit**, so **no release-notes entry** (no user-visible delta). The seed/rule-#3
+machinery earned no lift here; whether to keep or drop it is folded into the deferred
+deterministic-first phase-2 / ch44-residual work, not re-litigated now.

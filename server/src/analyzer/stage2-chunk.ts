@@ -240,6 +240,21 @@ export function tailParagraphs(text: string, n: number): string {
   return paras.slice(-Math.max(0, n)).join('\n\n');
 }
 
+/** #1758 — the last non-`narrator` speaker in a chunk's returned attributions,
+    used to seed the next chunk's first untagged quote. Falls back to `incoming`
+    when the chunk added no spoken line, so a speaker established earlier carries
+    across an all-narration chunk. Reads the RAW model output (pre-crossExamine),
+    where the only non-speaker id is the literal 'narrator'. */
+export function lastSpokenSpeaker(
+  sentences: SentenceOutput[],
+  incoming: string | null,
+): string | null {
+  for (let i = sentences.length - 1; i >= 0; i -= 1) {
+    if (sentences[i].characterId !== 'narrator') return sentences[i].characterId;
+  }
+  return incoming;
+}
+
 export interface Stage2ChunkRunResult {
   sentences: SentenceOutput[];
   /** Combined coverage verdict against the FULL chapter body. */
@@ -264,6 +279,7 @@ export interface Stage2ChunkRunOptions {
   callForBody: (
     subBody: string,
     precedingContext: string | null,
+    lastSpeakerId: string | null,
   ) => Promise<{ sentences: SentenceOutput[] }>;
   /** Preceding-context paragraph count. Default 2. */
   contextParagraphs?: number;
@@ -304,6 +320,7 @@ export async function runStage2ChapterChunked(
     span: string,
     depth: number,
     preceding: string | null,
+    lastSpeakerId: string | null,
   ): Promise<SentenceOutput[]> => {
     /* A span with no attributable words (a lone "***" scene break isolated
        between two over-budget paragraphs) has nothing to attribute. Skip it:
@@ -315,7 +332,7 @@ export async function runStage2ChapterChunked(
       const { result } = await runStage2WithCoverageGuard({
         body: span,
         maxRetries: opts.coverageRetries,
-        call: () => opts.callForBody(span, preceding),
+        call: () => opts.callForBody(span, preceding, lastSpeakerId),
         thresholds: opts.coverageThresholds,
         onRetry: opts.onRetry,
       });
@@ -326,9 +343,12 @@ export async function runStage2ChapterChunked(
         if (sub.length > 1) {
           const out: SentenceOutput[] = [];
           let prev = preceding;
+          let seed = lastSpeakerId;
           for (const s of sub) {
-            out.push(...(await attributeSpan(s, depth + 1, prev)));
+            const part = await attributeSpan(s, depth + 1, prev, seed);
+            out.push(...part);
             prev = tailParagraphs(s, contextParagraphs);
+            seed = lastSpokenSpeaker(part, seed);
           }
           return out;
         }
@@ -345,12 +365,14 @@ export async function runStage2ChapterChunked(
   const runChunks = async (chunks: string[]): Promise<Stage2ChunkRunResult> => {
     const all: SentenceOutput[] = [];
     let preceding: string | null = null;
+    let lastSpeakerId: string | null = null;
     for (let i = 0; i < chunks.length; i += 1) {
       opts.onChunk?.({ index: i, total: chunks.length, chars: chunks[i].length });
-      const sectionSentences = await attributeSpan(chunks[i], 0, preceding);
+      const sectionSentences = await attributeSpan(chunks[i], 0, preceding, lastSpeakerId);
       opts.onSectionDone?.(i, sectionSentences.length);
       all.push(...sectionSentences);
       preceding = tailParagraphs(chunks[i], contextParagraphs);
+      lastSpeakerId = lastSpokenSpeaker(sectionSentences, lastSpeakerId);
     }
     const sentences = all.map((s, i) => ({ ...s, id: i + 1 }));
     const coverage = validateStage2Coverage(opts.body, sentences, opts.coverageThresholds);
@@ -374,7 +396,7 @@ export async function runStage2ChapterChunked(
       const { result, coverage } = await runStage2WithCoverageGuard({
         body: opts.body,
         maxRetries: opts.coverageRetries,
-        call: () => opts.callForBody(opts.body, null),
+        call: () => opts.callForBody(opts.body, null, null),
         thresholds: opts.coverageThresholds,
         onRetry: opts.onRetry,
       });
