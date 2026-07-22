@@ -482,3 +482,47 @@ describe('onSectionDone', () => {
     expect(calls).toEqual([[0, 2]]);
   });
 });
+
+describe('lastSpeakerId threading (#1758)', () => {
+  /* Fake model: each paragraph "SPK:<id> …" is attributed to <id>; a paragraph
+     with no SPK prefix is narrator. Lets a test script who "spoke last" per chunk. */
+  function speakerAttribute(subBody: string): { sentences: SentenceOutput[] } {
+    const paras = subBody.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+    return {
+      sentences: paras.map((text, i) => ({
+        id: i + 1,
+        chapterId: 1,
+        characterId: text.startsWith('SPK:') ? text.slice(4).split(' ')[0] : 'narrator',
+        text,
+      })),
+    };
+  }
+
+  it('seeds chunk 2 with the last non-narrator speaker of chunk 1', async () => {
+    // Two paragraphs per chunk, budget forces a 2-chunk split.
+    const body = ['SPK:egor line one here', 'narration here between', 'SPK:anton line two here', 'more narration text']
+      .join('\n\n');
+    const seen: Array<string | null> = [];
+    const call = vi.fn(async (subBody: string, _p: string | null, seed: string | null) => {
+      seen.push(seed);
+      return speakerAttribute(subBody);
+    });
+    await runStage2ChapterChunked({ body, charBudget: 40, coverageRetries: 1, callForBody: call });
+    expect(seen[0]).toBeNull();          // first chunk: no seed
+    expect(seen[1]).toBe('egor');        // chunk 1's last spoken id
+  });
+
+  it('carries the prior speaker through an all-narration chunk', async () => {
+    const body = ['SPK:egor first spoken line', 'pure narration paragraph one', 'pure narration paragraph two']
+      .join('\n\n');
+    const seen: Array<string | null> = [];
+    const call = vi.fn(async (subBody: string, _p: string | null, seed: string | null) => {
+      seen.push(seed);
+      return speakerAttribute(subBody);
+    });
+    await runStage2ChapterChunked({ body, charBudget: 30, coverageRetries: 1, callForBody: call });
+    // Whatever chunk boundaries fall out, once egor has spoken every later chunk is seeded egor.
+    const afterEgor = seen.slice(1);
+    expect(afterEgor.every((s) => s === 'egor')).toBe(true);
+  });
+});

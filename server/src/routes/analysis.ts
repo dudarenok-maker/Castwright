@@ -1846,7 +1846,7 @@ export async function attributeChapterStage2(opts: {
   const firstPersonId = fpConventions
     ? findFirstPersonCharacter(stage1.characters, fpConventions)
     : null;
-  const callForBody = (subBody: string, preceding: string | null) => {
+  const callForBody = (subBody: string, preceding: string | null, lastSpeakerId: string | null) => {
     const prompt =
       preceding === null && subBody === opts.chapter.body
         ? buildStage2ChapterInbox(opts.manuscriptId, opts.title, stage1, opts.chapter, firstPersonId)
@@ -1858,7 +1858,7 @@ export async function attributeChapterStage2(opts: {
             subBody,
             preceding,
             firstPersonId,
-            null,
+            lastSpeakerId,
           );
     return opts.analyzer.runStage2Chapter(
       opts.manuscriptId,
