@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { evalFixture, rosterToStage1, familyBreakdown, aggStage, rosterAliasMap, scoreStage, type StageScore } from './run-eval.js';
+import { evalFixture, rosterToStage1, familyBreakdown, aggStage, aggregateFixture, rosterAliasMap, scoreStage, type StageScore, type ReviewScore, type FixtureResult } from './run-eval.js';
 import type { LabelledChapter } from './schema.js';
 import type { RosterSnapshot } from './roster-schema.js';
 import type { SentenceOutput } from '../../handoff/schemas.js';
@@ -158,5 +158,88 @@ describe('evalFixture', () => {
     expect(Object.keys(res.raw.byFamily).sort()).toEqual(
       Object.keys(res.deterministic.byFamily).sort(),
     );
+  });
+
+  it('review:false (default) leaves raw/det/final byte-identical and omits reviewed', async () => {
+    const res = await evalFixture({
+      analyzer: fakeAnalyzer,
+      manuscriptId: 'm', title: 'T', truth, roster, chapterId: 44,
+      stageCall: { language: 'en' } as never,
+    });
+    // The non-review result shape is exactly the four existing keys.
+    expect(Object.keys(res).sort()).toEqual(['deterministic', 'final', 'fixture', 'raw']);
+    expect('reviewed' in res).toBe(false);
+    expect(res.final.recall).toBeCloseTo(1);
+  });
+});
+
+describe('evalFixture — reviewed char-stage (opt-in)', () => {
+  // Analyzer whose review pass emits one on-roster reattribute that HARMS the
+  // (correct) narration span id:2 by pointing it at alice — a deterministic way
+  // to exercise applyOpsToCharArray + diffHelpedHarmed through the char adapter.
+  const reviewAnalyzer: any = {
+    ...fakeAnalyzer,
+    runScriptReviewChapter: () =>
+      Promise.resolve({
+        ops: [{ id: 2, op: 'reattribute', characterId: 'alice', rationale: 'test harm' }],
+      }),
+  };
+
+  it('populates reviewed with char/line recalls, helped/harmed, drops, opsByClass and a scored (non-dumped) op', async () => {
+    const res = await evalFixture({
+      analyzer: reviewAnalyzer,
+      manuscriptId: 'm', title: 'T', truth, roster, chapterId: 44,
+      stageCall: { language: 'en' } as never,
+      review: true,
+      engine: 'qwen',
+    });
+    expect(res.reviewed).toBeDefined();
+    const rv = res.reviewed!;
+    // char adapter (characterId → speakerId) works: final matches truth → charFinal > 0.
+    expect(rv.charFinal).toBeGreaterThan(0);
+    expect(typeof rv.lineFinal).toBe('number');
+    expect(typeof rv.lineReviewed).toBe('number');
+    // The reattribute on the (correct) narration span is a harm → reviewed drops below final.
+    expect(rv.charReviewed).toBeLessThan(rv.charFinal);
+    expect(rv.harmed).toBeGreaterThan(0);
+    expect(rv.helped).toBe(0);
+    expect(rv.churn).toBe(0);
+    // Verbatim final/truth text → nothing drops out of the projection.
+    expect(rv.predictedDropped).toBe(0);
+    expect(rv.truthDropped).toBe(0);
+    // opsByClass counts ALL ops; the accepted char-affecting reattribute is SCORED, so not dumped.
+    expect(rv.opsByClass.reattribute).toBe(1);
+    expect(rv.dump).toEqual([]);
+  });
+});
+
+describe('aggregateFixture — reviewed aggregation (aggReview)', () => {
+  const mkReviewed = (over: Partial<ReviewScore>): ReviewScore => ({
+    charFinal: 1, charReviewed: 1, lineFinal: 1, lineReviewed: 1,
+    helped: 0, harmed: 0, churn: 0, predictedDropped: 0, truthDropped: 0,
+    opsByClass: {}, dump: [], ...over,
+  });
+  const mkResult = (reviewed?: ReviewScore): FixtureResult => ({
+    fixture: 'c', raw: mkStage(1, {}), deterministic: mkStage(1, {}), final: mkStage(1, {}),
+    ...(reviewed ? { reviewed } : {}),
+  });
+
+  it('averages per-run reviewed into a ReviewAgg with Stat fields and run-0 dump', () => {
+    const r0 = mkResult(mkReviewed({ helped: 2, harmed: 1, opsByClass: { reattribute: 1 }, dump: [{ id: 1, op: 'strip_tag', rationale: 'r0' }] }));
+    const r1 = mkResult(mkReviewed({ helped: 4, harmed: 3, opsByClass: { reattribute: 3, split: 1 }, dump: [{ id: 2, op: 'merge', rationale: 'r1' }] }));
+    const agg = aggregateFixture([r0, r1]);
+    expect(agg.reviewed).toBeDefined();
+    expect(agg.reviewed!.helped).toEqual({ mean: 3, min: 2, max: 4 });
+    expect(agg.reviewed!.harmed).toEqual({ mean: 2, min: 1, max: 3 });
+    // mean count per class across runs (split absent in run-0 counts as 0).
+    expect(agg.reviewed!.opsByClass.reattribute).toBeCloseTo(2);
+    expect(agg.reviewed!.opsByClass.split).toBeCloseTo(0.5);
+    // dump is representative: run-0's.
+    expect(agg.reviewed!.dump).toEqual(r0.reviewed!.dump);
+  });
+
+  it('leaves reviewed undefined when no run carries a reviewed score', () => {
+    const agg = aggregateFixture([mkResult(), mkResult()]);
+    expect(agg.reviewed).toBeUndefined();
   });
 });
