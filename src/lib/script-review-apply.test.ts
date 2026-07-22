@@ -363,10 +363,19 @@ describe('rpdWarningFor', () => {
   });
 
   it('uses the per-model cap, not a shared one', () => {
-    // gemma has a 1500/day cap → 30 chapters is fine
+    // gemma has a 14,400/day cap → 30 chapters is fine
     expect(rpdWarningFor(30, 'gemma-4-31b-it')).toBeNull();
     // but flash preview only allows 20/day
     expect(rpdWarningFor(30, 'gemini-3-flash-preview')).not.toBeNull();
+  });
+
+  it('covers the newly-added Google models', () => {
+    // gemini-3.5-flash-lite (the new shipped cloud default) — 500/day, novel-safe
+    expect(rpdWarningFor(400, 'gemini-3.5-flash-lite')).toBeNull();
+    expect(rpdWarningFor(600, 'gemini-3.5-flash-lite')).not.toBeNull();
+    // gemini-3.6-flash — 20/day, short-book only
+    expect(rpdWarningFor(30, 'gemini-3.6-flash')).not.toBeNull();
+    expect(rpdWarningFor(20, 'gemini-3.6-flash')).toBeNull();
   });
 });
 

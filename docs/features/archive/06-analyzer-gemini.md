@@ -19,7 +19,7 @@ Opt-in analyzer mode that hits the Gemini free-tier API directly. Same Zod schem
 ## Invariants to preserve
 
 - Activated by env var `ANALYZER=gemini`; requires `GEMINI_API_KEY`. Without the key the analyzer fails fast at construction; do not fall back silently.
-- `GEMINI_MODEL` env var picks the model id; default `gemma-4-31b-it` (separate free-tier bucket from `gemini-*` and the most generous daily cap at 1,500 RPD). Switching to `gemini-3.1-flash-lite` etc. requires only an env var change.
+- `GEMINI_MODEL` env var picks the model id; ships defaulting to `gemini-3.5-flash-lite` (500 RPD, comfortably parses a novel), with the code-level last-resort fallback staying `gemma-4-31b-it` (its own free-tier bucket, the most generous daily cap at 14,400 RPD, and RECITATION-filter-immune). Switching between them requires only an env var change.
 - Stage-1 + stage-2 responses are validated against the **same** Zod schemas as the local Ollama analyzer (`server/src/handoff/schemas.ts`). A Gemini response that fails validation surfaces as an `AnalysisError` to the client, not a 500 with raw API output.
 - Per-chapter stage-2 mode (current default): the analyzer iterates chapters and calls Gemini once per chapter. Whole-manuscript stage-2 (legacy) is still supported for tiny manuscripts but not the default.
 - **Every outbound Gemini call (primary AND retry) goes through `GeminiRateLimiter.acquire()`** — a per-model token bucket tracking RPM, input-TPM, and RPD. Retries can never bypass it; this is the load-bearing safety net against the retry-storm pathology where a 5xx retry on a 3-s tick from N parallel workers spikes RPM and creates more 429s than primaries.
@@ -30,12 +30,14 @@ Opt-in analyzer mode that hits the Gemini free-tier API directly. Same Zod schem
 
   | Model                    | RPM | TPM                    | RPD   |
   | ------------------------ | --- | ---------------------- | ----- |
+  | `gemini-3.5-flash-lite`  | 15  | 250,000                | 500   |
   | `gemini-3.1-flash-lite`  | 15  | 250,000                | 500   |
+  | `gemini-3.6-flash`       | 5   | 250,000                | 20    |
   | `gemini-3.5-flash`       | 5   | 250,000                | 20    |
   | `gemini-3-flash-preview` | 5   | 250,000                | 20    |
   | `gemini-2.5-flash`       | 5   | 250,000                | 20    |
-  | `gemma-4-31b-it`         | 15  | 16,000/min (free tier) | 1,500 |
-  | `gemma-4-26b-a4b-it`     | 15  | 16,000/min (free tier) | 1,500 |
+  | `gemma-4-31b-it`         | 30  | 16,000/min (free tier) | 14,400 |
+  | `gemma-4-26b-a4b-it`     | 30  | 16,000/min (free tier) | 14,400 |
   | unknown (fallback)       | 5   | 100,000                | 50    |
 
 - TPM is **input** tokens per minute (output doesn't count). Estimate is `Math.ceil(promptChars / 4) + 1_000`; reconciled against `usageMetadata.promptTokenCount` once the SDK returns it so persistent estimation drift doesn't accumulate.

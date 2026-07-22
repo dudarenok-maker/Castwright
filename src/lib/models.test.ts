@@ -32,6 +32,20 @@ describe('Part 5 — fresh-user default coherence (Blocker-1 coupling)', () => {
   });
 });
 
+describe('curated Gemini catalog', () => {
+  /* Ids derive to the gemini dispatch path from their (colonless) shape too —
+     so a per-request override with either id routes to Gemini, not Ollama. */
+  it.each(['gemini-3.5-flash-lite', 'gemini-3.6-flash'])(
+    'offers %s as a selectable gemini option',
+    (id) => {
+      const opt = MODEL_OPTIONS.find((m) => m.id === id);
+      expect(opt).toBeDefined();
+      expect(opt?.engine).toBe('gemini');
+      expect(engineForModelId(id)).toBe('gemini');
+    },
+  );
+});
+
 describe('buildLocalModelOptions', () => {
   const curated = MODEL_OPTIONS.filter((m) => m.engine === 'local');
   it('keeps the curated label/hint for a matching live tag', () => {

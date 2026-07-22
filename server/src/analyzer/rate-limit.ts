@@ -37,12 +37,14 @@ const FALLBACK_LIMITS: ModelLimits = { rpm: 5, tpm: 100_000, rpd: 50 };
    docs/features/archive/06-analyzer-gemini.md (regression plan) when limits
    change. */
 const BUILTIN_LIMITS: Record<string, ModelLimits> = {
+  'gemini-3.5-flash-lite': { rpm: 15, tpm: 250_000, rpd: 500 },
   'gemini-3.1-flash-lite': { rpm: 15, tpm: 250_000, rpd: 500 },
+  'gemini-3.6-flash': { rpm: 5, tpm: 250_000, rpd: 20 },
   'gemini-3.5-flash': { rpm: 5, tpm: 250_000, rpd: 20 },
   'gemini-3-flash-preview': { rpm: 5, tpm: 250_000, rpd: 20 },
   'gemini-2.5-flash': { rpm: 5, tpm: 250_000, rpd: 20 },
-  'gemma-4-31b-it': { rpm: 15, tpm: 16_000, rpd: 1500 },
-  'gemma-4-26b-a4b-it': { rpm: 15, tpm: 16_000, rpd: 1500 },
+  'gemma-4-31b-it': { rpm: 30, tpm: 16_000, rpd: 14_400 },
+  'gemma-4-26b-a4b-it': { rpm: 30, tpm: 16_000, rpd: 14_400 },
 };
 
 /* Slug-ify a model id for env-var lookup: lowercase non-alphanum → `_`,

@@ -58,6 +58,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'medium',
   },
   {
+    key: 'analyzer.gemini.temperature',
+    env: 'GEMINI_TEMPERATURE',
+    group: 'analyzer-sampling',
+    label: 'Gemini temperature',
+    help: 'Sampling temperature for cloud Gemini/Gemma analysis; lower values reduce run-to-run variance and stay closer to the schema.',
+    type: 'number', min: 0, max: 2, step: 0.1,
+    default: 0.2,
+    apply: 'live', risk: 'medium',
+  },
+  {
     key: 'analyzer.gemini.maxInputTokensPerRequest',
     env: 'ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST',
     group: 'analyzer-sampling',
@@ -823,9 +833,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'GEMINI_RPM_GEMMA_4_31B_IT',
     group: 'rate-limits',
     label: 'Gemma 4 31B RPM',
-    help: 'Requests-per-minute cap for gemma-4-31b-it. Override to adjust the free-tier limit (default 15 RPM from AI Studio 2026-05-16). The limiter waits proactively so no 429s are issued.',
+    help: 'Requests-per-minute cap for gemma-4-31b-it. Override to adjust the free-tier limit (default 30 RPM from AI Studio 2026-05-16). The limiter waits proactively so no 429s are issued.',
     type: 'integer', min: 1,
-    default: 15, // ← BUILTIN_LIMITS['gemma-4-31b-it'].rpm in analyzer/rate-limit.ts (line 41)
+    default: 30, // ← BUILTIN_LIMITS['gemma-4-31b-it'].rpm in analyzer/rate-limit.ts
     apply: 'restart-server', risk: 'low',
   },
   {
@@ -843,9 +853,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'GEMINI_RPD_GEMMA_4_31B_IT',
     group: 'rate-limits',
     label: 'Gemma 4 31B RPD',
-    help: 'Requests-per-day cap for gemma-4-31b-it. Default 1500 (free-tier from AI Studio 2026-05-16). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
+    help: 'Requests-per-day cap for gemma-4-31b-it. Default 14400 (free-tier from AI Studio 2026-05-16). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
     type: 'integer', min: 1,
-    default: 1500, // ← BUILTIN_LIMITS['gemma-4-31b-it'].rpd in analyzer/rate-limit.ts (line 41)
+    default: 14400, // ← BUILTIN_LIMITS['gemma-4-31b-it'].rpd in analyzer/rate-limit.ts
     apply: 'restart-server', risk: 'low',
   },
   {
@@ -853,9 +863,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'GEMINI_RPM_GEMMA_4_26B_A4B_IT',
     group: 'rate-limits',
     label: 'Gemma 4 26B A4B RPM',
-    help: 'Requests-per-minute cap for gemma-4-26b-a4b-it (free tier 15). The limiter waits proactively so no 429s are issued.',
+    help: 'Requests-per-minute cap for gemma-4-26b-a4b-it (free tier 30). The limiter waits proactively so no 429s are issued.',
     type: 'integer', min: 1,
-    default: 15,
+    default: 30,
     apply: 'restart-server', risk: 'low',
   },
   {
@@ -873,9 +883,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'GEMINI_RPD_GEMMA_4_26B_A4B_IT',
     group: 'rate-limits',
     label: 'Gemma 4 26B A4B RPD',
-    help: 'Requests-per-day cap for gemma-4-26b-a4b-it (free tier 1500). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
+    help: 'Requests-per-day cap for gemma-4-26b-a4b-it (free tier 14400). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
     type: 'integer', min: 1,
-    default: 1500,
+    default: 14400,
     apply: 'restart-server', risk: 'low',
   },
 
@@ -957,9 +967,11 @@ export const KNOBS: ConfigKnob[] = [
     env: 'GEMINI_MODEL',
     group: 'analyzer-models',
     label: 'Gemini analyzer model',
-    help: 'Gemini model used directly (ANALYZER=gemini) or as the Ollama-unreachable fallback (ANALYZER=local). Separate free-tier bucket from gemini-* models; lower daily-hit risk for per-chapter stage-2 analysis.',
+    help: 'Gemini model used directly (engine=gemini) or as the Ollama-unreachable fallback (engine=local). Ships defaulting to gemini-3.5-flash-lite (500 RPD, comfortably parses a novel). Switch to a gemma-* model (30 RPM / 14,400 RPD, its own free-tier bucket) to avoid the RECITATION content filter that can block copyrighted-book chapters on gemini-* models.',
     type: 'string',
-    default: 'gemma-4-31b-it', // ← GEMINI_MODEL default in server/.env.example (line 40)
+    // Shipped default; the code-level last-resort fallback in analyzer/index.ts
+    // + routes/analysis.ts intentionally stays gemma-4-31b-it (RECITATION-safe).
+    default: 'gemini-3.5-flash-lite', // ← GEMINI_MODEL default mirrored in server/.env.example
     apply: 'live', risk: 'medium',
   },
   {
