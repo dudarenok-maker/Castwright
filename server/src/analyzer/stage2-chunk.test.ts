@@ -15,6 +15,7 @@ import {
   resolveStage2ChunkCharBudget,
   tailParagraphs,
   runStage2ChapterChunked,
+  lastSpokenSpeaker,
 } from './stage2-chunk.js';
 
 /* A fake "model": one sentence per paragraph, text copied verbatim so the
@@ -512,17 +513,65 @@ describe('lastSpeakerId threading (#1758)', () => {
     expect(seen[1]).toBe('egor');        // chunk 1's last spoken id
   });
 
-  it('carries the prior speaker through an all-narration chunk', async () => {
-    const body = ['SPK:egor first spoken line', 'pure narration paragraph one', 'pure narration paragraph two']
-      .join('\n\n');
+  it('carries the prior speaker through an all-narration MIDDLE chunk', async () => {
+    /* Empirically verified (chunk-boundary probe via splitBodyIntoChunks, see
+       the #1758 fix report) that this body splits into exactly 3 chunks at
+       charBudget=150 — [spoken, all-narration, narration] — with the middle
+       chunk PURELY narration and long enough (>= STAGE2_MIN_EVALUABLE_WORDS
+       attributable words) to survive mergeTinyChunks as its OWN isolated
+       chunk rather than being folded into a neighbour. That makes seen[2]
+       (chunk 2's seed) genuinely exercise lastSpokenSpeaker's `return
+       incoming` fallback branch — chunk 1 contributes no spoken line, so
+       chunk 2 must be seeded from what chunk 0 established, not from chunk 1. */
+    const body = [
+      'SPK:egor Egor turned toward the door and said something important before leaving the room quietly tonight.',
+      'The hallway stretched long and silent, dust motes drifting through a single shaft of pale evening light that fell across the worn floorboards near the far wall.',
+      'Somewhere below a clock ticked steadily, marking each second as the old house settled into its familiar nighttime creaks and quiet groaning timbers.',
+    ].join('\n\n');
     const seen: Array<string | null> = [];
     const call = vi.fn(async (subBody: string, _p: string | null, seed: string | null) => {
       seen.push(seed);
       return speakerAttribute(subBody);
     });
-    await runStage2ChapterChunked({ body, charBudget: 30, coverageRetries: 1, callForBody: call });
-    // Whatever chunk boundaries fall out, once egor has spoken every later chunk is seeded egor.
-    const afterEgor = seen.slice(1);
-    expect(afterEgor.every((s) => s === 'egor')).toBe(true);
+    const result = await runStage2ChapterChunked({
+      body,
+      charBudget: 150,
+      coverageRetries: 1,
+      callForBody: call,
+    });
+    expect(result.chunkCount).toBe(3); // pins the 3-chunk split the fallback branch needs
+    // seen[2] is the fallback assertion: chunk 1 (all-narration) added no spoken
+    // line, so chunk 2 must still be seeded 'egor' — carried through, not reset.
+    expect(seen).toEqual([null, 'egor', 'egor']);
+  });
+});
+
+describe('lastSpokenSpeaker (#1758)', () => {
+  function mkSentence(id: number, characterId: string): SentenceOutput {
+    return { id, chapterId: 1, characterId, text: `sentence ${id}` };
+  }
+
+  it('returns the last non-narrator speaker id', () => {
+    const sentences = [
+      mkSentence(1, 'egor'),
+      mkSentence(2, 'narrator'),
+      mkSentence(3, 'anton'),
+      mkSentence(4, 'narrator'),
+    ];
+    expect(lastSpokenSpeaker(sentences, null)).toBe('anton');
+  });
+
+  it('falls back to incoming when the chunk is all-narration', () => {
+    const sentences = [mkSentence(1, 'narrator'), mkSentence(2, 'narrator')];
+    expect(lastSpokenSpeaker(sentences, 'egor')).toBe('egor');
+  });
+
+  it('falls back to incoming on an empty sentence list', () => {
+    expect(lastSpokenSpeaker([], 'egor')).toBe('egor');
+  });
+
+  it('returns null when all-narration and incoming is null', () => {
+    const sentences = [mkSentence(1, 'narrator')];
+    expect(lastSpokenSpeaker(sentences, null)).toBeNull();
   });
 });
