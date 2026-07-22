@@ -33,6 +33,8 @@ import {
   aggregateStructureReports,
   buildStage2ChapterInbox,
   buildStage2ChunkInbox,
+  STAGE2_ATTRIBUTION_RULES,
+  STAGE2_ATTRIBUTION_RULES_CHUNK,
   type AnalysisJob,
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput, Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
@@ -3531,5 +3533,33 @@ describe('stage-2 attribution rules block (Target C)', () => {
     expect(rules).toBeGreaterThan(0);
     expect(firstPerson).toBeGreaterThan(rules);
     expect(prompt).toContain('`anton`');
+  });
+});
+
+describe('chunk-variant attribution rules (#1758)', () => {
+  // Extract the numbered rule bodies "N. …" up to the next "\nN. " boundary.
+  function rule(block: string, n: number): string {
+    const m = block.match(new RegExp(`\\n${n}\\. [\\s\\S]*?(?=\\n\\d\\. |$)`));
+    return (m?.[0] ?? '').trim();
+  }
+
+  it('shares rules 1, 2, 4, 5 byte-for-byte with the chapter block', () => {
+    for (const n of [1, 2, 4, 5]) {
+      expect(rule(STAGE2_ATTRIBUTION_RULES_CHUNK, n)).toBe(rule(STAGE2_ATTRIBUTION_RULES, n));
+      expect(rule(STAGE2_ATTRIBUTION_RULES_CHUNK, n)).not.toBe(''); // guard: regex actually matched
+    }
+  });
+
+  it('rewrites rule 3 to scope continuation/alternation within the section', () => {
+    const chunk3 = rule(STAGE2_ATTRIBUTION_RULES_CHUNK, 3);
+    expect(chunk3).not.toBe(rule(STAGE2_ATTRIBUTION_RULES, 3));
+    expect(chunk3).toContain('within this section');
+    // No unqualified claim that alternation carries in from before the section.
+    expect(chunk3).toContain('Do NOT assume');
+  });
+
+  it('both blocks start with the same header', () => {
+    expect(STAGE2_ATTRIBUTION_RULES_CHUNK.startsWith('## Attribution rules')).toBe(true);
+    expect(STAGE2_ATTRIBUTION_RULES.startsWith('## Attribution rules')).toBe(true);
   });
 });

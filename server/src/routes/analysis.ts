@@ -1529,7 +1529,7 @@ ${chapter.body}
    regression). Language-/quote-agnostic by construction (see the lead line) so
    it does not misfire on «…» / „…" or non-English text. Kept deliberately
    short — every rule earns its tokens. */
-const STAGE2_ATTRIBUTION_RULES = `## Attribution rules
+export const STAGE2_ATTRIBUTION_RULES = `## Attribution rules
 
 Apply these when assigning each sentence's speaker. They hold whatever
 quotation marks the text uses — \`"…"\`, \`«…»\`, \`„…"\`, \`“…”\` — and in any
@@ -1544,6 +1544,40 @@ language:
 3. Untagged quotes continue, and two-handers alternate. An untagged quote keeps
    the last established speaker. In a sustained back-and-forth between exactly
    two characters, untagged quotes alternate between them.
+4. Narration is the narrator. Non-dialogue prose — description, action,
+   scene-setting — is \`narrator\`, even between two characters' lines. Only words
+   inside quote marks belong to a character (unless the whole chapter is a
+   first-person document).
+5. The addressee is not the speaker. A name spoken to someone ("Careful,
+   Anton.") marks who is addressed, not who speaks — never attribute the line to
+   the person being addressed.`;
+
+/* #1758 — the chunk-path variant of the attribution rules. Rules 1, 2, 4, 5 are
+   byte-identical to STAGE2_ATTRIBUTION_RULES (all boundary-safe: explicit tag,
+   same-paragraph action beat, narration, addressee). Only rule 3 is rewritten to
+   scope continuation/alternation WITHIN the section — a chunk that opens
+   mid-conversation has no in-band anchor for two-hander alternation parity, so
+   telling the model to alternate across the seam flipped the whole run (the ch44
+   both-builders regression). The "Speaker at section start" seed (buildStage2ChunkInbox)
+   powers only rule 3's continuation clause; alternation is disclaimed across the seam.
+   A drift-guard unit test pins rules 1/2/4/5 identical between the two constants. */
+export const STAGE2_ATTRIBUTION_RULES_CHUNK = `## Attribution rules
+
+Apply these when assigning each sentence's speaker. They hold whatever
+quotation marks the text uses — \`"…"\`, \`«…»\`, \`„…"\`, \`"…"\` — and in any
+language:
+
+1. A dialogue tag is decisive. When a quote carries an explicit speech tag —
+   \`"…," said X\` / \`"…," X asked\` / \`"…," whispered X\` — the speaker is X,
+   whatever the surrounding lines suggest.
+2. An action beat names the speaker. A quote sharing a paragraph with a
+   character's action belongs to that character: \`X folded her arms. "Get
+   out."\` and \`"Get out." X turned away.\` are both spoken by X.
+3. Untagged quotes continue, and two-handers alternate — within this section. An
+   untagged quote keeps the last speaker established here (or the "Speaker at
+   section start" named below, for the first quote). Do NOT assume a two-hander's
+   alternation carries in from before this section's start; near the start, rely
+   on dialogue tags and action beats rather than alternation parity.
 4. Narration is the narrator. Non-dialogue prose — description, action,
    scene-setting — is \`narrator\`, even between two characters' lines. Only words
    inside quote marks belong to a character (unless the whole chapter is a
