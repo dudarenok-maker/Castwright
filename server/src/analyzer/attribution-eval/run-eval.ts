@@ -80,7 +80,9 @@ export function rosterAliasMap(roster: RosterSnapshot): Map<string, string> {
   return m;
 }
 
-function scoreStage(
+// Exported for a focused unit test on the aliasMap threading into scoreAttribution
+// (internal eval tooling, not part of the public analyzer surface).
+export function scoreStage(
   truth: LabelledChapter,
   sentences: SentenceOutput[],
   reasons?: Array<{ index: number; reason: string }>,
