@@ -39,14 +39,9 @@ Adds the second rules constant with only rule #3 rewritten, exports both constan
 
 - [ ] **Step 1: Write the failing drift-guard + shape test**
 
-Append to `server/src/routes/analysis.test.ts`. Import both constants (add to the existing import from `./analysis.js` — check the top-of-file import list and extend it):
+Append to `server/src/routes/analysis.test.ts`. `buildStage2ChapterInbox` / `buildStage2ChunkInbox` are already named-imported from `./analysis.js` (~lines 34-36) — **fold** `STAGE2_ATTRIBUTION_RULES` and `STAGE2_ATTRIBUTION_RULES_CHUNK` into that existing import block; do NOT add a second `import … from './analysis.js'` statement. Then append the suite:
 
 ```ts
-import {
-  STAGE2_ATTRIBUTION_RULES,
-  STAGE2_ATTRIBUTION_RULES_CHUNK,
-} from './analysis.js';
-
 describe('chunk-variant attribution rules (#1758)', () => {
   // Extract the numbered rule bodies "N. …" up to the next "\nN. " boundary.
   function rule(block: string, n: number): string {
@@ -294,7 +289,7 @@ git commit -m "feat(server): render chunk rules block + last-speaker seed in chu
 Widens the `callForBody` contract to a 3-arg signature, computes the last-established speaker after each chunk (last non-`narrator` id in that chunk's returned attributions, falling back to the incoming value on an all-narration chunk), threads it through both the top-level chunk loop and the adaptive re-split recursion, and forwards it from `analysis.ts`'s `callForBody` into `buildStage2ChunkInbox`. This is the task that makes the seed live.
 
 **Files:**
-- Modify: `server/src/analyzer/stage2-chunk.ts:264-267` (`callForBody` type), `:302-338` (`attributeSpan` recursion), `:345-358` (`runChunks` loop); add a `lastSpokenSpeaker` helper near `tailParagraphs` (~line 241)
+- Modify: `server/src/analyzer/stage2-chunk.ts:264-267` (`callForBody` type), `:303-338` (`attributeSpan` recursion), `:345-358` (`runChunks` loop); add a `lastSpokenSpeaker` helper near `tailParagraphs` (~line 241)
 - Modify: `server/src/routes/analysis.ts:1802-1821` (`callForBody` closure signature + forward)
 - Test: `server/src/analyzer/stage2-chunk.test.ts` (new driver cases)
 
