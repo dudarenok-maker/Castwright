@@ -35,6 +35,20 @@ that chunk — hence the broad-family collapse. Target C shipped the block
 chapter-only (ch44 recovered to baseline 82.6) and filed #1758 to design a
 chunk-safe variant.
 
+**The rule-#3 attribution is inferred, not experimentally isolated
+(assumption-check, IMPORTANT).** Target C's eval compared the *whole* block
+(both-builders) against *no* block (chapter-only); it never ran "rules 1/2/4/5
+in chunks but not #3," so "rule #3 specifically" is a structural inference, not
+a measured result. The inference is well-grounded: of the five rules, #3 is the
+**only** one with cross-boundary/stateful semantics ("keeps the last established
+speaker", "alternate") — rules 1 (tag), 2 (same-paragraph action beat), 4
+(narration), 5 (addressee) are all locally decidable within a fragment. But the
+design's core bet (keep 1/2/4/5 verbatim, rewrite only #3) rests on that
+inference. The mitigation is empirical, not argumentative: **the ch44 per-family
+`raw` gate is the real hypothesis test** — if hybrid-C recovers ch44 and the
+previously-collapsed families hold, the inference is confirmed; if it does not,
+the Measurement plan's isolation bisect locates the true culprit before ship.
+
 ## The enabling fact — chunks are dispatched sequentially
 
 `runStage2ChapterChunked` (`server/src/analyzer/stage2-chunk.ts:347–353`)
@@ -122,8 +136,13 @@ mirroring how `preceding` is already carried and updated:
   chunk added no spoken line (so a speaker established two chunks back still
   carries across an all-narration chunk). Pass it into the next
   `attributeSpan(...)`. Thread it through the **adaptive re-split recursion**
-  (`attributeSpan`, `stage2-chunk.ts:328–331`) the same way `prev` is updated per
-  sub-section, so a split chunk seeds its sub-sections correctly.
+  (`attributeSpan`, `stage2-chunk.ts:327–332`) so a split chunk seeds its
+  sub-sections correctly. **Nuance (assumption-check):** unlike `prev`, the
+  updated `lastSpeakerId` is *not* a byte-mirror of the input helper — `prev =
+  tailParagraphs(s, …)` derives from the sub-section's input *text*, whereas
+  `lastSpeakerId` must derive from that sub-call's **returned** attributed
+  sentences (last non-`narrator` `characterId` of the returned slice, falling
+  back to the incoming value). Don't copy the `prev` update line verbatim.
 - **`analysis.ts`** — `callForBody` passes `lastSpeakerId` into
   `buildStage2ChunkInbox`; the builder gains a `lastSpeakerId: string | null`
   parameter and renders the seed block (§2) and the chunk-variant rules block
@@ -157,7 +176,14 @@ single-call — see Target C spec "Chunking"). So the gate is unusually tight:
   regression signature this design targets.
 - **Every other fixture (ch43/45/46/Coalfall):** **flat by construction** — their
   prompt is the untouched chapter builder. Any movement beyond run-to-run noise
-  is a bug (an accidental chapter-builder change) and blocks ship.
+  is a bug (an accidental chapter-builder change) and blocks ship. **Caveat
+  (assumption-check):** "flat by construction" holds only while each stays under
+  the 9000-char budget. ch43 (~8.85k) sits only ~150 chars under it — a config
+  drift (`numCtx`, `localInputFraction`) or a larger ch43 tips it into chunking.
+  **Fixture char counts are UNVERIFIABLE off-corpus** (the corpus dir is
+  local-only, absent on this box); re-confirm ch44-is-sole-chunked — and ch43's
+  margin — on the corpus-present box as step 0 of the eval, before trusting the
+  gate.
 - **Secondary:** `det`/`final` on ch44 do not regress vs the post-#1761 baseline
   (same band rule).
 - **Targets:** local `qwen36-cw-iq4-32k` is the primary decision gate (ch44's
@@ -165,6 +191,16 @@ single-call — see Target C spec "Chunking"). So the gate is unusually tight:
   `gemini-3.1-flash-lite` are confirmatory — run if the free-tier budget/time
   allows, but a Qwen-green result ships (cloud was already flat on ch44 under
   both-builders, so it has little to say here).
+
+- **Ship logic + isolation bisect (assumption-check).** Hybrid-C green on ch44
+  (mean `raw` ≥ baseline min, collapsed families recovered) → **ship**; the
+  rule-#3 root cause is thereby confirmed and no isolation run is needed. Hybrid-C
+  **fails** to recover ch44 → run one cheap local-Qwen diagnostic config,
+  **rules 1/2/4/5 in chunks with no rule #3 and no seed**, to isolate whether the
+  residual is rule-#3 parity (→ the seed/wording needs more work) or one of the
+  other four rules misfiring on fragments (→ a different fix). This is a
+  bisect-only-on-failure step, mirroring Target C's "bisect to per-lever only if
+  the block regresses" — not run up front.
 
 Baseline = current `main` (chapter-only, post-#1761). Treatment = this branch.
 Re-baseline fresh in-session (seed/quant drift). Run from a checkout with the
@@ -180,8 +216,17 @@ corpus present (`server/src/analyzer/attribution-eval/corpus/`) and Ollama up.
   `X` when `lastSpeakerId` is given and is **omitted** when `null`; (d) the
   first-person block still renders alongside the seed when both apply; (e)
   ordering (roster → rules → preceding-context → seed → first-person → body).
+  **Note (assumption-check):** `buildStage2ChunkInbox` is called *positionally*
+  (7 args today at `analysis.test.ts:3514`); adding `lastSpeakerId` shifts the
+  signature — choose the insertion point deliberately (append is safest) and
+  update that call. Keep the `## Attribution rules` header identical so the
+  flipped `.toContain(...)` assertion needs only its polarity changed.
 - **Drift-guard unit test.** Rules 1/2/4/5 are textually identical between
-  `STAGE2_ATTRIBUTION_RULES` and `STAGE2_ATTRIBUTION_RULES_CHUNK`.
+  `STAGE2_ATTRIBUTION_RULES` and `STAGE2_ATTRIBUTION_RULES_CHUNK`. **Requires an
+  export:** `STAGE2_ATTRIBUTION_RULES` is currently module-private
+  (`analysis.ts:1532`) — export both constants for a direct text-equality
+  assertion, or assert equality via the two *rendered* prompts (no new export).
+  Plan picks one.
 - **`stage2-chunk.ts` driver unit test.** With a stubbed `callForBody` capturing
   its args: across a two-chunk body, chunk 2 receives `lastSpeakerId` = the last
   non-narrator id of chunk 1; an all-narration middle chunk carries the prior
