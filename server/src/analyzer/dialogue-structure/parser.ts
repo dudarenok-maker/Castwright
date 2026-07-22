@@ -1,6 +1,6 @@
 import type { ParagraphEvidence, SpanEvidence } from './types.js';
 import type { NameIndex } from './name-matcher.js';
-import { findRosterName } from './name-matcher.js';
+import { findRosterName, findSubjectName } from './name-matcher.js';
 
 /* Spec §5.1. Conservative by construction: only two interior-dash patterns
    toggle span state; anything ambiguous degrades to `unanchored` (flag, not
@@ -50,7 +50,9 @@ export function anchorSpansFromTags(spans: SpanEvidence[], line: string, base: n
   const applyTag = (tag: SpanEvidence, sp: SpanEvidence | null) => {
     if (!sp || sp.speaker || 'pendingPronoun' in sp) return;
     const text = line.slice(tag.start - base, tag.end - base);
-    const name = findRosterName(text, index);
+    const name = conv.addresseePrepositions
+      ? (findSubjectName(text, index)?.id ?? null)
+      : findRosterName(text, index);
     if (name) {
       const weak = 'weakTag' in tag; // set only on beat-only quote-gap tags (parseQuoteParagraph)
       sp.speaker = { characterId: name, source: 'tag-name', ...(weak ? { strength: 'weak' as const } : {}) };
