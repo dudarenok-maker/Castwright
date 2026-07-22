@@ -29,4 +29,6 @@ export const de: LanguageConventions = {
     male: /(^|[^\p{L}])er([^\p{L}]|$)/iu,
     female: /(^|[^\p{L}])sie([^\p{L}]|$)/iu,
   },
+  addresseePrepositions: ['zu', 'an'],
+  tagClauseConjunctions: ['und', 'aber'],
 };

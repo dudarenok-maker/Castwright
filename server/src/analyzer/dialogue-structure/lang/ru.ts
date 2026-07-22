@@ -24,4 +24,6 @@ export const ru: LanguageConventions = {
     male: /(^|[^\p{L}])он([^\p{L}]|$)/iu,
     female: /(^|[^\p{L}])она([^\p{L}]|$)/iu,
   },
+  addresseePrepositions: ['к'],
+  tagClauseConjunctions: ['и', 'но'],
 };

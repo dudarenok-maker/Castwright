@@ -7,6 +7,7 @@ export const RosterSnapshotSchema = z.object({
       name: z.string().min(1),
       gender: z.enum(['male', 'female', 'neutral']).optional(),
       aliases: z.array(z.string()).optional(),
+      canonicalId: z.string().optional(),
     })
   ),
 });

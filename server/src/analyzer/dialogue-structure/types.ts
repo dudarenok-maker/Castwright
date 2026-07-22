@@ -33,6 +33,15 @@ export interface LanguageConventions {
   nameStemmer: (lowerToken: string) => string;
   minStemLength: number;
   pronouns: { firstPerson: RegExp | null; male: RegExp | null; female: RegExp | null };
+  /** English-only opt-in: post-verb names preceded by one of these are the
+      ADDRESSEE, not the speaker (`he said to Valkyrie`). PRESENCE of this field
+      opts the language into subject-position tag resolution (findSubjectName);
+      absence → legacy first-match (findRosterName), byte-identical. Closed set —
+      never include `from`/`of` (they precede real inverted subjects). */
+  addresseePrepositions?: string[];
+  /** Coordinating conjunctions introducing a bystander clause after the verb
+      (`a voice said and Valkyrie turned`). */
+  tagClauseConjunctions?: string[];
 }
 
 export type DecisionBucket = 'confirmed' | 'corrected' | 'flagged' | 'lumped';

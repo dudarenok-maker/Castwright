@@ -240,3 +240,41 @@ describe('A1 — weak tag strength (beat-only quote gaps)', () => {
     expect(sp?.strength).toBeUndefined();
   });
 });
+
+describe('applyTag — addressee/bystander gate (opt-in languages)', () => {
+  const en = conventionsFor('en')!;
+  const speech = (body: string, nameIdx: ReturnType<typeof buildNameIndex>) =>
+    parseChapterStructure(body, nameIdx)[0].spans.find((s) => s.kind === 'speech');
+
+  it('addressee name does not become a tag-name speaker (en)', () => {
+    const idx = buildNameIndex(
+      [
+        { id: 'skulduggery', name: 'Skulduggery' },
+        { id: 'valkyrie', name: 'Valkyrie' },
+      ],
+      en,
+    );
+    const sp = speech('“Fireball,” he said to Valkyrie.', idx);
+    expect(sp?.speaker).toBeUndefined(); // not force-anchored to Valkyrie
+    expect((sp as any)?.pendingPronoun).toBe('male'); // falls through to pronoun `he`
+  });
+
+  it('subject name still anchors strong (en)', () => {
+    const idx = buildNameIndex([{ id: 'sanguine', name: 'Sanguine', aliases: ['Sanguine'] }], en);
+    const sp = speech('“Curse you,” Sanguine said.', idx);
+    expect(sp?.speaker).toEqual({ characterId: 'sanguine', source: 'tag-name' });
+  });
+
+  it('opt-in gate: a convention lacking addresseePrepositions stays on the legacy findRosterName route (byte-identical for unsupported languages)', () => {
+    const stub = { ...en, addresseePrepositions: undefined, tagClauseConjunctions: undefined };
+    const idx = buildNameIndex(
+      [
+        { id: 'skulduggery', name: 'Skulduggery' },
+        { id: 'valkyrie', name: 'Valkyrie' },
+      ],
+      stub,
+    );
+    const sp = speech('“Fireball,” he said to Valkyrie.', idx);
+    expect(sp?.speaker).toEqual({ characterId: 'valkyrie', source: 'tag-name' });
+  });
+});

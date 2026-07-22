@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { evalFixture, rosterToStage1, familyBreakdown, aggStage, type StageScore } from './run-eval.js';
+import { evalFixture, rosterToStage1, familyBreakdown, aggStage, rosterAliasMap, scoreStage, type StageScore } from './run-eval.js';
 import type { LabelledChapter } from './schema.js';
 import type { RosterSnapshot } from './roster-schema.js';
+import type { SentenceOutput } from '../../handoff/schemas.js';
 
 const roster: RosterSnapshot = { characters: [
   { id: 'narrator', name: 'Narrator' },
@@ -36,6 +37,42 @@ describe('rosterToStage1', () => {
     expect(s1.characters.map((c) => c.id)).toEqual(['narrator', 'alice']);
     expect(s1.characters[1].role).toBeTruthy();
     expect(s1.characters[1].color).toBeTruthy();
+  });
+});
+
+describe('rosterAliasMap', () => {
+  it('rosterAliasMap maps canonicalId', () => {
+    const map = rosterAliasMap({ characters: [
+      { id: 'the_torment', name: 'Torment', canonicalId: 'unknown-male' },
+      { id: 'unknown-male', name: 'Unknown male' },
+    ]});
+    expect(map.get('the_torment')).toBe('unknown-male');
+    expect(map.has('unknown-male')).toBe(false);
+  });
+});
+
+describe('scoreStage aliasMap threading', () => {
+  it('threads aliasMap into scoreAttribution: aliased predicted id scores as a true positive', () => {
+    const truth: LabelledChapter = {
+      chapterText: '"There it is," said the shape.',
+      lines: [{ text: 'There it is,', speakerId: 'unknown-male' }],
+    };
+    const sentences: SentenceOutput[] = [
+      { id: 1, chapterId: 1, characterId: 'the_torment', text: 'There it is,' },
+    ];
+    const aliasMap = new Map([['the_torment', 'unknown-male']]);
+
+    const withAlias = scoreStage(truth, sentences, undefined, aliasMap);
+    expect(withAlias.recall).toBeCloseTo(1);
+    expect(withAlias.total).toBe(1);
+
+    // Without the aliasMap, `the_torment` and `unknown-male` are treated as
+    // distinct ids — same call scores a false negative (recall 0). This is
+    // what proves the threading (not just the map construction) matters:
+    // dropping the aliasMap argument from scoreStage's scoreAttribution call
+    // would make `withAlias` regress to this same result.
+    const withoutAlias = scoreStage(truth, sentences, undefined);
+    expect(withoutAlias.recall).toBeCloseTo(0);
   });
 });
 
