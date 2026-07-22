@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { evalFixture, rosterToStage1, familyBreakdown, aggStage, type StageScore } from './run-eval.js';
+import { evalFixture, rosterToStage1, familyBreakdown, aggStage, rosterAliasMap, type StageScore } from './run-eval.js';
 import type { LabelledChapter } from './schema.js';
 import type { RosterSnapshot } from './roster-schema.js';
 
@@ -36,6 +36,17 @@ describe('rosterToStage1', () => {
     expect(s1.characters.map((c) => c.id)).toEqual(['narrator', 'alice']);
     expect(s1.characters[1].role).toBeTruthy();
     expect(s1.characters[1].color).toBeTruthy();
+  });
+});
+
+describe('rosterAliasMap', () => {
+  it('rosterAliasMap maps canonicalId', () => {
+    const map = rosterAliasMap({ characters: [
+      { id: 'the_torment', name: 'Torment', canonicalId: 'unknown-male' },
+      { id: 'unknown-male', name: 'Unknown male' },
+    ]});
+    expect(map.get('the_torment')).toBe('unknown-male');
+    expect(map.has('unknown-male')).toBe(false);
   });
 });
 

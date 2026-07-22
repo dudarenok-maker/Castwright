@@ -32,6 +32,13 @@ describe('scoreAttribution', () => {
     expect(dropped!.truth).toBe('narrator');
     expect(dropped!.correct).toBe(false);
   });
+  it('aliasMap canonicalizes equivalent ids', () => {
+    const truth2 = { chapterText: '', lines: [{ text: 'Leave.', speakerId: 'unknown-male' }] };
+    const map = new Map([['the_torment', 'unknown-male']]);
+    const s = scoreAttribution(truth2, [{ text: 'Leave.', characterId: 'the_torment' }], map);
+    expect(s.truePositive).toBe(1);
+    expect(s.falseNegative).toBe(0);
+  });
   it('repeated identical text with different speakers is not collapsed', () => {
     const dup = { chapterText: '', lines: [
       { text: '「はい」', speakerId: 'a' }, { text: '「はい」', speakerId: 'b' },

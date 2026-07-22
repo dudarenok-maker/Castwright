@@ -70,12 +70,23 @@ function toPredicted(sentences: SentenceOutput[]): Array<{ text: string; charact
   return sentences.map((s) => ({ text: s.text, characterId: s.characterId }));
 }
 
+/** Maps each character's `id → canonicalId`, ONLY for characters with one set —
+    lets the scorer treat a duplicate roster id (e.g. `the_torment` ==
+    `unknown-male`) as a true positive instead of a miss, without deleting the
+    roster entry or touching the name index. */
+export function rosterAliasMap(roster: RosterSnapshot): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const c of roster.characters) if (c.canonicalId) m.set(c.id, c.canonicalId);
+  return m;
+}
+
 function scoreStage(
   truth: LabelledChapter,
   sentences: SentenceOutput[],
   reasons?: Array<{ index: number; reason: string }>,
+  aliasMap?: Map<string, string>,
 ): StageScore {
-  const s = scoreAttribution(truth, toPredicted(sentences));
+  const s = scoreAttribution(truth, toPredicted(sentences), aliasMap);
   const total = s.truePositive + s.falseNegative;
   const byFamily: StageScore['byFamily'] = reasons
     ? familyBreakdown(s.perLine, reasons, sentences.length)
@@ -121,11 +132,12 @@ export async function evalFixture(opts: {
   // `reasons` align 1:1 to the deterministic snapshot; reused for the final stage
   // because escalation changes ids on already-flagged lines but not the evidence class.
   const reasons = stages!.reasons;
+  const aliasMap = rosterAliasMap(opts.roster);
   return {
     fixture: opts.fixtureName ?? `chapter-${opts.chapterId}`,
-    raw: scoreStage(opts.truth, stages!.raw, reasons),
-    deterministic: scoreStage(opts.truth, stages!.deterministic, reasons),
-    final: scoreStage(opts.truth, result.sentences, reasons),
+    raw: scoreStage(opts.truth, stages!.raw, reasons, aliasMap),
+    deterministic: scoreStage(opts.truth, stages!.deterministic, reasons, aliasMap),
+    final: scoreStage(opts.truth, result.sentences, reasons, aliasMap),
   };
 }
 
