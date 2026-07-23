@@ -62,6 +62,25 @@ describe('buildSilverSkeleton (Task 8)', () => {
     expect(out.priorExchange).toBeUndefined();
   });
 
+  it('repairs quote-continuation lines the current attribution defaulted to narrator', () => {
+    // The book's current attribution attributes only the opener; the rest of a
+    // multi-sentence speech defaults to narrator (issue #1769). The seed must
+    // carry the corrected continuation labels, not the circular ones.
+    const sentences = [
+      s(1, 44, 'skulduggery', '“Good enough.'),
+      s(2, 44, 'narrator', 'See here.'),
+      s(3, 44, 'narrator', 'Happy to help.”'),
+      s(4, 44, 'narrator', 'He walked off.'),
+    ];
+    const out = buildSilverSkeleton('CHAPTER BODY', sentences, roster);
+    expect(out.lines).toEqual([
+      { text: '“Good enough.', speakerId: 'skulduggery' },
+      { text: 'See here.', speakerId: 'skulduggery' },
+      { text: 'Happy to help.”', speakerId: 'skulduggery' },
+      { text: 'He walked off.', speakerId: 'narrator' }, // outside the quote — unchanged
+    ]);
+  });
+
   it('attaches the prior chapter final two-speaker exchange when prior-chapter sentences are supplied', () => {
     const sentences = [s(1, 44, 'narrator', 'Line A')];
     const priorSentences = [
