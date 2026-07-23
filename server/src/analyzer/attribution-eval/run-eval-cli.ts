@@ -181,6 +181,9 @@ export function formatReviewLine(agg: ReviewAgg, runs: number): string {
   if (agg.predictedDropped.mean > 0) {
     line += `\n      ⚠ ${countFmt(agg.predictedDropped.mean)} predicted units unlocated — char coverage incomplete`;
   }
+  if (agg.truthDropped.mean > 0) {
+    line += `\n      ⚠ ${countFmt(agg.truthDropped.mean)} truth units unlocated — recall denominator incomplete`;
+  }
   return line;
 }
 

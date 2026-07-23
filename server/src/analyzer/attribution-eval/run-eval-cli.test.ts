@@ -133,6 +133,17 @@ describe('formatReviewLine', () => {
     const line = formatReviewLine(agg, 1);
     expect(line).toContain('4 predicted units unlocated — char coverage incomplete');
   });
+
+  it('omits the truth-side coverage warning when truthDropped.mean is 0', () => {
+    const line = formatReviewLine(baseAgg(), 1);
+    expect(line).not.toContain('recall denominator incomplete');
+  });
+
+  it('adds the truth-side coverage warning when truthDropped.mean > 0', () => {
+    const agg = baseAgg({ truthDropped: st(3) });
+    const line = formatReviewLine(agg, 1);
+    expect(line).toContain('3 truth units unlocated — recall denominator incomplete');
+  });
 });
 
 describe('partitionByTier', () => {

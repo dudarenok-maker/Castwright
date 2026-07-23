@@ -212,13 +212,15 @@ export async function evalFixture(opts: {
   const finalSentences = result.sentences;
   const chunkEngine = opts.engine === 'qwen' ? 'local' : 'gemini';
 
-  // Roster carrying gender/aliases (and role) — the SAME object feeds both the
-  // gemini chunk-budget (via JSON.stringify length inside runReviewOverChapter)
-  // and the inbox, so eval chunk boundaries match production's CastCharacterSlim.
+  // Roster carrying gender/aliases (no `role` — RosterSnapshot has no such field,
+  // and production's stringified cast has no per-character role either; see
+  // review-run.ts's `roster` param, typed `role?: string`) — the SAME object
+  // feeds both the gemini chunk-budget (via JSON.stringify length inside
+  // runReviewOverChapter) and the inbox, so eval chunk boundaries approximate
+  // production's CastCharacterSlim.
   const reviewRoster = opts.roster.characters.map((c) => ({
     id: c.id,
     name: c.name,
-    role: 'character',
     ...(c.gender ? { gender: c.gender } : {}),
     ...(c.aliases ? { aliases: c.aliases } : {}),
   }));

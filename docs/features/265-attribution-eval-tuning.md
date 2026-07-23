@@ -394,6 +394,14 @@ version of chunk 0 than production ever runs. This task's silver capture path
 done here — until then, treat any gold `reviewed`-stage opening-line result as a conservative
 (harder-than-production) floor.
 
+**Fidelity note — roster has no per-character `role`.** The `reviewed` stage's roster
+(`reviewRoster`, `run-eval.ts`) carries `gender`/`aliases` but, like production's stringified
+cast, no per-character `role` — `RosterSnapshot` has no such field, and `runReviewOverChapter`'s
+roster param types it optional — so the gemini chunk budget's `JSON.stringify(roster).length`
+approximates, rather than exactly matches, production's chunk boundaries. The internal
+`final`→`reviewed` comparison is unaffected either way, since both sides of that comparison share
+the same roster within a run.
+
 **The char metric is a regression guard, not a lift target.** On an attribution baseline that's
 already good (post the deterministic-first tuning cycles above), the *expected* good outcome on the
 `reviewed` stage is **helped ≈ harmed ≈ 0** — there's little left for review to correctly fix, and a
