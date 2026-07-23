@@ -2,6 +2,7 @@ import type { LabelledChapter } from './schema.js';
 import type { RosterSnapshot } from './roster-schema.js';
 import type { SentenceOutput } from '../../handoff/schemas.js';
 import { priorChapterBoundaryExchange } from '../../routes/script-review.js';
+import { inheritQuoteContinuations } from './quote-continuation.js';
 
 export function buildLabelledChapter(
   chapterText: string,
@@ -40,10 +41,15 @@ export function buildSilverSkeleton(
     excludeFromSynthesis?: boolean;
   }>,
 ): LabelledChapter {
-  const lines = sentences
+  // Seed from current attribution, then repair the systematic quote-continuation
+  // error (multi-sentence speeches whose continuations defaulted to narrator) so
+  // the silver seed isn't circular for the reattribute path — see #1769 and
+  // `inheritQuoteContinuations`.
+  const seeded = sentences
     .slice()
     .sort((a, b) => a.id - b.id)
     .map((s) => ({ text: s.text, speakerId: s.characterId }));
+  const lines = inheritQuoteContinuations(seeded);
   const priorExchange = priorChapterSentences
     ? priorChapterBoundaryExchange(priorChapterSentences, roster) ?? undefined
     : undefined;
