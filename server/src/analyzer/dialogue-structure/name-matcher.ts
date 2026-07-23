@@ -3,20 +3,45 @@ import type { LanguageConventions } from './types.js';
 export interface RosterEntry { id: string; name: string; aliases?: string[] }
 export type NameIndex = { stems: Map<string, string>; conventions: LanguageConventions };
 
+/** Whitespace/hyphen tokens of a roster string, empties dropped. */
+function tokensOf(s: string): string[] {
+  return String(s)
+    .split(/[\s-]+/u)
+    .filter(Boolean);
+}
+
+/** A cased-lowercase leading char marks a determiner/common word, not a
+    proper-name part. Caseless scripts (Han/Kana) have no case
+    (`toUpperCase() === toLowerCase()`), so their tokens are never gated. */
+function isLowercaseWord(tok: string): boolean {
+  const c = tok[0] ?? '';
+  return c.toLowerCase() === c && c.toUpperCase() !== c;
+}
+
 /** Index roster name+alias TOKENS by stem. Ambiguous stems (two characters
     sharing a stem) are dropped — a match must be unique to anchor. */
 export function buildNameIndex(roster: RosterEntry[], conventions: LanguageConventions): NameIndex {
   const stems = new Map<string, string>();
   const ambiguous = new Set<string>();
+  const add = (tok: string, id: string) => {
+    const stem = conventions.nameStemmer(tok.toLowerCase());
+    if (stem.length < conventions.minStemLength) return;
+    const prev = stems.get(stem);
+    if (prev && prev !== id) ambiguous.add(stem);
+    else stems.set(stem, id);
+  };
   for (const c of roster) {
     if (c.id === 'narrator') continue;
-    const tokens = [c.name, ...(c.aliases ?? [])].flatMap((n) => String(n).split(/[\s-]+/u));
-    for (const tok of tokens) {
-      const stem = conventions.nameStemmer(tok.toLowerCase());
-      if (stem.length < conventions.minStemLength) continue;
-      const prev = stems.get(stem);
-      if (prev && prev !== c.id) ambiguous.add(stem);
-      else stems.set(stem, c.id);
+    for (const tok of tokensOf(c.name)) add(tok, c.id); // name field: authoritative, unconditional
+    for (const alias of c.aliases ?? []) {
+      // #1774 — a MULTI-word alias is often a relational descriptor
+      // ("her mother", "the captain"), not a proper name; its lowercase tokens
+      // ("her", "mother", "the") must not index as NAME stems, or a possessive/
+      // common word in prose name-matches an absent character (the #1768 root
+      // cause: "her" tokenized out of "her mother"). A single-word alias stays
+      // unconditional so a lowercase epithet ("шеф") still anchors.
+      const toks = tokensOf(alias);
+      for (const tok of toks) if (toks.length === 1 || !isLowercaseWord(tok)) add(tok, c.id);
     }
   }
   for (const s of ambiguous) stems.delete(s);
