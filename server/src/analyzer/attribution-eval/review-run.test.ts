@@ -24,6 +24,7 @@ import {
 } from '../chapter-chunker.js';
 import { buildReviewSentencesInput } from '../../routes/script-review.js';
 import { AnalyzerTruncatedError } from '../errors.js';
+import { DailyQuotaExhaustedError } from '../rate-limit.js';
 import type { Analyzer, StageCall } from '../index.js';
 import type { SentenceOutput, ScriptReviewOp, ScriptReviewOutput } from '../../handoff/schemas.js';
 
@@ -216,6 +217,30 @@ describe('runReviewOverChapter — route-parity chunk loop', () => {
     // …every other chunk's owned ids survive (cores partition the chapter).
     const survivors = chunks.slice(1).flatMap((c) => c.core.map((s) => s.id));
     expect([...stripIds].sort((a, b) => a - b)).toEqual(survivors.sort((a, b) => a - b));
+  });
+
+  it('(e) fast-fails on a terminal quota error instead of skip-and-retrying every remaining chunk', async () => {
+    // A quota (or content-block) error is fatal for EVERY remaining chunk, so
+    // skip-and-continue would burn API calls on a doomed run. Production breaks
+    // the chunk loop on these (routes/script-review.ts:915-922); the eval
+    // re-throws them rather than counting them as a droppable chunk.
+    const stub = {
+      async runScriptReviewChapter(): Promise<ScriptReviewOutput> {
+        throw new DailyQuotaExhaustedError('gemma-4-31b-it', new Date(0));
+      },
+    } as unknown as Analyzer;
+
+    await expect(
+      runReviewOverChapter({
+        analyzer: stub,
+        engine: 'gemini',
+        manuscriptId: MANUSCRIPT_ID,
+        chapterId: CHAPTER_ID,
+        sentences,
+        roster,
+        call,
+      }),
+    ).rejects.toBeInstanceOf(DailyQuotaExhaustedError);
   });
 });
 

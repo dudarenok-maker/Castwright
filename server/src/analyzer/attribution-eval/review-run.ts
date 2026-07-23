@@ -33,7 +33,9 @@ import {
   type PriorExchange,
 } from '../../routes/script-review.js';
 import { planApply, type LiveSentence } from './review-apply-core.js';
-import { AnalyzerTruncatedError } from '../errors.js';
+import { AnalyzerTruncatedError, GeminiContentBlockedError } from '../errors.js';
+import { AnalysisAbortedError } from '../ollama.js';
+import { DailyQuotaExhaustedError } from '../rate-limit.js';
 
 /* The route's `MAX_FORCE_SPLIT_DEPTH` and `CHUNK_OVERLAP` are both 3 but not
    exported — redeclared locally to match (server/src/routes/script-review.ts). */
@@ -111,7 +113,12 @@ export async function runReviewOverChapter(opts: {
      after retry — or exhausts force-split depth — is SKIPPED (its ops lost) and
      the loop continues, rather than aborting the whole chapter. The eval has no
      SSE `chapter-failed` channel, so it counts drops and returns the tally for
-     the scorecard to surface (a silent drop would understate helped/harmed). */
+     the scorecard to surface (a silent drop would understate helped/harmed).
+
+     TERMINAL errors are re-thrown, not dropped: an abort, an exhausted daily
+     quota, or a content block is fatal for EVERY remaining chunk (the route
+     breaks the loop on these), so swallowing them would burn API calls on a
+     doomed run and report a scorecard of near-total drops. */
   const ops: ScriptReviewOp[] = [];
   let droppedChunks = 0;
   for (let index = 0; index < chunks.length; index += 1) {
@@ -120,6 +127,13 @@ export async function runReviewOverChapter(opts: {
       const owned = await reviewCore(chunk.core, chunk.contextBefore, chunk.contextAfter, index === 0, 0);
       ops.push(...owned);
     } catch (err) {
+      if (
+        err instanceof AnalysisAbortedError ||
+        err instanceof DailyQuotaExhaustedError ||
+        err instanceof GeminiContentBlockedError
+      ) {
+        throw err;
+      }
       droppedChunks += 1;
       console.warn(
         `[review-run] ch${chapterId} chunk ${index + 1}/${chunks.length} dropped: ${(err as Error).message}`,
