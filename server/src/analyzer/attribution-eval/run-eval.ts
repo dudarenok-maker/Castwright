@@ -43,6 +43,7 @@ export interface ReviewScore {
   churn: number;
   predictedDropped: number;
   truthDropped: number;
+  droppedChunks: number; // review chunks skipped after a per-chunk model/validation failure (#1777)
   opsByClass: Record<string, number>;
   dump: Array<{ id: number; op: string; rationale: string; anchor?: string }>;
 }
@@ -232,7 +233,7 @@ export async function evalFixture(opts: {
     ? buildStructureEvidence(opts.truth.chapterText, finalSentences, opts.roster.characters, opts.language ?? 'en')
     : undefined;
 
-  const { ops, accepted } = await runReviewOverChapter({
+  const { ops, accepted, droppedChunks } = await runReviewOverChapter({
     analyzer: opts.analyzer,
     engine: chunkEngine,
     manuscriptId: opts.manuscriptId,
@@ -292,6 +293,7 @@ export async function evalFixture(opts: {
     churn,
     predictedDropped: finalProj.dropped,
     truthDropped: truthProj.dropped,
+    droppedChunks,
     opsByClass,
     dump,
   };
@@ -324,6 +326,7 @@ export interface ReviewAgg {
   churn: Stat;
   predictedDropped: Stat;
   truthDropped: Stat;
+  droppedChunks: Stat;
   opsByClass: Record<string, number>;
   dump: ReviewScore['dump'];
 }
@@ -394,6 +397,7 @@ export function aggReview(scores: ReviewScore[]): ReviewAgg {
     churn: stat(scores.map((s) => s.churn)),
     predictedDropped: stat(scores.map((s) => s.predictedDropped)),
     truthDropped: stat(scores.map((s) => s.truthDropped)),
+    droppedChunks: stat(scores.map((s) => s.droppedChunks)),
     opsByClass,
     dump: scores[0]?.dump ?? [],
   };

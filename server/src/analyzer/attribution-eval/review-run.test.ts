@@ -24,6 +24,7 @@ import {
 } from '../chapter-chunker.js';
 import { buildReviewSentencesInput } from '../../routes/script-review.js';
 import { AnalyzerTruncatedError } from '../errors.js';
+import { DailyQuotaExhaustedError } from '../rate-limit.js';
 import type { Analyzer, StageCall } from '../index.js';
 import type { SentenceOutput, ScriptReviewOp, ScriptReviewOutput } from '../../handoff/schemas.js';
 
@@ -174,6 +175,73 @@ describe('runReviewOverChapter — route-parity chunk loop', () => {
     // …while the same sentence's strip_tag (no anchor requirement) still is.
     expect(accepted.some((o) => o.op === 'strip_tag' && o.id === badAnchorId)).toBe(true);
   });
+
+  it('(d) skips a chunk whose analyzer throws a non-truncation error and keeps the rest (droppedChunks)', async () => {
+    // Mirrors production's per-chunk resilience (routes/script-review.ts:906-924):
+    // an LLM schema-validation failure on one chunk must not abort the chapter.
+    // Throw on the FIRST analyzer call (chunk 0) — a non-truncation error force-
+    // splits nothing, so it's exactly one call per chunk — then succeed. Keyed on
+    // call order, not sentence id, since the 3-sentence overlap can leak a core id
+    // into an adjacent chunk's context (which would fail two chunks).
+    const chunks = refChunksFor(sentences);
+    let calls = 0;
+    const stub = {
+      async runScriptReviewChapter(
+        _m: string,
+        _c: number,
+        prompt: string,
+        _call: StageCall,
+      ): Promise<ScriptReviewOutput> {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error('schema-validation — reattribute requires exactly one of characterId or proposed');
+        }
+        return { ops: presentIds(prompt).map((id) => ({ id, op: 'strip_tag', anchor: 'x', rationale } as ScriptReviewOp)) };
+      },
+    } as unknown as Analyzer;
+
+    const { ops, droppedChunks } = await runReviewOverChapter({
+      analyzer: stub,
+      engine: 'local',
+      manuscriptId: MANUSCRIPT_ID,
+      chapterId: CHAPTER_ID,
+      sentences,
+      roster,
+      call,
+    });
+
+    expect(droppedChunks).toBe(1);
+    const stripIds = new Set(ops.filter((o) => o.op === 'strip_tag').map((o) => o.id));
+    // chunk 0's owned ids are gone…
+    for (const s of chunks[0].core) expect(stripIds.has(s.id)).toBe(false);
+    // …every other chunk's owned ids survive (cores partition the chapter).
+    const survivors = chunks.slice(1).flatMap((c) => c.core.map((s) => s.id));
+    expect([...stripIds].sort((a, b) => a - b)).toEqual(survivors.sort((a, b) => a - b));
+  });
+
+  it('(e) fast-fails on a terminal quota error instead of skip-and-retrying every remaining chunk', async () => {
+    // A quota (or content-block) error is fatal for EVERY remaining chunk, so
+    // skip-and-continue would burn API calls on a doomed run. Production breaks
+    // the chunk loop on these (routes/script-review.ts:915-922); the eval
+    // re-throws them rather than counting them as a droppable chunk.
+    const stub = {
+      async runScriptReviewChapter(): Promise<ScriptReviewOutput> {
+        throw new DailyQuotaExhaustedError('gemma-4-31b-it', new Date(0));
+      },
+    } as unknown as Analyzer;
+
+    await expect(
+      runReviewOverChapter({
+        analyzer: stub,
+        engine: 'gemini',
+        manuscriptId: MANUSCRIPT_ID,
+        chapterId: CHAPTER_ID,
+        sentences,
+        roster,
+        call,
+      }),
+    ).rejects.toBeInstanceOf(DailyQuotaExhaustedError);
+  });
 });
 
 describe('runReviewOverChapter — force-split retry on AnalyzerTruncatedError', () => {
@@ -253,24 +321,28 @@ describe('runReviewOverChapter — force-split retry on AnalyzerTruncatedError',
     expect(stripIds).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
   });
 
-  it('depth-exhaustion: an always-truncating analyzer eventually rejects with AnalyzerTruncatedError (no infinite loop)', async () => {
+  it('depth-exhaustion: an always-truncating chunk is dropped-and-skipped, not rejected (no infinite loop)', async () => {
     // 16 tiny sentences → one top-level chunk (verified below); halving
     // 16→8→4→2 across 3 recursive splits still leaves a core of length 2
-    // (>1) at depth 3, so the rejection below is forced by the
-    // MAX_FORCE_SPLIT_DEPTH guard itself, not just the length===1 floor.
+    // (>1) at depth 3, so reviewCore re-throws AnalyzerTruncatedError at the
+    // MAX_FORCE_SPLIT_DEPTH guard. CONTRACT CHANGE (#1777): the chunk loop now
+    // catches that per-chunk error and continues — matching production
+    // (routes/script-review.ts:906-924) — rather than aborting the chapter.
+    // The "no infinite loop" intent is preserved (this resolves); the outcome
+    // is now a dropped chunk, not a rejection.
     const sentences = makeSentences(16, 50);
     expect(refChunksFor(sentences).length).toBe(1); // precondition: single top-level core
 
-    await expect(
-      runReviewOverChapter({
-        analyzer: makeAlwaysThrows(),
-        engine: 'local',
-        manuscriptId: MANUSCRIPT_ID,
-        chapterId: CHAPTER_ID,
-        sentences,
-        roster,
-        call,
-      }),
-    ).rejects.toBeInstanceOf(AnalyzerTruncatedError);
+    const { ops, droppedChunks } = await runReviewOverChapter({
+      analyzer: makeAlwaysThrows(),
+      engine: 'local',
+      manuscriptId: MANUSCRIPT_ID,
+      chapterId: CHAPTER_ID,
+      sentences,
+      roster,
+      call,
+    });
+    expect(ops).toEqual([]);
+    expect(droppedChunks).toBe(1);
   });
 });

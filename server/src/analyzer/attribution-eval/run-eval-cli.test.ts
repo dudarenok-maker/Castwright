@@ -99,6 +99,7 @@ describe('formatReviewLine', () => {
     churn: st(3),
     predictedDropped: st(0),
     truthDropped: st(0),
+    droppedChunks: st(0),
     opsByClass: {},
     dump: [],
     ...overrides,
@@ -143,6 +144,17 @@ describe('formatReviewLine', () => {
     const agg = baseAgg({ truthDropped: st(3) });
     const line = formatReviewLine(agg, 1);
     expect(line).toContain('3 truth units unlocated — recall denominator incomplete');
+  });
+
+  it('omits the dropped-chunk warning when droppedChunks.mean is 0', () => {
+    const line = formatReviewLine(baseAgg(), 1);
+    expect(line).not.toContain('review chunk(s) dropped');
+  });
+
+  it('adds the dropped-chunk warning when droppedChunks.mean > 0', () => {
+    const agg = baseAgg({ droppedChunks: st(2) });
+    const line = formatReviewLine(agg, 1);
+    expect(line).toContain('2 review chunk(s) dropped after a model/validation failure');
   });
 });
 
