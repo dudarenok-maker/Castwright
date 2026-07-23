@@ -184,6 +184,9 @@ export function formatReviewLine(agg: ReviewAgg, runs: number): string {
   if (agg.truthDropped.mean > 0) {
     line += `\n      ⚠ ${countFmt(agg.truthDropped.mean)} truth units unlocated — recall denominator incomplete`;
   }
+  if (agg.droppedChunks.mean > 0) {
+    line += `\n      ⚠ ${countFmt(agg.droppedChunks.mean)} review chunk(s) dropped after a model/validation failure — ops incomplete, helped/harmed understated (#1777)`;
+  }
   return line;
 }
 

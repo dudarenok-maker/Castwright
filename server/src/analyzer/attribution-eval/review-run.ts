@@ -50,7 +50,7 @@ export async function runReviewOverChapter(opts: {
   priorExchange?: PriorExchange;
   evidence?: Map<number, string>;
   call: StageCall;
-}): Promise<{ ops: ScriptReviewOp[]; accepted: ScriptReviewOp[] }> {
+}): Promise<{ ops: ScriptReviewOp[]; accepted: ScriptReviewOp[]; droppedChunks: number }> {
   const { analyzer, engine, manuscriptId, chapterId, sentences, roster, priorExchange, evidence, call } =
     opts;
 
@@ -106,11 +106,25 @@ export async function runReviewOverChapter(opts: {
     }
   };
 
+  /* Per-chunk resilience, mirroring the route's chunk loop
+     (routes/script-review.ts:906-924): a chunk whose model call fails validation
+     after retry — or exhausts force-split depth — is SKIPPED (its ops lost) and
+     the loop continues, rather than aborting the whole chapter. The eval has no
+     SSE `chapter-failed` channel, so it counts drops and returns the tally for
+     the scorecard to surface (a silent drop would understate helped/harmed). */
   const ops: ScriptReviewOp[] = [];
+  let droppedChunks = 0;
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
-    const owned = await reviewCore(chunk.core, chunk.contextBefore, chunk.contextAfter, index === 0, 0);
-    ops.push(...owned);
+    try {
+      const owned = await reviewCore(chunk.core, chunk.contextBefore, chunk.contextAfter, index === 0, 0);
+      ops.push(...owned);
+    } catch (err) {
+      droppedChunks += 1;
+      console.warn(
+        `[review-run] ch${chapterId} chunk ${index + 1}/${chunks.length} dropped: ${(err as Error).message}`,
+      );
+    }
   }
 
   const live: LiveSentence[] = sentences.map((s) => ({
@@ -124,5 +138,5 @@ export async function runReviewOverChapter(opts: {
   const rosterSet = new Set(roster.map((r) => r.id));
   const accepted = planApply(ops, live, rosterSet).appliable;
 
-  return { ops, accepted };
+  return { ops, accepted, droppedChunks };
 }

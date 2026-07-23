@@ -216,7 +216,7 @@ describe('evalFixture — reviewed char-stage (opt-in)', () => {
 describe('aggregateFixture — reviewed aggregation (aggReview)', () => {
   const mkReviewed = (over: Partial<ReviewScore>): ReviewScore => ({
     charFinal: 1, charReviewed: 1, lineFinal: 1, lineReviewed: 1,
-    helped: 0, harmed: 0, churn: 0, predictedDropped: 0, truthDropped: 0,
+    helped: 0, harmed: 0, churn: 0, predictedDropped: 0, truthDropped: 0, droppedChunks: 0,
     opsByClass: {}, dump: [], ...over,
   });
   const mkResult = (reviewed?: ReviewScore): FixtureResult => ({
@@ -225,12 +225,13 @@ describe('aggregateFixture — reviewed aggregation (aggReview)', () => {
   });
 
   it('averages per-run reviewed into a ReviewAgg with Stat fields and run-0 dump', () => {
-    const r0 = mkResult(mkReviewed({ helped: 2, harmed: 1, opsByClass: { reattribute: 1 }, dump: [{ id: 1, op: 'strip_tag', rationale: 'r0' }] }));
-    const r1 = mkResult(mkReviewed({ helped: 4, harmed: 3, opsByClass: { reattribute: 3, split: 1 }, dump: [{ id: 2, op: 'merge', rationale: 'r1' }] }));
+    const r0 = mkResult(mkReviewed({ helped: 2, harmed: 1, droppedChunks: 1, opsByClass: { reattribute: 1 }, dump: [{ id: 1, op: 'strip_tag', rationale: 'r0' }] }));
+    const r1 = mkResult(mkReviewed({ helped: 4, harmed: 3, droppedChunks: 0, opsByClass: { reattribute: 3, split: 1 }, dump: [{ id: 2, op: 'merge', rationale: 'r1' }] }));
     const agg = aggregateFixture([r0, r1]);
     expect(agg.reviewed).toBeDefined();
     expect(agg.reviewed!.helped).toEqual({ mean: 3, min: 2, max: 4 });
     expect(agg.reviewed!.harmed).toEqual({ mean: 2, min: 1, max: 3 });
+    expect(agg.reviewed!.droppedChunks).toEqual({ mean: 0.5, min: 0, max: 1 });
     // mean count per class across runs (split absent in run-0 counts as 0).
     expect(agg.reviewed!.opsByClass.reattribute).toBeCloseTo(2);
     expect(agg.reviewed!.opsByClass.split).toBeCloseTo(0.5);
