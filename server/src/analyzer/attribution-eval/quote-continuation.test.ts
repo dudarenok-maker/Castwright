@@ -70,6 +70,29 @@ describe('inheritQuoteContinuations', () => {
     expect(out.map((l) => l.speakerId)).toEqual(['jack', 'jack']);
   });
 
+  it('does not cascade past a multi-paragraph speech that reopens “ each paragraph', () => {
+    // Standard EN typography for one speaker across paragraphs: an opening “ at
+    // the START of each paragraph, a closing ” only at the very end. A naive
+    // depth counter never returns to 0 and bleeds into the following narration.
+    const lines = [
+      { text: '“First paragraph of the speech.', speakerId: 'jack' },
+      { text: '“Second paragraph, reopened.', speakerId: 'narrator' },
+      { text: 'Still the same speech here.', speakerId: 'narrator' },
+      { text: 'And the final line.”', speakerId: 'narrator' }, // closes the whole speech
+      { text: 'He walked away silently.', speakerId: 'narrator' }, // narration AFTER — must stay narrator
+      { text: 'The room fell quiet.', speakerId: 'narrator' },
+    ];
+    const out = inheritQuoteContinuations(lines);
+    expect(out.map((l) => l.speakerId)).toEqual([
+      'jack',
+      'jack',
+      'jack',
+      'jack',
+      'narrator',
+      'narrator',
+    ]);
+  });
+
   it('returns a new array and does not mutate the input', () => {
     const lines = [
       { text: '“Good enough.', speakerId: 'jack' },
