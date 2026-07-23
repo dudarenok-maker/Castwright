@@ -30,8 +30,10 @@
 
 ### Release Notes
 - [All releases](Release-Notes)
+- [v1.14.0](Release-Notes-v1.14.0)
 - [v1.13.0](Release-Notes-v1.13.0)
-- [v1.12](Release-Notes-v1.12)
+- [v1.12.3](Release-Notes-v1.12.3)
+- [v1.12.0](Release-Notes-v1.12.0)
 - [v1.11.0](Release-Notes-v1.11.0)
 - [v1.10.0](Release-Notes-v1.10.0)
 - [v1.9.0](Release-Notes-v1.9.0)

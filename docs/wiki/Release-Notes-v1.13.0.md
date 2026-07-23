@@ -71,5 +71,3 @@ Reaching Castwright from another device on your network used to mean a special c
 ---
 
 **Full changelog:** v1.12.3...v1.13.0
-
-

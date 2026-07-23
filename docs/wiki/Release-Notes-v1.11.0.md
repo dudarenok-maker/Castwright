@@ -122,5 +122,3 @@ The voice-match check used to batch every character's result until the whole boo
 ---
 
 **Full changelog:** v1.10.0...v1.11.0
-
-
