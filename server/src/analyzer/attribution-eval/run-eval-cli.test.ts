@@ -2,7 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runEval, slotLabel } from './run-eval-cli.js';
+import {
+  runEval,
+  slotLabel,
+  parseFixtureFilename,
+  formatReviewLine,
+  partitionByTier,
+  type ScoredFixture,
+} from './run-eval-cli.js';
+import type { ReviewAgg, Stat } from './run-eval.js';
 
 describe('runEval gating', () => {
   it('SKIPs cleanly when the corpus dir is empty', async () => {
@@ -43,5 +51,114 @@ describe('slotLabel', () => {
     } finally {
       if (prev !== undefined) process.env.GEMINI_MODEL = prev;
     }
+  });
+});
+
+describe('parseFixtureFilename', () => {
+  it('tags a fixture with the .silver segment as silver', () => {
+    expect(parseFixtureFilename('foo-ch12.en.silver.labelled.json')).toEqual({
+      slug: 'foo',
+      chapterId: 12,
+      lang: 'en',
+      tier: 'silver',
+    });
+  });
+
+  it('tags a fixture without the .silver segment as gold', () => {
+    expect(parseFixtureFilename('foo-ch12.en.labelled.json')).toEqual({
+      slug: 'foo',
+      chapterId: 12,
+      lang: 'en',
+      tier: 'gold',
+    });
+  });
+
+  it('tags the committed Coalfall guardrail as gold (no .silver segment)', () => {
+    expect(parseFixtureFilename('coalfall-ch1.en.labelled.json')).toEqual({
+      slug: 'coalfall',
+      chapterId: 1,
+      lang: 'en',
+      tier: 'gold',
+    });
+  });
+
+  it('returns null for a non-matching filename (e.g. a roster sidecar)', () => {
+    expect(parseFixtureFilename('foo.roster.json')).toBeNull();
+  });
+});
+
+describe('formatReviewLine', () => {
+  const st = (n: number): Stat => ({ mean: n, min: n, max: n });
+  const baseAgg = (overrides: Partial<ReviewAgg> = {}): ReviewAgg => ({
+    charFinal: st(0.7),
+    charReviewed: st(0.75),
+    lineFinal: st(0.6),
+    lineReviewed: st(0.65),
+    helped: st(10),
+    harmed: st(2),
+    churn: st(3),
+    predictedDropped: st(0),
+    truthDropped: st(0),
+    opsByClass: {},
+    dump: [],
+    ...overrides,
+  });
+
+  it('renders the char Δ, the line pair, and helped/harmed/churn at runs=1', () => {
+    const line = formatReviewLine(baseAgg(), 1);
+    expect(line).toContain('final(char) 70.0% → reviewed(char) 75.0%');
+    expect(line).toContain('Δ +5.0pp');
+    expect(line).toContain('line 60.0l%→65.0l%');
+    expect(line).toContain('helped 10 harmed 2 churn 3');
+  });
+
+  it('omits the coverage-health warning when predictedDropped.mean is 0', () => {
+    const line = formatReviewLine(baseAgg(), 1);
+    expect(line).not.toContain('unlocated');
+  });
+
+  it('renders a negative Δ when the reviewed stage regresses', () => {
+    const line = formatReviewLine(baseAgg({ charFinal: st(0.8), charReviewed: st(0.75) }), 1);
+    expect(line).toContain('Δ -5.0pp');
+  });
+
+  it('shows a min–max range for the char stats when runs > 1', () => {
+    const agg = baseAgg({ charFinal: { mean: 0.7, min: 0.65, max: 0.75 } });
+    const line = formatReviewLine(agg, 3);
+    expect(line).toContain('[65.0%–75.0%]');
+  });
+
+  it('adds the coverage-health warning when predictedDropped.mean > 0', () => {
+    const agg = baseAgg({ predictedDropped: st(4) });
+    const line = formatReviewLine(agg, 1);
+    expect(line).toContain('4 predicted units unlocated — char coverage incomplete');
+  });
+
+  it('omits the truth-side coverage warning when truthDropped.mean is 0', () => {
+    const line = formatReviewLine(baseAgg(), 1);
+    expect(line).not.toContain('recall denominator incomplete');
+  });
+
+  it('adds the truth-side coverage warning when truthDropped.mean > 0', () => {
+    const agg = baseAgg({ truthDropped: st(3) });
+    const line = formatReviewLine(agg, 1);
+    expect(line).toContain('3 truth units unlocated — recall denominator incomplete');
+  });
+});
+
+describe('partitionByTier', () => {
+  it('splits gold (incl. the Coalfall guardrail) from silver, preserving relative order', () => {
+    const gold1 = { fixture: 'a', tier: 'gold' } as unknown as ScoredFixture;
+    const coalfall = { fixture: 'coalfall-ch1.en.labelled.json', tier: 'gold' } as unknown as ScoredFixture;
+    const silver1 = { fixture: 'b', tier: 'silver' } as unknown as ScoredFixture;
+
+    const { gold, silver } = partitionByTier([gold1, silver1, coalfall]);
+
+    expect(gold.map((f) => f.fixture)).toEqual(['a', 'coalfall-ch1.en.labelled.json']);
+    expect(silver.map((f) => f.fixture)).toEqual(['b']);
+  });
+
+  it('returns empty arrays for an empty fixture list', () => {
+    expect(partitionByTier([])).toEqual({ gold: [], silver: [] });
   });
 });

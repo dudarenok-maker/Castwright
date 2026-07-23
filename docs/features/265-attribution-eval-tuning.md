@@ -52,7 +52,11 @@ owner: null
     coarsening.
   - Two new npm scripts: `eval:attribution` (runner, via
     `scripts/run-attribution-eval.mjs`) and `eval:attribution:capture`
-    (capture CLI, via `tsx`).
+    (capture CLI, via `tsx`). Silver capture (Task 8) rides the same
+    `eval:attribution:capture` script with an extra `--silver` flag
+    (`capture-cli.ts`'s `parseArgs`) rather than a third npm entry — the
+    existing script already forwards argv through `tsx`, so a flag was
+    sufficient.
 - **Invariants preserved:** the opt-in/gated-tooling posture established by
   `golden-audio` (185) — no model-touching command in `test:all`/`verify`;
   SKIP + exit 0 when a gate is missing. No production runtime behaviour
@@ -115,10 +119,16 @@ owner: null
 - Vitest server (`server/src/analyzer/attribution-eval/capture.test.ts`) —
   pure transforms: `buildLabelledChapter` filters to chapter/orders by
   id/maps `characterId`→`speakerId`; `buildRosterSnapshot` keeps
-  id/name/gender/aliases with name→id fallback.
+  id/name/gender/aliases with name→id fallback; `buildSilverSkeleton` (Task
+  8) schema-parses, seeds `lines` from current attribution, and attaches
+  `priorExchange` only when the supplied prior-chapter sentences resolve to
+  a two-speaker exchange (reusing `priorChapterBoundaryExchange`).
 - Vitest server (`server/src/analyzer/attribution-eval/capture-cli.test.ts`)
   — `captureCorpus` end-to-end against a temp workspace: writes the labelled
   fixture(s) + roster snapshot, reproduces the upstream boilerplate strip.
+  `captureSilverCorpus` (Task 8) — writes the `.silver.labelled.json`
+  skeleton with the prior chapter's captured boundary exchange attached, and
+  omits it for a chapter with no preceding chapter.
 - Vitest server (`server/src/analyzer/attribution-eval/buckets.test.ts`) —
   `evidenceFamily` reason→bucket coarsening for every prefix
   (`tag-*`, `pronoun-*`, `alt-*`, `unanchored*`, `narration*`, `lumped`,
@@ -167,6 +177,13 @@ and/or a `GEMINI_API_KEY`.
    (`server/src/analyzer/attribution-eval/corpus/<slug>.roster.json`). No
    model calls; pure file transform. `git status` shows nothing new tracked
    (corpus dir is git-ignored).
+1a. **Capture a silver skeleton (Task 8):**
+    `npm run eval:attribution:capture -- --book <bookId> --chapters <N> --silver`
+    → writes `<slug>-ch<NN>.<lang>.silver.labelled.json`, `lines` seeded from
+    that chapter's current attribution and, when a preceding chapter exists,
+    a `priorExchange` captured from its final two-speaker exchange. No model
+    calls; the corrected `speakerId`s are authored afterward by a human
+    labelling pass over this skeleton, not by the CLI.
 2. **Run the eval against Qwen local:**
    `npm run eval:attribution -- --engine qwen` → prints a per-fixture,
    per-stage scorecard (`raw → det → final` recall %, `n=`, `seg-drift`) plus
@@ -340,3 +357,57 @@ gained `"canonicalId": "unknown-male"` (entry kept, not deleted); nine ch44 cont
 (5 diagnostic-confirmed from the plan table + 4 same-run siblings — `[309]`, `[317]`, `[318]`,
 `[319]` — added under the plan's own uninterrupted-run rule; label changes shift baseline and
 treatment scores equally and cannot distort the ③ delta).
+
+### Script-review eval (char-level), silver capture + prior-exchange (2026-07-22)
+
+This closes out the harness's own build (spec §3, Tasks 1–8): the `reviewed` stage measures the
+**net effect of the LLM script-review pass** (`--review`) on attribution quality — did the pass that
+runs *after* stage-2 + deterministic attribution make the transcript more or less correct, char for
+char. It reuses the char-level, **segmentation-invariant** projection (`char-project.ts`'s
+`CharProjection`, built for exactly this reason: scoring by chapter-text character position rather
+than by matching normalised line text means a `reviewed`-stage split/extract/reattribute op registers
+as an honest recall change instead of looking like a truth line "vanished"). `char-score.ts`'s
+`diffHelpedHarmed` compares the pre-review (`final`) and post-review (`reviewed`) char-by-char
+correctness against truth and buckets every truth-attributed character into **helped** (was wrong,
+review fixed it), **harmed** (was right, review broke it), or **churn** (still wrong, but changed) —
+reported per fixture via `formatReviewLine` (`run-eval-cli.ts`) alongside the reviewed stage's
+per-op-class volumes and an illustrative op-dump of un-scored/off-roster ops.
+
+**Gold-only gate.** Only the gold tier — the four hand-corrected PwF fixtures (ch43–46) plus the
+committed Coalfall guardrail — gates anything. Silver fixtures (the `.silver.labelled.json` tag,
+`FIXTURE_RE` in `run-eval-cli.ts`) are reported in their own `--- silver (directional, not gating)
+---` block and never factor into a pass/fail decision (`partitionByTier`). This is deliberate: silver
+skeletons are seeded from the book's *current* (possibly still-wrong) attribution rather than a full
+independent human labelling pass, so they're directional signal for spotting a class of review
+mistake early, not a number to hold a merge gate on.
+
+**Prior-exchange v1 limitation.** The `reviewed` stage's first chunk of a chapter is fed the prior
+chapter's final two-speaker exchange (`priorExchange`, fs-64's `priorChapterBoundaryExchange`) in
+production, so it can resolve a tagless chapter-opening line via turn-taking — exactly the same
+context the real route gives it. The v1 gold fixtures (ch43–46) were captured **before** this field
+existed and carry no `priorExchange`, so a chunk-0 review run over them under-measures any
+opening-line correction that depends on that context — the eval sees a harder, context-starved
+version of chunk 0 than production ever runs. This task's silver capture path
+(`buildSilverSkeleton`, `capture.ts` / `captureSilverCorpus`, `capture-cli.ts`) captures
+`priorExchange` from the start, by reusing (not reimplementing) the route's own
+`priorChapterBoundaryExchange`; re-capturing the gold fixtures with it is a tracked follow-up, not
+done here — until then, treat any gold `reviewed`-stage opening-line result as a conservative
+(harder-than-production) floor.
+
+**Fidelity note — roster has no per-character `role`.** The `reviewed` stage's roster
+(`reviewRoster`, `run-eval.ts`) carries `gender`/`aliases` but, like production's stringified
+cast, no per-character `role` — `RosterSnapshot` has no such field, and `runReviewOverChapter`'s
+roster param types it optional — so the gemini chunk budget's `JSON.stringify(roster).length`
+approximates, rather than exactly matches, production's chunk boundaries. The internal
+`final`→`reviewed` comparison is unaffected either way, since both sides of that comparison share
+the same roster within a run.
+
+**The char metric is a regression guard, not a lift target.** On an attribution baseline that's
+already good (post the deterministic-first tuning cycles above), the *expected* good outcome on the
+`reviewed` stage is **helped ≈ harmed ≈ 0** — there's little left for review to correctly fix, and a
+well-behaved review pass shouldn't be breaking correct lines either. A large **positive** Δ
+(reviewed noticeably better than final) is not a signal that script-review is earning its keep; it's
+a signal to go check whether attribution *upstream* of review regressed — a bug that pushed more
+lines wrong right before the review stage would show up as a big charitable "helped" swing here, as
+review happens to patch over some of the damage. Read this stage as "did review avoid making a good
+baseline worse", not "how much did review improve things."

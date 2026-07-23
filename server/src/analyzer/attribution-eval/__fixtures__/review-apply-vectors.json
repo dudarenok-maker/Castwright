@@ -1,0 +1,194 @@
+[
+  {
+    "name": "reattribute on-roster is accepted",
+    "ops": [
+      { "id": 1, "op": "reattribute", "characterId": "ferra", "rationale": "on-roster reattribute" }
+    ],
+    "live": [
+      { "id": 1, "chapterId": 1, "text": "Hello there.", "characterId": "narrator" }
+    ],
+    "roster": ["narrator", "ferra"],
+    "expected": {
+      "appliableOpIndexes": [0],
+      "unappliable": []
+    }
+  },
+  {
+    "name": "reattribute to a non-roster id is rejected",
+    "ops": [
+      { "id": 1, "op": "reattribute", "characterId": "ghost", "rationale": "off-roster reattribute" }
+    ],
+    "live": [
+      { "id": 1, "chapterId": 1, "text": "Hello there.", "characterId": "narrator" }
+    ],
+    "roster": ["narrator"],
+    "expected": {
+      "appliableOpIndexes": [],
+      "unappliable": [
+        { "opIndex": 0, "reason": "reattribute characterId not in roster" }
+      ]
+    }
+  },
+  {
+    "name": "split with a resolvable anchor is accepted",
+    "ops": [
+      { "id": 1, "op": "split", "anchor": "Hello there.", "pieceCharacterIds": ["narrator", "narrator"], "rationale": "over-long sentence" }
+    ],
+    "live": [
+      { "id": 1, "chapterId": 1, "text": "Hello there. Goodbye now.", "characterId": "narrator" }
+    ],
+    "roster": [],
+    "expected": {
+      "appliableOpIndexes": [0],
+      "unappliable": []
+    }
+  },
+  {
+    "name": "split with an absent anchor is rejected",
+    "ops": [
+      { "id": 1, "op": "split", "anchor": "no such text", "pieceCharacterIds": ["narrator", "narrator"], "rationale": "over-long sentence" }
+    ],
+    "live": [
+      { "id": 1, "chapterId": 1, "text": "Hello there. Goodbye now.", "characterId": "narrator" }
+    ],
+    "roster": [],
+    "expected": {
+      "appliableOpIndexes": [],
+      "unappliable": [
+        { "opIndex": 0, "reason": "anchor not found or not unique" }
+      ]
+    }
+  },
+  {
+    "name": "second structural op on an already-claimed id is rejected",
+    "ops": [
+      { "id": 1, "op": "split", "anchor": "Hello there.", "pieceCharacterIds": ["narrator", "narrator"], "rationale": "first structural op" },
+      { "id": 1, "op": "extract_dialogue", "anchor": "Goodbye", "anchorEnd": "now.", "pieceCharacterIds": ["narrator", "narrator", "narrator"], "rationale": "second structural op, same id" }
+    ],
+    "live": [
+      { "id": 1, "chapterId": 1, "text": "Hello there. Goodbye now.", "characterId": "narrator" }
+    ],
+    "roster": [],
+    "expected": {
+      "appliableOpIndexes": [0],
+      "unappliable": [
+        { "opIndex": 1, "reason": "second structural op on the same id" }
+      ]
+    }
+  },
+  {
+    "name": "adjacent same-speaker merge is accepted",
+    "ops": [
+      { "id": 5, "op": "merge", "mergeIds": [5, 6], "rationale": "under-split" }
+    ],
+    "live": [
+      { "id": 5, "chapterId": 1, "text": "First piece.", "characterId": "narrator" },
+      { "id": 6, "chapterId": 1, "text": "Second piece.", "characterId": "narrator" }
+    ],
+    "roster": [],
+    "expected": {
+      "appliableOpIndexes": [0],
+      "unappliable": []
+    }
+  },
+  {
+    "name": "non-adjacent merge is rejected",
+    "ops": [
+      { "id": 5, "op": "merge", "mergeIds": [5, 7], "rationale": "bad merge span" }
+    ],
+    "live": [
+      { "id": 5, "chapterId": 1, "text": "First piece.", "characterId": "narrator" },
+      { "id": 6, "chapterId": 1, "text": "Middle piece.", "characterId": "narrator" },
+      { "id": 7, "chapterId": 1, "text": "Third piece.", "characterId": "narrator" }
+    ],
+    "roster": [],
+    "expected": {
+      "appliableOpIndexes": [],
+      "unappliable": [
+        { "opIndex": 0, "reason": "merge members not adjacent / same character / same chapter" }
+      ]
+    }
+  },
+  {
+    "name": "extract_dialogue with anchorEnd absent is rejected (anchor itself resolves)",
+    "ops": [
+      { "id": 1, "op": "extract_dialogue", "anchor": "\"At last,\"", "anchorEnd": "no such text here", "pieceCharacterIds": ["narrator", "maerin"], "rationale": "dialogue extract" }
+    ],
+    "live": [
+      { "id": 1, "chapterId": 1, "text": "He sighed. \"At last,\" she said. He left.", "characterId": "narrator" }
+    ],
+    "roster": [],
+    "expected": {
+      "appliableOpIndexes": [],
+      "unappliable": [
+        { "opIndex": 0, "reason": "extract anchorEnd not found or not unique" }
+      ]
+    }
+  },
+  {
+    "name": "reattribute targeting a sentence id missing from live is rejected",
+    "ops": [
+      { "id": 99, "op": "reattribute", "characterId": "narrator", "rationale": "target no longer exists" }
+    ],
+    "live": [
+      { "id": 1, "chapterId": 1, "text": "Hello there.", "characterId": "narrator" }
+    ],
+    "roster": ["narrator"],
+    "expected": {
+      "appliableOpIndexes": [],
+      "unappliable": [
+        { "opIndex": 0, "reason": "target id missing" }
+      ]
+    }
+  },
+  {
+    "name": "non-structural op on an id already consumed by a structural op is rejected",
+    "ops": [
+      { "id": 1, "op": "split", "anchor": "Hello there.", "pieceCharacterIds": ["narrator", "narrator"], "rationale": "first structural op" },
+      { "id": 1, "op": "reattribute", "characterId": "narrator", "rationale": "second op, same id, non-structural" }
+    ],
+    "live": [
+      { "id": 1, "chapterId": 1, "text": "Hello there. Goodbye now.", "characterId": "narrator" }
+    ],
+    "roster": ["narrator"],
+    "expected": {
+      "appliableOpIndexes": [0],
+      "unappliable": [
+        { "opIndex": 1, "reason": "id consumed by a structural op" }
+      ]
+    }
+  },
+  {
+    "name": "fix_emotion with an invalid emotion value is rejected",
+    "ops": [
+      { "id": 1, "op": "fix_emotion", "emotion": "furious", "rationale": "delivery correction" }
+    ],
+    "live": [
+      { "id": 1, "chapterId": 1, "text": "Hello there.", "characterId": "narrator" }
+    ],
+    "roster": [],
+    "expected": {
+      "appliableOpIndexes": [],
+      "unappliable": [
+        { "opIndex": 0, "reason": "invalid emotion value" }
+      ]
+    }
+  },
+  {
+    "name": "validate_instruct vocalization edit colliding with a strip_tag on the same id is rejected",
+    "ops": [
+      { "id": 1, "op": "strip_tag", "rationale": "remove leaked tag" },
+      { "id": 1, "op": "validate_instruct", "newVocalizationText": "Hmm.", "rationale": "vocalization text repair" }
+    ],
+    "live": [
+      { "id": 1, "chapterId": 1, "text": "Hmm...", "characterId": "narrator", "vocalization": true }
+    ],
+    "roster": [],
+    "expected": {
+      "appliableOpIndexes": [0],
+      "unappliable": [
+        { "opIndex": 1, "reason": "text already claimed by strip_tag" }
+      ]
+    }
+  }
+]
