@@ -245,7 +245,12 @@ export async function evalFixture(opts: {
   });
 
   // char adapter: SentenceOutput.characterId → projectToChars's speakerId (precedent: toPredicted).
-  const truthProj = projectToChars(opts.truth.chapterText, opts.truth.lines);
+  // Truth lines are the corrected/re-segmented labels; the raw chapterText carries
+  // inline `[...]` tags they don't, so strip tags from the truth basis to keep
+  // tag-only-divergent truth lines in the recall denominator (tag positions stay
+  // null → invisible to the metric). finalSentences derive from chapterText and
+  // match verbatim, so the final projection needs no stripping and is unchanged.
+  const truthProj = projectToChars(opts.truth.chapterText, opts.truth.lines, { stripTags: true });
   const finalProj = projectToChars(
     opts.truth.chapterText,
     finalSentences.map((s) => ({ text: s.text, speakerId: s.characterId })),

@@ -4,7 +4,7 @@
    collapses whitespace/brackets via normalise() and has no positional
    correspondence back to chapterText). */
 import { describe, it, expect } from 'vitest';
-import { projectToChars } from './char-project.js';
+import { projectToChars, stripInlineTags } from './char-project.js';
 
 describe('projectToChars', () => {
   it('(a) projects two contiguous units over a plain chapterText to correct spans + speakerByChar', () => {
@@ -136,5 +136,101 @@ describe('projectToChars', () => {
     expect(result.dropped).toBe(1);
     expect(result.spans).toEqual([{ start: 0, end: 12, speakerId: 'anakin' }]);
     expect(result.speakerByChar.some((s) => s === 'ghost')).toBe(false);
+  });
+});
+
+describe('stripInlineTags', () => {
+  it('removes a mid-text [..] tag and maps every kept char back to its original index', () => {
+    // 'say [excited] hi' : s0 a1 y2 ' '3 [excited]=4..12 ' '13 h14 i15
+    const { stripped, map } = stripInlineTags('say [excited] hi');
+    expect(stripped).toBe('say hi'); // the tag + its flanking double space collapse to one
+    expect(map.slice(0, stripped.length)).toEqual([0, 1, 2, 3, 14, 15]);
+    expect(map[stripped.length]).toBe('say [excited] hi'.length); // exclusive-end sentinel
+  });
+
+  it('keeps a legit leading space when a tag sits at the very start (only the unit path trims it)', () => {
+    expect(stripInlineTags('[excited] Help!').stripped).toBe(' Help!');
+  });
+
+  it('collapses the double space a mid-sentence tag would leave, keeping a single separator', () => {
+    const { stripped } = stripInlineTags('A [emphatic] cat');
+    expect(stripped).toBe('A cat'); // not "A  cat"
+  });
+
+  it('preserves newlines (paragraph breaks are not collapsed) and leaves tag-free text untouched (identity map)', () => {
+    const plain = 'Line one.\n\nLine two.';
+    const { stripped, map } = stripInlineTags(plain);
+    expect(stripped).toBe(plain);
+    expect(map).toEqual([...Array(plain.length).keys(), plain.length]); // identity + sentinel
+  });
+
+  it('leaves a lone "[" with no closing bracket as a literal char', () => {
+    expect(stripInlineTags('a [ b').stripped).toBe('a [ b');
+  });
+});
+
+describe('projectToChars (stripTags option)', () => {
+  it('(i) with stripTags, locates a unit whose spoken text is split by an inline tag; span covers the spoken chars, tag positions stay null', () => {
+    // chapterText carries the inline tag (the raw body); the truth unit is the
+    // corrected form WITHOUT it. The tag sits INSIDE the spoken run, so the unit
+    // is not a verbatim substring — default (no stripTags) drops it.
+    const chapterText = 'Before. Help [hesitant] me now. After.';
+    const units = [{ text: 'Help me now.', speakerId: 'bob' }];
+
+    expect(projectToChars(chapterText, units).dropped).toBe(1); // baseline: unlocated
+    const res = projectToChars(chapterText, units, { stripTags: true });
+    expect(res.dropped).toBe(0);
+    const start = chapterText.indexOf('Help'); // 8
+    const end = chapterText.indexOf('now.') + 'now.'.length; // after the final '.'
+    expect(res.spans).toEqual([{ start, end, speakerId: 'bob' }]);
+    // spoken chars on BOTH sides of the tag are painted…
+    for (const frag of ['Help', 'me now.']) {
+      const at = chapterText.indexOf(frag);
+      for (let i = at; i < at + frag.length; i++) expect(res.speakerByChar[i]).toBe('bob');
+    }
+    // …but chars inside the tag are not.
+    const tagAt = chapterText.indexOf('[hesitant]');
+    for (let i = tagAt; i < tagAt + '[hesitant]'.length; i++)
+      expect(res.speakerByChar[i]).toBe(null);
+  });
+
+  it('(j) index-map lock across a stripped tag: a later unit still resolves to its true ORIGINAL offsets', () => {
+    const chapterText = 'A [emphatic] big cat. "Meow," said Tom.';
+    const secondUnit = '"Meow," said Tom.';
+    const expectedStart = chapterText.indexOf(secondUnit);
+    const expectedEnd = expectedStart + secondUnit.length;
+    expect(expectedStart).toBeGreaterThan(0);
+
+    const res = projectToChars(
+      chapterText,
+      [
+        { text: 'A big cat.', speakerId: 'narr' }, // tag-stripped form of the first sentence
+        { text: secondUnit, speakerId: 'tom' },
+      ],
+      { stripTags: true },
+    );
+    expect(res.dropped).toBe(0);
+    expect(res.spans[1]).toEqual({ start: expectedStart, end: expectedEnd, speakerId: 'tom' });
+    for (let i = expectedStart; i < expectedEnd; i++) expect(res.speakerByChar[i]).toBe('tom');
+  });
+
+  it('(k) a tag-only unit strips to empty and is dropped (never a zero-length match)', () => {
+    const chapterText = 'Real words here.';
+    const res = projectToChars(chapterText, [{ text: '[emphatic]', speakerId: 'ghost' }], {
+      stripTags: true,
+    });
+    expect(res.dropped).toBe(1);
+    expect(res.speakerByChar.every((s) => s === null)).toBe(true);
+  });
+
+  it('(l) stripTags is opt-in: default behavior is byte-identical to no options (tag-free corpus)', () => {
+    const chapterText = 'Hello there. General Kenobi.';
+    const units = [
+      { text: 'Hello there.', speakerId: 'anakin' },
+      { text: 'General Kenobi.', speakerId: 'obiwan' },
+    ];
+    expect(projectToChars(chapterText, units, { stripTags: true })).toEqual(
+      projectToChars(chapterText, units),
+    );
   });
 });
