@@ -124,6 +124,49 @@ describe('findSubjectName', () => {
   });
 });
 
+describe('buildNameIndex — alias token gate (#1774)', () => {
+  // A junk multi-word alias like "her mother" (a relational descriptor the
+  // analyzer emits, not a proper name) tokenizes to "her"/"mother" — both
+  // lowercase, both ≥ minStemLength. Before the gate they indexed as NAME
+  // stems for an absent character, letting "…in her hand, she said" name-match
+  // that character via findSubjectName's unguarded before-verb branch (a STRONG
+  // tag-name that #1768's evidence-layer guard can't catch). Gate: an ALIAS
+  // token whose first char is a cased-lowercase letter is not indexed.
+  it('does NOT index lowercase alias tokens as names', () => {
+    const idx = buildNameIndex([{ id: 'mrs-fenn', name: 'Mrs Fenn', aliases: ['her mother'] }], en);
+    expect([...idx.stems.keys()].sort()).toEqual(['fenn', 'mrs']); // her/mother dropped
+    // the strong-anchor leak is closed: "her" before a speech verb no longer names Mrs Fenn
+    expect(findSubjectName('the letter still in her hand, she said', idx)).toBeNull();
+  });
+
+  it('still indexes a single-word alias, whatever its case (lowercase epithet)', () => {
+    // The gate is multi-word-only: a single-word lowercase epithet ("шеф", "boss")
+    // is a legitimate attribution anchor and must survive.
+    const idx = buildNameIndex([{ id: 'val', name: 'Valkyrie', aliases: ['Stephanie', 'boss'] }], en);
+    expect(idx.stems.has('stephanie')).toBe(true);
+    expect(idx.stems.has('boss')).toBe(true);
+    expect(findRosterName('said Stephanie quietly', idx)).toBe('val');
+    expect(findRosterName('the boss frowned', idx)).toBe('val');
+  });
+
+  it('keeps only the capitalized token of a mixed-case multi-word alias', () => {
+    const idx = buildNameIndex([{ id: 'sp', name: 'Skulduggery', aliases: ['the Captain'] }], en);
+    expect(idx.stems.has('captain')).toBe(true); // proper-name part kept
+    expect(idx.stems.has('the')).toBe(false); // determiner dropped
+  });
+
+  it('leaves the roster name field unconditional (a lowercase name token still indexes)', () => {
+    const idx = buildNameIndex([{ id: 'ee', name: 'ee cummings' }], en);
+    expect(idx.stems.has('cummings')).toBe(true);
+  });
+
+  it('does not gate caseless-script (CJK) alias tokens — fs-59 safe', () => {
+    const ja = conventionsFor('ja')!;
+    const idx = buildNameIndex([{ id: 'tanaka', name: '田中', aliases: ['田中太郎'] }], ja);
+    expect(findRosterName('と田中太郎は言った', idx)).toBe('tanaka'); // alias survived the gate
+  });
+});
+
 describe('findSubjectName — other languages', () => {
   const ruIdx = buildNameIndex(
     [{ id: 'anton', name: 'Антон' }, { id: 'valeri', name: 'Валери' }, { id: 'olga', name: 'Ольга' }],

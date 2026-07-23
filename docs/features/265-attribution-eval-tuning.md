@@ -520,3 +520,50 @@ variance, not harm.
 
 The projection refinement for the `truthDropped` coverage gap (above) remains a separate, still-open
 follow-up. No script-review-pass code change is warranted by this baseline.
+
+### #1768 follow-up resolved (#1774) — root-cause name-index fix + Facet 2 accepted (2026-07-23)
+
+The independent review of the #1768 PR (#1773) surfaced two residual facets, tracked as
+[#1774](https://github.com/dudarenok-maker/Castwright/issues/1774). Both are now resolved:
+
+**Facet 1 — the strong-anchor variant — FIXED at the root.** #1768's guard downgraded a `tag→X`
+hint only when X's anchors were all *weak* (beat-gap). But the true root cause is that
+`buildNameIndex` tokenized a relational-descriptor alias like `melissa-edgley`'s `"her mother"` and
+indexed its lowercase tokens (`"her"`, `"mother"`) as **name** stems. When `"her"` precedes a
+*speech* verb in a gap (`"…still in her hand, she said."`), `findSubjectName`'s before-verb branch
+returns the absent character as a **strong** (non-weak) `tag-name`, which #1768 cannot catch — so the
+phantom is NAMED again. The fix (`name-matcher.ts` `buildNameIndex`): the authoritative `name` field
+stays unconditional, but for a **multi-word** alias, only tokens that read as proper names (leading
+char not a cased-lowercase letter) are indexed. So `"her mother"` contributes nothing, while a
+single-word lowercase epithet (`"шеф"`, `"boss"`) still anchors, capitalized tokens of a multi-word
+alias (`"the Captain"` → `Captain`) survive, and caseless scripts (CJK) are never gated (fs-59 safe).
+Net: a phantom that previously produced a *wrong* name now falls through to the correct pronoun
+resolution — e.g. the strong-anchor fixture flips `tag→Mrs Edgley` (wrong) to `tag→Nora` (the "she"
+the phantom had masked). Paired tests: `name-matcher.test.ts` (`buildNameIndex — alias token gate`)
+and three `evidence.test.ts` cases (absent-char never named; strong-anchor correct-resolution;
+Facet 2 lock).
+
+_On-box validation (2026-07-23, deterministic — the change is post-LLM, so a
+sampling `--runs 3` attribution pass can't move the result; the exhaustive
+corpus proof below is stronger)._ Across the whole attribution/script-review
+corpus (the shared _Playing with Fire_ roster + every silver/gold fixture), the
+gate touches exactly three multi-word aliases — `"the man"`, `"the pool player"`
+(`unknown-male`) and `"her mother"` (`melissa-edgley`) — and **every** dropped
+token is a lowercase common word (`the/man/pool/player/her/mother`); **zero**
+aliases lose a token while keeping a proper-name token, i.e. no legitimate name
+anchor is lost anywhere in the corpus. Running the fixed structure engine over
+the real **ch41** text (152 lines, 35 hints): `tag→Mrs Edgley` **8→0** and 0
+other junk-alias names, with all 35 genuine hints preserved. Net: pure
+phantom-removal, no regression.
+
+**Facet 2 — over-suppression — ACCEPTED as documented, conservative behavior.** A real speaker
+anchored *only* by a weak beat-gap tag (`"Fine." Sarah frowned.` — beat verb, never a speech verb +
+name), by `tag-pronoun`, `alternation`, or the first-person pronoun is not in the strong set, so
+#1768's guard downgrades its correct `tag→X` to `[structure: speech, speaker unproven]` — never a
+*wrong* name (consistent with flag-never-fabricate), but a loss of corrective specificity. Post-#1774
+this is the guard's *main* remaining effect (junk-alias phantoms no longer reach it). We keep it: a
+`narrator`-always-present carve-out (the tempting Facet-2 fix, overlapping #1681) risks *introducing*
+wrong `tag→Narrator` hints — a first-person pronoun inside quoted dialogue belongs to the speaker,
+not the narrator — and the issue requires eval evidence before trading the current never-wrong
+posture for specificity. That refinement stays open as future work; the accepted behavior is locked
+by the `evidence.test.ts` Facet-2 case so it can't drift silently.
