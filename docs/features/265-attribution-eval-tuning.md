@@ -411,3 +411,60 @@ a signal to go check whether attribution *upstream* of review regressed — a bu
 lines wrong right before the review stage would show up as a big charitable "helped" swing here, as
 review happens to patch over some of the damage. Read this stage as "did review avoid making a good
 baseline worse", not "how much did review improve things."
+
+### Captured baseline (2026-07-23, on-box)
+
+First on-box `--review` baseline, **qwen `qwen36-cw-iq4-32k`**, book *Playing with Fire*
+(`derek-landy__skulduggery-pleasant__playing-with-fire`, 42 chapters). Gold = ch43–46 + the committed
+Coalfall guardrail (`--runs 3`); silver = 8 untuned chapters seeded from current attribution
+(`--runs 1`, directional). This is the number the sequenced script-review **tuning** follow-up gates
+against.
+
+**Gold (`--runs 3`) — the regression guard reads clean.** char-recall `final → reviewed`:
+
+| Fixture | final(char) → reviewed(char) | Δ | helped / harmed / churn |
+|---|---|---|---|
+| ch43 | 83.1 → 83.1 | +0.0pp | 0 / **0** / 0 |
+| ch44 | 94.5 → 94.5 | +0.0pp | 0 / **0** / 0 |
+| ch45 | 70.1 → 70.1 | +0.0pp | 0 / **0** / 0 |
+| ch46 | 78.1 → 78.1 | +0.0pp | 0 / **0** / 0 |
+| Coalfall | 93.4 → 97.0 | +3.6pp | 122 [0–209] / **0** / 0 |
+
+**`harmed = 0` in every run of every fixture** — the pass never degraded attribution. On the four
+tuned PwF chapters it's char-neutral (helped = harmed = 0), exactly the designed shape; its real work
+shows in the op-dump (strip_tag 23–35/chapter pulling `he said`/beats + leaked `[emphatic]` /
+`[structure:…]` artifacts out of spoken text; plus reattribute/split/merge). Coalfall shows the pass
+*can* lift attribution (+3.6pp) with high run-variance and zero harm.
+
+**Silver (`--runs 1`, directional, seed truth — NOT gating).**
+
+| Fixture | final → reviewed (char) | Δ | helped / harmed / churn | notable ops |
+|---|---|---|---|---|
+| ch07 | 99.5 → 99.5 | +0.0pp | 0 / **0** / 0 | merge 3 |
+| ch10 | 88.4 → 88.8 | +0.4pp | 66 / **0** / 124 | **reattribute 73** |
+| ch13 | 88.1 → 89.4 | +1.3pp | **234** / **0** / 0 | strip_tag 17 |
+| ch19 | 72.2 → 72.2 | +0.0pp | 0 / **0** / 170 | reattribute 10, merge 3 |
+| ch25 (narration) | 100 → 100 | +0.0pp | 0 / 0 / 0 | validate_instruct 11 |
+| ch30 | 99.4 → 99.4 | +0.0pp | 0 / **0** / 0 | validate_instruct 8 |
+| ch33 | 75.7 → 75.7 | +0.0pp | 0 / **0** / 0 | merge/strip/validate |
+| ch41 | 93.6 → **92.6** | **−1.0pp** | 0 / **86** / 22 | **reattribute 42** |
+
+**The tuning leads this baseline surfaces:**
+
+1. **Reattribution is the high-variance behavior on untuned text.** Tuned chapters trigger ~5
+   reattributes; untuned **ch10 = 73, ch41 = 42**, with swinging outcomes (ch13 +234 helped, ch41 −86
+   harmed, ch10 churn 124). Stabilizing reattribution — keep ch13-style help, kill ch41-style harm —
+   is the #1 tuning target. **ch41 is the sole harm case** and the first thing to read op-by-op.
+2. **`flag_nonstory` catches real import artifacts** (a truncated `alkyrie`→`Valkyrie`, header
+   residue) — QA value beyond attribution.
+3. **Silver harm/churn is correlated-error-ambiguous** (truth = the book's *unverified* current
+   attribution): ch41's "harm" may be the review *correcting* a bad seed, counted as disagreement.
+   Disambiguating needs the op-dump vs the actual text — a tuning-phase task, hence silver is
+   directional, never a gate.
+
+**Coverage caveat (surfaced by the `truthDropped` warning).** 16–29 truth units "unlocated" on
+ch43/ch44 (and similar on several silver chapters): manuscript text carries inline
+`[emphatic]`/`[structure:…]` annotations absent from the stripped `chapterText`, so `projectToChars`
+can't locate those lines. It shrinks the char-recall denominator but is symmetric across
+`final`/`reviewed`, so the helped/harmed findings stand. A projection refinement (tolerate/strip
+those inline annotations before matching) is a tracked follow-up.
