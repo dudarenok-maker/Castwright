@@ -468,3 +468,55 @@ ch43/ch44 (and similar on several silver chapters): manuscript text carries inli
 can't locate those lines. It shrinks the char-recall denominator but is symmetric across
 `final`/`reviewed`, so the helped/harmed findings stand. A projection refinement (tolerate/strip
 those inline annotations before matching) is a tracked follow-up.
+
+## Tuning follow-up outcome (2026-07-23) — measurement says *don't tune the review*
+
+The §7 tuning follow-up opened with the mandated diagnosis: read **ch41** (the baseline's sole
+harm case, −1.0pp / harmed 86) op-by-op, classifying each accepted reattribute against truth and
+adjudicating harm-vs-seed-correction from the actual chapter text. Result: **the harm dissolves —
+it is entirely broken silver truth, not review harm.**
+
+The harm is two ops (ids 113, 117) reattributing Springheeled Jack's dialogue away from `narrator`.
+Reading the fixture's *own* truth labels for the cluster shows one continuous cockney monologue by
+Jack that the seed split — first sentence to `springheeled-jack`, every continuation defaulted to
+`narrator`:
+
+```
+#111 [springheeled-jack] "Good enough.
+#112 [narrator]          See, they roped me into doin' 'em a favour.
+#113 [narrator]          Didn't appreciate that.
+#114 [narrator]          So here I am, doin' you a favour.
+#115 [narrator]          That big guy, the ugly one?
+#116 [narrator]          They're keepin' him at Clearwater Hospital.
+#117 [narrator]          Don't know what you can do with that information…"
+```
+
+The review reattributes the continuation back to Jack — **correct** — and the char metric scores
+the correct fix as "harm" only because it disagrees with the broken seed. (Same at #67/#68: Dusk's
+continued speech seed-labeled narrator.) This is exactly lead #3's correlated-error caveat, now
+concretely confirmed and resolved: **ch41 is a bad-seed artifact, not a tuning target.**
+
+**Conclusion — the baseline provides NO validated evidence that the script-review pass harms
+attribution.** `harmed=0` on every verified-truth fixture (4 gold chapters + Coalfall, 3 runs each =
+15 fixture-runs); the sole apparent silver harm is a seed-labeling error where the review is
+correct. Lead #1 ("stabilize reattribution to kill ch41-style harm") is **withdrawn** — there is no
+demonstrated harm to tune away, and tightening the reattribute path against this noise would teach
+the pass to defer when it is right. Per the spec's measurement-first gate, the correct action is
+**not to tune the review's reattribute logic.** Reattribute volume is run-variable (9 accepted this
+run vs 42 raw in the baseline), but since the reattributes are correct that is recall-completeness
+variance, not harm.
+
+**What the diagnosis *did* surface — two real, orthogonal defects (filed, not fixed here):**
+
+1. **[#1768](https://github.com/dudarenok-maker/Castwright/issues/1768) (bug, `area:srv`)** —
+   `buildStructureEvidence` emitted a `[structure: speech, tag→Mrs Edgley]` hint across the ch41
+   cluster, though `melissa-edgley` appears nowhere in the chapter. The review correctly overrode it
+   (no harm this run), but a structure hint naming an absent character is a defect in the evidence
+   layer feeding the review.
+2. **[#1769](https://github.com/dudarenok-maker/Castwright/issues/1769) (chore, `area:srv`)** — the
+   silver fixtures' quote-continuation mislabeling makes silver **circular** for the reattribute
+   path (the seed contains the errors the pass fixes). Silver cannot gate reattribute tuning until it
+   carries verified truth *or* the harness excludes reattribute deltas on silver.
+
+The projection refinement for the `truthDropped` coverage gap (above) remains a separate, still-open
+follow-up. No script-review-pass code change is warranted by this baseline.
