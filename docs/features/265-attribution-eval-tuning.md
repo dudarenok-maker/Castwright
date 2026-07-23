@@ -567,3 +567,14 @@ wrong `tag→Narrator` hints — a first-person pronoun inside quoted dialogue b
 not the narrator — and the issue requires eval evidence before trading the current never-wrong
 posture for specificity. That refinement stays open as future work; the accepted behavior is locked
 by the `evidence.test.ts` Facet-2 case so it can't drift silently.
+
+**Known partial-coverage caveat (German, future work).** The Facet-1 gate keys on capitalization,
+which German breaks: common nouns are capitalized, so a relational-descriptor alias like
+`"seine Mutter"` drops the lowercase possessive `seine` but **keeps** the capitalized common noun
+`Mutter`, which can still index as a name stem — the exact class the gate targets, only partially
+closed for `de`. This is never a *regression* (pre-fix indexed both tokens; post-fix drops one), and
+a leaked German common-noun stem still faces the #1768 evidence-layer guard downstream — but the
+capitalization heuristic alone does not fully close the junk-alias class for capitalized-noun
+languages. A language-aware refinement (e.g. a per-language function-word/determiner stop-list, or a
+dictionary-common-noun filter) is deferred; German descriptor aliases are rare and the layered guard
+holds the never-fabricate posture. (Surfaced by the #1776 independent review.)
