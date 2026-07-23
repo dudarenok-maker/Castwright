@@ -44,14 +44,23 @@ export function scoreCharRecall(
   if (truth.spans.length > 0) {
     let sumFractions = 0;
     for (const span of truth.spans) {
-      const length = span.end - span.start;
+      // Count only truth-ATTRIBUTED positions in the span. With the truth
+      // projection's tag-stripping (char-project.ts `stripTags`), a span can
+      // hold interior null (inline-tag) positions; including them in the
+      // denominator would deflate a perfectly-attributed recovered line.
+      // Mirrors the charRecall main loop's null skip; a no-op for the default
+      // projection, whose spans are painted contiguously with no interior nulls.
       let spanCorrect = 0;
+      let spanLen = 0;
       for (let i = span.start; i < span.end; i++) {
-        const resolvedTruth = resolveId(truth.speakerByChar[i]!, aliasMap);
+        const truthId = truth.speakerByChar[i];
+        if (truthId === null) continue;
+        spanLen++;
+        const resolvedTruth = resolveId(truthId, aliasMap);
         const resolvedPredicted = resolveId(predicted.speakerByChar[i] ?? null, aliasMap);
         if (resolvedPredicted === resolvedTruth) spanCorrect++;
       }
-      sumFractions += length > 0 ? spanCorrect / length : 1;
+      sumFractions += spanLen > 0 ? spanCorrect / spanLen : 1;
     }
     lineRecall = sumFractions / truth.spans.length;
   }

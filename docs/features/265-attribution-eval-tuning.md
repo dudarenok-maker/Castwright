@@ -462,12 +462,28 @@ shows in the op-dump (strip_tag 23–35/chapter pulling `he said`/beats + leaked
    Disambiguating needs the op-dump vs the actual text — a tuning-phase task, hence silver is
    directional, never a gate.
 
-**Coverage caveat (surfaced by the `truthDropped` warning).** 16–29 truth units "unlocated" on
-ch43/ch44 (and similar on several silver chapters): manuscript text carries inline
-`[emphatic]`/`[structure:…]` annotations absent from the stripped `chapterText`, so `projectToChars`
-can't locate those lines. It shrinks the char-recall denominator but is symmetric across
-`final`/`reviewed`, so the helped/harmed findings stand. A projection refinement (tolerate/strip
-those inline annotations before matching) is a tracked follow-up.
+**Coverage caveat (surfaced by the `truthDropped` warning) — projection refinement shipped
+(#1771).** The `truthDropped` count comes from truth lines whose text isn't a verbatim substring of
+`chapterText`. Diagnosis corrected the original read here: the inline `[emphatic]`/`[hesitant]`/
+`[structure:…]` tags live **in** the raw hydrated `chapterText`, not in the corrected/re-segmented
+truth lines — so a truth line differing only by a tag failed to locate. `projectToChars` now takes an
+opt-in `stripTags`, wired on the **truth** projection only (finalSentences derive from `chapterText`
+and match verbatim, so `finalProj` is untouched): it removes inline `[...]` tags from both the
+`chapterText` basis and each truth unit before matching and maps spans back to original positions,
+with tag positions left `null` (invisible to the metric, which scores only truth-attributed chars).
+Measured on the 12-fixture corpus: **truthDropped 231 → 162 (69 recovered, 30%)**. The residual ~162
+are genuine `chapterText`↔label **content divergence** — OCR/import artifacts the labels corrected
+(`tentor`→`Stentor`, `"26"` header residue) and re-segmentation — which a matcher must **not**
+force-align (design spec O-4: no silent mis-assignment); that residual is a fixture-capture concern,
+overlapping #1769. The change touches **only the truth projection** — `finalProj`,
+`pairSpansToSentences`, and `applyOpsToCharArray` are untouched — so it is purely additive to the
+recall denominator: no prior helped/harmed count is invalidated, and the newly-located tag-adjacent
+chars are simply measured too. Interior tag positions are excluded from BOTH `charRecall` and (after
+the review-folded fix) `lineRecall`, so a perfectly-attributed recovered line scores 1.0 rather than
+deflating. Verified by the `char-project` + `char-score` unit tests + full `test:server`; the
+231→162 delta is deterministic and GPU-free. An end-to-end gold re-confirmation that `harmed` stays 0
+under the wider denominator is a cheap follow-up, deferred here only by Ollama single-slot contention
+with concurrent eval work.
 
 ## Tuning follow-up outcome (2026-07-23) — measurement says *don't tune the review*
 
@@ -518,8 +534,8 @@ variance, not harm.
    path (the seed contains the errors the pass fixes). Silver cannot gate reattribute tuning until it
    carries verified truth *or* the harness excludes reattribute deltas on silver.
 
-The projection refinement for the `truthDropped` coverage gap (above) remains a separate, still-open
-follow-up. No script-review-pass code change is warranted by this baseline.
+The projection refinement for the `truthDropped` coverage gap **shipped** in #1771 (PR #1775) — see
+the coverage caveat above. No script-review-pass code change is warranted by this baseline.
 
 ### #1768 follow-up resolved (#1774) — root-cause name-index fix + Facet 2 accepted (2026-07-23)
 
