@@ -98,4 +98,26 @@ describe('scoreCharRecall', () => {
     expect(score.charRecall).toBe(0.9); // only 10 of 100 chars wrong
     expect(score.lineRecall).toBe(0.5); // (1.0 + 0.0) / 2 — the short line counts as much as the long one
   });
+
+  it('(f) an interior null (inline tag) in a truth span is excluded from lineRecall, not scored as wrong', () => {
+    // Mirrors the truth projection under stripTags: a span [0,10) whose chars
+    // [4,6) are a stripped inline tag (null), the rest attributed to 'A'. The
+    // predicted side (final/reviewed, no stripTags) paints the tag chars with a
+    // real speaker. A perfectly-attributed recovered line must score 1.0, not
+    // deflate to 0.8 by counting the 2 tag chars as mismatches.
+    const truthSpeakerByChar: Array<string | null> = new Array(10).fill('A');
+    truthSpeakerByChar[4] = null;
+    truthSpeakerByChar[5] = null;
+    const truth: CharProjection = {
+      speakerByChar: truthSpeakerByChar,
+      spans: [{ start: 0, end: 10, speakerId: 'A' }],
+      dropped: 0,
+    };
+    const predicted = projection(10, [{ start: 0, end: 10, speakerId: 'A' }]);
+
+    const score = scoreCharRecall(truth, predicted);
+    expect(score.truthChars).toBe(8); // 2 tag chars excluded from the denominator
+    expect(score.charRecall).toBe(1);
+    expect(score.lineRecall).toBe(1); // the span's 8 attributed chars are all correct
+  });
 });

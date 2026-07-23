@@ -152,6 +152,14 @@ describe('stripInlineTags', () => {
     expect(stripInlineTags('[excited] Help!').stripped).toBe(' Help!');
   });
 
+  it('maps correctly for a tag at the very end of the string (sentinel === original length)', () => {
+    // 'hi [x]' : h0 i1 ' '2 [x]=3..5 . The trailing space collapses onto nothing
+    // after the tag is dropped, but here the space precedes the tag, so it stays.
+    const { stripped, map } = stripInlineTags('hi [x]');
+    expect(stripped).toBe('hi '); // 'hi' + the space before the (removed) end tag
+    expect(map).toEqual([0, 1, 2, 'hi [x]'.length]); // last entry is the exclusive-end sentinel
+  });
+
   it('collapses the double space a mid-sentence tag would leave, keeping a single separator', () => {
     const { stripped } = stripInlineTags('A [emphatic] cat');
     expect(stripped).toBe('A cat'); // not "A  cat"
@@ -221,6 +229,33 @@ describe('projectToChars (stripTags option)', () => {
     });
     expect(res.dropped).toBe(1);
     expect(res.speakerByChar.every((s) => s === null)).toBe(true);
+  });
+
+  it('(m) composes the length-changing … fold with a stripped tag: a later unit resolves to true ORIGINAL offsets', () => {
+    // Both transforms act on the SAME string: '…' (1 char) folds to '...' (3)
+    // via normalizeForMatch over the STRIPPED basis, while '[emphatic]' is
+    // dropped from that basis. Original↔normalized↔stripped coordinates all
+    // diverge; only a correct index-map composition lands the second unit right.
+    const chapterText = 'Wait… [emphatic] go now. "OK," said Ann.';
+    const secondUnit = '"OK," said Ann.';
+    const expectedStart = chapterText.indexOf(secondUnit);
+    const expectedEnd = expectedStart + secondUnit.length;
+    expect(expectedStart).toBeGreaterThan(0);
+
+    const res = projectToChars(
+      chapterText,
+      [
+        { text: 'Wait… go now.', speakerId: 'narr' }, // ellipsis + tag-stripped form
+        { text: secondUnit, speakerId: 'ann' },
+      ],
+      { stripTags: true },
+    );
+    expect(res.dropped).toBe(0);
+    expect(res.spans[1]).toEqual({ start: expectedStart, end: expectedEnd, speakerId: 'ann' });
+    for (let i = expectedStart; i < expectedEnd; i++) expect(res.speakerByChar[i]).toBe('ann');
+    // the first unit's own span ends at the original '…' + rest, never the
+    // normalized-length offset (fold map intact under stripping).
+    expect(res.speakerByChar[chapterText.indexOf('[emphatic]')]).toBe(null);
   });
 
   it('(l) stripTags is opt-in: default behavior is byte-identical to no options (tag-free corpus)', () => {

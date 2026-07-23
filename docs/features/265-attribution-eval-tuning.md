@@ -478,7 +478,9 @@ force-align (design spec O-4: no silent mis-assignment); that residual is a fixt
 overlapping #1769. The change touches **only the truth projection** — `finalProj`,
 `pairSpansToSentences`, and `applyOpsToCharArray` are untouched — so it is purely additive to the
 recall denominator: no prior helped/harmed count is invalidated, and the newly-located tag-adjacent
-chars are simply measured too (verified by the 17 char-project unit tests + full `test:server`; the
-231→162 delta is deterministic, GPU-free). An end-to-end gold re-confirmation that `harmed` stays 0
+chars are simply measured too. Interior tag positions are excluded from BOTH `charRecall` and (after
+the review-folded fix) `lineRecall`, so a perfectly-attributed recovered line scores 1.0 rather than
+deflating. Verified by the `char-project` + `char-score` unit tests + full `test:server`; the
+231→162 delta is deterministic and GPU-free. An end-to-end gold re-confirmation that `harmed` stays 0
 under the wider denominator is a cheap follow-up, deferred here only by Ollama single-slot contention
 with concurrent eval work.
