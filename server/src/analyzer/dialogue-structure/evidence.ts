@@ -50,6 +50,7 @@ function classifySentence(
   as: AlignedSentence,
   currentId: string,
   nameById: Map<string, string>,
+  anchoredIds: Set<string>,
 ): string | null {
   if (as.spans.length === 0) return null; // unaligned — skip
   if (as.lumped) return null; // mixed speech+tag — no annotation string defined
@@ -58,6 +59,15 @@ function classifySentence(
     if (speech.speaker) {
       const x = speech.speaker.characterId;
       if (x === currentId) return null; // agreement
+      // #1768 — never NAME a redirect target that has no strong name anchor
+      // anywhere in the chapter. A derived speaker whose only footing is a weak
+      // beat-gap tag-name (or a pronoun/alternation fill seeded by one) is a
+      // phantom: a bad roster alias — e.g. the pronoun "her" tokenized out of an
+      // alias like "her mother" — can name-match a character who isn't in the
+      // chapter at all. Downgrade to the same "unproven" annotation an
+      // unanchored speech line already gets, rather than point the review at a
+      // speaker who isn't there.
+      if (!anchoredIds.has(x)) return '[structure: speech, speaker unproven]';
       return `[structure: speech, tag→${nameById.get(x) ?? x}]`;
     }
     return '[structure: speech, speaker unproven]'; // unanchored speech — surfaces even if id matches
@@ -83,6 +93,16 @@ export function buildStructureEvidence(
   if (alignment.alignedPct < ALIGNMENT_FLOOR_PCT) return new Map();
 
   const nameById = new Map(roster.map((c) => [c.id, c.name]));
+  // #1768 — the chapter's strongly-anchored speaker set: characters carried by
+  // at least one STRONG name tag (`source: 'tag-name'` that isn't a weak
+  // beat-gap match). Only these may be NAMED as a `tag→X` redirect target;
+  // see classifySentence. Computed over ALL paragraphs, so a character anchored
+  // in a paragraph that didn't itself align to a sentence still counts present.
+  const anchoredIds = new Set<string>();
+  for (const p of paras)
+    for (const s of p.spans)
+      if (s.kind === 'speech' && s.speaker?.source === 'tag-name' && s.speaker.strength !== 'weak')
+        anchoredIds.add(s.speaker.characterId);
   const out = new Map<number, string>();
   // The map is built purely from `sentences`' own ids (as.sentence.id, where
   // `as` ranges over `alignment.aligned`, itself derived 1:1 from the
@@ -90,7 +110,7 @@ export function buildStructureEvidence(
   // chapter's sentence set. This is the §4.6-style cross-chapter guard;
   // covered by script-review.test.ts test (c).
   for (const as of alignment.aligned) {
-    const annotation = classifySentence(as, as.sentence.characterId, nameById);
+    const annotation = classifySentence(as, as.sentence.characterId, nameById, anchoredIds);
     if (annotation !== null) out.set(as.sentence.id, annotation);
   }
   return out;

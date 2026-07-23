@@ -62,6 +62,33 @@ describe('buildStructureEvidence', () => {
     expect(out.size).toBe(0);
   });
 
+  it('(#1768 absent-character phantom) downgrades a tag→X hint to unproven when X has no strong name anchor, but keeps a genuine strong redirect', () => {
+    // Reproduces the ch41 defect: `melissa-edgley` (name "Mrs Edgley", alias
+    // "her mother") was NAMED as the speaker across a cluster she never spoke
+    // in — the pronoun token "her" tokenized out of that alias name-matched a
+    // beat-gap ("…hat to her … frowned"), anchoring a WEAK tag-name to a
+    // character absent from the chapter. Invented text, same mechanism:
+    // `mrs-fenn`'s alias "her mother" makes "her" a name stem.
+    const roster: EvidenceRosterChar[] = [
+      { id: 'nora', name: 'Nora', gender: 'female' },
+      { id: 'sam', name: 'Sam', gender: 'male' },
+      { id: 'mrs-fenn', name: 'Mrs Fenn', gender: 'female', aliases: ['her mother'] },
+    ];
+    const body = ['“Is he there?” Nora asked.', '“He is,” Sam said.', '“He’s gone.” He tipped his hat to her and she frowned.'].join('\n');
+    const sentences = [
+      mkSentence(1, 'nora', 'Is he there?'), // agrees with structure (Nora) → no annotation
+      mkSentence(2, 'nora', 'He is'), // model wrong → structure redirects to the STRONG-anchored Sam
+      mkSentence(3, 'sam', 'He’s gone'), // structure's only speaker here is the phantom Mrs Fenn (weak beat-gap "her")
+    ];
+    const out = buildStructureEvidence(body, sentences, roster, 'en');
+    // no annotation ever NAMES the absent character
+    expect([...out.values()].some((v) => v.includes('Fenn'))).toBe(false);
+    // the phantom line is downgraded, not suppressed — still flags as speech
+    expect(out.get(3)).toBe('[structure: speech, speaker unproven]');
+    // a genuine strong-tag redirect is untouched by the guard
+    expect(out.get(2)).toBe('[structure: speech, tag→Sam]');
+  });
+
   it('(below floor) an alignedPct under 80 returns an empty map even though one sentence would otherwise flag', () => {
     const body = '— Да, — сказал Антон.';
     const sentences = [
