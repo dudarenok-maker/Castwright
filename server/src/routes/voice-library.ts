@@ -10,7 +10,8 @@
    (workspace/voice-library.ts), respond. No business logic lives here. */
 
 import { Router } from 'express';
-import { rm } from 'node:fs/promises';
+import { rename, rm } from 'node:fs/promises';
+import { nanoid } from 'nanoid';
 import type { Request, Response } from '../http.js';
 import {
   listEntries,
@@ -20,6 +21,7 @@ import {
   type VoiceLibraryEntry,
 } from '../workspace/voice-library.js';
 import { currentQwenBaseModel } from '../tts/model-paths.js';
+import { runVoiceDesign } from '../tts/design-voice-core.js';
 import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace/voice-library-usage.js';
 import { castJsonPath, qwenVoiceSidecarPath } from '../workspace/paths.js';
 import { qwenVoicePtPath } from './qwen-voice.js';
@@ -30,6 +32,212 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 
 export const voiceLibraryRouter = Router();
+
+/* Library single-flight lock (spec §3). A module-level in-flight set keyed by
+   voiceUuid (plus one `'library:new'` key for creates) serializes design work
+   for one voice so a double-submit can't race two designs onto the same `.pt`.
+   This is DELIBERATELY separate from qwen-voice.ts's per-`bookDir`
+   `withDesignLock` — the library has no book scope, and the spec explicitly
+   rejects a cross-scope server mutex (cross-scope protection is the frontend's
+   single-slot + the sidecar's own VRAM arbitration). Re-entry → 409. */
+const inFlightDesigns = new Set<string>();
+
+class DesignInFlightError extends Error {
+  constructor() {
+    super('design already running');
+    this.name = 'DesignInFlightError';
+  }
+}
+
+async function withSingleFlight<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  if (inFlightDesigns.has(key)) throw new DesignInFlightError();
+  inFlightDesigns.add(key);
+  try {
+    return await fn();
+  } finally {
+    inFlightDesigns.delete(key);
+  }
+}
+
+interface DesignBody {
+  name?: unknown;
+  persona?: unknown;
+  languageCode?: unknown;
+}
+
+/* POST /api/voice-library/design
+
+   Create a brand-new designed library voice. Mints a fresh voiceUuid (the
+   srv-43 nanoid generator — NOT the character-coupled ensureCharacterVoiceUuid,
+   which stamps a cast member), runs the scope-agnostic design core under the
+   `qwen-<uuid>` storage key, and persists a `designed` manifest stamping the
+   Qwen base model it was derived from (for the list route's staleness check).
+   → 201 { entry, previewUrl }; the modal auditions previewUrl before Save. */
+voiceLibraryRouter.post('/design', async (req: Request, res: Response) => {
+  try {
+    const body = (req.body ?? {}) as DesignBody;
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    const persona = typeof body.persona === 'string' ? body.persona.trim() : '';
+    const languageCode = typeof body.languageCode === 'string' ? body.languageCode : undefined;
+    if (!name) return res.status(400).json({ error: '`name` is required.' });
+    if (!persona) return res.status(400).json({ error: '`persona` is required.' });
+
+    const result = await withSingleFlight('library:new', async () => {
+      const voiceUuid = nanoid();
+      const { previewUrl } = await runVoiceDesign({
+        storageKey: `qwen-${voiceUuid}`,
+        displayName: name,
+        persona,
+        languageCode,
+      });
+      const now = new Date().toISOString();
+      const entry: VoiceLibraryEntry = {
+        voiceUuid,
+        name,
+        provenance: 'designed',
+        tags: [],
+        pinned: false,
+        ...(languageCode ? { languageCode } : {}),
+        persona,
+        engines: { qwen: { status: 'ready', baseModel: currentQwenBaseModel() } },
+        createdAt: now,
+        updatedAt: now,
+      };
+      await writeEntry(entry);
+      return { entry: await readEntry(voiceUuid), previewUrl };
+    });
+    return res.status(201).json(result);
+  } catch (e) {
+    if (e instanceof DesignInFlightError) {
+      return res.status(409).json({ error: 'design already running' });
+    }
+    console.error('[voice-library] design failed', e);
+    return res.status(502).json({ error: (e as Error).message || 'Voice design failed.' });
+  }
+});
+
+/* POST /api/voice-library/:voiceUuid/redesign
+
+   Stage a redesign of an existing library voice under `<storageKey>-preview`
+   (preview:true) so the live `.pt` is untouched while the user A/B-compares.
+   → 200 { previewUrl } — the A/B modal plays this against the live sample. */
+voiceLibraryRouter.post('/:voiceUuid/redesign', async (req: Request, res: Response) => {
+  try {
+    const { voiceUuid } = req.params;
+    const entry = await readEntry(voiceUuid);
+    if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+
+    const body = (req.body ?? {}) as { persona?: unknown };
+    const persona = typeof body.persona === 'string' ? body.persona.trim() : '';
+    if (!persona) return res.status(400).json({ error: '`persona` is required.' });
+
+    const result = await withSingleFlight(voiceUuid, async () => {
+      const { previewUrl } = await runVoiceDesign({
+        storageKey: `qwen-${voiceUuid}`,
+        displayName: entry.name,
+        persona,
+        languageCode: entry.languageCode,
+        preview: true,
+      });
+      return { previewUrl };
+    });
+    return res.status(200).json(result);
+  } catch (e) {
+    if (e instanceof DesignInFlightError) {
+      return res.status(409).json({ error: 'design already running' });
+    }
+    console.error('[voice-library] redesign failed', e);
+    return res.status(502).json({ error: (e as Error).message || 'Voice redesign failed.' });
+  }
+});
+
+/* POST /api/voice-library/:voiceUuid/redesign/promote
+
+   Commit a staged redesign onto the live voice: move the preview `.pt`/`.json`
+   onto the stable `qwen-<uuid>` id (rm-then-rename for Windows EPERM safety),
+   THEN best-effort evict the sidecar's in-memory prompt cache — the same
+   file-op-first ordering as qwen-voice.ts's promote-voice. Purges the cached
+   auditions and bumps persona/updatedAt on the manifest. A missing preview
+   `.pt` (nothing staged / double-promote) → 409. */
+voiceLibraryRouter.post('/:voiceUuid/redesign/promote', async (req: Request, res: Response) => {
+  try {
+    const { voiceUuid } = req.params;
+    const entry = await readEntry(voiceUuid);
+    if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+
+    const storageKey = `qwen-${voiceUuid}`;
+    const previewKey = `${storageKey}-preview`;
+
+    try {
+      await rm(qwenVoicePtPath(storageKey), { force: true });
+      await rename(qwenVoicePtPath(previewKey), qwenVoicePtPath(storageKey));
+    } catch (e) {
+      return res
+        .status(409)
+        .json({ error: `No staged preview voice to promote (${(e as Error).message}).` });
+    }
+    await rm(qwenVoiceSidecarPath(storageKey), { force: true }).catch(() => {});
+    await rename(qwenVoiceSidecarPath(previewKey), qwenVoiceSidecarPath(storageKey)).catch(() => {});
+
+    /* Drop the stale live + preview auditions (both cached under storageKey) so
+       the next "Play" re-synthesises from the promoted `.pt`. */
+    purgeVoiceSamples(storageKey);
+
+    /* Evict the live id from the sidecar's in-memory prompt cache — best-effort,
+       AFTER the file op (a down/empty sidecar has nothing cached, and generation
+       reads the fresh `.pt` from disk regardless). */
+    try {
+      await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ voiceId: storageKey }),
+      });
+    } catch {
+      /* sidecar unreachable — non-fatal */
+    }
+
+    const body = (req.body ?? {}) as { persona?: unknown };
+    const updated: VoiceLibraryEntry = {
+      ...entry,
+      ...(typeof body.persona === 'string' ? { persona: body.persona } : {}),
+    };
+    await writeEntry(updated); // stamps a fresh updatedAt
+    return res.status(200).json(await readEntry(voiceUuid));
+  } catch (e) {
+    console.error('[voice-library] redesign/promote failed', e);
+    return res.status(500).json({ error: (e as Error).message || 'Promote failed.' });
+  }
+});
+
+/* POST /api/voice-library/:voiceUuid/redesign/discard
+
+   Drop a staged redesign preview (Cancel in the A/B compare). Best-effort
+   cleanup of the preview `.pt`/`.json` + a sidecar evict of the preview key;
+   NEVER touches the live voice. Always 200 once the uuid is known. */
+voiceLibraryRouter.post('/:voiceUuid/redesign/discard', async (req: Request, res: Response) => {
+  try {
+    const { voiceUuid } = req.params;
+    const entry = await readEntry(voiceUuid);
+    if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+
+    const previewKey = `qwen-${voiceUuid}-preview`;
+    await rm(qwenVoicePtPath(previewKey), { force: true }).catch(() => {});
+    await rm(qwenVoiceSidecarPath(previewKey), { force: true }).catch(() => {});
+    try {
+      await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ voiceId: previewKey }),
+      });
+    } catch {
+      /* sidecar unreachable — non-fatal */
+    }
+    return res.status(200).json({ discarded: true });
+  } catch (e) {
+    console.error('[voice-library] redesign/discard failed', e);
+    return res.status(500).json({ error: (e as Error).message || 'Discard failed.' });
+  }
+});
 
 /* Staleness is computed at list time (not persisted): a designed voice whose
    manifest recorded the Qwen base model it was derived from no longer

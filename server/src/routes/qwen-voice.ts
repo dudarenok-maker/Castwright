@@ -27,7 +27,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { mkdir, writeFile, rename, rm, copyFile } from 'node:fs/promises';
+import { rename, rm, copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
 import { sidecarLanguageName } from '../tts/language.js';
@@ -37,65 +37,38 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
-import { encodePcmToAudio } from '../tts/mp3.js';
 import { withDesignLock, isDesignBusy } from '../tts/design-lock.js';
 import { buildHintFromCast, toVoiceLike, type CastCharacter } from '../tts/synthesise-chapter.js';
 import { forEachMatchingCastCharacter } from './voices.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import {
   buildSampleText,
-  voiceSampleAudioDir,
   voiceSampleFileName,
   voiceSampleFilePath,
   voiceSamplePublicUrl,
 } from '../tts/voice-sample-cache.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
 import { nanoid } from 'nanoid';
-import { withCapacityRetry } from '../gpu/capacity-retry.js';
-import { NoCapacityError } from '../tts/tts-errors.js';
 
-export class SidecarDesignError extends Error {
-  status: number;
-  code?: string;
-  reason?: string;
-  constructor(message: string, status: number, code?: string, reason?: string) {
-    super(message);
-    this.name = 'SidecarDesignError';
-    this.status = status;
-    this.code = code;
-    this.reason = reason;
-  }
-}
+/* fs-38 Wave 1, Task 9 — the sidecar-POST + audition-cache mechanics, the
+   SidecarDesignError shape, and the liveness watchdog now live in the
+   scope-agnostic `tts/design-voice-core.ts` so the voice-library routes share
+   the exact same path. Re-exported here so this module's existing importers
+   (and its whole test file, which imports SidecarDesignError /
+   evaluateDesignLiveness from './qwen-voice.js') are unaffected. */
+import {
+  postDesignAndCacheAudition,
+  SidecarDesignError,
+  evaluateDesignLiveness,
+} from '../tts/design-voice-core.js';
+import type { DesignLivenessResult } from '../tts/design-voice-core.js';
+export { SidecarDesignError, evaluateDesignLiveness };
+export type { DesignLivenessResult };
 
 export const qwenVoiceRouter = Router();
 
 interface CastFile {
   characters: CastCharacter[];
-}
-
-/* The base liveness-check interval. A design that exceeds this AND whose sidecar
-   /health is still reachable is slow-but-alive — keep waiting (almost always a
-   contended GPU). Only an unreachable sidecar or the absolute ceiling aborts.
-   (Was a blind wall-clock abort that surfaced a false "Halted" while the sidecar
-   was happily still designing.) */
-const DESIGN_LIVENESS_INTERVAL_MS = 180_000;
-/* Hard ceiling so a genuinely hung-but-pingable sidecar still fails eventually. */
-const DESIGN_ABSOLUTE_MAX_MS = 600_000;
-
-export type DesignLivenessResult =
-  | { action: 'continue' }
-  | { action: 'abort'; reason: 'unreachable' | 'absolute' };
-
-/** Pure decision for the design liveness watchdog — easy to unit-test. */
-export function evaluateDesignLiveness(p: {
-  startedAt: number;
-  now: number;
-  health: 'reachable' | 'unreachable';
-  absoluteMaxMs: number;
-}): DesignLivenessResult {
-  if (p.health === 'unreachable') return { action: 'abort', reason: 'unreachable' };
-  if (p.now - p.startedAt >= p.absoluteMaxMs) return { action: 'abort', reason: 'absolute' };
-  return { action: 'continue' };
 }
 
 /* Stable cache key for the designed voice — keyed on the character's
@@ -344,95 +317,25 @@ export async function designQwenVoiceForCharacter(
     return withGpuLoad(async () => {
       const sidecarUrl = getResolvedSidecarUrl();
 
-      const postDesignAndCache = async (
+      /* Task 9 — the sidecar-POST + audition-cache mechanics now live in the
+         scope-agnostic core; this thin wrapper just binds the character-coupled
+         captures (sample scope, model key, cancel signal, log context). */
+      const postDesignAndCache = (
         target: string,
         fetchBody: string,
         outVoiceId: string,
-      ): Promise<{ voiceId: string; url: string }> => {
-        const controller = new AbortController();
-        const startedAt = Date.now();
-        let abortReason: 'unreachable' | 'absolute' | null = null;
-        const livenessTimer = setInterval(() => {
-          void (async () => {
-            const { probeSidecarHealth } = await import('./sidecar-health.js');
-            const health = (await probeSidecarHealth()).status;
-            const decision = evaluateDesignLiveness({ startedAt, now: Date.now(), health, absoluteMaxMs: DESIGN_ABSOLUTE_MAX_MS });
-            if (decision.action === 'abort') {
-              abortReason = decision.reason;
-              controller.abort();
-            } else {
-              console.warn(
-                `[qwen-voice] design slow (${Math.round((Date.now() - startedAt) / 1000)}s) ` +
-                  `— sidecar /health reachable, extending (ceiling ${DESIGN_ABSOLUTE_MAX_MS / 1000}s).`,
-              );
-            }
-          })();
-        }, DESIGN_LIVENESS_INTERVAL_MS);
-        const onExternalAbort = () => controller.abort();
-        if (p.signal) {
-          if (p.signal.aborted) controller.abort();
-          else p.signal.addEventListener('abort', onExternalAbort, { once: true });
-        }
-        try {
-          let upstream: Awaited<ReturnType<typeof fetch>>;
-          try {
-            upstream = await withCapacityRetry(
-              (signal) =>
-                fetch(target, {
-                  method: 'POST', signal,
-                  headers: { 'Content-Type': 'application/json' }, body: fetchBody,
-                }),
-              { engine: 'qwen', signal: controller.signal },
-            );
-          } catch (e) {
-            if (e instanceof NoCapacityError) {
-              throw new SidecarDesignError(
-                'GPU has no capacity for voice design right now — free VRAM and retry.',
-                503,
-              );
-            }
-            const err = e as { name?: string; message?: string };
-            if (err.name === 'AbortError') {
-              if (p.signal?.aborted) throw new SidecarDesignError('Voice design was cancelled.', 0);
-              if (abortReason === 'unreachable')
-                throw new SidecarDesignError(`TTS sidecar (${sidecarUrl}) stopped responding to /health during voice design.`, 0);
-              throw new SidecarDesignError(`Sidecar ${target} did not complete within ${DESIGN_ABSOLUTE_MAX_MS}ms.`, 0);
-            }
-            throw new SidecarDesignError(`TTS sidecar (${sidecarUrl}) is unreachable — ${err.message || 'request failed'}.`, 0);
-          }
-          if (!upstream.ok) {
-            let detail = '', code: string | undefined, reason: string | undefined;
-            try {
-              const b = (await upstream.json()) as { detail?: string; error?: string; code?: string; reason?: string };
-              detail = b.detail ?? b.error ?? ''; code = b.code; reason = b.reason;
-            } catch { /* not json */ }
-            throw new SidecarDesignError(
-              detail || `Sidecar ${target} returned ${upstream.status} ${upstream.statusText}.`,
-              upstream.status, code, reason,
-            );
-          }
-          const sampleRate = Number(upstream.headers.get('X-Sample-Rate') ?? '24000') || 24000;
-          const pcm = Buffer.from(await upstream.arrayBuffer());
-          const fileName = voiceSampleFileName({ cacheScope: p.sampleVoiceId, modelKey: p.modelKey, text: calibrationText, voiceName: outVoiceId });
-          const filePath = voiceSampleFilePath(fileName);
-          const url = voiceSamplePublicUrl(fileName);
-          try {
-            await mkdir(voiceSampleAudioDir(), { recursive: true });
-            const mp3 = await encodePcmToAudio(pcm, sampleRate);
-            await writeFile(filePath, mp3);
-          } catch (encErr) {
-            throw new Error(`Designed the voice but failed to cache its preview: ${(encErr as Error).message}`);
-          }
-          console.log(`[qwen-voice] book=${p.bookDir} character=${p.characterId} voiceId=${outVoiceId} → cached ${fileName} (${pcm.length} bytes @ ${sampleRate}Hz)`);
-          // fs-45 v1: record the design peak (Base + VoiceDesign resident here).
-          const { maybeSampleSidecarEngine } = await import('../gpu/sidecar-vram-sample.js');
-          await maybeSampleSidecarEngine('qwen:design');
-          return { voiceId: outVoiceId, url };
-        } finally {
-          clearInterval(livenessTimer);
-          if (p.signal) p.signal.removeEventListener('abort', onExternalAbort);
-        }
-      };
+      ): Promise<{ voiceId: string; url: string }> =>
+        postDesignAndCacheAudition({
+          target,
+          fetchBody,
+          outVoiceId,
+          cacheScope: p.sampleVoiceId,
+          modelKey: p.modelKey,
+          calibrationText,
+          sidecarUrl,
+          signal: p.signal,
+          logContext: `book=${p.bookDir} character=${p.characterId}`,
+        });
 
       /* AR2 design-progress: forward the token so the sidecar can POST phase
          progress back to this server. Spread into every body (base, mint,

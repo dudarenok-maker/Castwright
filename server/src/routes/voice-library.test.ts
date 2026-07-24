@@ -468,3 +468,174 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
     expect(cast.characters[0].overrideTtsVoices?.kokoro).toEqual({ name: 'af_heart' });
   });
 });
+
+/* Task 9 — design / redesign / promote / discard. The sidecar (`global.fetch`)
+   is stubbed with ~0.3s of silence so real ffmpeg encodes a valid MP3 into the
+   audition cache, exactly like routes/qwen-voice.test.ts. `withCapacityRetry`
+   runs for real (a single ok call needs no retry). */
+describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', () => {
+  function okSidecarResponse(pcm = new Uint8Array(24_000 * 2 * 0.3)) {
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'Content-Type': 'audio/L16', 'X-Sample-Rate': '24000' }),
+      arrayBuffer: async () => pcm.buffer,
+      json: async () => ({}),
+    } as unknown as Response;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('mints a uuid, designs, and writes a ready designed manifest + previewUrl', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+
+    const res = await request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'Nova', persona: 'a calm, measured narrator' });
+
+    expect(res.status).toBe(201);
+    const entry = res.body.entry as import('../workspace/voice-library.js').VoiceLibraryEntry;
+    expect(entry.provenance).toBe('designed');
+    expect(entry.name).toBe('Nova');
+    expect(entry.persona).toBe('a calm, measured narrator');
+    expect(entry.engines.qwen?.status).toBe('ready');
+    expect(entry.engines.qwen?.baseModel).toBe(modelPaths.currentQwenBaseModel());
+    expect(res.body.previewUrl).toMatch(/^\/audio\/voices\/qwen-.+-qwen3-tts-0\.6b-[a-z0-9]+\.mp3$/);
+
+    // Persisted on disk under the minted uuid.
+    const onDisk = await vl.readEntry(entry.voiceUuid);
+    expect(onDisk?.provenance).toBe('designed');
+    expect(onDisk?.engines.qwen?.status).toBe('ready');
+
+    // The design POST addressed the minted storageKey.
+    const sent = JSON.parse((vi.mocked(fetch).mock.calls[0][1] as RequestInit).body as string);
+    expect(sent.voiceId).toBe(`qwen-${entry.voiceUuid}`);
+    expect(sent.instruct).toBe('a calm, measured narrator');
+  });
+
+  it('400s when name or persona is missing', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    const noName = await request(app).post('/api/voice-library/design').send({ persona: 'p' });
+    expect(noName.status).toBe(400);
+    const noPersona = await request(app).post('/api/voice-library/design').send({ name: 'X' });
+    expect(noPersona.status).toBe(400);
+  });
+
+  it('returns 409 for a concurrent second design (single-flight lock)', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      await gate;
+      return okSidecarResponse();
+    });
+
+    // `.then()` forces supertest to DISPATCH p1 now (it is otherwise lazy), so
+    // p1 acquires the 'library:new' lock before p2 is sent.
+    const p1 = request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'A', persona: 'p' })
+      .then((r) => r);
+    await new Promise((r) => setTimeout(r, 60));
+
+    const res2 = await request(app).post('/api/voice-library/design').send({ name: 'B', persona: 'p' });
+    expect(res2.status).toBe(409);
+    expect(res2.body.error).toMatch(/already running/i);
+
+    release();
+    const res1 = await p1;
+    expect(res1.status).toBe(201);
+  });
+
+  it('redesign stages a preview under `<storageKey>-preview` and returns previewUrl', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    await vl.writeEntry(makeEntry({ voiceUuid: 're-1', name: 'Nova', provenance: 'designed' }));
+
+    const res = await request(app)
+      .post('/api/voice-library/re-1/redesign')
+      .send({ persona: 'a brighter, warmer read' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.previewUrl).toMatch(/^\/audio\/voices\/qwen-re-1-qwen3-tts-0\.6b-[a-z0-9]+\.mp3$/);
+    const sent = JSON.parse((vi.mocked(fetch).mock.calls[0][1] as RequestInit).body as string);
+    expect(sent.voiceId).toBe('qwen-re-1-preview');
+    expect(sent.instruct).toBe('a brighter, warmer read');
+  });
+
+  it('redesign 404s for an unknown uuid', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    const res = await request(app).post('/api/voice-library/nope/redesign').send({ persona: 'p' });
+    expect(res.status).toBe(404);
+  });
+
+  it('redesign/promote swaps the live .pt with the preview and bumps updatedAt', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    const { writeFileSync: wf } = await import('node:fs');
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'promo-1',
+        provenance: 'designed',
+        persona: 'old persona',
+        engines: { qwen: { status: 'ready', baseModel: modelPaths.currentQwenBaseModel() } },
+      }),
+    );
+    const before = await vl.readEntry('promo-1');
+
+    const liveP = qwenVoice.qwenVoicePtPath('qwen-promo-1');
+    const previewP = qwenVoice.qwenVoicePtPath('qwen-promo-1-preview');
+    wf(liveP, 'LIVE');
+    wf(previewP, 'PREVIEW');
+    wf(paths.qwenVoiceSidecarPath('qwen-promo-1'), JSON.stringify({ instruct: 'old' }));
+    wf(paths.qwenVoiceSidecarPath('qwen-promo-1-preview'), JSON.stringify({ instruct: 'new' }));
+
+    await new Promise((r) => setTimeout(r, 5)); // guarantee a distinct updatedAt
+    const res = await request(app)
+      .post('/api/voice-library/promo-1/redesign/promote')
+      .send({ persona: 'new persona' });
+
+    expect(res.status).toBe(200);
+    expect(readFileSync(liveP, 'utf8')).toBe('PREVIEW'); // preview promoted onto live
+    expect(existsSync(previewP)).toBe(false); // staged preview consumed
+    const after = await vl.readEntry('promo-1');
+    expect(after?.persona).toBe('new persona');
+    expect(new Date(after!.updatedAt).getTime()).toBeGreaterThan(
+      new Date(before!.updatedAt).getTime(),
+    );
+  });
+
+  it('redesign/discard removes the preview and leaves the live .pt untouched', async () => {
+    const { writeFileSync: wf } = await import('node:fs');
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+
+    await vl.writeEntry(makeEntry({ voiceUuid: 'disc-1', provenance: 'designed' }));
+    const liveP = qwenVoice.qwenVoicePtPath('qwen-disc-1');
+    const previewP = qwenVoice.qwenVoicePtPath('qwen-disc-1-preview');
+    wf(liveP, 'LIVE');
+    wf(previewP, 'PREVIEW');
+
+    const res = await request(app).post('/api/voice-library/disc-1/redesign/discard').send({});
+
+    expect(res.status).toBe(200);
+    expect(existsSync(previewP)).toBe(false); // preview dropped
+    expect(readFileSync(liveP, 'utf8')).toBe('LIVE'); // live never touched
+  });
+
+  it('promote 409s when nothing was staged', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'nostage-1', provenance: 'designed' }));
+    const res = await request(app).post('/api/voice-library/nostage-1/redesign/promote').send({});
+    expect(res.status).toBe(409);
+  });
+
+  it('404s design-lifecycle routes for an unknown uuid', async () => {
+    const r1 = await request(app).post('/api/voice-library/nope/redesign/promote').send({});
+    expect(r1.status).toBe(404);
+    const r2 = await request(app).post('/api/voice-library/nope/redesign/discard').send({});
+    expect(r2.status).toBe(404);
+  });
+});
