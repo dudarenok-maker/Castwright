@@ -8,8 +8,8 @@
    routes agree on the cache key AND the sample-text selection by construction
    (drift between them would silently miss the cache and re-synthesise). */
 
-import { existsSync, readdirSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { existsSync, readdirSync, unlinkSync } from 'node:fs';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { TtsModelKey } from './index.js';
 import type { CharacterHint, VoiceLike } from './voice-mapping.js';
@@ -61,6 +61,28 @@ export function listVoiceSampleFiles(): string[] {
     return readdirSync(dir).filter((f) => f.endsWith('.mp3'));
   } catch {
     return [];
+  }
+}
+
+/* fs-38 Wave 1 — remove every cached sample MP3 belonging to one cache
+   scope (e.g. a voice-library entry's `voiceUuid`), across every
+   modelKey/paramHash it was ever rendered under. Matches the same
+   `${asciiFileScope(scope)}-` prefix convention `voiceSampleFileName` and
+   the aggregator's `hasCachedQwenSample` prefix check use — the scope
+   segment always sorts first in the filename. Best-effort per file (a
+   half-deleted dir from a prior partial cleanup shouldn't abort the rest);
+   a no-op (not throwing) when the audio dir doesn't exist. */
+export function purgeVoiceSamples(cacheScope: string): void {
+  const dir = voiceSampleAudioDir();
+  if (!existsSync(dir)) return;
+  const prefix = `${asciiFileScope(cacheScope)}-`;
+  for (const f of listVoiceSampleFiles()) {
+    if (!f.startsWith(prefix)) continue;
+    try {
+      unlinkSync(join(dir, f));
+    } catch {
+      /* best-effort */
+    }
   }
 }
 
@@ -117,14 +139,29 @@ export function djb2(s: string): number {
    inputs → identical filename, so a design-time pre-render and a play-time
    lookup land on one file. `cacheScope` is the voiceId for character samples
    or `raw-<engine>-<hash>` for the Base-voices tab; `modelKey` is the
-   *effective* key actually synthesised under. */
-export function voiceSampleFileName(args: {
-  cacheScope: string;
-  modelKey: TtsModelKey;
-  text: string;
-  voiceName: string;
-}): string {
-  const paramHash = djb2(`${args.text}|${args.voiceName}`).toString(36).slice(0, 8);
+   *effective* key actually synthesised under.
+
+   `contentToken` (fs-38 Wave 1) is an optional extra hash input — folded
+   into the SAME djb2 hash as `text`/`voiceName` — for callers that need a
+   distinct cache entry for otherwise-identical (scope, modelKey, text,
+   voiceName) inputs (e.g. a library voice's persona/master-clip revision).
+   Omitted (the default): the hash is computed exactly as before this
+   parameter existed, so every pre-existing on-disk filename stays valid —
+   a BACKWARD-COMPAT invariant locked by a snapshot test in
+   voice-sample-cache.test.ts. */
+export function voiceSampleFileName(
+  args: {
+    cacheScope: string;
+    modelKey: TtsModelKey;
+    text: string;
+    voiceName: string;
+  },
+  contentToken?: string,
+): string {
+  const hashInput = contentToken
+    ? `${args.text}|${args.voiceName}|${contentToken}`
+    : `${args.text}|${args.voiceName}`;
+  const paramHash = djb2(hashInput).toString(36).slice(0, 8);
   return `${asciiFileScope(args.cacheScope)}-${args.modelKey}-${paramHash}.mp3`;
 }
 

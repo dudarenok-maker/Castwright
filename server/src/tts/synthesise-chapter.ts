@@ -264,7 +264,21 @@ export interface CastCharacter {
       Switching engines (Coqui ↔ Kokoro) preserves cast assignments
       because each engine has its own slot. */
   overrideTtsVoices?: Partial<
-    Record<TtsEngine, { name: string; variants?: Partial<Record<Emotion, { name: string }>> }>
+    Record<
+      TtsEngine,
+      {
+        name: string;
+        /** fs-38 Wave 1 — set when this slot's speaker is sourced from a
+            voice-library entry rather than an ad-hoc per-character design.
+            Lets `scanLibraryVoiceUsage` (workspace/voice-library-usage.ts)
+            find every character referencing a given library voice for the
+            DELETE usage report + confirm flow. */
+        libraryUuid?: string;
+        /** Mirrors the library entry's own `provenance` at assignment time. */
+        provenance?: 'designed' | 'cloned' | 'imported';
+        variants?: Partial<Record<Emotion, { name: string }>>;
+      }
+    >
   > | null;
   /** @deprecated Legacy singular override. Read paths normalise this
       into `overrideTtsVoices` at cast.json load time (see

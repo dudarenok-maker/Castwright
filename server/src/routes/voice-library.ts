@@ -10,9 +10,21 @@
    (workspace/voice-library.ts), respond. No business logic lives here. */
 
 import { Router } from 'express';
+import { rm } from 'node:fs/promises';
 import type { Request, Response } from '../http.js';
-import { listEntries, readEntry, writeEntry, type VoiceLibraryEntry } from '../workspace/voice-library.js';
+import {
+  listEntries,
+  readEntry,
+  removeEntryDir,
+  writeEntry,
+  type VoiceLibraryEntry,
+} from '../workspace/voice-library.js';
 import { currentQwenBaseModel } from '../tts/model-paths.js';
+import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace/voice-library-usage.js';
+import { qwenVoiceSidecarPath } from '../workspace/paths.js';
+import { qwenVoicePtPath } from './qwen-voice.js';
+import { purgeVoiceSamples } from '../tts/voice-sample-cache.js';
+import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 
 export const voiceLibraryRouter = Router();
 
@@ -97,6 +109,70 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
   } catch (e) {
     console.error('[voice-library] patch failed', e);
     res.status(500).json({ error: (e as Error).message || 'Voice library update failed.' });
+  }
+});
+
+/* Erase EVERY on-disk artifact of a library voice — not just the manifest
+   dir — so "local-only, never leaves the machine" holds through deletion
+   (spec §2.4). Windows-safety ordering (spec §7, copied from qwen-voice.ts's
+   `tearDownEmotionVariant`): the file removals happen FIRST; the sidecar
+   `/qwen/evict-voice` call is a separate, best-effort in-memory-cache-
+   coherency step that fires AFTER — never before, and its failure must
+   never fail the delete (the sidecar caches prompts in memory; it doesn't
+   hold the `.pt` open, so ordering here is about cache freshness, not file
+   locking). */
+async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<void> {
+  await removeEntryDir(voiceUuid);
+
+  const qwenVoiceId = `qwen-${voiceUuid}`;
+  await rm(qwenVoicePtPath(qwenVoiceId), { force: true }).catch(() => {});
+  await rm(qwenVoiceSidecarPath(qwenVoiceId), { force: true }).catch(() => {});
+
+  purgeVoiceSamples(voiceUuid);
+
+  try {
+    await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ voiceId: qwenVoiceId }),
+    });
+  } catch {
+    /* sidecar unreachable — non-fatal, generation reads the fresh (now-
+       deleted) state from disk regardless. */
+  }
+}
+
+/* DELETE /api/voice-library/:voiceUuid
+
+   Usage-scan + confirm, then multi-location erasure (spec §2.4/§7). Any
+   character across the workspace whose overrideTtsVoices[*].libraryUuid
+   matches this voice is reported via 409 unless the caller passes
+   `?confirm=1`; on confirm (or when unused) the matching override slots are
+   cleared first — leaving those characters voiceless on that engine, which
+   the fe-46 gate surfaces — THEN every derived artifact is erased. */
+voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => {
+  try {
+    const { voiceUuid } = req.params;
+    const existing = await readEntry(voiceUuid);
+    if (!existing) {
+      return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    }
+
+    const confirmed = req.query.confirm === '1';
+    const usage = await scanLibraryVoiceUsage(voiceUuid);
+    if (usage.length > 0 && !confirmed) {
+      return res.status(409).json({ usage });
+    }
+
+    if (usage.length > 0) {
+      await clearLibraryVoiceReferences(voiceUuid);
+    }
+    await eraseLibraryVoiceArtifacts(voiceUuid);
+
+    res.status(200).json({ deleted: true });
+  } catch (e) {
+    console.error('[voice-library] delete failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Voice library delete failed.' });
   }
 });
 

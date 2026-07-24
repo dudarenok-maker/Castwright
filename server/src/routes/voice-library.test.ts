@@ -9,7 +9,7 @@
    with the gate + router exactly as app.ts does. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -20,6 +20,42 @@ let app: Express;
 let vl: typeof import('../workspace/voice-library.js');
 let modelPaths: typeof import('../tts/model-paths.js');
 let writeConfigOverride: typeof import('../workspace/user-settings.js').writeConfigOverride;
+let paths: typeof import('../workspace/paths.js');
+let qwenVoice: typeof import('./qwen-voice.js');
+let sampleCache: typeof import('../tts/voice-sample-cache.js');
+
+function writeBookOnDisk(
+  workspace: string,
+  author: string,
+  series: string,
+  title: string,
+  bookId: string,
+  characters: object[],
+) {
+  const bookDir = join(workspace, 'books', author, series, title);
+  mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+  writeFileSync(
+    join(bookDir, '.audiobook', 'state.json'),
+    JSON.stringify({
+      bookId,
+      manuscriptId: `m_${bookId}`,
+      title,
+      author,
+      series,
+      seriesPosition: null,
+      isStandalone: false,
+      manuscriptFile: 'manuscript.txt',
+      castConfirmed: true,
+      chapters: [],
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+  writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+  writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({ characters }));
+  return bookDir;
+}
 
 function makeEntry(
   overrides: Partial<import('../workspace/voice-library.js').VoiceLibraryEntry> = {},
@@ -40,19 +76,34 @@ function makeEntry(
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'cw-voicelib-routes-'));
   process.env.WORKSPACE_DIR = dir;
+  process.env.VOICE_SAMPLE_AUDIO_DIR = join(dir, 'audio-voices');
   vi.resetModules();
 
-  const [{ voiceLibraryRouter }, { requireVoiceLibraryEnabled }, voiceLibMod, modelPathsMod, userSettings] =
-    await Promise.all([
-      import('./voice-library.js'),
-      import('./voice-library-gate.js'),
-      import('../workspace/voice-library.js'),
-      import('../tts/model-paths.js'),
-      import('../workspace/user-settings.js'),
-    ]);
+  const [
+    { voiceLibraryRouter },
+    { requireVoiceLibraryEnabled },
+    voiceLibMod,
+    modelPathsMod,
+    userSettings,
+    pathsMod,
+    qwenVoiceMod,
+    sampleCacheMod,
+  ] = await Promise.all([
+    import('./voice-library.js'),
+    import('./voice-library-gate.js'),
+    import('../workspace/voice-library.js'),
+    import('../tts/model-paths.js'),
+    import('../workspace/user-settings.js'),
+    import('../workspace/paths.js'),
+    import('./qwen-voice.js'),
+    import('../tts/voice-sample-cache.js'),
+  ]);
   vl = voiceLibMod;
   modelPaths = modelPathsMod;
   writeConfigOverride = userSettings.writeConfigOverride;
+  paths = pathsMod;
+  qwenVoice = qwenVoiceMod;
+  sampleCache = sampleCacheMod;
 
   app = express();
   app.use(express.json());
@@ -61,6 +112,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   delete process.env.WORKSPACE_DIR;
+  delete process.env.VOICE_SAMPLE_AUDIO_DIR;
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -195,5 +247,124 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
     await writeConfigOverride('voices.library.enabled', false);
     const res = await request(app).patch('/api/voice-library/gate-1').send({ name: 'X' });
     expect(res.status).toBe(404);
+  });
+});
+
+describe('DELETE /api/voice-library/:voiceUuid', () => {
+  /** Seeds every artifact a real designed library voice would have on disk:
+      the manifest dir (Task 3), the global qwen `.pt` + sidecar `.json`
+      (mirrors `qwen-voice.ts`'s design-route output), and a cached sample
+      MP3 under the voiceUuid scope (mirrors a future library sample route). */
+  async function seedFullVoiceArtifacts(voiceUuid: string) {
+    await vl.writeEntry(makeEntry({ voiceUuid, engines: { qwen: { status: 'ready' } } }));
+
+    const qwenName = `qwen-${voiceUuid}`;
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(qwenVoice.qwenVoicePtPath(qwenName), 'fake-pt-bytes');
+    writeFileSync(paths.qwenVoiceSidecarPath(qwenName), JSON.stringify({ instruct: 'x' }));
+
+    mkdirSync(sampleCache.voiceSampleAudioDir(), { recursive: true });
+    const sampleFileName = sampleCache.voiceSampleFileName({
+      cacheScope: voiceUuid,
+      modelKey: 'qwen3-tts-0.6b',
+      text: 'Hello.',
+      voiceName: qwenName,
+    });
+    writeFileSync(sampleCache.voiceSampleFilePath(sampleFileName), 'fake-mp3-bytes');
+
+    return {
+      entryDir: vl.entryDir(voiceUuid),
+      ptPath: qwenVoice.qwenVoicePtPath(qwenName),
+      jsonPath: paths.qwenVoiceSidecarPath(qwenName),
+      samplePath: sampleCache.voiceSampleFilePath(sampleFileName),
+    };
+  }
+
+  it('404s for an unknown uuid', async () => {
+    const res = await request(app).delete('/api/voice-library/does-not-exist');
+    expect(res.status).toBe(404);
+  });
+
+  it('404s when the voice-library feature is off', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'gate-1' }));
+    await writeConfigOverride('voices.library.enabled', false);
+    const res = await request(app).delete('/api/voice-library/gate-1');
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 409 with a usage report when the voice is referenced and confirm is absent', async () => {
+    const artifacts = await seedFullVoiceArtifacts('used-1');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-one', [
+      {
+        id: 'char-marlow',
+        name: 'Marlow',
+        overrideTtsVoices: { qwen: { name: 'qwen-used-1', libraryUuid: 'used-1' } },
+      },
+    ]);
+
+    const res = await request(app).delete('/api/voice-library/used-1');
+
+    expect(res.status).toBe(409);
+    expect(res.body.usage).toEqual([
+      { bookId: 'book-one', bookTitle: 'Book One', characterId: 'char-marlow', characterName: 'Marlow' },
+    ]);
+    // Nothing erased pre-confirm.
+    expect(existsSync(artifacts.entryDir)).toBe(true);
+    expect(existsSync(artifacts.ptPath)).toBe(true);
+  });
+
+  it('deletes an unused voice (no confirm needed) and erases every artifact', async () => {
+    const artifacts = await seedFullVoiceArtifacts('unused-1');
+
+    const res = await request(app).delete('/api/voice-library/unused-1');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deleted: true });
+    expect(existsSync(artifacts.entryDir)).toBe(false);
+    expect(existsSync(artifacts.ptPath)).toBe(false);
+    expect(existsSync(artifacts.jsonPath)).toBe(false);
+    expect(existsSync(artifacts.samplePath)).toBe(false);
+  });
+
+  it('with confirm=1: clears the referencing override slot, then erases every artifact (erasure completeness)', async () => {
+    const artifacts = await seedFullVoiceArtifacts('used-2');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-one', [
+      {
+        id: 'char-marlow',
+        name: 'Marlow',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-used-2', libraryUuid: 'used-2' },
+          coqui: { name: 'preset-voice' },
+        },
+      },
+    ]);
+
+    const res = await request(app).delete('/api/voice-library/used-2?confirm=1');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deleted: true });
+
+    // Erasure completeness — every artifact path gone.
+    expect(existsSync(artifacts.entryDir)).toBe(false);
+    expect(existsSync(artifacts.ptPath)).toBe(false);
+    expect(existsSync(artifacts.jsonPath)).toBe(false);
+    expect(existsSync(artifacts.samplePath)).toBe(false);
+
+    // Referencing slot cleared (character left voiceless on that engine);
+    // sibling slot untouched.
+    const castPath = join(
+      dir,
+      'books',
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      '.audiobook',
+      'cast.json',
+    );
+    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as {
+      characters: Array<{ overrideTtsVoices?: Record<string, unknown> }>;
+    };
+    expect(cast.characters[0].overrideTtsVoices?.qwen).toBeUndefined();
+    expect(cast.characters[0].overrideTtsVoices?.coqui).toEqual({ name: 'preset-voice' });
   });
 });

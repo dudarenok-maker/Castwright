@@ -3,10 +3,14 @@
    buildSampleText producing identical output for identical inputs — that's
    the contract that makes "design preview" and "Play 12s" one synthesis. */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   buildSampleText,
   djb2,
+  purgeVoiceSamples,
   sampleScopeForCharacter,
   voiceSampleFileName,
   voiceSamplePublicUrl,
@@ -109,6 +113,22 @@ describe('voiceSampleFileName', () => {
     expect(voiceSampleFileName(base)).toMatch(/^char-marlow-/);
   });
 
+  it('fs-38 Wave 1: an omitted contentToken matches the EXACT legacy filename (backward-compat snapshot, captured before contentToken existed)', () => {
+    expect(voiceSampleFileName(base)).toBe('char-marlow-qwen3-tts-0.6b-klrjwe.mp3');
+  });
+
+  it('fs-38 Wave 1: a different contentToken yields a different filename than the omitted-token (legacy) call', () => {
+    const legacy = voiceSampleFileName(base);
+    const withToken = voiceSampleFileName(base, 'library-uuid-1');
+    expect(withToken).not.toBe(legacy);
+    expect(withToken).toMatch(/^char-marlow-qwen3-tts-0\.6b-[a-z0-9]+\.mp3$/);
+  });
+
+  it('fs-38 Wave 1: contentToken is deterministic and distinguishes two distinct tokens', () => {
+    expect(voiceSampleFileName(base, 'tok-a')).toBe(voiceSampleFileName(base, 'tok-a'));
+    expect(voiceSampleFileName(base, 'tok-a')).not.toBe(voiceSampleFileName(base, 'tok-b'));
+  });
+
   it('the design route and the player land on the SAME filename for the same inputs', () => {
     /* The design route passes voiceName = deriveQwenVoiceId; the player passes
        voiceName = pickVoiceForEngine('qwen', …) = the same override id. text is
@@ -128,6 +148,40 @@ describe('voiceSampleFileName', () => {
       voiceName: 'qwen-v_halloran',
     });
     expect(fromDesign).toBe(fromPlayer);
+  });
+});
+
+describe('purgeVoiceSamples', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cw-voice-samples-'));
+    process.env.VOICE_SAMPLE_AUDIO_DIR = dir;
+  });
+
+  afterEach(() => {
+    delete process.env.VOICE_SAMPLE_AUDIO_DIR;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("fs-38 Wave 1: removes only the target scope's cached sample files, leaving other scopes untouched", () => {
+    writeFileSync(join(dir, 'lib-uuid-1-qwen3-tts-0.6b-abcd1234.mp3'), '');
+    writeFileSync(join(dir, 'lib-uuid-1-kokoro-v1-ffff0000.mp3'), '');
+    writeFileSync(join(dir, 'lib-uuid-2-qwen3-tts-0.6b-9999zzzz.mp3'), '');
+    writeFileSync(join(dir, 'not-a-sample.txt'), '');
+
+    purgeVoiceSamples('lib-uuid-1');
+
+    const remaining = readdirSync(dir);
+    expect(remaining).toContain('lib-uuid-2-qwen3-tts-0.6b-9999zzzz.mp3');
+    expect(remaining).toContain('not-a-sample.txt');
+    expect(remaining).not.toContain('lib-uuid-1-qwen3-tts-0.6b-abcd1234.mp3');
+    expect(remaining).not.toContain('lib-uuid-1-kokoro-v1-ffff0000.mp3');
+  });
+
+  it('fs-38 Wave 1: is a no-op when the audio dir does not exist', () => {
+    rmSync(dir, { recursive: true, force: true });
+    expect(() => purgeVoiceSamples('lib-uuid-1')).not.toThrow();
   });
 });
 
