@@ -72,7 +72,16 @@ export async function scanLibraryCharacters(): Promise<LibraryCharacterRecord[]>
         if (!state || !state.castConfirmed) continue;
         const cast = await readJson<CastJson>(castJsonPath(bookDir));
         if (!cast?.characters?.length) continue;
-        for (const c of cast.characters) {
+        /* spec §6 "Matcher exclusion — assignment-level, not manifest-level": a
+           cloned-provenance assignment is a person's own voice and must NEVER be
+           offered back to a stranger's book by the cross-book matcher, so it is
+           excluded here at the single seam feeding both projectLibraryVoice()
+           (routes/voice-match.ts) and series-reuse-link.ts. imported/designed and
+           provenance-less (legacy) characters pass through unchanged. */
+        const eligible = cast.characters.filter(
+          (c) => !Object.values(c.overrideTtsVoices ?? {}).some((slot) => slot?.provenance === 'cloned'),
+        );
+        for (const c of eligible) {
           if (!c.id) continue;
           out.push({ bookId: state.bookId, bookTitle: state.title, character: c });
         }
