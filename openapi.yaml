@@ -2048,6 +2048,14 @@ paths:
       operationId: promoteVoiceLibraryRedesign
       parameters:
         - { in: path, name: voiceUuid, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                persona: { type: string }
       responses:
         '200':
           description: Redesign promoted to live

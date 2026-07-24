@@ -99,7 +99,7 @@ export function RedesignLibraryVoiceModal({ entry, onClose }: Props) {
     setPromoteBusy(true);
     setError(null);
     try {
-      await dispatch(promoteRedesign(entry.voiceUuid)).unwrap();
+      await dispatch(promoteRedesign({ voiceUuid: entry.voiceUuid, persona })).unwrap();
       onClose();
     } catch (e) {
       setError((e as Error).message || 'Could not keep the new take.');

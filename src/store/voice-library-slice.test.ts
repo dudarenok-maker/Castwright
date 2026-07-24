@@ -272,8 +272,8 @@ describe('voiceLibrarySlice thunks against api mocks', () => {
       designPending: false,
       lastFetchedAt: 1000,
     });
-    await store.dispatch(promoteRedesign('v1'));
-    expect(api.promoteLibraryRedesign).toHaveBeenCalledWith('v1');
+    await store.dispatch(promoteRedesign({ voiceUuid: 'v1', persona: 'Gruffer, older' }));
+    expect(api.promoteLibraryRedesign).toHaveBeenCalledWith('v1', { persona: 'Gruffer, older' });
     expect(api.listVoiceLibrary).toHaveBeenCalledTimes(1);
   });
 

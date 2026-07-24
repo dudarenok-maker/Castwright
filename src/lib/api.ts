@@ -9477,10 +9477,17 @@ async function realRedesignLibraryVoice(
   return res.json();
 }
 
-async function realPromoteLibraryRedesign(voiceUuid: string): Promise<VoiceLibraryEntry> {
+async function realPromoteLibraryRedesign(
+  voiceUuid: string,
+  body?: { persona?: string },
+): Promise<VoiceLibraryEntry> {
   const res = await fetch(
     `/api/voice-library/${encodeURIComponent(voiceUuid)}/redesign/promote`,
-    { method: 'POST' },
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+    },
   );
   if (!res.ok)
     throw new Error(
@@ -9641,11 +9648,18 @@ export async function mockRedesignLibraryVoice(
   return { previewUrl: stubAudioB };
 }
 
-export async function mockPromoteLibraryRedesign(voiceUuid: string): Promise<VoiceLibraryEntry> {
+export async function mockPromoteLibraryRedesign(
+  voiceUuid: string,
+  body?: { persona?: string },
+): Promise<VoiceLibraryEntry> {
   await wait(60);
   const idx = mockVoiceLibraryEntries.findIndex((e) => e.voiceUuid === voiceUuid);
   if (idx === -1) throw new Error(`No voice-library entry "${voiceUuid}".`);
-  const updated = { ...mockVoiceLibraryEntries[idx], updatedAt: new Date().toISOString() };
+  const updated = {
+    ...mockVoiceLibraryEntries[idx],
+    ...(typeof body?.persona === 'string' ? { persona: body.persona } : {}),
+    updatedAt: new Date().toISOString(),
+  };
   mockVoiceLibraryEntries = [
     ...mockVoiceLibraryEntries.slice(0, idx),
     updated,

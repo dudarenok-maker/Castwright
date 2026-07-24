@@ -7308,7 +7308,13 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    persona?: string;
+                };
+            };
+        };
         responses: {
             /** @description Redesign promoted to live */
             200: {

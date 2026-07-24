@@ -88,17 +88,24 @@ describe('RedesignLibraryVoiceModal', () => {
     );
   });
 
-  it('"Keep new" dispatches promoteRedesign and closes the modal', async () => {
+  it('"Keep new" dispatches promoteRedesign with the edited persona and closes the modal', async () => {
     redesignLibraryVoice.mockResolvedValue({ previewUrl: '/new-preview.mp3' });
     promoteLibraryRedesign.mockResolvedValue(makeEntry());
     const entry = makeEntry();
     const { onClose } = renderModal(entry);
+    fireEvent.change(screen.getByTestId('redesign-library-voice-persona'), {
+      target: { value: 'A grizzled dockside smuggler.' },
+    });
     fireEvent.click(screen.getByTestId('redesign-library-voice-redesign'));
     await waitFor(() =>
       expect(screen.getByTestId('redesign-library-voice-keep-new')).not.toBeDisabled(),
     );
     fireEvent.click(screen.getByTestId('redesign-library-voice-keep-new'));
-    await waitFor(() => expect(promoteLibraryRedesign).toHaveBeenCalledWith(entry.voiceUuid));
+    await waitFor(() =>
+      expect(promoteLibraryRedesign).toHaveBeenCalledWith(entry.voiceUuid, {
+        persona: 'A grizzled dockside smuggler.',
+      }),
+    );
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 

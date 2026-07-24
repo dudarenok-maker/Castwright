@@ -9,6 +9,7 @@ import {
   mockListVoiceLibrary,
   mockDesignLibraryVoice,
   mockDeleteVoiceLibrary,
+  mockPromoteLibraryRedesign,
   _resetMockVoiceLibrary,
 } from './api';
 import { MOCK_VOICE_LIBRARY_ENTRIES } from '../mocks/voice-library';
@@ -65,5 +66,22 @@ describe('mock voice library', () => {
 
     const { voices } = await mockListVoiceLibrary();
     expect(voices.some((v) => v.voiceUuid === 'lib-used')).toBe(false);
+  });
+
+  it('promote-redesign persists the edited persona onto the entry', async () => {
+    const before = await mockListVoiceLibrary();
+    const original = before.voices.find((v) => v.voiceUuid === 'lib-pinned');
+    expect(original?.persona).toBe(
+      'A weathered ship captain, baritone, northern English, authoritative.',
+    );
+
+    const updated = await mockPromoteLibraryRedesign('lib-pinned', {
+      persona: 'A jovial retired quartermaster, tenor, softer edge.',
+    });
+    expect(updated.persona).toBe('A jovial retired quartermaster, tenor, softer edge.');
+
+    const after = await mockListVoiceLibrary();
+    const persisted = after.voices.find((v) => v.voiceUuid === 'lib-pinned');
+    expect(persisted?.persona).toBe('A jovial retired quartermaster, tenor, softer edge.');
   });
 });

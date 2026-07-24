@@ -78,8 +78,8 @@ export const redesignVoice = createAsyncThunk(
 
 export const promoteRedesign = createAsyncThunk(
   'voiceLibrary/promoteRedesign',
-  async (voiceUuid: string, { dispatch }) => {
-    const entry = await api.promoteLibraryRedesign(voiceUuid);
+  async (args: { voiceUuid: string; persona?: string }, { dispatch }) => {
+    const entry = await api.promoteLibraryRedesign(args.voiceUuid, { persona: args.persona });
     await dispatch(fetchVoiceLibrary());
     return entry;
   },
