@@ -739,11 +739,12 @@ export function MiniPlayer({
               className="flex-1 relative cursor-pointer group h-7"
             >
               <Waveform progress={progress} active peaks={audio.peaks} issues={audio.peaks?.length ? issues : undefined} />
-              {/* fs-10 — decorative band marking the chapter-title beat. NOT a
-                  button: it deliberately has no onClick and does not stop
-                  propagation, so a click here reaches onScrub above and scrubs
-                  normally. A floored width makes a ~2 s beat visible in a
-                  40-minute chapter without swallowing the track underneath. */}
+              {/* fs-10 — non-interactive band (not a control) marking the
+                  chapter-title beat. NOT a button: it deliberately has no
+                  onClick and does not stop propagation, so a click here
+                  reaches onScrub above and scrubs normally. A floored width
+                  makes a ~2 s beat visible in a 40-minute chapter without
+                  swallowing the track underneath. */}
               {titleSegment && totalSec > 0 && (
                 <span
                   data-testid="mini-player-title-segment"

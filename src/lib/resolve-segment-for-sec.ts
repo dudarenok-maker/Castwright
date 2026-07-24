@@ -22,7 +22,7 @@ export interface ResolvedSegment {
 /** Find the segment whose [start, end) range contains `sec`. When `sec` falls
     in a gap between segments (or past the last one), clamp to the nearest
     segment by edge distance. Returns null only when there are no usable
-    segments (none carry a characterId). */
+    segments (none carry a characterId, or all are title rows). */
 export function resolveSegmentForSec(
   sec: number,
   segments: ChapterSegment[] | undefined,

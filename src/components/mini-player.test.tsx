@@ -1206,8 +1206,9 @@ describe('MiniPlayer — jump-to-issue + auto-seek', () => {
 });
 
 /* fs-10 (#412) — the chapter-title beat is painted as a labelled band at the
-   head of the scrubber. It is DECORATIVE: clicks must reach the scrubber
-   underneath, not hard-seek to 0. See the spec's §6.1 for why. */
+   head of the scrubber. It is non-interactive — not a control: clicks must
+   reach the scrubber underneath, not hard-seek to 0. See the spec's §6.1 for
+   why. */
 describe('MiniPlayer — chapter-title band (fs-10)', () => {
   const TITLE_SEGMENTS: ChapterAudio['segments'] = [
     { start: 1.5, end: 3.5, characterId: 'narrator', kind: 'title' },
