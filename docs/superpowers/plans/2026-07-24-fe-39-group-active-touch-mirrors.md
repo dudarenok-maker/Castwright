@@ -41,7 +41,7 @@ Add this block to `continue-listening-rail.test.tsx`. It renders the rail with o
 
 ```tsx
 it('play badge mirrors group-hover with group-active for touch press feedback (fe-39)', () => {
-  render(<ContinueListeningRail items={items} onOpen={noop} onFinish={noop} onHide={noop} />);
+  render(<ContinueListeningRail items={[item()]} onOpen={noop} onFinish={noop} onHide={noop} />);
   const card = screen.getByRole('button', { name: /Continue listening to The Coalfall Commission/i });
   const badge = card.querySelector('span.bg-white\\/20');
   expect(badge).not.toBeNull();
@@ -50,7 +50,7 @@ it('play badge mirrors group-hover with group-active for touch press feedback (f
 });
 ```
 
-Note: reuse the existing `items` / `noop` fixtures already defined in this test file (the existing "renders … Coalfall" test uses them). If the first item's title differs, match the accessible name to whatever the existing fixtures use.
+Note: this test file defines a module-scope **`item()` factory** and **`noop`** (not an `items` array — those are local to each existing `it`). Use `items={[item()]}`; `item()`'s default title is "The Coalfall Commission", so the `getByRole` accessible-name query matches. The play badge (line 111) is the only `bg-white/20` span and is a descendant of the card `<button>` (line 84), so `card.querySelector('span.bg-white\\/20')` resolves it uniquely (not the sibling ⋯ remove button at line 135).
 
 - [ ] **Step 2: Run test to verify it fails**
 
