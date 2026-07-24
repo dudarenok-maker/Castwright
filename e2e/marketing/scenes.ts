@@ -288,51 +288,53 @@ export const SCENES: Scene[] = [
 
   /* Wiki wave — guided first-run wizard, one scene per step. The `setup=notready`
      hash seam (mockGetSetupReadiness) forces guided mode (completedAt: null), so
-     #/setup renders the linear "Step N of 7" walkthrough instead of the re-entry
+     #/setup renders the linear "Step N of 8" walkthrough instead of the re-entry
      checklist. Each scene pages forward with the always-enabled Next button and
-     confirms it landed via `Step N of 7`. Steps (0-indexed): 0 Environment /
-     1 ffmpeg / 2 Analysis / 3 Voice / 4 Defaults / 5 LAN access / 6 Finish. */
+     confirms it landed via `Step N of 8`. Steps (0-indexed): 0 Environment /
+     1 ffmpeg / 2 Analysis / 3 Voice / 4 Defaults / 5 Library / 6 LAN access /
+     7 Finish. (A "Library" step was inserted at index 5, after Defaults — the
+     paging counts below are unaffected since every step they target precedes it.) */
   {
     id: 'setup-environment',
     hash: '#/setup?setup=notready',
     viewports: ['desktop'],
-    waitFor: 'text=Step 1 of 7',
+    waitFor: 'text=Step 1 of 8',
     strict: true,
   },
   {
     id: 'setup-analysis',
     hash: '#/setup?setup=notready',
     viewports: ['desktop'],
-    waitFor: 'text=Step 1 of 7',
+    waitFor: 'text=Step 1 of 8',
     action: async (page) => {
       for (let i = 0; i < 2; i++) await page.getByRole('button', { name: 'Next' }).click();
       await page.evaluate(() => window.scrollTo(0, 0));
     },
-    waitForAfterAction: 'text=Step 3 of 7',
+    waitForAfterAction: 'text=Step 3 of 8',
     strict: true,
   },
   {
     id: 'setup-voice',
     hash: '#/setup?setup=notready',
     viewports: ['desktop'],
-    waitFor: 'text=Step 1 of 7',
+    waitFor: 'text=Step 1 of 8',
     action: async (page) => {
       for (let i = 0; i < 3; i++) await page.getByRole('button', { name: 'Next' }).click();
       await page.evaluate(() => window.scrollTo(0, 0));
     },
-    waitForAfterAction: 'text=Step 4 of 7',
+    waitForAfterAction: 'text=Step 4 of 8',
     strict: true,
   },
   {
     id: 'setup-defaults',
     hash: '#/setup?setup=notready',
     viewports: ['desktop'],
-    waitFor: 'text=Step 1 of 7',
+    waitFor: 'text=Step 1 of 8',
     action: async (page) => {
       for (let i = 0; i < 4; i++) await page.getByRole('button', { name: 'Next' }).click();
       await page.evaluate(() => window.scrollTo(0, 0));
     },
-    waitForAfterAction: 'text=Step 5 of 7',
+    waitForAfterAction: 'text=Step 5 of 8',
     strict: true,
   },
   {
@@ -524,8 +526,8 @@ export const SCENES: Scene[] = [
         .getByText('Analyzer models & endpoints', { exact: true })
         .click({ timeout: 5000 });
     },
-    waitForAfterAction: 'text=Analyzer keep-alive',
-    scrollTo: 'text=Analyzer keep-alive',
+    waitForAfterAction: 'text=Analyzer engine',
+    scrollTo: 'text=Analyzer engine',
     strict: true,
   },
   {
@@ -614,6 +616,29 @@ export const SCENES: Scene[] = [
     },
     waitForAfterAction: 'text=Device authorization lifetime',
     scrollTo: 'text=Device authorization lifetime',
+    strict: true,
+  },
+  {
+    id: 'adv-dialogue-attribution',
+    hash: '#/advanced',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Dialogue-structure attribution', { exact: true })
+        .click({ timeout: 5000 });
+      // The nav click smooth-scrolls to this LAST section (settings-
+      // accordion.tsx:189, behavior:'smooth'). Both themes are shot from one
+      // scroll position, so the animation must fully settle before the first
+      // (light) capture — otherwise light freezes mid-scroll while dark, shot
+      // ~800ms later, lands correctly. Wait it out here.
+      await page.getByText('Structure engine', { exact: true }).waitFor({ timeout: 5000 });
+      await page.waitForTimeout(1200);
+    },
+    // "Structure engine" is the group's first knob and unique on the page
+    // (not a substring of the group title "Dialogue-structure attribution").
+    waitForAfterAction: 'text=Structure engine',
+    scrollTo: 'text=Structure engine',
     strict: true,
   },
   {

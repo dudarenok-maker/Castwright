@@ -79,6 +79,8 @@ export interface RunProsodyPassesOpts {
   dispatch: AppDispatch;
   /** AbortSignal for cooperative cancellation (optional — Task 13 passes none). */
   signal?: AbortSignal;
+  /** ChapterId to forward to both emotion and instruct detection passes. */
+  chapterId?: number;
   /** Called with 0–1 fraction as the two passes progress, plus the
    *  reconciled chapter/ETA detail for this tick. */
   onProgress?: (fraction: number, detail?: SubstageDetail) => void;
@@ -105,7 +107,7 @@ export interface RunProsodyPassesResult {
  */
 export async function runProsodyPasses(
   bookId: string,
-  { dispatch, signal, onProgress, onStatus, onThrottle }: RunProsodyPassesOpts,
+  { dispatch, signal, chapterId, onProgress, onStatus, onThrottle }: RunProsodyPassesOpts,
 ): Promise<RunProsodyPassesResult> {
   let failed = 0;
   let combinedEstRemainingMs: number | undefined;
@@ -118,6 +120,7 @@ export async function runProsodyPasses(
   // Pass 1: emotion backfill — progress 0–50%
   const emotionResult = await api.detectEmotions(bookId, {
     signal,
+    chapterId,
     onPhase: (e) => {
       if (e.estRemainingMs !== undefined) {
         const elapsedSoFarPass1 = Date.now() - pass1StartedAt;
@@ -150,6 +153,7 @@ export async function runProsodyPasses(
   // Pass 2: instruct/vocalization — progress 50–100%
   const instructResult = await api.detectInstruct(bookId, {
     signal,
+    chapterId,
     onPhase: (e) => {
       if (e.estRemainingMs !== undefined) {
         combinedEstRemainingMs = e.estRemainingMs;

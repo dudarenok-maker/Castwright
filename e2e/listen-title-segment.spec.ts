@@ -36,7 +36,7 @@ test.describe('fs-10 — chapter-title band', () => {
     await expect(band).toHaveAttribute('title', /^Chapter title · /);
   });
 
-  test('is decorative — it adds no control to the player', async ({ page }) => {
+  test('is not a control — it adds no control to the player', async ({ page }) => {
     await openSolwayBay(page);
     await startPlaybackFromStart(page);
 

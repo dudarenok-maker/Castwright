@@ -1253,7 +1253,7 @@ describe('MiniPlayer — chapter-title band (fs-10)', () => {
     expect(screen.queryByTestId('mini-player-title-segment')).toBeNull();
   });
 
-  it('is decorative — clicking it scrubs to the click position, not to 0', async () => {
+  it('is not a control — clicking it scrubs to the click position, not to 0', async () => {
     renderTitleBandPlayer();
     await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3', TITLE_SEGMENTS);
 

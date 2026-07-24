@@ -2863,6 +2863,7 @@ export function parseSubstagePhaseEvent(p: Record<string, unknown>): SubstagePha
 export interface DetectEmotionsOpts {
   signal?: AbortSignal;
   model?: string;
+  chapterId?: number; // fs-35 — scope the pass to one chapter
   onPhase?: (e: SubstagePhaseEvent) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onAnnotation?: (e: {
@@ -2887,12 +2888,15 @@ export class DetectEmotionsError extends Error {
 
 async function realDetectEmotions(
   bookId: string,
-  { signal, model, onPhase, onThrottle, onAnnotation, onChapterFailed }: DetectEmotionsOpts = {},
+  { signal, model, chapterId, onPhase, onThrottle, onAnnotation, onChapterFailed }: DetectEmotionsOpts = {},
 ): Promise<DetectEmotionsResult> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/annotate-emotion`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(model !== undefined ? { model } : {}),
+    body: JSON.stringify({
+      ...(model !== undefined ? { model } : {}),
+      ...(chapterId !== undefined ? { chapterId } : {}),
+    }),
     signal,
   });
   if (res.status === 404) throw new DetectEmotionsError('Book not found.', 'not_found');
@@ -2973,9 +2977,16 @@ async function realDetectEmotions(
 
 async function mockDetectEmotions(
   _bookId: string,
-  { onPhase, onAnnotation, onChapterFailed: _onChapterFailed }: DetectEmotionsOpts = {},
+  { onPhase, onAnnotation, onChapterFailed: _onChapterFailed, chapterId }: DetectEmotionsOpts = {},
 ): Promise<DetectEmotionsResult> {
   await wait(60);
+  if (typeof chapterId === 'number') {
+    onPhase?.({ progress: 0.5, label: 'Detecting emotions', chapterId, chapterIndex: 1, totalChapters: 1 });
+    onAnnotation?.({ chapterId, annotations: [{ sentenceId: 1, emotion: 'excited' }] });
+    await wait(300);
+    onPhase?.({ progress: 1, label: 'Done' });
+    return { annotatedChapters: 1, totalAnnotations: 1 };
+  }
   onPhase?.({ progress: 0.25, label: 'Detecting emotions', chapterId: 1, chapterIndex: 1, totalChapters: 2 });
   await wait(500);
   onPhase?.({ progress: 0.5, label: 'Detecting emotions', chapterId: 1, chapterIndex: 1, totalChapters: 2 });
@@ -3000,6 +3011,7 @@ async function mockDetectEmotions(
 export interface DetectInstructOpts {
   signal?: AbortSignal;
   model?: string;
+  chapterId?: number; // fs-35 — scope the pass to one chapter
   onPhase?: (e: SubstagePhaseEvent) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onAnnotation?: (e: {
@@ -3024,12 +3036,15 @@ export class DetectInstructError extends Error {
 
 async function realDetectInstruct(
   bookId: string,
-  { signal, model, onPhase, onThrottle, onAnnotation, onChapterFailed }: DetectInstructOpts = {},
+  { signal, model, chapterId, onPhase, onThrottle, onAnnotation, onChapterFailed }: DetectInstructOpts = {},
 ): Promise<DetectInstructResult> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/instruct-annotation`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(model !== undefined ? { model } : {}),
+    body: JSON.stringify({
+      ...(model !== undefined ? { model } : {}),
+      ...(chapterId !== undefined ? { chapterId } : {}),
+    }),
     signal,
   });
   if (res.status === 404) throw new DetectInstructError('Book not found.', 'not_found');
@@ -3115,9 +3130,16 @@ async function realDetectInstruct(
 
 async function mockDetectInstruct(
   _bookId: string,
-  { onPhase, onAnnotation, onChapterFailed: _onChapterFailed }: DetectInstructOpts = {},
+  { onPhase, onAnnotation, onChapterFailed: _onChapterFailed, chapterId }: DetectInstructOpts = {},
 ): Promise<DetectInstructResult> {
   await wait(60);
+  if (typeof chapterId === 'number') {
+    onPhase?.({ progress: 0.5, label: 'Detecting instruct', chapterId, chapterIndex: 1, totalChapters: 1 });
+    onAnnotation?.({ chapterId, annotations: [{ sentenceId: 1, instruct: 'warm' }] });
+    await wait(300);
+    onPhase?.({ progress: 1, label: 'Done' });
+    return { annotatedChapters: 1, totalAnnotations: 1 };
+  }
   onPhase?.({ progress: 0.25, label: 'Detecting instruct', chapterId: 1, chapterIndex: 1, totalChapters: 2 });
   await wait(500);
   onAnnotation?.({
@@ -8967,6 +8989,55 @@ const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = [
     isPrompt: false,
     default: 30,
   },
+  // analyzer-structure — mirror server/src/config/registry.ts (parity-tested
+  // in api.config.test.ts so this can't drift from the real §12 group).
+  {
+    key: 'analyzer.structure.enabled',
+    group: 'analyzer-structure',
+    label: 'Structure engine',
+    help: 'Deterministic dialogue-structure pass that corrects tag-proven attributions and derives honest confidence. Off = pre-engine behaviour.',
+    type: 'boolean',
+    apply: 'live',
+    risk: 'medium',
+    isPrompt: false,
+    default: true,
+  },
+  {
+    key: 'analyzer.structure.escalation',
+    group: 'analyzer-structure',
+    label: 'Attribution escalation',
+    help: "Second-pass re-query of unresolved dialogue windows: 'local' (default) uses the configured analyzer, 'cloud' the Gemini-API Gemma model, 'off' disables.",
+    type: 'enum',
+    options: ['off', 'local', 'cloud'],
+    apply: 'live',
+    risk: 'medium',
+    isPrompt: false,
+    default: 'local',
+  },
+  {
+    key: 'analyzer.structure.maxWindowsPerChapter',
+    group: 'analyzer-structure',
+    label: 'Escalation windows per chapter',
+    help: 'Cap on re-queried conversation windows per chapter.',
+    type: 'integer',
+    min: 0,
+    apply: 'live',
+    risk: 'low',
+    isPrompt: false,
+    default: 120,
+  },
+  {
+    key: 'analyzer.structure.maxWindowsPerBook',
+    group: 'analyzer-structure',
+    label: 'Escalation windows per book',
+    help: 'Cap on re-queried conversation windows per full-book analysis.',
+    type: 'integer',
+    min: 0,
+    apply: 'live',
+    risk: 'low',
+    isPrompt: false,
+    default: 600,
+  },
 ];
 
 const MOCK_CONFIG_GROUPS: import('./types').ConfigGroup[] = [
@@ -9059,6 +9130,13 @@ const MOCK_CONFIG_GROUPS: import('./types').ConfigGroup[] = [
     label: 'LAN access & device tokens',
     help: 'Lifetime of browser/device authorizations minted from Admin.',
     risk: 'low',
+    collapsedByDefault: false,
+  },
+  {
+    id: 'analyzer-structure',
+    label: 'Dialogue-structure attribution',
+    help: 'Deterministic structure engine that corrects/flags stage-2 attributions.',
+    risk: 'medium',
     collapsedByDefault: false,
   },
 ];

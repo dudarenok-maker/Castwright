@@ -24,7 +24,11 @@
  *   7. (c) Assert the warn toast fires.
  *
  * The slowed mock gives ~2.5 s of analysisBusy window — enough for all
- * navigation + assertions before the stream auto-clears. */
+ * navigation + assertions before the stream auto-clears. This slow,
+ * multi-chapter timing only happens on the whole-book path — fs-35's
+ * per-chapter primary is scoped to one chapter and resolves in a single
+ * fast tick — so the run is started via the ⌄ menu's "Detect whole book"
+ * + confirm, not the bare primary click. */
 
 import { test, expect } from '@playwright/test';
 
@@ -51,11 +55,12 @@ test.describe('generate gate while analysing (analysis-pill Task 10)', () => {
     const detectBtn = page.getByTestId('detect-emotions-button');
     await expect(detectBtn).toBeVisible({ timeout: 5_000 });
     await expect(detectBtn).toBeEnabled();
-    await detectBtn.click();
 
-    const confirmBtn = page.getByTestId('detect-emotions-confirm');
-    await expect(confirmBtn).toBeVisible({ timeout: 3_000 });
-    await confirmBtn.click();
+    /* Whole-book path (⌄ menu → confirm) — the slow, multi-chapter mock
+       timing this spec depends on. */
+    await page.getByTestId('detect-emotions-menu-toggle').click();
+    await page.getByTestId('detect-emotions-wholebook').click();
+    await page.getByTestId('detect-emotions-confirm').click();
     /* prosodyActions.setActive dispatched synchronously — analysisBusy = true. */
 
     /* ── (b) Review Script button disabled on manuscript view ─────────── */

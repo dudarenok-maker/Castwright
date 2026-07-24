@@ -1,3 +1,13 @@
+# Castwright 1.15.0
+
+- **Re-detect one chapter, not the whole book.** Edited a single chapter? "Detect emotions" now works on just the chapter you're reading — the whole-book pass is one click away in its menu.
+- **You can see the chapter title on the timeline now.** Every chapter opens with its title read
+  aloud — the player now shows that opening beat as a small marker at the start of the track, so
+  what you see matches what you hear.
+- **"Fix this line" now fixes the line you marked.** On chapters with a spoken title, marking a
+  line for re-recording could quietly re-record the line before it, or fail with a confusing error
+  about segment indices. Both are fixed.
+
 # Castwright 1.14.0
 
 - **The confusing GPU-memory settings are gone — Castwright is learning to manage your graphics card by itself.** The old Advanced Settings for GPU memory (a budget number, per-engine "weights", a coexist threshold) were a fiddly guessing game that changed depending on which card you had plugged in. They're now retired in favour of groundwork that reads your card's *actual* free memory and reserves exactly what each voice needs before it runs — not just before it speaks, but before loading a voice model or designing a new voice too — so switching between your laptop card and an external GPU needs no settings change, and two jobs can't quietly collide and run out of memory. After validation on real single- and dual-GPU hardware, this automatic placement is now **on by default** — it reserves what each voice needs before it runs and steers work to whichever card has room; a single "reserve" cushion is the only knob left, and you can switch the whole thing off if you'd rather run one job at a time. On a two-card machine it now frees up room on the card that actually needs it, leaving an idle voice on your *other* card undisturbed.
@@ -60,12 +70,6 @@
 - **Phone & tablet pairing, now self-healing.** Castwright's setup now checks the local certificate that powers listening on your phone or tablet — and fixes it in one click if it's missing, so pairing never silently stays off.
 - **Pairing a phone now works from the friendly `castwright.local` address — and you can name the device as you pair it.** If you open Castwright on your computer at `https://castwright.local` (the nice name, rather than `localhost`), starting a pairing session used to fail — you had to switch to the `localhost` address to add a phone. Now pairing works straight from `castwright.local`, and when you pair from the Listen tab you're asked to name the device first, so it shows up in your LAN-access list as "Anna's phone" instead of a generic "Device." Pairing still has to be started on the computer running Castwright, and if you reach it another way you'll get a clear pointer to the right address.
 - **The tabs across the top now follow the order you actually work in.** When a book is open, the menu reads left-to-right the way you move through it — **Cast** first (where you design your characters' voices), then **Manuscript**, **Generate**, and **Listen** — with **Log** and your cross-book **Voices** library tucked at the end. It matches the guided tour and where a book already opens, so nothing jumps around on you anymore.
-- **You can see the chapter title on the timeline now.** Every chapter opens with its title read
-  aloud — the player now shows that opening beat as a small marker at the start of the track, so
-  what you see matches what you hear.
-- **"Fix this line" now fixes the line you marked.** On chapters with a spoken title, marking a
-  line for re-recording could quietly re-record the line before it, or fail with a confusing error
-  about segment indices. Both are fixed.
 - **Error messages you need in a pinch are readable again in dark mode.** Two dark-on-dark spots are fixed: the red explanation under a failed add-on install, and the amber "1 chapter failed cast detection" panel — including its "What to do:" retry steps — on the analysis screen. Both now show in a legible tint, so when something needs your attention you can actually read what went wrong and how to fix it.
 - **Find help faster.** Troubleshooting is now sorted into clear, searchable sections instead of one long list — and Help and Admin link straight out to the matching guide in the wiki.
 - **Fixed a rare developer-mode glitch where flipping between a book and its script review too quickly could make the review progress jump around.** (#1496)

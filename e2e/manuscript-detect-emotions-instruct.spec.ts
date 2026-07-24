@@ -1,15 +1,17 @@
-/* fs-57 (PR3-Mi2) — The "Detect emotions" button now runs BOTH the emotion
+/* fs-57 (PR3-Mi2) / fs-35 — The "Detect emotions" button runs BOTH the emotion
  * backfill pass (api.detectEmotions) AND the Stage-3 instruct/vocalization
  * pass (api.detectInstruct) in sequence. In mock mode both mocks resolve
  * synchronously and each streams one annotation.
  *
- * This spec asserts that a single button click drives the full
- * confirm → run → both-passes-done → result-shown flow, and that the
- * confirm dialog copy mentions text-mutating reactions (gasp/sigh/laugh).
+ * Since fs-35 the button is a split control: the primary runs both passes
+ * scoped to the current chapter IMMEDIATELY (no confirm), and the ⌄ menu's
+ * "Detect whole book" keeps the confirm popover. This spec asserts (1) the
+ * whole-book confirm dialog copy mentions text-mutating reactions
+ * (gasp/sigh/laugh) — reached via the ⌄ menu — and (2) the per-chapter primary
+ * runs both passes with no confirm.
  *
- * Pairs with manuscript-detect-emotions.spec.ts (the fs-33 emotion-only
- * regression). The fs-33 spec still runs unchanged and covers the legacy
- * flow; this spec covers the combined Stage-3 extension. */
+ * Pairs with manuscript-detect-emotions.spec.ts (the emotion-pass regression);
+ * this spec covers the combined Stage-3 extension. */
 
 import { test, expect } from '@playwright/test';
 import { goToConfirm, confirmCastAndReachManuscript } from './helpers';
@@ -24,8 +26,10 @@ test.describe('manuscript — Detect emotions + Stage 3 instruct (fs-57)', () =>
     await expect(button).toBeVisible({ timeout: 5_000 });
     await expect(button).toBeEnabled();
 
-    await button.click();
-    // Confirm dialog must mention that text will change
+    // fs-35: the confirm popover only shows on the whole-book path, behind the
+    // ⌄ menu — the per-chapter primary click runs immediately with no confirm.
+    await page.getByTestId('detect-emotions-menu-toggle').click();
+    await page.getByTestId('detect-emotions-wholebook').click();
     const dialog = page.getByRole('dialog', { name: /Detect emotions/i });
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText(/gasp|sigh|laugh/i);
@@ -40,9 +44,6 @@ test.describe('manuscript — Detect emotions + Stage 3 instruct (fs-57)', () =>
     await expect(button).toBeEnabled();
 
     await button.click();
-    const confirm = page.getByTestId('detect-emotions-confirm');
-    await expect(confirm).toBeVisible();
-    await confirm.click();
 
     // Both passes complete (mock) — the inline "Tagged N line(s)…" done
     // summary proves the full sequence ran and the result banner rendered.
