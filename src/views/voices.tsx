@@ -2124,9 +2124,18 @@ function QwenDesignedCardFooter({
   onSave: (character: Character) => void;
   onViewMyVoices: () => void;
 }) {
+  /* QwenDesignedCardFooter only renders for a card in the "Designed voices"
+     section (group.status === 'designed'), so the voice here is KNOWN to be
+     a designed one. Floor the slot's provenance to 'designed' when no
+     libraryUuid is set, so an un-stamped designed slot reads "Designed"
+     rather than VoiceProvenanceBadge's default "Catalogue" fallback (which
+     stays correct for a genuine preset/catalogue override elsewhere). */
+  const badgeSlot = slot?.libraryUuid
+    ? slot
+    : { ...(slot ?? { name: '' }), provenance: 'designed' as const };
   return (
     <>
-      <VoiceProvenanceBadge slot={slot} />
+      <VoiceProvenanceBadge slot={badgeSlot} />
       {slot?.libraryUuid ? (
         <button
           type="button"

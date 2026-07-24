@@ -1843,8 +1843,14 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
   it('badges a generated voice "Generated" and an unrendered designed voice "Designed"', () => {
     renderQwen();
     const designed = screen.getByRole('region', { name: 'Qwen · Designed voices' });
-    expect(within(designed).getByText('Generated')).toBeInTheDocument();
-    expect(within(designed).getByText('Designed')).toBeInTheDocument();
+    /* Scope to each card's header row (name + status pill) — since fs-38
+       Wave 1 Task 16's fix, the footer's VoiceProvenanceBadge can ALSO read
+       "Designed" for an un-stamped design, so an unscoped getByText('Designed')
+       against the whole section is ambiguous. */
+    const oduvanRow = within(designed).getByText('Oduvan').closest('div')!;
+    expect(within(oduvanRow).getByText('Generated')).toBeInTheDocument();
+    const marlowRow = within(designed).getByText('Marlow').closest('div')!;
+    expect(within(marlowRow).getByText('Designed')).toBeInTheDocument();
   });
 
   it('badges a sampled-but-unrendered designed voice "Sampled"', () => {
@@ -1961,11 +1967,11 @@ describe('LibraryView Designed-voice provenance badge + Save to my voices (fs-38
     promoteToLibraryMock.mockReset();
   });
 
-  it('badges a plain bespoke design "Catalogue" (no libraryUuid/provenance stamp) with a "Save to my voices" button', () => {
+  it('badges a plain bespoke design "Designed" (no libraryUuid/provenance stamp) with a "Save to my voices" button', () => {
     renderProvenance();
     const designed = screen.getByRole('region', { name: 'Qwen · Designed voices' });
     const marlowCard = within(designed).getByText('Marlow').closest('div')!.parentElement!;
-    expect(within(marlowCard).getByTestId('voice-provenance-badge')).toHaveTextContent('Catalogue');
+    expect(within(marlowCard).getByTestId('voice-provenance-badge')).toHaveTextContent('Designed');
     expect(screen.getByTestId('voice-save-to-my-voices-marlow')).toBeInTheDocument();
   });
 
