@@ -33,6 +33,8 @@ import { seriesRosterRouter } from './routes/series-roster.js';
 import { seriesCastRouter } from './routes/series-cast.js';
 import { voiceSampleRouter } from './routes/voice-sample.js';
 import { voicesRouter } from './routes/voices.js';
+import { voiceLibraryRouter } from './routes/voice-library.js';
+import { requireVoiceLibraryEnabled } from './routes/voice-library-gate.js';
 import { libraryRouter } from './routes/library.js';
 import { syncManifestRouter } from './routes/library-sync-manifest.js';
 import { seriesMemoryRouter } from './routes/series-memory.js';
@@ -191,6 +193,7 @@ app.use('/api/books', qaReportRouter); // fs-51 — mounts /:bookId/qa-report
 app.use('/api', worktreesRouter); // plan 86 — dev-only GET /worktrees (404s in production)
 app.use('/api/voices', voicesRouter); // mounts GET / + PUT /:voiceId/pin
 app.use('/api/voices', voiceSampleRouter); // mounts POST /:voiceId/sample
+app.use('/api/voice-library', requireVoiceLibraryEnabled, voiceLibraryRouter); // fs-38 Wave 1 — mounts GET / + PATCH /:voiceUuid (Tasks 4, more added by 5/7/9/10/11)
 app.use('/api/sidecar', sidecarHealthRouter); // mounts GET /health
 app.use('/api/ollama', ollamaHealthRouter); // mounts GET /health (local LLM analyzer)
 app.use('/api/qwen', qwenInstallRouter); // in-app Qwen3-TTS installer (detect/install/poll/recheck)

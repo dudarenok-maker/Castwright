@@ -28,6 +28,14 @@ export interface DirSize {
   fileCount: number;
 }
 
+/* fs-38 Wave 1, Task 4 — the ONLY Node-side accessor for the current Qwen
+   base model id, used by the voice-library list route (staleness) and the
+   library-design route (baseModel stamping, Task 9). Wraps the same
+   module-private constant above rather than duplicating its default. */
+export function currentQwenBaseModel(): string {
+  return QWEN_BASE_MODEL;
+}
+
 /* Resolve the HF hub cache exactly as huggingface_hub does so this module and
    the runtime loaders agree: HF_HUB_CACHE → HF_HOME/hub → $XDG_CACHE_HOME/
    huggingface/hub → ~/.cache/huggingface/hub. */
