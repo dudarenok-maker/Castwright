@@ -368,3 +368,103 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
     expect(cast.characters[0].overrideTtsVoices?.coqui).toEqual({ name: 'preset-voice' });
   });
 });
+
+describe('POST /api/voice-library/:voiceUuid/assign', () => {
+  function castPathFor(bookDir: string) {
+    return join(bookDir, '.audiobook', 'cast.json');
+  }
+
+  it('404s for an unknown voiceUuid', async () => {
+    const res = await request(app)
+      .post('/api/voice-library/does-not-exist/assign')
+      .send({ bookId: 'book-one', characterId: 'char-marlow' });
+    expect(res.status).toBe(404);
+  });
+
+  it('404s when the voice-library feature is off', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'gate-1' }));
+    await writeConfigOverride('voices.library.enabled', false);
+    const res = await request(app)
+      .post('/api/voice-library/gate-1/assign')
+      .send({ bookId: 'book-one', characterId: 'char-marlow' });
+    expect(res.status).toBe(404);
+  });
+
+  it('404s for an unknown bookId', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'assign-1' }));
+    const res = await request(app)
+      .post('/api/voice-library/assign-1/assign')
+      .send({ bookId: 'no-such-book', characterId: 'char-marlow' });
+    expect(res.status).toBe(404);
+  });
+
+  it('404s for an unknown characterId', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'assign-2' }));
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-two', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app)
+      .post('/api/voice-library/assign-2/assign')
+      .send({ bookId: 'book-two', characterId: 'no-such-char' });
+    expect(res.status).toBe(404);
+  });
+
+  it('409s when the voice consent has been revoked', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'revoked-1',
+        provenance: 'cloned',
+        consent: {
+          personName: 'Jamie',
+          relationship: 'self',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00.000Z',
+          attestedBy: 'Jamie',
+          revokedAt: '2026-01-02T00:00:00.000Z',
+        },
+      }),
+    );
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-three', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/revoked-1/assign')
+      .send({ bookId: 'book-three', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(409);
+  });
+
+  it('stamps the qwen slot with name/libraryUuid/provenance, merges with (not clobbers) a sibling kokoro slot, and never touches character.voiceUuid', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'assign-3', provenance: 'cloned' }));
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-four', [
+      {
+        id: 'char-marlow',
+        name: 'Marlow',
+        voiceUuid: 'original-marlow-voice-uuid',
+        overrideTtsVoices: { kokoro: { name: 'af_heart' } },
+      },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/assign-3/assign')
+      .send({ bookId: 'book-four', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ updated: 1 });
+
+    const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
+      characters: Array<{
+        voiceUuid?: string;
+        overrideTtsVoices?: Record<string, unknown>;
+      }>;
+    };
+    expect(cast.characters[0].voiceUuid).toBe('original-marlow-voice-uuid');
+    expect(cast.characters[0].overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-assign-3',
+      libraryUuid: 'assign-3',
+      provenance: 'cloned',
+    });
+    expect(cast.characters[0].overrideTtsVoices?.kokoro).toEqual({ name: 'af_heart' });
+  });
+});

@@ -21,10 +21,13 @@ import {
 } from '../workspace/voice-library.js';
 import { currentQwenBaseModel } from '../tts/model-paths.js';
 import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace/voice-library-usage.js';
-import { qwenVoiceSidecarPath } from '../workspace/paths.js';
+import { castJsonPath, qwenVoiceSidecarPath } from '../workspace/paths.js';
 import { qwenVoicePtPath } from './qwen-voice.js';
 import { purgeVoiceSamples } from '../tts/voice-sample-cache.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { findBookByBookId } from '../workspace/scan.js';
+import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import type { CastCharacter } from '../tts/synthesise-chapter.js';
 
 export const voiceLibraryRouter = Router();
 
@@ -109,6 +112,82 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
   } catch (e) {
     console.error('[voice-library] patch failed', e);
     res.status(500).json({ error: (e as Error).message || 'Voice library update failed.' });
+  }
+});
+
+interface AssignBody {
+  bookId?: unknown;
+  characterId?: unknown;
+}
+
+interface CastJson {
+  characters?: CastCharacter[];
+}
+
+/* POST /api/voice-library/:voiceUuid/assign
+
+   Assigns a library voice to ONE character in ONE book — a bespoke,
+   character-targeted cast write (NOT `applyOverrideToCastFiles` from
+   routes/voices.ts, which is keyed by voiceId across every matching book
+   and whose `override` param can't carry `libraryUuid`/`provenance`).
+   Reads the book's cast.json, merges the new `qwen` slot into that one
+   character's `overrideTtsVoices` (sibling engine slots + the rest of the
+   qwen slot survive), and writes back atomically. `character.voiceUuid`
+   is never touched — that field is the srv-43 identity key, not something
+   an assign should alias. */
+voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response) => {
+  try {
+    const { voiceUuid } = req.params;
+    const entry = await readEntry(voiceUuid);
+    if (!entry) {
+      return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    }
+    if (entry.consent?.revokedAt) {
+      return res.status(409).json({ error: 'Consent for this voice has been revoked.' });
+    }
+
+    const body = (req.body ?? {}) as AssignBody;
+    const bookId = typeof body.bookId === 'string' ? body.bookId : undefined;
+    const characterId = typeof body.characterId === 'string' ? body.characterId : undefined;
+    if (!bookId || !characterId) {
+      return res.status(400).json({ error: '`bookId` and `characterId` are required.' });
+    }
+
+    const located = await findBookByBookId(bookId);
+    if (!located) {
+      return res.status(404).json({ error: `No book "${bookId}".` });
+    }
+
+    const cast = await readJson<CastJson>(castJsonPath(located.bookDir));
+    const characters = cast?.characters ?? [];
+    const charIndex = characters.findIndex((c) => c.id === characterId);
+    if (charIndex === -1) {
+      return res
+        .status(404)
+        .json({ error: `No character "${characterId}" in book "${bookId}".` });
+    }
+
+    const character = characters[charIndex];
+    const nextCharacters = [...characters];
+    nextCharacters[charIndex] = {
+      ...character,
+      overrideTtsVoices: {
+        ...character.overrideTtsVoices,
+        qwen: {
+          ...character.overrideTtsVoices?.qwen,
+          name: `qwen-${voiceUuid}`,
+          libraryUuid: voiceUuid,
+          provenance: entry.provenance,
+        },
+      },
+    };
+
+    await writeJsonAtomic(castJsonPath(located.bookDir), { ...cast, characters: nextCharacters });
+
+    res.status(200).json({ updated: 1 });
+  } catch (e) {
+    console.error('[voice-library] assign failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Voice library assign failed.' });
   }
 });
 
