@@ -621,8 +621,11 @@ measurement is faithful.
 | Fixture | raw | det | final | drift (of 58) | anchored families | soft families |
 |---|---|---|---|---|---|---|
 | **EN** (guardrail) | 77.6% | 77.6% | 77.6% | 33.0 | tag/pronoun/narration/unanchored **100%** | — |
-| **DE** (new) | 76.4% [74.1–77.6] | 76.4% | 76.4% | 34.3 | tag/pronoun/narration/unanchored **100%** | — |
+| **DE** (new) | 76.4% [74.1–77.6] | 76.4% [74.1–77.6] | 76.4% [74.1–77.6] | 34.3 | tag/pronoun/narration/unanchored **100%** | — |
 | **RU** (new) | 71.3% [67.2–75.9] | **74.1%** [72.4–75.9] | 71.8% [70.7–74.1] | 38.3 | tag/pronoun/narration **100%** | unanchored 81%, lumped 89% |
+
+Point values are the 3-run **mean**; brackets are `[min–max]`, so the mean need not be the bracket
+midpoint (EN's runs were identical → `[77.6–77.6]`, shown bare).
 
 **Reading:**
 - **German is at parity with English** (76.4 vs 77.6, inside its own run-band). Critically, the DE
