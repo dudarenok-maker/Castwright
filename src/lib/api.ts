@@ -2857,6 +2857,7 @@ export function parseSubstagePhaseEvent(p: Record<string, unknown>): SubstagePha
 export interface DetectEmotionsOpts {
   signal?: AbortSignal;
   model?: string;
+  chapterId?: number; // fs-35 — scope the pass to one chapter
   onPhase?: (e: SubstagePhaseEvent) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onAnnotation?: (e: {
@@ -2881,12 +2882,15 @@ export class DetectEmotionsError extends Error {
 
 async function realDetectEmotions(
   bookId: string,
-  { signal, model, onPhase, onThrottle, onAnnotation, onChapterFailed }: DetectEmotionsOpts = {},
+  { signal, model, chapterId, onPhase, onThrottle, onAnnotation, onChapterFailed }: DetectEmotionsOpts = {},
 ): Promise<DetectEmotionsResult> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/annotate-emotion`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(model !== undefined ? { model } : {}),
+    body: JSON.stringify({
+      ...(model !== undefined ? { model } : {}),
+      ...(chapterId !== undefined ? { chapterId } : {}),
+    }),
     signal,
   });
   if (res.status === 404) throw new DetectEmotionsError('Book not found.', 'not_found');
@@ -2967,9 +2971,16 @@ async function realDetectEmotions(
 
 async function mockDetectEmotions(
   _bookId: string,
-  { onPhase, onAnnotation, onChapterFailed: _onChapterFailed }: DetectEmotionsOpts = {},
+  { onPhase, onAnnotation, onChapterFailed: _onChapterFailed, chapterId }: DetectEmotionsOpts = {},
 ): Promise<DetectEmotionsResult> {
   await wait(60);
+  if (typeof chapterId === 'number') {
+    onPhase?.({ progress: 0.5, label: 'Detecting emotions', chapterId, chapterIndex: 1, totalChapters: 1 });
+    onAnnotation?.({ chapterId, annotations: [{ sentenceId: 1, emotion: 'excited' }] });
+    await wait(300);
+    onPhase?.({ progress: 1, label: 'Done' });
+    return { annotatedChapters: 1, totalAnnotations: 1 };
+  }
   onPhase?.({ progress: 0.25, label: 'Detecting emotions', chapterId: 1, chapterIndex: 1, totalChapters: 2 });
   await wait(500);
   onPhase?.({ progress: 0.5, label: 'Detecting emotions', chapterId: 1, chapterIndex: 1, totalChapters: 2 });
@@ -2994,6 +3005,7 @@ async function mockDetectEmotions(
 export interface DetectInstructOpts {
   signal?: AbortSignal;
   model?: string;
+  chapterId?: number; // fs-35 — scope the pass to one chapter
   onPhase?: (e: SubstagePhaseEvent) => void;
   onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
   onAnnotation?: (e: {
@@ -3018,12 +3030,15 @@ export class DetectInstructError extends Error {
 
 async function realDetectInstruct(
   bookId: string,
-  { signal, model, onPhase, onThrottle, onAnnotation, onChapterFailed }: DetectInstructOpts = {},
+  { signal, model, chapterId, onPhase, onThrottle, onAnnotation, onChapterFailed }: DetectInstructOpts = {},
 ): Promise<DetectInstructResult> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/instruct-annotation`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(model !== undefined ? { model } : {}),
+    body: JSON.stringify({
+      ...(model !== undefined ? { model } : {}),
+      ...(chapterId !== undefined ? { chapterId } : {}),
+    }),
     signal,
   });
   if (res.status === 404) throw new DetectInstructError('Book not found.', 'not_found');
@@ -3109,9 +3124,16 @@ async function realDetectInstruct(
 
 async function mockDetectInstruct(
   _bookId: string,
-  { onPhase, onAnnotation, onChapterFailed: _onChapterFailed }: DetectInstructOpts = {},
+  { onPhase, onAnnotation, onChapterFailed: _onChapterFailed, chapterId }: DetectInstructOpts = {},
 ): Promise<DetectInstructResult> {
   await wait(60);
+  if (typeof chapterId === 'number') {
+    onPhase?.({ progress: 0.5, label: 'Detecting instruct', chapterId, chapterIndex: 1, totalChapters: 1 });
+    onAnnotation?.({ chapterId, annotations: [{ sentenceId: 1, instruct: 'warm' }] });
+    await wait(300);
+    onPhase?.({ progress: 1, label: 'Done' });
+    return { annotatedChapters: 1, totalAnnotations: 1 };
+  }
   onPhase?.({ progress: 0.25, label: 'Detecting instruct', chapterId: 1, chapterIndex: 1, totalChapters: 2 });
   await wait(500);
   onAnnotation?.({
