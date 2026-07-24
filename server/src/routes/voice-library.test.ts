@@ -839,6 +839,36 @@ describe('POST /api/voice-library/promote (Task 11)', () => {
     expect(entry.engines.qwen?.status).toBe('ready');
   });
 
+  it('a library-assigned character resolves via overrideTtsVoices.qwen.libraryUuid, not the character-keyed derivation', async () => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    // The character's OWN id-derived storage key has nothing on disk — only
+    // the library-assigned voice's key (qwen-libX, set by /assign, which
+    // never touches character.voiceUuid) does. Resolution must follow
+    // overrideTtsVoices.qwen.libraryUuid, mirroring pickVoiceForEngine.
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-libX'), 'LIBRARY-ASSIGNED-BYTES');
+
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-6', [
+      {
+        id: 'char-assigned',
+        name: 'Assigned',
+        // No own voiceUuid — assignment lives entirely in overrideTtsVoices.
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-libX', libraryUuid: 'libX', provenance: 'designed' },
+        },
+      },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-6', characterId: 'char-assigned', name: 'Assigned Voice' });
+
+    expect(res.status).toBe(201);
+    const entry = res.body as import('../workspace/voice-library.js').VoiceLibraryEntry;
+    const newPtPath = qwenVoice.qwenVoicePtPath(`qwen-${entry.voiceUuid}`);
+    expect(readFileSync(newPtPath, 'utf8')).toBe('LIBRARY-ASSIGNED-BYTES');
+    expect(entry.engines.qwen?.status).toBe('ready');
+  });
+
   it('missing source .pt → entry created with stale status, no throw (still 201)', async () => {
     writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-5', [
       { id: 'char-c', name: 'C', voiceStyle: 'a bright, chipper voice' },

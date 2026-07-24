@@ -414,11 +414,14 @@ interface PromoteBody {
    Promote a confirmed-cast character's designed voice into the standalone
    library. Mints a NEW library uuid — from this point the promoted voice is
    independent of the origin character. Resolves the character's TRUE source
-   storage key via `qwenStorageKey` — the SAME resolution `pickVoiceForEngine`
-   uses for the qwen engine (tts/voice-mapping.ts) — so a reused/matched
-   character (whose `voiceUuid` points at another voice's storage) copies
-   from that SOURCE `.pt`, not a nonexistent character-id-keyed one (spec
-   §2.2 edge rule). When no source `.pt` exists yet, the entry is still
+   storage key with the SAME ordering `pickVoiceForEngine` uses for the qwen
+   engine (tts/voice-mapping.ts:335-339): an `overrideTtsVoices.qwen.libraryUuid`
+   assignment wins outright, else fall back to `qwenStorageKey` — so both a
+   library-assigned character (whose `overrideTtsVoices.qwen.libraryUuid`
+   points at another voice's storage) and a reused/matched character (whose
+   `voiceUuid` points at another voice's storage) copy from that SOURCE `.pt`,
+   not a nonexistent character-id-keyed one (spec §2.2 edge rule). When no
+   source `.pt` exists yet, the entry is still
    created — persona-only, `engines.qwen.status: 'stale'` — rather than
    throwing; the voice can be derived on demand later. Registered as a
    literal `/promote` path (not `/:voiceUuid/...`) since there is no
@@ -450,10 +453,15 @@ voiceLibraryRouter.post('/promote', async (req: Request, res: Response) => {
         .json({ error: `No character "${characterId}" in book "${bookId}".` });
     }
 
-    const sourceKey = qwenStorageKey(
-      { voiceUuid: character.voiceUuid, voiceId: character.voiceId },
-      characterId,
-    );
+    /* fs-38 Wave 1 review fix — mirror pickVoiceForEngine's qwen-branch
+       ordering (tts/voice-mapping.ts:335-339): an explicit voice-library
+       assignment (`overrideTtsVoices.qwen.libraryUuid`, set by /assign
+       WITHOUT touching `character.voiceUuid`) wins outright; only fall back
+       to the character-id-derived qwenStorageKey when no libraryUuid is set. */
+    const assignedLibraryUuid = character.overrideTtsVoices?.qwen?.libraryUuid;
+    const sourceKey = assignedLibraryUuid
+      ? `qwen-${assignedLibraryUuid}`
+      : qwenStorageKey({ voiceUuid: character.voiceUuid, voiceId: character.voiceId }, characterId);
     const libraryUuid = nanoid();
     const targetKey = `qwen-${libraryUuid}`;
 
