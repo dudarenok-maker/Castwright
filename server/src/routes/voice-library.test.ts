@@ -724,3 +724,133 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     expect(r2.status).toBe(404);
   });
 });
+
+/* Task 11 — POST /api/voice-library/promote. Promotes a confirmed-cast
+   character's designed Qwen voice into the standalone library: mints a NEW
+   library uuid, resolves the character's TRUE source storage key the same
+   way pickVoiceForEngine/qwenStorageKey does (so a matched/reused character
+   copies from the SOURCE voice's `.pt`, not a nonexistent character-keyed
+   one), byte-copies the `.pt`/`.json` sidecar under the new uuid, and never
+   touches the origin character. */
+describe('POST /api/voice-library/promote (Task 11)', () => {
+  function castPathFor(bookDir: string) {
+    return join(bookDir, '.audiobook', 'cast.json');
+  }
+
+  it('404s for an unknown bookId', async () => {
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'no-such-book', characterId: 'char-a', name: 'Nova' });
+    expect(res.status).toBe(404);
+  });
+
+  it('404s for an unknown characterId', async () => {
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-1', [
+      { id: 'char-a', name: 'A' },
+    ]);
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-1', characterId: 'no-such-char', name: 'Nova' });
+    expect(res.status).toBe(404);
+  });
+
+  it('mints a new uuid, byte-copies the .pt/.json under the resolved source key, and stamps ready + baseModel', async () => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-char-a'), 'MARKER-PT-BYTES');
+    writeFileSync(
+      paths.qwenVoiceSidecarPath('qwen-char-a'),
+      JSON.stringify({ instruct: 'a warm narrator' }),
+    );
+
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-2', [
+      { id: 'char-a', name: 'A', voiceUuid: 'char-a', voiceStyle: 'a warm narrator' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-2', characterId: 'char-a', name: 'Nova' });
+
+    expect(res.status).toBe(201);
+    const entry = res.body as import('../workspace/voice-library.js').VoiceLibraryEntry;
+    expect(entry.provenance).toBe('designed');
+    expect(entry.name).toBe('Nova');
+    expect(entry.persona).toBe('a warm narrator');
+    expect(entry.promotedFrom).toEqual({ bookId: 'book-promo-2', characterId: 'char-a' });
+    expect(entry.engines.qwen?.status).toBe('ready');
+    expect(entry.engines.qwen?.baseModel).toBe(modelPaths.currentQwenBaseModel());
+    expect(entry.voiceUuid).not.toBe('char-a'); // NEW uuid, not the character's own id/voiceUuid
+
+    const newPtPath = qwenVoice.qwenVoicePtPath(`qwen-${entry.voiceUuid}`);
+    expect(readFileSync(newPtPath, 'utf8')).toBe('MARKER-PT-BYTES');
+    const newJsonPath = paths.qwenVoiceSidecarPath(`qwen-${entry.voiceUuid}`);
+    expect(JSON.parse(readFileSync(newJsonPath, 'utf8'))).toEqual({ instruct: 'a warm narrator' });
+
+    const onDisk = await vl.readEntry(entry.voiceUuid);
+    expect(onDisk?.engines.qwen?.status).toBe('ready');
+  });
+
+  it('never modifies the origin character or cast.json (byte-identical before/after)', async () => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-char-b'), 'ORIGIN-BYTES');
+
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-promo-3',
+      [{ id: 'char-b', name: 'B', voiceUuid: 'char-b', voiceStyle: 'a hushed whisper' }],
+    );
+    const before = readFileSync(castPathFor(bookDir), 'utf8');
+
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-3', characterId: 'char-b', name: 'Whisper' });
+
+    expect(res.status).toBe(201);
+    const after = readFileSync(castPathFor(bookDir), 'utf8');
+    expect(after).toBe(before); // byte-identical — origin cast.json untouched
+  });
+
+  it('a matched/reused character resolves the SOURCE voice uuid, not a nonexistent character-keyed one', async () => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    // The character's OWN id-derived storage key has nothing on disk — only
+    // the matched SOURCE voice's key (its voiceUuid, from a different
+    // character) does. Resolution must follow voiceUuid, not characterId.
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-shared-source-uuid'), 'SHARED-SOURCE-BYTES');
+
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-4', [
+      {
+        id: 'char-reused',
+        name: 'Reused',
+        voiceUuid: 'shared-source-uuid', // matched to another voice's uuid
+        voiceStyle: 'a gravelly smuggler',
+      },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-4', characterId: 'char-reused', name: 'Smuggler' });
+
+    expect(res.status).toBe(201);
+    const entry = res.body as import('../workspace/voice-library.js').VoiceLibraryEntry;
+    const newPtPath = qwenVoice.qwenVoicePtPath(`qwen-${entry.voiceUuid}`);
+    expect(readFileSync(newPtPath, 'utf8')).toBe('SHARED-SOURCE-BYTES');
+    expect(entry.engines.qwen?.status).toBe('ready');
+  });
+
+  it('missing source .pt → entry created with stale status, no throw (still 201)', async () => {
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-5', [
+      { id: 'char-c', name: 'C', voiceStyle: 'a bright, chipper voice' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-5', characterId: 'char-c', name: 'Chipper' });
+
+    expect(res.status).toBe(201);
+    const entry = res.body as import('../workspace/voice-library.js').VoiceLibraryEntry;
+    expect(entry.engines.qwen?.status).toBe('stale');
+    expect(entry.persona).toBe('a bright, chipper voice');
+  });
+});

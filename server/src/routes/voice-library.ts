@@ -11,7 +11,7 @@
 
 import { Router } from 'express';
 import { existsSync } from 'node:fs';
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, copyFile, rename, rm, writeFile } from 'node:fs/promises';
 import { nanoid } from 'nanoid';
 import type { Request, Response } from '../http.js';
 import {
@@ -20,12 +20,14 @@ import {
   removeEntryDir,
   writeEntry,
   type VoiceLibraryEntry,
+  type VoiceLibraryEngineStatus,
 } from '../workspace/voice-library.js';
 import { currentQwenBaseModel } from '../tts/model-paths.js';
 import { runVoiceDesign } from '../tts/design-voice-core.js';
 import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace/voice-library-usage.js';
 import { castJsonPath, qwenVoiceSidecarPath } from '../workspace/paths.js';
 import { qwenVoicePtPath } from './qwen-voice.js';
+import { qwenStorageKey } from '../tts/voice-mapping.js';
 import { selectTtsProvider, type TtsModelKey } from '../tts/index.js';
 import { encodePcmToAudio } from '../tts/mp3.js';
 import {
@@ -400,6 +402,94 @@ interface AssignBody {
 interface CastJson {
   characters?: CastCharacter[];
 }
+
+interface PromoteBody {
+  bookId?: unknown;
+  characterId?: unknown;
+  name?: unknown;
+}
+
+/* POST /api/voice-library/promote
+
+   Promote a confirmed-cast character's designed voice into the standalone
+   library. Mints a NEW library uuid — from this point the promoted voice is
+   independent of the origin character. Resolves the character's TRUE source
+   storage key via `qwenStorageKey` — the SAME resolution `pickVoiceForEngine`
+   uses for the qwen engine (tts/voice-mapping.ts) — so a reused/matched
+   character (whose `voiceUuid` points at another voice's storage) copies
+   from that SOURCE `.pt`, not a nonexistent character-id-keyed one (spec
+   §2.2 edge rule). When no source `.pt` exists yet, the entry is still
+   created — persona-only, `engines.qwen.status: 'stale'` — rather than
+   throwing; the voice can be derived on demand later. Registered as a
+   literal `/promote` path (not `/:voiceUuid/...`) since there is no
+   voiceUuid yet — one is minted inside the handler. The origin character/
+   cast.json is NEVER modified. */
+voiceLibraryRouter.post('/promote', async (req: Request, res: Response) => {
+  try {
+    const body = (req.body ?? {}) as PromoteBody;
+    const bookId = typeof body.bookId === 'string' ? body.bookId : undefined;
+    const characterId = typeof body.characterId === 'string' ? body.characterId : undefined;
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    if (!bookId || !characterId || !name) {
+      return res
+        .status(400)
+        .json({ error: '`bookId`, `characterId`, and `name` are required.' });
+    }
+
+    const located = await findBookByBookId(bookId);
+    if (!located) {
+      return res.status(404).json({ error: `No book "${bookId}".` });
+    }
+
+    const cast = await readJson<CastJson>(castJsonPath(located.bookDir));
+    const characters = cast?.characters ?? [];
+    const character = characters.find((c) => c.id === characterId);
+    if (!character) {
+      return res
+        .status(404)
+        .json({ error: `No character "${characterId}" in book "${bookId}".` });
+    }
+
+    const sourceKey = qwenStorageKey(
+      { voiceUuid: character.voiceUuid, voiceId: character.voiceId },
+      characterId,
+    );
+    const libraryUuid = nanoid();
+    const targetKey = `qwen-${libraryUuid}`;
+
+    let qwenStatus: VoiceLibraryEngineStatus;
+    if (existsSync(qwenVoicePtPath(sourceKey))) {
+      await copyFile(qwenVoicePtPath(sourceKey), qwenVoicePtPath(targetKey));
+      if (existsSync(qwenVoiceSidecarPath(sourceKey))) {
+        await copyFile(qwenVoiceSidecarPath(sourceKey), qwenVoiceSidecarPath(targetKey));
+      }
+      qwenStatus = { status: 'ready', baseModel: currentQwenBaseModel() };
+    } else {
+      /* No designed `.pt` yet (character was never actually designed) —
+         persist the persona anyway; nothing to throw over. */
+      qwenStatus = { status: 'stale' };
+    }
+
+    const now = new Date().toISOString();
+    const entry: VoiceLibraryEntry = {
+      voiceUuid: libraryUuid,
+      name,
+      provenance: 'designed',
+      tags: [],
+      pinned: false,
+      ...(character.voiceStyle ? { persona: character.voiceStyle } : {}),
+      engines: { qwen: qwenStatus },
+      promotedFrom: { bookId, characterId },
+      createdAt: now,
+      updatedAt: now,
+    };
+    await writeEntry(entry);
+    return res.status(201).json(await readEntry(libraryUuid));
+  } catch (e) {
+    console.error('[voice-library] promote failed', e);
+    return res.status(500).json({ error: (e as Error).message || 'Voice promotion failed.' });
+  }
+});
 
 /* POST /api/voice-library/:voiceUuid/assign
 
