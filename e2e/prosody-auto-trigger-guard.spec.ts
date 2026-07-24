@@ -91,9 +91,6 @@ test.describe('prosody auto-trigger guard (analysis-pill Task 10)', () => {
 
     /* Drive the button → confirm → slowed mock path to prove no double-run. */
     await detectBtn.click();
-    const confirmBtn = page.getByTestId('detect-emotions-confirm');
-    await expect(confirmBtn).toBeVisible({ timeout: 3_000 });
-    await confirmBtn.click();
 
     /* While the run is active, the component renders detect-emotions-progress
        (the spinner bar) IN PLACE OF the button — the button is unmounted.

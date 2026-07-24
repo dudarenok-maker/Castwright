@@ -24,8 +24,10 @@ test.describe('manuscript — Detect emotions + Stage 3 instruct (fs-57)', () =>
     await expect(button).toBeVisible({ timeout: 5_000 });
     await expect(button).toBeEnabled();
 
-    await button.click();
-    // Confirm dialog must mention that text will change
+    // fs-35: the confirm popover only shows on the whole-book path, behind the
+    // ⌄ menu — the per-chapter primary click runs immediately with no confirm.
+    await page.getByTestId('detect-emotions-menu-toggle').click();
+    await page.getByTestId('detect-emotions-wholebook').click();
     const dialog = page.getByRole('dialog', { name: /Detect emotions/i });
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText(/gasp|sigh|laugh/i);
@@ -40,9 +42,6 @@ test.describe('manuscript — Detect emotions + Stage 3 instruct (fs-57)', () =>
     await expect(button).toBeEnabled();
 
     await button.click();
-    const confirm = page.getByTestId('detect-emotions-confirm');
-    await expect(confirm).toBeVisible();
-    await confirm.click();
 
     // Both passes complete (mock) — the inline "Tagged N line(s)…" done
     // summary proves the full sequence ran and the result banner rendered.
