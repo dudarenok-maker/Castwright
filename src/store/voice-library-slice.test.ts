@@ -12,8 +12,13 @@ import {
   voiceLibrarySlice,
   fetchVoiceLibrary,
   designVoice,
+  redesignVoice,
+  promoteRedesign,
+  discardRedesign,
   patchEntry,
   deleteEntry,
+  assignVoice,
+  promoteCharacterVoice,
   selectMyVoices,
   selectVoiceByUuid,
   installVoiceLibraryFocusListener,
@@ -238,6 +243,83 @@ describe('voiceLibrarySlice thunks against api mocks', () => {
     vi.mocked(api.listVoiceLibrary).mockClear();
     await store.dispatch(deleteEntry({ voiceUuid: 'v1' }));
     expect(api.listVoiceLibrary).not.toHaveBeenCalled();
+  });
+
+  it('redesignVoice calls api.redesignLibraryVoice and does NOT refetch the library', async () => {
+    vi.mocked(api.redesignLibraryVoice).mockResolvedValue({ previewUrl: '/redesign-preview.mp3' });
+    const store = makeStore({
+      entries: [makeEntry({ voiceUuid: 'v1' })],
+      status: 'ready',
+      designPending: false,
+      lastFetchedAt: 1000,
+    });
+    const action = await store.dispatch(redesignVoice({ voiceUuid: 'v1', persona: 'Gruffer, older' }));
+    expect(api.redesignLibraryVoice).toHaveBeenCalledWith('v1', { persona: 'Gruffer, older' });
+    expect(action.payload).toEqual({ previewUrl: '/redesign-preview.mp3' });
+    /* A redesign only produces a preview — nothing persists server-side
+       until promote/discard — so it deliberately does NOT trigger a
+       library refetch. */
+    expect(api.listVoiceLibrary).not.toHaveBeenCalled();
+  });
+
+  it('promoteRedesign calls api.promoteLibraryRedesign and refetches the list', async () => {
+    const promoted = makeEntry({ voiceUuid: 'v1', persona: 'Gruffer, older' });
+    vi.mocked(api.promoteLibraryRedesign).mockResolvedValue(promoted);
+    vi.mocked(api.listVoiceLibrary).mockResolvedValue({ voices: [promoted] });
+    const store = makeStore({
+      entries: [makeEntry({ voiceUuid: 'v1' })],
+      status: 'ready',
+      designPending: false,
+      lastFetchedAt: 1000,
+    });
+    await store.dispatch(promoteRedesign('v1'));
+    expect(api.promoteLibraryRedesign).toHaveBeenCalledWith('v1');
+    expect(api.listVoiceLibrary).toHaveBeenCalledTimes(1);
+  });
+
+  it('discardRedesign calls api.discardLibraryRedesign and refetches the list', async () => {
+    const reverted = makeEntry({ voiceUuid: 'v1' });
+    vi.mocked(api.discardLibraryRedesign).mockResolvedValue(reverted);
+    vi.mocked(api.listVoiceLibrary).mockResolvedValue({ voices: [reverted] });
+    const store = makeStore({
+      entries: [makeEntry({ voiceUuid: 'v1' })],
+      status: 'ready',
+      designPending: false,
+      lastFetchedAt: 1000,
+    });
+    await store.dispatch(discardRedesign('v1'));
+    expect(api.discardLibraryRedesign).toHaveBeenCalledWith('v1');
+    expect(api.listVoiceLibrary).toHaveBeenCalledTimes(1);
+  });
+
+  it('assignVoice calls api.assignLibraryVoice with the right args and refetches the list', async () => {
+    vi.mocked(api.assignLibraryVoice).mockResolvedValue({ updated: 1 });
+    vi.mocked(api.listVoiceLibrary).mockResolvedValue({ voices: [makeEntry({ voiceUuid: 'v1' })] });
+    const store = makeStore({
+      entries: [makeEntry({ voiceUuid: 'v1' })],
+      status: 'ready',
+      designPending: false,
+      lastFetchedAt: 1000,
+    });
+    await store.dispatch(assignVoice({ voiceUuid: 'v1', bookId: 'book-1', characterId: 'char-1' }));
+    expect(api.assignLibraryVoice).toHaveBeenCalledWith('v1', { bookId: 'book-1', characterId: 'char-1' });
+    expect(api.listVoiceLibrary).toHaveBeenCalledTimes(1);
+  });
+
+  it('promoteCharacterVoice calls api.promoteToLibrary and refetches the list', async () => {
+    const promoted = makeEntry({ voiceUuid: 'lib-new', name: 'New Voice' });
+    vi.mocked(api.promoteToLibrary).mockResolvedValue(promoted);
+    vi.mocked(api.listVoiceLibrary).mockResolvedValue({ voices: [promoted] });
+    const store = makeStore();
+    await store.dispatch(
+      promoteCharacterVoice({ bookId: 'book-1', characterId: 'char-1', name: 'New Voice' }),
+    );
+    expect(api.promoteToLibrary).toHaveBeenCalledWith({
+      bookId: 'book-1',
+      characterId: 'char-1',
+      name: 'New Voice',
+    });
+    expect(api.listVoiceLibrary).toHaveBeenCalledTimes(1);
   });
 });
 
