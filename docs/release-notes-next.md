@@ -33,7 +33,7 @@ history at cut time.
 ## 🎙️ Voices & casting
 
 - **fs-38 Wave 1 — book-independent voice library (`#/voices` restructure + designed-voice
-  authoring)** (Refs #624). Ships a first-class, book-independent voice-library store ("My
+  authoring)** (#1800, refs #624). Ships a first-class, book-independent voice-library store ("My
   voices"), restructuring `#/voices` into three sections — **My voices | In use | Catalogue**.
   Adds standalone designed-voice authoring: create a Qwen voice from a persona with a live
   audition, **redesign-with-compare** (A/B old-vs-new, keep or discard), **promote** a
