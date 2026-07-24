@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { waitForRouteReady } from './helpers';
 
 /**
  * Status-first Qwen voice presentation — plan 117.
@@ -24,10 +25,15 @@ test.describe('Qwen status sections on #/voices', () => {
     });
 
     await page.goto('/#/voices');
+    /* Gate on the #/voices React.lazy chunk hydrating before asserting content —
+       the cold chunk can run 15-20s under CI worker contention, so a bare fixed
+       timeout races it (pre-existing flake, stabilized here alongside the fs-38
+       badge adaptation). */
+    await waitForRouteReady(page);
 
     /* Preset family co-exists in the same scroll (Gemini Charon → Captain
        Halloran), proving Qwen partitioning didn't disturb preset grouping. */
-    await expect(page.getByText('Captain Halloran').first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Captain Halloran').first()).toBeVisible({ timeout: 20_000 });
 
     /* Exactly two Qwen sections — not one per designed voice. */
     const needs = page.getByRole('region', { name: 'Qwen · Needs a voice' });
@@ -46,7 +52,14 @@ test.describe('Qwen status sections on #/voices', () => {
     await expect(designed.getByText('Finch', { exact: true })).toBeVisible();
     await expect(designed.getByText('Generated', { exact: true })).toBeVisible();
     await expect(designed.getByText('Sampled', { exact: true })).toBeVisible();
-    await expect(designed.getByText('Designed', { exact: true })).toBeVisible();
+    /* The status-bucket "Designed" pill — NOT the fs-38 provenance badge
+       (data-testid="voice-provenance-badge"), which also reads "Designed" on a
+       designed voice and would otherwise trip strict mode with multiple matches. */
+    await expect(
+      designed
+        .getByText('Designed', { exact: true })
+        .and(designed.locator(':not([data-testid="voice-provenance-badge"])')),
+    ).toBeVisible();
 
     /* No "Audition base voice" button on a Qwen section (a status bucket is
        not a single base voice). */
