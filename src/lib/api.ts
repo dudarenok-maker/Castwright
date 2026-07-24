@@ -1736,7 +1736,13 @@ async function mockGetChapterAudio({ bookId, chapterId, duration }: AudioArgs): 
     peaks,
     sampleRate: 44100,
     segments: [
-      { start: 0, end: third, characterId: 'narrator', sentenceId: 1 },
+      /* fs-10 — production always emits a title beat first: 1.5 s of lead
+         silence, the narrator-voiced title, then post-title silence before the
+         first body segment. Mirroring that geometry (rather than tiling from 0)
+         is what makes the frontend tests say something true about the real
+         payload. */
+      { start: 1.5, end: 3.5, characterId: 'narrator', kind: 'title' as const },
+      { start: 5, end: third, characterId: 'narrator', sentenceId: 1 },
       {
         start: third,
         end: third * 2,

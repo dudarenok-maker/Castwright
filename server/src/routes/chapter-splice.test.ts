@@ -7,7 +7,7 @@
    Real ffmpeg throughout (encode + decode + gain) — no mocks at the audio
    boundary, matching the rest of the audio suite. */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -49,6 +49,42 @@ function avgAbsRange(pcm: Buffer, startSec: number, endSec: number): number {
   }
   return count ? sum / count : 0;
 }
+
+/* fs-10 (#412, review fix) — regression: the splice route resolves
+   `segmentIndices` against the ON-DISK segments array (where a title-led
+   chapter's title beat occupies index 0), not the published/filtered one.
+   Mock the two GPU-backed calls so the ownership + isRerecordableSegment gate
+   below is exercised without a live sidecar. `loadAnalysisCache` is gated on
+   manuscriptId so the "fails a valid re-record gracefully when no analysis is
+   cached" case above (manuscriptId 'm_test') keeps its original empty-cache
+   behaviour untouched. */
+const TITLE_LED_MANUSCRIPT_ID = 'm_title_led';
+vi.mock('../store/analysis-cache.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../store/analysis-cache.js')>();
+  return {
+    ...actual,
+    loadAnalysisCache: vi.fn(async (manuscriptId: string) =>
+      manuscriptId === TITLE_LED_MANUSCRIPT_ID
+        ? { chapters: { 1: [{ id: 1, characterId: 'amy', text: 'The first body line.' }] } }
+        : { chapters: {} },
+    ),
+  };
+});
+vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../tts/synthesise-chapter.js')>();
+  return {
+    ...actual,
+    // Re-synth returns a short 0.3s tone regardless of input — only used by
+    // the title-led index-mapping case below, which cares about WHICH segment
+    // got replaced, not the audio content.
+    synthesiseChapter: vi.fn(async () => ({
+      pcm: tone(0.3, 9000),
+      sampleRate: SR,
+      segments: [],
+      durationSec: 0.3,
+    })),
+  };
+});
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-splice-test-'));
@@ -203,5 +239,112 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
     const events = parseSse(res.text);
     expect(events.some((e) => e.type === 'splice_start')).toBe(true);
     expect(events.some((e) => e.type === 'chapter_failed')).toBe(true);
+  });
+});
+
+describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-led index mapping', () => {
+  let titleLedBookId: string;
+  let titleLedAudioRoot: string;
+
+  beforeAll(async () => {
+    const [{ makeBookId: makeId }, mp3] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('../tts/mp3.js'),
+    ]);
+    const author = 'Title-Led Author';
+    const series = 'Standalones';
+    const title = 'Title-Led Story';
+    titleLedBookId = makeId(author, series, title);
+    const bookDir = join(workspaceRoot, 'books', author, series, title);
+    titleLedAudioRoot = join(bookDir, 'audio');
+    mkdirSync(titleLedAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: titleLedBookId,
+        manuscriptId: TITLE_LED_MANUSCRIPT_ID,
+        title,
+        author,
+        series,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:02' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
+          { id: 'castor', name: 'Castor', gender: 'female', attributes: [] },
+        ],
+      }),
+    );
+
+    /* Title-led on-disk array: index 0 is the synthetic chapter-title beat
+       (amy's characterId, no sentences), index 1 is amy's first real body
+       line, index 2 belongs to another character — mirrors a book where the
+       narrator and a re-recordable character are the same person, so
+       ownership alone can't tell the title beat apart from a real line. */
+    const chapterPcm = Buffer.concat([tone(0.2, 12000), tone(1.0, 9000), tone(1.0, 3000)]);
+    const mp3Bytes = await mp3.encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(titleLedAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    writeFileSync(
+      join(titleLedAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: titleLedBookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 2.2,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          { groupIndex: -1, characterId: 'amy', sentenceIds: [], startSec: 0, endSec: 0.2, kind: 'title' },
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0.2, endSec: 1.2 },
+          { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.2, endSec: 2.2 },
+        ],
+      }),
+    );
+  });
+
+  it('targets the first BODY line (index 1) and re-records it, leaving the title beat untouched', async () => {
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'splice_complete');
+    expect(done, `expected splice_complete, got ${res.text}`).toBeTruthy();
+
+    const segFile = JSON.parse(readFileSync(join(titleLedAudioRoot, `${SLUG}.segments.json`), 'utf8')) as {
+      segments: Array<{ kind?: string; startSec: number; endSec: number; characterId: string }>;
+    };
+    // The title beat (segment 0) is untouched — same timing, still kind:'title'.
+    expect(segFile.segments[0]).toMatchObject({ kind: 'title', startSec: 0, endSec: 0.2 });
+    // The body segment (segment 1) is the one that changed — it now reflects
+    // the mocked re-record's 0.3s length (was 1.0s), proving the request
+    // targeted index 1, not the title at index 0.
+    expect(segFile.segments[1].endSec - segFile.segments[1].startSec).toBeCloseTo(0.3, 5);
+  });
+
+  it('rejects targeting the title beat (index 0) directly with the title-only error', async () => {
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [0] });
+
+    const events = parseSse(res.text);
+    const failed = events.find((e) => e.type === 'chapter_failed');
+    expect(failed).toBeTruthy();
+    expect(String(failed!.errorReason)).toBe(
+      'No re-recordable lines for this character in this chapter (title-only).',
+    );
   });
 });

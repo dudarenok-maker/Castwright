@@ -27,3 +27,16 @@ history at cut time.
 ## 📝 Script review & manuscript
 
 - Detect emotions can now be scoped to the current chapter — the header button runs the emotion + reaction passes on just the chapter you're viewing, with whole-book still available from its ⌄ menu. (fs-35, #592)
+
+---
+
+## 🎧 Listening & revising
+
+- **fs-10 — chapter-title segment on the Listen timeline** (#412). `ChapterAudio.segments[]`
+  gains an optional `kind: 'title'` discriminator and the chapter-audio route stops filtering the
+  synthetic title beat out of both `/audio` and `/audio/previous`. The mini-player scrubber paints
+  it as a non-interactive labelled band; the Generation view's "Narrative order" strip fills it
+  neutrally rather than in the narrator's colour. **Also fixes a latent off-by-one:** because the
+  published array was short one leading row, `resolveSegmentForSec`'s index no longer matched the
+  on-disk index the splice route addresses, so Listen-view "Fix this line" targeted the line before
+  the marked one.

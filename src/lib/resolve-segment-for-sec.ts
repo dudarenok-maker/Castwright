@@ -1,8 +1,14 @@
 /* fs-26 (#480) — resolve a Listen-view playhead second to the chapter audio
    segment that contains it, so a re-record marker can be scoped to exactly the
    line under the marker. Segments carry start/end seconds + characterId; the
-   segment index is its position in the chapter's `segments` array (the same
-   index the splice route's `segmentIndices` addresses). */
+   segment index is its position in the chapter's `segments` array — the same
+   index the splice route's `segmentIndices` addresses.
+
+   That alignment is real only because the ChapterAudio endpoint publishes the
+   on-disk segments array unfiltered (fs-10 / #412). Title rows are skipped as
+   candidates below but still occupy their index. If anything ever re-filters
+   the wire array, this function's contract breaks silently and "Fix this line"
+   starts re-recording the wrong line — the failure mode fs-10 fixed. */
 
 import type { ChapterAudio } from './types';
 
@@ -16,7 +22,7 @@ export interface ResolvedSegment {
 /** Find the segment whose [start, end) range contains `sec`. When `sec` falls
     in a gap between segments (or past the last one), clamp to the nearest
     segment by edge distance. Returns null only when there are no usable
-    segments (none carry a characterId). */
+    segments (none carry a characterId, or all are title rows). */
 export function resolveSegmentForSec(
   sec: number,
   segments: ChapterSegment[] | undefined,
@@ -27,6 +33,12 @@ export function resolveSegmentForSec(
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
     if (!seg.characterId) continue;
+    /* fs-10 (#412) — the synthetic chapter-title beat carries the narrator's
+       characterId but no sentences, so the splice route rejects it outright
+       (`isRerecordableSegment`). Skip it as a CANDIDATE while leaving `i`
+       untouched: the returned index addresses the on-disk array, and that
+       array contains the title. Never filter — that would renumber. */
+    if (seg.kind === 'title') continue;
     const start = seg.start ?? 0;
     const end = seg.end ?? start;
     // Direct hit: [start, end) contains sec — distance 0 wins immediately.

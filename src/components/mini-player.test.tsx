@@ -174,14 +174,18 @@ const chapter2: Chapter = {
 
 const noop = () => {};
 
-async function resolveChapter(id: number, url: string) {
+async function resolveChapter(
+  id: number,
+  url: string,
+  segments: ChapterAudio['segments'] = [],
+) {
   const resolver = pendingByChapter.get(id);
   if (!resolver) throw new Error(`No pending fetch for chapter ${id}`);
   /* The .then handler in MiniPlayer's Effect 1 fires setAudio when this
      resolves; wrap in act so React's commit + Effect 2 run inside the
      test's act window instead of leaking past it. */
   await act(async () => {
-    resolver({ url, durationSec: 600, peaks: [], sampleRate: 44100, segments: [] });
+    resolver({ url, durationSec: 600, peaks: [], sampleRate: 44100, segments });
   });
 }
 
@@ -1198,5 +1202,84 @@ describe('MiniPlayer — jump-to-issue + auto-seek', () => {
     /* Without the guard, the unguarded Waveform would render the sr-only
        issue list even though bars are decorative. Assert the list is absent. */
     expect(screen.queryByText(/Issue at/)).toBeNull();
+  });
+});
+
+/* fs-10 (#412) — the chapter-title beat is painted as a labelled band at the
+   head of the scrubber. It is non-interactive — not a control: clicks must
+   reach the scrubber underneath, not hard-seek to 0. See the spec's §6.1 for
+   why. */
+describe('MiniPlayer — chapter-title band (fs-10)', () => {
+  const TITLE_SEGMENTS: ChapterAudio['segments'] = [
+    { start: 1.5, end: 3.5, characterId: 'narrator', kind: 'title' },
+    { start: 5, end: 600, characterId: 'narrator', sentenceId: 1 },
+  ];
+
+  /* Named to avoid shadowing the file's existing `renderPlayer(ui)` helper at
+     `:39`, which takes a different argument entirely. */
+  function renderTitleBandPlayer() {
+    return render(
+      <Provider store={makeStore()}>
+        <MiniPlayer
+          chapter={chapter1}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={noop}
+          prevAvailable={false}
+          nextAvailable={true}
+        />
+      </Provider>,
+    );
+  }
+
+  it('renders the band with payload-derived geometry and label', async () => {
+    renderTitleBandPlayer();
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3', TITLE_SEGMENTS);
+
+    const band = await screen.findByTestId('mini-player-title-segment');
+    /* 1.5s of a 600s chapter = 0.25% from the left. */
+    expect(band.style.left).toBe('0.25%');
+    expect(band).toHaveAttribute('title', 'Chapter title · 0:01–0:03');
+  });
+
+  it('renders nothing for a legacy chapter with no title segment', async () => {
+    renderTitleBandPlayer();
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3', [
+      { start: 0, end: 600, characterId: 'narrator', sentenceId: 1 },
+    ]);
+
+    await screen.findByTestId('mini-player-scrubber');
+    expect(screen.queryByTestId('mini-player-title-segment')).toBeNull();
+  });
+
+  it('is not a control — clicking it scrubs to the click position, not to 0', async () => {
+    renderTitleBandPlayer();
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3', TITLE_SEGMENTS);
+
+    const band = await screen.findByTestId('mini-player-title-segment');
+    const scrubber = screen.getByTestId('mini-player-scrubber');
+    /* jsdom reports a zero-size rect; stub the scrubber's so onScrub's
+       percentage maths has real numbers to work with. */
+    scrubber.getBoundingClientRect = () =>
+      ({ left: 0, width: 400, top: 0, height: 28, right: 400, bottom: 28, x: 0, y: 0 }) as DOMRect;
+
+    /* Click 2px in — genuinely ON the band. A hard-seek-to-0 implementation
+       would show 0:00; a pass-through shows 2/400 * 600s = 3s. */
+    fireEvent.click(band, { clientX: 2 });
+    expect(screen.getByText('0:03')).toBeInTheDocument();
+  });
+
+  it('is not a focusable control', async () => {
+    renderTitleBandPlayer();
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3', TITLE_SEGMENTS);
+
+    const band = await screen.findByTestId('mini-player-title-segment');
+    /* Assert the CONTRACT (not a control, not in the tab order), not the tag
+       name — pinning `=== 'SPAN'` would freeze an incidental choice and make a
+       later div/span swap look like a regression. */
+    expect(band.tagName).not.toBe('BUTTON');
+    expect(band).not.toHaveAttribute('tabindex');
+    expect(screen.queryByRole('button', { name: /chapter title/i })).toBeNull();
   });
 });

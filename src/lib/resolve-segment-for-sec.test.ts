@@ -51,3 +51,61 @@ describe('resolveSegmentForSec', () => {
     expect(resolveSegmentForSec(5, partial)).toEqual({ characterId: 'halloran', segmentIndex: 1 });
   });
 });
+
+/* fs-10 (#412) — the published segments array now includes the synthetic
+   chapter-title beat at index 0. It must never be RETURNED (it has no
+   sentences, so the splice route rejects it) but must still OCCUPY its index,
+   because the returned index addresses the on-disk array. */
+describe('resolveSegmentForSec — chapter-title segments (fs-10)', () => {
+  const TITLE_LED: ChapterSegment[] = [
+    { start: 1.5, end: 3.5, characterId: 'narrator', kind: 'title' },
+    { start: 5, end: 15, characterId: 'narrator', sentenceId: 1 },
+    { start: 15, end: 25, characterId: 'halloran', sentenceId: 2 },
+  ];
+
+  it('does not return the title row for a marker dropped in the lead silence', () => {
+    /* sec=1.0 sits before the title beat. Without the kind guard the title wins
+       the nearest-edge fallback (it carries the narrator's characterId, so the
+       existing !characterId guard waves it through) and this returns index 0. */
+    expect(resolveSegmentForSec(1.0, TITLE_LED)).toEqual({
+      characterId: 'narrator',
+      segmentIndex: 1,
+    });
+  });
+
+  it('clamps a marker dropped ON the title to the first body segment', () => {
+    expect(resolveSegmentForSec(2.5, TITLE_LED)).toEqual({
+      characterId: 'narrator',
+      segmentIndex: 1,
+    });
+  });
+
+  it('returns disk-aligned indices for body segments in a title-led chapter', () => {
+    expect(resolveSegmentForSec(10, TITLE_LED)).toEqual({
+      characterId: 'narrator',
+      segmentIndex: 1,
+    });
+    expect(resolveSegmentForSec(20, TITLE_LED)).toEqual({
+      characterId: 'halloran',
+      segmentIndex: 2,
+    });
+  });
+
+  it('skips a title row WITHOUT renumbering the rows after it', () => {
+    /* The guard must `continue` inside the index loop, never filter the array.
+       A filtering implementation would return 1 here instead of 2. */
+    const midTitle: ChapterSegment[] = [
+      { start: 0, end: 10, characterId: 'narrator', sentenceId: 1 },
+      { start: 10, end: 12, characterId: 'narrator', kind: 'title' },
+      { start: 12, end: 22, characterId: 'halloran', sentenceId: 2 },
+    ];
+    expect(resolveSegmentForSec(15, midTitle)).toEqual({
+      characterId: 'halloran',
+      segmentIndex: 2,
+    });
+    expect(resolveSegmentForSec(11, midTitle)).toEqual({
+      characterId: 'narrator',
+      segmentIndex: 0,
+    });
+  });
+});

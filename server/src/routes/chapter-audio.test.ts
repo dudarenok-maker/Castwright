@@ -69,22 +69,7 @@ beforeAll(async () => {
   writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
 
   /* Segments JSON powers the JSON endpoint's metadata response. */
-  writeFileSync(
-    join(audioRoot, `${SLUG}.segments.json`),
-    JSON.stringify({
-      bookId,
-      chapterId: 1,
-      chapterTitle: 'Chapter 1',
-      durationSec: 12.5,
-      sampleRate: 24_000,
-      modelKey: 'xtts_v2',
-      synthesizedAt: new Date().toISOString(),
-      segments: [
-        { groupIndex: 0, characterId: 'marlow', sentenceIds: [101, 102], startSec: 0, endSec: 6.2 },
-        { groupIndex: 1, characterId: 'oduvan', sentenceIds: [103], startSec: 6.2, endSec: 12.5 },
-      ],
-    }),
-  );
+  writeChapterSegments(DEFAULT_SEGMENTS);
 
   app = express();
   app.use('/api/books', chapterAudioRouter);
@@ -193,6 +178,29 @@ function writePreviousSegments() {
       segments: [
         { groupIndex: 0, characterId: 'marlow', sentenceIds: [101], startSec: 0, endSec: 11 },
       ],
+    }),
+  );
+}
+
+/* Default two-segment payload the bulk of this suite asserts against.
+   Hoisted so fs-10's title-led cases can swap the file and restore it. */
+const DEFAULT_SEGMENTS = [
+  { groupIndex: 0, characterId: 'marlow', sentenceIds: [101, 102], startSec: 0, endSec: 6.2 },
+  { groupIndex: 1, characterId: 'oduvan', sentenceIds: [103], startSec: 6.2, endSec: 12.5 },
+];
+
+function writeChapterSegments(segments: unknown[], name = `${SLUG}.segments.json`) {
+  writeFileSync(
+    join(audioRoot, name),
+    JSON.stringify({
+      bookId,
+      chapterId: 1,
+      chapterTitle: 'Chapter 1',
+      durationSec: 12.5,
+      sampleRate: 24_000,
+      modelKey: 'xtts_v2',
+      synthesizedAt: new Date().toISOString(),
+      segments,
     }),
   );
 }
@@ -699,5 +707,75 @@ describe('workspace nested under a dot-prefixed directory (bug #1290)', () => {
       rmSync(dottedRoot, { recursive: true, force: true });
       vi.resetModules();
     }
+  });
+});
+
+/* fs-10 (#412) — the synthetic narrator-voiced chapter-title beat is published
+   rather than filtered. The published index must line up 1:1 with the on-disk
+   index, because that is the index chapter-splice.ts resolves segmentIndices
+   against (see the spec's §5). */
+describe('fs-10 — title segment pass-through', () => {
+  const TITLE_LED = [
+    {
+      groupIndex: -1,
+      characterId: 'narrator',
+      sentenceIds: [] as number[],
+      startSec: 1.5,
+      endSec: 3.5,
+      kind: 'title',
+    },
+    { groupIndex: 0, characterId: 'marlow', sentenceIds: [101, 102], startSec: 5, endSec: 8.2 },
+    { groupIndex: 1, characterId: 'oduvan', sentenceIds: [103], startSec: 8.2, endSec: 12.5 },
+  ];
+
+  beforeAll(() => {
+    resetAudio();
+    writeMp3();
+    writePreviousMp3();
+    writeChapterSegments(TITLE_LED);
+    writeChapterSegments(TITLE_LED, `${SLUG}.previous.segments.json`);
+  });
+
+  afterAll(() => {
+    resetAudio();
+    writeChapterSegments(DEFAULT_SEGMENTS);
+  });
+
+  it('publishes the title row with kind: "title" and no sentenceId', async () => {
+    const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`).expect(200);
+    expect(res.body.segments[0]).toMatchObject({
+      kind: 'title',
+      characterId: 'narrator',
+      start: 1.5,
+      end: 3.5,
+    });
+    expect(res.body.segments[0].sentenceId).toBeUndefined();
+  });
+
+  it('keeps the published index aligned 1:1 with the on-disk index', async () => {
+    const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`).expect(200);
+    expect(res.body.segments).toHaveLength(TITLE_LED.length);
+    /* Match by sentenceId, not by position alone — a positional-only check
+       would still pass if someone re-added a filter AND a compensating shift.
+       The title row's sentenceIds[0] is undefined, which is the assertion for k=0. */
+    TITLE_LED.forEach((disk, k) => {
+      expect(res.body.segments[k].sentenceId).toBe(disk.sentenceIds[0]);
+      expect(res.body.segments[k].characterId).toBe(disk.characterId);
+    });
+  });
+
+  it('omits kind on ordinary sentence-backed segments', async () => {
+    const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`).expect(200);
+    expect(res.body.segments[1].kind).toBeUndefined();
+    expect(res.body.segments[2].kind).toBeUndefined();
+  });
+
+  it('applies the same pass-through on the preserved /audio/previous variant', async () => {
+    const res = await request(app)
+      .get(`/api/books/${bookId}/chapters/1/audio/previous`)
+      .expect(200);
+    expect(res.body.segments).toHaveLength(TITLE_LED.length);
+    expect(res.body.segments[0]).toMatchObject({ kind: 'title' });
+    expect(res.body.segments[0].sentenceId).toBeUndefined();
   });
 });

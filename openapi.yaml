@@ -4696,6 +4696,15 @@ components:
               end: { type: number, description: 'seconds' }
               characterId: { type: string }
               sentenceId: { type: integer }
+              kind:
+                type: string
+                enum: [title]
+                description: >-
+                  fs-10 — present only on the synthetic narrator-voiced
+                  chapter-title beat (empty sentenceIds[] on disk, see
+                  synthesise-chapter.ts). Absent on every ordinary
+                  sentence-backed segment and on every pre-fs-10 render, so
+                  consumers MUST treat absence as "sentence".
               suspect:
                 type: boolean
                 description: >-

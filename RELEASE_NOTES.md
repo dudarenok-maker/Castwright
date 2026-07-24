@@ -1,6 +1,12 @@
 # Castwright 1.15.0
 
 - **Re-detect one chapter, not the whole book.** Edited a single chapter? "Detect emotions" now works on just the chapter you're reading — the whole-book pass is one click away in its menu.
+- **You can see the chapter title on the timeline now.** Every chapter opens with its title read
+  aloud — the player now shows that opening beat as a small marker at the start of the track, so
+  what you see matches what you hear.
+- **"Fix this line" now fixes the line you marked.** On chapters with a spoken title, marking a
+  line for re-recording could quietly re-record the line before it, or fail with a confusing error
+  about segment indices. Both are fixed.
 
 # Castwright 1.14.0
 

@@ -2324,8 +2324,32 @@ export function ChapterSegmentStrip({
         {audio.segments.map((seg, i) => {
           const start = seg.start ?? 0;
           const end = seg.end ?? start;
-          const charId = seg.characterId ?? '';
           const width = ((end - start) / audio.durationSec) * 100;
+          /* fs-10 — the synthetic chapter-title beat carries the narrator's
+             characterId but has no sentences behind it. Paint it neutral so the
+             strip doesn't read as "the narrator has a line here", and floor its
+             width (3px) so a ~2 s beat stays visible in a 40-minute chapter.
+             This strip is only 2px tall vs. the mini-player scrubber's ~28px,
+             so its floor is a separate, smaller constant tuned for THIS strip
+             — the mini-player's `max(4px, …)` floor isn't a mismatch to fix,
+             just a different surface with its own minimum.
+
+             NOTE: this is an explicit `=== 'title'` test, so a future third
+             `kind` would fall through to the character-palette branch below and
+             be painted as if someone spoke it. Revisit here when `kind` widens
+             (spec §3). */
+          if (seg.kind === 'title') {
+            return (
+              <div
+                key={i}
+                data-testid="segment-band-title"
+                className="bg-ink/25"
+                title={`Chapter title · ${formatTime(start)}–${formatTime(end)}`}
+                style={{ width: `${width}%`, minWidth: 3 }}
+              />
+            );
+          }
+          const charId = seg.characterId ?? '';
           const charColor = findChar(charId)?.color ?? 'narrator';
           const hex = CHAR_COLORS[charColor]?.hex ?? CHAR_COLORS.narrator.hex;
           return (
