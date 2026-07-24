@@ -284,6 +284,41 @@ describe('qwen is a bespoke-voice engine — no catalog inference (plan 108)', (
   });
 });
 
+describe('fs-38 Wave 1 — pickVoiceForEngine passes through an explicit voice-library key', () => {
+  /* When a qwen slot carries a libraryUuid (the character was explicitly
+     assigned a voice-library entry rather than designed ad-hoc), the picker
+     must return the library's storage key (qwen-<libraryUuid>) instead of
+     deriving one from the character's own voiceUuid/id. */
+  it('returns qwen-<libraryUuid> when the qwen slot carries an explicit library assignment', () => {
+    const picked = pickVoiceForEngine('qwen', {
+      id: 'char-x',
+      voiceUuid: 'abc',
+      overrideTtsVoices: { qwen: { name: 'qwen-lib1', libraryUuid: 'lib1', provenance: 'designed' } },
+    });
+    expect(picked).toBe('qwen-lib1');
+  });
+
+  it('falls back to the legacy qwenStorageKey derivation when no libraryUuid is set', () => {
+    /* Same character shape as above, minus libraryUuid — must resolve exactly
+       as it did before this feature (qwen-<voiceUuid> via qwenStorageKey). */
+    const picked = pickVoiceForEngine('qwen', {
+      id: 'char-x',
+      voiceUuid: 'abc',
+      overrideTtsVoices: { qwen: { name: 'qwen-abc' } },
+    });
+    expect(picked).toBe('qwen-abc');
+  });
+
+  it('GUARD: pickEmotionVariantVoice is untouched for a non-library designed voice', () => {
+    /* Same non-library character as the fallback case above — the emotion-
+       variant picker must resolve byte-identical to its pre-library-pass-
+       through behaviour. */
+    const variants = { angry: { name: 'qwen-abc__angry' } };
+    expect(pickEmotionVariantVoice('qwen', variants, 'angry', 'qwen-abc')).toBe('qwen-abc__angry');
+    expect(pickEmotionVariantVoice('qwen', variants, 'neutral', 'qwen-abc')).toBe('qwen-abc');
+  });
+});
+
 describe('fs-25 — pickEmotionVariantVoice (Qwen-gated emotion variant selection)', () => {
   /* srv-43: variant key is derived from the (already uuid-resolved) baseVoice,
      not from the stored variant name. Variant slot presence = designed. */

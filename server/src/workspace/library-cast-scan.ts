@@ -9,6 +9,8 @@ import { join } from 'node:path';
 import { BOOKS_ROOT, castJsonPath, ensureWorkspace, stateJsonPath } from './paths.js';
 import { readJson } from './state-io.js';
 import type { BookStateJson } from './scan.js';
+import type { TtsEngine } from '../tts/index.js';
+import type { Emotion } from '../handoff/schemas.js';
 
 export interface LibraryCastCharacter {
   id: string;
@@ -21,6 +23,21 @@ export interface LibraryCastCharacter {
   attributes?: string[];
   gender?: 'male' | 'female' | 'neutral';
   ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
+  /** Per-engine user-set voice overrides — carried through by reference from
+      cast.json (see scanLibraryCharacters below, which pushes `character: c`
+      whole). fs-38 Wave 1 widens the qwen slot with libraryUuid/provenance so
+      the usage-scan filter (Task 8) can identify library-sourced assignments. */
+  overrideTtsVoices?: Partial<
+    Record<
+      TtsEngine,
+      {
+        name: string;
+        libraryUuid?: string;
+        provenance?: 'designed' | 'cloned' | 'imported';
+        variants?: Partial<Record<Emotion, { name: string }>>;
+      }
+    >
+  > | null;
 }
 
 export interface LibraryCharacterRecord {

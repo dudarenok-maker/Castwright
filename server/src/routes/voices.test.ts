@@ -385,6 +385,41 @@ describe('GET /api/voices — aggregation', () => {
     delete cast.characters[0].voiceUuid;
     writeFileSync(castPath, JSON.stringify(cast));
   });
+
+  it('fs-38 Wave 1: normaliseCastCharacter does not strip libraryUuid/provenance from a slot', async () => {
+    /* Pin the read-path pass-through in place: normaliseCastCharacter only
+       touches the legacy-singular-field merge path — it must never drop
+       extra fields (libraryUuid/provenance) a slot already carries, whether
+       or not the legacy field is also present. Locks this in so a future
+       "cleanup" of the merge logic can't silently narrow the slot back down
+       to { name }. */
+    const castPath = join(
+      workspaceRoot,
+      'books',
+      AUTHOR,
+      SERIES,
+      BOOK_ONE,
+      '.audiobook',
+      'cast.json',
+    );
+    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    cast.characters[0].overrideTtsVoices = {
+      qwen: { name: 'qwen-lib1', libraryUuid: 'lib1', provenance: 'designed' },
+    };
+    writeFileSync(castPath, JSON.stringify(cast));
+
+    const res = await request(app).get('/api/voices?engine=qwen');
+    const v_brann = res.body.voices.find((v: { id: string }) => v.id === 'v_brann');
+    expect(v_brann.overrideTtsVoices).toEqual({
+      qwen: { name: 'qwen-lib1', libraryUuid: 'lib1', provenance: 'designed' },
+    });
+
+    /* Cleanup. */
+    delete cast.characters[0].overrideTtsVoices;
+    writeFileSync(castPath, JSON.stringify(cast));
+  });
 });
 
 describe('GET /api/voices?engine=qwen — generated flag', () => {

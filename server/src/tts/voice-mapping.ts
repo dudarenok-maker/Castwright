@@ -10,6 +10,7 @@
    DESCRIPTIONS table and extend pickVoiceForEngine. */
 
 import type { TtsEngine } from './index.js';
+import type { Emotion } from '../handoff/schemas.js';
 
 /* srv-43 — the on-disk/sidecar STORAGE key for a bespoke Qwen voice. Prefers
    the immutable voiceUuid (globally unique → no cross-series collision); else
@@ -105,7 +106,20 @@ export interface VoiceLike {
       `overrideTtsVoice: { engine, name }` field was ignored when its
       engine didn't match the synth engine. With a map, each engine
       carries its own assignment and switches preserve the cast. */
-  overrideTtsVoices?: Partial<Record<TtsEngine, { name: string }>> | null;
+  overrideTtsVoices?: Partial<
+    Record<
+      TtsEngine,
+      {
+        name: string;
+        /** fs-38 Wave 1 — set when this slot's speaker is sourced from a
+            voice-library entry rather than an ad-hoc per-character design. */
+        libraryUuid?: string;
+        /** Mirrors the library entry's own `provenance` at assignment time. */
+        provenance?: 'designed' | 'cloned' | 'imported';
+        variants?: Partial<Record<Emotion, { name: string }>>;
+      }
+    >
+  > | null;
   /** @deprecated Legacy singular field. Read paths normalise this into
       `overrideTtsVoices` at load time (see normaliseVoiceOverrides in
       server/src/routes/voices.ts); writes always emit the plural form.
@@ -318,6 +332,11 @@ export function pickVoiceForEngine(
       voice.overrideTtsVoices?.qwen?.name ??
       (voice.overrideTtsVoice?.engine === 'qwen' ? voice.overrideTtsVoice.name : undefined);
     if (!designedName) return '';
+    /* fs-38 Wave 1 — an explicit voice-library assignment wins outright: the
+       slot's libraryUuid IS the storage key, not something to re-derive from
+       the character's own voiceUuid/id via qwenStorageKey. */
+    const qwenSlot = voice.overrideTtsVoices?.qwen;
+    if (qwenSlot?.libraryUuid) return `qwen-${qwenSlot.libraryUuid}`;
     return qwenStorageKey(voice, voice.id);
   }
 
