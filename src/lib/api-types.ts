@@ -1398,6 +1398,180 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/voice-library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the book-independent voice library ("My voices")
+         * @description Returns every voice designed, cloned, or imported into the
+         *     book-independent library — distinct from `/api/voices`, which
+         *     derives its list from confirmed casts. Pinned first, then by
+         *     `updatedAt` descending.
+         */
+        get: operations["listVoiceLibrary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice-library/{voiceUuid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a voice library entry
+         * @description Refuses to delete a voice that is currently assigned to a
+         *     confirmed cast unless `confirm=1` is passed, surfacing the
+         *     blocking usage so the client can warn the user first.
+         */
+        delete: operations["deleteVoiceLibraryEntry"];
+        options?: never;
+        head?: never;
+        /** Update a voice library entry's metadata */
+        patch: operations["updateVoiceLibraryEntry"];
+        trace?: never;
+    };
+    "/api/voice-library/design": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Design a brand-new library voice from a persona instruct */
+        post: operations["designVoiceLibraryEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice-library/{voiceUuid}/redesign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-run voice design against an updated persona
+         * @description Synthesises a fresh preview from the new persona without
+         *     overwriting the entry's live engines — the client previews the
+         *     redesign, then calls `promote` to make it live or `discard` to
+         *     drop it.
+         */
+        post: operations["redesignVoiceLibraryEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice-library/{voiceUuid}/redesign/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Make the pending redesign the entry's live voice */
+        post: operations["promoteVoiceLibraryRedesign"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice-library/{voiceUuid}/redesign/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Discard the pending redesign preview */
+        post: operations["discardVoiceLibraryRedesign"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice-library/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Promote a confirmed-cast character's voice into the library */
+        post: operations["promoteVoiceToLibrary"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice-library/{voiceUuid}/assign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assign a library voice to a character */
+        post: operations["assignVoiceLibraryEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice-library/{voiceUuid}/sample": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Synthesise a preview sample of a library voice
+         * @description Mirrors `POST /api/voices/{voiceId}/sample` but scoped to the library entry's own baked voice, no picker involved.
+         */
+        post: operations["sampleVoiceLibraryEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/revisions": {
         parameters: {
             query?: never;
@@ -3386,6 +3560,9 @@ export interface components {
                 overrideTtsVoices?: {
                     [key: string]: {
                         name?: string;
+                        libraryUuid?: string;
+                        /** @enum {string} */
+                        provenance?: "designed" | "cloned" | "imported";
                     };
                 };
             };
@@ -3539,6 +3716,9 @@ export interface components {
                 [key: string]: {
                     /** @description Engine-specific speaker handle for this engine's slot. */
                     name: string;
+                    libraryUuid?: string;
+                    /** @enum {string} */
+                    provenance?: "designed" | "cloned" | "imported";
                     /**
                      * @description fs-25 — per-emotion voice variants (Qwen only). Keyed by the
                      *     non-neutral `Emotion` values (`whisper`/`angry`/`excited`/`sad`);
@@ -3596,6 +3776,62 @@ export interface components {
         };
         VoiceLibraryResponse: {
             voices: components["schemas"]["Voice"][];
+        };
+        VoiceLibraryEntry: {
+            voiceUuid: string;
+            name: string;
+            /** @enum {string} */
+            provenance: "designed" | "cloned" | "imported";
+            tags: string[];
+            pinned: boolean;
+            languageCode?: string;
+            /** @description designed-only instruct text */
+            persona?: string;
+            consent?: components["schemas"]["VoiceConsentRecord"];
+            sourceAttestation?: components["schemas"]["VoiceSourceAttestation"];
+            sampleTranscript?: string;
+            sampleMeta?: {
+                durationSeconds?: number;
+                sampleRate?: number;
+                qualityChecks?: {
+                    [key: string]: unknown;
+                };
+            };
+            engines: components["schemas"]["VoiceLibraryEngines"];
+            promotedFrom?: {
+                bookId?: string;
+                characterId?: string;
+            };
+            createdAt: string;
+            updatedAt: string;
+        };
+        VoiceLibraryEngines: {
+            qwen?: {
+                /** @enum {string} */
+                status: "ready" | "deriving" | "stale" | "failed";
+                baseModel?: string;
+            };
+            xtts?: {
+                /** @enum {string} */
+                status: "ready" | "deriving" | "stale" | "failed";
+                coquiVersion?: string;
+                modelId?: string;
+            };
+        };
+        VoiceConsentRecord: {
+            personName: string;
+            /** @enum {string} */
+            relationship: "self" | "family-with-permission" | "guardian-of-minor";
+            /** @enum {string} */
+            permittedUse: "personal";
+            attestedAt: string;
+            attestedBy: string;
+            revokedAt?: string;
+        };
+        VoiceSourceAttestation: {
+            source: string;
+            rightsNote: string;
+            attestedAt: string;
         };
         ChapterAudio: {
             /** @description Signed MP3/Opus URL; null while still rendering. */
@@ -3910,6 +4146,9 @@ export interface components {
                 [key: string]: {
                     /** @description Engine-specific speaker handle (designed voiceId for Qwen). */
                     name: string;
+                    libraryUuid?: string;
+                    /** @enum {string} */
+                    provenance?: "designed" | "cloned" | "imported";
                     /**
                      * @description fs-25 — per-emotion Qwen voice variants (keyed by non-neutral
                      *     `Emotion`); each is an independently designed voiceId. Absent →
@@ -6873,6 +7112,351 @@ export interface operations {
                 content?: never;
             };
             /** @description No character with that voiceId exists in any confirmed cast */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listVoiceLibrary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Voice library entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        voices: components["schemas"]["VoiceLibraryEntry"][];
+                    };
+                };
+            };
+        };
+    };
+    deleteVoiceLibraryEntry: {
+        parameters: {
+            query?: {
+                /** @description Pass '1' to delete despite in-use warnings. */
+                confirm?: "1";
+            };
+            header?: never;
+            path: {
+                voiceUuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Entry deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        deleted: true;
+                    };
+                };
+            };
+            /** @description No library entry with that voiceUuid */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Voice is assigned to one or more confirmed casts; retry with confirm=1 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        usage: {
+                            bookId: string;
+                            bookTitle: string;
+                            characterId: string;
+                            characterName: string;
+                        }[];
+                    };
+                };
+            };
+        };
+    };
+    updateVoiceLibraryEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                voiceUuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    tags?: string[];
+                    pinned?: boolean;
+                    persona?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated entry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceLibraryEntry"];
+                };
+            };
+            /** @description No library entry with that voiceUuid */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    designVoiceLibraryEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    persona: string;
+                    languageCode?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Voice designed and added to the library */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        entry: components["schemas"]["VoiceLibraryEntry"];
+                        previewUrl: string;
+                    };
+                };
+            };
+        };
+    };
+    redesignVoiceLibraryEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                voiceUuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    persona: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Redesign preview ready */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        previewUrl: string;
+                    };
+                };
+            };
+            /** @description No library entry with that voiceUuid */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    promoteVoiceLibraryRedesign: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                voiceUuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redesign promoted to live */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceLibraryEntry"];
+                };
+            };
+            /** @description No library entry with that voiceUuid, or no pending redesign */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    discardVoiceLibraryRedesign: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                voiceUuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pending redesign discarded; live voice unchanged */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceLibraryEntry"];
+                };
+            };
+            /** @description No library entry with that voiceUuid, or no pending redesign */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    promoteVoiceToLibrary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    bookId: string;
+                    characterId: string;
+                    name: string;
+                };
+            };
+        };
+        responses: {
+            /** @description New library entry created from the character's voice */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceLibraryEntry"];
+                };
+            };
+            /** @description Book or character not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    assignVoiceLibraryEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                voiceUuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    bookId: string;
+                    characterId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Character's overrideTtsVoices slot updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        updated: number;
+                    };
+                };
+            };
+            /** @description No library entry, book, or character matching the request */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    sampleVoiceLibraryEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                voiceUuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Sample is ready (either cached or freshly synthesised) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        url: string;
+                    };
+                };
+            };
+            /** @description No library entry with that voiceUuid */
             404: {
                 headers: {
                     [name: string]: unknown;
