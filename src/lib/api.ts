@@ -78,6 +78,7 @@ import {
   COALFALL_VOICES,
 } from '../mocks/marketing/hollow-tide';
 import { MOCK_BASE_VOICES, MOCK_VOICE_LIBRARY } from '../mocks/voices';
+import { MOCK_VOICE_LIBRARY_ENTRIES, MOCK_VOICE_LIBRARY_USAGE } from '../mocks/voice-library';
 import { MATCH_FACTORS } from '../data/match-factors';
 import { PENDING_REVISIONS } from '../data/revisions';
 import { VOICE_DRIFT_EVENTS } from '../data/drift';
@@ -9383,6 +9384,322 @@ async function realRestartSidecar(): Promise<{ ok: boolean; error?: string }> {
   return res.json();
 }
 
+/* ── voice library (fs-38 Wave 1, Task 12) ───────────────────────────────
+   Book-independent voice library ("My voices") — distinct from
+   getVoices/VoiceLibraryResponse above, which derives its list from
+   confirmed casts. See api-types.ts's listVoiceLibrary operation doc. */
+
+export type VoiceLibraryEntry = ApiComponents['schemas']['VoiceLibraryEntry'];
+export interface VoiceLibraryUsageEntry {
+  bookId: string;
+  bookTitle: string;
+  characterId: string;
+  characterName: string;
+}
+export interface VoiceLibraryPatch {
+  name?: string;
+  tags?: string[];
+  pinned?: boolean;
+  persona?: string;
+}
+
+async function realListVoiceLibrary(): Promise<{ voices: VoiceLibraryEntry[] }> {
+  const res = await fetch('/api/voice-library');
+  if (!res.ok)
+    throw new Error(
+      `Voice library list fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realPatchVoiceLibrary(
+  voiceUuid: string,
+  patch: VoiceLibraryPatch,
+): Promise<VoiceLibraryEntry> {
+  const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok)
+    throw new Error(
+      `Voice library update failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realDeleteVoiceLibrary(
+  voiceUuid: string,
+  opts?: { confirm?: boolean },
+): Promise<{ deleted: true } | { usage: VoiceLibraryUsageEntry[] }> {
+  const qs = opts?.confirm ? '?confirm=1' : '';
+  const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}${qs}`, {
+    method: 'DELETE',
+  });
+  if (res.status === 409) return res.json();
+  if (!res.ok)
+    throw new Error(
+      `Voice library delete failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realDesignLibraryVoice(body: {
+  name: string;
+  persona: string;
+  languageCode?: string;
+}): Promise<{ entry: VoiceLibraryEntry; previewUrl: string }> {
+  const res = await fetch('/api/voice-library/design', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok)
+    throw new Error(
+      `Voice library design failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realRedesignLibraryVoice(
+  voiceUuid: string,
+  body: { persona: string },
+): Promise<{ previewUrl: string }> {
+  const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}/redesign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok)
+    throw new Error(
+      `Voice library redesign failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realPromoteLibraryRedesign(voiceUuid: string): Promise<VoiceLibraryEntry> {
+  const res = await fetch(
+    `/api/voice-library/${encodeURIComponent(voiceUuid)}/redesign/promote`,
+    { method: 'POST' },
+  );
+  if (!res.ok)
+    throw new Error(
+      `Voice library redesign promote failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realDiscardLibraryRedesign(voiceUuid: string): Promise<VoiceLibraryEntry> {
+  const res = await fetch(
+    `/api/voice-library/${encodeURIComponent(voiceUuid)}/redesign/discard`,
+    { method: 'POST' },
+  );
+  if (!res.ok)
+    throw new Error(
+      `Voice library redesign discard failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realPromoteToLibrary(body: {
+  bookId: string;
+  characterId: string;
+  name: string;
+}): Promise<VoiceLibraryEntry> {
+  const res = await fetch('/api/voice-library/promote', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok)
+    throw new Error(
+      `Voice library promote failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realAssignLibraryVoice(
+  voiceUuid: string,
+  body: { bookId: string; characterId: string },
+): Promise<{ updated: number }> {
+  const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}/assign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok)
+    throw new Error(
+      `Voice library assign failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realSampleLibraryVoice(voiceUuid: string): Promise<{ url: string }> {
+  const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}/sample`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok)
+    throw new Error(
+      `Voice library sample failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+/* In-memory mock backing store, seeded from ../mocks/voice-library.ts.
+   Exported so api.voice-library.test.ts can exercise the mock pair
+   directly — the api module locks USE_MOCKS at import time, mirroring
+   mockGetBookState/_resetMockBookStates above. */
+let mockVoiceLibraryEntries: VoiceLibraryEntry[] = MOCK_VOICE_LIBRARY_ENTRIES.map((e) => ({
+  ...e,
+}));
+
+export function _resetMockVoiceLibrary(): void {
+  mockVoiceLibraryEntries = MOCK_VOICE_LIBRARY_ENTRIES.map((e) => ({ ...e }));
+}
+
+function sortMockVoiceLibrary(entries: VoiceLibraryEntry[]): VoiceLibraryEntry[] {
+  return [...entries].sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+}
+
+export async function mockListVoiceLibrary(): Promise<{ voices: VoiceLibraryEntry[] }> {
+  await wait(60);
+  return { voices: sortMockVoiceLibrary(mockVoiceLibraryEntries) };
+}
+
+export async function mockPatchVoiceLibrary(
+  voiceUuid: string,
+  patch: VoiceLibraryPatch,
+): Promise<VoiceLibraryEntry> {
+  await wait(60);
+  const idx = mockVoiceLibraryEntries.findIndex((e) => e.voiceUuid === voiceUuid);
+  if (idx === -1) throw new Error(`No voice-library entry "${voiceUuid}".`);
+  const updated: VoiceLibraryEntry = {
+    ...mockVoiceLibraryEntries[idx],
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  };
+  mockVoiceLibraryEntries = [
+    ...mockVoiceLibraryEntries.slice(0, idx),
+    updated,
+    ...mockVoiceLibraryEntries.slice(idx + 1),
+  ];
+  return updated;
+}
+
+/* `lib-used` is the fixture wired to MOCK_VOICE_LIBRARY_USAGE (see
+   ../mocks/voice-library.ts) — deleting it without confirm exercises the
+   409 usage path the real DELETE route returns. */
+export async function mockDeleteVoiceLibrary(
+  voiceUuid: string,
+  opts?: { confirm?: boolean },
+): Promise<{ deleted: true } | { usage: VoiceLibraryUsageEntry[] }> {
+  await wait(60);
+  if (voiceUuid === 'lib-used' && !opts?.confirm) {
+    return { usage: MOCK_VOICE_LIBRARY_USAGE };
+  }
+  mockVoiceLibraryEntries = mockVoiceLibraryEntries.filter((e) => e.voiceUuid !== voiceUuid);
+  return { deleted: true };
+}
+
+/* Resolves after ~300ms (not the usual 60ms) so pending/spinner UI has
+   something to render in e2e — mirrors the real design route's synth time. */
+export async function mockDesignLibraryVoice(body: {
+  name: string;
+  persona: string;
+  languageCode?: string;
+}): Promise<{ entry: VoiceLibraryEntry; previewUrl: string }> {
+  await wait(300);
+  const now = new Date().toISOString();
+  const entry: VoiceLibraryEntry = {
+    voiceUuid: `lib-${Math.random().toString(36).slice(2, 10)}`,
+    name: body.name,
+    provenance: 'designed',
+    tags: [],
+    pinned: false,
+    ...(body.languageCode ? { languageCode: body.languageCode } : {}),
+    persona: body.persona,
+    engines: { qwen: { status: 'ready', baseModel: 'qwen3-tts-0.6b-2026-05' } },
+    createdAt: now,
+    updatedAt: now,
+  };
+  mockVoiceLibraryEntries = [...mockVoiceLibraryEntries, entry];
+  return { entry, previewUrl: stubAudioB };
+}
+
+export async function mockRedesignLibraryVoice(
+  voiceUuid: string,
+  _body: { persona: string },
+): Promise<{ previewUrl: string }> {
+  await wait(300);
+  const entry = mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid);
+  if (!entry) throw new Error(`No voice-library entry "${voiceUuid}".`);
+  return { previewUrl: stubAudioB };
+}
+
+export async function mockPromoteLibraryRedesign(voiceUuid: string): Promise<VoiceLibraryEntry> {
+  await wait(60);
+  const idx = mockVoiceLibraryEntries.findIndex((e) => e.voiceUuid === voiceUuid);
+  if (idx === -1) throw new Error(`No voice-library entry "${voiceUuid}".`);
+  const updated = { ...mockVoiceLibraryEntries[idx], updatedAt: new Date().toISOString() };
+  mockVoiceLibraryEntries = [
+    ...mockVoiceLibraryEntries.slice(0, idx),
+    updated,
+    ...mockVoiceLibraryEntries.slice(idx + 1),
+  ];
+  return updated;
+}
+
+export async function mockDiscardLibraryRedesign(voiceUuid: string): Promise<VoiceLibraryEntry> {
+  await wait(60);
+  const entry = mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid);
+  if (!entry) throw new Error(`No voice-library entry "${voiceUuid}".`);
+  return entry;
+}
+
+export async function mockPromoteToLibrary(body: {
+  bookId: string;
+  characterId: string;
+  name: string;
+}): Promise<VoiceLibraryEntry> {
+  await wait(60);
+  const now = new Date().toISOString();
+  const entry: VoiceLibraryEntry = {
+    voiceUuid: `lib-${Math.random().toString(36).slice(2, 10)}`,
+    name: body.name,
+    provenance: 'designed',
+    tags: [],
+    pinned: false,
+    engines: { qwen: { status: 'ready', baseModel: 'qwen3-tts-0.6b-2026-05' } },
+    promotedFrom: { bookId: body.bookId, characterId: body.characterId },
+    createdAt: now,
+    updatedAt: now,
+  };
+  mockVoiceLibraryEntries = [...mockVoiceLibraryEntries, entry];
+  return entry;
+}
+
+export async function mockAssignLibraryVoice(
+  voiceUuid: string,
+  _body: { bookId: string; characterId: string },
+): Promise<{ updated: number }> {
+  await wait(60);
+  const entry = mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid);
+  if (!entry) throw new Error(`No voice-library entry "${voiceUuid}".`);
+  return { updated: 1 };
+}
+
+export async function mockSampleLibraryVoice(voiceUuid: string): Promise<{ url: string }> {
+  await wait(60);
+  const entry = mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid);
+  if (!entry) throw new Error(`No voice-library entry "${voiceUuid}".`);
+  return { url: stubAudioA };
+}
+
 /* Chapter audio + revisions polling stay mocked for now — both belong to the
    playback slice that comes after this one. */
 const real = {
@@ -9673,6 +9990,16 @@ const real = {
   getAnalyzerDevice: realGetAnalyzerDevice,
   getQaReport: realGetQaReport,
   resumeScoring: realResumeScoring,
+  listVoiceLibrary: realListVoiceLibrary,
+  patchVoiceLibrary: realPatchVoiceLibrary,
+  deleteVoiceLibrary: realDeleteVoiceLibrary,
+  designLibraryVoice: realDesignLibraryVoice,
+  redesignLibraryVoice: realRedesignLibraryVoice,
+  promoteLibraryRedesign: realPromoteLibraryRedesign,
+  discardLibraryRedesign: realDiscardLibraryRedesign,
+  promoteToLibrary: realPromoteToLibrary,
+  assignLibraryVoice: realAssignLibraryVoice,
+  sampleLibraryVoice: realSampleLibraryVoice,
 };
 
 const mock = {
@@ -9952,6 +10279,16 @@ const mock = {
   getAnalyzerDevice: mockGetAnalyzerDevice,
   getQaReport: mockGetQaReport,
   resumeScoring: mockResumeScoring,
+  listVoiceLibrary: mockListVoiceLibrary,
+  patchVoiceLibrary: mockPatchVoiceLibrary,
+  deleteVoiceLibrary: mockDeleteVoiceLibrary,
+  designLibraryVoice: mockDesignLibraryVoice,
+  redesignLibraryVoice: mockRedesignLibraryVoice,
+  promoteLibraryRedesign: mockPromoteLibraryRedesign,
+  discardLibraryRedesign: mockDiscardLibraryRedesign,
+  promoteToLibrary: mockPromoteToLibrary,
+  assignLibraryVoice: mockAssignLibraryVoice,
+  sampleLibraryVoice: mockSampleLibraryVoice,
 };
 
 /* fs-20 — re-export so the Admin trend panel + its tests import the telemetry
