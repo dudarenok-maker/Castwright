@@ -619,6 +619,29 @@ export const SCENES: Scene[] = [
     strict: true,
   },
   {
+    id: 'adv-dialogue-attribution',
+    hash: '#/advanced',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page
+        .getByRole('navigation', { name: 'Settings sections' })
+        .getByText('Dialogue-structure attribution', { exact: true })
+        .click({ timeout: 5000 });
+      // The nav click smooth-scrolls to this LAST section (settings-
+      // accordion.tsx:189, behavior:'smooth'). Both themes are shot from one
+      // scroll position, so the animation must fully settle before the first
+      // (light) capture — otherwise light freezes mid-scroll while dark, shot
+      // ~800ms later, lands correctly. Wait it out here.
+      await page.getByText('Structure engine', { exact: true }).waitFor({ timeout: 5000 });
+      await page.waitForTimeout(1200);
+    },
+    // "Structure engine" is the group's first knob and unique on the page
+    // (not a substring of the group title "Dialogue-structure attribution").
+    waitForAfterAction: 'text=Structure engine',
+    scrollTo: 'text=Structure engine',
+    strict: true,
+  },
+  {
     /* Saltgrave (hollow-tide-2) is mid-generation (7/11 done) — the Regenerate
        action on a finished chapter opens the real per-chapter modal. The
        per-chapter button's accessible name is its aria-label
