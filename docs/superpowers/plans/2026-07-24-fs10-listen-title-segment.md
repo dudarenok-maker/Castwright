@@ -628,8 +628,8 @@ Append to the existing `describe('ChapterSegmentStrip — issue waveform', …)`
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `npx vitest run src/views/generation.test.tsx -t "title band"`
-Expected: FAIL on `'paints the chapter-title beat neutrally, not in the narrator colour'` — `Unable to find an element by: [data-testid="segment-band-title"]`. The second new case (`'renders no title band for a legacy chapter without one'`) passes before the change too; it is a guard rail. Both match the `title band` filter — do not filter on `chapter-title beat`, which matches only the first.
+Run: `npx vitest run src/views/generation.test.tsx -t "title"`
+Expected: FAIL on `'paints the chapter-title beat neutrally, not in the narrator colour'` — `Unable to find an element by: [data-testid="segment-band-title"]`. The second new case (`'renders no title band for a legacy chapter without one'`) passes before the change too; it is a guard rail. Both match the `title` filter — do not filter on `title band`, which matches only the second.
 
 - [ ] **Step 3: Branch on `kind` in the band map**
 

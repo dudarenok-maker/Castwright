@@ -57,3 +57,19 @@ Merged to `main` 2026-06-03 via **PR #500** (merge commit `25bf3aa`). `Refs #480
 **Polish round 2026-06-03 (post-merge follow-ups):** (1) **bug** — re-record now skips the title beat (`kind:'title'`, empty `sentenceIds`) so picking the narrator can't splice silence over the chapter title (`isRerecordableSegment`). (2) the Listen row refreshes immediately on splice — `chaptersActions.markChapterAudioUpdated` bumps duration + an `audioRenderedAt` stamp, and the mini-player cache-busts the audio URL with it (so a gain remix, which keeps the same URL + duration, still reloads fresh bytes). (3) the per-chapter batch moved out of the modal into `splice-runner-middleware` + a `splice` slice, so it survives the modal closing and surfaces a global progress toast; the modal is now a dispatcher that tracks its batch by id. (4) the modal warns the gain is relative to the current audio (stacks on re-apply) and nudges try-one-chapter-first. (5) a full-run mock e2e (`cc`/Eliza) clicks apply→completion. Remaining: live-GPU acceptance, `srv-29`, and the line-level Listen entry (#480).
 
 **Follow-up round 2026-06-05 (this closes #480):** the line-level Listen-view per-sentence entry shipped — a re-record marker on the Listen MarkersPanel now carries a "Fix this line" action that resolves the marker's timestamp → the chapter segment (`lib/resolve-segment-for-sec.ts`) → `{characterId, segmentIndex}` and opens `FixCharacterAudioModal` pre-scoped to that single segment in rerecord mode (`segmentIndices` threaded through `splice-slice`/`splice-runner-middleware` → `api.streamSplice`); a kind toggle on the panel lets a note become a re-record marker. `srv-29` (#501) also landed (generation.ts converged onto `finalizeChapterAudioWrite` via an `onEncoded` callback), so fs-26's substantive scope is now fully delivered. **Still owed: live-GPU re-record acceptance** — `status` stays `active` until that runs.
+
+**Correction 2026-07-24 (fs-10 / #412):** the marker → `segmentIndex` →
+`segmentIndices` chain described above was off by one for every chapter with a
+voiced title beat. `resolveSegmentForSec` returns a position in the *published*
+`ChapterAudio.segments` array, but `chapter-splice.ts` resolves `segmentIndices`
+against the *on-disk* array — and the chapter-audio route was filtering the
+`kind: 'title'` row out of the published one. "Fix this line" therefore targeted
+the line **before** the marked one: silently re-recording the wrong line when
+both belonged to the same speaker, and failing with `"segmentIndices must all
+belong to the character in this chapter."` at a speaker boundary or `"No
+re-recordable lines for this character in this chapter (title-only)."` when the
+marked line was the chapter's first. fs-10 removed the filter (the two arrays
+are now index-identical, pinned by a `sentenceId`-matched assertion in
+`server/src/routes/chapter-audio.test.ts`) and taught the resolver to skip title
+rows without renumbering. Anything that re-filters the published array
+reintroduces this bug.

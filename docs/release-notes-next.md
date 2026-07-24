@@ -89,6 +89,14 @@ Tap any chapter you haven't downloaded and it starts immediately on the home net
 - **The intermittent Qwen meta-tensor load fault retries in-process instead of recycling the whole sidecar (#1557).** `_load_qwen_model` hitting `NotImplementedError: Cannot copy out of meta tensor` used to schedule an immediate sidecar self-recycle on the FIRST fault — but the fault is intermittent (a fresh `from_pretrained` in the same process loads cleanly ~8s later). The load now retries in-process (a fixed 2 attempts, VRAM-reclaimed between) on that fault class only; the self-recycle fires ONLY when the fault is persistent. A different error (CUDA OOM, deterministic fault) re-raises truthfully with no recycle, so the caller's own handling fires as before. Regression tests in `test_qwen_load_reclaim.py`.
 - **Pausing a cast design during the local-model persona pre-pass stops promptly instead of waiting out the current synthesis chunk (srv-48 follow-ups).** `GpuSemaphore.acquire` takes an optional `AbortSignal` (queued waiters removed on abort, no token leak), and the pre-pass threads `job.controller.signal` through `preparePersonaBatch` → `unloadResidentSidecar`, so a pause during a multi-minute pass takes effect at once; an aborted evict-wait falls back to CPU personas rather than erroring. Also hardened two srv-48 regression tests. (#1561)
 - **The per-book top-menu reads in workflow order — Cast · Manuscript · Generate · Listen · Log · Voices.** Reordering the single `TABS` array aligns both surfaces it feeds (the inline `xl` strip and the hamburger drawer). Cast → Manuscript → Generate → Listen are the per-book steps in order; Log and the cross-book Voices library trail as cross-cutting controls. A new `top-bar.test.tsx` case locks the order. (#1632)
+- **fs-10 — chapter-title segment on the Listen timeline** (#412). `ChapterAudio.segments[]`
+  gains an optional `kind: 'title'` discriminator and the chapter-audio route stops filtering the
+  synthetic title beat out of both `/audio` and `/audio/previous`. The mini-player scrubber paints
+  it as a decorative labelled band; the Generation view's "Narrative order" strip fills it neutrally
+  rather than in the narrator's colour. **Also fixes a latent off-by-one:** because the published
+  array was short one leading row, `resolveSegmentForSec`'s index no longer matched the on-disk
+  index the splice route addresses, so Listen-view "Fix this line" targeted the line before the
+  marked one.
 
 ---
 
