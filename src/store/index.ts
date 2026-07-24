@@ -60,6 +60,7 @@ import { tourSlice } from './tour-slice';
 import { continueListeningSlice } from './continue-listening-slice';
 import { scriptReviewSlice } from './script-review-slice';
 import { prosodySlice } from './prosody-slice';
+import { voiceLibrarySlice, installVoiceLibraryFocusListener } from './voice-library-slice';
 import { persistenceMiddleware } from './persistence-middleware';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
@@ -206,6 +207,7 @@ export const store = configureStore({
     continueListening: continueListeningSlice.reducer,
     scriptReview: scriptReviewSlice.reducer,
     prosody: prosodySlice.reducer,
+    voiceLibrary: voiceLibrarySlice.reducer,
   },
   middleware: (getDefault) =>
     getDefault({
@@ -234,6 +236,11 @@ export const store = configureStore({
    Safe before the first action dispatches — middleware bodies only call
    `getStreamRunner()` at action time. */
 streamRunnerInstance = createStreamRunner(store);
+
+/* fs-38 Wave 1, Task 13 — voice-library's cross-tab refetch-on-focus
+   (design spec §5). Installed post-creation since it needs the live
+   store's getState/dispatch; no-ops outside a DOM environment. */
+installVoiceLibraryFocusListener(store);
 
 /** Persistor for the store. Wrap the app in `<PersistGate>` from
  *  `redux-persist/integration/react` if you want to delay first render
