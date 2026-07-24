@@ -456,7 +456,7 @@ function SetupSummary({
             />
             <span className="font-semibold text-ink text-sm w-36 shrink-0">{r.label}</span>
             <span className="text-sm text-ink/60 min-w-0 flex-1 truncate">{r.detail}</span>
-            <span className="text-xs font-medium text-ink/40 group-hover:text-magenta shrink-0">
+            <span className="text-xs font-medium text-ink/40 group-hover:text-magenta group-active:text-magenta shrink-0">
               Review &rsaquo;
             </span>
           </button>
