@@ -269,11 +269,11 @@ _Full detail + acceptance:_ [#668](https://github.com/dudarenok-maker/Castwright
 - _Benefit:_ **Technical/architectural** — closes a known, adversarial-review-identified gap (three rounds of `assumption-checker` review on the base spec flagged that the v1 "primary LAN IP" heuristic is a best-effort default, not a guarantee, under VPN or dual-homed LAN setups) without blocking the base feature's ship, which already degrades gracefully to the existing LAN-IP URL in the meantime.
 _Full detail + acceptance:_ [#1239](https://github.com/dudarenok-maker/Castwright/issues/1239).
 
-#### `fs-74` — VRAM MB-accounting policy + two-model-split UI (Wave 4 — beta 12/16GB cards) ([#845](https://github.com/dudarenok-maker/Castwright/issues/845))
+#### `fs-77` — Two-model analyzer-split co-fit hint (cosmetic; residual of fs-74) ([#1783](https://github.com/dudarenok-maker/Castwright/issues/1783))
 
-- _What:_ Wave 1 already gives 12/16GB cards coexistence via the gpu.safeCoexistMb threshold (a roomy card doesn't evict). Wave 4 refines this for beta testers who run better cards than the 8GB dev box: (1) per-(engine,mode) MB cost table vs detected VRAM (non-additive Qwen synth/design modes) so a 12GB card with a heavy combo that passes the coarse threshold but would overcommit is caught; (2) two-model analysis-split warn+confirm UI when phase0/phase1 use two different local models that won't co-fit. Design: docs/superpowers/specs/2026-06-16-vram-budget-aware-gpu-policy-design.md §7; context in docs/features/222.
-- _Benefit:_ Beta testers on 12/16GB cards get accurate overcommit protection (not just the coarse 8GB-dev-box threshold) and a clear warning instead of a silent OOM when two local models cannot co-fit during analysis.
-_Full detail + acceptance:_ [#845](https://github.com/dudarenok-maker/Castwright/issues/845).
+- _What:_ Optional, non-blocking settings-time hint in the two-model analyzer-split UI (`GROUP_ANALYZER_SPLIT`, `src/components/model-settings-form.tsx`) that flags when Phase 0 and Phase 1 both resolve to **local** models that won't be co-resident on the detected VRAM, so the user expects a reload between phases rather than co-residency. De-scoped residual of fs-74 (#845, closed): the original "warn instead of silent OOM" rationale is obsolete — capacity admission (#1719/#1720/#1737/#1745) + Ollama per-model `keep_alive` eviction already swap safely, never OOM — leaving only a cosmetic efficiency hint.
+- _Benefit:_ **User** — a heads-up that a local split will pay reload latency between phases, instead of silently wondering why analysis is slower. Zero correctness stakes.
+_Full detail + acceptance:_ [#1783](https://github.com/dudarenok-maker/Castwright/issues/1783).
 
 #### `ops-26` — LAN public cert broker (mkcert-based, per-device trust) ([#1333](https://github.com/dudarenok-maker/Castwright/issues/1333))
 
