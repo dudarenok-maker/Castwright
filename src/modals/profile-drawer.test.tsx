@@ -1,6 +1,6 @@
 // Pairs with docs/features/archive/10-profile-drawer.md
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
@@ -9,6 +9,7 @@ import { voicesSlice, voicesActions } from '../store/voices-slice';
 import { castSlice, castActions } from '../store/cast-slice';
 import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
 import { librarySlice } from '../store/library-slice';
+import { voiceLibrarySlice, type VoiceLibraryEntry } from '../store/voice-library-slice';
 import { ProfileDrawer, type PriorMergeCandidate } from './profile-drawer';
 import {
   playSampleWithAutoLoad,
@@ -61,8 +62,22 @@ const promoteQwenVoice = vi.fn(
 const discardQwenPreview = vi.fn((_bookId: string, _characterId: string, _args?: unknown) =>
   Promise.resolve(),
 );
+/* fs-38 Wave 1, Task 16 — "My voices" picker + "Save to my voices". */
+const assignLibraryVoice = vi.fn(
+  (_voiceUuid: string, _args: { bookId: string; characterId: string }) =>
+    Promise.resolve({ updated: 1 }),
+);
+const promoteToLibrary = vi.fn(
+  (_args: { bookId: string; characterId: string; name: string }) =>
+    Promise.resolve({ voiceUuid: 'lib-new', name: 'New' }),
+);
 vi.mock('../lib/api', () => ({
   api: {
+    assignLibraryVoice: (voiceUuid: string, args: { bookId: string; characterId: string }) =>
+      assignLibraryVoice(voiceUuid, args),
+    promoteToLibrary: (args: { bookId: string; characterId: string; name: string }) =>
+      promoteToLibrary(args),
+    listVoiceLibrary: () => Promise.resolve({ voices: [] }),
     /* Forward exactly the args received — a 2-arg call stays 2-arg so the
        existing override-write assertions (toHaveBeenCalledWith(id, null))
        keep matching after the optional scope arg landed. */
@@ -85,9 +100,10 @@ interface StoreSetup {
   baseVoices?: BaseVoice[];
   voices?: Voice[];
   libraryBook?: LibraryBook;
+  myVoices?: VoiceLibraryEntry[];
 }
 
-function makeStore({ baseVoices, voices, libraryBook }: StoreSetup = {}) {
+function makeStore({ baseVoices, voices, libraryBook, myVoices }: StoreSetup = {}) {
   const store = configureStore({
     reducer: {
       ui: uiSlice.reducer,
@@ -95,7 +111,11 @@ function makeStore({ baseVoices, voices, libraryBook }: StoreSetup = {}) {
       cast: castSlice.reducer,
       castDesign: castDesignSlice.reducer,
       library: librarySlice.reducer,
+      voiceLibrary: voiceLibrarySlice.reducer,
     },
+    preloadedState: myVoices
+      ? { voiceLibrary: { ...voiceLibrarySlice.getInitialState(), entries: myVoices } }
+      : undefined,
   });
   if (baseVoices) store.dispatch(voicesActions.hydrateBaseVoices(baseVoices));
   if (voices) store.dispatch(voicesActions.hydrate({ voices }));
@@ -130,12 +150,14 @@ function renderDrawer(
     bookId?: string;
     libraryBook?: LibraryBook;
     onReassignLines?: (characterId: string) => void;
+    myVoices?: VoiceLibraryEntry[];
   } = {},
 ) {
   const store = makeStore({
     baseVoices: extra.baseVoices,
     voices: extra.voices,
     libraryBook: extra.libraryBook,
+    myVoices: extra.myVoices,
   });
   return {
     store,
@@ -1710,6 +1732,97 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
     expect(args.modelKey).toBe(store.getState().ui.ttsModelKey);
     expect(args.voice.overrideTtsVoices?.qwen).toBeUndefined();
+  });
+});
+
+describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, Task 16)', () => {
+  const myVoicesFixture: VoiceLibraryEntry[] = [
+    {
+      voiceUuid: 'lib1',
+      name: 'Captain Halloran (library)',
+      provenance: 'designed',
+      tags: [],
+      pinned: false,
+      engines: { qwen: { status: 'ready' } },
+      createdAt: '2026-06-01T09:00:00.000Z',
+      updatedAt: '2026-06-01T09:00:00.000Z',
+    },
+  ];
+
+  beforeEach(() => {
+    assignLibraryVoice.mockClear();
+    promoteToLibrary.mockClear();
+  });
+
+  it('lists "My voices" entries when Qwen is the effective engine', () => {
+    renderDrawer(
+      { ...baseChar, ttsEngine: 'qwen' },
+      { bookId: 'book-1', myVoices: myVoicesFixture },
+    );
+    expect(screen.getByTestId('profile-drawer-my-voice-lib1')).toHaveTextContent(
+      'Captain Halloran (library)',
+    );
+  });
+
+  it('hides the "My voices" group + Save button on a non-Qwen character', () => {
+    renderDrawer(
+      { ...baseChar, ttsEngine: 'kokoro', overrideTtsVoices: { qwen: { name: 'qwen-halloran' } } },
+      { bookId: 'book-1', myVoices: myVoicesFixture },
+    );
+    expect(screen.queryByTestId('profile-drawer-my-voice-lib1')).toBeNull();
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
+  });
+
+  it('clicking a "My voices" entry dispatches assignVoice(uuid, {bookId, characterId})', async () => {
+    assignLibraryVoice.mockResolvedValue({ updated: 1 });
+    renderDrawer(
+      { ...baseChar, ttsEngine: 'qwen' },
+      { bookId: 'book-1', myVoices: myVoicesFixture },
+    );
+    fireEvent.click(screen.getByTestId('profile-drawer-my-voice-lib1'));
+    await waitFor(() =>
+      expect(assignLibraryVoice).toHaveBeenCalledWith('lib1', {
+        bookId: 'book-1',
+        characterId: 'halloran',
+      }),
+    );
+  });
+
+  it('shows "Save to my voices" once the character has a designed Qwen voice', () => {
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+      },
+      { bookId: 'book-1' },
+    );
+    expect(screen.getByTestId('profile-drawer-save-to-my-voices')).toBeInTheDocument();
+  });
+
+  it('does not show "Save to my voices" before any Qwen voice is designed', () => {
+    renderDrawer({ ...baseChar, ttsEngine: 'qwen' }, { bookId: 'book-1' });
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
+  });
+
+  it('clicking "Save to my voices" dispatches promoteCharacterVoice({bookId, characterId, name})', async () => {
+    promoteToLibrary.mockResolvedValue({ voiceUuid: 'lib-new', name: 'Captain Halloran' });
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+      },
+      { bookId: 'book-1' },
+    );
+    fireEvent.click(screen.getByTestId('profile-drawer-save-to-my-voices'));
+    await waitFor(() =>
+      expect(promoteToLibrary).toHaveBeenCalledWith({
+        bookId: 'book-1',
+        characterId: 'halloran',
+        name: 'Captain Halloran',
+      }),
+    );
   });
 });
 

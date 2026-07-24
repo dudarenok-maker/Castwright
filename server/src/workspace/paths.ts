@@ -298,6 +298,15 @@ export function qwenVoiceSidecarPath(name: string): string {
   return p;
 }
 
+/** fs-38 Wave 1 — workspace-level voice-library manifest jail. Each library
+    entry gets its own directory keyed by voiceUuid, holding `voice.json` (the
+    manifest, see workspace/voice-library.ts) plus future per-entry sidecar
+    assets (sample audio, etc.). Shared across every book, so it lives at the
+    workspace root, sibling to voices/qwen. */
+export function voiceLibraryDir(): string {
+  return join(WORKSPACE_ROOT, 'voice-library');
+}
+
 /** Plan 102 — workspace-level chapter-generation queue. ONE file holds the
     cross-book queue so the user can mix-and-match order across books in a
     single ordering (e.g. "regenerate these 2 chapters of Book 1, then these

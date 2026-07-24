@@ -13,6 +13,7 @@ import { IconPlay, IconSparkle } from '../lib/icons';
 import type {
   BaseVoice,
   Character,
+  ConfigValues,
   LibraryBook,
   Sentence,
   TtsEngine,
@@ -36,6 +37,12 @@ import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playBaseVoiceSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { gradientForTtsVoice } from '../lib/voice-palette';
 import { findCharacterForVoice, pickMergeSurvivor } from '../lib/voice-character-link';
+import { MyVoicesSection } from '../components/voices/my-voices-section';
+import {
+  VoiceProvenanceBadge,
+  type VoiceProvenanceSlot,
+} from '../components/voices/voice-provenance-badge';
+import { promoteCharacterVoice } from '../store/voice-library-slice';
 import { CompareCastModal } from '../modals/compare-cast-modal';
 import { RebaselineModalContainer } from '../modals/rebaseline-modal';
 import {
@@ -54,7 +61,7 @@ import {
   type DuplicateCandidate,
 } from '../lib/cross-book-duplicates';
 
-type Tab = 'all' | 'current' | 'library' | 'base';
+type Tab = 'all' | 'current' | 'library';
 
 interface Props {
   library: Voice[];
@@ -108,6 +115,10 @@ const ENGINE_LABEL: Record<TtsEngine, string> = {
    useMemo deps stable in tests that don't register the library slice. */
 const EMPTY_LIBRARY_BOOKS: LibraryBook[] = [];
 
+/* fs-38 Wave 1, Task 14 — module-level empty object for the defensive
+   config-values selector below, mirroring EMPTY_LIBRARY_BOOKS above. */
+const EMPTY_CONFIG_VALUES: ConfigValues = {};
+
 /* Bucket / narrator ids the pill's Merge action refuses to act on. Mirrors
    the guards profile-drawer.tsx uses for its own merge picker — merging
    into or out of a standing background bucket would corrupt the
@@ -117,6 +128,10 @@ const UNMERGEABLE_IDS = new Set(['narrator', 'unknown-male', 'unknown-female']);
 
 export function LibraryView({ library, onOpenCharacter }: Props) {
   const [tab, setTab] = useState<Tab>('all');
+  /* fs-38 Wave 1, Task 14 — top-level page section (design spec §1/§Q6).
+     Defaults to 'in-use' so a fresh mount renders byte-for-byte the same
+     rollup content this view has always defaulted to. */
+  const [section, setSection] = useState<'my-voices' | 'in-use' | 'catalogue'>('in-use');
   const [draggingVoiceId, setDraggingVoiceId] = useState<string | null>(null);
   const [familyStatus, setFamilyStatus] = useState<{ key: string; label: string } | null>(null);
   /* Compare affordance (plan 22a + plan 60 + plan 96). Selection is
@@ -202,6 +217,17 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   const libraryBooks = useAppSelector(
     (s) => (s as { library?: { books?: LibraryBook[] } }).library?.books ?? EMPTY_LIBRARY_BOOKS,
   );
+  /* fs-38 Wave 1, Task 14 — voices.library.enabled config gate for the "My
+     voices" nav segment. Defensive read (same pattern as libraryBooks
+     above): many existing test stores don't register the config slice —
+     fall back to {} so a missing/unhydrated config always reads as
+     enabled-pending (`undefined !== false` → true), never a false→true
+     flash once `fetchConfig` (dispatched at store boot, src/store/index.ts)
+     resolves. */
+  const configValues = useAppSelector(
+    (s) => (s as { config?: { values?: ConfigValues } }).config?.values ?? EMPTY_CONFIG_VALUES,
+  );
+  const myVoicesLibraryEnabled = configValues['voices.library.enabled']?.effective !== false;
   const playback = useSamplePlayback();
   const activeEngine = engineForModelKey(ttsModelKey);
 
@@ -997,7 +1023,6 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       id: 'library',
       label: `Series & older (${library.filter((v) => v.source === 'library').length})`,
     },
-    { id: 'base', label: `Base voices${baseVoicesLoaded ? ` (${baseVoices.length})` : ''}` },
   ];
 
   /* Count preset families only — bespoke Qwen voices no longer form
@@ -1041,26 +1066,47 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <StatTile label="Voices" value={library.length} />
-        <StatTile label="Families" value={familyCount} />
-        <StatTile label="Books" value={books.length} />
-        <StatTile label="Pinned" value={library.filter((v) => v.pinned).length} />
-      </div>
-
-      <div className="flex items-center gap-1 mb-6 flex-wrap">
-        {tabs.map((t) => (
+      {/* fs-38 Wave 1, Task 14 — top-level section nav (design spec §1/§Q6).
+          Order locked: My voices → In use → Catalogue. "My voices" is
+          gated by the voices.library.enabled knob; hidden entirely (not
+          shown-but-empty) when an operator has turned the library off, so
+          the nav never offers a section with nothing behind it. */}
+      <div
+        role="group"
+        aria-label="Voice library sections"
+        className="flex items-center gap-1 mb-6 rounded-full bg-ink/5 p-1 w-fit flex-wrap"
+      >
+        {myVoicesLibraryEnabled && (
           <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${tab === t.id ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/4'}`}
+            type="button"
+            aria-pressed={section === 'my-voices'}
+            onClick={() => setSection('my-voices')}
+            className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${section === 'my-voices' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
           >
-            {t.label}
+            My voices
           </button>
-        ))}
+        )}
+        <button
+          type="button"
+          aria-pressed={section === 'in-use'}
+          onClick={() => setSection('in-use')}
+          className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${section === 'in-use' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
+        >
+          In use
+        </button>
+        <button
+          type="button"
+          aria-pressed={section === 'catalogue'}
+          onClick={() => setSection('catalogue')}
+          className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${section === 'catalogue' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
+        >
+          Catalogue
+        </button>
       </div>
 
-      {tab === 'base' ? (
+      {section === 'my-voices' && <MyVoicesSection enabled={myVoicesLibraryEnabled} />}
+
+      {section === 'catalogue' && (
         <BaseVoiceCatalogPanel
           baseVoices={baseVoices}
           baseVoicesLoaded={baseVoicesLoaded}
@@ -1069,7 +1115,30 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
           onPlay={playBaseVoice}
           status={familyStatus}
         />
-      ) : families.length === 0 && qwenGroups.length === 0 && variantFilter === 'all' ? (
+      )}
+
+      {section === 'in-use' && (
+        <>
+          <div className="grid grid-cols-4 gap-4 mb-6">
+            <StatTile label="Voices" value={library.length} />
+            <StatTile label="Families" value={familyCount} />
+            <StatTile label="Books" value={books.length} />
+            <StatTile label="Pinned" value={library.filter((v) => v.pinned).length} />
+          </div>
+
+          <div className="flex items-center gap-1 mb-6 flex-wrap">
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${tab === t.id ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/4'}`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {families.length === 0 && qwenGroups.length === 0 && variantFilter === 'all' ? (
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10 text-center">
           <p className="text-sm font-bold text-ink">No voices yet</p>
           <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">
@@ -1281,9 +1350,14 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               onRebaselineSeries={(bookId) =>
                 dispatch(uiActions.openRebaselineModal({ bookId }))
               }
+              characters={characters}
+              currentBookId={currentBookId}
+              onViewMyVoices={() => setSection('my-voices')}
             />
           ))}
         </div>
+      )}
+        </>
       )}
 
       {selectedVoiceIds.length > 0 && (
@@ -1578,7 +1652,7 @@ function buildFamilies(
   tab: Tab,
 ): Array<VoiceFamily & { seriesGroups: SeriesGroup[] }> {
   const filtered = library.filter((v) => {
-    if (tab === 'all' || tab === 'base') return true;
+    if (tab === 'all') return true;
     return v.source === tab;
   });
   const byKey = new Map<string, VoiceFamily>();
@@ -1640,7 +1714,7 @@ interface QwenStatusGroup {
    buildFamilies; "Needs a voice" sorts first so action-needed is at the top. */
 function buildQwenStatusGroups(library: Voice[], tab: Tab): QwenStatusGroup[] {
   const filtered = library.filter((v) => {
-    if (tab === 'all' || tab === 'base') return true;
+    if (tab === 'all') return true;
     return v.source === tab;
   });
   const buckets: Record<QwenStatus, Voice[]> = { none: [], designed: [] };
@@ -1851,13 +1925,23 @@ interface QwenSectionProps {
      sits naturally on the Qwen sections' series-group headers. */
   representativeBookIdBySeries: Map<string, string>;
   onRebaselineSeries: (bookId: string) => void;
+  /* fs-38 Wave 1, Task 16 — "Save to my voices" needs a real characterId
+     (not always `voice.id` — a reused/shared voiceId doesn't identify one
+     character), and it only makes sense for a card belonging to the
+     CURRENTLY OPEN book (a foreign book's cast isn't loaded into redux).
+     `characters` + `currentBookId` let each card resolve its own match via
+     `findCharacterForVoice`, same helper the rest of this file uses. */
+  characters: Character[];
+  currentBookId: string | null;
+  onViewMyVoices: () => void;
 }
 
 /* Status-bucketed Qwen section (plan 117): "Needs a voice" / "Designed
    voices", each nested series → book → character. No "Audition base voice"
    (a status bucket is not one voice) and no ⚠ duplicate pill (unique Qwen
    voiceIds never share a base voice). The "Designed voices" cards carry a
-   Designed / Sampled / Generated badge. */
+   Designed / Sampled / Generated badge, the shared VoiceProvenanceBadge, and
+   (fs-38 Wave 1) an inline "Save to my voices" / "View in My voices". */
 function QwenStatusSection({
   group,
   draggingVoiceId,
@@ -1870,7 +1954,42 @@ function QwenStatusSection({
   missingVariantCountByVoiceId,
   representativeBookIdBySeries,
   onRebaselineSeries,
+  characters,
+  currentBookId,
+  onViewMyVoices,
 }: QwenSectionProps) {
+  const dispatch = useAppDispatch();
+  const [promoting, setPromoting] = useState<string | null>(null);
+
+  async function handleSaveToMyVoices(character: Character, key: string) {
+    if (!currentBookId) return;
+    setPromoting(key);
+    try {
+      await dispatch(
+        promoteCharacterVoice({
+          bookId: currentBookId,
+          characterId: character.id,
+          name: character.name ?? character.id,
+        }),
+      ).unwrap();
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'info',
+          message: `Saved ${character.name ?? character.id} to My voices.`,
+        }),
+      );
+    } catch (e) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: (e as Error).message || 'Could not save this voice to My voices.',
+        }),
+      );
+    } finally {
+      setPromoting(null);
+    }
+  }
+
   const seriesGroups = group.seriesGroups;
   return (
     <section aria-label={`Qwen · ${group.title}`}>
@@ -1954,6 +2073,23 @@ function QwenStatusSection({
                               </span>
                             ) : undefined
                           }
+                          footer={
+                            group.status === 'designed' ? (
+                              <QwenDesignedCardFooter
+                                slot={v.overrideTtsVoices?.qwen}
+                                character={
+                                  v.bookId === currentBookId
+                                    ? findCharacterForVoice(v, characters, true)
+                                    : undefined
+                                }
+                                saving={promoting === (v.familyKey ?? v.id)}
+                                onSave={(character) =>
+                                  void handleSaveToMyVoices(character, v.familyKey ?? v.id)
+                                }
+                                onViewMyVoices={onViewMyVoices}
+                              />
+                            ) : undefined
+                          }
                         />
                       ))}
                     </div>
@@ -1965,6 +2101,63 @@ function QwenStatusSection({
         })}
       </div>
     </section>
+  );
+}
+
+/* fs-38 Wave 1, Task 16 — the "Designed voices" In-use card's provenance row:
+   the shared VoiceProvenanceBadge plus whichever single follow-on action
+   applies — "View in My voices" for a slot already pulled from the library
+   (libraryUuid set), else "Save to my voices" when this book's own matching
+   character can be resolved (promoteCharacterVoice needs a real
+   characterId), else nothing (a foreign-book card with no resolvable
+   character in redux). */
+function QwenDesignedCardFooter({
+  slot,
+  character,
+  saving,
+  onSave,
+  onViewMyVoices,
+}: {
+  slot: VoiceProvenanceSlot | undefined;
+  character: Character | undefined;
+  saving: boolean;
+  onSave: (character: Character) => void;
+  onViewMyVoices: () => void;
+}) {
+  /* QwenDesignedCardFooter only renders for a card in the "Designed voices"
+     section (group.status === 'designed'), so the voice here is KNOWN to be
+     a designed one. Floor the slot's provenance to 'designed' when no
+     libraryUuid is set, so an un-stamped designed slot reads "Designed"
+     rather than VoiceProvenanceBadge's default "Catalogue" fallback (which
+     stays correct for a genuine preset/catalogue override elsewhere). */
+  const badgeSlot = slot?.libraryUuid
+    ? slot
+    : { ...(slot ?? { name: '' }), provenance: 'designed' as const };
+  return (
+    <>
+      <VoiceProvenanceBadge slot={badgeSlot} />
+      {slot?.libraryUuid ? (
+        <button
+          type="button"
+          onClick={onViewMyVoices}
+          className="text-[11px] font-semibold text-ink/60 hover:text-ink underline min-h-[44px] fine-pointer:min-h-0"
+        >
+          View in My voices
+        </button>
+      ) : (
+        character && (
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => onSave(character)}
+            data-testid={`voice-save-to-my-voices-${character.id}`}
+            className="text-[11px] font-semibold text-magenta hover:text-magenta/80 disabled:opacity-50 disabled:cursor-wait min-h-[44px] fine-pointer:min-h-0"
+          >
+            {saving ? 'Saving…' : 'Save to my voices'}
+          </button>
+        )
+      )}
+    </>
   );
 }
 

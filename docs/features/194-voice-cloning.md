@@ -1,15 +1,31 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # Voice cloning — read a book in your own (or your family's) voice
 
-> Status: draft — next big release ([`fs-38` · #624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624))
+> Status: active — Wave 1 shipped, Waves 2-5 outstanding ([`fs-38` · #624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624))
 > Key files (anticipated): `server/tts-sidecar/` (XTTS clone + Qwen design-to-target), `server/src/tts/`, `src/store/cast-slice.ts`, `src/views/voices.tsx`, `src/components/voice-library-panel.tsx`, `openapi.yaml`
 > URL surface: `#/voices` (cloned-voice section + capture flow), cast profile drawer
 > OpenAPI ops: new — voice-sample capture/upload + clone-design endpoints (TBD)
+
+## Wave 1 shipped (2026-07-24)
+
+Wave 1 (which alone delivers the folded-in **fs-12**) shipped a first-class, book-independent
+**voice library** ("My voices") at `#/voices`, restructured into three sections **My voices |
+In use | Catalogue**. It adds standalone **designed-voice authoring**: create a Qwen voice from
+a persona with a live audition, **redesign-with-compare** (A/B old-vs-new, keep or discard),
+**promote** a character's designed voice into the library (new uuid + byte-copy of the `.pt`),
+and **assign** a library voice to any character — reusable across books and series. A
+`provenance` dimension (`designed`/`cloned`/`imported`) lands now (cloned/imported are inert
+until Wave 3), and the cross-book voice matcher already **excludes cloned-provenance voices** so
+a person's voice is never offered back into a stranger's book. Everything is **local-only**;
+deleting a library voice gives a usage report and does full multi-location erasure (manifest +
+`.pt` + cached samples). **NOT in Wave 1** (later waves): clone-from-a-real-sample,
+consent/attestation, audio ingest, in-app recording, Catalogue rebuild. Plan:
+[`docs/superpowers/plans/2026-07-04-fs38-wave1-voice-library-store.md`](../superpowers/plans/2026-07-04-fs38-wave1-voice-library-store.md).
 
 Pays off the brand promise — _"even in your own voice"_ (`brand/project-narrative.md`,
 [#622](https://github.com/dudarenok-maker/AudioBook-Generator/issues/622)). A parent reads a

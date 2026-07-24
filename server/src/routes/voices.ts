@@ -129,7 +129,9 @@ interface DerivedVoice {
       resolves to the slot matching the query's `engine`; this map is
       surfaced separately so the UI can render all engine assignments
       across tabs and offer per-engine "Clear" buttons. */
-  overrideTtsVoices?: Partial<Record<TtsEngine, { name: string }>> | null;
+  overrideTtsVoices?: Partial<
+    Record<TtsEngine, { name: string; libraryUuid?: string; provenance?: 'designed' | 'cloned' | 'imported' }>
+  > | null;
   /** @deprecated Surfaced for one release so old clients still parse
       the response. New clients read `overrideTtsVoices`. Populated from
       the active engine's slot when present. */
@@ -369,12 +371,23 @@ async function aggregateVoices(
                cast.json), but if they happen, first-seen wins per
                engine slot. */
             if (overrideMap) {
-              const merged: Partial<Record<TtsEngine, { name: string }>> = {
+              const merged: Partial<
+                Record<
+                  TtsEngine,
+                  { name: string; libraryUuid?: string; provenance?: 'designed' | 'cloned' | 'imported' }
+                >
+              > = {
                 ...(existing.overrideTtsVoices ?? {}),
               };
               for (const [eng, val] of Object.entries(overrideMap)) {
                 const e = eng as TtsEngine;
-                if (val?.name && !merged[e]?.name) merged[e] = { name: val.name };
+                if (val?.name && !merged[e]?.name) {
+                  merged[e] = {
+                    name: val.name,
+                    libraryUuid: val.libraryUuid,
+                    provenance: val.provenance,
+                  };
+                }
               }
               existing.overrideTtsVoices = merged;
               existing.overrideTtsVoice = merged[engine]

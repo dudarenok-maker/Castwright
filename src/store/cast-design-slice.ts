@@ -54,7 +54,15 @@ export interface CastDesignPreview {
     middleware on start (or on cold-boot re-subscribe); advanced per character;
     settled then cleared on completion. */
 export interface CastDesignSnapshot {
-  bookId: string;
+  /** `null` marks a book-less (voice-library) design run — e.g. designing a
+      voice from the standalone "My voices" library, which isn't tied to any
+      book's cast. Every reducer's cross-book guard (`snap.bookId !==
+      action.payload.bookId`) already treats `null` as "not this book" for
+      any real book, which is exactly the single-slot semantics fs-38 Wave 1
+      wants: while a library design runs, every book's Cast view shows
+      "design running elsewhere" (cast.tsx's `designRunningElsewhere`) and
+      the fe-46 voice-readiness gate warns accordingly. */
+  bookId: string | null;
   /** Distinguishes the bulk job from a single-character design. */
   kind: 'bulk' | 'single';
   /** Characters enqueued at job start — the denominator for the pill. */
@@ -124,7 +132,7 @@ export const castDesignSlice = createSlice({
     begin(
       state,
       action: PayloadAction<{
-        bookId: string;
+        bookId: string | null;
         total: number;
         currentName: string | null;
         lastTickAt: number;

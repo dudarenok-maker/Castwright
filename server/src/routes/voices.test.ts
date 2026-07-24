@@ -385,6 +385,71 @@ describe('GET /api/voices — aggregation', () => {
     delete cast.characters[0].voiceUuid;
     writeFileSync(castPath, JSON.stringify(cast));
   });
+
+  it('fs-38 Wave 1: normaliseCastCharacter does not strip libraryUuid/provenance from a slot', async () => {
+    /* Pin the read-path pass-through in place: normaliseCastCharacter only
+       touches the legacy-singular-field merge path — it must never drop
+       extra fields (libraryUuid/provenance) a slot already carries, whether
+       or not the legacy field is also present. Locks this in so a future
+       "cleanup" of the merge logic can't silently narrow the slot back down
+       to { name }. */
+    const castPath = join(
+      workspaceRoot,
+      'books',
+      AUTHOR,
+      SERIES,
+      BOOK_ONE,
+      '.audiobook',
+      'cast.json',
+    );
+    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    cast.characters[0].overrideTtsVoices = {
+      qwen: { name: 'qwen-lib1', libraryUuid: 'lib1', provenance: 'designed' },
+    };
+    writeFileSync(castPath, JSON.stringify(cast));
+
+    const res = await request(app).get('/api/voices?engine=qwen');
+    const v_brann = res.body.voices.find((v: { id: string }) => v.id === 'v_brann');
+    expect(v_brann.overrideTtsVoices).toEqual({
+      qwen: { name: 'qwen-lib1', libraryUuid: 'lib1', provenance: 'designed' },
+    });
+
+    /* Cleanup. */
+    delete cast.characters[0].overrideTtsVoices;
+    writeFileSync(castPath, JSON.stringify(cast));
+  });
+
+  it('fs-38 Wave 1, Task 16: the multi-book MERGE branch carries libraryUuid/provenance through, not just name', async () => {
+    /* v_brann spans BOOK_ONE/BOOK_TWO/OTHER_BOOK (usedIn 3), so this exercises
+       the cross-book fold at ~:373-379 (not the single-book direct-reference
+       path already covered above). BOOK_ONE is the first-seen book (its cast
+       is scanned before BOOK_TWO's — see the voiceUuid regression test above,
+       which relies on the same ordering) and gets NO override here, so the
+       qwen slot below is folded in entirely by the merge loop for BOOK_TWO —
+       the exact branch that used to rebuild `{ name: val.name }` and drop the
+       library-provenance fields. */
+    const bookTwoPath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_TWO, '.audiobook', 'cast.json');
+    const bookTwoCast = JSON.parse(readFileSync(bookTwoPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    bookTwoCast.characters[0].overrideTtsVoices = {
+      qwen: { name: 'qwen-lib1', libraryUuid: 'lib1', provenance: 'designed' },
+    };
+    writeFileSync(bookTwoPath, JSON.stringify(bookTwoCast));
+
+    const res = await request(app).get('/api/voices?engine=qwen');
+    const v_brann = res.body.voices.find((v: { id: string }) => v.id === 'v_brann');
+    expect(v_brann.usedIn).toBe(3);
+    expect(v_brann.overrideTtsVoices).toEqual({
+      qwen: { name: 'qwen-lib1', libraryUuid: 'lib1', provenance: 'designed' },
+    });
+
+    /* Cleanup. */
+    delete bookTwoCast.characters[0].overrideTtsVoices;
+    writeFileSync(bookTwoPath, JSON.stringify(bookTwoCast));
+  });
 });
 
 describe('GET /api/voices?engine=qwen — generated flag', () => {

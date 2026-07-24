@@ -1499,6 +1499,7 @@ export function CastView({
             onTapAssign={handleTapAssignToggle}
             assigningVoiceId={assigningVoice?.familyKey ?? assigningVoice?.id ?? null}
             bookLanguage={bookLanguage}
+            bookId={bookId ?? undefined}
           />
         </aside>
       )}
@@ -1570,6 +1571,7 @@ export function CastView({
                 }}
                 assigningVoiceId={assigningVoice?.familyKey ?? assigningVoice?.id ?? null}
                 bookLanguage={bookLanguage}
+                bookId={bookId ?? undefined}
               />
             </div>
           </div>

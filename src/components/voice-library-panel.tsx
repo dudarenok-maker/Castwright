@@ -3,8 +3,16 @@ import { IconStar, IconDrag, IconCheck, IconSearch } from '../lib/icons';
 import { VoiceSwatch, Pill } from './primitives';
 import type { Character, Voice } from '../lib/types';
 import { findCharacterForVoice } from '../lib/voice-character-link';
+import { useAppDispatch, useAppSelector } from '../store';
+import { assignVoice, type VoiceLibraryEntry } from '../store/voice-library-slice';
 
 type Tab = 'all' | 'current' | 'library';
+
+/* Module-level empty array so the defensive selector below (see
+   EMPTY_LIBRARY_BOOKS in voices.tsx for the same pattern) returns a stable
+   reference across renders when the `voiceLibrary` slice isn't registered —
+   many existing test stores across the app compose CastView without it. */
+const EMPTY_LIBRARY_ENTRIES: VoiceLibraryEntry[] = [];
 
 interface VoiceLibraryPanelProps {
   library: Voice[];
@@ -38,6 +46,11 @@ interface VoiceLibraryPanelProps {
      so the user can't pick a voice that would be cleared at generation.
      English books (`bookLanguage === 'en'` or absent) are unaffected. */
   bookLanguage?: string;
+  /* fs-38 Wave 1, Task 16 — the open book's id. Required (alongside
+     `characters`) for the "My voices" group's tap-to-assign affordance,
+     which dispatches `assignVoice(uuid, { bookId, characterId })`. The
+     group renders nothing without both — there's no book to assign into. */
+  bookId?: string;
 }
 
 export function VoiceLibraryPanel({
@@ -52,9 +65,37 @@ export function VoiceLibraryPanel({
   onTapAssign,
   assigningVoiceId,
   bookLanguage,
+  bookId,
 }: VoiceLibraryPanelProps) {
   const [query, setQuery] = useState('');
   const [showAll, setShowAll] = useState(false);
+  /* fs-38 Wave 1, Task 16 — "My voices" group at the top of the panel. Its
+     own tap-to-assign flow (voiceUuid currently showing its inline
+     character picker) is deliberately local + self-contained rather than
+     reusing the existing `onTapAssign`/`assigningVoiceId` two-step (that
+     one is driven by cast.tsx's assign-mode state machine, keyed by
+     Voice.familyKey, and completes by dropping onto/tapping a cast ROW —
+     a library entry isn't a `Voice` and has no row to complete against). */
+  const dispatch = useAppDispatch();
+  /* Defensive read (mirrors EMPTY_LIBRARY_BOOKS/EMPTY_CONFIG_VALUES in
+     voices.tsx): the panel mounts inside CastView, which many existing test
+     stores compose WITHOUT the `voiceLibrary` slice registered — a plain
+     `selectMyVoices` (state.voiceLibrary.entries) would throw for all of
+     them. Falls back to no entries, which just hides the group (same as a
+     freshly-hydrated empty library). Sort mirrors `selectMyVoices`
+     (pinned first, then most-recently-updated). */
+  const myVoicesEntries = useAppSelector(
+    (s) => (s as { voiceLibrary?: { entries: VoiceLibraryEntry[] } }).voiceLibrary?.entries,
+  );
+  const myVoices = useMemo(
+    () =>
+      (myVoicesEntries ?? EMPTY_LIBRARY_ENTRIES).slice().sort((a, b) => {
+        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      }),
+    [myVoicesEntries],
+  );
+  const [assigningLibraryUuid, setAssigningLibraryUuid] = useState<string | null>(null);
   /* Whether any voice belongs to the open book's series (a sibling book — the
      `source === 'library'` half — that shares its author + series). The server
      tags these `inCurrentSeries`. A standalone (or a one-book series) has none,
@@ -176,6 +217,33 @@ export function VoiceLibraryPanel({
         data-testid="voice-library-scroll"
         className="p-5 overflow-y-auto scrollbar-thin space-y-2"
       >
+        {myVoices.length > 0 && bookId && characters && (
+          <div
+            data-testid="voice-library-my-voices-group"
+            className="mb-3 pb-3 border-b border-ink/10 space-y-2"
+          >
+            <p className="text-[11px] uppercase tracking-widest text-ink/40 font-semibold px-1">
+              My voices
+            </p>
+            {myVoices.map((entry) => (
+              <MyVoiceCard
+                key={entry.voiceUuid}
+                entry={entry}
+                characters={characters}
+                assigning={assigningLibraryUuid === entry.voiceUuid}
+                onToggleAssign={() =>
+                  setAssigningLibraryUuid((cur) =>
+                    cur === entry.voiceUuid ? null : entry.voiceUuid,
+                  )
+                }
+                onAssignTo={(characterId) => {
+                  dispatch(assignVoice({ voiceUuid: entry.voiceUuid, bookId, characterId }));
+                  setAssigningLibraryUuid(null);
+                }}
+              />
+            ))}
+          </div>
+        )}
         {shown.length === 0 && q ? (
           <p className="text-center text-xs text-ink/40 py-6">
             No voices match “{query.trim()}”
@@ -249,6 +317,11 @@ interface VoiceCardProps {
      The Qwen "Designed voices" section passes a Designed / Generated badge
      here; preset cards leave it unset. */
   badge?: ReactNode;
+  /* fs-38 Wave 1, Task 16 — optional extra row below the attribute chips.
+     The In-use "Designed voices" cards use this for the shared
+     VoiceProvenanceBadge + an inline "Save to my voices" / "View in My
+     voices" affordance. Unset elsewhere — no layout change when absent. */
+  footer?: ReactNode;
 }
 
 export function VoiceCard({
@@ -268,6 +341,7 @@ export function VoiceCard({
   onTapAssign,
   isAssigningTarget = false,
   badge,
+  footer,
 }: VoiceCardProps) {
   const isDragging = draggingVoiceId === (voice.familyKey ?? voice.id);
   const canOpenProfile = !!(character && onOpenProfile);
@@ -369,6 +443,15 @@ export function VoiceCard({
             ))}
           </div>
         )}
+        {footer && (
+          <div
+            className="mt-1.5 flex items-center gap-2 flex-wrap"
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {footer}
+          </div>
+        )}
       </div>
       {onTapAssign ? (
         <button
@@ -388,6 +471,58 @@ export function VoiceCard({
         <span className="text-ink/30 group-hover:text-ink/60 group-active:text-ink/60 transition-colors mt-1 hidden md:inline">
           <IconDrag className="w-4 h-4" />
         </span>
+      )}
+    </div>
+  );
+}
+
+/* fs-38 Wave 1, Task 16 — one "My voices" group row: a compact card (name +
+   Assign pill) that expands into a row of character-name buttons when
+   tapped. Tapping a character completes the assign immediately — no
+   separate "drop onto a row" step, since there's no cast row to drop onto
+   here (the parent owns the actual dispatch via `onAssignTo`). */
+function MyVoiceCard({
+  entry,
+  characters,
+  assigning,
+  onToggleAssign,
+  onAssignTo,
+}: {
+  entry: VoiceLibraryEntry;
+  characters: Character[];
+  assigning: boolean;
+  onToggleAssign: () => void;
+  onAssignTo: (characterId: string) => void;
+}) {
+  return (
+    <div>
+      <div className="flex items-center gap-3 p-3 rounded-2xl border bg-canvas hover:bg-white border-ink/10">
+        <span className="flex-1 min-w-0 text-sm font-bold text-ink truncate">{entry.name}</span>
+        <button
+          type="button"
+          onClick={onToggleAssign}
+          aria-pressed={assigning}
+          aria-label={assigning ? `Cancel assigning ${entry.name}` : `Assign ${entry.name} to a character`}
+          data-testid={`my-voices-panel-assign-${entry.voiceUuid}`}
+          className={`shrink-0 min-h-[44px] min-w-[44px] px-3 inline-flex items-center justify-center rounded-full text-xs font-semibold transition-colors ${assigning ? 'bg-magenta text-white hover:bg-magenta/90' : 'bg-ink/6 text-ink/70 hover:bg-ink/10 hover:text-ink'}`}
+        >
+          {assigning ? 'Cancel' : 'Assign'}
+        </button>
+      </div>
+      {assigning && (
+        <div className="mt-1.5 pl-2 flex flex-wrap gap-1.5">
+          {characters.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => onAssignTo(c.id)}
+              data-testid={`my-voices-panel-assign-target-${entry.voiceUuid}-${c.id}`}
+              className="px-2.5 py-1.5 rounded-full text-[11px] font-medium bg-ink/4 hover:bg-magenta/15 hover:text-magenta text-ink/70 min-h-[44px] fine-pointer:min-h-0"
+            >
+              {c.name}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );

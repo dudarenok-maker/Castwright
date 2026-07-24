@@ -55,11 +55,12 @@ import { queueSlice } from './queue-slice';
 import { rebaselineSlice } from './rebaseline-slice';
 import { upgradeSlice } from './upgrade-slice';
 import { spliceSlice } from './splice-slice';
-import { configSlice } from './config-slice';
+import { configSlice, fetchConfig } from './config-slice';
 import { tourSlice } from './tour-slice';
 import { continueListeningSlice } from './continue-listening-slice';
 import { scriptReviewSlice } from './script-review-slice';
 import { prosodySlice } from './prosody-slice';
+import { voiceLibrarySlice, installVoiceLibraryFocusListener } from './voice-library-slice';
 import { persistenceMiddleware } from './persistence-middleware';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
@@ -206,6 +207,7 @@ export const store = configureStore({
     continueListening: continueListeningSlice.reducer,
     scriptReview: scriptReviewSlice.reducer,
     prosody: prosodySlice.reducer,
+    voiceLibrary: voiceLibrarySlice.reducer,
   },
   middleware: (getDefault) =>
     getDefault({
@@ -234,6 +236,23 @@ export const store = configureStore({
    Safe before the first action dispatches — middleware bodies only call
    `getStreamRunner()` at action time. */
 streamRunnerInstance = createStreamRunner(store);
+
+/* fs-38 Wave 1, Task 13 — voice-library's cross-tab refetch-on-focus
+   (design spec §5). Installed post-creation since it needs the live
+   store's getState/dispatch; no-ops outside a DOM environment. */
+installVoiceLibraryFocusListener(store);
+
+/* fs-38 Wave 1, Task 14 — hydrate the config slice at boot so the
+   `voices.library.enabled` knob (and any other config-gated UI) is
+   available without requiring the user to open Advanced first
+   (previously `fetchConfig` only dispatched from `advanced.tsx` on
+   mount). Fire-and-forget: `configSlice`'s own pending/fulfilled/
+   rejected reducers handle the async lifecycle; nothing here awaits it.
+   Consumers that read a not-yet-hydrated knob should treat `undefined`
+   as "enabled-pending" rather than "disabled" so the UI can't flash-hide
+   then reappear once this resolves (see voices.tsx's
+   `myVoicesLibraryEnabled`). */
+store.dispatch(fetchConfig());
 
 /** Persistor for the store. Wrap the app in `<PersistGate>` from
  *  `redux-persist/integration/react` if you want to delay first render

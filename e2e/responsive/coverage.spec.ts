@@ -113,6 +113,14 @@ test.describe('responsive coverage (all views × all viewports)', () => {
     await page.goto('/#/voices');
     /* h1 "Every voice you've ever generated" mounts once the voices slice loads. */
     await expect(page.getByRole('heading', { name: /Every voice you've ever generated/i })).toBeVisible({ timeout: 10_000 });
+    /* fs-38 Wave 1 — the three-segment section nav (My voices | In use |
+       Catalogue, src/views/voices.tsx). Runs at all three projects
+       (chromium / mobile-chrome / tablet-chrome) via this file's testMatch
+       glob, so this one assertion covers all three viewports. */
+    await expect(page.getByRole('group', { name: 'Voice library sections' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'My voices', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'In use', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Catalogue', exact: true })).toBeVisible();
     await expectNoHorizontalScroll(page);
   });
 

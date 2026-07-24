@@ -1889,6 +1889,275 @@ paths:
         '404':
           description: No character with that voiceId exists in any confirmed cast
 
+  # --- Voice library (fs-38 Wave 1) --------------------------------
+  /api/voice-library:
+    get:
+      summary: List the book-independent voice library ("My voices")
+      operationId: listVoiceLibrary
+      description: |
+        Returns every voice designed, cloned, or imported into the
+        book-independent library — distinct from `/api/voices`, which
+        derives its list from confirmed casts. Pinned first, then by
+        `updatedAt` descending.
+      responses:
+        '200':
+          description: Voice library entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [voices]
+                properties:
+                  voices:
+                    type: array
+                    items: { $ref: '#/components/schemas/VoiceLibraryEntry' }
+
+  /api/voice-library/{voiceUuid}:
+    patch:
+      summary: Update a voice library entry's metadata
+      operationId: updateVoiceLibraryEntry
+      parameters:
+        - { in: path, name: voiceUuid, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                tags: { type: array, items: { type: string } }
+                pinned: { type: boolean }
+                persona: { type: string }
+      responses:
+        '200':
+          description: Updated entry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VoiceLibraryEntry' }
+        '404':
+          description: No library entry with that voiceUuid
+    delete:
+      summary: Remove a voice library entry
+      operationId: deleteVoiceLibraryEntry
+      description: |
+        Refuses to delete a voice that is currently assigned to a
+        confirmed cast unless `confirm=1` is passed, surfacing the
+        blocking usage so the client can warn the user first.
+      parameters:
+        - { in: path, name: voiceUuid, required: true, schema: { type: string } }
+        - in: query
+          name: confirm
+          required: false
+          schema: { type: string, enum: ['1'] }
+          description: Pass '1' to delete despite in-use warnings.
+      responses:
+        '200':
+          description: Entry deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: { type: boolean, enum: [true] }
+        '404':
+          description: No library entry with that voiceUuid
+        '409':
+          description: Voice is assigned to one or more confirmed casts; retry with confirm=1
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [usage]
+                properties:
+                  usage:
+                    type: array
+                    items:
+                      type: object
+                      required: [bookId, bookTitle, characterId, characterName]
+                      properties:
+                        bookId: { type: string }
+                        bookTitle: { type: string }
+                        characterId: { type: string }
+                        characterName: { type: string }
+
+  /api/voice-library/design:
+    post:
+      summary: Design a brand-new library voice from a persona instruct
+      operationId: designVoiceLibraryEntry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, persona]
+              properties:
+                name: { type: string }
+                persona: { type: string }
+                languageCode: { type: string }
+      responses:
+        '201':
+          description: Voice designed and added to the library
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entry, previewUrl]
+                properties:
+                  entry: { $ref: '#/components/schemas/VoiceLibraryEntry' }
+                  previewUrl: { type: string }
+
+  /api/voice-library/{voiceUuid}/redesign:
+    post:
+      summary: Re-run voice design against an updated persona
+      operationId: redesignVoiceLibraryEntry
+      description: |
+        Synthesises a fresh preview from the new persona without
+        overwriting the entry's live engines — the client previews the
+        redesign, then calls `promote` to make it live or `discard` to
+        drop it.
+      parameters:
+        - { in: path, name: voiceUuid, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [persona]
+              properties:
+                persona: { type: string }
+      responses:
+        '200':
+          description: Redesign preview ready
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [previewUrl]
+                properties:
+                  previewUrl: { type: string }
+        '404':
+          description: No library entry with that voiceUuid
+
+  /api/voice-library/{voiceUuid}/redesign/promote:
+    post:
+      summary: Make the pending redesign the entry's live voice
+      operationId: promoteVoiceLibraryRedesign
+      parameters:
+        - { in: path, name: voiceUuid, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                persona: { type: string }
+      responses:
+        '200':
+          description: Redesign promoted to live
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VoiceLibraryEntry' }
+        '404':
+          description: No library entry with that voiceUuid, or no pending redesign
+
+  /api/voice-library/{voiceUuid}/redesign/discard:
+    post:
+      summary: Discard the pending redesign preview
+      operationId: discardVoiceLibraryRedesign
+      parameters:
+        - { in: path, name: voiceUuid, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Pending redesign discarded; live voice unchanged
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VoiceLibraryEntry' }
+        '404':
+          description: No library entry with that voiceUuid, or no pending redesign
+
+  /api/voice-library/promote:
+    post:
+      summary: Promote a confirmed-cast character's voice into the library
+      operationId: promoteVoiceToLibrary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bookId, characterId, name]
+              properties:
+                bookId: { type: string }
+                characterId: { type: string }
+                name: { type: string }
+      responses:
+        '201':
+          description: New library entry created from the character's voice
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VoiceLibraryEntry' }
+        '404':
+          description: Book or character not found
+
+  /api/voice-library/{voiceUuid}/assign:
+    post:
+      summary: Assign a library voice to a character
+      operationId: assignVoiceLibraryEntry
+      parameters:
+        - { in: path, name: voiceUuid, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bookId, characterId]
+              properties:
+                bookId: { type: string }
+                characterId: { type: string }
+      responses:
+        '200':
+          description: Character's overrideTtsVoices slot updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [updated]
+                properties:
+                  updated: { type: integer }
+        '404':
+          description: No library entry, book, or character matching the request
+
+  /api/voice-library/{voiceUuid}/sample:
+    post:
+      summary: Synthesise a preview sample of a library voice
+      operationId: sampleVoiceLibraryEntry
+      description: Mirrors `POST /api/voices/{voiceId}/sample` but scoped to the library entry's own baked voice, no picker involved.
+      parameters:
+        - { in: path, name: voiceUuid, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200':
+          description: Sample is ready (either cached or freshly synthesised)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url]
+                properties:
+                  url: { type: string }
+        '404':
+          description: No library entry with that voiceUuid
+
   /api/books/{bookId}/revisions:
     get:
       summary: Pending A/B revisions + voice-drift events
@@ -4372,6 +4641,8 @@ components:
                 type: object
                 properties:
                   name: { type: string }
+                  libraryUuid: { type: string }
+                  provenance: { type: string, enum: [designed, cloned, imported] }
         characterHint:
           type: object
           description: |
@@ -4595,6 +4866,8 @@ components:
               name:
                 type: string
                 description: "Engine-specific speaker handle for this engine's slot."
+              libraryUuid: { type: string }
+              provenance: { type: string, enum: [designed, cloned, imported] }
               variants:
                 type: object
                 description: |
@@ -4671,6 +4944,66 @@ components:
         voices:
           type: array
           items: { $ref: '#/components/schemas/Voice' }
+
+    VoiceLibraryEntry:
+      type: object
+      required: [voiceUuid, name, provenance, tags, pinned, engines, createdAt, updatedAt]
+      properties:
+        voiceUuid: { type: string }
+        name: { type: string }
+        provenance: { type: string, enum: [designed, cloned, imported] }
+        tags: { type: array, items: { type: string } }
+        pinned: { type: boolean }
+        languageCode: { type: string }
+        persona: { type: string, description: designed-only instruct text }
+        consent: { $ref: '#/components/schemas/VoiceConsentRecord' }
+        sourceAttestation: { $ref: '#/components/schemas/VoiceSourceAttestation' }
+        sampleTranscript: { type: string }
+        sampleMeta:
+          type: object
+          properties:
+            durationSeconds: { type: number }
+            sampleRate: { type: number }
+            qualityChecks: { type: object, additionalProperties: true }
+        engines: { $ref: '#/components/schemas/VoiceLibraryEngines' }
+        promotedFrom:
+          type: object
+          properties: { bookId: { type: string }, characterId: { type: string } }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    VoiceLibraryEngines:
+      type: object
+      properties:
+        qwen:
+          type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [ready, deriving, stale, failed] }
+            baseModel: { type: string }
+        xtts:
+          type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [ready, deriving, stale, failed] }
+            coquiVersion: { type: string }
+            modelId: { type: string }
+    VoiceConsentRecord:
+      type: object
+      required: [personName, relationship, permittedUse, attestedAt, attestedBy]
+      properties:
+        personName: { type: string }
+        relationship: { type: string, enum: [self, family-with-permission, guardian-of-minor] }
+        permittedUse: { type: string, enum: [personal] }
+        attestedAt: { type: string }
+        attestedBy: { type: string }
+        revokedAt: { type: string }
+    VoiceSourceAttestation:
+      type: object
+      required: [source, rightsNote, attestedAt]
+      properties:
+        source: { type: string }
+        rightsNote: { type: string }
+        attestedAt: { type: string }
 
     # --- Audio ------------------------------------------------------
     ChapterAudio:
@@ -5147,6 +5480,8 @@ components:
               name:
                 type: string
                 description: "Engine-specific speaker handle (designed voiceId for Qwen)."
+              libraryUuid: { type: string }
+              provenance: { type: string, enum: [designed, cloned, imported] }
               variants:
                 type: object
                 description: |

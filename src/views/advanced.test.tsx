@@ -14,7 +14,21 @@ import type { ConfigResponse, GpuDevicesResponse } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
   api: {
-    getConfig: vi.fn(),
+    /* fs-38 Wave 1, Task 14 — `src/store/index.ts` now dispatches
+       `fetchConfig()` once at store-module-import time (boot hydrate for
+       the `voices.library.enabled` gate). Because `vi.mock` factories are
+       hoisted above every import — including the transitive `../store`
+       import `AdvancedView` pulls in below — that boot call reaches this
+       mock before any of this file's own `beforeEach`/`mockResolvedValueOnce`
+       setup has run. A bare `vi.fn()` would resolve `undefined` for that
+       stray call and crash `fetchConfig.fulfilled`'s reducer
+       (config-slice.ts) with an unhandled rejection. Giving the mock a
+       harmless default implementation here covers it; every test below
+       still layers its own `mockResolvedValueOnce`/`mockResolvedValue` on
+       top for its own mount-triggered fetch. */
+    getConfig: vi.fn(() =>
+      Promise.resolve({ groups: [], descriptors: [], values: {}, cudaEnvShadow: false }),
+    ),
     putConfig: vi.fn(),
     resetConfig: vi.fn(),
     getPrompt: vi.fn(),

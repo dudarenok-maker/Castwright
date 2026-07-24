@@ -13,6 +13,7 @@ export const GROUPS: ConfigGroup[] = [
   { id: 'rate-limits', label: 'Gemini rate limits', help: 'Per-model request/token/day caps for the Gemini API.', risk: 'low', collapsedByDefault: false },
   { id: 'lan-access', label: 'LAN access & device tokens', help: 'Lifetime of browser/device authorizations minted from Admin.', risk: 'low', collapsedByDefault: false },
   { id: 'analyzer-structure', label: 'Dialogue-structure attribution', help: 'Deterministic structure engine that corrects/flags stage-2 attributions.', risk: 'medium', collapsedByDefault: false },
+  { id: 'voices-library', label: 'Voice library', help: 'Feature flags for the voice-library surface.', risk: 'low', collapsedByDefault: false },
 ];
 
 export const KNOBS: ConfigKnob[] = [
@@ -639,6 +640,16 @@ export const KNOBS: ConfigKnob[] = [
     type: 'boolean',
     default: false, // fs-60 — was `true`; see help text above
     apply: 'restart-sidecar', risk: 'high',
+  },
+  {
+    key: 'voices.library.enabled',
+    env: '',
+    group: 'voices-library',
+    label: 'Voice library',
+    help: 'Turn off to hide My voices and disable its API',
+    type: 'boolean',
+    default: true,
+    apply: 'live', risk: 'low',
   },
   {
     key: 'tts.preload.qwen',

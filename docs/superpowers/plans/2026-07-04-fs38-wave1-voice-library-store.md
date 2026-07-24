@@ -494,3 +494,8 @@ if (qwenSlot?.libraryUuid) return `qwen-${qwenSlot.libraryUuid}`
 - **Wave 3 plan** — clone pipeline: ffmpeg ingest, `/qwen/clone-voice` extraction, XTTS latents + validation bypass, two-phase wizard, consent/attestation, three-state substitution protection, ECAPA fidelity. Written against post-Wave-1 code.
 - **Wave 4 plan** — in-app recording (MediaRecorder + fake-media e2e flags).
 - **Wave 5 plan** — polish/hardening.
+
+## Ship notes
+
+Shipped 2026-07-24 on branch `feat/frontend-voice-library-wave1`; merge SHA: _TBD (filled
+post-merge)_.

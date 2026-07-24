@@ -3,11 +3,56 @@
    that voice, and clicking the swatch bubble must trigger a voice sample
    for that character. Pre-fix the panel was drag-only. */
 
-import { describe, it, expect, vi } from 'vitest';
-import { render, fireEvent, screen, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render as rtlRender, fireEvent, screen, within, waitFor } from '@testing-library/react';
+import type { RenderOptions } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { configureStore } from '@reduxjs/toolkit';
+import { Provider } from 'react-redux';
+import { voiceLibrarySlice, type VoiceLibraryEntry, type VoiceLibraryState } from '../store/voice-library-slice';
 import { VoiceCard, VoiceLibraryPanel } from './voice-library-panel';
 import type { Character, Voice } from '../lib/types';
+
+const assignLibraryVoiceMock =
+  vi.fn<(voiceUuid: string, args: { bookId: string; characterId: string }) => Promise<{ updated: number }>>();
+
+vi.mock('../lib/api', () => ({
+  api: {
+    assignLibraryVoice: (voiceUuid: string, args: { bookId: string; characterId: string }) =>
+      assignLibraryVoiceMock(voiceUuid, args),
+    listVoiceLibrary: () => Promise.resolve({ voices: [] }),
+  },
+}));
+
+/* fs-38 Wave 1, Task 16 — VoiceLibraryPanel now reads `selectMyVoices` off
+   redux (the "My voices" group), so every render in this file needs a
+   Provider ancestor even when a test isn't exercising that group at all —
+   react-redux's hooks throw without one. A local `render` override wraps
+   every call site uniformly instead of touching each of this file's ~30
+   render()/rerender() call sites individually. Defaults to an EMPTY
+   `voiceLibrary` slice so every pre-existing test's DOM (no "My voices"
+   group, since `myVoices.length > 0` gates it) is byte-for-byte unchanged;
+   pass `myVoices` to seed entries for the new tests further down. */
+function makeVoiceLibraryStore(myVoices: VoiceLibraryState['entries'] = []) {
+  return configureStore({
+    reducer: { voiceLibrary: voiceLibrarySlice.reducer },
+    preloadedState: { voiceLibrary: { ...voiceLibrarySlice.getInitialState(), entries: myVoices } },
+  });
+}
+
+function render(ui: React.ReactElement, options?: RenderOptions & { myVoices?: VoiceLibraryState['entries'] }) {
+  const store = makeVoiceLibraryStore(options?.myVoices);
+  /* `wrapper` (not manually nesting `ui` inside `<Provider>` here) so RTL
+     applies the SAME wrapper on every `rerender()` call too — several tests
+     below capture a DOM node before calling `rerender(<VoiceCard .../>)`
+     raw (no Provider) and expect updates on that same node; nesting
+     manually would change the root element type between renders and force
+     a full remount, orphaning that captured reference. */
+  return rtlRender(ui, {
+    wrapper: ({ children }) => <Provider store={store}>{children}</Provider>,
+    ...options,
+  });
+}
 
 const makeVoice = (id: string, character: string, overrides: Partial<Voice> = {}): Voice => ({
   id,
@@ -601,5 +646,69 @@ describe('VoiceLibraryPanel — language filter (fs-41/fs-50 seam 4a)', () => {
     render(<VoiceLibraryPanel library={library} bookLanguage="en" {...noopProps} />);
     expect(screen.getByText('John')).toBeInTheDocument();
     expect(screen.queryByText(/hidden/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('VoiceLibraryPanel — "My voices" group (fs-38 Wave 1, Task 16)', () => {
+  const noopProps = {
+    library: [] as Voice[],
+    draggingVoiceId: null as string | null,
+    setDraggingVoiceId: vi.fn(),
+  };
+  const marlow: Character = {
+    id: 'marlow',
+    name: 'Marlow',
+    role: 'role',
+    color: 'marlow',
+    voiceState: 'generated',
+  };
+  const entry: VoiceLibraryEntry = {
+    voiceUuid: 'lib1',
+    name: 'Captain Halloran',
+    provenance: 'designed',
+    tags: [],
+    pinned: false,
+    engines: { qwen: { status: 'ready' } },
+    createdAt: '2026-06-01T09:00:00.000Z',
+    updatedAt: '2026-06-01T09:00:00.000Z',
+  };
+
+  beforeEach(() => {
+    assignLibraryVoiceMock.mockReset();
+  });
+
+  it('renders nothing when the library is empty', () => {
+    render(<VoiceLibraryPanel {...noopProps} bookId="b1" characters={[marlow]} />);
+    expect(screen.queryByTestId('voice-library-my-voices-group')).toBeNull();
+  });
+
+  it('renders nothing without both bookId and characters, even with entries', () => {
+    render(<VoiceLibraryPanel {...noopProps} />, { myVoices: [entry] });
+    expect(screen.queryByTestId('voice-library-my-voices-group')).toBeNull();
+  });
+
+  it('renders a "My voices" group card when entries + bookId + characters are all present', () => {
+    render(<VoiceLibraryPanel {...noopProps} bookId="b1" characters={[marlow]} />, {
+      myVoices: [entry],
+    });
+    const group = screen.getByTestId('voice-library-my-voices-group');
+    expect(within(group).getByText('Captain Halloran')).toBeInTheDocument();
+  });
+
+  it('tapping Assign then a character dispatches assignVoice(uuid, {bookId, characterId})', async () => {
+    assignLibraryVoiceMock.mockResolvedValue({ updated: 1 });
+    render(<VoiceLibraryPanel {...noopProps} bookId="b1" characters={[marlow]} />, {
+      myVoices: [entry],
+    });
+    fireEvent.click(screen.getByTestId('my-voices-panel-assign-lib1'));
+    fireEvent.click(screen.getByTestId('my-voices-panel-assign-target-lib1-marlow'));
+    await waitFor(() =>
+      expect(assignLibraryVoiceMock).toHaveBeenCalledWith('lib1', {
+        bookId: 'b1',
+        characterId: 'marlow',
+      }),
+    );
+    /* The inline picker closes after a completed assign. */
+    expect(screen.queryByTestId('my-voices-panel-assign-target-lib1-marlow')).toBeNull();
   });
 });

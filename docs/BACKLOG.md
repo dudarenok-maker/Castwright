@@ -29,6 +29,7 @@ prioritized issue in its tier.
 
 - _What:_ In-app voice-sample **capture** (record/upload) with quality guidance + re-take. Explicit **consent on the record** (names the person + permitted use); cloning blocked without it. **Clone + cast** via XTTS (zero-shot reference) first, then Qwen design-to-target; held consistent across book + series. **Voice-library split:** cloned voices get their own `#/voices` section with provenance + consent, **excluded** from the cross-book "offer it back" matcher so a person's voice is never reused into a stranger's book. **Local-only**; export explicit.
 - _Benefit:_ the most personal, gift-able feature the product can offer — and the strongest consumer hook.
+- _Status:_ **Wave 1 delivered** (2026-07-24, branch `feat/frontend-voice-library-wave1`) — the book-independent voice-library store, the three-section `#/voices` restructure (My voices | In use | Catalogue), and standalone designed-voice authoring (create / redesign-with-compare / promote / assign); folds in `fs-12` as fully delivered. **Remaining:** Waves 2-5 — Catalogue rebuild, the clone pipeline itself (capture/consent/XTTS+Qwen clone/reuse-exclusion), in-app recording, polish. See `docs/features/194-voice-cloning.md`.
 _Full detail + acceptance:_ [#624](https://github.com/dudarenok-maker/Castwright/issues/624).
 
 #### `ops-1` — Windows installer (Inno Setup or NSIS) wrapping the release zip ([#432](https://github.com/dudarenok-maker/Castwright/issues/432))

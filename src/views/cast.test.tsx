@@ -1533,7 +1533,7 @@ describe('CastView — Design full cast button', () => {
 
   type DesignActive = {
     kind: 'bulk' | 'single';
-    bookId: string;
+    bookId: string | null;
     total: number;
     done: number;
     skipped: number;
@@ -1730,6 +1730,36 @@ describe('CastView — Design full cast button', () => {
       },
     });
     expect(screen.getByTestId('design-full-cast')).toHaveTextContent('Cancel design · 1/3');
+  });
+
+  it('fs-38 Wave 1 — a book-less (bookId: null) library design reads as "running elsewhere" for every book, disabling the button', () => {
+    /* A "My voices" library design (create-library-voice.tsx) opens a
+       cast-design snapshot with bookId: null so it never collides with any
+       real book's own run. Every book's Cast view must therefore see it as
+       designRunningElsewhere (cast.tsx:355-356's `!== bookId` guard treats
+       null as "not this book" for any real book id), not designRunningHere. */
+    setup({
+      modelKey: 'qwen3-tts-0.6b',
+      ready: true,
+      designActive: {
+        kind: 'bulk',
+        bookId: null,
+        total: 1,
+        done: 0,
+        skipped: 0,
+        currentName: 'A library voice',
+        state: 'running',
+        lastTickAt: 1,
+        failures: [],
+        fallbacks: [],
+      },
+    });
+    const btn = screen.getByTestId('design-full-cast');
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('title')).toBe(
+      'A design run is already in progress for another book.',
+    );
+    expect(btn).not.toHaveTextContent('Cancel design');
   });
 
   it('picking "both" from the scope picker dispatches designAllRequested with scope:both, non-empty characterIds AND variantTasks', () => {
