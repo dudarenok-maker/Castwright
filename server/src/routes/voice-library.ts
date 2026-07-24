@@ -10,7 +10,8 @@
    (workspace/voice-library.ts), respond. No business logic lives here. */
 
 import { Router } from 'express';
-import { rename, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { nanoid } from 'nanoid';
 import type { Request, Response } from '../http.js';
 import {
@@ -25,7 +26,17 @@ import { runVoiceDesign } from '../tts/design-voice-core.js';
 import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace/voice-library-usage.js';
 import { castJsonPath, qwenVoiceSidecarPath } from '../workspace/paths.js';
 import { qwenVoicePtPath } from './qwen-voice.js';
-import { purgeVoiceSamples } from '../tts/voice-sample-cache.js';
+import { selectTtsProvider, type TtsModelKey } from '../tts/index.js';
+import { encodePcmToAudio } from '../tts/mp3.js';
+import {
+  buildSampleText,
+  djb2,
+  purgeVoiceSamples,
+  voiceSampleAudioDir,
+  voiceSampleFileName,
+  voiceSampleFilePath,
+  voiceSamplePublicUrl,
+} from '../tts/voice-sample-cache.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
@@ -323,6 +334,64 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
   }
 });
 
+/* POST /api/voice-library/:voiceUuid/sample
+
+   Mirrors POST /api/voices/:voiceId/sample (routes/voice-sample.ts) for a
+   library voice: synthesise (or serve cached) a short preview via the
+   library's Qwen storageKey.
+
+   RECONCILIATION (fs-38 Wave 1, Task 10): the plan's original design called
+   for a separate `lib-<uuid>` cache scope, but Task 9's design/redesign/
+   promote routes above already cache auditions under `qwen-<uuid>` (the
+   storageKey itself — see runVoiceDesign's `cacheScope: opts.storageKey`).
+   Using that SAME scope here means one cache namespace per library voice —
+   a Play click right after a design/promote reuses the freshly-warmed
+   audition instead of re-synthesising, and ONE `purgeVoiceSamples` call
+   (either here or in the DELETE route below) clears every cached preview
+   for the voice. A separate `lib-` namespace would have needed its own
+   purge call and never benefited from the design-time warm cache — no
+   consumer needs the two namespaces kept apart.
+
+   `contentToken = djb2(entry.persona)` busts the cache on a persona edit
+   even when the request text/voiceName are otherwise unchanged (Wave 3
+   swaps in a master-clip hash for cloned voices instead). */
+voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response) => {
+  try {
+    const { voiceUuid } = req.params;
+    const entry = await readEntry(voiceUuid);
+    if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+
+    const body = (req.body ?? {}) as { text?: unknown };
+    const voiceName = `qwen-${voiceUuid}`;
+    const modelKey: TtsModelKey = 'qwen3-tts-0.6b';
+    const text =
+      typeof body.text === 'string' && body.text.trim().length > 0
+        ? body.text.trim()
+        : buildSampleText({ id: voiceUuid, character: entry.name, overrideTtsVoices: {} });
+    const cacheScope = `qwen-${voiceUuid}`;
+    const contentToken = entry.persona ? djb2(entry.persona).toString(36) : undefined;
+
+    const fileName = voiceSampleFileName({ cacheScope, modelKey, text, voiceName }, contentToken);
+    const filePath = voiceSampleFilePath(fileName);
+    const publicUrl = voiceSamplePublicUrl(fileName);
+
+    if (existsSync(filePath)) {
+      return res.json({ url: publicUrl, cached: true });
+    }
+
+    await mkdir(voiceSampleAudioDir(), { recursive: true });
+
+    const provider = selectTtsProvider(modelKey);
+    const { pcm, sampleRate } = await provider.synthesize({ text, voiceName, modelKey });
+    const mp3 = await encodePcmToAudio(pcm, sampleRate);
+    await writeFile(filePath, mp3);
+    return res.json({ url: publicUrl, cached: false });
+  } catch (e) {
+    console.error('[voice-library] sample failed', e);
+    return res.status(502).json({ error: (e as Error).message || 'Voice sample failed.' });
+  }
+});
+
 interface AssignBody {
   bookId?: unknown;
   characterId?: unknown;
@@ -415,7 +484,12 @@ async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<void> {
   await rm(qwenVoicePtPath(qwenVoiceId), { force: true }).catch(() => {});
   await rm(qwenVoiceSidecarPath(qwenVoiceId), { force: true }).catch(() => {});
 
-  purgeVoiceSamples(voiceUuid);
+  /* Purge by the REAL cache scope (`qwen-<uuid>`, the storageKey) — design/
+     promote (Task 9) and the sample route (Task 10) both cache auditions
+     there, not under the bare voiceUuid. Purging `voiceUuid` here (the
+     pre-fix behaviour) silently orphaned every cached sample MP3 on
+     delete — see the Task 10 reconciliation note above the sample route. */
+  purgeVoiceSamples(qwenVoiceId);
 
   try {
     await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {

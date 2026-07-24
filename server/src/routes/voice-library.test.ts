@@ -15,6 +15,21 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
+/* Task 10 — the sample route calls selectTtsProvider(). Stub it the same way
+   routes/voice-sample.test.ts does, so the encoder boundary (real ffmpeg) is
+   the only system dependency for a synth call. vi.mock is hoisted, so it
+   intercepts every dynamic `import('./voice-library.js')` below regardless of
+   vi.resetModules() churn. */
+const { synthesize } = vi.hoisted(() => ({ synthesize: vi.fn() }));
+
+vi.mock('../tts/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../tts/index.js')>();
+  return {
+    ...actual,
+    selectTtsProvider: vi.fn(() => ({ synthesize })),
+  };
+});
+
 let dir: string;
 let app: Express;
 let vl: typeof import('../workspace/voice-library.js');
@@ -108,6 +123,12 @@ beforeEach(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/voice-library', requireVoiceLibraryEnabled, voiceLibraryRouter);
+
+  synthesize.mockReset();
+  /* Default: 0.3 s of silence at 24 kHz mono int16 — matches the
+     Task 9 sidecar stub's clip length, keeps ffmpeg encoding fast. */
+  const pcm = Buffer.alloc(24_000 * 2 * 0.3, 0);
+  synthesize.mockResolvedValue({ pcm, sampleRate: 24_000, mimeType: 'audio/L16' });
 });
 
 afterEach(() => {
@@ -254,7 +275,13 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
   /** Seeds every artifact a real designed library voice would have on disk:
       the manifest dir (Task 3), the global qwen `.pt` + sidecar `.json`
       (mirrors `qwen-voice.ts`'s design-route output), and a cached sample
-      MP3 under the voiceUuid scope (mirrors a future library sample route). */
+      MP3 under the REAL `qwen-<uuid>` scope — the same scope Task 9's
+      design/promote and Task 10's sample route actually cache under (see
+      voice-sample-cache.ts's `purgeVoiceSamples` doc). Seeding under the bare
+      `voiceUuid` scope here would make this a placebo: it'd match the
+      DELETE route's (pre-fix) `purgeVoiceSamples(voiceUuid)` call by
+      construction, without proving the purge matches a file the app would
+      really create. */
   async function seedFullVoiceArtifacts(voiceUuid: string) {
     await vl.writeEntry(makeEntry({ voiceUuid, engines: { qwen: { status: 'ready' } } }));
 
@@ -265,7 +292,7 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
 
     mkdirSync(sampleCache.voiceSampleAudioDir(), { recursive: true });
     const sampleFileName = sampleCache.voiceSampleFileName({
-      cacheScope: voiceUuid,
+      cacheScope: qwenName,
       modelKey: 'qwen3-tts-0.6b',
       text: 'Hello.',
       voiceName: qwenName,
@@ -366,6 +393,64 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
     };
     expect(cast.characters[0].overrideTtsVoices?.qwen).toBeUndefined();
     expect(cast.characters[0].overrideTtsVoices?.coqui).toEqual({ name: 'preset-voice' });
+  });
+});
+
+/* Task 10 — POST /:voiceUuid/sample. Mirrors POST /api/voices/:voiceId/sample
+   (routes/voice-sample.ts) but scoped to a library voice: cacheScope is the
+   RECONCILED `qwen-<uuid>` storageKey (not the plan's original `lib-<uuid>`
+   — see the module doc comment above the route), and contentToken folds in
+   a hash of the entry's persona so a persona edit busts the cache even when
+   the (scope, modelKey, text, voiceName) tuple is otherwise unchanged. */
+describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
+  it('404s for an unknown voiceUuid', async () => {
+    const res = await request(app).post('/api/voice-library/does-not-exist/sample').send({});
+    expect(res.status).toBe(404);
+    expect(synthesize).not.toHaveBeenCalled();
+  });
+
+  it('404s when the voice-library feature is off', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'gate-1' }));
+    await writeConfigOverride('voices.library.enabled', false);
+    const res = await request(app).post('/api/voice-library/gate-1/sample').send({});
+    expect(res.status).toBe(404);
+  });
+
+  it('synthesises and caches a sample under the qwen-<uuid> scope; a repeat call is a cache hit', async () => {
+    await vl.writeEntry(
+      makeEntry({ voiceUuid: 'sample-1', name: 'Nova', provenance: 'designed', persona: 'a calm narrator' }),
+    );
+
+    const res1 = await request(app).post('/api/voice-library/sample-1/sample').send({});
+    expect(res1.status).toBe(200);
+    expect(res1.body.url).toMatch(/^\/audio\/voices\/qwen-sample-1-qwen3-tts-0\.6b-[a-z0-9]+\.mp3$/);
+    expect(synthesize).toHaveBeenCalledTimes(1);
+    const synthArgs = synthesize.mock.calls[0][0] as { voiceName: string; modelKey: string };
+    expect(synthArgs.voiceName).toBe('qwen-sample-1');
+    expect(synthArgs.modelKey).toBe('qwen3-tts-0.6b');
+
+    const res2 = await request(app).post('/api/voice-library/sample-1/sample').send({});
+    expect(res2.status).toBe(200);
+    expect(res2.body.url).toBe(res1.body.url);
+    expect(synthesize).toHaveBeenCalledTimes(1); // cache hit, no re-synth
+  });
+
+  it('a persona edit changes the returned sample url (content-hashed cache key)', async () => {
+    await vl.writeEntry(
+      makeEntry({ voiceUuid: 'sample-2', name: 'Nova', provenance: 'designed', persona: 'a calm narrator' }),
+    );
+
+    const before = await request(app).post('/api/voice-library/sample-2/sample').send({});
+    expect(before.status).toBe(200);
+
+    await request(app)
+      .patch('/api/voice-library/sample-2')
+      .send({ persona: 'a brighter, warmer read' });
+
+    const after = await request(app).post('/api/voice-library/sample-2/sample').send({});
+    expect(after.status).toBe(200);
+    expect(after.body.url).not.toBe(before.body.url);
+    expect(synthesize).toHaveBeenCalledTimes(2); // distinct content tokens, both cache misses
   });
 });
 
