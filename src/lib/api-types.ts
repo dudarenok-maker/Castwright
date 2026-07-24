@@ -2020,7 +2020,8 @@ export interface paths {
          *     kinds: `phase`, `throttle`, `heartbeat`, `annotation`
          *     (`{ chapterId, annotations: [{ sentenceId, emotion }] }`), `chapter-failed`,
          *     `error` (`code: no_attribution | quota_exhausted`), and a terminal
-         *     `result` (`{ done, annotatedChapters, totalAnnotations }`).
+         *     `result` (`{ done, annotatedChapters, totalAnnotations }`). When an
+         *     optional chapterId is provided, only that chapter is annotated.
          */
         post: operations["annotateEmotion"];
         delete?: never;
@@ -7639,6 +7640,8 @@ export interface operations {
                 "application/json": {
                     /** @description Optional analyzer model id override (matches the analysis endpoints). */
                     model?: string;
+                    /** @description fs-35 — scope the pass to a single chapter id. Omit for whole-book. */
+                    chapterId?: number;
                 };
             };
         };

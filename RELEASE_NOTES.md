@@ -1,3 +1,7 @@
+# Castwright 1.15.0
+
+- **Re-detect one chapter, not the whole book.** Edited a single chapter? "Detect emotions" now works on just the chapter you're reading — the whole-book pass is one click away in its menu.
+
 # Castwright 1.14.0
 
 - **The confusing GPU-memory settings are gone — Castwright is learning to manage your graphics card by itself.** The old Advanced Settings for GPU memory (a budget number, per-engine "weights", a coexist threshold) were a fiddly guessing game that changed depending on which card you had plugged in. They're now retired in favour of groundwork that reads your card's *actual* free memory and reserves exactly what each voice needs before it runs — not just before it speaks, but before loading a voice model or designing a new voice too — so switching between your laptop card and an external GPU needs no settings change, and two jobs can't quietly collide and run out of memory. After validation on real single- and dual-GPU hardware, this automatic placement is now **on by default** — it reserves what each voice needs before it runs and steers work to whichever card has room; a single "reserve" cushion is the only knob left, and you can switch the whole thing off if you'd rather run one job at a time. On a two-card machine it now frees up room on the card that actually needs it, leaving an idle voice on your *other* card undisturbed.

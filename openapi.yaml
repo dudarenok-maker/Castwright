@@ -2575,7 +2575,8 @@ paths:
         kinds: `phase`, `throttle`, `heartbeat`, `annotation`
         (`{ chapterId, annotations: [{ sentenceId, emotion }] }`), `chapter-failed`,
         `error` (`code: no_attribution | quota_exhausted`), and a terminal
-        `result` (`{ done, annotatedChapters, totalAnnotations }`).
+        `result` (`{ done, annotatedChapters, totalAnnotations }`). When an
+        optional chapterId is provided, only that chapter is annotated.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
       requestBody:
@@ -2589,6 +2590,11 @@ paths:
                   {
                     type: string,
                     description: 'Optional analyzer model id override (matches the analysis endpoints).',
+                  }
+                chapterId:
+                  {
+                    type: integer,
+                    description: 'fs-35 — scope the pass to a single chapter id. Omit for whole-book.',
                   }
       responses:
         '200':

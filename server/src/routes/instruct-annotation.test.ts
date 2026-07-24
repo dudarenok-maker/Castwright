@@ -229,6 +229,39 @@ describe('POST /api/books/:bookId/instruct-annotation', () => {
     expect(events.some((e) => e.kind === 'annotation' && e.chapterId === 2)).toBe(false);
   });
 
+  it('scopes the pass to a single chapter when chapterId is provided', async () => {
+    writeBook(SENTENCES);
+    runStage3.mockImplementation((_m, chapterId): Promise<Stage3ChapterOutput> =>
+      Promise.resolve({
+        annotations:
+          chapterId === 1
+            ? [{ sentenceId: 2, instruct: 'sharp' }]
+            : [{ sentenceId: 3, instruct: 'soft' }],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/instruct-annotation`)
+      .send({ chapterId: 2 });
+    expect(res.status).toBe(200);
+
+    expect(runStage3.mock.calls.map((c) => c[1])).toEqual([2]);
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.kind === 'annotation' && e.chapterId === 2)).toBe(true);
+    expect(events.some((e) => e.kind === 'annotation' && e.chapterId === 1)).toBe(false);
+    expect(events.find((e) => e.kind === 'result')).toMatchObject({ annotatedChapters: 1 });
+  });
+
+  it('emits no_attribution when the requested chapterId is absent/excluded', async () => {
+    writeBook(SENTENCES);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/instruct-annotation`)
+      .send({ chapterId: 999 });
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.kind === 'error' && e.code === 'no_attribution')).toBe(true);
+    expect(runStage3).not.toHaveBeenCalled();
+  });
+
   it('on mid-pass daily-quota exhaustion, keeps already-streamed chapters and stops with quota_exhausted', async () => {
     writeBook(SENTENCES);
     const { DailyQuotaExhaustedError } = await import('../analyzer/rate-limit.js');

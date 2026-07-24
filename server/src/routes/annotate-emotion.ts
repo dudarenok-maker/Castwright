@@ -89,8 +89,17 @@ annotateEmotionRouter.post(
     const excludedChapterIds = new Set<number>(
       located.state.chapters.filter((c) => c.excluded).map((c) => c.id),
     );
+    /* fs-35 — optional per-chapter scope. When the client sends a chapterId,
+       narrow the pass to that single chapter (still respecting `excluded`). An
+       absent/excluded chapter yields an empty set → the existing
+       no_attribution path below. Deliberately NOT a distinct no_such_chapter
+       code (see the fs-35 design doc): the UI disables the per-chapter trigger
+       on empty chapters, so this is unreachable through the button. */
+    const scopeChapterId =
+      typeof req.body?.chapterId === 'number' ? req.body.chapterId : null;
     const chapterIds = [...byChapter.keys()]
       .filter((id) => !excludedChapterIds.has(id))
+      .filter((id) => scopeChapterId == null || id === scopeChapterId)
       .sort((a, b) => a - b);
 
     /* SSE setup (mirrors analysis.ts). */

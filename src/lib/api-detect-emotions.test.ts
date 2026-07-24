@@ -98,6 +98,26 @@ describe('api.detectEmotions', () => {
     await api.detectEmotions('book-1', { onPhase: (e) => phases.push(e) });
     expect(phases[0]).toMatchObject({ chapterIndex: 3, totalChapters: 12, estRemainingMs: 60_000 });
   });
+
+  it('forwards chapterId in the request body when provided', async () => {
+    const { api } = await import('./api');
+    fetchMock.mockResolvedValueOnce(
+      sseResponse([JSON.stringify({ kind: 'result', done: true, annotatedChapters: 1, totalAnnotations: 0 })]),
+    );
+    await api.detectEmotions('b1', { chapterId: 7 });
+    const [, init] = fetchMock.mock.calls.at(-1)!;
+    expect(JSON.parse(init!.body as string)).toMatchObject({ chapterId: 7 });
+  });
+
+  it('omits chapterId from the body when not provided', async () => {
+    const { api } = await import('./api');
+    fetchMock.mockResolvedValueOnce(
+      sseResponse([JSON.stringify({ kind: 'result', done: true, annotatedChapters: 0, totalAnnotations: 0 })]),
+    );
+    await api.detectEmotions('b1', {});
+    const [, init] = fetchMock.mock.calls.at(-1)!;
+    expect(JSON.parse(init!.body as string)).not.toHaveProperty('chapterId');
+  });
 });
 
 describe('api.detectEmotions — chapter-failed is surfaced', () => {

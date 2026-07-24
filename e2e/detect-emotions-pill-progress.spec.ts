@@ -6,7 +6,11 @@
  *
  * The mockDetectEmotions + mockDetectInstruct mocks emit three ticks each
  * with fixed delays (~1.56 s + ~0.96 s = ~2.52 s total), giving the test
- * enough time to navigate away and back before the stream clears.
+ * enough time to navigate away and back before the stream clears. This slow,
+ * multi-chapter (totalChapters: 2) timing only happens on the whole-book path
+ * — fs-35's per-chapter primary is scoped to one chapter and resolves in a
+ * single fast tick — so this spec drives the run via the ⌄ menu's
+ * "Detect whole book" + confirm, not the bare primary click.
  *
  * Uses the Solway Bay (sb) fixture book — 18 chapters all in 'done' state,
  * already cast + analysed, so detect-emotions-button is immediately clickable
@@ -32,12 +36,12 @@ test.describe('detect-emotions pill progress (analysis-pill Task 10)', () => {
 
     await expect(detectBtn).toBeVisible({ timeout: 5_000 });
     await expect(detectBtn).toBeEnabled();
-    await detectBtn.click();
 
-    /* Confirm dialog must appear and be acknowledged. */
-    const confirmBtn = page.getByTestId('detect-emotions-confirm');
-    await expect(confirmBtn).toBeVisible({ timeout: 3_000 });
-    await confirmBtn.click();
+    /* Whole-book path (⌄ menu → confirm) — the slow, multi-chapter mock
+       timing this spec depends on. */
+    await page.getByTestId('detect-emotions-menu-toggle').click();
+    await page.getByTestId('detect-emotions-wholebook').click();
+    await page.getByTestId('detect-emotions-confirm').click();
 
     /* prosodyActions.setActive is dispatched synchronously before the first
        await inside run(), so the pill flips to "Analysing" immediately. */

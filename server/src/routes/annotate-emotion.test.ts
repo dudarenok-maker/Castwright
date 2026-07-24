@@ -295,6 +295,41 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
     expect(events.some((e) => e.kind === 'result')).toBe(true);
   });
 
+  it('scopes the pass to a single chapter when chapterId is provided', async () => {
+    writeBook(SENTENCES);
+    runEmotion.mockImplementation((_m, chapterId): Promise<EmotionAnnotationOutput> =>
+      Promise.resolve({
+        annotations:
+          chapterId === 1
+            ? [{ sentenceId: 2, emotion: 'angry' }]
+            : [{ sentenceId: 3, emotion: 'sad' }],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/annotate-emotion`)
+      .send({ chapterId: 2 });
+    expect(res.status).toBe(200);
+
+    // Only chapter 2 was analyzed.
+    expect(runEmotion.mock.calls.map((c) => c[1])).toEqual([2]);
+
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.kind === 'annotation' && e.chapterId === 2)).toBe(true);
+    expect(events.some((e) => e.kind === 'annotation' && e.chapterId === 1)).toBe(false);
+    expect(events.find((e) => e.kind === 'result')).toMatchObject({ annotatedChapters: 1 });
+  });
+
+  it('emits no_attribution when the requested chapterId is absent/excluded', async () => {
+    writeBook(SENTENCES);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/annotate-emotion`)
+      .send({ chapterId: 999 });
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.kind === 'error' && e.code === 'no_attribution')).toBe(true);
+    expect(runEmotion).not.toHaveBeenCalled();
+  });
+
   it('carries chapterIndex/totalChapters on every phase event, and estRemainingMs only from the 2nd chapter onward', async () => {
     writeBook(SENTENCES); // 2 chapters
     runEmotion.mockImplementation(async (_m, chapterId): Promise<EmotionAnnotationOutput> => {
