@@ -73,9 +73,8 @@ describe('fs-33 — DetectEmotionsButton', () => {
       </Provider>,
     );
 
-    // open the confirm popover, then confirm
+    // the primary click alone now starts the (per-chapter) run
     fireEvent.click(screen.getByTestId('detect-emotions-button'));
-    fireEvent.click(screen.getByTestId('detect-emotions-confirm'));
 
     // Both reducers fire: emotion from pass 1, instruct text from pass 2
     await waitFor(() =>
@@ -99,7 +98,8 @@ describe('fs-33 — DetectEmotionsButton', () => {
       </Provider>,
     );
 
-    fireEvent.click(screen.getByTestId('detect-emotions-button'));
+    fireEvent.click(screen.getByTestId('detect-emotions-menu-toggle'));
+    fireEvent.click(screen.getByTestId('detect-emotions-wholebook'));
     // The confirm popover should mention text-mutating reactions (gasp/sigh/laugh)
     const dialog = screen.getByRole('dialog', { name: /Detect emotions/i });
     expect(dialog.textContent).toMatch(/gasp|sigh|laugh/i);
@@ -131,7 +131,6 @@ describe('fs-33 — DetectEmotionsButton', () => {
     );
 
     fireEvent.click(screen.getByTestId('detect-emotions-button'));
-    fireEvent.click(screen.getByTestId('detect-emotions-confirm'));
 
     // Progress bar should appear; click Cancel
     await waitFor(() => screen.getByTestId('detect-emotions-progress'));
@@ -181,7 +180,6 @@ describe('fs-33 — DetectEmotionsButton', () => {
       </Provider>,
     );
     fireEvent.click(screen.getByTestId('detect-emotions-button'));
-    fireEvent.click(screen.getByTestId('detect-emotions-confirm'));
     // cleared in finally despite the throw:
     await waitFor(() => expect(store.getState().prosody.activeStreams['b1']).toBeUndefined());
     // and it was set while running:
@@ -210,7 +208,6 @@ describe('fs-33 — DetectEmotionsButton', () => {
     );
 
     fireEvent.click(screen.getByTestId('detect-emotions-button'));
-    fireEvent.click(screen.getByTestId('detect-emotions-confirm'));
 
     await waitFor(() =>
       expect(screen.getByTestId('detect-emotions-progress-detail').textContent).toBe(
@@ -225,5 +222,71 @@ describe('fs-33 — DetectEmotionsButton', () => {
     expect(entry).toMatchObject({ chapterIndex: 3, totalChapters: 12 });
     expect(entry?.estRemainingMs).toBeGreaterThanOrEqual(250_000);
     expect(entry?.estRemainingMs).toBeLessThan(251_000);
+  });
+
+  it('primary runs the current chapter only (forwards its chapterId to both passes)', async () => {
+    const chapterIds: Array<number | undefined> = [];
+    detectEmotions.mockImplementation((_id: string, opts?: any) => {
+      if (!opts) return Promise.resolve({ annotatedChapters: 0, totalAnnotations: 0 });
+      chapterIds.push(opts.chapterId);
+      return Promise.resolve({ annotatedChapters: 1, totalAnnotations: 1 });
+    });
+    detectInstruct.mockImplementation((_id: string, opts?: any) => {
+      if (!opts) return Promise.resolve({ annotatedChapters: 0, totalAnnotations: 0 });
+      chapterIds.push(opts.chapterId);
+      return Promise.resolve({ annotatedChapters: 1, totalAnnotations: 1 });
+    });
+    const store = makeStore(); // ui.stage.currentChapterId === 1, one sentence in ch1
+    render(
+      <Provider store={store}>
+        <DetectEmotionsButton />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('detect-emotions-button'));
+    await waitFor(() => expect(screen.getByTestId('detect-emotions-done')).toBeTruthy());
+    expect(chapterIds).toEqual([1, 1]);
+    expect(screen.getByTestId('detect-emotions-done').textContent).toMatch(/in this chapter/i);
+  });
+
+  it('whole book (via the menu) runs with no chapterId', async () => {
+    const chapterIds: Array<number | undefined> = [];
+    detectEmotions.mockImplementation((_id: string, opts?: any) => {
+      if (!opts) return Promise.resolve({ annotatedChapters: 0, totalAnnotations: 0 });
+      chapterIds.push(opts.chapterId);
+      return Promise.resolve({ annotatedChapters: 2, totalAnnotations: 2 });
+    });
+    detectInstruct.mockResolvedValue({ annotatedChapters: 2, totalAnnotations: 0 });
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <DetectEmotionsButton />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('detect-emotions-menu-toggle'));
+    fireEvent.click(screen.getByTestId('detect-emotions-wholebook'));
+    fireEvent.click(screen.getByTestId('detect-emotions-confirm'));
+    await waitFor(() => expect(screen.getByTestId('detect-emotions-done')).toBeTruthy());
+    expect(chapterIds[0]).toBeUndefined();
+  });
+
+  it('primary is disabled when the current chapter has no sentences', () => {
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer, ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer, prosody: prosodySlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: { ...manuscriptSlice.getInitialState(), sentences: [
+          { id: 1, chapterId: 1, characterId: 'wren', text: 'Get down!' } as never,
+        ] },
+        // current chapter 2 has NO sentences
+        ui: { ...uiSlice.getInitialState(), stage: { kind: 'ready', bookId: 'b1', view: 'manuscript', currentChapterId: 2 } as never },
+      },
+    });
+    render(<Provider store={store}><DetectEmotionsButton /></Provider>);
+    expect((screen.getByTestId('detect-emotions-button') as HTMLButtonElement).disabled).toBe(true);
   });
 });
