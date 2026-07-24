@@ -1,5 +1,6 @@
 # Castwright 1.15.0
 
+- **The demo library shows the right covers again.** In the built-in sample library, _Saltgrave_ and _The Tidewatcher's Oath_ were wearing each other's cover art — they now each show their own.
 - **Re-detect one chapter, not the whole book.** Edited a single chapter? "Detect emotions" now works on just the chapter you're reading — the whole-book pass is one click away in its menu.
 - **You can see the chapter title on the timeline now.** Every chapter opens with its title read
   aloud — the player now shows that opening beat as a small marker at the start of the track, so
