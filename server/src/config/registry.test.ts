@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { GROUPS, KNOBS, allKnobs, getKnob, knobByEnv, knobsInGroup } from './registry.js';
 
 describe('config registry', () => {
-  it('declares the twelve groups', () => {
+  it('declares the thirteen groups', () => {
     expect(GROUPS.map((g) => g.id)).toEqual([
       'analyzer-sampling',
       'analyzer-chunking',
@@ -16,6 +16,7 @@ describe('config registry', () => {
       'rate-limits',
       'lan-access',
       'analyzer-structure',
+      'voices-library',
     ]);
   });
 
@@ -61,9 +62,13 @@ describe('config registry', () => {
     expect(knobsInGroup('does-not-exist')).toEqual([]);
   });
 
-  it('prompt knobs carry isPrompt and empty env; non-prompt knobs have a non-empty env', () => {
+  it('prompt knobs carry isPrompt and empty env; non-prompt knobs have a non-empty env (except the route/UI-only feature flags)', () => {
+    // voices.library.enabled gates a route/UI, not an env-backed process setting —
+    // it has no restart-sidecar/-server apply mode to read an env var for, so it's
+    // the one deliberate non-prompt exception (see registry.ts).
+    const NON_PROMPT_ENV_EXEMPT = new Set(['voices.library.enabled']);
     for (const k of allKnobs()) {
-      if (k.isPrompt) { expect(k.env).toBe(''); }
+      if (k.isPrompt || NON_PROMPT_ENV_EXEMPT.has(k.key)) { expect(k.env).toBe(''); }
       else { expect(k.env.length).toBeGreaterThan(0); }
     }
   });
