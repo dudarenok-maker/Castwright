@@ -38,6 +38,11 @@ import { playBaseVoiceSampleWithAutoLoad } from '../lib/play-sample-with-auto-lo
 import { gradientForTtsVoice } from '../lib/voice-palette';
 import { findCharacterForVoice, pickMergeSurvivor } from '../lib/voice-character-link';
 import { MyVoicesSection } from '../components/voices/my-voices-section';
+import {
+  VoiceProvenanceBadge,
+  type VoiceProvenanceSlot,
+} from '../components/voices/voice-provenance-badge';
+import { promoteCharacterVoice } from '../store/voice-library-slice';
 import { CompareCastModal } from '../modals/compare-cast-modal';
 import { RebaselineModalContainer } from '../modals/rebaseline-modal';
 import {
@@ -56,7 +61,7 @@ import {
   type DuplicateCandidate,
 } from '../lib/cross-book-duplicates';
 
-type Tab = 'all' | 'current' | 'library' | 'base';
+type Tab = 'all' | 'current' | 'library';
 
 interface Props {
   library: Voice[];
@@ -1345,6 +1350,9 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               onRebaselineSeries={(bookId) =>
                 dispatch(uiActions.openRebaselineModal({ bookId }))
               }
+              characters={characters}
+              currentBookId={currentBookId}
+              onViewMyVoices={() => setSection('my-voices')}
             />
           ))}
         </div>
@@ -1644,7 +1652,7 @@ function buildFamilies(
   tab: Tab,
 ): Array<VoiceFamily & { seriesGroups: SeriesGroup[] }> {
   const filtered = library.filter((v) => {
-    if (tab === 'all' || tab === 'base') return true;
+    if (tab === 'all') return true;
     return v.source === tab;
   });
   const byKey = new Map<string, VoiceFamily>();
@@ -1706,7 +1714,7 @@ interface QwenStatusGroup {
    buildFamilies; "Needs a voice" sorts first so action-needed is at the top. */
 function buildQwenStatusGroups(library: Voice[], tab: Tab): QwenStatusGroup[] {
   const filtered = library.filter((v) => {
-    if (tab === 'all' || tab === 'base') return true;
+    if (tab === 'all') return true;
     return v.source === tab;
   });
   const buckets: Record<QwenStatus, Voice[]> = { none: [], designed: [] };
@@ -1917,13 +1925,23 @@ interface QwenSectionProps {
      sits naturally on the Qwen sections' series-group headers. */
   representativeBookIdBySeries: Map<string, string>;
   onRebaselineSeries: (bookId: string) => void;
+  /* fs-38 Wave 1, Task 16 — "Save to my voices" needs a real characterId
+     (not always `voice.id` — a reused/shared voiceId doesn't identify one
+     character), and it only makes sense for a card belonging to the
+     CURRENTLY OPEN book (a foreign book's cast isn't loaded into redux).
+     `characters` + `currentBookId` let each card resolve its own match via
+     `findCharacterForVoice`, same helper the rest of this file uses. */
+  characters: Character[];
+  currentBookId: string | null;
+  onViewMyVoices: () => void;
 }
 
 /* Status-bucketed Qwen section (plan 117): "Needs a voice" / "Designed
    voices", each nested series → book → character. No "Audition base voice"
    (a status bucket is not one voice) and no ⚠ duplicate pill (unique Qwen
    voiceIds never share a base voice). The "Designed voices" cards carry a
-   Designed / Sampled / Generated badge. */
+   Designed / Sampled / Generated badge, the shared VoiceProvenanceBadge, and
+   (fs-38 Wave 1) an inline "Save to my voices" / "View in My voices". */
 function QwenStatusSection({
   group,
   draggingVoiceId,
@@ -1936,7 +1954,42 @@ function QwenStatusSection({
   missingVariantCountByVoiceId,
   representativeBookIdBySeries,
   onRebaselineSeries,
+  characters,
+  currentBookId,
+  onViewMyVoices,
 }: QwenSectionProps) {
+  const dispatch = useAppDispatch();
+  const [promoting, setPromoting] = useState<string | null>(null);
+
+  async function handleSaveToMyVoices(character: Character, key: string) {
+    if (!currentBookId) return;
+    setPromoting(key);
+    try {
+      await dispatch(
+        promoteCharacterVoice({
+          bookId: currentBookId,
+          characterId: character.id,
+          name: character.name ?? character.id,
+        }),
+      ).unwrap();
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'info',
+          message: `Saved ${character.name ?? character.id} to My voices.`,
+        }),
+      );
+    } catch (e) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: (e as Error).message || 'Could not save this voice to My voices.',
+        }),
+      );
+    } finally {
+      setPromoting(null);
+    }
+  }
+
   const seriesGroups = group.seriesGroups;
   return (
     <section aria-label={`Qwen · ${group.title}`}>
@@ -2020,6 +2073,23 @@ function QwenStatusSection({
                               </span>
                             ) : undefined
                           }
+                          footer={
+                            group.status === 'designed' ? (
+                              <QwenDesignedCardFooter
+                                slot={v.overrideTtsVoices?.qwen}
+                                character={
+                                  v.bookId === currentBookId
+                                    ? findCharacterForVoice(v, characters, true)
+                                    : undefined
+                                }
+                                saving={promoting === (v.familyKey ?? v.id)}
+                                onSave={(character) =>
+                                  void handleSaveToMyVoices(character, v.familyKey ?? v.id)
+                                }
+                                onViewMyVoices={onViewMyVoices}
+                              />
+                            ) : undefined
+                          }
                         />
                       ))}
                     </div>
@@ -2031,6 +2101,54 @@ function QwenStatusSection({
         })}
       </div>
     </section>
+  );
+}
+
+/* fs-38 Wave 1, Task 16 — the "Designed voices" In-use card's provenance row:
+   the shared VoiceProvenanceBadge plus whichever single follow-on action
+   applies — "View in My voices" for a slot already pulled from the library
+   (libraryUuid set), else "Save to my voices" when this book's own matching
+   character can be resolved (promoteCharacterVoice needs a real
+   characterId), else nothing (a foreign-book card with no resolvable
+   character in redux). */
+function QwenDesignedCardFooter({
+  slot,
+  character,
+  saving,
+  onSave,
+  onViewMyVoices,
+}: {
+  slot: VoiceProvenanceSlot | undefined;
+  character: Character | undefined;
+  saving: boolean;
+  onSave: (character: Character) => void;
+  onViewMyVoices: () => void;
+}) {
+  return (
+    <>
+      <VoiceProvenanceBadge slot={slot} />
+      {slot?.libraryUuid ? (
+        <button
+          type="button"
+          onClick={onViewMyVoices}
+          className="text-[11px] font-semibold text-ink/60 hover:text-ink underline min-h-[44px] fine-pointer:min-h-0"
+        >
+          View in My voices
+        </button>
+      ) : (
+        character && (
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => onSave(character)}
+            data-testid={`voice-save-to-my-voices-${character.id}`}
+            className="text-[11px] font-semibold text-magenta hover:text-magenta/80 disabled:opacity-50 disabled:cursor-wait min-h-[44px] fine-pointer:min-h-0"
+          >
+            {saving ? 'Saving…' : 'Save to my voices'}
+          </button>
+        )
+      )}
+    </>
   );
 }
 

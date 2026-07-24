@@ -27,7 +27,7 @@ function makeStore(opts: {
   language?: string;
   eligibleTtsEngines?: string[];
   characters?: Character[];
-  designActive?: { bookId: string; state: string } | null;
+  designActive?: { bookId: string | null; state: string } | null;
 } = {}) {
   const bookId = opts.bookId ?? 'b1';
   const store = configureStore({
@@ -177,6 +177,36 @@ describe('VoiceReadinessGateModal', () => {
       }),
     ).toBe(true);
     /* Gate stays open and the view is untouched — the run belongs to another book. */
+    expect(store.getState().ui.voiceReadinessGate).toEqual({ bookId: 'b1' });
+    expect(store.getState().ui.stage).toMatchObject({ view: 'manuscript' });
+  });
+
+  it('fs-38 Wave 1 — a book-less (bookId: null) library design also warns and refuses to dispatch, for ANY book', () => {
+    /* Mirrors the "another book" test above but for the book-less
+       (bookId: null) library-design snapshot create-library-voice.tsx
+       opens. Every real book's gate must treat it as "elsewhere" — there is
+       no book it could ever equal. */
+    const store = makeStore({
+      bookId: 'b1',
+      characters: [qwenChar({ id: 'a', name: 'Alice', lines: 5 })],
+      designActive: { bookId: null, state: 'running' },
+    });
+    const dispatchSpy = vi.spyOn(store, 'dispatch');
+    render(
+      <Provider store={store}>
+        <VoiceReadinessGateModal />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Design full cast' }));
+    expect(
+      dispatchSpy.mock.calls.some((c) => c[0]?.type === castDesignActions.designAllRequested.type),
+    ).toBe(false);
+    expect(
+      dispatchSpy.mock.calls.some((c) => {
+        const action = c[0] as { type?: string; payload?: { kind?: string } };
+        return action?.type === 'notifications/pushToast' && action.payload?.kind === 'warn';
+      }),
+    ).toBe(true);
     expect(store.getState().ui.voiceReadinessGate).toEqual({ bookId: 'b1' });
     expect(store.getState().ui.stage).toMatchObject({ view: 'manuscript' });
   });

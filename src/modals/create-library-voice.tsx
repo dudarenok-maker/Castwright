@@ -12,6 +12,7 @@
 import { useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import { designVoice } from '../store/voice-library-slice';
+import { castDesignActions } from '../store/cast-design-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { IconClose, IconSparkle, IconSpinner, IconPlay, IconPause } from '../lib/icons';
 
@@ -43,8 +44,20 @@ export function CreateLibraryVoiceModal({ onClose }: Props) {
       return;
     }
     setError(null);
-    /* Task 16: dispatch the cast-design pill's start({bookId: null}) here so
-       book views see designRunningElsewhere while this library design runs. */
+    /* fs-38 Wave 1, Task 16 — a book-less library design has no server-owned
+       SSE stream to drive the cast-design pill (unlike a per-book design),
+       so open/close the snapshot directly around the request. bookId: null
+       makes every book's Cast view + the fe-46 gate read this as "design
+       running elsewhere" (cast-design-slice.ts) — the intended single-slot
+       semantics, not a bug. */
+    dispatch(
+      castDesignActions.begin({
+        bookId: null,
+        total: 1,
+        currentName: trimmedName,
+        lastTickAt: Date.now(),
+      }),
+    );
     try {
       const result = await dispatch(
         designVoice({ name: trimmedName, persona: trimmedPersona }),
@@ -53,6 +66,8 @@ export function CreateLibraryVoiceModal({ onClose }: Props) {
       await playback.play(result.previewUrl);
     } catch (e) {
       setError((e as Error).message || 'Voice design failed.');
+    } finally {
+      dispatch(castDesignActions.clear());
     }
   }
 

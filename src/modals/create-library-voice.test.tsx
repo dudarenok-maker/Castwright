@@ -9,6 +9,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { voiceLibrarySlice, type VoiceLibraryEntry } from '../store/voice-library-slice';
+import { castDesignSlice } from '../store/cast-design-slice';
 import { CreateLibraryVoiceModal } from './create-library-voice';
 
 const designLibraryVoice = vi.fn();
@@ -37,7 +38,9 @@ function makeDesignResult(overrides: Partial<VoiceLibraryEntry> = {}) {
 }
 
 function renderModal(onClose = vi.fn()) {
-  const store = configureStore({ reducer: { voiceLibrary: voiceLibrarySlice.reducer } });
+  const store = configureStore({
+    reducer: { voiceLibrary: voiceLibrarySlice.reducer, castDesign: castDesignSlice.reducer },
+  });
   render(
     <Provider store={store}>
       <CreateLibraryVoiceModal onClose={onClose} />
@@ -75,6 +78,27 @@ describe('CreateLibraryVoiceModal', () => {
     );
     await waitFor(() => expect(screen.getByTestId('create-library-voice-save')).not.toBeDisabled());
     expect(screen.getByTestId('create-library-voice-audition')).toBeInTheDocument();
+  });
+
+  it('fs-38 Wave 1, Task 16 — opens a book-less (bookId: null) cast-design snapshot while designing, and clears it when done', async () => {
+    designLibraryVoice.mockResolvedValue(makeDesignResult());
+    const { store } = renderModal();
+    fireEvent.change(screen.getByTestId('create-library-voice-name'), {
+      target: { value: 'Captain Halloran' },
+    });
+    fireEvent.change(screen.getByTestId('create-library-voice-persona'), {
+      target: { value: 'A gruff captain' },
+    });
+    fireEvent.click(screen.getByTestId('create-library-voice-design'));
+    await waitFor(() =>
+      expect(store.getState().castDesign.active).toMatchObject({
+        bookId: null,
+        state: 'running',
+        currentName: 'Captain Halloran',
+      }),
+    );
+    await waitFor(() => expect(screen.getByTestId('create-library-voice-save')).not.toBeDisabled());
+    expect(store.getState().castDesign.active).toBeNull();
   });
 
   it('requires a persona before designing (no api call, inline error)', () => {

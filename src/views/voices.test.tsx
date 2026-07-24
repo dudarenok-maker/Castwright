@@ -11,6 +11,7 @@ import { uiSlice } from '../store/ui-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { librarySlice } from '../store/library-slice';
 import { rebaselineSlice } from '../store/rebaseline-slice';
+import { voiceLibrarySlice } from '../store/voice-library-slice';
 import { LibraryView } from './voices';
 import type { BaseVoice, BookStateResponse, Character, Sentence, Voice } from '../lib/types';
 
@@ -80,6 +81,14 @@ const removeNotLinkedToMock =
     }>
   >();
 
+const promoteToLibraryMock =
+  vi.fn<
+    (args: { bookId: string; characterId: string; name: string }) => Promise<{
+      voiceUuid: string;
+      name: string;
+    }>
+  >();
+
 vi.mock('../lib/api', () => ({
   api: {
     setVoicePin: (voiceId: string, pinned: boolean) => setVoicePin(voiceId, pinned),
@@ -114,6 +123,9 @@ vi.mock('../lib/api', () => ({
       otherBookId: string;
       otherCharacterId: string;
     }) => removeNotLinkedToMock(args),
+    promoteToLibrary: (args: { bookId: string; characterId: string; name: string }) =>
+      promoteToLibraryMock(args),
+    listVoiceLibrary: () => Promise.resolve({ voices: [] }),
   },
 }));
 
@@ -1886,6 +1898,103 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
     );
     expect(screen.queryByText('No voices yet')).toBeNull();
     expect(screen.getByRole('region', { name: 'Qwen · Needs a voice' })).toBeInTheDocument();
+  });
+});
+
+describe('LibraryView Designed-voice provenance badge + Save to my voices (fs-38 Wave 1, Task 16)', () => {
+  const provenanceLibrary: Voice[] = [
+    makeVoice({
+      /* Voice.id === Character.id (no explicit voiceId on either side) is
+         findCharacterForVoice's bare-id fallback (voice-character-link.ts
+         rule 2) — matches how a freshly-designed, never-reused Qwen voice
+         actually looks. */
+      id: 'marlow',
+      character: 'Marlow',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+      overrideTtsVoices: { qwen: { name: 'qwen-marlow' } },
+      ttsVoice: { provider: 'qwen', name: 'qwen-marlow', description: 'Designed voice' },
+    }),
+    makeVoice({
+      id: 'oduvan',
+      character: 'Oduvan',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+      overrideTtsVoices: {
+        qwen: { name: 'qwen-lib1', libraryUuid: 'lib1', provenance: 'designed' },
+      },
+      ttsVoice: { provider: 'qwen', name: 'qwen-lib1', description: 'Designed voice' },
+    }),
+  ];
+
+  function renderProvenance() {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        voices: voicesSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        library: librarySlice.reducer,
+        rebaseline: rebaselineSlice.reducer,
+        voiceLibrary: voiceLibrarySlice.reducer,
+      },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'complete' }));
+    store.dispatch(
+      castSlice.actions.setCharacters([
+        { id: 'marlow', name: 'Marlow', role: 'Empath', color: 'peach', lines: 60 },
+        { id: 'oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta', lines: 10 },
+      ]),
+    );
+    render(
+      <Provider store={store}>
+        <LibraryView library={provenanceLibrary} />
+      </Provider>,
+    );
+    return { store };
+  }
+
+  beforeEach(() => {
+    promoteToLibraryMock.mockReset();
+  });
+
+  it('badges a plain bespoke design "Catalogue" (no libraryUuid/provenance stamp) with a "Save to my voices" button', () => {
+    renderProvenance();
+    const designed = screen.getByRole('region', { name: 'Qwen · Designed voices' });
+    const marlowCard = within(designed).getByText('Marlow').closest('div')!.parentElement!;
+    expect(within(marlowCard).getByTestId('voice-provenance-badge')).toHaveTextContent('Catalogue');
+    expect(screen.getByTestId('voice-save-to-my-voices-marlow')).toBeInTheDocument();
+  });
+
+  it('badges a slot carrying a libraryUuid "My voice" with a "View in My voices" link, no Save button', () => {
+    renderProvenance();
+    const designed = screen.getByRole('region', { name: 'Qwen · Designed voices' });
+    const oduvanCard = within(designed).getByText('Oduvan').closest('div')!.parentElement!;
+    expect(within(oduvanCard).getByTestId('voice-provenance-badge')).toHaveTextContent('My voice');
+    expect(within(oduvanCard).getByText('View in My voices')).toBeInTheDocument();
+    expect(screen.queryByTestId('voice-save-to-my-voices-oduvan')).toBeNull();
+  });
+
+  it('clicking "Save to my voices" dispatches promoteCharacterVoice(bookId, characterId, name)', async () => {
+    promoteToLibraryMock.mockResolvedValue({ voiceUuid: 'new-uuid', name: 'Marlow' });
+    renderProvenance();
+    fireEvent.click(screen.getByTestId('voice-save-to-my-voices-marlow'));
+    await waitFor(() =>
+      expect(promoteToLibraryMock).toHaveBeenCalledWith({
+        bookId: 'b1',
+        characterId: 'marlow',
+        name: 'Marlow',
+      }),
+    );
+  });
+
+  it('clicking "View in My voices" switches the page to the My voices section', () => {
+    renderProvenance();
+    fireEvent.click(screen.getByText('View in My voices'));
+    expect(screen.getByRole('button', { name: 'My voices', pressed: true })).toBeInTheDocument();
   });
 });
 

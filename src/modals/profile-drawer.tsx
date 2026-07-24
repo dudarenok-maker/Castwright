@@ -43,7 +43,15 @@ import { VoiceCompareModal } from './voice-compare-modal';
 import { CharacterSearchPicker } from '../components/character-search-picker';
 import { castActions } from '../store/cast-slice';
 import { castDesignActions } from '../store/cast-design-slice';
+import { assignVoice, promoteCharacterVoice, type VoiceLibraryEntry } from '../store/voice-library-slice';
 import { type DesignPhase } from '../lib/design-phase';
+
+/* fs-38 Wave 1, Task 16 — module-level empty array so the defensive
+   voiceLibrary-slice read below (see EMPTY_LIBRARY_BOOKS in voices.tsx /
+   EMPTY_LIBRARY_ENTRIES in voice-library-panel.tsx for the same pattern)
+   returns a stable reference when the slice isn't registered — most
+   existing profile-drawer test stores don't carry it. */
+const EMPTY_MY_VOICES: VoiceLibraryEntry[] = [];
 
 /* Default preview line. Pangram + a short follow-on so the user can
    hear consonant + vowel coverage AND a held sentence at typical
@@ -337,6 +345,65 @@ export function ProfileDrawer({
   const [stagedVoiceUuid, setStagedVoiceUuid] = useState<string | undefined>(
     character.voiceUuid ?? voice?.voiceUuid,
   );
+  /* fs-38 Wave 1, Task 16 — "My voices" picker + "Save to my voices",
+     surfaced alongside the Qwen design sub-flow. `libraryActionBusy` holds
+     either a voiceUuid (an assign in flight) or the literal 'promote' (a
+     save-to-library in flight) so each button's own spinner/disabled state
+     is independent; `libraryActionError` is a small inline message shared
+     by both, matching this drawer's existing local-error convention
+     (`engineError`/`overrideError`) rather than a global toast. */
+  const [libraryActionBusy, setLibraryActionBusy] = useState<string | null>(null);
+  const [libraryActionError, setLibraryActionError] = useState<string | null>(null);
+  /* Defensive read — see EMPTY_MY_VOICES above. */
+  const myVoicesEntries = useAppSelector(
+    (s) => (s as { voiceLibrary?: { entries: VoiceLibraryEntry[] } }).voiceLibrary?.entries,
+  );
+  const myVoices = myVoicesEntries ?? EMPTY_MY_VOICES;
+
+  /* Assigns a "My voices" entry to THIS character (fs-38 spec §2/§5's
+     assign flow) — the server writes cast.json directly, so mirror the
+     result into the drawer's own session state (same pattern
+     `setQwenOverrideName` already documents for the bulk-design SSE
+     stream: "the server already persisted it — this is local-only, no
+     persist rule") so Save/Play behave as if this character had been
+     designed, without waiting on a full cast refetch. */
+  async function useMyVoice(entry: VoiceLibraryEntry) {
+    if (!bookId) return;
+    setLibraryActionError(null);
+    setLibraryActionBusy(entry.voiceUuid);
+    try {
+      await dispatch(
+        assignVoice({ voiceUuid: entry.voiceUuid, bookId, characterId: character.id }),
+      ).unwrap();
+      const assignedName = `qwen-${entry.voiceUuid}`;
+      setDesignedVoiceId(assignedName);
+      setStagedVoiceUuid(entry.voiceUuid);
+      dispatch(castActions.setQwenOverrideName({ characterId: character.id, voiceId: assignedName }));
+    } catch (e) {
+      setLibraryActionError((e as Error).message || 'Could not assign this voice.');
+    } finally {
+      setLibraryActionBusy(null);
+    }
+  }
+
+  /* Promotes THIS character's current designed Qwen voice into the
+     standalone library (fs-38 spec §2.2). Server-side: mints an
+     independent copy — the origin character/cast.json is never touched —
+     so there's no local state to mirror back beyond a status message. */
+  async function saveToMyVoices() {
+    if (!bookId) return;
+    setLibraryActionError(null);
+    setLibraryActionBusy('promote');
+    try {
+      await dispatch(
+        promoteCharacterVoice({ bookId, characterId: character.id, name: character.name }),
+      ).unwrap();
+    } catch (e) {
+      setLibraryActionError((e as Error).message || 'Could not save this voice to My voices.');
+    } finally {
+      setLibraryActionBusy(null);
+    }
+  }
   /* URL of the most-recent audition preview. Now a stable cached-sample URL
      (the design route writes the audition into the voice-sample cache), so
      there's no blob to revoke — the ref only feeds `designPlaying` below. */
@@ -1099,6 +1166,53 @@ export function ProfileDrawer({
               charModelKey={charModelKey}
               onCharModelKeyChange={(k) => setCharModelKey(k === 'qwen3-tts-1.7b' ? 'qwen3-tts-1.7b' : null)}
             />
+
+            {/* fs-38 Wave 1, Task 16 — "My voices" picker + "Save to my
+                voices", alongside the Qwen design sub-flow above. */}
+            {effectiveEngine === 'qwen' && bookId && (
+              <div className="space-y-2">
+                {myVoices.length > 0 && (
+                  <div className="rounded-2xl border border-ink/10 bg-canvas/60 p-3 space-y-2">
+                    <p className="text-[11px] uppercase tracking-widest text-ink/40 font-semibold">
+                      Or use a voice from My voices
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {myVoices.map((entry) => (
+                        <button
+                          key={entry.voiceUuid}
+                          type="button"
+                          disabled={libraryActionBusy === entry.voiceUuid}
+                          onClick={() => void useMyVoice(entry)}
+                          data-testid={`profile-drawer-my-voice-${entry.voiceUuid}`}
+                          className="px-2.5 py-1.5 rounded-full text-[11px] font-medium bg-ink/4 hover:bg-magenta/15 hover:text-magenta text-ink/70 disabled:opacity-50 disabled:cursor-wait min-h-[44px] fine-pointer:min-h-0"
+                        >
+                          {libraryActionBusy === entry.voiceUuid ? 'Assigning…' : entry.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {designedVoiceId && (
+                  <button
+                    type="button"
+                    disabled={libraryActionBusy === 'promote'}
+                    onClick={() => void saveToMyVoices()}
+                    data-testid="profile-drawer-save-to-my-voices"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-ink/70 hover:text-ink hover:bg-ink/6 disabled:opacity-50 disabled:cursor-wait transition-colors min-h-[44px] fine-pointer:min-h-0"
+                  >
+                    {libraryActionBusy === 'promote' ? 'Saving…' : 'Save to my voices'}
+                  </button>
+                )}
+                {libraryActionError && (
+                  <p
+                    data-testid="profile-drawer-my-voices-error"
+                    className="text-[11px] text-red-600/90 font-medium"
+                  >
+                    ⚠ {libraryActionError}
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* fs-25 — Qwen-only emotion variant design (gated on the base voice
                 existing, handled inside the component). */}
