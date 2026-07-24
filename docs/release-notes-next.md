@@ -51,3 +51,14 @@ history at cut time.
   the filename-mapping test could not see it. Swapped both the committed downscaled assets and the
   git-ignored `brand/book-covers/` sources (so regeneration stays correct), and added a SHA-256
   regression guard in `scripts/tests/build-demo-covers.test.mjs` that pins the corrected art.
+
+---
+
+## 📖 Help
+
+- **Mirror the marketing site's local-first privacy FAQ into the app Help view** (#1793). Adds two
+  Help topics — `is-my-data-private` (files) and `does-it-work-offline` (analysis) — to
+  `src/data/help-topics.ts`, matching the website's corrected copy: analysis is local by default and
+  the cloud fallback is opt-out (on by default, switchable off), never framed as opt-in-only or
+  "never touches the cloud". Guarded by `src/data/help-topics.test.ts`; item-count assertions bumped
+  43 → 45.
