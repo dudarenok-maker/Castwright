@@ -60,3 +60,25 @@ history at cut time.
   published array was short one leading row, `resolveSegmentForSec`'s index no longer matched the
   on-disk index the splice route addresses, so Listen-view "Fix this line" targeted the line before
   the marked one.
+
+---
+
+## 📱 Companion app
+
+- **Demo library covers for _Saltgrave_ and _The Tidewatcher's Oath_ were swapped** (#1792). The
+  committed `apps/android/assets/demo-covers/hollow-tide-2.png` (mapped to _The Tidewatcher's Oath_
+  in `demo_data.dart`) held the _Saltgrave_ artwork and vice versa — the filenames were correct, so
+  the filename-mapping test could not see it. Swapped both the committed downscaled assets and the
+  git-ignored `brand/book-covers/` sources (so regeneration stays correct), and added a SHA-256
+  regression guard in `scripts/tests/build-demo-covers.test.mjs` that pins the corrected art.
+
+---
+
+## 📖 Help
+
+- **Mirror the marketing site's local-first privacy FAQ into the app Help view** (#1793). Adds two
+  Help topics — `is-my-data-private` (files) and `does-it-work-offline` (analysis) — to
+  `src/data/help-topics.ts`, matching the website's corrected copy: analysis is local by default and
+  the cloud fallback is opt-out (on by default, switchable off), never framed as opt-in-only or
+  "never touches the cloud". Guarded by `src/data/help-topics.test.ts`; item-count assertions bumped
+  43 → 45.

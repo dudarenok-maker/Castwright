@@ -1,0 +1,10 @@
+{
+  "characters": [
+    { "id": "narrator", "name": "Erzähler" },
+    { "id": "oduvan", "name": "Oduvan", "gender": "male" },
+    { "id": "wren", "name": "Wren", "gender": "female" },
+    { "id": "maerin", "name": "Maerin", "gender": "female" },
+    { "id": "voice", "name": "Stimme" },
+    { "id": "dragon", "name": "Drache", "gender": "neutral" }
+  ]
+}

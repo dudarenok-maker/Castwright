@@ -72,3 +72,26 @@ describe('LibraryGrid series-memory', () => {
     expect(screen.queryByTestId('series-sparkline')).toBeNull();
   });
 });
+
+describe('LibraryGrid Add-book tile', () => {
+  it('Add-book tile mirrors hover with group-active, no resting peach (fe-39, caveat a)', () => {
+    renderGrid(authorsWith(undefined));
+    const addBtn = document.querySelector('[data-tour-id="new-book-btn"]') as HTMLElement;
+    expect(addBtn).not.toBeNull();
+    const circle = addBtn.querySelector('span.rounded-full') as HTMLElement;
+    expect(circle).not.toBeNull();
+    // mirrors present
+    expect(circle.className).toContain('group-active:bg-peach');
+    expect(circle.className).toContain('group-active:border-peach');
+    expect(circle.className).toContain('group-active:text-white');
+    // resting appearance intact
+    expect(circle.className).toContain('bg-white');
+    expect(circle.className).toContain('border-ink/10');
+    // caveat (a): peach only ever appears as a variant, never bare
+    // (regex requires start-or-whitespace before the token, so `group-hover:bg-peach`
+    //  and `group-active:bg-peach` — preceded by ':' — do NOT match)
+    expect(circle.className).not.toMatch(/(^|\s)bg-peach(\s|$)/);
+    expect(circle.className).not.toMatch(/(^|\s)border-peach(\s|$)/);
+    expect(circle.className).not.toMatch(/(^|\s)text-white(\s|$)/);
+  });
+});

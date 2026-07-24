@@ -114,6 +114,12 @@ _Full detail + acceptance:_ [#1302](https://github.com/dudarenok-maker/Castwrigh
 - _Benefit:_ marginal — touch users get a brief press-feedback flash on already-visible controls. Low priority precisely because the controls are already reachable; this is cosmetic parity only.
 _Full detail + acceptance:_ [#799](https://github.com/dudarenok-maker/Castwright/issues/799).
 
+#### `fe-54` — Touch press-feedback for the Add-book outer-tile hover (fe-39 sibling follow-up) ([#1798](https://github.com/dudarenok-maker/Castwright/issues/1798))
+
+- _What:_ Sibling follow-up to `fe-39` (#799), which shipped `group-active:` mirrors on the *enumerated inner-span* controls but deliberately scoped out the *container-level* hover on the same groups. This mirrors the highest-value one: the "Add book" tile's **outer-tile** tint (`hover:border-peach hover:bg-peach/4` on the `NewBookCard` button, `library-grid.tsx`) gets a paired `active:border-peach active:bg-peach/4` so the whole control flashes on press, not just its inner badge. Add-only; plain `active:` (the outer tile is the native `<button>` itself). Lower-value rail-card and wizard-row sibling hovers are optional in the same pass.
+- _Benefit:_ marginal cosmetic parity — closes the last touch-feedback gap fe-39 left on the most visible sibling hover. Same MoSCoW `could` rationale as fe-39; the control is already reachable and the inner-badge flash already exists.
+_Full detail + acceptance:_ [#1798](https://github.com/dudarenok-maker/Castwright/issues/1798).
+
 #### `fs-70` — XTTS/Qwen languages beyond the five (it, pt, ko dual-engine; pl, tr, nl, cs, ar, hu, hi Coqui-only) ([#1303](https://github.com/dudarenok-maker/Castwright/issues/1303))
 
 - _What:_ Coqui XTTS v2 natively supports 17 languages; fs-60 (#1005) only enabled the five the analyze/attribution pipeline already fully supports (en/ru/es/fr/de, via fs-41/fs-50). This item opens the remaining XTTS-capable languages beyond fs-59's CJK pair as new book languages. The remaining set, after fs-59 (#1004) claims zh + ja, is **10 languages**. They do **not** all route the same way — some are Qwen-capable (dual-engine, full fallback resilience) and some are Coqui-only (no Qwen path). This is the correction to the original framing: it previously assumed the whole set was "XTTS-only, since Qwen design doesn't support them," which is wrong for ko/pt/it.

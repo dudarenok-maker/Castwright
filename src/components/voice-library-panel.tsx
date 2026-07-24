@@ -468,7 +468,7 @@ export function VoiceCard({
           {isAssigningTarget ? 'Cancel' : 'Assign'}
         </button>
       ) : (
-        <span className="text-ink/30 group-hover:text-ink/60 transition-colors mt-1 hidden md:inline">
+        <span className="text-ink/30 group-hover:text-ink/60 group-active:text-ink/60 transition-colors mt-1 hidden md:inline">
           <IconDrag className="w-4 h-4" />
         </span>
       )}

@@ -314,4 +314,30 @@ export const HELP_TOPICS: HelpTopic[] = [
       'choice can land on Gemini. Want it to stop and tell you instead? Start Ollama before you ' +
       'analyse, or set the analyzer engine to Gemini outright.',
   },
+  {
+    id: 'is-my-data-private',
+    category: 'files',
+    title: 'Is my data private?',
+    body:
+      'Your books, voices, library and rendered audio stay on your machine — nothing is uploaded to ' +
+      'a Castwright server, and there is no account. Working out who speaks each line reads your ' +
+      'chapter text on a local model by default too. The one thing that can leave your machine is ' +
+      'the optional cloud analyzer (the free Gemini tier): if you have set a Gemini key, it sends ' +
+      "chapter text only when your local model isn't running. Cloud fallback stays on by default, " +
+      'and a single switch in analyzer settings turns it off for good — and whenever Castwright does ' +
+      'fall back to Gemini it tells you, rather than switching behind your back.',
+  },
+  {
+    id: 'does-it-work-offline',
+    category: 'analysis',
+    title: 'Does it work offline?',
+    body:
+      'Yes, once the models are installed. Rendering the audio and playing it back are fully ' +
+      'offline — nothing is sent anywhere while Castwright synthesises — and working out who speaks ' +
+      'each line runs on a local Ollama model by default. The optional cloud analyzer (Gemini) is ' +
+      'the one part that wants a connection: leave it switched off in analyzer settings, or keep ' +
+      'your local model running, and the whole pipeline works with no internet at all. Voice design ' +
+      'follows the same analyzer engine, so a no-key, fully-offline setup can still design a cast ' +
+      'from scratch.',
+  },
 ];

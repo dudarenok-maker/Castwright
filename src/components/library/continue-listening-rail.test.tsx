@@ -67,6 +67,15 @@ describe('ContinueListeningRail', () => {
     );
     expect(container.querySelector('.scrollbar-thin')).not.toBeNull();
   });
+
+  it('play badge mirrors group-hover with group-active for touch press feedback (fe-39)', () => {
+    render(<ContinueListeningRail items={[item()]} onOpen={noop} onFinish={noop} onHide={noop} />);
+    const card = screen.getByRole('button', { name: /Continue listening to The Coalfall Commission/i });
+    const badge = card.querySelector('span.bg-white\\/20');
+    expect(badge).not.toBeNull();
+    expect(badge!.className).toContain('group-hover:bg-white/35');
+    expect(badge!.className).toContain('group-active:bg-white/35');
+  });
 });
 
 describe('ContinueListeningRail — covers', () => {

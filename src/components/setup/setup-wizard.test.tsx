@@ -481,3 +481,15 @@ describe('SetupWizard — help & wiki links (fe-52/fe-53)', () => {
     );
   });
 });
+
+describe('SetupWizard — touch press-feedback parity (fe-39)', () => {
+  it('Review chip mirrors group-hover with group-active for touch (fe-39)', () => {
+    render(<SetupWizard readiness={READINESS} mode="checklist" onRefetch={() => {}} onFinish={() => {}} />);
+    const chip = screen
+      .getAllByText(/Review/)
+      .find((el) => el.className.includes('group-hover:text-magenta'));
+    expect(chip).toBeTruthy();
+    expect(chip!.className).toContain('group-hover:text-magenta');
+    expect(chip!.className).toContain('group-active:text-magenta');
+  });
+});

@@ -5,6 +5,8 @@
   Not happy with a take? Redesign it and compare old against new side by side before you commit.
   Fallen for a voice you built for one character? Save it to My voices and hand it to someone
   else next time, in a different book entirely.
+- **In-app Help now answers "Is my data private?" and "Does it work offline?"** — the same plain-language answers as the website, so both agree: analysis reads your book on a local model by default, and the optional cloud fallback is on by default but a single switch turns it off for good.
+- **The demo library shows the right covers again.** In the built-in sample library, _Saltgrave_ and _The Tidewatcher's Oath_ were wearing each other's cover art — they now each show their own.
 - **Re-detect one chapter, not the whole book.** Edited a single chapter? "Detect emotions" now works on just the chapter you're reading — the whole-book pass is one click away in its menu.
 - **You can see the chapter title on the timeline now.** Every chapter opens with its title read
   aloud — the player now shows that opening beat as a small marker at the start of the track, so
