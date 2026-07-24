@@ -2796,4 +2796,34 @@ describe('ChapterSegmentStrip — issue waveform', () => {
       bookId="b" characters={[]} />);
     expect(await screen.findByText(/Chapter-level issue/)).toBeInTheDocument();
   });
+
+  /* fs-10 (#412) — the chapter-title beat reaches this strip now that the
+     server stops filtering it. It carries the narrator's characterId but no
+     sentences, so it must NOT be painted in the narrator's palette colour. */
+  it('paints the chapter-title beat neutrally, not in the narrator colour', async () => {
+    vi.mocked(api.getChapterAudio).mockResolvedValue({
+      ...baseAudio,
+      segments: [
+        { start: 1.5, end: 3.5, characterId: 'narrator', kind: 'title' },
+        { start: 5, end: 20, characterId: 'narrator', sentenceId: 1 },
+      ],
+    } as never);
+    render(<ChapterSegmentStrip chapter={{ id: 1 } as never} bookId="b" characters={[]} />);
+
+    const band = await screen.findByTestId('segment-band-title');
+    expect(band).toHaveAttribute('title', 'Chapter title · 0:01–0:03');
+    expect(band).toHaveClass('bg-ink/25');
+    expect(band.style.background).toBe('');
+  });
+
+  it('renders no title band for a legacy chapter without one', async () => {
+    vi.mocked(api.getChapterAudio).mockResolvedValue({
+      ...baseAudio,
+      segments: [{ start: 0, end: 20, characterId: 'narrator', sentenceId: 1 }],
+    } as never);
+    render(<ChapterSegmentStrip chapter={{ id: 1 } as never} bookId="b" characters={[]} />);
+
+    await screen.findByText('Narrative order');
+    expect(screen.queryByTestId('segment-band-title')).toBeNull();
+  });
 });
