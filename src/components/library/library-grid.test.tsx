@@ -92,5 +92,6 @@ describe('LibraryGrid Add-book tile', () => {
     //  and `group-active:bg-peach` — preceded by ':' — do NOT match)
     expect(circle.className).not.toMatch(/(^|\s)bg-peach(\s|$)/);
     expect(circle.className).not.toMatch(/(^|\s)border-peach(\s|$)/);
+    expect(circle.className).not.toMatch(/(^|\s)text-white(\s|$)/);
   });
 });
