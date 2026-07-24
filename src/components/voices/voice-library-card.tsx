@@ -1,0 +1,244 @@
+/* fs-38 Wave 1, Task 15 — VoiceLibraryCard.
+
+   Presents one "My voices" library entry: name, inline tag editor (add on
+   Enter / remove on ×), pin toggle, language chip, per-engine readiness chip
+   (from `entry.engines.qwen.status`), a preview-play button (calls
+   `api.sampleLibraryVoice`), and a quiet provenance marker. Tag/pin edits
+   dispatch the Task 13 `patchEntry` thunk directly — it's optimistic, so the
+   slice applies the patch to the matching entry immediately. Assign/Edit are
+   left to the parent via callback props: Task 16 wires the assign-to-
+   character picker onto `onAssign`; `MyVoicesSection` wires `onEdit` to open
+   `RedesignLibraryVoiceModal`. */
+
+import { useState } from 'react';
+import { useAppDispatch } from '../../store';
+import { patchEntry, type VoiceLibraryEntry } from '../../store/voice-library-slice';
+import { Pill } from '../primitives';
+import { IconStar, IconPlay, IconPause, IconSpinner, IconClose } from '../../lib/icons';
+import { useSamplePlayback } from '../../lib/use-sample-playback';
+import { api } from '../../lib/api';
+
+interface Props {
+  entry: VoiceLibraryEntry;
+  onAssign?: (entry: VoiceLibraryEntry) => void;
+  onEdit?: (entry: VoiceLibraryEntry) => void;
+}
+
+type QwenStatus = 'ready' | 'deriving' | 'stale' | 'failed';
+
+const ENGINE_STATUS_LABEL: Record<QwenStatus, string> = {
+  ready: 'Qwen ✓',
+  deriving: 'Qwen …',
+  stale: 'Qwen ⟳',
+  failed: 'Qwen ⚠',
+};
+
+const ENGINE_STATUS_COLOR: Record<QwenStatus, 'success' | 'neutral' | 'warning' | 'danger'> = {
+  ready: 'success',
+  deriving: 'neutral',
+  stale: 'warning',
+  failed: 'danger',
+};
+
+export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
+  const dispatch = useAppDispatch();
+  const playback = useSamplePlayback();
+  const [tagDraft, setTagDraft] = useState('');
+  const [sampleLoading, setSampleLoading] = useState(false);
+  const [sampleError, setSampleError] = useState<string | null>(null);
+  const [sampleUrl, setSampleUrl] = useState<string | null>(null);
+
+  const qwenStatus = entry.engines.qwen?.status;
+  const playing = playback.isPlaying && !!sampleUrl && playback.currentUrl === sampleUrl;
+
+  function addTag() {
+    const tag = tagDraft.trim();
+    if (!tag || entry.tags.includes(tag)) {
+      setTagDraft('');
+      return;
+    }
+    void dispatch(
+      patchEntry({ voiceUuid: entry.voiceUuid, patch: { tags: [...entry.tags, tag] } }),
+    );
+    setTagDraft('');
+  }
+
+  function removeTag(tag: string) {
+    void dispatch(
+      patchEntry({
+        voiceUuid: entry.voiceUuid,
+        patch: { tags: entry.tags.filter((t) => t !== tag) },
+      }),
+    );
+  }
+
+  function togglePin() {
+    void dispatch(patchEntry({ voiceUuid: entry.voiceUuid, patch: { pinned: !entry.pinned } }));
+  }
+
+  async function playSample() {
+    if (playing) {
+      playback.stop();
+      return;
+    }
+    setSampleError(null);
+    setSampleLoading(true);
+    try {
+      const { url } = await api.sampleLibraryVoice(entry.voiceUuid);
+      setSampleUrl(url);
+      await playback.play(url);
+    } catch (e) {
+      setSampleError((e as Error).message || 'Preview failed.');
+    } finally {
+      setSampleLoading(false);
+    }
+  }
+
+  return (
+    <div
+      data-testid={`voice-library-card-${entry.voiceUuid}`}
+      className="rounded-2xl border border-ink/10 bg-white p-4 space-y-3"
+    >
+      <div className="flex items-start gap-2">
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-bold text-ink truncate">{entry.name}</p>
+          <ProvenanceMarker entry={entry} />
+        </div>
+        <button
+          type="button"
+          onClick={togglePin}
+          aria-label={entry.pinned ? 'Unpin voice' : 'Pin voice'}
+          aria-pressed={entry.pinned}
+          data-testid={`voice-library-pin-${entry.voiceUuid}`}
+          className={`w-8 h-8 grid place-items-center rounded-full transition-colors shrink-0 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 ${entry.pinned ? 'bg-peach text-ink' : 'text-ink/30 hover:text-ink hover:bg-ink/6'}`}
+        >
+          <IconStar className="w-4 h-4" />
+        </button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        {entry.languageCode && (
+          <Pill color="neutral">
+            <span data-testid={`voice-library-language-${entry.voiceUuid}`}>
+              {entry.languageCode}
+            </span>
+          </Pill>
+        )}
+        {qwenStatus && (
+          <Pill color={ENGINE_STATUS_COLOR[qwenStatus]}>
+            <span data-testid={`voice-library-engine-qwen-${entry.voiceUuid}`}>
+              {ENGINE_STATUS_LABEL[qwenStatus]}
+            </span>
+          </Pill>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        {entry.tags.map((tag) => (
+          <span
+            key={tag}
+            data-testid={`voice-library-tag-${entry.voiceUuid}-${tag}`}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-ink/4 text-ink/70 border border-ink/10"
+          >
+            {tag}
+            <button
+              type="button"
+              onClick={() => removeTag(tag)}
+              aria-label={`Remove tag ${tag}`}
+              data-testid={`voice-library-tag-remove-${entry.voiceUuid}-${tag}`}
+              className="text-ink/40 hover:text-ink"
+            >
+              <IconClose className="w-2.5 h-2.5" />
+            </button>
+          </span>
+        ))}
+        <input
+          type="text"
+          value={tagDraft}
+          onChange={(e) => setTagDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              addTag();
+            }
+          }}
+          placeholder="Add tag…"
+          aria-label={`Add a tag to ${entry.name}`}
+          data-testid={`voice-library-tag-input-${entry.voiceUuid}`}
+          className="min-w-[80px] flex-1 px-2 py-0.5 rounded-full text-[11px] bg-canvas border border-dashed border-ink/15 focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
+        />
+      </div>
+
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          type="button"
+          onClick={() => void playSample()}
+          disabled={sampleLoading}
+          aria-label={playing ? 'Stop preview' : 'Play preview'}
+          data-testid={`voice-library-play-${entry.voiceUuid}`}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-ink/6 text-ink/80 hover:bg-magenta/15 hover:text-magenta disabled:opacity-50 disabled:cursor-wait transition-colors min-h-[44px] fine-pointer:min-h-0"
+        >
+          {sampleLoading ? (
+            <IconSpinner className="w-3 h-3" />
+          ) : playing ? (
+            <IconPause className="w-3 h-3" />
+          ) : (
+            <IconPlay className="w-3 h-3" />
+          )}
+          <span>{sampleLoading ? 'Loading…' : playing ? 'Stop' : 'Preview'}</span>
+        </button>
+        {onEdit && (
+          <button
+            type="button"
+            onClick={() => onEdit(entry)}
+            data-testid={`voice-library-edit-${entry.voiceUuid}`}
+            className="px-3 py-1.5 rounded-full text-xs font-semibold text-ink/70 hover:text-ink hover:bg-ink/6 transition-colors min-h-[44px] fine-pointer:min-h-0"
+          >
+            Edit
+          </button>
+        )}
+        {onAssign && (
+          <button
+            type="button"
+            onClick={() => onAssign(entry)}
+            data-testid={`voice-library-assign-${entry.voiceUuid}`}
+            className="ml-auto px-3 py-1.5 rounded-full text-xs font-semibold text-ink/70 hover:text-ink hover:bg-ink/6 transition-colors min-h-[44px] fine-pointer:min-h-0"
+          >
+            Assign
+          </button>
+        )}
+      </div>
+      {sampleError && (
+        <p
+          className="text-[11px] text-red-600/90 font-medium"
+          data-testid={`voice-library-play-error-${entry.voiceUuid}`}
+        >
+          ⚠ {sampleError}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/* Quiet provenance marker — all three branches land now (task-15 brief),
+   even though only `designed` is exercised in Wave 1; the `cloned`/
+   `imported` treatments arrive with cloning/import in Wave 3. */
+function ProvenanceMarker({ entry }: { entry: VoiceLibraryEntry }) {
+  switch (entry.provenance) {
+    case 'designed':
+      return (
+        <p
+          data-testid={`voice-library-provenance-${entry.voiceUuid}`}
+          className="text-[10px] uppercase tracking-wide text-ink/40 font-semibold"
+        >
+          My voice
+        </p>
+      );
+    case 'cloned':
+      // Wave 3 — cloned-voice provenance treatment lands with cloning.
+      return null;
+    case 'imported':
+      // Wave 3 — imported-voice provenance treatment lands with import.
+      return null;
+  }
+}
