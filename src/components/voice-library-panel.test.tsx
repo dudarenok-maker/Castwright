@@ -309,6 +309,23 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     expect(scroller.className).toMatch(/overflow-y-auto/);
     expect(scroller.className).toMatch(/scrollbar-thin/);
   });
+
+  it('drag icon mirrors group-hover with group-active for touch (fe-39)', () => {
+    render(
+      <VoiceLibraryPanel
+        library={[makeVoice('v_marlow', 'Marlow')]}
+        characters={[makeCharacter('marlow', 'v_marlow')]}
+        draggingVoiceId={null}
+        setDraggingVoiceId={vi.fn()}
+        onOpenProfile={vi.fn()}
+        onPlaySample={vi.fn()}
+      />,
+    );
+    const dragIcon = document.querySelector('span.group-hover\\:text-ink\\/60');
+    expect(dragIcon).not.toBeNull();
+    expect(dragIcon!.className).toContain('group-hover:text-ink/60');
+    expect(dragIcon!.className).toContain('group-active:text-ink/60');
+  });
 });
 
 describe('VoiceCard — familyKey identity (cross-book id collision)', () => {

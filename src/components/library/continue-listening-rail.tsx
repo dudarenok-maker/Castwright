@@ -108,7 +108,7 @@ function ContinueCard({
           )}
 
           {/* Play badge */}
-          <span className="absolute bottom-2 right-2 w-7 h-7 rounded-full bg-white/20 group-hover:bg-white/35 transition-colors grid place-items-center">
+          <span className="absolute bottom-2 right-2 w-7 h-7 rounded-full bg-white/20 group-hover:bg-white/35 group-active:bg-white/35 transition-colors grid place-items-center">
             <IconPlay className="w-3.5 h-3.5 text-white" />
           </span>
         </div>
