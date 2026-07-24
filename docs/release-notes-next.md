@@ -30,6 +30,26 @@ history at cut time.
 
 ---
 
+## 🎙️ Voices & casting
+
+- **fs-38 Wave 1 — book-independent voice library (`#/voices` restructure + designed-voice
+  authoring)** (Refs #624). Ships a first-class, book-independent voice-library store ("My
+  voices"), restructuring `#/voices` into three sections — **My voices | In use | Catalogue**.
+  Adds standalone designed-voice authoring: create a Qwen voice from a persona with a live
+  audition, **redesign-with-compare** (A/B old-vs-new, keep or discard), **promote** a
+  character's designed voice into the library (new uuid + byte-copy of the `.pt`), and
+  **assign** a library voice to any character — reusable across books and series. A new
+  `provenance` dimension (`designed`/`cloned`/`imported`) lands now on the schema (cloned/
+  imported are inert until Wave 3 of `fs-38`/#624), and the cross-book voice matcher already
+  excludes cloned-provenance voices so a person's voice can't be offered back into a stranger's
+  book. Local-only; deleting a library voice runs a usage report and full multi-location
+  erasure (manifest + `.pt` + cached samples). This wave alone delivers the folded-in `fs-12`.
+  Not in Wave 1: clone-from-a-real-sample, consent/attestation, audio ingest, in-app recording,
+  Catalogue rebuild (later waves). Plan:
+  `docs/superpowers/plans/2026-07-04-fs38-wave1-voice-library-store.md`.
+
+---
+
 ## 🎧 Listening & revising
 
 - **fs-10 — chapter-title segment on the Listen timeline** (#412). `ChapterAudio.segments[]`

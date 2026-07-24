@@ -1,5 +1,10 @@
 # Castwright 1.15.0
 
+- **Build your own stable of narrators in My voices.** Design a voice once — from a persona, with
+  a live audition — and it's yours to cast in any book, not just the one you designed it for.
+  Not happy with a take? Redesign it and compare old against new side by side before you commit.
+  Fallen for a voice you built for one character? Save it to My voices and hand it to someone
+  else next time, in a different book entirely.
 - **Re-detect one chapter, not the whole book.** Edited a single chapter? "Detect emotions" now works on just the chapter you're reading — the whole-book pass is one click away in its menu.
 - **You can see the chapter title on the timeline now.** Every chapter opens with its title read
   aloud — the player now shows that opening beat as a small marker at the start of the track, so
