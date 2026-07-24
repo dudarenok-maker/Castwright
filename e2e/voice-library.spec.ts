@@ -54,7 +54,12 @@ test.describe.configure({ mode: 'serial' });
 
 test.describe('Voice library — create / assign / cross-book reuse / promote', () => {
   test('golden path', async ({ page }) => {
-    test.setTimeout(90_000);
+    /* 150 s — this scenario cold-loads the (large) CastView chunk up to three
+       times (steps 3/4/5), and under sustained local worker contention that
+       cold load alone can run 15-20+ s each (see the per-navigation comments
+       below). 90 s left too little headroom for more than one of those to
+       land on the slow side in the same run. */
+    test.setTimeout(150_000);
 
     await page.goto('/');
     await waitForRouteReady(page);
@@ -64,13 +69,19 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
 
     /* ── Step 1: #/voices → "My voices" renders first with the fixtures ── */
     await page.goto('/#/voices');
-    /* Deterministic cold-load gate: wait for the LibraryView route chunk's
-       suspense fallback to detach before asserting on any content, rather
-       than racing a fixed timeout against hydration (same pattern as
-       goToAnalysing/goToConfirm in helpers.ts). */
+    /* waitForRouteReady is a best-effort early gate, not a full substitute
+       for budget: DelayedSpinner's fallback only attaches 150 ms after
+       navigation (src/components/delayed-spinner.tsx), so calling
+       waitForRouteReady immediately after a bare goto() can observe "not
+       attached" and return instantly on both a genuinely-warm chunk AND a
+       cold one still inside that 150 ms window — it can't fully replace a
+       generous timeout on the content assertion that follows. Keep both:
+       the route-ready wait catches the common cold-chunk case, and the 20 s
+       budget below (same as the original, pre-stabilization value) absorbs
+       the residual race. */
     await waitForRouteReady(page);
     const myVoicesTab = page.getByRole('button', { name: 'My voices', exact: true });
-    await expect(myVoicesTab).toBeVisible({ timeout: 10_000 });
+    await expect(myVoicesTab).toBeVisible({ timeout: 20_000 });
     await myVoicesTab.click();
 
     /* The four Task 12 fixtures (src/mocks/voice-library.ts). */
@@ -108,14 +119,16 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
     /* ── Step 3: assign a My-voices fixture to a character in book `ns` —
        Marcus the Cook starts with no Qwen voice designed. ── */
     await page.goto('/#/books/ns/cast');
-    /* Deterministic cold-load gate for the cast route's own React.lazy
-       chunk, then a stable precondition (the cast-roster container that
-       wraps the whole view — src/views/cast.tsx `[data-tour-id="cast-
-       roster"]`) beyond route-ready, before asserting on individual rows.
-       This replaces racing a fixed 20 s timeout against hydration. */
+    /* Same best-effort-plus-budget approach as the #/voices navigation
+       above: waitForRouteReady catches the common cold-chunk case, then
+       the cast-roster container (src/views/cast.tsx `[data-tour-id="cast-
+       roster"]`) is a stable precondition beyond route-ready — it mounts
+       unconditionally with the view (no data-hydration gate), so waiting
+       on it first isolates "the route chunk mounted" from "the cast rows
+       hydrated" before asserting on the individual row. */
     await waitForRouteReady(page);
-    await expect(page.locator('[data-tour-id="cast-roster"]')).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByTestId('cast-row-marcus')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-tour-id="cast-roster"]')).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByTestId('cast-row-marcus')).toBeVisible({ timeout: 20_000 });
     await page.getByTestId('cast-row-marcus').click();
 
     const marcusDrawer = page.locator('[data-tour-id="profile-drawer"]');
@@ -150,10 +163,10 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
        too (cross-book reuse). Carrick's Compass / First Mate Greene, also
        starting with no Qwen voice designed. ── */
     await page.goto('/#/books/cc/cast');
-    /* Same deterministic gate as the `ns` cast navigation above. */
+    /* Same gate as the `ns` cast navigation above. */
     await waitForRouteReady(page);
-    await expect(page.locator('[data-tour-id="cast-roster"]')).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByTestId('cast-row-greene')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-tour-id="cast-roster"]')).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByTestId('cast-row-greene')).toBeVisible({ timeout: 20_000 });
     await page.getByTestId('cast-row-greene').click();
 
     const greeneDrawer = page.locator('[data-tour-id="profile-drawer"]');
@@ -180,8 +193,8 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
        any engine-switch step. ── */
     await page.goto('/#/books/ns/cast');
     await waitForRouteReady(page);
-    await expect(page.locator('[data-tour-id="cast-roster"]')).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByTestId('cast-row-eliza')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-tour-id="cast-roster"]')).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByTestId('cast-row-eliza')).toBeVisible({ timeout: 20_000 });
     await page.getByTestId('cast-row-eliza').click();
 
     const elizaDrawer = page.locator('[data-tour-id="profile-drawer"]');
