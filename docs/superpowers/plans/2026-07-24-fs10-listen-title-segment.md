@@ -36,7 +36,9 @@
 
 - [ ] **Step 1: Refactor the test fixture so segments are writable per-test**
 
-In `server/src/routes/chapter-audio.test.ts`, hoist the segment payload out of `beforeAll`. Add near the other helpers (after `writePreviousSegments`, ~line 198):
+In `server/src/routes/chapter-audio.test.ts`, hoist the segment payload out of `beforeAll`. Add near the other helpers (after `writePreviousSegments`, ~line 198).
+
+> **Name collision — do not use `writeSegments`.** A different `writeSegments(segments: unknown[])` already exists at `:587`, function-scoped inside the `describe('meta endpoint — per-segment QA issues (issue-waveform)')` block. A module-scope one would legally shadow it (no `no-shadow` rule is configured, so nothing would warn) and leave the file with two same-named helpers with incompatible signatures. Use `writeChapterSegments`.
 
 ```ts
 /* Default two-segment payload the bulk of this suite asserts against.
@@ -46,7 +48,7 @@ const DEFAULT_SEGMENTS = [
   { groupIndex: 1, characterId: 'oduvan', sentenceIds: [103], startSec: 6.2, endSec: 12.5 },
 ];
 
-function writeSegments(segments: unknown[], name = `${SLUG}.segments.json`) {
+function writeChapterSegments(segments: unknown[], name = `${SLUG}.segments.json`) {
   writeFileSync(
     join(audioRoot, name),
     JSON.stringify({
@@ -63,14 +65,16 @@ function writeSegments(segments: unknown[], name = `${SLUG}.segments.json`) {
 }
 ```
 
-Then replace the inline `writeFileSync(join(audioRoot, `${SLUG}.segments.json`), JSON.stringify({...}))` block at lines 72-87 with a single call. Because `writeSegments` is a function declaration it hoists, so calling it from `beforeAll` is fine even though it is defined lower in the file:
+Then replace the inline `writeFileSync(join(audioRoot, `${SLUG}.segments.json`), JSON.stringify({...}))` block at lines 72-87 with a single call. Because `writeChapterSegments` is a function declaration it hoists, so calling it from `beforeAll` is fine even though it is defined lower in the file:
 
 ```ts
   /* Segments JSON powers the JSON endpoint's metadata response. */
-  writeSegments(DEFAULT_SEGMENTS);
+  writeChapterSegments(DEFAULT_SEGMENTS);
 ```
 
 - [ ] **Step 2: Write the failing tests**
+
+**This block MUST be appended after the file's final top-level `describe`** — currently `describe('workspace nested under a dot-prefixed directory (bug #1290)')`, which ends at `:703`. The reason is not style: every suite in this file shares one on-disk `${SLUG}.segments.json`, written once by the root `beforeAll`, and `resetAudio()` (`:118-131`) deliberately does **not** delete it. Vitest runs sibling top-level suites in declaration order, so a block placed earlier would leave the title-led payload in place for `describe('mp3 chapter')`'s `expect(res.body.segments).toHaveLength(2)` (`:214`) and for the QA suite at `:586`, turning both red with a failure that reads like a product bug.
 
 Append to `server/src/routes/chapter-audio.test.ts`:
 
@@ -97,13 +101,13 @@ describe('fs-10 — title segment pass-through', () => {
     resetAudio();
     writeMp3();
     writePreviousMp3();
-    writeSegments(TITLE_LED);
-    writeSegments(TITLE_LED, `${SLUG}.previous.segments.json`);
+    writeChapterSegments(TITLE_LED);
+    writeChapterSegments(TITLE_LED, `${SLUG}.previous.segments.json`);
   });
 
   afterAll(() => {
     resetAudio();
-    writeSegments(DEFAULT_SEGMENTS);
+    writeChapterSegments(DEFAULT_SEGMENTS);
   });
 
   it('publishes the title row with kind: "title" and no sentenceId', async () => {
@@ -326,7 +330,13 @@ describe('resolveSegmentForSec — chapter-title segments (fs-10)', () => {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run src/lib/resolve-segment-for-sec.test.ts -t "fs-10"`
-Expected: FAIL — the first two cases return `segmentIndex: 0` (the title). The third and fourth already pass; that is expected and fine, they are guard rails against a filtering implementation rather than the fails-before assertion.
+Expected: FAIL — **three of the four cases**, for two different reasons:
+
+1. `'does not return the title row for a marker dropped in the lead silence'` — returns `segmentIndex: 0`; the title wins the nearest-edge fallback (`resolve-segment-for-sec.ts:37-40`).
+2. `'clamps a marker dropped ON the title to the first body segment'` — returns `segmentIndex: 0` via the direct-hit branch (`:33-35`).
+3. `'skips a title row WITHOUT renumbering the rows after it'` — its **second** assertion, `resolveSegmentForSec(11, midTitle)`, direct-hits the mid-array title at `[10, 12)` and returns `segmentIndex: 1` where the test expects `0`. Its first assertion already passes.
+
+`'returns disk-aligned indices for body segments in a title-led chapter'` passes both before and after — it is a guard rail against a filtering implementation, not a fails-before assertion.
 
 - [ ] **Step 3: Add the guard**
 
@@ -422,7 +432,9 @@ describe('MiniPlayer — chapter-title band (fs-10)', () => {
     { start: 5, end: 600, characterId: 'narrator', sentenceId: 1 },
   ];
 
-  function renderPlayer() {
+  /* Named to avoid shadowing the file's existing `renderPlayer(ui)` helper at
+     `:39`, which takes a different argument entirely. */
+  function renderTitleBandPlayer() {
     return render(
       <Provider store={makeStore()}>
         <MiniPlayer
@@ -439,7 +451,7 @@ describe('MiniPlayer — chapter-title band (fs-10)', () => {
   }
 
   it('renders the band with payload-derived geometry and label', async () => {
-    renderPlayer();
+    renderTitleBandPlayer();
     await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3', TITLE_SEGMENTS);
 
     const band = await screen.findByTestId('mini-player-title-segment');
@@ -449,7 +461,7 @@ describe('MiniPlayer — chapter-title band (fs-10)', () => {
   });
 
   it('renders nothing for a legacy chapter with no title segment', async () => {
-    renderPlayer();
+    renderTitleBandPlayer();
     await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3', [
       { start: 0, end: 600, characterId: 'narrator', sentenceId: 1 },
     ]);
@@ -459,7 +471,7 @@ describe('MiniPlayer — chapter-title band (fs-10)', () => {
   });
 
   it('is decorative — clicking it scrubs to the click position, not to 0', async () => {
-    renderPlayer();
+    renderTitleBandPlayer();
     await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3', TITLE_SEGMENTS);
 
     const band = await screen.findByTestId('mini-player-title-segment');
@@ -476,12 +488,16 @@ describe('MiniPlayer — chapter-title band (fs-10)', () => {
   });
 
   it('is not a focusable control', async () => {
-    renderPlayer();
+    renderTitleBandPlayer();
     await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3', TITLE_SEGMENTS);
 
     const band = await screen.findByTestId('mini-player-title-segment');
-    expect(band.tagName).toBe('SPAN');
+    /* Assert the CONTRACT (not a control, not in the tab order), not the tag
+       name — pinning `=== 'SPAN'` would freeze an incidental choice and make a
+       later div/span swap look like a regression. */
+    expect(band.tagName).not.toBe('BUTTON');
     expect(band).not.toHaveAttribute('tabindex');
+    expect(screen.queryByRole('button', { name: /chapter title/i })).toBeNull();
   });
 });
 ```
@@ -500,7 +516,13 @@ In `src/components/mini-player.tsx`, immediately after the `issueSummary` memo (
 ```ts
   /* fs-10 (#412) — the synthetic narrator-voiced chapter-title beat, when this
      render has one. Chapters rendered before PR #101 have none, and the band
-     null-renders for them. */
+     null-renders for them.
+
+     `kind` is currently a single-value enum. If a future render ever adds a
+     third kind (`'silence'`, `'credits'`, …), this find() silently ignores it
+     rather than mis-painting it — but any NEW consumer written as
+     `kind === 'title' ? A : B` would quietly bin it into B. Widen deliberately,
+     not by accident (spec §3). */
   const titleSegment = useMemo(
     () => audio.segments?.find((s) => s.kind === 'title') ?? null,
     [audio.segments],
@@ -562,7 +584,7 @@ git commit -m "feat(frontend): mark the chapter-title beat on the mini-player sc
 
 **Files:**
 - Modify: `src/views/generation.tsx:2323-2339`
-- Test: `src/views/generation.test.tsx:2766-2799`
+- Test: `src/views/generation.test.tsx:2766-2801`
 
 **Interfaces:**
 - Consumes: `kind?: 'title'` (Task 1).
@@ -570,7 +592,7 @@ git commit -m "feat(frontend): mark the chapter-title beat on the mini-player sc
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to the existing `describe('ChapterSegmentStrip — issue waveform', …)` block in `src/views/generation.test.tsx` (before its closing `});` at line 2799):
+Append to the existing `describe('ChapterSegmentStrip — issue waveform', …)` block in `src/views/generation.test.tsx` (the block spans 2766-2801; insert before its closing `});`):
 
 ```ts
   /* fs-10 (#412) — the chapter-title beat reaches this strip now that the
@@ -606,8 +628,8 @@ Append to the existing `describe('ChapterSegmentStrip — issue waveform', …)`
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `npx vitest run src/views/generation.test.tsx -t "chapter-title beat"`
-Expected: FAIL — `Unable to find an element by: [data-testid="segment-band-title"]`.
+Run: `npx vitest run src/views/generation.test.tsx -t "title band"`
+Expected: FAIL on `'paints the chapter-title beat neutrally, not in the narrator colour'` — `Unable to find an element by: [data-testid="segment-band-title"]`. The second new case (`'renders no title band for a legacy chapter without one'`) passes before the change too; it is a guard rail. Both match the `title band` filter — do not filter on `chapter-title beat`, which matches only the first.
 
 - [ ] **Step 3: Branch on `kind` in the band map**
 
@@ -621,7 +643,12 @@ In `src/views/generation.tsx`, replace the map callback body (lines 2324-2338) w
           /* fs-10 — the synthetic chapter-title beat carries the narrator's
              characterId but has no sentences behind it. Paint it neutral so the
              strip doesn't read as "the narrator has a line here", and floor its
-             width so a ~2 s beat stays visible in a 40-minute chapter. */
+             width so a ~2 s beat stays visible in a 40-minute chapter.
+
+             NOTE: this is an explicit `=== 'title'` test, so a future third
+             `kind` would fall through to the character-palette branch below and
+             be painted as if someone spoke it. Revisit here when `kind` widens
+             (spec §3). */
           if (seg.kind === 'title') {
             return (
               <div
@@ -736,7 +763,7 @@ git commit -m "test(mocks): give mock chapter audio a production-shaped title se
 
 **Files:**
 - Create: `e2e/listen-title-segment.spec.ts`
-- Modify: `e2e/win32/**` visual baselines (regenerated, not hand-edited)
+- Verify (expected unchanged): `e2e/{win32,linux}/**` visual baselines — see Step 3
 
 **Interfaces:**
 - Consumes: `data-testid="mini-player-title-segment"` (Task 3), `data-testid="segment-band-title"` (Task 4), the mock title segment (Task 5).
@@ -811,42 +838,27 @@ test.describe('fs-10 — chapter-title band', () => {
 Run: `npx playwright test e2e/listen-title-segment.spec.ts --project=chromium`
 Expected: PASS, 2 tests. If chromium is missing, run `npx playwright install chromium` first.
 
-- [ ] **Step 3: Run the visual baselines to see what moved**
+- [ ] **Step 3: Check the visual baselines — expect PASS, not FAIL**
 
 Run: `npm run test:e2e:visual`
-Expected: FAIL on `generate.png` and `generate-dark.png`. Solway Bay hydrates 18 `done` chapters and `src/views/generation.tsx:2047-2049` renders a `ChapterSegmentStrip` per chapter, so both the new mock title segment (Task 5) and the neutral fill (Task 4) land inside those two screenshots.
+Expected: **PASS.**
 
-If `listen.png` also fails, stop and report — the spec predicted it would not (the mini-player is closed on that route), and a failure there means something else changed.
+This is a verification step, not a regeneration trigger, and the reasoning matters because the obvious assumption is wrong. `e2e/responsive/visual.spec.ts:92` sets `VISUAL_DIFF_OPTS = { maxDiffPixelRatio: 0.05 }` — 5 % of a 1280×720 viewport is ~46,000 pixels. The change to `generate.png` is, per visible chapter row, a ~3 px neutral band plus a ~5 px shift of one boundary inside an `h-2` (8 px tall) strip: order 10²–10³ pixels in total, comfortably inside tolerance. The committed baselines stay valid, which is exactly what the tolerance exists for.
 
-- [ ] **Step 4: Regenerate the win32 baselines**
+**Do not "fix" a passing run by force-regenerating.** A bare `--update-snapshots` defaults to `=changed` and would write nothing at all (documented as trap #922 in `.github/workflows/regen-visual-baselines.yml:104`), and `--update-snapshots=all` would re-bless all 51 baselines on both platforms — re-baking every unrelated view against whatever chromium build happens to be present. Neither is wanted here.
 
-Run: `npx playwright test e2e/responsive/visual.spec.ts --project=chromium --workers=1 --update-snapshots`
-Then: `git status --short e2e/win32/`
-Expected: only `generate.png` and `generate-dark.png` modified. If other baselines moved, inspect each before staging — an unexpected diff is a real regression, not noise.
+**Only if Step 3 actually FAILS** does a regen enter scope. In that case:
+1. Read the reported diff ratio — a real failure means the delta exceeded 5 %, which would be surprising and worth understanding before re-baking.
+2. Regenerate win32 locally with `npx playwright test e2e/responsive/visual.spec.ts --project=chromium --workers=1 --update-snapshots=all` (the `=all` form, per the trap above), inspect `git status --short e2e/win32/`, and stage only what genuinely moved.
+3. Regenerate linux via `gh workflow run regen-visual-baselines.yml --ref feat/frontend-fs10-title-segment`, wait ~10-15 min, then merge the pushed branch directly: `git fetch origin && git merge origin/ci/linux-visual-baselines-regen-<N>`. (The workflow's own `gh pr create` targets `main`, which is the wrong base for this purpose, and reportedly fails anyway on the repo's Actions-cannot-open-PRs setting.) The linux baselines are the ones CI validates: `e2e-visual` is its own job in `.github/workflows/verify.yml:339` and sits in the final gate's `needs:` (`:395`), so a genuinely stale linux baseline blocks merge.
+4. Add the rebake back to the PR body's test plan, which currently does not claim it.
 
-- [ ] **Step 5: Re-run the visual suite clean**
-
-Run: `npm run test:e2e:visual`
-Expected: PASS.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add e2e/listen-title-segment.spec.ts e2e/win32/
-git commit -m "test(e2e): cover the chapter-title band and rebake win32 baselines"
+git add e2e/listen-title-segment.spec.ts
+git commit -m "test(e2e): cover the chapter-title band on the mini-player scrubber"
 ```
-
-- [ ] **Step 7: Queue the linux baseline regen**
-
-The `e2e/linux/**` baselines are the ones CI validates, and since 2026-07-06 they **do** gate the PR — `e2e-visual` is its own job in `.github/workflows/verify.yml:339` and sits in the final gate's `needs:` list (`:395`). Stale linux baselines will block merge.
-
-After pushing the branch (Task 7), run:
-
-```bash
-gh workflow run regen-visual-baselines.yml --ref feat/frontend-fs10-title-segment
-```
-
-Wait ~10-15 min, then open a PR from the pushed `ci/linux-visual-baselines-regen-<N>` branch **yourself** — the workflow's own `gh pr create` step fails because the repo has "Allow GitHub Actions to create and approve pull requests" turned off. Merge that into this feature branch before marking the PR ready.
 
 ---
 
@@ -885,7 +897,9 @@ reintroduces this bug.
 
 - [ ] **Step 2: Append to the technical release register**
 
-Add to `docs/release-notes-next.md` under the current in-progress section:
+First confirm the cycle is still open: `docs/release-notes-next.md` must still carry `release-notes-next-version: 1.14.0` and `RELEASE_NOTES.md` must still open with `# Castwright 1.14.0`. Both were true on 2026-07-24 and v1.14.0 was uncut. **If the marker has moved on, v1.14.0 was cut in the meantime and this is the first PR after a cut** — follow the reset procedure in [CONTRIBUTING.md "Release notes"](../../CONTRIBUTING.md#release-notes) rather than appending to a shipped section.
+
+Add the bullet to `docs/release-notes-next.md` in the themed section that fits (the file is organised `## ✨ Headline features` → emoji-themed sections → bold-lead bullets); a listener-facing player change belongs with the other playback/Listen entries, not under a server or analyzer heading:
 
 ```markdown
 - **fs-10 — chapter-title segment on the Listen timeline** (#412). `ChapterAudio.segments[]`
@@ -945,7 +959,7 @@ Surfaces the synthetic narrator-voiced chapter-title beat that every render has 
 - `src/components/mini-player.test.tsx` — band geometry and label derived from the payload; absent for legacy chapters; clicking it scrubs to the click position rather than hard-seeking to 0; not focusable.
 - `src/views/generation.test.tsx` — neutral fill and `Chapter title` tooltip.
 - `e2e/listen-title-segment.spec.ts` — band visible and labelled in a real browser.
-- `e2e/{win32,linux}/generate*.png` — visual baselines rebaked.
+- `npm run test:e2e:visual` green with the committed baselines untouched — the strip delta is well inside the suite's 5% `maxDiffPixelRatio`, so no rebake was needed.
 
 The index fix spans a wire→disk seam that mock mode cannot reach, so it is pinned by the server and resolver tests composed, not by an e2e. This is called out in the spec and in the plan so nobody mistakes either half for the whole.
 

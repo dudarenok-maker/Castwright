@@ -151,16 +151,20 @@ what causes the realignment — it cannot be split into a separate PR.
 
 ### 6.1 Mini-player title band (`src/components/mini-player.tsx`)
 
-A **decorative, non-interactive** `<div>` rendered inside the existing scrubber container
-(`:723-738`), as a sibling of the progress underline and thumb.
+A **decorative, non-interactive** element (a `<span>`) rendered inside the existing scrubber
+container (`:723-738`), as a sibling of the progress underline and thumb.
 
 - **Geometry, from the payload — not hardcoded.** `left: (seg.start / totalSec) * 100%`,
   `width: max(4px, ((seg.end - seg.start) / totalSec) * 100%)`, full track height, peach at partial
   alpha so the bars read through, `rounded`. The width floor is necessary: a ~2 s beat in a
   41-minute chapter is 0.08 % of the track, i.e. sub-pixel.
 - **Label, from the payload.** `title={`Chapter title · ${formatTime(seg.start)}–${formatTime(seg.end)}`}`
-  plus an `sr-only` line, mirroring the pattern `Waveform` already uses for issue regions
-  (`src/components/waveform.tsx:111-115`). The first draft hardcoded `0:00–0:03`; production's
+  for the hover tooltip, plus `role="img"` and a matching `aria-label` for assistive tech.
+  (An earlier draft of this section called for an `sr-only` text node mirroring
+  `src/components/waveform.tsx:111-115`. `role="img"` + `aria-label` expresses the same thing on
+  the element itself — it is a labelled graphic, not a text run — and keeps the DOM lighter.
+  The plan implements the `role="img"` form; this section is the one that moved.)
+  The first draft hardcoded `0:00–0:03`; production's
   title runs `[1.5, ~3.5]` — `CHAPTER_LEAD_SILENCE_SEC = 1.5`
   (`synthesise-chapter.ts:387`) precedes it and `CHAPTER_POST_TITLE_SILENCE_SEC` follows it.
 - **Clicks pass straight through.** No `onClick`, no `stopPropagation`, no `<button>`. The parent's
@@ -233,13 +237,20 @@ hand-built; `layout.test.tsx` uses `segments: []`; `e2e/character-splice.spec.ts
 state only — so nothing is expected to break. That is a prediction to verify while implementing,
 not a licence to skip re-running the suites.
 
-**The visual baselines at risk are `generate.png` / `generate-dark.png`, not `listen.png`.**
-`listen.png` (`e2e/responsive/visual.spec.ts:149-154`) navigates to the listen route with the
-mini-player closed, so the band cannot appear. But Solway Bay hydrates 18 `done` chapters and
-`generation.tsx:2047-2049` renders a `ChapterSegmentStrip` for each, so **both** the new mock title
-segment and §6.2's neutral-fill branch land inside `generate.png` / `generate-dark.png`
-(`visual.spec.ts:155-167,337-343`). Baselines are per-platform (`e2e/{linux,win32}/`), so both need
-regenerating.
+**The visual baselines to watch are `generate.png` / `generate-dark.png`, not `listen.png` — but
+they are expected to stay green.** `listen.png` (`e2e/responsive/visual.spec.ts:149-154`) navigates
+to the listen route with the mini-player closed, so the band cannot appear there at all. Solway Bay
+does hydrate 18 `done` chapters and `generation.tsx:2047-2049` renders a `ChapterSegmentStrip` for
+each, so both the new mock title segment and §6.2's neutral-fill branch land inside `generate.png` /
+`generate-dark.png` (`visual.spec.ts:155-167,337-343`). **That delta is nonetheless well under the
+suite's tolerance:** `visual.spec.ts:92` sets `maxDiffPixelRatio: 0.05`, i.e. ~46,000 px of a
+1280×720 viewport, against a change of order 10²–10³ px (a ~3 px band and a ~5 px boundary shift
+inside an 8 px-tall strip, per row). So the committed baselines stay valid and **no rebake is
+planned**. This matters because it gates real merge risk: `e2e-visual` is its own job in
+`.github/workflows/verify.yml:339` and sits in the final gate's `needs:` (`:395`), so a genuinely
+stale linux baseline blocks merge — while a needless force-regen (`--update-snapshots=all`) would
+re-bless all 51 baselines on both platforms. Verify, don't regenerate; the plan's Task 6 Step 3
+carries the escape hatch if the run actually goes red.
 
 **No test currently asserts the filter exists**, so removing it breaks nothing — and would have
 been caught by nothing. The §7 server test closes that hole in both directions.
