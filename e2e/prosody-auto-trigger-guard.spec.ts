@@ -89,7 +89,8 @@ test.describe('prosody auto-trigger guard (analysis-pill Task 10)', () => {
 
     /* ── Phase 2: real click-through ─────────────────────────────────── */
 
-    /* Drive the button → confirm → slowed mock path to prove no double-run. */
+    /* Drive the per-chapter primary (fs-35: runs immediately, no confirm) to
+       prove no double-run. */
     await detectBtn.click();
 
     /* While the run is active, the component renders detect-emotions-progress
