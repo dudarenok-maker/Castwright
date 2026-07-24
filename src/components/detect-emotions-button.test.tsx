@@ -289,4 +289,34 @@ describe('fs-33 — DetectEmotionsButton', () => {
     render(<Provider store={store}><DetectEmotionsButton /></Provider>);
     expect((screen.getByTestId('detect-emotions-button') as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it('dismisses the ⌄ menu on Escape', () => {
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <DetectEmotionsButton />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('detect-emotions-menu-toggle'));
+    expect(screen.getByTestId('detect-emotions-wholebook')).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByTestId('detect-emotions-wholebook')).toBeNull();
+  });
+
+  it('dismisses the ⌄ menu on an outside click', () => {
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <DetectEmotionsButton />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByTestId('detect-emotions-menu-toggle'));
+    expect(screen.getByTestId('detect-emotions-wholebook')).toBeInTheDocument();
+
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByTestId('detect-emotions-wholebook')).toBeNull();
+  });
 });

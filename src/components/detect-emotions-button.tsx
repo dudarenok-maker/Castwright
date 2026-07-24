@@ -49,14 +49,21 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
   const menuRef = useRef<HTMLDivElement>(null);
   const busy = useAppSelector((s) => (bookId ? selectAnalysisBusyForBook(s, bookId) : false));
 
-  // Close the ⌄ menu on an outside click (mirrors the Review Script menu).
+  // Close the ⌄ menu on an outside click or Escape (mirrors the Review Script menu).
   useEffect(() => {
     if (!menuOpen) return;
     const onDown = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
     document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
   }, [menuOpen]);
 
   if (!bookId) return null;
