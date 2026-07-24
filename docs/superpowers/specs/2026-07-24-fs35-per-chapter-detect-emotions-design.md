@@ -108,25 +108,35 @@ per-chapter is a manual, targeted action only and never writes the
 ### Component — `src/components/detect-emotions-button.tsx`
 
 Restructured from a single button + confirm popover into a split button that
-mirrors `review-script-chapter` / `review-script-menu-toggle`:
+mirrors `review-script-chapter` / `review-script-menu-toggle`.
 
-- Props: add `currentChapterId: number | null` and a per-chapter availability
-  flag (the current chapter's sentence count / `chapterHasSentences`).
-  `manuscript.tsx` already holds both (`currentChapterId`, `chapterSentences`)
-  and passes `<DetectEmotionsButton disabled={sentences.length === 0} />`
-  today.
+**Scope source — the store, not props.** The button already reaches into
+`ui.stage` for `bookId` (`s.ui.stage.bookId`). It reads `currentChapterId` the
+same way (it lives inside the `ready` stage variant — confirmed:
+`{ kind: 'ready', bookId, view, currentChapterId }`) and derives per-chapter
+availability from `s.manuscript.sentences.some((x) => x.chapterId === currentChapterId)`.
+**`manuscript.tsx` therefore does NOT change** — it keeps rendering
+`<DetectEmotionsButton disabled={sentences.length === 0} />` (the `disabled`
+prop remains the book-level / whole-book availability signal). This is smaller
+and more consistent with the component's existing self-contained pattern than
+threading new props.
+
 - **Primary** ("Detect emotions"): `onClick` → `run({ chapterId: currentChapterId })`
-  immediately. Disabled when the current chapter has no sentences.
-- **`⌄` toggle**: opens a small menu with **"Detect whole book"**, which opens
-  the existing confirm popover → `run({})` (no chapterId). Disabled when the
-  book has no sentences.
-- `run` takes an optional `{ chapterId }` and passes it into
-  `runProsodyPasses`.
+  immediately, no confirm. Disabled when the current chapter has no sentences
+  (or `currentChapterId == null`), plus the existing `disabled`/`busy` gates.
+- **`⌄` toggle** (`detect-emotions-menu-toggle`): opens a small menu with
+  **"Detect whole book"** (`detect-emotions-wholebook`), which opens the
+  existing confirm popover → `run({})` (no chapterId). Disabled when the book
+  has no sentences (`disabled` prop).
+- `run` takes an optional `{ chapterId }` and passes it into `runProsodyPasses`.
 - Success copy is scope-aware: per-chapter → "Tagged N line(s) in this
   chapter."; whole-book → today's "Tagged N line(s) across M chapter(s)."
 - The running-state `SubstageProgressPill`, `busy`/substage lock, cancel, and
   error handling are unchanged. The shared bookId-keyed substage lock already
   prevents a per-chapter and whole-book run overlapping.
+- Test-ids: `detect-emotions-button` stays the **primary** (now per-chapter);
+  new `detect-emotions-menu-toggle` + `detect-emotions-wholebook`;
+  `detect-emotions-confirm` / `-progress` / `-done` / `-error` unchanged.
 
 ### Contract — `openapi.yaml`
 
@@ -158,20 +168,26 @@ the diff minimal and matches the route's current state.
   `chapterId`); keep the whole-book path covered via the menu.
 
 **Existing tests that WILL break and must be updated (not additive):** the
-button restructure changes the primary action from "open confirm → whole-book"
-to "run immediately → this chapter". Every spec that drives the current
-single-button-plus-confirm flow needs updating to reach whole-book through the
-new `⌄` menu:
+primary action changes from "open confirm → whole-book" to "run immediately →
+this chapter", so the primary click no longer shows a confirm popover. Every
+spec that does `click(detect-emotions-button)` → `click(detect-emotions-confirm)`
+breaks. Grep-verified full list:
 
+- `src/components/detect-emotions-button.test.tsx` (6 tests reference the flow)
 - `e2e/manuscript-detect-emotions.spec.ts`
 - `e2e/manuscript-detect-emotions-instruct.spec.ts`
 - `e2e/detect-emotions-pill-progress.spec.ts`
-- `src/components/detect-emotions-button.test.tsx`
+- `e2e/generate-disabled-while-analysing.spec.ts`
+- `e2e/prosody-auto-trigger-guard.spec.ts`
 
-Treat these four as required work in the implementation plan, not a surprise at
-verify time. New/updated test-ids (e.g. a `detect-emotions-menu-toggle` and a
-`detect-emotions-wholebook` option) mirror the `review-script-menu-toggle` /
-`review-script-wholebook` naming.
+For the four specs where the confirm click was merely a way to *start a run*
+(pill-progress, generate-disabled, prosody-guard, and the instruct spec's run),
+the fix is a **simplification** — delete the `detect-emotions-confirm` click;
+the primary click alone now starts the (per-chapter) run. Only
+`manuscript-detect-emotions.spec.ts` and the component test need the confirm
+path re-homed under the new `⌄` menu (`detect-emotions-menu-toggle` →
+`detect-emotions-wholebook` → `detect-emotions-confirm`). New/updated test-ids
+mirror the `review-script-menu-toggle` / `review-script-wholebook` naming.
 
 ## Out of scope
 
