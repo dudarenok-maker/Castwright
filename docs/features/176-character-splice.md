@@ -43,7 +43,7 @@ Automated:
 - `server/src/audio/splice-chapter.test.ts` — timing/duration integrity, gap reconstruction, downstream shift, drift round-trip, invariant, validation.
 - `server/src/tts/gain-pcm.test.ts`, `decode-audio-to-pcm.test.ts` — real-ffmpeg gain math + decode round-trip.
 - `server/src/audio/{character-snapshots,build-synth-replacement}.test.ts` — shared snapshot shape + re-record replacement wiring.
-- `server/src/routes/chapter-splice.test.ts` — remix route end-to-end (target region louder, `.previous.*` preserved, duration unchanged) + validation + graceful re-record failure paths.
+- `server/src/routes/chapter-splice.test.ts` — remix route end-to-end (target region louder, `.previous.*` preserved, duration unchanged) + validation + graceful re-record failure paths; `'fs-10 title-led index mapping'` pins the route's own `segmentIndices`→on-disk-array resolution (title-led fixture: index 1 succeeds on the body line, index 0 is rejected title-only).
 - `src/modals/fix-character-audio.test.tsx` — candidate filtering, one splice per chapter, pending revisions, remix vs re-record args.
 - e2e: `e2e/character-splice.spec.ts` (mock mode) — open cast profile → Fix audio → Loudness → apply → completion.
 
@@ -73,3 +73,21 @@ are now index-identical, pinned by a `sentenceId`-matched assertion in
 `server/src/routes/chapter-audio.test.ts`) and taught the resolver to skip title
 rows without renumbering. Anything that re-filters the published array
 reintroduces this bug.
+
+The index-alignment guarantee is pinned by four links, not two: the
+chapter-audio route test (`server/src/routes/chapter-audio.test.ts` — published
+index matches on-disk index by `sentenceId`, both arrays index-identical) →
+the resolver test (`src/lib/resolve-segment-for-sec.test.ts` — a marker in the
+lead silence resolves past the title without renumbering the rows after it) →
+the splice-chapter engine test
+(`server/src/audio/splice-chapter.test.ts:224` — `'preserves the title segment
++ its lead silence verbatim when not targeted'`, which builds a title-led array
+and asserts the title segment survives a body-line splice byte-identical) →
+the splice **route's** own index→segment mapping
+(`server/src/routes/chapter-splice.test.ts` — `'fs-10 title-led index
+mapping'`, added post-review: a title-led on-disk fixture asserts
+`segmentIndices: [1]` targets the first body line while `segmentIndices: [0]`
+is rejected with the title-only error). The route-level case closes the one
+seam none of the other three touched: `chapter-splice.ts`'s own ownership
+check + `isRerecordableSegment` filter over the raw on-disk array, which had
+zero coverage before this correction.
