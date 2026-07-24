@@ -7,7 +7,7 @@ owner: null
 # 265 — Attribution eval + tuning loop
 
 > Status: active
-> Key files: `server/src/analyzer/attribution-eval/{schema,scorer,roster-schema,capture,capture-cli,buckets,run-eval,run-eval-cli,diff-runs}.ts`, `server/src/analyzer/attribution-eval/__fixtures__/{coalfall-ch1.en.labelled.json,coalfall.roster.json}`, `scripts/run-attribution-eval.mjs`, `server/src/routes/analysis.ts` (`onStages` seam), `server/src/analyzer/dialogue-structure/{cross-examine.ts,types.ts}` (`reasons`/`DecisionBucket`)
+> Key files: `server/src/analyzer/attribution-eval/{schema,scorer,roster-schema,capture,capture-cli,buckets,run-eval,run-eval-cli,diff-runs}.ts`, `server/src/analyzer/attribution-eval/__fixtures__/{coalfall-ch1.en.labelled.json,coalfall.roster.json,coalfall-ru-ch1.ru.labelled.json,coalfall-ru.roster.json,coalfall-de-ch1.de.labelled.json,coalfall-de.roster.json}` + `committed-fixtures.test.ts`, `scripts/run-attribution-eval.mjs`, `server/src/routes/analysis.ts` (`onStages` seam), `server/src/analyzer/dialogue-structure/{cross-examine.ts,types.ts}` (`reasons`/`DecisionBucket`)
 > URL surface: none (dev tooling — no route/UI surface)
 > OpenAPI ops: none
 > Design spec: [docs/superpowers/specs/2026-07-20-attribution-eval-tuning-design.md](../superpowers/specs/2026-07-20-attribution-eval-tuning-design.md)
@@ -79,9 +79,10 @@ owner: null
 2. **Corpus is local-only.** `server/src/analyzer/attribution-eval/corpus/`
    is git-ignored (`.gitignore:170`) — labelled chapter fixtures and per-book
    roster snapshots captured from copyrighted books never land in git. Only
-   the Castwright-owned Coalfall fixtures
-   (`__fixtures__/coalfall-ch1.en.labelled.json` +
-   `__fixtures__/coalfall.roster.json`) are committed.
+   the Castwright-owned Coalfall fixtures are committed under `__fixtures__/`:
+   the EN guardrail (`coalfall-ch1.en.labelled.json` + `coalfall.roster.json`)
+   plus the RU/DE non-English guardrails (srv-64: `coalfall-ru-ch1.ru.*` and
+   `coalfall-de-ch1.de.*`, each with its own native-name roster).
 3. **Roster-pinning prevents ID drift.** The runner pins the captured roster
    snapshot as a fixed `stage1` (`rosterToStage1`, `run-eval.ts`) before
    attributing, so stage-1 cast re-discovery can never mint IDs that diverge
@@ -99,10 +100,12 @@ owner: null
    by evidence family (`buckets.ts`: `tag`, `pronoun`, `alternation`,
    `unanchored`, `narration`, `lumped`, `unaligned`, `other`) derived from
    the real `cross-examine.ts` `Decision.reason` taxonomy.
-5. **Coalfall guardrail runs on every eval.** `runEval()` always scores the
-   committed Coalfall fixture + roster alongside whatever corpus fixtures are
+5. **Coalfall guardrails run on every eval.** `runEval()` always scores the
+   committed Coalfall fixtures + rosters alongside whatever corpus fixtures are
    present (`run-eval-cli.ts`'s `loadDir(COMMITTED)` merge) — the anti-
    overfit check against the thin, single-author, single-language PwF seed.
+   Since srv-64 this is three languages (EN + RU + DE), so a rules/heuristic
+   change is measured against non-English text too, not just English.
 6. **Production seam is strictly additive.** `onStages` and `reasons` are
    both optional/extra outputs; omitted, `attributeChapterStage2` and
    `crossExamine` behave exactly as before this plan. Locked by
@@ -594,3 +597,48 @@ capitalization heuristic alone does not fully close the junk-alias class for cap
 languages. A language-aware refinement (e.g. a per-language function-word/determiner stop-list, or a
 dictionary-common-noun filter) is deferred; German descriptor aliases are rare and the layered guard
 holds the never-fabricate posture. (Surfaced by the #1776 independent review.)
+
+### Non-English (RU/DE) eval fixtures — language-safe rules block validated (2026-07-24, srv-64 / #1759)
+
+The eval corpus + every acceptance gate above was **English-only** — the language-safe stage-2
+`STAGE2_ATTRIBUTION_RULES` block (Target C / srv-62) is language-agnostic by construction but was
+**unmeasured on non-English**. srv-64 closes that gap by hand-labelling **Chapter One of the
+Castwright-owned Coalfall** — the same chapter the EN guardrail labels — in Russian and German, and
+committing both as **gold-tier guardrails** (`__fixtures__/coalfall-{ru,de}-ch1.{ru,de}.labelled.json`
++ per-language native-name rosters). Each is ported line-for-line from the EN gold fixture's ground
+truth (stable character `id`s; only the roster `name` localises — Cyrillic Рен/Одуван/Мэйрин for RU,
+Latin Wren/Oduvan/Maerin + Drache/Stimme for DE), so the *speaker* labels are trustworthy by
+construction. A committed unit test (`committed-fixtures.test.ts`) locks discovery, gold tier,
+roster-resolution, and a **token-completeness invariant** — the ordered concatenation of every truth
+line's tokens (scorer normalisation) must equal `chapterText`'s, so a future edit can't silently
+desync lines from the chapter body. Both are single-call chapters (~4k chars, under the chunk
+budget), so they exercise the **chapter** rules block (`buildStage2ChapterInbox`), not the chunk path.
+
+**On-box eval (`qwen36-cw-iq4-32k`, `--runs 3`) — the block holds on non-English, no collapse.**
+The EN guardrail scored 77.6% in the same run, reproducing its ~77.0% history and confirming the
+measurement is faithful.
+
+| Fixture | raw | det | final | drift (of 58) | anchored families | soft families |
+|---|---|---|---|---|---|---|
+| **EN** (guardrail) | 77.6% | 77.6% | 77.6% | 33.0 | tag/pronoun/narration/unanchored **100%** | — |
+| **DE** (new) | 76.4% [74.1–77.6] | 76.4% | 76.4% | 34.3 | tag/pronoun/narration/unanchored **100%** | — |
+| **RU** (new) | 71.3% [67.2–75.9] | **74.1%** [72.4–75.9] | 71.8% [70.7–74.1] | 38.3 | tag/pronoun/narration **100%** | unanchored 81%, lumped 89% |
+
+**Reading:**
+- **German is at parity with English** (76.4 vs 77.6, inside its own run-band). Critically, the DE
+  text uses `„…"` quotes whose closing `"` is **U+201C — the same code point as the EN *opening*
+  quote (#1598)** — and attribution did **not** collapse: every evidence family that anchors scores
+  100% where attributed. The #1598 collision fix holds on labelled ground truth, not just in the
+  unit test.
+- **Russian is ~5pp lower** (final 71.8) with the gap concentrated in **segmentation drift** (38 vs
+  33) and the `unanchored`/`lumped` families (81% / 89%) — i.e. the `«…, — сказал X, —…»`
+  em-dash **embedded-attribution** construction is harder to *segment* (the model lumps the tag +
+  resumed speech, or splits differently than the truth), **not** a rules-block failure: where a line
+  anchors on a tag/pronoun/narration cue, accuracy is 100% in Russian too. The deterministic pass
+  even lifts RU raw→det (+2.8pp) before `final` settles. This is a diagnostic **future lever** (RU
+  em-dash re-segmentation), not a regression.
+
+No production code changed — pure eval-fixture + test addition. Because the eval is opt-in on-box
+tooling (never in `test:all`/`verify`, invariant #1), there is **no user- or operator-visible delta**,
+so **no release-notes entry** (same posture as #1758). Delivered on branch
+`test/server-srv64-ru-de-eval-fixtures`.

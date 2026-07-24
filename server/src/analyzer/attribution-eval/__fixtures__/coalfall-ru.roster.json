@@ -1,0 +1,10 @@
+{
+  "characters": [
+    { "id": "narrator", "name": "Рассказчик" },
+    { "id": "oduvan", "name": "Одуван", "gender": "male" },
+    { "id": "wren", "name": "Рен", "gender": "female" },
+    { "id": "maerin", "name": "Мэйрин", "gender": "female" },
+    { "id": "voice", "name": "Голос" },
+    { "id": "dragon", "name": "Дракон", "gender": "neutral" }
+  ]
+}

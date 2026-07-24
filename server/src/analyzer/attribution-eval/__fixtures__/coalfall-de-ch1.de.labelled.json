@@ -1,0 +1,237 @@
+{
+  "chapterText": "Die Schmiede hatte die Farbe eines gedämpften Sonnenuntergangs angenommen, und Wren kratzte die letzten Schlackenreste ab, als das Klopfen an der Tür begann.\n\n„Lass es\", sagte Meister Oduvan, ohne aufzusehen. Siebzig Winter hatten seine Stimme zu Kies und Geduld abgeschliffen. „Wer immer es ist, der mag weiterklopfen.\"\n\n„Es könnte ein Kunde sein.\"\n\n„Um diese Stunde ist es entweder ein Betrunkener oder eine Schuld. Keiner von beiden zahlt besser dafür, dass man ihn schnell hereinlässt.\"\n\nDie Tür ging trotzdem auf. Maerin die Vögtin steckte den Kopf herein, und die Kälte kam mit ihr. „Oduvan. Verriegle die Läden und lösch die Kohlen.\" Ihre Worte waren knapp, wie sie es immer waren, wenn sie gelaufen war. „Auf der Straße nach Coalfall ist ein Drache. Groß wie eine Scheune. Er kommt den Weg herunter.\"\n\nWrens Kratzer hielt inne. „Ein echter?\"\n\n„Nein, Kind, ein gemalter.\" Maerin lächelte nicht. „Ein echter. Und er kommt geradewegs auf das einzige erleuchtete Fenster im Tal zu, und das ist eures. Lösch das Feuer.\"\n\n„Wenn ich das Feuer lösche\", sagte Oduvan, „verliere ich die Schweißnaht, die ich seit Mittag hege. Ein Drache kann die Länge einer Schweißnaht warten oder er kann es nicht, und so oder so empfange ich ihn lieber in der Wärme.\" Er legte seine Zange ab. „Spatz. Mach das große Tor auf.\"\n\nWren — Spatz nur für ihn, und nur, wenn er vergaß, streng zu sein — ging zum großen Tor und stieß es weit auf.\n\nDer Drache füllte die Dunkelheit dahinter, wie Wasser einen Becher füllt. Ein Auge, golden und langsam, kam auf Höhe der Schwelle und hielt dort inne, die kleine Wärme des Ortes abwägend.\n\nVon irgendwo den Weg hinab brach eine Stimme aus der Dunkelheit: „Flieht, ihr Narren — er wird euch alle verschlingen!\"\n\nNiemand floh.\n\n„Ich bin von weit her gekommen\", sagte der Drache. Seine Stimme war nicht laut. Es war der Klang, den ein Berg machen würde, wenn ein Berg müde wäre, und jedes Wort traf einen Augenblick später ein, als man es erwartete. „Die Dörfer nennen mich Coalfall. Das ist nicht mein Name, aber er genügt. Man sagt mir, der beste Schmied im Tal halte diese Schmiede.\"\n\n„Man sagt Euch falsch\", sagte Oduvan. „Der beste Schmied im Tal ist vor neun Jahren gestorben. Ihr müsst Euch mit dem zweitbesten begnügen.\"\n\n„Bescheidenheit oder Verkaufstaktik?\"\n\n„In meinem Alter dasselbe.\"\n\nDas goldene Auge wanderte zu Wren, und sie spürte es, wie man die Sonne durch ein Fenster spürt. „Und die Kleine?\"\n\n„Mein Lehrling. Sie ist dreizehn und glaubt, ich höre sie nicht seufzen. Sie wird besser sein als ich, ehe sie zwanzig ist, und das ist der einzige Grund, warum ich sie behalte.\"\n\n„Ich seufze nie\", sagte Wren, die seufzte.\n\nDer Drache senkte sich, bis sein Atem die Kohlen bewegte, und sie glühten auf, ohne darum gebeten worden zu sein. „Ich will kein Schwert\", sagte er. „Alle wollen mich tot, und ein Schwert würde sie nur ermutigen. Ich will eine Glocke. Klein genug, um an einer Klaue zu hängen. Ich bin der Letzte meiner Art, und wenn ich gehe, wird niemand da sein, der es vermerkt. Ich möchte es selbst vermerken, im Voraus — solange es noch jemanden gibt, der einen wahren Ton zu gießen weiß.\"\n\nEine Weile war das Feuer das einzige Geräusch.\n\nDann nahm Oduvan seine Zange wieder auf. „Eine Glocke\", sagte er, als bestellten Drachen sie jeden Dienstag. „Bronze also, kein Eisen. Spatz — das gute Zinn, den Tiegel, und hör auf, auf den Formsand zu weinen, das verdirbt den Guss.\"\n\n„Ich weine nicht.\"\n\n„Natürlich nicht.\" Er kniff die Augen zusammen und betrachtete den Drachen, maß ihn, wie er alles maß. „Es dauert bis zum Morgen. Ihr werdet dem Feuer Gesellschaft leisten müssen, während wir arbeiten.\"\n\nDer Drache ließ sich in der Türöffnung nieder, ein Auge gegen die Wärme halb geschlossen, und sagte mit der Stimme eines müden Berges, den man seit sehr langer Zeit nicht gebeten hatte, an einem freundlichen Ort zu warten:\n\n„Ich habe nichts als Zeit. Fangt an.\"",
+  "lines": [
+    {
+      "text": "Die Schmiede hatte die Farbe eines gedämpften Sonnenuntergangs angenommen, und Wren kratzte die letzten Schlackenreste ab, als das Klopfen an der Tür begann.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Lass es\",",
+      "speakerId": "oduvan"
+    },
+    {
+      "text": "sagte Meister Oduvan, ohne aufzusehen.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "Siebzig Winter hatten seine Stimme zu Kies und Geduld abgeschliffen.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Wer immer es ist, der mag weiterklopfen.\"",
+      "speakerId": "oduvan"
+    },
+    {
+      "text": "„Es könnte ein Kunde sein.\"",
+      "speakerId": "wren"
+    },
+    {
+      "text": "„Um diese Stunde ist es entweder ein Betrunkener oder eine Schuld. Keiner von beiden zahlt besser dafür, dass man ihn schnell hereinlässt.\"",
+      "speakerId": "oduvan"
+    },
+    {
+      "text": "Die Tür ging trotzdem auf.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "Maerin die Vögtin steckte den Kopf herein, und die Kälte kam mit ihr.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Oduvan. Verriegle die Läden und lösch die Kohlen.\"",
+      "speakerId": "maerin"
+    },
+    {
+      "text": "Ihre Worte waren knapp, wie sie es immer waren, wenn sie gelaufen war.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Auf der Straße nach Coalfall ist ein Drache. Groß wie eine Scheune. Er kommt den Weg herunter.\"",
+      "speakerId": "maerin"
+    },
+    {
+      "text": "Wrens Kratzer hielt inne.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Ein echter?\"",
+      "speakerId": "wren"
+    },
+    {
+      "text": "„Nein, Kind, ein gemalter.\"",
+      "speakerId": "maerin"
+    },
+    {
+      "text": "Maerin lächelte nicht.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Ein echter. Und er kommt geradewegs auf das einzige erleuchtete Fenster im Tal zu, und das ist eures. Lösch das Feuer.\"",
+      "speakerId": "maerin"
+    },
+    {
+      "text": "„Wenn ich das Feuer lösche\",",
+      "speakerId": "oduvan"
+    },
+    {
+      "text": "sagte Oduvan,",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„verliere ich die Schweißnaht, die ich seit Mittag hege. Ein Drache kann die Länge einer Schweißnaht warten oder er kann es nicht, und so oder so empfange ich ihn lieber in der Wärme.\"",
+      "speakerId": "oduvan"
+    },
+    {
+      "text": "Er legte seine Zange ab.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Spatz. Mach das große Tor auf.\"",
+      "speakerId": "oduvan"
+    },
+    {
+      "text": "Wren — Spatz nur für ihn, und nur, wenn er vergaß, streng zu sein — ging zum großen Tor und stieß es weit auf.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "Der Drache füllte die Dunkelheit dahinter, wie Wasser einen Becher füllt.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "Ein Auge, golden und langsam, kam auf Höhe der Schwelle und hielt dort inne, die kleine Wärme des Ortes abwägend.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "Von irgendwo den Weg hinab brach eine Stimme aus der Dunkelheit:",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Flieht, ihr Narren — er wird euch alle verschlingen!\"",
+      "speakerId": "voice"
+    },
+    {
+      "text": "Niemand floh.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Ich bin von weit her gekommen\",",
+      "speakerId": "dragon"
+    },
+    {
+      "text": "sagte der Drache.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "Seine Stimme war nicht laut.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "Es war der Klang, den ein Berg machen würde, wenn ein Berg müde wäre, und jedes Wort traf einen Augenblick später ein, als man es erwartete.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Die Dörfer nennen mich Coalfall. Das ist nicht mein Name, aber er genügt. Man sagt mir, der beste Schmied im Tal halte diese Schmiede.\"",
+      "speakerId": "dragon"
+    },
+    {
+      "text": "„Man sagt Euch falsch\",",
+      "speakerId": "oduvan"
+    },
+    {
+      "text": "sagte Oduvan.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Der beste Schmied im Tal ist vor neun Jahren gestorben. Ihr müsst Euch mit dem zweitbesten begnügen.\"",
+      "speakerId": "oduvan"
+    },
+    {
+      "text": "„Bescheidenheit oder Verkaufstaktik?\"",
+      "speakerId": "dragon"
+    },
+    {
+      "text": "„In meinem Alter dasselbe.\"",
+      "speakerId": "oduvan"
+    },
+    {
+      "text": "Das goldene Auge wanderte zu Wren, und sie spürte es, wie man die Sonne durch ein Fenster spürt.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Und die Kleine?\"",
+      "speakerId": "dragon"
+    },
+    {
+      "text": "„Mein Lehrling. Sie ist dreizehn und glaubt, ich höre sie nicht seufzen. Sie wird besser sein als ich, ehe sie zwanzig ist, und das ist der einzige Grund, warum ich sie behalte.\"",
+      "speakerId": "oduvan"
+    },
+    {
+      "text": "„Ich seufze nie\",",
+      "speakerId": "wren"
+    },
+    {
+      "text": "sagte Wren, die seufzte.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "Der Drache senkte sich, bis sein Atem die Kohlen bewegte, und sie glühten auf, ohne darum gebeten worden zu sein.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Ich will kein Schwert\",",
+      "speakerId": "dragon"
+    },
+    {
+      "text": "sagte er.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Alle wollen mich tot, und ein Schwert würde sie nur ermutigen. Ich will eine Glocke. Klein genug, um an einer Klaue zu hängen. Ich bin der Letzte meiner Art, und wenn ich gehe, wird niemand da sein, der es vermerkt. Ich möchte es selbst vermerken, im Voraus — solange es noch jemanden gibt, der einen wahren Ton zu gießen weiß.\"",
+      "speakerId": "dragon"
+    },
+    {
+      "text": "Eine Weile war das Feuer das einzige Geräusch.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "Dann nahm Oduvan seine Zange wieder auf.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Eine Glocke\",",
+      "speakerId": "oduvan"
+    },
+    {
+      "text": "sagte er, als bestellten Drachen sie jeden Dienstag.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Bronze also, kein Eisen. Spatz — das gute Zinn, den Tiegel, und hör auf, auf den Formsand zu weinen, das verdirbt den Guss.\"",
+      "speakerId": "oduvan"
+    },
+    {
+      "text": "„Ich weine nicht.\"",
+      "speakerId": "wren"
+    },
+    {
+      "text": "„Natürlich nicht.\"",
+      "speakerId": "oduvan"
+    },
+    {
+      "text": "Er kniff die Augen zusammen und betrachtete den Drachen, maß ihn, wie er alles maß.",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Es dauert bis zum Morgen. Ihr werdet dem Feuer Gesellschaft leisten müssen, während wir arbeiten.\"",
+      "speakerId": "oduvan"
+    },
+    {
+      "text": "Der Drache ließ sich in der Türöffnung nieder, ein Auge gegen die Wärme halb geschlossen, und sagte mit der Stimme eines müden Berges, den man seit sehr langer Zeit nicht gebeten hatte, an einem freundlichen Ort zu warten:",
+      "speakerId": "narrator"
+    },
+    {
+      "text": "„Ich habe nichts als Zeit. Fangt an.\"",
+      "speakerId": "dragon"
+    }
+  ]
+}
