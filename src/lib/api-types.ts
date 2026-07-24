@@ -3611,6 +3611,11 @@ export interface components {
                 end?: number;
                 characterId?: string;
                 sentenceId?: number;
+                /**
+                 * @description fs-10 — present only on the synthetic narrator-voiced chapter-title beat (empty sentenceIds[] on disk, see synthesise-chapter.ts). Absent on every ordinary sentence-backed segment and on every pre-fs-10 render, so consumers MUST treat absence as "sentence".
+                 * @enum {string}
+                 */
+                kind?: "title";
                 /** @description issue-waveform — true when this segment is still flagged by the pre-assembly segment-QA gate or the ASR content-QA gate. Absent on clean / legacy / pre-QA renders. */
                 suspect?: boolean;
                 /** @description Human-readable QA reasons for a suspect segment. Segment-QA reasons always; ASR reasons only when the ASR verdict was drift. */
