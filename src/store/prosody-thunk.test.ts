@@ -332,6 +332,21 @@ describe('runProsodyPasses', () => {
     await expect(runProsodyPasses(bookId, { dispatch })).resolves.toMatchObject({ failed: 0 });
   });
 
+  it('forwards chapterId to both passes when provided', async () => {
+    const seen: Array<number | undefined> = [];
+    vi.mocked(api.detectEmotions).mockImplementation(async (_id, opts: DetectEmotionsOpts = {}) => {
+      seen.push(opts.chapterId);
+      return EMPTY_EMOTIONS;
+    });
+    vi.mocked(api.detectInstruct).mockImplementation(async (_id, opts: DetectInstructOpts = {}) => {
+      seen.push(opts.chapterId);
+      return EMPTY_INSTRUCT;
+    });
+
+    await runProsodyPasses('book-1', { dispatch: vi.fn(), chapterId: 4 });
+    expect(seen).toEqual([4, 4]);
+  });
+
   it('combines pass-1 remaining + pass-1-total-as-pass-2-proxy for the ETA while pass 1 runs', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
