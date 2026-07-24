@@ -1889,8 +1889,8 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
   });
 });
 
-describe('LibraryView Base voices tab', () => {
-  it('shows the catalog from getBaseVoices when the user clicks the tab', async () => {
+describe('LibraryView Catalogue section (fs-38 Wave 1 Task 14 — formerly the Base voices tab)', () => {
+  it('shows the catalog from getBaseVoices when the user clicks Catalogue', async () => {
     getBaseVoices.mockResolvedValue({
       voices: [
         { engine: 'coqui', name: 'Asya Anara' },
@@ -1899,9 +1899,9 @@ describe('LibraryView Base voices tab', () => {
     });
     renderView();
     /* Catalog is fetched on mount; await the promise resolution before
-       clicking through to the tab. */
+       clicking through to the section. */
     await new Promise((resolve) => setTimeout(resolve, 0));
-    fireEvent.click(screen.getByRole('button', { name: /Base voices/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Catalogue' }));
     expect(screen.getByText('Asya Anara')).toBeInTheDocument();
     /* Charon appears in BOTH the family section and the base catalog; the
        Coqui section is what proves the catalog itself is rendering. */

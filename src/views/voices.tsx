@@ -13,6 +13,7 @@ import { IconPlay, IconSparkle } from '../lib/icons';
 import type {
   BaseVoice,
   Character,
+  ConfigValues,
   LibraryBook,
   Sentence,
   TtsEngine,
@@ -36,6 +37,7 @@ import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playBaseVoiceSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { gradientForTtsVoice } from '../lib/voice-palette';
 import { findCharacterForVoice, pickMergeSurvivor } from '../lib/voice-character-link';
+import { MyVoicesSection } from '../components/voices/my-voices-section';
 import { CompareCastModal } from '../modals/compare-cast-modal';
 import { RebaselineModalContainer } from '../modals/rebaseline-modal';
 import {
@@ -108,6 +110,10 @@ const ENGINE_LABEL: Record<TtsEngine, string> = {
    useMemo deps stable in tests that don't register the library slice. */
 const EMPTY_LIBRARY_BOOKS: LibraryBook[] = [];
 
+/* fs-38 Wave 1, Task 14 — module-level empty object for the defensive
+   config-values selector below, mirroring EMPTY_LIBRARY_BOOKS above. */
+const EMPTY_CONFIG_VALUES: ConfigValues = {};
+
 /* Bucket / narrator ids the pill's Merge action refuses to act on. Mirrors
    the guards profile-drawer.tsx uses for its own merge picker — merging
    into or out of a standing background bucket would corrupt the
@@ -117,6 +123,10 @@ const UNMERGEABLE_IDS = new Set(['narrator', 'unknown-male', 'unknown-female']);
 
 export function LibraryView({ library, onOpenCharacter }: Props) {
   const [tab, setTab] = useState<Tab>('all');
+  /* fs-38 Wave 1, Task 14 — top-level page section (design spec §1/§Q6).
+     Defaults to 'in-use' so a fresh mount renders byte-for-byte the same
+     rollup content this view has always defaulted to. */
+  const [section, setSection] = useState<'my-voices' | 'in-use' | 'catalogue'>('in-use');
   const [draggingVoiceId, setDraggingVoiceId] = useState<string | null>(null);
   const [familyStatus, setFamilyStatus] = useState<{ key: string; label: string } | null>(null);
   /* Compare affordance (plan 22a + plan 60 + plan 96). Selection is
@@ -202,6 +212,17 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   const libraryBooks = useAppSelector(
     (s) => (s as { library?: { books?: LibraryBook[] } }).library?.books ?? EMPTY_LIBRARY_BOOKS,
   );
+  /* fs-38 Wave 1, Task 14 — voices.library.enabled config gate for the "My
+     voices" nav segment. Defensive read (same pattern as libraryBooks
+     above): many existing test stores don't register the config slice —
+     fall back to {} so a missing/unhydrated config always reads as
+     enabled-pending (`undefined !== false` → true), never a false→true
+     flash once `fetchConfig` (dispatched at store boot, src/store/index.ts)
+     resolves. */
+  const configValues = useAppSelector(
+    (s) => (s as { config?: { values?: ConfigValues } }).config?.values ?? EMPTY_CONFIG_VALUES,
+  );
+  const myVoicesLibraryEnabled = configValues['voices.library.enabled']?.effective !== false;
   const playback = useSamplePlayback();
   const activeEngine = engineForModelKey(ttsModelKey);
 
@@ -997,7 +1018,6 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       id: 'library',
       label: `Series & older (${library.filter((v) => v.source === 'library').length})`,
     },
-    { id: 'base', label: `Base voices${baseVoicesLoaded ? ` (${baseVoices.length})` : ''}` },
   ];
 
   /* Count preset families only — bespoke Qwen voices no longer form
@@ -1041,26 +1061,47 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <StatTile label="Voices" value={library.length} />
-        <StatTile label="Families" value={familyCount} />
-        <StatTile label="Books" value={books.length} />
-        <StatTile label="Pinned" value={library.filter((v) => v.pinned).length} />
-      </div>
-
-      <div className="flex items-center gap-1 mb-6 flex-wrap">
-        {tabs.map((t) => (
+      {/* fs-38 Wave 1, Task 14 — top-level section nav (design spec §1/§Q6).
+          Order locked: My voices → In use → Catalogue. "My voices" is
+          gated by the voices.library.enabled knob; hidden entirely (not
+          shown-but-empty) when an operator has turned the library off, so
+          the nav never offers a section with nothing behind it. */}
+      <div
+        role="group"
+        aria-label="Voice library sections"
+        className="flex items-center gap-1 mb-6 rounded-full bg-ink/5 p-1 w-fit flex-wrap"
+      >
+        {myVoicesLibraryEnabled && (
           <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${tab === t.id ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/4'}`}
+            type="button"
+            aria-pressed={section === 'my-voices'}
+            onClick={() => setSection('my-voices')}
+            className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${section === 'my-voices' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
           >
-            {t.label}
+            My voices
           </button>
-        ))}
+        )}
+        <button
+          type="button"
+          aria-pressed={section === 'in-use'}
+          onClick={() => setSection('in-use')}
+          className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${section === 'in-use' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
+        >
+          In use
+        </button>
+        <button
+          type="button"
+          aria-pressed={section === 'catalogue'}
+          onClick={() => setSection('catalogue')}
+          className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${section === 'catalogue' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
+        >
+          Catalogue
+        </button>
       </div>
 
-      {tab === 'base' ? (
+      {section === 'my-voices' && <MyVoicesSection enabled={myVoicesLibraryEnabled} />}
+
+      {section === 'catalogue' && (
         <BaseVoiceCatalogPanel
           baseVoices={baseVoices}
           baseVoicesLoaded={baseVoicesLoaded}
@@ -1069,7 +1110,30 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
           onPlay={playBaseVoice}
           status={familyStatus}
         />
-      ) : families.length === 0 && qwenGroups.length === 0 && variantFilter === 'all' ? (
+      )}
+
+      {section === 'in-use' && (
+        <>
+          <div className="grid grid-cols-4 gap-4 mb-6">
+            <StatTile label="Voices" value={library.length} />
+            <StatTile label="Families" value={familyCount} />
+            <StatTile label="Books" value={books.length} />
+            <StatTile label="Pinned" value={library.filter((v) => v.pinned).length} />
+          </div>
+
+          <div className="flex items-center gap-1 mb-6 flex-wrap">
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${tab === t.id ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/4'}`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {families.length === 0 && qwenGroups.length === 0 && variantFilter === 'all' ? (
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10 text-center">
           <p className="text-sm font-bold text-ink">No voices yet</p>
           <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">
@@ -1284,6 +1348,8 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
             />
           ))}
         </div>
+      )}
+        </>
       )}
 
       {selectedVoiceIds.length > 0 && (
