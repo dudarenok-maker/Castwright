@@ -185,4 +185,27 @@ describe('mock config parity with the server registry', () => {
     const registryGroup = GROUPS.find((g) => g.id === 'gpu-lifecycle');
     expect(mockGroup?.help).toBe(registryGroup?.help);
   });
+
+  /* #1786: the §12 dialogue-structure attribution group was absent from the
+     mock entirely, so it could not be screenshotted for the wiki. Same
+     mirror-the-registry-exactly guard as gpu-lifecycle above. */
+  it('analyzer-structure descriptor keys mirror the registry group', async () => {
+    const { descriptors } = await mockGetConfig();
+    const mockKeys = descriptors
+      .filter((d) => d.group === 'analyzer-structure')
+      .map((d) => d.key)
+      .sort();
+    const registryKeys = knobsInGroup('analyzer-structure')
+      .map((k) => k.key)
+      .sort();
+    expect(mockKeys).toEqual(registryKeys);
+    expect(mockKeys.length).toBeGreaterThan(0);
+  });
+
+  it('analyzer-structure group blurb matches the registry', async () => {
+    const { groups } = await mockGetConfig();
+    const mockGroup = groups.find((g) => g.id === 'analyzer-structure');
+    const registryGroup = GROUPS.find((g) => g.id === 'analyzer-structure');
+    expect(mockGroup?.help).toBe(registryGroup?.help);
+  });
 });
