@@ -172,5 +172,6 @@ Run in mock mode (`VITE_USE_MOCKS=true`, the default for `npm run dev`).
 
 ## Ship notes
 
-Shipped 2026-07-24. PR for #592 (fs-35, follow-up to fs-33 #510). Commit SHA
-filled by the controlling thread at merge time.
+Shipped 2026-07-24 via PR #1789 (`Closes #592`, fs-35, follow-up to fs-33 #510),
+merge commit `842212ec`. First PR of the v1.15.0 cycle — bootstrapped the
+release-notes files to 1.15.0. All cloud `verify.yml` checks green.
