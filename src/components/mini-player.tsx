@@ -105,6 +105,19 @@ export function MiniPlayer({
     () => issues.map((r) => `${formatTime(r.seekSec)}: ${r.reasons.join(', ')}`).join(' · '),
     [issues],
   );
+  /* fs-10 (#412) — the synthetic narrator-voiced chapter-title beat, when this
+     render has one. Chapters rendered before PR #101 have none, and the band
+     null-renders for them.
+
+     `kind` is currently a single-value enum. If a future render ever adds a
+     third kind (`'silence'`, `'credits'`, …), this find() silently ignores it
+     rather than mis-painting it — but any NEW consumer written as
+     `kind === 'title' ? A : B` would quietly bin it into B. Widen deliberately,
+     not by accident (spec §3). */
+  const titleSegment = useMemo(
+    () => audio.segments?.find((s) => s.kind === 'title') ?? null,
+    [audio.segments],
+  );
   const [currentSec, setCurrentSec] = useState(0);
   const [playing, setPlaying] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -726,6 +739,24 @@ export function MiniPlayer({
               className="flex-1 relative cursor-pointer group h-7"
             >
               <Waveform progress={progress} active peaks={audio.peaks} issues={audio.peaks?.length ? issues : undefined} />
+              {/* fs-10 — decorative band marking the chapter-title beat. NOT a
+                  button: it deliberately has no onClick and does not stop
+                  propagation, so a click here reaches onScrub above and scrubs
+                  normally. A floored width makes a ~2 s beat visible in a
+                  40-minute chapter without swallowing the track underneath. */}
+              {titleSegment && totalSec > 0 && (
+                <span
+                  data-testid="mini-player-title-segment"
+                  role="img"
+                  aria-label={`Chapter title, ${formatTime(titleSegment.start ?? 0)} to ${formatTime(titleSegment.end ?? 0)}`}
+                  title={`Chapter title · ${formatTime(titleSegment.start ?? 0)}–${formatTime(titleSegment.end ?? 0)}`}
+                  className="absolute inset-y-0 rounded bg-peach/60"
+                  style={{
+                    left: `${(((titleSegment.start ?? 0) / totalSec) * 100).toFixed(2)}%`,
+                    width: `max(4px, ${((((titleSegment.end ?? 0) - (titleSegment.start ?? 0)) / totalSec) * 100).toFixed(2)}%)`,
+                  }}
+                />
+              )}
               <div
                 className="absolute bottom-0 left-0 h-[2px] rounded-full bg-gradient-progress pointer-events-none"
                 style={{ width: `${progress * 100}%` }}
