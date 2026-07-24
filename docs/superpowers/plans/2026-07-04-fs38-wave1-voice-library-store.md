@@ -497,5 +497,11 @@ if (qwenSlot?.libraryUuid) return `qwen-${qwenSlot.libraryUuid}`
 
 ## Ship notes
 
-Shipped 2026-07-24 on branch `feat/frontend-voice-library-wave1`; merge SHA: _TBD (filled
-post-merge)_.
+Shipped 2026-07-24 via PR [#1800](https://github.com/dudarenok-maker/Castwright/pull/1800)
+(`Refs #624` — partial; fs-38 Waves 2-5 remain), merge commit `3d8e10f4` on `main`. All 18 tasks
+delivered subagent-driven with per-task + whole-branch review. Wave-1 follow-ups filed:
+[#1801](https://github.com/dudarenok-maker/Castwright/issues/1801) (design/sample 503→502),
+[#1802](https://github.com/dudarenok-maker/Castwright/issues/1802) (toggle-off blank pane),
+[#1803](https://github.com/dudarenok-maker/Castwright/issues/1803) (badge docstring),
+[#1804](https://github.com/dudarenok-maker/Castwright/issues/1804) (promote preview-stat hardening).
+On-box live-GPU acceptance (real designed voice renders a chapter recognizably) still owed.
