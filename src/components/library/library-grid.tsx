@@ -556,7 +556,7 @@ function NewBookCard({ onStartNew }: { onStartNew: () => void }) {
       className="group bg-canvas rounded-3xl border-2 border-dashed border-ink/15 hover:border-peach hover:bg-peach/4 transition-all min-h-[180px] grid place-items-center text-center p-8"
     >
       <div>
-        <span className="w-14 h-14 mx-auto rounded-full bg-white border border-ink/10 grid place-items-center group-hover:bg-peach group-hover:border-peach group-hover:text-white transition-colors text-ink">
+        <span className="w-14 h-14 mx-auto rounded-full bg-white border border-ink/10 grid place-items-center group-hover:bg-peach group-hover:border-peach group-hover:text-white group-active:bg-peach group-active:border-peach group-active:text-white transition-colors text-ink">
           <IconPlus className="w-6 h-6" />
         </span>
         <p className="mt-4 text-base font-bold text-ink">Add another book</p>
