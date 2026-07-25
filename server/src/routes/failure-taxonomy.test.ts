@@ -12,6 +12,7 @@ import { classifyFailure, classifyAnalysisError, classifyAnalysisFailure } from 
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { AnalyzerTruncatedError, GeminiContentBlockedError } from '../analyzer/errors.js';
+import { UnresolvableClonedVoiceError } from '../tts/clone-voice-resolver.js';
 
 /* No copy should leak raw stack/jargon at the user — assert the message reads
    like a sentence (starts uppercase, ends with punctuation, no "Traceback"
@@ -196,6 +197,50 @@ describe('classifyFailure', () => {
     expect(out.fatal).toBe(false);
   });
 
+  it('classifies UnresolvableClonedVoiceError (fromList, revoked) as cloned-voice-broken, non-fatal', () => {
+    /* T7 (Wave 3b2) — the resolver pre-pass in synthesiseChapter raises this
+       when an assigned cloned voice can't render as itself this run. */
+    const err = UnresolvableClonedVoiceError.fromList([{ name: 'Marlow', reason: 'revoked' }]);
+    const out = classifyFailure(err, 'qwen');
+    expect(out.code).toBe('cloned-voice-broken');
+    /* Per-chapter/per-character, not a whole-run stop — mirrors voice-not-
+       designed's chapter-scoped model. The cross-chapter cascade in
+       generation.ts still escalates to a run-stop if the same reason repeats. */
+    expect(out.fatal).toBe(false);
+    expect(out.remediation.length).toBeGreaterThan(0);
+    expect(out.userMessage.length).toBeGreaterThan(0);
+    assertJargonFree(out.userMessage);
+  });
+
+  it('classifies a wrong-engine UnresolvableClonedVoiceError as cloned-voice-broken without claiming Qwen is unavailable', () => {
+    /* Task 6b guard: a wrong-engine break means the BOOK doesn't route to
+       Qwen this run — Qwen itself may be perfectly healthy, so the surfaced
+       copy must never misdiagnose this as "Qwen is unavailable". */
+    const err = UnresolvableClonedVoiceError.fromList([{ name: 'Sable', reason: 'wrong-engine' }]);
+    const out = classifyFailure(err, 'kokoro');
+    expect(out.code).toBe('cloned-voice-broken');
+    expect(out.userMessage).not.toMatch(/qwen (is|engine is not) unavailable/i);
+    expect(out.remediation).not.toMatch(/qwen (is|engine is not) unavailable/i);
+  });
+
+  it('classifies the legacy single-name UnresolvableClonedVoiceError (engine-unavailable) as cloned-voice-broken', () => {
+    const err = new UnresolvableClonedVoiceError('Marlow');
+    const out = classifyFailure(err, 'qwen');
+    expect(out.code).toBe('cloned-voice-broken');
+  });
+
+  it('does not let cloned-voice-broken get shadowed by a broader generation signature (ordering)', () => {
+    /* Defense against a future re-order: this error's own message never
+       matches the earlier synth-timeout/sidecar-unreachable/recycle-storm
+       signatures, but it must ALSO win over the later, broader ones (e.g.
+       gpu-acceleration-unavailable's "unavailable" wording) since first-match
+       wins and named errors should never fall through to a generic regex. */
+    const err = Object.assign(new Error('totally different future wording'), {
+      name: 'UnresolvableClonedVoiceError',
+    });
+    expect(classifyFailure(err, 'qwen').code).toBe('cloned-voice-broken');
+  });
+
   it('passes an unknown error through as code "unknown", non-fatal, raw userMessage', () => {
     const out = classifyFailure(new Error('Something unexpected and unmapped happened'));
     expect(out.code).toBe('unknown');
@@ -354,6 +399,7 @@ describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
         'analyzer-unreachable',
         'attribution-incomplete',
         'auth',
+        'cloned-voice-broken',
         'cuda-poisoned',
         'disk-full',
         'gpu-acceleration-unavailable',
