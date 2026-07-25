@@ -483,8 +483,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const transcribeSegment = vi.fn();
-vi.mock('./transcribe-client.js', () => ({ transcribeSegment: (...a: unknown[]) => transcribeSegment(...a) }));
+// vi.hoisted — house style (voice-library.test.ts:23) + the repo's documented
+// "vi.mock top-level let = TDZ" gotcha. Never a bare top-level `const … = vi.fn()`.
+const { transcribeSegment } = vi.hoisted(() => ({ transcribeSegment: vi.fn() }));
+vi.mock('./transcribe-client.js', () => ({ transcribeSegment }));
 
 let dir: string;
 beforeEach(() => {
@@ -513,7 +515,7 @@ describe('ingestCloneSample', () => {
     const res = await ingestCloneSample(await wav(6), { captureMethod: 'upload', candidateId: 'c1' });
     expect(res.transcript).toBe('the quick brown fox');
     expect(res.durationSeconds).toBeCloseTo(6, 0);
-    expect(res.qualityWarnings).toContain(expect.stringMatching(/short/i));
+    expect(res.qualityWarnings.join(' ')).toMatch(/short/i); // toContain is strict-equality; use join+toMatch
     expect((await readCandidate('c1'))?.master.captureMethod).toBe('upload');
   });
 
@@ -600,13 +602,50 @@ export async function ingestCloneSample(
 ```
 
 - [ ] **Step 4: Run test to verify it passes.** Run: `cd server && npm test -- src/tts/clone-ingest.test.ts`
-Expected: PASS. (If the `expect.stringMatching` inside `toContain` is unsupported in this Vitest, switch that assertion to `expect(res.qualityWarnings.join(' ')).toMatch(/short/i)`.)
+Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add server/src/tts/clone-ingest.ts server/src/tts/clone-ingest.test.ts
 git commit -m "feat(server): clone-sample ingest pipeline (decode+gate+wav+transcribe)"
+```
+
+---
+
+### Task 5b: webm/opus decode fixture (record-path acceptance gate · spec §4.1/§8)
+
+The recorder (Task 11) emits webm/opus; the spec flags webm-over-a-non-seekable-pipe as probe-fragile and **mandates** a decode fixture as the record-path gate. Every other ingest test feeds synthetic WAV, so the real record-path decode is otherwise unexercised.
+
+**Files:**
+- Create: `server/src/tts/__fixtures__/recorder-sample.webm` (a tiny real webm/opus clip)
+- Test: add a case to `server/src/tts/decode-audio-to-pcm.test.ts`
+
+- [ ] **Step 1: Generate the fixture** (one-time, committed). Run:
+```bash
+ffmpeg -f lavfi -i "sine=frequency=220:duration=6" -ac 1 -c:a libopus server/src/tts/__fixtures__/recorder-sample.webm
+```
+Expected: a small (<100 KB) `.webm` file. (This mimics MediaRecorder's default `audio/webm;codecs=opus` container.)
+
+- [ ] **Step 2: Write the failing test.**
+```ts
+// add to server/src/tts/decode-audio-to-pcm.test.ts
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+it('decodes MediaRecorder-style webm/opus to non-empty s16le PCM', async () => {
+  const webm = readFileSync(join(__dirname, '__fixtures__/recorder-sample.webm'));
+  const pcm = await decodeAudioToPcm(webm, 24_000);
+  expect(pcm.length).toBeGreaterThan(24_000 * 2 * 4); // > ~4s of 24kHz mono s16le
+});
+```
+
+- [ ] **Step 3: Run test.** Run: `cd server && npm test -- src/tts/decode-audio-to-pcm.test.ts`
+Expected: PASS (proves the ffmpeg build decodes webm/opus). If it FAILS on probe, the plan's ingest must add `-f webm` input hint — surface this to the controller, it's a real spec risk this gate exists to catch.
+
+- [ ] **Step 4: Commit**
+```bash
+git add server/src/tts/__fixtures__/recorder-sample.webm server/src/tts/decode-audio-to-pcm.test.ts
+git commit -m "test(server): webm/opus decode fixture for the clone record path"
 ```
 
 ---
@@ -624,9 +663,11 @@ git commit -m "feat(server): clone-sample ingest pipeline (decode+gate+wav+trans
 - [ ] **Step 1: Write the failing test.** (Add to the existing suite; mock transcribe at module scope alongside the existing provider mock.)
 
 ```ts
-// in server/src/routes/voice-library.test.ts — add near the other vi.mock calls:
-const transcribeSegment = vi.fn().mockResolvedValue({ text: 'hello there', language: 'en', words: null, avgLogprob: null, noSpeechProb: null, compressionRatio: null });
-vi.mock('../tts/transcribe-client.js', () => ({ transcribeSegment: (...a: unknown[]) => transcribeSegment(...a) }));
+// in server/src/routes/voice-library.test.ts — add beside the existing vi.hoisted synth mock (:23):
+const { transcribeSegment } = vi.hoisted(() => ({ transcribeSegment: vi.fn() }));
+vi.mock('../tts/transcribe-client.js', () => ({ transcribeSegment }));
+// in the existing beforeEach, after the synth stub:
+transcribeSegment.mockResolvedValue({ text: 'hello there', language: 'en', words: null, avgLogprob: null, noSpeechProb: null, compressionRatio: null });
 
 // ...and a new test (uses supertest .attach for multipart):
 it('POST /clone-sample ingests an uploaded clip → 202 candidate', async () => {
@@ -696,7 +737,7 @@ voiceLibraryRouter.post(
 );
 ```
 
-> NOTE: place `/clone-sample` **before** any `/:voiceUuid`-parameterized routes are matched? Express matches in registration order; `/clone-sample` is a literal segment and `/:voiceUuid` is a param at the same depth — a GET/POST to `/clone-sample` will match the literal only if registered first OR if the param route uses a different method. Register `/clone-sample` above `POST /:voiceUuid/...` handlers to be safe.
+> NOTE (verified — no hazard): there is **no** single-segment `POST /:voiceUuid` on this router (the only param POSTs are two-segment — `/:voiceUuid/redesign|sample|assign|revoke`), so a one-segment literal `POST /clone-sample` cannot be shadowed regardless of registration order. Register it anywhere among the other `voiceLibraryRouter.post(...)` calls.
 
 - [ ] **Step 4: Run test to verify it passes.** Run: `cd server && npm test -- src/routes/voice-library.test.ts`
 Expected: PASS.
@@ -781,6 +822,13 @@ function assertConsentForClone(entry: VoiceLibraryEntry): void {
 // at the very top of writeEntry(entry):
 assertConsentForClone(entry);
 ```
+
+- [ ] **Step 3b: Fix pre-existing cloned seeds the guard now rejects (CRITICAL — else Tasks 8/9 + the full server suite go red).** In `server/src/routes/voice-library.test.ts`, two `makeEntry(...)` calls seed a `provenance:'cloned'` entry with **no consent** — at **line 243** (`voiceUuid:'cloned-1'`) and **line 524** (`voiceUuid:'assign-3'`). Both will now throw at the seed line. Add a valid consent block to each (mirror the `revoked-1` consent already at ~502–510):
+
+```ts
+consent: { personName: 'Test', relationship: 'family-with-permission', permittedUse: 'personal', attestedAt: '2026-01-01T00:00:00Z', attestedBy: 'test' },
+```
+Production is unaffected (no Wave-1 code writes a cloned entry) — this is a test-only fixup that the new invariant requires. Run `cd server && npm test -- src/routes/voice-library.test.ts` and confirm it stays green after the edit.
 
 - [ ] **Step 4: Run test to verify it passes.** Run: `cd server && npm test -- src/workspace/voice-library.store.test.ts`
 Expected: PASS.
@@ -938,6 +986,8 @@ if (slot?.provenance === 'cloned') {
 ```
 (Match the exact class-name/markup pattern the file already uses for the "Designed"/"My voice" spans — copy that span, change the label to "Cloned".)
 
+> Conscious note (M3): the badge's existing design ranks `libraryUuid` ABOVE `provenance`, so a *cast-assigned* cloned slot (which carries `libraryUuid`, stamped by the assign route) renders "My voice", not "Cloned". That's intended and unchanged — the 'Cloned' branch shows on the My-voices *library* surface (Task 13), where the slot has no `libraryUuid`. Don't reorder the branches.
+
 - [ ] **Step 4: Run test to verify it passes.** Run: `npm test -- src/components/voices/voice-provenance-badge.test.tsx`
 Expected: PASS.
 
@@ -1067,6 +1117,153 @@ git add src/components/voices/voice-recorder.tsx src/components/voices/voice-rec
 git commit -m "feat(frontend): reusable VoiceRecorder component (getUserMedia + MediaRecorder)"
 ```
 
+> **Dependency note:** Task 11b depends on Task 12's `cloneSample` thunk. Execute Task 12 **before** Task 11b (the numbering keeps the recorder next to its panel for readability, but the thunk must exist first). SDD/executing-plans: honor this ordering.
+
+---
+
+### Task 11b: Clone capture + consent panel (spec §6.1 phase-1 building block)
+
+The spec's 3a row includes "wizard **phase 1**" — the `[Record|Upload]` capture surface **and the consent form**. Since the full two-phase wizard modal assembles in 3b1, 3a ships phase 1 as a standalone, unit-tested panel component (no modal wrapper, no phase-2), which 3b1 embeds. This is the consent-*capture* UI (Task 7 is only the server-side consent *guard*).
+
+**Files:**
+- Create: `src/components/voices/clone-capture-panel.tsx`
+- Test: `src/components/voices/clone-capture-panel.test.tsx`
+
+**Interfaces:**
+- Consumes: `VoiceRecorder` (Task 11), `cloneSample` thunk (Task 12).
+- Produces: `<CloneCapturePanel onReady={(r: { candidateId: string; consent: ConsentDraft }) => void} />` where `ConsentDraft = { personName: string; relationship: 'self'|'family-with-permission'|'guardian-of-minor'; permittedUse: 'personal' }`. A **Continue** button stays disabled until (a candidate exists from an ingested sample) AND (personName non-empty AND the attestation checkbox is checked). On click it calls `onReady`.
+
+- [ ] **Step 1: Write the failing test.**
+
+```tsx
+// src/components/voices/clone-capture-panel.test.tsx
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { configureStore } from '@reduxjs/toolkit';
+import { Provider } from 'react-redux';
+import { voiceLibrarySlice } from '../../store/voice-library-slice';
+import { CloneCapturePanel } from './clone-capture-panel';
+
+const cloneVoiceSample = vi.fn().mockResolvedValue({ candidateId: 'cand-1', transcript: 'hi there', durationSeconds: 9, sampleRate: 24_000, qualityWarnings: [] });
+vi.mock('../../lib/api', () => ({ api: { cloneVoiceSample: (...a: unknown[]) => cloneVoiceSample(...a), listVoiceLibrary: () => Promise.resolve({ voices: [] }) } }));
+
+const wrap = (ui: React.ReactNode) => <Provider store={configureStore({ reducer: { voiceLibrary: voiceLibrarySlice.reducer } })}>{ui}</Provider>;
+beforeEach(() => vi.clearAllMocks());
+
+it('gates Continue until a sample AND consent are complete', async () => {
+  const onReady = vi.fn();
+  render(wrap(<CloneCapturePanel onReady={onReady} />));
+  const cont = () => screen.getByRole('button', { name: /continue/i });
+  expect(cont()).toBeDisabled();
+
+  // upload a file → ingest
+  const file = new File([new Uint8Array([1, 2, 3])], 's.wav', { type: 'audio/wav' });
+  fireEvent.change(screen.getByLabelText(/upload/i), { target: { files: [file] } });
+  await waitFor(() => expect(cloneVoiceSample).toHaveBeenCalled());
+
+  // still gated — no consent yet
+  expect(cont()).toBeDisabled();
+  fireEvent.change(screen.getByLabelText(/person/i), { target: { value: 'Mum' } });
+  fireEvent.click(screen.getByLabelText(/i attest/i));
+  await waitFor(() => expect(cont()).toBeEnabled());
+
+  fireEvent.click(cont());
+  expect(onReady).toHaveBeenCalledWith(expect.objectContaining({ candidateId: 'cand-1', consent: expect.objectContaining({ personName: 'Mum' }) }));
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails.** Run: `npm test -- src/components/voices/clone-capture-panel.test.tsx`
+Expected: FAIL ("Cannot find module './clone-capture-panel'").
+
+- [ ] **Step 3: Implement.** A controlled panel: Record/Upload tabs, ingest-on-input via the `cloneSample` thunk, transcript display, consent fields, and the gated Continue button.
+
+```tsx
+// src/components/voices/clone-capture-panel.tsx
+import { useState } from 'react';
+import { useAppDispatch } from '../../store';
+import { cloneSample } from '../../store/voice-library-slice';
+import { VoiceRecorder } from './voice-recorder';
+
+type Relationship = 'self' | 'family-with-permission' | 'guardian-of-minor';
+export interface ConsentDraft { personName: string; relationship: Relationship; permittedUse: 'personal'; }
+
+export function CloneCapturePanel({ onReady }: { onReady: (r: { candidateId: string; consent: ConsentDraft }) => void }) {
+  const dispatch = useAppDispatch();
+  const [tab, setTab] = useState<'record' | 'upload'>('upload');
+  const [candidateId, setCandidateId] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState('');
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [personName, setPersonName] = useState('');
+  const [relationship, setRelationship] = useState<Relationship>('self');
+  const [attested, setAttested] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function ingest(blobOrFile: Blob, captureMethod: 'record' | 'upload') {
+    setBusy(true); setError(null);
+    try {
+      const form = new FormData();
+      form.append('audio', blobOrFile, captureMethod === 'record' ? 'recording.webm' : 'sample');
+      form.append('captureMethod', captureMethod);
+      const res = await dispatch(cloneSample(form)).unwrap();
+      setCandidateId(res.candidateId); setTranscript(res.transcript); setWarnings(res.qualityWarnings);
+    } catch (e) { setError((e as Error).message || 'Could not use that audio.'); }
+    finally { setBusy(false); }
+  }
+
+  const consentComplete = personName.trim().length > 0 && attested;
+  const canContinue = !!candidateId && consentComplete && !busy;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div role="tablist" className="flex gap-2">
+        <button role="tab" aria-selected={tab === 'record'} onClick={() => setTab('record')} className="min-h-[44px] fine-pointer:min-h-0">Record</button>
+        <button role="tab" aria-selected={tab === 'upload'} onClick={() => setTab('upload')} className="min-h-[44px] fine-pointer:min-h-0">Upload</button>
+      </div>
+      {tab === 'record'
+        ? <VoiceRecorder onRecorded={(blob) => void ingest(blob, 'record')} />
+        : <label>Upload a clip<input aria-label="Upload audio" type="file" accept="audio/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) void ingest(f, 'upload'); }} /></label>}
+
+      {busy && <p>Processing sample…</p>}
+      {error && <p className="text-magenta">{error}</p>}
+      {warnings.map((w) => <p key={w} className="text-amber-600 text-xs">{w}</p>)}
+      {candidateId && (
+        <label>Transcript<textarea aria-label="transcript" value={transcript} onChange={(e) => setTranscript(e.target.value)} /></label>
+      )}
+
+      <fieldset className="flex flex-col gap-2">
+        <legend>Consent</legend>
+        <label>Person’s name<input aria-label="person name" value={personName} onChange={(e) => setPersonName(e.target.value)} /></label>
+        <label>Relationship
+          <select aria-label="relationship" value={relationship} onChange={(e) => setRelationship(e.target.value as Relationship)}>
+            <option value="self">This is my own voice</option>
+            <option value="family-with-permission">A family member, with their permission</option>
+            <option value="guardian-of-minor">My child (I’m their guardian)</option>
+          </select>
+        </label>
+        <label><input type="checkbox" aria-label="I attest" checked={attested} onChange={(e) => setAttested(e.target.checked)} /> I attest I have this person’s permission to clone their voice.</label>
+      </fieldset>
+
+      <button
+        className="min-h-[44px] fine-pointer:min-h-0"
+        disabled={!canContinue}
+        onClick={() => candidateId && onReady({ candidateId, consent: { personName: personName.trim(), relationship, permittedUse: 'personal' } })}
+      >Continue</button>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes.** Run: `npm test -- src/components/voices/clone-capture-panel.test.tsx`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/components/voices/clone-capture-panel.tsx src/components/voices/clone-capture-panel.test.tsx
+git commit -m "feat(frontend): clone capture + consent panel (phase-1 building block)"
+```
+
 ---
 
 ### Task 12: Slice thunks + API real/mock pair + cloned fixture
@@ -1089,9 +1286,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { voiceLibrarySlice, revokeVoice } from './voice-library-slice';
 
-const revokeVoiceLibraryEntry = vi.fn().mockResolvedValue({ voiceUuid: 'r1', name: 'X', provenance: 'cloned', consent: { revokedAt: 'now' } });
-const listVoiceLibrary = vi.fn().mockResolvedValue([]);
-vi.mock('../lib/api', () => ({ api: { revokeVoiceLibraryEntry: (...a: unknown[]) => revokeVoiceLibraryEntry(...a), listVoiceLibrary: () => listVoiceLibrary() } }));
+const { revokeVoiceLibraryEntry, listVoiceLibrary } = vi.hoisted(() => ({
+  revokeVoiceLibraryEntry: vi.fn().mockResolvedValue({ voiceUuid: 'r1', name: 'X', provenance: 'cloned', consent: { revokedAt: 'now' } }),
+  // fetchVoiceLibrary.fulfilled reads action.payload.voices — the real api returns { voices: [...] }, NOT a bare array
+  listVoiceLibrary: vi.fn().mockResolvedValue({ voices: [] }),
+}));
+vi.mock('../lib/api', () => ({ api: { revokeVoiceLibraryEntry, listVoiceLibrary } }));
 
 it('revokeVoice calls the api and refetches', async () => {
   const store = configureStore({ reducer: { voiceLibrary: voiceLibrarySlice.reducer } });
@@ -1174,67 +1374,73 @@ git commit -m "feat(frontend): clone-sample + revoke thunks, api pair, cloned fi
 ### Task 13: Cloned voices in My voices (render + Revoke action)
 
 **Files:**
-- Modify: `src/components/voices/my-voices-section.tsx`
-- Test: `src/components/voices/my-voices-section.clone.test.tsx`
+- Modify: `src/components/voices/voice-library-card.tsx` (the per-entry card — this is where per-entry markup lives, NOT `my-voices-section.tsx` which just maps entries → `<VoiceLibraryCard>`)
+- Modify: `src/components/voices/my-voices-section.tsx` (only if the hardcoded `"Designed voices"` heading, ~:64, needs to become provenance-agnostic so cloned voices don't render under a "Designed" header — split the heading or make it "My voices")
+- Test: `src/components/voices/voice-library-card.clone.test.tsx`
 
 **Interfaces:**
-- Consumes: `selectMyVoices`, `revokeVoice` (slice); `VoiceProvenanceBadge`.
-- Produces: cloned entries render in the My-voices grid with the 'Cloned' badge, a consent summary (person + relationship), and a **Revoke** button that dispatches `revokeVoice(uuid)` behind a confirm.
+- Consumes: `revokeVoice` (slice); `VoiceProvenanceBadge`.
+- Produces: a cloned `VoiceLibraryCard` fills the stubbed `ProvenanceMarker` `case 'cloned'` (currently `return null`, ~voice-library-card.tsx:237-239) with the 'Cloned' badge + consent summary (person + relationship), and adds a **Revoke** button that dispatches `revokeVoice(uuid)` behind a confirm.
 
 - [ ] **Step 1: Write the failing test.**
 
 ```tsx
-// src/components/voices/my-voices-section.clone.test.tsx
+// src/components/voices/voice-library-card.clone.test.tsx
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { voiceLibrarySlice } from '../../store/voice-library-slice';
-import { MyVoicesSection } from './my-voices-section';
+import { VoiceLibraryCard } from './voice-library-card';
 
-vi.mock('../../lib/api', () => ({ api: { listVoiceLibrary: () => Promise.resolve([]), revokeVoiceLibraryEntry: vi.fn() } }));
+// listVoiceLibrary must return { voices: [...] } (reducer reads payload.voices), even if unused here
+vi.mock('../../lib/api', () => ({ api: { listVoiceLibrary: () => Promise.resolve({ voices: [] }), revokeVoiceLibraryEntry: vi.fn() } }));
 
-function storeWith(entries: unknown[]) {
-  return configureStore({
-    reducer: { voiceLibrary: voiceLibrarySlice.reducer },
-    preloadedState: { voiceLibrary: { entries, status: 'ready', designPending: false, lastFetchedAt: 1 } as never },
-  });
-}
+const store = () => configureStore({ reducer: { voiceLibrary: voiceLibrarySlice.reducer } });
+const cloned = { voiceUuid: 'c1', name: 'Mum', provenance: 'cloned' as const, tags: [], pinned: false, engines: {}, consent: { personName: 'Mum', relationship: 'family-with-permission' as const, permittedUse: 'personal' as const, attestedAt: 'x', attestedBy: 'me' }, createdAt: 'x', updatedAt: 'x' };
 
 it('shows a cloned voice with its badge and a Revoke action', () => {
-  const cloned = { voiceUuid: 'c1', name: 'Mum', provenance: 'cloned', tags: [], pinned: false, engines: {}, consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal', attestedAt: 'x', attestedBy: 'me' }, createdAt: 'x', updatedAt: 'x' };
-  render(<Provider store={storeWith([cloned])}><MyVoicesSection enabled /></Provider>);
+  render(<Provider store={store()}><VoiceLibraryCard entry={cloned} /></Provider>);
   expect(screen.getByText('Cloned')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /revoke/i })).toBeInTheDocument();
 });
 ```
+(Match `VoiceLibraryCard`'s actual required props — read its `Props` interface first and pass what it needs; `entry` is the load-bearing one.)
 
-- [ ] **Step 2: Run test to verify it fails.** Run: `npm test -- src/components/voices/my-voices-section.clone.test.tsx`
-Expected: FAIL (no 'Cloned' badge / Revoke button rendered).
+- [ ] **Step 2: Run test to verify it fails.** Run: `npm test -- src/components/voices/voice-library-card.clone.test.tsx`
+Expected: FAIL (the `case 'cloned'` marker returns null; no Revoke button).
 
-- [ ] **Step 3: Implement.** In `my-voices-section.tsx`, in the entry card render, add a cloned branch: render `<VoiceProvenanceBadge slot={{ name: '', provenance: entry.provenance }} />`, the consent summary, and a Revoke button:
+- [ ] **Step 3: Implement.** In `voice-library-card.tsx`, fill the stubbed `ProvenanceMarker` `case 'cloned'` (~:237) and add a Revoke control:
 
 ```tsx
+// in ProvenanceMarker's switch:
+case 'cloned':
+  return (
+    <span className="inline-flex items-center gap-2 text-xs text-ink/70">
+      <VoiceProvenanceBadge slot={{ name: '', provenance: 'cloned' }} />
+      {entry.consent && <span>{entry.consent.personName} · {entry.consent.relationship}</span>}
+    </span>
+  );
+
+// in the card body (where actions render), add for cloned entries:
 {entry.provenance === 'cloned' && (
-  <div className="mt-1 text-xs text-ink/70">
-    <VoiceProvenanceBadge slot={{ name: '', provenance: 'cloned' }} />
-    {entry.consent && <span className="ml-2">{entry.consent.personName} · {entry.consent.relationship}</span>}
-    <button
-      className="ml-2 underline min-h-[44px] fine-pointer:min-h-0"
-      onClick={() => { if (window.confirm(`Revoke consent for "${entry.name}"? It will stop working immediately.`)) dispatch(revokeVoice(entry.voiceUuid)); }}
-    >Revoke</button>
-  </div>
+  <button
+    className="underline min-h-[44px] fine-pointer:min-h-0"
+    onClick={() => { if (window.confirm(`Revoke consent for "${entry.name}"? It will stop working immediately.`)) dispatch(revokeVoice(entry.voiceUuid)); }}
+  >Revoke</button>
 )}
 ```
-(Wire `const dispatch = useAppDispatch()` and import `revokeVoice` + `VoiceProvenanceBadge` if not already present.)
+(Wire `const dispatch = useAppDispatch()`, import `revokeVoice` + `VoiceProvenanceBadge` if not already present. If `ProvenanceMarker` lacks `entry.consent` in scope, thread it in or inline the marker in the card body.)
 
-- [ ] **Step 4: Run test to verify it passes.** Run: `npm test -- src/components/voices/my-voices-section.clone.test.tsx`
+- [ ] **Step 3b: Fix the section heading.** If `my-voices-section.tsx` renders a hardcoded `"Designed voices"` heading (~:64) above the whole grid, cloned voices would sit under a "Designed" header. Change it to a provenance-neutral `"My voices"` (or split the grid into "Designed" / "Cloned" sub-sections). Confirm no snapshot/test asserts the old text.
+
+- [ ] **Step 4: Run test to verify it passes.** Run: `npm test -- src/components/voices/voice-library-card.clone.test.tsx`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/components/voices/my-voices-section.tsx src/components/voices/my-voices-section.clone.test.tsx
+git add src/components/voices/voice-library-card.tsx src/components/voices/my-voices-section.tsx src/components/voices/voice-library-card.clone.test.tsx
 git commit -m "feat(frontend): render cloned voices in My voices with Revoke action"
 ```
 
@@ -1278,6 +1484,7 @@ git commit -m "docs(docs): fs-38 3a regression plan + release notes + doc-194 up
 
 ## Self-review notes (author)
 
-- **Spec coverage (3a rows of §1.1):** ingest ✔ T5/T6, quality gate ✔ T3, Whisper transcript ✔ T5, `master.wav` write ✔ T2/T4/T5, OpenAPI schema ✔ T1, consent-at-write guard ✔ T7, wizard phase-1 building blocks ✔ T10–T13 (recorder + capture surfaces + slice; full wizard assembly is 3b1 by the disclosed refinement), cloned-section UI shell ✔ T13, sample-route consent gate ✔ T9, cross-book exclusion — **already shipped in Wave 1** (spec §4.4), no task. Revoke ✔ T8.
+- **Spec coverage (3a rows of §1.1):** ingest ✔ T5/T6, quality gate ✔ T3, Whisper transcript ✔ T5, webm/opus record-path decode gate ✔ **T5b**, `master.wav` write ✔ T2/T4/T5, OpenAPI schema ✔ T1, consent-at-write guard ✔ T7 (+ pre-existing-seed fixup in T7 Step 3b), wizard **phase 1** = recorder ✔ T11 + capture+consent panel ✔ **T11b** (full modal assembly is 3b1 by the disclosed refinement), cloned-section UI ✔ T10/T13, sample-route consent gate ✔ T9, cross-book exclusion — **already shipped in Wave 1** (spec §4.4), no task. Revoke ✔ T8.
 - **No placeholders:** every code step carries real code; the only deferred item (e2e golden path) is explicitly assigned to 3b1 with rationale, not left as a TODO.
-- **Type consistency:** `CloneSampleCandidate`, `VoiceMaster`, `CloneCandidateMaster`, `assessCloneSample`/`CloneQuality`, `ingestCloneSample`/`CloneSampleCandidateResult`, `cloneSample`/`revokeVoice` thunks, `cloneVoiceSample`/`revokeVoiceLibraryEntry` api calls — names are consistent across tasks 1–13.
+- **Execution order:** run **T12 before T11b** (the panel consumes the `cloneSample` thunk); otherwise sequential. Assumption-checker fixes folded: C1 (T7 seed fixup), I1 (T13 → `voice-library-card.tsx`), I2 (mock returns `{ voices: [] }`), I3 (`vi.hoisted` mocks), I4 (T5b), I5 (T11b).
+- **Type consistency:** `CloneSampleCandidate`, `VoiceMaster`, `CloneCandidateMaster`, `assessCloneSample`/`CloneQuality`, `ingestCloneSample`/`CloneSampleCandidateResult`, `ConsentDraft`, `cloneSample`/`revokeVoice` thunks, `cloneVoiceSample`/`revokeVoiceLibraryEntry` api calls — names are consistent across all tasks.
