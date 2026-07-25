@@ -12,11 +12,12 @@
 
 import { useState } from 'react';
 import { useAppDispatch } from '../../store';
-import { patchEntry, type VoiceLibraryEntry } from '../../store/voice-library-slice';
+import { patchEntry, revokeVoice, type VoiceLibraryEntry } from '../../store/voice-library-slice';
 import { Pill } from '../primitives';
 import { IconStar, IconPlay, IconPause, IconSpinner, IconClose } from '../../lib/icons';
 import { useSamplePlayback } from '../../lib/use-sample-playback';
 import { api } from '../../lib/api';
+import { VoiceProvenanceBadge } from './voice-provenance-badge';
 
 interface Props {
   entry: VoiceLibraryEntry;
@@ -74,6 +75,12 @@ export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
 
   function togglePin() {
     void dispatch(patchEntry({ voiceUuid: entry.voiceUuid, patch: { pinned: !entry.pinned } }));
+  }
+
+  function revoke() {
+    if (window.confirm(`Revoke consent for "${entry.name}"? It will stop working immediately.`)) {
+      void dispatch(revokeVoice(entry.voiceUuid));
+    }
   }
 
   async function playSample() {
@@ -207,6 +214,16 @@ export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
             Assign
           </button>
         )}
+        {entry.provenance === 'cloned' && (
+          <button
+            type="button"
+            onClick={revoke}
+            data-testid={`voice-library-revoke-${entry.voiceUuid}`}
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold text-red-600/90 hover:bg-red-600/10 transition-colors min-h-[44px] fine-pointer:min-h-0 ${onAssign ? '' : 'ml-auto'}`}
+          >
+            Revoke
+          </button>
+        )}
       </div>
       {sampleError && (
         <p
@@ -221,8 +238,9 @@ export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
 }
 
 /* Quiet provenance marker — all three branches land now (task-15 brief),
-   even though only `designed` is exercised in Wave 1; the `cloned`/
-   `imported` treatments arrive with cloning/import in Wave 3. */
+   though only `designed` was exercised in Wave 1. `cloned` lands with
+   Task 13 (badge + consent summary); `imported` still arrives with
+   import. */
 function ProvenanceMarker({ entry }: { entry: VoiceLibraryEntry }) {
   switch (entry.provenance) {
     case 'designed':
@@ -235,8 +253,19 @@ function ProvenanceMarker({ entry }: { entry: VoiceLibraryEntry }) {
         </p>
       );
     case 'cloned':
-      // Wave 3 — cloned-voice provenance treatment lands with cloning.
-      return null;
+      return (
+        <span
+          data-testid={`voice-library-provenance-${entry.voiceUuid}`}
+          className="inline-flex items-center gap-2 text-xs text-ink/70"
+        >
+          <VoiceProvenanceBadge slot={{ name: '', provenance: 'cloned' }} />
+          {entry.consent && (
+            <span>
+              {entry.consent.personName} · {entry.consent.relationship}
+            </span>
+          )}
+        </span>
+      );
     case 'imported':
       // Wave 3 — imported-voice provenance treatment lands with import.
       return null;

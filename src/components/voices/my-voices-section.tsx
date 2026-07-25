@@ -61,7 +61,7 @@ export function MyVoicesSection({ enabled }: Props) {
       ) : (
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-bold text-ink">Designed voices</h2>
+            <h2 className="text-sm font-bold text-ink">My voices</h2>
             <button
               type="button"
               data-testid="my-voices-create-cta"
