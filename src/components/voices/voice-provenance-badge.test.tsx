@@ -31,4 +31,9 @@ describe('VoiceProvenanceBadge', () => {
     render(<VoiceProvenanceBadge slot={undefined} />);
     expect(screen.getByTestId('voice-provenance-badge')).toHaveTextContent('Catalogue');
   });
+
+  it('renders "Cloned" for a cloned slot', () => {
+    render(<VoiceProvenanceBadge slot={{ name: 'qwen-x', provenance: 'cloned' }} />);
+    expect(screen.getByText('Cloned')).toBeInTheDocument();
+  });
 });
