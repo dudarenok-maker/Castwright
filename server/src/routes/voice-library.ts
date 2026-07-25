@@ -21,7 +21,6 @@ import {
   entryDir,
   listEntries,
   readEntry,
-  removeEntryDir,
   writeEntry,
   ConsentRequiredError,
   type VoiceConsentRecord,
@@ -54,6 +53,7 @@ import { ingestCloneSample } from '../tts/clone-ingest.js';
 import { readCandidate, candidateMasterPath, removeCandidate } from '../workspace/clone-candidate.js';
 import { deriveEngineArtifact } from '../tts/derive-engine-artifact.js';
 import { assessCloneFidelity } from '../tts/clone-fidelity.js';
+import { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
 
 export const voiceLibraryRouter = Router();
 
@@ -780,7 +780,10 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
    guard, since revokedAt is orthogonal to structural consent validity (the
    entry still carries a complete consent record, just a revoked one). A 409
    guards the (should-be-impossible-for-a-cloned-voice) case of an entry with
-   no consent record at all — nothing to revoke. */
+   no consent record at all — nothing to revoke. Wave 3b2, Task 3: revocation
+   also erases the resynthesis-capable clone artifacts (`purgeCloneArtifacts`,
+   no `deleteEntryDir` — the manifest + `master.wav` are retained so the
+   entry stays visible/inspectable, only the engine `.pt`/cache files go). */
 voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
@@ -789,6 +792,7 @@ voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response
     if (!entry.consent) return res.status(409).json({ error: 'Entry has no consent record to revoke.' });
     const updated = { ...entry, consent: { ...entry.consent, revokedAt: new Date().toISOString() } };
     await writeEntry(updated); // passes the guard — revokedAt is orthogonal (Task 7)
+    await purgeCloneArtifacts(voiceUuid); // erase resynthesis-capable artifacts on revoke
     return res.status(200).json(updated);
   } catch (e) {
     return res.status(502).json({ error: (e as Error).message || 'Revoke failed.' });
@@ -797,37 +801,14 @@ voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response
 
 /* Erase EVERY on-disk artifact of a library voice — not just the manifest
    dir — so "local-only, never leaves the machine" holds through deletion
-   (spec §2.4). Windows-safety ordering (spec §7, copied from qwen-voice.ts's
-   `tearDownEmotionVariant`): the file removals happen FIRST; the sidecar
-   `/qwen/evict-voice` call is a separate, best-effort in-memory-cache-
-   coherency step that fires AFTER — never before, and its failure must
-   never fail the delete (the sidecar caches prompts in memory; it doesn't
-   hold the `.pt` open, so ordering here is about cache freshness, not file
-   locking). */
+   (spec §2.4). Thin wrapper around the Wave 3b2 Task 2 `purgeCloneArtifacts`
+   (workspace/purge-clone-artifacts.ts), which is the single source of truth
+   for "every consent-scoped clone artifact" — including the `__1.7b.pt`
+   variant this route's prior ad-hoc erasure missed. `deleteEntryDir: true`
+   also removes the manifest dir (voice.json + master.wav), unlike the
+   revoke route above. */
 async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<void> {
-  await removeEntryDir(voiceUuid);
-
-  const qwenVoiceId = `qwen-${voiceUuid}`;
-  await rm(qwenVoicePtPath(qwenVoiceId), { force: true }).catch(() => {});
-  await rm(qwenVoiceSidecarPath(qwenVoiceId), { force: true }).catch(() => {});
-
-  /* Purge by the REAL cache scope (`qwen-<uuid>`, the storageKey) — design/
-     promote (Task 9) and the sample route (Task 10) both cache auditions
-     there, not under the bare voiceUuid. Purging `voiceUuid` here (the
-     pre-fix behaviour) silently orphaned every cached sample MP3 on
-     delete — see the Task 10 reconciliation note above the sample route. */
-  purgeVoiceSamples(qwenVoiceId);
-
-  try {
-    await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ voiceId: qwenVoiceId }),
-    });
-  } catch {
-    /* sidecar unreachable — non-fatal, generation reads the fresh (now-
-       deleted) state from disk regardless. */
-  }
+  await purgeCloneArtifacts(voiceUuid, { deleteEntryDir: true });
 }
 
 /* DELETE /api/voice-library/:voiceUuid

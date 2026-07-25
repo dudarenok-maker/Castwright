@@ -56,6 +56,20 @@ vi.mock('../tts/mp3.js', async (orig) => {
   return { ...actual, decodeAudioToPcm: decodeMock };
 });
 
+/* Wave 3b2, Task 3 — revoke + delete both wire through purgeCloneArtifacts
+   (workspace/purge-clone-artifacts.ts, Task 2), left UNMOCKED here so the
+   revoke/delete tests below prove real Node-side erasure (not a stand-in).
+   NOTE: a self-wrapping `vi.mock('../workspace/purge-clone-artifacts.js',
+   (importOriginal) => ...)` spy was tried and rejected — Vitest's
+   importOriginal() resolves purge-clone-artifacts.ts's OWN transitive
+   import of workspace/voice-library.js through a second, parallel module
+   graph, so `removeEntryDir` inside the real purge function silently
+   erases a DIFFERENT `entryDir(voiceUuid)` instance than the one this
+   test file's own `vl` binding reads/asserts against — a real, sneaky bug
+   made assertions like existsSync(artifacts.entryDir) flake pathologically
+   depending on test order. Asserting on real file-existence effects (as the
+   rest of this DELETE describe already does) sidesteps it entirely. */
+
 let dir: string;
 let app: Express;
 let vl: typeof import('../workspace/voice-library.js');
@@ -409,6 +423,33 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
     expect(existsSync(artifacts.ptPath)).toBe(false);
     expect(existsSync(artifacts.jsonPath)).toBe(false);
     expect(existsSync(artifacts.samplePath)).toBe(false);
+  });
+
+  /* Wave 3b2, Task 3 — DELETE now routes through purgeCloneArtifacts, which
+     closes the `__1.7b.pt` gap the prior ad-hoc erasure missed. The fetch
+     stub below is load-bearing (non-placebo requirement): the OLD
+     `/qwen/evict-voice` sidecar call already erases a live sidecar's
+     `__1.7b.pt` copy, so an unstubbed test here could pass against
+     un-fixed Node-side code as long as a sidecar happened to be reachable.
+     Rejecting the sidecar call proves the file is gone via the Node-side
+     `rm`, not the sidecar. */
+  it('erases the qwen-<uuid>__1.7b.pt clone variant on delete (Node-side, sidecar unreachable)', async () => {
+    const artifacts = await seedFullVoiceArtifacts('unused-17b');
+    const qwenName = `qwen-unused-17b`;
+    const pt17bPath = qwenVoice.qwenVoicePtPath(`${qwenName}__1.7b`);
+    writeFileSync(pt17bPath, 'fake-1.7b-pt-bytes');
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('sidecar unreachable'));
+    try {
+      const res = await request(app).delete('/api/voice-library/unused-17b');
+
+      expect(res.status).toBe(200);
+      expect(existsSync(pt17bPath)).toBe(false); // the 1.7B gap this closes
+      expect(existsSync(artifacts.ptPath)).toBe(false);
+      expect(existsSync(artifacts.entryDir)).toBe(false); // deleteEntryDir: true
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it('with confirm=1: clears the referencing override slot, then erases every artifact (erasure completeness)', async () => {
@@ -1161,5 +1202,56 @@ describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
   it('404s an unknown entry', async () => {
     const res = await request(app).post('/api/voice-library/nope/revoke');
     expect(res.status).toBe(404);
+  });
+
+  /* Wave 3b2, Task 3 — revoke now purges resynthesis-capable clone
+     artifacts via purgeCloneArtifacts, WITHOUT deleting the entry dir: the
+     manifest (voice.json) + retained clip (master.wav) stay readable so the
+     revoked entry is still visible/inspectable in the library, just no
+     longer resynthesisable. Proven via real erasure effects (not a spy) —
+     see the file-header note above the hoisted mocks for why a self-mocked
+     spy on purgeCloneArtifacts was rejected. */
+  it('purges clone artifacts (no deleteEntryDir) and leaves voice.json + master.wav readable', async () => {
+    const voiceUuid = 'r-purge-1';
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid,
+        name: 'Dad',
+        provenance: 'cloned',
+        consent: {
+          personName: 'Dad',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00.000Z',
+          attestedBy: 'me',
+        },
+      }),
+    );
+    const masterPath = join(vl.entryDir(voiceUuid), 'master.wav');
+    writeFileSync(masterPath, 'fake-wav-bytes');
+
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    const qwenName = `qwen-${voiceUuid}`;
+    writeFileSync(qwenVoice.qwenVoicePtPath(qwenName), 'fake-pt-bytes');
+    const pt17bPath = qwenVoice.qwenVoicePtPath(`${qwenName}__1.7b`);
+    writeFileSync(pt17bPath, 'fake-1.7b-pt-bytes');
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('sidecar unreachable'));
+    try {
+      const res = await request(app).post(`/api/voice-library/${voiceUuid}/revoke`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.consent.revokedAt).toBeTruthy();
+
+      // The engine artifacts (resynthesis-capable) are purged...
+      expect(existsSync(qwenVoice.qwenVoicePtPath(qwenName))).toBe(false);
+      expect(existsSync(pt17bPath)).toBe(false);
+      // ...but the manifest dir + retained clip survive (no deleteEntryDir).
+      expect(existsSync(masterPath)).toBe(true);
+      const onDisk = await vl.readEntry(voiceUuid);
+      expect(onDisk?.consent?.revokedAt).toBeTruthy();
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });
