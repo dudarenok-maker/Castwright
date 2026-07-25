@@ -14,6 +14,10 @@
 - **"Fix this line" now fixes the line you marked.** On chapters with a spoken title, marking a
   line for re-recording could quietly re-record the line before it, or fail with a confusing error
   about segment indices. Both are fixed.
+- **The groundwork for cloning a real voice is quietly taking shape.** Recording, quality
+  checks, and consent — the plumbing behind _"even in your own voice"_ — are now in place
+  under the hood. Nothing to try yet; the first voice you can actually clone and cast is
+  coming in a follow-up update.
 
 # Castwright 1.14.0
 

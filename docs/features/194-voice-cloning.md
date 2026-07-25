@@ -6,10 +6,12 @@ owner: null
 
 # Voice cloning — read a book in your own (or your family's) voice
 
-> Status: active — Wave 1 shipped, Waves 2-5 outstanding ([`fs-38` · #624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624))
-> Key files (anticipated): `server/tts-sidecar/` (XTTS clone + Qwen design-to-target), `server/src/tts/`, `src/store/cast-slice.ts`, `src/views/voices.tsx`, `src/components/voice-library-panel.tsx`, `openapi.yaml`
+> Status: active — Wave 1 shipped; Wave 3a (ingest/consent/recorder, behind-flag)
+> delivered; Waves 3b1/3b2/3c + polish outstanding ([`fs-38` · #624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624))
+> Key files (anticipated): `server/tts-sidecar/` (Qwen clone extraction + XTTS clone), `server/src/tts/`, `src/store/cast-slice.ts`, `src/views/voices.tsx`, `src/components/voice-library-panel.tsx`, `openapi.yaml`
 > URL surface: `#/voices` (cloned-voice section + capture flow), cast profile drawer
-> OpenAPI ops: new — voice-sample capture/upload + clone-design endpoints (TBD)
+> OpenAPI ops: `POST /api/voice-library/clone-sample`, `POST /api/voice-library/{voiceUuid}/revoke` (3a, shipped); `POST /api/voice-library/clone` (3b1, TBD)
+> Wave 3 umbrella spec: [`docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md`](../superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md)
 
 ## Wave 1 shipped (2026-07-24)
 
@@ -26,6 +28,22 @@ deleting a library voice gives a usage report and does full multi-location erasu
 `.pt` + cached samples). **NOT in Wave 1** (later waves): clone-from-a-real-sample,
 consent/attestation, audio ingest, in-app recording, Catalogue rebuild. Plan:
 [`docs/superpowers/plans/2026-07-04-fs38-wave1-voice-library-store.md`](../superpowers/plans/2026-07-04-fs38-wave1-voice-library-store.md).
+
+## Wave 3a delivered (ingest, consent, recorder — behind-flag)
+
+Wave 3a activated the ingest side of the scaffolding Wave 1 left inert: real ffmpeg
+decode (upload **or** an in-app `VoiceRecorder`) → a pure quality gate (fatal <4s/silence,
+warn short/clipping) → 60s cap → a Node-written `master.wav` → Whisper transcript, behind
+`POST /api/voice-library/clone-sample` (an ephemeral candidate, no entry yet). A write-time
+consent-structure guard on `writeEntry()` and `POST /:uuid/revoke` (stamps `consent.revokedAt`,
+orthogonal to the structure guard) round out the store contract; the existing sample-audition
+route now 403s a revoked/consent-absent cloned voice. On the frontend: a 'Cloned' provenance
+badge and a Revoke action render in My voices, and the recorder + a capture/consent panel exist
+as phase-1 wizard building blocks (mic-permission-denied falls back to Upload, never a dead
+end). **Per spec §1.1's honesty note, this is a behind-the-flag engineering slice, not a
+user-visible feature on its own** — the consent guard, `/revoke` route, and cloned-section UI
+states have no reachable production caller until **3b1** writes the first real cloned entry
+via `POST /clone`. Regression plan: [267](267-fs38-wave3-voice-clone.md).
 
 Pays off the brand promise — _"even in your own voice"_ (`brand/project-narrative.md`,
 [#622](https://github.com/dudarenok-maker/AudioBook-Generator/issues/622)). A parent reads a
@@ -48,11 +66,12 @@ bedtime story in their own voice while away; a kid hears themselves as the hero.
    noise, clipping) and a re-take loop.
 2. **Consent on the record** — an explicit, stored consent step naming the person and the
    permitted use; cloning is blocked without it. (See risk below.)
-3. **Clone + cast** — produce a reusable cloned voice (XTTS reference path first; Qwen
-   reference-clip clone via Base `create_voice_clone_prompt` as the second engine — see
-   _Implementation notes_, **not** the 1.7B "design-to-target") and assign it to a character
-   exactly like a designed voice, held **consistent across the book and series** the way
-   designed voices already are.
+3. **Clone + cast** — produce a reusable cloned voice (**Qwen leads** — reference-clip
+   clone via Base `create_voice_clone_prompt`, **not** the 1.7B "design-to-target" — since
+   it's the default engine and a refactor of already-proven code; XTTS reference-clip clone
+   follows as the second engine, see _Implementation notes_ and the Wave 3 spec's §1.2
+   wave-ordering note) and assign it to a character exactly like a designed voice, held
+   **consistent across the book and series** the way designed voices already are.
 4. **Library separation** — cloned voices live in their own section of `#/voices`, never
    intermingled with designed voices, with provenance + consent surfaced and **reuse gated** so
    a person's voice is never offered back to an unrelated book/stranger.
@@ -115,14 +134,26 @@ in v1.
 ## Delivery roadmap (waves)
 
 1. **Data model + library split** — provenance dimension, consent record, `#/voices` cloned
-   section (no engine work yet; designed voices unaffected).
-2. **Sample capture** — record/upload + quality checks + consent gate.
-3. **XTTS clone path** — reference-clip → reusable cloned voice → cast assignment + series
-   consistency.
-4. **Qwen reference-clip clone** — second engine for the same cloned-voice contract. Real clip
-   → `Base.create_voice_clone_prompt` (the 1.7B VoiceDesign is **not** used); see
-   _Implementation notes_.
-5. **Polish** — auditions, A/B vs a designed alternative, drift handling for cloned voices.
+   section (no engine work yet; designed voices unaffected). **Shipped** (Wave 1, 2026-07-24).
+2. **Sample capture** — record/upload + quality checks + consent gate. **Delivered as Wave
+   3a** (see below) — folded into the Wave 3 umbrella spec's sub-wave decomposition rather
+   than shipping as its own standalone wave.
+3. **The clone pipeline itself**, split into four independently-reviewable sub-waves per
+   [`docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md`](../superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md)
+   §1.1 (supersedes this doc's earlier "XTTS then Qwen" ordering — **Qwen leads**, it's the
+   default engine and a refactor of already-proven `design_voice` code):
+   - **3a — Ingest, consent, recorder.** **Delivered** (behind `voices.library.enabled`,
+     no reachable production caller until 3b1 — see plan
+     [267](267-fs38-wave3-voice-clone.md)).
+   - **3b1 — Qwen clone (happy path).** `POST /qwen/clone-voice` extraction, `POST
+     /api/voice-library/clone`, wizard phase 2, cast assignment, ECAPA fidelity, and the
+     `applyQwenFallback` cloned-voice exemption (closing the first silent-substitution
+     hole). **First user-visible clone.**
+   - **3b2 — Resolver + lifecycle.** The three-state (Healthy/Repairable/Broken) resolver
+     as an async per-chapter pre-pass, orphan self-heal, revocation-at-render.
+   - **3c — XTTS clone.** `POST /xtts/clone-voice`, the latents-backed Coqui synth branch,
+     designed-voice XTTS-eligibility.
+4. **Polish** — auditions, A/B vs a designed alternative, drift handling for cloned voices.
 
 ## Test plan / acceptance
 

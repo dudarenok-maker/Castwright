@@ -13,12 +13,15 @@
    (the OpenAPI-generated shape) rather than hand-typed, so a schema change
    there surfaces here as a type error instead of silent drift.
 
-   Three branches, derived from the slot alone:
+   Four branches, derived from the slot alone:
      - `slot.libraryUuid` set        → "My voice" (pulled from / saved to the
        standalone voice library — outranks `provenance` since a promoted
        character's slot can carry both).
      - `slot.provenance === 'designed'` (no libraryUuid) → "Designed" (a
        bespoke voice designed for this character specifically).
+     - `slot.provenance === 'cloned'` (no libraryUuid) → "Cloned" (Wave 3 —
+       a voice cloned from a sample recording; the My-voices library surface
+       is where a cloned slot has no libraryUuid to outrank it).
      - anything else (no slot, or a preset engine's plain override) →
        "Catalogue" (a stock/prebuilt speaker). */
 
@@ -43,6 +46,13 @@ export function VoiceProvenanceBadge({ slot }: Props) {
     return (
       <Pill color="peach">
         <span data-testid="voice-provenance-badge">Designed</span>
+      </Pill>
+    );
+  }
+  if (slot?.provenance === 'cloned') {
+    return (
+      <Pill color="library">
+        <span data-testid="voice-provenance-badge">Cloned</span>
       </Pill>
     );
   }

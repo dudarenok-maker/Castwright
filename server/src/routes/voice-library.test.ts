@@ -30,6 +30,13 @@ vi.mock('../tts/index.js', async (importOriginal) => {
   };
 });
 
+/* Task 6 — the clone-sample route ingests via ingestCloneSample, which in
+   turn calls Whisper transcription (transcribe-client.js). Stub it the same
+   hoisted way as the synth mock above, so the ingest path never needs a
+   real Whisper model in this route-level test. */
+const { transcribeSegment } = vi.hoisted(() => ({ transcribeSegment: vi.fn() }));
+vi.mock('../tts/transcribe-client.js', () => ({ transcribeSegment }));
+
 let dir: string;
 let app: Express;
 let vl: typeof import('../workspace/voice-library.js');
@@ -129,6 +136,15 @@ beforeEach(async () => {
      Task 9 sidecar stub's clip length, keeps ffmpeg encoding fast. */
   const pcm = Buffer.alloc(24_000 * 2 * 0.3, 0);
   synthesize.mockResolvedValue({ pcm, sampleRate: 24_000, mimeType: 'audio/L16' });
+
+  transcribeSegment.mockResolvedValue({
+    text: 'hello there',
+    language: 'en',
+    words: null,
+    avgLogprob: null,
+    noSpeechProb: null,
+    compressionRatio: null,
+  });
 });
 
 afterEach(() => {
@@ -240,7 +256,19 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
   });
 
   it('rejects a persona edit on a non-designed (cloned) entry with 400', async () => {
-    await vl.writeEntry(makeEntry({ voiceUuid: 'cloned-1', provenance: 'cloned' }));
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'cloned-1',
+        provenance: 'cloned',
+        consent: {
+          personName: 'Test',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00Z',
+          attestedBy: 'test',
+        },
+      }),
+    );
 
     const res = await request(app)
       .patch('/api/voice-library/cloned-1')
@@ -452,6 +480,17 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
     expect(after.body.url).not.toBe(before.body.url);
     expect(synthesize).toHaveBeenCalledTimes(2); // distinct content tokens, both cache misses
   });
+
+  it('POST /:uuid/sample 403s a revoked cloned voice', async () => {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    await writeEntry({
+      voiceUuid: 's1', name: 'Gran', provenance: 'cloned', tags: [], pinned: false, engines: {},
+      consent: { personName: 'Gran', relationship: 'family-with-permission', permittedUse: 'personal', attestedAt: 'x', attestedBy: 'me', revokedAt: 'yesterday' },
+      createdAt: 'x', updatedAt: 'x',
+    });
+    const res = await request(app).post('/api/voice-library/s1/sample').send({});
+    expect(res.status).toBe(403);
+  });
 });
 
 describe('POST /api/voice-library/:voiceUuid/assign', () => {
@@ -521,7 +560,19 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
   });
 
   it('stamps the qwen slot with name/libraryUuid/provenance, merges with (not clobbers) a sibling kokoro slot, and never touches character.voiceUuid', async () => {
-    await vl.writeEntry(makeEntry({ voiceUuid: 'assign-3', provenance: 'cloned' }));
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'assign-3',
+        provenance: 'cloned',
+        consent: {
+          personName: 'Test',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00Z',
+          attestedBy: 'test',
+        },
+      }),
+    );
     const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-four', [
       {
         id: 'char-marlow',
@@ -882,5 +933,59 @@ describe('POST /api/voice-library/promote (Task 11)', () => {
     const entry = res.body as import('../workspace/voice-library.js').VoiceLibraryEntry;
     expect(entry.engines.qwen?.status).toBe('stale');
     expect(entry.persona).toBe('a bright, chipper voice');
+  });
+});
+
+describe('POST /api/voice-library/clone-sample (Task 6)', () => {
+  it('POST /clone-sample ingests an uploaded clip → 202 candidate', async () => {
+    const { encodePcmToWav } = await import('../tts/wav.js');
+    const n = 6 * 24_000;
+    const pcm = Buffer.alloc(n * 2);
+    for (let i = 0; i < n; i++) pcm.writeInt16LE(i % 2 ? -8000 : 8000, i * 2);
+    const wav = encodePcmToWav(pcm, 24_000);
+    const res = await request(app)
+      .post('/api/voice-library/clone-sample')
+      .field('captureMethod', 'upload')
+      .attach('audio', wav, 'sample.wav');
+    expect(res.status).toBe(202);
+    expect(res.body.candidateId).toBeTruthy();
+    expect(res.body.transcript).toBe('hello there');
+  });
+
+  it('POST /clone-sample rejects a too-short clip → 400', async () => {
+    const { encodePcmToWav } = await import('../tts/wav.js');
+    const n = 2 * 24_000;
+    const wav = encodePcmToWav(Buffer.alloc(n * 2, 40), 24_000);
+    const res = await request(app).post('/api/voice-library/clone-sample').attach('audio', wav, 's.wav');
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
+  it('stamps revokedAt on a cloned entry with a valid consent record', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'r1',
+        name: 'Dad',
+        provenance: 'cloned',
+        consent: {
+          personName: 'Dad',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00.000Z',
+          attestedBy: 'me',
+        },
+      }),
+    );
+
+    const res = await request(app).post('/api/voice-library/r1/revoke');
+
+    expect(res.status).toBe(200);
+    expect(res.body.consent.revokedAt).toBeTruthy();
+  });
+
+  it('404s an unknown entry', async () => {
+    const res = await request(app).post('/api/voice-library/nope/revoke');
+    expect(res.status).toBe(404);
   });
 });

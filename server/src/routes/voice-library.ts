@@ -12,7 +12,9 @@
 import { Router } from 'express';
 import { existsSync } from 'node:fs';
 import { mkdir, copyFile, rename, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { nanoid } from 'nanoid';
+import multer from 'multer';
 import type { Request, Response } from '../http.js';
 import {
   listEntries,
@@ -43,8 +45,11 @@ import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
+import { ingestCloneSample } from '../tts/clone-ingest.js';
 
 export const voiceLibraryRouter = Router();
+
+const cloneUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 /* Library single-flight lock (spec §3). A module-level in-flight set keyed by
    voiceUuid (plus one `'library:new'` key for creates) serializes design work
@@ -362,6 +367,9 @@ voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response
     const { voiceUuid } = req.params;
     const entry = await readEntry(voiceUuid);
     if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    if (entry.provenance === 'cloned' && (!entry.consent || entry.consent.revokedAt)) {
+      return res.status(403).json({ error: 'This cloned voice has no valid consent and cannot be played.' });
+    }
 
     const body = (req.body ?? {}) as { text?: unknown };
     const voiceName = `qwen-${voiceUuid}`;
@@ -499,6 +507,43 @@ voiceLibraryRouter.post('/promote', async (req: Request, res: Response) => {
   }
 });
 
+/* POST /api/voice-library/clone-sample
+
+   fs-38 Wave 3a, Task 6 — ingest a captured/uploaded voice clip into a
+   normalized clone-sample candidate (decode → quality gate → cap 60s → WAV →
+   candidate store → Whisper transcript; see tts/clone-ingest.ts). No clip
+   preview URL yet (out of scope for 3a) — the response carries just the
+   candidateId + transcript. Registered as a literal `/clone-sample` path;
+   there is no single-segment `POST /:voiceUuid` on this router, so it can't
+   be shadowed regardless of registration order (verified — see plan). */
+voiceLibraryRouter.post(
+  '/clone-sample',
+  (req: Request, res: Response, next: (err?: unknown) => void) => {
+    cloneUpload.single('audio')(req, res, (err: unknown) => {
+      if (err) {
+        if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(413).json({ error: 'Sample too large (max 25 MB).' });
+        }
+        return res.status(400).json({ error: (err as Error).message || 'Upload error.' });
+      }
+      next();
+    });
+  },
+  async (req: Request, res: Response) => {
+    try {
+      const file = req.file;
+      if (!file?.buffer?.length) return res.status(400).json({ error: 'No audio uploaded (use the "audio" field).' });
+      const captureMethod = (req.body?.captureMethod === 'record' ? 'record' : 'upload') as 'record' | 'upload';
+      const candidateId = randomUUID();
+      const result = await ingestCloneSample(file.buffer, { captureMethod, candidateId });
+      return res.status(202).json({ ...result, qualityWarnings: result.qualityWarnings });
+    } catch (e) {
+      const status = (e as { status?: number }).status ?? 502;
+      return res.status(status).json({ error: (e as Error).message || 'Clone-sample ingest failed.' });
+    }
+  },
+);
+
 /* POST /api/voice-library/:voiceUuid/assign
 
    Assigns a library voice to ONE character in ONE book — a bespoke,
@@ -563,6 +608,28 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
   } catch (e) {
     console.error('[voice-library] assign failed', e);
     res.status(500).json({ error: (e as Error).message || 'Voice library assign failed.' });
+  }
+});
+
+/* POST /api/voice-library/:voiceUuid/revoke
+
+   Consent revocation (fs-38 Wave 3a, Task 8). Stamps `consent.revokedAt` on
+   the entry and re-writes it — this PASSES the Task 7 write-time consent
+   guard, since revokedAt is orthogonal to structural consent validity (the
+   entry still carries a complete consent record, just a revoked one). A 409
+   guards the (should-be-impossible-for-a-cloned-voice) case of an entry with
+   no consent record at all — nothing to revoke. */
+voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response) => {
+  try {
+    const { voiceUuid } = req.params;
+    const entry = await readEntry(voiceUuid);
+    if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    if (!entry.consent) return res.status(409).json({ error: 'Entry has no consent record to revoke.' });
+    const updated = { ...entry, consent: { ...entry.consent, revokedAt: new Date().toISOString() } };
+    await writeEntry(updated); // passes the guard — revokedAt is orthogonal (Task 7)
+    return res.status(200).json(updated);
+  } catch (e) {
+    return res.status(502).json({ error: (e as Error).message || 'Revoke failed.' });
   }
 });
 
