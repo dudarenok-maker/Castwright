@@ -247,7 +247,10 @@ unaffected — the intent behind the earlier "not the whole book" preference) wi
 net-new per-character orchestration; per-character-continue is an explicit future
 upgrade, not v1. Revocation therefore bites **at the next chapter boundary** (the
 pre-pass re-validates per chapter; a group's `resolvedByIndex` cache is per-chapter),
-not mid-chapter (M3).
+not mid-chapter (M3). **3b2 scoping note (readiness gate):** the pre-pass must validate
+only cloned voices whose `characterId`s actually appear in *this chapter's* sentence
+groups — a book-wide `cast` array must not fail-fast a chapter for a broken cloned voice
+no sentence in it uses. Group `characterId`s are available; intersect against them.
 
 ### 5.5 1.7B path — DECIDED: allow, artifact is consent-scoped (Fable C3)
 `_load_voice_prompt_17b` (`main.py:~4076`) **auto-derives** a 1.7B-native clone prompt
