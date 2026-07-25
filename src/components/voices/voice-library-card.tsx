@@ -284,7 +284,7 @@ function ProvenanceMarker({ entry }: { entry: VoiceLibraryEntry }) {
           )}
           {clonedState && (
             <Pill color={clonedState === 'broken' ? 'danger' : 'warning'}>
-              <span data-testid={`voice-library-card-clonestate-${entry.voiceUuid}`}>
+              <span data-testid={`voice-library-clonestate-${entry.voiceUuid}`}>
                 {clonedState === 'broken' ? 'Needs attention' : 'Will re-derive'}
               </span>
             </Pill>

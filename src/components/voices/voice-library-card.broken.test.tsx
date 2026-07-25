@@ -97,13 +97,24 @@ describe('deriveClonedVoiceState', () => {
   it('is null for a healthy cloned entry', () => {
     expect(deriveClonedVoiceState(makeCloned())).toBeNull();
   });
+
+  it('is "broken" (not "repairable") when both revoked and stale apply', () => {
+    expect(
+      deriveClonedVoiceState(
+        makeCloned({
+          consent: { ...CONSENT, revokedAt: '2026-07-25T00:00:00Z' },
+          engines: { qwen: { status: 'stale' } },
+        }),
+      ),
+    ).toBe('broken');
+  });
 });
 
 describe('VoiceLibraryCard — cloned Broken/Repairable chip', () => {
   it('shows the danger "Needs attention" chip when consent is revoked', () => {
     const entry = makeCloned({ consent: { ...CONSENT, revokedAt: '2026-07-25T00:00:00Z' } });
     renderCard(entry);
-    expect(screen.getByTestId(`voice-library-card-clonestate-${entry.voiceUuid}`)).toHaveTextContent(
+    expect(screen.getByTestId(`voice-library-clonestate-${entry.voiceUuid}`)).toHaveTextContent(
       'Needs attention',
     );
   });
@@ -111,7 +122,7 @@ describe('VoiceLibraryCard — cloned Broken/Repairable chip', () => {
   it('shows the danger "Needs attention" chip when engines.qwen.status is failed', () => {
     const entry = makeCloned({ engines: { qwen: { status: 'failed' } } });
     renderCard(entry);
-    expect(screen.getByTestId(`voice-library-card-clonestate-${entry.voiceUuid}`)).toHaveTextContent(
+    expect(screen.getByTestId(`voice-library-clonestate-${entry.voiceUuid}`)).toHaveTextContent(
       'Needs attention',
     );
   });
@@ -119,7 +130,7 @@ describe('VoiceLibraryCard — cloned Broken/Repairable chip', () => {
   it('shows the danger "Needs attention" chip when master is missing', () => {
     const entry = makeCloned({ master: undefined });
     renderCard(entry);
-    expect(screen.getByTestId(`voice-library-card-clonestate-${entry.voiceUuid}`)).toHaveTextContent(
+    expect(screen.getByTestId(`voice-library-clonestate-${entry.voiceUuid}`)).toHaveTextContent(
       'Needs attention',
     );
   });
@@ -127,7 +138,7 @@ describe('VoiceLibraryCard — cloned Broken/Repairable chip', () => {
   it('shows the warning "Will re-derive" chip for a stale cloned entry', () => {
     const entry = makeCloned({ engines: { qwen: { status: 'stale' } } });
     renderCard(entry);
-    expect(screen.getByTestId(`voice-library-card-clonestate-${entry.voiceUuid}`)).toHaveTextContent(
+    expect(screen.getByTestId(`voice-library-clonestate-${entry.voiceUuid}`)).toHaveTextContent(
       'Will re-derive',
     );
   });
@@ -136,7 +147,18 @@ describe('VoiceLibraryCard — cloned Broken/Repairable chip', () => {
     const entry = makeCloned();
     renderCard(entry);
     expect(
-      screen.queryByTestId(`voice-library-card-clonestate-${entry.voiceUuid}`),
+      screen.queryByTestId(`voice-library-clonestate-${entry.voiceUuid}`),
     ).not.toBeInTheDocument();
+  });
+
+  it('shows the danger "Needs attention" chip (not "Will re-derive") when both revoked and stale apply', () => {
+    const entry = makeCloned({
+      consent: { ...CONSENT, revokedAt: '2026-07-25T00:00:00Z' },
+      engines: { qwen: { status: 'stale' } },
+    });
+    renderCard(entry);
+    expect(screen.getByTestId(`voice-library-clonestate-${entry.voiceUuid}`)).toHaveTextContent(
+      'Needs attention',
+    );
   });
 });
