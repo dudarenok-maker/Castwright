@@ -9391,6 +9391,7 @@ async function realRestartSidecar(): Promise<{ ok: boolean; error?: string }> {
 
 export type VoiceLibraryEntry = ApiComponents['schemas']['VoiceLibraryEntry'];
 export type CloneSampleCandidate = ApiComponents['schemas']['CloneSampleCandidate'];
+export type CloneVoiceBody = ApiComponents['schemas']['CloneVoiceRequest'];
 export interface VoiceLibraryUsageEntry {
   bookId: string;
   bookTitle: string;
@@ -9561,6 +9562,17 @@ async function realCloneVoiceSample(form: FormData): Promise<CloneSampleCandidat
     throw new Error(
       `Clone sample failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
+  return res.json();
+}
+
+async function realCloneVoice(body: CloneVoiceBody): Promise<VoiceLibraryEntry> {
+  const res = await fetch('/api/voice-library/clone', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok)
+    throw new Error(`Voice clone failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
 }
 
@@ -9742,6 +9754,33 @@ export async function mockCloneVoiceSample(_form: FormData): Promise<CloneSample
     sampleRate: 24_000,
     qualityWarnings: [],
   };
+}
+
+export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibraryEntry> {
+  await wait(300);
+  const now = new Date().toISOString();
+  const entry: VoiceLibraryEntry = {
+    voiceUuid: `lib-clone-${Math.random().toString(36).slice(2, 10)}`,
+    name: body.name?.trim() || body.consent.personName,
+    provenance: 'cloned',
+    tags: [],
+    pinned: false,
+    consent: { ...body.consent, attestedAt: now, attestedBy: body.consent.personName },
+    master: {
+      clipFile: 'master.wav',
+      sampleRate: 24_000,
+      durationSeconds: 10,
+      transcript: 'the quick brown fox jumped',
+      transcriptSource: 'whisper',
+      captureMethod: 'upload',
+    },
+    sampleMeta: { qualityChecks: { cloneCosine: 0.62 } },
+    engines: { qwen: { status: 'ready', baseModel: 'qwen3-tts-0.6b-2026-05' } },
+    createdAt: now,
+    updatedAt: now,
+  };
+  mockVoiceLibraryEntries = [...mockVoiceLibraryEntries, entry];
+  return entry;
 }
 
 export async function mockRevokeVoiceLibraryEntry(voiceUuid: string): Promise<VoiceLibraryEntry> {
@@ -10055,6 +10094,7 @@ const real = {
   assignLibraryVoice: realAssignLibraryVoice,
   sampleLibraryVoice: realSampleLibraryVoice,
   cloneVoiceSample: realCloneVoiceSample,
+  cloneVoice: realCloneVoice,
   revokeVoiceLibraryEntry: realRevokeVoiceLibraryEntry,
 };
 
@@ -10346,6 +10386,7 @@ const mock = {
   assignLibraryVoice: mockAssignLibraryVoice,
   sampleLibraryVoice: mockSampleLibraryVoice,
   cloneVoiceSample: mockCloneVoiceSample,
+  cloneVoice: mockCloneVoice,
   revokeVoiceLibraryEntry: mockRevokeVoiceLibraryEntry,
 };
 
