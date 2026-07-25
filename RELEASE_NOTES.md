@@ -18,6 +18,10 @@
   checks, and consent — the plumbing behind _"even in your own voice"_ — are now in place
   under the hood. Nothing to try yet; the first voice you can actually clone and cast is
   coming in a follow-up update.
+- **Clone a voice you have permission to use — and cast it anywhere.** Record or upload a
+  short sample, confirm it's yours (or a family member's, with their say-so), and Castwright
+  builds a reusable voice you can hand to any character. It'll never quietly swap in a
+  stand-in: if it can't use your cloned voice, it tells you rather than faking it.
 
 # Castwright 1.14.0
 

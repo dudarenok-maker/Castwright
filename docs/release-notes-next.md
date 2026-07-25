@@ -59,6 +59,10 @@ history at cut time.
   guard/revoke route/cloned-section UI until 3b1** ships the first real cloned entry — disclosed
   scope, not a gap (spec §1.1). Plan: `docs/features/267-fs38-wave3-voice-clone.md`. Spec:
   `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md`.
+- **First voice clone on the Qwen engine.** Capture or upload a sample, attest consent, and
+  Castwright distils a reusable cloned voice — auditioned, ECAPA fidelity-checked, and castable
+  like a designed one. A cloned voice is never silently substituted: if Qwen is unavailable the
+  chapter fails loud instead. (Refs #624)
 
 ---
 
