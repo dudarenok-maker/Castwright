@@ -16,7 +16,7 @@ _Every task's requirements implicitly include this section. Values copied from t
 - **Scope is Qwen only.** 3b2 resolves cloned voices on the **Qwen** engine (the only engine 3b1 can clone on). XTTS/coqui cloned voices are 3c. `purgeCloneArtifacts` has **no `voices/xtts/` path to erase** today (no such helper exists) — do not invent one.
 - **Additive & reversible.** No `cast.json` shape change. Everything stays gated behind `voices.library.enabled`. Pre-Wave-3 entries (no `master`, no `consent`, `provenance` designed/imported) are untouched.
 - **Fail-fast wastes zero GPU.** The pre-pass validates every in-chapter cloned voice **before any synth call**; a Broken voice aborts before the title beat, not mid-render.
-- **Consent-scoped erasure is total.** Revoke and delete must erase every artifact from which the voice could be resynthesised: `voices/qwen/qwen-<uuid>.pt`, `voices/qwen/qwen-<uuid>__1.7b.pt` (double underscore, literal `1.7b`), `voices/qwen/qwen-<uuid>.json`, the `-preview` variants, and the sample cache (`purgeVoiceSamples('qwen-<uuid>')`); delete additionally removes the entry dir (`master.wav` + `voice.json`). The `__1.7b.pt` is erased by **nothing** today — that is the load-bearing gap.
+- **Consent-scoped erasure is total.** Revoke and delete must erase every artifact from which the voice could be resynthesised: `voices/qwen/qwen-<uuid>.pt`, `voices/qwen/qwen-<uuid>__1.7b.pt` (double underscore, literal `1.7b`), `voices/qwen/qwen-<uuid>.json`, the `-preview` variants, and the sample cache (`purgeVoiceSamples('qwen-<uuid>')`); delete additionally removes the entry dir (`master.wav` + `voice.json`). **The gaps this closes are precise: (a) REVOKE erases *nothing* today** (`routes/voice-library.ts:790-791` only stamps `revokedAt` + `writeEntry`) — a revoked person's `.pt`/`__1.7b.pt` survive on disk; **(b) DELETE's 1.7B removal is best-effort and sidecar-reachability-dependent** — it rides only on the `/qwen/evict-voice` POST (`voice-library.ts:822` → sidecar `_evict_17b_prompt`), so if the sidecar is down at delete time the `__1.7b.pt` is orphaned. `purgeCloneArtifacts` adds a **Node-side direct unlink** so erasure holds regardless of sidecar state, on both paths.
 - **Sidecar owns the `.pt`; Node owns the manifest.** `deriveEngineArtifact` does not write any `.pt` — it POSTs PCM to `/qwen/clone-voice` and the **sidecar** writes `voices/qwen/qwen-<uuid>.pt`. "Stat-before-remove" (spec §5.6, absorbing #1804) is therefore an **atomic write on the sidecar side**, plus a **manifest-transactional** re-derive on the Node side (old `.pt` + `master.wav` survive until the new derive succeeds; only then flip `engines.qwen.status`).
 - **Windows-safe artifact ordering.** When erasing, remove **files first, sidecar evict last** (the pattern documented at `routes/voice-library.ts:798-806`), so a held sidecar handle can't block the file unlink.
 - **OpenAPI-first for any wire shape.** No hand-edited `src/lib/api-types.ts`. (3b2 adds no new HTTP request/response shapes on the Node↔client boundary, so this is a guard, not a step — the resolver is internal, and `engines.qwen.status` / `consent.revokedAt` / `master` already exist in the schema.)
@@ -29,7 +29,7 @@ _Every task's requirements implicitly include this section. Values copied from t
 1. **The resolver lives in its own module** (`server/src/tts/clone-voice-resolver.ts`), not inline in `synthesise-chapter.ts`. Rationale: the classifier must be unit-tested placebo-proof with injected deps; `synthesise-chapter.ts` is 1978 lines and its diff must stay small (one call site).
 2. **Cloned→entry mapping is via `overrideTtsVoices.qwen.libraryUuid`** (declared `synthesise-chapter.ts:290`, currently unread). The assign route writes `libraryUuid = voiceUuid`. A cloned qwen slot with **no** `libraryUuid` → Broken (misconfigured).
 3. **Engine-mismatch is Broken.** For a cloned qwen voice, if this character's route does **not** resolve to `qwen` (global non-qwen render engine) **or** `qwenUnavailable` → Broken. This closes the engine-mismatch substitution hole alongside the availability one (spec §5.2 "engine unavailable").
-4. **Transient vs. permanent derive failure.** A **transient** re-derive failure (sidecar unreachable `status:0`, `NoCapacityError` `status:503`) → Broken **for this run only**; do **not** persist `status:'failed'` (a retry must re-attempt). A **permanent** failure (a `4xx` reject of the clip) → persist `engines.qwen.status:'failed'` so the card reflects it. `qwenUnavailable`/engine-mismatch → Broken, never persisted.
+4. **Transient vs. permanent derive failure.** A **transient** re-derive failure → Broken **for this run only**; do **not** persist `status:'failed'` (a retry must re-attempt). Transient = **any `SidecarDesignError.status` that is `0` (unreachable), `503` (NoCapacity), or any `5xx`** — the sidecar returns 500/502/504 for genuinely recoverable conditions (CUDA OOM mid-distil, model exception, recycle), so those must **not** brick the voice. **Permanent = only a `4xx`** (the sidecar rejected the clip itself) → persist `engines.qwen.status:'failed'`. This split matters because classification rule 3 (`status==='failed'` → Broken) fires **before** the re-derive rule, so a persisted `'failed'` is terminal until a manual re-clone — a transient outage must never reach it. `qwenUnavailable`/engine-mismatch → Broken, never persisted.
 5. **§2.3 (designed-voice clip-persist) is the separable tail (Tasks 11–12), recommended DEFER.** Cloned voices already carry an entry-dir `master.wav` from 3b1, so the resolver's Repairable path needs nothing from §2.3. §2.3 buys designed-voice *consistency across a base-model upgrade* — a quality nicety, not the never-substitute correctness this wave is about — and it forces a second `master` location + a Python WAV writer + a designed-voice re-derive path. Author them last, behind a clear divider, so the branch can ship Tasks 1–10 + 13 without them. **The controlling thread must ask the user which scope to run before dispatching Task 11.**
 
 ---
@@ -135,6 +135,8 @@ export async function purgeCloneArtifacts(voiceUuid: string, opts?: { deleteEntr
 
 **Why:** `deriveEngineArtifact` re-derives by having the sidecar overwrite `qwen-<uuid>.pt`. Today that write is a bare `torch.save(prompt, pt_path)` — a crash/kill mid-write corrupts the live `.pt` (the #1804 class). Making it atomic is the sidecar half of spec §5.6 "stat-before-remove".
 
+**Scope note (M1):** there is a **third** bare `torch.save(prompt, pt_path)` at `main.py:~4011` (`mint_variant`, the emotion-variant clone prompt). It is **off the resolver's re-derive path** (re-derive hits `clone_voice`), so 3b2 correctness does not require it — Task 1 covers **only** `clone_voice` (~3857) and `design_voice` (~3767). If the atomic helper is trivially reusable there, hardening it too is welcome, but it is explicitly **not required** for this task's acceptance.
+
 - [ ] **Step 1: Write the failing test**
 
 ```python
@@ -239,6 +241,9 @@ export async function purgeCloneArtifacts(voiceUuid: string, opts: { deleteEntry
   ];
   for (const f of files) await rm(f, { force: true }).catch(() => {});
   purgeVoiceSamples(key);
+  // TODO(3c): when XTTS clone lands, also erase voices/xtts/xtts-<uuid>.pt here
+  //   (spec §5.6). No xtts artifact exists on disk in 3b2, so omit it for now —
+  //   but a future xtts clone would be un-erasable via this path if forgotten.
   if (opts.deleteEntryDir) await removeEntryDir(voiceUuid);
   try {
     await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
@@ -262,7 +267,7 @@ export async function purgeCloneArtifacts(voiceUuid: string, opts: { deleteEntry
 
 **Interfaces:** Consumes `purgeCloneArtifacts` (Task 2). The delete flow **replaces** the inline `eraseLibraryVoiceArtifacts` body with `purgeCloneArtifacts(voiceUuid, { deleteEntryDir: true })` (it currently misses `__1.7b.pt`). Revoke, after stamping `revokedAt` + `writeEntry`, calls `purgeCloneArtifacts(voiceUuid)` (no entry-dir removal — the manifest + `master.wav` are retained; only the resynthesis-capable artifacts are erased).
 
-- [ ] **Step 1: Write the failing tests** — (a) `POST /:uuid/revoke` on a cloned entry stamps `revokedAt` **and** calls `purgeCloneArtifacts(uuid)` (spy) with no `deleteEntryDir`; the entry (voice.json + master.wav) still readable afterward. (b) `DELETE /:uuid?confirm=1` calls `purgeCloneArtifacts(uuid, { deleteEntryDir: true })` and — integration-style against a temp workspace — the `qwen-<uuid>__1.7b.pt` file is gone.
+- [ ] **Step 1: Write the failing tests** — (a) `POST /:uuid/revoke` on a cloned entry stamps `revokedAt` **and** calls `purgeCloneArtifacts(uuid)` (spy) with no `deleteEntryDir`; the entry (voice.json + master.wav) still readable afterward. (b) `DELETE /:uuid?confirm=1` calls `purgeCloneArtifacts(uuid, { deleteEntryDir: true })` and — integration-style against a temp workspace — the `qwen-<uuid>__1.7b.pt` file is gone. **Non-placebo requirement (I2):** the delete test MUST stub `fetch` so the `/qwen/evict-voice` POST fails/no-ops (simulating the sidecar unreachable) — otherwise today's evict-voice path already removes `__1.7b.pt` and the assertion passes against un-fixed code. The test proves the **Node-side** unlink, so the sidecar must be mocked out of the picture.
 
 - [ ] **Step 2: Run** → FAIL (revoke purges nothing; delete misses 1.7B).
 
@@ -334,12 +339,12 @@ it('the legacy single-name constructor still works (3b1 backstop)', () => {
 
 _(Caller maps a cloned qwen slot with no `libraryUuid`, or `readEntry` → null, to `{ broken, reason: 'misconfigured' }` before classify — see Task 6.)_
 
-**Orchestrator** (`resolveClonedVoicesForChapter`): for each request, `readEntry(libraryUuid)`; classify; if `repairable` → `reportProgress('Preparing voice "<name>"…')`, `readMasterPcm`, `deriveEngineArtifact(uuid, 'qwen', { masterPcm, sampleRate, refText })`, on success `writeEntry({ ...entry, engines: { ...entry.engines, qwen: { status: 'ready', baseModel: currentBaseModel() } } })`; on derive throw → transient (`status===0||503`) collects Broken **without** persisting; permanent (`4xx`) persists `engines.qwen.status:'failed'` then collects Broken. Collect all Broken; **after the loop**, if `broken.length` → `throw UnresolvableClonedVoiceError.fromList(broken)`.
+**Orchestrator** (`resolveClonedVoicesForChapter`): for each request, if `libraryUuid` is falsy → collect Broken `misconfigured` and continue; else `readEntry(libraryUuid)` (null → Broken `misconfigured`); classify; if `repairable` → `reportProgress('Preparing voice "<name>"…')`, `readMasterPcm`, `deriveEngineArtifact(uuid, 'qwen', { masterPcm, sampleRate, refText })`, on success `writeEntry({ ...entry, engines: { ...entry.engines, qwen: { status: 'ready', baseModel: currentBaseModel() } } })`; on derive throw → **transient** (`status === 0 || status >= 500`) collects Broken `derive-failed` **without** persisting; **permanent** (`status >= 400 && status < 500`) persists `engines.qwen.status:'failed'` then collects Broken `derive-failed`. Collect all Broken; **after the loop**, if `broken.length` → `throw UnresolvableClonedVoiceError.fromList(broken)`.
 
 - [ ] **Step 1: Write the failing tests (placebo-proof).** Table over `classifyClonedVoice`: revoked→broken/revoked; engineUnavailable→broken/engine-unavailable; status failed→broken/derive-failed; pt-missing+master→repairable; pt-missing+no-master→broken/missing-master; stale-baseModel+master→repairable; healthy→healthy. Then orchestrator tests with fake deps:
-  - **the invariant, direct:** one revoked voice ⇒ `resolveClonedVoicesForChapter` **rejects** with `UnresolvableClonedVoiceError`, `deriveEngineArtifact` was **never called**, no other voice produced.
+  - **the invariant, direct:** one revoked voice (fixture genuinely sets `entry.consent.revokedAt` — **not** a `readEntry`→null, which would throw `misconfigured` and pass this assertion vacuously wrt the *revoked* path, M3) ⇒ `resolveClonedVoicesForChapter` **rejects** with `UnresolvableClonedVoiceError`, `deriveEngineArtifact` was **never called** (spy asserts `not.toHaveBeenCalled`), no other voice produced.
   - repairable ⇒ `deriveEngineArtifact` called once, `writeEntry` stamps `status:'ready'` + current baseModel, resolves (no throw).
-  - **transient** derive failure (`{ status: 0 }`) ⇒ Broken, `writeEntry` **not** called with `'failed'` (state left intact for retry).
+  - **transient** derive failure — cover **both** `{ status: 0 }` (unreachable) **and** `{ status: 500 }` (server error, I1) ⇒ Broken, `writeEntry` **not** called with `'failed'` (state left intact for retry). This is the anti-brick case: a 5xx must not persist `failed`.
   - **permanent** derive failure (`{ status: 422 }`) ⇒ Broken, `writeEntry` called with `status:'failed'`.
   - two Broken ⇒ the thrown error's `.broken` has both names.
 
@@ -361,6 +366,10 @@ _(Caller maps a cloned qwen slot with no `libraryUuid`, or `readEntry` → null,
 ```ts
 // after `const groups = buildSentenceGroups(sentences);`  (~998)
 const inChapter = new Set(groups.map((g) => g.characterId));
+// M2 — the title beat is narrated by the narrator but has no SentenceGroup, so a
+// cloned narrator used ONLY for the title would escape the readiness gate. Union
+// the narrator id in when a title beat will actually fire.
+if (titleText) inChapter.add(narratorCharacterId);
 const clonedRequests = cast
   .filter((c) => inChapter.has(c.id) && c.overrideTtsVoices?.qwen?.provenance === 'cloned')
   .map((c) => {
