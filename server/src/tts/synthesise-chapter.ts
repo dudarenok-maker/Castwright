@@ -1042,12 +1042,14 @@ export async function synthesiseChapter(
        BEFORE any group reaches this function, over exactly the same
        cloned+qwen-routed characters this branch checks (including the
        orphaned-characterId narrator substitution — see the IMPORTANT-1
-       fix on `rendersNarrator` above). Its `engineUnavailable` input is
-       `routedEngine !== 'qwen' || qwenUnavailable`, a strict superset of
-       this branch's `route.engine === 'qwen' && qwenUnavailable` trigger,
-       and `classifyClonedVoice` treats `engineUnavailable` as broken
-       unconditionally (before any entry-health check) — so the pre-pass
-       always throws `UnresolvableClonedVoiceError` first in production.
+       fix on `rendersNarrator` above). Task 6b split its single
+       `engineUnavailable` input into two: `wrongEngine` (`routedEngine !==
+       'qwen'`) and `engineUnavailable` (`qwenUnavailable`) — together a
+       strict superset of this branch's `route.engine === 'qwen' &&
+       qwenUnavailable` trigger, and `classifyClonedVoice` treats either as
+       broken unconditionally (before any entry-health check) — so the
+       pre-pass always throws `UnresolvableClonedVoiceError` first in
+       production.
        This branch is retained as a backstop for any future caller that
        reaches `applyQwenFallback` without going through the pre-pass
        first (e.g. a direct unit-test harness, or a future refactor that
@@ -1126,7 +1128,8 @@ export async function synthesiseChapter(
       return {
         characterName: c.name ?? c.id,
         libraryUuid: c.overrideTtsVoices?.qwen?.libraryUuid,
-        engineUnavailable: routedEngine !== 'qwen' || qwenUnavailable,
+        wrongEngine: routedEngine !== 'qwen',
+        engineUnavailable: qwenUnavailable,
       };
     });
   if (clonedVoiceRequests.length > 0) {

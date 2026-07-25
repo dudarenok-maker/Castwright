@@ -34,7 +34,8 @@ import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace
 import { castJsonPath, qwenVoiceSidecarPath } from '../workspace/paths.js';
 import { qwenVoicePtPath } from './qwen-voice.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
-import { selectTtsProvider, type TtsModelKey } from '../tts/index.js';
+import { selectTtsProvider, engineForModelKey, type TtsModelKey } from '../tts/index.js';
+import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { encodePcmToAudio, decodeAudioToPcm } from '../tts/mp3.js';
 import {
   buildSampleText,
@@ -45,7 +46,7 @@ import {
   voiceSampleFilePath,
   voiceSamplePublicUrl,
 } from '../tts/voice-sample-cache.js';
-import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { getResolvedSidecarUrl, getResolvedTtsModelKey } from '../workspace/user-settings.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
@@ -750,6 +751,32 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
     }
 
     const character = characters[charIndex];
+
+    /* Task 6b — a cloned voice renders on Qwen ONLY. Assigning one to a
+       character that doesn't route to Qwen this run would produce exactly
+       the same 3b2 resolver-pre-pass hard-fail this task exists to give an
+       accurate reason for ('wrong-engine') — but discovered only at RENDER
+       time, chapters deep. Catch it here instead, at assign time, so the
+       user gets an actionable 409 immediately. The book's effective default
+       engine has no per-book override (see `queue-engine-stamp.ts`'s
+       `bookDefaultEngine` for the same assumption) — it's the user-wide
+       `getResolvedTtsModelKey()` default, the same source `info.ts` /
+       `models-inventory.ts` report as the active engine. A character's own
+       `ttsEngine` override (if any) still wins via `resolveCharacterEngine`,
+       so a character explicitly cast on Qwen is unaffected by the book's
+       default sitting elsewhere. */
+    if (entry.provenance === 'cloned') {
+      const bookDefaultEngine = engineForModelKey(getResolvedTtsModelKey());
+      const routedEngine = resolveCharacterEngine(character, bookDefaultEngine);
+      if (routedEngine !== 'qwen') {
+        return res.status(409).json({
+          error:
+            `Cloned voices render on Qwen, but this book is set to ${routedEngine}. Switch the ` +
+            `book's engine to Qwen before assigning "${character.name ?? characterId}".`,
+        });
+      }
+    }
+
     const nextCharacters = [...characters];
     nextCharacters[charIndex] = {
       ...character,

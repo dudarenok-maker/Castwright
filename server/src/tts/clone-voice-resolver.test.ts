@@ -29,6 +29,25 @@ describe('UnresolvableClonedVoiceError', () => {
     expect(e.name).toBe('UnresolvableClonedVoiceError');
   });
 
+  it('fromList gives wrong-engine its own accurate remedy copy, distinct from the Qwen-availability wording', () => {
+    const e = UnresolvableClonedVoiceError.fromList([{ name: 'Wren', reason: 'wrong-engine' }]);
+    expect(e.message).toContain('Wren');
+    expect(e.message).toContain('wrong-engine');
+    expect(e.message).toContain('switch the book to Qwen');
+    // The Qwen-availability remedy (misleading here — Qwen may be fine) must
+    // NOT appear when every broken reason is wrong-engine.
+    expect(e.message).not.toContain('Re-enable Qwen');
+  });
+
+  it('fromList keeps the Qwen-availability remedy for a mixed list, alongside the wrong-engine one', () => {
+    const e = UnresolvableClonedVoiceError.fromList([
+      { name: 'Marlow', reason: 'engine-unavailable' },
+      { name: 'Wren', reason: 'wrong-engine' },
+    ]);
+    expect(e.message).toContain('Re-enable Qwen');
+    expect(e.message).toContain('switch the book to Qwen');
+  });
+
   it('the legacy single-name constructor still works (3b1 backstop)', () => {
     const e = new UnresolvableClonedVoiceError('Marlow');
     expect(e.broken).toEqual([{ name: 'Marlow', reason: 'engine-unavailable' }]);
@@ -68,6 +87,7 @@ function baseEntry(overrides: Partial<VoiceLibraryEntry> = {}): VoiceLibraryEntr
 function classifyInput(overrides: Partial<ClassifyInput> = {}): ClassifyInput {
   return {
     entry: baseEntry(),
+    wrongEngine: false,
     engineUnavailable: false,
     ptExists: true,
     currentBaseModel: 'qwen3-0.6b',
@@ -98,6 +118,37 @@ describe('classifyClonedVoice', () => {
   it('engine unavailable -> broken/engine-unavailable', () => {
     const result = classifyClonedVoice(classifyInput({ engineUnavailable: true }));
     expect(result).toEqual({ state: 'broken', reason: 'engine-unavailable' });
+  });
+
+  it('wrong engine (character does not route to qwen) -> broken/wrong-engine', () => {
+    const result = classifyClonedVoice(classifyInput({ wrongEngine: true }));
+    expect(result).toEqual({ state: 'broken', reason: 'wrong-engine' });
+  });
+
+  it('wrong engine takes precedence over engine-unavailable when both are true', () => {
+    const result = classifyClonedVoice(
+      classifyInput({ wrongEngine: true, engineUnavailable: true }),
+    );
+    expect(result).toEqual({ state: 'broken', reason: 'wrong-engine' });
+  });
+
+  it('revoked consent beats wrong-engine (rule-1 precedence preserved)', () => {
+    const result = classifyClonedVoice(
+      classifyInput({
+        entry: baseEntry({
+          consent: {
+            personName: 'x',
+            relationship: 'self',
+            permittedUse: 'personal',
+            attestedAt: '2026-01-01T00:00:00Z',
+            attestedBy: 'x',
+            revokedAt: '2026-02-01T00:00:00Z',
+          },
+        }),
+        wrongEngine: true,
+      }),
+    );
+    expect(result).toEqual({ state: 'broken', reason: 'revoked' });
   });
 
   it('persisted failed status -> broken/derive-failed', () => {
@@ -236,7 +287,7 @@ describe('resolveClonedVoicesForChapter', () => {
 
     await expect(
       resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', engineUnavailable: false }],
+        [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
         deps,
       ),
     ).rejects.toBeInstanceOf(UnresolvableClonedVoiceError);
@@ -248,7 +299,7 @@ describe('resolveClonedVoicesForChapter', () => {
     // coincidental throw from something else).
     try {
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', engineUnavailable: false }],
+        [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
         deps,
       );
       throw new Error('expected rejection');
@@ -281,7 +332,7 @@ describe('resolveClonedVoicesForChapter', () => {
 
     await expect(
       resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', engineUnavailable: false }],
+        [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
         deps,
       ),
     ).resolves.toBeUndefined();
@@ -317,7 +368,7 @@ describe('resolveClonedVoicesForChapter', () => {
 
       await expect(
         resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', engineUnavailable: false }],
+          [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
           deps,
         ),
       ).rejects.toBeInstanceOf(UnresolvableClonedVoiceError);
@@ -338,7 +389,7 @@ describe('resolveClonedVoicesForChapter', () => {
 
     await expect(
       resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', engineUnavailable: false }],
+        [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
         deps,
       ),
     ).rejects.toBeInstanceOf(UnresolvableClonedVoiceError);
@@ -359,7 +410,7 @@ describe('resolveClonedVoicesForChapter', () => {
     let thrown: UnresolvableClonedVoiceError | undefined;
     try {
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', engineUnavailable: false }],
+        [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
         deps,
       );
     } catch (e) {
@@ -395,8 +446,8 @@ describe('resolveClonedVoicesForChapter', () => {
     try {
       await resolveClonedVoicesForChapter(
         [
-          { characterName: 'Marlow', libraryUuid: 'u1', engineUnavailable: false },
-          { characterName: 'Reeve', libraryUuid: 'u2', engineUnavailable: false },
+          { characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false },
+          { characterName: 'Reeve', libraryUuid: 'u2', wrongEngine: false, engineUnavailable: false },
         ],
         deps,
       );
@@ -415,7 +466,7 @@ describe('resolveClonedVoicesForChapter', () => {
     let thrown: UnresolvableClonedVoiceError | undefined;
     try {
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: undefined, engineUnavailable: false }],
+        [{ characterName: 'Marlow', libraryUuid: undefined, wrongEngine: false, engineUnavailable: false }],
         deps,
       );
     } catch (e) {
@@ -432,7 +483,7 @@ describe('resolveClonedVoicesForChapter', () => {
     let thrown: UnresolvableClonedVoiceError | undefined;
     try {
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', engineUnavailable: false }],
+        [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
         deps,
       );
     } catch (e) {

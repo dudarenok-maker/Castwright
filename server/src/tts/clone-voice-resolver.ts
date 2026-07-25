@@ -10,10 +10,21 @@ import type { deriveEngineArtifact } from './derive-engine-artifact.js';
 
 /* Why a cloned voice can't be used this run. `engine-unavailable` is the
    coarse 3b1 reason (Qwen unreachable) preserved for the legacy single-name
-   constructor; the finer-grained reasons are for T5's classifier. */
+   constructor; the finer-grained reasons are for T5's classifier.
+   `wrong-engine` (Task 6b) is distinct from `engine-unavailable`: it fires
+   when the CHARACTER simply doesn't route to Qwen at all this run (e.g. a
+   cloned voice assigned on a Kokoro-default book) — Qwen itself may be
+   perfectly healthy, so lumping this under `engine-unavailable`'s "re-enable
+   Qwen" messaging would misdiagnose the fix. */
 export interface BrokenClonedVoice {
   name: string;
-  reason: 'revoked' | 'missing-master' | 'engine-unavailable' | 'derive-failed' | 'misconfigured';
+  reason:
+    | 'revoked'
+    | 'missing-master'
+    | 'engine-unavailable'
+    | 'derive-failed'
+    | 'misconfigured'
+    | 'wrong-engine';
 }
 
 /* fs-38 Wave 3b1 (C1) — a cloned-provenance Qwen group must never be silently
@@ -38,14 +49,34 @@ export class UnresolvableClonedVoiceError extends Error {
   }
 
   /* Pre-pass entry point (T5): build one error from the full set of
-     characters whose cloned voice couldn't be resolved this run. */
+     characters whose cloned voice couldn't be resolved this run. Task 6b —
+     the trailing remedy sentence is reason-aware: `wrong-engine` gets its
+     own accurate copy (the fix is switching the BOOK's engine, not Qwen's
+     availability) instead of being folded into the "Re-enable Qwen…"
+     catch-all, which would misdiagnose a perfectly healthy Qwen. */
   static fromList(broken: BrokenClonedVoice[]): UnresolvableClonedVoiceError {
+    if (broken.length === 0) {
+      const e = new UnresolvableClonedVoiceError('');
+      return Object.assign(e, {
+        message: 'Cloned voice(s) unavailable — a cloned voice must never be substituted with another.',
+        broken: [],
+      });
+    }
+    const hasWrongEngine = broken.some((b) => b.reason === 'wrong-engine');
+    const hasOtherReason = broken.some((b) => b.reason !== 'wrong-engine');
+    const remedies: string[] = [];
+    if (hasOtherReason) {
+      remedies.push('Re-enable Qwen, restore the missing voice(s), or reassign the character(s)');
+    }
+    if (hasWrongEngine) {
+      remedies.push(
+        'switch the book to Qwen, or reassign the character(s) currently routed to another engine',
+      );
+    }
     const message =
-      broken.length === 0
-        ? 'Cloned voice(s) unavailable — a cloned voice must never be substituted with another.'
-        : `Cloned voice(s) unavailable — a cloned voice must never be substituted with another: ` +
-          broken.map((b) => `"${b.name}" (${b.reason})`).join(', ') +
-          `. Re-enable Qwen, restore the missing voice(s), or reassign the character(s).`;
+      `Cloned voice(s) unavailable — a cloned voice must never be substituted with another: ` +
+      broken.map((b) => `"${b.name}" (${b.reason})`).join(', ') +
+      `. ${remedies.join('; ')}.`;
     const e = new UnresolvableClonedVoiceError(broken[0]?.name ?? '');
     return Object.assign(e, { message, broken: [...broken] });
   }
@@ -63,7 +94,11 @@ export interface ClonedVoiceClassification {
 
 export interface ClassifyInput {
   entry: VoiceLibraryEntry;
-  /** true when this character's effective route is not qwen, or qwen is unavailable this run. */
+  /** true when this character's effective route is not qwen at all this run
+      (e.g. assigned on a Kokoro-default book) — distinct from Qwen itself
+      being unavailable; see `BrokenClonedVoice`'s `wrong-engine` reason. */
+  wrongEngine: boolean;
+  /** true when the character DOES route to qwen, but qwen is unavailable this run. */
   engineUnavailable: boolean;
   /** result of stat()-ing voices/qwen/qwen-<uuid>.pt */
   ptExists: boolean;
@@ -73,12 +108,17 @@ export interface ClassifyInput {
 
 /* Pure — no fs, no async. Order matters: revoked beats every other reason
    (a revoked person's .pt surviving on disk must never read as merely
-   "repairable"), engine-unavailable beats a stale/missing .pt, and a
-   persisted 'failed' status is terminal (never silently retried here — a
-   retry has to come from a fresh derive attempt that clears it). */
+   "repairable"); within the engine-problem tier, wrongEngine is checked
+   FIRST (Task 6b) since it's the more specific diagnosis — a character that
+   doesn't route to qwen at all is not the same failure as qwen itself being
+   unreachable, and reporting the wrong one misdirects the fix. engine-
+   unavailable then beats a stale/missing .pt, and a persisted 'failed'
+   status is terminal (never silently retried here — a retry has to come
+   from a fresh derive attempt that clears it). */
 export function classifyClonedVoice(input: ClassifyInput): ClonedVoiceClassification {
-  const { entry, engineUnavailable, ptExists, currentBaseModel } = input;
+  const { entry, wrongEngine, engineUnavailable, ptExists, currentBaseModel } = input;
   if (entry.consent?.revokedAt) return { state: 'broken', reason: 'revoked' };
+  if (wrongEngine) return { state: 'broken', reason: 'wrong-engine' };
   if (engineUnavailable) return { state: 'broken', reason: 'engine-unavailable' };
   const qwen = entry.engines.qwen;
   if (qwen?.status === 'failed') return { state: 'broken', reason: 'derive-failed' };
@@ -109,6 +149,9 @@ export interface ResolveChapterDeps {
 export interface ClonedVoiceRequest {
   characterName: string;
   libraryUuid: string | undefined;
+  /** true when this character's effective route is not qwen at all this run. */
+  wrongEngine: boolean;
+  /** true when the character DOES route to qwen, but qwen is unavailable this run. */
   engineUnavailable: boolean;
 }
 
@@ -133,7 +176,7 @@ export async function resolveClonedVoicesForChapter(
   const broken: BrokenClonedVoice[] = [];
 
   for (const request of requests) {
-    const { characterName, libraryUuid, engineUnavailable } = request;
+    const { characterName, libraryUuid, wrongEngine, engineUnavailable } = request;
 
     if (!libraryUuid) {
       broken.push({ name: characterName, reason: 'misconfigured' });
@@ -150,6 +193,7 @@ export async function resolveClonedVoicesForChapter(
     const ptExists = await deps.ptExists(`qwen-${libraryUuid}`);
     const classification = classifyClonedVoice({
       entry,
+      wrongEngine,
       engineUnavailable,
       ptExists,
       currentBaseModel,

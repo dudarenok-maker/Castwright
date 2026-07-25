@@ -649,6 +649,11 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
       {
         id: 'char-marlow',
         name: 'Marlow',
+        // Task 6b — the character must route to Qwen for this assign to
+        // succeed (a cloned voice on a non-Qwen route now 409s). Explicit
+        // per-character override so this test doesn't depend on the
+        // process-wide Qwen install-state default.
+        ttsEngine: 'qwen',
         voiceUuid: 'original-marlow-voice-uuid',
         overrideTtsVoices: { kokoro: { name: 'af_heart' } },
       },
@@ -706,12 +711,65 @@ describe('POST /:uuid/assign — cloned readiness gate (fs-38 Wave 3b1)', () => 
        ~line 562 of this file): `writeBookOnDisk(dir, author, series, title,
        bookId, characters)`, then post with that same bookId/characterId.
        Without this the route 404s on findBookByBookId before ever reaching
-       the readiness gate, and this case would never actually prove 200. */
+       the readiness gate, and this case would never actually prove 200.
+       Task 6b — `ttsEngine: 'qwen'` so this character routes to Qwen (the
+       wrong-engine guard added in this task would otherwise 409 it, since
+       this test environment's process-wide Qwen default is not installed). */
     writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-four', [
-      { id: 'char-marlow', name: 'Marlow' },
+      { id: 'char-marlow', name: 'Marlow', ttsEngine: 'qwen' },
     ]);
     const res = await request(app).post('/api/voice-library/clone-ready/assign')
       .send({ bookId: 'book-four', characterId: 'char-marlow' });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('POST /:uuid/assign — wrong-engine guard (fs-38 Wave 3b2, Task 6b)', () => {
+  it('409s assigning a ready cloned voice to a character that does not route to Qwen', async () => {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    await writeEntry({
+      voiceUuid: 'clone-wrong-engine', name: 'Mum', provenance: 'cloned', tags: [], pinned: false,
+      consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal',
+                 attestedAt: '2026-07-25T00:00:00Z', attestedBy: 'Mum' },
+      engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+      createdAt: '2026-07-25T00:00:00Z', updatedAt: '2026-07-25T00:00:00Z',
+    });
+    // No per-character `ttsEngine` override, and this test environment's
+    // process-wide Qwen default is "not installed" -> the book's effective
+    // default engine resolves to kokoro, NOT qwen.
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-five', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-wrong-engine/assign')
+      .send({ bookId: 'book-five', characterId: 'char-marlow' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/qwen/i);
+  });
+
+  it('allows assigning a ready cloned voice to a character that DOES route to Qwen (200, regression)', async () => {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    await writeEntry({
+      voiceUuid: 'clone-right-engine', name: 'Mum', provenance: 'cloned', tags: [], pinned: false,
+      consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal',
+                 attestedAt: '2026-07-25T00:00:00Z', attestedBy: 'Mum' },
+      engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+      createdAt: '2026-07-25T00:00:00Z', updatedAt: '2026-07-25T00:00:00Z',
+    });
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-six', [
+      { id: 'char-marlow', name: 'Marlow', ttsEngine: 'qwen' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-right-engine/assign')
+      .send({ bookId: 'book-six', characterId: 'char-marlow' });
+    expect(res.status).toBe(200);
+  });
+
+  it('does not guard a non-cloned (designed) voice, even on a non-Qwen-routed character', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-1', provenance: 'designed' }));
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-seven', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/designed-1/assign')
+      .send({ bookId: 'book-seven', characterId: 'char-marlow' });
     expect(res.status).toBe(200);
   });
 });

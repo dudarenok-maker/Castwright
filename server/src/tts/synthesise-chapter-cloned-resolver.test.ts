@@ -191,6 +191,42 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
     expect(result.segments.length).toBeGreaterThan(0);
   });
 
+  it('Task 6b: a cloned character routed to a non-qwen engine (book default) rejects as wrong-engine, with ZERO synth calls', async () => {
+    // 'wren' carries no per-character `ttsEngine`, so she rides the run's
+    // default engine — here that's 'kokoro', NOT 'qwen'. Her cloned qwen
+    // slot therefore can never actually render: the character simply isn't
+    // routed to Qwen this run. Qwen itself is untouched (qwenUnavailable is
+    // left at its default false) — this must be diagnosed as 'wrong-engine',
+    // not 'engine-unavailable', which would misleadingly suggest Qwen is down.
+    const provider = makeProvider();
+    const readEntry = vi.fn(async (uuid: string) =>
+      uuid === 'lib-clone' ? baseEntry() : null,
+    );
+    const deriveEngineArtifact = vi.fn();
+
+    let thrown: UnresolvableClonedVoiceError | undefined;
+    try {
+      await synthesiseChapter({
+        sentences: [sentence(1, 'wren')],
+        cast: clonedCast,
+        provider,
+        modelKey: 'kokoro-v1',
+        engine: 'kokoro',
+        cloneResolverDepsOverride: {
+          readEntry,
+          deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
+        },
+      });
+    } catch (e) {
+      thrown = e as UnresolvableClonedVoiceError;
+    }
+
+    expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
+    expect(thrown?.broken).toEqual([{ name: 'Wren', reason: 'wrong-engine' }]);
+    expect(provider.calls).toHaveLength(0);
+    expect(deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+
   it('IMPORTANT-1 (Task 6 review): an orphaned-characterId sentence pulls a cloned narrator into the readiness gate even with no title beat', async () => {
     // 'ghost' is deliberately absent from `cast` — the orphaned-characterId
     // safety net in resolveGroup() substitutes resolveNarratorChar() for
