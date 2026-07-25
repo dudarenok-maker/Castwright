@@ -1500,6 +1500,7 @@ export function CastView({
             assigningVoiceId={assigningVoice?.familyKey ?? assigningVoice?.id ?? null}
             bookLanguage={bookLanguage}
             bookId={bookId ?? undefined}
+            ttsModelKey={ttsModelKey}
           />
         </aside>
       )}
@@ -1572,6 +1573,7 @@ export function CastView({
                 assigningVoiceId={assigningVoice?.familyKey ?? assigningVoice?.id ?? null}
                 bookLanguage={bookLanguage}
                 bookId={bookId ?? undefined}
+                ttsModelKey={ttsModelKey}
               />
             </div>
           </div>

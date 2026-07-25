@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { IconStar, IconDrag, IconCheck, IconSearch } from '../lib/icons';
 import { VoiceSwatch, Pill } from './primitives';
-import type { Character, Voice } from '../lib/types';
+import type { Character, TtsModelKey, Voice } from '../lib/types';
 import { findCharacterForVoice } from '../lib/voice-character-link';
+import { modelKeyForEngineChoice } from '../lib/tts-models';
 import { useAppDispatch, useAppSelector } from '../store';
 import { assignVoice, type VoiceLibraryEntry } from '../store/voice-library-slice';
 
@@ -51,6 +52,16 @@ interface VoiceLibraryPanelProps {
      which dispatches `assignVoice(uuid, { bookId, characterId })`. The
      group renders nothing without both — there's no book to assign into. */
   bookId?: string;
+  /* Fix wave 3 (fs-38 Wave 3b2, T6b re-review) — the session's live
+     `ui.ttsModelKey`, mirroring the profile drawer's `ttsModelKey`. The "My
+     voices" group here has no pending/unsaved engine picker of its own (unlike
+     the drawer's `engineChoice`) — it assigns straight onto a character that
+     already has (or lacks) a PERSISTED `ttsEngine`, so the intended modelKey
+     is derived from that persisted engine + this session default, via the same
+     `modelKeyForEngineChoice` the drawer uses. Omitted → no `modelKey` sent
+     (server falls back to the persisted account default), matching the
+     pre-fix behaviour for any caller that hasn't wired this through yet. */
+  ttsModelKey?: TtsModelKey;
 }
 
 export function VoiceLibraryPanel({
@@ -66,6 +77,7 @@ export function VoiceLibraryPanel({
   assigningVoiceId,
   bookLanguage,
   bookId,
+  ttsModelKey,
 }: VoiceLibraryPanelProps) {
   const [query, setQuery] = useState('');
   const [showAll, setShowAll] = useState(false);
@@ -237,7 +249,23 @@ export function VoiceLibraryPanel({
                   )
                 }
                 onAssignTo={(characterId) => {
-                  dispatch(assignVoice({ voiceUuid: entry.voiceUuid, bookId, characterId }));
+                  /* Fix wave 3 (T6b re-review) — this group has no pending
+                     engine picker of its own, so derive the intended engine
+                     CHOICE from the target character's already-PERSISTED
+                     `ttsEngine` (falling back to 'default' = "use the session
+                     model key"), mirroring the drawer's `useMyVoice` derivation
+                     one-for-one. `qwenTier` carries the character's own
+                     persisted 1.7B pin, if any. */
+                  const targetChar = characters.find((c) => c.id === characterId);
+                  const engineChoice = targetChar?.ttsEngine ?? 'default';
+                  const qwenTier =
+                    targetChar?.ttsModelKey === 'qwen3-tts-1.7b' ? 'qwen3-tts-1.7b' : null;
+                  const modelKey = ttsModelKey
+                    ? modelKeyForEngineChoice(engineChoice, ttsModelKey, qwenTier)
+                    : undefined;
+                  dispatch(
+                    assignVoice({ voiceUuid: entry.voiceUuid, bookId, characterId, modelKey }),
+                  );
                   setAssigningLibraryUuid(null);
                 }}
               />
