@@ -2120,6 +2120,16 @@ paths:
               properties:
                 bookId: { type: string }
                 characterId: { type: string }
+                modelKey:
+                  type: string
+                  enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+                  description: |
+                    Optional — the model key this assign's caller actually intends to
+                    render with (e.g. the profile drawer's PENDING engine-picker
+                    choice, not-yet-saved). Used only to compute the correct engine
+                    for the cloned-voice wrong-engine 409 guard below; when absent
+                    the guard falls back to the persisted account default
+                    (`getResolvedTtsModelKey()`).
       responses:
         '200':
           description: Character's overrideTtsVoices slot updated
@@ -2132,6 +2142,18 @@ paths:
                   updated: { type: integer }
         '404':
           description: No library entry, book, or character matching the request
+        '409':
+          description: |
+            The library entry is a cloned voice, but the character would route to a
+            non-Qwen engine (cloned voices only render on Qwen) — or the entry's
+            consent has been revoked, or the entry hasn't finished deriving yet.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
 
   /api/voice-library/{voiceUuid}/sample:
     post:

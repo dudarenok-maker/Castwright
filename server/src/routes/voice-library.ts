@@ -34,7 +34,12 @@ import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace
 import { castJsonPath, qwenVoiceSidecarPath } from '../workspace/paths.js';
 import { qwenVoicePtPath } from './qwen-voice.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
-import { selectTtsProvider, engineForModelKey, type TtsModelKey } from '../tts/index.js';
+import {
+  selectTtsProvider,
+  engineForModelKey,
+  isTtsModelKey,
+  type TtsModelKey,
+} from '../tts/index.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { encodePcmToAudio, decodeAudioToPcm } from '../tts/mp3.js';
 import {
@@ -437,6 +442,12 @@ voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response
 interface AssignBody {
   bookId?: unknown;
   characterId?: unknown;
+  /** Fix wave 2 (review) — the model key the CALLER actually intends to
+      render with (e.g. the profile drawer's PENDING engine-picker choice,
+      not yet Saved). Optional; the wrong-engine guard below falls back to
+      the persisted account default when absent. See the guard's own
+      comment for why the persisted default alone was unsound. */
+  modelKey?: unknown;
 }
 
 interface CastJson {
@@ -757,22 +768,44 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
        the same 3b2 resolver-pre-pass hard-fail this task exists to give an
        accurate reason for ('wrong-engine') — but discovered only at RENDER
        time, chapters deep. Catch it here instead, at assign time, so the
-       user gets an actionable 409 immediately. The book's effective default
-       engine has no per-book override (see `queue-engine-stamp.ts`'s
-       `bookDefaultEngine` for the same assumption) — it's the user-wide
-       `getResolvedTtsModelKey()` default, the same source `info.ts` /
-       `models-inventory.ts` report as the active engine. A character's own
-       `ttsEngine` override (if any) still wins via `resolveCharacterEngine`,
-       so a character explicitly cast on Qwen is unaffected by the book's
-       default sitting elsewhere. */
+       user gets an actionable 409 immediately.
+
+       Fix wave 2 (review) — the guard's FIRST cut computed the book's
+       effective default purely from the PERSISTED `getResolvedTtsModelKey()`
+       account default. That default is not what actually renders: the
+       engine picker on the Voices page (and the session `ui.ttsModelKey` it
+       writes) is never persisted, and generation itself routes off the
+       REQUEST's modelKey, not the account default — so a session pick of
+       Qwen against a non-Qwen persisted default produced a false 409, and
+       the reverse produced a false 200 (assign succeeds, render then fails).
+       The caller now optionally sends the modelKey it actually intends to
+       render with (`body.modelKey` — e.g. the profile drawer's PENDING
+       engine-picker choice); that wins when present. Only when the caller
+       has no meaningful engine context (and omits the field) do we fall
+       back to the persisted default. A character's own `ttsEngine` override
+       (if any) still wins via `resolveCharacterEngine`, so a character
+       explicitly cast on Qwen is unaffected by the book/session default
+       sitting elsewhere. */
     if (entry.provenance === 'cloned') {
-      const bookDefaultEngine = engineForModelKey(getResolvedTtsModelKey());
+      const requestedModelKey = isTtsModelKey(body.modelKey) ? body.modelKey : undefined;
+      const bookDefaultEngine = engineForModelKey(requestedModelKey ?? getResolvedTtsModelKey());
       const routedEngine = resolveCharacterEngine(character, bookDefaultEngine);
       if (routedEngine !== 'qwen') {
+        /* I-2 — name the ACTUAL cause. When the character carries its own
+           `ttsEngine` override, THAT is why it's not routing to Qwen — the
+           book/session default is irrelevant, and telling the user to
+           "switch the book's engine" would send them to fix the wrong
+           thing (the same misdiagnosis class Part A eliminated for the
+           render-time error). */
+        const characterCaused = Boolean(character.ttsEngine);
+        const cause = characterCaused
+          ? `"${character.name ?? characterId}" is cast on ${routedEngine}`
+          : `this book is set to ${routedEngine}`;
+        const fix = characterCaused
+          ? `Switch the character's engine to Qwen (or reassign the character)`
+          : `Switch the book's engine to Qwen`;
         return res.status(409).json({
-          error:
-            `Cloned voices render on Qwen, but this book is set to ${routedEngine}. Switch the ` +
-            `book's engine to Qwen before assigning "${character.name ?? characterId}".`,
+          error: `Cloned voices render on Qwen, but ${cause}. ${fix} before assigning "${character.name ?? characterId}".`,
         });
       }
     }

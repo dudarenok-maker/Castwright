@@ -12,7 +12,7 @@ import {
   IconChevD,
 } from '../lib/icons';
 import type { SeriesRosterEntry } from '../lib/api';
-import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
+import { TTS_MODEL_OPTIONS, engineForModelKey, modelKeyForEngineChoice } from '../lib/tts-models';
 import type { BaseVoice, TtsEngine, TtsModelKey } from '../lib/types';
 import {
   Avatar,
@@ -372,8 +372,21 @@ export function ProfileDrawer({
     setLibraryActionError(null);
     setLibraryActionBusy(entry.voiceUuid);
     try {
+      /* Fix wave 2 (review) — send the drawer's PENDING `engineChoice` (local
+         state, not yet Saved onto `character.ttsEngine`), not the character's
+         already-saved engine. Without this, "pick Qwen for this character,
+         then immediately pick a cloned voice" would assign against the
+         character's STALE saved engine and could 409 (or false-200) against
+         a real backend — this thunk fires the assign immediately, ahead of
+         Save. `charModelKey` carries a pending 1.7B tier pin, if any. */
+      const intendedModelKey = modelKeyForEngineChoice(engineChoice, ttsModelKey, charModelKey);
       await dispatch(
-        assignVoice({ voiceUuid: entry.voiceUuid, bookId, characterId: character.id }),
+        assignVoice({
+          voiceUuid: entry.voiceUuid,
+          bookId,
+          characterId: character.id,
+          modelKey: intendedModelKey,
+        }),
       ).unwrap();
       const assignedName = `qwen-${entry.voiceUuid}`;
       setDesignedVoiceId(assignedName);

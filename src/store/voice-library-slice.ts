@@ -28,6 +28,7 @@
 
 import { createSlice, createAsyncThunk, createSelector, type PayloadAction } from '@reduxjs/toolkit';
 import { api, type VoiceLibraryEntry, type VoiceLibraryPatch, type VoiceLibraryUsageEntry, type CloneVoiceBody } from '../lib/api';
+import type { TtsModelKey } from '../lib/types';
 
 export type VoiceLibraryStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -129,12 +130,19 @@ export const deleteEntry = createAsyncThunk(
 export const assignVoice = createAsyncThunk(
   'voiceLibrary/assign',
   async (
-    args: { voiceUuid: string; bookId: string; characterId: string },
+    /* Fix wave 2 (review) — `modelKey` is optional and carries the CALLER's
+       intended render engine (e.g. the profile drawer's pending, unsaved
+       engine-picker choice) so the server's cloned-voice wrong-engine 409
+       guard checks against what will actually render, not just the
+       persisted account default. Omit when the caller has no meaningful
+       engine context; the server falls back on its own. */
+    args: { voiceUuid: string; bookId: string; characterId: string; modelKey?: TtsModelKey },
     { dispatch },
   ) => {
     const result = await api.assignLibraryVoice(args.voiceUuid, {
       bookId: args.bookId,
       characterId: args.characterId,
+      ...(args.modelKey ? { modelKey: args.modelKey } : {}),
     });
     await dispatch(fetchVoiceLibrary());
     return result;

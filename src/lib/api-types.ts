@@ -7495,6 +7495,16 @@ export interface operations {
                 "application/json": {
                     bookId: string;
                     characterId: string;
+                    /**
+                     * @description Optional — the model key this assign's caller actually intends to
+                     *     render with (e.g. the profile drawer's PENDING engine-picker
+                     *     choice, not-yet-saved). Used only to compute the correct engine
+                     *     for the cloned-voice wrong-engine 409 guard below; when absent
+                     *     the guard falls back to the persisted account default
+                     *     (`getResolvedTtsModelKey()`).
+                     * @enum {string}
+                     */
+                    modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
                 };
             };
         };
@@ -7516,6 +7526,21 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /**
+             * @description The library entry is a cloned voice, but the character would route to a
+             *     non-Qwen engine (cloned voices only render on Qwen) — or the entry's
+             *     consent has been revoked, or the entry hasn't finished deriving yet.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
             };
         };
     };

@@ -9529,13 +9529,22 @@ async function realPromoteToLibrary(body: {
 
 async function realAssignLibraryVoice(
   voiceUuid: string,
-  body: { bookId: string; characterId: string },
+  body: { bookId: string; characterId: string; modelKey?: TtsModelKey },
 ): Promise<{ updated: number }> {
   const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}/assign`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+  /* I-3 (fix wave 2 review) — the server's wrong-engine 409 carries a
+     specific, actionable message (`{ error: '...' }`); surface just that
+     message instead of the generic "assign failed (409): {raw json}" the
+     fallback below would produce, matching realDeleteVoiceLibrary's 409
+     handling above. */
+  if (res.status === 409) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || 'Voice library assign failed.');
+  }
   if (!res.ok)
     throw new Error(
       `Voice library assign failed (${res.status}): ${(await res.text()) || res.statusText}`,
@@ -9730,7 +9739,7 @@ export async function mockPromoteToLibrary(body: {
 
 export async function mockAssignLibraryVoice(
   voiceUuid: string,
-  _body: { bookId: string; characterId: string },
+  _body: { bookId: string; characterId: string; modelKey?: TtsModelKey },
 ): Promise<{ updated: number }> {
   await wait(60);
   const entry = mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid);

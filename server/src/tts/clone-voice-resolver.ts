@@ -53,12 +53,17 @@ export class UnresolvableClonedVoiceError extends Error {
      the trailing remedy sentence is reason-aware: `wrong-engine` gets its
      own accurate copy (the fix is switching the BOOK's engine, not Qwen's
      availability) instead of being folded into the "Re-enable Qwen…"
-     catch-all, which would misdiagnose a perfectly healthy Qwen. */
+     catch-all, which would misdiagnose a perfectly healthy Qwen.
+
+     M-4 (review) — both remedy clauses used to end with their own
+     near-identical "reassign the character(s)" tail. Say it once, at the
+     end, shared by every case, instead of repeating it per-reason. */
   static fromList(broken: BrokenClonedVoice[]): UnresolvableClonedVoiceError {
     if (broken.length === 0) {
       const e = new UnresolvableClonedVoiceError('');
       return Object.assign(e, {
-        message: 'Cloned voice(s) unavailable — a cloned voice must never be substituted with another.',
+        message:
+          'Cloned voice(s) unavailable — a cloned voice must never be substituted with another.',
         broken: [],
       });
     }
@@ -66,13 +71,12 @@ export class UnresolvableClonedVoiceError extends Error {
     const hasOtherReason = broken.some((b) => b.reason !== 'wrong-engine');
     const remedies: string[] = [];
     if (hasOtherReason) {
-      remedies.push('Re-enable Qwen, restore the missing voice(s), or reassign the character(s)');
+      remedies.push('Re-enable Qwen or restore the missing voice(s)');
     }
     if (hasWrongEngine) {
-      remedies.push(
-        'switch the book to Qwen, or reassign the character(s) currently routed to another engine',
-      );
+      remedies.push('switch the book to Qwen');
     }
+    remedies.push('reassign the character(s)');
     const message =
       `Cloned voice(s) unavailable — a cloned voice must never be substituted with another: ` +
       broken.map((b) => `"${b.name}" (${b.reason})`).join(', ') +

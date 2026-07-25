@@ -75,6 +75,7 @@ let app: Express;
 let vl: typeof import('../workspace/voice-library.js');
 let modelPaths: typeof import('../tts/model-paths.js');
 let writeConfigOverride: typeof import('../workspace/user-settings.js').writeConfigOverride;
+let setUserSettingsCacheForTest: typeof import('../workspace/user-settings.js')._setUserSettingsCacheForTest;
 let paths: typeof import('../workspace/paths.js');
 let qwenVoice: typeof import('./qwen-voice.js');
 let sampleCache: typeof import('../tts/voice-sample-cache.js');
@@ -156,6 +157,7 @@ beforeEach(async () => {
   vl = voiceLibMod;
   modelPaths = modelPathsMod;
   writeConfigOverride = userSettings.writeConfigOverride;
+  setUserSettingsCacheForTest = userSettings._setUserSettingsCacheForTest;
   paths = pathsMod;
   qwenVoice = qwenVoiceMod;
   sampleCache = sampleCacheMod;
@@ -628,6 +630,11 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
       .send({ bookId: 'book-three', characterId: 'char-marlow' });
 
     expect(res.status).toBe(409);
+    /* M-2 (review) — three separate guards on this route now produce 409
+       for a cloned entry (revoked consent, not-ready-to-assign, wrong-engine).
+       Assert the MESSAGE too so this test fails for the right reason if the
+       revoked-consent check ever stops running first. */
+    expect(res.body.error).toBe('Consent for this voice has been revoked.');
   });
 
   it('stamps the qwen slot with name/libraryUuid/provenance, merges with (not clobbers) a sibling kokoro slot, and never touches character.voiceUuid', async () => {
@@ -770,6 +777,98 @@ describe('POST /:uuid/assign — wrong-engine guard (fs-38 Wave 3b2, Task 6b)', 
     ]);
     const res = await request(app).post('/api/voice-library/designed-1/assign')
       .send({ bookId: 'book-seven', characterId: 'char-marlow' });
+    expect(res.status).toBe(200);
+  });
+});
+
+/* Fix wave 2 (review) — the guard's first cut computed the effective engine
+   purely from the PERSISTED account default (getResolvedTtsModelKey()), which
+   is not what actually renders: the Voices-page engine picker (and the
+   session ui.ttsModelKey it writes) is never persisted, and generation itself
+   routes off the REQUEST's modelKey. These cases pin the fixed contract: the
+   caller's OWN intended modelKey (body.modelKey) wins when sent, and the
+   persisted default is only a fallback for a caller with no engine context. */
+describe('POST /:uuid/assign — request modelKey guard accuracy (fs-38 Wave 3b2, fix wave 2)', () => {
+  async function seedReadyClone(voiceUuid: string) {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    await writeEntry({
+      voiceUuid, name: 'Mum', provenance: 'cloned', tags: [], pinned: false,
+      consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal',
+                 attestedAt: '2026-07-25T00:00:00Z', attestedBy: 'Mum' },
+      engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+      createdAt: '2026-07-25T00:00:00Z', updatedAt: '2026-07-25T00:00:00Z',
+    });
+  }
+
+  it('a request modelKey routing to Qwen wins over a non-Qwen persisted default (the false-409 case, now fixed)', async () => {
+    await seedReadyClone('clone-req-qwen');
+    setUserSettingsCacheForTest({ defaultTtsModelKey: 'kokoro-v1', defaultTtsModelKeyExplicit: true });
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-req-1', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-req-qwen/assign')
+      .send({ bookId: 'book-req-1', characterId: 'char-marlow', modelKey: 'qwen3-tts-0.6b' });
+    expect(res.status).toBe(200);
+  });
+
+  it('a request modelKey routing to a non-Qwen engine still 409s, even against a Qwen persisted default (the false-200 case, now fixed)', async () => {
+    await seedReadyClone('clone-req-kokoro');
+    setUserSettingsCacheForTest({ defaultTtsModelKey: 'qwen3-tts-0.6b', defaultTtsModelKeyExplicit: true });
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-req-2', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-req-kokoro/assign')
+      .send({ bookId: 'book-req-2', characterId: 'char-marlow', modelKey: 'kokoro-v1' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/qwen/i);
+  });
+
+  it('I-1: falls back to the persisted default when no modelKey is sent, and 200s when that default is Qwen', async () => {
+    await seedReadyClone('clone-default-qwen');
+    setUserSettingsCacheForTest({ defaultTtsModelKey: 'qwen3-tts-0.6b', defaultTtsModelKeyExplicit: true });
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-req-3', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-default-qwen/assign')
+      .send({ bookId: 'book-req-3', characterId: 'char-marlow' });
+    expect(res.status).toBe(200);
+  });
+
+  it('falls back to the persisted default when no modelKey is sent, and 409s when that default is not Qwen', async () => {
+    await seedReadyClone('clone-default-kokoro');
+    setUserSettingsCacheForTest({ defaultTtsModelKey: 'kokoro-v1', defaultTtsModelKeyExplicit: true });
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-req-4', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-default-kokoro/assign')
+      .send({ bookId: 'book-req-4', characterId: 'char-marlow' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('this book is set to');
+  });
+
+  it('I-2: 409s with character-cause copy when the character has its own non-Qwen ttsEngine override, regardless of a Qwen book default', async () => {
+    await seedReadyClone('clone-char-override');
+    setUserSettingsCacheForTest({ defaultTtsModelKey: 'qwen3-tts-0.6b', defaultTtsModelKeyExplicit: true });
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-req-5', [
+      { id: 'char-marlow', name: 'Marlow', ttsEngine: 'kokoro' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-char-override/assign')
+      .send({ bookId: 'book-req-5', characterId: 'char-marlow' });
+    expect(res.status).toBe(409);
+    // Names the CHARACTER as the cause, not the book/session default — the
+    // book default here is actually Qwen, so "this book is set to" would be
+    // an outright misdiagnosis.
+    expect(res.body.error).toContain('"Marlow" is cast on kokoro');
+    expect(res.body.error).not.toContain('this book is set to');
+  });
+
+  it('does not guard a designed (non-cloned) voice, even with a request modelKey routing off Qwen', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-req', provenance: 'designed' }));
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-req-6', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/designed-req/assign')
+      .send({ bookId: 'book-req-6', characterId: 'char-marlow', modelKey: 'kokoro-v1' });
     expect(res.status).toBe(200);
   });
 });

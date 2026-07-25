@@ -186,3 +186,41 @@ export function engineForModelKey(
 export function engineGroupForModelKey(key: TtsModelKey): TtsEngineId {
   return engineForModelKey(key) === 'gemini' ? 'gemini' : 'local';
 }
+
+import type { TtsEngine } from './types';
+
+/* Fix wave 2 (fs-38 Wave 3b2, T6b review) — mirror of the backend's
+   canonicalModelKeyForEngine (server/src/tts/model-keys.ts). Resolves a
+   profile-drawer-style engine CHOICE ('default' means "use the session
+   default", any real TtsEngine is a per-character override) to a concrete
+   TtsModelKey the caller can send as the assign request's intended
+   `modelKey` — so the server's cloned-voice wrong-engine guard checks the
+   engine that will ACTUALLY render (the drawer's pending, not-yet-Saved
+   choice) rather than only the persisted account default. `qwenTier` lets a
+   caller that already knows it's pinning the 1.7B tier carry that through;
+   omitted/null falls back to the 0.6B key (only the ENGINE half of the
+   result matters to the guard, not the tier). `piper` has no UI-stable
+   TtsModelKey yet (it's not in the frontend's TTS_ENGINES groups — "future
+   local", per model-keys.ts) and isn't offered by the engine picker, so it
+   falls back to the session key like 'default' rather than fabricating an
+   unrepresentable model key. */
+export function modelKeyForEngineChoice(
+  engineChoice: 'default' | TtsEngine,
+  sessionModelKey: TtsModelKey,
+  qwenTier?: TtsModelKey | null,
+): TtsModelKey {
+  if (engineChoice === 'default') return sessionModelKey;
+  switch (engineChoice) {
+    case 'kokoro':
+      return 'kokoro-v1';
+    case 'qwen':
+      return qwenTier ?? 'qwen3-tts-0.6b';
+    case 'coqui':
+      return 'coqui-xtts-v2';
+    case 'gemini':
+      return sessionModelKey.startsWith('gemini-') ? sessionModelKey : 'gemini-2.5-flash';
+    case 'piper':
+    default:
+      return sessionModelKey;
+  }
+}

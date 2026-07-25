@@ -316,6 +316,26 @@ describe('voiceLibrarySlice thunks against api mocks', () => {
     expect(api.listVoiceLibrary).toHaveBeenCalledTimes(1);
   });
 
+  it('assignVoice forwards an explicit modelKey to api.assignLibraryVoice (fix wave 2 — the guard-accuracy field)', async () => {
+    vi.mocked(api.assignLibraryVoice).mockResolvedValue({ updated: 1 });
+    vi.mocked(api.listVoiceLibrary).mockResolvedValue({ voices: [makeEntry({ voiceUuid: 'v1' })] });
+    const store = makeStore({
+      entries: [makeEntry({ voiceUuid: 'v1' })],
+      status: 'ready',
+      designPending: false,
+      clonePending: false,
+      lastFetchedAt: 1000,
+    });
+    await store.dispatch(
+      assignVoice({ voiceUuid: 'v1', bookId: 'book-1', characterId: 'char-1', modelKey: 'qwen3-tts-0.6b' }),
+    );
+    expect(api.assignLibraryVoice).toHaveBeenCalledWith('v1', {
+      bookId: 'book-1',
+      characterId: 'char-1',
+      modelKey: 'qwen3-tts-0.6b',
+    });
+  });
+
   it('promoteCharacterVoice calls api.promoteToLibrary and refetches the list', async () => {
     const promoted = makeEntry({ voiceUuid: 'lib-new', name: 'New Voice' });
     vi.mocked(api.promoteToLibrary).mockResolvedValue(promoted);
