@@ -65,6 +65,12 @@ function streamKey(bookId: string, chapterId: number | undefined): string {
   return `${bookId}::${chapterId == null ? '*' : chapterId}`;
 }
 
+/** `chapter_failed` error codes that are deterministic per-book config issues
+    rather than stochastic infra failures, so they toast immediately instead
+    of waiting for the srv-11 streak breaker to trip (see the `chapter_failed`
+    handler below for the rationale on each). */
+const IMMEDIATE_TOAST_ERROR_CODES = new Set(['voice-not-designed', 'cloned-voice-broken']);
+
 /** Minimal store surface the runner needs. Satisfied by the configured RTK
     store; kept narrow (only `chapters`) so the runner doesn't import the
     store's circular `RootState` and stays usable from lean test stores. */
@@ -377,18 +383,21 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
           );
         }
       }
-      /* voice-not-designed is a deterministic per-book cast-config issue, not
-         a stochastic infra failure — the old chapter_awaiting_fallback_confirm
-         park it replaces (#1263) always toasted immediately rather than
-         waiting for the srv-11 streak breaker to trip, so restore that same
-         visibility here. Deduped per chapter so a reconnect replay can't
-         stack duplicates. */
-      if (ev.errorCode === 'voice-not-designed') {
+      /* voice-not-designed and cloned-voice-broken are both deterministic
+         per-book cast-config issues, not stochastic infra failures — the old
+         chapter_awaiting_fallback_confirm park voice-not-designed replaces
+         (#1263) always toasted immediately rather than waiting for the
+         srv-11 streak breaker to trip, so restore that same visibility here.
+         cloned-voice-broken (fs-38 Wave 3b2 T8) joins it for the same reason:
+         a cloned voice can't silently render as someone else, so the user
+         must see it right away rather than after 3 streak-breaker failures.
+         Deduped per chapter so a reconnect replay can't stack duplicates. */
+      if (IMMEDIATE_TOAST_ERROR_CODES.has(ev.errorCode ?? '')) {
         dispatch(
           notificationsActions.pushToast({
             kind: 'error',
             message: `Chapter ${ev.chapterId} failed — ${ev.errorReason ?? 'no designed Qwen voice for a speaking character.'}`,
-            dedupeKey: `voice-not-designed:${bookId}:${ev.chapterId}`,
+            dedupeKey: `${ev.errorCode}:${bookId}:${ev.chapterId}`,
           }),
         );
       }

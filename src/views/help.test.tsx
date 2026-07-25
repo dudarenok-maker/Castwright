@@ -76,7 +76,7 @@ describe('HelpView (fe-29)', () => {
     renderHelp();
     const box = screen.getByRole('searchbox', { name: /search troubleshooting/i });
     fireEvent.change(box, { target: { value: 'gpu' } });
-    expect(screen.getByText(/of 45/i)).toBeInTheDocument();
+    expect(screen.getByText(/of 46/i)).toBeInTheDocument();
     fireEvent.change(box, { target: { value: '' } });
     // back to default: setup open, performance collapsed
     expect(screen.getByText("The app won't start")).toBeInTheDocument();

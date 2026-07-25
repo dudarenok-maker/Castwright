@@ -5651,6 +5651,7 @@ components:
         - attribution-incomplete
         - gpu-acceleration-unavailable
         - voice-not-designed
+        - cloned-voice-broken
 
     ChapterQaVerdict:
       type: object
