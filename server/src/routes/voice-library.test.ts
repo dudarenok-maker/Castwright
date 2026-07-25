@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { SidecarDesignError } from '../tts/design-voice-core.js';
 
 /* Task 10 — the sample route calls selectTtsProvider(). Stub it the same way
    routes/voice-sample.test.ts does, so the encoder boundary (real ffmpeg) is
@@ -36,6 +37,24 @@ vi.mock('../tts/index.js', async (importOriginal) => {
    real Whisper model in this route-level test. */
 const { transcribeSegment } = vi.hoisted(() => ({ transcribeSegment: vi.fn() }));
 vi.mock('../tts/transcribe-client.js', () => ({ transcribeSegment }));
+
+/* Task 5 — the /clone route calls deriveEngineArtifact (Node -> sidecar
+   /qwen/clone-voice) and assessCloneFidelity (ECAPA embed + cosine). Stub
+   both, plus the ffmpeg decode boundary, so no sidecar/ffmpeg is hit in this
+   route-level test. */
+const { deriveMock, decodeMock } = vi.hoisted(() => ({
+  deriveMock: vi.fn(),
+  decodeMock: vi.fn(),
+}));
+vi.mock('../tts/derive-engine-artifact.js', () => ({ deriveEngineArtifact: deriveMock }));
+vi.mock('../tts/clone-fidelity.js', async (orig) => {
+  const actual = (await orig()) as Record<string, unknown>;
+  return { ...actual, assessCloneFidelity: vi.fn().mockResolvedValue({ cosine: 0.72 }) };
+});
+vi.mock('../tts/mp3.js', async (orig) => {
+  const actual = (await orig()) as Record<string, unknown>;
+  return { ...actual, decodeAudioToPcm: decodeMock };
+});
 
 let dir: string;
 let app: Express;
@@ -145,6 +164,17 @@ beforeEach(async () => {
     noSpeechProb: null,
     compressionRatio: null,
   });
+
+  deriveMock.mockReset();
+  deriveMock.mockResolvedValue({ previewPcm: Buffer.from([1, 2, 3, 4]), sampleRate: 24_000, baseModel: 'qwen3-0.6b' });
+  /* decodeMock defaults to the REAL ffmpeg decode (pass-through) — the
+     clone-sample ingest route (Task 6) also calls decodeAudioToPcm and needs
+     genuine decoding to run its quality gate against real uploaded audio.
+     Individual "POST /clone" tests below override with mockResolvedValueOnce
+     to stand in for the fake, non-decodable candidate WAV bytes they seed. */
+  const mp3Actual = await vi.importActual<typeof import('../tts/mp3.js')>('../tts/mp3.js');
+  decodeMock.mockReset();
+  decodeMock.mockImplementation(mp3Actual.decodeAudioToPcm);
 });
 
 afterEach(() => {
@@ -564,6 +594,7 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
       makeEntry({
         voiceUuid: 'assign-3',
         provenance: 'cloned',
+        engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
         consent: {
           personName: 'Test',
           relationship: 'family-with-permission',
@@ -602,6 +633,45 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
       provenance: 'cloned',
     });
     expect(cast.characters[0].overrideTtsVoices?.kokoro).toEqual({ name: 'af_heart' });
+  });
+});
+
+describe('POST /:uuid/assign — cloned readiness gate (fs-38 Wave 3b1)', () => {
+  it('409s assigning a cloned voice whose qwen engine is not ready', async () => {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    await writeEntry({
+      voiceUuid: 'clone-unready', name: 'Mum', provenance: 'cloned', tags: [], pinned: false,
+      consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal',
+                 attestedAt: '2026-07-25T00:00:00Z', attestedBy: 'Mum' },
+      engines: { qwen: { status: 'stale' } },
+      createdAt: '2026-07-25T00:00:00Z', updatedAt: '2026-07-25T00:00:00Z',
+    });
+    const res = await request(app).post('/api/voice-library/clone-unready/assign')
+      .send({ bookId: 'ns', characterId: 'marcus' });
+    expect(res.status).toBe(409);
+  });
+
+  it('allows assigning a ready cloned voice (200)', async () => {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    await writeEntry({
+      voiceUuid: 'clone-ready', name: 'Mum', provenance: 'cloned', tags: [], pinned: false,
+      consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal',
+                 attestedAt: '2026-07-25T00:00:00Z', attestedBy: 'Mum' },
+      engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+      createdAt: '2026-07-25T00:00:00Z', updatedAt: '2026-07-25T00:00:00Z',
+    });
+    /* I1 — a REAL resolvable book + character, seeded exactly like this
+       file's existing successful `/assign` test ("stamps the qwen slot…",
+       ~line 562 of this file): `writeBookOnDisk(dir, author, series, title,
+       bookId, characters)`, then post with that same bookId/characterId.
+       Without this the route 404s on findBookByBookId before ever reaching
+       the readiness gate, and this case would never actually prove 200. */
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-four', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-ready/assign')
+      .send({ bookId: 'book-four', characterId: 'char-marlow' });
+    expect(res.status).toBe(200);
   });
 });
 
@@ -958,6 +1028,110 @@ describe('POST /api/voice-library/clone-sample (Task 6)', () => {
     const wav = encodePcmToWav(Buffer.alloc(n * 2, 40), 24_000);
     const res = await request(app).post('/api/voice-library/clone-sample').attach('audio', wav, 's.wav');
     expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
+  it('derives, previews, scores, and persists a ready cloned entry — removing the candidate', async () => {
+    // Arrange: seed a candidate on disk via the 3a candidate store.
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-1',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFFfake-wav-bytes'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-1',
+        consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.provenance).toBe('cloned');
+    expect(res.body.engines.qwen.status).toBe('ready');
+    expect(res.body.consent.attestedBy).toBe('Mum');
+    expect(res.body.master.clipFile).toBe('master.wav');
+    expect(res.body.sampleMeta.qualityChecks.cloneCosine).toBeTypeOf('number');
+
+    const { readCandidate } = await import('../workspace/clone-candidate.js');
+    expect(await readCandidate('cand-1')).toBeNull(); // candidate consumed
+  });
+
+  it('404s a missing candidate', async () => {
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({ candidateId: 'nope', consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' } });
+    expect(res.status).toBe(404);
+  });
+
+  it('422s absent/invalid consent', async () => {
+    const res = await request(app).post('/api/voice-library/clone').send({ candidateId: 'cand-x' });
+    expect(res.status).toBe(422);
+  });
+
+  it('preserves a sidecar 503 (does not flatten to 502)', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-503',
+      { sampleRate: 24000, durationSeconds: 12, transcript: 't', transcriptSource: 'whisper', captureMethod: 'upload' },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+    /* A REAL SidecarDesignError instance (not a plain Object.assign fake) —
+       this is what actually crosses the deriveEngineArtifact module boundary
+       in production, so it pins the route's duck-typed catch (C1) against a
+       genuine cross-module instance, not just a structurally-equal double. */
+    deriveMock.mockRejectedValueOnce(new SidecarDesignError('no capacity', 503));
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({ candidateId: 'cand-503', consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' } });
+    expect(res.status).toBe(503);
+  });
+
+  it('clamps a sidecar status-0 (unreachable) to 502, not a RangeError 500', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-0',
+      { sampleRate: 24000, durationSeconds: 12, transcript: 't', transcriptSource: 'whisper', captureMethod: 'upload' },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+    /* deriveEngineArtifact throws SidecarDesignError(..., 0) on the
+       sidecar-unreachable branch — res.status(0) is an invalid Express/Node
+       status code (RangeError) that would otherwise flatten to a generic
+       HTML 500, defeating the status-preservation invariant this suite
+       pins. The route clamps any out-of-range status to 502. */
+    deriveMock.mockRejectedValueOnce(new SidecarDesignError('unreachable', 0));
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({ candidateId: 'cand-0', consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' } });
+    expect(res.status).toBe(502);
+  });
+
+  it('atomicity: a derive throw leaves NO entry and keeps the candidate', async () => {
+    const { writeCandidate, readCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-fail',
+      { sampleRate: 24000, durationSeconds: 12, transcript: 't', transcriptSource: 'whisper', captureMethod: 'upload' },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+    deriveMock.mockRejectedValueOnce(new SidecarDesignError('boom', 502));
+    await request(app)
+      .post('/api/voice-library/clone')
+      .send({ candidateId: 'cand-fail', consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' } });
+    const { listEntries } = await import('../workspace/voice-library.js');
+    expect((await listEntries()).filter((e) => e.provenance === 'cloned')).toHaveLength(0);
+    expect(await readCandidate('cand-fail')).not.toBeNull(); // candidate intact
   });
 });
 

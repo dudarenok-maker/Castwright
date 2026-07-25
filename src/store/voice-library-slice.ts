@@ -27,7 +27,7 @@
    store-level side effects (e.g. the router) are wired up post-creation. */
 
 import { createSlice, createAsyncThunk, createSelector, type PayloadAction } from '@reduxjs/toolkit';
-import { api, type VoiceLibraryEntry, type VoiceLibraryPatch, type VoiceLibraryUsageEntry } from '../lib/api';
+import { api, type VoiceLibraryEntry, type VoiceLibraryPatch, type VoiceLibraryUsageEntry, type CloneVoiceBody } from '../lib/api';
 
 export type VoiceLibraryStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -37,6 +37,9 @@ export interface VoiceLibraryState {
   /** True while a design-voice request is in flight (Create-voice modal's
    *  submit spinner / disabled state). */
   designPending: boolean;
+  /** True while a clone-voice request is in flight (Clone-voice modal's
+   *  submit spinner / disabled state). */
+  clonePending: boolean;
   /** ms-since-epoch of the last successful `fetchVoiceLibrary`, or null
    *  before the first fetch. Internal bookkeeping for the focus-listener's
    *  staleness check — not itself part of the task's stated state shape,
@@ -48,6 +51,7 @@ const initialState: VoiceLibraryState = {
   entries: [],
   status: 'idle',
   designPending: false,
+  clonePending: false,
   lastFetchedAt: null,
 };
 
@@ -153,6 +157,10 @@ export const cloneSample = createAsyncThunk('voiceLibrary/cloneSample', async (f
   return api.cloneVoiceSample(form);
 });
 
+export const cloneVoice = createAsyncThunk('voiceLibrary/clone', async (body: CloneVoiceBody) => {
+  return api.cloneVoice(body);
+});
+
 export const revokeVoice = createAsyncThunk(
   'voiceLibrary/revoke',
   async (voiceUuid: string, { dispatch }) => {
@@ -204,6 +212,18 @@ export const voiceLibrarySlice = createSlice({
         const idx = state.entries.findIndex((e) => e.voiceUuid === action.payload.voiceUuid);
         if (idx >= 0) state.entries[idx] = action.payload;
         else state.entries.push(action.payload);
+      })
+      .addCase(cloneVoice.pending, (state) => {
+        state.clonePending = true;
+      })
+      .addCase(cloneVoice.fulfilled, (state, action: PayloadAction<VoiceLibraryEntry>) => {
+        state.clonePending = false;
+        const idx = state.entries.findIndex((e) => e.voiceUuid === action.payload.voiceUuid);
+        if (idx >= 0) state.entries[idx] = action.payload;
+        else state.entries.push(action.payload);
+      })
+      .addCase(cloneVoice.rejected, (state) => {
+        state.clonePending = false;
       });
   },
 });
@@ -230,7 +250,7 @@ export function selectVoiceByUuid(
   return state.voiceLibrary.entries.find((e) => e.voiceUuid === voiceUuid);
 }
 
-export type { VoiceLibraryEntry, VoiceLibraryPatch, VoiceLibraryUsageEntry };
+export type { VoiceLibraryEntry, VoiceLibraryPatch, VoiceLibraryUsageEntry, CloneVoiceBody };
 
 /* ── Cross-tab refetch-on-focus (spec §5) ───────────────────────────────── */
 

@@ -210,7 +210,7 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
 
     /* A seventh library entry now exists (5 fixtures — incl. the Wave 3a
        cloned demo — + Step 2's "E2E Harbor Pilot" + this promoted "Eliza
-       Gray"). */
+       Gray"; + Step 6's cloned entry below brings the running total to 8). */
     await page.goto('/#/voices');
     await waitForRouteReady(page);
     const myVoicesTabAgain = page.getByRole('button', { name: 'My voices', exact: true });
@@ -221,5 +221,60 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
     });
     await expect(page.locator('[data-testid^="voice-library-card-"]')).toHaveCount(7);
     await expect(page.getByText('Eliza Gray', { exact: true }).last()).toBeVisible();
+
+    /* ── Step 6: clone a voice from the new CTA → wizard → Save → a ready
+       cloned card appears in My voices (7 → 8), then assign it to a
+       character. The mock cloneVoiceSample returns a candidate and the mock
+       cloneVoice mints a ready `provenance:'cloned'` entry, so the assign
+       step below isn't semantically broken. ── */
+    await page.getByTestId('my-voices-clone-cta').first().click();
+    await expect(page.getByTestId('clone-voice-wizard')).toBeVisible();
+
+    // Phase 1: upload a tiny fake clip + fill consent (CloneCapturePanel controls).
+    await page.getByLabel('Upload audio').setInputFiles({
+      name: 'sample.wav',
+      mimeType: 'audio/wav',
+      buffer: Buffer.from('RIFFfake-wav-bytes-for-mock-ingest'),
+    });
+    await page.getByLabel('person name').fill('Mum');
+    await page.getByLabel('relationship').selectOption('family-with-permission');
+    await page.getByLabel('I attest').check();
+    await page.getByRole('button', { name: 'Continue' }).click();
+
+    // Phase 2: name + Save.
+    await page.getByTestId('clone-voice-wizard-name').fill('E2E Mum');
+    await page.getByTestId('clone-voice-wizard-save').click();
+    await expect(page.getByTestId('clone-voice-wizard-done')).toBeVisible({ timeout: 10_000 });
+    await page.getByTestId('clone-voice-wizard-done').click();
+
+    await expect(page.getByText('E2E Mum', { exact: true })).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('[data-testid^="voice-library-card-"]')).toHaveCount(8);
+
+    // Capture the newly-minted cloned uuid from its card testid for the assign step.
+    const cloneCardTestId = await page
+      .locator('[data-testid^="voice-library-card-lib-clone-"]')
+      .first()
+      .getAttribute('data-testid');
+    const cloneUuid = cloneCardTestId!.replace('voice-library-card-', '');
+
+    /* Assign the cloned voice to a character via the profile-drawer My-voices
+       picker (the generic, provenance-agnostic path — no cloned-specific
+       wiring needed). Marcus (book `ns`) already carries lib-stale from Step 3,
+       but the picker offers every ready library voice including this clone. */
+    await page.goto('/#/books/ns/cast');
+    await waitForRouteReady(page);
+    await expect(page.locator('[data-tour-id="cast-roster"]')).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByTestId('cast-row-marcus')).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId('cast-row-marcus').click();
+
+    const clonedDrawer = page.locator('[data-tour-id="profile-drawer"]');
+    await expect(clonedDrawer).toBeVisible({ timeout: 10_000 });
+    await clonedDrawer.getByLabel('Voice engine for this character').selectOption('qwen');
+    const clonedPick = clonedDrawer.getByTestId(`profile-drawer-my-voice-${cloneUuid}`);
+    await expect(clonedPick).toBeVisible({ timeout: 5_000 });
+    await clonedPick.click();
+    const clonedPlayBtn = clonedDrawer.getByRole('button', { name: /Play 12s sample/i });
+    await expect(clonedPlayBtn).toBeEnabled({ timeout: 5_000 });
+    await expect(clonedDrawer.getByTestId('profile-drawer-my-voices-error')).toHaveCount(0);
   });
 });

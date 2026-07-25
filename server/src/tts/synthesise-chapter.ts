@@ -201,6 +201,22 @@ export class MissingDesignedVoiceError extends Error {
   }
 }
 
+/* fs-38 Wave 3b1 (C1) — a cloned-provenance Qwen group must never be silently
+   substituted. When Qwen is unavailable this run, applyQwenFallback raises this
+   instead of rerouting to Kokoro/Coqui — a real person's voice is never swapped
+   for another. 3b2's resolver reuses this same typed error. */
+export class UnresolvableClonedVoiceError extends Error {
+  constructor(characterName: string, detail?: string) {
+    super(
+      `Cloned voice for "${characterName}" is unavailable — the Qwen engine is not available this ` +
+        `run, and a cloned voice must never be substituted with another. Re-enable Qwen or reassign ` +
+        `the character.` +
+        (detail ? ` ${detail}` : ''),
+    );
+    this.name = 'UnresolvableClonedVoiceError';
+  }
+}
+
 /* Identify the input that hung when a synth call times out. We couldn't tell
    what the 2026-05-31 ch29 ChapterSynthTimeoutError choked on, so on a timeout
    log the offending group(s): sentence id(s), speaker, the longest item's char
@@ -943,6 +959,14 @@ export async function synthesiseChapter(
     voiceName: string,
     detail?: string,
   ): { route: Route; voiceName: string; renderedFallbackEngine?: TtsEngine } => {
+    /* C1 — a cloned voice is exempt from fallback: if Qwen is unavailable this
+       run, raise instead of rerouting (never substitute a real person). A
+       cloned voice with a healthy Qwen + a real voiceName falls through
+       unchanged and renders normally. */
+    const cloned = c.overrideTtsVoices?.qwen?.provenance === 'cloned';
+    if (route.engine === 'qwen' && cloned && qwenUnavailable) {
+      throw new UnresolvableClonedVoiceError(c.name ?? c.id, detail);
+    }
     const needsFallback =
       route.engine === 'qwen' && (!voiceName || qwenUnavailable) && !!resolveForEngine;
     if (!needsFallback || !resolveForEngine) return { route, voiceName };

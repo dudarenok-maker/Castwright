@@ -17,6 +17,7 @@ import {
 import { VoiceLibraryCard } from './voice-library-card';
 import { CreateLibraryVoiceModal } from '../../modals/create-library-voice';
 import { RedesignLibraryVoiceModal } from '../../modals/redesign-library-voice';
+import { CloneVoiceWizard } from '../../modals/clone-voice-wizard';
 
 interface Props {
   /** Reflects the `voices.library.enabled` config gate, computed by the
@@ -31,6 +32,7 @@ export function MyVoicesSection({ enabled }: Props) {
   const dispatch = useAppDispatch();
   const entries = useAppSelector(selectMyVoices);
   const [createOpen, setCreateOpen] = useState(false);
+  const [cloneOpen, setCloneOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<VoiceLibraryEntry | null>(null);
 
   useEffect(() => {
@@ -57,19 +59,37 @@ export function MyVoicesSection({ enabled }: Props) {
           >
             Create voice
           </button>
+          <button
+            type="button"
+            data-testid="my-voices-clone-cta"
+            onClick={() => setCloneOpen(true)}
+            className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-full border border-ink/15 bg-white text-sm font-semibold text-ink/80 hover:text-ink hover:border-ink/30 transition-colors min-h-[44px] fine-pointer:min-h-0"
+          >
+            Clone a voice
+          </button>
         </div>
       ) : (
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-sm font-bold text-ink">My voices</h2>
-            <button
-              type="button"
-              data-testid="my-voices-create-cta"
-              onClick={() => setCreateOpen(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink-soft transition-colors min-h-[44px] fine-pointer:min-h-0"
-            >
-              Create voice
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                data-testid="my-voices-create-cta"
+                onClick={() => setCreateOpen(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink-soft transition-colors min-h-[44px] fine-pointer:min-h-0"
+              >
+                Create voice
+              </button>
+              <button
+                type="button"
+                data-testid="my-voices-clone-cta"
+                onClick={() => setCloneOpen(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-ink/15 bg-white text-sm font-semibold text-ink/80 hover:text-ink hover:border-ink/30 transition-colors min-h-[44px] fine-pointer:min-h-0"
+              >
+                Clone a voice
+              </button>
+            </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {entries.map((entry) => (
@@ -87,6 +107,7 @@ export function MyVoicesSection({ enabled }: Props) {
       )}
 
       {createOpen && <CreateLibraryVoiceModal onClose={() => setCreateOpen(false)} />}
+      {cloneOpen && <CloneVoiceWizard onClose={() => setCloneOpen(false)} />}
       {editingEntry && (
         <RedesignLibraryVoiceModal entry={editingEntry} onClose={() => setEditingEntry(null)} />
       )}

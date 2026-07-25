@@ -4,37 +4,52 @@ shipped: null
 owner: null
 ---
 
-# 267 — fs-38 Wave 3a: voice-clone ingest, consent & recorder
+# 267 — fs-38 Wave 3: voice-clone pipeline (3a ingest/consent/recorder + 3b1 first Qwen clone)
 
 > Status: active
 > Key files: `server/src/tts/clone-ingest.ts`, `server/src/tts/clone-quality.ts`,
-> `server/src/tts/wav.ts`, `server/src/workspace/clone-candidate.ts`,
+> `server/src/tts/wav.ts`, `server/src/tts/derive-engine-artifact.ts`,
+> `server/src/tts/clone-fidelity.ts`, `server/src/workspace/clone-candidate.ts`,
 > `server/src/workspace/voice-library.ts`, `server/src/routes/voice-library.ts`,
-> `src/components/voices/voice-recorder.tsx`,
+> `server/src/tts/synthesise-chapter.ts` (`applyQwenFallback` cloned-exemption,
+> `UnresolvableClonedVoiceError`), `server/tts-sidecar/main.py`
+> (`POST /qwen/clone-voice`), `src/components/voices/voice-recorder.tsx`,
 > `src/components/voices/clone-capture-panel.tsx`,
+> `src/modals/clone-voice-wizard.tsx`,
+> `src/components/voices/my-voices-section.tsx` (Clone-a-voice CTA),
 > `src/components/voices/voice-library-card.tsx`, `src/store/voice-library-slice.ts`,
 > `openapi.yaml`
-> URL surface: `#/voices` (My voices — 'Cloned' badge + Revoke action on an existing
-> cloned entry); no wired wizard entry point yet (see "Not in 3a")
-> OpenAPI ops: `POST /api/voice-library/clone-sample`, `POST /api/voice-library/{voiceUuid}/revoke`
+> URL surface: `#/voices` (My voices — a "Clone a voice" CTA opens the two-phase
+> wizard: capture/consent → name + Save → audition + advisory fidelity warning →
+> the new entry lands in My voices with the 'Cloned' badge + Revoke action, and
+> is assignable to any character once its engine artifact is `ready`)
+> OpenAPI ops: `POST /api/voice-library/clone-sample`,
+> `POST /api/voice-library/clone`, `POST /api/voice-library/{voiceUuid}/revoke`
 
 Source spec: [`docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md`](../superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md)
 Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](https://github.com/dudarenok-maker/Castwright/issues/624)
 
 ## Benefit / Rationale
 
-- **User:** none directly yet — 3a is a **behind-the-flag engineering slice**
-  (see spec §1.1's "3a honesty note"). Its payoff is entirely enabling: the
-  next sub-wave (3b1) can ship the first user-visible clone without also
-  having to build ingest/consent/recorder from scratch under review pressure.
+- **User (3a):** none directly — 3a was a **behind-the-flag engineering
+  slice** (see spec §1.1's "3a honesty note"). Its payoff was entirely
+  enabling: it let 3b1 ship the first user-visible clone without also having
+  to build ingest/consent/recorder from scratch under review pressure.
+- **User (3b1):** the first payoff of the _"even in your own voice"_ brand
+  promise — bring a short sample (recorded or uploaded), attest consent, and
+  Castwright distils a reusable voice you can cast on any character, with an
+  audible fidelity check before you commit to it.
 - **Technical:** establishes the shared "capture → gate → normalize →
-  transcribe" pipeline every future clone (Qwen 3b1, XTTS 3c) will read
-  `master.wav` from, plus the write-time consent guard the whole wave's data
-  model depends on (spec §4.3).
+  transcribe" pipeline every clone (Qwen 3b1, XTTS 3c) reads `master.wav`
+  from, plus the write-time consent guard the whole wave's data model depends
+  on (spec §4.3). 3b1 adds the derive→audition→persist orchestration
+  (`POST /voice-library/clone`) on top without redesigning that contract.
 - **Architectural:** locks in the on-disk contract (`master.wav` retained
   alongside the manifest, spec §2.2) and the OpenAPI shapes
-  (`VoiceMaster`, `CloneSampleCandidate`) that 3b1's `POST /clone` will
-  extend rather than redesign.
+  (`VoiceMaster`, `CloneSampleCandidate`) that 3b1's `POST /clone` extends
+  rather than redesigns, and closes the **first** never-silent-substitution
+  hole (spec §5) for the Qwen engine — a cloned voice now fails loud instead
+  of being silently swapped when Qwen is unavailable.
 
 ## Architectural impact
 
@@ -55,10 +70,33 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
     (`src/components/voices/voice-recorder.tsx`) — getUserMedia + MediaRecorder,
     with a `denied` phase that surfaces an Upload-tab fallback instead of a
     dead end.
+  - **(3b1)** `deriveEngineArtifact(voiceUuid, 'qwen', input, opts)`
+    (`server/src/tts/derive-engine-artifact.ts`) — the Node client for the
+    sidecar's `POST /qwen/clone-voice`, reusing `withCapacityRetry` +
+    `NoCapacityError` and throwing `SidecarDesignError` with the upstream
+    status/code/reason preserved; the engine seam (`'qwen'` only for now)
+    leaves a clean slot for 3c's XTTS variant.
+  - **(3b1)** `assessCloneFidelity(masterPcm, previewPcm, sampleRate, opts)`
+    (`server/src/tts/clone-fidelity.ts`) — an advisory ECAPA cosine check
+    (module const `CLONE_FIDELITY_MIN`) that annotates the persisted entry
+    with a warning rather than blocking the save.
+  - **(3b1)** `POST /api/voice-library/clone`
+    (`server/src/routes/voice-library.ts`) — the phase-2 orchestrator:
+    reads the ephemeral candidate → `deriveEngineArtifact` → `assessCloneFidelity`
+    → `writeEntry` (LAST step). First route that actually promotes a
+    `_candidates/<id>/` output into a real, persisted cloned entry.
+  - **(3b1)** `applyQwenFallback` cloned-voice exemption + new
+    `UnresolvableClonedVoiceError` (`server/src/tts/synthesise-chapter.ts`) —
+    a character cast to a cloned voice on the Qwen route never silently
+    falls back to another voice when Qwen is unavailable; it throws instead.
+  - **(3b1)** an assign-readiness gate on `POST /:voiceUuid/assign`
+    (`server/src/routes/voice-library.ts`) — 409s assigning a cloned entry
+    whose `engines.qwen.status !== 'ready'`, closing the "assign a
+    never-derived cloned voice" hole a stale/demo entry could otherwise hit.
 - **Invariants preserved:**
   - Cross-book matcher exclusion for cloned-provenance voices — **already
     shipped in Wave 1** (`library-cast-scan.ts:81`, spec §4.4). No new
-    matcher work in 3a.
+    matcher work in 3a or 3b1.
   - The Qwen `.pt` cache location is unchanged (`voices/qwen/qwen-<uuid>.pt`)
     — `master.wav` is a **new sibling file** in the entry directory, not a
     relocation (spec §2.2).
@@ -69,9 +107,10 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
   field and are unaffected; `sampleTranscript` stays in sync with
   `master.transcript` per spec §2.1.
 - **Reversibility:** every route/component in this plan is inert unless
-  `voices.library.enabled` is on AND (for the consent guard/revoke
-  route/cloned-section UI) a 3b1 caller exists to reach them — see "Not in
-  3a" below. Reverting the branch is a clean no-op for any existing entry.
+  `voices.library.enabled` is on. With 3b1 landed, the consent guard/revoke
+  route/cloned-section UI now have a real production caller (the wizard's
+  `POST /clone`); reverting the whole Wave-3-to-date branch is still a clean
+  no-op for any pre-existing, non-cloned entry.
 
 ## Invariants to preserve
 
@@ -100,6 +139,34 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
    Upload tab rather than leaving the user stuck.
 7. **Everything here is gated by `voices.library.enabled`.** No route or UI
    surface in this plan is reachable with the flag off.
+
+### 3b1 invariants
+
+8. **A cloned entry is never persisted half-formed.** `POST
+   /api/voice-library/clone` (`server/src/routes/voice-library.ts`) runs
+   `deriveEngineArtifact` → `assessCloneFidelity` → `writeEntry` (which
+   internally re-runs `assertConsentForClone`) strictly in that order, and
+   `writeEntry` is called **only as the last step** — if derive or the
+   fidelity check throws, nothing is ever written to disk (spec §7).
+9. **A cloned voice is never silently substituted.** `applyQwenFallback`
+   (`server/src/tts/synthesise-chapter.ts`) throws
+   `UnresolvableClonedVoiceError` when a character's Qwen slot is
+   `provenance==='cloned'` and Qwen is unavailable, instead of falling back
+   to another voice — closing the **first** never-silent-substitution hole
+   (spec §5) for the Qwen engine. All other fallback paths are unchanged.
+10. **A cloned voice can't be assigned before its engine artifact is ready.**
+    `POST /:voiceUuid/assign` 409s when `entry.provenance==='cloned' &&
+    entry.engines?.qwen?.status !== 'ready'` — the wizard only ever creates
+    ready entries, so this guards a stale/never-derived cloned entry (or a
+    seeded fixture) rather than anything the golden path produces.
+11. **`SidecarDesignError` status is preserved across the sidecar-transport
+    module boundary by duck-typing the error shape, not `instanceof`.** The
+    `POST /clone` route's catch checks `sde?.name === 'SidecarDesignError' &&
+    typeof sde.status === 'number'` rather than `instanceof
+    SidecarDesignError`, so a genuine cross-module error (e.g. surfaced
+    through a mocked `deriveEngineArtifact`/`assessCloneFidelity` in tests)
+    still branches to the right 503/502/500 instead of falling through to a
+    generic 500 (regression class of #1801).
 
 ## Test plan
 
@@ -147,7 +214,54 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
 - Vitest unit (`src/lib/api.voice-library.test.ts`) — `cloneVoiceSample`/
   `revokeVoiceLibraryEntry` real+mock pairs match the OpenAPI shapes.
 
-No new Playwright e2e in 3a — see "Not in 3a" below.
+No new Playwright e2e in 3a — added in 3b1 (below).
+
+### 3b1 automated coverage
+
+- Pytest sidecar (`server/tts-sidecar/tests/test_qwen_clone_voice.py`) —
+  `POST /qwen/clone-voice` clip-distil happy path + error shapes.
+- Vitest server (`server/src/tts/derive-engine-artifact.test.ts`) — a
+  successful derive; `SidecarDesignError` with the upstream 503/status/code
+  preserved; an unsupported engine (e.g. `'xtts'`) rejects with
+  `SidecarDesignError` too.
+- Vitest server (`server/src/tts/clone-fidelity.test.ts`) — a high-cosine
+  pair returns no warning; a low-cosine pair returns a warning string below
+  `CLONE_FIDELITY_MIN`.
+- Vitest server (`server/src/routes/voice-library.clone.test.ts`) — `POST
+  /clone`: 200 + `VoiceLibraryEntry` (with `sampleMeta.qualityChecks
+  .cloneCosine`/`cloneFidelityWarning`) on a good candidate; 400 (no
+  `candidateId`), 404 (unknown candidate), 409 (single-flight), 422 (bad
+  consent), and 503/502/500 branched off a real `SidecarDesignError`
+  instance from a mocked `deriveEngineArtifact` (not a plain object —
+  proving the duck-type check actually works across the module boundary).
+- Vitest server (`server/src/routes/voice-library.test.ts`) — the
+  assign-readiness gate: 409 on a cloned entry with
+  `engines.qwen.status !== 'ready'`, 200 on a ready one against a real
+  seeded book/character.
+- Vitest server (`server/src/tts/synthesise-chapter-cloned-exemption.test.ts`)
+  — `applyQwenFallback` raises `UnresolvableClonedVoiceError` for a cloned
+  Qwen-routed character when Qwen is unavailable, and leaves every other
+  fallback path (designed voice, non-cloned override) unchanged.
+- Vitest unit (`src/lib/api.ts` clone pair) — `realCloneVoice`/`mockCloneVoice`
+  match the OpenAPI `CloneVoiceBody`/`VoiceLibraryEntry` shapes.
+- Vitest unit (`src/store/voice-library-slice.clone.test.ts`) — `cloneVoice`
+  thunk flips `clonePending` and appends the returned entry on success;
+  resets `clonePending` on failure.
+- Vitest unit (`src/modals/clone-voice-wizard.test.tsx`) — phase-1→phase-2
+  flow, Save dispatches `cloneVoice`, the completion state shows the
+  audition player and (when present) the advisory fidelity warning.
+- Vitest unit (`src/components/voices/my-voices-section.clone.test.tsx`) —
+  the "Clone a voice" CTA opens `CloneVoiceWizard`.
+- Playwright e2e (`e2e/voice-library.spec.ts`) — extends the existing
+  golden-path spec with a clone segment: CTA → upload + consent → name +
+  Save → a ready cloned card appears in My voices (count 7→8) → assign it to
+  a character via the profile-drawer My-voices picker → sample plays.
+
+> **Known coverage gap (M4), owed on-box.** The capacity-admission-ON branch
+> of `/qwen/clone-voice` (the sidecar's `if _capacity_admission_enabled(): …`
+> path) is not exercised by the pytest suite above — admission defaults off
+> in the test env. This mirrors the same, already-accepted gap on
+> `/qwen/design-voice`; not a blocker for 3b1's automated pass/fail bar.
 
 ### Manual acceptance walkthrough
 
@@ -178,43 +292,78 @@ only exercises the frontend thunks/components in isolation.
    Expected: the card shows the 'Cloned' badge and a "Revoke" button;
    clicking it (after the confirm dialog) calls `POST …/revoke` and the
    card updates.
+8. **(3b1)** Open My voices → "Clone a voice". Record or upload a clean
+   ≥8s sample, fill in consent (person name / relationship / permitted use),
+   attest, Continue, name the voice, Save. Expected: a progress state, then
+   a completion screen with an audition player (and a fidelity warning if
+   the ECAPA cosine is low); the new entry appears in My voices with the
+   'Cloned' badge and is immediately assignable to a character.
+9. **(3b1)** With Qwen unavailable (sidecar down / model unreachable),
+   attempt to generate a chapter with a character cast to a cloned voice.
+   Expected: the chapter fails loud (surfaces an error naming the cloned
+   voice) rather than silently rendering in a substitute voice.
 
-## Out of scope — "Not in 3a" (→ 3b1 / 3b2 / 3c)
+> **Owed — on-box live-GPU acceptance (spec §8), not yet run.** Steps 8/9
+> above are describable from the automated suite's mocked seams but have not
+> been walked on real hardware: (a) a real recorded/uploaded sample renders
+> recognisably and consistently in the cloned voice across multiple lines,
+> and the ECAPA cosine reads sane (not clamped to a mock constant); (b) the
+> assign-readiness gate and the `applyQwenFallback` exemption behave the
+> same against a live sidecar as they do against the vitest mocks. Track
+> alongside the existing `/qwen/design-voice` on-box acceptance debt.
 
-Per spec §1.1's sub-wave table and its "3a honesty note": 3a persists **no
-cloned entry at all**. Phase 1 (`POST /clone-sample`) yields only an
-*ephemeral candidate* under `_candidates/<id>/`; §7 of the spec forbids a
-half-formed entry, so the **first** cloned entry is written by 3b1's `POST
-/clone`. Concretely, still missing after 3a:
+## Delivered in 3b1
 
-- **No actual clone extraction on either engine.** `POST /qwen/clone-voice`
-  (Qwen `create_voice_clone_prompt`) is 3b1; `POST /xtts/clone-voice`
-  (`get_conditioning_latents` + low-level `inference`) is 3c.
-- **No `POST /api/voice-library/clone` (phase 2).** The route that actually
-  derives an engine artifact, previews it, runs ECAPA, and persists the
-  first real entry — 3b1.
-- **No wired wizard entry point.** The recorder + `clone-capture-panel.tsx`
-  are phase-1 *building blocks*; there is no reachable "clone a voice"
-  button/route in the product yet that assembles them into a flow a user
-  can start end-to-end (that assembly, plus phase 2's progress/audition/save
-  screen, is 3b1).
-- **No GPU synth of any kind.** Nothing in 3a loads Qwen Base, VoiceDesign,
-  or Coqui XTTS.
+Per spec §1.1's sub-wave table: 3a persisted **no cloned entry at all** —
+phase 1 (`POST /clone-sample`) yielded only an *ephemeral candidate* under
+`_candidates/<id>/`, and §7 of the spec forbids a half-formed entry. 3b1
+closes that gap and ships the **first user-visible clone** on the default
+Qwen engine:
+
+- **Actual clone extraction on the Qwen engine.** `POST /qwen/clone-voice`
+  (sidecar `server/tts-sidecar/main.py`, Qwen `create_voice_clone_prompt`)
+  distils a reusable Qwen artifact from the ingested `master.wav`. (XTTS's
+  `POST /xtts/clone-voice` remains 3c.)
+- **`POST /api/voice-library/clone` (phase 2).** The orchestrator that
+  actually derives the engine artifact, runs the advisory ECAPA fidelity
+  check, and persists the **first real cloned entry** — `deriveEngineArtifact`
+  → `assessCloneFidelity` → `writeEntry` (last step; see Invariant 8).
+- **A wired wizard entry point.** `CloneVoiceWizard` (`src/modals/clone-voice-wizard.tsx`)
+  assembles the phase-1 building blocks (recorder + `clone-capture-panel.tsx`)
+  into an end-to-end flow, launched from a new "Clone a voice" CTA in My
+  voices (`src/components/voices/my-voices-section.tsx`); phase 2 adds a
+  name field, Save, and a completion screen with an audition player + the
+  advisory fidelity warning.
 - **The consent-at-write guard, `/revoke` route, and cloned-section card
-  states (Revoke button, 'Cloned' badge) have no reachable production
-  caller until 3b1 ships the first entry that could exist to revoke or
-  display.** They are tested directly (fixtures/unit tests) and are a
-  correct, load-bearing part of the store contract the whole wave depends
-  on — but nothing in the shipped product can reach them through normal use
-  until 3b1 lands.
-- **No resolver / never-silent-substitution work** (spec §5) — that's 3b2,
-  and it doesn't apply yet since no cloned voice can be cast.
+  states now have a real production caller.** The wizard's `POST /clone`
+  is the first path that writes a `provenance:'cloned'` entry, so the guard,
+  Revoke, and the 'Cloned' badge are reachable through normal product use,
+  not just fixtures.
+- **The first never-silent-substitution hole is closed for Qwen** —
+  `applyQwenFallback`'s cloned-voice exemption (Invariant 9). The **general**
+  resolver / lifecycle work (spec §5) is still 3b2's; 3b1 only covers this
+  one fallback path, not a resolver abstraction.
+- **An assign-readiness gate** prevents casting a cloned voice before its
+  engine artifact exists (Invariant 10).
+
+## Out of scope — "Not in 3a / 3b1" (→ 3b2 / 3c)
+
+Still missing after 3b1:
+
+- **No clone extraction on XTTS.** `POST /xtts/clone-voice`
+  (`get_conditioning_latents` + low-level `inference`) is 3c.
+- **No resolver / lifecycle abstraction** (spec §5, beyond the single
+  `applyQwenFallback` exemption 3b1 ships) — that's 3b2.
 - **No stat-before-remove / artifact purge on revoke or delete** (spec §5.6)
-  — there are no derived artifacts (`.pt`/latents) to purge yet, since
-  nothing derives one until 3b1/3c.
+  — 3b1 derives a `.pt` artifact but doesn't yet purge it on revoke/delete;
+  that lands with 3b2's lifecycle work.
+- **§2.3 designed-voice clip-persist was DEFERRED to 3b2** — recording a
+  clip alongside a *designed* (non-cloned) voice's persona is out of scope
+  for both 3a and 3b1.
 - **Cross-book matcher exclusion is unaffected** — already shipped in Wave 1
   (spec §4.4); no work here.
 
 ## Ship notes
 
-_(to fill on ship)_
+_(to fill when the whole Wave-3 arc — 3a through 3c — ships; 3b1 itself
+shipped via its own PR, Refs #624.)_

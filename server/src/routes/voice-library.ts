@@ -11,18 +11,23 @@
 
 import { Router } from 'express';
 import { existsSync } from 'node:fs';
-import { mkdir, copyFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, copyFile, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import { nanoid } from 'nanoid';
 import multer from 'multer';
 import type { Request, Response } from '../http.js';
 import {
+  entryDir,
   listEntries,
   readEntry,
   removeEntryDir,
   writeEntry,
+  ConsentRequiredError,
+  type VoiceConsentRecord,
   type VoiceLibraryEntry,
   type VoiceLibraryEngineStatus,
+  type VoiceMaster,
 } from '../workspace/voice-library.js';
 import { currentQwenBaseModel } from '../tts/model-paths.js';
 import { runVoiceDesign } from '../tts/design-voice-core.js';
@@ -31,7 +36,7 @@ import { castJsonPath, qwenVoiceSidecarPath } from '../workspace/paths.js';
 import { qwenVoicePtPath } from './qwen-voice.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
 import { selectTtsProvider, type TtsModelKey } from '../tts/index.js';
-import { encodePcmToAudio } from '../tts/mp3.js';
+import { encodePcmToAudio, decodeAudioToPcm } from '../tts/mp3.js';
 import {
   buildSampleText,
   djb2,
@@ -46,6 +51,9 @@ import { findBookByBookId } from '../workspace/scan.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import { ingestCloneSample } from '../tts/clone-ingest.js';
+import { readCandidate, candidateMasterPath, removeCandidate } from '../workspace/clone-candidate.js';
+import { deriveEngineArtifact } from '../tts/derive-engine-artifact.js';
+import { assessCloneFidelity } from '../tts/clone-fidelity.js';
 
 export const voiceLibraryRouter = Router();
 
@@ -65,6 +73,29 @@ class DesignInFlightError extends Error {
     super('design already running');
     this.name = 'DesignInFlightError';
   }
+}
+
+class CloneCandidateMissingError extends Error {
+  constructor(candidateId: string) {
+    super(`No clone-sample candidate "${candidateId}".`);
+    this.name = 'CloneCandidateMissingError';
+  }
+}
+
+type CloneConsentDraft = {
+  personName: string;
+  relationship: VoiceConsentRecord['relationship'];
+  permittedUse: 'personal';
+};
+
+function validateConsentDraft(raw: unknown): CloneConsentDraft | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const c = raw as Record<string, unknown>;
+  const personName = typeof c.personName === 'string' ? c.personName.trim() : '';
+  const rel = c.relationship;
+  const relOk = rel === 'self' || rel === 'family-with-permission' || rel === 'guardian-of-minor';
+  if (!personName || !relOk || c.permittedUse !== 'personal') return null;
+  return { personName, relationship: rel as VoiceConsentRecord['relationship'], permittedUse: 'personal' };
 }
 
 async function withSingleFlight<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -544,6 +575,130 @@ voiceLibraryRouter.post(
   },
 );
 
+/* POST /api/voice-library/clone
+
+   fs-38 Wave 3b1 phase-2 orchestrator. Consumes a 3a candidate, derives the
+   Qwen clone artifact, auditions + ECAPA-scores it, and atomically persists a
+   `cloned` entry — the atomicity guarantee is ORDERING, not re-validation:
+   `writeEntry` (which internally runs `assertConsentForClone`) is called only
+   as the LAST step, after derive + the fidelity check succeed, so no entry is
+   written if any earlier step throws (spec §7). SidecarDesignError status is
+   preserved (503/502/500) by duck-typing the error's shape in the catch below
+   — NOT `instanceof`, because the real sidecar-transport error crosses a
+   module boundary (and tests reject with structurally-equal fakes) — not
+   flattened like the /design + /redesign catches (#1801). */
+voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as { candidateId?: unknown; consent?: unknown; name?: unknown };
+  const candidateId = typeof body.candidateId === 'string' ? body.candidateId : '';
+  if (!candidateId) return res.status(400).json({ error: '`candidateId` is required.' });
+  if (!validateConsentDraft(body.consent)) {
+    return res
+      .status(422)
+      .json({ error: 'A complete consent record (person, relationship, permitted use) is required.' });
+  }
+
+  try {
+    const entry = await withSingleFlight(`library:new:${candidateId}`, async () => {
+      const candidate = await readCandidate(candidateId);
+      if (!candidate) throw new CloneCandidateMissingError(candidateId);
+
+      const voiceUuid = randomUUID();
+      const masterWav = await readFile(candidateMasterPath(candidateId));
+      const masterPcm = await decodeAudioToPcm(masterWav, candidate.master.sampleRate);
+
+      const derived = await deriveEngineArtifact(voiceUuid, 'qwen', {
+        masterPcm,
+        sampleRate: candidate.master.sampleRate,
+        refText: candidate.master.transcript,
+      });
+
+      const dir = entryDir(voiceUuid);
+      await mkdir(dir, { recursive: true });
+
+      /* Score fidelity on the previewPcm already in hand — NOT a persisted
+         file. 3b1 does not write a `preview.mp3`: the user-facing audition
+         is served later by the existing POST /:uuid/sample route + its
+         sample cache (a re-synth off the cloned .pt). On-disk layout for a
+         3b1 cloned entry is master.wav + voice.json only (the .pt lives
+         under voices/qwen/, keyed by voiceUuid — see entryDir vs. the
+         sidecar's own voice dir). */
+      const fidelity = await assessCloneFidelity(masterPcm, derived.previewPcm, candidate.master.sampleRate);
+
+      /* Re-derive the typed consent draft (parsing only — body.consent was
+         already validated at request entry and is immutable, so this can't
+         fail differently). The REAL atomicity guarantee is ordering: writeEntry
+         below is the LAST step, and it internally runs assertConsentForClone
+         — so nothing is written if derive/fidelity/anything above throws. */
+      const consentDraft = validateConsentDraft(body.consent);
+      if (!consentDraft) throw new ConsentRequiredError();
+
+      // Copy the retained source clip into the entry dir (candidate -> entry).
+      await copyFile(candidateMasterPath(candidateId), join(dir, 'master.wav'));
+
+      const now = new Date().toISOString();
+      const name =
+        typeof body.name === 'string' && body.name.trim() ? body.name.trim() : consentDraft.personName;
+      const consent: VoiceConsentRecord = {
+        personName: consentDraft.personName,
+        relationship: consentDraft.relationship,
+        permittedUse: 'personal',
+        attestedAt: now,
+        attestedBy: consentDraft.personName,
+      };
+      const master: VoiceMaster = { ...candidate.master, clipFile: 'master.wav' };
+      const cloned: VoiceLibraryEntry = {
+        voiceUuid,
+        name,
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        consent,
+        master,
+        sampleTranscript: candidate.master.transcript,
+        sampleMeta: {
+          durationSeconds: candidate.master.durationSeconds,
+          sampleRate: candidate.master.sampleRate,
+          qualityChecks: {
+            cloneCosine: fidelity.cosine,
+            ...(fidelity.warning ? { cloneFidelityWarning: fidelity.warning } : {}),
+          },
+        },
+        engines: { qwen: { status: 'ready', baseModel: derived.baseModel || currentQwenBaseModel() } },
+        createdAt: now,
+        updatedAt: now,
+      };
+      await writeEntry(cloned); // guard passes (consent structurally complete)
+      await removeCandidate(candidateId);
+      return (await readEntry(voiceUuid))!;
+    });
+    return res.status(200).json(entry);
+  } catch (e) {
+    if (e instanceof DesignInFlightError) {
+      return res.status(409).json({ error: 'A clone for this sample is already running.' });
+    }
+    if (e instanceof CloneCandidateMissingError) {
+      return res.status(404).json({ error: e.message });
+    }
+    if (e instanceof ConsentRequiredError) {
+      return res.status(422).json({ error: e.message });
+    }
+    /* C1 — duck-type on the error's SHAPE, not `instanceof SidecarDesignError`.
+       The real error crosses the sidecar-transport module boundary (and this
+       route's own tests reject `deriveMock`/`assessCloneFidelity` mocks with
+       structurally-equal fakes, not real class instances) — `instanceof`
+       would silently miss both a genuine cross-module SidecarDesignError AND
+       a structurally-equal test double, flattening either to the generic 502
+       below. Duck-typing preserves status for both. */
+    const sde = e as { name?: string; status?: number; code?: string; reason?: string; message?: string };
+    if (sde?.name === 'SidecarDesignError' && typeof sde.status === 'number') {
+      const status = sde.status >= 400 && sde.status <= 599 ? sde.status : 502;
+      return res.status(status).json({ error: sde.reason ?? sde.message ?? 'Clone derivation failed.', code: sde.code });
+    }
+    console.error('[voice-library] clone failed', e);
+    return res.status(502).json({ error: (e as Error).message || 'Voice clone failed.' });
+  }
+});
+
 /* POST /api/voice-library/:voiceUuid/assign
 
    Assigns a library voice to ONE character in ONE book — a bespoke,
@@ -564,6 +719,13 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
     }
     if (entry.consent?.revokedAt) {
       return res.status(409).json({ error: 'Consent for this voice has been revoked.' });
+    }
+    /* fs-38 Wave 3b1 — never assign an un-derived cloned voice (would produce a
+       broken slot the moment it's synthesised). The wizard only ever creates
+       ready entries; this stops a stale/never-derived cloned entry (or the mock
+       demo) from being assigned. */
+    if (entry.provenance === 'cloned' && entry.engines?.qwen?.status !== 'ready') {
+      return res.status(409).json({ error: 'Cloned voice is not ready to assign yet.' });
     }
 
     const body = (req.body ?? {}) as AssignBody;
