@@ -50,6 +50,7 @@ function renderCard(
         entries: [entry],
         status: 'ready' as const,
         designPending: false,
+        clonePending: false,
         lastFetchedAt: Date.now(),
       },
     },

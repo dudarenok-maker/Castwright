@@ -96,6 +96,7 @@ describe('voiceLibrarySlice reducers', () => {
       entries: [makeEntry({ voiceUuid: 'v1', pinned: false, tags: ['a'] })],
       status: 'ready' as const,
       designPending: false,
+      clonePending: false,
       lastFetchedAt: 1000,
     };
     const state = voiceLibrarySlice.reducer(
@@ -114,6 +115,7 @@ describe('voiceLibrarySlice reducers', () => {
       entries: [makeEntry({ voiceUuid: 'v1' })],
       status: 'ready' as const,
       designPending: false,
+      clonePending: false,
       lastFetchedAt: 1000,
     };
     const state = voiceLibrarySlice.reducer(
@@ -128,6 +130,7 @@ describe('voiceLibrarySlice reducers', () => {
       entries: [makeEntry({ voiceUuid: 'v1', name: 'Old Name' })],
       status: 'ready' as const,
       designPending: false,
+      clonePending: false,
       lastFetchedAt: 1000,
     };
     const serverEntry = makeEntry({ voiceUuid: 'v1', name: 'New Name', updatedAt: '2026-07-01T00:00:00.000Z' });
@@ -200,6 +203,7 @@ describe('voiceLibrarySlice thunks against api mocks', () => {
       entries: [makeEntry({ voiceUuid: 'v1', pinned: false })],
       status: 'ready',
       designPending: false,
+      clonePending: false,
       lastFetchedAt: 1000,
     });
     await store.dispatch(patchEntry({ voiceUuid: 'v1', patch: { pinned: true } }));
@@ -216,6 +220,7 @@ describe('voiceLibrarySlice thunks against api mocks', () => {
       entries: [makeEntry({ voiceUuid: 'v1', pinned: false })],
       status: 'ready',
       designPending: false,
+      clonePending: false,
       lastFetchedAt: 1000,
     });
     await store.dispatch(patchEntry({ voiceUuid: 'v1', patch: { pinned: true } }));
@@ -232,6 +237,7 @@ describe('voiceLibrarySlice thunks against api mocks', () => {
       entries: [makeEntry({ voiceUuid: 'v1' })],
       status: 'ready',
       designPending: false,
+      clonePending: false,
       lastFetchedAt: 1000,
     });
     await store.dispatch(deleteEntry({ voiceUuid: 'v1' }));
@@ -251,6 +257,7 @@ describe('voiceLibrarySlice thunks against api mocks', () => {
       entries: [makeEntry({ voiceUuid: 'v1' })],
       status: 'ready',
       designPending: false,
+      clonePending: false,
       lastFetchedAt: 1000,
     });
     const action = await store.dispatch(redesignVoice({ voiceUuid: 'v1', persona: 'Gruffer, older' }));
@@ -270,6 +277,7 @@ describe('voiceLibrarySlice thunks against api mocks', () => {
       entries: [makeEntry({ voiceUuid: 'v1' })],
       status: 'ready',
       designPending: false,
+      clonePending: false,
       lastFetchedAt: 1000,
     });
     await store.dispatch(promoteRedesign({ voiceUuid: 'v1', persona: 'Gruffer, older' }));
@@ -285,6 +293,7 @@ describe('voiceLibrarySlice thunks against api mocks', () => {
       entries: [makeEntry({ voiceUuid: 'v1' })],
       status: 'ready',
       designPending: false,
+      clonePending: false,
       lastFetchedAt: 1000,
     });
     await store.dispatch(discardRedesign('v1'));
@@ -299,6 +308,7 @@ describe('voiceLibrarySlice thunks against api mocks', () => {
       entries: [makeEntry({ voiceUuid: 'v1' })],
       status: 'ready',
       designPending: false,
+      clonePending: false,
       lastFetchedAt: 1000,
     });
     await store.dispatch(assignVoice({ voiceUuid: 'v1', bookId: 'book-1', characterId: 'char-1' }));
@@ -335,6 +345,7 @@ describe('selectMyVoices', () => {
         ],
         status: 'ready' as const,
         designPending: false,
+        clonePending: false,
         lastFetchedAt: 1000,
       },
     };
@@ -350,6 +361,7 @@ describe('selectVoiceByUuid', () => {
         entries: [makeEntry({ voiceUuid: 'v1' })],
         status: 'ready' as const,
         designPending: false,
+        clonePending: false,
         lastFetchedAt: 1000,
       },
     };
