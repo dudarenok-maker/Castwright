@@ -30,6 +30,13 @@ vi.mock('../tts/index.js', async (importOriginal) => {
   };
 });
 
+/* Task 6 — the clone-sample route ingests via ingestCloneSample, which in
+   turn calls Whisper transcription (transcribe-client.js). Stub it the same
+   hoisted way as the synth mock above, so the ingest path never needs a
+   real Whisper model in this route-level test. */
+const { transcribeSegment } = vi.hoisted(() => ({ transcribeSegment: vi.fn() }));
+vi.mock('../tts/transcribe-client.js', () => ({ transcribeSegment }));
+
 let dir: string;
 let app: Express;
 let vl: typeof import('../workspace/voice-library.js');
@@ -129,6 +136,15 @@ beforeEach(async () => {
      Task 9 sidecar stub's clip length, keeps ffmpeg encoding fast. */
   const pcm = Buffer.alloc(24_000 * 2 * 0.3, 0);
   synthesize.mockResolvedValue({ pcm, sampleRate: 24_000, mimeType: 'audio/L16' });
+
+  transcribeSegment.mockResolvedValue({
+    text: 'hello there',
+    language: 'en',
+    words: null,
+    avgLogprob: null,
+    noSpeechProb: null,
+    compressionRatio: null,
+  });
 });
 
 afterEach(() => {
@@ -882,5 +898,30 @@ describe('POST /api/voice-library/promote (Task 11)', () => {
     const entry = res.body as import('../workspace/voice-library.js').VoiceLibraryEntry;
     expect(entry.engines.qwen?.status).toBe('stale');
     expect(entry.persona).toBe('a bright, chipper voice');
+  });
+});
+
+describe('POST /api/voice-library/clone-sample (Task 6)', () => {
+  it('POST /clone-sample ingests an uploaded clip → 202 candidate', async () => {
+    const { encodePcmToWav } = await import('../tts/wav.js');
+    const n = 6 * 24_000;
+    const pcm = Buffer.alloc(n * 2);
+    for (let i = 0; i < n; i++) pcm.writeInt16LE(i % 2 ? -8000 : 8000, i * 2);
+    const wav = encodePcmToWav(pcm, 24_000);
+    const res = await request(app)
+      .post('/api/voice-library/clone-sample')
+      .field('captureMethod', 'upload')
+      .attach('audio', wav, 'sample.wav');
+    expect(res.status).toBe(202);
+    expect(res.body.candidateId).toBeTruthy();
+    expect(res.body.transcript).toBe('hello there');
+  });
+
+  it('POST /clone-sample rejects a too-short clip → 400', async () => {
+    const { encodePcmToWav } = await import('../tts/wav.js');
+    const n = 2 * 24_000;
+    const wav = encodePcmToWav(Buffer.alloc(n * 2, 40), 24_000);
+    const res = await request(app).post('/api/voice-library/clone-sample').attach('audio', wav, 's.wav');
+    expect(res.status).toBe(400);
   });
 });
