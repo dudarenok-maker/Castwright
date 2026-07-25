@@ -480,6 +480,17 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
     expect(after.body.url).not.toBe(before.body.url);
     expect(synthesize).toHaveBeenCalledTimes(2); // distinct content tokens, both cache misses
   });
+
+  it('POST /:uuid/sample 403s a revoked cloned voice', async () => {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    await writeEntry({
+      voiceUuid: 's1', name: 'Gran', provenance: 'cloned', tags: [], pinned: false, engines: {},
+      consent: { personName: 'Gran', relationship: 'family-with-permission', permittedUse: 'personal', attestedAt: 'x', attestedBy: 'me', revokedAt: 'yesterday' },
+      createdAt: 'x', updatedAt: 'x',
+    });
+    const res = await request(app).post('/api/voice-library/s1/sample').send({});
+    expect(res.status).toBe(403);
+  });
 });
 
 describe('POST /api/voice-library/:voiceUuid/assign', () => {

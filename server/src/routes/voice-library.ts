@@ -367,6 +367,9 @@ voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response
     const { voiceUuid } = req.params;
     const entry = await readEntry(voiceUuid);
     if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    if (entry.provenance === 'cloned' && (!entry.consent || entry.consent.revokedAt)) {
+      return res.status(403).json({ error: 'This cloned voice has no valid consent and cannot be played.' });
+    }
 
     const body = (req.body ?? {}) as { text?: unknown };
     const voiceName = `qwen-${voiceUuid}`;
