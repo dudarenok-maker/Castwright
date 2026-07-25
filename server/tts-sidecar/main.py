@@ -3831,6 +3831,56 @@ class QwenEngine(Engine):
         finally:
             self._design_in_flight -= 1
 
+    def clone_voice(
+        self, voice_id: str, ref_audio: Any, ref_sr: int, ref_text: str,
+        audition_text: Optional[str], language: Optional[str] = None,
+        voice_uuid: Optional[str] = None, device: Optional[str] = None,
+    ) -> SynthResult:
+        """Distil a CALLER-supplied reference clip into a reusable clone prompt
+        (0.6B Base only — no VoiceDesign model) and return an audition preview.
+        Mirrors design_voice's clip->.pt block but with a real clip + real
+        transcript instead of a synthetic VoiceDesign reference."""
+        import torch  # type: ignore
+
+        lang = (language or self.DEFAULT_LANGUAGE).strip() or self.DEFAULT_LANGUAGE
+        audition = (audition_text or ref_text or self.CALIBRATION_TEXT).strip() or self.CALIBRATION_TEXT
+
+        with self._synth_lock:
+            self._ensure_base_loaded(device=device)
+            # 1. distil the caller's clip into a reusable clone prompt.
+            prompt = self._base.create_voice_clone_prompt(
+                ref_audio=(ref_audio, ref_sr), ref_text=ref_text
+            )
+            # 2. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
+            os.makedirs(self._voices_dir, exist_ok=True)
+            pt_path, json_path = self._voice_paths(voice_id)
+            torch.save(prompt, pt_path)
+            import json as _json
+            with open(json_path, "w", encoding="utf-8") as fh:
+                _json.dump(
+                    {
+                        "voiceId": voice_id,
+                        "voiceUuid": voice_uuid,
+                        "refText": ref_text,
+                        "language": lang,
+                        "baseModel": self.BASE_MODEL,
+                        "designModel": None,
+                        "clone": True,
+                    },
+                    fh, ensure_ascii=False, indent=2,
+                )
+            # 3. audition preview — speak the audition line in the cloned voice.
+            wavs, sr = self._base.generate_voice_clone(
+                text=[audition], language=[lang], voice_clone_prompt=prompt
+            )
+        # Warm the in-memory cache + drop any stale 1.7B-native prompt, OUTSIDE
+        # the synth lock (mirrors design_voice's post-lock cache handling).
+        with self._cache_lock:
+            self._prompt_cache[voice_id] = prompt
+        self._evict_17b_prompt(voice_id)
+        log.info("Cloned + cached Qwen voice '%s' from caller clip.", voice_id)
+        return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
+
     def mint_variant(
         self,
         base_voice_id: str,
@@ -6800,6 +6850,105 @@ async def qwen_design_voice(req: Request) -> Response:
         content=result.pcm,
         media_type=f"audio/L16;codec=pcm;rate={result.sample_rate}",
         headers={"X-Sample-Rate": str(result.sample_rate)},
+    )
+
+
+@app.post("/qwen/clone-voice")
+async def qwen_clone_voice(req: Request) -> Response:
+    """Distil a caller-supplied reference clip (raw s16le mono PCM body) into a
+    reusable Qwen clone prompt and return an audition preview (PCM, same wire
+    shape as /synthesize). Headers: X-Sample-Rate (required), X-Voice-Id
+    (required, the qwen-<uuid> id), X-Ref-Text (base64 UTF-8 transcript,
+    required), X-Audition-Text (base64, optional), X-Language (optional).
+    Uses the 0.6B Base model only — never VoiceDesign. Fails loud (no
+    FALLBACK) on distil/audition error."""
+    import base64 as _b64
+    import numpy as np  # type: ignore
+
+    if _process_poisoned:
+        return JSONResponse(
+            {"detail": "Voice engine is in a poisoned CUDA state and must be restarted.", "poisoned": True},
+            status_code=503,
+        )
+    if _restart_pending:
+        return JSONResponse(
+            {"detail": "Voice engine is recycling to free memory; retry shortly."},
+            status_code=503,
+        )
+
+    pcm = await req.body()
+    if not pcm:
+        raise HTTPException(status_code=400, detail="empty PCM body")
+    try:
+        sample_rate = int(req.headers.get("X-Sample-Rate", "0"))
+    except (TypeError, ValueError):
+        sample_rate = 0
+    if sample_rate <= 0:
+        raise HTTPException(status_code=400, detail="X-Sample-Rate header (>0) is required.")
+    voice_id = (req.headers.get("X-Voice-Id") or "").strip()
+    if not voice_id:
+        raise HTTPException(status_code=400, detail="X-Voice-Id header is required.")
+    try:
+        ref_text = _b64.b64decode(req.headers.get("X-Ref-Text", "")).decode("utf-8")
+    except Exception:
+        raise HTTPException(status_code=400, detail="X-Ref-Text must be base64 UTF-8.")
+    if not ref_text.strip():
+        raise HTTPException(status_code=400, detail="X-Ref-Text header (base64 transcript) is required.")
+    audition_text: Optional[str] = None
+    _aud = req.headers.get("X-Audition-Text")
+    if _aud:
+        try:
+            audition_text = _b64.b64decode(_aud).decode("utf-8")
+        except Exception:
+            audition_text = None
+    language = req.headers.get("X-Language") or None
+
+    qwen = ENGINES.get("qwen")
+    if not isinstance(qwen, QwenEngine):
+        return JSONResponse({"detail": "qwen engine missing"}, status_code=500)
+
+    ref_audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+
+    global _inflight_synth
+    _inflight_synth += 1
+    try:
+        if _capacity_admission_enabled():
+            with _placement.reservation(
+                "qwen", "0.6b", {"op": "clone"},
+                cpu_capable=False, heavy=True,
+                pinned=_engine_env_pin("qwen"),
+            ) as adm:
+                if "noCapacity" in adm:
+                    return _no_capacity(adm)
+                result = await asyncio.to_thread(
+                    qwen.clone_voice, voice_id, ref_audio, sample_rate,
+                    ref_text, audition_text, language, None, adm["device"],
+                )
+        else:
+            result = await asyncio.to_thread(
+                qwen.clone_voice, voice_id, ref_audio, sample_rate,
+                ref_text, audition_text, language,
+            )
+    except Exception as e:
+        err_str = f"{e}"
+        if _CUDA_POISON_RE.search(err_str):
+            log.warning("/qwen/clone-voice CUDA poison (voiceId=%s): %s", voice_id, e)
+            _mark_cuda_poisoned(err_str)
+            return JSONResponse(
+                {"detail": ("GPU is out of memory — likely another job is using it. "
+                            "Free up GPU memory and try again."),
+                 "poisoned": True, "code": "gpu_poisoned"},
+                status_code=503,
+            )
+        log.exception("/qwen/clone-voice failed (voiceId=%s)", voice_id)
+        return JSONResponse({"detail": "Internal error."}, status_code=500)
+    finally:
+        _inflight_synth -= 1
+
+    return Response(
+        content=result.pcm,
+        media_type=f"audio/L16;codec=pcm;rate={result.sample_rate}",
+        headers={"X-Sample-Rate": str(result.sample_rate), "X-Base-Model": qwen.BASE_MODEL},
     )
 
 
