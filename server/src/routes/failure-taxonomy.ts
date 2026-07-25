@@ -199,11 +199,19 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
 
      fatal: false — this is a per-chapter, per-character failure (mirrors
      voice-not-designed's chapter-scoped model): a chapter that doesn't use
-     the broken voice should still render. The cascade counter in
-     generation.ts still escalates to a run-stop if the SAME broken-voice
-     reason repeats across chapters, so a systemic break (e.g. Qwen down for
-     every cloned voice) doesn't grind through the whole queue one chapter
-     at a time. */
+     the broken voice should still render. There is NO cross-chapter backstop
+     on the common queue path: the dispatcher fires one POST per chapter, so
+     the cascade counter in generation.ts (recordNonFatal, a fresh job-local
+     state per POST) never sees a second chapter's failure and can't
+     escalate this to a run-stop (mirrors the corrected recycle-storm
+     framing at generation.ts, not the stale isStall comment above it). Each
+     affected chapter therefore fails independently with its own accurate,
+     per-voice message — accepted deliberately, because a broken cloned
+     voice is character-scoped: other chapters (that don't cast it) and
+     other books sharing the queue should keep rendering. A blanket
+     queue-pause like recycle-storm's would be an overcorrection here — that
+     case is a systemic sidecar failure, this one is scoped to whichever
+     voices are broken. */
   {
     code: 'cloned-voice-broken',
     fatal: false,

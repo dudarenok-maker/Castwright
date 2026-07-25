@@ -230,14 +230,19 @@ describe('classifyFailure', () => {
   });
 
   it('does not let cloned-voice-broken get shadowed by a broader generation signature (ordering)', () => {
-    /* Defense against a future re-order: this error's own message never
-       matches the earlier synth-timeout/sidecar-unreachable/recycle-storm
-       signatures, but it must ALSO win over the later, broader ones (e.g.
-       gpu-acceleration-unavailable's "unavailable" wording) since first-match
-       wins and named errors should never fall through to a generic regex. */
-    const err = Object.assign(new Error('totally different future wording'), {
-      name: 'UnresolvableClonedVoiceError',
-    });
+    /* Defense against a future re-order: craft a message that WOULD also
+       match the later, broader gpu-acceleration-unavailable signature's
+       regex (/GPU acceleration (is )?unavailable/i) — if cloned-voice-broken
+       were ever moved after it in FAILURE_SIGNATURES, this would misclassify
+       as gpu-acceleration-unavailable instead. Because scanSignatures is
+       first-match-wins and the typed `matchName` entry sits earlier in the
+       table, the named match must win regardless of what the message text
+       collides with. This genuinely proves non-shadowing, unlike asserting
+       on a message that matches no other signature at all. */
+    const err = Object.assign(
+      new Error('GPU acceleration unavailable — totally different future wording'),
+      { name: 'UnresolvableClonedVoiceError' },
+    );
     expect(classifyFailure(err, 'qwen').code).toBe('cloned-voice-broken');
   });
 
