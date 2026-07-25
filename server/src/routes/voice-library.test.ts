@@ -42,14 +42,15 @@ vi.mock('../tts/transcribe-client.js', () => ({ transcribeSegment }));
    /qwen/clone-voice) and assessCloneFidelity (ECAPA embed + cosine). Stub
    both, plus the ffmpeg decode boundary, so no sidecar/ffmpeg is hit in this
    route-level test. */
-const { deriveMock, decodeMock } = vi.hoisted(() => ({
+const { deriveMock, decodeMock, assessFidelityMock } = vi.hoisted(() => ({
   deriveMock: vi.fn(),
   decodeMock: vi.fn(),
+  assessFidelityMock: vi.fn(),
 }));
 vi.mock('../tts/derive-engine-artifact.js', () => ({ deriveEngineArtifact: deriveMock }));
 vi.mock('../tts/clone-fidelity.js', async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
-  return { ...actual, assessCloneFidelity: vi.fn().mockResolvedValue({ cosine: 0.72 }) };
+  return { ...actual, assessCloneFidelity: assessFidelityMock };
 });
 vi.mock('../tts/mp3.js', async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
@@ -183,6 +184,8 @@ beforeEach(async () => {
 
   deriveMock.mockReset();
   deriveMock.mockResolvedValue({ previewPcm: Buffer.from([1, 2, 3, 4]), sampleRate: 24_000, baseModel: 'qwen3-0.6b' });
+  assessFidelityMock.mockReset();
+  assessFidelityMock.mockResolvedValue({ cosine: 0.72 });
   /* decodeMock defaults to the REAL ffmpeg decode (pass-through) — the
      clone-sample ingest route (Task 6) also calls decodeAudioToPcm and needs
      genuine decoding to run its quality gate against real uploaded audio.
@@ -1330,6 +1333,59 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     const { listEntries } = await import('../workspace/voice-library.js');
     expect((await listEntries()).filter((e) => e.provenance === 'cloned')).toHaveLength(0);
     expect(await readCandidate('cand-fail')).not.toBeNull(); // candidate intact
+  });
+
+  /* Task 10 follow-up — a TRANSPORT failure of the advisory ECAPA fidelity
+     check must not orphan an otherwise-successful clone. By this point the
+     sidecar has already written the .pt artifact (deriveEngineArtifact
+     succeeded); only the /embed cosine check is unreachable. */
+  it('persists without a cosine when the ECAPA embed is unreachable (transient) — candidate still removed', async () => {
+    const { writeCandidate, readCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-transient',
+      { sampleRate: 24000, durationSeconds: 12, transcript: 't', transcriptSource: 'whisper', captureMethod: 'upload' },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+    assessFidelityMock.mockRejectedValueOnce(Object.assign(new Error('embed down'), { transient: true }));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-transient',
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.sampleMeta.qualityChecks.cloneFidelityUnavailable).toBe(true);
+    expect(res.body.sampleMeta.qualityChecks.cloneCosine).toBeUndefined();
+
+    expect(await readCandidate('cand-transient')).toBeNull(); // candidate consumed, same as the happy path
+  });
+
+  it('still aborts (and persists nothing) on a genuine SidecarDesignError from the fidelity check', async () => {
+    const { writeCandidate, readCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-fidelity-sde',
+      { sampleRate: 24000, durationSeconds: 12, transcript: 't', transcriptSource: 'whisper', captureMethod: 'upload' },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+    // A REAL SidecarDesignError instance — not merely `{ transient: true }` —
+    // proving the catch doesn't over-broaden past the transient duck-type.
+    assessFidelityMock.mockRejectedValueOnce(new SidecarDesignError('sidecar overloaded', 503));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-fidelity-sde',
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(503);
+    const { listEntries } = await import('../workspace/voice-library.js');
+    expect((await listEntries()).filter((e) => e.provenance === 'cloned')).toHaveLength(0);
+    expect(await readCandidate('cand-fidelity-sde')).not.toBeNull(); // candidate intact, nothing persisted
   });
 });
 

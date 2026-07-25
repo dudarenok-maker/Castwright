@@ -59,6 +59,7 @@ import { ingestCloneSample } from '../tts/clone-ingest.js';
 import { readCandidate, candidateMasterPath, removeCandidate } from '../workspace/clone-candidate.js';
 import { deriveEngineArtifact } from '../tts/derive-engine-artifact.js';
 import { assessCloneFidelity } from '../tts/clone-fidelity.js';
+import { isTransient } from '../tts/retry.js';
 import { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
 
 export const voiceLibraryRouter = Router();
@@ -593,12 +594,15 @@ voiceLibraryRouter.post(
    Qwen clone artifact, auditions + ECAPA-scores it, and atomically persists a
    `cloned` entry — the atomicity guarantee is ORDERING, not re-validation:
    `writeEntry` (which internally runs `assertConsentForClone`) is called only
-   as the LAST step, after derive + the fidelity check succeed, so no entry is
-   written if any earlier step throws (spec §7). SidecarDesignError status is
-   preserved (503/502/500) by duck-typing the error's shape in the catch below
-   — NOT `instanceof`, because the real sidecar-transport error crosses a
-   module boundary (and tests reject with structurally-equal fakes) — not
-   flattened like the /design + /redesign catches (#1801). */
+   as the LAST step, after derive succeeds and the fidelity check either
+   succeeds or fails transiently (Task 10 — a merely-unreachable ECAPA
+   /embed is advisory, not blocking; see the fidelity try/catch below), so
+   no entry is written if any OTHER earlier step throws (spec §7).
+   SidecarDesignError status is preserved (503/502/500) by duck-typing the
+   error's shape in the catch below — NOT `instanceof`, because the real
+   sidecar-transport error crosses a module boundary (and tests reject with
+   structurally-equal fakes) — not flattened like the /design + /redesign
+   catches (#1801). */
 voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { candidateId?: unknown; consent?: unknown; name?: unknown };
   const candidateId = typeof body.candidateId === 'string' ? body.candidateId : '';
@@ -633,8 +637,45 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
          sample cache (a re-synth off the cloned .pt). On-disk layout for a
          3b1 cloned entry is master.wav + voice.json only (the .pt lives
          under voices/qwen/, keyed by voiceUuid — see entryDir vs. the
-         sidecar's own voice dir). */
-      const fidelity = await assessCloneFidelity(masterPcm, derived.previewPcm, candidate.master.sampleRate);
+         sidecar's own voice dir).
+
+         Task 10 follow-up: by this point the sidecar has ALREADY written
+         the .pt (deriveEngineArtifact succeeded above) — assessCloneFidelity
+         is an ADVISORY quality check on top of a real, usable clone. If the
+         ECAPA /embed call itself is merely unreachable (embed-client.ts
+         tags the thrown Error `{ transient: true }`), aborting here would
+         orphan that .pt and leak the candidate for no benefit — the clone
+         still works, we just couldn't score it. So a transient throw is
+         swallowed and the clone proceeds without a cosine.
+
+         Predicate: `isTransient` (tts/retry.ts) — the SAME `err.transient
+         === true` duck-type the TTS auto-retry path already uses, not
+         re-invented here. Deliberately NOT widened to "no numeric status
+         => transport", the heuristic clone-voice-resolver.ts's
+         isTransientDeriveFailure uses for SidecarDesignError-shaped repair
+         failures: every throw inside assessCloneFidelity funnels through
+         embed-client.ts's embedSegment, which already tags EVERY one of its
+         throw paths with an explicit `transient` boolean (network-unreachable
+         => true, HTTP 5xx => true, HTTP 4xx => false — see embed-client.ts)
+         and never sets `.status`. A "no status" fallback would therefore
+         swallow that explicit `transient: false` (a 4xx really is permanent)
+         AND any unrelated code-level bug (e.g. a malformed embedding tripping
+         cosineToCentroid) as mere "fidelity unavailable" — masking real
+         defects behind a silent 200 instead of surfacing them. Any non-
+         transient throw (an explicit 4xx, or a genuine SidecarDesignError
+         surfaced from a shared client) still aborts — handled by the outer
+         catch's existing duck-typed status mapping. */
+      let fidelity: { cosine: number; warning?: string } | undefined;
+      let fidelityUnavailable = false;
+      try {
+        fidelity = await assessCloneFidelity(masterPcm, derived.previewPcm, candidate.master.sampleRate);
+      } catch (e) {
+        if (isTransient(e)) {
+          fidelityUnavailable = true;
+        } else {
+          throw e;
+        }
+      }
 
       /* Re-derive the typed consent draft (parsing only — body.consent was
          already validated at request entry and is immutable, so this can't
@@ -670,10 +711,12 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
         sampleMeta: {
           durationSeconds: candidate.master.durationSeconds,
           sampleRate: candidate.master.sampleRate,
-          qualityChecks: {
-            cloneCosine: fidelity.cosine,
-            ...(fidelity.warning ? { cloneFidelityWarning: fidelity.warning } : {}),
-          },
+          qualityChecks: fidelityUnavailable
+            ? { cloneFidelityUnavailable: true }
+            : {
+                cloneCosine: fidelity!.cosine,
+                ...(fidelity!.warning ? { cloneFidelityWarning: fidelity!.warning } : {}),
+              },
         },
         engines: { qwen: { status: 'ready', baseModel: derived.baseModel || currentQwenBaseModel() } },
         createdAt: now,
