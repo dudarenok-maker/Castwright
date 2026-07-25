@@ -28,11 +28,9 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { rename, rm, copyFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
 import { sidecarLanguageName } from '../tts/language.js';
-import { castJsonPath, qwenVoiceSidecarPath, qwenVoicesDir } from '../workspace/paths.js';
-import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
+import { castJsonPath, qwenVoiceSidecarPath, qwenVoicePtPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
@@ -213,11 +211,16 @@ const PREVIEW_SUFFIX = '-preview';
 function previewVoiceIdFor(realVoiceId: string): string {
   return `${realVoiceId}${PREVIEW_SUFFIX}`;
 }
-export function qwenVoicePtPath(name: string): string {
-  const p = join(qwenVoicesDir(), `${sanitizeIdSegment(safeSegment(name))}.pt`);
-  assertContained(qwenVoicesDir(), p);
-  return p;
-}
+/* fs-38 Wave 3b2 MINOR-1 — moved to workspace/paths.ts (cycle-free; this
+   module imports from tts/synthesise-chapter.ts, which needs this helper
+   too). Imported above (with the rest of this module's `paths.js` imports)
+   and re-exported here — a bare `export { x } from 'mod'` does NOT bind `x`
+   as a local name, and this module's own route handlers call
+   `qwenVoicePtPath(...)` directly, so it needs both the import AND the
+   re-export. Re-exported so this module's existing importers
+   (voice-library.ts, workspace/purge-clone-artifacts.ts, qwen-voice.test.ts)
+   are unaffected. */
+export { qwenVoicePtPath };
 
 /* GET /api/books/:bookId/cast/:characterId/designed-persona
 

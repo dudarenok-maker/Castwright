@@ -47,7 +47,7 @@ import { readEntry, writeEntry, entryDir, type VoiceLibraryEntry } from '../work
 import { deriveEngineArtifact } from './derive-engine-artifact.js';
 import { currentQwenBaseModel } from './model-paths.js';
 import { decodeAudioToPcm } from './mp3.js';
-import { qwenVoicesDir } from '../workspace/paths.js';
+import { qwenVoicePtPath } from '../workspace/paths.js';
 import { safeSegment, sanitizeIdSegment, assertContained } from '../util/safe-path.js';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -879,18 +879,6 @@ async function evictQwenForCoquiPhase(): Promise<void> {
   }
 }
 
-/* fs-38 Wave 3b2 — path to a Qwen voice's cached `.pt` embedding, keyed by its
-   storage id (e.g. `qwen-<uuid>`). Duplicated (not imported) from
-   `routes/qwen-voice.ts`'s identical `qwenVoicePtPath`: that module imports
-   `buildHintFromCast`/`toVoiceLike`/`CastCharacter` FROM this one, so
-   importing it back here would create a cycle. */
-function qwenVoicePtPathLocal(storageKey: string): string {
-  const dir = qwenVoicesDir();
-  const p = join(dir, `${sanitizeIdSegment(safeSegment(storageKey))}.pt`);
-  assertContained(dir, p);
-  return p;
-}
-
 /* fs-38 Wave 3b2 — read a cloned voice's retained reference clip (its
    `master.wav`, kept since the Wave 3a ingest) and decode it to raw s16le PCM
    at its own recorded sample rate, ready for `deriveEngineArtifact`. The
@@ -905,7 +893,15 @@ async function readMasterPcmDefault(
   if (!entry.master) {
     throw new Error(`Cloned voice "${uuid}" has no retained master clip to re-derive from.`);
   }
-  const clipPath = join(entryDir(uuid), entry.master.clipFile);
+  /* MINOR-3 — sanitize the clip filename the same way every other path
+     builder in this file's neighbourhood does (qwenVoicePtPath et al.):
+     `entry.master.clipFile` is manifest data, not a hardcoded literal, so it
+     gets the same throwing safeSegment() pre-filter + sanitizeIdSegment()
+     CodeQL-recognized transform + assertContained() containment check
+     before it's joined onto disk. */
+  const dir = entryDir(uuid);
+  const clipPath = join(dir, sanitizeIdSegment(safeSegment(entry.master.clipFile)));
+  assertContained(dir, clipPath);
   const raw = await readFile(clipPath);
   const pcm = await decodeAudioToPcm(raw, entry.master.sampleRate);
   return { pcm, sampleRate: entry.master.sampleRate, refText: entry.master.transcript };
@@ -922,7 +918,7 @@ function buildDefaultCloneResolverDeps(signal: AbortSignal | undefined): Resolve
     writeEntry,
     ptExists: async (storageKey: string) => {
       try {
-        await stat(qwenVoicePtPathLocal(storageKey));
+        await stat(qwenVoicePtPath(storageKey));
         return true;
       } catch {
         return false;
@@ -1039,7 +1035,25 @@ export async function synthesiseChapter(
     /* C1 — a cloned voice is exempt from fallback: if Qwen is unavailable this
        run, raise instead of rerouting (never substitute a real person). A
        cloned voice with a healthy Qwen + a real voiceName falls through
-       unchanged and renders normally. */
+       unchanged and renders normally.
+
+       Defence-in-depth, not the live guard: the cloned-voice resolver
+       pre-pass above (`resolveClonedVoicesForChapter`, ~:1119) now runs
+       BEFORE any group reaches this function, over exactly the same
+       cloned+qwen-routed characters this branch checks (including the
+       orphaned-characterId narrator substitution — see the IMPORTANT-1
+       fix on `rendersNarrator` above). Its `engineUnavailable` input is
+       `routedEngine !== 'qwen' || qwenUnavailable`, a strict superset of
+       this branch's `route.engine === 'qwen' && qwenUnavailable` trigger,
+       and `classifyClonedVoice` treats `engineUnavailable` as broken
+       unconditionally (before any entry-health check) — so the pre-pass
+       always throws `UnresolvableClonedVoiceError` first in production.
+       This branch is retained as a backstop for any future caller that
+       reaches `applyQwenFallback` without going through the pre-pass
+       first (e.g. a direct unit-test harness, or a future refactor that
+       adds another call site) — see `synthesise-chapter-cloned-exemption
+       .test.ts` case 1, which now documents (rather than exercises) this
+       gap between the two guards. */
     const cloned = c.overrideTtsVoices?.qwen?.provenance === 'cloned';
     if (route.engine === 'qwen' && cloned && qwenUnavailable) {
       throw new UnresolvableClonedVoiceError(c.name ?? c.id, detail);
@@ -1091,8 +1105,18 @@ export async function synthesiseChapter(
      chapter loud before any GPU work; a Repairable voice re-derives from its
      retained master.wav and the chapter proceeds. Never substitutes — see
      the module-level invariant on `UnresolvableClonedVoiceError`. */
+  if (signal?.aborted) {
+    throw new DOMException('synthesiseChapter aborted', 'AbortError');
+  }
   const inChapterCharacterIds = new Set(groups.map((g) => g.characterId));
-  if (titleText) inChapterCharacterIds.add(narratorCharacterId);
+  /* IMPORTANT-1 (Task 6 review) — the title beat isn't the only way the
+     narrator renders unvalidated: `resolveGroup` below ALSO substitutes
+     `resolveNarratorChar()` for any group whose `characterId` isn't in
+     `cast` (the "orphaned characterId safety net"). Without this, a chapter
+     with an orphaned-characterId sentence and no title narration would let a
+     cloned-but-stale narrator voice render past the gate untouched. */
+  const rendersNarrator = Boolean(titleText) || groups.some((g) => !castById.has(g.characterId));
+  if (rendersNarrator) inChapterCharacterIds.add(narratorCharacterId);
   const clonedVoiceRequests = cast
     .filter(
       (c) => inChapterCharacterIds.has(c.id) && c.overrideTtsVoices?.qwen?.provenance === 'cloned',

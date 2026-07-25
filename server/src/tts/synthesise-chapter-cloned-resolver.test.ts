@@ -9,10 +9,16 @@
         chapter (not in `groups`, no title beat) is never even looked at.
      3. repairable: a cloned voice with a stale/missing `.pt` but a retained
         `master.wav` re-derives once, then the chapter synthesises normally.
+     4. readiness gate, orphaned-characterId narrator path (Task 6 review,
+        IMPORTANT-1): the gate also catches a cloned narrator that only
+        renders via the orphaned-characterId safety net (resolveGroup's
+        `resolveNarratorChar()` fallback) — not just the title-beat trigger.
 
    See `synthesise-chapter-cloned-exemption.test.ts` for the sibling 3b1 C1
    coverage (Qwen-unavailable exemption), which this pre-pass sits in front
-   of but does not replace. */
+   of but does not replace — except that, per the Task 6 review, the pre-pass
+   now fully subsumes C1 for every character `applyQwenFallback` sees (case 4
+   above pins the last gap that let C1 stay reachable). */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { synthesiseChapter, type CastCharacter } from './synthesise-chapter.js';
 import { UnresolvableClonedVoiceError, type ResolveChapterDeps } from './clone-voice-resolver.js';
@@ -183,5 +189,58 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
     expect(written.engines.qwen?.status).toBe('ready');
     expect(provider.calls.length).toBeGreaterThan(0); // then the chapter synthesises normally
     expect(result.segments.length).toBeGreaterThan(0);
+  });
+
+  it('IMPORTANT-1 (Task 6 review): an orphaned-characterId sentence pulls a cloned narrator into the readiness gate even with no title beat', async () => {
+    // 'ghost' is deliberately absent from `cast` — the orphaned-characterId
+    // safety net in resolveGroup() substitutes resolveNarratorChar() for
+    // this line. There is NO chapterTitleNarration, so before the
+    // IMPORTANT-1 fix the narrator's characterId was never added to the
+    // pre-pass's in-chapter set for this chapter, and a cloned-but-stale
+    // narrator voice would render past the gate untouched.
+    const provider = makeProvider();
+    const narratorCast: CastCharacter[] = [
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        overrideTtsVoices: {
+          qwen: { name: 'Narrator (unused)', libraryUuid: 'lib-narrator-clone', provenance: 'cloned' },
+        },
+      },
+    ];
+    const readEntry = vi.fn(async (uuid: string) =>
+      uuid === 'lib-narrator-clone' ? baseEntry({ voiceUuid: 'lib-narrator-clone' }) : null,
+    );
+    const deriveEngineArtifact = vi.fn();
+
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'ghost')],
+        cast: narratorCast,
+        provider,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        // Global Qwen-unavailable, same as the C1 exemption tests — this is
+        // the condition that must reach EITHER the pre-pass's
+        // 'engine-unavailable' classification OR (pre-fix)
+        // applyQwenFallback's C1 throw. It must reach one of the two, never
+        // silently render.
+        qwenUnavailable: true,
+        cloneResolverDepsOverride: {
+          readEntry,
+          deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
+        },
+      }),
+    ).rejects.toBeInstanceOf(UnresolvableClonedVoiceError);
+
+    // Placebo-proof: NO synth call at all, and the resolver DID look up the
+    // narrator's cloned entry — proving the gate (not some unrelated path)
+    // caught this. Reverting the IMPORTANT-1 fix makes this test fail: the
+    // chapter renders the 'ghost' line on the narrator's stale cloned voice
+    // via applyQwenFallback instead of rejecting (see task report for the
+    // revert-and-confirm-fail verification).
+    expect(provider.calls).toHaveLength(0);
+    expect(readEntry).toHaveBeenCalledWith('lib-narrator-clone');
+    expect(deriveEngineArtifact).not.toHaveBeenCalled();
   });
 });

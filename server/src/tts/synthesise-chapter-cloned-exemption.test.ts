@@ -1,4 +1,4 @@
-/* fs-38 Wave 3b1 — the C1 never-substitute guard. A cloned-provenance Qwen
+/* fs-38 Wave 3b1 — the C1 never-substitute guard: a cloned-provenance Qwen
    group must RAISE (not reroute) when Qwen is unavailable — and provably
    render on no other voice (guard the placebo trap).
 
@@ -8,10 +8,27 @@
    REAL on-disk voice library (which has no such entry in this worktree) and
    fail every cloned-voice test here with 'misconfigured' regardless of what
    they're actually testing. `cloneResolverDepsOverride` fakes a HEALTHY
-   'lib-clone' entry so these tests keep exercising exactly the C1 exemption
-   behaviour they were written for — see
-   `synthesise-chapter-cloned-resolver.test.ts` for the resolver pre-pass's
-   own dedicated coverage (revoked/readiness-gate/repairable). */
+   'lib-clone' entry so cases 2 and 3 below keep exercising exactly the
+   behaviour they were written for — see `synthesise-chapter-cloned-resolver
+   .test.ts` for the resolver pre-pass's own dedicated coverage
+   (revoked/readiness-gate/repairable/orphan-narrator).
+
+   Task-6-review correction (IMPORTANT-2): case 1 ("raises … when a cloned
+   voice + Qwen is unavailable") no longer exercises `applyQwenFallback`'s C1
+   throw — it now rejects at the pre-pass `await` instead, because the
+   pre-pass's `engineUnavailable` input (`routedEngine !== 'qwen' ||
+   qwenUnavailable`) is a strict superset of C1's own trigger condition and
+   `classifyClonedVoice` treats it as broken unconditionally, regardless of
+   the "healthy" entry `fakeCloneResolverDeps` feeds it. The assertions
+   (rejects with `UnresolvableClonedVoiceError`, zero synth calls on either
+   provider) still hold and are still worth pinning — they just now prove
+   the pre-pass's `engine-unavailable` classification produces the same
+   never-substitute outcome, not `applyQwenFallback`'s own branch. See the
+   defence-in-depth comment on that branch in `synthesise-chapter.ts` (C1,
+   `applyQwenFallback`) for why it's retained as an now-unreachable-in-
+   production backstop, and `synthesise-chapter-cloned-resolver.test.ts`'s
+   orphaned-narrator case for the test that actually pins the pre-pass
+   catching this. */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   synthesiseChapter,
