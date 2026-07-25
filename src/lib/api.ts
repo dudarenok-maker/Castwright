@@ -9390,6 +9390,7 @@ async function realRestartSidecar(): Promise<{ ok: boolean; error?: string }> {
    confirmed casts. See api-types.ts's listVoiceLibrary operation doc. */
 
 export type VoiceLibraryEntry = ApiComponents['schemas']['VoiceLibraryEntry'];
+export type CloneSampleCandidate = ApiComponents['schemas']['CloneSampleCandidate'];
 export interface VoiceLibraryUsageEntry {
   bookId: string;
   bookTitle: string;
@@ -9554,6 +9555,24 @@ async function realSampleLibraryVoice(voiceUuid: string): Promise<{ url: string 
   return res.json();
 }
 
+async function realCloneVoiceSample(form: FormData): Promise<CloneSampleCandidate> {
+  const res = await fetch('/api/voice-library/clone-sample', { method: 'POST', body: form });
+  if (!res.ok)
+    throw new Error(
+      `Clone sample failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realRevokeVoiceLibraryEntry(voiceUuid: string): Promise<VoiceLibraryEntry> {
+  const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}/revoke`, {
+    method: 'POST',
+  });
+  if (!res.ok)
+    throw new Error(`Revoke failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
 /* In-memory mock backing store, seeded from ../mocks/voice-library.ts.
    Exported so api.voice-library.test.ts can exercise the mock pair
    directly — the api module locks USE_MOCKS at import time, mirroring
@@ -9712,6 +9731,27 @@ export async function mockSampleLibraryVoice(voiceUuid: string): Promise<{ url: 
   const entry = mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid);
   if (!entry) throw new Error(`No voice-library entry "${voiceUuid}".`);
   return { url: stubAudioA };
+}
+
+export async function mockCloneVoiceSample(_form: FormData): Promise<CloneSampleCandidate> {
+  await wait(300);
+  return {
+    candidateId: `cand-${Math.random().toString(36).slice(2, 10)}`,
+    transcript: 'the quick brown fox jumped',
+    durationSeconds: 9,
+    sampleRate: 24_000,
+    qualityWarnings: [],
+  };
+}
+
+export async function mockRevokeVoiceLibraryEntry(voiceUuid: string): Promise<VoiceLibraryEntry> {
+  await wait(150);
+  mockVoiceLibraryEntries = mockVoiceLibraryEntries.map((e) =>
+    e.voiceUuid === voiceUuid && e.consent
+      ? { ...e, consent: { ...e.consent, revokedAt: new Date().toISOString() } }
+      : e,
+  );
+  return mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid)!;
 }
 
 /* Chapter audio + revisions polling stay mocked for now — both belong to the
@@ -10014,6 +10054,8 @@ const real = {
   promoteToLibrary: realPromoteToLibrary,
   assignLibraryVoice: realAssignLibraryVoice,
   sampleLibraryVoice: realSampleLibraryVoice,
+  cloneVoiceSample: realCloneVoiceSample,
+  revokeVoiceLibraryEntry: realRevokeVoiceLibraryEntry,
 };
 
 const mock = {
@@ -10303,6 +10345,8 @@ const mock = {
   promoteToLibrary: mockPromoteToLibrary,
   assignLibraryVoice: mockAssignLibraryVoice,
   sampleLibraryVoice: mockSampleLibraryVoice,
+  cloneVoiceSample: mockCloneVoiceSample,
+  revokeVoiceLibraryEntry: mockRevokeVoiceLibraryEntry,
 };
 
 /* fs-20 — re-export so the Admin trend panel + its tests import the telemetry

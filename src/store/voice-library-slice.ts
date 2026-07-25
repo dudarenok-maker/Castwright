@@ -149,6 +149,19 @@ export const promoteCharacterVoice = createAsyncThunk(
   },
 );
 
+export const cloneSample = createAsyncThunk('voiceLibrary/cloneSample', async (form: FormData) => {
+  return api.cloneVoiceSample(form);
+});
+
+export const revokeVoice = createAsyncThunk(
+  'voiceLibrary/revoke',
+  async (voiceUuid: string, { dispatch }) => {
+    const entry = await api.revokeVoiceLibraryEntry(voiceUuid);
+    await dispatch(fetchVoiceLibrary());
+    return entry;
+  },
+);
+
 /* ── Slice ───────────────────────────────────────────────────────────── */
 
 export const voiceLibrarySlice = createSlice({

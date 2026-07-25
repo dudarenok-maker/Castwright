@@ -63,6 +63,31 @@ export const MOCK_VOICE_LIBRARY_ENTRIES: VoiceLibraryEntry[] = [
     createdAt: CREATED_AT,
     updatedAt: UPDATED_AT,
   },
+  {
+    voiceUuid: 'lib-cloned-demo',
+    name: 'Mum (cloned)',
+    provenance: 'cloned',
+    tags: [],
+    pinned: false,
+    consent: {
+      personName: 'Mum',
+      relationship: 'family-with-permission',
+      permittedUse: 'personal',
+      attestedAt: '2026-07-20T00:00:00Z',
+      attestedBy: 'me',
+    },
+    master: {
+      clipFile: 'master.wav',
+      sampleRate: 24_000,
+      durationSeconds: 12,
+      transcript: 'demo',
+      transcriptSource: 'whisper',
+      captureMethod: 'record',
+    },
+    engines: {},
+    createdAt: '2026-07-20T00:00:00Z',
+    updatedAt: '2026-07-20T00:00:00Z',
+  },
 ];
 
 /* Returned by DELETE /api/voice-library/lib-used without ?confirm=1 — mirrors
