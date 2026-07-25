@@ -3172,6 +3172,34 @@ paths:
         '404':
           description: Book or character not found
 
+  /voice-library/clone-sample:
+    post:
+      operationId: cloneVoiceSample
+      summary: Ingest a voice sample (upload or recorded blob) into an ephemeral candidate
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [audio]
+              properties:
+                audio: { type: string, format: binary }
+                captureMethod: { type: string, enum: [upload, record] }
+      responses:
+        '202': { description: Candidate created, content: { application/json: { schema: { $ref: '#/components/schemas/CloneSampleCandidate' } } } }
+        '400': { description: Bad or unusable audio }
+        '404': { description: Voice library disabled }
+  /voice-library/{voiceUuid}/revoke:
+    post:
+      operationId: revokeVoiceLibraryEntry
+      summary: Revoke consent for a cloned voice (hides it and makes it unrenderable)
+      parameters:
+        - { name: voiceUuid, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Revoked, content: { application/json: { schema: { $ref: '#/components/schemas/VoiceLibraryEntry' } } } }
+        '404': { description: No such entry / disabled }
+
 # ---------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------
@@ -4945,6 +4973,27 @@ components:
           type: array
           items: { $ref: '#/components/schemas/Voice' }
 
+    VoiceMaster:
+      type: object
+      required: [clipFile, sampleRate, durationSeconds, transcript, transcriptSource, captureMethod]
+      properties:
+        clipFile: { type: string, description: "'master.wav', relative to the entry dir" }
+        sampleRate: { type: integer }
+        durationSeconds: { type: number }
+        transcript: { type: string }
+        transcriptSource: { type: string, enum: [whisper, user] }
+        captureMethod: { type: string, enum: [upload, record] }
+    CloneSampleCandidate:
+      type: object
+      required: [candidateId, transcript, durationSeconds, sampleRate, qualityWarnings]
+      properties:
+        candidateId: { type: string }
+        transcript: { type: string }
+        durationSeconds: { type: number }
+        sampleRate: { type: integer }
+        qualityWarnings: { type: array, items: { type: string } }
+        clipPreviewUrl: { type: string }
+
     VoiceLibraryEntry:
       type: object
       required: [voiceUuid, name, provenance, tags, pinned, engines, createdAt, updatedAt]
@@ -4971,6 +5020,8 @@ components:
           properties: { bookId: { type: string }, characterId: { type: string } }
         createdAt: { type: string }
         updatedAt: { type: string }
+        master:
+          $ref: '#/components/schemas/VoiceMaster'
     VoiceLibraryEngines:
       type: object
       properties:

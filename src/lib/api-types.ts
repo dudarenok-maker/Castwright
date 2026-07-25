@@ -2412,6 +2412,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/voice-library/clone-sample": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest a voice sample (upload or recorded blob) into an ephemeral candidate */
+        post: operations["cloneVoiceSample"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/voice-library/{voiceUuid}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke consent for a cloned voice (hides it and makes it unrenderable) */
+        post: operations["revokeVoiceLibraryEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3777,6 +3811,25 @@ export interface components {
         VoiceLibraryResponse: {
             voices: components["schemas"]["Voice"][];
         };
+        VoiceMaster: {
+            /** @description 'master.wav', relative to the entry dir */
+            clipFile: string;
+            sampleRate: number;
+            durationSeconds: number;
+            transcript: string;
+            /** @enum {string} */
+            transcriptSource: "whisper" | "user";
+            /** @enum {string} */
+            captureMethod: "upload" | "record";
+        };
+        CloneSampleCandidate: {
+            candidateId: string;
+            transcript: string;
+            durationSeconds: number;
+            sampleRate: number;
+            qualityWarnings: string[];
+            clipPreviewUrl?: string;
+        };
         VoiceLibraryEntry: {
             voiceUuid: string;
             name: string;
@@ -3804,6 +3857,7 @@ export interface components {
             };
             createdAt: string;
             updatedAt: string;
+            master?: components["schemas"]["VoiceMaster"];
         };
         VoiceLibraryEngines: {
             qwen?: {
@@ -8574,6 +8628,78 @@ export interface operations {
                 content?: never;
             };
             /** @description Book or character not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    cloneVoiceSample: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    audio: string;
+                    /** @enum {string} */
+                    captureMethod?: "upload" | "record";
+                };
+            };
+        };
+        responses: {
+            /** @description Candidate created */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloneSampleCandidate"];
+                };
+            };
+            /** @description Bad or unusable audio */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Voice library disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    revokeVoiceLibraryEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                voiceUuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceLibraryEntry"];
+                };
+            };
+            /** @description No such entry / disabled */
             404: {
                 headers: {
                     [name: string]: unknown;
