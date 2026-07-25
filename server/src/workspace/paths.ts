@@ -312,6 +312,18 @@ export function qwenVoicePtPath(name: string): string {
   return p;
 }
 
+/** Path to a designed voice's retained reference-clip WAV (fs-38 Wave 3b2
+    §2.3) — `name` is the full artifact key including its `__master` suffix,
+    e.g. `qwen-<uuid>__master`, mirroring how `qwenVoicePtPath` is called with
+    `${key}__1.7b`. Written by the sidecar's `design_voice` (not consumed by
+    voice design itself — see `purgeCloneArtifacts`, the only current
+    consumer here, which erases it alongside the other clone artifacts). */
+export function qwenVoiceWavPath(name: string): string {
+  const p = join(qwenVoicesDir(), `${sanitizeIdSegment(safeSegment(name))}.wav`);
+  assertContained(qwenVoicesDir(), p);
+  return p;
+}
+
 /** fs-38 Wave 1 — workspace-level voice-library manifest jail. Each library
     entry gets its own directory keyed by voiceUuid, holding `voice.json` (the
     manifest, see workspace/voice-library.ts) plus future per-entry sidecar

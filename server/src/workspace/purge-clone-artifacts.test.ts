@@ -40,7 +40,7 @@ let purge: typeof import('./purge-clone-artifacts.js');
 let paths: typeof import('./paths.js');
 let fetchMock: ReturnType<typeof vi.fn>;
 
-function seed(name: string, ext: 'pt' | 'json'): string {
+function seed(name: string, ext: 'pt' | 'json' | 'wav'): string {
   const p = join(paths.qwenVoicesDir(), `${name}.${ext}`);
   writeFileSync(p, ext === 'json' ? '{}' : 'binary-stub');
   return p;
@@ -75,17 +75,18 @@ afterEach(() => {
 });
 
 describe('purgeCloneArtifacts', () => {
-  it('erases the base, 1.7B, manifest, and preview artifacts, and purges samples', async () => {
+  it('erases the base, 1.7B, manifest, preview, and master-clip artifacts, and purges samples', async () => {
     const key = 'qwen-u1';
     const ptFile = seed(key, 'pt');
     const jsonFile = seed(key, 'json');
     const pt17bFile = seed(`${key}__1.7b`, 'pt'); // the gap this closes
     const previewPtFile = seed(`${key}-preview`, 'pt');
     const previewJsonFile = seed(`${key}-preview`, 'json');
+    const masterWavFile = seed(`${key}__master`, 'wav'); // §2.3 designed-voice reference clip
 
     await purge.purgeCloneArtifacts('u1');
 
-    for (const f of [ptFile, jsonFile, pt17bFile, previewPtFile, previewJsonFile]) {
+    for (const f of [ptFile, jsonFile, pt17bFile, previewPtFile, previewJsonFile, masterWavFile]) {
       expect(existsSync(f)).toBe(false);
     }
     expect(purgeVoiceSamples).toHaveBeenCalledWith(key);

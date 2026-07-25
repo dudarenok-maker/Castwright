@@ -12,7 +12,7 @@
 
 import { rm } from 'node:fs/promises';
 import { qwenVoicePtPath } from '../routes/qwen-voice.js';
-import { qwenVoiceSidecarPath } from './paths.js';
+import { qwenVoiceSidecarPath, qwenVoiceWavPath } from './paths.js';
 import { removeEntryDir } from './voice-library.js';
 import { purgeVoiceSamples } from '../tts/voice-sample-cache.js';
 import { getResolvedSidecarUrl } from './user-settings.js';
@@ -28,6 +28,9 @@ export async function purgeCloneArtifacts(
     qwenVoicePtPath(`${key}__1.7b`),
     qwenVoicePtPath(`${key}-preview`),
     qwenVoiceSidecarPath(`${key}-preview`),
+    // §2.3 (fs-38 Wave 3b2, optional Task 11) — a DESIGNED voice's retained
+    // reference clip. No-op (rm force) for a plain clone, which never has one.
+    qwenVoiceWavPath(`${key}__master`),
   ];
   for (const f of files) await rm(f, { force: true }).catch(() => {});
   purgeVoiceSamples(key);
