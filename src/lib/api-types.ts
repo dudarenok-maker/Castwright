@@ -2429,6 +2429,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/voice-library/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Distil an ingested clone-sample candidate into a persisted cloned voice (phase 2, 3b1) */
+        post: operations["cloneVoice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/voice-library/{voiceUuid}/revoke": {
         parameters: {
             query?: never;
@@ -3881,6 +3898,18 @@ export interface components {
             attestedAt: string;
             attestedBy: string;
             revokedAt?: string;
+        };
+        CloneVoiceRequest: {
+            candidateId: string;
+            /** @description Optional display name; defaults to the consent personName */
+            name?: string;
+            consent: {
+                personName: string;
+                /** @enum {string} */
+                relationship: "self" | "family-with-permission" | "guardian-of-minor";
+                /** @enum {string} */
+                permittedUse: "personal";
+            };
         };
         VoiceSourceAttestation: {
             source: string;
@@ -8672,6 +8701,72 @@ export interface operations {
             };
             /** @description Voice library disabled */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    cloneVoice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloneVoiceRequest"];
+            };
+        };
+        responses: {
+            /** @description Cloned voice created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceLibraryEntry"];
+                };
+            };
+            /** @description Missing candidateId */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such candidate / voice library disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A clone for this candidate is already running */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Consent is absent or structurally invalid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Sidecar clone failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Sidecar has no GPU capacity / is recycling */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

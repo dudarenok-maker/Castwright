@@ -3190,6 +3190,23 @@ paths:
         '202': { description: Candidate created, content: { application/json: { schema: { $ref: '#/components/schemas/CloneSampleCandidate' } } } }
         '400': { description: Bad or unusable audio }
         '404': { description: Voice library disabled }
+  /voice-library/clone:
+    post:
+      operationId: cloneVoice
+      summary: Distil an ingested clone-sample candidate into a persisted cloned voice (phase 2, 3b1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CloneVoiceRequest' }
+      responses:
+        '200': { description: Cloned voice created, content: { application/json: { schema: { $ref: '#/components/schemas/VoiceLibraryEntry' } } } }
+        '400': { description: Missing candidateId }
+        '404': { description: No such candidate / voice library disabled }
+        '409': { description: A clone for this candidate is already running }
+        '422': { description: Consent is absent or structurally invalid }
+        '502': { description: Sidecar clone failed }
+        '503': { description: Sidecar has no GPU capacity / is recycling }
   /voice-library/{voiceUuid}/revoke:
     post:
       operationId: revokeVoiceLibraryEntry
@@ -5048,6 +5065,19 @@ components:
         attestedAt: { type: string }
         attestedBy: { type: string }
         revokedAt: { type: string }
+    CloneVoiceRequest:
+      type: object
+      required: [candidateId, consent]
+      properties:
+        candidateId: { type: string }
+        name: { type: string, description: Optional display name; defaults to the consent personName }
+        consent:
+          type: object
+          required: [personName, relationship, permittedUse]
+          properties:
+            personName: { type: string }
+            relationship: { type: string, enum: [self, family-with-permission, guardian-of-minor] }
+            permittedUse: { type: string, enum: [personal] }
     VoiceSourceAttestation:
       type: object
       required: [source, rightsNote, attestedAt]
