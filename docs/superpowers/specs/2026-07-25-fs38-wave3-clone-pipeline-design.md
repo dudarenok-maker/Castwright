@@ -3,391 +3,308 @@
 > Status: design — awaiting approval → `writing-plans` (plan sub-wave **3a** first)
 > Feature: fs-38 voice cloning · issue [#624](https://github.com/dudarenok-maker/Castwright/issues/624) · master doc [`docs/features/194-voice-cloning.md`](../../features/194-voice-cloning.md)
 > Builds on: fs-38 Wave 1 (voice library store), merged `3d8e10f4` — references the **post-Wave-1** `main` seams by name.
-> Adversarial `assumption-checker` pass applied (2026-07-25); the four mislocated-mechanism claims below are the corrections it surfaced.
+> Reviewed by two independent adversarial passes (`assumption-checker` + Fable, 2026-07-25); their code-verified corrections are folded below.
 
 ## 1. Summary & scope
 
 Wave 1 shipped the book-independent voice library and **scaffolded** the cloning
 data model — `provenance: 'cloned'`, `VoiceConsentRecord`, `VoiceSourceAttestation`,
-`sampleTranscript`/`sampleMeta`, and a per-engine `VoiceLibraryEngineStatus`
-lifecycle (`ready` | `deriving` | `stale` | `failed`) — all currently inert.
-Wave 3 **activates** that scaffolding into a working clone pipeline: a user brings
-a voice sample (record **or** upload), attests consent, and gets a reusable
-**cloned** voice cast like a designed one — consistent across a book/series, on
-**both** the Qwen and XTTS engines, and **never silently substituted**.
+`sampleTranscript`/`sampleMeta`, a per-engine `VoiceLibraryEngineStatus` lifecycle
+(`ready`|`deriving`|`stale`|`failed`), **and the cross-book matcher exclusion**
+(`library-cast-scan.ts:81`) — most currently inert. Wave 3 **activates** that
+scaffolding into a working clone pipeline: a user brings a voice sample (record or
+upload), attests consent, and gets a reusable **cloned** voice cast like a designed
+one — consistent across a book/series, on both the Qwen and XTTS engines, and
+**never silently substituted**.
 
 ### 1.1 Sub-wave decomposition (the delivery unit)
 
-The `assumption-checker` established that two engines + the never-substitute
-resolver + a recorder in one PR cannot get a competent review, and that the
-resolver work is materially more invasive than a single function change. Wave 3
-therefore ships as **three independently-reviewable sub-waves**, each its own
-plan + PR + acceptance. This design doc is the umbrella spec; **`writing-plans`
-produces the 3a plan first**, and 3b/3c get their own plans when scheduled.
+Two engines + the never-substitute resolver + a recorder in one PR cannot get a
+competent review, and the resolver work is materially more invasive than a single
+function change. Wave 3 ships as **four independently-reviewable sub-waves**, each
+its own plan + PR + acceptance. This doc is the umbrella spec; **`writing-plans`
+produces the 3a plan first**; later sub-waves get their own plans when scheduled.
 
-| Sub-wave | Scope | Ships alone? | Depends on |
-|---|---|---|---|
-| **3a — Ingest, consent, recorder** (no ML) | ffmpeg ingest (upload + recorder), quality gate, Whisper transcript, `master.wav` persistence + WAV writer, consent-at-write store enforcement, cloned-section UI shell, cross-book exclusion | Yes — capture + a persisted, consented (but not-yet-cloned) sample is a coherent slice | Wave 1 |
-| **3b — Qwen clone + resolver** | `/qwen/clone-voice` extraction, `deriveEngineArtifact` (Qwen), the three-state resolver in `synthesise-chapter.ts` **+ sidecar fail-loud**, cast assignment, ECAPA fidelity, two-phase wizard wired to Qwen | Yes — the actual clone payoff on the **default** engine | 3a |
-| **3c — XTTS clone** | `/xtts/clone-voice` (`get_conditioning_latents` + low-level `inference`), latents-backed Coqui synth branch + its fail-loud, designed-voice XTTS-eligibility (spike-gated), wizard engine choice | Yes — second engine for the same contract | 3b (reuses the resolver + derive contract) |
+| Sub-wave | Scope | Nature |
+|---|---|---|
+| **3a — Ingest, consent, recorder** | ffmpeg ingest (upload + recorder), quality gate, Whisper transcript, `master.wav` write, OpenAPI schema, consent-at-write store guard, wizard **phase 1**, cloned-section UI shell, sample-route consent gate | **No-ML, behind-flag engineering slice.** CI-verifiable, no GPU. See honesty note below. |
+| **3b1 — Qwen clone (happy path)** | `design_voice` clip-persist + `/qwen/clone-voice` extraction, `deriveEngineArtifact` (Qwen), `POST /clone`, wizard **phase 2**, save + cast assignment, ECAPA fidelity, **the C1 `applyQwenFallback` cloned-exemption** | **First user-visible clone**, on the default engine. Interim safety floor is real (Qwen already fails loud on a missing `.pt` — §3.1). |
+| **3b2 — Resolver + lifecycle** | The three-state resolver as an async **per-chapter pre-pass** in `synthesise-chapter.ts`, transparent re-derive, orphan self-heal, revocation-at-render, stat-before-remove, the §5.4 blast-radius + §5.5 1.7B decisions | **The invasive synth-path work**, isolated so it can't block the payoff. |
+| **3c — XTTS clone** | `/xtts/clone-voice` (`get_conditioning_latents` + low-level `inference`), latents-backed Coqui synth branch + its fail-loud, the coqui voice-key wire contract (§3.2), designed-voice XTTS-eligibility (spike-gated) | **Greenfield, API-verified.** Remaining risk is quality, not feasibility. |
 
-**XTTS API spike — GREEN (verified 2026-07-25):** `get_conditioning_latents(audio_path, …)`
-(returns latents + speaker embedding) and low-level `inference(text, language,
-gpt_cond_latent, speaker_embedding, …)` both exist on the installed
-`coqui-tts 0.27.5` XTTS model (`…/TTS/tts/models/xtts.py:331,448`). 3c rests on
-verified API, not an assumption. The remaining 3c risk is *quality* (does a clone
-from a real clip / a synthetic Qwen clip sound right), not *feasibility*.
+**3a honesty note (per Fable).** Under this spec's own rules, 3a persists **no
+cloned entry** — phase 1 (`POST clone-sample`) yields an *ephemeral candidate*, and
+§7 forbids a half-formed entry, so the first entry is written by 3b1's `POST /clone`.
+3a is therefore a **behind-the-flag engineering slice** whose UI dead-ends at the
+consent screen; three of its items (the consent-at-write guard, the revoke route, the
+cloned-section states) have **no reachable production caller until 3b1**. That is a
+normal behind-flag merge in this repo — but it is *not* a user-facing feature on its
+own. The store guard + schema live in 3a because they are the store contract the
+whole wave builds on; the first ship a user notices is 3b1.
+
+**XTTS API spike — GREEN (2026-07-25):** `get_conditioning_latents(audio_path, …)`
+and low-level `inference(text, language, gpt_cond_latent, speaker_embedding, …)` both
+exist on the installed `coqui-tts 0.27.5` XTTS model (`…/TTS/tts/models/xtts.py:331,448`).
 
 **Out of scope (later / doc 194 wave 5):** A/B compare of a clone vs. a designed
-alternative in the wizard; cloned-voice drift auditions; **1.7B-native clone
-prompts** (cloned voices render on the 0.6B Base only in v1 — no anchored-emotion
-variant minting for cloned voices; see §5.4); any sharing of cloned voices; the
-doc-194 "same-owner/same-consent" cross-book relaxation.
+alternative; cloned-voice drift auditions; any sharing of cloned voices; the doc-194
+"same-owner/same-consent" cross-book relaxation. The **1.7B-native clone** question is
+*not* punted — it is a live §5.5 decision because the sidecar auto-derives one today.
 
 ### 1.2 Wave-ordering note
 
-Doc 194 sequences XTTS (wave 3) before Qwen (wave 4) and splits capture from clone.
-This design collapses doc-194 waves 2–4 into the fs-38-Wave-3 umbrella and **inverts
-the engine emphasis**: Qwen clone is a refactor of proven code and the product's
-**default** engine, so it leads (3b); XTTS is greenfield and ships last (3c).
+Doc 194 sequences XTTS before Qwen and splits capture from clone; this design inverts
+the engine emphasis (Qwen leads — it is the default engine and a refactor of proven
+code). **The stale doc-194 roadmap + "XTTS reference path first" DoD text must be
+updated in the same PR that lands 3a** (M4).
 
 ## 2. Data model
 
 Additive extensions to the Wave-1 `VoiceLibraryEntry`
-(`server/src/workspace/voice-library.ts`); all changes land **OpenAPI-first**
-(`openapi.yaml` → `npm run openapi:types`). **Sub-wave 3a** owns the schema.
+(`server/src/workspace/voice-library.ts`); all changes land **OpenAPI-first**.
+**3a** owns the schema.
 
-### 2.1 Manifest (`voice.json`) additions
+### 2.1 Manifest additions
 
-- `provenance: 'cloned'` — activated. **Consent hard-required** for this value; the
-  store refuses to write a `cloned` entry without a valid, non-revoked `consent`
-  (see §4.3 for the *new* enforcement — it does not exist in Wave 1's `writeEntry`).
-- `master?: VoiceMaster` — **new**, present for every voice retaining a source clip
-  (all newly-created cloned voices; designed voices per §2.3):
+- `provenance: 'cloned'` — activated; **consent hard-required** (see §4.3 — new
+  enforcement, absent in Wave-1 `writeEntry`).
+- `master?: VoiceMaster` — new: `{ clipFile:'master.wav', sampleRate, durationSeconds,
+  transcript, transcriptSource:'whisper'|'user', captureMethod:'upload'|'record' }`.
+  `sampleTranscript` kept in sync with `master.transcript`.
+- `consent?: VoiceConsentRecord` — Wave-1 shape unchanged, now populated
+  (`personName`, `relationship:'self'|'family-with-permission'|'guardian-of-minor'`,
+  `permittedUse:'personal'`, `attestedAt`, `attestedBy`, `revokedAt?`). No enum change.
+- `engines.{qwen,xtts}?: VoiceLibraryEngineStatus` — Wave-1 shape unchanged; the
+  resolver's state source (§5). `status` ∈ `ready|deriving|stale|failed`;
+  `baseModel`/`coquiVersion` stamp the derivation model for orphan detection.
 
-  ```ts
-  interface VoiceMaster {
-    clipFile: string;              // 'master.wav', relative to the entry dir
-    sampleRate: number;
-    durationSeconds: number;
-    transcript: string;            // ref_text for clone-prompt derivation
-    transcriptSource: 'whisper' | 'user';
-    captureMethod: 'upload' | 'record';
-  }
-  ```
+### 2.2 On-disk layout (corrected per Fable I2)
 
-  `sampleTranscript` (Wave-1) is kept in sync with `master.transcript`.
-
-- `consent?: VoiceConsentRecord` — Wave-1 shape **unchanged**, now populated:
-  `{ personName, relationship: 'self'|'family-with-permission'|'guardian-of-minor',
-  permittedUse: 'personal', attestedAt, attestedBy, revokedAt? }`. The UI's three
-  relationship choices map onto this shipped enum verbatim — **no enum change**.
-
-- `engines.{qwen,xtts}?: VoiceLibraryEngineStatus` — Wave-1 shape **unchanged**, now
-  the resolver's state source (§5). `status` ∈ `ready|deriving|stale|failed`;
-  `baseModel` (Qwen) / `coquiVersion` (XTTS) stamp the model the artifact was derived
-  against, for orphan detection.
-
-### 2.2 On-disk layout (per voice, under the Wave-1 entry dir)
+**The `.pt` does NOT move into the entry dir** — the sidecar reads Qwen clone prompts
+only from `QWEN_VOICES_DIR` (`<workspace>/voices/qwen/`, `main.py:~2828`; Node writes
+via `qwenVoicePtPath`). Relocating it breaks every synth path.
 
 ```
-<WORKSPACE_ROOT>/voice-library/<voiceUuid>/
-  voice.json          ← manifest (Wave-1 store, atomic tmp+rename)
-  master.wav          ← retained normalized source clip     [NEW — the master]
-  qwen.pt             ← derived Qwen clone prompt            (regenerable cache)
-  xtts-latents.pt     ← derived XTTS conditioning latents    (regenerable cache)
-  preview.mp3         ← last audition
+<WORKSPACE_ROOT>/voice-library/<voiceUuid>/     <workspace>/voices/qwen/
+  voice.json    ← manifest (atomic tmp+rename)    qwen-<voiceUuid>.pt   ← Qwen cache
+  master.wav    ← retained source clip [NEW]
+  preview.mp3   ← last audition
 ```
 
-`master.wav` is **never auto-deleted**; `.pt`/latents are freely rebuildable from
-it. Storage-key scope stays `qwen-<voiceUuid>` (Wave-1 convention). **Note:** the
-codebase has **no WAV writer** today — `encodePcmToAudio` (`tts/mp3.ts:52`) emits
-only mp3/aac/opus. Writing `master.wav` is a **new ffmpeg `-f wav` container step**
-(3a), not a reuse of an existing encoder.
+`master.wav` is never auto-deleted; `.pt`/latents rebuild from it. **`xtts-latents.pt`
+location is an explicit 3c decision** (a `voices/xtts/` sibling vs. the entry dir),
+gated on how the sidecar loads it (§3.2). Storage-key scope stays `qwen-<voiceUuid>`.
+**No WAV writer exists** — either a ~20-line Node RIFF header over the normalized PCM
+(no subprocess) or a new ffmpeg `-f wav` step; 3a plan picks one and says why (M1).
 
-### 2.3 Designed voices also retain `master.wav` (deliberate, additive change)
+### 2.3 Designed voices also retain `master.wav` (additive)
 
-Today the Qwen design flow **discards** its reference clip **inside the sidecar** —
+Today the design flow **discards** its reference clip **inside the sidecar** —
 `design_voice` consumes `ref_audio` into `create_voice_clone_prompt` (`main.py:~3754`)
-and returns only the *audition* PCM; the server never sees the clip. Retaining it
-is therefore **net-new sidecar work** (persist/return the ref clip), owned by 3b.
-
-- **This is strictly additive.** `design_voice`'s audition output and voice quality
-  are unchanged; the *only* addition is persisting the reference clip. (The earlier
-  "byte-for-byte unchanged" framing was wrong — the function *does* change, just
-  additively. The regression guard is: audition PCM + `.pt` identical to before.)
-- **Payoff:** deterministic orphan-repair for all voices; one derive path.
-- **Caveat (down-ranked from "for free"):** deriving XTTS latents from a *synthetic*
-  Qwen calibration clip is **quality-unvalidated** — gated behind the 3c golden-audio
-  check, not assumed.
+and returns only the audition PCM. Retaining it is **net-new sidecar work** (3b1),
+**strictly additive**: `design_voice`'s audition output and `.pt` are unchanged; the
+only addition is persisting the clip (the regression guard). Payoff: deterministic
+orphan-repair for all voices, one derive path. **Caveat:** deriving XTTS latents from
+a *synthetic* Qwen calibration clip is quality-unvalidated — gated behind the 3c
+golden-audio check, not assumed.
 
 ## 3. Sidecar (`server/tts-sidecar/main.py`)
 
-Shared contract: **"derive an engine artifact from a master clip"** —
-`(master-clip + ref_text) → persisted artifact + stamped derivation source`.
+Shared contract: **"derive an engine artifact from a master clip."**
 
-### 3.1 Qwen — `POST /qwen/clone-voice` (3b · extraction)
+### 3.1 Qwen — `POST /qwen/clone-voice` (3b1 · extraction)
 
-`create_voice_clone_prompt(ref_audio, ref_text)` is a Base-0.6B call taking an
-*external* clip (`main.py:~3759`) — confirmed separable from the 1.7B design flow.
-**Factor the shared distillation into one helper** called by both `design_voice`
-and the new endpoint. Scope-honest caveat: the inline logic is embedded in
-`design_voice`'s VRAM-arbitration / `_synth_lock` / cache-eviction machinery, so the
-extracted helper is **narrower than "the whole back-half"** — the plan must isolate
-exactly the clip→`.pt` step. Does **not** load the 1.7B VoiceDesign. **Regression
-guard (mandatory tests):** existing sidecar `test_*` + `qwen-voice.test.ts` stay
-green; the extraction's correctness rides entirely on these being written.
+`create_voice_clone_prompt(ref_audio, ref_text)` is a Base-0.6B call on an external
+clip (`main.py:~3759`) — separable, but embedded in `design_voice`'s VRAM-arbitration
+/ `_synth_lock` / cache-eviction machinery, so the extracted helper is **narrower than
+"the back-half"**; the plan isolates exactly the clip→`.pt` step. Does not load the
+1.7B. **Already fails loud on a missing `.pt`** (`VoiceNotDesignedError`,
+`main.py:~4058` → 409 in `routes/voice-sample.ts:176`) — so 3b1's interim floor
+(clone without the full resolver) is genuinely safe. Regression guard: existing
+sidecar `test_*` + `qwen-voice.test.ts` stay green; `design_voice` audition/`.pt`
+unchanged after extraction.
 
 ### 3.2 XTTS — `POST /xtts/clone-voice` (3c · net-new, API verified)
 
-1. Load XTTS (auto-evicts the analyzer Ollama, as any Coqui `/load`), call
-   `get_conditioning_latents(master.wav) → (gpt_cond_latent, speaker_embedding)`
-   (`xtts.py:331`), persist both to `xtts-latents.pt`.
-2. **New synth branch:** the Coqui synth path today calls only high-level
-   `self._tts.tts(text, speaker, language)` with **baked** speakers
-   (`main.py:1252`). Add a **low-level** `tts_model.inference(text, lang,
-   gpt_cond_latent, speaker_embedding, …)` (`xtts.py:448`) branch for latents-backed
-   voices. This branch **must fail loud** (§5.3) — it must NOT fall through to
-   `FALLBACK_SPEAKER`.
+1. `get_conditioning_latents(master.wav) → (gpt_cond_latent, speaker_embedding)`
+   (`xtts.py:331`), persist to `xtts-latents.pt`.
+2. **New low-level synth branch:** the Coqui path today calls only high-level
+   `self._tts.tts(text, speaker, language)` with baked speakers (`main.py:~1252`). Add
+   a `tts_model.inference(...)` (`xtts.py:448`) branch for latents-backed voices that
+   **fails loud** on missing latents — must NOT fall through to `FALLBACK_SPEAKER`
+   (`main.py:1226-1238`).
+3. **Wire contract (Fable I3 — must be designed in 3c):** `TtsEngine` has **no
+   `'xtts'` id** — the XTTS engine *is* `'coqui'`; `engines.xtts` (manifest) maps to
+   the `coqui` engine slot. Today `pickVoiceForEngine`'s coqui path returns the slot
+   name verbatim (`voice-mapping.ts:343`) with **no `libraryUuid` branch** like qwen's
+   (`:339`), so a cloned name would hit `FALLBACK_SPEAKER`. 3c must add: a coqui
+   voice-key convention (e.g. `xtts-<uuid>`), the coqui-`libraryUuid` branch in
+   `pickVoiceForEngine`, and how the latents path travels to the sidecar.
 
-### 3.3 ref_text — Whisper auto-transcribe (3a)
+### 3.3 ref_text — Whisper `/transcribe` (3a) · 3.4 Fidelity — ECAPA `/embed`, warn-not-block (3b1)
 
-`create_voice_clone_prompt` needs the clip transcript. The in-stack Whisper
-`POST /transcribe` (`main.py:4605`, srv-31) auto-fills it; user-editable.
-`transcriptSource` records `whisper` vs `user`. *(Endpoint confirmed present.)*
-
-### 3.4 Fidelity — ECAPA, warn-not-block (3b)
-
-After the phase-2 preview renders, embed the master clip and the rendered preview
-via `POST /embed` (192-d ECAPA, `main.py:4751`) and cosine-score
-(`embed-client.ts` + `render-integrity/score.ts::cosineToCentroid`). Below a
-threshold → a **non-blocking** wizard warning. Threshold calibrated against the
-srv-36 spike data, not a guessed constant. *(Both endpoints confirmed present.)*
+Whisper `POST /transcribe` (`main.py:~4605`) auto-fills `ref_text` (user-editable;
+`transcriptSource` records which). After the phase-2 preview, embed master + preview
+via `POST /embed` (192-d ECAPA, `main.py:~4751`) and cosine-score
+(`embed-client.ts` + `render-integrity/score.ts::cosineToCentroid`); below a
+srv-36-calibrated threshold → **non-blocking** warning. Both endpoints confirmed present.
 
 ## 4. Server (`server/src/`)
 
 ### 4.1 Ingest pipeline (3a)
 
-1. Multipart upload (multer `memoryStorage`, `routes/cover.ts` pattern) **or** a
-   recorded-blob POST → `decodeAudioToPcm` (`tts/mp3.ts:501`, real ffmpeg,
-   format auto-probed) → normalize (sample-rate + mono) → **write `master.wav` via
-   the new ffmpeg `-f wav` step** (§2.2).
-   - **webm/opus caveat:** MediaRecorder emits webm/opus; `decodeAudioToPcm`'s
-     tested inputs are mp3/m4a/ogg, and webm-from-a-non-seekable-pipe (Matroska
-     tail metadata) is probe-fragile. 3a **adds a webm/opus fixture** to
-     `decode-audio-to-pcm.test.ts` as an acceptance gate for the record path.
-2. **Quality gate:** duration bounds, clip/peak detection, silence/noise floor.
-   Cloning-fatal input (too short / all-silence) **blocks phase 1**; soft issues →
-   non-blocking `qualityChecks` warnings. Concrete thresholds chosen at plan time.
-3. Whisper `/transcribe` → editable `ref_text`.
+Multipart upload (multer `memoryStorage`, `routes/cover.ts`) **or** recorded-blob POST
+→ `decodeAudioToPcm` (`tts/mp3.ts:501`, real ffmpeg, format auto-probed) → normalize
+→ write `master.wav` (§2.2). **webm/opus caveat:** MediaRecorder emits webm/opus;
+`decodeAudioToPcm`'s tested inputs are mp3/m4a/ogg and webm-over-a-non-seekable-pipe is
+probe-fragile — 3a **adds a webm/opus fixture** to `decode-audio-to-pcm.test.ts` as the
+record-path acceptance gate. **Quality gate:** fatal input (too short/all-silence)
+blocks phase 1; soft issues → non-blocking `qualityChecks`. Whisper → editable `ref_text`.
 
-### 4.2 Routes (new `voice-library` sub-routes, gated by `voices.library.enabled`)
+### 4.2 Routes (gated by `voices.library.enabled`)
 
-- `POST /api/voice-library/clone-sample` **(phase 1 · 3a)** — audio in → ingest →
-  ephemeral **candidate** `{ candidateId, transcript, durationSeconds, sampleRate,
-  qualityChecks, clipPreviewUrl }`. No entry, no consent yet.
-- `POST /api/voice-library/clone` **(phase 2 · 3b)** — `{ candidateId, name, consent,
-  targetEngine }` → **consent hard-validated first** (invalid → 4xx, no entry) →
-  `deriveEngineArtifact` for the active engine → render preview → ECAPA score →
-  persist entry. Returns entry + preview + advisory fidelity.
-- `POST /api/voice-library/:uuid/revoke` **(3a)** — stamps `consent.revokedAt`.
-- **Internal `deriveEngineArtifact(uuid, engine)` (3b/3c)** — not a public route:
-  when a voice is resolved for engine X and `engines.X` is absent, `stale`, or its
-  stamped model ≠ current → set `status:'deriving'`, call the sidecar clone endpoint,
-  stamp `status:'ready'`. One function; serves engine-switch **and** orphan self-heal.
+- `POST /api/voice-library/clone-sample` **(phase 1 · 3a)** → ephemeral candidate.
+- `POST /api/voice-library/clone` **(phase 2 · 3b1)** → consent hard-validated first
+  → `deriveEngineArtifact` (active engine) → preview → ECAPA → persist entry.
+- `POST /api/voice-library/:uuid/revoke` **(3a)** → stamps `consent.revokedAt` (see the
+  C2 guard carve-out, §4.3).
+- **`POST /api/voice-library/:uuid/sample` consent gate (Fable I5 · 3a):** the existing
+  sample route (`routes/voice-library.ts:~360`) synthesises via `qwen-<uuid>` with **no
+  consent check** — after revocation the card's Play button would still speak the
+  person. 3a adds a consent-valid gate here + a test.
+- **Internal `deriveEngineArtifact(uuid, engine)` (3b1/3c)** — derives when
+  `engines.X` is absent/`stale`/model-mismatched; serves engine-switch + orphan self-heal.
 
-Clone routes reuse the Wave-1 `SidecarDesignError` (`design-voice-core.ts:33`), which
-already carries `status`/`code`/`reason`, so sidecar 503/502/500 semantics are
-**preserved end-to-end** — absorbing follow-up **#1801** rather than inheriting the
-signal-loss.
+Clone routes reuse `SidecarDesignError` (carries `status`/`code`/`reason`) so 503/502/500
+semantics are preserved — absorbing follow-up **#1801**.
 
-### 4.3 Consent-at-write — NEW store enforcement (3a)
+### 4.3 Consent-at-write guard (3a) — with the C2 carve-out
 
-Wave-1 `writeEntry` (`voice-library.ts:109`) has **no validation hook** — it stamps
-`updatedAt` and writes; `isValidEntry` only checks `voiceUuid`/`name`/`provenance`.
-Consent-at-write is **net-new** and touches the **shared writer** (used by
-designed/imported too). Design: add a guard that **throws** when
-`provenance==='cloned'` and `consent` is absent or `revokedAt` is set. The guard
-lives in `writeEntry` (single choke-point) so *every* caller is covered; its blast
-radius (all provenances now pass through the check, no-op for non-cloned) is called
-out and tested.
+Wave-1 `writeEntry` (`voice-library.ts:109`) has no validation hook. Add a guard at
+that single choke-point that **throws when `provenance==='cloned'` and consent is
+absent/invalid**. **Critical carve-out (Fable C2):** the guard must NOT block the
+`/revoke` write — revocation persists `revokedAt` *through* `writeEntry`. So the guard
+rejects *creation/use with absent-or-invalid consent* but **permits a write whose only
+consent delta is adding `revokedAt`** (or an explicit `allowRevocation` option). Blast
+radius (all provenances traverse the check, no-op for non-cloned) is tested.
 
-### 4.4 Cross-book reuse exclusion — via provenance projection (3a)
+### 4.4 Cross-book exclusion — ALREADY SHIPPED (Fable I1, corrected)
 
-**Corrected location.** `voice-match.ts` scores against *other books' confirmed
-cast* via `scanLibraryCharacters → projectLibraryVoice` (`:87`), and its
-`LibraryVoice` shape carries **no `provenance` field** (`:73`) — a cloned voice
-reaches it only as a cast override (`overrideTtsVoices.<e>.provenance`), which the
-projection **drops**. Exclusion therefore requires **projecting `provenance`
-through** `LibraryCharacterRecord → LibraryVoice` and filtering `cloned` there
-(and excluding cloned entries from any voice-library reuse/assignment listing). A
-test asserts a cloned voice never appears in a cross-book suggestion.
+Wave 1 **already excludes** cloned-provenance assignments at the scan feeder
+(`library-cast-scan.ts:81-83`, before projection, feeding both `voice-match.ts` and
+`series-reuse-link.ts`). **No new matcher work.** What remains for Wave 3 is only:
+keep cloned entries out of **automatic suggestion** surfaces — while **deliberate owner
+assignment from My voices stays allowed** (reconciles with §6.4 and §1's reusable
+premise; the earlier "exclude from any assignment listing" wording was wrong).
 
-## 5. Never-silent-substitution — the resolver (3b)
-
-The invariant this feature exists to protect. The `assumption-checker` corrected
-**where** it lives.
+## 5. Never-silent-substitution — the resolver (3b2, except the 3b1 exemption)
 
 ### 5.1 It is NOT in `pickVoiceForEngine`
+Pure/synchronous (`voice-mapping.ts:317`) — no fs, no async. The resolver isn't there.
 
-`pickVoiceForEngine` (`voice-mapping.ts:317`) is **pure/synchronous** — no
-filesystem, no async, cannot read the manifest or call the sidecar. The resolver
-does **not** go there.
-
-### 5.2 It lives in the synth path
-
-Real resolution + the existing Qwen→Kokoro fallback are in
-`server/src/tts/synthesise-chapter.ts` (`resolveGroup`/`routeFor`/`applyQwenFallback`,
-~`:930–970,1120–1177`) — a per-group, capacity-gated path. The three-state resolver
-is injected **there**, before synth, made **async/stat-aware**:
+### 5.2 It is an async per-chapter PRE-PASS (Fable I4)
+`resolveGroup` is synchronous with ~17 call sites, some inside sync `map`/`filter`
+expressions — making *it* async is a rewrite, and deriving mid-render would contend
+with synth batches for `_synth_lock` + the VRAM semaphore. Instead: an **async pre-pass
+resolves + derives + consent-checks every cloned voice in the chapter's cast BEFORE the
+group loop**; the sync `resolveGroup` then consumes pre-resolved state. `synthesiseChapter`
+has three callers (`generation.ts:1583`, `chapter-splice.ts:310`, `chapter-qa-repair.ts:437`)
+— the pre-pass sits at that single shared entry, which is why the resolver belongs here.
 
 | State | Condition | Behaviour |
 |---|---|---|
-| **Healthy** | `engines.<e>.status==='ready'`, stamped model current, consent valid | render normally |
-| **Repairable** | `master.wav` present, artifact absent / `stale` / model stale | **transparently `deriveEngineArtifact`** ("preparing voice…"), then render — never substitute |
-| **Broken** | `master.wav` missing/deleted **or** consent revoked **or** derive `failed` | raise typed `UnresolvableClonedVoiceError` — **do not substitute** |
+| **Healthy** | `engines.<e>.status==='ready'`, model current, consent valid, engine available | render normally |
+| **Repairable** | `master.wav` present, artifact absent/`stale`/model-stale | pre-pass **derives** ("preparing voice…"), then render |
+| **Broken** | `master.wav` missing **or** consent revoked **or** derive `failed` **or engine unavailable** (see 5.3) | typed `UnresolvableClonedVoiceError` — **never substitute** |
 
-### 5.3 The sidecar must also fail loud
+### 5.3 Close BOTH substitution holes
+- **Node (Fable C1 — the big one, lands in 3b1):** `applyQwenFallback`
+  (`synthesise-chapter.ts:946`) reroutes a Qwen group to Kokoro/Coqui when
+  `qwenUnavailable`. A cloned voice has a name, so `!voiceName` never fires, but
+  `qwenUnavailable` **does** — silently swapping a real person's voice. **Cloned-provenance
+  groups are exempt from `applyQwenFallback`; `qwenUnavailable` + cloned → Broken.** This
+  is the minimum guard 3b1 must ship with its happy path, ahead of the full 3b2 resolver.
+- **Sidecar:** the latents/`.pt` clone-synth branches (§3.1/§3.2) must reject an
+  unknown cloned voice, not fall through to `FALLBACK_SPEAKER`/`FALLBACK_VOICE`
+  (`main.py:1226-1238,1286-1293`). Qwen already does (`VoiceNotDesignedError`); the
+  genuinely new fail-loud work is the **XTTS branch (3c)**.
 
-**Critical, from the audit:** the sidecar *itself* silently substitutes — Coqui →
-`FALLBACK_SPEAKER` (`main.py:1224–1238`), Kokoro → `FALLBACK_VOICE` (`:1286–1293`).
-A missing clone artifact would be swapped **below** the Node resolver. So the
-latents/`.pt`-backed clone-synth branches (§3.1/§3.2) **must reject** an
-unknown/missing cloned voice with an error instead of falling through to
-`FALLBACK_*`. Both layers (Node resolver + sidecar branch) are required; either
-alone leaves a silent-substitution hole. Sidecar tests assert the clone branches
-raise rather than substitute.
+### 5.4 Hard-block blast-radius (3b2 decision)
+Current model is fail-fast — `MissingDesignedVoiceError` aborts the whole chapter.
+"Block only the affected character, continue the rest" is a **different execution
+model** (net-new pre-pass orchestration). v1 floor if per-character proves too invasive:
+fail-the-chapter-with-a-named-repair-prompt (still never a silent swap; coarser blast
+radius). Revocation realistically bites **at the next chapter boundary** (per-chapter
+pre-pass + group cache), not mid-chapter (M3) — state it that way.
 
-### 5.4 Blast-radius of the hard-block — a real design cost
+### 5.5 1.7B path (3b2 decision — NOT a free exclusion · Fable C3)
+`_load_voice_prompt_17b` (`main.py:~4076`) **auto-derives** a 1.7B-native clone prompt
+from the 0.6B `.pt` on cache miss, and fs-56 tiering is **elevate-only** (no downgrade)
+— so a book run at 1.7B default would silently mint a 1.7B prompt of the real person's
+voice, contradicting §1's "0.6B-only" line. The 3b2 plan must choose: **(a)** allow the
+auto-derive — simplest, but the derived `<voice>__1.7b.pt` becomes another
+**consent-scoped artifact** revocation must erase; or **(b)** an active gate —
+per-character downgrade for cloned provenance in `routeFor` + hiding the tier control
+for cloned characters — net-new UI that deliberately breaks the elevate-only invariant.
 
-The current model is **fail-fast**: `MissingDesignedVoiceError` thrown inside
-`resolveGroup` aborts the **whole chapter** synth. The desired
-"block only the affected characters, continue everyone else" is a **different
-execution model** — net-new per-character orchestration in `synthesise-chapter.ts`,
-not a given. **Plan-time decision:** implement per-character continue if tractable;
-otherwise the acceptable **v1 floor** is fail-the-chapter-with-a-named-error +
-repair/reassign prompt (still never a silent substitution — just coarser blast
-radius). The invariant (no silent swap) holds under either; only the granularity
-differs.
-
-**1.7B path:** `create_voice_clone_prompt` also has a 1.7B derivation
-(`main.py:~3940/4141`) for the emotion/instruct quality tier. v1 **excludes** cloned
-voices from the 1.7B path — cloned voices render on the 0.6B Base only (no
-anchored-emotion minting). A cloned voice routed to the 1.7B path resolves to its
-0.6B artifact; 1.7B-native clone is a documented follow-up.
-
-**Revocation bites in-flight renders:** `revokedAt` → Broken; the render hard-blocks
-that voice's characters (per §5.4 granularity) rather than silently continuing.
-
-**Stat-before-remove:** re-derive writes to a temp path, **stats/verifies, then
-swaps** — the working artifact is never removed before its replacement is verified
-(absorbs follow-up **#1804**).
+### 5.6 Stat-before-remove
+Re-derive writes to temp, stats/verifies, then swaps (absorbs **#1804**).
 
 ## 6. Frontend (`src/`)
 
-### 6.1 Two-phase clone wizard (3a shell → 3b/3c wiring)
-
-**Phase 1 — Capture & consent (3a).** Segmented `[ Record | Upload ]`:
-- *Record:* `getUserMedia → MediaRecorder`, live level/clip meter, timer with
-  min/max guidance, re-take loop, explicit mic-permission UX (granted /
-  denied-with-recovery → steer to Upload; LAN HTTPS satisfies secure-context).
-- *Upload:* drop an audio file.
-- Both → `POST clone-sample` → editable transcript, duration, quality warnings, then
-  the **consent form** (person name, relationship, permitted-use note, required "I
-  attest I have this person's permission" checkbox). **Advance disabled until sample
-  acceptable AND consent complete** — enforced in UI **and** re-validated server-side.
-
-**Phase 2 — Clone & preview (3b, +engine choice in 3c).** `POST clone` streams
-progress in the single-design phase vocabulary (`loading-model → deriving →
-rendering`) → audition player + **advisory** ECAPA note + name field → **Save** →
-**My voices**, cloned section. **No A/B compare this wave** (single audition).
-
-### 6.2 Reusable recorder component (3a)
-
-Factored (getUserMedia + MediaRecorder + meter + re-take + permission states);
-touch targets ≥44×44, responsive across the three viewports per the mobile protocol.
-
-### 6.3 Library surfaces — `src/views/voices.tsx` (3a shell, 3b states)
-
-- Cloned voices in **My voices** with a **'Cloned'** provenance badge, consent
-  summary (person + relationship), **Revoke** action.
-- **Broken/Repairable** card states: "Needs repair" pill + re-upload (master missing)
-  or silent transparent re-derive (stale model).
-- Reuse-gated — absent from cross-book surfaces (§4.4).
-
-### 6.4 Cast assignment (3b)
-
-Assigns like any library voice (`overrideTtsVoices` with `libraryUuid` +
-`provenance:'cloned'`). Engine-switch triggers the lazy per-engine derive
-("preparing voice…").
-
-### 6.5 Store & API (3a slice, extended per sub-wave)
-
-Extend Wave-1 `src/store/voice-library-slice.ts` with clone thunks (`cloneSample`,
-`clone`, `revoke`) + candidate/wizard state. Paired `real`+`mock` `src/lib/api.ts`
-entries; OpenAPI-first types. Stays **off** `broadcast-middleware` (Wave-1 choice).
+- **Two-phase wizard:** phase 1 (3a) — segmented `[Record|Upload]`, recorder
+  (getUserMedia + MediaRecorder + meter + re-take + mic-permission→Upload fallback),
+  editable transcript, consent form; **Advance disabled until sample OK AND consent
+  complete** (UI + server-re-validated). Phase 2 (3b1, +engine choice 3c) — progress in
+  the single-design vocabulary, audition + advisory ECAPA + name → Save. No A/B this wave.
+- **Reusable recorder component (3a):** touch targets ≥44×44, responsive per the mobile
+  protocol.
+- **Library surfaces `voices.tsx`:** cloned voices in **My voices** with a 'Cloned'
+  badge, consent summary, Revoke (shell 3a); Broken/Repairable card states (3b2).
+- **Cast assignment (3b1 qwen / 3c coqui):** `overrideTtsVoices` with `libraryUuid` +
+  `provenance:'cloned'`; engine-switch triggers lazy derive.
+- **Store/API:** extend Wave-1 `voice-library-slice.ts` (clone thunks + candidate/wizard
+  state); paired `real`+`mock`; OpenAPI-first; stays off `broadcast-middleware`.
 
 ## 7. Error handling & atomicity
 
-Through-line: **fail loud and named, never silent or half-committed.**
+Fail loud and named, never silent or half-committed. A `cloned` entry is never persisted
+half-formed (manifest written only after derive + preview succeed + consent re-validated).
+Corrupt file → 4xx; mic denied → Upload fallback; sidecar clone errors keep status
+(#1801); re-derive stat-before-remove (#1804); genuine derive failure → Broken.
+**Absorbs #1801 + #1804** (note as "delivered by Wave 3", 3b1).
 
-- Corrupt/unsupported file or ffmpeg decode failure → 4xx specific message; never a
-  silent empty candidate.
-- Mic denied / non-secure context → recorder recovery guidance → Upload tab.
-- A `cloned` entry is **never persisted half-formed** — manifest written (atomic
-  tmp+rename) only after derive **and** preview succeed and consent re-validated.
-- Sidecar clone errors keep status (§4.2, #1801); XTTS load failure under VRAM
-  pressure → named error, no silent engine degrade.
-- Re-derive stat-before-remove (§5, #1804); genuine derive failure → Broken.
+## 8. Testing strategy (per sub-wave)
 
-**Absorbs Wave-1 follow-ups #1801 + #1804** — note as "delivered by Wave 3" (3b) if
-this ships before they're separately addressed.
-
-## 8. Testing strategy
-
-Five harness tiers + e2e + live-GPU acceptance; **per sub-wave** so each PR is
-self-verifying. Every new behaviour ships paired tests.
-
-**3a (no ML):** ingest with real fixtures incl. the **webm/opus** case (fatal-short
-blocks, soft-noise warns); WAV-writer output is a valid WAV; **consent hard-validation
-at the store layer** (cloned without valid consent → `writeEntry` throws) with the
-shared-writer no-op-for-others test; cross-book exclusion (cloned never suggested);
-recorder component with mocked `getUserMedia`/`MediaRecorder` (granted /
-denied-fallback / re-take); wizard phase-1 state machine + consent-gate-disables-Advance.
-
-**3b (Qwen + resolver):** `/qwen/clone-voice` yields a stable `.pt` **without loading
-the 1.7B** (explicit assertion) **and `design_voice` audition/`.pt` unchanged** after
-extraction (regression); the **three-state resolver with the invariant asserted
-directly** — a Broken cloned voice raises `UnresolvableClonedVoiceError` **and
-provably resolves to no other voice** (guards the placebo-test trap); **sidecar
-clone branch rejects an unknown cloned voice instead of `FALLBACK_*`**; orphan
-detection → transparent re-derive; stat-before-remove; ECAPA fidelity returns a sane
-cosine; e2e upload→consent→clone→preview→save→cloned-section→assign→mock-render.
-
-**3c (XTTS):** `get_conditioning_latents` stable + low-level `inference` yields PCM +
-no cross-request bleed; latents-backed synth fails loud on missing latents; golden-audio
-check that a cloned voice (and a designed voice's synthetic-clip→latents) renders
-**consistent across chapters** — this is where the down-ranked "synthetic clip →
-XTTS" quality claim (§2.3) is validated or rejected.
-
-**Live-GPU acceptance (owed, on-box, per sub-wave):** a real sample renders
-**recognizable, consistent** on the target engine; a simulated Base-model bump
-orphans then re-derives to an **identical** voice; ECAPA sane. Cannot run in mock.
+- **3a:** ingest fixtures incl. **webm/opus** (fatal-short blocks, soft-noise warns);
+  WAV output valid; **consent guard throws** (cloned w/o consent) **and permits the
+  revoke write** (C2); shared-writer no-op-for-others; sample-route consent gate (I5);
+  recorder mocks (granted/denied-fallback/re-take); wizard phase-1 + consent-gate.
+- **3b1:** `/qwen/clone-voice` stable `.pt` **without the 1.7B** + `design_voice`
+  audition/`.pt` unchanged (regression); **`applyQwenFallback` cloned-exemption** —
+  `qwenUnavailable:true` + cloned ⇒ raises, provably renders on no other voice (C1);
+  `POST /clone` atomicity; ECAPA sane; e2e upload→consent→clone→save→cloned-section→assign.
+- **3b2:** three-state pre-pass resolver, invariant asserted directly (Broken ⇒ raises,
+  resolves to no other voice — guards the placebo trap); orphan → transparent re-derive;
+  revocation-at-next-chapter; stat-before-remove; the §5.4/§5.5 decisions' tests.
+- **3c:** `get_conditioning_latents` stable + low-level `inference` PCM + no cross-request
+  bleed; latents branch fails loud on missing latents; the coqui voice-key branch resolves
+  a cloned voice (not `FALLBACK_SPEAKER`); golden-audio consistency (validates the §2.3
+  synthetic-clip→latents quality claim).
+- **Live-GPU (owed, on-box, per sub-wave):** real sample renders recognizable/consistent;
+  simulated Base-bump orphans → re-derives identical; ECAPA sane.
 
 ## 9. Migration & reversibility
 
-- **Additive:** no `cast.json` change; pre-Wave-3 entries keep `provenance`, have no
-  `master`/`consent`. `master.wav` retention starts for new voices; existing designed
-  voices lazily gain one on next re-derive, else stay persona-repairable.
-- **Reversible:** the whole clone surface stays behind `voices.library.enabled`;
-  disabling it hides cloning, leaves designed/imported voices untouched.
-- **Local-only:** samples, artifacts, renders never leave the machine.
+Additive (no `cast.json` change; pre-Wave-3 entries keep `provenance`, no `master`/`consent`).
+Reversible behind `voices.library.enabled`. Local-only.
 
-## 10. Open questions / plan-time decisions
+## 10. Plan-time decisions (carried into the sub-wave plans)
 
-- Quality-gate thresholds (min/max clip seconds, peak/silence cutoffs) — concrete
-  numbers in the 3a plan, backed by a golden fixture.
-- Recorder: raw level meter (lean v1) vs. on-device VAD (polish).
-- ECAPA warn threshold — calibrate from srv-36 spike data.
-- §5.4 blast-radius: per-character-continue vs. fail-chapter-with-repair v1 floor —
-  decide in the 3b plan against how invasive per-character orchestration proves.
+- **3a:** quality-gate thresholds; WAV-writer choice (Node RIFF vs ffmpeg, M1);
+  consent-guard revoke carve-out shape (C2).
+- **3b2:** §5.4 blast-radius (per-character vs fail-chapter floor); **§5.5 1.7B handling
+  (auto-derive-as-consent-artifact vs active downgrade gate — C3)**.
+- **3c:** `xtts-latents.pt` location + the coqui voice-key wire contract (I2/I3);
+  recorder VAD vs raw meter (polish).
+- **Same-PR-as-3a:** update stale doc-194 roadmap/DoD text (M4).
