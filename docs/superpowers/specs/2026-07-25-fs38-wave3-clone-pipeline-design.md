@@ -29,7 +29,7 @@ produces the 3a plan first**; later sub-waves get their own plans when scheduled
 |---|---|---|
 | **3a — Ingest, consent, recorder** | ffmpeg ingest (upload + recorder), quality gate, Whisper transcript, `master.wav` write, OpenAPI schema, consent-at-write store guard, wizard **phase 1**, cloned-section UI shell, sample-route consent gate | **No-ML, behind-flag engineering slice.** CI-verifiable, no GPU. See honesty note below. |
 | **3b1 — Qwen clone (happy path)** | `design_voice` clip-persist + `/qwen/clone-voice` extraction, `deriveEngineArtifact` (Qwen), `POST /clone`, wizard **phase 2**, save + cast assignment, ECAPA fidelity, **the C1 `applyQwenFallback` cloned-exemption** | **First user-visible clone**, on the default engine. Interim safety floor is real (Qwen already fails loud on a missing `.pt` — §3.1). |
-| **3b2 — Resolver + lifecycle** | The three-state resolver as an async **per-chapter pre-pass** in `synthesise-chapter.ts`, transparent re-derive, orphan self-heal, revocation-at-render, stat-before-remove, the §5.4 blast-radius + §5.5 1.7B decisions | **The invasive synth-path work**, isolated so it can't block the payoff. |
+| **3b2 — Resolver + lifecycle** | The three-state resolver as an async **per-chapter pre-pass** in `synthesise-chapter.ts`, transparent re-derive, orphan self-heal, revocation-at-render, stat-before-remove + `purgeCloneArtifacts` (incl. 1.7B), fail-fast chapter validation | **The invasive synth-path work**, isolated so it can't block the payoff. |
 | **3c — XTTS clone** | `/xtts/clone-voice` (`get_conditioning_latents` + low-level `inference`), latents-backed Coqui synth branch + its fail-loud, the coqui voice-key wire contract (§3.2), designed-voice XTTS-eligibility (spike-gated) | **Greenfield, API-verified.** Remaining risk is quality, not feasibility. |
 
 **3a honesty note (per Fable).** Under this spec's own rules, 3a persists **no
@@ -48,8 +48,9 @@ exist on the installed `coqui-tts 0.27.5` XTTS model (`…/TTS/tts/models/xtts.p
 
 **Out of scope (later / doc 194 wave 5):** A/B compare of a clone vs. a designed
 alternative; cloned-voice drift auditions; any sharing of cloned voices; the doc-194
-"same-owner/same-consent" cross-book relaxation. The **1.7B-native clone** question is
-*not* punted — it is a live §5.5 decision because the sidecar auto-derives one today.
+"same-owner/same-consent" cross-book relaxation; **per-character-continue** on a broken
+clone (v1 fails the chapter fast — §5.4). The 1.7B-native clone tier **is in v1**
+(§5.5, decided).
 
 ### 1.2 Wave-ordering note
 
@@ -92,10 +93,11 @@ via `qwenVoicePtPath`). Relocating it breaks every synth path.
 ```
 
 `master.wav` is never auto-deleted; `.pt`/latents rebuild from it. **`xtts-latents.pt`
-location is an explicit 3c decision** (a `voices/xtts/` sibling vs. the entry dir),
-gated on how the sidecar loads it (§3.2). Storage-key scope stays `qwen-<voiceUuid>`.
-**No WAV writer exists** — either a ~20-line Node RIFF header over the normalized PCM
-(no subprocess) or a new ffmpeg `-f wav` step; 3a plan picks one and says why (M1).
+lives at `<workspace>/voices/xtts/xtts-<voiceUuid>.pt`** — a sibling to `voices/qwen/`,
+mirroring the per-engine artifact-dir convention the sidecar already uses (decided; §3.2).
+Storage-key scope stays `qwen-<voiceUuid>`. **`master.wav` is written by a ~20-line Node
+RIFF/WAVE header over the already-normalized in-process PCM** (decided — no WAV writer
+exists today, and this avoids a second ffmpeg spawn since decode already used ffmpeg).
 
 ### 2.3 Designed voices also retain `master.wav` (additive)
 
@@ -133,13 +135,14 @@ unchanged after extraction.
    a `tts_model.inference(...)` (`xtts.py:448`) branch for latents-backed voices that
    **fails loud** on missing latents — must NOT fall through to `FALLBACK_SPEAKER`
    (`main.py:1226-1238`).
-3. **Wire contract (Fable I3 — must be designed in 3c):** `TtsEngine` has **no
-   `'xtts'` id** — the XTTS engine *is* `'coqui'`; `engines.xtts` (manifest) maps to
-   the `coqui` engine slot. Today `pickVoiceForEngine`'s coqui path returns the slot
-   name verbatim (`voice-mapping.ts:343`) with **no `libraryUuid` branch** like qwen's
-   (`:339`), so a cloned name would hit `FALLBACK_SPEAKER`. 3c must add: a coqui
-   voice-key convention (e.g. `xtts-<uuid>`), the coqui-`libraryUuid` branch in
-   `pickVoiceForEngine`, and how the latents path travels to the sidecar.
+3. **Wire contract (Fable I3 — decided):** `TtsEngine` has **no `'xtts'` id** — the
+   XTTS engine *is* `'coqui'`; `engines.xtts` (manifest) maps to the `coqui` engine
+   slot. Today `pickVoiceForEngine`'s coqui path returns the slot name verbatim
+   (`voice-mapping.ts:343`) with **no `libraryUuid` branch** like qwen's (`:339`), so a
+   cloned name would hit `FALLBACK_SPEAKER`. **Decided:** key convention `xtts-<uuid>`;
+   add a coqui-`libraryUuid` branch in `pickVoiceForEngine` returning `xtts-<libraryUuid>`;
+   the sidecar's coqui synth loads latents from `voices/xtts/xtts-<uuid>.pt` (mirrors how
+   Qwen loads `voices/qwen/qwen-<uuid>.pt`).
 
 ### 3.3 ref_text — Whisper `/transcribe` (3a) · 3.4 Fidelity — ECAPA `/embed`, warn-not-block (3b1)
 
@@ -158,8 +161,12 @@ Multipart upload (multer `memoryStorage`, `routes/cover.ts`) **or** recorded-blo
 → write `master.wav` (§2.2). **webm/opus caveat:** MediaRecorder emits webm/opus;
 `decodeAudioToPcm`'s tested inputs are mp3/m4a/ogg and webm-over-a-non-seekable-pipe is
 probe-fragile — 3a **adds a webm/opus fixture** to `decode-audio-to-pcm.test.ts` as the
-record-path acceptance gate. **Quality gate:** fatal input (too short/all-silence)
-blocks phase 1; soft issues → non-blocking `qualityChecks`. Whisper → editable `ref_text`.
+record-path acceptance gate. **Quality gate (decided thresholds, calibrated against the
+golden fixture at impl):** *fatal* (blocks phase 1) → duration < 4 s or RMS below the
+silence floor (~−45 dBFS); *warn* (non-blocking `qualityChecks`) → 4–8 s (short) or
+clipping (samples ≥ −0.1 dBFS over > 0.5 % of the clip); ingest is capped at 60 s and
+derivation uses the first ~30 s (XTTS `get_conditioning_latents` trims to 30 s anyway).
+Whisper → editable `ref_text`.
 
 ### 4.2 Routes (gated by `voices.library.enabled`)
 
@@ -181,12 +188,13 @@ semantics are preserved — absorbing follow-up **#1801**.
 ### 4.3 Consent-at-write guard (3a) — with the C2 carve-out
 
 Wave-1 `writeEntry` (`voice-library.ts:109`) has no validation hook. Add a guard at
-that single choke-point that **throws when `provenance==='cloned'` and consent is
-absent/invalid**. **Critical carve-out (Fable C2):** the guard must NOT block the
-`/revoke` write — revocation persists `revokedAt` *through* `writeEntry`. So the guard
-rejects *creation/use with absent-or-invalid consent* but **permits a write whose only
-consent delta is adding `revokedAt`** (or an explicit `allowRevocation` option). Blast
-radius (all provenances traverse the check, no-op for non-cloned) is tested.
+that single choke-point that **throws when `provenance==='cloned'` and consent is absent
+or structurally invalid** (missing `personName`/`relationship`/`permittedUse`/`attestedAt`/
+`attestedBy`). **C2 resolution (decided):** the guard validates consent *structure only*
+— `revokedAt` is **orthogonal** and never makes a write fail. Revocation is enforced at
+the *resolution* layer (§5, a revoked voice is Broken), not at write, so the `/revoke`
+write persists cleanly with no special flag. Blast radius (all provenances traverse the
+check, no-op for non-cloned) is tested.
 
 ### 4.4 Cross-book exclusion — ALREADY SHIPPED (Fable I1, corrected)
 
@@ -229,26 +237,33 @@ has three callers (`generation.ts:1583`, `chapter-splice.ts:310`, `chapter-qa-re
   (`main.py:1226-1238,1286-1293`). Qwen already does (`VoiceNotDesignedError`); the
   genuinely new fail-loud work is the **XTTS branch (3c)**.
 
-### 5.4 Hard-block blast-radius (3b2 decision)
-Current model is fail-fast — `MissingDesignedVoiceError` aborts the whole chapter.
-"Block only the affected character, continue the rest" is a **different execution
-model** (net-new pre-pass orchestration). v1 floor if per-character proves too invasive:
-fail-the-chapter-with-a-named-repair-prompt (still never a silent swap; coarser blast
-radius). Revocation realistically bites **at the next chapter boundary** (per-chapter
-pre-pass + group cache), not mid-chapter (M3) — state it that way.
+### 5.4 Hard-block blast-radius — DECIDED: fail-fast at chapter start
+The async pre-pass (§5.2) validates **every** cloned voice in the chapter's cast
+**before any GPU work**. If any is Broken, the chapter **fails immediately** with a
+named list (`Cloned voice "X" unavailable — re-upload the sample or reassign`) and a
+repair/reassign prompt — never a silent swap, and zero wasted compute on a chapter that
+can't complete. This preserves **book-level isolation** (other books/runs are
+unaffected — the intent behind the earlier "not the whole book" preference) without the
+net-new per-character orchestration; per-character-continue is an explicit future
+upgrade, not v1. Revocation therefore bites **at the next chapter boundary** (the
+pre-pass re-validates per chapter; a group's `resolvedByIndex` cache is per-chapter),
+not mid-chapter (M3).
 
-### 5.5 1.7B path (3b2 decision — NOT a free exclusion · Fable C3)
+### 5.5 1.7B path — DECIDED: allow, artifact is consent-scoped (Fable C3)
 `_load_voice_prompt_17b` (`main.py:~4076`) **auto-derives** a 1.7B-native clone prompt
-from the 0.6B `.pt` on cache miss, and fs-56 tiering is **elevate-only** (no downgrade)
-— so a book run at 1.7B default would silently mint a 1.7B prompt of the real person's
-voice, contradicting §1's "0.6B-only" line. The 3b2 plan must choose: **(a)** allow the
-auto-derive — simplest, but the derived `<voice>__1.7b.pt` becomes another
-**consent-scoped artifact** revocation must erase; or **(b)** an active gate —
-per-character downgrade for cloned provenance in `routeFor` + hiding the tier control
-for cloned characters — net-new UI that deliberately breaks the elevate-only invariant.
+from the 0.6B `.pt` on cache miss; fs-56 tiering is elevate-only. **Decided:** cloned
+voices are **allowed** on the 1.7B Quality/emotion tier — the auto-derive machinery is
+proven for designed voices, so cloned voices get the full range with no new gating and
+no elevate-only break. The **only** added obligation: the derived `<voice>__1.7b.pt` is
+a **consent-scoped artifact** (§5.6). §1.1's "0.6B-only" out-of-scope line is **removed**
+— 1.7B clone is in v1.
 
-### 5.6 Stat-before-remove
-Re-derive writes to temp, stats/verifies, then swaps (absorbs **#1804**).
+### 5.6 Stat-before-remove + consent-scoped artifact erasure
+Re-derive writes to temp, stats/verifies, then swaps (absorbs **#1804**). **Revoke and
+delete erase every consent-scoped artifact for the voice** — `voices/qwen/qwen-<uuid>.pt`,
+`voices/qwen/qwen-<uuid>__1.7b.pt` (§5.5), `voices/xtts/xtts-<uuid>.pt`, and (on delete)
+`master.wav` + `preview.mp3`. A single `purgeCloneArtifacts(uuid)` covers all engine
+dirs so a revoked person's voice cannot be resynthesised from a stray cache.
 
 ## 6. Frontend (`src/`)
 
@@ -299,12 +314,17 @@ Corrupt file → 4xx; mic denied → Upload fallback; sidecar clone errors keep 
 Additive (no `cast.json` change; pre-Wave-3 entries keep `provenance`, no `master`/`consent`).
 Reversible behind `voices.library.enabled`. Local-only.
 
-## 10. Plan-time decisions (carried into the sub-wave plans)
+## 10. Decisions — all settled
 
-- **3a:** quality-gate thresholds; WAV-writer choice (Node RIFF vs ffmpeg, M1);
-  consent-guard revoke carve-out shape (C2).
-- **3b2:** §5.4 blast-radius (per-character vs fail-chapter floor); **§5.5 1.7B handling
-  (auto-derive-as-consent-artifact vs active downgrade gate — C3)**.
-- **3c:** `xtts-latents.pt` location + the coqui voice-key wire contract (I2/I3);
-  recorder VAD vs raw meter (polish).
-- **Same-PR-as-3a:** update stale doc-194 roadmap/DoD text (M4).
+Every prior open question is now resolved in-spec; nothing is deferred to plan authoring:
+
+- **Blast radius** → fail-fast at chapter start + named repair prompt (§5.4).
+- **1.7B tier** → allowed; `__1.7b.pt` is a consent-scoped artifact (§5.5/§5.6).
+- **Consent guard** → validates structure only; `revokedAt` orthogonal (§4.3, C2).
+- **WAV writer** → Node RIFF header, no second ffmpeg spawn (§2.2, M1).
+- **XTTS artifacts + wire** → `voices/xtts/xtts-<uuid>.pt`; key `xtts-<uuid>`; coqui
+  `libraryUuid` branch in `pickVoiceForEngine` (§2.2/§3.2, I2/I3).
+- **Quality thresholds** → fatal <4 s / silence; warn 4–8 s / clipping; 60 s cap,
+  ~30 s derive window (§4.1) — exact cutoffs calibrated against the golden fixture at impl.
+- **Recorder** → raw level/clip meter for v1; VAD deferred.
+- **Same-PR-as-3a** → update stale doc-194 roadmap + "XTTS reference path first" DoD text (M4).
