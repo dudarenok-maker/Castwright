@@ -47,6 +47,15 @@ export interface VoiceSourceAttestation {
   attestedAt: string;
 }
 
+export interface VoiceMaster {
+  clipFile: string;
+  sampleRate: number;
+  durationSeconds: number;
+  transcript: string;
+  transcriptSource: 'whisper' | 'user';
+  captureMethod: 'upload' | 'record';
+}
+
 export interface VoiceLibraryEntry {
   voiceUuid: string;
   name: string;
@@ -66,6 +75,7 @@ export interface VoiceLibraryEntry {
   };
   engines: VoiceLibraryEngines;
   promotedFrom?: { bookId?: string; characterId?: string };
+  master?: VoiceMaster;
   createdAt: string;
   updatedAt: string;
 }
