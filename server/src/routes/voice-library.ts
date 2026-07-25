@@ -719,6 +719,13 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
     if (entry.consent?.revokedAt) {
       return res.status(409).json({ error: 'Consent for this voice has been revoked.' });
     }
+    /* fs-38 Wave 3b1 — never assign an un-derived cloned voice (would produce a
+       broken slot the moment it's synthesised). The wizard only ever creates
+       ready entries; this stops a stale/never-derived cloned entry (or the mock
+       demo) from being assigned. */
+    if (entry.provenance === 'cloned' && entry.engines?.qwen?.status !== 'ready') {
+      return res.status(409).json({ error: 'Cloned voice is not ready to assign yet.' });
+    }
 
     const body = (req.body ?? {}) as AssignBody;
     const bookId = typeof body.bookId === 'string' ? body.bookId : undefined;

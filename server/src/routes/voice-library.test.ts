@@ -594,6 +594,7 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
       makeEntry({
         voiceUuid: 'assign-3',
         provenance: 'cloned',
+        engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
         consent: {
           personName: 'Test',
           relationship: 'family-with-permission',
@@ -632,6 +633,45 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
       provenance: 'cloned',
     });
     expect(cast.characters[0].overrideTtsVoices?.kokoro).toEqual({ name: 'af_heart' });
+  });
+});
+
+describe('POST /:uuid/assign — cloned readiness gate (fs-38 Wave 3b1)', () => {
+  it('409s assigning a cloned voice whose qwen engine is not ready', async () => {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    await writeEntry({
+      voiceUuid: 'clone-unready', name: 'Mum', provenance: 'cloned', tags: [], pinned: false,
+      consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal',
+                 attestedAt: '2026-07-25T00:00:00Z', attestedBy: 'Mum' },
+      engines: { qwen: { status: 'stale' } },
+      createdAt: '2026-07-25T00:00:00Z', updatedAt: '2026-07-25T00:00:00Z',
+    });
+    const res = await request(app).post('/api/voice-library/clone-unready/assign')
+      .send({ bookId: 'ns', characterId: 'marcus' });
+    expect(res.status).toBe(409);
+  });
+
+  it('allows assigning a ready cloned voice (200)', async () => {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    await writeEntry({
+      voiceUuid: 'clone-ready', name: 'Mum', provenance: 'cloned', tags: [], pinned: false,
+      consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal',
+                 attestedAt: '2026-07-25T00:00:00Z', attestedBy: 'Mum' },
+      engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+      createdAt: '2026-07-25T00:00:00Z', updatedAt: '2026-07-25T00:00:00Z',
+    });
+    /* I1 — a REAL resolvable book + character, seeded exactly like this
+       file's existing successful `/assign` test ("stamps the qwen slot…",
+       ~line 562 of this file): `writeBookOnDisk(dir, author, series, title,
+       bookId, characters)`, then post with that same bookId/characterId.
+       Without this the route 404s on findBookByBookId before ever reaching
+       the readiness gate, and this case would never actually prove 200. */
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-four', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-ready/assign')
+      .send({ bookId: 'book-four', characterId: 'char-marlow' });
+    expect(res.status).toBe(200);
   });
 });
 
