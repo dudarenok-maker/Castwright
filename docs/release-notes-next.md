@@ -47,6 +47,18 @@ history at cut time.
   Not in Wave 1: clone-from-a-real-sample, consent/attestation, audio ingest, in-app recording,
   Catalogue rebuild (later waves). Plan:
   `docs/superpowers/plans/2026-07-04-fs38-wave1-voice-library-store.md`.
+- **fs-38 Wave 3a — voice-clone ingest, consent & recorder** (Refs #624). Voice cloning
+  groundwork: sample ingest, consent, and recorder (behind the voice-library flag). Real ffmpeg
+  decode (upload or a new `VoiceRecorder`) → a pure quality gate (fatal <4s/silence, warn
+  short/clipping) → 60s cap → a Node-written `master.wav` → Whisper transcript, via `POST
+  /api/voice-library/clone-sample` (ephemeral candidate — no entry persisted yet). A write-time
+  consent-structure guard on `writeEntry()` plus `POST /:uuid/revoke` (revocation orthogonal to
+  the guard); the existing sample-audition route now 403s a revoked/consent-absent cloned voice.
+  My voices gains a 'Cloned' badge + Revoke action; a capture/consent panel exists as a phase-1
+  wizard building block. **Behind-the-flag, no reachable production caller for the consent
+  guard/revoke route/cloned-section UI until 3b1** ships the first real cloned entry — disclosed
+  scope, not a gap (spec §1.1). Plan: `docs/features/267-fs38-wave3-voice-clone.md`. Spec:
+  `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md`.
 
 ---
 
