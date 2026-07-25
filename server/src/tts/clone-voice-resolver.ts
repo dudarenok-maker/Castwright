@@ -113,13 +113,15 @@ export interface ClonedVoiceRequest {
 }
 
 /** A thrown error's numeric transport status, if present (SidecarDesignError
-    and similar shapes carry `.status`). Anything else — including a thrown
-    error with no numeric status at all — is treated as transient (never
-    bricks the voice on an unrecognised failure shape). */
+    and similar shapes carry `.status`). Permanent is EXACTLY a 4xx (the
+    sidecar rejected the clip itself) — everything else, including 0, <400,
+    >=500, and a thrown error with no numeric status at all, is treated as
+    transient. This errs toward fail-loud (retryable) rather than toward
+    silently bricking the voice on an unrecognised failure shape. */
 function isTransientDeriveFailure(err: unknown): boolean {
   const status = (err as { status?: unknown } | null)?.status;
   if (typeof status !== 'number') return true;
-  return status === 0 || status >= 500;
+  return !(status >= 400 && status < 500);
 }
 
 /** For each requested cloned voice: classify, derive Repairable, collect Broken.

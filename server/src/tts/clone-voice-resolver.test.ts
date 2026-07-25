@@ -260,15 +260,23 @@ describe('resolveClonedVoicesForChapter', () => {
     }
   });
 
-  it('repairable: derives once, writeEntry stamps ready + current baseModel, resolves', async () => {
+  it('repairable: derives once, writeEntry stamps ready + current baseModel, resolves — and preserves a sibling engine untouched', async () => {
+    // A sibling `engines.xtts` entry must survive the `...entry.engines`
+    // spread on write — this fixture catches a future edit that rewrites
+    // the success write as `engines: { qwen: … }` and silently drops it.
     const entry = baseEntry({
       master: MASTER,
-      engines: { qwen: { status: 'ready', baseModel: 'qwen3-old' } },
+      engines: {
+        qwen: { status: 'stale', baseModel: 'old-base' },
+        xtts: { status: 'ready' },
+      },
     });
+    const controller = new AbortController();
     const deps = makeDeps({
       readEntry: vi.fn(async () => entry),
       ptExists: vi.fn(async () => true),
       currentBaseModel: () => 'qwen3-new',
+      signal: controller.signal,
     });
 
     await expect(
@@ -283,16 +291,18 @@ describe('resolveClonedVoicesForChapter', () => {
       'u1',
       'qwen',
       { masterPcm: expect.any(Buffer), sampleRate: 24000, refText: 'hi' },
-      expect.objectContaining({}),
+      { signal: controller.signal },
     );
     expect(deps.writeEntry).toHaveBeenCalledTimes(1);
     const written = deps.writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
     expect(written.engines.qwen).toEqual({ status: 'ready', baseModel: 'qwen3-new' });
+    expect(written.engines.xtts).toEqual({ status: 'ready' });
   });
 
   it.each([
     ['unreachable (status 0)', 0],
     ['server error (status 500)', 500],
+    ['no capacity (status 503)', 503],
   ])(
     'transient derive failure — %s — is Broken and does NOT persist failed',
     async (_label, status) => {
@@ -315,6 +325,26 @@ describe('resolveClonedVoicesForChapter', () => {
       expect(deps.writeEntry).not.toHaveBeenCalled();
     },
   );
+
+  it('transient derive failure with no numeric status at all — fail-open default — is Broken and does NOT persist failed', async () => {
+    const entry = baseEntry({ master: MASTER });
+    const deps = makeDeps({
+      readEntry: vi.fn(async () => entry),
+      ptExists: vi.fn(async () => false),
+      deriveEngineArtifact: vi.fn(async () => {
+        throw new Error('readMasterPcm blew up');
+      }),
+    });
+
+    await expect(
+      resolveClonedVoicesForChapter(
+        [{ characterName: 'Marlow', libraryUuid: 'u1', engineUnavailable: false }],
+        deps,
+      ),
+    ).rejects.toBeInstanceOf(UnresolvableClonedVoiceError);
+
+    expect(deps.writeEntry).not.toHaveBeenCalled();
+  });
 
   it('permanent derive failure (status 422) is Broken AND persists failed', async () => {
     const entry = baseEntry({ master: MASTER });
