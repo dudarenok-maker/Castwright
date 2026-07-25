@@ -256,7 +256,19 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
   });
 
   it('rejects a persona edit on a non-designed (cloned) entry with 400', async () => {
-    await vl.writeEntry(makeEntry({ voiceUuid: 'cloned-1', provenance: 'cloned' }));
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'cloned-1',
+        provenance: 'cloned',
+        consent: {
+          personName: 'Test',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00Z',
+          attestedBy: 'test',
+        },
+      }),
+    );
 
     const res = await request(app)
       .patch('/api/voice-library/cloned-1')
@@ -537,7 +549,19 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
   });
 
   it('stamps the qwen slot with name/libraryUuid/provenance, merges with (not clobbers) a sibling kokoro slot, and never touches character.voiceUuid', async () => {
-    await vl.writeEntry(makeEntry({ voiceUuid: 'assign-3', provenance: 'cloned' }));
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'assign-3',
+        provenance: 'cloned',
+        consent: {
+          personName: 'Test',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00Z',
+          attestedBy: 'test',
+        },
+      }),
+    );
     const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-four', [
       {
         id: 'char-marlow',

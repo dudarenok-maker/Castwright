@@ -113,10 +113,31 @@ export async function readEntry(voiceUuid: string): Promise<VoiceLibraryEntry | 
   }
 }
 
+export class ConsentRequiredError extends Error {
+  status = 422;
+  constructor() {
+    super('A cloned voice requires a consent record (person, relationship, permitted use, attestation).');
+    this.name = 'ConsentRequiredError';
+  }
+}
+
+/** Structural consent guard for cloned entries — checked at write time,
+    independent of `revokedAt` (a revoke write already carries a
+    structurally-complete consent block, so it passes this check; the
+    revoked state itself is enforced elsewhere, at assign-time). */
+function assertConsentForClone(entry: VoiceLibraryEntry): void {
+  if (entry.provenance !== 'cloned') return;
+  const c = entry.consent;
+  const structurallyValid =
+    !!c && !!c.personName && !!c.relationship && !!c.permittedUse && !!c.attestedAt && !!c.attestedBy;
+  if (!structurallyValid) throw new ConsentRequiredError(); // revokedAt is orthogonal — not checked here
+}
+
 /** Write (create or overwrite) one entry's manifest atomically — write
     `voice.json.tmp`, then rename over `voice.json`. Always stamps a fresh
     `updatedAt`. */
 export async function writeEntry(entry: VoiceLibraryEntry): Promise<void> {
+  assertConsentForClone(entry);
   const stamped: VoiceLibraryEntry = { ...entry, updatedAt: new Date().toISOString() };
   const dir = entryDir(stamped.voiceUuid);
   await mkdir(dir, { recursive: true });
