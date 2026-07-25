@@ -38,6 +38,7 @@ import { textHashForStale } from '../audio/segments-io.js';
 import { resamplePcm16 } from './resample-pcm16.js';
 import { withTtsRetry, isTransient } from './retry.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { UnresolvableClonedVoiceError } from './clone-voice-resolver.js';
 
 /* Default body-group dispatch width for a GPU engine (kokoro/coqui/qwen), and
    the flag-OFF safety invariant for the whole capacity-aware-placement
@@ -204,18 +205,10 @@ export class MissingDesignedVoiceError extends Error {
 /* fs-38 Wave 3b1 (C1) — a cloned-provenance Qwen group must never be silently
    substituted. When Qwen is unavailable this run, applyQwenFallback raises this
    instead of rerouting to Kokoro/Coqui — a real person's voice is never swapped
-   for another. 3b2's resolver reuses this same typed error. */
-export class UnresolvableClonedVoiceError extends Error {
-  constructor(characterName: string, detail?: string) {
-    super(
-      `Cloned voice for "${characterName}" is unavailable — the Qwen engine is not available this ` +
-        `run, and a cloned voice must never be substituted with another. Re-enable Qwen or reassign ` +
-        `the character.` +
-        (detail ? ` ${detail}` : ''),
-    );
-    this.name = 'UnresolvableClonedVoiceError';
-  }
-}
+   for another. Moved to clone-voice-resolver.ts in 3b2 (T4) so the resolver
+   module (which synthesiseChapter will import) can define it without an
+   import cycle; re-exported here so existing importers keep working. */
+export { UnresolvableClonedVoiceError } from './clone-voice-resolver.js';
 
 /* Identify the input that hung when a synth call times out. We couldn't tell
    what the 2026-05-31 ch29 ChapterSynthTimeoutError choked on, so on a timeout
