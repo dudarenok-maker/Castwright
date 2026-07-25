@@ -38,7 +38,19 @@ import { textHashForStale } from '../audio/segments-io.js';
 import { resamplePcm16 } from './resample-pcm16.js';
 import { withTtsRetry, isTransient } from './retry.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
-import { UnresolvableClonedVoiceError } from './clone-voice-resolver.js';
+import {
+  UnresolvableClonedVoiceError,
+  resolveClonedVoicesForChapter,
+  type ResolveChapterDeps,
+} from './clone-voice-resolver.js';
+import { readEntry, writeEntry, entryDir, type VoiceLibraryEntry } from '../workspace/voice-library.js';
+import { deriveEngineArtifact } from './derive-engine-artifact.js';
+import { currentQwenBaseModel } from './model-paths.js';
+import { decodeAudioToPcm } from './mp3.js';
+import { qwenVoicesDir } from '../workspace/paths.js';
+import { safeSegment, sanitizeIdSegment, assertContained } from '../util/safe-path.js';
+import { readFile, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 
 /* Default body-group dispatch width for a GPU engine (kokoro/coqui/qwen), and
    the flag-OFF safety invariant for the whole capacity-aware-placement
@@ -717,6 +729,15 @@ export interface SynthesiseChapterOpts {
       throws `RecycleStormError` so the chapter fails fast (no infinite grind).
       Only consulted when `onRecoverRecycle` is provided. Default 2. */
   maxRecycleRecoveries?: number;
+  /** fs-38 Wave 3b2 — override some/all of the cloned-voice resolver
+      pre-pass's dependencies (readEntry/writeEntry/ptExists/deriveEngineArtifact/
+      readMasterPcm/currentBaseModel) instead of the real workspace + sidecar
+      wiring. Mainly for tests, which need to exercise the pre-pass (readiness
+      gate, fail-fast, repair) without touching the real voice-library disk.
+      Absent → the real `workspace/voice-library.js` + `derive-engine-artifact.js`
+      + `mp3.js` wiring (production behaviour). Merged shallowly over the real
+      deps, so a test can override just one function. */
+  cloneResolverDepsOverride?: Partial<ResolveChapterDeps>;
 }
 
 /** Options for the per-sentence ASR content-QA pass (srv-31). */
@@ -858,6 +879,68 @@ async function evictQwenForCoquiPhase(): Promise<void> {
   }
 }
 
+/* fs-38 Wave 3b2 — path to a Qwen voice's cached `.pt` embedding, keyed by its
+   storage id (e.g. `qwen-<uuid>`). Duplicated (not imported) from
+   `routes/qwen-voice.ts`'s identical `qwenVoicePtPath`: that module imports
+   `buildHintFromCast`/`toVoiceLike`/`CastCharacter` FROM this one, so
+   importing it back here would create a cycle. */
+function qwenVoicePtPathLocal(storageKey: string): string {
+  const dir = qwenVoicesDir();
+  const p = join(dir, `${sanitizeIdSegment(safeSegment(storageKey))}.pt`);
+  assertContained(dir, p);
+  return p;
+}
+
+/* fs-38 Wave 3b2 — read a cloned voice's retained reference clip (its
+   `master.wav`, kept since the Wave 3a ingest) and decode it to raw s16le PCM
+   at its own recorded sample rate, ready for `deriveEngineArtifact`. The
+   resolver only calls this on a `repairable` classification, which (per
+   `classifyClonedVoice`) is never reached unless `entry.master` is present —
+   but a caller invoking this directly should still get a clear error rather
+   than a `TypeError` on an absent `master`. */
+async function readMasterPcmDefault(
+  uuid: string,
+  entry: VoiceLibraryEntry,
+): Promise<{ pcm: Buffer; sampleRate: number; refText: string }> {
+  if (!entry.master) {
+    throw new Error(`Cloned voice "${uuid}" has no retained master clip to re-derive from.`);
+  }
+  const clipPath = join(entryDir(uuid), entry.master.clipFile);
+  const raw = await readFile(clipPath);
+  const pcm = await decodeAudioToPcm(raw, entry.master.sampleRate);
+  return { pcm, sampleRate: entry.master.sampleRate, refText: entry.master.transcript };
+}
+
+/* fs-38 Wave 3b2 — the resolver pre-pass's real (production) dependency
+   wiring: the actual voice-library manifest store, the actual sidecar
+   clone-derive call, and a real stat() of the cached `.pt`. `synthesiseChapter`
+   merges `opts.cloneResolverDepsOverride` shallowly over this so a test can
+   replace just the pieces it needs to fake (see that opt's doc comment). */
+function buildDefaultCloneResolverDeps(signal: AbortSignal | undefined): ResolveChapterDeps {
+  return {
+    readEntry,
+    writeEntry,
+    ptExists: async (storageKey: string) => {
+      try {
+        await stat(qwenVoicePtPathLocal(storageKey));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    deriveEngineArtifact,
+    readMasterPcm: readMasterPcmDefault,
+    currentBaseModel: currentQwenBaseModel,
+    /* No free-text progress channel exists on SynthesiseChapterOpts today —
+       only typed per-group/per-title ticks (onGroupStart/onTitleStart etc.).
+       Forcing a "Preparing voice…" message through one of those would misuse
+       a differently-shaped callback, so this stays unwired (undefined) until
+       a real channel exists. */
+    reportProgress: undefined,
+    signal,
+  };
+}
+
 export async function synthesiseChapter(
   opts: SynthesiseChapterOpts,
 ): Promise<ChapterSynthesisResult> {
@@ -896,6 +979,7 @@ export async function synthesiseChapter(
     asr,
     onRecoverRecycle,
     maxRecycleRecoveries = 2,
+    cloneResolverDepsOverride,
   } = opts;
 
   /* fs-53: resolve the book language to a concrete BCP-47 primary subtag ONCE,
@@ -990,6 +1074,45 @@ export async function synthesiseChapter(
   const castById = new Map(cast.map((c) => [c.id, c]));
   const groups = buildSentenceGroups(sentences);
 
+  /* Chapter-title narration (moved up from its original site just above the
+     title beat, further down) is computed here because the resolver pre-pass
+     right below needs it: a cloned narrator used ONLY for the title has no
+     SentenceGroup of its own, so `titleText` must be known before building
+     the pre-pass's in-chapter set. See `if (titleText)` further down for the
+     title beat itself, unchanged. */
+  const titleText = chapterTitleNarration?.trim();
+
+  /* fs-38 Wave 3b2 — cloned-voice resolver pre-pass (spec §5.2/§5.4). Runs
+     BEFORE any synth call (title or body) fires, over exactly the cloned
+     Qwen voices whose character actually speaks in this chapter — never the
+     whole cast, so an unrelated Broken cloned voice elsewhere in the book
+     can't fail a chapter it doesn't appear in (the readiness gate). A
+     Broken voice throws `UnresolvableClonedVoiceError` here, aborting the
+     chapter loud before any GPU work; a Repairable voice re-derives from its
+     retained master.wav and the chapter proceeds. Never substitutes — see
+     the module-level invariant on `UnresolvableClonedVoiceError`. */
+  const inChapterCharacterIds = new Set(groups.map((g) => g.characterId));
+  if (titleText) inChapterCharacterIds.add(narratorCharacterId);
+  const clonedVoiceRequests = cast
+    .filter(
+      (c) => inChapterCharacterIds.has(c.id) && c.overrideTtsVoices?.qwen?.provenance === 'cloned',
+    )
+    .map((c) => {
+      const routedEngine = routeFor(c).engine;
+      return {
+        characterName: c.name ?? c.id,
+        libraryUuid: c.overrideTtsVoices?.qwen?.libraryUuid,
+        engineUnavailable: routedEngine !== 'qwen' || qwenUnavailable,
+      };
+    });
+  if (clonedVoiceRequests.length > 0) {
+    const cloneResolverDeps: ResolveChapterDeps = {
+      ...buildDefaultCloneResolverDeps(signal),
+      ...cloneResolverDepsOverride,
+    };
+    await resolveClonedVoicesForChapter(clonedVoiceRequests, cloneResolverDeps);
+  }
+
   /* Shared synthetic-narrator stub, used wherever a narrator CastCharacter is
      needed but the book's cast has no explicit `narrator` entry. Single
      source of truth so the title beat and the orphaned-characterId fallback
@@ -1065,7 +1188,6 @@ export async function synthesiseChapter(
     }
   }
 
-  const titleText = chapterTitleNarration?.trim();
   if (titleText) {
     if (signal?.aborted) {
       throw new DOMException('synthesiseChapter aborted', 'AbortError');
