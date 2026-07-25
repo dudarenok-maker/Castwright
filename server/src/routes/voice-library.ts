@@ -691,7 +691,8 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
        below. Duck-typing preserves status for both. */
     const sde = e as { name?: string; status?: number; code?: string; reason?: string; message?: string };
     if (sde?.name === 'SidecarDesignError' && typeof sde.status === 'number') {
-      return res.status(sde.status).json({ error: sde.reason ?? sde.message ?? 'Clone derivation failed.', code: sde.code });
+      const status = sde.status >= 400 && sde.status <= 599 ? sde.status : 502;
+      return res.status(status).json({ error: sde.reason ?? sde.message ?? 'Clone derivation failed.', code: sde.code });
     }
     console.error('[voice-library] clone failed', e);
     return res.status(502).json({ error: (e as Error).message || 'Voice clone failed.' });

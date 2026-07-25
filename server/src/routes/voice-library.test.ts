@@ -1097,6 +1097,26 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     expect(res.status).toBe(503);
   });
 
+  it('clamps a sidecar status-0 (unreachable) to 502, not a RangeError 500', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-0',
+      { sampleRate: 24000, durationSeconds: 12, transcript: 't', transcriptSource: 'whisper', captureMethod: 'upload' },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+    /* deriveEngineArtifact throws SidecarDesignError(..., 0) on the
+       sidecar-unreachable branch — res.status(0) is an invalid Express/Node
+       status code (RangeError) that would otherwise flatten to a generic
+       HTML 500, defeating the status-preservation invariant this suite
+       pins. The route clamps any out-of-range status to 502. */
+    deriveMock.mockRejectedValueOnce(new SidecarDesignError('unreachable', 0));
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({ candidateId: 'cand-0', consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' } });
+    expect(res.status).toBe(502);
+  });
+
   it('atomicity: a derive throw leaves NO entry and keeps the candidate', async () => {
     const { writeCandidate, readCandidate } = await import('../workspace/clone-candidate.js');
     await writeCandidate(

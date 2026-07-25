@@ -1,9 +1,11 @@
 /* fs-38 Wave 3b1 — advisory clone-fidelity check (spec §3.4).
 
    Embeds the master clip and the clone audition preview via the sidecar's
-   ECAPA /embed endpoint and cosine-scores them. NON-blocking: below a
-   srv-36-calibrated threshold it returns a warning string the wizard can
-   surface, but never fails the clone. */
+   ECAPA /embed endpoint and cosine-scores them. The LOW-SCORE path is
+   non-blocking: below a srv-36-calibrated threshold it returns a warning
+   string the wizard can surface, rather than failing the clone. A
+   TRANSPORT failure of /embed itself is NOT swallowed here — it propagates
+   to the caller (the /clone route), which maps it to an error response. */
 
 import { embedSegment } from './embed-client.js';
 import { cosineToCentroid } from '../audio/render-integrity/score.js';
