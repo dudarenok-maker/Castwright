@@ -84,9 +84,10 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
     await expect(myVoicesTab).toBeVisible({ timeout: 20_000 });
     await myVoicesTab.click();
 
-    /* Five voice-library fixtures (src/mocks/voice-library.ts): the four
-       original entries plus the fs-38 Wave 3a cloned demo, which renders in
-       My voices with a Revoke action. */
+    /* Six voice-library fixtures (src/mocks/voice-library.ts): the four
+       original entries, the fs-38 Wave 3a cloned demo (renders in My voices
+       with a Revoke action), and the Wave 3b2 revoked cloned fixture
+       (renders with the "Needs attention" Broken chip). */
     await expect(page.getByTestId('voice-library-card-lib-pinned')).toBeVisible({
       timeout: 10_000,
     });
@@ -94,7 +95,8 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
     await expect(page.getByTestId('voice-library-card-lib-stale')).toBeVisible();
     await expect(page.getByTestId('voice-library-card-lib-used')).toBeVisible();
     await expect(page.getByTestId('voice-library-card-lib-cloned-demo')).toBeVisible();
-    await expect(page.locator('[data-testid^="voice-library-card-"]')).toHaveCount(5);
+    await expect(page.getByTestId('voice-library-card-lib-cloned-revoked')).toBeVisible();
+    await expect(page.locator('[data-testid^="voice-library-card-"]')).toHaveCount(6);
 
     /* ── Step 2: Create voice → persona → design (mock ~300 ms) → save →
        the new card appears in the Designed group ── */
@@ -117,7 +119,7 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
     await expect(page.getByText('E2E Harbor Pilot', { exact: true })).toBeVisible({
       timeout: 5_000,
     });
-    await expect(page.locator('[data-testid^="voice-library-card-"]')).toHaveCount(6);
+    await expect(page.locator('[data-testid^="voice-library-card-"]')).toHaveCount(7);
 
     /* ── Step 3: assign a My-voices fixture to a character in book `ns` —
        Marcus the Cook starts with no Qwen voice designed. ── */
@@ -208,9 +210,10 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
     await expect(saveToMyVoicesBtn).toHaveText('Save to my voices', { timeout: 5_000 });
     await expect(elizaDrawer.getByTestId('profile-drawer-my-voices-error')).toHaveCount(0);
 
-    /* A seventh library entry now exists (5 fixtures — incl. the Wave 3a
-       cloned demo — + Step 2's "E2E Harbor Pilot" + this promoted "Eliza
-       Gray"; + Step 6's cloned entry below brings the running total to 8). */
+    /* An eighth library entry now exists (6 fixtures — incl. the Wave 3a
+       cloned demo and the Wave 3b2 revoked-clone fixture — + Step 2's "E2E
+       Harbor Pilot" + this promoted "Eliza Gray"; + Step 6's cloned entry
+       below brings the running total to 9). */
     await page.goto('/#/voices');
     await waitForRouteReady(page);
     const myVoicesTabAgain = page.getByRole('button', { name: 'My voices', exact: true });
@@ -219,11 +222,11 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
     await expect(page.getByText('E2E Harbor Pilot', { exact: true })).toBeVisible({
       timeout: 10_000,
     });
-    await expect(page.locator('[data-testid^="voice-library-card-"]')).toHaveCount(7);
+    await expect(page.locator('[data-testid^="voice-library-card-"]')).toHaveCount(8);
     await expect(page.getByText('Eliza Gray', { exact: true }).last()).toBeVisible();
 
     /* ── Step 6: clone a voice from the new CTA → wizard → Save → a ready
-       cloned card appears in My voices (7 → 8), then assign it to a
+       cloned card appears in My voices (8 → 9), then assign it to a
        character. The mock cloneVoiceSample returns a candidate and the mock
        cloneVoice mints a ready `provenance:'cloned'` entry, so the assign
        step below isn't semantically broken. ── */
@@ -248,7 +251,7 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
     await page.getByTestId('clone-voice-wizard-done').click();
 
     await expect(page.getByText('E2E Mum', { exact: true })).toBeVisible({ timeout: 5_000 });
-    await expect(page.locator('[data-testid^="voice-library-card-"]')).toHaveCount(8);
+    await expect(page.locator('[data-testid^="voice-library-card-"]')).toHaveCount(9);
 
     // Capture the newly-minted cloned uuid from its card testid for the assign step.
     const cloneCardTestId = await page

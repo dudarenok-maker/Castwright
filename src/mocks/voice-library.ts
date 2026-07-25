@@ -88,6 +88,35 @@ export const MOCK_VOICE_LIBRARY_ENTRIES: VoiceLibraryEntry[] = [
     createdAt: '2026-07-20T00:00:00Z',
     updatedAt: '2026-07-20T00:00:00Z',
   },
+  {
+    // fs-38 Wave 3b2, Task 9 — a Broken cloned voice (consent revoked): the
+    // My-voices card shows the danger "Needs attention" chip in place of
+    // the healthy lib-cloned-demo fixture above.
+    voiceUuid: 'lib-cloned-revoked',
+    name: 'Dad (cloned)',
+    provenance: 'cloned',
+    tags: [],
+    pinned: false,
+    consent: {
+      personName: 'Dad',
+      relationship: 'family-with-permission',
+      permittedUse: 'personal',
+      attestedAt: '2026-07-15T00:00:00Z',
+      attestedBy: 'me',
+      revokedAt: '2026-07-22T00:00:00Z',
+    },
+    master: {
+      clipFile: 'master.wav',
+      sampleRate: 24_000,
+      durationSeconds: 10,
+      transcript: 'demo',
+      transcriptSource: 'whisper',
+      captureMethod: 'record',
+    },
+    engines: {},
+    createdAt: '2026-07-15T00:00:00Z',
+    updatedAt: '2026-07-22T00:00:00Z',
+  },
 ];
 
 /* Returned by DELETE /api/voice-library/lib-used without ?confirm=1 — mirrors

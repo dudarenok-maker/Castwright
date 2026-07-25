@@ -41,6 +41,23 @@ const ENGINE_STATUS_COLOR: Record<QwenStatus, 'success' | 'neutral' | 'warning' 
   failed: 'danger',
 };
 
+/* fs-38 Wave 3b2, Task 9 — the server now resolves a cloned voice's Qwen
+   model per-chapter and fails loud when it's Broken (see task-9-brief.md).
+   Derive the same state here so the My-voices card can warn the user before
+   they hit it at render time. Repairable self-heals at next render (a fresh
+   derive request), so it's a softer signal than Broken. */
+type ClonedVoiceState = 'broken' | 'repairable' | null;
+
+export function deriveClonedVoiceState(entry: VoiceLibraryEntry): ClonedVoiceState {
+  if (entry.consent?.revokedAt || !entry.master || entry.engines.qwen?.status === 'failed') {
+    return 'broken';
+  }
+  if (entry.engines.qwen?.status === 'stale') {
+    return 'repairable';
+  }
+  return null;
+}
+
 export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
   const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
@@ -252,7 +269,8 @@ function ProvenanceMarker({ entry }: { entry: VoiceLibraryEntry }) {
           My voice
         </p>
       );
-    case 'cloned':
+    case 'cloned': {
+      const clonedState = deriveClonedVoiceState(entry);
       return (
         <span
           data-testid={`voice-library-provenance-${entry.voiceUuid}`}
@@ -264,8 +282,16 @@ function ProvenanceMarker({ entry }: { entry: VoiceLibraryEntry }) {
               {entry.consent.personName} · {entry.consent.relationship}
             </span>
           )}
+          {clonedState && (
+            <Pill color={clonedState === 'broken' ? 'danger' : 'warning'}>
+              <span data-testid={`voice-library-card-clonestate-${entry.voiceUuid}`}>
+                {clonedState === 'broken' ? 'Needs attention' : 'Will re-derive'}
+              </span>
+            </Pill>
+          )}
         </span>
       );
+    }
     case 'imported':
       // Wave 3 — imported-voice provenance treatment lands with import.
       return null;
