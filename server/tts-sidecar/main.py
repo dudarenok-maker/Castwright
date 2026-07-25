@@ -198,6 +198,31 @@ def _apply_torch_perf_flags(torch: Any) -> None:
         log.warning("Could not apply torch perf flags (%s) — continuing.", e)
 
 
+def _atomic_torch_save(torch: Any, obj: Any, pt_path: str) -> None:
+    """Write a torch object to pt_path atomically: temp sibling + os.replace,
+    matching _load_voice_prompt_17b's persist (#1804 — no corruption window).
+    `torch` is passed in (not imported at module scope) — see
+    _apply_torch_perf_flags above for the same pattern in this file.
+
+    Temp-name shape mirrors _load_voice_prompt_17b exactly (basename-prefixed,
+    `.tmp`-suffixed) rather than a bare dot-prefixed mkstemp name: real
+    torch's PyTorchFileWriter rejects a dot-leading, extension-less filename
+    on Windows ("invalid file name") — only caught by the GPU-backed
+    regression tests here since the sidecar unit fixtures stub torch.save."""
+    d = os.path.dirname(pt_path)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=f"{os.path.basename(pt_path)}.", suffix=".tmp")
+    os.close(fd)
+    try:
+        torch.save(obj, tmp)
+        os.replace(tmp, pt_path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 _CODEC_TIMING: dict = {"total_ms": 0.0, "calls": 0}
 
 
@@ -3764,7 +3789,7 @@ class QwenEngine(Engine):
             # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
             os.makedirs(self._voices_dir, exist_ok=True)
             pt_path, json_path = self._voice_paths(voice_id)
-            torch.save(prompt, pt_path)
+            _atomic_torch_save(torch, prompt, pt_path)
             import json as _json
 
             with open(json_path, "w", encoding="utf-8") as fh:
@@ -3854,7 +3879,7 @@ class QwenEngine(Engine):
             # 2. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
             os.makedirs(self._voices_dir, exist_ok=True)
             pt_path, json_path = self._voice_paths(voice_id)
-            torch.save(prompt, pt_path)
+            _atomic_torch_save(torch, prompt, pt_path)
             import json as _json
             with open(json_path, "w", encoding="utf-8") as fh:
                 _json.dump(
