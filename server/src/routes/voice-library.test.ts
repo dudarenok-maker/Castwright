@@ -949,3 +949,32 @@ describe('POST /api/voice-library/clone-sample (Task 6)', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
+  it('stamps revokedAt on a cloned entry with a valid consent record', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'r1',
+        name: 'Dad',
+        provenance: 'cloned',
+        consent: {
+          personName: 'Dad',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00.000Z',
+          attestedBy: 'me',
+        },
+      }),
+    );
+
+    const res = await request(app).post('/api/voice-library/r1/revoke');
+
+    expect(res.status).toBe(200);
+    expect(res.body.consent.revokedAt).toBeTruthy();
+  });
+
+  it('404s an unknown entry', async () => {
+    const res = await request(app).post('/api/voice-library/nope/revoke');
+    expect(res.status).toBe(404);
+  });
+});

@@ -608,6 +608,28 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
   }
 });
 
+/* POST /api/voice-library/:voiceUuid/revoke
+
+   Consent revocation (fs-38 Wave 3a, Task 8). Stamps `consent.revokedAt` on
+   the entry and re-writes it — this PASSES the Task 7 write-time consent
+   guard, since revokedAt is orthogonal to structural consent validity (the
+   entry still carries a complete consent record, just a revoked one). A 409
+   guards the (should-be-impossible-for-a-cloned-voice) case of an entry with
+   no consent record at all — nothing to revoke. */
+voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response) => {
+  try {
+    const { voiceUuid } = req.params;
+    const entry = await readEntry(voiceUuid);
+    if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    if (!entry.consent) return res.status(409).json({ error: 'Entry has no consent record to revoke.' });
+    const updated = { ...entry, consent: { ...entry.consent, revokedAt: new Date().toISOString() } };
+    await writeEntry(updated); // passes the guard — revokedAt is orthogonal (Task 7)
+    return res.status(200).json(updated);
+  } catch (e) {
+    return res.status(502).json({ error: (e as Error).message || 'Revoke failed.' });
+  }
+});
+
 /* Erase EVERY on-disk artifact of a library voice — not just the manifest
    dir — so "local-only, never leaves the machine" holds through deletion
    (spec §2.4). Windows-safety ordering (spec §7, copied from qwen-voice.ts's
