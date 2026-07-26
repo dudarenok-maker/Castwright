@@ -37,6 +37,11 @@ describe('StartGenerationModal — 1.7B gated on installed weights (#1841)', () 
     expect(onConfirm).toHaveBeenCalledWith('qwen3-tts-0.6b');
   });
 
+  /* Forward-regression test, not proof the gate works: this passed before the
+     gate was added (tier button had no disabled attribute at all), so its
+     enabled state is not evidence. The real proof is the sibling disabled and
+     guard-rail tests. This test's value is forward-only: it stops a future
+     change from disabling 1.7B when the weights are in fact present. */
   it('leaves 1.7B selectable when the weights are present', () => {
     render(
       <StartGenerationModal
