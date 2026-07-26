@@ -1,0 +1,34 @@
+name: Idea or feedback
+description: A feature idea, a rough edge, or how your first book went. No format required.
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues are welcome from anyone — this form has no required format, no ID scheme,
+        and nothing you need to know about the codebase. Write it however it comes out.
+
+        A maintainer triages this and, if it becomes tracked work, rewrites it as a
+        backlog item — you don't need to do that part. (Code changes are by invitation
+        for now, so please don't feel you need to offer a fix.)
+  - type: textarea
+    id: what
+    attributes:
+      label: What's on your mind?
+      description: An idea, something that annoyed you, something confusing, or just how it went.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: What were you trying to do?
+      description: Optional — the book, the step you were on, or what you expected to happen.
+    validations:
+      required: false
+  - type: input
+    id: setup
+    attributes:
+      label: Your setup
+      description: Optional — OS, graphics card, and app version (the pill in the top bar), if it seems relevant.
+    validations:
+      required: false

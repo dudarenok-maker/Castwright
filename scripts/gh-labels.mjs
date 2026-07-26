@@ -44,6 +44,10 @@ export const LABELS = [
   // Helpers — amber.
   { name: 'needs-plan', color: 'fbca04', description: 'Substantial — owes a docs/features/NN-*.md regression plan' },
   { name: 'tracking', color: 'fbca04', description: 'Watchdog item, no direct code fix' },
+
+  // Inbound — pale blue. Applied by the "Idea or feedback" issue form; triaged
+  // into a backlog item or a bug by a maintainer.
+  { name: 'feedback', color: 'bfd4f2', description: 'Product/UX feedback from users, not a bug report' },
 ];
 
 function info(msg) {

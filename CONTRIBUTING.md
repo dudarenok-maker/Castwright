@@ -325,15 +325,32 @@ Bugs are **out-of-band** — file the **Bug** form (auto-labels `bug`), keep a
 plain descriptive title (no `<prefix>-<n>`), and leave them **off**
 `docs/BACKLOG.md`. They still get triage, history, and PR-linking.
 
+### Ideas & feedback
+
+The **Backlog item** and **Bug** forms above are maintainer-shaped — they ask
+for a `<prefix>-<n>` ID, acceptance criteria, and key files, which nobody
+outside the project can supply. Anyone who just wants to report a rough edge,
+suggest something, or say how their first book went files the **Idea or
+feedback** form (`.github/ISSUE_TEMPLATE/idea-or-feedback.yml`, auto-labels
+`feedback`): one required free-text field, no title format, no jargon. Blank
+issues are enabled as a further escape hatch.
+
+**Issues are welcome from anyone; code changes stay by invitation.** A
+maintainer triages `feedback` issues and rewrites the ones that become tracked
+work as proper Backlog items or Bugs — the reporter never has to learn the
+`<prefix>-<n>` convention. This is also why `good first issue` is deliberately
+applied to **zero** issues: it advertises "send us a PR", which the
+invitation-only contribution policy does not accept. Leave it unused.
+
 ### Labels
 
-Three axes + two helpers, version-controlled in `scripts/gh-labels.mjs` (run
+Three axes + three helpers, version-controlled in `scripts/gh-labels.mjs` (run
 `node scripts/gh-labels.mjs --apply` to create/reconcile them):
 
-- `area:fe` · `area:srv` · `area:side` · `area:ops` · `area:fs`
+- `area:fe` · `area:srv` · `area:side` · `area:app` · `area:ops` · `area:fs`
 - `moscow:must` · `moscow:should` · `moscow:could` · `moscow:wont`
 - `type:feature` · `type:chore` · `bug`
-- `needs-plan` (owes a `docs/features/NN-*.md`) · `tracking` (watchdog, no direct fix)
+- `needs-plan` (owes a `docs/features/NN-*.md`) · `tracking` (watchdog, no direct fix) · `feedback` (inbound user report, awaiting triage)
 
 ### The board
 
