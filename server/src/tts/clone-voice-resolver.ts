@@ -7,6 +7,7 @@
 
 import type { VoiceLibraryEntry } from '../workspace/voice-library.js';
 import type { deriveEngineArtifact } from './derive-engine-artifact.js';
+import { currentQwenBaseModel } from './model-paths.js';
 // Review C-1 — type-only: this module's whole design is injected deps for
 // testability, so the REAL purgeCloneArtifacts is wired in by the caller
 // (synthesise-chapter.ts's buildDefaultCloneResolverDeps), never imported
@@ -544,7 +545,17 @@ export async function resolveDesignedVoicesForChapter(
          read its own snapshot in the gap between this read and this write
          and have ITS write clobbered by this one landing after — or vice
          versa. `mutate` returning null when the entry has vanished skips
-         the write, matching the prior "if (entry)" guard. */
+         the write, matching the prior "if (entry)" guard.
+
+         Task 15 — `deriveEngineArtifact`'s `baseModel` is now optional on
+         its result (coqui derives never set it), so `result.baseModel` is
+         `string | undefined` here even though this call site always derives
+         via the literal 'qwen' (which always populates it at runtime).
+         Falling back to `currentQwenBaseModel()` on the type-level
+         possibility keeps this from ever writing `baseModel: undefined` onto
+         `engines.qwen` — `withComputedStaleness` (routes/voice-library.ts)
+         reads a falsy `baseModel` as "never stale", so an undefined write
+         here would silently disable this voice's future staleness checks. */
       try {
         await deps.updateEntry(libraryUuid, (fresh) =>
           fresh
@@ -552,7 +563,11 @@ export async function resolveDesignedVoicesForChapter(
                 ...fresh,
                 engines: {
                   ...fresh.engines,
-                  qwen: { ...fresh.engines.qwen, status: 'ready', baseModel: result.baseModel },
+                  qwen: {
+                    ...fresh.engines.qwen,
+                    status: 'ready',
+                    baseModel: result.baseModel || currentQwenBaseModel(),
+                  },
                 },
               }
             : null,

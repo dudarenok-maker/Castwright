@@ -16,6 +16,7 @@ import {
   type ResolveDesignedVoiceDeps,
 } from './clone-voice-resolver.js';
 import type { VoiceLibraryEntry } from '../workspace/voice-library.js';
+import { currentQwenBaseModel } from './model-paths.js';
 
 describe('UnresolvableClonedVoiceError', () => {
   it('fromList carries the structured broken voices and a readable message', () => {
@@ -1227,6 +1228,54 @@ describe('resolveDesignedVoicesForChapter', () => {
     const written = writeEntry.mock.calls[0][0];
     expect(written.engines.qwen).toEqual({ status: 'ready', baseModel: 'qwen3-new' });
     expect(written.engines.xtts).toEqual({ status: 'ready' }); // sibling engine survives
+  });
+
+  /* Task 15 (DELTA-I4) — `deriveEngineArtifact`'s `baseModel` is now optional
+     on its result (a coqui derive never sets it), so `result.baseModel` is
+     `string | undefined` at this call site even though it always derives via
+     the literal 'qwen'. Left unguarded, a falsy `result.baseModel` would
+     write `baseModel: undefined` onto `engines.qwen`, which
+     `withComputedStaleness` (routes/voice-library.ts) reads as "never
+     stale" — a silent regression to this self-heal. Pins the guard: an
+     undefined `baseModel` on the derive result falls back to
+     `currentQwenBaseModel()`, never `undefined`. */
+  it('I-2/Task-15: a derive result with no baseModel stamps engines.qwen with currentQwenBaseModel(), never undefined', async () => {
+    const entry = {
+      voiceUuid: 'lib-designed',
+      name: 'Orin',
+      provenance: 'designed' as const,
+      tags: [],
+      pinned: false,
+      engines: { qwen: { status: 'stale' as const } },
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+    const writeEntry = vi.fn(async (_entry: typeof entry) => {});
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm: vi.fn(async () => ({
+        pcm: Buffer.alloc(10),
+        sampleRate: 24000,
+        refText: 'x',
+        manifest: { refText: 'x' },
+      })),
+      deriveEngineArtifact: vi.fn(async () => ({
+        previewPcm: Buffer.alloc(0),
+        sampleRate: 24000,
+        baseModel: undefined,
+      })),
+      readEntry: vi.fn(async () => entry),
+      writeEntry,
+    });
+
+    await resolveDesignedVoicesForChapter(
+      [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+      deps,
+    );
+
+    expect(writeEntry).toHaveBeenCalledTimes(1);
+    const written = writeEntry.mock.calls[0][0];
+    expect(written.engines.qwen).toEqual({ status: 'ready', baseModel: currentQwenBaseModel() });
   });
 
   /* Review C-1 — a designed voice carries no consent dimension, so there's
