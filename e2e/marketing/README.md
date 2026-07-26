@@ -59,11 +59,48 @@ Add one row to `scenes.ts`:
   `#/books/:bookId/<view>`, `#/account`, `#/voices`.
 - `waitFor` is an optional content selector (non-fatal) so the shot isn't taken
   on the loading shell.
+- `themes` pins a scene to `['dark']` or `['light']`. Only for a fixed-treatment
+  surface where the other theme is not a second look but a worse version of the
+  same one (see `series-cast-card-export`). It intersects with `CAPTURE_THEME`
+  rather than overriding it, so a scene never writes a theme it disowns.
 - `viewports` defaults to `['desktop']`.
+
+## Export scenes (capturing what the app *produces*, not what it shows)
+
+Most scenes screenshot the page. A scene with a **`downloadAction`** instead
+presses an in-app export button and keeps the file the browser downloads — so
+the output PNG is the real user-facing artefact, byte for byte, rather than the
+harness's own re-render of the same pixels.
+
+```ts
+{ id: 'series-cast-card-export', hash: '#/', themes: ['dark'],
+  waitFor: '[data-testid="series-memory-chip"]',
+  action: async (page) => { /* …open the modal… */ },
+  waitForAfterAction: '[data-testid="series-share-card"]',
+  downloadAction: async (page) =>
+    page.getByRole('button', { name: /download image \(\.png\)/i }).click(),
+  strict: true },
+```
+
+Two ordering rules matter:
+
+- **`action` reaches the export affordance; `downloadAction` presses it.**
+  `action` runs once, before the theme loop; `downloadAction` runs *inside* it,
+  because an exported card bakes the active theme's tokens into the file, so the
+  click has to happen after `emulateMedia`.
+- **Export scenes never degrade to a screenshot.** A fallback would write a
+  plausible-looking PNG of the wrong thing (the modal, chrome and all) under the
+  export's filename — worse than a red run.
+
+Export scenes are marked `test.slow()` automatically. `html-to-image` walks the
+node, inlines every stylesheet, re-fetches each `url()` under `cacheBust`, then
+rasterises; stacked on the cold Vite compile the stock 120s budget already
+assumes, that overran the deadline mid-render on a cold first run (the button
+was still reading "Rendering…") while finishing in ~2s warm.
 
 ## Covers
 
-The four covers are copied into the git-ignored `public/marketing-covers/`:
+The covers are copied into the git-ignored `public/marketing-covers/`:
 
 ```bash
 mkdir -p public/marketing-covers
@@ -71,7 +108,21 @@ cp "brand/book-covers/The Drowning Bell - Marin Vale.png"      public/marketing-
 cp "brand/book-covers/Saltgrave - Marin Vale.png"              public/marketing-covers/hollow-tide-2.png
 cp "brand/book-covers/The Tidewatcher's Oath - Marin Vale.png" public/marketing-covers/hollow-tide-3.png
 cp "brand/test-book/the-coalfall-commission-cover-final.png"   public/marketing-covers/coalfall-commission.png
+# Localized editions — each has its translated title baked into the art, so a
+# book must never borrow a sibling language's cover (see hollow-tide.test.ts's
+# "never a sibling edition's" case, which locks a regression where the German
+# entry showed the English cover).
+cp brand/book-covers/coalfall-commission-de.png                public/marketing-covers/coalfall-commission-de.png
+cp brand/book-covers/coalfall-commission-ru.png                public/marketing-covers/coalfall-commission-ru.png
 ```
+
+The localized masters are extracted from the real per-language renders in the
+maintainer's library (`books/Castwright/Standalones/<translated title>/.audiobook/cover.jpg`,
+2048×2048); a copy of each lives in
+`brand/go-to-market/launch-post-images/marketing-site/book/coalfall-cover-<lang>.jpg`
+so they don't have to be dug out of the library again. `es`/`fr` masters exist there
+too; `ja`/`zh` have none (those samples ship as Markdown, not EPUB, so there is no
+embedded cover).
 
 Grid cards crop the square covers to 16:10; the fixtures set a top-biased
 `coverFraming` so titles aren't clipped on the shelf.

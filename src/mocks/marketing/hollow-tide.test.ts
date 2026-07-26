@@ -22,12 +22,12 @@ describe('Hollow Tide marketing fixtures', () => {
     ]);
   });
 
-  it('includes Coalfall + its Russian edition + Der Bernsteinturm as Castwright standalones', () => {
+  it('includes Coalfall plus its Russian and German editions as Castwright standalones', () => {
     const cw = HOLLOW_TIDE_LIBRARY.authors.find((a) => a.name === 'Castwright');
     expect(cw?.series[0].books.map((b) => b.bookId)).toEqual([
       'coalfall-commission',
       'coalfall-commission-ru',
-      'der-bernsteinturm',
+      'coalfall-commission-de',
     ]);
   });
 
@@ -49,7 +49,7 @@ describe('Hollow Tide marketing fixtures', () => {
       'hollow-tide-4',
       'coalfall-commission',
       'coalfall-commission-ru',
-      'der-bernsteinturm',
+      'coalfall-commission-de',
     ]) {
       expect(HOLLOW_TIDE_BOOK_STATES.get(bookId)?.state.bookId).toBe(bookId);
     }
@@ -85,21 +85,36 @@ describe('Hollow Tide marketing fixtures', () => {
   describe('Russian + German standalones (fs-1318 Tier D)', () => {
     it('carry their own BCP-47 language on the book state', () => {
       expect(HOLLOW_TIDE_BOOK_STATES.get('coalfall-commission-ru')?.state.language).toBe('ru');
-      expect(HOLLOW_TIDE_BOOK_STATES.get('der-bernsteinturm')?.state.language).toBe('de');
+      expect(HOLLOW_TIDE_BOOK_STATES.get('coalfall-commission-de')?.state.language).toBe('de');
     });
 
     it('carry their own BCP-47 language on the library entry', () => {
       const cw = HOLLOW_TIDE_LIBRARY.authors.find((a) => a.name === 'Castwright')!;
       const byId = new Map(cw.series[0].books.map((b) => [b.bookId, b]));
       expect(byId.get('coalfall-commission-ru')?.language).toBe('ru');
-      expect(byId.get('der-bernsteinturm')?.language).toBe('de');
+      expect(byId.get('coalfall-commission-de')?.language).toBe('de');
     });
 
     it('cast members carry names in their own language', () => {
       const ruCast = HOLLOW_TIDE_BOOK_STATES.get('coalfall-commission-ru')?.cast?.characters ?? [];
       expect(ruCast.map((c) => c.name)).toEqual(['Рассказчик', 'Рен']);
-      const deCast = HOLLOW_TIDE_BOOK_STATES.get('der-bernsteinturm')?.cast?.characters ?? [];
-      expect(deCast.map((c) => c.name)).toEqual(['Erzählerin', 'Wachtmeister Brandt']);
+      const deCast = HOLLOW_TIDE_BOOK_STATES.get('coalfall-commission-de')?.cast?.characters ?? [];
+      expect(deCast.map((c) => c.name)).toEqual(['Erzähler', 'Wren']);
+    });
+
+    it('each localized edition uses its OWN cover art, never a sibling edition\'s', () => {
+      /* Regression: the German entry used to point at COVER('coalfall-commission'),
+         so the library shelf rendered the English cover TWICE — the second time
+         under a German title. Asserting per-book is what catches a wrong slug;
+         asserting global distinctness is what catches the same mistake made
+         again for any other language. */
+      const cw = HOLLOW_TIDE_LIBRARY.authors.find((a) => a.name === 'Castwright')!;
+      const books = cw.series[0].books;
+      const byId = new Map(books.map((b) => [b.bookId, b]));
+      expect(byId.get('coalfall-commission-ru')?.coverImageUrl).toContain('coalfall-commission-ru');
+      expect(byId.get('coalfall-commission-de')?.coverImageUrl).toContain('coalfall-commission-de');
+      const covers = books.map((b) => b.coverImageUrl);
+      expect(new Set(covers).size).toBe(covers.length);
     });
 
     it('the 4 original English books are unaffected (language left unset)', () => {
