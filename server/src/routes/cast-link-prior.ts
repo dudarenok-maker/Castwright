@@ -35,6 +35,7 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { normaliseForMatch } from './analysis.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 import type { TtsEngine } from '../tts/index.js';
+import { characterHasClonedSlot } from '../tts/clone-engines.js';
 
 export const castLinkPriorRouter = Router();
 
@@ -161,10 +162,25 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
      its own qwen voice and the target carries one; never clobbers an explicit
      source override. The persona (`voiceStyle`) rides along the same gate
      (srv-18) — copied from the target only when the source lacks its own, so
-     the reused row carries the persona on disk without a backfill. */
+     the reused row carries the persona on disk without a backfill.
+
+     [Task 6a] — a source that already carries a CLONED voice on ANY
+     clone-capable engine (e.g. coqui) must never be denormalised onto the
+     target's qwen slot: `sourceHasQwen` is a name-only test on the qwen slot
+     specifically, so a coqui-cloned character (which genuinely has no qwen
+     slot) read as `!sourceHasQwen` and inherited the target's qwen voice via
+     `{ ...target.overrideTtsVoices, ...source.overrideTtsVoices }` — planting
+     another character's designed voice on a real person's cloned record, and
+     (via the `ttsEngine` fallback below) retargeting them onto qwen for
+     generation. FAIL-SAFE test (`characterHasClonedSlot`, provenance only,
+     no libraryUuid validation) — this is a destructive/preserving guard, so
+     a malformed cloned slot must still count as cloned and stay protected.
+     Cloned source: fail loud/preserve (never denormalise, never retarget
+     engine). Designed/no-voice source: unchanged fail-soft denormalise below. */
+  const sourceIsCloned = characterHasClonedSlot(source);
   const sourceHasQwen = !!source.overrideTtsVoices?.qwen?.name;
   const targetQwen = target.overrideTtsVoices?.qwen?.name;
-  const shouldDenormaliseVoice = !sourceHasQwen && !!targetQwen;
+  const shouldDenormaliseVoice = !sourceIsCloned && !sourceHasQwen && !!targetQwen;
 
   /* Carry the prior character's PROFILE content onto the source at link time.
      A manual continuity link declares "these are the same person", so the
