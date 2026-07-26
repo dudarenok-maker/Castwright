@@ -396,7 +396,10 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
         dispatch(
           notificationsActions.pushToast({
             kind: 'error',
-            message: `Chapter ${ev.chapterId} failed — ${ev.errorReason ?? 'no designed Qwen voice for a speaking character.'}`,
+            // M5 (review) — this fallback now backstops both voice-not-designed
+            // AND cloned-voice-broken, so it stays engine/reason-neutral rather
+            // than naming "designed Qwen voice" specifically.
+            message: `Chapter ${ev.chapterId} failed — ${ev.errorReason ?? 'a cast voice is unavailable for a speaking character.'}`,
             dedupeKey: `${ev.errorCode}:${bookId}:${ev.chapterId}`,
           }),
         );

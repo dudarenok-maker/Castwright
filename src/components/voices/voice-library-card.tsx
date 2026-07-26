@@ -14,10 +14,11 @@ import { useState } from 'react';
 import { useAppDispatch } from '../../store';
 import { patchEntry, revokeVoice, type VoiceLibraryEntry } from '../../store/voice-library-slice';
 import { Pill } from '../primitives';
-import { IconStar, IconPlay, IconPause, IconSpinner, IconClose } from '../../lib/icons';
+import { IconStar, IconPlay, IconPause, IconSpinner, IconClose, IconWarning } from '../../lib/icons';
 import { useSamplePlayback } from '../../lib/use-sample-playback';
 import { api } from '../../lib/api';
 import { VoiceProvenanceBadge } from './voice-provenance-badge';
+import { ConfirmDialog } from '../../modals/confirm-dialog';
 
 interface Props {
   entry: VoiceLibraryEntry;
@@ -65,6 +66,7 @@ export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
   const [sampleLoading, setSampleLoading] = useState(false);
   const [sampleError, setSampleError] = useState<string | null>(null);
   const [sampleUrl, setSampleUrl] = useState<string | null>(null);
+  const [confirmRevokeOpen, setConfirmRevokeOpen] = useState(false);
 
   const qwenStatus = entry.engines.qwen?.status;
   const playing = playback.isPlaying && !!sampleUrl && playback.currentUrl === sampleUrl;
@@ -94,10 +96,9 @@ export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
     void dispatch(patchEntry({ voiceUuid: entry.voiceUuid, patch: { pinned: !entry.pinned } }));
   }
 
-  function revoke() {
-    if (window.confirm(`Revoke consent for "${entry.name}"? It will stop working immediately.`)) {
-      void dispatch(revokeVoice(entry.voiceUuid));
-    }
+  function confirmRevoke() {
+    setConfirmRevokeOpen(false);
+    void dispatch(revokeVoice(entry.voiceUuid));
   }
 
   async function playSample() {
@@ -234,7 +235,7 @@ export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
         {entry.provenance === 'cloned' && (
           <button
             type="button"
-            onClick={revoke}
+            onClick={() => setConfirmRevokeOpen(true)}
             data-testid={`voice-library-revoke-${entry.voiceUuid}`}
             className={`px-3 py-1.5 rounded-full text-xs font-semibold text-red-600/90 hover:bg-red-600/10 transition-colors min-h-[44px] fine-pointer:min-h-0 ${onAssign ? '' : 'ml-auto'}`}
           >
@@ -250,6 +251,40 @@ export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
           ⚠ {sampleError}
         </p>
       )}
+      {/* User-directed fix (fs-38 Wave 3b2) — revoke now also erases the
+          person's original recording, an irreversible action, so it gets a
+          real two-step confirm (matching the app's other destructive-action
+          dialogs, e.g. library-grid's book delete) instead of the previous
+          window.confirm. The copy states every consequence up front: the
+          voice stops working, the recording + everything derived from it is
+          gone for good, it can't be undone, and any character currently cast
+          to it will fail to render until reassigned. */}
+      <ConfirmDialog
+        open={confirmRevokeOpen}
+        eyebrow="Revoke"
+        title={`Revoke "${entry.name}"?`}
+        icon={<IconWarning className="w-4 h-4" />}
+        variant="danger"
+        body={
+          <div className="space-y-2">
+            <p>
+              &ldquo;{entry.name}&rdquo; will stop working immediately — it can no longer be used
+              or played.
+            </p>
+            <p>
+              The original recording and everything derived from it are permanently deleted.
+            </p>
+            <p>
+              Any character currently cast to &ldquo;{entry.name}&rdquo; will fail to render
+              until reassigned to another voice.
+            </p>
+            <p className="text-red-700/80 font-medium">This can&rsquo;t be undone.</p>
+          </div>
+        }
+        confirmLabel="Revoke & delete recording"
+        onConfirm={confirmRevoke}
+        onClose={() => setConfirmRevokeOpen(false)}
+      />
     </div>
   );
 }
