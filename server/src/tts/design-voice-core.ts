@@ -17,6 +17,7 @@
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
+import { evictIdleQwenBase } from '../gpu/evict-idle-tts.js';
 import { NoCapacityError } from './tts-errors.js';
 import { encodePcmToAudio } from './mp3.js';
 import {
@@ -159,14 +160,24 @@ export async function postDesignAndCacheAudition(
             headers: { 'Content-Type': 'application/json' },
             body: fetchBody,
           }),
-        { engine: 'qwen', signal: controller.signal },
+        {
+          engine: 'qwen',
+          signal: controller.signal,
+          /* Same eviction lever the /synthesize path gets (tts/sidecar.ts) —
+             free an idle Qwen base this design doesn't need instead of polling
+             for ~60s and failing while it holds the VRAM (#1839 finding 4). */
+          evictIdleTts: () => evictIdleQwenBase({ modelKey, signal: controller.signal }),
+        },
       );
     } catch (e) {
       if (e instanceof NoCapacityError) {
-        throw new SidecarDesignError(
-          'GPU has no capacity for voice design right now — free VRAM and retry.',
-          503,
-        );
+        /* Carry the error's own message through — it names the blocking
+           model + remedy (e.g. "Coqui is loaded — free it from Models")
+           when describeVramBlockers can identify one, rather than the
+           generic fallback that used to replace it unconditionally
+           (#1839 finding 4). Still surfaced as a SidecarDesignError, the
+           type this route's caller expects. */
+        throw new SidecarDesignError(e.message, 503);
       }
       const err = e as { name?: string; message?: string };
       if (err.name === 'AbortError') {

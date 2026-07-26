@@ -1234,7 +1234,10 @@ describe('SidecarDesignError', () => {
       expect(fetchSpy.mock.calls.filter((c) => String(c[0]).includes('/qwen/mint-variant'))).toHaveLength(1);
     });
 
-    it('maps a thrown NoCapacityError to a SidecarDesignError with a capacity-specific message', async () => {
+    it('maps a thrown NoCapacityError to a SidecarDesignError, carrying its own message through (#1839 finding 4)', async () => {
+      // #1839 finding 4 — this used to be replaced with a generic
+      // "GPU has no capacity for voice design" string, discarding the real
+      // NoCapacityError message (and any named blocker) entirely.
       mockWithCapacityRetry.mockImplementation(async () => {
         throw new NoCapacityError('qwen', 5_000, 'cuda:0');
       });
@@ -1242,7 +1245,21 @@ describe('SidecarDesignError', () => {
       await expect(designQwenVoiceForCharacter(makeBaseParams())).rejects.toMatchObject({
         name: 'SidecarDesignError',
         status: 503,
-        message: expect.stringMatching(/no capacity/i),
+        message: expect.stringMatching(/not enough gpu memory/i),
+      });
+    });
+
+    it('threads a named VRAM blocker (e.g. Coqui) from NoCapacityError through to the SidecarDesignError message', async () => {
+      mockWithCapacityRetry.mockImplementation(async () => {
+        throw new NoCapacityError('qwen', 5_000, 'cuda:0', [
+          { model: 'Coqui XTTS', remedy: 'Use its Stop button, at the top of the window.' },
+        ]);
+      });
+
+      await expect(designQwenVoiceForCharacter(makeBaseParams())).rejects.toMatchObject({
+        name: 'SidecarDesignError',
+        status: 503,
+        message: expect.stringContaining('Coqui XTTS is loaded'),
       });
     });
   });
