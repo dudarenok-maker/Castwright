@@ -39,6 +39,13 @@ export async function clearMismatchedDesignedVoices(
 ): Promise<ClearedVoice[]> {
   const cleared: ClearedVoice[] = [];
   for (const c of cast) {
+    /* fs-38 Wave 3c — a CLONED voice's language is the speaker's own, not a
+       baked design language, and its manifest lives under qwen-<libraryUuid>,
+       which qwenStorageKey() does not produce. Both facts made this loop
+       delete the clone marker on every non-English book, after which
+       applyQwenFallback saw an ordinary undesigned character and fs-60's
+       Qwen->Coqui branch rendered a catalog speaker for a real person. */
+    if (c.overrideTtsVoices?.qwen?.provenance === 'cloned') continue;
     const designedName = c.overrideTtsVoices?.qwen?.name;
     if (!designedName) continue;
     const manifest = await readJson<{ language?: string }>(
