@@ -9,7 +9,7 @@
    user hears. The Voice-library response (GET /api/voices) is authoritative;
    prefer reading `voice.ttsVoice` when it's available. */
 
-import type { Character, Voice, TtsModelKey, TtsEngine } from './types';
+import type { Character, Voice, TtsEngine } from './types';
 
 /* Single source of truth for the engine union: the OpenAPI-derived type in
    ./types (BaseVoice.engine). Re-exported here so the many
@@ -369,13 +369,6 @@ export function resolveDisplayTtsVoice(
   }
   return voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c, projectEngine);
 }
-
-/* The 0.6B Qwen base key. Still used by the emotion-variant player
-   (src/lib/play-emotion-variant.ts), which is pinned to that tier.
-   To resolve the model key for an AUDITION or a design, use
-   modelKeyForEngineChoice (src/lib/tts-models.ts) — the single
-   engine→modelKey mapper on this side of the wire. */
-export const QWEN_MODEL_KEY: TtsModelKey = 'qwen3-tts-0.6b';
 
 /* Profile-only resolver — same mapping as resolveTtsVoiceForCharacter,
    exposed so the compare modal can label the inferred bucket

@@ -20,13 +20,14 @@ vi.mock('../lib/play-emotion-variant', async () => {
   };
 });
 
-function makeStore(sentences: any[], bookId = 'book-one') {
+function makeStore(sentences: any[], bookId = 'book-one', ttsModelKey?: string) {
   return configureStore({
     reducer: { manuscript: manuscriptSlice.reducer, ui: uiSlice.reducer },
     preloadedState: {
       manuscript: { ...manuscriptSlice.getInitialState(), sentences },
       ui: {
         ...uiSlice.getInitialState(),
+        ...(ttsModelKey ? { ttsModelKey: ttsModelKey as never } : {}),
         stage: { kind: 'ready', bookId, view: 'manuscript', currentChapterId: 1 } as never,
       },
     },
@@ -97,8 +98,12 @@ describe('fs-25 — SentenceEmotionControl', () => {
 });
 
 describe('fe-31 — emotion preview from the chip', () => {
-  function renderWithChar(char: Character | undefined, emotion = 'angry') {
-    const store = makeStore([{ id: 2, chapterId: 1, characterId: char?.id, text: 'Stop.', emotion }]);
+  function renderWithChar(char: Character | undefined, emotion = 'angry', ttsModelKey?: string) {
+    const store = makeStore(
+      [{ id: 2, chapterId: 1, characterId: char?.id, text: 'Stop.', emotion }],
+      undefined,
+      ttsModelKey,
+    );
     return render(
       <Provider store={store}>
         <SentenceEmotionControl chapterId={1} sentenceId={2} emotion={emotion as any} character={char} />
@@ -116,6 +121,17 @@ describe('fe-31 — emotion preview from the chip', () => {
     expect(playEmotionVariantSample.mock.calls[0][1]).toBe('angry');
     /* No fallback → no "renders neutral" note. */
     expect(screen.queryByTestId('emotion-preview-note')).toBeNull();
+  });
+
+  it('plays the variant at the session Qwen tier, not a hardcoded 0.6B', async () => {
+    /* Regression for the finding: the chip used to hardcode QWEN_MODEL_KEY
+       (0.6B) regardless of session tier. Assert against 1.7B specifically —
+       0.6B is both the old hardcoded value and the non-Qwen floor, so a test
+       expecting 0.6B here would pass against the unfixed code. */
+    renderWithChar(qwenChar, 'angry', 'qwen3-tts-1.7b');
+    fireEvent.click(screen.getByTestId('emotion-preview'));
+    await waitFor(() => expect(playEmotionVariantSample).toHaveBeenCalledTimes(1));
+    expect(playEmotionVariantSample.mock.calls[0][3]).toBe('qwen3-tts-1.7b');
   });
 
   it('shows a "renders neutral" note when the Qwen speaker has no variant', async () => {
@@ -165,6 +181,6 @@ describe('fe-31 — emotion preview from the chip', () => {
     );
     fireEvent.click(screen.getByTestId('emotion-preview'));
     await waitFor(() => expect(playEmotionVariantSample).toHaveBeenCalledTimes(1));
-    expect(playEmotionVariantSample.mock.calls[0][3]).toBe('book-alpha');
+    expect(playEmotionVariantSample.mock.calls[0][4]).toBe('book-alpha');
   });
 });
