@@ -1468,7 +1468,111 @@ Refs #1839"
 
 ---
 
-### Task 10: Release notes
+### Task 10: A Stop control wherever a voice model is resident
+
+Task 9 names the model holding the VRAM. This gives that name a button.
+
+The `ModelControlPill` already exists for both Kokoro and Coqui
+(`generation.tsx:1000-1027`, wired to `ttsLifecycle.kokoro/coqui.onLoad/onStop`),
+but it renders **only in the generation view** and **only** when
+`enginesInUse.has(engine)` — i.e. when the open book's cast uses that engine.
+Kokoro is the eagerly-resident fallback (`PRELOAD_KOKORO`, ~1 GB), so the common
+case is that it holds VRAM while the user is on the cast or voices view, with no
+control in reach. That is exactly the moment a preview fails for capacity.
+
+**Files:**
+- Modify: `src/components/layout.tsx` (the global `TtsNoticeBanner` slot)
+- Modify: `src/lib/use-tts-lifecycle.ts` (expose resident-engine list, if not already derivable)
+- Modify: `CLAUDE.md` (the stale "NO Load/Stop pill" claim)
+- Test: `src/components/layout.test.tsx`
+
+**Interfaces:**
+- Consumes: `TtsLifecycle.kokoro` / `.coqui` (`onStop`, `state`) — already present.
+- Produces: no new exports. A resident-model Stop control rendered globally.
+
+- [ ] **Step 1: Read the existing global notice surface first**
+
+`generation.tsx:1029-1033` documents that TTS Load/Stop notices moved to a single
+global `<TtsNoticeBanner>` in `layout.tsx`, deliberately, to avoid a double render
+against the one shared `useTtsLifecycle` instance. **Extend that component** —
+do not add a second lifecycle consumer, or the double-render this comment warns
+about comes straight back.
+
+Run: `grep -n "TtsNoticeBanner" src/components/layout.tsx src/components/*.tsx`
+
+- [ ] **Step 2: Write the failing test**
+
+In `src/components/layout.test.tsx`, following its existing lifecycle-stub pattern:
+
+```tsx
+it('offers a Stop control for a resident voice model outside the generation view', async () => {
+  /* Kokoro is eagerly resident (PRELOAD_KOKORO). Before this, its only Stop pill
+     lived in the generation view behind enginesInUse — so on the cast/voices
+     view it held ~1GB with no control in reach, which is exactly when a preview
+     fails for capacity. */
+  const onStop = vi.fn();
+  renderLayoutAt('#/cast', { ttsLifecycle: stubLifecycle({ kokoro: { state: 'ready', onStop } }) });
+
+  fireEvent.click(screen.getByRole('button', { name: /stop kokoro/i }));
+  expect(onStop).toHaveBeenCalledTimes(1);
+});
+
+it('shows no Stop control when nothing is resident', () => {
+  renderLayoutAt('#/cast', { ttsLifecycle: stubLifecycle({ kokoro: { state: 'idle' } }) });
+  expect(screen.queryByRole('button', { name: /stop kokoro/i })).toBeNull();
+});
+```
+
+Adapt `renderLayoutAt` / `stubLifecycle` to the helpers `layout.test.tsx` already
+defines — `routes/index.test.tsx:365` shows the established `ttsLifecycle` stub
+shape. Reuse it rather than writing a third one.
+
+- [ ] **Step 3: Implement**
+
+Render a Stop affordance for each engine whose lifecycle `state === 'ready'`,
+inside the existing global notice component. Gate on residency (`state`), **not**
+on `enginesInUse` — residency is the thing that costs VRAM, and it is what the
+user needs to act on. Keep it quiet: this is a small inline control next to the
+existing notice copy, not a persistent banner. Reuse `ModelControlPill` so the
+control is the same object the generation view already shows.
+
+Do not change the generation view's own pills — they stay, and both surfaces
+share the one `useTtsLifecycle` instance as `generation.tsx:1029-1033` requires.
+
+- [ ] **Step 4: Wire the blockers from Task 9 to it**
+
+Where the no-capacity error surfaces its `blockers`, render each blocker beside
+this control so the named model and the button that frees it are one unit rather
+than a description and a scavenger hunt.
+
+- [ ] **Step 5: Correct CLAUDE.md**
+
+Under "Suggested follow-ups", the Kokoro bullet claims "NO Load/Stop pill — it's
+just always available". Replace that clause with the truth: a pill exists and is
+now reachable wherever the model is resident, gated on residency rather than on
+the open book's cast.
+
+- [ ] **Step 6: Run the tests**
+
+Run: `npm run test -- src/components/layout.test.tsx src/views/generation.test.tsx`
+Expected: PASS, and the generation view's own pills unchanged.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/components/layout.tsx src/components/layout.test.tsx src/lib/use-tts-lifecycle.ts CLAUDE.md
+git commit -m "feat(frontend): stop a resident voice model from anywhere
+
+The Kokoro/Coqui pill only rendered in the generation view behind enginesInUse,
+so an eagerly-resident Kokoro held VRAM with no control in reach. Gates on
+residency instead. Corrects CLAUDE.md's stale 'no Load/Stop pill' claim.
+
+Refs #1839"
+```
+
+---
+
+### Task 11: Release notes
 
 **Files:**
 - Modify: `docs/release-notes-next.md`
@@ -1516,7 +1620,7 @@ Refs #1839"
 
 ---
 
-### Task 11: Verify and open the PR
+### Task 12: Verify and open the PR
 
 - [ ] **Step 1: Run the branch-scoped battery**
 
@@ -1573,7 +1677,8 @@ Run the `code-review` gate (no `--fix`) per CLAUDE.md's Before-shipping checklis
 | 1.7B tier picker weights gate (#1841) | 7 |
 | Admission frees an idle Qwen base | 8 |
 | Hard-warn naming the resident blockers | 9 |
-| Release notes | 10 |
+| A Stop control wherever a model is resident | 10 |
+| Release notes | 11 |
 
 No gaps. Note the spec's earlier "no-capacity UI copy is out of scope" line no
 longer holds — Task 9 brings it in scope, and the spec says so.

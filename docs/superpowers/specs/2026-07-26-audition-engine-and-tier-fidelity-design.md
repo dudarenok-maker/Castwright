@@ -197,14 +197,22 @@ combination: the user watches a preview fail against a message that reads only
 "free VRAM or attach a second GPU" (`tts-errors.ts:20`), naming nothing.
 
 So when capacity is genuinely exhausted, `NoCapacityError` names the resident
-user-controlled models and gives the specific remedy for each. The two remedies
-differ, because the two models are controlled differently — and getting this
-wrong would send the user hunting for a button that does not exist:
+user-controlled models, and each named model is **paired with a control that
+actually stops it** — a remedy the user can act on in one click, not a
+description of where to go looking.
 
-| Resident model | Control | Remedy |
+| Resident model | Control today | After |
 |---|---|---|
-| Coqui XTTS | button-driven `ModelControlPill` | "Stop it in the Models panel." |
-| Kokoro | **no Load/Stop pill** — eagerly resident, gated by `tts.preload.kokoro` | "Turn off *Preload Kokoro* in settings." |
+| Coqui XTTS | `ModelControlPill`, but only in the generation view under `enginesInUse.has('coqui')` | Stop control wherever it is resident |
+| Kokoro | same pill, same gate (`generation.tsx:1000`) — so **absent** exactly when Kokoro is eagerly resident and the user is on the cast or voices view | Stop control wherever it is resident |
+
+**Correcting a stale claim in our own docs:** CLAUDE.md states Kokoro has "NO
+Load/Stop pill". It does — `generation.tsx:1000-1013` renders one with
+`ttsLifecycle.kokoro.onLoad/onStop`. What it lacks is *reach*: the pill is gated
+on the open book's cast actually using Kokoro, and it lives in one view. Since
+Kokoro is the eagerly-resident fallback (`PRELOAD_KOKORO`, ~1 GB), the common
+case is that it holds VRAM while the user is nowhere near that pill. CLAUDE.md
+is corrected in the same change.
 
 A resident Qwen base is deliberately **not** listed: the lever above already
 frees an idle one, so naming it would be noise on top of an action already
