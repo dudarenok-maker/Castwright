@@ -205,3 +205,55 @@ export function clonedSlotForEngine(
 
   return { libraryUuid };
 }
+
+/** RESOLUTION test that spans BOTH voice-library provenances — "which
+    library voice backs this engine's slot, whatever put it there?" Unlike
+    `clonedSlotForEngine` (which only recognises `provenance: 'cloned'`),
+    this also accepts `provenance: 'designed'`, because *resolution* — which
+    artifact does this uuid point to — is identical for a cloned and a
+    designed voice-library slot. Only the *failure policy* when that
+    artifact turns out to be missing differs between the two, and that is
+    enforced downstream, in the pre-pass (Task 20a), never here — this
+    function is pure and synchronous and has no way to check whether the
+    artifact actually exists on disk.
+
+    Like `clonedSlotForEngine`, this is a RESOLUTION test: it validates
+    `libraryUuid` (must be a non-empty string) because it RETURNS it. A
+    non-clone engine, an `imported` slot, a slot with no `provenance` at all
+    (legacy drift — a bare `libraryUuid` with nothing to say what put it
+    there), or a missing/empty/non-string `libraryUuid` all return
+    undefined.
+
+    Do NOT use this as a fail-safe presence check for a destructive guard —
+    same caveat as `clonedSlotForEngine`: a malformed-but-real slot reads as
+    "nothing here" and a guard could delete it. Use `hasClonedProvenance` /
+    `characterHasClonedSlot` for that. Purely additive alongside the
+    existing FAIL-SAFE vs RESOLUTION vocabulary above — it does not modify,
+    delegate to, or get delegated to by either `clonedSlotForEngine` or the
+    fail-safe helpers. */
+export function libraryVoiceForEngine(
+  c: { overrideTtsVoices?: unknown },
+  e: TtsEngine,
+): { libraryUuid: string; provenance: 'cloned' | 'designed' } | undefined {
+  if (!isCloneEngine(e)) return undefined;
+
+  const slots = c.overrideTtsVoices;
+  if (!slots || typeof slots !== 'object') return undefined;
+
+  const slot = (slots as Record<string, unknown>)[e];
+  if (!slot || typeof slot !== 'object' || !('provenance' in slot)) {
+    return undefined;
+  }
+
+  const provenance = (slot as Record<string, unknown>).provenance;
+  if (provenance !== 'cloned' && provenance !== 'designed') {
+    return undefined;
+  }
+
+  const libraryUuid = (slot as Record<string, unknown>).libraryUuid;
+  if (typeof libraryUuid !== 'string' || libraryUuid.length === 0) {
+    return undefined;
+  }
+
+  return { libraryUuid, provenance };
+}

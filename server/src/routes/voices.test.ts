@@ -1299,6 +1299,106 @@ describe('PUT /api/voices/:voiceId/override — refuses to clear a cloned slot (
   });
 });
 
+describe('PUT /api/voices/:voiceId/override — clears a stale libraryUuid/provenance on an explicit pick (fs-38 Wave 3c Task 16, DELTA-I5)', () => {
+  function castPath(title: string) {
+    return join(workspaceRoot, 'books', AUTHOR, SERIES, title, '.audiobook', 'cast.json');
+  }
+
+  /* Direct-to-disk cleanup, not `override: null` via the route — a cloned
+     slot seeded by these tests would make the route's own Task 4 guard
+     (hasClonedSlotAmongMatches) refuse the clear with a 409, leaking state
+     into later tests. Mirrors the cleanup pattern in the "refuses to clear
+     a cloned slot" describe block above. */
+  afterEach(() => {
+    for (const title of [BOOK_ONE, BOOK_TWO]) {
+      const path = castPath(title);
+      const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+        characters: Array<Record<string, unknown>>;
+      };
+      delete cast.characters[0].overrideTtsVoices;
+      writeFileSync(path, JSON.stringify(cast));
+    }
+  });
+
+  it('[DELTA-I5] an explicit catalogue pick after a designed library assign clears the stale libraryUuid/provenance', async () => {
+    /* Seed a DESIGNED coqui slot carrying a libraryUuid — the shape a
+       voice-library assignment leaves behind. Written directly to disk
+       (not via this route) because the route itself has no "assign a
+       library voice" affordance yet; this reproduces the shape whatever
+       does write it (fs-38 Wave 1 library-assign path) leaves on disk. */
+    const path = castPath(BOOK_ONE);
+    const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    cast.characters[0].overrideTtsVoices = {
+      coqui: { name: 'Some Library Voice', libraryUuid: 'lib-uuid-1', provenance: 'designed' },
+    };
+    writeFileSync(path, JSON.stringify(cast));
+
+    /* User now explicitly picks a stock catalogue voice for the same
+       engine via the cast picker — this is the route under test. */
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+    expect(res.status).toBe(204);
+
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slot = (one.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.coqui;
+    expect(slot?.name).toBe('Asya Anara');
+    expect(slot?.libraryUuid).toBeUndefined();
+    expect(slot?.provenance).toBeUndefined();
+  });
+
+  it('[DELTA-I5 known wart, deliberate carry-forward to Task 24/25] a CLONED slot is preserved even when the user explicitly picks a stock voice', async () => {
+    /* Same shape as the previous test, except provenance is 'cloned' — the
+       consented-clone-marker preserve gate (hasClonedProvenance) must
+       refuse to erase libraryUuid/provenance here, even though the user's
+       explicit pick still updates `name`. This means the character still
+       RENDERS the clone despite the picker showing a stock voice — a
+       known, deliberate wart. The real fix is an explicit "unassign
+       library voice" affordance (Task 24/25), not a silent clear here:
+       Phase 0 of this wave fixed seven live bugs that were all
+       guard-less writes erasing a clone marker upstream of a resolver —
+       this pins that this branch does not reintroduce that class. */
+    const path = castPath(BOOK_ONE);
+    const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    cast.characters[0].overrideTtsVoices = {
+      coqui: { name: 'brann-clone', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+    };
+    writeFileSync(path, JSON.stringify(cast));
+
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+    expect(res.status).toBe(204);
+
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slot = (one.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.coqui;
+    expect(slot?.name).toBe('Asya Anara');
+    expect(slot?.libraryUuid).toBe('lib-clone-1');
+    expect(slot?.provenance).toBe('cloned');
+  });
+
+  it('leaves a slot with a name but no libraryUuid untouched (nothing to clear)', async () => {
+    await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Daisy Studious' } });
+    expect(res.status).toBe(204);
+
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slot = (one.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.coqui;
+    expect(slot).toEqual({ name: 'Daisy Studious' });
+  });
+});
+
 describe('PUT /api/voices/:voiceId/override — series scope (plan 108)', () => {
   afterEach(async () => {
     /* Clear all three casts between cases so the cross-series assertions

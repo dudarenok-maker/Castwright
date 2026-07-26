@@ -16,6 +16,7 @@ import {
   resolveVoiceAssignment,
   qwenStorageKey,
   KOKORO_PROFILE_VOICES,
+  COQUI_PROFILE_VOICES,
 } from './voice-mapping.js';
 
 describe('voice-mapping catalogs are self-consistent', () => {
@@ -335,6 +336,76 @@ describe('fs-38 Wave 1 — pickVoiceForEngine passes through an explicit voice-l
       },
     });
     expect(picked).toBe('qwen-lib1');
+  });
+});
+
+describe('fs-38 Wave 3c Task 16 [ADV-H3] — pickVoiceForEngine resolves a library voice on coqui', () => {
+  /* Policy note (D-B/D-F): both a cloned AND a designed coqui slot carrying
+     a libraryUuid resolve to xtts-<uuid> — resolution is identical for the
+     two provenances. The failure policy for a missing artifact is enforced
+     downstream, in the pre-pass (Task 20a), never here. */
+  it('returns xtts-<uuid> for a cloned coqui slot', () => {
+    const picked = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: {
+        coqui: { name: 'Cloned Voice', libraryUuid: 'u1', provenance: 'cloned' },
+      },
+    });
+    expect(picked).toBe('xtts-u1');
+  });
+
+  it('returns xtts-<uuid> for a designed coqui slot carrying a libraryUuid too', () => {
+    const picked = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: {
+        coqui: { name: 'Designed Voice', libraryUuid: 'u1', provenance: 'designed' },
+      },
+    });
+    expect(picked).toBe('xtts-u1');
+  });
+
+  it('neither the cloned nor the designed resolution returns a COQUI_PROFILE_VOICES member', () => {
+    const catalogNames = new Set(Object.values(COQUI_PROFILE_VOICES).flat());
+    const cloned = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: {
+        coqui: { name: 'Cloned Voice', libraryUuid: 'u1', provenance: 'cloned' },
+      },
+    });
+    const designed = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: {
+        coqui: { name: 'Designed Voice', libraryUuid: 'u1', provenance: 'designed' },
+      },
+    });
+    expect(catalogNames.has(cloned)).toBe(false);
+    expect(catalogNames.has(designed)).toBe(false);
+  });
+
+  it('a slot with a name but no libraryUuid is unchanged (falls through to the generic name lookup)', () => {
+    const picked = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: { coqui: { name: 'Asya Anara' } },
+    });
+    expect(picked).toBe('Asya Anara');
+  });
+
+  it('an imported slot is unchanged (falls through to the generic name lookup)', () => {
+    const picked = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: {
+        coqui: { name: 'Imported Voice', libraryUuid: 'u1', provenance: 'imported' },
+      },
+    });
+    expect(picked).toBe('Imported Voice');
+  });
+
+  it('[DELTA-M2] a slot with a libraryUuid but no provenance is unchanged (legacy drift)', () => {
+    const picked = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: { coqui: { name: 'Legacy Voice', libraryUuid: 'u1' } },
+    });
+    expect(picked).toBe('Legacy Voice');
   });
 });
 

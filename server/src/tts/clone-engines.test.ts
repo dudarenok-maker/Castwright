@@ -14,6 +14,7 @@ import {
   clonedSlotForEngine,
   hasClonedProvenance,
   resolveClonedRetargetEngine,
+  libraryVoiceForEngine,
 } from './clone-engines.js';
 
 describe('clone-engines vocabulary', () => {
@@ -311,6 +312,108 @@ describe('clone-engines vocabulary', () => {
       };
       const result = clonedSlotForEngine(character, 'qwen');
       expect(result).toBeUndefined();
+    });
+  });
+
+  /* Task 16 (fs-38 Wave 3c) — libraryVoiceForEngine is the RESOLUTION test
+     that spans BOTH voice-library provenances ('cloned' AND 'designed').
+     Resolution is identical for the two — only the downstream failure
+     policy (pre-pass, Task 20a) differs, and that is out of scope here. */
+  describe('libraryVoiceForEngine resolves a library voice regardless of cloned/designed provenance', () => {
+    it('returns the slot for a designed coqui slot carrying a libraryUuid', () => {
+      const character = {
+        overrideTtsVoices: {
+          coqui: {
+            name: 'Designed Coqui Voice',
+            libraryUuid: 'lib-uuid-designed',
+            provenance: 'designed' as const,
+          },
+        },
+      };
+      expect(libraryVoiceForEngine(character, 'coqui')).toEqual({
+        libraryUuid: 'lib-uuid-designed',
+        provenance: 'designed',
+      });
+    });
+
+    it('returns the slot for a cloned coqui slot carrying a libraryUuid', () => {
+      const character = {
+        overrideTtsVoices: {
+          coqui: {
+            name: 'Cloned Coqui Voice',
+            libraryUuid: 'lib-uuid-cloned',
+            provenance: 'cloned' as const,
+          },
+        },
+      };
+      expect(libraryVoiceForEngine(character, 'coqui')).toEqual({
+        libraryUuid: 'lib-uuid-cloned',
+        provenance: 'cloned',
+      });
+    });
+
+    it('returns undefined for an imported slot', () => {
+      const character = {
+        overrideTtsVoices: {
+          coqui: {
+            name: 'Imported Voice',
+            libraryUuid: 'lib-uuid-imported',
+            provenance: 'imported' as const,
+          },
+        },
+      };
+      expect(libraryVoiceForEngine(character, 'coqui')).toBeUndefined();
+    });
+
+    it('returns undefined when libraryUuid is present but provenance is absent (legacy drift)', () => {
+      const character = {
+        overrideTtsVoices: {
+          coqui: {
+            name: 'Legacy Voice',
+            libraryUuid: 'lib-uuid-legacy',
+          },
+        },
+      };
+      expect(libraryVoiceForEngine(character, 'coqui')).toBeUndefined();
+    });
+
+    it('returns undefined when libraryUuid is an empty string', () => {
+      const character = {
+        overrideTtsVoices: {
+          coqui: {
+            name: 'Empty Uuid Voice',
+            libraryUuid: '',
+            provenance: 'cloned' as const,
+          },
+        },
+      };
+      expect(libraryVoiceForEngine(character, 'coqui')).toBeUndefined();
+    });
+
+    it('returns undefined when libraryUuid is not a string', () => {
+      const character = {
+        overrideTtsVoices: {
+          coqui: {
+            name: 'Non-string Uuid Voice',
+            libraryUuid: 123,
+            provenance: 'designed' as const,
+          },
+        },
+      };
+      expect(libraryVoiceForEngine(character, 'coqui')).toBeUndefined();
+    });
+
+    it('returns undefined for a non-clone engine (kokoro)', () => {
+      const character = {
+        overrideTtsVoices: {
+          kokoro: {
+            name: 'Kokoro Voice',
+            libraryUuid: 'lib-uuid-kokoro',
+            provenance: 'cloned' as const,
+          },
+        },
+      };
+      expect(libraryVoiceForEngine(character, 'kokoro')).toBeUndefined();
     });
   });
 

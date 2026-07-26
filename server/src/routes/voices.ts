@@ -61,7 +61,7 @@ import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { collectRenderedQwenVoiceNames } from '../audio/segments-io.js';
 import { listVoiceSampleFiles, sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
-import { characterHasClonedSlot } from '../tts/clone-engines.js';
+import { characterHasClonedSlot, hasClonedProvenance } from '../tts/clone-engines.js';
 
 /* The single model key the bespoke Qwen engine synthesises under (mirror of
    the frontend's QWEN_MODEL_KEY / sampleModelKeyForEngine). Cached auditions
@@ -830,7 +830,33 @@ export async function applyOverrideToCastFiles(
         /* Preserve any existing slot detail (notably qwen emotion `variants`)
            when (re)assigning the base name — a base re-design, or its series
            propagation, must NOT wipe designed variants. */
-        map[override.engine] = { ...(map[override.engine] ?? {}), name: override.name };
+        const nextSlot = { ...(map[override.engine] ?? {}), name: override.name };
+        /* [DELTA-I5] fs-38 Wave 3c Task 16 — pickVoiceForEngine's clone-engine
+           branch now resolves a slot's libraryUuid BEFORE this `name` is ever
+           read, so a stale libraryUuid/provenance left over from a prior
+           library assignment on this same slot would silently outlive an
+           explicit override and keep rendering the old clone/design instead
+           of the user's fresh pick. Clear both here — EXCEPT when the
+           EXISTING slot is already `provenance: 'cloned'` (checked via the
+           fail-safe `hasClonedProvenance`, not the uuid-validating
+           `clonedSlotForEngine` — a malformed-but-real cloned slot must
+           still count as cloned, or it would read as "not cloned" and get
+           its marker erased). This wave's Phase 0 fixed seven live bugs that
+           all had the same shape — a guard-less write erasing a clone marker
+           upstream of a resolver; bulk qwen design (routes/cast-design.ts)
+           and single design (routes/single-design.ts) both funnel through
+           this same function, so an unconditional clear would let a design
+           sweep silently erase a consented clone marker.
+
+           Known, deliberate wart this leaves: a user who explicitly picks a
+           stock voice over a CLONED slot still renders the clone — the
+           right fix is an explicit "unassign library voice" affordance,
+           which is Task 24/25's scope, not this one. */
+        if (!hasClonedProvenance(normalised, override.engine)) {
+          delete nextSlot.libraryUuid;
+          delete nextSlot.provenance;
+        }
+        map[override.engine] = nextSlot;
         replacement.overrideTtsVoices = map;
         /* Setting a per-engine voice override is a deliberate "use this
            engine for this character" action (the only callers — the cast
