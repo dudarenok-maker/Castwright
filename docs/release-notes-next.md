@@ -107,7 +107,7 @@ history at cut time.
   `qwen-<uuid>__master.wav`, scoped to a missing `.pt` only and never throwing) shipped alongside
   as the wave's optional tail. Plan: `docs/features/268-fs38-wave3b2-resolver.md`. Spec:
   `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md` §5.
-- **fs-38 — clone-wizard transcript edits now reach the derive** (Closes #1836, refs #624). The
+- **fs-38 — clone-wizard transcript edits now reach the derive** (#1840, closes #1836, refs #624). The
   wizard's transcript textarea was editable but write-only: `onReady` forwarded just
   `{ candidateId, consent }` and `CloneVoiceRequest` had no transcript field, so `POST /clone`
   always distilled against `candidate.master.transcript` — the raw Whisper output. Adds an
@@ -120,8 +120,12 @@ history at cut time.
   text differs from the stored Whisper transcript (previously the enum's `'user'` arm was
   unreachable), decided server-side rather than from a client flag. Blank/whitespace falls back
   to the Whisper text, since Whisper can legitimately return an empty transcript for a non-speech
-  clip. `mockCloneVoice` mirrors the same semantics so mock/e2e mode stops reproducing the bug.
-  Closes the run sheet's KL-k finding.
+  clip. As the first client-controlled value to reach the derive's `refText` — which travels to
+  the sidecar as a base64 `X-Ref-Text` header — it is capped at 4000 chars in the contract, the
+  textarea, and the route, and over-length is a 400 rather than a silent truncation.
+  `mockCloneVoice` mirrors the same semantics so mock/e2e mode stops reproducing the bug. Adds
+  Invariant 12 to `docs/features/267-fs38-wave3-voice-clone.md`. Closes the run sheet's KL-k
+  finding.
 
 ---
 

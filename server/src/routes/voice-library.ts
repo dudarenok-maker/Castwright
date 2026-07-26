@@ -68,6 +68,12 @@ export const voiceLibraryRouter = Router();
 
 const cloneUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
+/** Cap on a client-supplied clone transcript (#1836) — mirrors
+ *  `CloneVoiceRequest.transcript`'s `maxLength` in openapi.yaml. Far above any
+ *  real transcript of the ≤60 s sample clip, and bounded because the value is
+ *  forwarded to the sidecar as a base64 `X-Ref-Text` header. */
+const MAX_CLONE_TRANSCRIPT_CHARS = 4000;
+
 /* Library single-flight lock (spec §3). A module-level in-flight set keyed by
    voiceUuid (plus one `'library:new'` key for creates) serializes design work
    for one voice so a double-submit can't race two designs onto the same `.pt`.
@@ -634,6 +640,18 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
   };
   const candidateId = typeof body.candidateId === 'string' ? body.candidateId : '';
   if (!candidateId) return res.status(400).json({ error: '`candidateId` is required.' });
+  /* #1836 — `transcript` is the first CLIENT-controlled value to reach
+     deriveEngineArtifact's `refText`, which forwards it to the sidecar as a
+     base64 `X-Ref-Text` HTTP header. Unbounded input would blow the sidecar's
+     header limit and surface as a misleading "sidecar unreachable" error, so
+     cap it here (matching CloneVoiceRequest.maxLength). Rejected outright
+     rather than truncated — silently dropping part of a correction is the
+     class of bug this whole change fixes. */
+  if (typeof body.transcript === 'string' && body.transcript.length > MAX_CLONE_TRANSCRIPT_CHARS) {
+    return res
+      .status(400)
+      .json({ error: `Transcript is too long (max ${MAX_CLONE_TRANSCRIPT_CHARS} characters).` });
+  }
   if (!validateConsentDraft(body.consent)) {
     return res
       .status(422)

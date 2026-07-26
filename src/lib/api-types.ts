@@ -3909,9 +3909,15 @@ export interface components {
              *     instead of the candidate's Whisper transcript, and it is persisted
              *     as the entry's `master.transcript` so a later re-derive/repair uses
              *     it too. `master.transcriptSource` becomes `user` when it differs
-             *     from the Whisper text, `whisper` otherwise. Blank/whitespace falls
-             *     back to the Whisper transcript (which may itself legitimately be
-             *     empty for a non-speech clip).
+             *     from the candidate's stored transcript, and otherwise keeps the
+             *     candidate's own source (always `whisper` today). Blank/whitespace
+             *     falls back to the stored transcript (which may itself legitimately
+             *     be empty for a non-speech clip).
+             *
+             *     Capped at 4000 characters — comfortably above any transcript of the
+             *     ≤60 s sample clip, and bounded because this value is forwarded to
+             *     the sidecar as a base64 `X-Ref-Text` HTTP header. Over-length is a
+             *     400, never a silent truncation.
              */
             transcript?: string;
             consent: {

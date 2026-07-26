@@ -3223,7 +3223,7 @@ paths:
             schema: { $ref: '#/components/schemas/CloneVoiceRequest' }
       responses:
         '200': { description: Cloned voice created, content: { application/json: { schema: { $ref: '#/components/schemas/VoiceLibraryEntry' } } } }
-        '400': { description: Missing candidateId }
+        '400': { description: Missing candidateId, or a transcript longer than 4000 characters }
         '404': { description: No such candidate / voice library disabled }
         '409': { description: A clone for this candidate is already running }
         '422': { description: Consent is absent or structurally invalid }
@@ -5111,15 +5111,22 @@ components:
         name: { type: string, description: Optional display name; defaults to the consent personName }
         transcript:
           type: string
+          maxLength: 4000
           description: |
             Optional corrected transcript of the sample clip. When present and
             non-blank this is what the clone is distilled against (`ref_text`)
             instead of the candidate's Whisper transcript, and it is persisted
             as the entry's `master.transcript` so a later re-derive/repair uses
             it too. `master.transcriptSource` becomes `user` when it differs
-            from the Whisper text, `whisper` otherwise. Blank/whitespace falls
-            back to the Whisper transcript (which may itself legitimately be
-            empty for a non-speech clip).
+            from the candidate's stored transcript, and otherwise keeps the
+            candidate's own source (always `whisper` today). Blank/whitespace
+            falls back to the stored transcript (which may itself legitimately
+            be empty for a non-speech clip).
+
+            Capped at 4000 characters — comfortably above any transcript of the
+            ≤60 s sample clip, and bounded because this value is forwarded to
+            the sidecar as a base64 `X-Ref-Text` HTTP header. Over-length is a
+            400, never a silent truncation.
         consent:
           type: object
           required: [personName, relationship, permittedUse]

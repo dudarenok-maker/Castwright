@@ -1568,6 +1568,62 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     expect(res.body.master.transcriptSource).toBe('whisper');
   });
 
+  /* The transcript is the first CLIENT-controlled value to reach the derive's
+     refText, which travels to the sidecar as a base64 X-Ref-Text header — so
+     it is bounded, and rejected rather than truncated. */
+  it('400s an over-length transcript instead of truncating it', async () => {
+    const { writeCandidate, readCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-long',
+      { sampleRate: 24000, durationSeconds: 12, transcript: 't', transcriptSource: 'whisper', captureMethod: 'upload' },
+      Buffer.from('RIFF'),
+    );
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-long',
+        transcript: 'x'.repeat(4001),
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(400);
+    expect(deriveMock).not.toHaveBeenCalled(); // rejected before any GPU work
+    expect(await readCandidate('cand-long')).not.toBeNull(); // candidate intact
+  });
+
+  it('ignores a non-string transcript and falls back to the Whisper text', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-nonstring',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-nonstring',
+        transcript: { nope: true },
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(deriveMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'qwen',
+      expect.objectContaining({ refText: 'my own voice sample' }),
+    );
+    expect(res.body.master.transcriptSource).toBe('whisper');
+  });
+
   it('404s a missing candidate', async () => {
     const res = await request(app)
       .post('/api/voice-library/clone')
