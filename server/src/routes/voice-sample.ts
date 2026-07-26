@@ -20,6 +20,7 @@ import {
   type TtsModelKey,
 } from '../tts/index.js';
 import { encodePcmToAudio } from '../tts/mp3.js';
+import { NoCapacityError } from '../tts/tts-errors.js';
 import { pcmDurationSec } from '../tts/pcm.js';
 import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from '../tts/voice-mapping.js';
 import {
@@ -161,6 +162,16 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     await writeFile(filePath, mp3);
     return res.json({ url: publicUrl, durationSec, cached: false, modelKey });
   } catch (err) {
+    /* #1839 — the GPU is genuinely full and admission gave up. Name what's
+       holding it (Coqui / Kokoro, each with its own actionable remedy) rather
+       than falling through to the generic 502 `tts_failed` below. */
+    if (err instanceof NoCapacityError) {
+      return res.status(503).json({
+        code: 'no_capacity',
+        message: err.message,
+        blockers: err.blockers,
+      });
+    }
     const msg = (err as Error).message ?? 'TTS synthesis failed.';
     /* #1063 — the sidecar returns 409 `voice_not_designed` when the requested
        voice/variant has no cached embedding (a bad-input condition, not an

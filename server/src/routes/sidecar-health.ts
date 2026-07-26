@@ -19,6 +19,7 @@ import { setLastKnownEngineDevices } from '../gpu/engine-device-state.js';
 import { TRACKED_ENGINES, type TrackedEngine } from '../gpu/tracked-engines.js';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
+import { setProbeSidecarHealthProvider } from '../gpu/sidecar-health-gate.js';
 
 export const sidecarHealthRouter = Router();
 
@@ -319,6 +320,15 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
     };
   }
 }
+
+/* Register this module's own probe into the stateless leaf gate
+   (../gpu/sidecar-health-gate.ts) so gpu/capacity-retry.ts can name what's
+   holding the VRAM (#1839) without statically importing this module — this
+   module already imports gpu/capacity-retry.ts (withCapacityRetry, above),
+   so the reverse import would be a direct two-file cycle. See
+   sidecar-health-gate.ts's file header for the fail-closed contract this
+   registration satisfies. */
+setProbeSidecarHealthProvider(probeSidecarHealth);
 
 sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
   res.json(await probeSidecarHealth());

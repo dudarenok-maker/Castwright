@@ -20,6 +20,8 @@ import {
 import { getAnalyzerConcurrencyStats } from '../analyzer/analyzer-concurrency.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 import type { TtsEngine } from '../tts/model-keys.js';
+import { describeVramBlockers, type VramBlocker } from './describe-vram-blockers.js';
+import { probeSidecarHealthIfRegistered } from './sidecar-health-gate.js';
 
 /* Bounded poll for the no-capacity retry loop. GPU_CAPACITY_POLL_MS is the
    wait between admission checks; GPU_CAPACITY_MAX_ATTEMPTS bounds the total
@@ -72,6 +74,32 @@ export interface CapacityRetryOpts {
       defaults to `evictIdleQwenBase` bound to this call's model key. Returns
       true when it actually unloaded something. */
   evictIdleTts?: () => Promise<boolean>;
+  /** Injected "name what's holding the VRAM" action — defaults to a live
+      probe of sidecar health mapped through `describeVramBlockers`
+      (./describe-vram-blockers.ts). Folded into `NoCapacityError`'s message
+      when admission finally gives up (#1839). */
+  describeBlockers?: () => Promise<VramBlocker[]>;
+}
+
+/* Default `describeBlockers` — reads the sidecar health snapshot through the
+   stateless leaf gate (./sidecar-health-gate.ts) rather than importing
+   routes/sidecar-health.ts directly, which would close an import cycle (see
+   that gate's file header for the full path). Best-effort: an unregistered
+   gate or a probe failure both report no blockers rather than turning a
+   probe failure into a worse error than the one already being thrown. */
+async function defaultDescribeBlockers(): Promise<VramBlocker[]> {
+  try {
+    const health = await probeSidecarHealthIfRegistered();
+    if (!health) return [];
+    return describeVramBlockers({
+      coquiLoaded: health.modelLoaded,
+      kokoroLoaded: health.kokoroLoaded,
+      qwenLoaded: health.qwenLoaded,
+      qwenBase17Loaded: health.qwenBase17Loaded,
+    });
+  } catch {
+    return [];
+  }
 }
 
 /* Capacity-aware admission (vram-aware placement, Task 8b). Calls `doPost` and,
@@ -98,6 +126,7 @@ export async function withCapacityRetry(
   const pollMs = opts.pollMs ?? GPU_CAPACITY_POLL_MS;
   const maxAttempts = opts.maxAttempts ?? GPU_CAPACITY_MAX_ATTEMPTS;
   const evictIdleTts = opts.evictIdleTts ?? (async () => false);
+  const describeBlockers = opts.describeBlockers ?? defaultDescribeBlockers;
 
   let evicted = false;
   let evictedTts = false;
@@ -134,7 +163,12 @@ export async function withCapacityRetry(
       }
 
       if (attempt + 1 >= maxAttempts) {
-        throw new NoCapacityError(opts.engine as TtsEngine, noCap.neededMb, noCap.deviceKey);
+        throw new NoCapacityError(
+          opts.engine as TtsEngine,
+          noCap.neededMb,
+          noCap.deviceKey,
+          await describeBlockers(),
+        );
       }
       if (!waiting) {
         waiting = true;

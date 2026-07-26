@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { NoCapacityError } from '../tts/tts-errors.js';
 
 /* vi.hoisted so the inner factory below can close over the same vi.fn()
    instance we drive from the tests. selectTtsProvider() returns this stub
@@ -472,6 +473,23 @@ describe('voice-sample router', () => {
         .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
       expect(res.status).toBe(502);
       expect(res.body.code).toBe('tts_failed');
+    });
+
+    it('503 no_capacity with the named blockers when admission gives up (#1839)', async () => {
+      synthesize.mockRejectedValueOnce(
+        new NoCapacityError('qwen', 4100, 'cuda:0', [
+          { model: 'Coqui XTTS', remedy: 'Stop it in the Models panel.' },
+        ]),
+      );
+      const res = await request(app)
+        .post('/api/voices/v_marlow/sample')
+        .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe('no_capacity');
+      expect(res.body.blockers).toEqual([
+        { model: 'Coqui XTTS', remedy: 'Stop it in the Models panel.' },
+      ]);
+      expect(res.body.message).toContain('Coqui XTTS');
     });
   });
 });
