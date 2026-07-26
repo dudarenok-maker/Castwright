@@ -10,6 +10,7 @@ sys.modules stub is needed — same pattern as test_coqui_device.py).
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import pickle
@@ -22,6 +23,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from fastapi.testclient import TestClient
 
 SIDECAR_ROOT = Path(__file__).resolve().parent.parent
 if str(SIDECAR_ROOT) not in sys.path:
@@ -698,3 +700,254 @@ def test_bump_evict_epoch_drops_a_resident_cache_entry(monkeypatch, tmp_path) ->
     eng._bump_evict_epoch("xtts-evict1")
 
     assert "xtts-evict1" not in eng._latents_cache
+
+
+# ── Task 11 — POST /xtts/clone-voice + POST /xtts/evict-voice ──────────────
+#
+# HTTP-layer coverage. Reuses the Task 9/10 fake-runtime fixtures above
+# (`_make_engine`/`_install_fake_coqui_runtime`) instead of duplicating them
+# — same technique test_qwen_clone_voice.py uses for /qwen/clone-voice.
+# Bare `TestClient(main.app)` throughout (never `with TestClient(...)`) —
+# the context manager fires startup handlers against the fake torch.
+
+
+def _pcm_bytes(n: int = 4800) -> bytes:
+    """Raw s16le mono PCM — the wire body /xtts/clone-voice expects (as
+    opposed to `_ref_audio`'s float32 array, used by the direct engine-level
+    tests above)."""
+    return np.zeros(n, dtype="<i2").tobytes()
+
+
+def _b64(s: str) -> str:
+    return base64.b64encode(s.encode("utf-8")).decode("ascii")
+
+
+def _install_engine(monkeypatch, tmp_path: Path, **kwargs: Any) -> tuple[main.CoquiEngine, Path, _FakeTTS]:
+    eng, voices_dir, tts_instance = _make_engine(monkeypatch, tmp_path, **kwargs)
+    monkeypatch.setitem(main.ENGINES, "coqui", eng)
+    return eng, voices_dir, tts_instance
+
+
+def test_clone_voice_route_happy_path_returns_pcm_and_headers(monkeypatch, tmp_path) -> None:
+    eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path, coqui_version="9.9.9-test")
+    client = TestClient(main.app)
+
+    resp = client.post(
+        "/xtts/clone-voice",
+        content=_pcm_bytes(),
+        headers={"X-Sample-Rate": "24000", "X-Voice-Id": "xtts-happy1"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Sample-Rate"] == "24000"
+    assert resp.headers["X-Coqui-Version"] == "9.9.9-test"
+    assert resp.headers["X-Model-Id"] == "tts_models/multilingual/multi-dataset/xtts_v2"
+    assert len(resp.content) > 0
+    pt_path, json_path = eng._voice_paths("xtts-happy1")
+    assert os.path.isfile(pt_path)
+    assert os.path.isfile(json_path)
+
+
+def test_clone_voice_route_rejects_missing_body_and_headers(monkeypatch, tmp_path) -> None:
+    _install_engine(monkeypatch, tmp_path)
+    client = TestClient(main.app)
+
+    assert client.post(
+        "/xtts/clone-voice", content=b"",
+        headers={"X-Sample-Rate": "24000", "X-Voice-Id": "xtts-x"},
+    ).status_code == 400
+    assert client.post(
+        "/xtts/clone-voice", content=_pcm_bytes(),
+        headers={"X-Voice-Id": "xtts-x"},
+    ).status_code == 400
+    assert client.post(
+        "/xtts/clone-voice", content=_pcm_bytes(),
+        headers={"X-Sample-Rate": "24000"},
+    ).status_code == 400
+
+
+def test_clone_voice_route_honours_audition_text_header(monkeypatch, tmp_path) -> None:
+    """`[AC-C2]` — the verified `_b64` scoping bug on /qwen/clone-voice: a
+    bare `_b64.b64decode` inside `try/except Exception` with no local import
+    would swallow the NameError and silently discard the audition text. This
+    asserts the DECODED text actually reaches the engine's inference call,
+    not just that the response is 200 (a 200 says nothing about which text
+    was spoken — the default-fallback text also renders 200)."""
+    eng, _voices_dir, tts_instance = _install_engine(monkeypatch, tmp_path)
+    client = TestClient(main.app)
+
+    resp = client.post(
+        "/xtts/clone-voice",
+        content=_pcm_bytes(),
+        headers={
+            "X-Sample-Rate": "24000",
+            "X-Voice-Id": "xtts-audition1",
+            "X-Audition-Text": _b64("please say this exact audition line"),
+        },
+    )
+
+    assert resp.status_code == 200
+    tts_model = tts_instance.synthesizer.tts_model
+    assert tts_model.infer_calls[-1]["text"] == "please say this exact audition line"
+    assert tts_model.infer_calls[-1]["text"] != eng.DEFAULT_AUDITION_TEXT
+
+
+def test_clone_voice_route_defaults_audition_text_when_header_absent(monkeypatch, tmp_path) -> None:
+    eng, _voices_dir, tts_instance = _install_engine(monkeypatch, tmp_path)
+    client = TestClient(main.app)
+
+    resp = client.post(
+        "/xtts/clone-voice",
+        content=_pcm_bytes(),
+        headers={"X-Sample-Rate": "24000", "X-Voice-Id": "xtts-audition2"},
+    )
+
+    assert resp.status_code == 200
+    tts_model = tts_instance.synthesizer.tts_model
+    assert tts_model.infer_calls[-1]["text"] == eng.DEFAULT_AUDITION_TEXT
+
+
+def test_clone_voice_route_cuda_poison_shaped_exception_returns_503(monkeypatch, tmp_path) -> None:
+    """The verified `_mark_cuda_poisoned` naming trap: calling the wrong
+    helper name (`_mark_poisoned`) would raise a NameError INSIDE the except
+    handler, so a real CUDA OOM would never mark the process poisoned. This
+    forces a CUDA-poison-shaped exception out of the derive call and asserts
+    both the 503 response AND that the process-wide poison flag actually
+    flipped — a wrong-name bug would blow up this test with a NameError
+    instead of a clean assertion failure, which is exactly the point."""
+    config = _FakeXttsConfig()
+    tts_model = _FakeXttsModel(config=config)
+    tts_model.derive_exc = RuntimeError("CUDA error: out of memory")
+    tts_instance = _FakeTTS(
+        "tts_models/multilingual/multi-dataset/xtts_v2",
+        synthesizer=_FakeSynthesizer(tts_model=tts_model),
+    )
+    _install_engine(monkeypatch, tmp_path, tts_instance=tts_instance)
+    main._reset_poison_for_test()
+    client = TestClient(main.app)
+
+    try:
+        resp = client.post(
+            "/xtts/clone-voice",
+            content=_pcm_bytes(),
+            headers={"X-Sample-Rate": "24000", "X-Voice-Id": "xtts-poison1"},
+        )
+
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["poisoned"] is True
+        assert main._process_poisoned is True
+    finally:
+        main._reset_poison_for_test()
+
+
+def test_clone_voice_route_admission_branch_threads_device_into_clone_voice(
+    monkeypatch, tmp_path
+) -> None:
+    """Exercises the SEG_CAPACITY_ADMISSION=1 branch — conftest.py defaults
+    it OFF for every other test in this suite, so without this test the
+    admission wrapping around /xtts/clone-voice would never actually run."""
+    eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
+    monkeypatch.setattr(
+        main._placement,
+        "probe",
+        lambda: [
+            {"kind": "cuda", "index": 0, "label": "g0", "totalMb": 8192, "freeMb": 5000},
+            {"kind": "cuda", "index": 1, "label": "g1", "totalMb": 24000, "freeMb": 20000},
+        ],
+    )
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    real_clone_voice = eng.clone_voice
+
+    def _spy(*args: Any, **kwargs: Any) -> Any:
+        calls.append((args, kwargs))
+        return real_clone_voice(*args, **kwargs)
+
+    monkeypatch.setattr(eng, "clone_voice", _spy)
+    client = TestClient(main.app)
+
+    resp = client.post(
+        "/xtts/clone-voice",
+        content=_pcm_bytes(),
+        headers={"X-Sample-Rate": "24000", "X-Voice-Id": "xtts-admission1"},
+    )
+
+    assert resp.status_code == 200
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    assert kwargs.get("device") == "cuda:1"
+
+
+def test_evict_voice_route_rejects_missing_voice_id(monkeypatch, tmp_path) -> None:
+    _install_engine(monkeypatch, tmp_path)
+    client = TestClient(main.app)
+
+    resp = client.post("/xtts/evict-voice", json={})
+
+    assert resp.status_code == 400
+
+
+def test_evict_voice_route_miss_is_a_noop(monkeypatch, tmp_path) -> None:
+    _install_engine(monkeypatch, tmp_path)
+    client = TestClient(main.app)
+
+    resp = client.post("/xtts/evict-voice", json={"voiceId": "xtts-never-cloned"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "evicted": False}
+
+
+def test_evict_voice_route_drops_warm_cache_and_next_synth_raises_409(monkeypatch, tmp_path) -> None:
+    """The route-level equivalent of `test_bump_evict_epoch_drops_a_resident_
+    cache_entry` above, but proves the full Property-2 lifecycle across the
+    HTTP surface end to end: clone -> warm the in-memory cache via a synth ->
+    evict via the route -> (mirroring Task 13's purgeCloneArtifacts,
+    files-first) delete the on-disk .pt -> the next /synthesize for that
+    voice fails loud with 409, exactly as /synthesize already maps
+    VoiceNotDesignedError."""
+    eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-evict-http1")
+    eng._load_voice_latents("xtts-evict-http1")  # warm the in-memory cache
+    assert "xtts-evict-http1" in eng._latents_cache
+    client = TestClient(main.app)
+
+    resp = client.post("/xtts/evict-voice", json={"voiceId": "xtts-evict-http1"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "evicted": True}
+    assert "xtts-evict-http1" not in eng._latents_cache
+
+    pt_path, _json_path = eng._voice_paths("xtts-evict-http1")
+    os.remove(pt_path)
+
+    synth_resp = client.post(
+        "/synthesize",
+        json={"engine": "coqui", "model": "xtts_v2", "voice": "xtts-evict-http1", "text": "hello"},
+    )
+    assert synth_resp.status_code == 409
+
+
+def test_evict_voice_route_evicts_even_when_model_unloaded(monkeypatch, tmp_path) -> None:
+    """`[AC-M4]` — the cache-clear must NOT be gated on engine residency the
+    way `unload()`'s own `self._tts is None` early-return is. A voice can
+    have warm latents cached from an earlier synth even after the model
+    itself was later unloaded (e.g. the UI's Stop button, or the Analysing
+    screen auto-evicting Coqui for the analyzer LLM) — Property 2 (erasure
+    is total) must still reach that cache entry on revoke regardless."""
+    eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-evict-unloaded")
+    eng._load_voice_latents("xtts-evict-unloaded")
+    assert "xtts-evict-unloaded" in eng._latents_cache
+
+    eng.unload()
+    assert eng._tts is None
+    # unload() doesn't touch _latents_cache — the entry survives a stop.
+    assert "xtts-evict-unloaded" in eng._latents_cache
+
+    client = TestClient(main.app)
+    resp = client.post("/xtts/evict-voice", json={"voiceId": "xtts-evict-unloaded"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "evicted": True}
+    assert "xtts-evict-unloaded" not in eng._latents_cache

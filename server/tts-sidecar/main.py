@@ -1048,6 +1048,18 @@ class CoquiEngine(Engine):
     # cloneStorageKey('coqui', uuid) -> 'xtts-<uuid>'.
     XTTS_KEY_PREFIX = "xtts-"
 
+    # Fixed calibration line POST /xtts/clone-voice (Task 11) speaks when the
+    # caller omits X-Audition-Text (or it fails to decode). `clone_voice`'s
+    # `audition_text` parameter has no engine-side fallback of its own —
+    # unlike QwenEngine.clone_voice's `audition_text or ref_text or
+    # CALIBRATION_TEXT`, XTTS has no ref_text to fall back to — so the route
+    # resolves this default and the engine always receives a concrete
+    # string. Same pangram as QwenEngine.CALIBRATION_TEXT for consistency.
+    DEFAULT_AUDITION_TEXT = (
+        "The quick brown fox jumps over the lazy dog, "
+        "and she wondered what tomorrow would bring."
+    )
+
     def __init__(self) -> None:
         self._tts: Any = None
         self._torch: Any = None
@@ -7585,6 +7597,169 @@ async def qwen_evict_voice(req: Request) -> Response:
         with qwen._cache_lock:
             evicted = qwen._prompt_cache.pop(stripped_id, None) is not None
         qwen._evict_17b_prompt(stripped_id)
+    return JSONResponse({"ok": True, "evicted": evicted})
+
+
+@app.post("/xtts/clone-voice")
+async def xtts_clone_voice(req: Request) -> Response:
+    """Distil a caller-supplied reference clip (raw s16le mono PCM body) into
+    persisted XTTS conditioning latents (`CoquiEngine.clone_voice`, Task 9)
+    and return an audition preview (PCM, same wire shape as /synthesize).
+    Headers: X-Sample-Rate (required), X-Voice-Id (required, the
+    `xtts-<uuid>` storage key — CoquiEngine.XTTS_KEY_PREFIX),
+    X-Audition-Text (base64, optional — falls back to
+    CoquiEngine.DEFAULT_AUDITION_TEXT when absent or undecodable),
+    X-Language (optional). No X-Ref-Text: unlike Qwen's clone prompt,
+    XTTS's `get_conditioning_latents` is purely acoustic and takes no
+    transcript. Fails loud (no fallback) on derive/audition error — a
+    cloned voice is provenance==='cloned', which is a fail-loud contract
+    (Property 1)."""
+    import base64 as _b64
+    import numpy as np  # type: ignore
+
+    if _process_poisoned:
+        return JSONResponse(
+            {"detail": "Voice engine is in a poisoned CUDA state and must be restarted.", "poisoned": True},
+            status_code=503,
+        )
+    if _restart_pending:
+        return JSONResponse(
+            {"detail": "Voice engine is recycling to free memory; retry shortly."},
+            status_code=503,
+        )
+
+    pcm = await req.body()
+    if not pcm:
+        raise HTTPException(status_code=400, detail="empty PCM body")
+    try:
+        sample_rate = int(req.headers.get("X-Sample-Rate", "0"))
+    except (TypeError, ValueError):
+        sample_rate = 0
+    if sample_rate <= 0:
+        raise HTTPException(status_code=400, detail="X-Sample-Rate header (>0) is required.")
+    voice_id = (req.headers.get("X-Voice-Id") or "").strip()
+    if not voice_id:
+        raise HTTPException(status_code=400, detail="X-Voice-Id header is required.")
+
+    coqui = ENGINES.get("coqui")
+    if not isinstance(coqui, CoquiEngine):
+        return JSONResponse({"detail": "coqui engine missing"}, status_code=500)
+
+    # X-Audition-Text decode. Local `_b64` import (see the verified trap on
+    # /qwen/clone-voice above) — a bare module-scope `_b64` doesn't exist, so
+    # this must be imported in THIS function too. Falls back to
+    # DEFAULT_AUDITION_TEXT on a missing/empty/undecodable header — unlike
+    # QwenEngine.clone_voice, CoquiEngine.clone_voice's `audition_text` param
+    # has no engine-side fallback of its own (no ref_text to fall back to),
+    # so the route must always hand it a concrete non-empty string.
+    audition_text = coqui.DEFAULT_AUDITION_TEXT
+    _aud = req.headers.get("X-Audition-Text")
+    if _aud:
+        try:
+            decoded = _b64.b64decode(_aud).decode("utf-8").strip()
+        except Exception:
+            decoded = ""
+        if decoded:
+            audition_text = decoded
+    language = req.headers.get("X-Language") or None
+
+    ref_audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+
+    global _inflight_synth
+    _inflight_synth += 1
+    try:
+        if _capacity_admission_enabled():
+            cap = _ENGINE_CAPACITY_PROFILE.get("coqui", {"cpu_capable": False, "heavy": True})
+            with _placement.reservation(
+                "coqui", None, {},
+                cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
+                pinned=_engine_env_pin("coqui"),
+            ) as adm:
+                if "noCapacity" in adm:
+                    return _no_capacity(adm)
+                result = await asyncio.to_thread(
+                    coqui.clone_voice, voice_id, ref_audio, sample_rate, audition_text,
+                    language=language, device=adm["device"],
+                )
+        else:
+            result = await asyncio.to_thread(
+                coqui.clone_voice, voice_id, ref_audio, sample_rate, audition_text,
+                language=language,
+            )
+    except Exception as e:
+        err_str = f"{e}"
+        if _CUDA_POISON_RE.search(err_str):
+            log.warning("/xtts/clone-voice CUDA poison (voiceId=%s): %s", voice_id, e)
+            _mark_cuda_poisoned(err_str)
+            return JSONResponse(
+                {"detail": ("GPU is out of memory — likely another job is using it. "
+                            "Free up GPU memory and try again."),
+                 "poisoned": True, "code": "gpu_poisoned"},
+                status_code=503,
+            )
+        log.exception("/xtts/clone-voice failed (voiceId=%s)", voice_id)
+        return JSONResponse({"detail": "Internal error."}, status_code=500)
+    finally:
+        _inflight_synth -= 1
+
+    # X-Coqui-Version / X-Model-Id come from the manifest `clone_voice` just
+    # persisted (Task 9's json_path — `coquiVersion`/`modelId`), rather than
+    # re-derived here, so the response can never disagree with what's on
+    # disk. `modelId` is the FULL resolved model string (e.g.
+    # "tts_models/multilingual/multi-dataset/xtts_v2"), not the short
+    # "xtts_v2" alias — this route is the first consumer of that field and
+    # deliberately echoes it verbatim rather than inventing a second form.
+    coqui_version = "unknown"
+    model_id = "unknown"
+    _pt_path, json_path = coqui._voice_paths(voice_id)
+    try:
+        with open(json_path, "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        coqui_version = manifest.get("coquiVersion", coqui_version)
+        model_id = manifest.get("modelId", model_id)
+    except Exception:
+        log.warning("Could not read cloned-voice manifest '%s' for response headers.", json_path)
+
+    return Response(
+        content=result.pcm,
+        media_type=f"audio/L16;codec=pcm;rate={result.sample_rate}",
+        headers={
+            "X-Sample-Rate": str(result.sample_rate),
+            "X-Coqui-Version": coqui_version,
+            "X-Model-Id": model_id,
+        },
+    )
+
+
+@app.post("/xtts/evict-voice")
+async def xtts_evict_voice(req: Request) -> Response:
+    """Drop a cloned XTTS voice's in-memory conditioning-latents cache entry
+    and bump its evict epoch (`CoquiEngine._bump_evict_epoch`, Task 10's
+    cache-epoch contract). Mirrors /qwen/evict-voice's shape and idempotence,
+    but the payload is Property 2 ("erasure is total"): called by the
+    server's clone-revoke/purge flow (Task 13's `purgeCloneArtifacts`) AFTER
+    it deletes the on-disk `.pt`/`.json`, so neither a stale resident cache
+    entry NOR an in-flight `torch.load` racing the purge can keep a revoked
+    voice renderable — `_load_voice_latents` re-checks the epoch immediately
+    before installing into the cache. Deliberately NOT gated on the engine's
+    load state (`coqui._tts`): a voice can have warm latents cached from an
+    earlier synth even after the model itself was later unloaded (e.g. the
+    UI's Stop button), and revoke must still reach it. Idempotent: a miss is
+    a no-op `evicted: false`."""
+    try:
+        body = await _read_json_body(req)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body must be JSON.")
+    voice_id = body.get("voiceId")
+    if not isinstance(voice_id, str) or not voice_id.strip():
+        raise HTTPException(status_code=400, detail="`voiceId` is required.")
+    coqui = ENGINES.get("coqui")
+    evicted = False
+    if isinstance(coqui, CoquiEngine):
+        stripped_id = voice_id.strip()
+        with coqui._latents_lock:
+            evicted = stripped_id in coqui._latents_cache
+        coqui._bump_evict_epoch(stripped_id)
     return JSONResponse({"ok": True, "evicted": evicted})
 
 
