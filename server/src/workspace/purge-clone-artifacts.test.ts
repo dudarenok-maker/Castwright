@@ -83,10 +83,21 @@ describe('purgeCloneArtifacts', () => {
     const previewPtFile = seed(`${key}-preview`, 'pt');
     const previewJsonFile = seed(`${key}-preview`, 'json');
     const masterWavFile = seed(`${key}__master`, 'wav'); // §2.3 designed-voice reference clip
+    // Fix wave (consent-erasure gap) — the PREVIEW design writes its own
+    // `<key>-preview__master.wav` clip; nothing erased it before this fix.
+    const previewMasterWavFile = seed(`${key}-preview__master`, 'wav');
 
     await purge.purgeCloneArtifacts('u1');
 
-    for (const f of [ptFile, jsonFile, pt17bFile, previewPtFile, previewJsonFile, masterWavFile]) {
+    for (const f of [
+      ptFile,
+      jsonFile,
+      pt17bFile,
+      previewPtFile,
+      previewJsonFile,
+      masterWavFile,
+      previewMasterWavFile,
+    ]) {
       expect(existsSync(f)).toBe(false);
     }
     expect(purgeVoiceSamples).toHaveBeenCalledWith(key);

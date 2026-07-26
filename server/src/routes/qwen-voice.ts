@@ -30,7 +30,12 @@ import type { Request, Response } from '../http.js';
 import { rename, rm, copyFile } from 'node:fs/promises';
 import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
 import { sidecarLanguageName } from '../tts/language.js';
-import { castJsonPath, qwenVoiceSidecarPath, qwenVoicePtPath } from '../workspace/paths.js';
+import {
+  castJsonPath,
+  qwenVoiceSidecarPath,
+  qwenVoicePtPath,
+  qwenVoiceWavPath,
+} from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
@@ -624,6 +629,16 @@ qwenVoiceRouter.post(
     await rename(qwenVoiceSidecarPath(previewVoiceId), qwenVoiceSidecarPath(realVoiceId)).catch(
       () => {},
     );
+    /* Fix wave (consent-erasure gap) — carry the preview's retained reference
+       clip (§2.3, written by the sidecar's design_voice) onto the real key too.
+       Best-effort like the .json above (only the .pt is required): a voice
+       designed before this fix, or one whose sidecar never wrote a clip, has
+       no `-preview__master.wav` to move — must not 409 the whole promote. */
+    await rm(qwenVoiceWavPath(`${realVoiceId}__master`), { force: true }).catch(() => {});
+    await rename(
+      qwenVoiceWavPath(`${previewVoiceId}__master`),
+      qwenVoiceWavPath(`${realVoiceId}__master`),
+    ).catch(() => {});
 
     /* Refresh the cached audition under the real id (same text, voiceName flips
        preview → real). Best-effort — a miss just means the next "Play 12s"
@@ -722,6 +737,11 @@ qwenVoiceRouter.post(
 
     await rm(qwenVoicePtPath(previewVoiceId), { force: true }).catch(() => {});
     await rm(qwenVoiceSidecarPath(previewVoiceId), { force: true }).catch(() => {});
+    // Fix wave (consent-erasure gap) — the preview design may also have
+    // written its own retained reference clip (§2.3); erase it on reject too,
+    // matching the pt/json cleanup above. No-op when absent (plain clone /
+    // pre-fix design never wrote one).
+    await rm(qwenVoiceWavPath(`${previewVoiceId}__master`), { force: true }).catch(() => {});
     if (typeof body.sampleVoiceId === 'string' && isTtsModelKey(body.modelKey)) {
       const calibrationText = buildSampleText(toVoiceLike(character), buildHintFromCast(character));
       const previewMp3 = voiceSampleFilePath(

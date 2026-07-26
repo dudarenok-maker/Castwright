@@ -31,6 +31,12 @@ export async function purgeCloneArtifacts(
     // §2.3 (fs-38 Wave 3b2, optional Task 11) — a DESIGNED voice's retained
     // reference clip. No-op (rm force) for a plain clone, which never has one.
     qwenVoiceWavPath(`${key}__master`),
+    // Fix wave (consent-erasure gap) — the PREVIEW design also writes its own
+    // `<key>-preview__master.wav` (see qwen-voice.ts design-voice with
+    // preview:true). Never renamed onto the real key unless promoted (see the
+    // promote-voice best-effort rename), so an unpromoted/rejected preview's
+    // clip must be erasable here too, mirroring the preview .pt/.json above.
+    qwenVoiceWavPath(`${key}-preview__master`),
   ];
   for (const f of files) await rm(f, { force: true }).catch(() => {});
   purgeVoiceSamples(key);

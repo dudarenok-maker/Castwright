@@ -31,7 +31,7 @@ import {
 import { currentQwenBaseModel } from '../tts/model-paths.js';
 import { runVoiceDesign } from '../tts/design-voice-core.js';
 import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace/voice-library-usage.js';
-import { castJsonPath, qwenVoiceSidecarPath } from '../workspace/paths.js';
+import { castJsonPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from '../workspace/paths.js';
 import { qwenVoicePtPath } from './qwen-voice.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
 import {
@@ -236,6 +236,17 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/promote', async (req: Request, res
     await rm(qwenVoiceSidecarPath(storageKey), { force: true }).catch(() => {});
     await rename(qwenVoiceSidecarPath(previewKey), qwenVoiceSidecarPath(storageKey)).catch(() => {});
 
+    /* Fix wave (consent-erasure gap, mirrors qwen-voice.ts's promote-voice) —
+       carry the preview's retained reference clip (§2.3) onto the live key too.
+       Best-effort like the .json above (only the .pt is required): a voice
+       designed before this fix, or one whose sidecar never wrote a clip, has
+       no `-preview__master.wav` to move — must not 409 the whole promote. */
+    await rm(qwenVoiceWavPath(`${storageKey}__master`), { force: true }).catch(() => {});
+    await rename(
+      qwenVoiceWavPath(`${previewKey}__master`),
+      qwenVoiceWavPath(`${storageKey}__master`),
+    ).catch(() => {});
+
     /* Drop the stale live + preview auditions (both cached under storageKey) so
        the next "Play" re-synthesises from the promoted `.pt`. */
     purgeVoiceSamples(storageKey);
@@ -280,6 +291,9 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/discard', async (req: Request, res
     const previewKey = `qwen-${voiceUuid}-preview`;
     await rm(qwenVoicePtPath(previewKey), { force: true }).catch(() => {});
     await rm(qwenVoiceSidecarPath(previewKey), { force: true }).catch(() => {});
+    // Fix wave (consent-erasure gap) — erase the preview's retained reference
+    // clip too (§2.3), mirroring the pt/json cleanup above. No-op when absent.
+    await rm(qwenVoiceWavPath(`${previewKey}__master`), { force: true }).catch(() => {});
     try {
       await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
         method: 'POST',

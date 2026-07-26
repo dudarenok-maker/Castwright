@@ -1016,6 +1016,60 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     );
   });
 
+  it('redesign/promote carries the preview’s retained reference clip onto the live key (fix wave, §2.3 consent gap)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    const { writeFileSync: wf } = await import('node:fs');
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+
+    await vl.writeEntry(makeEntry({ voiceUuid: 'promo-wav-1', provenance: 'designed' }));
+    wf(qwenVoice.qwenVoicePtPath('qwen-promo-wav-1'), 'LIVE');
+    wf(qwenVoice.qwenVoicePtPath('qwen-promo-wav-1-preview'), 'PREVIEW');
+    const liveWav = paths.qwenVoiceWavPath('qwen-promo-wav-1__master');
+    const previewWav = paths.qwenVoiceWavPath('qwen-promo-wav-1-preview__master');
+    wf(previewWav, 'REF-CLIP');
+
+    const res = await request(app)
+      .post('/api/voice-library/promo-wav-1/redesign/promote')
+      .send({ persona: 'new persona' });
+
+    expect(res.status).toBe(200);
+    expect(existsSync(liveWav)).toBe(true);
+    expect(existsSync(previewWav)).toBe(false);
+  });
+
+  it('redesign/promote still succeeds when the preview has no retained reference clip (pre-fix design, best-effort)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    const { writeFileSync: wf } = await import('node:fs');
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+
+    await vl.writeEntry(makeEntry({ voiceUuid: 'promo-wav-2', provenance: 'designed' }));
+    wf(qwenVoice.qwenVoicePtPath('qwen-promo-wav-2'), 'LIVE');
+    wf(qwenVoice.qwenVoicePtPath('qwen-promo-wav-2-preview'), 'PREVIEW');
+    /* No `-preview__master.wav` seeded at all. */
+
+    const res = await request(app)
+      .post('/api/voice-library/promo-wav-2/redesign/promote')
+      .send({ persona: 'new persona' });
+
+    expect(res.status).toBe(200);
+    expect(existsSync(paths.qwenVoiceWavPath('qwen-promo-wav-2__master'))).toBe(false);
+  });
+
+  it('redesign/discard also erases the preview’s retained reference clip (fix wave, §2.3 consent gap)', async () => {
+    const { writeFileSync: wf } = await import('node:fs');
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+
+    await vl.writeEntry(makeEntry({ voiceUuid: 'disc-wav-1', provenance: 'designed' }));
+    wf(qwenVoice.qwenVoicePtPath('qwen-disc-wav-1-preview'), 'PREVIEW');
+    const previewWav = paths.qwenVoiceWavPath('qwen-disc-wav-1-preview__master');
+    wf(previewWav, 'REF-CLIP');
+
+    const res = await request(app).post('/api/voice-library/disc-wav-1/redesign/discard').send({});
+
+    expect(res.status).toBe(200);
+    expect(existsSync(previewWav)).toBe(false);
+  });
+
   it('redesign/discard removes the preview and leaves the live .pt untouched', async () => {
     const { writeFileSync: wf } = await import('node:fs');
     mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });

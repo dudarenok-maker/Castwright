@@ -658,6 +658,30 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
     expect(JSON.parse(evictCall![1].body).voiceId).toBe('qwen-v_maerin');
   });
 
+  it('promote-voice renames the preview’s retained reference clip onto the real key (fix wave, §2.3 consent gap)', async () => {
+    stagedPreviewArtifacts('qwen-v_maerin-preview');
+    writeFileSync(join(qwenDir(), 'qwen-v_maerin-preview__master.wav'), 'REF-CLIP');
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
+      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__master.wav'))).toBe(true);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin-preview__master.wav'))).toBe(false);
+  });
+
+  it('promote-voice still succeeds when the preview has no retained reference clip (pre-fix design, best-effort)', async () => {
+    stagedPreviewArtifacts('qwen-v_maerin-preview');
+    /* No `-preview__master.wav` seeded at all. */
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
+      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__master.wav'))).toBe(false);
+  });
+
   it('promote-voice invalidates the redesigned character’s stale emotion variants (slots + .pt/.json + sidecar evict)', async () => {
     /* A redesign replaces the base embedding, so every variant minted from the
        OLD embedding is now stale. Seed maerin with a live base + two designed
@@ -739,6 +763,18 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin-preview.pt'))).toBe(false);
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin-preview.json'))).toBe(false);
     expect(readFileSync(join(qwenDir(), 'qwen-v_maerin.pt'), 'utf8')).toBe('LIVE');
+  });
+
+  it('discard-voice also erases the preview’s retained reference clip (fix wave, §2.3 consent gap)', async () => {
+    stagedPreviewArtifacts('qwen-v_maerin-preview');
+    writeFileSync(join(qwenDir(), 'qwen-v_maerin-preview__master.wav'), 'REF-CLIP');
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/discard-voice`)
+      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin-preview__master.wav'))).toBe(false);
   });
 });
 
