@@ -12,6 +12,31 @@
      inert during generation by construction, which is correct: the render path
      already reconciles tiers at run start (ensure-sidecar-loaded.ts:182).
 
+     KNOWN RESIDUAL WINDOW (#1839 finding 2, investigated and left open on
+     purpose): "the render path already reconciles at run start, so the lever
+     is inert on the hot path by construction" is not quite true for the
+     first ~190 lines of a render's startup. `routes/generation.ts` calls its
+     run-start `reconcileResidentQwenTiers` well BEFORE it calls `registerJob`
+     — the point at which `activeGenerationBooks()` (and so
+     `isAnyGenerationActive()` above) actually sees the book. In that window a
+     DIFFERENT blocked op's `evictIdleQwenBase` can see "no render in flight"
+     and race the starting render's own run-start reconcile: if this lever's
+     `/unload` lands after the render decided to keep a tier, the render's
+     first chapter synth hits a tier that was just evicted out from under it.
+     Closing this properly means making the starting render visible to the
+     gate before its own reconcile call — investigated for this fix, but
+     `job`/`key`/`controller` and friends are declared inside that same
+     stretch of `routes/generation.ts` and read by closures hundreds of lines
+     further down (through `registerJob` and well into the per-chapter render
+     loop), so marking-then-clearing around just the run-start reconcile would
+     either leak scope-breaking `let` hoists across a huge function or clear
+     too early to actually close the window — not a change to make with
+     confidence under this fix. The outcome if the race is hit is a sidecar
+     lazy cold-reload on that chapter, NOT corruption or data loss — cold-
+     reload is already documented as a correct fallback
+     (tts/ensure-sidecar-loaded.ts:31-36) — so this is a narrow, benign-outcome
+     gap, not a safety hole. See also active-generation-gate.ts's file header.
+
    Reads both outside dependencies from stateless leaf gates rather than
    importing their owning modules directly:
    - "is any render in flight" from ./active-generation-gate.ts, instead of
@@ -39,11 +64,13 @@ import { engineForModelKey, type TtsModelKey } from '../tts/model-keys.js';
 
 /** Same shape as tts/ensure-sidecar-loaded.ts's `reconcileResidentQwenTiers` —
     spelled out locally so this module doesn't need to import that one (see
-    file header). */
+    file header). Returns whether it actually issued an `/unload` (see that
+    function's doc comment) — threaded straight through by `evictIdleQwenBase`
+    below so this lever's own return value stays truthful (#1839 finding 1). */
 type ReconcileResidentQwenTiersFn = (
   keep: { keep06: boolean; keep17: boolean },
   signal?: AbortSignal,
-) => Promise<void>;
+) => Promise<boolean>;
 
 export interface EvictIdleQwenBaseOpts {
   /** The model key the blocked op is asking for. Its tier is the one KEPT. */
@@ -58,7 +85,13 @@ export interface EvictIdleQwenBaseOpts {
   _isAnyGenerationActive?: typeof isAnyGenerationActive;
 }
 
-/** Returns true when it actually asked the sidecar to unload something. */
+/** Returns true when it actually freed something — i.e. the underlying
+    `reconcileResidentQwenTiers` issued a real `/unload` (see that function's
+    doc comment). `false` covers every other outcome, including "called
+    successfully but the tier to drop was never resident" — that used to
+    collapse into `true` here (#1839 finding 1), which made
+    `capacity-retry.ts` `continue` into an immediate, wasted retry attempt
+    instead of falling through to its bounded poll. */
 export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<boolean> {
   const anyGenerationActive = opts._isAnyGenerationActive ?? isAnyGenerationActive;
   const { modelKey } = opts;
@@ -70,8 +103,7 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
   const keep = { keep06: !wants17, keep17: wants17 };
 
   if (opts._reconcile) {
-    await opts._reconcile(keep, opts.signal);
-    return true;
+    return opts._reconcile(keep, opts.signal);
   }
   return reconcileResidentQwenTiersIfRegistered(keep, opts.signal);
 }

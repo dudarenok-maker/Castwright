@@ -179,20 +179,27 @@ export async function ensureSidecarEngineReady(
     default), so a genuinely mixed-tier book keeps both. Best-effort: a sidecar
     that is down / mid-recycle just skips (the next run reconciles).
 
-    `keep06` / `keep17` = "this run uses the 0.6B / 1.7B base tier". */
+    `keep06` / `keep17` = "this run uses the 0.6B / 1.7B base tier". Returns
+    `true` when this call actually issued a `/unload` — `false` for every
+    other outcome (sidecar unreachable, mid-recycle, or the tier(s) not kept
+    were never resident to begin with, e.g. a fresh sidecar). #1839's
+    `evictIdleQwenBase` lever (`gpu/evict-idle-tts.ts`, via
+    `gpu/qwen-tier-reconcile-gate.ts`) threads this value through so it can
+    honestly report whether it freed anything, instead of reporting success
+    just because it was called. */
 export async function reconcileResidentQwenTiers(
   keep: { keep06: boolean; keep17: boolean },
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<boolean> {
   const base = getResolvedSidecarUrl();
   let h: Record<string, unknown> | null = null;
   try {
     const res = await fetch(`${base}/health`, { method: 'GET', signal });
     h = res.ok ? ((await res.json().catch(() => null)) as Record<string, unknown> | null) : null;
   } catch {
-    return; // sidecar unreachable — nothing to reconcile
+    return false; // sidecar unreachable — nothing to reconcile
   }
-  if (!h || h.recycle_pending === true) return;
+  if (!h || h.recycle_pending === true) return false;
 
   const unload = async (model?: '1.7b'): Promise<void> => {
     try {
@@ -210,12 +217,13 @@ export async function reconcileResidentQwenTiers(
   const evictions: Promise<void>[] = [];
   if (h.qwen_loaded === true && !keep.keep06) evictions.push(unload()); // drop the 0.6B base
   if (h.qwen_base17_loaded === true && !keep.keep17) evictions.push(unload('1.7b')); // drop the 1.7B base
-  if (evictions.length === 0) return;
+  if (evictions.length === 0) return false;
   console.info(
     `[generation] VRAM reconcile: evicting unused Qwen tier(s) ` +
       `[${!keep.keep06 && h.qwen_loaded ? '0.6B ' : ''}${!keep.keep17 && h.qwen_base17_loaded ? '1.7B' : ''}]`.trim(),
   );
   await Promise.allSettled(evictions);
+  return true;
 }
 
 /* Register this module's own reconciler into the stateless leaf gate

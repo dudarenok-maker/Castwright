@@ -7,7 +7,7 @@ import { evictIdleQwenBase } from './evict-idle-tts.js';
 
 describe('evictIdleQwenBase', () => {
   it('frees the OTHER Qwen tier when no render is in flight', async () => {
-    const reconcile = vi.fn().mockResolvedValue(undefined);
+    const reconcile = vi.fn().mockResolvedValue(true); // actually issued an /unload
     const freed = await evictIdleQwenBase({
       modelKey: 'qwen3-tts-1.7b',
       _reconcile: reconcile,
@@ -20,7 +20,7 @@ describe('evictIdleQwenBase', () => {
   });
 
   it('keeps the 0.6B base when that is the tier being asked for', async () => {
-    const reconcile = vi.fn().mockResolvedValue(undefined);
+    const reconcile = vi.fn().mockResolvedValue(true);
     await evictIdleQwenBase({
       modelKey: 'qwen3-tts-0.6b',
       _reconcile: reconcile,
@@ -28,6 +28,24 @@ describe('evictIdleQwenBase', () => {
     });
 
     expect(reconcile).toHaveBeenCalledWith({ keep06: true, keep17: false }, undefined);
+  });
+
+  it('#1839 finding 1: reports false when the tier to drop was never resident (nothing actually freed)', async () => {
+    /* reconcileResidentQwenTiers ran successfully — it's not a wiring/network
+       failure — but had nothing to unload (e.g. the op asked to keep both
+       tiers, or the other tier was never loaded). Before the fix this still
+       reported success ("true") just because the reconcile was CALLED, which
+       cost capacity-retry.ts a wasted immediate-retry attempt instead of its
+       normal poll wait (see capacity-retry.test.ts). */
+    const reconcile = vi.fn().mockResolvedValue(false);
+    const freed = await evictIdleQwenBase({
+      modelKey: 'qwen3-tts-1.7b',
+      _reconcile: reconcile,
+      _isAnyGenerationActive: () => false,
+    });
+
+    expect(freed).toBe(false);
+    expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: true }, undefined);
   });
 
   it('does nothing while any render is in flight', async () => {

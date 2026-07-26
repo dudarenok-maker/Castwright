@@ -190,44 +190,49 @@ describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
     return { fetch: f, unloads: () => unloads };
   }
 
-  it('evicts the 0.6B base for a pure-1.7B run, keeps the 1.7B base', async () => {
+  it('evicts the 0.6B base for a pure-1.7B run, keeps the 1.7B base, reports true', async () => {
     const m = mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true });
     global.fetch = m.fetch as unknown as typeof fetch;
-    await reconcileResidentQwenTiers({ keep06: false, keep17: true });
+    await expect(reconcileResidentQwenTiers({ keep06: false, keep17: true })).resolves.toBe(true);
     expect(m.unloads()).toEqual([{ engine: 'qwen' }]); // 0.6B only
   });
 
-  it('evicts the 1.7B base for a pure-0.6B run, keeps the 0.6B base', async () => {
+  it('evicts the 1.7B base for a pure-0.6B run, keeps the 0.6B base, reports true', async () => {
     const m = mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true });
     global.fetch = m.fetch as unknown as typeof fetch;
-    await reconcileResidentQwenTiers({ keep06: true, keep17: false });
+    await expect(reconcileResidentQwenTiers({ keep06: true, keep17: false })).resolves.toBe(true);
     expect(m.unloads()).toEqual([{ engine: 'qwen', model: '1.7b' }]); // 1.7B only
   });
 
-  it('evicts nothing for a mixed-tier run (both in use)', async () => {
+  it('evicts nothing for a mixed-tier run (both in use), reports false', async () => {
     const m = mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true });
     global.fetch = m.fetch as unknown as typeof fetch;
-    await reconcileResidentQwenTiers({ keep06: true, keep17: true });
+    await expect(reconcileResidentQwenTiers({ keep06: true, keep17: true })).resolves.toBe(false);
     expect(m.unloads()).toEqual([]);
   });
 
-  it('no-ops when the unused tier is not resident', async () => {
+  it('no-ops when the unused tier is not resident, reports false (#1839 finding 1)', async () => {
+    /* The tier we'd drop (0.6B) was never resident to begin with — a fresh
+       sidecar, or a run that only ever touched 1.7B. Before the fix this
+       call still reported "success" up through evictIdleQwenBase even
+       though zero /unload calls were issued, which cost capacity-retry.ts a
+       wasted immediate-retry attempt (see capacity-retry.test.ts). */
     const m = mockSidecar({ qwen_loaded: false, qwen_base17_loaded: true });
     global.fetch = m.fetch as unknown as typeof fetch;
-    await reconcileResidentQwenTiers({ keep06: false, keep17: true }); // 0.6B not loaded → nothing to evict
+    await expect(reconcileResidentQwenTiers({ keep06: false, keep17: true })).resolves.toBe(false); // 0.6B not loaded → nothing to evict
     expect(m.unloads()).toEqual([]);
   });
 
-  it('skips (no evict) while a recycle is pending', async () => {
+  it('skips (no evict) while a recycle is pending, reports false', async () => {
     const m = mockSidecar({ qwen_loaded: true, recycle_pending: true });
     global.fetch = m.fetch as unknown as typeof fetch;
-    await reconcileResidentQwenTiers({ keep06: false, keep17: true });
+    await expect(reconcileResidentQwenTiers({ keep06: false, keep17: true })).resolves.toBe(false);
     expect(m.unloads()).toEqual([]);
   });
 
-  it('is best-effort: a down sidecar does not throw', async () => {
+  it('is best-effort: a down sidecar does not throw, reports false', async () => {
     global.fetch = vi.fn().mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch;
-    await expect(reconcileResidentQwenTiers({ keep06: false, keep17: true })).resolves.toBeUndefined();
+    await expect(reconcileResidentQwenTiers({ keep06: false, keep17: true })).resolves.toBe(false);
   });
 });
 

@@ -21,11 +21,11 @@ describe('qwen-tier-reconcile-gate', () => {
     expect(freed).toBe(false);
   });
 
-  it('calls the registered provider once one is set', async () => {
+  it('calls the registered provider once one is set, and passes its true through', async () => {
     const { setReconcileResidentQwenTiersProvider, reconcileResidentQwenTiersIfRegistered } =
       await import('./qwen-tier-reconcile-gate.js');
 
-    const provider = vi.fn().mockResolvedValue(undefined);
+    const provider = vi.fn().mockResolvedValue(true);
     setReconcileResidentQwenTiersProvider(provider);
 
     const freed = await reconcileResidentQwenTiersIfRegistered(
@@ -35,5 +35,25 @@ describe('qwen-tier-reconcile-gate', () => {
 
     expect(freed).toBe(true);
     expect(provider).toHaveBeenCalledWith({ keep06: false, keep17: true }, undefined);
+  });
+
+  it('#1839 finding 1: passes the provider\'s false through — registered but froze nothing is NOT success', async () => {
+    const { setReconcileResidentQwenTiersProvider, reconcileResidentQwenTiersIfRegistered } =
+      await import('./qwen-tier-reconcile-gate.js');
+
+    /* Simulates reconcileResidentQwenTiers running successfully but the tier
+       to drop never having been resident — the registered call happened, but
+       nothing was actually freed. This gate must NOT collapse that back to
+       `true` just because a provider is registered. */
+    const provider = vi.fn().mockResolvedValue(false);
+    setReconcileResidentQwenTiersProvider(provider);
+
+    const freed = await reconcileResidentQwenTiersIfRegistered(
+      { keep06: true, keep17: true },
+      undefined,
+    );
+
+    expect(freed).toBe(false);
+    expect(provider).toHaveBeenCalledWith({ keep06: true, keep17: true }, undefined);
   });
 });

@@ -20,7 +20,25 @@
    than assuming it's safe. For the eviction lever this guards, the worst case
    of fail-closed is today's behaviour (a capacity error); the worst case of
    fail-open would be evicting a model out from under a live render. Do NOT
-   "simplify" the unregistered default to `false`. */
+   "simplify" the unregistered default to `false`.
+
+   KNOWN RESIDUAL WINDOW (#1839 finding 2, left open on purpose — see
+   gpu/evict-idle-tts.ts's file header for the full writeup). This accessor
+   only reflects `routes/generation.ts`'s `registerJob` — a render that has
+   started but not yet reached `registerJob` (it calls its own run-start
+   `reconcileResidentQwenTiers` well before that point) is invisible here, so
+   `isAnyGenerationActive()` can report `false` for a render that is, in
+   fact, mid-startup. A blocked op's `evictIdleQwenBase` racing that window
+   is a narrow gap whose worst case is a sidecar lazy cold-reload on the
+   starting render's first chapter (documented as a correct fallback at
+   tts/ensure-sidecar-loaded.ts:31-36), not corruption or data loss. Closing
+   it would need a "starting" marker set before that render's own reconcile
+   and cleared once `registerJob` (or any earlier exit) hands off — not added
+   here because `routes/generation.ts` declares `job`/`key`/`controller` in
+   that same stretch and reads them from closures deep inside the per-chapter
+   render loop hundreds of lines later, so the marker's lifetime can't be
+   scoped to a clean try/finally without hoisting those declarations across a
+   much larger span than this fix should touch. */
 
 let provider: (() => string[]) | null = null;
 
