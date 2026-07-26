@@ -750,3 +750,32 @@ describe('RebaselineModal — sample-cache scope across books (bug #1411 follow-
     expect(lastCall.args.voiceId).toBe('char-book-2__wren');
   });
 });
+
+describe('RebaselineModal — audition resolves the character\'s own engine (#1839 review fix)', () => {
+  it("auditions the CURRENT voice in the character's own overridden engine, not the session default", async () => {
+    /* The ui slice's default session key (DEFAULT_TTS_MODEL) is kokoro-v1.
+       Faye is overridden to coqui in THIS book, so playCurrent must resolve
+       her audition to coqui-xtts-v2 — mirroring cast.tsx / profile-drawer.tsx
+       — not the raw session key. Pre-fix, playCurrent passed ttsModelKey
+       straight through and this would resolve to 'kokoro-v1'. */
+    const overriddenChar = { ...char('faye', 'Faye', 5), ttsEngine: 'coqui' } as Character;
+    const store = makeStore([...CHARACTERS, overriddenChar], VOICES, { openBookId: 'book-1' });
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitForReady();
+    // Five lines is below the principal-cast threshold — select her explicitly.
+    fireEvent.click(screen.getByLabelText('Rebaseline Faye'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(screen.getByTestId('rebaseline-proposal-faye')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('rebaseline-play-current-faye'));
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalled());
+    const lastCall = vi.mocked(playSampleWithAutoLoad).mock.calls.at(-1)![0];
+    expect(lastCall.args.modelKey).toBe('coqui-xtts-v2');
+  });
+});

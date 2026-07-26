@@ -1,12 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { maybePushVoiceNudge } from './script-review-diff';
-import { QWEN_MODEL_KEY } from '../lib/tts-voice-mapping';
 
 describe('maybePushVoiceNudge', () => {
   it('pushes a nudge on a qwen project with the right payload + dedupeKey', () => {
     const dispatch = vi.fn();
     maybePushVoiceNudge(dispatch, {
-      ttsModelKey: 'qwen3-tts-0.6b',
+      ttsModelKey: 'qwen3-tts-1.7b',
       startBookId: 'b1',
       createdCharacters: [{ id: 'mara', name: 'Mara' }],
     });
@@ -14,13 +13,13 @@ describe('maybePushVoiceNudge', () => {
     const action = dispatch.mock.calls[0][0];
     expect(action.type).toBe('notifications/pushToast');
     expect(action.payload.dedupeKey).toBe('off-roster-voice-nudge:b1');
-    // modelKey is the constant sampleModelKeyForEngine('qwen', …) substitutes,
-    // NOT an echo of the input — assert against the constant so a future
-    // "fix" that echoes the input fails this test.
+    // modelKey carries the SESSION tier through modelKeyForEngineChoice('qwen', ttsModelKey)
+    // — a 1.7B project must nudge at 1.7B, not flatten to the 0.6B constant. Assert against
+    // the session tier so a regression that hardcodes the 0.6B constant fails this test.
     expect(action.payload.nudge).toEqual({
       bookId: 'b1',
       characterIds: ['mara'],
-      modelKey: QWEN_MODEL_KEY,
+      modelKey: 'qwen3-tts-1.7b',
       names: ['Mara'],
     });
   });

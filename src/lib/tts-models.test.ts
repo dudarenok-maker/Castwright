@@ -142,6 +142,7 @@ describe('modelKeyForEngineChoice (fs-38 Wave 3b2, T6b review — resolves a dra
   it("'qwen' falls back to the 0.6B tier when no qwenTier is given", () => {
     expect(modelKeyForEngineChoice('qwen', 'kokoro-v1')).toBe('qwen3-tts-0.6b');
     expect(modelKeyForEngineChoice('qwen', 'kokoro-v1', null)).toBe('qwen3-tts-0.6b');
+    expect(modelKeyForEngineChoice('qwen', 'coqui-xtts-v2')).toBe('qwen3-tts-0.6b');
   });
 
   it("'qwen' carries through a pinned 1.7B qwenTier", () => {

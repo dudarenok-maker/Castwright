@@ -461,6 +461,33 @@ describe('DriftReportModal — Listen A/B compare player (bug 8)', () => {
     );
   });
 
+  it("resolves the voice audition to the character's own overridden engine, not the session default (#1839)", async () => {
+    /* The ui slice's default session key (DEFAULT_TTS_MODEL) is kokoro-v1.
+       Eliza is overridden to coqui in this book, so the "Play voice" sample
+       must resolve to coqui-xtts-v2 — mirroring cast.tsx / profile-drawer.tsx
+       — not the raw session key. Pre-fix this passed ttsModelKey straight
+       through and would resolve to 'kokoro-v1'. */
+    const overriddenEliza = { ...characters[0], ttsEngine: 'coqui' } as Character;
+    const store = configureStore({ reducer: { ui: uiSlice.reducer } });
+    render(
+      <Provider store={store}>
+        <DriftReportModal
+          groupsByBook={[
+            group([makeEvent({})], { characters: [overriddenEliza, characters[1]] }),
+          ]}
+          voices={[elizaVoice]}
+          onClose={vi.fn()}
+          onRegenerateChapter={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('drift-listen-drift:book-A:1:eliza:voice'));
+    fireEvent.click(screen.getByTestId('drift-play-voice-drift:book-A:1:eliza:voice'));
+    await waitFor(() => expect(getVoiceSampleSpy).toHaveBeenCalledTimes(1));
+    expect(getVoiceSampleSpy.mock.calls[0][0]).toMatchObject({ modelKey: 'coqui-xtts-v2' });
+  });
+
   it('starting B while A is playing hands the mutex to B (only one side shows Pause)', async () => {
     renderModalWithVoices([makeEvent({})]);
     fireEvent.click(screen.getByTestId('drift-listen-drift:book-A:1:eliza:voice'));
