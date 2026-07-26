@@ -346,6 +346,30 @@ describe('voice-sample router', () => {
          collide with this entry. */
       expect(res.body.url).toMatch(/gemini-2\.5-flash/);
     });
+
+    it('re-picks a matching model key when a raw sample names a different engine', async () => {
+      const res = await request(app)
+        .post('/api/voices/any-voice/sample')
+        .send({ modelKey: 'coqui-xtts-v2', rawEngine: 'kokoro', rawSpeaker: 'af_heart' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.modelKey).toBe('coqui-xtts-v2'); // response echoes the REQUEST key
+      /* The EFFECTIVE key routed to the provider is the re-picked one —
+         the stronger check, since the response body always echoes back
+         whatever modelKey the request sent. */
+      const args = synthesize.mock.calls[0][0] as { modelKey: string };
+      expect(args.modelKey).toBe('kokoro-v1');
+    });
+
+    it('leaves the request key alone when it already routes to the requested engine', async () => {
+      const res = await request(app)
+        .post('/api/voices/any-voice/sample')
+        .send({ modelKey: 'gemini-3.1-flash', rawEngine: 'gemini', rawSpeaker: 'Charon' });
+
+      expect(res.status).toBe(200);
+      const args = synthesize.mock.calls[0][0] as { modelKey: string };
+      expect(args.modelKey).toBe('gemini-3.1-flash');
+    });
   });
 
   describe('srv-43 voiceUuid resolution', () => {

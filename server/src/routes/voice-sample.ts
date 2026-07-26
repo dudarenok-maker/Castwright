@@ -11,6 +11,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { safeSegment } from '../util/safe-path.js';
 import {
+  canonicalModelKeyForEngine,
   engineForModelKey,
   isTtsModelKey,
   selectTtsProvider,
@@ -44,17 +45,6 @@ const RAW_SAMPLE_TEXT =
 
 function isTtsEngine(value: unknown): value is TtsEngine {
   return value === 'coqui' || value === 'gemini' || value === 'piper' || value === 'kokoro';
-}
-
-/* Pick a sensible modelKey for a given engine when the caller didn't supply
-   one that matches. Used by the raw-sample branch: a client clicking Play
-   on a Gemini base voice while the project is set to a Coqui modelKey
-   shouldn't have to know to re-pick — the server routes via the engine. */
-function defaultModelKeyForEngine(engine: TtsEngine): TtsModelKey {
-  if (engine === 'gemini') return 'gemini-2.5-flash';
-  if (engine === 'piper') return 'piper-en-us-medium';
-  if (engine === 'kokoro') return 'kokoro-v1';
-  return 'coqui-xtts-v2';
 }
 
 voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) => {
@@ -112,10 +102,16 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     cacheScope = `raw-${engine}-${djb2(voiceName).toString(36).slice(0, 6)}`;
     /* The client may have passed any modelKey it had handy (whatever the
        project's currently set to). Re-pick one that actually routes to the
-       requested engine, otherwise selectTtsProvider would send a Coqui
-       speaker name to the Gemini provider or vice versa. */
+       requested engine, otherwise selectTtsProvider would send a Coqui speaker
+       name to the Gemini provider or vice versa.
+
+       canonicalModelKeyForEngine (../tts/model-keys.ts) is the ONE
+       engine→modelKey table on this side of the wire; the frontend mirror is
+       modelKeyForEngineChoice (src/lib/tts-models.ts). Behaviour here is
+       unchanged — under this guard the local table it replaced agreed on every
+       reachable input. */
     if (engineForModelKey(modelKey) !== engine) {
-      effectiveModelKey = defaultModelKeyForEngine(engine);
+      effectiveModelKey = canonicalModelKeyForEngine(engine, modelKey);
     }
   } else {
     engine = engineForModelKey(modelKey);
