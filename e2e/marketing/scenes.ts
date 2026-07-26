@@ -901,7 +901,8 @@ export const SCENES: Scene[] = [
     strict: true,
   },
   {
-    /* der-bernsteinturm — new German-language standalone (hollow-tide.ts) —
+    /* coalfall-commission-de ("Der Auftrag von Coalfall") — the German edition
+       (hollow-tide.ts) —
        non-English cast confirmation, names shown in their own language.
        ADAPTED from the brief's `[data-testid^="cast-row-"]` — that testid
        belongs to src/views/cast.tsx (the post-confirm cast VIEW, used by
@@ -913,7 +914,7 @@ export const SCENES: Scene[] = [
        (confirm-cast.tsx:419), which also happens to double-confirm the
        row is showing the character's own-language name. */
     id: 'language-cast-confirm-german',
-    hash: '#/books/der-bernsteinturm/confirm',
+    hash: '#/books/coalfall-commission-de/confirm',
     viewports: ['desktop'],
     waitFor: '[aria-label^="Open profile for"]',
     /* confirm-cast.tsx:80 resolves the shown suggested-voice engine from the
@@ -922,9 +923,9 @@ export const SCENES: Scene[] = [
        the product's actual default engine now, so force ttsModelKey to a
        Qwen key before the shot rather than letting whatever the marketing
        account's default happens to be (previously Kokoro) show instead —
-       bernsteinturmCast's characters already carry a designed
+       coalfallDeCast's characters already carry a designed
        `overrideTtsVoices.qwen.name`, so switching the engine renders their
-       real designed voice ("Qwen · qwen-erzaehlerin · Designed voice")
+       real designed voice ("Qwen · qwen-narrator-de · Designed voice")
        instead of a generic Kokoro preset suggestion. */
     action: async (page) => {
       await page.evaluate(() => {
@@ -939,7 +940,7 @@ export const SCENES: Scene[] = [
        provider-label span unconditionally whenever ttsVoice.provider is
        'qwen', even on the "No voice designed yet" fallback (tts-voice-
        mapping.ts:333), so 'text=Qwen ·' alone would still pass if
-       bernsteinturmCast's overrideTtsVoices.qwen.name ever regressed. */
+       coalfallDeCast's overrideTtsVoices.qwen.name ever regressed. */
     waitForAfterAction: 'text=Designed voice',
     strict: true,
   },

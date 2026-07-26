@@ -22,7 +22,7 @@ names, each ready to design a Qwen voice for.
   <img alt="Confirm-details screen — auto-detected Russian, title carried over in Cyrillic" src="images/multi-language-support/language-detection.png">
 </picture>
 
-Below, *Der Bernsteinturm* — a German standalone — at the cast confirmation step: both detected characters, Erzählerin and Wachtmeister Brandt, keep their German names and roles, each queued to generate a new Qwen voice.
+Below, *Der Auftrag von Coalfall* — the German edition of the demo book — at the cast confirmation step: both detected characters, Erzähler and Wren, keep the names the manuscript gives them, each queued to generate a new Qwen voice. (Role labels stay in the interface language; it's the character names that come from the book.)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/multi-language-support/non-english-cast-confirmation-dark.png">

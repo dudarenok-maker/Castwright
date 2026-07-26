@@ -63,7 +63,7 @@ Add one row to `scenes.ts`:
 
 ## Covers
 
-The four covers are copied into the git-ignored `public/marketing-covers/`:
+The covers are copied into the git-ignored `public/marketing-covers/`:
 
 ```bash
 mkdir -p public/marketing-covers
@@ -71,7 +71,21 @@ cp "brand/book-covers/The Drowning Bell - Marin Vale.png"      public/marketing-
 cp "brand/book-covers/Saltgrave - Marin Vale.png"              public/marketing-covers/hollow-tide-2.png
 cp "brand/book-covers/The Tidewatcher's Oath - Marin Vale.png" public/marketing-covers/hollow-tide-3.png
 cp "brand/test-book/the-coalfall-commission-cover-final.png"   public/marketing-covers/coalfall-commission.png
+# Localized editions — each has its translated title baked into the art, so a
+# book must never borrow a sibling language's cover (see hollow-tide.test.ts's
+# "never a sibling edition's" case, which locks a regression where the German
+# entry showed the English cover).
+cp brand/book-covers/coalfall-commission-de.png                public/marketing-covers/coalfall-commission-de.png
+cp brand/book-covers/coalfall-commission-ru.png                public/marketing-covers/coalfall-commission-ru.png
 ```
+
+The localized masters are extracted from the real per-language renders in the
+maintainer's library (`books/Castwright/Standalones/<translated title>/.audiobook/cover.jpg`,
+2048×2048); a copy of each lives in
+`brand/go-to-market/launch-post-images/marketing-site/book/coalfall-cover-<lang>.jpg`
+so they don't have to be dug out of the library again. `es`/`fr` masters exist there
+too; `ja`/`zh` have none (those samples ship as Markdown, not EPUB, so there is no
+embedded cover).
 
 Grid cards crop the square covers to 16:10; the fixtures set a top-biased
 `coverFraming` so titles aren't clipped on the shelf.
