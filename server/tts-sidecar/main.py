@@ -1043,6 +1043,11 @@ class CoquiEngine(Engine):
     # tells the caller their catalog is stale.
     FALLBACK_SPEAKER = "Claribel Dervla"
 
+    # Storage-key prefix for a cloned voice on this engine (fs-38 Wave 3c).
+    # Mirrors the manifest slot key ('xtts') — see clone-engines.ts
+    # cloneStorageKey('coqui', uuid) -> 'xtts-<uuid>'.
+    XTTS_KEY_PREFIX = "xtts-"
+
     def __init__(self) -> None:
         self._tts: Any = None
         self._torch: Any = None
@@ -1079,6 +1084,28 @@ class CoquiEngine(Engine):
         # engine), not per-engine — see the module-level `_process_poisoned` /
         # `_mark_cuda_poisoned`. Any engine's context-fatal CUDA error fast-fails
         # all engines + schedules one supervised self-exit.
+        # Cloned-voice latents (fs-38 Wave 3c). Node points XTTS_VOICES_DIR at
+        # <workspace>/voices/xtts; the local default keeps a bare sidecar run
+        # working. Sibling convention to QWEN_VOICES_DIR.
+        self._voices_dir = os.environ.get("XTTS_VOICES_DIR") or os.path.join(
+            os.path.dirname(__file__), "voices", "xtts"
+        )
+
+    def _voice_paths(self, voice_id: str) -> tuple[str, str]:
+        # Same scheme as QwenEngine._voice_paths (verbatim behaviour, copied
+        # rather than shared, since the two engines' voices dirs differ):
+        # filename-safe id, identity for an already-ASCII voice_id, and a
+        # short stable sha1 suffix of the ORIGINAL id when sanitisation is
+        # lossy — so two distinct non-ASCII ids that `re.sub` would otherwise
+        # both flatten to the same underscores stay injective.
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", voice_id)
+        if safe != voice_id:
+            digest = hashlib.sha1(voice_id.encode("utf-8")).hexdigest()[:8]
+            safe = f"{safe}-{digest}"
+        return (
+            os.path.join(self._voices_dir, f"{safe}.pt"),
+            os.path.join(self._voices_dir, f"{safe}.json"),
+        )
 
     def _resolve_runtime_options(
         self, torch_module: Any, device_override: Optional[str] = None
