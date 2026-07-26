@@ -100,17 +100,16 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
   - The Qwen `.pt` cache location is unchanged (`voices/qwen/qwen-<uuid>.pt`)
     — `master.wav` is a **new sibling file** in the entry directory, not a
     relocation (spec §2.2).
-  - Everything in 3a is gated by the pre-existing `voices.library.enabled`
-    config key (`server/src/config/registry.ts:645`); flipping it off hides
-    the routes and UI with no other behaviour change.
 - **Migration story:** additive only — pre-Wave-3 entries have no `master`
   field and are unaffected; `sampleTranscript` stays in sync with
   `master.transcript` per spec §2.1.
-- **Reversibility:** every route/component in this plan is inert unless
-  `voices.library.enabled` is on. With 3b1 landed, the consent guard/revoke
-  route/cloned-section UI now have a real production caller (the wizard's
-  `POST /clone`); reverting the whole Wave-3-to-date branch is still a clean
-  no-op for any pre-existing, non-cloned entry.
+- **Reversibility:** the `voices.library.enabled` config key that once gated
+  this surface was **removed** (2026-07-27) — it hid `#/voices`'s My-voices
+  tab while leaving Cast-view entry points (the profile drawer's assign /
+  "Save to my voices", the In-use card's "View in My voices", #1833) wired to
+  routes that then 404'd, so "off" was a broken state rather than a clean
+  one. Reverting the whole Wave-3-to-date branch is still a clean no-op for
+  any pre-existing, non-cloned entry.
 
 ## Invariants to preserve
 
@@ -137,8 +136,9 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
 6. **The recorder never dead-ends on a permission denial.** `VoiceRecorder`'s
    `denied` phase (`voice-recorder.tsx`) surfaces copy pointing at the
    Upload tab rather than leaving the user stuck.
-7. **Everything here is gated by `voices.library.enabled`.** No route or UI
-   surface in this plan is reachable with the flag off.
+7. **The voice library has no feature gate.** The `voices.library.enabled`
+   knob was removed (2026-07-27); every route and UI surface in this plan is
+   unconditionally available, and a stale persisted `false` override is inert.
 
 ### 3b1 invariants
 
@@ -241,7 +241,7 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
   too-short/unusable one; `POST /:voiceUuid/revoke`: 200 + `revokedAt`
   stamped, 404 on an unknown uuid, 409 when the entry has no consent record
   to revoke; the sample route's new 403 on revoked/consent-absent cloned
-  entries; all three gated behind `voices.library.enabled` (404 when off).
+  entries.
 - Vitest unit (`src/components/voices/voice-recorder.test.tsx`) — granted
   (record → stop → blob), denied (falls into the `denied` phase with the
   Upload-tab fallback copy), and re-take flows.
@@ -369,9 +369,9 @@ No new Playwright e2e in 3a — added in 3b1 (below).
 
 ### Manual acceptance walkthrough
 
-Run against the real server (`voices.library.enabled` on) since 3a's ingest
-pipeline depends on real ffmpeg decode + Whisper transcription — mock mode
-only exercises the frontend thunks/components in isolation.
+Run against the real server since 3a's ingest pipeline depends on real ffmpeg
+decode + Whisper transcription — mock mode only exercises the frontend
+thunks/components in isolation.
 
 1. `POST /api/voice-library/clone-sample` with a clean ≥8s clip (multipart
    `audio` field). Expected: `202` with `{ candidateId, transcript,

@@ -71,15 +71,20 @@ history at cut time.
   request to the sidecar, not the caller's request to us, and forwarding it would collide with
   the 409 these routes already use for "design run in progress" / `gpu_busy`. The `0` the
   unreachable/cancelled paths carry also clamps to 502. (#1801)
-- **`#/voices` no longer strands you on a blank pane when the voice library is turned off**
-  (#1802). The view's section state is local; `voices.library.enabled` reading `false` after the
-  user had already opened **My voices** unmounted that nav segment and rendered
-  `MyVoicesSection` as `null`, leaving the nav strip with nothing beneath it until another
-  segment was picked. In practice the reachable trigger is the boot-time race — the config read
-  treats an unhydrated knob as enabled-pending, so a click landing before `fetchConfig` resolves
-  could strand on a disabled library. The active section is now **derived** rather than reset by
-  an effect, so the fallback to `in-use` happens during render and the empty pane is never
-  painted at all.
+- **The `voices.library.enabled` feature flag is removed outright** (#1833, subsuming #1802). The
+  knob hid the **My voices** tab and 404'd the whole `/api/voice-library` router, but it never
+  gated the library's other entry points: the profile drawer's assign / "Save to my voices"
+  actions and the In-use card's "View in My voices" link kept rendering and calling routes that
+  had just been turned off. "Off" was therefore not a supported state but a half-broken one —
+  designed voices depend on the library surface existing — and the two bugs filed against it
+  (#1802's blank pane, #1833's dead button) were instances of that class rather than independent
+  defects. Deleted: the registry knob and its now-empty `voices-library` settings group,
+  `requireVoiceLibraryEnabled` and its mount at `app.ts:196`, the `myVoicesLibraryEnabled` gate
+  and the derived-`activeSection` masking added for #1802, `MyVoicesSection`'s `enabled` prop,
+  and the boot-time `fetchConfig()` dispatch in `src/store/index.ts` that existed solely to
+  hydrate the gate (`advanced.tsx` still dispatches its own on mount; it was the only other
+  consumer). A stale `voices.library.enabled: false` left in a user's persisted config overrides
+  is inert — pinned by a regression test in `voices.restructure.test.tsx`.
 - **fs-38 Wave 3b2 — cloned-voice resolver + lifecycle** (Refs #624). Closes the resolver/
   lifecycle half of the never-substitute invariant 3b1's single `applyQwenFallback` exemption
   only partially covered. A new `clone-voice-resolver.ts` (pure Healthy/Repairable/Broken

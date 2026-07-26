@@ -84,7 +84,6 @@ this box is dual-GPU).
 | P-16 | ECAPA `/embed` reachable? | Drives the advisory clone-fidelity cosine. `POST http://localhost:9000/embed`. | |
 | P-17 | `WORKSPACE_ROOT` (resolved) | `curl -s http://localhost:8080/api/workspace` → `{ root, booksRoot, source }`. **Use this value, not a guess** — it can come from `workspaceDirOverride` in `~/.castwright/user-settings.json`, from `WORKSPACE_DIR` in `server/.env`, or from the built-in `<repo>/castwright-workspace` default (`server/src/workspace/paths.ts:20-45`). | |
 | P-18 | Workspace source | from P-17 `source` (`env` / `default`; note `override` is also possible per `paths.ts:41`) | |
-| P-19 | `voices.library.enabled` | `curl -s http://localhost:8080/api/config` → find key `voices.library.enabled` (registry default **true**, `server/src/config/registry.ts:645`). MUST be **on**. | |
 | P-20 | `SEG_CAPACITY_ADMISSION` | `server/.env` line (ships `SEG_CAPACITY_ADMISSION=1`, `server/.env.example:126`). Sidecar default is **ON** when unset (`main.py:2379-2380` — anything but `"0"` enables). **No registry knob exists for this — it is env-only.** | |
 | P-21 | Analyzer engine setting | Account → analyzer settings (or `~/.castwright/user-settings.json`). Record it; the analyzer competes for VRAM. | |
 | P-22 | TTS engine setting (persisted account default) | Account settings → default TTS model. Record the **model key** (e.g. `qwen3-tts-0.6b`). | |
@@ -517,8 +516,7 @@ mock/unit coverage genuinely cannot stand in for. `VoiceRecorder` emits a Blob
 with `type: 'audio/webm'` (`voice-recorder.tsx:19`), which must survive ffmpeg
 decode.
 
-**Preconditions:** a real browser with a working mic and permission **granted**;
-`voices.library.enabled` on.
+**Preconditions:** a real browser with a working mic and permission **granted**.
 
 **Steps**
 1. Open the app, go to `#/voices` → My voices → **Clone a voice**.
@@ -674,26 +672,28 @@ control.
 
 ---
 
-#### A-13 — Everything is gated by `voices.library.enabled`
+#### A-13 — The voice library is unconditionally available
 
-**Proves:** 267 Invariant 7 — flipping the flag off hides the routes and UI with
-no other behaviour change.
+**Proves:** the `voices.library.enabled` flag is gone and cannot be resurrected
+by a stale persisted override.
 
-**Preconditions:** ability to change config (`PUT /api/config`, or the settings
-UI). The key applies **live** (`registry.ts:645`, `apply: 'live'`) — no restart.
+**Preconditions:** none. There is no longer any setting that hides the library.
 
 **Steps**
-1. Turn `voices.library.enabled` **off**.
+1. Add `"voices.library.enabled": false` by hand to the config overrides in
+   `~/.castwright/user-settings.json` (simulating a user who flipped the old
+   knob before it was removed), then restart the server.
 2. `GET /api/voice-library` and `POST /api/voice-library/clone-sample`.
-3. Reload `#/voices` in the UI.
-4. Turn it back **on** and confirm everything returns.
+3. Open `#/voices`, then open a character's profile drawer from the Cast view.
 
 **Expected**
-- With the flag off, both routes return **404** (the `requireVoiceLibraryEnabled`
-  gate at `app.ts:196`).
-- My voices / the "Clone a voice" CTA is not reachable in the UI.
-- No other view regresses.
-- With the flag back on, previously-created entries are all still listed.
+- Neither route 404s — the stale override is inert. `GET` returns the entry
+  list; the bodyless `POST` returns its normal **400** validation error, which
+  is a pass here, not a failure.
+- **My voices** and the "Clone a voice" CTA are present.
+- The profile drawer's assign / "Save to my voices" actions work rather than
+  failing against dead routes (the failure mode that motivated the removal).
+- No "Voice library" group appears in Advanced settings.
 
 **Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
 
@@ -2111,7 +2111,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | A-10 | Write-time consent guard; nothing persisted | | |
 | A-11 | `/revoke` stamps `revokedAt` | | |
 | A-12 | Sample route 403s a revoked voice | | |
-| A-13 | `voices.library.enabled` gates everything | | |
+| A-13 | Voice library unconditionally available | | |
 
 #### Section B — 3b1 (13)
 
@@ -2218,9 +2218,9 @@ loaded, preferences toggled) — and whether you **restored** it:
 | 2 | | | ☐ |
 | 3 | | | ☐ |
 
-Specifically confirm these are back to their P-19 / P-20 / P-22 / P-23 values:
+Specifically confirm these are back to their P-20 / P-22 / P-23 values:
 
-- ☐ `voices.library.enabled` restored (A-13)
+- ☐ the hand-added `voices.library.enabled` override removed again (A-13)
 - ☐ `SEG_CAPACITY_ADMISSION` restored to `1` (B-12)
 - ☐ Session engine picker restored (C-13, C-14)
 - ☐ Any hand-edited `voice.json` restored or the voice re-cloned (B-11, C-07, C-09, C-16, C-18)

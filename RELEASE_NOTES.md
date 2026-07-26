@@ -38,9 +38,6 @@
   Until now those corrections were quietly ignored, and the clone was built against the wrong
   words. Your edit is now what the voice is built from, and it sticks, so a later touch-up
   doesn't undo it.
-- **The Voices page never shows you an empty room.** If My voices turns out to be switched off
-  just as you open it, the page now shows your in-use voices instead of leaving you staring at a
-  blank pane.
 - **A cloned voice now tells you clearly when it can't be used — instead of quietly rendering
   as someone else.** If Castwright can't rebuild a cloned voice as itself, it stops and says so,
   right down to the reason — a revoked voice, a missing sample, or a book set to the wrong

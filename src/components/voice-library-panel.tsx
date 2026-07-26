@@ -89,7 +89,7 @@ export function VoiceLibraryPanel({
      Voice.familyKey, and completes by dropping onto/tapping a cast ROW —
      a library entry isn't a `Voice` and has no row to complete against). */
   const dispatch = useAppDispatch();
-  /* Defensive read (mirrors EMPTY_LIBRARY_BOOKS/EMPTY_CONFIG_VALUES in
+  /* Defensive read (mirrors EMPTY_LIBRARY_BOOKS in
      voices.tsx): the panel mounts inside CastView, which many existing test
      stores compose WITHOUT the `voiceLibrary` slice registered — a plain
      `selectMyVoices` (state.voiceLibrary.entries) would throw for all of

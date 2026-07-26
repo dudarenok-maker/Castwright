@@ -5,8 +5,8 @@
    Mirrors the tempdir-workspace integration pattern used by
    workspace/voice-library.test.ts and routes/voices.test.ts: mkdtempSync +
    WORKSPACE_DIR env + vi.resetModules() so paths.ts / model-paths.ts re-read
-   their env-derived state fresh per test, then a real express app mounted
-   with the gate + router exactly as app.ts does. */
+   their env-derived state fresh per test, then a real express app mounting
+   the router exactly as app.ts does. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -75,7 +75,6 @@ let dir: string;
 let app: Express;
 let vl: typeof import('../workspace/voice-library.js');
 let modelPaths: typeof import('../tts/model-paths.js');
-let writeConfigOverride: typeof import('../workspace/user-settings.js').writeConfigOverride;
 let setUserSettingsCacheForTest: typeof import('../workspace/user-settings.js')._setUserSettingsCacheForTest;
 let paths: typeof import('../workspace/paths.js');
 let qwenVoice: typeof import('./qwen-voice.js');
@@ -138,7 +137,6 @@ beforeEach(async () => {
 
   const [
     { voiceLibraryRouter },
-    { requireVoiceLibraryEnabled },
     voiceLibMod,
     modelPathsMod,
     userSettings,
@@ -147,7 +145,6 @@ beforeEach(async () => {
     sampleCacheMod,
   ] = await Promise.all([
     import('./voice-library.js'),
-    import('./voice-library-gate.js'),
     import('../workspace/voice-library.js'),
     import('../tts/model-paths.js'),
     import('../workspace/user-settings.js'),
@@ -157,7 +154,6 @@ beforeEach(async () => {
   ]);
   vl = voiceLibMod;
   modelPaths = modelPathsMod;
-  writeConfigOverride = userSettings.writeConfigOverride;
   setUserSettingsCacheForTest = userSettings._setUserSettingsCacheForTest;
   paths = pathsMod;
   qwenVoice = qwenVoiceMod;
@@ -165,7 +161,7 @@ beforeEach(async () => {
 
   app = express();
   app.use(express.json());
-  app.use('/api/voice-library', requireVoiceLibraryEnabled, voiceLibraryRouter);
+  app.use('/api/voice-library', voiceLibraryRouter);
 
   synthesize.mockReset();
   /* Default: 0.3 s of silence at 24 kHz mono int16 — matches the
@@ -203,12 +199,6 @@ afterEach(() => {
 });
 
 describe('GET /api/voice-library', () => {
-  it('404s when the voice-library feature is off', async () => {
-    await writeConfigOverride('voices.library.enabled', false);
-    const res = await request(app).get('/api/voice-library');
-    expect(res.status).toBe(404);
-  });
-
   it('lists entries sorted pinned-first, then updatedAt desc', async () => {
     await vl.writeEntry(makeEntry({ voiceUuid: 'a', name: 'A', pinned: false, updatedAt: '2026-01-03T00:00:00.000Z' }));
     await vl.writeEntry(makeEntry({ voiceUuid: 'b', name: 'B', pinned: true, updatedAt: '2026-01-01T00:00:00.000Z' }));
@@ -339,13 +329,6 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
     const onDisk = await vl.readEntry('prov-1');
     expect(onDisk?.provenance).toBe('designed');
   });
-
-  it('404s when the voice-library feature is off', async () => {
-    await vl.writeEntry(makeEntry({ voiceUuid: 'gate-1' }));
-    await writeConfigOverride('voices.library.enabled', false);
-    const res = await request(app).patch('/api/voice-library/gate-1').send({ name: 'X' });
-    expect(res.status).toBe(404);
-  });
 });
 
 describe('DELETE /api/voice-library/:voiceUuid', () => {
@@ -386,13 +369,6 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
 
   it('404s for an unknown uuid', async () => {
     const res = await request(app).delete('/api/voice-library/does-not-exist');
-    expect(res.status).toBe(404);
-  });
-
-  it('404s when the voice-library feature is off', async () => {
-    await vl.writeEntry(makeEntry({ voiceUuid: 'gate-1' }));
-    await writeConfigOverride('voices.library.enabled', false);
-    const res = await request(app).delete('/api/voice-library/gate-1');
     expect(res.status).toBe(404);
   });
 
@@ -511,13 +487,6 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
     const res = await request(app).post('/api/voice-library/does-not-exist/sample').send({});
     expect(res.status).toBe(404);
     expect(synthesize).not.toHaveBeenCalled();
-  });
-
-  it('404s when the voice-library feature is off', async () => {
-    await vl.writeEntry(makeEntry({ voiceUuid: 'gate-1' }));
-    await writeConfigOverride('voices.library.enabled', false);
-    const res = await request(app).post('/api/voice-library/gate-1/sample').send({});
-    expect(res.status).toBe(404);
   });
 
   it('synthesises and caches a sample under the qwen-<uuid> scope; a repeat call is a cache hit', async () => {
@@ -717,15 +686,6 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
   it('404s for an unknown voiceUuid', async () => {
     const res = await request(app)
       .post('/api/voice-library/does-not-exist/assign')
-      .send({ bookId: 'book-one', characterId: 'char-marlow' });
-    expect(res.status).toBe(404);
-  });
-
-  it('404s when the voice-library feature is off', async () => {
-    await vl.writeEntry(makeEntry({ voiceUuid: 'gate-1' }));
-    await writeConfigOverride('voices.library.enabled', false);
-    const res = await request(app)
-      .post('/api/voice-library/gate-1/assign')
       .send({ bookId: 'book-one', characterId: 'char-marlow' });
     expect(res.status).toBe(404);
   });
