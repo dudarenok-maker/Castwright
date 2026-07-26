@@ -7589,7 +7589,15 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    /** @description Optional preview text. Omitted defaults to a built-in sample line for the entry's persona/name. */
+                    text?: string;
+                    /**
+                     * @description The Qwen tier to preview at (#1842). Must route to the qwen engine or the request 400s. Omitted defaults to qwen3-tts-0.6b.
+                     * @enum {string}
+                     */
+                    modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+                };
             };
         };
         responses: {

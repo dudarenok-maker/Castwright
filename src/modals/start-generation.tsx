@@ -93,7 +93,7 @@ export function StartGenerationModal({
                     <p className="text-xs text-ink/55 mt-0.5">{t.hint}</p>
                     {!available && (
                       <p className="text-xs text-ink/40 mt-0.5">
-                        Not downloaded — add it from Models
+                        Not downloaded — add it from Model Manager
                       </p>
                     )}
                   </button>

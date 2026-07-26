@@ -249,6 +249,15 @@ Design rationale:
   `api = USE_MOCKS ? mock : real`. Components only ever import from `api.*`;
   they never know which is which. `.env.development` sets the flag on.
 - **RTK immer** — slice reducers mutate via Immer drafts. Don't rewrite to spreads.
+- **`server/src/gpu/` reaches a route module through a leaf gate, never an
+  import** — a static import, a dynamic `import()`, and even `import type`
+  all close an import cycle through `tts/index.ts`. Anything under
+  `server/src/gpu/` that needs a value from a route module goes through a
+  stateless leaf gate the owning module registers an accessor into instead.
+  Three exist: `gpu/active-generation-gate.ts`, `gpu/qwen-tier-reconcile-gate.ts`,
+  `gpu/sidecar-health-gate.ts` — each fails closed. Verify with
+  `npx madge --circular --extensions ts server/src`, which should stay at
+  its 15-cycle baseline.
 
 ## Testing discipline (REQUIRED for every change)
 
@@ -406,7 +415,7 @@ Adding a new view? Append a case to `e2e/responsive/coverage.spec.ts` — it aut
     startup, ~1 s cold load, ~1 GB VRAM. Permanently resident alongside
     the analyzer Ollama on an 8 GB GPU. A Stop pill exists (the same
     `ModelControlPill` Coqui uses) and is reachable via the Status popover
-    (residency-gated, but behind a click) as well as, since Task 10 (#1839),
+    (residency-gated, but behind a click) as well as, since #1839,
     the global TTS notice banner (`src/components/tts-notice-banner.tsx`)
     for direct access. It's just always available once
     `server/tts-sidecar/scripts/install-kokoro.ps1` (or its

@@ -119,11 +119,12 @@ interface DerivedVoice {
   /** True when a 12s audition has been synthesised for this voice — the
       lifecycle tier between "Designed" and "Generated". Populated only for
       bespoke Qwen voices (the engine query is 'qwen') by checking the
-      voice-sample cache for a `<scope>-qwen3-tts-0.6b-*.mp3` file, where
-      `scope = voiceId ?? char-<characterId>` (the same scope the player +
-      design route cache under). Cross-book like `generated`; preset voices
-      omit it. A `generated` voice outranks `sampled` at the presentation
-      layer. */
+      voice-sample cache for a `<scope>-qwen3-tts-{0.6b,1.7b}-*.mp3` file —
+      an audition follows the book's session tier (#1839), so the scan must
+      match either — where `scope = voiceId ?? char-<bookId>__<characterId>`
+      (the same scope the player + design route cache under). Cross-book
+      like `generated`; preset voices omit it. A `generated` voice outranks
+      `sampled` at the presentation layer. */
   sampled?: boolean;
   ttsVoice: TtsVoiceAssignment;
   /** Per-engine user-set voice overrides. The `ttsVoice` field above
