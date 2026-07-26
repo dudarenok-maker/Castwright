@@ -84,11 +84,15 @@ export function clonedSlotForEngine(
     !slot ||
     typeof slot !== 'object' ||
     !('provenance' in slot) ||
-    slot.provenance !== 'cloned' ||
-    !('libraryUuid' in slot)
+    slot.provenance !== 'cloned'
   ) {
     return undefined;
   }
 
-  return { libraryUuid: slot.libraryUuid as string };
+  const libraryUuid = (slot as Record<string, unknown>).libraryUuid;
+  if (typeof libraryUuid !== 'string') {
+    return undefined;
+  }
+
+  return { libraryUuid };
 }

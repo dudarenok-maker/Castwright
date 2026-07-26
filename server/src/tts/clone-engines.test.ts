@@ -5,7 +5,6 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  CloneEngine,
   CLONE_CAPABLE_ENGINES,
   isCloneEngine,
   manifestSlotFor,
@@ -277,6 +276,20 @@ describe('clone-engines vocabulary', () => {
         overrideTtsVoices: {
           qwen: {
             name: 'qwen-voice',
+            provenance: 'cloned' as const,
+          },
+        },
+      };
+      const result = clonedSlotForEngine(character, 'qwen');
+      expect(result).toBeUndefined();
+    });
+
+    it('returns undefined when libraryUuid is not a string', () => {
+      const character = {
+        overrideTtsVoices: {
+          qwen: {
+            name: 'qwen-voice',
+            libraryUuid: 123,
             provenance: 'cloned' as const,
           },
         },
