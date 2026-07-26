@@ -49,6 +49,10 @@
 - Auditioning a voice you just designed no longer re-records it. The take from the design was already sitting there; now it actually gets used, so the first play is instant.
 - The higher-quality 1.7B voice model is greyed out until you've actually downloaded it, instead of failing partway into a run.
 - Previewing a voice will now put away a voice model it isn't using to make room, rather than giving up when your graphics card looks full. If something it can't put away is in the way, it tells you which model that is and where the button to stop it lives — instead of just saying the card is full.
+- **Security housekeeping on the parts you don't see.** We've taken the latest patched versions of the
+  outside code Castwright is built on — including the component that opens your EPUB files, where a
+  malformed book could previously have made Castwright try to swallow far more memory than it should.
+  Nothing to do at your end, and nothing looks different.
 
 # Castwright 1.14.0
 

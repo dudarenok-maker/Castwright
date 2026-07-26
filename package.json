@@ -105,7 +105,7 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.0.2",
     "archiver": "^8",
-    "concurrently": "^10.0.3",
+    "concurrently": "^10.0.4",
     "cross-env": "^10.1.0",
     "eslint": "^9",
     "eslint-config-prettier": "^10",
