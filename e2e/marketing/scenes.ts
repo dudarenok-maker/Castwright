@@ -45,6 +45,23 @@ export interface Scene {
       loaded before any click happens). Existing/legacy scenes stay
       non-strict. */
   strict?: boolean;
+  /** Restrict this scene to a subset of themes. Defaults to whatever the
+      runner asks for (both light + dark, or `CAPTURE_THEME`). Only for a
+      scene whose output is a FIXED-treatment surface, where the second theme
+      is not a second look but a worse version of the same one — see the
+      series-cast-card-export scene for the motivating case. */
+  themes?: ('light' | 'dark')[];
+  /** Capture the artefact the app itself EXPORTS, instead of a screenshot of
+      the page. When present, the runner triggers this (the in-app export
+      click) inside the theme loop and saves the resulting browser download
+      as the scene's PNG — so the output is the real user-facing file, byte
+      for byte, not the harness's re-render of the same pixels.
+
+      Runs INSIDE the theme loop, unlike `action`, which runs once before it.
+      That ordering matters: an exported card bakes the active theme's tokens
+      into the file, so the click has to happen after `emulateMedia`. Use
+      `action` to reach the export affordance, this to press it. */
+  downloadAction?: (page: Page) => Promise<void>;
 }
 
 /* fs-1318 Tier D — real Cyrillic text (ported from
@@ -1250,6 +1267,42 @@ export const SCENES: Scene[] = [
       await page.getByRole('button', { name: 'Share this cast' }).click({ timeout: 5000 });
     },
     waitForAfterAction: 'text=Download image',
+    strict: true,
+  },
+  {
+    /* Series memory — the portrait cast card as the app EXPORTS it, not as the
+       page shows it. The sibling series-share-card scene above frames the modal
+       in context (dimmed library behind, close button, both download buttons);
+       this one presses "Download image (.png)" and keeps the file that comes
+       back, so the output is the standalone 4:5 share unit with no app chrome
+       — the one launch asset that has to travel on its own, off-app (Reddit,
+       the marketing site) rather than as a screenshot of a window.
+
+       Same chip + Hollow Tide fixture dependency as the two scenes above; a
+       real multi-book series is the whole point of the card (its hero line
+       counts voices kept true ACROSS books, so a single-book library would
+       render a meaningless card).
+
+       Dark-only, deliberately. The card is a fixed dark surface
+       (series-share-card.tsx hardcodes `bg-[#1b1714] text-cream`) but it draws
+       its accent from the themed `--magenta` token, which is #a43c6c in light
+       and #e58fb8 in dark (src/styles.css). Only the dark value has usable
+       contrast on a near-black card, so a light capture is not a second
+       treatment to choose from — it is the same card with a muddy accent. */
+    id: 'series-cast-card-export',
+    hash: '#/',
+    viewports: ['desktop'],
+    themes: ['dark'],
+    waitFor: '[data-testid="series-memory-chip"]',
+    action: async (page) => {
+      await page.getByTestId('series-memory-chip').click({ timeout: 5000 });
+      await page.waitForSelector('text=books in, and the cast carries through', { timeout: 5000 });
+      await page.getByRole('button', { name: 'Share this cast' }).click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="series-share-card"]',
+    downloadAction: async (page) => {
+      await page.getByRole('button', { name: /download image \(\.png\)/i }).click({ timeout: 5000 });
+    },
     strict: true,
   },
 ];
