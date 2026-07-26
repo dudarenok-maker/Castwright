@@ -262,6 +262,17 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     };
   }, [dispatch]);
 
+  /* fs-38 Wave 1 follow-up (#1802) — the library gate can flip true→false
+     while this view is mounted (a late `fetchConfig` landing after the user
+     already clicked into My voices, or an operator disabling the library
+     elsewhere). The nav segment unmounts and `MyVoicesSection` renders null,
+     so a `section` still pointing at 'my-voices' would strand the user on a
+     blank pane until they picked another segment. Fall back to the same
+     default a fresh mount uses. */
+  useEffect(() => {
+    if (!myVoicesLibraryEnabled && section === 'my-voices') setSection('in-use');
+  }, [myVoicesLibraryEnabled, section]);
+
   /* Partition Qwen out of family grouping (plan 117). Preset engines keep
      the (engine, name) voice-family grouping — that's resolved server-side
      after honouring overrides, so two characters with the same engine+name

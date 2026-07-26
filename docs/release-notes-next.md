@@ -63,6 +63,12 @@ history at cut time.
   Castwright distils a reusable cloned voice — auditioned, ECAPA fidelity-checked, and castable
   like a designed one. A cloned voice is never silently substituted: if Qwen is unavailable the
   chapter fails loud instead. (Refs #624)
+- **`#/voices` no longer strands you on a blank pane when the voice library is turned off**
+  (#1802). `voices.library.enabled` flipping `true`→`false` while the view was mounted (a late
+  `fetchConfig`, or an operator disabling the library elsewhere) unmounted the **My voices** nav
+  segment and rendered `MyVoicesSection` as `null`, but the local `section` state kept pointing
+  at `my-voices` — leaving the nav with nothing beneath it until the user picked another
+  segment. The view now falls back to `in-use`, the same default a fresh mount uses.
 
 ---
 

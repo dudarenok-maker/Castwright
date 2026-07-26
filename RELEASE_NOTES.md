@@ -22,6 +22,9 @@
   short sample, confirm it's yours (or a family member's, with their say-so), and Castwright
   builds a reusable voice you can hand to any character. It'll never quietly swap in a
   stand-in: if it can't use your cloned voice, it tells you rather than faking it.
+- **The Voices page never shows you an empty room.** If My voices gets switched off while you're
+  standing in it, the page now walks you back to your in-use voices instead of leaving you
+  staring at a blank pane.
 
 # Castwright 1.14.0
 
