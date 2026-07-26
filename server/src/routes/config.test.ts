@@ -77,6 +77,28 @@ describe('GET /api/config', () => {
     const res = await request(app).get('/api/config');
     expect(res.body.restartPending).toBe(false);
   });
+
+  /* Backward compat for a removed knob. `voices.library.enabled` was deleted
+     from the registry, but anyone who had flipped it still carries the key in
+     their persisted `configOverrides`. `resolveAll()` walks `allKnobs()`, so
+     an override with no matching knob is simply never visited — it can't
+     surface in `values`, and it can't make a later write fail. Pinned here
+     (not just in the frontend) because this is the path a real settings file
+     takes; it fails loudly if anyone makes the resolver or the overrides zod
+     record strict about unknown keys. */
+  it('ignores a persisted override whose knob no longer exists in the registry', async () => {
+    const { writeConfigOverride } = await import('../workspace/user-settings.js');
+    await writeConfigOverride('voices.library.enabled', false);
+
+    const res = await request(app).get('/api/config');
+    expect(res.status).toBe(200);
+    expect(res.body.values['voices.library.enabled']).toBeUndefined();
+    expect(res.body.descriptors.some((d: { key: string }) => d.key === 'voices.library.enabled')).toBe(false);
+
+    // A normal write still round-trips with the orphan key sitting in the file.
+    const put = await request(app).put('/api/config').send({ 'analyzer.stage2.minCoverage': 0.5 });
+    expect(put.status).toBe(200);
+  });
 });
 
 describe('PUT /api/config', () => {

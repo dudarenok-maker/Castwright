@@ -5,8 +5,8 @@
    Mirrors the tempdir-workspace integration pattern used by
    workspace/voice-library.test.ts and routes/voices.test.ts: mkdtempSync +
    WORKSPACE_DIR env + vi.resetModules() so paths.ts / model-paths.ts re-read
-   their env-derived state fresh per test, then a real express app mounted
-   with the gate + router exactly as app.ts does. */
+   their env-derived state fresh per test, then a real express app mounting
+   the router exactly as app.ts does. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -329,7 +329,6 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
     const onDisk = await vl.readEntry('prov-1');
     expect(onDisk?.provenance).toBe('designed');
   });
-
 });
 
 describe('DELETE /api/voice-library/:voiceUuid', () => {

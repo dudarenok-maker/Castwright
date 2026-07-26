@@ -38,10 +38,6 @@
   Until now those corrections were quietly ignored, and the clone was built against the wrong
   words. Your edit is now what the voice is built from, and it sticks, so a later touch-up
   doesn't undo it.
-- **My voices can't be switched off any more — because it never should have been.** There was a
-  setting that hid your voice library, but it only ever hid the tab: the buttons elsewhere that
-  reach into your library stayed put and simply stopped working. It was a way to half-break
-  Castwright, not a feature, so it's gone. Your library is always there.
 - **A cloned voice now tells you clearly when it can't be used — instead of quietly rendering
   as someone else.** If Castwright can't rebuild a cloned voice as itself, it stops and says so,
   right down to the reason — a revoked voice, a missing sample, or a book set to the wrong

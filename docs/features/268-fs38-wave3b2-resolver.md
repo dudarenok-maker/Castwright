@@ -305,8 +305,8 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
 
 ### Manual acceptance walkthrough
 
-Run against the real server + sidecar (a real
-Qwen-capable book) — mock mode only exercises the frontend/store seams.
+Run against the real server + sidecar (a real Qwen-capable book) — mock mode
+only exercises the frontend/store seams.
 
 1. Cast a character to a cloned voice, then stop the TTS sidecar. Generate
    that chapter. Expected: the chapter fails immediately (before any audible

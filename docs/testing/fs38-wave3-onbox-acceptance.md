@@ -687,7 +687,9 @@ by a stale persisted override.
 3. Open `#/voices`, then open a character's profile drawer from the Cast view.
 
 **Expected**
-- Both routes behave normally — the stale override is inert, not a 404.
+- Neither route 404s — the stale override is inert. `GET` returns the entry
+  list; the bodyless `POST` returns its normal **400** validation error, which
+  is a pass here, not a failure.
 - **My voices** and the "Clone a voice" CTA are present.
 - The profile drawer's assign / "Save to my voices" actions work rather than
   failing against dead routes (the failure mode that motivated the removal).

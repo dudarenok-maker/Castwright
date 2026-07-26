@@ -369,9 +369,9 @@ No new Playwright e2e in 3a — added in 3b1 (below).
 
 ### Manual acceptance walkthrough
 
-Run against the real server since 3a's ingest
-pipeline depends on real ffmpeg decode + Whisper transcription — mock mode
-only exercises the frontend thunks/components in isolation.
+Run against the real server since 3a's ingest pipeline depends on real ffmpeg
+decode + Whisper transcription — mock mode only exercises the frontend
+thunks/components in isolation.
 
 1. `POST /api/voice-library/clone-sample` with a clean ≥8s clip (multipart
    `audio` field). Expected: `202` with `{ candidateId, transcript,

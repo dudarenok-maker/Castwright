@@ -14,16 +14,7 @@ import type { ConfigResponse, GpuDevicesResponse } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
   api: {
-    /* `getConfig` carries a harmless default implementation so any call
-       arriving before a test's own `beforeEach`/`mockResolvedValueOnce`
-       setup resolves a well-formed payload. A bare `vi.fn()` would resolve
-       `undefined` and crash `fetchConfig.fulfilled`'s reducer
-       (config-slice.ts) with an unhandled rejection. Every test below still
-       layers its own `mockResolvedValueOnce`/`mockResolvedValue` on top for
-       its own mount-triggered fetch. */
-    getConfig: vi.fn(() =>
-      Promise.resolve({ groups: [], descriptors: [], values: {}, cudaEnvShadow: false }),
-    ),
+    getConfig: vi.fn(),
     putConfig: vi.fn(),
     resetConfig: vi.fn(),
     getPrompt: vi.fn(),
