@@ -45,7 +45,13 @@ import {
   type ResolveChapterDeps,
   type ResolveDesignedVoiceDeps,
 } from './clone-voice-resolver.js';
-import { readEntry, writeEntry, entryDir, type VoiceLibraryEntry } from '../workspace/voice-library.js';
+import {
+  readEntry,
+  writeEntry,
+  updateEntry,
+  entryDir,
+  type VoiceLibraryEntry,
+} from '../workspace/voice-library.js';
 import { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
 import { deriveEngineArtifact } from './derive-engine-artifact.js';
 import { currentQwenBaseModel } from './model-paths.js';
@@ -928,6 +934,49 @@ async function defaultPtExists(storageKey: string): Promise<boolean> {
   }
 }
 
+/* fs-38 Wave 3c, Task 14 — `cloneResolverDepsOverride`/
+   `designedResolverDepsOverride` are documented as a SHALLOW merge over the
+   real deps ("a test can replace just the pieces it needs to fake").
+   `updateEntry` is a NEW primitive that performs its OWN internal
+   readEntry+writeEntry — so a test overriding `readEntry`/`writeEntry` (to
+   fake the voice-library store) but not `updateEntry` would, under a bare
+   shallow merge, silently keep the REAL `updateEntry` from
+   `buildDefault*ResolverDeps`, which reads/writes the REAL on-disk
+   workspace and ignores the test's fakes entirely — reporting the test's
+   requested voice as missing rather than whatever the fake `readEntry`
+   intended. Recompose `updateEntry` from the FINAL `readEntry`/`writeEntry`
+   whenever either was overridden and `updateEntry` itself wasn't,
+   preserving the "just the pieces it needs" contract for this primitive
+   too. A no-op (returns `merged` unchanged) whenever the caller supplied
+   its own `updateEntry` override or overrode neither read nor write. */
+function withDerivedUpdateEntry<
+  T extends {
+    readEntry(uuid: string): Promise<VoiceLibraryEntry | null>;
+    writeEntry(entry: VoiceLibraryEntry): Promise<void>;
+    updateEntry(
+      uuid: string,
+      mutate: (
+        entry: VoiceLibraryEntry | null,
+      ) => Promise<VoiceLibraryEntry | null | undefined> | VoiceLibraryEntry | null | undefined,
+    ): Promise<VoiceLibraryEntry | null>;
+  },
+>(merged: T, override: Partial<T> | undefined): T {
+  if (!override || override.updateEntry || (!override.readEntry && !override.writeEntry)) {
+    return merged;
+  }
+  const { readEntry: mergedReadEntry, writeEntry: mergedWriteEntry } = merged;
+  return {
+    ...merged,
+    updateEntry: async (uuid, mutate) => {
+      const fresh = await mergedReadEntry(uuid);
+      const next = await mutate(fresh);
+      if (!next) return null;
+      await mergedWriteEntry(next);
+      return mergedReadEntry(uuid);
+    },
+  };
+}
+
 /* fs-38 Wave 3b2 — the resolver pre-pass's real (production) dependency
    wiring: the actual voice-library manifest store, the actual sidecar
    clone-derive call, and a real stat() of the cached `.pt`. `synthesiseChapter`
@@ -937,6 +986,7 @@ function buildDefaultCloneResolverDeps(signal: AbortSignal | undefined): Resolve
   return {
     readEntry,
     writeEntry,
+    updateEntry,
     ptExists: defaultPtExists,
     deriveEngineArtifact,
     readMasterPcm: readMasterPcmDefault,
@@ -1026,6 +1076,7 @@ function buildDefaultDesignedResolverDeps(
     writeSidecarManifest: writeSidecarManifestDefault,
     readEntry,
     writeEntry,
+    updateEntry,
     deriveEngineArtifact,
     reportProgress: undefined,
     signal,
@@ -1237,10 +1288,10 @@ export async function synthesiseChapter(
       };
     });
   if (clonedVoiceRequests.length > 0) {
-    const cloneResolverDeps: ResolveChapterDeps = {
-      ...buildDefaultCloneResolverDeps(signal),
-      ...cloneResolverDepsOverride,
-    };
+    const cloneResolverDeps = withDerivedUpdateEntry<ResolveChapterDeps>(
+      { ...buildDefaultCloneResolverDeps(signal), ...cloneResolverDepsOverride },
+      cloneResolverDepsOverride,
+    );
     await resolveClonedVoicesForChapter(clonedVoiceRequests, cloneResolverDeps);
   }
 
@@ -1271,10 +1322,10 @@ export async function synthesiseChapter(
     if (signal?.aborted) {
       throw new DOMException('synthesiseChapter aborted', 'AbortError');
     }
-    const designedResolverDeps: ResolveDesignedVoiceDeps = {
-      ...buildDefaultDesignedResolverDeps(signal),
-      ...designedResolverDepsOverride,
-    };
+    const designedResolverDeps = withDerivedUpdateEntry<ResolveDesignedVoiceDeps>(
+      { ...buildDefaultDesignedResolverDeps(signal), ...designedResolverDepsOverride },
+      designedResolverDepsOverride,
+    );
     await resolveDesignedVoicesForChapter(designedVoiceRequests, designedResolverDeps);
   }
 

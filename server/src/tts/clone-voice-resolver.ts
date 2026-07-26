@@ -160,6 +160,22 @@ export function classifyClonedVoice(input: ClassifyInput): ClonedVoiceClassifica
 export interface ResolveChapterDeps {
   readEntry(uuid: string): Promise<VoiceLibraryEntry | null>;
   writeEntry(entry: VoiceLibraryEntry): Promise<void>;
+  /** fs-38 Wave 3c, Task 14 — the shared, per-uuid-locked read-modify-write
+      primitive (workspace/voice-library.ts's `updateEntry`), injected here
+      the same way `readEntry`/`writeEntry` are. The post-derive status
+      stamp below routes through THIS, not a bare readEntry+writeEntry pair,
+      because the lock has to span the fresh re-read through the write as
+      ONE critical section — a mutex around only the write still lets a
+      concurrent writer's write use a stale pre-derive snapshot. `mutate`
+      returning null/undefined skips the write (still under the lock),
+      letting a caller run a side effect (the revoked/gone re-purge below)
+      before declining. */
+  updateEntry(
+    uuid: string,
+    mutate: (
+      entry: VoiceLibraryEntry | null,
+    ) => Promise<VoiceLibraryEntry | null | undefined> | VoiceLibraryEntry | null | undefined,
+  ): Promise<VoiceLibraryEntry | null>;
   ptExists(storageKey: string): Promise<boolean>;
   deriveEngineArtifact: typeof deriveEngineArtifact;
   readMasterPcm(
@@ -229,44 +245,42 @@ function abortRejection(err: unknown, deps: ResolveChapterDeps): unknown {
   return deps.signal?.reason ?? Object.assign(new Error('Aborted'), { name: 'AbortError' });
 }
 
-/** Review C-1 — after a derive completes (a real, seconds+ GPU op), the
-    voice-library entry may have changed underneath the in-flight repair: a
-    revoke can land mid-derive (stamping `consent.revokedAt` and purging
-    artifacts) before this write goes out, or the entry can be deleted
-    outright. Re-read fresh right before every post-derive write so that
-    write doesn't resurrect a revoked/deleted entry — or clobber
-    `revokedAt` — from the STALE pre-derive snapshot the caller classified
-    against. Returns the fresh entry to merge the status stamp into, or
-    `undefined` when the write must be skipped entirely (gone/revoked) — in
-    which case this reports the voice Broken/revoked and re-runs the
-    artifact purge, so a `.pt` (and sidecar in-memory prompt) the derive just
-    produced AFTER an in-flight revoke's own purge already ran doesn't
-    survive it.
+/** fs-38 Wave 3c, Task 14 — after a derive completes (a real, seconds+ GPU
+    op), the voice-library entry may have changed underneath the in-flight
+    repair: a revoke can land mid-derive (stamping `consent.revokedAt` and
+    purging artifacts) before this write goes out, or the entry can be
+    deleted outright. Runs entirely inside `deps.updateEntry`'s per-uuid
+    lock, so the fresh read this closure is handed and the write it decides
+    on are ONE atomic critical section — not just the write. When gone or
+    revoked, this reports the voice Broken/revoked and re-runs the artifact
+    purge (still under the lock) so a `.pt` the derive just produced AFTER
+    an in-flight revoke's own purge already ran doesn't survive it, and
+    returns null so `updateEntry` skips the write. Otherwise returns the
+    status-stamped entry to write.
 
-    NOT a lock: `writeEntry` is tmp+rename with no compare-and-swap (true of
-    every manifest write in this codebase), so this closes the seconds-wide
-    GPU window, not the millisecond one between this re-read and the write
-    that follows. If a revoke lands in THAT window the flag can still be
-    clobbered — but the revoke's purge runs strictly after its own
-    `writeEntry`, hence after this re-read, so it lands last and the
-    artifacts still go: the residue is a stale un-revoked flag with nothing
-    renderable behind it (the next render fails loud on the missing master),
-    recoverable by revoking again. Per-uuid write serialization / an
-    `updatedAt` CAS would close it properly — tracked as a follow-up, which
-    also names the two-worker compound corner. */
-async function guardPostDeriveWrite(
+    Previously (pre-Task-14) this only re-read fresh before an UNLOCKED
+    write, which closed the seconds-wide GPU-derive window but not the
+    millisecond one between that re-read and the write — a second writer
+    (e.g. a concurrent PATCH, or another character's repair landing on a
+    DIFFERENT engine slot of the same entry) could still read its own stale
+    snapshot in that gap and clobber this write. `deps.updateEntry` closes
+    that gap by holding the SAME per-uuid lock across the read this function
+    does and the write the caller makes from its result. */
+function statusStampMutate(
   deps: ResolveChapterDeps,
   libraryUuid: string,
   characterName: string,
   broken: BrokenClonedVoice[],
-): Promise<VoiceLibraryEntry | undefined> {
-  const fresh = await deps.readEntry(libraryUuid);
-  if (!fresh || fresh.consent?.revokedAt) {
-    broken.push({ name: characterName, reason: 'revoked' });
-    await deps.purgeCloneArtifacts(libraryUuid, {});
-    return undefined;
-  }
-  return fresh;
+  applyStatus: (fresh: VoiceLibraryEntry) => VoiceLibraryEntry,
+): (fresh: VoiceLibraryEntry | null) => Promise<VoiceLibraryEntry | null> {
+  return async (fresh) => {
+    if (!fresh || fresh.consent?.revokedAt) {
+      broken.push({ name: characterName, reason: 'revoked' });
+      await deps.purgeCloneArtifacts(libraryUuid, {});
+      return null;
+    }
+    return applyStatus(fresh);
+  };
 }
 
 /** For each requested cloned voice: classify, derive Repairable, collect Broken.
@@ -326,15 +340,17 @@ export async function resolveClonedVoicesForChapter(
         { masterPcm: pcm, sampleRate, refText, auditionText: REPAIR_AUDITION_TEXT },
         { signal: deps.signal },
       );
-      const fresh = await guardPostDeriveWrite(deps, libraryUuid, characterName, broken);
-      if (!fresh) continue; // gone/revoked mid-derive — guard already reported + purged.
-      await deps.writeEntry({
-        ...fresh,
-        engines: {
-          ...fresh.engines,
-          qwen: { ...fresh.engines.qwen, status: 'ready', baseModel: currentBaseModel },
-        },
-      });
+      const written = await deps.updateEntry(
+        libraryUuid,
+        statusStampMutate(deps, libraryUuid, characterName, broken, (fresh) => ({
+          ...fresh,
+          engines: {
+            ...fresh.engines,
+            qwen: { ...fresh.engines.qwen, status: 'ready', baseModel: currentBaseModel },
+          },
+        })),
+      );
+      if (!written) continue; // gone/revoked mid-derive — mutate already reported + purged.
     } catch (err) {
       // Review I-1 — the caller's own abort must propagate as a real
       // AbortError (see abortRejection's doc comment), stopping the whole
@@ -347,15 +363,18 @@ export async function resolveClonedVoicesForChapter(
         broken.push({ name: characterName, reason: 'derive-failed' });
       } else {
         // Permanent (4xx) — the sidecar rejected the clip itself. Same
-        // re-read guard as the success path (review C-1): a revoke landing
-        // between the (failed) derive attempt and this write must not have
-        // its revokedAt clobbered by the stale pre-derive snapshot.
-        const fresh = await guardPostDeriveWrite(deps, libraryUuid, characterName, broken);
-        if (fresh) {
-          await deps.writeEntry({
+        // locked re-read as the success path (Task 14 / review C-1): a
+        // revoke landing between the (failed) derive attempt and this
+        // write must not have its revokedAt clobbered by the stale
+        // pre-derive snapshot.
+        const written = await deps.updateEntry(
+          libraryUuid,
+          statusStampMutate(deps, libraryUuid, characterName, broken, (fresh) => ({
             ...fresh,
             engines: { ...fresh.engines, qwen: { ...fresh.engines.qwen, status: 'failed' } },
-          });
+          })),
+        );
+        if (written) {
           broken.push({ name: characterName, reason: 'derive-failed' });
         }
       }
@@ -427,6 +446,18 @@ export interface ResolveDesignedVoiceDeps {
       mirroring the cloned resolver's success write. */
   readEntry(uuid: string): Promise<VoiceLibraryEntry | null>;
   writeEntry(entry: VoiceLibraryEntry): Promise<void>;
+  /** fs-38 Wave 3c, Task 14 — the shared, per-uuid-locked read-modify-write
+      primitive (see `ResolveChapterDeps.updateEntry`'s doc comment). The
+      success-stamp write below routes through this instead of a bare
+      readEntry+writeEntry pair for the same reason as the cloned resolver's
+      derive-success write: the lock has to span the fresh read AND the
+      write as one critical section, not just the write. */
+  updateEntry(
+    uuid: string,
+    mutate: (
+      entry: VoiceLibraryEntry | null,
+    ) => Promise<VoiceLibraryEntry | null | undefined> | VoiceLibraryEntry | null | undefined,
+  ): Promise<VoiceLibraryEntry | null>;
   deriveEngineArtifact: typeof deriveEngineArtifact;
   reportProgress?(msg: string): void;
   signal?: AbortSignal;
@@ -504,18 +535,28 @@ export async function resolveDesignedVoicesForChapter(
          (routes/voice-library.ts ~:545), which `withComputedStaleness`
          can't repair on its own. Preserve sibling engines + other qwen
          fields via spreads, same as the cloned path. Best-effort, same
-         rationale as the manifest write above. */
+         rationale as the manifest write above.
+
+         fs-38 Wave 3c, Task 14 — routes through `deps.updateEntry`, the
+         shared per-uuid-locked read-modify-write primitive, rather than a
+         bare readEntry+writeEntry pair: without the lock, a concurrent
+         writer (e.g. the cloned resolver's own repair, or a PATCH) could
+         read its own snapshot in the gap between this read and this write
+         and have ITS write clobbered by this one landing after — or vice
+         versa. `mutate` returning null when the entry has vanished skips
+         the write, matching the prior "if (entry)" guard. */
       try {
-        const entry = await deps.readEntry(libraryUuid);
-        if (entry) {
-          await deps.writeEntry({
-            ...entry,
-            engines: {
-              ...entry.engines,
-              qwen: { ...entry.engines.qwen, status: 'ready', baseModel: result.baseModel },
-            },
-          });
-        }
+        await deps.updateEntry(libraryUuid, (fresh) =>
+          fresh
+            ? {
+                ...fresh,
+                engines: {
+                  ...fresh.engines,
+                  qwen: { ...fresh.engines.qwen, status: 'ready', baseModel: result.baseModel },
+                },
+              }
+            : null,
+        );
       } catch (entryErr) {
         console.warn(
           `[clone-voice-resolver] designed self-heal for "${characterName}" (${libraryUuid}) re-derived ` +

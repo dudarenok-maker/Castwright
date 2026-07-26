@@ -239,14 +239,43 @@ describe('classifyClonedVoice', () => {
 function makeDeps(overrides: Partial<ResolveChapterDeps> = {}): ResolveChapterDeps & {
   readEntry: ReturnType<typeof vi.fn>;
   writeEntry: ReturnType<typeof vi.fn>;
+  updateEntry: ReturnType<typeof vi.fn>;
   ptExists: ReturnType<typeof vi.fn>;
   deriveEngineArtifact: ReturnType<typeof vi.fn>;
   readMasterPcm: ReturnType<typeof vi.fn>;
   purgeCloneArtifacts: ReturnType<typeof vi.fn>;
 } {
+  // fs-38 Wave 3c, Task 14 — `readEntry`/`writeEntry` are pulled out as
+  // locals (rather than inlined in the returned object) so the DEFAULT
+  // `updateEntry` below can call through to whichever readEntry/writeEntry
+  // mock a given test configured (including the sequenced
+  // `mockResolvedValueOnce` chains the review-C-1 tests use), mirroring
+  // exactly what the pre-Task-14 inline read+write did. This keeps every
+  // pre-existing test's call-count/ordering assertions on `readEntry`/
+  // `writeEntry` valid unchanged — a test only needs its own `updateEntry`
+  // override when it's testing the LOCK itself (see the dedicated
+  // concurrency describe block below), not the ordinary success/failure
+  // paths.
+  const readEntry = overrides.readEntry ?? vi.fn(async () => null);
+  const writeEntry = overrides.writeEntry ?? vi.fn(async () => {});
+  const defaultUpdateEntry = vi.fn(
+    async (
+      uuid: string,
+      mutate: (
+        entry: VoiceLibraryEntry | null,
+      ) => Promise<VoiceLibraryEntry | null | undefined> | VoiceLibraryEntry | null | undefined,
+    ) => {
+      const fresh = await readEntry(uuid);
+      const next = await mutate(fresh);
+      if (!next) return null;
+      await writeEntry(next);
+      return next;
+    },
+  );
   return {
-    readEntry: vi.fn(async () => null),
-    writeEntry: vi.fn(async () => {}),
+    readEntry,
+    writeEntry,
+    updateEntry: defaultUpdateEntry,
     ptExists: vi.fn(async () => true),
     deriveEngineArtifact: vi.fn(async () => ({
       previewPcm: Buffer.alloc(0),
@@ -262,6 +291,7 @@ function makeDeps(overrides: Partial<ResolveChapterDeps> = {}): ResolveChapterDe
   } as ResolveChapterDeps & {
     readEntry: ReturnType<typeof vi.fn>;
     writeEntry: ReturnType<typeof vi.fn>;
+    updateEntry: ReturnType<typeof vi.fn>;
     ptExists: ReturnType<typeof vi.fn>;
     deriveEngineArtifact: ReturnType<typeof vi.fn>;
     readMasterPcm: ReturnType<typeof vi.fn>;
@@ -800,7 +830,27 @@ function makeDesignedDeps(
   writeSidecarManifest: ReturnType<typeof vi.fn>;
   readEntry: ReturnType<typeof vi.fn>;
   writeEntry: ReturnType<typeof vi.fn>;
+  updateEntry: ReturnType<typeof vi.fn>;
 } {
+  // fs-38 Wave 3c, Task 14 — same call-through default as makeDeps above, so
+  // pre-existing tests asserting on `readEntry`/`writeEntry` directly keep
+  // passing unchanged.
+  const readEntry = overrides.readEntry ?? vi.fn(async () => null);
+  const writeEntry = overrides.writeEntry ?? vi.fn(async () => {});
+  const defaultUpdateEntry = vi.fn(
+    async (
+      uuid: string,
+      mutate: (
+        entry: VoiceLibraryEntry | null,
+      ) => Promise<VoiceLibraryEntry | null | undefined> | VoiceLibraryEntry | null | undefined,
+    ) => {
+      const fresh = await readEntry(uuid);
+      const next = await mutate(fresh);
+      if (!next) return null;
+      await writeEntry(next);
+      return next;
+    },
+  );
   return {
     ptExists: vi.fn(async () => true),
     readDesignedMasterPcm: vi.fn(async () => null),
@@ -810,8 +860,9 @@ function makeDesignedDeps(
       baseModel: 'qwen3-0.6b',
     })),
     writeSidecarManifest: vi.fn(async () => {}),
-    readEntry: vi.fn(async () => null),
-    writeEntry: vi.fn(async () => {}),
+    readEntry,
+    writeEntry,
+    updateEntry: defaultUpdateEntry,
     ...overrides,
   } as ResolveDesignedVoiceDeps & {
     ptExists: ReturnType<typeof vi.fn>;
@@ -820,6 +871,7 @@ function makeDesignedDeps(
     writeSidecarManifest: ReturnType<typeof vi.fn>;
     readEntry: ReturnType<typeof vi.fn>;
     writeEntry: ReturnType<typeof vi.fn>;
+    updateEntry: ReturnType<typeof vi.fn>;
   };
 }
 

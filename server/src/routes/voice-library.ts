@@ -22,6 +22,7 @@ import {
   listEntries,
   readEntry,
   writeEntry,
+  updateEntry,
   ConsentRequiredError,
   clonedVoiceLacksConsent,
   type VoiceConsentRecord,
@@ -271,12 +272,23 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/promote', async (req: Request, res
     }
 
     const body = (req.body ?? {}) as { persona?: unknown };
-    const updated: VoiceLibraryEntry = {
-      ...entry,
-      ...(typeof body.persona === 'string' ? { persona: body.persona } : {}),
-    };
-    await writeEntry(updated); // stamps a fresh updatedAt
-    return res.status(200).json(await readEntry(voiceUuid));
+    /* fs-38 Wave 3c, Task 14 — read+mutate+write through the shared,
+       per-uuid-locked `updateEntry` rather than the `entry` read at the top
+       of this handler: that read happened BEFORE the file-op/sidecar-evict
+       work above, a long-enough window for a concurrent xtts derive
+       (clone-voice-resolver.ts) to have written `engines.xtts` in the
+       meantime — writing `entry`'s stale `engines` here would silently
+       erase it. `updateEntry` re-reads fresh under the lock immediately
+       before writing. */
+    const updated = await updateEntry(voiceUuid, (fresh) =>
+      fresh
+        ? { ...fresh, ...(typeof body.persona === 'string' ? { persona: body.persona } : {}) }
+        : null,
+    );
+    if (!updated) {
+      return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    }
+    return res.status(200).json(updated);
   } catch (e) {
     console.error('[voice-library] redesign/promote failed', e);
     return res.status(500).json({ error: (e as Error).message || 'Promote failed.' });
@@ -384,15 +396,29 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
       return res.status(400).json({ error: '`persona` must be a string.' });
     }
 
-    const updated: VoiceLibraryEntry = {
-      ...existing,
-      ...(body.name !== undefined ? { name: body.name as string } : {}),
-      ...(body.tags !== undefined ? { tags: body.tags as string[] } : {}),
-      ...(body.pinned !== undefined ? { pinned: body.pinned as boolean } : {}),
-      ...(body.persona !== undefined ? { persona: body.persona as string } : {}),
-    };
-    await writeEntry(updated);
-    const written = await readEntry(voiceUuid);
+    /* fs-38 Wave 3c, Task 14 — mutate/write through the shared, per-uuid-
+       locked `updateEntry`, spreading over a FRESH `fresh` (read under the
+       lock), not the `existing` read above. `existing` is only used for the
+       validation checks above (all timing-insensitive: 404 on missing, and
+       `provenance` is immutable so its value can't have changed between the
+       two reads) — but writing `existing`'s `engines` back would silently
+       clobber a concurrent engine-slot write (e.g. an in-flight xtts
+       derive) that landed in the window between this handler's first read
+       and its write. */
+    const written = await updateEntry(voiceUuid, (fresh) =>
+      fresh
+        ? {
+            ...fresh,
+            ...(body.name !== undefined ? { name: body.name as string } : {}),
+            ...(body.tags !== undefined ? { tags: body.tags as string[] } : {}),
+            ...(body.pinned !== undefined ? { pinned: body.pinned as boolean } : {}),
+            ...(body.persona !== undefined ? { persona: body.persona as string } : {}),
+          }
+        : null,
+    );
+    if (!written) {
+      return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    }
     res.json(written);
   } catch (e) {
     console.error('[voice-library] patch failed', e);
@@ -974,8 +1000,24 @@ voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response
     const entry = await readEntry(voiceUuid);
     if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
     if (!entry.consent) return res.status(409).json({ error: 'Entry has no consent record to revoke.' });
-    const updated = { ...entry, consent: { ...entry.consent, revokedAt: new Date().toISOString() } };
-    await writeEntry(updated); // passes the guard — revokedAt is orthogonal (Task 7)
+    /* fs-38 Wave 3c, Task 14 — stamp `revokedAt` through the shared,
+       per-uuid-locked `updateEntry` (fresh read + mutate + write, held
+       under one lock) instead of writing back the `entry` read above,
+       which by now may be stale relative to a concurrent engine-slot
+       write (e.g. an in-flight xtts derive elsewhere) that would
+       otherwise be silently clobbered. The 404/409 checks above stay
+       against the pre-lock `entry` — both are timing-insensitive here
+       (missing-entirely and no-consent-record are not states a concurrent
+       writer would create out from under a genuinely present, consented
+       entry) — only the write itself needs the fresh snapshot. */
+    const updated = await updateEntry(voiceUuid, (fresh) =>
+      fresh?.consent
+        ? { ...fresh, consent: { ...fresh.consent, revokedAt: new Date().toISOString() } }
+        : null,
+    );
+    if (!updated) {
+      return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    }
     // Erase resynthesis-capable artifacts AND the original recording itself.
     const purgeResult = await purgeCloneArtifacts(voiceUuid, { deleteMasterClip: true });
     const final = (await readEntry(voiceUuid)) ?? updated;

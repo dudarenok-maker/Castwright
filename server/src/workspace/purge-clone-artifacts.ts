@@ -26,7 +26,7 @@ import {
   xttsVoiceLatentsPath,
   xttsVoiceSidecarPath,
 } from './paths.js';
-import { entryDir, readEntry, removeEntryDir, writeEntry } from './voice-library.js';
+import { entryDir, removeEntryDir, updateEntry } from './voice-library.js';
 import { djb2, purgeVoiceSamples } from '../tts/voice-sample-cache.js';
 import { CLONE_ENGINE_LIST, cloneStorageKey } from '../tts/clone-engines.js';
 import { getResolvedSidecarUrl } from './user-settings.js';
@@ -166,12 +166,21 @@ export async function purgeCloneArtifacts(
        `master` so the manifest never points at a file that's gone. A plain
        delete (`deleteEntryDir`, above) doesn't need any of this — it removes
        the whole entry dir, clip included, in one shot. No-op when the entry
-       or its `master` field is already absent. */
-    const entry = await readEntry(voiceUuid);
-    if (entry?.master) {
-      await unlinkTracked(join(entryDir(voiceUuid), entry.master.clipFile), voiceUuid, failed);
-      await writeEntry({ ...entry, master: undefined });
-    }
+       or its `master` field is already absent.
+
+       fs-38 Wave 3c, Task 14 — read+clear+write through the shared, per-uuid
+       -locked `updateEntry` rather than a bare readEntry/writeEntry pair, so
+       a concurrent engine-slot write elsewhere (e.g. an in-flight xtts
+       derive) landing between the read and the write can't be clobbered by
+       this clearing the `master` field off a stale snapshot. The unlink
+       itself runs inside `mutate`, under the same lock, so nothing else can
+       observe (or write) this entry between "the clip is gone from disk"
+       and "the manifest stops pointing at it". */
+    await updateEntry(voiceUuid, async (fresh) => {
+      if (!fresh?.master) return null;
+      await unlinkTracked(join(entryDir(voiceUuid), fresh.master.clipFile), voiceUuid, failed);
+      return { ...fresh, master: undefined };
+    });
   }
   // M2 (review) — evict both the base and `-preview` sidecar cache entries so
   // a `-preview` clone-prompt can't linger resident in sidecar memory after

@@ -158,6 +158,95 @@ export async function writeEntry(entry: VoiceLibraryEntry): Promise<void> {
   await rename(tmpPath, finalPath);
 }
 
+/* fs-38 Wave 3c, Task 14 — per-uuid lock closing the voice-library's
+   read-modify-write race, not just the write. 3c writes a SECOND,
+   independent engine slot (`engines.xtts`) alongside the existing
+   `engines.qwen` one, so two concurrent callers reading the same stale
+   snapshot and each writing back their own slot is no longer an idempotent
+   collision (as it was pre-3c, when both writers touched only `qwen`) — it's
+   a silent loss of whichever slot writes first:
+
+     A and B both readEntry() and see {qwen: stale}. A finishes deriving xtts
+     and writes {qwen: stale, xtts: ready}. B, still holding its OWN stale
+     pre-derive snapshot, then writes {qwen: ready} — the xtts slot A just
+     wrote is gone, clobbered by B's write of a snapshot that predates it.
+
+   A mutex around ONLY the final `writeEntry` call does not close this: it
+   would just serialize two ALREADY-STALE snapshots one after the other, and
+   the second write still overwrites the first caller's change — B's write
+   still doesn't know about A's xtts slot, lock or no lock, because B took
+   its snapshot before A ever wrote. The critical section has to be the
+   WHOLE span — fresh read, mutate, write — not the write alone.
+
+   `withEntryLock` is a per-voiceUuid promise-chain mutex: different uuids
+   never block each other, and a caller queued behind another for the SAME
+   uuid only starts its own body once the prior one's fully settled (success
+   OR failure — a thrown mutate can't wedge the queue for that uuid). Built
+   on the "each successive .then() is the next queue slot" pattern rather
+   than any lock library, since Node is single-threaded and the only thing
+   that needs serializing is which `fn` gets to run next for a given uuid.
+
+   `updateEntry` is the shared read-modify-write primitive every caller that
+   reads this store, mutates its own copy, and writes it back should route
+   through: it holds the lock across a FRESH readEntry, the caller's
+   `mutate`, and (when `mutate` doesn't opt out by returning null/undefined)
+   the writeEntry — then returns the canonical post-write record. `mutate`
+   receives `null` when the entry is missing so a caller can still run a
+   side effect (e.g. re-purging orphaned artifacts) under the same lock
+   before declining to write.
+
+   Cross-process (two separate `node` server processes sharing one
+   workspace) stays out of scope — this is an in-process, single-Node-
+   instance lock, same scope carve-out as #1826 (the 3b2 lost-update-is-
+   idempotent case this task supersedes). */
+const entryLocks = new Map<string, Promise<void>>();
+
+async function withEntryLock<T>(voiceUuid: string, fn: () => Promise<T>): Promise<T> {
+  const previous = entryLocks.get(voiceUuid) ?? Promise.resolve();
+  const result = previous.then(fn);
+  // The chain link stored in the map must never reject — a rejection there
+  // would propagate into the NEXT queued caller's `previous.then(fn)` as an
+  // onRejected call, which happens to still work (fn ignores the reason
+  // argument) but is fragile to rely on. Swallow it explicitly instead, and
+  // let `result` (returned to THIS caller) carry the real rejection.
+  const settled: Promise<void> = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  entryLocks.set(voiceUuid, settled);
+  // Best-effort cleanup so a uuid that's gone quiet doesn't sit in the map
+  // forever — only delete if nobody queued behind us in the meantime.
+  settled.finally(() => {
+    if (entryLocks.get(voiceUuid) === settled) entryLocks.delete(voiceUuid);
+  });
+  return result;
+}
+
+/** The shared read-modify-write primitive (see the module comment above for
+    why a write-only mutex doesn't close the race this closes). `mutate` runs
+    under the per-uuid lock, is handed the FRESH entry (or `null` if none
+    exists), and may itself be async — including running its own side
+    effects (e.g. purging artifacts) before deciding whether to write.
+    Returning `null`/`undefined` from `mutate` skips the write entirely
+    (still under the lock) and this resolves to `null`. Returning an entry
+    writes it and resolves to the canonical post-write record (re-read, so
+    the caller sees `writeEntry`'s own fresh `updatedAt` stamp — mirroring
+    every existing call site's writeEntry-then-readEntry convention). */
+export async function updateEntry(
+  voiceUuid: string,
+  mutate: (
+    entry: VoiceLibraryEntry | null,
+  ) => Promise<VoiceLibraryEntry | null | undefined> | VoiceLibraryEntry | null | undefined,
+): Promise<VoiceLibraryEntry | null> {
+  return withEntryLock(voiceUuid, async () => {
+    const entry = await readEntry(voiceUuid);
+    const next = await mutate(entry);
+    if (!next) return null;
+    await writeEntry(next);
+    return readEntry(voiceUuid);
+  });
+}
+
 /** List every valid entry in the library. A directory whose manifest is
     missing, unparseable, or structurally invalid is skipped (with a
     console.warn) rather than failing the whole listing. */
