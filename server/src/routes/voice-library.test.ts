@@ -1363,6 +1363,44 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     expect(await readCandidate('cand-transient')).toBeNull(); // candidate consumed, same as the happy path
   });
 
+  /* Review follow-up on Task 10 — embed-client.ts rethrows NoCapacityError
+     BARE (not tagged `transient: true`), so a GPU-contention failure of the
+     advisory /embed call must ALSO be swallowed here, exactly like a
+     transport failure — otherwise it reproduces the orphaned-.pt +
+     leaked-candidate bug Task 10 exists to eliminate. */
+  it('persists without a cosine when the ECAPA embed fails on GPU capacity contention — candidate still removed', async () => {
+    const { writeCandidate, readCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-nocapacity',
+      { sampleRate: 24000, durationSeconds: 12, transcript: 't', transcriptSource: 'whisper', captureMethod: 'upload' },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+    // A REAL NoCapacityError instance — this is what embedSegment actually
+    // throws on GPU contention (see embed-client.ts:73); it deliberately
+    // does NOT carry `{ transient: true }`. Imported dynamically (post
+    // beforeEach's vi.resetModules()) so this is the SAME class instance
+    // the freshly re-imported route module's `instanceof` check sees —
+    // a static top-level import here would be a stale pre-reset instance,
+    // exactly the module-boundary trap #1801 warns about elsewhere in
+    // this route file.
+    const { NoCapacityError } = await import('../tts/tts-errors.js');
+    assessFidelityMock.mockRejectedValueOnce(new NoCapacityError('coqui', 512, 'cuda:0'));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-nocapacity',
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.sampleMeta.qualityChecks.cloneFidelityUnavailable).toBe(true);
+    expect(res.body.sampleMeta.qualityChecks.cloneCosine).toBeUndefined();
+
+    expect(await readCandidate('cand-nocapacity')).toBeNull(); // candidate consumed, same as the transient path
+  });
+
   it('still aborts (and persists nothing) on a genuine SidecarDesignError from the fidelity check', async () => {
     const { writeCandidate, readCandidate } = await import('../workspace/clone-candidate.js');
     await writeCandidate(

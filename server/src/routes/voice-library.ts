@@ -60,6 +60,7 @@ import { readCandidate, candidateMasterPath, removeCandidate } from '../workspac
 import { deriveEngineArtifact } from '../tts/derive-engine-artifact.js';
 import { assessCloneFidelity } from '../tts/clone-fidelity.js';
 import { isTransient } from '../tts/retry.js';
+import { NoCapacityError } from '../tts/tts-errors.js';
 import { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
 
 export const voiceLibraryRouter = Router();
@@ -664,13 +665,35 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
          defects behind a silent 200 instead of surfacing them. Any non-
          transient throw (an explicit 4xx, or a genuine SidecarDesignError
          surfaced from a shared client) still aborts — handled by the outer
-         catch's existing duck-typed status mapping. */
+         catch's existing duck-typed status mapping.
+
+         NoCapacityError is a SEPARATE special case, ALSO treated as
+         "fidelity unavailable" here: embed-client.ts's embedSegment
+         deliberately rethrows it bare (see embed-client.ts:73) rather than
+         tagging it `transient: true`, because in the SYNTH path a capacity
+         error is genuinely non-retryable (replaying the same doomed call
+         against a still-full GPU wastes a retry budget for nothing — see
+         tts-errors.ts's NoCapacityError doc comment). But this is the
+         CLONE ROUTE's ADVISORY fidelity step, not a synth path: by this
+         point deriveEngineArtifact has already succeeded and written the
+         .pt, so a GPU-contention failure of the /embed call is exactly as
+         recoverable-by-not-scoring as a transport failure — aborting here
+         would orphan that .pt and leak the candidate for no benefit, same
+         as the transient case above. This does NOT change NoCapacityError's
+         general non-retryable semantics anywhere else (synth, design,
+         redesign) — only how this one advisory check reacts to it.
+         Detected via `instanceof`, matching every OTHER NoCapacityError call
+         site in this module graph (embed-client.ts, design-voice-core.ts,
+         derive-engine-artifact.ts, sidecar-health.ts, transcribe-client.ts)
+         — unlike SidecarDesignError above, NoCapacityError never crosses a
+         module boundary that defeats `instanceof` here, and its own tests
+         construct real instances, so `instanceof` is proven in-process. */
       let fidelity: { cosine: number; warning?: string } | undefined;
       let fidelityUnavailable = false;
       try {
         fidelity = await assessCloneFidelity(masterPcm, derived.previewPcm, candidate.master.sampleRate);
       } catch (e) {
-        if (isTransient(e)) {
+        if (isTransient(e) || e instanceof NoCapacityError) {
           fidelityUnavailable = true;
         } else {
           throw e;
