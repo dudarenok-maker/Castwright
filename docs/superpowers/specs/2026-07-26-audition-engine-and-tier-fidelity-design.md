@@ -3,7 +3,7 @@
 **Date:** 2026-07-26
 **Issues:** #1812 (mapper consolidation) + #1839 (the two live defects behind it)
 **Branch:** `fix/frontend-audition-engine-tier`
-**Status:** design approved, plan pending
+**Status:** design approved, revised after adversarial review
 
 ## Context
 
@@ -11,6 +11,11 @@
 mappers with different semantics and nothing keeping them in sync. Auditing the
 call sites turned up two live defects behind that drift, so this is a `fix`, not
 a `chore`.
+
+This document was revised after an independent review. Three of its original
+claims were wrong; they are corrected in place below and called out in
+**Corrections after review** at the end, so the reasoning that changed is not
+silently rewritten.
 
 ## The three problems
 
@@ -25,34 +30,35 @@ return effectiveEngine === 'qwen' ? QWEN_MODEL_KEY : projectModelKey;
 
 Its doc comment justifies this with "the picker offers kokoro|qwen". That is
 stale — `VoiceEnginePicker` offers `kokoro | qwen | coqui`
-(`src/modals/profile-drawer.tsx:1163`, filtered by fs-60 eligibility). So a book
-defaulting to Coqui XTTS with a character overridden to Kokoro builds a sample
-request carrying `modelKey: 'coqui-xtts-v2'`, and the preview renders in Coqui.
+(`src/modals/profile-drawer.tsx:1163`), and `eligibleTtsEngines` genuinely can
+contain `coqui` (`server/src/workspace/scan.ts:792`; `scan.test.ts:347` asserts
+`['coqui','qwen']`). So a book defaulting to Coqui XTTS with a character
+overridden to Kokoro builds a sample request carrying `modelKey:
+'coqui-xtts-v2'`, and the preview renders in Coqui.
 
-The server does not correct this. `voice-sample.ts:117` re-picks a matching key
+The server does not correct it. `voice-sample.ts:117` re-picks a matching key
 **only** on the raw base-voice branch (`rawEngine` + `rawSpeaker`); the
 character-audition branch is `engine = engineForModelKey(modelKey)`
-(`voice-sample.ts:121`) — the client's key *is* the routing decision.
+(`voice-sample.ts:121`), and `:123 pickVoiceForEngine(engine, …)` then picks a
+Coqui speaker. The client's key *is* the routing decision.
 
 Existing tests only cover the Qwen arm and already-matching engine/key pairs
 (`src/lib/tts-voice-mapping.test.ts:98-108`), which is why this went unseen.
 
-### 2. Qwen previews are pinned to the wrong tier, and it costs VRAM
+### 2. Qwen previews are pinned to 0.6B even when the book renders at 1.7B
 
-The same function collapses every Qwen audition to `qwen3-tts-0.6b`, regardless
-of the character's or the run's tier. This was understood as a guard against the
-#1388 co-residency OOM. It is the opposite.
+The same function collapses every Qwen audition to `qwen3-tts-0.6b` regardless
+of the run's tier, so a book generating at 1.7B previews its cast at 0.6B — the
+preview is not the voice you will hear.
 
-`reconcileResidentQwenTiers` (`server/src/tts/ensure-sidecar-loaded.ts:182`)
-evicts, at run start, every Qwen base tier the run's cast does not need, "so
-only the needed tier occupies the GPU — a pure-1.7B render no longer co-resides
-the 0.6B base (and vice-versa)." A hardcoded 0.6B audition against a 1.7B-pinned
-character forces the 0.6B base resident **alongside** the 1.7B one — it
-manufactures exactly the co-residency the reconcile pass exists to prevent.
-
-Matching the audition to the character's real tier reuses a base that is already
-loaded. It is strictly cheaper on VRAM than today's behaviour, and the preview
-becomes the thing the user will actually hear.
+There is also a VRAM consequence, though a narrower one than this document
+originally claimed. `reconcileResidentQwenTiers`
+(`server/src/tts/ensure-sidecar-loaded.ts:182-218`) runs **once at run start**
+and evicts every Qwen base tier the run's cast does not need, and the synth path
+lazily loads whichever tier the request names (`main.py:4414`,
+`sidecarModelId`). So a hardcoded-0.6B audition fired *during* a 1.7B render
+does force the 0.6B base resident alongside the 1.7B one — manufacturing the
+co-residency the reconcile pass just eliminated.
 
 ### 3. Four mappers and three `TtsEngine` declarations
 
@@ -64,123 +70,170 @@ becomes the thing the user will actually hear.
 | `server/src/routes/voice-sample.ts:53` `defaultModelKeyForEngine` | full table minus Qwen |
 
 `TtsEngine` is declared three times: `src/lib/types.ts:115` (derived from the
-OpenAPI `BaseVoice.engine`), `src/lib/tts-voice-mapping.ts:19` (hand-written
-literal union), and `src/store/queue-slice.ts:22` (hand-written literal union).
+OpenAPI `BaseVoice.engine`, which `api-types.ts:3692` confirms is required and
+enumerates all five engines), `src/lib/tts-voice-mapping.ts:19`, and
+`src/store/queue-slice.ts:22`.
+
+## The constraint that shapes the design: the audition key is a cache key
+
+`server/src/tts/voice-sample-cache.ts:1-9` states an invariant that no earlier
+draft of this design accounted for:
+
+> The voice-sample player (`POST /api/voices/:id/sample`) and the Qwen
+> design-voice route both render a ~12 s preview MP3 and cache it under the
+> **same deterministic filename** … designing a bespoke Qwen voice from a
+> character's own line produces exactly the file the "Play 12s" button later
+> reads — **one synthesis, not two**.
+
+`server/src/routes/qwen-voice.ts:13,23,480` repeats it. Today every side
+resolves to `qwen3-tts-0.6b`, so they agree by construction.
+
+Two consequences follow, and they drive everything below:
+
+1. **Every site that computes an audition key must compute the *same* key** for
+   the same character — the play sites *and* the design sites. Making one
+   tier-aware and not the other splits the filename, causing a silent second
+   synthesis and breaking the "is this row playing" prefix check.
+2. **The tier in that key must be a stable function of persisted state.** It
+   cannot depend on anything transient. In particular it cannot be gated on
+   `ttsLifecycle.qwen1_7b.state`, which `use-tts-lifecycle.ts:179` derives from
+   `sidecarHealth.qwenBase17Loaded` — *currently resident*, not *installed*.
+   Gating on residency would make the same character key 1.7B while the model
+   happens to be loaded and 0.6B afterwards.
+
+Four call sites this design originally listed as auditions are in fact **design**
+requests — `cast.tsx:427` (bulk), `voice-readiness-gate.tsx:74`,
+`rebaseline-modal.tsx:277`, `script-review-diff.tsx:74`. Server-side their
+`modelKey` is used *only* to name the cached audition file
+(`design-voice-core.ts:206`); the design request body carries no tier at all
+(`design-voice-core.ts:272-278`). They are VRAM- and output-neutral — which is
+exactly why they matter here: they are on the shared cache key.
 
 ## Design
 
-### Tier resolution reuses the rule the codebase already has
+### The audition tier comes from the session key, never per-character
 
-`higherQwenTier` (`server/src/tts/model-keys.ts:118`) is the established policy
-for reconciling a per-character tier against the run default: take the higher, so
-"a character whose stored tier happens to be the lower one can never drag a run
-that was explicitly started at the higher tier back down." Auditions adopt the
-same rule rather than inventing a second one.
+```
+auditionModelKey = modelKeyForEngineChoice(effectiveEngine, sessionModelKey)
+```
 
-| Character tier | Run default | Audition today | After |
-|---|---|---|---|
-| 1.7B pinned | 1.7B | 0.6B — forces a 2nd base resident | 1.7B — reuses the resident base |
-| unpinned | 1.7B | 0.6B | 1.7B |
-| 1.7B pinned | 0.6B | 0.6B | 1.7B |
-| unpinned | 0.6B | 0.6B | 0.6B (unchanged) |
+with **no character-tier argument at any audition or design call site**.
 
-### The VRAM gate stays at admission, where the truth is
+This is what makes the tier follow the book. The Start-generation modal is the
+affordance that chooses a tier, and `layout.tsx:1743-1760` documents that it
+deliberately converges **three sinks** — `ui.ttsModelKey` (the session key), the
+cast-wide pins via `api.setCastTier`, and the queue dispatcher's fallback — so
+that "this book is on 1.7B" is already expressed in the session key. Reading the
+session key therefore captures the real workflow: pick 1.7B, and every preview
+follows at 1.7B.
 
-A voice sample goes through the same sidecar synth path as a render, so it is
-already gated by `withCapacityRetry` (`server/src/gpu/capacity-retry.ts`, #1720):
-evict-once, then a bounded poll (`GPU_CAPACITY_POLL_MS` × `GPU_CAPACITY_MAX_ATTEMPTS`,
-~60 s by default), then `NoCapacityError`. That layer reads live per-device
-`freeMb` via `capacityProbe`; the frontend has no such reading.
+Deriving the key per-character instead would:
 
-**The frontend will not pre-guess whether a tier fits.** When 1.7B genuinely
-cannot be admitted, the existing no-capacity error surfaces rather than a silent
-downgrade to a different model. This is the honest outcome and it is the same
-answer the *render* would give on that machine — if a 1.7B preview cannot fit
-there, a 1.7B generation cannot either, which is worth learning before a long run
-rather than after it.
+- **split the shared design/play cache key**, since bulk design
+  (`cast.tsx:427`) sends one `modelKey` for N characters and physically cannot
+  match a heterogeneous per-character key. This is the structural reason, and it
+  alone settles it.
+- reintroduce the worst VRAM case — a single 1.7B-pinned character inside a 0.6B
+  book would load the 1.7B base *alongside* the resident 0.6B, for a 12-second
+  clip.
+
+A per-character 1.7B pin still governs **generation** exactly as it does today
+(`synthesise-chapter.ts` `routeFor`, `higherQwenTier`). It simply stops
+fragmenting the preview cache. The one case that loses preview fidelity is a
+character individually pinned above its book's tier — the same case that is
+worst on VRAM, so the trade is aligned rather than a compromise.
+
+### The VRAM gate stays at admission
+
+A voice sample flows through the same sidecar synth path as a render —
+`voice-sample.ts:138 selectTtsProvider` → `SidecarTtsProvider.postWithCapacityRetry`
+(`sidecar.ts:297-320`) → `withCapacityRetry` (`capacity-retry.ts:85`) — and the
+sidecar's `admit()` is tier-aware (`main.py:2260`). The frontend has no VRAM
+reading and will not pre-guess one.
+
+Because the audition tier now tracks the session tier, a 1.7B preview only ever
+happens on a book already set to render at 1.7B — so the preview asks for a
+model that book needs anyway. That is what keeps admission's worst case
+(a ~60 s bounded poll, then `NoCapacityError`) off the common path, rather than
+any new frontend logic.
 
 ### One source of truth per side
 
-- **`TtsEngine` → one declaration.** `src/lib/types.ts:115` wins (it is derived
-  from the OpenAPI contract, so it cannot drift from the wire format).
-  `tts-voice-mapping.ts:19` and `queue-slice.ts:22` become re-exports/imports of
-  it. If the unions turn out to have already drifted, that drift is a finding to
-  report, not to paper over.
-- **Engine→modelKey → one mapper per side.** Frontend keeps
-  `modelKeyForEngineChoice` and it becomes a genuine mirror of the server's
-  `canonicalModelKeyForEngine`, including the tier-preserving Qwen arm.
-  `sampleModelKeyForEngine` is deleted. Server-side, `defaultModelKeyForEngine`
-  (`voice-sample.ts:53`) folds into `canonicalModelKeyForEngine`.
+- **`TtsEngine` → one declaration.** `src/lib/types.ts:115` wins.
+  `tts-voice-mapping.ts:19` and `queue-slice.ts:22` become imports/re-exports.
+- **Engine→modelKey → one mapper per side.** Frontend `modelKeyForEngineChoice`
+  becomes a complete mirror of the server's `canonicalModelKeyForEngine`;
+  `sampleModelKeyForEngine` is deleted. Server-side `defaultModelKeyForEngine`
+  folds into `canonicalModelKeyForEngine` — a behaviour-preserving de-duplication
+  (under its `engineForModelKey(modelKey) !== engine` guard the two tables agree
+  on every reachable input), not a fix.
 - `QWEN_MODEL_KEY` stays exported — `src/lib/play-emotion-variant.ts:15` and
   `src/components/script-review-voice-nudge.test.ts:3` import it.
 
-### Revised `modelKeyForEngineChoice` Qwen arm
-
-```
-qwen: higherQwenTier(
-        characterTier ?? (sessionModelKey is a qwen key ? sessionModelKey : '0.6b'),
-        sessionModelKey is a qwen key ? sessionModelKey : '0.6b')
-```
-
-`higherQwenTier` is mirrored into `tts-models.ts` alongside the existing
-`engineForModelKey` mirror, which already carries the "add new prefixes here in
-lockstep with `server/src/tts/index.ts`" convention.
+The `modelKeyForEngineChoice` Qwen arm still accepts its existing optional tier
+argument, which the **assign guard** callers (`voice-library-panel.tsx:264`,
+`profile-drawer.tsx:382`) pass. That guard is engine-only and tier-agnostic
+(`server/src/routes/voice-library.ts:886`), so their behaviour is unchanged; the
+argument simply is not used by audition callers.
 
 ### The "Sampled" lifecycle tier must stop anchoring on one tier
 
-`hasCachedQwenSample` (`server/src/routes/voices.ts:250`) decides whether a
-character reads as **Sampled** by testing the cached-audition filename against the
-literal prefix `` `${sampleScope}-qwen3-tts-0.6b-` `` (`QWEN_SAMPLE_MODEL_KEY`,
-`:69`). Once an audition can render at 1.7B the file is named
-`<scope>-qwen3-tts-1.7b-<hash>.mp3` and the test fails — the voice would silently
-drop out of the Sampled tier despite having a perfectly good audition on disk.
-
-The scan must match **either** Qwen tier. The constant's own comment already
-anticipates this ("Revisit if a second Qwen synth key is ever added"); this change
-is what triggers it. Paired test: a `1.7b`-named sample file marks the character
-Sampled.
-
-### Call-site migration
-
-| Call site | Argument | Effect |
-|---|---|---|
-| `cast.tsx:427`, `voice-readiness-gate.tsx:74`, `rebaseline-modal.tsx:277`, `script-review-diff.tsx:74` | literal `'qwen'` | engine unchanged; tier now follows the run/character instead of always 0.6B |
-| `cast.tsx:500`, `cast.tsx:1018`, `cast.tsx:1223` | `effectiveEngineFor(c)` | wrong-engine fix + tier fidelity |
-| `profile-drawer.tsx:655` | `effectiveEngine` (pending choice) | wrong-engine fix + tier fidelity |
-| `profile-drawer.tsx:665` | `currentEngine` (persisted) | wrong-engine fix + tier fidelity |
-
-The character tier comes from `charModelKey` in the drawer (already held in
-state and already passed to `modelKeyForEngineChoice` at
-`voice-library-panel.tsx:264`) and from `c.ttsModelKey` in the cast view.
+`hasCachedQwenSample` (`server/src/routes/voices.ts:250`) tests the cached
+filename against the literal prefix `` `${sampleScope}-qwen3-tts-0.6b-` ``. Once
+an audition can render at 1.7B the file is named `<scope>-qwen3-tts-1.7b-<hash>.mp3`
+and the character silently drops out of the **Sampled** tier. The scan must match
+either tier, and `openapi.yaml`'s `sampled` field description (mirrored into
+`api-types.ts:3733`) hardcodes the same 0.6B example and must be updated with it.
 
 ## Testing
 
-- **Regression, wrong engine (fails before, passes after):** render the profile
-  drawer with project key `coqui-xtts-v2` and `engineChoice = 'kokoro'`; assert
-  the sample URL prefix carries `kokoro-v1`.
-- **Regression, wrong tier:** a 1.7B-pinned character in a 0.6B-default book
-  requests `qwen3-tts-1.7b`.
-- **Mapper table:** the three existing `modelKeyForEngineChoice` Qwen cases
-  (`tts-models.test.ts:142-147`) must stay green unchanged; add
-  `('qwen', 'qwen3-tts-1.7b')` → `qwen3-tts-1.7b` and
-  `('kokoro', 'coqui-xtts-v2')` → `kokoro-v1`.
-- The `sampleModelKeyForEngine` describe block (`tts-voice-mapping.test.ts:98`)
-  retires with the function; its cases are already covered in
-  `tts-models.test.ts`, plus the two new ones above. No coverage is lost.
-- Server: `canonicalModelKeyForEngine` gains the raw-sample cases inherited from
-  `defaultModelKeyForEngine`, including `piper → piper-en-us-medium`.
+- **Regression, wrong engine (fails before, passes after):** a character
+  overridden to Kokoro in a Coqui-default book auditions with `kokoro-v1`.
+- **Regression, wrong tier:** a Qwen character in a 1.7B-session book auditions
+  with `qwen3-tts-1.7b`.
+- **Cache-key uniformity:** the play sites and the design sites resolve to the
+  same `modelKey` for the same character and session — the invariant that keeps
+  design's output and Play's lookup on one file.
+- **Mapper table:** `('kokoro','coqui-xtts-v2') → 'kokoro-v1'` and
+  `('qwen','qwen3-tts-1.7b') → 'qwen3-tts-1.7b'` are the two the old function got
+  wrong. These are table coverage, not the regression proof — the regression
+  proof is at the call sites, since the broken function was never
+  `modelKeyForEngineChoice`.
+- The `sampleModelKeyForEngine` describe block retires with the function; its
+  cases move to `tts-models.test.ts` first, so no coverage is lost.
 
 ## Out of scope
 
-- The no-capacity **UI** copy. If the frontend does not already surface a sample
-  request's error body, wiring that is its own change — this spec only commits to
-  not masking the error.
-- Cache invalidation of auditions already on disk at the old tier. They stay
-  valid and playable; the next audition for a 1.7B character simply writes a
-  second file. No migration, no purge.
+- **The Start-generation tier picker is ungated.** `start-generation.tsx:11-18`
+  offers 1.7B with no weights-installed check, while the 1.7B base is separately
+  downloaded (`main.py:6070`, `:3146`). Picking it on a box without those weights
+  is already broken for *generation*; because the audition tier now tracks the
+  session key, previews inherit that exposure rather than adding to it. Filed as
+  [#1841](https://github.com/dudarenok-maker/Castwright/issues/1841).
+- **The library-card preview stays at 0.6B** (`voice-library.ts:434`,
+  `design-voice-core.ts:281`, cache scope `qwen-<uuid>`). Once a library voice is
+  assigned to a character in a 1.7B book, the card and the character preview are
+  two files. Filed as
+  [#1842](https://github.com/dudarenok-maker/Castwright/issues/1842).
+- **The no-capacity UI copy.** Whether the frontend surfaces a sample request's
+  error body is unverified; this spec only commits to not masking it.
+- **Auditions already on disk at the old tier.** They stay valid and playable; no
+  migration, no purge.
+
+## Corrections after review
+
+1. **"Strictly cheaper on VRAM" was wrong.** Tier fidelity is cheaper only
+   *during* a 1.7B run. Under a per-character key it would have been more
+   expensive in two reachable cases (a 1.7B-pinned character in a 0.6B run; any
+   preview on an idle machine). Session-tier resolution avoids the first case;
+   the second is inherent to previewing at the tier the book renders at.
+2. **The audition `modelKey` is also a shared cache key.** Not accounted for in
+   the first draft; it is now the constraint the design is built around.
+3. **Four call sites were described as auditions.** They are design requests
+   whose `modelKey` only names the cached file.
 
 ## Release notes
 
 User-visible, so both `docs/release-notes-next.md` and `RELEASE_NOTES.md` get an
-entry: voice previews now play in the engine and quality tier picked for that
-character, instead of the book's default.
+entry: voice previews now play in the engine picked for that character and at the
+quality tier the book is set to generate at.
