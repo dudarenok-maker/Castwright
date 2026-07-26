@@ -991,7 +991,484 @@ Closes #1841"
 
 ---
 
-### Task 8: Release notes
+### Task 8: Free an idle Qwen base instead of refusing the op
+
+Admission already serialises (bounded poll) and evicts the analyzer once
+(`capacity-retry.ts:116-120`), but never frees a resident TTS model — so a 1.7B
+preview can fail after ~60 s while an unused 0.6B base holds the VRAM. Add a
+second eviction lever, symmetric with the analyzer one.
+
+**Files:**
+- Modify: `server/src/gpu/capacity-retry.ts:51-71,97-133`
+- Create: `server/src/gpu/evict-idle-tts.ts`
+- Test: `server/src/gpu/capacity-retry.test.ts`, `server/src/gpu/evict-idle-tts.test.ts`
+
+**Interfaces:**
+- Consumes: `reconcileResidentQwenTiers(keep: { keep06: boolean; keep17: boolean }, signal?)` from `server/src/tts/ensure-sidecar-loaded.ts:182`; `activeGenerationBooks(): string[]` from `server/src/routes/generation.ts:602`; `engineForModelKey` from `server/src/tts/model-keys.ts`.
+- Produces: `evictIdleQwenBase(opts: { modelKey?: TtsModelKey; signal?: AbortSignal }): Promise<boolean>` — true when it actually unloaded something. `CapacityRetryOpts` gains `evictIdleTts?: () => Promise<boolean>`.
+
+- [ ] **Step 1: Write the failing tests for the helper**
+
+Create `server/src/gpu/evict-idle-tts.test.ts`:
+
+```ts
+it('frees the OTHER Qwen tier when no render is in flight', async () => {
+  const reconcile = vi.fn().mockResolvedValue(undefined);
+  const freed = await evictIdleQwenBase({
+    modelKey: 'qwen3-tts-1.7b',
+    _reconcile: reconcile,
+    _activeBooks: () => [],
+  });
+
+  expect(freed).toBe(true);
+  /* Keep the tier this op needs, drop the other. */
+  expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: true }, undefined);
+});
+
+it('keeps the 0.6B base when that is the tier being asked for', async () => {
+  const reconcile = vi.fn().mockResolvedValue(undefined);
+  await evictIdleQwenBase({
+    modelKey: 'qwen3-tts-0.6b',
+    _reconcile: reconcile,
+    _activeBooks: () => [],
+  });
+
+  expect(reconcile).toHaveBeenCalledWith({ keep06: true, keep17: false }, undefined);
+});
+
+it('does nothing while any render is in flight', async () => {
+  /* A resident base may be in active use, and a mixed-tier book can have BOTH
+     tiers live at once (a character pinned above its book's tier). The render
+     path already gets reconcileResidentQwenTiers at run start. */
+  const reconcile = vi.fn();
+  const freed = await evictIdleQwenBase({
+    modelKey: 'qwen3-tts-1.7b',
+    _reconcile: reconcile,
+    _activeBooks: () => ['book-1'],
+  });
+
+  expect(freed).toBe(false);
+  expect(reconcile).not.toHaveBeenCalled();
+});
+
+it('does nothing for a non-Qwen op', async () => {
+  const reconcile = vi.fn();
+  const freed = await evictIdleQwenBase({
+    modelKey: 'kokoro-v1',
+    _reconcile: reconcile,
+    _activeBooks: () => [],
+  });
+
+  expect(freed).toBe(false);
+  expect(reconcile).not.toHaveBeenCalled();
+});
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `npm run test:server -- server/src/gpu/evict-idle-tts.test.ts`
+Expected: FAIL — the module does not exist.
+
+- [ ] **Step 3: Implement the helper**
+
+Create `server/src/gpu/evict-idle-tts.ts`:
+
+```ts
+/* Second eviction lever for capacity admission (#1839). Admission already
+   evicts the analyzer Ollama once; this frees a resident Qwen BASE TIER the
+   current op does not need, so an interactive preview can make room for itself
+   instead of polling for ~60 s and failing while an idle base holds the VRAM.
+
+   Deliberately narrow:
+   - Qwen bases only. Coqui and Kokoro are button-driven — the user loaded them
+     on purpose and silently unloading them would be surprising.
+   - Only when NO render is in flight anywhere. A resident base during a render
+     may be in active use, and a mixed-tier book can have both tiers live at
+     once (a character pinned above its book's tier). This also makes the lever
+     inert during generation by construction, which is correct: the render path
+     already reconciles tiers at run start (ensure-sidecar-loaded.ts:182). */
+import { reconcileResidentQwenTiers } from '../tts/ensure-sidecar-loaded.js';
+import { activeGenerationBooks } from '../routes/generation.js';
+import { engineForModelKey, type TtsModelKey } from '../tts/model-keys.js';
+
+export interface EvictIdleQwenBaseOpts {
+  /** The model key the blocked op is asking for. Its tier is the one KEPT. */
+  modelKey?: TtsModelKey;
+  signal?: AbortSignal;
+  /** Injected for tests. */
+  _reconcile?: typeof reconcileResidentQwenTiers;
+  /** Injected for tests. */
+  _activeBooks?: typeof activeGenerationBooks;
+}
+
+/** Returns true when it actually asked the sidecar to unload something. */
+export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<boolean> {
+  const activeBooks = opts._activeBooks ?? activeGenerationBooks;
+  const reconcile = opts._reconcile ?? reconcileResidentQwenTiers;
+  const { modelKey } = opts;
+
+  if (!modelKey || engineForModelKey(modelKey) !== 'qwen') return false;
+  if (activeBooks().length > 0) return false;
+
+  const wants17 = modelKey === 'qwen3-tts-1.7b';
+  await reconcile({ keep06: !wants17, keep17: wants17 }, opts.signal);
+  return true;
+}
+```
+
+- [ ] **Step 4: Run to verify they pass**
+
+Run: `npm run test:server -- server/src/gpu/evict-idle-tts.test.ts`
+Expected: PASS.
+
+- [ ] **Step 5: Write the failing wiring test**
+
+Add to `server/src/gpu/capacity-retry.test.ts`, following its existing
+no-capacity harness (it already builds 503 `{noCapacity:true,neededMb,deviceKey}`
+responses — reuse that helper rather than writing a new one):
+
+```ts
+it('frees an idle TTS base before falling back to the poll', async () => {
+  const evictIdleTts = vi.fn().mockResolvedValue(true);
+  let calls = 0;
+  const doPost = vi.fn(async () => {
+    calls += 1;
+    return calls === 1 ? noCapacityResponse(4000, 'cuda:0') : new Response('ok', { status: 200 });
+  });
+
+  const res = await withCapacityRetry(doPost, {
+    engine: 'qwen',
+    evictIdleTts,
+    /* Analyzer lever off, so the TTS lever is the only thing that can rescue it. */
+    analyzerEvictWouldHelp: async () => false,
+    pollMs: 0,
+  });
+
+  expect(res.status).toBe(200);
+  expect(evictIdleTts).toHaveBeenCalledTimes(1);
+  expect(doPost).toHaveBeenCalledTimes(2); // refused, freed, retried OK
+});
+
+it('does not retry the TTS eviction more than once', async () => {
+  const evictIdleTts = vi.fn().mockResolvedValue(true);
+  const doPost = vi.fn(async () => noCapacityResponse(4000, 'cuda:0'));
+
+  await expect(
+    withCapacityRetry(doPost, {
+      engine: 'qwen',
+      evictIdleTts,
+      analyzerEvictWouldHelp: async () => false,
+      pollMs: 0,
+      maxAttempts: 3,
+    }),
+  ).rejects.toThrow(NoCapacityError);
+
+  expect(evictIdleTts).toHaveBeenCalledTimes(1);
+});
+```
+
+- [ ] **Step 6: Run to verify they fail**
+
+Run: `npm run test:server -- server/src/gpu/capacity-retry.test.ts`
+Expected: FAIL — `evictIdleTts` is not an option.
+
+- [ ] **Step 7: Wire the lever into the retry loop**
+
+In `server/src/gpu/capacity-retry.ts`, add to `CapacityRetryOpts`:
+
+```ts
+  /** Injected "free a resident TTS model this op doesn't need" action —
+      defaults to `evictIdleQwenBase` bound to this call's model key. Returns
+      true when it actually unloaded something. */
+  evictIdleTts?: () => Promise<boolean>;
+```
+
+Add `const evictIdleTts = opts.evictIdleTts ?? (async () => false);` beside the
+other defaults, a `let evictedTts = false;` beside `let evicted = false;`, and a
+second lever immediately after the analyzer block (`:116-120`), before the
+attempt cap:
+
+```ts
+      /* Second lever: free a resident Qwen base this op doesn't need. Guarded to
+         "no render in flight" inside evictIdleQwenBase, so it is inert during
+         generation by construction. At most once per call, like the analyzer. */
+      if (!evictedTts) {
+        evictedTts = true;
+        if (await evictIdleTts()) continue; // immediate retry after freeing VRAM
+      }
+```
+
+Then in `server/src/tts/sidecar.ts`, at the `withCapacityRetry` call site
+(`:297-320`), pass the bound lever:
+
+```ts
+      evictIdleTts: () => evictIdleQwenBase({ modelKey, signal }),
+```
+
+using the `modelKey` already in scope for that request. Import `evictIdleQwenBase`
+from `../gpu/evict-idle-tts.js`.
+
+- [ ] **Step 8: Run to verify they pass**
+
+Run: `npm run test:server -- server/src/gpu/capacity-retry.test.ts server/src/gpu/evict-idle-tts.test.ts server/src/tts/sidecar.test.ts`
+Expected: PASS.
+
+- [ ] **Step 9: Watch for an import cycle**
+
+`evict-idle-tts.ts` imports from `routes/generation.ts`, which is a heavy module.
+If `npm run test:server` surfaces a cycle or a partially-initialised namespace
+(the `importOriginal` flake documented in `model-keys.ts:1-13`), break it by
+having `sidecar.ts` inject `_activeBooks` at the call site instead of letting the
+helper import the route module directly. Do **not** ignore a cycle warning here.
+
+Run: `npm run test:server`
+Expected: PASS, no new flake.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add server/src/gpu/evict-idle-tts.ts server/src/gpu/evict-idle-tts.test.ts server/src/gpu/capacity-retry.ts server/src/gpu/capacity-retry.test.ts server/src/tts/sidecar.ts
+git commit -m "fix(server): free an idle Qwen base before refusing on capacity
+
+Admission evicted only the analyzer, so a 1.7B preview could fail after a ~60s
+poll while an unused 0.6B base held the VRAM. Guarded to no-render-in-flight, so
+it is inert on the generation hot path.
+
+Refs #1839"
+```
+
+---
+
+### Task 9: Name what's holding the VRAM, loudly
+
+Task 8 auto-frees what is safe to free (an idle Qwen base). It deliberately will
+**not** touch Coqui or Kokoro. Refusing to evict them *and* staying quiet about
+it is the worst combination — the user watches a preview fail with
+`NoCapacityError`'s current message, which says only "free VRAM or attach a
+second GPU" (`tts-errors.ts:20`) and never names the model to stop.
+
+So when capacity is genuinely exhausted, the error names the resident
+user-controlled models and says exactly what to do about each. The two are not
+the same action:
+
+- **Coqui XTTS** is button-driven (`ModelControlPill`) → "Stop it in the Models
+  panel."
+- **Kokoro** is the eagerly-resident fallback with **no Load/Stop pill**, gated by
+  the `tts.preload.kokoro` setting → "Turn off *Preload Kokoro* in settings."
+
+**Files:**
+- Modify: `server/src/tts/tts-errors.ts:14-26`
+- Create: `server/src/gpu/describe-vram-blockers.ts`
+- Modify: `server/src/gpu/capacity-retry.ts` (pass blockers into the throw)
+- Modify: `server/src/routes/voice-sample.ts` (surface it as a typed 503)
+- Test: `server/src/gpu/describe-vram-blockers.test.ts`, `server/src/tts/tts-errors.test.ts`, `server/src/routes/voice-sample.test.ts`
+
+**Interfaces:**
+- Consumes: sidecar health booleans (`coquiLoaded`, `kokoroLoaded`, `qwenLoaded`, `qwenBase17Loaded`) via the existing `probeSidecarHealth` result shape (`sidecar-health.ts:193-208`).
+- Produces:
+  - `describeVramBlockers(health): VramBlocker[]` where `VramBlocker = { model: string; remedy: string }`
+  - `NoCapacityError` gains `readonly blockers: VramBlocker[]` and folds them into its message.
+
+- [ ] **Step 1: Write the failing tests for the describer**
+
+Create `server/src/gpu/describe-vram-blockers.test.ts`:
+
+```ts
+it('names Coqui with the Models-panel remedy', () => {
+  const out = describeVramBlockers({ coquiLoaded: true });
+  expect(out).toEqual([
+    { model: 'Coqui XTTS', remedy: 'Stop it in the Models panel.' },
+  ]);
+});
+
+it('names Kokoro with the preload-setting remedy, not a Stop button', () => {
+  /* Kokoro has NO Load/Stop pill — it is the eagerly-resident fallback gated by
+     the tts.preload.kokoro setting, so "stop it" would be un-actionable. */
+  const out = describeVramBlockers({ kokoroLoaded: true });
+  expect(out).toEqual([
+    { model: 'Kokoro', remedy: 'Turn off "Preload Kokoro" in settings.' },
+  ]);
+});
+
+it('lists both when both are resident', () => {
+  expect(describeVramBlockers({ coquiLoaded: true, kokoroLoaded: true })).toHaveLength(2);
+});
+
+it('never names a Qwen base — admission frees those itself', () => {
+  /* Task 8's lever already handles an idle Qwen tier, so telling the user to go
+     do it by hand would be noise. */
+  expect(describeVramBlockers({ qwenLoaded: true, qwenBase17Loaded: true })).toEqual([]);
+});
+
+it('returns nothing when the sidecar reported nothing resident', () => {
+  expect(describeVramBlockers({})).toEqual([]);
+});
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `npm run test:server -- server/src/gpu/describe-vram-blockers.test.ts`
+Expected: FAIL — module missing.
+
+- [ ] **Step 3: Implement the describer**
+
+Create `server/src/gpu/describe-vram-blockers.ts`:
+
+```ts
+/* Turns "the GPU is full" into "THIS is what's holding it, and here is the
+   button that frees it" (#1839).
+
+   Only lists models the USER controls and that admission deliberately will not
+   auto-evict. A resident Qwen base is excluded on purpose: evict-idle-tts.ts
+   already frees an idle one, so naming it here would be noise on top of an
+   action already taken. The two remedies differ because the two models are
+   controlled differently — Coqui has a Load/Stop pill, Kokoro does not. */
+
+export interface VramBlocker {
+  /** Display name, as the user sees it in the UI. */
+  model: string;
+  /** Imperative sentence naming the control that frees it. */
+  remedy: string;
+}
+
+export interface VramBlockerHealth {
+  coquiLoaded?: boolean;
+  kokoroLoaded?: boolean;
+  qwenLoaded?: boolean;
+  qwenBase17Loaded?: boolean;
+}
+
+export function describeVramBlockers(health: VramBlockerHealth): VramBlocker[] {
+  const out: VramBlocker[] = [];
+  if (health.coquiLoaded) {
+    out.push({ model: 'Coqui XTTS', remedy: 'Stop it in the Models panel.' });
+  }
+  if (health.kokoroLoaded) {
+    out.push({ model: 'Kokoro', remedy: 'Turn off "Preload Kokoro" in settings.' });
+  }
+  return out;
+}
+```
+
+- [ ] **Step 4: Run to verify they pass**
+
+Run: `npm run test:server -- server/src/gpu/describe-vram-blockers.test.ts`
+Expected: PASS.
+
+- [ ] **Step 5: Write the failing error-message test**
+
+Add `server/src/tts/tts-errors.test.ts` (or extend it if present):
+
+```ts
+it('names the blocking models and their remedies in the message', () => {
+  const err = new NoCapacityError('qwen', 4100, 'cuda:0', [
+    { model: 'Coqui XTTS', remedy: 'Stop it in the Models panel.' },
+  ]);
+
+  expect(err.message).toContain('Coqui XTTS');
+  expect(err.message).toContain('Stop it in the Models panel.');
+  expect(err.blockers).toHaveLength(1);
+});
+
+it('falls back to the generic advice when nothing user-controlled is resident', () => {
+  const err = new NoCapacityError('qwen', 4100, 'cuda:0', []);
+  expect(err.message).toContain('free VRAM or attach a second GPU');
+  expect(err.blockers).toEqual([]);
+});
+```
+
+- [ ] **Step 6: Run to verify it fails**
+
+Run: `npm run test:server -- server/src/tts/tts-errors.test.ts`
+Expected: FAIL — the constructor takes three arguments.
+
+- [ ] **Step 7: Extend the error**
+
+In `server/src/tts/tts-errors.ts`, add an optional fourth parameter so every
+existing three-argument call site keeps compiling:
+
+```ts
+  readonly blockers: VramBlocker[];
+
+  constructor(engine: TtsEngine, neededMb: number, deviceKey: string, blockers: VramBlocker[] = []) {
+    /* Name what is actually holding the memory. The generic "free VRAM" line is
+       the fallback for when nothing user-controlled is resident — in that case
+       the GPU is genuinely busy and there is no button to press. */
+    const named = blockers.length
+      ? ` ${blockers.map((b) => `${b.model} is loaded — ${b.remedy}`).join(' ')}`
+      : ' — free VRAM or attach a second GPU.';
+    super(`Not enough GPU memory for ${engine} (${neededMb}MB).${named}`);
+    this.name = 'NoCapacityError';
+    this.engine = engine;
+    this.neededMb = neededMb;
+    this.deviceKey = deviceKey;
+    this.blockers = blockers;
+  }
+```
+
+Note the generic branch keeps the exact substring `free VRAM or attach a second
+GPU` so any existing assertion on it still matches — grep before changing:
+`grep -rn "attach a second GPU" server/src src`.
+
+- [ ] **Step 8: Populate blockers at the throw site**
+
+In `capacity-retry.ts`, add an injected `describeBlockers?: () => Promise<VramBlocker[]>`
+(defaulting to a probe of sidecar health through `describeVramBlockers`), and use
+it where `NoCapacityError` is constructed:
+
+```ts
+      if (attempt + 1 >= maxAttempts) {
+        throw new NoCapacityError(
+          opts.engine as TtsEngine,
+          noCap.neededMb,
+          noCap.deviceKey,
+          await describeBlockers(),
+        );
+      }
+```
+
+Inject rather than import the health route directly, for the same cycle reason
+flagged in Task 8 Step 9.
+
+- [ ] **Step 9: Surface it from the sample route**
+
+In `server/src/routes/voice-sample.ts`, catch `NoCapacityError` around the
+synthesis call and return a typed 503 the frontend can render, mirroring the
+`chapter_failed` remediation shape already used at `generation.ts:1029`:
+
+```ts
+    if (e instanceof NoCapacityError) {
+      return res.status(503).json({
+        code: 'no_capacity',
+        message: e.message,
+        blockers: e.blockers,
+      });
+    }
+```
+
+Add a route test asserting the 503 body carries `code: 'no_capacity'` and the
+blocker list.
+
+- [ ] **Step 10: Run the server suite**
+
+Run: `npm run test:server`
+Expected: PASS.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add server/src/gpu/describe-vram-blockers.ts server/src/gpu/describe-vram-blockers.test.ts server/src/tts/tts-errors.ts server/src/tts/tts-errors.test.ts server/src/gpu/capacity-retry.ts server/src/routes/voice-sample.ts server/src/routes/voice-sample.test.ts
+git commit -m "fix(server): name the models holding VRAM when capacity runs out
+
+NoCapacityError said only 'free VRAM' and never named what to stop. Coqui and
+Kokoro get different remedies because they are controlled differently.
+
+Refs #1839"
+```
+
+---
+
+### Task 10: Release notes
 
 **Files:**
 - Modify: `docs/release-notes-next.md`
@@ -1024,6 +1501,7 @@ Expected: an in-progress version section at the top. If the newest section is a 
 ```markdown
 - Voice previews now play in the engine you picked for that character, at the quality your book is set to render in — what you hear in the cast list is what you'll hear in the book, and the same voice sounds the same wherever you play it.
 - The higher-quality 1.7B voice model is now greyed out until you've actually downloaded it, instead of failing partway into a run.
+- Previewing a voice will now free up an idle voice model to make room for itself, rather than giving up when your graphics card looks full.
 ```
 
 - [ ] **Step 4: Commit**
@@ -1038,7 +1516,7 @@ Refs #1839"
 
 ---
 
-### Task 9: Verify and open the PR
+### Task 11: Verify and open the PR
 
 - [ ] **Step 1: Run the branch-scoped battery**
 
@@ -1087,15 +1565,18 @@ Run the `code-review` gate (no `--fix`) per CLAUDE.md's Before-shipping checklis
 | Qwen preview at the book's tier | 2, 3 |
 | One-cache-key constraint | 3 (Step 3 test + the two-argument rule in Global Constraints) |
 | Never gate the key on transient state | Global Constraints; no task introduces such a gate |
-| VRAM gate stays at admission | no code — the design is to *not* add a frontend gate |
+| VRAM gate stays at admission (no frontend gate) | no code by design; Task 8 strengthens admission itself |
 | One `TtsEngine` | 1 |
 | One mapper per side | 2 (frontend), 4 (server) |
 | "Sampled" scan + OpenAPI description | 5 |
 | Library-card preview tier (#1842) | 6 |
 | 1.7B tier picker weights gate (#1841) | 7 |
-| Release notes | 8 |
+| Admission frees an idle Qwen base | 8 |
+| Hard-warn naming the resident blockers | 9 |
+| Release notes | 10 |
 
-No gaps.
+No gaps. Note the spec's earlier "no-capacity UI copy is out of scope" line no
+longer holds — Task 9 brings it in scope, and the spec says so.
 
 **2. Placeholder scan**
 

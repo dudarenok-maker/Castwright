@@ -150,7 +150,7 @@ fragmenting the preview cache. The one case that loses preview fidelity is a
 character individually pinned above its book's tier — the same case that is
 worst on VRAM, so the trade is aligned rather than a compromise.
 
-### The VRAM gate stays at admission
+### The VRAM gate stays at admission — and admission learns to free an idle base
 
 A voice sample flows through the same sidecar synth path as a render —
 `voice-sample.ts:138 selectTtsProvider` → `SidecarTtsProvider.postWithCapacityRetry`
@@ -158,11 +158,68 @@ A voice sample flows through the same sidecar synth path as a render —
 sidecar's `admit()` is tier-aware (`main.py:2260`). The frontend has no VRAM
 reading and will not pre-guess one.
 
-Because the audition tier now tracks the session tier, a 1.7B preview only ever
-happens on a book already set to render at 1.7B — so the preview asks for a
-model that book needs anyway. That is what keeps admission's worst case
-(a ~60 s bounded poll, then `NoCapacityError`) off the common path, rather than
-any new frontend logic.
+Admission today **serialises** (a bounded ~60 s poll while other GPU work
+drains) and **evicts** — but only the analyzer Ollama, once, and only when
+`analyzerEvictWouldHelp` (`capacity-retry.ts:116-120`). It never frees a
+resident *TTS* model. That leaves a case where the right answer is obviously
+"make room", and the current answer is "refuse":
+
+> A book on 1.7B. The 0.6B base is resident from earlier work. The analyzer
+> isn't running, so the one eviction lever is a no-op. The preview polls for
+> ~60 s and fails — while a base it does not need sits idle holding the VRAM.
+
+`reconcileResidentQwenTiers` (`ensure-sidecar-loaded.ts:182`) already knows how
+to free exactly that, and already speaks `/unload {engine:'qwen', model:'1.7b'}`.
+It just only fires at generation start.
+
+**So admission gains a second eviction lever, symmetric with the analyzer one:**
+before giving up, free a resident Qwen base tier this request does not need, then
+retry. Fires at most once per call, after the analyzer lever and before the poll.
+
+Two constraints keep it safe:
+
+- **Only when no render is in flight anywhere** — `activeGenerationBooks()`
+  (`generation.ts:602`) must be empty. A resident base during a render may be in
+  active use, and a mixed-tier book can legitimately have both tiers live at
+  once (a character pinned above its book's tier renders at 1.7B while the
+  session sits at 0.6B). This guard also means the lever is **inert during
+  generation by construction** — which is correct, because the render path
+  already gets `reconcileResidentQwenTiers` at run start. No new behaviour is
+  introduced on the render hot path.
+- **Qwen bases only.** Coqui and Kokoro are user-controlled: unloading them
+  behind the user's back would be surprising. The scenario this addresses is two
+  Qwen tiers, which is what the reconcile pass already models.
+
+### If we won't evict it, we must say so — loudly
+
+Declining to auto-evict Coqui/Kokoro *and* staying quiet about it is the worst
+combination: the user watches a preview fail against a message that reads only
+"free VRAM or attach a second GPU" (`tts-errors.ts:20`), naming nothing.
+
+So when capacity is genuinely exhausted, `NoCapacityError` names the resident
+user-controlled models and gives the specific remedy for each. The two remedies
+differ, because the two models are controlled differently — and getting this
+wrong would send the user hunting for a button that does not exist:
+
+| Resident model | Control | Remedy |
+|---|---|---|
+| Coqui XTTS | button-driven `ModelControlPill` | "Stop it in the Models panel." |
+| Kokoro | **no Load/Stop pill** — eagerly resident, gated by `tts.preload.kokoro` | "Turn off *Preload Kokoro* in settings." |
+
+A resident Qwen base is deliberately **not** listed: the lever above already
+frees an idle one, so naming it would be noise on top of an action already
+taken. The generic "free VRAM or attach a second GPU" line survives as the
+fallback for when nothing user-controlled is resident — in that case the GPU is
+genuinely busy and there is no button to press.
+
+This supersedes the earlier "no-capacity UI copy is out of scope" note: the
+sample route surfaces the error as a typed `503 { code: 'no_capacity', message,
+blockers }`, mirroring the `remediation` shape `chapter_failed` already uses
+(`generation.ts:1029`).
+
+The net effect is that a preview which *can* be made to fit does fit — by
+freeing something genuinely idle — and `NoCapacityError` is reserved for the
+case where nothing can be freed and the GPU is genuinely busy.
 
 ### One source of truth per side
 
@@ -256,8 +313,6 @@ in the two places. After this they render at the same tier.
 
 ## Out of scope
 
-- **The no-capacity UI copy.** Whether the frontend surfaces a sample request's
-  error body is unverified; this spec only commits to not masking it.
 - **Auditions already on disk at the old tier.** They stay valid and playable; no
   migration, no purge.
 - **Wave 2 (#1813)** — the resolver pre-pass progress signal, on its own branch.
