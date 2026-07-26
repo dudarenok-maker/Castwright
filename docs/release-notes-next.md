@@ -248,7 +248,7 @@ history at cut time.
     `transformers` 5.x and `huggingface_hub` 1.x are both frozen by `qwen-tts==0.1.1`'s exact
     `transformers==4.57.3` pin (#1228).
 
-- **Dependabot sweep: 9 alerts cleared, 1 dismissed as unreachable, 3 recorded as upstream-blocked** (#1858).
+- **Dependabot sweep: 9 alerts cleared, 1 dismissed as unreachable, 3 recorded as upstream-blocked** (#1863).
   Nine bumps, all of which npm resolves within existing ranges except where noted:
   - Frontend (dev-only, build tooling): `postcss` 8.5.15 → 8.5.23 (GHSA-r28c-9q8g-f849, source-map path
     traversal), `js-yaml` 4.2.0 → 4.3.0 (GHSA-52cp-r559-cp3m, quadratic merge-key chains),
