@@ -11,6 +11,10 @@ describe('planOrtSwap', () => {
   it('nvidia → swap: uninstall BOTH (bare names) then force-reinstall onnxruntime-gpu, version-constrained', () => {
     const plan = planOrtSwap('nvidia', 'win32');
     expect(plan.action).toBe('swap');
+    // The CLI's success message interpolates this rather than hardcoding a
+    // package name (#1844 — it used to hardcode 'onnxruntime-directml' even
+    // though nvidia is the only profile that reaches this code path).
+    expect(plan.ortPackage).toBe('onnxruntime-gpu');
     // Uninstall plain onnxruntime AND any cached onnxruntime-gpu so the shared
     // namespace is cleared, then --force-reinstall lays it fresh (a plain install
     // is a no-op when onnxruntime-gpu is cached at a skewed version → broken import).

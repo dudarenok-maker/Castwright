@@ -65,8 +65,10 @@ function constrainForInstall(ortPackage) {
  * onnxruntime-gpu; a future DirectML re-enable → onnxruntime-directml) is a swap;
  * a recipe that already wants plain `onnxruntime` (cpu/amd/apple) is a no-op. Pure
  * — no I/O. `steps` are pip sub-command arg arrays, run in order with the venv
- * python.
- * @returns {{action:'skip', reason:string} | {action:'swap', steps:string[][]}}
+ * python. `ortPackage` on the swap variant lets the CLI report which package it
+ * actually put in place without re-deriving it (#1844) — a second source of
+ * truth there is exactly how the CLI drifted into naming the wrong package.
+ * @returns {{action:'skip', reason:string} | {action:'swap', steps:string[][], ortPackage:string}}
  */
 export function planOrtSwap(profile, platform) {
   const { ortPackage } = installRecipe(profile, platform);
@@ -75,6 +77,7 @@ export function planOrtSwap(profile, platform) {
   }
   return {
     action: 'swap',
+    ortPackage,
     steps: [
       // Uninstall BOTH the plain `onnxruntime` the overlay landed AND any cached
       // `ortPackage` first, so the shared `onnxruntime/` namespace directory is
@@ -113,6 +116,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       process.exit(code);
     }
   }
-  process.stdout.write('[install-ort] onnxruntime-directml in place.\n');
+  process.stdout.write(`[install-ort] ${plan.ortPackage} in place.\n`);
   process.exit(0);
 }
