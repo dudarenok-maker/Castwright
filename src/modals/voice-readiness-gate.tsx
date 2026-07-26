@@ -21,7 +21,7 @@ import {
   selectFallbackEngineName,
   voiceReadinessGateMessage,
 } from '../store/voice-readiness-selectors';
-import { sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
+import { modelKeyForEngineChoice } from '../lib/tts-models';
 import type { UndesignedCharacterRow } from '../store/voice-readiness-selectors';
 
 /* Stable fallback so the closed-gate case (the common one — this modal is a
@@ -71,7 +71,7 @@ export function VoiceReadinessGateModal() {
         castDesignActions.designAllRequested({
           bookId,
           characterIds: undesigned.map((c) => c.id),
-          modelKey: sampleModelKeyForEngine('qwen', ttsModelKey),
+          modelKey: modelKeyForEngineChoice('qwen', ttsModelKey),
           scope: 'bases',
           variantTasks: [],
         }),

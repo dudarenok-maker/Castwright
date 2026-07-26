@@ -17,10 +17,12 @@
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
+import { evictIdleQwenBase } from '../gpu/evict-idle-tts.js';
 import { NoCapacityError } from './tts-errors.js';
 import { encodePcmToAudio } from './mp3.js';
 import {
   buildSampleText,
+  djb2,
   voiceSampleAudioDir,
   voiceSampleFileName,
   voiceSampleFilePath,
@@ -79,6 +81,15 @@ export interface PostDesignAndCacheParams {
   modelKey: TtsModelKey;
   /** The audition line — also the cache-key text. */
   calibrationText: string;
+  /** Finding 1 (#1842 review) — the SAME extra hash input the voice-library
+      `/:voiceUuid/sample` route folds in (`voice-library.ts`'s `contentToken =
+      djb2(entry.persona).toString(36)`). Omitted by the character-scoped
+      design route (qwen-voice.ts), which pairs with a play route that never
+      passes one either — passing it here only for the library's
+      runVoiceDesign() caller keeps that pairing intact while giving the
+      library design ↔ play pairing a REAL shared filename instead of two
+      that silently diverge. */
+  contentToken?: string;
   /** Resolved sidecar base URL (for error messages). */
   sidecarUrl: string;
   /** External cancel — aborts the in-flight sidecar call (e.g. a bulk job). */
@@ -106,6 +117,7 @@ export async function postDesignAndCacheAudition(
     sidecarUrl,
     signal,
     logContext,
+    contentToken,
   } = params;
 
   const controller = new AbortController();
@@ -148,14 +160,25 @@ export async function postDesignAndCacheAudition(
             headers: { 'Content-Type': 'application/json' },
             body: fetchBody,
           }),
-        { engine: 'qwen', signal: controller.signal },
+        {
+          engine: 'qwen',
+          signal: controller.signal,
+          /* Same eviction lever the /synthesize path gets (tts/sidecar.ts) —
+             free an idle Qwen base this design doesn't need instead of polling
+             for ~60s and failing while it holds the VRAM (#1839 finding 4). */
+          evictIdleTts: () => evictIdleQwenBase({ modelKey, signal: controller.signal }),
+        },
       );
     } catch (e) {
       if (e instanceof NoCapacityError) {
-        throw new SidecarDesignError(
-          'GPU has no capacity for voice design right now — free VRAM and retry.',
-          503,
-        );
+        /* Carry the error's own message through — it names the blocking
+           model + remedy (e.g. "Coqui XTTS is loaded — Use its Stop button,
+           at the top of the window.") when describeVramBlockers can
+           identify one, rather than the
+           generic fallback that used to replace it unconditionally
+           (#1839 finding 4). Still surfaced as a SidecarDesignError, the
+           type this route's caller expects. */
+        throw new SidecarDesignError(e.message, 503);
       }
       const err = e as { name?: string; message?: string };
       if (err.name === 'AbortError') {
@@ -201,12 +224,15 @@ export async function postDesignAndCacheAudition(
     }
     const sampleRate = Number(upstream.headers.get('X-Sample-Rate') ?? '24000') || 24000;
     const pcm = Buffer.from(await upstream.arrayBuffer());
-    const fileName = voiceSampleFileName({
-      cacheScope,
-      modelKey,
-      text: calibrationText,
-      voiceName: outVoiceId,
-    });
+    const fileName = voiceSampleFileName(
+      {
+        cacheScope,
+        modelKey,
+        text: calibrationText,
+        voiceName: outVoiceId,
+      },
+      contentToken,
+    );
     const filePath = voiceSampleFilePath(fileName);
     const url = voiceSamplePublicUrl(fileName);
     try {
@@ -240,6 +266,12 @@ export interface RunVoiceDesignOpts {
   languageCode?: string;
   /** Stage under `<storageKey>-preview` (A/B compare) instead of in place. */
   preview?: boolean;
+  /** #1842 — the Qwen tier to design at. Shares cache scope `storageKey` with
+      the voice-library `/sample` (play) route, so the two MUST agree on a
+      tier for the same voice or the card's play button silently re-synthesises
+      at a different tier than the one it was designed at. Defaults to the
+      0.6B base, matching the play route's own omitted-modelKey default. */
+  modelKey?: TtsModelKey;
 }
 
 /* The scope-agnostic entry point the voice-library routes call. Designs a Qwen
@@ -261,6 +293,15 @@ export async function runVoiceDesign(
   });
   const language = sidecarLanguageName(opts.languageCode ?? 'en');
   const sidecarUrl = getResolvedSidecarUrl();
+  /* Finding 1 (#1842 review) — derive the SAME contentToken the play route
+     computes from the persisted entry's persona (voice-library.ts:
+     `contentToken = entry.persona ? djb2(entry.persona).toString(36) :
+     undefined`). For a LIVE (non-preview) design, opts.persona is the exact
+     string the /design route then persists as entry.persona, so the two
+     sides derive an identical token from an identical source — by
+     construction, not coincidence. Harmless for a preview design too (its
+     previewUrl is played directly, never looked up by filename). */
+  const contentToken = opts.persona ? djb2(opts.persona).toString(36) : undefined;
 
   const { url } = await postDesignAndCacheAudition({
     target: `${sidecarUrl}/qwen/design-voice`,
@@ -278,10 +319,11 @@ export async function runVoiceDesign(
        single `purgeVoiceSamples(storageKey)` clears both live + preview
        auditions on promote/delete. */
     cacheScope: opts.storageKey,
-    modelKey: 'qwen3-tts-0.6b',
+    modelKey: opts.modelKey ?? 'qwen3-tts-0.6b',
     calibrationText,
     sidecarUrl,
     logContext: `library storageKey=${opts.storageKey}${opts.preview ? ' (preview)' : ''}`,
+    contentToken,
   });
 
   return { storageKey: opts.storageKey, previewUrl: url };

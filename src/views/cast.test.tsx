@@ -404,15 +404,15 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
     expect(playSampleWithAutoLoad).not.toHaveBeenCalled();
   });
 
-  it('keeps the project model key + injects no qwen override for a non-Qwen row', async () => {
+  it('resolves a non-Qwen row to its own engine key and injects no qwen override', async () => {
     vi.mocked(playSampleWithAutoLoad).mockClear();
-    const { store } = renderChars([marrow]);
+    renderChars([marrow]);
     const row = rowFor('Mr. Marrow');
     const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
     fireEvent.click(swatch);
     await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
     const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
-    expect(args.modelKey).toBe(store.getState().ui.ttsModelKey);
+    expect(args.modelKey).toBe('kokoro-v1');
     expect(args.voice.overrideTtsVoices?.qwen).toBeUndefined();
   });
 
@@ -1931,6 +1931,79 @@ describe('CastView — Design full cast button', () => {
     expect(a?.payload.scope).toBe('variants');
     expect(a?.payload.characterIds).toEqual([]);
     expect(a?.payload.variantTasks).toEqual([{ characterId: 'with-base', emotions: ['angry'] }]);
+  });
+});
+
+describe('CastView — audition/design modelKey uniformity (#1839)', () => {
+  /* voice-sample-cache.ts:1-9 — the sample player and the Qwen design route
+     cache under the SAME deterministic filename: designing produces exactly
+     the file "Play 12s" later reads. One synthesis, not two. If these two
+     expressions ever diverge, design writes <scope>-A.mp3 and Play looks for
+     <scope>-B.mp3: a silent second synthesis, and the row's "is this playing"
+     prefix check stops matching. */
+  it('resolves the same modelKey for a row sample and for bulk design, so both hit one cache file', async () => {
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    const designedRow: Character = {
+      ...marrow,
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-marrow' } },
+    };
+    const needsVoiceRow: Character = {
+      id: 'wren-needs-voice',
+      name: 'Wren',
+      role: 'Hero',
+      color: 'mentor',
+      lines: 1,
+      scenes: 1,
+      attributes: [],
+      ttsEngine: 'qwen',
+      overrideTtsVoices: undefined,
+    };
+    const actions: Array<{ type: string; payload?: unknown }> = [];
+    const recorder = () => (next: (a: unknown) => unknown) => (action: unknown) => {
+      actions.push(action as { type: string; payload?: unknown });
+      return next(action);
+    };
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
+      middleware: (g) => g().concat(recorder),
+    });
+    store.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-1.7b'));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'complete' }));
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[designedRow, needsVoiceRow]}
+          setCharacters={() => {}}
+          library={library}
+          title="X"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
+        />
+      </Provider>,
+    );
+
+    const row = rowFor('Mr. Marrow');
+    const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
+    fireEvent.click(swatch);
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalled());
+    const playKey = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.modelKey;
+
+    fireEvent.click(screen.getByRole('button', { name: /Design full cast/i }));
+    fireEvent.click(screen.getByTestId('scope-bases'));
+    const designAction = actions.find((a) => a?.type === castDesignActions.designAllRequested.type) as
+      | { payload: { modelKey: string } }
+      | undefined;
+
+    expect(designAction?.payload.modelKey).toBe(playKey);
+    expect(playKey).toBe('qwen3-tts-1.7b');
   });
 });
 

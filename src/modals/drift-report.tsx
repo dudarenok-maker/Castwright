@@ -7,6 +7,7 @@ import { api } from '../lib/api';
 import { useAppSelector } from '../store';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { useAbAudition, type AbSide, type AbSideKey } from '../lib/use-ab-audition';
+import { engineForModelKey, modelKeyForEngineChoice } from '../lib/tts-models';
 import {
   distinctDriftChapterCount,
   type DriftGroup,
@@ -1002,10 +1003,15 @@ function DriftListenWidget({
       play: async () => {
         let url = voiceSampleUrl;
         if (!url) {
+          /* Audition in THIS character's own effective engine, not the
+             book's default (#1839) — mirrors cast.tsx's effectiveEngineFor /
+             profile-drawer.tsx's currentEngine: the character's own ttsEngine
+             override wins, else the session default. */
+          const effectiveEngine = character?.ttsEngine ?? engineForModelKey(ttsModelKey);
           const sample = await api.getVoiceSample({
             voiceId: voice.id,
             voice,
-            modelKey: ttsModelKey,
+            modelKey: modelKeyForEngineChoice(effectiveEngine, ttsModelKey),
             characterHint: character
               ? {
                   description: character.description,

@@ -140,10 +140,28 @@ async function withSingleFlight<T>(key: string, fn: () => Promise<T>): Promise<T
   }
 }
 
+/* Finding 3 (#1842 review) — /design, /:voiceUuid/redesign, and
+   /:voiceUuid/sample each validated an incoming `modelKey` with a
+   character-identical block. Collapsed to one helper: `null` means "reject
+   with the 400 below", any other return is the resolved, valid modelKey
+   (the 0.6B base when the caller omitted the field). Callers still own the
+   400 response status/body — this only decides validity. */
+function resolveQwenModelKey(raw: unknown): TtsModelKey | null {
+  if (raw === undefined) return 'qwen3-tts-0.6b';
+  if (!isTtsModelKey(raw) || engineForModelKey(raw) !== 'qwen') return null;
+  return raw;
+}
+
 interface DesignBody {
   name?: unknown;
   persona?: unknown;
   languageCode?: unknown;
+  /** #1842 — the tier the modal's own previewUrl auditions. Must land on the
+      SAME modelKey the /sample route above resolves, since design and play
+      share the `qwen-<uuid>` cache scope — otherwise the design-time
+      audition and the card's first Play would disagree on tier and land on
+      two different cached filenames, costing a silent extra synthesis. */
+  modelKey?: unknown;
 }
 
 /* POST /api/voice-library/design
@@ -162,6 +180,13 @@ voiceLibraryRouter.post('/design', async (req: Request, res: Response) => {
     const languageCode = typeof body.languageCode === 'string' ? body.languageCode : undefined;
     if (!name) return res.status(400).json({ error: '`name` is required.' });
     if (!persona) return res.status(400).json({ error: '`persona` is required.' });
+    /* #1842 — this route only ever designs onto a `qwen-<uuid>` storageKey, so
+       a non-Qwen modelKey can never be honoured. Omitted → the 0.6B base,
+       matching the play route's default (resolveQwenModelKey — Finding 3). */
+    const modelKey = resolveQwenModelKey(body.modelKey);
+    if (!modelKey) {
+      return res.status(400).json({ code: 'invalid_model', message: 'modelKey must be a Qwen model key.' });
+    }
 
     const result = await withSingleFlight('library:new', async () => {
       const voiceUuid = nanoid();
@@ -170,6 +195,7 @@ voiceLibraryRouter.post('/design', async (req: Request, res: Response) => {
         displayName: name,
         persona,
         languageCode,
+        modelKey,
       });
       const now = new Date().toISOString();
       const entry: VoiceLibraryEntry = {
@@ -210,9 +236,16 @@ voiceLibraryRouter.post('/:voiceUuid/redesign', async (req: Request, res: Respon
     const entry = await readEntry(voiceUuid);
     if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
 
-    const body = (req.body ?? {}) as { persona?: unknown };
+    const body = (req.body ?? {}) as { persona?: unknown; modelKey?: unknown };
     const persona = typeof body.persona === 'string' ? body.persona.trim() : '';
     if (!persona) return res.status(400).json({ error: '`persona` is required.' });
+    /* #1842 — the A/B modal's previewUrl must match the tier the live voice
+       will later Play at, and both share the `qwen-<uuid>` cache scope.
+       Omitted → 0.6B (resolveQwenModelKey — Finding 3). */
+    const modelKey = resolveQwenModelKey(body.modelKey);
+    if (!modelKey) {
+      return res.status(400).json({ code: 'invalid_model', message: 'modelKey must be a Qwen model key.' });
+    }
 
     const result = await withSingleFlight(voiceUuid, async () => {
       const { previewUrl } = await runVoiceDesign({
@@ -221,6 +254,7 @@ voiceLibraryRouter.post('/:voiceUuid/redesign', async (req: Request, res: Respon
         persona,
         languageCode: entry.languageCode,
         preview: true,
+        modelKey,
       });
       return { previewUrl };
     });
@@ -452,14 +486,27 @@ voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response
       return res.status(403).json({ error: 'This cloned voice has no valid consent and cannot be played.' });
     }
 
-    const body = (req.body ?? {}) as { text?: unknown };
+    const body = (req.body ?? {}) as { text?: unknown; modelKey?: unknown };
     const voiceName = `qwen-${voiceUuid}`;
-    const modelKey: TtsModelKey = 'qwen3-tts-0.6b';
+    /* #1842 — the card previews at the tier the caller's session will render at,
+       so the same voice doesn't sound different on the card and on the cast row.
+       Qwen-only: this endpoint synthesises `qwen-<uuid>`, which no other engine
+       can voice. Omitted → the 0.6B base (resolveQwenModelKey — Finding 3),
+       keeping older callers working. */
+    const modelKey = resolveQwenModelKey(body.modelKey);
+    if (!modelKey) {
+      return res.status(400).json({ code: 'invalid_model', message: 'modelKey must be a Qwen model key.' });
+    }
     const text =
       typeof body.text === 'string' && body.text.trim().length > 0
         ? body.text.trim()
         : buildSampleText({ id: voiceUuid, character: entry.name, overrideTtsVoices: {} });
     const cacheScope = `qwen-${voiceUuid}`;
+    /* Finding 1 (#1842 review) — runVoiceDesign (design-voice-core.ts) derives
+       this SAME token from opts.persona for a live design, so a /design
+       (or /redesign's promoted) audition and this route's first Play land on
+       the identical filename instead of silently missing cache. Keep the two
+       derivations byte-identical if either ever changes. */
     const contentToken = entry.persona ? djb2(entry.persona).toString(36) : undefined;
 
     const fileName = voiceSampleFileName({ cacheScope, modelKey, text, voiceName }, contentToken);

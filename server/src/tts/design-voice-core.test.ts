@@ -15,6 +15,8 @@ import { mkdtempSync, rmSync, readdirSync, readFileSync, existsSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
+import { evictIdleQwenBase } from '../gpu/evict-idle-tts.js';
+import { NoCapacityError } from './tts-errors.js';
 
 let workspaceRoot: string;
 let audioDir: string;
@@ -22,8 +24,15 @@ let runVoiceDesign: typeof import('./design-voice-core.js').runVoiceDesign;
 
 const fetchMock = vi.fn();
 const mockWithCapacityRetry = vi.mocked(withCapacityRetry);
+const mockEvictIdleQwenBase = vi.mocked(evictIdleQwenBase);
 
 vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
+/* #1839 finding 4 — design used to call withCapacityRetry with no
+   `evictIdleTts` lever at all, so an idle base held VRAM through the whole
+   ~60s poll-then-fail. Mock the lever so a test can assert the route now
+   passes one, and that it delegates to the same evictIdleQwenBase the
+   /synthesize path uses (tts/sidecar.ts). */
+vi.mock('../gpu/evict-idle-tts.js', () => ({ evictIdleQwenBase: vi.fn(async () => false) }));
 
 const { maybeSampleSidecarEngineMock } = vi.hoisted(() => ({
   maybeSampleSidecarEngineMock: vi.fn(async (_key: string) => {}),
@@ -76,6 +85,8 @@ beforeEach(() => {
   maybeSampleSidecarEngineMock.mockClear();
   mockWithCapacityRetry.mockReset();
   mockWithCapacityRetry.mockImplementation((doPost, opts) => doPost(opts.signal));
+  mockEvictIdleQwenBase.mockReset();
+  mockEvictIdleQwenBase.mockResolvedValue(false);
   for (const f of readdirSync(audioDir)) rmSync(join(audioDir, f), { force: true });
 });
 
@@ -144,5 +155,45 @@ describe('runVoiceDesign', () => {
     await expect(
       runVoiceDesign({ storageKey: 'qwen-boom', displayName: 'X', persona: 'p' }),
     ).rejects.toMatchObject({ name: 'SidecarDesignError', status: 500 });
+  });
+
+  it('#1839 finding 4 — passes withCapacityRetry an evictIdleTts lever that frees an idle Qwen base for THIS design\'s own tier', async () => {
+    let capturedOpts: { evictIdleTts?: () => Promise<boolean> } | undefined;
+    mockWithCapacityRetry.mockImplementation((doPost, opts) => {
+      capturedOpts = opts;
+      return doPost(opts.signal);
+    });
+
+    await runVoiceDesign({
+      storageKey: 'qwen-lever',
+      displayName: 'Nova',
+      persona: 'a calm voice',
+      modelKey: 'qwen3-tts-1.7b',
+    });
+
+    // The old bug: no evictIdleTts at all, so withCapacityRetry's internal
+    // default (`async () => false`) ran instead — an idle base never got a
+    // chance to free VRAM before the ~60s poll-then-fail.
+    expect(capturedOpts?.evictIdleTts).toBeTypeOf('function');
+    mockEvictIdleQwenBase.mockClear();
+    await capturedOpts!.evictIdleTts!();
+    expect(mockEvictIdleQwenBase).toHaveBeenCalledWith(
+      expect.objectContaining({ modelKey: 'qwen3-tts-1.7b' }),
+    );
+  });
+
+  it("#1839 finding 4 — a capacity failure's own message (naming the blocking model) reaches the caller, not a generic fallback", async () => {
+    const blockers = [{ model: 'Coqui XTTS', remedy: 'Use its Stop button, at the top of the window.' }];
+    mockWithCapacityRetry.mockRejectedValue(
+      new NoCapacityError('qwen', 4096, 'cuda:0', blockers),
+    );
+
+    await expect(
+      runVoiceDesign({ storageKey: 'qwen-blocked', displayName: 'X', persona: 'p' }),
+    ).rejects.toMatchObject({
+      name: 'SidecarDesignError',
+      status: 503,
+      message: expect.stringContaining('Coqui XTTS is loaded'),
+    });
   });
 });

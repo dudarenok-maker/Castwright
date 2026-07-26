@@ -28,7 +28,7 @@ import { sampleScopeFor } from '../lib/sample-scope';
 import type { Character, Voice, CharColor } from '../lib/types';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad, type SampleStatus } from '../lib/play-sample-with-auto-load';
-import { resolveTtsVoiceForCharacter, sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
+import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
 import { gradientForTtsVoice } from '../lib/voice-palette';
 import { useAppDispatch, useAppSelector } from '../store';
 import { voicesActions } from '../store/voices-slice';
@@ -652,7 +652,7 @@ export function ProfileDrawer({
      pickVoiceForEngine returns '' and the sidecar 400s, so we gate the
      Play button instead of firing a request we know will fail. */
   const effectiveEngine: TtsEngine = engineChoice === 'default' ? ttsEngine : engineChoice;
-  const effectiveSampleModelKey = sampleModelKeyForEngine(effectiveEngine, ttsModelKey);
+  const effectiveSampleModelKey = modelKeyForEngineChoice(effectiveEngine, ttsModelKey);
   const qwenSampleBlocked = effectiveEngine === 'qwen' && !designedVoiceId;
   const samplePrefix = sampleUrlPrefixFor(sampleVoiceId, effectiveSampleModelKey);
   const isPlayingThis = playback.isPlaying && !!playback.currentUrl?.startsWith(samplePrefix);
@@ -662,7 +662,7 @@ export function ProfileDrawer({
      selection), so Side A is the genuine pre-design voice in both the
      first-design (Kokoro/default) and re-design (existing Qwen) cases. */
   const currentEngine: TtsEngine = character.ttsEngine ?? ttsEngine;
-  const currentModelKey = sampleModelKeyForEngine(currentEngine, ttsModelKey);
+  const currentModelKey = modelKeyForEngineChoice(currentEngine, ttsModelKey);
   const currentTtsVoice = resolveTtsVoiceForCharacter(character, currentEngine);
   const currentSubject: Voice = voice ?? {
     id: sampleVoiceId,

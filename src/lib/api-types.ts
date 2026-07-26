@@ -3730,7 +3730,7 @@ export interface components {
             pinned?: boolean;
             /** @description True when this voiceId has rendered chapter audio at least once. Populated only for bespoke Qwen voices (the server scans rendered segments for the resolved voiceId when the engine query is 'qwen'); preset voices omit it. Drives the Voices view's "Designed" vs "Generated" split and the cast Status column. Cross-book: true if rendered in any book carrying this voiceId. Absent ⇒ not generated / not applicable. */
             generated?: boolean;
-            /** @description True when a 12s audition has been synthesised for this voiceId — the lifecycle tier between "Designed" and "Generated". Populated only for bespoke Qwen voices (the server checks the voice-sample cache for a `<scope>-qwen3-tts-0.6b-*.mp3` file when the engine query is 'qwen'); preset voices omit it. Drives the new "Sampled" cast Status pill / Voices badge. Cross-book like `generated`; a `generated` voice outranks it. Absent ⇒ not sampled / not applicable. */
+            /** @description True when a 12s audition has been synthesised for this voiceId — the lifecycle tier between "Designed" and "Generated". Populated only for bespoke Qwen voices (the server checks the voice-sample cache for a `<scope>-qwen3-tts-{0.6b,1.7b}-*.mp3` file when the engine query is 'qwen'); preset voices omit it. Drives the new "Sampled" cast Status pill / Voices badge. Cross-book like `generated`; a `generated` voice outranks it. Absent ⇒ not sampled / not applicable. */
             sampled?: boolean;
             /** @description BCP-47 code of a designed Qwen voice's baked manifest language (e.g. 'ru' for Russian). Derived from the sidecar manifest `{ language }` word via the registry reverse-lookup. Absent for preset/catalog voices and voices whose manifest is missing or has no language field. */
             languageCode?: string;
@@ -7352,6 +7352,11 @@ export interface operations {
                     name: string;
                     persona: string;
                     languageCode?: string;
+                    /**
+                     * @description The Qwen tier to design at (#1842). Must route to the qwen engine or the request 400s. Omitted defaults to qwen3-tts-0.6b.
+                     * @enum {string}
+                     */
+                    modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
                 };
             };
         };
@@ -7365,6 +7370,18 @@ export interface operations {
                     "application/json": {
                         entry: components["schemas"]["VoiceLibraryEntry"];
                         previewUrl: string;
+                    };
+                };
+            };
+            /** @description modelKey is present but does not route to the qwen engine */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        code?: string;
+                        message?: string;
                     };
                 };
             };
@@ -7383,6 +7400,11 @@ export interface operations {
             content: {
                 "application/json": {
                     persona: string;
+                    /**
+                     * @description The Qwen tier to redesign at (#1842). Must route to the qwen engine or the request 400s. Omitted defaults to qwen3-tts-0.6b.
+                     * @enum {string}
+                     */
+                    modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
                 };
             };
         };
@@ -7395,6 +7417,18 @@ export interface operations {
                 content: {
                     "application/json": {
                         previewUrl: string;
+                    };
+                };
+            };
+            /** @description modelKey is present but does not route to the qwen engine */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        code?: string;
+                        message?: string;
                     };
                 };
             };
@@ -7580,7 +7614,15 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    /** @description Optional preview text. Omitted defaults to a built-in sample line for the entry's persona/name. */
+                    text?: string;
+                    /**
+                     * @description The Qwen tier to preview at (#1842). Must route to the qwen engine or the request 400s. Omitted defaults to qwen3-tts-0.6b.
+                     * @enum {string}
+                     */
+                    modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+                };
             };
         };
         responses: {
@@ -7592,6 +7634,18 @@ export interface operations {
                 content: {
                     "application/json": {
                         url: string;
+                    };
+                };
+            };
+            /** @description modelKey is present but does not route to the qwen engine */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        code?: string;
+                        message?: string;
                     };
                 };
             };

@@ -11,12 +11,13 @@
    `RedesignLibraryVoiceModal`. */
 
 import { useState } from 'react';
-import { useAppDispatch } from '../../store';
+import { useAppDispatch, useAppSelector } from '../../store';
 import { patchEntry, revokeVoice, type VoiceLibraryEntry } from '../../store/voice-library-slice';
 import { Pill } from '../primitives';
 import { IconStar, IconPlay, IconPause, IconSpinner, IconClose, IconWarning } from '../../lib/icons';
 import { useSamplePlayback } from '../../lib/use-sample-playback';
 import { api } from '../../lib/api';
+import { modelKeyForEngineChoice } from '../../lib/tts-models';
 import { VoiceProvenanceBadge } from './voice-provenance-badge';
 import { ConfirmDialog } from '../../modals/confirm-dialog';
 
@@ -61,6 +62,7 @@ export function deriveClonedVoiceState(entry: VoiceLibraryEntry): ClonedVoiceSta
 
 export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
   const dispatch = useAppDispatch();
+  const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const playback = useSamplePlayback();
   const [tagDraft, setTagDraft] = useState('');
   const [sampleLoading, setSampleLoading] = useState(false);
@@ -109,7 +111,9 @@ export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
     setSampleError(null);
     setSampleLoading(true);
     try {
-      const { url } = await api.sampleLibraryVoice(entry.voiceUuid);
+      const { url } = await api.sampleLibraryVoice(entry.voiceUuid, {
+        modelKey: modelKeyForEngineChoice('qwen', ttsModelKey),
+      });
       setSampleUrl(url);
       await playback.play(url);
     } catch (e) {

@@ -213,6 +213,55 @@ describe('ModelControlPill — suppressUnreachableAction prop', () => {
   });
 });
 
+describe('ModelControlPill — leadWithAction prop (Task 10 / #1839)', () => {
+  /* The loaded-models banner (tts-notice-banner.tsx) wants the action, not
+     the status readout, to be the prominent element — this prop is how it
+     opts in without touching any other call site (every other call site
+     omits it and keeps today's byte-identical rendering). */
+
+  it('names the engine on the VISIBLE button text instead of a bare "Stop"', () => {
+    const { onLoad, onStop } = makeHandlers();
+    render(
+      <ModelControlPill
+        kind="tts"
+        state="ready"
+        engineLabel="Kokoro"
+        leadWithAction
+        onLoad={onLoad}
+        onStop={onStop}
+      />,
+    );
+    const button = screen.getByRole('button', { name: 'Stop Kokoro' });
+    expect(button).toHaveTextContent('Stop Kokoro');
+  });
+
+  it('omits a separate aria-label so the visible text is the only source of the accessible name', () => {
+    const { onLoad, onStop } = makeHandlers();
+    render(
+      <ModelControlPill
+        kind="tts"
+        state="ready"
+        engineLabel="Kokoro"
+        leadWithAction
+        onLoad={onLoad}
+        onStop={onStop}
+      />,
+    );
+    const button = screen.getByRole('button', { name: 'Stop Kokoro' });
+    expect(button).not.toHaveAttribute('aria-label');
+  });
+
+  it('leaves the default (leadWithAction omitted) rendering untouched — bare "Stop" text', () => {
+    const { onLoad, onStop } = makeHandlers();
+    render(
+      <ModelControlPill kind="tts" state="ready" engineLabel="Kokoro" onLoad={onLoad} onStop={onStop} />,
+    );
+    const button = screen.getByRole('button', { name: /^stop \(voice engine\)$/i });
+    expect(button).toHaveTextContent('Stop');
+    expect(button).not.toHaveTextContent('Stop Kokoro');
+  });
+});
+
 describe('ModelControlPill — Qwen 1.7B-Base pill (fs-55)', () => {
   /* Pin that the Qwen 1.7B-Base pill renders the correct label in each state.
      The pill is a plain ModelControlPill with engineLabel="Qwen 1.7B"; these

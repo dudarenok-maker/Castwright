@@ -7,6 +7,7 @@ import { useAppSelector } from '../store';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { buildCharacterHint } from '../lib/build-character-hint';
+import { engineForModelKey, modelKeyForEngineChoice } from '../lib/tts-models';
 
 interface Props {
   character: Character | null;
@@ -28,12 +29,17 @@ export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecl
     if (!voice || !character) return;
     setSampleError(null);
     setSampleBusy(true);
+    /* Audition in THIS character's own effective engine, not the book's
+       default (#1839) — mirrors cast.tsx's effectiveEngineFor / profile-
+       drawer.tsx's currentEngine: the character's own ttsEngine override
+       wins, else the session default. */
+    const effectiveEngine = character.ttsEngine ?? engineForModelKey(ttsModelKey);
     try {
       await playSampleWithAutoLoad({
         args: {
           voiceId: voice.id,
           voice,
-          modelKey: ttsModelKey,
+          modelKey: modelKeyForEngineChoice(effectiveEngine, ttsModelKey),
           characterHint: buildCharacterHint(character),
         },
         playback,
