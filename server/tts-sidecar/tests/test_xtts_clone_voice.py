@@ -194,9 +194,19 @@ class _FakeTTS:
     def __init__(self, model_id: str, synthesizer: _FakeSynthesizer | None = None) -> None:
         self.model_id = model_id
         self.synthesizer = synthesizer or _FakeSynthesizer()
+        # Task 10 — records calls to the catalogue/fallback synth path
+        # (`self._tts.tts(...)`), distinct from `tts_model.inference(...)`
+        # (recorded in `_FakeXttsModel.infer_calls`) — a placebo-proof test
+        # must spy on THIS, not on the tts_model, to actually observe
+        # whether a fallback substitution happened.
+        self.tts_calls: list[dict[str, Any]] = []
 
     def to(self, device: str) -> "_FakeTTS":
         return self
+
+    def tts(self, text: str, speaker: str, language: str) -> list[float]:
+        self.tts_calls.append({"text": text, "speaker": speaker, "language": language})
+        return [0.0, 0.0, 0.0, 0.0]
 
 
 def _fake_torch_module() -> types.ModuleType:
@@ -458,3 +468,233 @@ def test_clone_voice_and_synthesize_never_interleave_on_shared_model(
     ], (
         f"forwards interleaved instead of serialising under _synth_lock: {events}"
     )
+
+
+# ── Task 10 — CoquiEngine.synthesize cloned-voice latents branch ───────────
+#
+# `/synthesize` already maps `VoiceNotDesignedError` to a 409
+# engine-agnostically, so this task lands no route/HTTP-layer change — these
+# tests call `CoquiEngine.synthesize` / `_load_voice_latents` /
+# `_bump_evict_epoch` directly, same technique as the Task 9 section above.
+
+
+def _clone(eng: main.CoquiEngine, voice_id: str, **kwargs: Any) -> None:
+    eng.clone_voice(voice_id, _ref_audio(), 24000, "an audition line", **kwargs)
+
+
+def test_synthesize_cloned_voice_renders_with_no_substitution(monkeypatch, tmp_path) -> None:
+    eng, _voices_dir, tts_instance = _make_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-synth1")
+    tts_model = tts_instance.synthesizer.tts_model
+    tts_model.infer_calls.clear()  # drop clone_voice's own audition call
+
+    result = eng.synthesize("xtts_v2", "xtts-synth1", "hello there")
+
+    assert isinstance(result.pcm, bytes) and len(result.pcm) > 0
+    assert result.sample_rate == 24000
+    assert result.substituted_from is None
+    # Placebo guard: with `_speakers` empty (no speaker_manager configured on
+    # this fake), the OLD substitution path is also permissive — a bare
+    # `pcm`/`substituted_from` check above would pass even if the cloned-
+    # voice branch were never entered, by falling through to `_tts.tts()`.
+    # Pin that this actually went through the latents/`inference()` path.
+    assert len(tts_model.infer_calls) == 1
+    assert tts_instance.tts_calls == []
+
+
+def test_synthesize_missing_latents_raises_voice_not_designed(monkeypatch, tmp_path) -> None:
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path)
+
+    with pytest.raises(main.VoiceNotDesignedError):
+        eng.synthesize("xtts_v2", "xtts-never-cloned", "hello there")
+
+
+def test_synthesize_missing_latents_never_falls_back_to_real_tts_call(monkeypatch, tmp_path) -> None:
+    """Placebo-proof `[AC-M1]`: asserting on `tts_model.*` can never observe
+    a fallback substitution — the cloned-voice branch never touches
+    `tts_model.speaker_manager`/the catalogue path at all. The REAL
+    fallback is `self._tts.tts()`; spy on THAT and assert it was never
+    called on a miss."""
+    eng, _voices_dir, tts_instance = _make_engine(monkeypatch, tmp_path)
+
+    with pytest.raises(main.VoiceNotDesignedError):
+        eng.synthesize("xtts_v2", "xtts-never-cloned", "hello there")
+
+    assert tts_instance.tts_calls == []
+
+
+def test_synthesize_catalog_voice_still_substitutes_regression(monkeypatch, tmp_path) -> None:
+    """A non-cloned (baked catalog) voice absent from the manifest must
+    still hit the PRE-EXISTING fail-soft substitution path — the new
+    cloned-voice branch (gated on `XTTS_KEY_PREFIX`) must never intercept a
+    plain catalog voice id."""
+    config = _FakeXttsConfig()
+    tts_model = _FakeXttsModel(config=config)
+    tts_model.speaker_manager = types.SimpleNamespace(
+        name_to_id={main.CoquiEngine.FALLBACK_SPEAKER: 0, "Some Other Speaker": 1}
+    )
+    tts_instance = _FakeTTS(
+        "tts_models/multilingual/multi-dataset/xtts_v2",
+        synthesizer=_FakeSynthesizer(tts_model=tts_model),
+    )
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path, tts_instance=tts_instance)
+
+    result = eng.synthesize("xtts_v2", "NotInCatalog", "hello there")
+
+    assert result.substituted_from == "NotInCatalog"
+    assert len(tts_instance.tts_calls) == 1
+    assert tts_instance.tts_calls[0]["speaker"] == main.CoquiEngine.FALLBACK_SPEAKER
+    # And the cloned-voice branch was never entered for a plain catalog id.
+    assert tts_model.infer_calls == []
+
+
+def test_synthesize_cloned_voice_receives_config_settings_and_text_splitting(
+    monkeypatch, tmp_path
+) -> None:
+    """`[AC-C3]` — the bare low-level `inference()` hardcodes
+    temperature=0.75/repetition_penalty=10.0/top_p=0.85 and defaults
+    `enable_text_splitting=False`. The cached-latents synth branch must
+    receive the LOADED MODEL's config values (via the shared
+    `_infer_from_latents` helper Task 9 built) and
+    `enable_text_splitting=True`."""
+    config = _FakeXttsConfig(
+        temperature=0.42, length_penalty=2.5, repetition_penalty=3.3, top_k=17, top_p=0.11
+    )
+    tts_model = _FakeXttsModel(config=config)
+    tts_instance = _FakeTTS(
+        "tts_models/multilingual/multi-dataset/xtts_v2",
+        synthesizer=_FakeSynthesizer(tts_model=tts_model),
+    )
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path, tts_instance=tts_instance)
+    _clone(eng, "xtts-synth2")
+    tts_model.infer_calls.clear()  # drop clone_voice's own audition call
+
+    eng.synthesize("xtts_v2", "xtts-synth2", "hello there")
+
+    assert len(tts_model.infer_calls) == 1
+    call = tts_model.infer_calls[0]
+    assert call["temperature"] == 0.42
+    assert call["length_penalty"] == 2.5
+    assert call["repetition_penalty"] == 3.3
+    assert call["top_k"] == 17
+    assert call["top_p"] == 0.11
+    assert call["enable_text_splitting"] is True
+
+
+def test_synthesize_cloned_voice_long_sentence_renders(monkeypatch, tmp_path) -> None:
+    """The crash case `[AC-C3]`: a bare `inference()` call defaults
+    `enable_text_splitting=False` and then asserts
+    `text_tokens.shape[-1] < gpt_max_text_tokens` — a long sentence that
+    renders fine on a stock catalogue voice hard-crashes a cloned one. This
+    fake doesn't replicate the real token-length assert (no real model is
+    loaded), but does pin that `enable_text_splitting=True` — the actual
+    fix — is passed for an unmistakably long input, and that the call
+    completes rather than raising."""
+    eng, _voices_dir, tts_instance = _make_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-synth3")
+    tts_model = tts_instance.synthesizer.tts_model
+    tts_model.infer_calls.clear()
+
+    long_text = "This is a long sentence that keeps going. " * 200
+    result = eng.synthesize("xtts_v2", "xtts-synth3", long_text)
+
+    assert isinstance(result.pcm, bytes) and len(result.pcm) > 0
+    assert tts_model.infer_calls[-1]["enable_text_splitting"] is True
+    assert tts_model.infer_calls[-1]["text"] == long_text
+
+
+def test_synthesize_cloned_voice_unsupported_language_raises(monkeypatch, tmp_path) -> None:
+    """The fake's `config.languages` is `["en", "es", "fr", "de", "it"]` — a
+    request for an unsupported language must fail loud before ever reaching
+    `inference()`, mirroring `Xtts.synthesize`'s own guard (xtts.py:422-423)
+    that the low-level `inference()` path skips entirely."""
+    eng, _voices_dir, tts_instance = _make_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-synth4")
+    tts_model = tts_instance.synthesizer.tts_model
+    tts_model.infer_calls.clear()
+
+    with pytest.raises(main.VoiceNotDesignedError):
+        eng.synthesize("xtts_v2", "xtts-synth4", "hello there", language="xx")
+
+    assert tts_model.infer_calls == []
+
+
+def test_synthesize_cloned_voice_zh_language_quirk_matches_upstream(monkeypatch, tmp_path) -> None:
+    """Config-faithful means faithful to the upstream quirk too:
+    `Xtts.synthesize`'s own guard is
+    `"zh-cn" if language == "zh" else language in self.config.languages`
+    (xtts.py:422-423) — because a non-empty string literal is always
+    truthy, `language="zh"` ALWAYS passes this assert regardless of whether
+    "zh"/"zh-cn" is actually in `config.languages`. This fake's
+    `config.languages` deliberately excludes both."""
+    eng, _voices_dir, tts_instance = _make_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-synth5")
+    tts_model = tts_instance.synthesizer.tts_model
+    assert "zh" not in tts_model.config.languages
+    assert "zh-cn" not in tts_model.config.languages
+    tts_model.infer_calls.clear()
+
+    result = eng.synthesize("xtts_v2", "xtts-synth5", "hello there", language="zh")
+
+    assert isinstance(result.pcm, bytes) and len(result.pcm) > 0
+    assert tts_model.infer_calls[-1]["language"] == "zh"
+
+
+def test_load_voice_latents_epoch_bumped_mid_load_discards_result(monkeypatch, tmp_path) -> None:
+    """`[AC-C7][ADV-M1]` — interleaving. `_bump_evict_epoch` landing while a
+    `torch.load` for that same voice is in flight must discard the load's
+    result instead of installing it into the cache, and the in-flight call
+    itself must raise rather than silently returning a load that's already
+    stale. Deterministic via threading.Event handshakes, not sleeps."""
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-race")
+
+    real_torch = sys.modules["torch"]
+    load_entered = threading.Event()
+    proceed_with_load = threading.Event()
+
+    def _blocking_load(path: str, **kwargs: Any) -> Any:
+        load_entered.set()
+        assert proceed_with_load.wait(timeout=5), "test stalled waiting for the epoch bump"
+        return real_torch.load(path, **kwargs)
+
+    blocking_torch = types.ModuleType("torch")
+    blocking_torch.save = real_torch.save  # type: ignore[attr-defined]
+    blocking_torch.load = _blocking_load  # type: ignore[attr-defined]
+    blocking_torch.cuda = real_torch.cuda  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "torch", blocking_torch)
+
+    outcome: dict[str, Any] = {}
+
+    def _do_load() -> None:
+        try:
+            outcome["latents"] = eng._load_voice_latents("xtts-race")
+        except Exception as exc:  # noqa: BLE001 — captured for the assertion below
+            outcome["error"] = exc
+
+    t = threading.Thread(target=_do_load)
+    t.start()
+    assert load_entered.wait(timeout=5), "torch.load was never entered"
+    eng._bump_evict_epoch("xtts-race")
+    proceed_with_load.set()
+    t.join(timeout=5)
+
+    assert "latents" not in outcome, "a load whose epoch moved mid-flight must not succeed"
+    assert "error" in outcome, "expected VoiceNotDesignedError from the stale-epoch refusal"
+    assert isinstance(outcome["error"], main.VoiceNotDesignedError)
+    assert "xtts-race" not in eng._latents_cache
+
+
+def test_bump_evict_epoch_drops_a_resident_cache_entry(monkeypatch, tmp_path) -> None:
+    """Property 2 — erasure reaches the in-process cache, not just disk. A
+    voice already resident in `_latents_cache` must be dropped by
+    `_bump_evict_epoch`, forcing the next load to re-read from disk (or, if
+    the .pt is also gone by then, fail loud)."""
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-evict1")
+    eng._load_voice_latents("xtts-evict1")  # warm the cache
+    assert "xtts-evict1" in eng._latents_cache
+
+    eng._bump_evict_epoch("xtts-evict1")
+
+    assert "xtts-evict1" not in eng._latents_cache

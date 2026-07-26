@@ -1113,6 +1113,25 @@ class CoquiEngine(Engine):
         self._voices_dir = os.environ.get("XTTS_VOICES_DIR") or os.path.join(
             os.path.dirname(__file__), "voices", "xtts"
         )
+        # Task 10 — in-memory cache for a cloned voice's derived latents, keyed
+        # by voice_id, so a hot cloned voice doesn't re-`torch.load` its .pt on
+        # every sentence. `_evict_epoch` is the cache-epoch contract Task 9
+        # deliberately left unbuilt (its own docstring: "Task 10 owns
+        # `_latents_cache`'s epoch contract"): a plain dict of voice_id -> int,
+        # bumped by `_bump_evict_epoch` (Task 11 wires an HTTP route to it,
+        # mirroring `/qwen/evict-voice`). `_load_voice_latents` captures the
+        # epoch BEFORE reading the .pt and re-checks it under `_latents_lock`
+        # immediately before installing into the cache — see that method's
+        # docstring for why (AC-C7/ADV-M1: purgeCloneArtifacts is files-first/
+        # evict-last, so a slow `torch.load` already past the isfile check
+        # could otherwise repopulate the cache AFTER a concurrent evict).
+        # Deliberately a SEPARATE lock from `_synth_lock`: the load itself
+        # (disk read, sometimes seconds) must not block a concurrent unrelated
+        # /synthesize's GPU forward, mirroring QwenEngine._load_voice_prompt's
+        # own choice to release its cache lock across `torch.load`.
+        self._latents_cache: dict[str, tuple[Any, Any]] = {}
+        self._latents_lock = threading.Lock()
+        self._evict_epoch: dict[str, int] = {}
 
     def _voice_paths(self, voice_id: str) -> tuple[str, str]:
         # Same scheme as QwenEngine._voice_paths (verbatim behaviour, copied
@@ -1317,9 +1336,135 @@ class CoquiEngine(Engine):
                 log.warning("torch.cuda.empty_cache() failed (%s) — model is dropped, VRAM will free on GC.", e)
         log.info("Coqui model unloaded.")
 
+    def _bump_evict_epoch(self, voice_id: str) -> None:
+        """Invalidate any cached (or in-flight) latents load for `voice_id`
+        (fs-38 Wave 3c, Task 10's cache-epoch contract). Task 11 wires an
+        HTTP route to this, mirroring `/qwen/evict-voice` — called on a
+        clone revoke/purge so a stale in-process cache entry can't keep
+        serving an erased voice (Property 2: erasure is total, including
+        this cache). Also invalidates a `torch.load` that is CURRENTLY in
+        flight for this voice: `_load_voice_latents` captures the epoch
+        before reading the .pt and re-checks it under `_latents_lock`
+        immediately before installing — bumping it here mid-load means that
+        load discards its result instead of caching it. Idempotent/cheap —
+        safe to call for a voice_id with no cached entry."""
+        with self._latents_lock:
+            self._evict_epoch[voice_id] = self._evict_epoch.get(voice_id, 0) + 1
+            self._latents_cache.pop(voice_id, None)
+
+    def _load_voice_latents(self, voice_id: str) -> tuple[Any, Any]:
+        """Return (gpt_cond_latent, speaker_embedding) for a cloned XTTS
+        voice — an in-memory cache hit, or a `torch.load` of the persisted
+        `.pt` on a miss. Raises `VoiceNotDesignedError` if this voice was
+        never cloned (no `.pt` on disk).
+
+        Epoch-safe (`[AC-C7][ADV-M1]`): `purgeCloneArtifacts` is
+        files-first / evict-last (delete the `.pt`, THEN best-effort POST
+        the sidecar evict). A naive read-cache -> isfile -> torch.load
+        (seconds) -> write-cache sequence lets a load that already passed
+        the isfile check land AFTER a concurrent evict lands — a revoked
+        voice would stay renderable from RAM until process restart, which
+        is exactly the never-silent-substitution property (Property 1) this
+        whole wave exists to protect. Capturing `_evict_epoch[voice_id]`
+        BEFORE the isfile check, then re-comparing it under `_latents_lock`
+        immediately before installing into `_latents_cache`, closes that
+        window: if `_bump_evict_epoch` landed anywhere in between, the
+        freshly-loaded tensors are discarded (never cached) and this call
+        raises instead of returning them.
+
+        NOT held under `_synth_lock` — this can block on disk I/O for
+        seconds and must not stall a concurrent unrelated /synthesize's GPU
+        forward. Mirrors QwenEngine._load_voice_prompt's own choice to
+        release its cache lock across `torch.load`."""
+        with self._latents_lock:
+            cached = self._latents_cache.get(voice_id)
+        if cached is not None:
+            return cached
+
+        epoch_before = self._evict_epoch.get(voice_id, 0)
+        pt_path, _json_path = self._voice_paths(voice_id)
+        if not os.path.isfile(pt_path):
+            raise VoiceNotDesignedError(
+                f"Voice '{voice_id}' has not been cloned yet (no cached latents). "
+                "Clone it first via POST /xtts/clone-voice."
+            )
+
+        import torch  # noqa: PLC0415  — never `self._torch`, unload() nulls it (AC-I3)
+
+        # map_location='cpu' is required, not an optimisation: latents are
+        # persisted as CUDA tensors on whichever device DERIVED them
+        # (get_conditioning_latents runs on `self.device` at clone time,
+        # xtts.py:361-370), and capacity-aware placement can derive on
+        # cuda:1 while this process later synthesises on cuda:0 — a bare
+        # `torch.load` would try to materialise cuda:1 tensors on a process
+        # that may not even have that card. `inference()` moves both
+        # tensors to `self.device` anyway (xtts.py:505-506), so loading onto
+        # cpu first costs nothing extra `[AC-I1]`.
+        saved = torch.load(pt_path, map_location="cpu", weights_only=False)
+        latents = (saved["gpt_cond_latent"], saved["speaker_embedding"])
+
+        with self._latents_lock:
+            if self._evict_epoch.get(voice_id, 0) != epoch_before:
+                # A purge landed while this torch.load was in flight — refuse
+                # to install a load that's already stale. Property 1: never
+                # silently render a revoked voice from RAM.
+                raise VoiceNotDesignedError(
+                    f"Voice '{voice_id}' was revoked while its latents were loading."
+                )
+            self._latents_cache[voice_id] = latents
+        return latents
+
     def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
         self._ensure_loaded(model)
         effective_language = language or self._language
+
+        # Cloned-voice branch — MUST precede the `self._speakers` membership
+        # check below: `xtts-<uuid>` is never in the loaded model's manifest,
+        # so without this branch a cloned-voice request would fall through
+        # and silently substitute FALLBACK_SPEAKER (Property 1 violation).
+        # Gated on the storage-key prefix (`XTTS_KEY_PREFIX`), which — unlike
+        # Qwen's `qwen-<uuid>` — is unambiguous for this engine: Coqui has no
+        # "designed" voice concept, so every `xtts-<uuid>` request reaching
+        # this engine came from `cloneStorageKey('coqui', uuid)` for a
+        # provenance==='cloned' slot (clone-engines.ts) and nothing else ever
+        # mints that shape. A non-cloned request (a baked catalog speaker
+        # name, or any other id) skips this branch entirely and falls through
+        # to the existing fail-soft substitution logic, unchanged.
+        if voice.startswith(self.XTTS_KEY_PREFIX):
+            assert self._tts is not None
+            config = self._tts.synthesizer.tts_model.config
+            # Config-faithful language gate `[AC-C3]` — mirrors `Xtts.synthesize`'s
+            # own guard (xtts.py:422-423) EXACTLY, quirk included: that upstream
+            # assert is `"zh-cn" if language == "zh" else language in
+            # self.config.languages`, which — because "zh-cn" is a non-empty
+            # string and therefore always truthy — always accepts language="zh"
+            # regardless of whether the loaded model's config actually lists it.
+            # The low-level `inference()` `_infer_from_latents` calls skips this
+            # check entirely (its own docstring), so without it here an
+            # unsupported language would reach deep into the GPT forward before
+            # failing, instead of failing loud with an actionable error now.
+            language_ok = (
+                True if effective_language == "zh" else effective_language in config.get("languages", [])
+            )
+            if not language_ok:
+                raise VoiceNotDesignedError(
+                    f"Voice '{voice}' cannot render in language '{effective_language}' — "
+                    f"not supported by the loaded XTTS model (supported: {config.get('languages', [])})."
+                )
+            gpt_cond_latent, speaker_embedding = self._load_voice_latents(voice)
+            # `_infer_from_latents` must be called under `_synth_lock` (its own
+            # docstring) — the shared helper Task 9 built so a cloned voice
+            # renders identically whether reached via clone_voice's audition or
+            # this cached-latents synth branch.
+            with self._synth_lock:
+                assert self._tts is not None
+                audio, sample_rate = self._infer_from_latents(
+                    gpt_cond_latent, speaker_embedding, text, effective_language
+                )
+            pcm = _float_audio_to_int16_le(audio)
+            # Never substituted — a cloned voice renders as itself or fails
+            # loud above (Property 1). `substituted_from` stays None.
+            return SynthResult(pcm=pcm, sample_rate=sample_rate, substituted_from=None)
 
         # Serialise the forward — see `_synth_lock` in __init__ (the XTTS
         # model isn't thread-safe for concurrent `tts()` calls, mirroring
