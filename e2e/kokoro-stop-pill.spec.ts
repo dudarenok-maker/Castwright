@@ -46,7 +46,7 @@ test.describe('Kokoro Stop pill — bidirectional Load/Stop in the Status popove
        more than one is idle. This is also distinct from the loaded-models
        banner's OWN Kokoro Stop control (Task 10 / #1839), whose button is
        named "Stop Kokoro" instead so it never collides with this one — see
-       ModelControlPill's `actionAriaLabel` prop. */
+       ModelControlPill's `leadWithAction` prop. */
     const kokoroGroup = popover.getByRole('group', { name: /^Kokoro/i });
     const stopButton = kokoroGroup.getByRole('button', { name: /^stop \(voice engine\)$/i });
     await expect(stopButton).toBeVisible({ timeout: 5_000 });

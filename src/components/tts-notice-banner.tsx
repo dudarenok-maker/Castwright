@@ -30,22 +30,30 @@ interface TtsNoticeBannerProps {
    the Generate view, where the inline copy was removed to avoid a double
    render.
 
-   Task 10 (#1839) — also the home for a resident-model Stop control. Kokoro
-   is the eagerly-resident fallback (PRELOAD_KOKORO); its Stop pill was
-   reachable only via the Status popover (which is residency-gated), not the
-   generation view — this control makes one visible without that extra click.
-   Gated on residency (`state === 'ready'`), not `enginesInUse` — residency
-   is what costs VRAM. Exactly the moment a voice preview fails for capacity
-   (see server/src/gpu/describe-vram-blockers.ts, whose remedy copy now points
+   Task 10 (#1839) — also the home for a resident-model Stop control. Either
+   engine can end up resident — Kokoro warms on demand at first synth by
+   default but stays resident once loaded (or eagerly at startup if
+   PRELOAD_KOKORO is turned on); Coqui is always button-driven — and either
+   one's Stop pill was reachable only via the Status popover (which is
+   residency-gated), not the generation view — this control makes one
+   visible without that extra click. Gated on residency (`state === 'ready'`),
+   not `enginesInUse` — residency is what costs VRAM. Exactly the moment a
+   voice preview fails for capacity (see
+   server/src/gpu/describe-vram-blockers.ts, whose remedy copy now points
    here). Renders nothing when there's no notice AND nothing resident.
 
    This row can be on screen at the same time as the Status popover's own
    Stop pill for the same engine (the popover is residency-gated too, so
    both surface together whenever an engine is resident). Passes
-   `actionAriaLabel` so this copy's Stop button reads "Stop Kokoro" /
-   "Stop Coqui XTTS" — distinct from the popover's unchanged generic
-   "Stop (voice engine)" — so the two controls have different accessible
-   names (#1839 / #1841 CI triage). */
+   `leadWithAction` so this copy leads with the action rather than reading
+   as a status readout: the button's VISIBLE text is "Stop Kokoro" /
+   "Stop Coqui XTTS" (the status chip drops to a secondary line beside it).
+   Because the visible text already names the engine, it doubles as the
+   button's accessible name with no separate `actionAriaLabel` needed — one
+   source of truth — and it still reads distinctly from the popover's own
+   pill, which keeps its unchanged generic "Stop (voice engine)" text, so
+   the two controls keep different accessible names (#1839 / #1841 CI
+   triage). */
 export function TtsNoticeBanner({
   evictionNotice,
   loadErrorNotice,
@@ -91,7 +99,7 @@ export function TtsNoticeBanner({
               key={label}
               kind="tts"
               engineLabel={label}
-              actionAriaLabel={label}
+              leadWithAction
               state={lifecycle.state}
               onLoad={() => {
                 void lifecycle.onLoad();

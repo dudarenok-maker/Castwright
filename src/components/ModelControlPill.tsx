@@ -64,6 +64,15 @@ interface Props {
       controls' accessible names no longer collide. Omit to keep the
       existing aria-label byte-identical; every current call site omits it. */
   actionAriaLabel?: string;
+  /** When true, the action button's VISIBLE text names the engine (e.g.
+      "Stop Kokoro" instead of a bare "Stop") and the status chip renders
+      as a secondary, de-emphasised line instead of the usual pill — for a
+      context where the point is the action, not the status readout (the
+      loaded-models banner, Task 10 / #1839). Since the button's text
+      already names the engine, no separate `actionAriaLabel` is applied in
+      this mode — one source of truth for the accessible name. Omit to keep
+      every existing call site byte-identical. */
+  leadWithAction?: boolean;
 }
 
 interface Tone {
@@ -160,6 +169,7 @@ export function ModelControlPill({
   engineLabel,
   suppressUnreachableAction,
   actionAriaLabel,
+  leadWithAction,
 }: Props) {
   const tone = TONES[state];
   const action = actionFor(state);
@@ -167,10 +177,17 @@ export function ModelControlPill({
   const ariaLabel = engineLabel
     ? `${engineLabel} ${state}`
     : `${kindNoun(kind)} ${state}`;
+  const actionText = leadWithAction
+    ? `${action.label} ${engineLabel ?? kindNoun(kind)}`
+    : action.label;
   return (
     <span className="inline-flex items-center gap-2 flex-wrap" role="group" aria-label={ariaLabel}>
       <span
-        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold tabular-nums ${tone.pill}`}
+        className={
+          leadWithAction
+            ? 'inline-flex items-center gap-1.5 text-[10px] text-ink/40'
+            : `inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold tabular-nums ${tone.pill}`
+        }
       >
         <span
           className={`w-1.5 h-1.5 rounded-full ${tone.dot} ${tone.pulse ? 'animate-pulse' : ''}`}
@@ -185,13 +202,15 @@ export function ModelControlPill({
           disabled={action.disabled}
           aria-disabled={action.disabled}
           aria-label={
-            actionAriaLabel
-              ? `${action.label} ${actionAriaLabel}`
-              : `${action.label} (${kindNoun(kind).toLowerCase()})`
+            leadWithAction
+              ? undefined
+              : actionAriaLabel
+                ? `${action.label} ${actionAriaLabel}`
+                : `${action.label} (${kindNoun(kind).toLowerCase()})`
           }
           className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${tone.button}`}
         >
-          {action.label}
+          {actionText}
         </button>
       )}
     </span>

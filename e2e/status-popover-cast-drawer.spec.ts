@@ -51,7 +51,7 @@ test.describe('Status popover ↔ cast drawer coexistence', () => {
        (voice engine)" button aria-label, so the popover alone isn't a unique
        scope. This is also distinct from the loaded-models banner's OWN Kokoro
        Stop control (Task 10 / #1839), named "Stop Kokoro" instead — see
-       ModelControlPill's `actionAriaLabel` prop — and that banner copy sits
+       ModelControlPill's `leadWithAction` prop — and that banner copy sits
        behind the cast drawer's scrim in this exact state, which is why an
        unscoped `.first()` locator here used to time out clicking a control it
        could never actually reach. */

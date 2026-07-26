@@ -62,12 +62,14 @@ describe('TtsNoticeBanner', () => {
   });
 
   describe('resident-model Stop row (Task 10 / #1839)', () => {
-    it("names the engine in the Stop button's aria-label, not the generic kind noun", () => {
+    it("leads with the action: the Stop button's VISIBLE text names the engine, and doubles as its accessible name", () => {
       /* This control duplicates the Status popover's own Stop pill for the
          same engine whenever that engine is resident (#1841 CI triage) — the
          two must have different accessible names. This banner copy names the
-         engine directly ("Stop Kokoro") instead of the popover's unchanged,
-         generic "Stop (voice engine)". */
+         engine directly on the button itself ("Stop Kokoro") instead of the
+         popover's unchanged, generic "Stop (voice engine)" — the point here
+         is the action, not a status readout, so the label reads on the
+         button rather than via a hidden aria-label override. */
       render(
         <TtsNoticeBanner
           evictionNotice={null}
@@ -76,8 +78,26 @@ describe('TtsNoticeBanner', () => {
           kokoro={makeReadyLifecycle()}
         />,
       );
-      expect(screen.getByRole('button', { name: 'Stop Kokoro' })).toBeInTheDocument();
+      const stopButton = screen.getByRole('button', { name: 'Stop Kokoro' });
+      expect(stopButton).toBeInTheDocument();
+      /* Visible text, not just the accessible name — proves the engine name
+         is on-screen copy, not hidden aria-label-only copy. */
+      expect(stopButton).toHaveTextContent('Stop Kokoro');
       expect(screen.queryByRole('button', { name: /^stop \(voice engine\)$/i })).not.toBeInTheDocument();
+    });
+
+    it('still shows the resident status as secondary copy alongside the action', () => {
+      /* The status chip ("Kokoro ready") isn't gone — it just isn't the
+         prominent element in this context anymore; the Stop button is. */
+      render(
+        <TtsNoticeBanner
+          evictionNotice={null}
+          loadErrorNotice={null}
+          onDismiss={vi.fn()}
+          kokoro={makeReadyLifecycle()}
+        />,
+      );
+      expect(screen.getByText(/Kokoro ready/i)).toBeInTheDocument();
     });
 
     it('gives Kokoro and Coqui XTTS distinct Stop buttons when both are resident', () => {
