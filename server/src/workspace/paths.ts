@@ -324,6 +324,33 @@ export function qwenVoiceWavPath(name: string): string {
   return p;
 }
 
+/** Workspace-level directory holding cloned XTTS speaker latents (fs-38
+    Wave 3c) — one `<voiceId>.{pt,json}` pair per cloned voice: the `.pt` is
+    the cached conditioning-latents tensor pair, the `.json` carries clone
+    metadata. Shared across every book, so it lives at the workspace root,
+    sibling to voices/qwen. Mirrors the `XTTS_VOICES_DIR` the sidecar is
+    spawned with (spawn-sidecar.ts) — a derived spawn env like
+    `QWEN_VOICES_DIR`, deliberately with no registry knob of its own. */
+export function xttsVoicesDir(): string {
+  return join(WORKSPACE_ROOT, 'voices', 'xtts');
+}
+
+/** Path to a single cloned XTTS voice's cached `.pt` conditioning-latents
+    tensor pair. `name` is the cloned voiceId, e.g. `xtts-<uuid>`. */
+export function xttsVoiceLatentsPath(name: string): string {
+  const p = join(xttsVoicesDir(), `${sanitizeIdSegment(safeSegment(name))}.pt`);
+  assertContained(xttsVoicesDir(), p);
+  return p;
+}
+
+/** Path to a single cloned XTTS voice's JSON sidecar (clone metadata). `name`
+    is the cloned voiceId, e.g. `xtts-<uuid>`. */
+export function xttsVoiceSidecarPath(name: string): string {
+  const p = join(xttsVoicesDir(), `${sanitizeIdSegment(safeSegment(name))}.json`);
+  assertContained(xttsVoicesDir(), p);
+  return p;
+}
+
 /** fs-38 Wave 1 — workspace-level voice-library manifest jail. Each library
     entry gets its own directory keyed by voiceUuid, holding `voice.json` (the
     manifest, see workspace/voice-library.ts) plus future per-entry sidecar
