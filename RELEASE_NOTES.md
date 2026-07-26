@@ -22,6 +22,12 @@
   short sample, confirm it's yours (or a family member's, with their say-so), and Castwright
   builds a reusable voice you can hand to any character. It'll never quietly swap in a
   stand-in: if it can't use your cloned voice, it tells you rather than faking it.
+- **A cloned voice now tells you clearly when it can't be used — instead of quietly rendering
+  as someone else.** If Castwright can't rebuild a cloned voice as itself, it stops and says so,
+  right down to the reason — a revoked voice, a missing sample, or a book set to the wrong
+  engine — so you always know a chapter used the real voice or didn't run at all. And revoking
+  a voice now really does erase it: every file Castwright could have used to rebuild that
+  person's voice is gone, not just the visible entry.
 
 # Castwright 1.14.0
 
