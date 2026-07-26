@@ -217,6 +217,14 @@ export function higherQwenTier(a: TtsModelKey, b: TtsModelKey): TtsModelKey {
    character overridden to Kokoro auditioned in Coqui (#1839). Add new engines
    here and in the server mirror together; there is nowhere else to add them.
 
+   ASYMMETRY: the mirror is complete except for piper. The frontend
+   TtsModelKey derives from VoiceSampleRequest.modelKey (openapi.yaml:4708),
+   the audition endpoint's own enum, which is narrower than the server's
+   TtsModelKey (server/src/tts/model-keys.ts:31) and carries no piper key.
+   So piper falls through to the session key below. It is unreachable from
+   the UI anyway — piper is absent from TTS_ENGINES and from the engine
+   picker's installedEngines.
+
    TWO CALLER SHAPES, and the difference matters:
 
    - Audition / design call sites pass TWO arguments. Their result is a shared
@@ -245,8 +253,6 @@ export function modelKeyForEngineChoice(
     }
     case 'coqui':
       return 'coqui-xtts-v2';
-    case 'piper':
-      return 'piper-en-us-medium';
     case 'gemini':
       return sessionModelKey.startsWith('gemini-') ? sessionModelKey : 'gemini-2.5-flash';
     default:

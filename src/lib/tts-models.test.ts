@@ -190,14 +190,16 @@ describe('modelKeyForEngineChoice (fs-38 Wave 3b2, T6b review — resolves a dra
     expect(modelKeyForEngineChoice('gemini', 'gemini-2.5-flash')).toBe('gemini-2.5-flash');
   });
 
-  it('maps piper to its canonical key, mirroring the server table', () => {
-    /* Changed here: previously fell back to the session key. Unreachable from
-       the UI (piper is absent from TTS_ENGINES and from the engine picker's
-       installedEngines), so this is alignment with
-       server/src/tts/model-keys.ts canonicalModelKeyForEngine, not a behaviour
-       change any user can observe. */
-    expect(modelKeyForEngineChoice('piper', 'kokoro-v1')).toBe('piper-en-us-medium');
-    expect(modelKeyForEngineChoice('piper', 'qwen3-tts-1.7b')).toBe('piper-en-us-medium');
+  it('piper falls through to the session key (frontend model-key enum asymmetry)', () => {
+    /* The frontend TtsModelKey derives from VoiceSampleRequest.modelKey
+       (openapi.yaml:4708), the audition endpoint's enum, which is narrower
+       than the server's TtsModelKey and carries no piper key. Piper is also
+       unreachable from the UI — it's absent from TTS_ENGINES and from the
+       engine picker's installedEngines. So piper falls through to the session
+       key here, and the comment in modelKeyForEngineChoice documents the
+       intentional asymmetry. */
+    expect(modelKeyForEngineChoice('piper', 'kokoro-v1')).toBe('kokoro-v1');
+    expect(modelKeyForEngineChoice('piper', 'qwen3-tts-1.7b')).toBe('qwen3-tts-1.7b');
   });
 });
 
