@@ -54,6 +54,7 @@ import { ingestCloneSample } from '../tts/clone-ingest.js';
 import { readCandidate, candidateMasterPath, removeCandidate } from '../workspace/clone-candidate.js';
 import { deriveEngineArtifact } from '../tts/derive-engine-artifact.js';
 import { assessCloneFidelity } from '../tts/clone-fidelity.js';
+import { httpStatusForSidecarError } from './sidecar-error-status.js';
 
 export const voiceLibraryRouter = Router();
 
@@ -161,7 +162,9 @@ voiceLibraryRouter.post('/design', async (req: Request, res: Response) => {
       return res.status(409).json({ error: 'design already running' });
     }
     console.error('[voice-library] design failed', e);
-    return res.status(502).json({ error: (e as Error).message || 'Voice design failed.' });
+    return res
+      .status(httpStatusForSidecarError(e))
+      .json({ error: (e as Error).message || 'Voice design failed.' });
   }
 });
 
@@ -196,7 +199,9 @@ voiceLibraryRouter.post('/:voiceUuid/redesign', async (req: Request, res: Respon
       return res.status(409).json({ error: 'design already running' });
     }
     console.error('[voice-library] redesign failed', e);
-    return res.status(502).json({ error: (e as Error).message || 'Voice redesign failed.' });
+    return res
+      .status(httpStatusForSidecarError(e))
+      .json({ error: (e as Error).message || 'Voice redesign failed.' });
   }
 });
 
@@ -429,7 +434,9 @@ voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response
     return res.json({ url: publicUrl, cached: false });
   } catch (e) {
     console.error('[voice-library] sample failed', e);
-    return res.status(502).json({ error: (e as Error).message || 'Voice sample failed.' });
+    return res
+      .status(httpStatusForSidecarError(e))
+      .json({ error: (e as Error).message || 'Voice sample failed.' });
   }
 });
 

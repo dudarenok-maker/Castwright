@@ -134,12 +134,14 @@ describe('LibraryView restructure — three-way section nav (fs-38 Wave 1 Task 1
     expect(screen.getByRole('button', { name: 'My voices' })).toBeInTheDocument();
   });
 
-  /* #1802 — the gate can flip true→false while the view is mounted (a late
-     `fetchConfig` landing after the user already clicked into My voices, or
-     an operator disabling the library in another tab). The nav segment
-     unmounts and MyVoicesSection renders null, so without a reset the local
-     `section` state strands the user on a blank pane. */
-  it('falls back to the In-use section when the gate flips off while My voices is active', () => {
+  /* #1802 — the boot-time race: the unhydrated config above reads as
+     enabled-pending, so the user can open My voices before `fetchConfig`
+     (dispatched at store boot, src/store/index.ts) resolves with the knob
+     disabled. The nav segment then unmounts and MyVoicesSection renders
+     null, so a `section` still pointing at 'my-voices' would leave the nav
+     strip with nothing beneath it. Dispatching the fulfilled action directly
+     is byte-for-byte what that boot dispatch produces. */
+  it('falls back to the In-use section when the gate reads false while My voices is active', () => {
     const store = makeStore({});
     render(
       <Provider store={store}>

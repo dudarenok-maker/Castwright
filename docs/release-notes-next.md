@@ -63,12 +63,23 @@ history at cut time.
   Castwright distils a reusable cloned voice — auditioned, ECAPA fidelity-checked, and castable
   like a designed one. A cloned voice is never silently substituted: if Qwen is unavailable the
   chapter fails loud instead. (Refs #624)
+- **Voice design and audition endpoints stop flattening the sidecar's status to 502.** The
+  library `design` / `redesign` / `sample` routes and the character `design-voice` route now map
+  the sidecar's own **5xx** through, so a **503** ("no GPU capacity — free VRAM and retry")
+  survives as a 503 instead of reading as a broken gateway, and `NoCapacityError` — which carries
+  no status at all — maps to 503. A sidecar **4xx** deliberately stays 502: it describes our
+  request to the sidecar, not the caller's request to us, and forwarding it would collide with
+  the 409 these routes already use for "design run in progress" / `gpu_busy`. The `0` the
+  unreachable/cancelled paths carry also clamps to 502. (#1801)
 - **`#/voices` no longer strands you on a blank pane when the voice library is turned off**
-  (#1802). `voices.library.enabled` flipping `true`→`false` while the view was mounted (a late
-  `fetchConfig`, or an operator disabling the library elsewhere) unmounted the **My voices** nav
-  segment and rendered `MyVoicesSection` as `null`, but the local `section` state kept pointing
-  at `my-voices` — leaving the nav with nothing beneath it until the user picked another
-  segment. The view now falls back to `in-use`, the same default a fresh mount uses.
+  (#1802). The view's section state is local; `voices.library.enabled` reading `false` after the
+  user had already opened **My voices** unmounted that nav segment and rendered
+  `MyVoicesSection` as `null`, leaving the nav strip with nothing beneath it until another
+  segment was picked. In practice the reachable trigger is the boot-time race — the config read
+  treats an unhydrated knob as enabled-pending, so a click landing before `fetchConfig` resolves
+  could strand on a disabled library. The active section is now **derived** rather than reset by
+  an effect, so the fallback to `in-use` happens during render and the empty pane is never
+  painted at all.
 
 ---
 
