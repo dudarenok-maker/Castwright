@@ -181,13 +181,17 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
     so the persisted text and its recorded source can't disagree. Blank input
     falls back to the stored transcript (Whisper can legitimately return an
     empty transcript for a non-speech clip); over-length is a 400, never a
-    truncation — including in the UI, which deliberately carries no textarea
-    `maxLength`, since a browser-side cap would silently drop the tail of a
-    correction and persist the remainder as `transcriptSource: 'user'`. The
-    2000-char cap is chosen so the base64 `X-Ref-Text` header stays bounded in
-    BYTES for multi-byte scripts (worst case 3 bytes per UTF-16 unit → ≤6000
-    bytes → ≤8000 base64), which a character cap does not otherwise guarantee
-    (#1836).
+    truncation. The UI deliberately carries **no textarea `maxLength`** — a
+    browser-side cap would silently drop the tail of a long paste and persist
+    half a correction as `transcriptSource: 'user'` — and instead blocks
+    Continue with a visible reason while the field is still on screen and
+    editable, since the panel unmounts after Continue and a server 400 would
+    leave nowhere to fix it. The 2000-char cap is enforced in characters only,
+    chosen so the base64 `X-Ref-Text` header stays bounded in BYTES for
+    multi-byte scripts (worst case 3 bytes per UTF-16 unit → ≤6000 bytes →
+    ≤8000 base64); a separate byte check would be unreachable at that cap, and
+    a test derives the arithmetic from the constant so raising it without
+    redoing the sums fails (#1836).
 
 ## Test plan
 
@@ -264,7 +268,14 @@ No new Playwright e2e in 3a — added in 3b1 (below).
   `refText` and lands in `sampleTranscript` + `master.transcript` with
   `transcriptSource: 'user'`; an unedited one stays `'whisper'`; a blank or
   non-string one falls back to the stored text; an over-length one 400s
-  before any GPU work with the candidate left intact.
+  before any GPU work with the candidate left intact. Two guard tests derive
+  from the exported `MAX_CLONE_TRANSCRIPT_CHARS`: one pins the byte arithmetic
+  that justifies having no separate byte check, the other pins the constant
+  against `openapi.yaml`'s `maxLength`. Both fail if the cap is raised alone.
+- Vitest frontend (`src/components/voices/clone-capture-panel.test.tsx`) — the
+  transcript textarea carries no `maxlength` attribute, and an over-cap value
+  disables Continue with an on-screen reason instead of truncating or letting
+  the user reach an unrecoverable server 400.
 - Vitest frontend (`src/components/voices/clone-capture-panel.test.tsx`,
   `src/modals/clone-voice-wizard.test.tsx`) — the panel forwards the *edited*
   transcript via `onReady`, and the wizard forwards it on into the

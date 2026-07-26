@@ -3,6 +3,10 @@ import { useAppDispatch } from '../../store';
 import { cloneSample } from '../../store/voice-library-slice';
 import { VoiceRecorder } from './voice-recorder';
 
+/** Keep in step with `CloneVoiceRequest.transcript`'s `maxLength` in
+ *  openapi.yaml and `MAX_CLONE_TRANSCRIPT_CHARS` in the clone route. */
+const MAX_TRANSCRIPT_CHARS = 2000;
+
 type Relationship = 'self' | 'family-with-permission' | 'guardian-of-minor';
 export interface ConsentDraft { personName: string; relationship: Relationship; permittedUse: 'personal'; }
 
@@ -30,8 +34,16 @@ export function CloneCapturePanel({ onReady }: { onReady: (r: { candidateId: str
     finally { setBusy(false); }
   }
 
+  /* Mirrors CloneVoiceRequest.transcript's maxLength / the route's
+     MAX_CLONE_TRANSCRIPT_CHARS (#1836). Deliberately NOT a textarea
+     `maxLength`: the browser would silently drop the tail of a long paste,
+     and a half-a-correction is exactly the silent discard this fixes. Caught
+     here instead, while the field is still on screen and editable — after
+     Continue the panel unmounts, so a server 400 would leave nowhere to fix
+     it. The route still enforces the same cap for non-UI callers. */
+  const transcriptTooLong = transcript.length > MAX_TRANSCRIPT_CHARS;
   const consentComplete = personName.trim().length > 0 && attested;
-  const canContinue = !!candidateId && consentComplete && !busy;
+  const canContinue = !!candidateId && consentComplete && !busy && !transcriptTooLong;
 
   return (
     <div className="flex flex-col gap-4">
@@ -47,7 +59,15 @@ export function CloneCapturePanel({ onReady }: { onReady: (r: { candidateId: str
       {error && <p className="text-magenta">{error}</p>}
       {warnings.map((w) => <p key={w} className="text-amber-600 text-xs">{w}</p>)}
       {candidateId && (
-        <label>Transcript<textarea aria-label="transcript" value={transcript} onChange={(e) => setTranscript(e.target.value)} /></label>
+        <label>Transcript
+          <textarea aria-label="transcript" value={transcript} onChange={(e) => setTranscript(e.target.value)} />
+          {transcriptTooLong && (
+            <p className="text-magenta text-xs">
+              That transcript is too long — {transcript.length.toLocaleString()} characters, and the
+              limit is {MAX_TRANSCRIPT_CHARS.toLocaleString()}. Trim it to continue.
+            </p>
+          )}
+        </label>
       )}
 
       <fieldset className="flex flex-col gap-2">

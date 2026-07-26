@@ -90,7 +90,7 @@ const cloneUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize
  *  request line + header block — and the 3b2 repair path re-sends this same
  *  persisted text plus an `X-Audition-Text` header, sharing that budget.
  *  8000 base64 bytes leaves ample room for both. */
-const MAX_CLONE_TRANSCRIPT_CHARS = 2000;
+export const MAX_CLONE_TRANSCRIPT_CHARS = 2000;
 
 /* Library single-flight lock (spec §3). A module-level in-flight set keyed by
    voiceUuid (plus one `'library:new'` key for creates) serializes design work
@@ -660,8 +660,9 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
   if (!candidateId) return res.status(400).json({ error: '`candidateId` is required.' });
   /* #1836 — `transcript` is the first CLIENT-controlled value to reach
      deriveEngineArtifact's `refText` (and, via master.transcript, every later
-     re-derive). Bound it in both units — see the constants above for why the
-     byte bound is the one that actually holds for non-ASCII.
+     re-derive), so it is bounded. Characters only: see the constant above for
+     why that also bounds the base64 header in bytes, and why a separate byte
+     check would be unreachable at this cap.
 
      Rejected outright rather than truncated: silently dropping the tail of a
      correction would persist a PARTIAL transcript as `transcriptSource:

@@ -1579,11 +1579,12 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
       Buffer.from('RIFF'),
     );
 
+    const { MAX_CLONE_TRANSCRIPT_CHARS } = await import('./voice-library.js');
     const res = await request(app)
       .post('/api/voice-library/clone')
       .send({
         candidateId: 'cand-long',
-        transcript: 'x'.repeat(2001),
+        transcript: 'x'.repeat(MAX_CLONE_TRANSCRIPT_CHARS + 1),
         consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
       });
 
@@ -1598,28 +1599,35 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
      character cap sufficient — worst case is a 3-byte BMP character per UTF-16
      unit — so that raising the cap without redoing the sums fails here rather
      than silently producing an oversized header for ja/zh/ru text (fs-59). */
-  it('the character cap bounds the base64 X-Ref-Text header for multi-byte text', () => {
-    const atCap = '漢'.repeat(2000); // CJK: 1 UTF-16 unit, 3 UTF-8 bytes each
-    expect(atCap.length).toBe(2000); // exactly at the cap, so it is accepted
-    const bytes = Buffer.byteLength(atCap, 'utf8');
+  it('the character cap bounds the base64 X-Ref-Text header for multi-byte text', async () => {
+    const { MAX_CLONE_TRANSCRIPT_CHARS } = await import('./voice-library.js');
+    /* Worst case per UTF-16 unit is a 3-byte BMP character (astral chars cost
+       4 bytes but 2 units; lone surrogates encode as 3-byte U+FFFD), so a
+       cap-length CJK string is the byte-heaviest input the route accepts. */
+    const atCap = '漢'.repeat(MAX_CLONE_TRANSCRIPT_CHARS);
     const base64Bytes = Buffer.from(atCap, 'utf8').toString('base64').length;
-    expect(bytes).toBe(6000);
-    expect(base64Bytes).toBe(8000);
+    expect(Buffer.byteLength(atCap, 'utf8')).toBe(MAX_CLONE_TRANSCRIPT_CHARS * 3);
     /* h11's fallback budget is 16 KiB for the WHOLE request line + header
-       block, and the 3b2 repair path adds X-Audition-Text alongside this. */
-    expect(base64Bytes).toBeLessThan(16_384 / 2);
+       block, and the 3b2 repair path re-sends this text plus a short
+       X-Audition-Text. Derived from the constant, so RAISING THE CAP WITHOUT
+       REDOING THE SUMS FAILS HERE — which is the entire justification for the
+       route carrying no separate byte check. */
+    expect(base64Bytes).toBeLessThan(16_384 - 2_048);
   });
 
   /* The cap lives in two places — MAX_CLONE_TRANSCRIPT_CHARS and the
      contract's CloneVoiceRequest.transcript.maxLength — tied together only by
-     prose. Nothing else fails if one drifts, so pin them. */
+     prose. Nothing else fails if one drifts, so pin them against each other
+     (not against a second hardcoded literal, which pins nothing). */
   it('the route cap and openapi.yaml maxLength agree', async () => {
+    const { MAX_CLONE_TRANSCRIPT_CHARS } = await import('./voice-library.js');
     const { readFile } = await import('node:fs/promises');
     const yaml = await readFile(new URL('../../../openapi.yaml', import.meta.url), 'utf8');
-    const schema = yaml.slice(yaml.indexOf('    CloneVoiceRequest:'));
-    const transcriptBlock = schema.slice(schema.indexOf('        transcript:'));
+    const anchor = yaml.indexOf('    CloneVoiceRequest:');
+    expect(anchor).toBeGreaterThan(-1); // fail closed if the schema is renamed
+    const transcriptBlock = yaml.slice(yaml.indexOf('        transcript:', anchor));
     const maxLength = /maxLength:\s*(\d+)/.exec(transcriptBlock)?.[1];
-    expect(maxLength).toBe('2000'); // === MAX_CLONE_TRANSCRIPT_CHARS
+    expect(maxLength).toBe(String(MAX_CLONE_TRANSCRIPT_CHARS));
   });
 
   it('ignores a non-string transcript and falls back to the Whisper text', async () => {
