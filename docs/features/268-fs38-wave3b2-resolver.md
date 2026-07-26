@@ -341,6 +341,15 @@ Qwen-capable book) — mock mode only exercises the frontend/store seams.
 
 ## Known limitations / owed on-box acceptance
 
+> **The owed acceptance below is scripted end-to-end** in
+> [`docs/testing/fs38-wave3-onbox-acceptance.md`](../testing/fs38-wave3-onbox-acceptance.md)
+> — 51 numbered tests covering the whole fs-38 Wave 3 arc (3a ingest/consent/
+> recorder, 3b1 the first clone, 3b2 this wave), with environment capture,
+> fixtures, and a sign-off sheet. Walk that document on real hardware and
+> commit it filled in; each item below maps to a test ID there. The
+> limitations in §6 of that sheet are to be verified as **expected**, not
+> filed as defects.
+
 - **(a)** A real revoked voice fails a live render loud — described above,
   not yet walked on real hardware.
 - **(b)** A base-model-bumped voice re-derives — the resolver logic is
