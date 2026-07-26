@@ -67,9 +67,20 @@ async function evictSidecarVoice(route: 'qwen' | 'xtts', voiceId: string): Promi
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ voiceId }),
+      // Fix wave (review I-2) — this purge can run INSIDE `updateEntry`'s
+      // per-uuid lock (the revoke `deleteMasterClip` branch's mutate, and
+      // the cloned-resolver's revoked/gone status-stamp mutate both call
+      // `purgeCloneArtifacts` from inside a mutate). A wedged/OOM'd
+      // sidecar that accepts the connection but never responds would
+      // otherwise park that uuid's lock indefinitely — including a
+      // user-initiated revoke's own SECOND `updateEntry` call, right after
+      // this one. Bound it instead of leaving it unbounded; still
+      // best-effort — the catch below swallows a timeout exactly like any
+      // other unreachable-sidecar failure, unchanged from before.
+      signal: AbortSignal.timeout(10_000),
     });
   } catch {
-    /* sidecar unreachable — non-fatal */
+    /* sidecar unreachable (or timed out) — non-fatal */
   }
 }
 

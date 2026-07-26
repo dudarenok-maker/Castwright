@@ -972,7 +972,13 @@ function withDerivedUpdateEntry<
       const next = await mutate(fresh);
       if (!next) return null;
       await mergedWriteEntry(next);
-      return mergedReadEntry(uuid);
+      // Fix wave (review I-1) — mirrors production's `updateEntry`
+      // fallback (workspace/voice-library.ts): null must mean ONLY
+      // "mutate declined", never "the canonical re-read merely failed" —
+      // e.g. a fixed-value `readEntry` mock that can't observe its own
+      // fake write (M-3). Falling back to `next` keeps this recomposed
+      // primitive's contract identical to the real one.
+      return (await mergedReadEntry(uuid)) ?? next;
     },
   };
 }

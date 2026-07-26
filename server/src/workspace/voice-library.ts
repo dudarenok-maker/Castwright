@@ -12,6 +12,7 @@
 
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { join } from 'node:path';
 import { voiceLibraryDir } from './paths.js';
 import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
@@ -201,9 +202,37 @@ export async function writeEntry(entry: VoiceLibraryEntry): Promise<void> {
    idempotent case this task supersedes). */
 const entryLocks = new Map<string, Promise<void>>();
 
+/* Fix wave (review I-3) — tracks which voiceUuid(s) the CURRENTLY-EXECUTING
+   async call chain already holds this lock for. A `mutate` that calls
+   `updateEntry` again for the SAME uuid would chain onto a queue slot that
+   can only settle once that very `mutate` returns — which can't happen
+   while it's awaiting the nested call, so that uuid's lock would wedge for
+   the rest of the process's lifetime: no error, no timeout, just a
+   permanently hanging caller (worst case: the revoke route). A plain "is
+   this uuid currently held" flag can't tell a genuine re-entrant call apart
+   from an ordinary second caller arriving while the first is still busy —
+   both see the same "someone holds this uuid" state. AsyncLocalStorage,
+   which follows the logical async call chain across every `await` inside
+   it, can: only a call literally running INSIDE the `fn` that's holding a
+   uuid's lock sees that uuid in its store. */
+const activeLockContext = new AsyncLocalStorage<ReadonlySet<string>>();
+
 async function withEntryLock<T>(voiceUuid: string, fn: () => Promise<T>): Promise<T> {
+  const active = activeLockContext.getStore();
+  if (active?.has(voiceUuid)) {
+    throw new Error(
+      `[voice-library] re-entrant updateEntry("${voiceUuid}") — a mutate for this uuid called ` +
+        `updateEntry for the SAME uuid again while still running. The nested call can only ` +
+        `resolve once this outer mutate returns, which can never happen while it's awaiting ` +
+        `the nested call — this uuid's lock would hang forever instead of failing loud. ` +
+        `Restructure the caller so the nested work runs outside this mutate (e.g. after the ` +
+        `outer updateEntry() call has resolved).`,
+    );
+  }
+  const nextActive = new Set<string>(active);
+  nextActive.add(voiceUuid);
   const previous = entryLocks.get(voiceUuid) ?? Promise.resolve();
-  const result = previous.then(fn);
+  const result = previous.then(() => activeLockContext.run(nextActive, fn));
   // The chain link stored in the map must never reject — a rejection there
   // would propagate into the NEXT queued caller's `previous.then(fn)` as an
   // onRejected call, which happens to still work (fn ignores the reason
@@ -243,7 +272,20 @@ export async function updateEntry(
     const next = await mutate(entry);
     if (!next) return null;
     await writeEntry(next);
-    return readEntry(voiceUuid);
+    /* Fix wave (review I-1) — `null` from this function must mean ONLY
+       "mutate declined to write" (the branch above), never "wrote
+       successfully but the canonical re-read that follows happened to
+       fail" (e.g. a concurrent unlocked DELETE — see removeEntryDir —
+       landing in the gap between writeEntry's rename and this readEntry,
+       or any other reason readEntry's own validation can reject a manifest
+       it just wrote). Two production callers branched on plain truthiness
+       and could not tell the two apart: the revoke route skipped its
+       consent-erasure purge after a successful revokedAt stamp, and the
+       cloned-voice resolver silently dropped a permanent derive-failure
+       report. Falling back to the value that was in fact just written
+       keeps `null` unambiguous without changing this function's return
+       type or any caller's branching. */
+    return (await readEntry(voiceUuid)) ?? next;
   });
 }
 

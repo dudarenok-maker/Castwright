@@ -201,6 +201,87 @@ describe('updateEntry — per-uuid read-modify-write lock', () => {
     expect(final?.engines.qwen).toEqual({ status: 'stale', baseModel: 'old' });
   });
 
+  /* Fix wave (review I-1) — `updateEntry` used to return the bare
+     post-write `readEntry()` result, so "mutate declined to write" and
+     "the write succeeded but the canonical re-read failed" were both
+     surfaced to callers as `null`, indistinguishable. Two production
+     callers branched on plain truthiness and paid for the ambiguity: the
+     revoke route skipped its consent-erasure purge after a successful
+     revokedAt stamp, and the cloned-voice resolver silently dropped a
+     permanent derive-failure report. This reproduces the "re-read fails"
+     half for REAL, with no mocking: `mutate` hands back an entry with an
+     empty `provenance`, which `writeEntry` happily persists (its own
+     consent guard only cares about `provenance === 'cloned'`), but
+     `readEntry`'s OWN documented structural check
+     (`Boolean(voiceUuid && name && provenance)`) treats that exact
+     on-disk state as invalid and returns null — the same class of gap as
+     "a concurrent unlocked DELETE lands between the write and the
+     re-read", reached here through this module's own real validation
+     rule instead of a race. */
+  it('review I-1: returns the just-written entry, not null, when the canonical post-write re-read fails structurally', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'reread-fail-1', name: 'Original' }));
+
+    const result = await vl.updateEntry('reread-fail-1', (fresh) => ({
+      ...fresh!,
+      provenance: '' as unknown as import('./voice-library.js').VoiceProvenance,
+    }));
+
+    // Proof the write really happened AND that a bare re-read of this
+    // exact on-disk state genuinely fails structurally (this is not a
+    // mocked/simulated null — it's readEntry's own real validation rule).
+    expect(await vl.readEntry('reread-fail-1')).toBeNull();
+
+    // Yet updateEntry must not report this the same way as "mutate
+    // declined" — the caller needs to know a write actually happened.
+    expect(result).not.toBeNull();
+    expect(result?.voiceUuid).toBe('reread-fail-1');
+  });
+
+  /* Fix wave (review I-3) — a `mutate` that calls `updateEntry` again for
+     the SAME uuid it's already running under chains onto a queue slot
+     that can only settle once that very `mutate` returns — which can
+     never happen while it's awaiting the nested call. Pre-fix this wedged
+     the uuid's lock for the rest of the process's lifetime with no error
+     and no timeout (the revoke route would just hang). The guard must
+     fail loud instead. */
+  it('review I-3: a mutate that re-enters updateEntry for the SAME uuid throws a clear re-entrancy error instead of wedging the lock forever', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'reentrant-1', name: 'Original' }));
+
+    await expect(
+      vl.updateEntry('reentrant-1', async (fresh) => {
+        // Nested call for the SAME uuid, from inside this very mutate.
+        await vl.updateEntry('reentrant-1', (inner) => ({ ...inner!, name: 'inner' }));
+        return { ...fresh!, name: 'outer' };
+      }),
+    ).rejects.toThrow(/re-entrant/i);
+
+    // Neither the outer nor the inner write landed — the entry is
+    // untouched.
+    expect((await vl.readEntry('reentrant-1'))?.name).toBe('Original');
+
+    // The lock must not be left wedged for this uuid — an ordinary
+    // subsequent caller still gets to run.
+    const after = await vl.updateEntry('reentrant-1', (fresh) => ({ ...fresh!, name: 'after' }));
+    expect(after?.name).toBe('after');
+  }, 10_000);
+
+  /* Fix wave (review I-3) — a mutate calling updateEntry for a DIFFERENT
+     uuid is ordinary, expected usage (not the hazard above) and must not
+     trip the guard. */
+  it('review I-3: a mutate calling updateEntry for a DIFFERENT uuid is not re-entrancy and runs normally', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'outer-1' }));
+    await vl.writeEntry(makeEntry({ voiceUuid: 'inner-1' }));
+
+    const result = await vl.updateEntry('outer-1', async (fresh) => {
+      const innerResult = await vl.updateEntry('inner-1', (inner) => ({ ...inner!, name: 'inner-done' }));
+      expect(innerResult?.name).toBe('inner-done');
+      return { ...fresh!, name: 'outer-done' };
+    });
+
+    expect(result?.name).toBe('outer-done');
+    expect((await vl.readEntry('inner-1'))?.name).toBe('inner-done');
+  });
+
   it('different voiceUuids never block each other', async () => {
     await vl.writeEntry(makeEntry({ voiceUuid: 'indep-1' }));
     await vl.writeEntry(makeEntry({ voiceUuid: 'indep-2' }));

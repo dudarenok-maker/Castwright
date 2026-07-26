@@ -363,6 +363,29 @@ describe('purgeCloneArtifacts', () => {
     expect(existsSync(ptFile)).toBe(false);
     expect(result.failed).toEqual([]);
   });
+
+  /* Fix wave (review I-2) — `purgeCloneArtifacts` can run INSIDE
+     `updateEntry`'s per-uuid lock (the revoke `deleteMasterClip` branch and
+     the cloned-resolver's revoked/gone status-stamp both call it from
+     inside a mutate), and this best-effort evict used to be a bare
+     unbounded `fetch` — a wedged/OOM'd sidecar that accepts the connection
+     but never responds would park that uuid's lock indefinitely, including
+     the revoke route's own SECOND `updateEntry` call. Each evict must now
+     carry an abortable signal so the caller is never left waiting forever.
+     Actually waiting out the real timeout isn't exercised here (that's a
+     runtime property of Node's own `AbortSignal.timeout`, not this
+     module's logic) — this pins the WIRING: every evict-voice fetch gets a
+     real `AbortSignal`. */
+  it('review I-2: every evict-voice fetch carries an abortable signal, so a hung sidecar cannot hold the lock forever', async () => {
+    await purge.purgeCloneArtifacts('u1');
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    for (const call of fetchMock.mock.calls) {
+      const init = call[1] as RequestInit | undefined;
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      expect(init?.signal?.aborted).toBe(false);
+    }
+  });
 });
 
 /* User-directed fix — revoke must also erase the person's original

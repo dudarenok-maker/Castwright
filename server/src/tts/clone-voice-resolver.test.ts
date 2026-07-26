@@ -269,7 +269,16 @@ function makeDeps(overrides: Partial<ResolveChapterDeps> = {}): ResolveChapterDe
       const next = await mutate(fresh);
       if (!next) return null;
       await writeEntry(next);
-      return next;
+      // Fix wave (review I-4) — production's `updateEntry` does a SECOND,
+      // canonical re-read after the write (workspace/voice-library.ts),
+      // not a bare return of `next`. The old double stopped at `writeEntry`
+      // and never exercised that re-read, which is exactly where I-1's
+      // null-conflation bug lived — a double that never reaches
+      // production's real shape can't catch a regression there. Falls
+      // back to `next` (I-1's fix, mirrored here too) when the re-read
+      // comes back null/undefined, e.g. a test that only configured 2
+      // `mockResolvedValueOnce` reads.
+      return (await readEntry(uuid)) ?? next;
     },
   );
   return {
@@ -721,6 +730,55 @@ describe('resolveClonedVoicesForChapter', () => {
     });
   });
 
+  /* --- fix wave, review I-1/I-4: the makeDeps default `updateEntry` used to
+     stop at `writeEntry` and never exercise production's canonical
+     post-write re-read — the exact spot where I-1's null-conflation bug
+     lived. This test drives that double's real (fixed) two-read shape and
+     configures its SECOND (post-write) read to come back undefined —
+     reproducing "the write succeeded but the canonical re-read failed"
+     inside the resolver's own permanent-derive-failure path, not just at
+     the voice-library primitive in isolation. */
+  describe('fix wave, review I-1/I-4 — a successful write must still be reported even when the canonical re-read fails', () => {
+    it('permanent (4xx) derive failure: still reported as derive-failed even when the post-write canonical re-read comes back undefined', async () => {
+      const preDeriveEntry = baseEntry({ master: MASTER });
+      const freshEntry = baseEntry({ master: MASTER }); // NOT revoked — the write proceeds.
+      const readEntry = vi
+        .fn()
+        .mockResolvedValueOnce(preDeriveEntry) // classify's read
+        .mockResolvedValueOnce(freshEntry); // updateEntry's fresh pre-write read
+      // Deliberately NO third mockResolvedValueOnce — the double's
+      // canonical post-write re-read falls through to `undefined`,
+      // reproducing I-1's "write succeeded, re-read failed" ambiguity.
+      const deps = makeDeps({
+        readEntry,
+        ptExists: vi.fn(async () => false),
+        deriveEngineArtifact: vi.fn(async () => {
+          throw Object.assign(new Error('rejected clip'), { status: 422 });
+        }),
+      });
+
+      let thrown: UnresolvableClonedVoiceError | undefined;
+      try {
+        await resolveClonedVoicesForChapter(
+          [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+          deps,
+        );
+      } catch (e) {
+        thrown = e as UnresolvableClonedVoiceError;
+      }
+
+      // The write DID happen — proving this isn't the "mutate declined"
+      // branch (that's the pre-existing "revoked" test above).
+      expect(deps.writeEntry).toHaveBeenCalledTimes(1);
+      const written = deps.writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
+      expect(written.engines.qwen?.status).toBe('failed');
+
+      // I-1: a write that succeeded but whose canonical re-read comes back
+      // null/undefined must still be reported — not silently dropped.
+      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed' }]);
+    });
+  });
+
   /* --- review I-1: an abort mid-derive must propagate as an AbortError, ---
      --- never be misreported as a chapter/voice failure ------------------- */
 
@@ -848,7 +906,10 @@ function makeDesignedDeps(
       const next = await mutate(fresh);
       if (!next) return null;
       await writeEntry(next);
-      return next;
+      // Fix wave (review I-4) — same production-shape fix as makeDeps'
+      // default above: a real canonical re-read, falling back to `next`
+      // (I-1) when it comes back null/undefined.
+      return (await readEntry(uuid)) ?? next;
     },
   );
   return {
