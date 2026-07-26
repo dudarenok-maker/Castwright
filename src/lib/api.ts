@@ -9552,11 +9552,14 @@ async function realAssignLibraryVoice(
   return res.json();
 }
 
-async function realSampleLibraryVoice(voiceUuid: string): Promise<{ url: string }> {
+async function realSampleLibraryVoice(
+  voiceUuid: string,
+  opts?: { modelKey?: TtsModelKey },
+): Promise<{ url: string }> {
   const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}/sample`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ modelKey: opts?.modelKey }),
   });
   if (!res.ok)
     throw new Error(
@@ -9747,7 +9750,10 @@ export async function mockAssignLibraryVoice(
   return { updated: 1 };
 }
 
-export async function mockSampleLibraryVoice(voiceUuid: string): Promise<{ url: string }> {
+export async function mockSampleLibraryVoice(
+  voiceUuid: string,
+  _opts?: { modelKey?: TtsModelKey },
+): Promise<{ url: string }> {
   await wait(60);
   const entry = mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid);
   if (!entry) throw new Error(`No voice-library entry "${voiceUuid}".`);

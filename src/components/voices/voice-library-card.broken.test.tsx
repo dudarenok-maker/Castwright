@@ -16,6 +16,7 @@ import { render, screen } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { voiceLibrarySlice, type VoiceLibraryEntry } from '../../store/voice-library-slice';
+import { uiSlice } from '../../store/ui-slice';
 import { VoiceLibraryCard, deriveClonedVoiceState } from './voice-library-card';
 
 const MASTER = {
@@ -53,7 +54,7 @@ function makeCloned(overrides: Partial<VoiceLibraryEntry> = {}): VoiceLibraryEnt
 
 function renderCard(entry: VoiceLibraryEntry) {
   const store = configureStore({
-    reducer: { voiceLibrary: voiceLibrarySlice.reducer },
+    reducer: { voiceLibrary: voiceLibrarySlice.reducer, ui: uiSlice.reducer },
     preloadedState: {
       voiceLibrary: {
         entries: [entry],

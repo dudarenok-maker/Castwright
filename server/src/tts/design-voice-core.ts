@@ -240,6 +240,12 @@ export interface RunVoiceDesignOpts {
   languageCode?: string;
   /** Stage under `<storageKey>-preview` (A/B compare) instead of in place. */
   preview?: boolean;
+  /** #1842 — the Qwen tier to design at. Shares cache scope `storageKey` with
+      the voice-library `/sample` (play) route, so the two MUST agree on a
+      tier for the same voice or the card's play button silently re-synthesises
+      at a different tier than the one it was designed at. Defaults to the
+      0.6B base, matching the play route's own omitted-modelKey default. */
+  modelKey?: TtsModelKey;
 }
 
 /* The scope-agnostic entry point the voice-library routes call. Designs a Qwen
@@ -278,7 +284,7 @@ export async function runVoiceDesign(
        single `purgeVoiceSamples(storageKey)` clears both live + preview
        auditions on promote/delete. */
     cacheScope: opts.storageKey,
-    modelKey: 'qwen3-tts-0.6b',
+    modelKey: opts.modelKey ?? 'qwen3-tts-0.6b',
     calibrationText,
     sidecarUrl,
     logContext: `library storageKey=${opts.storageKey}${opts.preview ? ' (preview)' : ''}`,

@@ -11,6 +11,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { voiceLibrarySlice, type VoiceLibraryEntry } from '../../store/voice-library-slice';
+import { uiSlice } from '../../store/ui-slice';
 import { VoiceLibraryCard } from './voice-library-card';
 
 const patchVoiceLibrary = vi.fn();
@@ -44,7 +45,7 @@ function renderCard(
   props: { onAssign?: (e: VoiceLibraryEntry) => void; onEdit?: (e: VoiceLibraryEntry) => void } = {},
 ) {
   const store = configureStore({
-    reducer: { voiceLibrary: voiceLibrarySlice.reducer },
+    reducer: { voiceLibrary: voiceLibrarySlice.reducer, ui: uiSlice.reducer },
     preloadedState: {
       voiceLibrary: {
         entries: [entry],
@@ -150,11 +151,15 @@ describe('VoiceLibraryCard', () => {
     expect(screen.queryByTestId(`voice-library-edit-${entry.voiceUuid}`)).not.toBeInTheDocument();
   });
 
-  it('preview-play calls api.sampleLibraryVoice with the entry uuid', async () => {
+  it('preview-play calls api.sampleLibraryVoice with the entry uuid and the session Qwen tier', async () => {
     sampleLibraryVoice.mockResolvedValue({ url: '/preview.mp3' });
     const entry = makeEntry();
     renderCard(entry);
     fireEvent.click(screen.getByTestId(`voice-library-play-${entry.voiceUuid}`));
-    await waitFor(() => expect(sampleLibraryVoice).toHaveBeenCalledWith(entry.voiceUuid));
+    await waitFor(() =>
+      expect(sampleLibraryVoice).toHaveBeenCalledWith(entry.voiceUuid, {
+        modelKey: 'qwen3-tts-0.6b',
+      }),
+    );
   });
 });

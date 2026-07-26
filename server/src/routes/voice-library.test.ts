@@ -607,6 +607,43 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
     const res = await request(app).post('/api/voice-library/sample-down/sample').send({});
     expect(res.status).toBe(502);
   });
+
+  /* #1842 — the library card's preview follows the caller's Qwen tier
+     (mirrors Task 3's cast-row fix, one level over: this route and
+     design-voice-core.ts's library design/redesign path share the
+     `qwen-<uuid>` cache scope, so they must land on the same filename for
+     the same tier). Omitted modelKey keeps older callers on 0.6B; a
+     non-Qwen modelKey is rejected outright since this route only ever
+     synthesises `qwen-<uuid>`. */
+  it('renders a library sample at the requested Qwen tier', async () => {
+    await vl.writeEntry(makeEntry());
+
+    const res = await request(app)
+      .post('/api/voice-library/uuid-1/sample')
+      .send({ modelKey: 'qwen3-tts-1.7b' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.url).toContain('qwen3-tts-1.7b');
+  });
+
+  it('defaults to 0.6B when the caller sends no modelKey', async () => {
+    await vl.writeEntry(makeEntry());
+
+    const res = await request(app).post('/api/voice-library/uuid-1/sample').send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.url).toContain('qwen3-tts-0.6b');
+  });
+
+  it('rejects a modelKey that does not route to Qwen', async () => {
+    await vl.writeEntry(makeEntry());
+
+    const res = await request(app)
+      .post('/api/voice-library/uuid-1/sample')
+      .send({ modelKey: 'kokoro-v1' });
+
+    expect(res.status).toBe(400);
+  });
 });
 
 describe('POST /api/voice-library/:voiceUuid/assign', () => {

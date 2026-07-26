@@ -429,9 +429,21 @@ voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response
       return res.status(403).json({ error: 'This cloned voice has no valid consent and cannot be played.' });
     }
 
-    const body = (req.body ?? {}) as { text?: unknown };
+    const body = (req.body ?? {}) as { text?: unknown; modelKey?: unknown };
     const voiceName = `qwen-${voiceUuid}`;
-    const modelKey: TtsModelKey = 'qwen3-tts-0.6b';
+    /* #1842 — the card previews at the tier the caller's session will render at,
+       so the same voice doesn't sound different on the card and on the cast row.
+       Qwen-only: this endpoint synthesises `qwen-<uuid>`, which no other engine
+       can voice. Omitted → the 0.6B base, keeping older callers working. */
+    if (body.modelKey !== undefined) {
+      if (!isTtsModelKey(body.modelKey) || engineForModelKey(body.modelKey) !== 'qwen') {
+        return res.status(400).json({
+          code: 'invalid_model',
+          message: 'modelKey must be a Qwen model key.',
+        });
+      }
+    }
+    const modelKey: TtsModelKey = isTtsModelKey(body.modelKey) ? body.modelKey : 'qwen3-tts-0.6b';
     const text =
       typeof body.text === 'string' && body.text.trim().length > 0
         ? body.text.trim()
