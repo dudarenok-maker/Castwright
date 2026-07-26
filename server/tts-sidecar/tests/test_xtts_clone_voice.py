@@ -10,9 +10,18 @@ sys.modules stub is needed — same pattern as test_coqui_device.py).
 """
 from __future__ import annotations
 
+import json
 import os
+import pickle
 import sys
+import threading
+import time
+import types
 from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pytest
 
 SIDECAR_ROOT = Path(__file__).resolve().parent.parent
 if str(SIDECAR_ROOT) not in sys.path:
@@ -72,3 +81,380 @@ def test_voice_paths_lossy_sanitisation_stays_injective(monkeypatch) -> None:
         assert p.endswith(".pt")
     for p in (json_a, json_b):
         assert p.endswith(".json")
+
+
+# ── Task 9 — CoquiEngine.clone_voice (config-faithful latents derive) ──────
+#
+# No HTTP endpoint exists yet (Task 11 adds POST /xtts/clone-voice), so these
+# tests call `CoquiEngine.clone_voice` directly, with a fake `TTS.api.TTS` +
+# `torch` installed via sys.modules (same technique as
+# test_concurrent_synthesis.py's `coqui_load_stubs` / test_coqui_device.py's
+# `_stub_coqui_load`, inlined here to keep this file's fixtures
+# self-contained). The fake `tts_model` mirrors the REAL `Xtts` low-level
+# API shape closely enough to exercise the two verified traps: config-
+# derived `get_conditioning_latents` kwargs, and a path-not-array audio
+# input.
+
+
+class _FakeXttsConfig:
+    """Coqpit-`.get(key, default)`-shaped config stub. Defaults intentionally
+    DIFFER from `get_conditioning_latents`'s own bare-signature defaults
+    (6/6/30/False) below, so a test asserting the derive call received the
+    CONFIG value (not the bare default) actually proves something."""
+
+    def __init__(self, **overrides: Any) -> None:
+        self.gpt_cond_len = 12
+        self.gpt_cond_chunk_len = 4
+        self.max_ref_len = 10
+        self.sound_norm_refs = True
+        self.temperature = 0.85
+        self.length_penalty = 1.0
+        self.repetition_penalty = 2.0
+        self.top_k = 50
+        self.top_p = 0.85
+        self.languages = ["en", "es", "fr", "de", "it"]
+        for k, v in overrides.items():
+            setattr(self, k, v)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
+
+class _FakeXttsModel:
+    """Stands in for `Xtts.synthesizer.tts_model`. Signature mirrors the
+    real `get_conditioning_latents`/`inference` closely enough that
+    `inspect.signature(...)` introspection in `clone_voice` behaves exactly
+    as it would against the real class."""
+
+    def __init__(self, config: "_FakeXttsConfig | None" = None) -> None:
+        self.config = config or _FakeXttsConfig()
+        self.derive_calls: list[dict[str, Any]] = []
+        self.infer_calls: list[dict[str, Any]] = []
+        self.derive_exc: Exception | None = None
+
+    def get_conditioning_latents(
+        self,
+        audio_path: Any,
+        max_ref_length: int = 30,
+        gpt_cond_len: int = 6,
+        gpt_cond_chunk_len: int = 6,
+        librosa_trim_db: Any = None,
+        sound_norm_refs: bool = False,
+        load_sr: int = 22050,
+    ) -> tuple[str, str]:
+        # Real get_conditioning_latents takes a PATH, not an array (trap 2)
+        # — assert that invariant right here so a regression that passes an
+        # array/bytes object fails LOUD inside the fake, not silently.
+        assert isinstance(audio_path, (str, os.PathLike)), (
+            f"get_conditioning_latents must receive a path, got {type(audio_path)!r}"
+        )
+        assert os.path.isfile(audio_path), "the temp WAV must exist while deriving"
+        self.derive_calls.append(
+            {
+                "audio_path": audio_path,
+                "max_ref_length": max_ref_length,
+                "gpt_cond_len": gpt_cond_len,
+                "gpt_cond_chunk_len": gpt_cond_chunk_len,
+                "sound_norm_refs": sound_norm_refs,
+            }
+        )
+        if self.derive_exc is not None:
+            raise self.derive_exc
+        return ("LATENT", "EMBEDDING")
+
+    def inference(
+        self,
+        text: str,
+        language: str,
+        gpt_cond_latent: Any,
+        speaker_embedding: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.infer_calls.append(
+            {
+                "text": text,
+                "language": language,
+                "gpt_cond_latent": gpt_cond_latent,
+                "speaker_embedding": speaker_embedding,
+                **kwargs,
+            }
+        )
+        return {"wav": np.zeros(2400, dtype=np.float32)}
+
+
+class _FakeSynthesizer:
+    def __init__(self, tts_model: _FakeXttsModel | None = None) -> None:
+        self.tts_model = tts_model or _FakeXttsModel()
+        self.output_sample_rate = 24000
+
+
+class _FakeTTS:
+    """Stands in for `TTS.api.TTS(model_id)`."""
+
+    def __init__(self, model_id: str, synthesizer: _FakeSynthesizer | None = None) -> None:
+        self.model_id = model_id
+        self.synthesizer = synthesizer or _FakeSynthesizer()
+
+    def to(self, device: str) -> "_FakeTTS":
+        return self
+
+
+def _fake_torch_module() -> types.ModuleType:
+    """pickle-backed save/load so a test can open the persisted `.pt` and
+    inspect its real content, not just its presence — stronger than the
+    marker-byte trick some other fixtures use, and cheap since these fakes
+    only ever persist plain strings/dicts."""
+    fake_torch = types.ModuleType("torch")
+
+    def _save(obj: Any, path: str) -> None:
+        with open(path, "wb") as fh:
+            pickle.dump(obj, fh)
+
+    def _load(path: str, **_kwargs: Any) -> Any:
+        with open(path, "rb") as fh:
+            return pickle.load(fh)
+
+    fake_torch.save = _save  # type: ignore[attr-defined]
+    fake_torch.load = _load  # type: ignore[attr-defined]
+    fake_torch.cuda = types.SimpleNamespace(  # type: ignore[attr-defined]
+        is_available=lambda: False, empty_cache=lambda: None
+    )
+    return fake_torch
+
+
+def _install_fake_coqui_runtime(
+    monkeypatch, tts_instance: _FakeTTS | None = None, coqui_version: str = "9.9.9-test"
+) -> _FakeTTS:
+    """Install a fake `TTS`/`TTS.api`/`torch` triple into sys.modules and
+    force COQUI_DEVICE=cpu so `_ensure_loaded` resolves without touching a
+    real CUDA/DeepSpeed path (fp16/DeepSpeed stay off on cpu — see
+    `_resolve_runtime_options`)."""
+    monkeypatch.setenv("COQUI_DEVICE", "cpu")
+    monkeypatch.delenv("COQUI_HALF", raising=False)
+    monkeypatch.delenv("COQUI_DEEPSPEED", raising=False)
+
+    tts_instance = tts_instance or _FakeTTS("tts_models/multilingual/multi-dataset/xtts_v2")
+
+    fake_tts_pkg = types.ModuleType("TTS")
+    fake_tts_pkg.__version__ = coqui_version  # type: ignore[attr-defined]
+    fake_tts_api = types.ModuleType("TTS.api")
+    fake_tts_api.TTS = lambda model_id, *a, **k: tts_instance  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "TTS", fake_tts_pkg)
+    monkeypatch.setitem(sys.modules, "TTS.api", fake_tts_api)
+    monkeypatch.setitem(sys.modules, "torch", _fake_torch_module())
+    return tts_instance
+
+
+def _make_engine(monkeypatch, tmp_path: Path, **kwargs: Any) -> tuple[main.CoquiEngine, Path, _FakeTTS]:
+    monkeypatch.setenv("XTTS_VOICES_DIR", str(tmp_path / "xtts"))
+    tts_instance = _install_fake_coqui_runtime(monkeypatch, **kwargs)
+    eng = main.CoquiEngine()
+    return eng, Path(eng._voices_dir), tts_instance
+
+
+def _ref_audio(n: int = 4800) -> np.ndarray:
+    return np.zeros(n, dtype=np.float32)
+
+
+def test_clone_voice_persists_pt_with_both_keys(monkeypatch, tmp_path) -> None:
+    eng, voices_dir, _tts = _make_engine(monkeypatch, tmp_path)
+    eng.clone_voice("xtts-clone1", _ref_audio(), 24000, "an audition line")
+
+    pt_path, _json_path = eng._voice_paths("xtts-clone1")
+    assert os.path.isfile(pt_path)
+    with open(pt_path, "rb") as fh:
+        saved = pickle.load(fh)
+    assert set(saved.keys()) == {"gpt_cond_latent", "speaker_embedding"}
+    assert saved["gpt_cond_latent"] == "LATENT"
+    assert saved["speaker_embedding"] == "EMBEDDING"
+
+
+def test_clone_voice_returns_nonempty_24khz_audition(monkeypatch, tmp_path) -> None:
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path)
+    result = eng.clone_voice("xtts-clone2", _ref_audio(), 24000, "an audition line")
+    assert isinstance(result.pcm, bytes) and len(result.pcm) > 0
+    assert result.sample_rate == 24000
+
+
+def test_clone_voice_writes_metadata_json(monkeypatch, tmp_path) -> None:
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path, coqui_version="1.2.3-fake")
+    eng.clone_voice("xtts-clone3", _ref_audio(), 24000, "an audition line", model="xtts_v2")
+
+    _pt_path, json_path = eng._voice_paths("xtts-clone3")
+    assert os.path.isfile(json_path)
+    manifest = json.loads(Path(json_path).read_text(encoding="utf-8"))
+    assert manifest["voiceId"] == "xtts-clone3"
+    assert manifest["clone"] is True
+    assert manifest["coquiVersion"] == "1.2.3-fake"
+    assert manifest["modelId"] == "tts_models/multilingual/multi-dataset/xtts_v2"
+
+
+def test_clone_voice_get_conditioning_latents_receives_config_derived_kwargs(
+    monkeypatch, tmp_path
+) -> None:
+    """Trap 1: a bare call would use gpt_cond_len=6/gpt_cond_chunk_len=6/
+    max_ref_length=30/sound_norm_refs=False — LOWER fidelity than the
+    engine's own tts()/synthesize() path. The derive call must receive the
+    LOADED MODEL's config values instead."""
+    config = _FakeXttsConfig(
+        gpt_cond_len=99, gpt_cond_chunk_len=17, max_ref_len=42, sound_norm_refs=True
+    )
+    tts_model = _FakeXttsModel(config=config)
+    tts_instance = _FakeTTS(
+        "tts_models/multilingual/multi-dataset/xtts_v2",
+        synthesizer=_FakeSynthesizer(tts_model=tts_model),
+    )
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path, tts_instance=tts_instance)
+    eng.clone_voice("xtts-clone4", _ref_audio(), 24000, "an audition line")
+
+    assert len(tts_model.derive_calls) == 1
+    call = tts_model.derive_calls[0]
+    assert call["gpt_cond_len"] == 99
+    assert call["gpt_cond_chunk_len"] == 17
+    assert call["max_ref_length"] == 42
+    assert call["sound_norm_refs"] is True
+
+
+def test_clone_voice_falls_back_to_signature_default_when_config_key_absent(
+    monkeypatch, tmp_path
+) -> None:
+    """A config missing a key (API drift / an unusual config subclass) must
+    fall back to get_conditioning_latents' OWN signature default, not crash
+    and not silently use some other made-up value."""
+    config = _FakeXttsConfig(max_ref_len=999)
+    del config.max_ref_len  # simulate the key being absent from this config
+    tts_model = _FakeXttsModel(config=config)
+    tts_instance = _FakeTTS(
+        "tts_models/multilingual/multi-dataset/xtts_v2",
+        synthesizer=_FakeSynthesizer(tts_model=tts_model),
+    )
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path, tts_instance=tts_instance)
+    eng.clone_voice("xtts-clone5", _ref_audio(), 24000, "an audition line")
+
+    # get_conditioning_latents' own signature default for max_ref_length is 30.
+    assert tts_model.derive_calls[0]["max_ref_length"] == 30
+
+
+def test_clone_voice_cleans_up_temp_wav_after_success(monkeypatch, tmp_path) -> None:
+    eng, voices_dir, _tts = _make_engine(monkeypatch, tmp_path)
+    eng.clone_voice("xtts-clone6", _ref_audio(), 24000, "an audition line")
+
+    pt_path, _json_path = eng._voice_paths("xtts-clone6")
+    tmp_wav_path = os.path.splitext(pt_path)[0] + ".derive-src.tmp.wav"
+    assert not os.path.exists(tmp_wav_path)
+    # And nothing else was left behind under the voices dir either.
+    leftovers = [p for p in voices_dir.iterdir() if p.name.endswith(".wav")]
+    assert leftovers == []
+
+
+def test_clone_voice_cleans_up_temp_wav_on_derive_exception(monkeypatch, tmp_path) -> None:
+    config = _FakeXttsConfig()
+    tts_model = _FakeXttsModel(config=config)
+    tts_model.derive_exc = RuntimeError("boom — simulated derive failure")
+    tts_instance = _FakeTTS(
+        "tts_models/multilingual/multi-dataset/xtts_v2",
+        synthesizer=_FakeSynthesizer(tts_model=tts_model),
+    )
+    eng, voices_dir, _tts = _make_engine(monkeypatch, tmp_path, tts_instance=tts_instance)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        eng.clone_voice("xtts-clone7", _ref_audio(), 24000, "an audition line")
+
+    pt_path, _json_path = eng._voice_paths("xtts-clone7")
+    tmp_wav_path = os.path.splitext(pt_path)[0] + ".derive-src.tmp.wav"
+    assert not os.path.exists(tmp_wav_path)
+    # The exception must also mean no artifact was persisted — a partial
+    # derive never lands a .pt a later synth could pick up.
+    assert not os.path.isfile(pt_path)
+
+
+def test_clone_voice_and_synthesize_never_interleave_on_shared_model(
+    monkeypatch, tmp_path
+) -> None:
+    """Task 8 deferred this: `clone_voice` (Task 9) is the SECOND concurrent
+    entry point into the same `self._tts` that motivated `_synth_lock`. A
+    `/synthesize` forward and a `clone_voice` derive+audition forward,
+    running on separate threads, must never interleave — `_synth_lock`
+    serialises them exactly like two `/synthesize` calls (Task 8's own
+    regression)."""
+    events: list[tuple[str, str]] = []
+    events_lock = threading.Lock()
+
+    def _record(label: str, phase: str) -> None:
+        with events_lock:
+            events.append((label, phase))
+
+    class _SlowFakeXttsModel(_FakeXttsModel):
+        # Mirrors the base class's full parameter list (not **kwargs) so
+        # `inspect.signature` in `clone_voice` still finds each named
+        # keyword's default — the same shape the REAL Xtts method has.
+        def get_conditioning_latents(
+            self,
+            audio_path: Any,
+            max_ref_length: int = 30,
+            gpt_cond_len: int = 6,
+            gpt_cond_chunk_len: int = 6,
+            librosa_trim_db: Any = None,
+            sound_norm_refs: bool = False,
+            load_sr: int = 22050,
+        ) -> tuple[str, str]:
+            _record("clone", "enter")
+            time.sleep(0.05)
+            result = super().get_conditioning_latents(
+                audio_path,
+                max_ref_length=max_ref_length,
+                gpt_cond_len=gpt_cond_len,
+                gpt_cond_chunk_len=gpt_cond_chunk_len,
+                librosa_trim_db=librosa_trim_db,
+                sound_norm_refs=sound_norm_refs,
+                load_sr=load_sr,
+            )
+            _record("clone", "exit")
+            return result
+
+    class _SlowFakeTTS(_FakeTTS):
+        def tts(self, text: str, speaker: str, language: str) -> list[float]:
+            _record("synth", "enter")
+            time.sleep(0.05)
+            _record("synth", "exit")
+            return [0.0, 0.0]
+
+    tts_model = _SlowFakeXttsModel()
+    tts_instance = _SlowFakeTTS(
+        "tts_models/multilingual/multi-dataset/xtts_v2",
+        synthesizer=_FakeSynthesizer(tts_model=tts_model),
+    )
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path, tts_instance=tts_instance)
+    eng._ensure_loaded("xtts_v2")  # warm first, so both threads race on the FORWARD only
+
+    outcome: dict[str, Any] = {}
+
+    def _do_synth() -> None:
+        outcome["synth"] = eng.synthesize("xtts_v2", "anything", "hello there")
+
+    def _do_clone() -> None:
+        outcome["clone"] = eng.clone_voice(
+            "xtts-interleave", _ref_audio(), 24000, "an audition line"
+        )
+
+    t_synth = threading.Thread(target=_do_synth)
+    t_clone = threading.Thread(target=_do_clone)
+    t_synth.start()
+    time.sleep(0.02)  # let the synth forward begin before the clone races in
+    t_clone.start()
+    t_synth.join(timeout=5)
+    t_clone.join(timeout=5)
+
+    assert "synth" in outcome and "clone" in outcome, "one of the two calls did not complete"
+    assert len(events) == 4, f"expected exactly 2 enter/exit pairs, got {events}"
+    first_label = events[0][0]
+    second_label = events[2][0]
+    assert first_label != second_label
+    assert events == [
+        (first_label, "enter"),
+        (first_label, "exit"),
+        (second_label, "enter"),
+        (second_label, "exit"),
+    ], (
+        f"forwards interleaved instead of serialising under _synth_lock: {events}"
+    )

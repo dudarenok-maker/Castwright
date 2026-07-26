@@ -1378,6 +1378,186 @@ class CoquiEngine(Engine):
         pcm = _float_audio_to_int16_le(audio)
         return SynthResult(pcm=pcm, sample_rate=sample_rate, substituted_from=substituted_from)
 
+    def _infer_from_latents(
+        self, gpt_cond_latent: Any, speaker_embedding: Any, text: str, language: str,
+    ) -> tuple[Any, int]:
+        """Config-faithful low-level XTTS inference from already-derived
+        conditioning latents. Mirrors `Xtts.synthesize`'s own build of
+        `inference_settings` — temperature/length_penalty/repetition_penalty/
+        top_k/top_p pulled from the loaded model's config (`xtts.py:432-437`)
+        — and its `enable_text_splitting=True` (`xtts.py:438` via `tts()`'s
+        default, `api.py:300`). The bare low-level `Xtts.inference()` instead
+        hardcodes temperature=0.75/repetition_penalty=10.0/top_p=0.85 and
+        defaults `enable_text_splitting=False` (`xtts.py:448-462`), then
+        asserts `text_tokens.shape[-1] < gpt_max_text_tokens` (`xtts.py:516`)
+        — so a sentence that renders fine on a stock catalogue voice can
+        hard-crash a cloned one. Deliberately does NOT replicate
+        `Xtts.synthesize`'s `language in self.config.languages` guard (with
+        its zh/zh-cn special case, `xtts.py:423`) — that validation is
+        Task 10's stated scope for the cached-latents synth branch.
+
+        CALLER MUST HOLD `_synth_lock` — this touches `self._tts` and does
+        not serialise itself, mirroring how `synthesize()`'s own forward
+        body lives inside its `with self._synth_lock:` block rather than
+        behind a second acquisition (the lock is NON-REENTRANT). Shared by
+        `clone_voice`'s audition preview and (from Task 10) the
+        cached-latents `/synthesize` branch, so both render a cloned voice
+        identically instead of one path hitting XTTS's low-fidelity
+        low-level-API defaults.
+
+        Returns (audio, sample_rate).
+        """
+        assert self._tts is not None
+        tts_model = self._tts.synthesizer.tts_model
+        config = tts_model.config
+        inference_settings = {
+            key: config.get(key, default)
+            for key, default in (
+                ("temperature", 0.75),
+                ("length_penalty", 1.0),
+                ("repetition_penalty", 10.0),
+                ("top_k", 50),
+                ("top_p", 0.85),
+            )
+        }
+        result = tts_model.inference(
+            text=text,
+            language=language,
+            gpt_cond_latent=gpt_cond_latent,
+            speaker_embedding=speaker_embedding,
+            enable_text_splitting=True,
+            **inference_settings,
+        )
+        sample_rate = int(getattr(self._tts.synthesizer, "output_sample_rate", 24000))
+        return result["wav"], sample_rate
+
+    def clone_voice(
+        self,
+        voice_id: str,
+        ref_audio: Any,
+        ref_sr: int,
+        audition_text: str,
+        language: Optional[str] = None,
+        model: str = "xtts_v2",
+        device: Optional[str] = None,
+    ) -> SynthResult:
+        """Derive engine-config-faithful XTTS conditioning latents from a
+        CALLER-supplied reference clip and persist them for later
+        cloned-voice synthesis (Task 10 reads what this writes). Mirrors
+        QwenEngine.clone_voice's shape (distil -> persist -> audition), but
+        XTTS has no transcript input — `get_conditioning_latents` is purely
+        acoustic — and the low-level `tts_model` API is entered directly
+        rather than through the catalogue `tts.tts()` wrapper `synthesize()`
+        uses.
+
+        D-C (design decision, do not reverse): latents are hand-rolled via
+        `get_conditioning_latents` + `_atomic_torch_save`, NOT Coqui's
+        built-in `CloningMixin` (`Xtts.clone_voice`/`_clone_voice`) — the
+        built-in slugifies its own filename and writes it with a plain,
+        non-atomic `torch.save`, so purge could not reliably reach it and a
+        crash mid-write would leave a corrupt artifact.
+
+        Does NOT seed any in-memory cache — Task 10 owns `_latents_cache`'s
+        epoch contract. The derived tensors here live only as local
+        variables and are dropped (GC-eligible) the moment this call
+        returns; the only durable trace is the `.pt`/`.json` pair on disk,
+        which Property 2's purge path already reaches via `_voice_paths`.
+        """
+        import torch  # noqa: PLC0415  — never `self._torch`, unload() nulls it (AC-I3)
+        import TTS as _tts_pkg  # noqa: PLC0415
+
+        self._ensure_loaded(model, device=device)
+        effective_language = (language or self._language).strip() or self._language
+
+        # Serialise the derive AND the audition forward under the SAME lock
+        # `synthesize()` uses (`_synth_lock` in __init__) — both touch the
+        # shared `self._tts` model, and Task 8's over-serialization verdict
+        # is intentional/spec-mandated (see `_synth_lock`'s docstring): a
+        # concurrent /synthesize must never interleave with a derive-in-
+        # flight against the same model object. Mirrors QwenEngine.clone_voice,
+        # which holds `_synth_lock` across its own distil+persist+audition.
+        with self._synth_lock:
+            assert self._tts is not None
+            tts_model = self._tts.synthesizer.tts_model
+            config = tts_model.config
+
+            # Trap 1: config-faithful get_conditioning_latents kwargs. A bare
+            # call defaults to gpt_cond_len=6 — LOWER fidelity than the
+            # engine's own tts()/synthesize() path. Mirror `Xtts.synthesize`'s
+            # own kwarg build (`xtts.py:425-431`) exactly: pull each key from
+            # the loaded model's config, falling back to
+            # get_conditioning_latents' OWN signature default only when the
+            # config lacks it.
+            import inspect  # noqa: PLC0415
+
+            sig = inspect.signature(tts_model.get_conditioning_latents)
+
+            def _cfg(config_key: str, param_name: str) -> Any:
+                return config.get(config_key, sig.parameters[param_name].default)
+
+            derive_kwargs = {
+                "gpt_cond_len": _cfg("gpt_cond_len", "gpt_cond_len"),
+                "gpt_cond_chunk_len": _cfg("gpt_cond_chunk_len", "gpt_cond_chunk_len"),
+                "max_ref_length": _cfg("max_ref_len", "max_ref_length"),
+                "sound_norm_refs": _cfg("sound_norm_refs", "sound_norm_refs"),
+            }
+
+            os.makedirs(self._voices_dir, exist_ok=True)
+            pt_path, json_path = self._voice_paths(voice_id)
+
+            # Trap 2: get_conditioning_latents takes an audio PATH, not an
+            # array (`xtts.py:331`) — write the normalised PCM to a temp WAV
+            # beside the artifact, derive, then ALWAYS delete it (including
+            # on a derive exception — it's scratch, never a durable
+            # artifact, so `os.remove` runs in a `finally`).
+            tmp_wav_path = os.path.splitext(pt_path)[0] + ".derive-src.tmp.wav"
+            _atomic_wav_save(_float_audio_to_int16_le(ref_audio), int(ref_sr), tmp_wav_path)
+            try:
+                gpt_cond_latent, speaker_embedding = tts_model.get_conditioning_latents(
+                    audio_path=tmp_wav_path, **derive_kwargs
+                )
+            finally:
+                try:
+                    os.remove(tmp_wav_path)
+                except OSError:
+                    pass
+
+            _atomic_torch_save(
+                torch,
+                {"gpt_cond_latent": gpt_cond_latent, "speaker_embedding": speaker_embedding},
+                pt_path,
+            )
+
+            # model_id resolution mirrors `_ensure_loaded`'s own mapping.
+            model_id = {
+                "xtts_v2": "tts_models/multilingual/multi-dataset/xtts_v2",
+            }.get(model, model)
+            coqui_version = getattr(_tts_pkg, "__version__", "unknown")
+
+            import json as _json  # noqa: PLC0415
+
+            with open(json_path, "w", encoding="utf-8") as fh:
+                _json.dump(
+                    {
+                        "voiceId": voice_id,
+                        "clone": True,
+                        "coquiVersion": coqui_version,
+                        "modelId": model_id,
+                    },
+                    fh, ensure_ascii=False, indent=2,
+                )
+
+            # Audition preview — via the shared low-level inference helper
+            # Task 10's cached-latents synth branch will also call, so both
+            # paths render a cloned voice identically instead of hitting
+            # XTTS's raw low-fidelity low-level `inference()` defaults.
+            audio, sample_rate = self._infer_from_latents(
+                gpt_cond_latent, speaker_embedding, audition_text, effective_language
+            )
+
+        log.info("Cloned + cached Coqui voice '%s' from caller clip.", voice_id)
+        return SynthResult(pcm=_float_audio_to_int16_le(audio), sample_rate=sample_rate)
+
 
 class KokoroEngine(Engine):
     """Kokoro v1 via the `kokoro-onnx` package. Tuned for quality, not VRAM
