@@ -607,6 +607,106 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
     const res = await request(app).post('/api/voice-library/sample-down/sample').send({});
     expect(res.status).toBe(502);
   });
+
+  /* #1842 — the library card's preview follows the caller's Qwen tier
+     (mirrors Task 3's cast-row fix, one level over: this route and
+     design-voice-core.ts's library design/redesign path share the
+     `qwen-<uuid>` cache scope, so they must land on the same filename for
+     the same tier). Omitted modelKey keeps older callers on 0.6B; a
+     non-Qwen modelKey is rejected outright since this route only ever
+     synthesises `qwen-<uuid>`. */
+  it('renders a library sample at the requested Qwen tier', async () => {
+    await vl.writeEntry(makeEntry());
+
+    const res = await request(app)
+      .post('/api/voice-library/uuid-1/sample')
+      .send({ modelKey: 'qwen3-tts-1.7b' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.url).toContain('qwen3-tts-1.7b');
+  });
+
+  it('defaults to 0.6B when the caller sends no modelKey', async () => {
+    await vl.writeEntry(makeEntry());
+
+    const res = await request(app).post('/api/voice-library/uuid-1/sample').send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.url).toContain('qwen3-tts-0.6b');
+  });
+
+  it('rejects a modelKey that does not route to Qwen', async () => {
+    await vl.writeEntry(makeEntry());
+
+    const res = await request(app)
+      .post('/api/voice-library/uuid-1/sample')
+      .send({ modelKey: 'kokoro-v1' });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+/* Finding 1 (#1842 review) — /design computed its cached audition's filename
+   without the persona contentToken /:voiceUuid/sample folds in, so the two
+   never actually agreed on a filename despite the module comments claiming
+   they did: a card's first Play after designing always missed cache and
+   re-synthesised. Proven behaviourally (a /sample call resolves the SAME
+   cache entry /design just warmed — `cached: true`, no `synthesize` call),
+   not by asserting on filename internals directly. */
+describe('design → sample cache pairing (#1842 finding 1)', () => {
+  function okSidecarResponse(pcm = new Uint8Array(24_000 * 2 * 0.3)) {
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'Content-Type': 'audio/L16', 'X-Sample-Rate': '24000' }),
+      arrayBuffer: async () => pcm.buffer,
+      json: async () => ({}),
+    } as unknown as Response;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('a /sample call right after /design hits the SAME cached file design already warmed', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+
+    const designRes = await request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'Nova', persona: 'a calm, measured narrator' });
+    expect(designRes.status).toBe(201);
+    const { voiceUuid } = designRes.body.entry as { voiceUuid: string };
+    const previewUrl = designRes.body.previewUrl as string;
+
+    const sampleRes = await request(app).post(`/api/voice-library/${voiceUuid}/sample`).send({});
+
+    expect(sampleRes.status).toBe(200);
+    expect(sampleRes.body.cached).toBe(true);
+    expect(sampleRes.body.url).toBe(previewUrl);
+    expect(synthesize).not.toHaveBeenCalled();
+  });
+
+  it('the pairing holds at the 1.7B tier too', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+
+    const designRes = await request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'Nova', persona: 'a calm, measured narrator', modelKey: 'qwen3-tts-1.7b' });
+    expect(designRes.status).toBe(201);
+    const { voiceUuid } = designRes.body.entry as { voiceUuid: string };
+    const previewUrl = designRes.body.previewUrl as string;
+    expect(previewUrl).toContain('qwen3-tts-1.7b');
+
+    const sampleRes = await request(app)
+      .post(`/api/voice-library/${voiceUuid}/sample`)
+      .send({ modelKey: 'qwen3-tts-1.7b' });
+
+    expect(sampleRes.status).toBe(200);
+    expect(sampleRes.body.cached).toBe(true);
+    expect(sampleRes.body.url).toBe(previewUrl);
+    expect(synthesize).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/voice-library/:voiceUuid/assign', () => {
@@ -1030,6 +1130,46 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     expect(noPersona.status).toBe(400);
   });
 
+  /* #1842 — the create modal's previewUrl must follow the caller's session
+     tier the same way POST /:uuid/sample already does (see the sibling
+     describe above): design and play share the `qwen-<uuid>` cache scope,
+     so a tier mismatch between them silently costs a second synthesis on
+     first Play. Asserting on previewUrl (which embeds modelKey via
+     voiceSampleFileName) proves the tier actually reached the sidecar
+     request/cache path, not just that the route accepted the field. */
+  it('designs at the requested Qwen tier', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+
+    const res = await request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'Nova', persona: 'a calm, measured narrator', modelKey: 'qwen3-tts-1.7b' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.previewUrl).toContain('qwen3-tts-1.7b');
+  });
+
+  it('defaults design to 0.6B when the caller sends no modelKey', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+
+    const res = await request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'Nova', persona: 'a calm, measured narrator' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.previewUrl).toContain('qwen3-tts-0.6b');
+  });
+
+  it('rejects a design modelKey that does not route to Qwen', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+
+    const res = await request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'Nova', persona: 'a calm, measured narrator', modelKey: 'kokoro-v1' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('invalid_model');
+  });
+
   it('returns 409 for a concurrent second design (single-flight lock)', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => {
@@ -1076,6 +1216,45 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
     const res = await request(app).post('/api/voice-library/nope/redesign').send({ persona: 'p' });
     expect(res.status).toBe(404);
+  });
+
+  /* #1842 — same reasoning as the design tests above: the A/B compare
+     modal's previewUrl must land at the caller's session tier, and it
+     shares the same `qwen-<uuid>` cache scope as /design and /sample. */
+  it('redesigns at the requested Qwen tier', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    await vl.writeEntry(makeEntry({ voiceUuid: 're-tier-1', name: 'Nova', provenance: 'designed' }));
+
+    const res = await request(app)
+      .post('/api/voice-library/re-tier-1/redesign')
+      .send({ persona: 'a brighter, warmer read', modelKey: 'qwen3-tts-1.7b' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.previewUrl).toContain('qwen3-tts-1.7b');
+  });
+
+  it('defaults redesign to 0.6B when the caller sends no modelKey', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    await vl.writeEntry(makeEntry({ voiceUuid: 're-tier-2', name: 'Nova', provenance: 'designed' }));
+
+    const res = await request(app)
+      .post('/api/voice-library/re-tier-2/redesign')
+      .send({ persona: 'a brighter, warmer read' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.previewUrl).toContain('qwen3-tts-0.6b');
+  });
+
+  it('rejects a redesign modelKey that does not route to Qwen', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    await vl.writeEntry(makeEntry({ voiceUuid: 're-tier-3', name: 'Nova', provenance: 'designed' }));
+
+    const res = await request(app)
+      .post('/api/voice-library/re-tier-3/redesign')
+      .send({ persona: 'a brighter, warmer read', modelKey: 'kokoro-v1' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('invalid_model');
   });
 
   /* #1801 — a 503 from the sidecar is the "no GPU capacity, free VRAM and

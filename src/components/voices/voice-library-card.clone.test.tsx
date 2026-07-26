@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { voiceLibrarySlice } from '../../store/voice-library-slice';
+import { uiSlice } from '../../store/ui-slice';
 import { VoiceLibraryCard } from './voice-library-card';
 import { api } from '../../lib/api';
 
@@ -16,7 +17,8 @@ beforeEach(() => {
   vi.mocked(api.revokeVoiceLibraryEntry).mockClear();
 });
 
-const store = () => configureStore({ reducer: { voiceLibrary: voiceLibrarySlice.reducer } });
+const store = () =>
+  configureStore({ reducer: { voiceLibrary: voiceLibrarySlice.reducer, ui: uiSlice.reducer } });
 const cloned = {
   voiceUuid: 'c1',
   name: 'Mum',

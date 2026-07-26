@@ -473,6 +473,11 @@ export const uiSelectors = {
      read would throw for them instead of just reporting "no book open". */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   bookId: (s: RootState) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null,
+  /* Same optional-chained tolerance as bookId above, for the same reason:
+     components deep in the tree (e.g. SentenceEmotionControl inside
+     ManuscriptView) are unit-tested with a store that has no `ui` slice. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ttsModelKey: (s: RootState) => (s as any).ui?.ttsModelKey ?? DEFAULT_TTS_MODEL,
   view: (s: RootState) => (s.ui.stage.kind === 'ready' ? s.ui.stage.view : null),
   chapterId: (s: RootState) => (s.ui.stage.kind === 'ready' ? s.ui.stage.currentChapterId : null),
   profileId: (s: RootState) =>

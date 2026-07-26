@@ -38,6 +38,7 @@
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { forceSidecarRecycle } from './sidecar-supervisor.js';
 import type { TtsEngine } from './index.js';
+import { setReconcileResidentQwenTiersProvider } from '../gpu/qwen-tier-reconcile-gate.js';
 
 /* Engines whose model lives in the local sidecar and must be loaded before
    synth. Gemini is a cloud API (nothing to preload); unknown engines are left
@@ -178,20 +179,27 @@ export async function ensureSidecarEngineReady(
     default), so a genuinely mixed-tier book keeps both. Best-effort: a sidecar
     that is down / mid-recycle just skips (the next run reconciles).
 
-    `keep06` / `keep17` = "this run uses the 0.6B / 1.7B base tier". */
+    `keep06` / `keep17` = "this run uses the 0.6B / 1.7B base tier". Returns
+    `true` when this call actually issued a `/unload` — `false` for every
+    other outcome (sidecar unreachable, mid-recycle, or the tier(s) not kept
+    were never resident to begin with, e.g. a fresh sidecar). #1839's
+    `evictIdleQwenBase` lever (`gpu/evict-idle-tts.ts`, via
+    `gpu/qwen-tier-reconcile-gate.ts`) threads this value through so it can
+    honestly report whether it freed anything, instead of reporting success
+    just because it was called. */
 export async function reconcileResidentQwenTiers(
   keep: { keep06: boolean; keep17: boolean },
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<boolean> {
   const base = getResolvedSidecarUrl();
   let h: Record<string, unknown> | null = null;
   try {
     const res = await fetch(`${base}/health`, { method: 'GET', signal });
     h = res.ok ? ((await res.json().catch(() => null)) as Record<string, unknown> | null) : null;
   } catch {
-    return; // sidecar unreachable — nothing to reconcile
+    return false; // sidecar unreachable — nothing to reconcile
   }
-  if (!h || h.recycle_pending === true) return;
+  if (!h || h.recycle_pending === true) return false;
 
   const unload = async (model?: '1.7b'): Promise<void> => {
     try {
@@ -209,13 +217,23 @@ export async function reconcileResidentQwenTiers(
   const evictions: Promise<void>[] = [];
   if (h.qwen_loaded === true && !keep.keep06) evictions.push(unload()); // drop the 0.6B base
   if (h.qwen_base17_loaded === true && !keep.keep17) evictions.push(unload('1.7b')); // drop the 1.7B base
-  if (evictions.length === 0) return;
+  if (evictions.length === 0) return false;
   console.info(
     `[generation] VRAM reconcile: evicting unused Qwen tier(s) ` +
       `[${!keep.keep06 && h.qwen_loaded ? '0.6B ' : ''}${!keep.keep17 && h.qwen_base17_loaded ? '1.7B' : ''}]`.trim(),
   );
   await Promise.allSettled(evictions);
+  return true;
 }
+
+/* Register this module's own reconciler into the stateless leaf gate
+   (../gpu/qwen-tier-reconcile-gate.ts) so gpu/evict-idle-tts.ts can free an
+   idle Qwen base without statically importing this module — this module's
+   OTHER exports reach gpu/engine-device.ts (dynamic import) ->
+   gpu/engine-device-state.ts -> routes/sidecar-health.ts, which closes a
+   cycle back through tts/index.ts. See qwen-tier-reconcile-gate.ts's file
+   header for the fail-closed contract this registration satisfies. */
+setReconcileResidentQwenTiersProvider(reconcileResidentQwenTiers);
 
 /* Abort-aware sleep — resolves after `ms`, or rejects promptly if `signal`
    fires (so a run-level Stop tears down the wait without serving the full gap). */

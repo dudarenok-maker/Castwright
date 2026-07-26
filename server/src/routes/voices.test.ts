@@ -619,6 +619,18 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
     expect(marlow.sampled).toBeUndefined();
   });
 
+  it('counts a 1.7B audition as sampled (#1839)', async () => {
+    /* Once auditions follow the book's tier, the cached file is named
+       <scope>-qwen3-tts-1.7b-<hash>.mp3. Anchoring the scan on the 0.6B literal
+       dropped such a character out of the Sampled tier despite a good audition
+       sitting on disk. Oduvan has no 0.6B file — only this one. */
+    writeFileSync(join(sampleCacheDir, 'v_oduvan-qwen3-tts-1.7b-c0ffee.mp3'), 'fake-mp3');
+
+    const res = await request(app).get('/api/voices?engine=qwen');
+    const oduvan = res.body.voices.find((v: { id: string }) => v.id === 'v_oduvan');
+    expect(oduvan.sampled).toBe(true);
+  });
+
   it('srv-43 Wave 2: emits human display name (qwen-<voiceId>) and keeps generated flag keyed on storage key (qwen-<uuid>)', async () => {
     /* Fail-before/pass-after for the display-name / generated-flag split.
        A character carries BOTH a voiceId ('wren') AND a voiceUuid ('ABC123'),

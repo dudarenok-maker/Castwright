@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { NoCapacityError } from '../tts/tts-errors.js';
 
 /* vi.hoisted so the inner factory below can close over the same vi.fn()
    instance we drive from the tests. selectTtsProvider() returns this stub
@@ -346,6 +347,30 @@ describe('voice-sample router', () => {
          collide with this entry. */
       expect(res.body.url).toMatch(/gemini-2\.5-flash/);
     });
+
+    it('re-picks a matching model key when a raw sample names a different engine', async () => {
+      const res = await request(app)
+        .post('/api/voices/any-voice/sample')
+        .send({ modelKey: 'coqui-xtts-v2', rawEngine: 'kokoro', rawSpeaker: 'af_heart' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.modelKey).toBe('coqui-xtts-v2'); // response echoes the REQUEST key
+      /* The EFFECTIVE key routed to the provider is the re-picked one —
+         the stronger check, since the response body always echoes back
+         whatever modelKey the request sent. */
+      const args = synthesize.mock.calls[0][0] as { modelKey: string };
+      expect(args.modelKey).toBe('kokoro-v1');
+    });
+
+    it('leaves the request key alone when it already routes to the requested engine', async () => {
+      const res = await request(app)
+        .post('/api/voices/any-voice/sample')
+        .send({ modelKey: 'gemini-3.1-flash', rawEngine: 'gemini', rawSpeaker: 'Charon' });
+
+      expect(res.status).toBe(200);
+      const args = synthesize.mock.calls[0][0] as { modelKey: string };
+      expect(args.modelKey).toBe('gemini-3.1-flash');
+    });
   });
 
   describe('srv-43 voiceUuid resolution', () => {
@@ -448,6 +473,23 @@ describe('voice-sample router', () => {
         .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
       expect(res.status).toBe(502);
       expect(res.body.code).toBe('tts_failed');
+    });
+
+    it('503 no_capacity with the named blockers when admission gives up (#1839)', async () => {
+      synthesize.mockRejectedValueOnce(
+        new NoCapacityError('qwen', 4100, 'cuda:0', [
+          { model: 'Coqui XTTS', remedy: 'Use its Stop button, at the top of the window.' },
+        ]),
+      );
+      const res = await request(app)
+        .post('/api/voices/v_marlow/sample')
+        .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe('no_capacity');
+      expect(res.body.blockers).toEqual([
+        { model: 'Coqui XTTS', remedy: 'Use its Stop button, at the top of the window.' },
+      ]);
+      expect(res.body.message).toContain('Coqui XTTS');
     });
   });
 });

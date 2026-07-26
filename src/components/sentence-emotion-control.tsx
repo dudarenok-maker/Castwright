@@ -20,6 +20,7 @@ import {
   playEmotionVariantSample,
   variantVoiceIdFor,
 } from '../lib/play-emotion-variant';
+import { modelKeyForEngineChoice } from '../lib/tts-models';
 import { useMarkCharacterStaleIfRendered } from '../lib/stale-chapters';
 import { IconPlay, IconSpinner } from '../lib/icons';
 import type { Character, Emotion } from '../lib/types';
@@ -62,6 +63,7 @@ export function SentenceEmotionControl({
      sampleScopeFor's old unscoped fallback when a book id genuinely isn't
      available, matching every other sampleScopeFor call site. */
   const bookId = useAppSelector(uiSelectors.bookId) ?? undefined;
+  const ttsModelKey = useAppSelector(uiSelectors.ttsModelKey);
   const [open, setOpen] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -105,7 +107,14 @@ export function SentenceEmotionControl({
     setPreviewing(true);
     setNote(null);
     try {
-      const { fellBackToBase } = await playEmotionVariantSample(character, current, playback, bookId);
+      const modelKey = modelKeyForEngineChoice('qwen', ttsModelKey);
+      const { fellBackToBase } = await playEmotionVariantSample(
+        character,
+        current,
+        playback,
+        modelKey,
+        bookId,
+      );
       if (fellBackToBase) {
         setNote(`no ${current} variant for ${firstName} — renders neutral`);
       }

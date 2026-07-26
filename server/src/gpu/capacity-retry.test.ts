@@ -135,6 +135,75 @@ describe('withCapacityRetry', () => {
     expect(capacityProbeRead).not.toHaveBeenCalled();
   });
 
+  it('frees an idle TTS base before falling back to the poll', async () => {
+    const evictIdleTts = vi.fn().mockResolvedValue(true);
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      return calls === 1 ? noCapacityResponse(4000, 'cuda:0') : new Response('ok', { status: 200 });
+    });
+
+    const res = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      evictIdleTts,
+      /* Analyzer lever off, so the TTS lever is the only thing that can rescue it. */
+      analyzerEvictWouldHelp: async () => false,
+      pollMs: 0,
+    });
+
+    expect(res.status).toBe(200);
+    expect(evictIdleTts).toHaveBeenCalledTimes(1);
+    expect(doPost).toHaveBeenCalledTimes(2); // refused, freed, retried OK
+  });
+
+  it('#1839 finding 1: evictIdleTts reporting false does not burn an immediate no-op retry — it still takes the poll wait', async () => {
+    /* Before the fix, evictIdleTts (evict-idle-tts.ts's evictIdleQwenBase)
+       reported `true` whenever it was CALLED, even when it froze nothing —
+       so `if (await evictIdleTts()) continue;` fired an immediate retry with
+       no poll wait, wasting one of the limited maxAttempts on a guaranteed
+       repeat 503. With the honest `false`, this attempt must instead fall
+       through to the normal poll wait (measured via elapsed wall-clock time,
+       since maxAttempts:2 leaves exactly one wait before giving up). */
+    const evictIdleTts = vi.fn().mockResolvedValue(false); // ran, but froze nothing
+    const doPost = vi.fn(async () => noCapacityResponse(4000, 'cuda:0'));
+    const pollMs = 40;
+
+    const start = Date.now();
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'qwen',
+        evictIdleTts,
+        analyzerEvictWouldHelp: async () => false,
+        pollMs,
+        maxAttempts: 2,
+      }),
+    ).rejects.toThrow(NoCapacityError);
+    const elapsed = Date.now() - start;
+
+    expect(evictIdleTts).toHaveBeenCalledTimes(1);
+    expect(doPost).toHaveBeenCalledTimes(2);
+    // A wasted immediate `continue` would finish in well under pollMs; a
+    // real poll wait takes at least pollMs before the second doPost fires.
+    expect(elapsed).toBeGreaterThanOrEqual(pollMs - 5);
+  });
+
+  it('does not retry the TTS eviction more than once', async () => {
+    const evictIdleTts = vi.fn().mockResolvedValue(true);
+    const doPost = vi.fn(async () => noCapacityResponse(4000, 'cuda:0'));
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'qwen',
+        evictIdleTts,
+        analyzerEvictWouldHelp: async () => false,
+        pollMs: 0,
+        maxAttempts: 3,
+      }),
+    ).rejects.toThrow(NoCapacityError);
+
+    expect(evictIdleTts).toHaveBeenCalledTimes(1);
+  });
+
   it('(f) getCapacityWaiterCount() reflects a parked waiter while polling, back to 0 after', async () => {
     expect(getCapacityWaiterCount()).toBe(0);
     let calls = 0;

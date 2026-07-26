@@ -9,14 +9,18 @@
    user hears. The Voice-library response (GET /api/voices) is authoritative;
    prefer reading `voice.ttsVoice` when it's available. */
 
-import type { Character, Voice, TtsModelKey } from './types';
+import type { Character, Voice, TtsEngine } from './types';
 
-/* qwen is a BESPOKE per-character engine (plan 108) — no preset catalog;
-   its "voice" is a designed voiceId living in overrideTtsVoices.qwen.name.
-   Kept in this union so the engine-aware resolver below can label it
-   ("Designed voice" / "No voice designed yet") instead of falsely picking
-   a Coqui/Kokoro preset for it. */
-export type TtsEngine = 'coqui' | 'gemini' | 'piper' | 'kokoro' | 'qwen';
+/* Single source of truth for the engine union: the OpenAPI-derived type in
+   ./types (BaseVoice.engine). Re-exported here so the many
+   `import { TtsEngine } from './tts-voice-mapping'` call sites keep working,
+   while there is exactly ONE declaration to keep in step with the contract.
+
+   qwen is a BESPOKE per-character engine (plan 108) — no preset catalog; its
+   "voice" is a designed voiceId living in overrideTtsVoices.qwen.name. It is in
+   the union so the engine-aware resolver below can label it ("Designed voice" /
+   "No voice designed yet") instead of falsely picking a Coqui/Kokoro preset. */
+export type { TtsEngine };
 
 export interface TtsVoiceAssignment {
   provider: TtsEngine;
@@ -364,23 +368,6 @@ export function resolveDisplayTtsVoice(
     return own;
   }
   return voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c, projectEngine);
-}
-
-/* The single model key the Qwen bespoke engine routes through. Mirror of
-   the server's engineForModelKey: any 'qwen…' key maps to engine 'qwen'. */
-export const QWEN_MODEL_KEY: TtsModelKey = 'qwen3-tts-0.6b';
-
-/* Resolve the modelKey a sample/audition should use for a character whose
-   effective engine may diverge from the project default. Qwen is the only
-   per-character override that diverges (the picker offers kokoro|qwen), and
-   it needs its own model key so the server routes to the bespoke engine
-   instead of the project's Kokoro/Coqui key. Every non-qwen engine keeps the
-   project key — that key already routes to the engine the character uses. */
-export function sampleModelKeyForEngine(
-  effectiveEngine: TtsEngine,
-  projectModelKey: TtsModelKey,
-): TtsModelKey {
-  return effectiveEngine === 'qwen' ? QWEN_MODEL_KEY : projectModelKey;
 }
 
 /* Profile-only resolver — same mapping as resolveTtsVoiceForCharacter,

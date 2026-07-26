@@ -249,6 +249,15 @@ Design rationale:
   `api = USE_MOCKS ? mock : real`. Components only ever import from `api.*`;
   they never know which is which. `.env.development` sets the flag on.
 - **RTK immer** — slice reducers mutate via Immer drafts. Don't rewrite to spreads.
+- **`server/src/gpu/` reaches a route module through a leaf gate, never an
+  import** — a static import, a dynamic `import()`, and even `import type`
+  all close an import cycle through `tts/index.ts`. Anything under
+  `server/src/gpu/` that needs a value from a route module goes through a
+  stateless leaf gate the owning module registers an accessor into instead.
+  Three exist: `gpu/active-generation-gate.ts`, `gpu/qwen-tier-reconcile-gate.ts`,
+  `gpu/sidecar-health-gate.ts` — each fails closed. Verify with
+  `npx madge --circular --extensions ts server/src`, which should stay at
+  its 15-cycle baseline.
 
 ## Testing discipline (REQUIRED for every change)
 
@@ -398,14 +407,23 @@ Adding a new view? Append a case to `e2e/responsive/coverage.spec.ts` — it aut
 - **Model lifecycle is split between eager and button-driven** —
   _Don't confuse "default generation engine" with "eagerly-resident model":_
   **Qwen is the default/main generation engine** (the hot path a book render
-  uses); **Kokoro is the always-available fallback** that happens to be the
-  one *eagerly resident* (it's cheap — ~1 GB), gated by the `PRELOAD_KOKORO`
-  setting (`server/src/config/registry.ts:553`, registry key `tts.preload.kokoro` — "Turn off if Qwen is your main
-  engine"). Resident ≠ default-for-generation.
-  - **Kokoro v1 (eagerly-resident fallback, new in 2026-05)**: eagerly loaded at sidecar
-    startup, ~1 s cold load, ~1 GB VRAM. Permanently resident alongside
-    the analyzer Ollama on an 8 GB GPU. NO Load/Stop pill — it's just
-    always available once `server/tts-sidecar/scripts/install-kokoro.ps1` (or its
+  uses); **Kokoro is the always-available fallback**, cheap enough (~1 GB) to
+  optionally keep resident, gated by the `PRELOAD_KOKORO` setting
+  (`server/src/config/registry.ts:635`, registry key `tts.preload.kokoro` —
+  defaults **off** since fs-60, because non-English books can use Coqui too,
+  so an always-hot English-only engine stopped being a universally good
+  default; "Turn off if Qwen is your main engine" still applies for anyone
+  who does turn it on). Resident ≠ default-for-generation.
+  - **Kokoro v1 (fallback engine, new in 2026-05)**: warms on demand at the
+    first synth that needs it (~1 s cold load, ~1 GB VRAM) unless
+    `PRELOAD_KOKORO=1`, in which case it's eagerly loaded at sidecar startup
+    and stays permanently resident alongside the analyzer Ollama on an 8 GB
+    GPU. A Stop pill exists (the same `ModelControlPill` Coqui uses) and is
+    reachable via the Status popover (residency-gated, but behind a click) as
+    well as, since #1839, the global TTS notice banner
+    (`src/components/tts-notice-banner.tsx`) for direct access whenever it
+    happens to be resident. It's available once
+    `server/tts-sidecar/scripts/install-kokoro.ps1` (or its
     cross-platform `install-kokoro.mjs`/`.sh` wrappers) has dropped the
     weights into `server/tts-sidecar/voices/kokoro/`. Voice catalog
     filtered to English-only (28 voices: `af_*`, `am_*`, `bf_*`, `bm_*`).

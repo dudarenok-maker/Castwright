@@ -46,7 +46,7 @@ import { selectPrincipalCast } from '../lib/principal-cast';
 import { mergeSeriesCast } from '../lib/merge-series-cast';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
 import { sampleScopeFor } from '../lib/sample-scope';
-import { sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
+import { engineForModelKey, modelKeyForEngineChoice } from '../lib/tts-models';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { buildCharacterHint } from '../lib/build-character-hint';
@@ -274,7 +274,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
       const { voiceId, previewUrl } = await api.designQwenVoice(bookId, characterId, {
         persona,
         sampleVoiceId,
-        modelKey: sampleModelKeyForEngine('qwen', ttsModelKey),
+        modelKey: modelKeyForEngineChoice('qwen', ttsModelKey),
       });
       dispatch(
         rebaselineActions.proposalReady({
@@ -456,12 +456,17 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
         usedIn: 0,
         source: 'current',
       } as Voice);
+    /* Audition in THIS character's own effective engine, not the book's
+       default (#1839) — mirrors cast.tsx's effectiveEngineFor / profile-
+       drawer.tsx's currentEngine, and this file's own designOne, which
+       already resolves the Qwen design tier through the same mapper. */
+    const effectiveEngine = character.ttsEngine ?? engineForModelKey(ttsModelKey);
     try {
       await playSampleWithAutoLoad({
         args: {
           voiceId,
           voice: subject,
-          modelKey: ttsModelKey,
+          modelKey: modelKeyForEngineChoice(effectiveEngine, ttsModelKey),
           characterHint: buildCharacterHint(character),
         },
         playback,

@@ -171,6 +171,21 @@ describe('CompareCastModal sample playback', () => {
     expect(call.args.characterHint?.gender).toBe('male');
   });
 
+  it("resolves each side's audition to ITS OWN character engine, not the book's default (#1839)", async () => {
+    /* renderModal's default ttsModelKey is 'kokoro-v1' (the book's session
+       default). Side A (Halloran) is overridden to coqui in this book, so
+       its audition must resolve to coqui-xtts-v2 — mirroring cast.tsx /
+       profile-drawer.tsx — not the raw session key. Pre-fix, the play call
+       passed ttsModelKey straight through and both sides would resolve to
+       'kokoro-v1' regardless of any per-character override. */
+    renderModal({ characters: [{ ...charA, ttsEngine: 'coqui' }, charB] });
+    fireEvent.click(screen.getByLabelText(/Play sample for Halloran/));
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.modelKey).toBe(
+      'coqui-xtts-v2',
+    );
+  });
+
   it('bug #1411: scopes each side\'s sample by its OWN bookId in a cross-book compare', async () => {
     /* charA/charB are both voiceId-less, so their sample scope falls back to
        char-<bookId>-<id>. A cross-book compare (the Voices view's

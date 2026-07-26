@@ -55,7 +55,7 @@ describe('playEmotionVariantSample', () => {
       },
     } as unknown as Character;
 
-    const res = await playEmotionVariantSample(c, 'angry', playback);
+    const res = await playEmotionVariantSample(c, 'angry', playback, 'qwen3-tts-0.6b');
 
     expect(res.fellBackToBase).toBe(false);
     const args = playSampleWithAutoLoad.mock.calls[0][0].args;
@@ -65,8 +65,25 @@ describe('playEmotionVariantSample', () => {
     expect(args.modelKey).toBe('qwen3-tts-0.6b');
   });
 
+  it('plays at the caller-resolved tier, not a hardcoded constant', async () => {
+    /* Regression: the modelKey used to be pinned to the QWEN_MODEL_KEY (0.6B)
+       constant regardless of what the caller resolved. 1.7B specifically,
+       since 0.6B is both the old hardcoded value and the non-Qwen floor. */
+    const c = {
+      ...baseChar,
+      overrideTtsVoices: {
+        qwen: { name: 'qwen-marrow', variants: { angry: { name: 'qwen-marrow-angry' } } },
+      },
+    } as unknown as Character;
+
+    await playEmotionVariantSample(c, 'angry', playback, 'qwen3-tts-1.7b');
+
+    const args = playSampleWithAutoLoad.mock.calls[0][0].args;
+    expect(args.modelKey).toBe('qwen3-tts-1.7b');
+  });
+
   it('falls back to the base scope + voice when the emotion variant is missing', async () => {
-    const res = await playEmotionVariantSample(baseChar, 'sad', playback);
+    const res = await playEmotionVariantSample(baseChar, 'sad', playback, 'qwen3-tts-0.6b');
 
     expect(res.fellBackToBase).toBe(true);
     const args = playSampleWithAutoLoad.mock.calls[0][0].args;

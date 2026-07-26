@@ -22,6 +22,7 @@ import { castJsonPath, audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import {
+  canonicalModelKeyForEngine,
   engineForModelKey,
   isTtsModelKey,
   selectTtsProvider,
@@ -223,24 +224,10 @@ chapterSpliceRouter.post(
         /* Per-character engine routing (plan 108), mirrored from generation. */
         const providerCache = new Map<TtsEngine, { provider: TtsProvider; modelKey: TtsModelKey }>();
         providerCache.set(engine, { provider, modelKey });
-        const canonicalModelKeyForEngine = (e: TtsEngine): TtsModelKey => {
-          switch (e) {
-            case 'kokoro':
-              return 'kokoro-v1';
-            case 'qwen':
-              return 'qwen3-tts-0.6b';
-            case 'coqui':
-              return 'coqui-xtts-v2';
-            case 'piper':
-              return 'piper-en-us-medium';
-            case 'gemini':
-              return modelKey.startsWith('gemini-') ? modelKey : 'gemini-2.5-flash';
-          }
-        };
         const resolveForEngine = (e: TtsEngine): { provider: TtsProvider; modelKey: TtsModelKey } => {
           const cached = providerCache.get(e);
           if (cached) return cached;
-          const mk = canonicalModelKeyForEngine(e);
+          const mk = canonicalModelKeyForEngine(e, modelKey);
           const built = { provider: selectTtsProvider(mk), modelKey: mk };
           providerCache.set(e, built);
           return built;

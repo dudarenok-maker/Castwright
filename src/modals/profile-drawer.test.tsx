@@ -1733,6 +1733,49 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     expect(args.modelKey).toBe(store.getState().ui.ttsModelKey);
     expect(args.voice.overrideTtsVoices?.qwen).toBeUndefined();
   });
+
+  it('auditions a Kokoro-overridden character in Kokoro, not the book default engine (#1839)', async () => {
+    /* Book default is Coqui XTTS; this character is overridden to Kokoro via the
+       engine picker (which offers coqui — profile-drawer.tsx:1163). Before the
+       fix the request carried the PROJECT key (coqui-xtts-v2) and
+       voice-sample.ts:121 derives the engine FROM that key on the
+       character-audition branch, so the preview played in Coqui. */
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    vi.mocked(playSampleWithAutoLoad).mockResolvedValueOnce({ analyzerEvicted: false });
+    const { store } = renderWithBook({ ...baseChar, ttsEngine: 'kokoro' });
+    act(() => {
+      store.dispatch(uiSlice.actions.setTtsModelKey('coqui-xtts-v2'));
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Play 12s sample/i }));
+
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.modelKey).toBe('kokoro-v1');
+  });
+
+  it('auditions a Qwen character at the book tier, not the 0.6B floor (#1839)', async () => {
+    /* The Start-generation modal writes ui.ttsModelKey and the cast pins
+       together (layout.tsx:1731-1760), so a 1.7B session key means "this book
+       renders at 1.7B" — the preview must match. */
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    vi.mocked(playSampleWithAutoLoad).mockResolvedValueOnce({ analyzerEvicted: false });
+    const { store } = renderWithBook({
+      ...baseChar,
+      ttsEngine: 'qwen',
+      voiceStyle: 'a steady adult voice',
+      overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+    });
+    act(() => {
+      store.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-1.7b'));
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Play 12s sample/i }));
+
+    await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.modelKey).toBe(
+      'qwen3-tts-1.7b',
+    );
+  });
 });
 
 describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, Task 16)', () => {
