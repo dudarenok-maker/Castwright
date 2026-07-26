@@ -62,11 +62,12 @@ import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { collectRenderedQwenVoiceNames } from '../audio/segments-io.js';
 import { listVoiceSampleFiles, sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 
-/* The single model key the bespoke Qwen engine synthesises under (mirror of
-   the frontend's QWEN_MODEL_KEY / sampleModelKeyForEngine). Cached auditions
-   are named `<scope>-qwen3-tts-0.6b-<hash>.mp3`, so the `sampled` scan anchors
-   on this literal. Revisit if a second Qwen synth key is ever added. */
-const QWEN_SAMPLE_MODEL_KEY = 'qwen3-tts-0.6b';
+/* The model keys the bespoke Qwen engine synthesises under — BOTH quality tiers
+   (fs-56). Cached auditions are named `<scope>-<modelKey>-<hash>.mp3`, and an
+   audition follows the book's session tier (#1839), so the `sampled` scan must
+   match either. Mirror of the frontend's modelKeyForEngineChoice Qwen arm
+   (src/lib/tts-models.ts). */
+const QWEN_SAMPLE_MODEL_KEYS = ['qwen3-tts-0.6b', 'qwen3-tts-1.7b'] as const;
 
 export const voicesRouter = Router();
 
@@ -244,13 +245,13 @@ async function aggregateVoices(
   /* The voice-sample cache is workspace-global (not per-book), so read it
      once. Empty for preset engines — the `sampled` lifecycle tier is
      Qwen-only, matching the `generated` invariant. A character has been
-     "Sampled" when a `<scope>-qwen3-tts-0.6b-*.mp3` audition exists, where
-     `scope = voiceId ?? char-<characterId>`. */
+     "Sampled" when a `<scope>-qwen3-tts-{0.6b,1.7b}-*.mp3` audition exists,
+     where `scope = voiceId ?? char-<bookId>__<characterId>`. */
   const sampleFiles = engine === 'qwen' ? listVoiceSampleFiles() : [];
-  const hasCachedQwenSample = (sampleScope: string): boolean => {
-    const prefix = `${sampleScope}-${QWEN_SAMPLE_MODEL_KEY}-`;
-    return sampleFiles.some((f) => f.startsWith(prefix));
-  };
+  const hasCachedQwenSample = (sampleScope: string): boolean =>
+    QWEN_SAMPLE_MODEL_KEYS.some((key) =>
+      sampleFiles.some((f) => f.startsWith(`${sampleScope}-${key}-`)),
+    );
 
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {

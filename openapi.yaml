@@ -4915,7 +4915,7 @@ components:
             True when a 12s audition has been synthesised for this voiceId —
             the lifecycle tier between "Designed" and "Generated". Populated
             only for bespoke Qwen voices (the server checks the voice-sample
-            cache for a `<scope>-qwen3-tts-0.6b-*.mp3` file when the engine
+            cache for a `<scope>-qwen3-tts-{0.6b,1.7b}-*.mp3` file when the engine
             query is 'qwen'); preset voices omit it. Drives the new "Sampled"
             cast Status pill / Voices badge. Cross-book like `generated`; a
             `generated` voice outranks it. Absent ⇒ not sampled / not applicable.
