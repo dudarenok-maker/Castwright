@@ -548,3 +548,154 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejec
     expect(segFile.segments[1].qa?.status).toBe('ok');
   });
 });
+
+/* fs-38 Wave 3c (fix wave, Task 6) — mirrors generation.ts/chapter-splice.ts's
+   fs-2 force-to-Qwen loop test: a cloned character riding the book default on
+   a non-English book must RETARGET to the eligible clone-capable engine
+   carrying the clone, not get blindly forced onto 'qwen'. Uses
+   VERDICT_MANUSCRIPT_ID so the module-level loadAnalysisCache mock returns
+   real sentence data (id 2, "Yes.") for castor's dead-silent segment, which
+   the signal scan flags and the repair loop then re-records. */
+describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-38 Wave 3c cloned-character retarget)', () => {
+  let makeBookId: (author: string, series: string, title: string) => string;
+  let audioDirFn: (bookDir: string) => string;
+  let encodePcmToAudio: (pcm: Buffer, sr: number, opts: { format: 'mp3'; quality: number }) => Promise<Buffer>;
+  let synthesiseChapterMock: any;
+
+  const AUTHOR3 = 'Clone Retarget Author';
+  const SERIES3 = 'Standalones';
+
+  beforeAll(async () => {
+    const paths = await import('../workspace/paths.js');
+    const mp3 = await import('../tts/mp3.js');
+    const synth = await import('../tts/synthesise-chapter.js');
+    makeBookId = paths.makeBookId;
+    audioDirFn = paths.audioDir;
+    encodePcmToAudio = mp3.encodePcmToAudio;
+    synthesiseChapterMock = vi.mocked(synth.synthesiseChapter);
+  });
+
+  /** A single character ('castor') with a dead-silent segment (flagged by the
+      signal scan and re-recorded by the repair loop) on an 'es' book,
+      carrying `overrideTtsVoicesInit` for the caller to vary per test. */
+  async function scaffoldCloneRetargetBook(
+    bookTitle: string,
+    overrideTtsVoices: Record<string, { name: string; libraryUuid: string; provenance: 'cloned' }>,
+  ): Promise<{ bookId: string; chapterSlug: string }> {
+    const id = makeBookId(AUTHOR3, SERIES3, bookTitle);
+    const bookDir = join(workspaceRoot, 'books', AUTHOR3, SERIES3, bookTitle);
+    const thisAudioRoot = audioDirFn(bookDir);
+    mkdirSync(thisAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: id,
+        manuscriptId: VERDICT_MANUSCRIPT_ID,
+        title: bookTitle,
+        author: AUTHOR3,
+        series: SERIES3,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        language: 'es',
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:02' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'castor', name: 'Castor', gender: 'female', attributes: [], overrideTtsVoices },
+        ],
+      }),
+    );
+
+    const castorSilent = Buffer.alloc(SR * 2); // 1s of dead silence — flagged by the signal scan
+    const mp3Bytes = await encodePcmToAudio(castorSilent, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(thisAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: id,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 1.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [{ groupIndex: 0, characterId: 'castor', sentenceIds: [2], startSec: 0, endSec: 1.0 }],
+      }),
+    );
+
+    return { bookId: id, chapterSlug: SLUG };
+  }
+
+  it('retargets a coqui-cloned character to coqui on an es book, instead of forcing qwen', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — accepted on attempt 1
+      sampleRate: SR,
+    }));
+
+    const { bookId: id } = await scaffoldCloneRetargetBook('Coqui Clone Story', {
+      coqui: { name: 'Cloned Voice', libraryUuid: 'uuid-coqui', provenance: 'cloned' },
+    });
+
+    // modelKey 'kokoro-v1' → request default engine 'kokoro' (not clone-capable,
+    // not eligible for 'es' either) — proves the retarget comes from the
+    // character's own cloned slot, not the request default.
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+
+    expect(synthesiseChapterMock).toHaveBeenCalled();
+    const lastArgs = synthesiseChapterMock.mock.calls[synthesiseChapterMock.mock.calls.length - 1][0] as {
+      cast: Array<{ id: string; ttsEngine?: string }>;
+    };
+    const castor = lastArgs.cast.find((c) => c.id === 'castor');
+    /* The regression this fix closes: pre-fix this was 'qwen' (forced), or
+       (with the naive "just skip it" fix) left unset entirely — both wrong. */
+    expect(castor?.ttsEngine).toBeDefined();
+    expect(castor?.ttsEngine).not.toBe('qwen');
+    expect(castor?.ttsEngine).toBe('coqui');
+  });
+
+  it('keeps a doubly-cloned character on the request default (qwen) when both engines qualify', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+    }));
+
+    const { bookId: id } = await scaffoldCloneRetargetBook('Dual Clone Story', {
+      qwen: { name: 'Qwen Clone', libraryUuid: 'uuid-qwen', provenance: 'cloned' },
+      coqui: { name: 'Coqui Clone', libraryUuid: 'uuid-coqui', provenance: 'cloned' },
+    });
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'qwen3-tts-0.6b' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+
+    expect(synthesiseChapterMock).toHaveBeenCalled();
+    const lastArgs = synthesiseChapterMock.mock.calls[synthesiseChapterMock.mock.calls.length - 1][0] as {
+      cast: Array<{ id: string; ttsEngine?: string }>;
+    };
+    const castor = lastArgs.cast.find((c) => c.id === 'castor');
+    expect(castor?.ttsEngine).toBe('qwen');
+  });
+});

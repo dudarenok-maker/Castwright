@@ -13,6 +13,7 @@ import {
   characterHasClonedSlot,
   clonedSlotForEngine,
   hasClonedProvenance,
+  resolveClonedRetargetEngine,
 } from './clone-engines.js';
 
 describe('clone-engines vocabulary', () => {
@@ -391,6 +392,105 @@ describe('clone-engines vocabulary', () => {
         },
       };
       expect(hasClonedProvenance(character, 'coqui')).toBe(false);
+    });
+  });
+
+  /* Task 6 (fix wave) — resolveClonedRetargetEngine backs the fs-2
+     force-to-Qwen loop's retarget: which eligible clone-capable engine
+     should carry a cloned character, instead of blindly forcing 'qwen'. */
+  describe('resolveClonedRetargetEngine picks the eligible engine carrying the clone', () => {
+    it('returns coqui when only the coqui slot is cloned and coqui is eligible', () => {
+      const character = {
+        overrideTtsVoices: {
+          coqui: {
+            name: 'Cloned Voice',
+            libraryUuid: 'uuid-1',
+            provenance: 'cloned' as const,
+          },
+        },
+      };
+      expect(resolveClonedRetargetEngine(character, ['qwen', 'coqui'], 'gemini')).toBe('coqui');
+    });
+
+    it('returns undefined when the cloned engine is not eligible for this book language', () => {
+      const character = {
+        overrideTtsVoices: {
+          coqui: {
+            name: 'Cloned Voice',
+            libraryUuid: 'uuid-1',
+            provenance: 'cloned' as const,
+          },
+        },
+      };
+      // coqui is not in the eligible list (e.g. an unsupported language) —
+      // caller falls back to the historical 'qwen' force.
+      expect(resolveClonedRetargetEngine(character, ['qwen'], 'gemini')).toBeUndefined();
+    });
+
+    it('prefers currentEngine when both qwen and coqui slots are cloned and eligible', () => {
+      const character = {
+        overrideTtsVoices: {
+          qwen: {
+            name: 'Qwen Clone',
+            libraryUuid: 'uuid-qwen',
+            provenance: 'cloned' as const,
+          },
+          coqui: {
+            name: 'Coqui Clone',
+            libraryUuid: 'uuid-coqui',
+            provenance: 'cloned' as const,
+          },
+        },
+      };
+      expect(resolveClonedRetargetEngine(character, ['qwen', 'coqui'], 'qwen')).toBe('qwen');
+      expect(resolveClonedRetargetEngine(character, ['qwen', 'coqui'], 'coqui')).toBe('coqui');
+    });
+
+    it('falls back to the sole eligible clone engine when currentEngine does not qualify', () => {
+      const character = {
+        overrideTtsVoices: {
+          coqui: {
+            name: 'Coqui Clone',
+            libraryUuid: 'uuid-coqui',
+            provenance: 'cloned' as const,
+          },
+        },
+      };
+      // currentEngine 'gemini' is not clone-capable and has no cloned slot —
+      // the only cloned+eligible candidate (coqui) wins regardless.
+      expect(resolveClonedRetargetEngine(character, ['qwen', 'coqui'], 'gemini')).toBe('coqui');
+    });
+
+    it('returns undefined for a character with no cloned slot at all', () => {
+      const character = {
+        overrideTtsVoices: {
+          qwen: {
+            name: 'Designed Voice',
+            libraryUuid: 'uuid',
+            provenance: 'designed' as const,
+          },
+        },
+      };
+      expect(resolveClonedRetargetEngine(character, ['qwen', 'coqui'], 'gemini')).toBeUndefined();
+    });
+
+    it('returns undefined when overrideTtsVoices is absent', () => {
+      expect(resolveClonedRetargetEngine({}, ['qwen', 'coqui'], 'gemini')).toBeUndefined();
+    });
+
+    it('is fail-safe: a malformed cloned slot (missing libraryUuid) still counts', () => {
+      const character = {
+        overrideTtsVoices: {
+          coqui: {
+            name: 'Coqui Clone',
+            provenance: 'cloned' as const,
+            // no libraryUuid — clonedSlotForEngine would say "not resolvable",
+            // but this is a routing decision, not a resolution, so it must
+            // still count as cloned.
+          },
+        },
+      };
+      expect(resolveClonedRetargetEngine(character, ['qwen', 'coqui'], 'gemini')).toBe('coqui');
     });
   });
 });

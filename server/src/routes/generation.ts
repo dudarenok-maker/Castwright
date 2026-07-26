@@ -61,6 +61,7 @@ import {
   type TtsProvider,
 } from '../tts/index.js';
 import { resolveCharacterEngine, computeUsedQwenTiers } from '../tts/per-character-engine.js';
+import { resolveClonedRetargetEngine } from '../tts/clone-engines.js';
 import { finalizeChapterAudioWrite } from '../audio/finalize-chapter-write.js';
 import { clearMismatchedDesignedVoices } from '../tts/verify-designed-voice-language.js';
 import {
@@ -794,7 +795,13 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        before. */
     for (const c of cast.characters) {
       if (c.ttsEngine && eligibleEngines.includes(c.ttsEngine)) continue;
-      c.ttsEngine = 'qwen';
+      /* fs-38 Wave 3c — a coqui/qwen-cloned character riding the book default
+         must retarget to whichever eligible clone-capable engine actually
+         carries its cloned slot (preferring the current default `engine`
+         when both qualify), NOT get force-moved to qwen where it has no
+         voice at all. Falls back to the historical blind 'qwen' force for a
+         non-cloned (or cloned-but-ineligible) character. */
+      c.ttsEngine = resolveClonedRetargetEngine(c, eligibleEngines, engine) ?? 'qwen';
     }
     /* fs-2 / fs-32c — force re-design on cross-language reuse. Shared with the
        splice re-record path: clears any designed Qwen voice whose baked

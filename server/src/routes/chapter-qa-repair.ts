@@ -43,6 +43,7 @@ import {
   type AsrClassification,
 } from '../tts/segment-asr-qa.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
+import { resolveClonedRetargetEngine } from '../tts/clone-engines.js';
 import { isNonEnglish, resolveEligibleEngines } from '../tts/language.js';
 import { ALL_TTS_ENGINES } from '../tts/model-keys.js';
 import { getLastKnownQwenInstallState } from '../workspace/user-settings.js';
@@ -308,8 +309,18 @@ chapterQaRepairRouter.post(
       if (nonEnglishBook) {
         for (const c of cast.characters) {
           if (c.ttsEngine && eligibleEngines.includes(c.ttsEngine)) continue;
-          c.ttsEngine = 'qwen';
+          /* fs-38 Wave 3c — mirror generation/splice: retarget a cloned
+             character to whichever eligible clone-capable engine actually
+             carries its cloned slot (preferring the current default `engine`
+             when both qualify), instead of blindly forcing 'qwen' where it
+             has no voice at all. */
+          c.ttsEngine = resolveClonedRetargetEngine(c, eligibleEngines, engine) ?? 'qwen';
         }
+        /* Unlike generation.ts and chapter-splice.ts, this route does NOT call
+           clearMismatchedDesignedVoices here — a reused designed Qwen voice
+           whose baked manifest language differs from this book's is not
+           re-checked on the QA-repair path. Pre-existing asymmetry, not
+           introduced by this fix; noted but out of scope here (follow-up). */
       }
       const requiredEngines = new Set(cast.characters.map((c) => resolveCharacterEngine(c, engine)));
       const qwenInUse = requiredEngines.has('qwen');

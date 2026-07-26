@@ -117,6 +117,47 @@ export function hasClonedProvenance(c: { overrideTtsVoices?: unknown }, engine: 
   );
 }
 
+/** fs-38 Wave 3c — fs-2's non-English force-to-Qwen loop (generation.ts,
+    chapter-splice.ts, chapter-qa-repair.ts) used to blindly overwrite
+    `ttsEngine = 'qwen'` for any character not already on an eligible engine.
+    That force-moved a coqui-cloned character riding the book default onto
+    qwen even on a book where coqui itself IS eligible (ru/es/fr/de/zh/ja) —
+    stranding the character on an engine that carries no cloned (or designed)
+    voice for it.
+
+    This decides which eligible clone-capable engine should carry the
+    character instead of the blind 'qwen' force: the eligible clone-capable
+    engine (qwen or coqui) whose slot is actually cloned, preferring
+    `currentEngine` (the book's request-default engine, NOT the character's
+    pre-loop `ttsEngine` — that's the value being replaced) when both
+    qualify. Returns undefined when the character has no eligible cloned
+    slot at all — the caller's existing `?? 'qwen'` fallback then reproduces
+    the historical force for a non-cloned (or cloned-but-ineligible)
+    character, so this function only ever ADDS a retarget, never removes the
+    fallback.
+
+    FAIL-SAFE by design — built on `hasClonedProvenance`, not
+    `clonedSlotForEngine`. This is a routing decision ("which engine should
+    carry this character"), not an artifact resolution ("give me the uuid to
+    load/derive/purge") — the uuid is never used here, so validating it would
+    only add a way for a malformed-but-real cloned slot to be silently
+    skipped and forced onto qwen anyway, which is the exact regression this
+    function exists to close. */
+export function resolveClonedRetargetEngine(
+  c: { overrideTtsVoices?: unknown },
+  eligibleEngines: readonly TtsEngine[],
+  currentEngine: TtsEngine | undefined,
+): CloneEngine | undefined {
+  const candidates = CLONE_ENGINE_LIST.filter(
+    (e) => eligibleEngines.includes(e) && hasClonedProvenance(c, e),
+  );
+  if (candidates.length === 0) return undefined;
+  if (currentEngine && (candidates as readonly TtsEngine[]).includes(currentEngine)) {
+    return currentEngine as CloneEngine;
+  }
+  return candidates[0];
+}
+
 /** RESOLUTION test — "which clone is this, exactly?" Used by anything that
     needs the uuid in order to resolve, derive, or purge an artifact (it
     RETURNS the libraryUuid, so it MUST validate it — an undefined or

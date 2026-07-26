@@ -348,3 +348,153 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-le
     );
   });
 });
+
+/* fs-38 Wave 3c (fix wave, Task 6) — mirrors generation.ts's fs-2 force-to-Qwen
+   loop test: a cloned character riding the book default on a non-English book
+   must RETARGET to the eligible clone-capable engine carrying the clone, not
+   get blindly forced onto 'qwen'. Only reachable through the rerecord branch
+   (chapter-splice.ts only runs the language-force loop there — remix never
+   touches ttsEngine). Reuses TITLE_LED_MANUSCRIPT_ID so the module-level
+   loadAnalysisCache mock returns real sentence data for this fixture's
+   chapter. */
+describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-38 Wave 3c cloned-character retarget', () => {
+  let cloneBookId: string;
+  let cloneAudioRoot: string;
+
+  beforeAll(async () => {
+    const [{ makeBookId: makeId }, mp3] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('../tts/mp3.js'),
+    ]);
+    const author = 'Clone Retarget Author';
+    const series = 'Standalones';
+    const title = 'Clone Retarget Story';
+    cloneBookId = makeId(author, series, title);
+    const bookDir = join(workspaceRoot, 'books', author, series, title);
+    cloneAudioRoot = join(bookDir, 'audio');
+    mkdirSync(cloneAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: cloneBookId,
+        manuscriptId: TITLE_LED_MANUSCRIPT_ID,
+        title,
+        author,
+        series,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        language: 'es',
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:01' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          {
+            id: 'amy',
+            name: 'Amy',
+            gender: 'female',
+            attributes: [],
+            overrideTtsVoices: {
+              coqui: { name: 'Cloned Voice', libraryUuid: 'uuid-coqui', provenance: 'cloned' },
+            },
+          },
+        ],
+      }),
+    );
+
+    const chapterPcm = tone(1.0, 12000);
+    const mp3Bytes = await mp3.encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(cloneAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    writeFileSync(
+      join(cloneAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: cloneBookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 1.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+        ],
+      }),
+    );
+  });
+
+  it('retargets a coqui-cloned character to coqui on an es book, instead of forcing qwen', async () => {
+    const synthMod = await import('../tts/synthesise-chapter.js');
+    const synthMock = vi.mocked(synthMod.synthesiseChapter);
+    synthMock.mockClear();
+
+    // modelKey 'kokoro-v1' → request default engine 'kokoro' (not clone-capable,
+    // not eligible for 'es' either) — proves the retarget comes from the
+    // character's own cloned slot, not the request default.
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(cloneBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'splice_complete');
+    expect(done, `expected splice_complete, got ${res.text}`).toBeTruthy();
+
+    expect(synthMock).toHaveBeenCalled();
+    const lastArgs = synthMock.mock.calls[synthMock.mock.calls.length - 1][0] as {
+      cast: Array<{ id: string; ttsEngine?: string }>;
+    };
+    const amy = lastArgs.cast.find((c) => c.id === 'amy');
+    /* The regression this fix closes: pre-fix this was 'qwen' (forced), or
+       (with the naive "just skip it" fix) left unset entirely — both wrong. */
+    expect(amy?.ttsEngine).toBeDefined();
+    expect(amy?.ttsEngine).not.toBe('qwen');
+    expect(amy?.ttsEngine).toBe('coqui');
+  });
+
+  it('keeps a doubly-cloned character on the request default (qwen) when both engines qualify', async () => {
+    writeFileSync(
+      join(join(workspaceRoot, 'books', 'Clone Retarget Author', 'Standalones', 'Clone Retarget Story'), '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          {
+            id: 'amy',
+            name: 'Amy',
+            gender: 'female',
+            attributes: [],
+            overrideTtsVoices: {
+              qwen: { name: 'Qwen Clone', libraryUuid: 'uuid-qwen', provenance: 'cloned' },
+              coqui: { name: 'Coqui Clone', libraryUuid: 'uuid-coqui', provenance: 'cloned' },
+            },
+          },
+        ],
+      }),
+    );
+
+    const synthMod = await import('../tts/synthesise-chapter.js');
+    const synthMock = vi.mocked(synthMod.synthesiseChapter);
+    synthMock.mockClear();
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(cloneBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'qwen3-tts-0.6b' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'splice_complete');
+    expect(done, `expected splice_complete, got ${res.text}`).toBeTruthy();
+
+    expect(synthMock).toHaveBeenCalled();
+    const lastArgs = synthMock.mock.calls[synthMock.mock.calls.length - 1][0] as {
+      cast: Array<{ id: string; ttsEngine?: string }>;
+    };
+    const amy = lastArgs.cast.find((c) => c.id === 'amy');
+    expect(amy?.ttsEngine).toBe('qwen');
+  });
+});

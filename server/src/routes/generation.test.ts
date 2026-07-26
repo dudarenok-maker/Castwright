@@ -1031,6 +1031,147 @@ describe('POST /api/books/:bookId/generation — plan 70c auto-heal', () => {
   });
 });
 
+/* ── fs-38 Wave 3c (fix wave, Task 6) — the fs-2 force-to-Qwen loop must
+   RETARGET a cloned character to whichever eligible clone-capable engine
+   carries the clone, not blindly force it onto 'qwen'. Pre-fix, a
+   coqui-cloned character riding the book default on a non-English book got
+   force-moved to 'qwen' even when coqui itself is eligible for that
+   language — stranding the character on an engine with no voice for it.
+   These assert against the character snapshot the route hands to
+   synthesiseChapter (mocked below), which is the real seam the loop's
+   mutation feeds. */
+describe('POST /api/books/:bookId/generation — fs-38 Wave 3c cloned-character retarget', () => {
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+  const castPath = () => join(bookDir, '.audiobook', 'cast.json');
+  let fsModule: typeof import('node:fs');
+  let originalState: string;
+  let originalCast: string;
+
+  beforeAll(async () => {
+    fsModule = await import('node:fs');
+    originalState = fsModule.readFileSync(statePath(), 'utf8');
+    originalCast = fsModule.readFileSync(castPath(), 'utf8');
+  });
+
+  afterEach(() => {
+    fsModule.writeFileSync(statePath(), originalState);
+    fsModule.writeFileSync(castPath(), originalCast);
+    const audioRoot = join(bookDir, 'audio');
+    if (fsModule.existsSync(audioRoot)) fsModule.rmSync(audioRoot, { recursive: true, force: true });
+  });
+
+  function setBookLanguage(lang: string): void {
+    const state = JSON.parse(fsModule.readFileSync(statePath(), 'utf8')) as Record<string, unknown>;
+    state.language = lang;
+    fsModule.writeFileSync(statePath(), JSON.stringify(state));
+  }
+
+  it('retargets a coqui-cloned narrator to coqui on an es book, instead of forcing qwen', async () => {
+    setBookLanguage('es');
+    fsModule.writeFileSync(
+      castPath(),
+      JSON.stringify({
+        characters: [
+          {
+            id: 'narrator',
+            name: 'Narrator',
+            attributes: ['observational'],
+            overrideTtsVoices: {
+              coqui: { name: 'Cloned Voice', libraryUuid: 'uuid-coqui', provenance: 'cloned' },
+            },
+          },
+        ],
+      }),
+    );
+
+    let capturedCast: Array<{ id: string; ttsEngine?: string }> | undefined;
+    synthesiseImpl = async (args: unknown) => {
+      const a = args as {
+        cast: Array<{ id: string; ttsEngine?: string }>;
+        sentences: Array<{ id: number }>;
+      };
+      capturedCast = a.cast;
+      return {
+        pcm: Buffer.alloc(2),
+        sampleRate: 24000,
+        durationSec: 1,
+        segments: [
+          {
+            characterId: 'narrator',
+            voiceName: 'Cloned Voice',
+            sampleStart: 0,
+            sampleEnd: 1,
+            sentenceIds: a.sentences.map((s) => s.id),
+          },
+        ],
+      };
+    };
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+    expect(res.status).toBe(200);
+
+    const narrator = capturedCast?.find((c) => c.id === 'narrator');
+    /* The regression this fix closes: pre-fix this was 'qwen' (forced), or
+       (with the naive "just skip it" fix) left unset entirely — both wrong. */
+    expect(narrator?.ttsEngine).toBeDefined();
+    expect(narrator?.ttsEngine).not.toBe('qwen');
+    expect(narrator?.ttsEngine).toBe('coqui');
+  });
+
+  it('keeps a doubly-cloned narrator on the request default (qwen) when both engines qualify', async () => {
+    setBookLanguage('es');
+    fsModule.writeFileSync(
+      castPath(),
+      JSON.stringify({
+        characters: [
+          {
+            id: 'narrator',
+            name: 'Narrator',
+            attributes: ['observational'],
+            overrideTtsVoices: {
+              qwen: { name: 'Qwen Clone', libraryUuid: 'uuid-qwen', provenance: 'cloned' },
+              coqui: { name: 'Coqui Clone', libraryUuid: 'uuid-coqui', provenance: 'cloned' },
+            },
+          },
+        ],
+      }),
+    );
+
+    let capturedCast: Array<{ id: string; ttsEngine?: string }> | undefined;
+    synthesiseImpl = async (args: unknown) => {
+      const a = args as {
+        cast: Array<{ id: string; ttsEngine?: string }>;
+        sentences: Array<{ id: number }>;
+      };
+      capturedCast = a.cast;
+      return {
+        pcm: Buffer.alloc(2),
+        sampleRate: 24000,
+        durationSec: 1,
+        segments: [
+          {
+            characterId: 'narrator',
+            voiceName: 'Qwen Clone',
+            sampleStart: 0,
+            sampleEnd: 1,
+            sentenceIds: a.sentences.map((s) => s.id),
+          },
+        ],
+      };
+    };
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'qwen3-tts-0.6b', force: true, chapterIds: [1] });
+    expect(res.status).toBe(200);
+
+    const narrator = capturedCast?.find((c) => c.id === 'narrator');
+    expect(narrator?.ttsEngine).toBe('qwen');
+  });
+});
+
 /* ── Plan 80 — regenerate applies manuscript-edits overlay before synth ──
    The user edits per-sentence speaker attribution in the manuscript view;
    those edits flush to manuscript-edits.json via PUT /state. Pre-fix, the
