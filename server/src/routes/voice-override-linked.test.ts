@@ -279,6 +279,70 @@ describe('POST /api/books/:bookId/cast/:characterId/voice-override-linked', () =
     expect(c?.voiceUuid).toBe('U-CLONE');
   });
 
+  it('refuses (does not write) a group SET that would replace a cloned slot with a MALFORMED libraryUuid', async () => {
+    /* CRITICAL-2 regression guard: the SET-path guard must test provenance
+       ALONE (fail-safe), never the uuid-validating clonedSlotForEngine — a
+       cloned slot with a missing/malformed libraryUuid is still a consented
+       clone and must still be refused. Before the fix, clonedSlotForEngine
+       returned undefined for a slot with no usable libraryUuid, `blocked`
+       stayed false, and the dangerous voiceUuid unification + slot overwrite
+       proceeded — a real person's voice silently swapped for a stock one. */
+    writeBookOnDisk(AUTHOR, SERIES, BOOK_A, bookA, [
+      {
+        id: 'wren',
+        name: 'Wren',
+        role: 'character',
+        color: 'unset',
+        aliases: ['Wren Sparrow'],
+        lines: 100,
+        voiceUuid: 'U-CLONE',
+        overrideTtsVoices: {
+          // provenance:'cloned' but NO usable libraryUuid (missing).
+          qwen: { name: 'wren-clone', provenance: 'cloned' },
+        },
+      },
+    ]);
+    const res = await callLinked(bookA, 'wren', {
+      override: { engine: 'qwen', name: 'someone-else' },
+    });
+    expect(res.body.updated.some((u: { bookId: string }) => u.bookId === bookA)).toBe(false);
+    expect(res.body.failed.some((f: { bookId: string }) => f.bookId === bookA)).toBe(true);
+    const c = findChar(BOOK_A, 'wren');
+    const slot = (c?.overrideTtsVoices as Record<string, Record<string, unknown>>)?.qwen;
+    expect(slot?.name).toBe('wren-clone');
+    expect(slot?.provenance).toBe('cloned');
+    expect(c?.voiceUuid).toBe('U-CLONE');
+  });
+
+  it('refuses (does not write) a group SET that would replace a cloned slot with a NON-STRING libraryUuid', async () => {
+    /* Same fail-unsafe gap, non-string variant (e.g. a corrupted cast.json
+       carrying a number). */
+    writeBookOnDisk(AUTHOR, SERIES, BOOK_A, bookA, [
+      {
+        id: 'wren',
+        name: 'Wren',
+        role: 'character',
+        color: 'unset',
+        aliases: ['Wren Sparrow'],
+        lines: 100,
+        voiceUuid: 'U-CLONE',
+        overrideTtsVoices: {
+          qwen: { name: 'wren-clone', libraryUuid: 12345, provenance: 'cloned' },
+        },
+      },
+    ]);
+    const res = await callLinked(bookA, 'wren', {
+      override: { engine: 'qwen', name: 'someone-else' },
+    });
+    expect(res.body.updated.some((u: { bookId: string }) => u.bookId === bookA)).toBe(false);
+    expect(res.body.failed.some((f: { bookId: string }) => f.bookId === bookA)).toBe(true);
+    const c = findChar(BOOK_A, 'wren');
+    const slot = (c?.overrideTtsVoices as Record<string, Record<string, unknown>>)?.qwen;
+    expect(slot?.name).toBe('wren-clone');
+    expect(slot?.provenance).toBe('cloned');
+    expect(c?.voiceUuid).toBe('U-CLONE');
+  });
+
   it('refuses (does not write) a group CLEAR that would wipe a cloned slot', async () => {
     writeBookOnDisk(AUTHOR, SERIES, BOOK_A, bookA, [
       {

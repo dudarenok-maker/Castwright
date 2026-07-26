@@ -36,7 +36,7 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
-import { characterHasClonedSlot, clonedSlotForEngine } from '../tts/clone-engines.js';
+import { characterHasClonedSlot, hasClonedProvenance } from '../tts/clone-engines.js';
 
 export const voiceOverrideLinkedRouter = Router();
 
@@ -197,8 +197,15 @@ async function applyToBook(
 
   for (const c of cast.characters) {
     if (!want.has(c.id)) continue;
+    /* fs-38 Wave 3c Task 4 CRITICAL-2 fix: the SET-path guard must test
+       provenance ALONE (hasClonedProvenance), never the uuid-validating
+       clonedSlotForEngine — a cloned slot with a missing/malformed
+       libraryUuid is still a consented clone. A guard deciding whether to
+       *preserve* a slot must fail safe (preserve when in doubt); only code
+       that needs the uuid to resolve/derive/purge an artifact should
+       validate it. */
     const blocked =
-      override === null ? characterHasClonedSlot(c) : Boolean(clonedSlotForEngine(c, override.engine));
+      override === null ? characterHasClonedSlot(c) : hasClonedProvenance(c, override.engine);
     if (blocked) {
       throw new Error(
         `Character "${c.name ?? c.id}" has a consented cloned voice — series rebaseline refuses to ` +
