@@ -20,7 +20,7 @@ import { withCapacityRetry } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from './tts-errors.js';
 import { SidecarDesignError } from './design-voice-core.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
-import { CLONE_CAPABLE_ENGINES, cloneStorageKey, type CloneEngine } from './clone-engines.js';
+import { CLONE_CAPABLE_ENGINES, cloneStorageKey, manifestSlotFor, type CloneEngine } from './clone-engines.js';
 
 export interface DeriveArtifactInput {
   masterPcm: Buffer;
@@ -45,14 +45,6 @@ export interface DeriveArtifactResult {
   modelId?: string;
 }
 
-/** The sidecar route slot each clone engine's derive POST targets —
-    'qwen' -> /qwen/clone-voice, 'coqui' -> /xtts/clone-voice — matching
-    `manifestSlotFor` (clone-engines.ts) so this can never drift from the
-    manifest-slot vocabulary the rest of the wave shares. */
-function cloneRouteSlot(engine: CloneEngine): 'qwen' | 'xtts' {
-  return engine === 'coqui' ? 'xtts' : 'qwen';
-}
-
 export async function deriveEngineArtifact(
   voiceUuid: string,
   engine: CloneEngine,
@@ -67,7 +59,7 @@ export async function deriveEngineArtifact(
   }
 
   const sidecarUrl = (opts.sidecarUrl ?? getResolvedSidecarUrl()).replace(/\/+$/, '');
-  const target = `${sidecarUrl}/${cloneRouteSlot(engine)}/clone-voice`;
+  const target = `${sidecarUrl}/${manifestSlotFor(engine)}/clone-voice`;
   const headers: Record<string, string> = {
     'Content-Type': 'audio/L16',
     'X-Sample-Rate': String(input.sampleRate),
