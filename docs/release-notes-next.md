@@ -106,3 +106,43 @@ history at cut time.
   the cloud fallback is opt-out (on by default, switchable off), never framed as opt-in-only or
   "never touches the cloud". Guarded by `src/data/help-topics.test.ts`; item-count assertions bumped
   43 → 45.
+
+---
+
+## 🔒 Security & dependencies
+
+- **Sidecar engine deps: kokoro-onnx 0.5.0, a real ONNX Runtime pin, and FastAPI 0.140 via `lifespan`** (#1846).
+  Clears the actionable half of the `side-17` umbrella (#893), which an audit found was carrying three
+  stale rationales.
+  - `kokoro-onnx` `>=0.4.0,<0.5.0` → `>=0.5.0,<0.6.0` across all three overlays. The entire upstream
+    delta is `kokoro_onnx/log.py` dropping `colorlog` for stdlib `logging`; `Kokoro.create()`'s signature
+    and the private `.sess` attribute are unchanged. Two new contract tests in `test_kokoro.py` run
+    against the REAL installed package (the rest of that file stubs `kokoro_onnx` via `sys.modules`) —
+    they exist because the indexed-device pin rebuilds `.sess` in a warn-only `try/except`, so an
+    upstream rename would silently unpin the device rather than raise.
+  - `onnxruntime-gpu` gets an explicit `>=1.27,<1.28` constraint in `scripts/install-ort.mjs`. There was
+    no pin before — the swap ran `pip install --force-reinstall --no-deps onnxruntime-gpu` unversioned,
+    so the runtime executing Kokoro was whatever was latest on the user's install date. The constraint
+    lives in the installer, never the overlays (macOS reads those and has no wheel).
+    **Existing installs on 1.28.x will step back to 1.27.x on first upgrade** — both upgrade paths
+    (`bootstrap-venv.mjs`, `apply.ts`) re-run the swap.
+  - All 12 `@app.on_event` handlers → one `lifespan` context manager (`main.py`), then `fastapi`
+    `0.115` → `0.140` and `uvicorn` `0.30` → `0.51` (starlette rides transitively to 1.3.1).
+    Startup order preserved exactly; shutdown stays in registration order (FastAPI runs it forwards —
+    reversing would be a behaviour change). Teardown is in a `finally`, not after a bare `yield`,
+    because `_DefaultLifespan.__aexit__` discards `exc_info` and runs shutdown unconditionally.
+    `test_lifespan_order.py` pins both sequences against the actually-wired `lifespan_context`.
+  - **Correction to the rationale**: the migration was NOT a hard prerequisite, contrary to what the
+    working notes claimed. FastAPI 0.140 re-implements `_DefaultLifespan`, `APIRouter._startup()`,
+    `._shutdown()`, `.add_event_handler()` and `.on_event()` locally to preserve backward compatibility
+    after Starlette removed them. `on_event` is deprecated on a compat shim carrying its own removal
+    TODO — that is the real reason to move, and the comments now say so.
+  - Follow-ups folded in: `httpx2` adopted in `requirements-dev.txt` (#1843) so Starlette 1.3.1's
+    `testclient` stops warning about the deprecated `httpx` fallback (`httpx` stays — gradio and
+    safehttpx still import it); and `install-ort.mjs` now reports the package it actually swapped in
+    (#1844) instead of hardcoding `onnxruntime-directml`, which was wrong on every profile that
+    reaches the swap.
+  - Still upstream-blocked, with corrected reasons in #893: `torch` 2.12/2.13 is blocked because
+    **torchaudio's last release is 2.11.0**, NOT by the cu130 driver bump originally recorded;
+    `transformers` 5.x and `huggingface_hub` 1.x are both frozen by `qwen-tts==0.1.1`'s exact
+    `transformers==4.57.3` pin (#1228).
