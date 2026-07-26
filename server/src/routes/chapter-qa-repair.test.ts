@@ -41,6 +41,19 @@ vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
   return { ...real, synthesiseChapter: vi.fn() };
 });
 
+/* #1839 finding 3 — the route used to carry its own local canonicalModelKeyForEngine
+   lambda (pinning every 'qwen' resolution to the 0.6B constant) instead of calling
+   the shared server/src/tts/model-keys.ts mapper. Spy-wrap the real export so a
+   test can assert the route's `resolveForEngine` actually DELEGATES to it — the
+   only way to observe the local-lambda-vs-shared-mapper distinction, since (as
+   verified for this fix) their outputs happen to coincide on every input reachable
+   through this route today; only the "was the real one called" signal would have
+   caught the old local copy. */
+vi.mock('../tts/model-keys.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../tts/model-keys.js')>();
+  return { ...real, canonicalModelKeyForEngine: vi.fn(real.canonicalModelKeyForEngine) };
+});
+
 /* Only exercised by the "acoustic-only rejection" describe block below (which
    turns on qa.speaker.autoRepair via SEG_SPK_AUTO_REPAIR for its own tests) —
    returns a vector orthogonal to that block's centroid fixture, so its
@@ -363,6 +376,38 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
     expect(segFile.segments[1].suspect).toBe(true);
     expect(segFile.segments[1].qa?.status).toBe('suspect');
     expect(segFile.segments[1].qaRetries).toBeGreaterThan(0);
+  });
+
+  it('#1839 finding 3 — resolveForEngine("qwen") delegates to the shared canonicalModelKeyForEngine mapper, not a local hardcoded copy', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+    }));
+
+    const modelKeys = await import('../tts/model-keys.js');
+    const spy = vi.mocked(modelKeys.canonicalModelKeyForEngine);
+    spy.mockClear();
+
+    const { bookId: id } = await scaffoldVerdictBook('Mapper Delegation Story');
+
+    // Primary run engine is Kokoro (non-Qwen) so a per-character Qwen route is
+    // a providerCache MISS and must fall through to the mapper — the only
+    // reachable path that actually calls resolveForEngine('qwen').
+    await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    expect(synthesiseChapterMock).toHaveBeenCalled();
+    const opts = synthesiseChapterMock.mock.calls[0][0];
+    spy.mockClear();
+    const resolved = opts.resolveForEngine('qwen');
+
+    // The old local lambda never touched the shared export at all — this call
+    // count is exactly what distinguishes "we deleted the duplicate table" from
+    // "we still have a local copy that happens to agree on this input".
+    expect(spy).toHaveBeenCalledWith('qwen', 'kokoro-v1');
+    expect(resolved.modelKey).toBe('qwen3-tts-0.6b');
   });
 });
 
