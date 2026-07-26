@@ -65,6 +65,7 @@ import {
   evaluateDesignLiveness,
 } from '../tts/design-voice-core.js';
 import type { DesignLivenessResult } from '../tts/design-voice-core.js';
+import { httpStatusForSidecarError } from './sidecar-error-status.js';
 export { SidecarDesignError, evaluateDesignLiveness };
 export type { DesignLivenessResult };
 
@@ -541,12 +542,17 @@ qwenVoiceRouter.post(
       return res.status(200).json({ voiceId, url, voiceUuid });
     } catch (e) {
       /* The core throws a user-facing message for sidecar/encode/timeout
-         failures — surface it as a 502 (the sidecar boundary). */
+         failures. Map the sidecar's OWN status through (#1801) — a 503 is the
+         retryable "no GPU capacity, free VRAM and retry" signal, and flattening
+         it to 502 left the caller unable to tell it apart from a broken
+         gateway. Unreachable/cancelled (status 0) still lands on 502. */
       const { GpuBusyError } = await import('../gpu/gpu-load.js');
       if (e instanceof GpuBusyError) {
         return res.status(409).json({ error: e.message, code: 'gpu_busy' });
       }
-      return res.status(502).json({ error: (e as Error).message || 'Voice design failed.' });
+      return res
+        .status(httpStatusForSidecarError(e))
+        .json({ error: (e as Error).message || 'Voice design failed.' });
     }
   },
 );

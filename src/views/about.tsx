@@ -1,7 +1,7 @@
 /* /about — the brand page (reached from Admin, #/about).
    Rebuilt for fe-37: the only in-product explanation of the product. Seven
    blocks (brand guidelines §2/§3): identity · what it is · coming next (teaser,
-   flagged) · engine credits · licence · what's new · alpha ask.
+   flagged) · engine credits · licence · what's new · beta ask.
    All brand copy comes from src/lib/brand.ts so a tagline change is one diff. */
 
 import type { ReactNode } from 'react';
@@ -58,11 +58,15 @@ export function AboutView() {
           <p className="text-ink/70 max-w-prose">
             Castwright turns any book into a full-cast performance — every character its own
             voice, kept true from book one to the last. One narrator can&rsquo;t be everyone: the
-            apprentice sounds thirteen; the swordsmith sounds seventy and a forge.
+            apprentice sounds thirteen; the swordsmith sounds seventy and a forge. It performs seven
+            languages — English, Spanish, French, German, Russian, Chinese and Japanese — reading
+            each book in its own tongue.
           </p>
           <p className="text-ink/70 max-w-prose">
             It renders at home, on a machine you may already own. {HARDWARE_LINE} Your book never
-            leaves the house — no meter, no monthly fee, no server that can take your library away.
+            leaves the house — no meter, no monthly fee, no server that can take your library away. A
+            companion app — Android now, iOS at launch — plays your library anywhere, or export to
+            the audiobook player you already use.
           </p>
         </section>
 
@@ -128,9 +132,9 @@ export function AboutView() {
             Help shape it
           </h2>
           <p className="text-ink/70 max-w-prose">
-            Castwright is in alpha. We&rsquo;d love more testers — especially on Apple Silicon Macs
-            and non-NVIDIA GPUs, where we have the fewest miles. Tell us how it runs on your machine
-            at <ExternalLink href={`https://${DOMAIN}`}>{DOMAIN}</ExternalLink>.
+            Castwright is in open beta. We&rsquo;d love more testers — especially on Apple Silicon
+            Macs and non-NVIDIA GPUs, where we have the fewest miles. Tell us how it runs on your
+            machine at <ExternalLink href={`https://${DOMAIN}`}>{DOMAIN}</ExternalLink>.
           </p>
         </section>
       </div>

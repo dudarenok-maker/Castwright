@@ -63,6 +63,14 @@ history at cut time.
   Castwright distils a reusable cloned voice — auditioned, ECAPA fidelity-checked, and castable
   like a designed one. A cloned voice is never silently substituted: if Qwen is unavailable the
   chapter fails loud instead. (Refs #624)
+- **Voice design and audition endpoints stop flattening the sidecar's status to 502.** The
+  library `design` / `redesign` / `sample` routes and the character `design-voice` route now map
+  the sidecar's own **5xx** through, so a **503** ("no GPU capacity — free VRAM and retry")
+  survives as a 503 instead of reading as a broken gateway, and `NoCapacityError` — which carries
+  no status at all — maps to 503. A sidecar **4xx** deliberately stays 502: it describes our
+  request to the sidecar, not the caller's request to us, and forwarding it would collide with
+  the 409 these routes already use for "design run in progress" / `gpu_busy`. The `0` the
+  unreachable/cancelled paths carry also clamps to 502. (#1801)
 - **fs-38 Wave 3b2 — cloned-voice resolver + lifecycle** (Refs #624). Closes the resolver/
   lifecycle half of the never-substitute invariant 3b1's single `applyQwenFallback` exemption
   only partially covered. A new `clone-voice-resolver.ts` (pure Healthy/Repairable/Broken

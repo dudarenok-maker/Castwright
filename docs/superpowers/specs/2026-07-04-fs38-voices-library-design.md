@@ -422,6 +422,20 @@ persists; re-attest only if the person name changes.
    wrap of existing paths — plus the config-registry setting + route-gating middleware
    (§6 reversibility). No clone yet; immediately useful — this wave alone delivers fs-12.
 2. **Catalogue rebuild** — engine filter + facets (small; may ride wave 1's train).
+   **Deferred 2026-07-25 — pick up after Wave 3 merges** (handover brief:
+   [#624 comment](https://github.com/dudarenok-maker/Castwright/issues/624#issuecomment-5074876545)).
+   Sequencing call, not a data one: Wave 3 reworks the same voices surface
+   (`voices.tsx`, `base-voices.ts`, `#/voices`, `voice-mapping.ts`, `openapi.yaml`),
+   so a parallel small rebuild only invites conflicts on `#/voices` — presets are the
+   deliberately last-priority section (§1.3). Note the Catalogue holds base *presets*
+   only; Wave 3's LibriVox voices are `imported` and land in **My voices**, so waiting
+   does **not** enrich the Catalogue's facets. Two findings for the pickup: (a) the
+   server emits no `gender`/`language` on base voices today (`base-voices.ts` → bare
+   `{ engine, name }`; both fields already exist on the `BaseVoice` schema) — enriching
+   `BaseVoiceEntry` is the first task; (b) only **gender** has real signal (Kokoro
+   name-prefix + Coqui/Gemini `*_PROFILE_VOICES` reverse-lookup) — the language facet is
+   a no-op over English-only Kokoro + untagged Coqui/Gemini and should be dropped until
+   language-diverse base voices exist. Qwen has no presets, so it won't be a segment.
 3. **Clone pipeline** — the ffmpeg **audio ingest stage** (§3, first — everything else
    consumes its output), sidecar `/qwen/clone-voice` (extracted from `design_voice`),
    XTTS latents-cache derive + synthesize-from-latents, upload path + quality checks +

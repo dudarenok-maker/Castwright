@@ -68,7 +68,7 @@ describe('AboutView', () => {
     expect(screen.getByText(new RegExp(`Castwright v${buildInfo.version}`))).toBeInTheDocument();
   });
 
-  it('carries the alpha-tester ask with the castwright.ai link', () => {
+  it('carries the beta-tester ask with the castwright.ai link', () => {
     renderAbout();
     const link = screen.getByRole('link', { name: new RegExp(DOMAIN.replace('.', '\\.'), 'i') });
     expect(link).toHaveAttribute('href', `https://${DOMAIN}`);

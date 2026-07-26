@@ -62,6 +62,7 @@ import { assessCloneFidelity } from '../tts/clone-fidelity.js';
 import { isTransient } from '../tts/retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 import { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
+import { httpStatusForSidecarError } from './sidecar-error-status.js';
 
 export const voiceLibraryRouter = Router();
 
@@ -169,7 +170,9 @@ voiceLibraryRouter.post('/design', async (req: Request, res: Response) => {
       return res.status(409).json({ error: 'design already running' });
     }
     console.error('[voice-library] design failed', e);
-    return res.status(502).json({ error: (e as Error).message || 'Voice design failed.' });
+    return res
+      .status(httpStatusForSidecarError(e))
+      .json({ error: (e as Error).message || 'Voice design failed.' });
   }
 });
 
@@ -204,7 +207,9 @@ voiceLibraryRouter.post('/:voiceUuid/redesign', async (req: Request, res: Respon
       return res.status(409).json({ error: 'design already running' });
     }
     console.error('[voice-library] redesign failed', e);
-    return res.status(502).json({ error: (e as Error).message || 'Voice redesign failed.' });
+    return res
+      .status(httpStatusForSidecarError(e))
+      .json({ error: (e as Error).message || 'Voice redesign failed.' });
   }
 });
 
@@ -451,7 +456,9 @@ voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response
     return res.json({ url: publicUrl, cached: false });
   } catch (e) {
     console.error('[voice-library] sample failed', e);
-    return res.status(502).json({ error: (e as Error).message || 'Voice sample failed.' });
+    return res
+      .status(httpStatusForSidecarError(e))
+      .json({ error: (e as Error).message || 'Voice sample failed.' });
   }
 });
 
@@ -783,8 +790,16 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
        below. Duck-typing preserves status for both. */
     const sde = e as { name?: string; status?: number; code?: string; reason?: string; message?: string };
     if (sde?.name === 'SidecarDesignError' && typeof sde.status === 'number') {
-      const status = sde.status >= 400 && sde.status <= 599 ? sde.status : 502;
-      return res.status(status).json({ error: sde.reason ?? sde.message ?? 'Clone derivation failed.', code: sde.code });
+      /* Status policy comes from the shared helper (#1822) so this route and
+         the design/sample routes above can't drift apart on what a sidecar
+         failure means to OUR caller — notably that a sidecar 4xx describes our
+         request to IT, so it surfaces as 502 rather than misattributing the
+         fault to the client. The duck-type above stays: it decides WHETHER
+         this is a sidecar-shaped error, the helper decides what status it maps
+         to. Body shape (reason/code) is this route's own. */
+      return res
+        .status(httpStatusForSidecarError(sde))
+        .json({ error: sde.reason ?? sde.message ?? 'Clone derivation failed.', code: sde.code });
     }
     console.error('[voice-library] clone failed', e);
     return res.status(502).json({ error: (e as Error).message || 'Voice clone failed.' });

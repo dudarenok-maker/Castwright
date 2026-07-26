@@ -381,7 +381,11 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     expect(res.body.error).toMatch(/unreachable/i);
   });
 
-  it('502s when the sidecar returns a non-OK status', async () => {
+  /* #1801 — the route used to flatten EVERY sidecar failure to 502. It now
+     maps the SidecarDesignError's own status through, so an upstream 500
+     arrives as 500 (and the 503 below as 503). The status-0 unreachable case
+     above still clamps to 502. */
+  it('surfaces the sidecar status when it returns a non-OK status', async () => {
     fetchMock.mockResolvedValue({
       ok: false,
       status: 500,
@@ -393,11 +397,25 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send(designBody);
-    expect(res.status).toBe(502);
+    expect(res.status).toBe(500);
     expect(res.body.error).toMatch(/qwen-tts not installed/);
   });
 
-  it('502 surfaces the sidecar FastAPI {detail} field, not a bare "returned 500"', async () => {
+  /* The signal this whole fix exists for: a 503 means "no GPU capacity — free
+     VRAM and retry", which is retryable. A flat 502 reads as "the gateway is
+     broken" and gives a retry UI nothing to key off. */
+  it('surfaces a sidecar 503 (free-VRAM-and-retry) instead of flattening to 502', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'GPU is saturated' }), { status: 503 }),
+    );
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send(designBody);
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatch(/GPU is saturated/);
+  });
+
+  it('surfaces the sidecar FastAPI {detail} field, not a bare "returned 500"', async () => {
     /* The sidecar reports failures as `{ detail }` (FastAPI), e.g. a CUDA
        "Cannot copy out of meta tensor" load error. The route used to read only
        `.error`, dropping the reason and showing a generic "returned 500" — so
@@ -413,7 +431,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send(designBody);
-    expect(res.status).toBe(502);
+    expect(res.status).toBe(500);
     expect(res.body.error).toMatch(/meta tensor/);
     expect(res.body.error).not.toMatch(/returned 500/);
   });
