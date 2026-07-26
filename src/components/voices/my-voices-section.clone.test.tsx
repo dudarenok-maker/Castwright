@@ -18,7 +18,7 @@ function renderSection() {
   const store = configureStore({ reducer: { voiceLibrary: voiceLibrarySlice.reducer } });
   render(
     <Provider store={store}>
-      <MyVoicesSection enabled />
+      <MyVoicesSection />
     </Provider>,
   );
 }

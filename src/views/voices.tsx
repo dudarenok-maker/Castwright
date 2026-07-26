@@ -13,7 +13,6 @@ import { IconPlay, IconSparkle } from '../lib/icons';
 import type {
   BaseVoice,
   Character,
-  ConfigValues,
   LibraryBook,
   Sentence,
   TtsEngine,
@@ -115,10 +114,6 @@ const ENGINE_LABEL: Record<TtsEngine, string> = {
    useMemo deps stable in tests that don't register the library slice. */
 const EMPTY_LIBRARY_BOOKS: LibraryBook[] = [];
 
-/* fs-38 Wave 1, Task 14 — module-level empty object for the defensive
-   config-values selector below, mirroring EMPTY_LIBRARY_BOOKS above. */
-const EMPTY_CONFIG_VALUES: ConfigValues = {};
-
 /* Bucket / narrator ids the pill's Merge action refuses to act on. Mirrors
    the guards profile-drawer.tsx uses for its own merge picker — merging
    into or out of a standing background bucket would corrupt the
@@ -217,27 +212,6 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   const libraryBooks = useAppSelector(
     (s) => (s as { library?: { books?: LibraryBook[] } }).library?.books ?? EMPTY_LIBRARY_BOOKS,
   );
-  /* fs-38 Wave 1, Task 14 — voices.library.enabled config gate for the "My
-     voices" nav segment. Defensive read (same pattern as libraryBooks
-     above): many existing test stores don't register the config slice —
-     fall back to {} so a missing/unhydrated config always reads as
-     enabled-pending (`undefined !== false` → true), never a false→true
-     flash once `fetchConfig` (dispatched at store boot, src/store/index.ts)
-     resolves. */
-  const configValues = useAppSelector(
-    (s) => (s as { config?: { values?: ConfigValues } }).config?.values ?? EMPTY_CONFIG_VALUES,
-  );
-  const myVoicesLibraryEnabled = configValues['voices.library.enabled']?.effective !== false;
-  /* fs-38 Wave 1 follow-up (#1802) — the gate can read `false` after the user
-     has already opened My voices, because the unhydrated config above is
-     treated as enabled-pending: a click landing before the boot-time
-     `fetchConfig` resolves leaves `section` on a segment whose nav button
-     unmounts and whose body renders null — a blank pane under the nav strip.
-     Derive the active section rather than correcting `section` in an effect,
-     so the fallback happens during render and the empty pane is never
-     painted. Every read below goes through this, not `section`. */
-  const activeSection =
-    !myVoicesLibraryEnabled && section === 'my-voices' ? 'in-use' : section;
   const playback = useSamplePlayback();
   const activeEngine = engineForModelKey(ttsModelKey);
 
@@ -1077,46 +1051,42 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       </div>
 
       {/* fs-38 Wave 1, Task 14 — top-level section nav (design spec §1/§Q6).
-          Order locked: My voices → In use → Catalogue. "My voices" is
-          gated by the voices.library.enabled knob; hidden entirely (not
-          shown-but-empty) when an operator has turned the library off, so
-          the nav never offers a section with nothing behind it. */}
+          Order locked: My voices → In use → Catalogue. All three segments
+          always render: the library is a core surface, not an optional one. */}
       <div
         role="group"
         aria-label="Voice library sections"
         className="flex items-center gap-1 mb-6 rounded-full bg-ink/5 p-1 w-fit flex-wrap"
       >
-        {myVoicesLibraryEnabled && (
-          <button
-            type="button"
-            aria-pressed={activeSection === 'my-voices'}
-            onClick={() => setSection('my-voices')}
-            className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${activeSection === 'my-voices' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
-          >
-            My voices
-          </button>
-        )}
         <button
           type="button"
-          aria-pressed={activeSection === 'in-use'}
+          aria-pressed={section === 'my-voices'}
+          onClick={() => setSection('my-voices')}
+          className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${section === 'my-voices' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
+        >
+          My voices
+        </button>
+        <button
+          type="button"
+          aria-pressed={section === 'in-use'}
           onClick={() => setSection('in-use')}
-          className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${activeSection === 'in-use' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
+          className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${section === 'in-use' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
         >
           In use
         </button>
         <button
           type="button"
-          aria-pressed={activeSection === 'catalogue'}
+          aria-pressed={section === 'catalogue'}
           onClick={() => setSection('catalogue')}
-          className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${activeSection === 'catalogue' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
+          className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${section === 'catalogue' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
         >
           Catalogue
         </button>
       </div>
 
-      {activeSection === 'my-voices' && <MyVoicesSection enabled={myVoicesLibraryEnabled} />}
+      {section === 'my-voices' && <MyVoicesSection />}
 
-      {activeSection === 'catalogue' && (
+      {section === 'catalogue' && (
         <BaseVoiceCatalogPanel
           baseVoices={baseVoices}
           baseVoicesLoaded={baseVoicesLoaded}
@@ -1127,7 +1097,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         />
       )}
 
-      {activeSection === 'in-use' && (
+      {section === 'in-use' && (
         <>
           <div className="grid grid-cols-4 gap-4 mb-6">
             <StatTile label="Voices" value={library.length} />

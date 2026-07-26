@@ -2,9 +2,8 @@
    PATCH /api/voice-library/:voiceUuid
 
    fs-38 Wave 1, Task 4 — the voice-library list + edit routes. Tasks 5, 7, 9,
-   10, 11 add more handlers to this same router file. Mounted behind
-   requireVoiceLibraryEnabled (voice-library-gate.ts) at the app.ts call
-   site, so every handler here can assume the feature is on.
+   10, 11 add more handlers to this same router file. The library is a core
+   surface with no feature gate in front of it.
 
    Handlers stay thin: validate the request, call the Task 3 manifest store
    (workspace/voice-library.ts), respond. No business logic lives here. */
