@@ -6,11 +6,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   CLONE_CAPABLE_ENGINES,
+  CLONE_ENGINE_LIST,
   isCloneEngine,
   manifestSlotFor,
   cloneStorageKey,
   characterHasClonedSlot,
   clonedSlotForEngine,
+  hasClonedProvenance,
 } from './clone-engines.js';
 
 describe('clone-engines vocabulary', () => {
@@ -31,6 +33,18 @@ describe('clone-engines vocabulary', () => {
       expect(isCloneEngine('kokoro')).toBe(false);
       expect(isCloneEngine('piper')).toBe(false);
       expect(isCloneEngine('gemini')).toBe(false);
+    });
+
+    /* B2 (fix wave) — CLONE_ENGINE_LIST is the CloneEngine[]-typed sibling of
+       CLONE_CAPABLE_ENGINES, added so callers that need to iterate as
+       CloneEngine (e.g. purge-clone-artifacts.ts) don't need an unchecked
+       cast. Pins that the two can never drift apart. */
+    it('CLONE_ENGINE_LIST has identical membership to CLONE_CAPABLE_ENGINES', () => {
+      expect(new Set(CLONE_ENGINE_LIST)).toEqual(CLONE_CAPABLE_ENGINES);
+      expect(CLONE_ENGINE_LIST.length).toBe(CLONE_CAPABLE_ENGINES.size);
+      for (const engine of CLONE_ENGINE_LIST) {
+        expect(CLONE_CAPABLE_ENGINES.has(engine)).toBe(true);
+      }
     });
   });
 
@@ -296,6 +310,87 @@ describe('clone-engines vocabulary', () => {
       };
       const result = clonedSlotForEngine(character, 'qwen');
       expect(result).toBeUndefined();
+    });
+  });
+
+  /* fix wave — hasClonedProvenance is the FAIL-SAFE test: "might this be
+     cloned?" for destructive guards that decide whether to *preserve* a
+     slot. Unlike clonedSlotForEngine (the RESOLUTION test, which returns the
+     uuid and therefore must validate it), this one must recognise a
+     malformed cloned slot as cloned — a guard that requires a well-formed
+     libraryUuid before treating a slot as cloned would delete a
+     provenance:'cloned' slot that merely has a missing/malformed uuid. */
+  describe('hasClonedProvenance is the fail-safe test (does not validate libraryUuid)', () => {
+    it('returns true for provenance: cloned with a MISSING libraryUuid', () => {
+      const character = {
+        overrideTtsVoices: {
+          qwen: {
+            name: 'qwen-voice',
+            provenance: 'cloned' as const,
+          },
+        },
+      };
+      expect(hasClonedProvenance(character, 'qwen')).toBe(true);
+    });
+
+    it('returns true for provenance: cloned with a NON-STRING libraryUuid', () => {
+      const character = {
+        overrideTtsVoices: {
+          qwen: {
+            name: 'qwen-voice',
+            libraryUuid: 123,
+            provenance: 'cloned' as const,
+          },
+        },
+      };
+      expect(hasClonedProvenance(character, 'qwen')).toBe(true);
+    });
+
+    it('returns false for a designed slot with a valid libraryUuid', () => {
+      const character = {
+        overrideTtsVoices: {
+          qwen: {
+            name: 'qwen-voice',
+            libraryUuid: 'valid-uuid',
+            provenance: 'designed' as const,
+          },
+        },
+      };
+      expect(hasClonedProvenance(character, 'qwen')).toBe(false);
+    });
+
+    it('returns false when the cloned slot is on a different engine', () => {
+      const character = {
+        overrideTtsVoices: {
+          coqui: {
+            name: 'Cloned Voice',
+            libraryUuid: 'uuid',
+            provenance: 'cloned' as const,
+          },
+        },
+      };
+      expect(hasClonedProvenance(character, 'qwen')).toBe(false);
+    });
+
+    it('returns false when overrideTtsVoices is absent', () => {
+      expect(hasClonedProvenance({}, 'qwen')).toBe(false);
+    });
+
+    it('returns false when overrideTtsVoices is null', () => {
+      expect(hasClonedProvenance({ overrideTtsVoices: null }, 'qwen')).toBe(false);
+    });
+
+    it('returns false for an imported slot', () => {
+      const character = {
+        overrideTtsVoices: {
+          coqui: {
+            name: 'Imported Voice',
+            libraryUuid: 'uuid',
+            provenance: 'imported' as const,
+          },
+        },
+      };
+      expect(hasClonedProvenance(character, 'coqui')).toBe(false);
     });
   });
 });

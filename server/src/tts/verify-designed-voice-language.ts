@@ -16,6 +16,7 @@ import { readJson } from '../workspace/state-io.js';
 import { qwenVoiceSidecarPath } from '../workspace/paths.js';
 import type { CastCharacter } from './synthesise-chapter.js';
 import { qwenStorageKey } from './voice-mapping.js';
+import { hasClonedProvenance } from './clone-engines.js';
 
 /** A character whose designed Qwen voice was cleared because its baked manifest
     language didn't match the book's language. */
@@ -44,8 +45,14 @@ export async function clearMismatchedDesignedVoices(
        which qwenStorageKey() does not produce. Both facts made this loop
        delete the clone marker on every non-English book, after which
        applyQwenFallback saw an ordinary undesigned character and fs-60's
-       Qwen->Coqui branch rendered a catalog speaker for a real person. */
-    if (c.overrideTtsVoices?.qwen?.provenance === 'cloned') continue;
+       Qwen->Coqui branch rendered a catalog speaker for a real person.
+
+       hasClonedProvenance is the FAIL-SAFE test (clone-engines.ts) — it
+       deliberately does not require a valid libraryUuid, so a malformed
+       cloned slot still survives this guard. Do not swap in
+       clonedSlotForEngine here: it validates libraryUuid and would return
+       undefined for a malformed cloned slot, letting this loop delete it. */
+    if (hasClonedProvenance(c, 'qwen')) continue;
     const designedName = c.overrideTtsVoices?.qwen?.name;
     if (!designedName) continue;
     const manifest = await readJson<{ language?: string }>(

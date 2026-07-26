@@ -153,7 +153,7 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
       /* Fix wave (cache-scope gap) — for a CLONED voice reached via the
          normal (non-raw) branch, cache under the resolved storage key
          (`qwen-<uuid>` / `xtts-<uuid>`) instead of the character id,
-         mirroring what routes/voice-library.ts:439 already does for its own
+         mirroring what routes/voice-library.ts:440 already does for its own
          /sample route. This makes the scope derivable from `voiceUuid`
          alone, so the EXISTING storageKey-scoped sweep in
          purge-clone-artifacts.ts reaches it on revoke — previously a file

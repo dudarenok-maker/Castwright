@@ -4,7 +4,7 @@
    run doesn't leak files into the dev server's audio dir. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, readdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -27,6 +27,7 @@ let audioDir: string;
 let workspaceDir: string;
 let app: Express;
 let writeEntry: typeof import('../workspace/voice-library.js').writeEntry;
+let purgeCloneArtifacts: typeof import('../workspace/purge-clone-artifacts.js').purgeCloneArtifacts;
 
 beforeAll(async () => {
   audioDir = mkdtempSync(join(tmpdir(), 'audiobook-voice-sample-test-'));
@@ -43,6 +44,10 @@ beforeAll(async () => {
      at load time (they're captured in module-level consts). */
   const { voiceSampleRouter } = await import('./voice-sample.js');
   ({ writeEntry } = await import('../workspace/voice-library.js'));
+  /* Fix wave (B1) — the real (unmocked) purgeCloneArtifacts, imported so the
+     "purge → route" loop test below can prove the ROUTE's own on-disk cache
+     file is reachable by purge's real sweep, not a stand-in. */
+  ({ purgeCloneArtifacts } = await import('../workspace/purge-clone-artifacts.js'));
 
   app = express();
   app.use(express.json());
@@ -691,6 +696,81 @@ describe('voice-sample router', () => {
       expect(res2.status).toBe(200);
       expect(res2.body.cached).toBe(true);
       expect(synthesize).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /* Fix wave (B1) — closes the loop the two disjoint halves left open:
+     voice-sample.test.ts's "fix wave (finding 1)" test above proves the
+     ROUTE computes the right cache-scope URL; purge-clone-artifacts.test.ts
+     proves purgeCloneArtifacts's OWN sweep deletes a file it's HANDED a
+     scope for. Neither drives the real route AND then purges the file it
+     actually wrote, so a revert of either half individually wouldn't be
+     caught by the other. This test does: real POST → real MP3 written to
+     disk by the real route → real purgeCloneArtifacts call → real
+     existsSync proving the file the route wrote is actually gone. */
+  describe('end-to-end: route writes a real cache file, purge actually erases it (fix wave B1)', () => {
+    it('a cloned voice audition cached by the real route is erased by a real purgeCloneArtifacts sweep', async () => {
+      const voiceUuid = 'purge-loop-1';
+      await writeEntry({
+        voiceUuid,
+        name: 'Purge Loop',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        consent: {
+          personName: 'Purge Loop',
+          relationship: 'self',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00.000Z',
+          attestedBy: 'me',
+        },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const res = await request(app)
+        .post('/api/voices/v_purge_loop/sample')
+        .send({
+          modelKey: 'qwen3-tts-0.6b',
+          voice: {
+            id: 'v_purge_loop',
+            character: 'Purge Loop',
+            overrideTtsVoices: {
+              qwen: { name: `qwen-${voiceUuid}`, libraryUuid: voiceUuid, provenance: 'cloned' as const },
+            },
+          },
+          text: 'End to end purge loop check.',
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.cached).toBe(false);
+
+      /* The real file the real route just wrote to the real (tempdir) audio
+         cache — not a mock call-arg assertion. */
+      const fileName = res.body.url.split('/').pop() as string;
+      const filePath = join(audioDir, fileName);
+      expect(existsSync(filePath)).toBe(true);
+
+      /* Sidecar is unreachable in this test env — purgeCloneArtifacts treats
+         that as non-fatal (best-effort evict), so stubbing fetch here just
+         avoids a real, slow, doomed-to-fail network attempt; it isn't load-
+         bearing for the assertion below. */
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+      try {
+        await purgeCloneArtifacts(voiceUuid);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+
+      /* The file the route wrote is now actually gone from disk. This is
+         exactly the assertion that fails if routes/voice-sample.ts's
+         cache-scope fix (caching a cloned voice under `qwen-<uuid>` /
+         `xtts-<uuid>` instead of the character id) is reverted: without it,
+         the file above would be cached under `v_purge_loop-...`, a prefix
+         purgeCloneArtifacts's sweep (scoped to `qwen-<uuid>`/`xtts-<uuid>`)
+         never matches, so it would still exist here. */
+      expect(existsSync(filePath)).toBe(false);
     });
   });
 });

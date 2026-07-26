@@ -158,16 +158,24 @@ describe('purgeCloneArtifacts', () => {
 
   /* Fix wave (fs-38 Wave 3c, Task 2 review, finding 1) — the two tests above
      only assert purgeVoiceSamples was CALLED with the right scope string;
-     they don't prove the sweep actually deletes anything, which is exactly
-     how the real gap (routes/voice-sample.ts's cast-view route caching a
-     cloned voice under the character-id scope, unreachable by any purge)
-     survived review. This test opts the mock into the REAL sweep
-     implementation and plants an actual file under the storage-key scope
-     that voice-sample.ts's cache-scope fix now uses for a cloned voice's
-     normal (non-raw) audition — proving purgeCloneArtifacts erases it
-     end-to-end, not just that it calls the right function with the right
-     argument. */
-  it('fix wave: erases a REAL file cached under the resolved storage-key scope (end-to-end, not just a call-arg assertion)', async () => {
+     this test opts the mock into the REAL sweep implementation and plants a
+     file directly under the qwen-<uuid> storage-key scope, proving
+     purgeCloneArtifacts's OWN sweep logic actually removes a file that's
+     sitting at that path — not just that it calls purgeVoiceSamples with the
+     right argument.
+
+     Correction (fix wave, review B1) — despite the name this test used to
+     carry, it does NOT prove the loop end-to-end: it hardcodes
+     `cacheScope: 'qwen-u1'` and calls purgeCloneArtifacts directly, so it
+     never exercises routes/voice-sample.ts — the route whose cache-scope fix
+     is the actual thing that must keep working. It would still pass even if
+     that route fix were reverted (the route isn't in the call graph at all).
+     The genuine end-to-end regression lock — real POST through the real
+     route, real MP3 on disk, real purgeCloneArtifacts call, real file gone —
+     lives in routes/voice-sample.test.ts's "end-to-end: route writes a real
+     cache file, purge actually erases it" test. This one stays as a
+     narrower, purge-side-only check. */
+  it('purge sweep alone: erases a REAL file already planted under the qwen-<uuid> storage-key scope (does not exercise the route)', async () => {
     const audioDir = join(dir, 'audio-voices');
     mkdirSync(audioDir, { recursive: true });
     process.env.VOICE_SAMPLE_AUDIO_DIR = audioDir;

@@ -20,6 +20,17 @@ export const CLONE_CAPABLE_ENGINES: ReadonlySet<TtsEngine> = Object.freeze(
   new Set<TtsEngine>(['qwen', 'coqui']),
 );
 
+/** Same members as `CLONE_CAPABLE_ENGINES`, typed `CloneEngine[]` instead of
+    `ReadonlySet<TtsEngine>` — for callers that need to iterate as
+    `CloneEngine` (e.g. to pass each member into a `CloneEngine`-typed
+    function like `cloneStorageKey`) without an unchecked cast. Derived from
+    the same set literal so the two can never drift. Do NOT change
+    `CLONE_CAPABLE_ENGINES`'s own declared type to `ReadonlySet<CloneEngine>`
+    — `ReadonlySet<T>.has(T)` would then reject a plain `TtsEngine` at the
+    membership-test call sites that need it (e.g. `isCloneEngine`-adjacent
+    checks against an arbitrary engine value). */
+export const CLONE_ENGINE_LIST: readonly CloneEngine[] = Object.freeze(['qwen', 'coqui']);
+
 /** Type guard: returns true for clone-capable engines. */
 export function isCloneEngine(e: TtsEngine): e is CloneEngine {
   return e === 'qwen' || e === 'coqui';
@@ -42,7 +53,17 @@ export function cloneStorageKey(e: CloneEngine, uuid: string): string {
   return `${prefix}-${uuid}`;
 }
 
-/** Returns true if a character has a cloned voice on ANY clone-capable engine.
+/** FAIL-SAFE test (whole-character form) — "does this character have a
+    cloned voice on ANY clone-capable engine?" Used by destructive guards
+    that decide whether to *preserve* a character's voice state. Returns true
+    purely on `provenance === 'cloned'`, on any clone-capable engine slot —
+    it deliberately does NOT validate `libraryUuid`, so a malformed cloned
+    slot (missing/non-string libraryUuid) still counts as cloned. When in
+    doubt, preserve. See `hasClonedProvenance` (the single-engine sibling of
+    this same fail-safe test) and `clonedSlotForEngine` (the different,
+    uuid-validating RESOLUTION test) for the full cloned/designed vocabulary
+    and when to use which.
+
     Critical: returns false for a 'designed' or 'imported' slot, even if it
     carries a libraryUuid. Cloned-ness is determined by provenance, not
     by the presence of libraryUuid or a storage-key prefix.
@@ -66,9 +87,50 @@ export function characterHasClonedSlot(c: { overrideTtsVoices?: unknown }): bool
   return false;
 }
 
-/** Returns the cloned slot for a specific engine if it exists and is cloned,
-    otherwise undefined. Returns only the libraryUuid field (the critical signal).
-    Non-clone engines or designed/imported slots return undefined.
+/** FAIL-SAFE test (single-engine form) — "might THIS engine's slot be
+    cloned?" Used by destructive guards that decide whether to *preserve* a
+    specific engine's voice slot (e.g. a per-engine language-mismatch sweep
+    that must not delete a cloned voice just because it can't find/match a
+    baked-language manifest for it). Tests `provenance === 'cloned'` on that
+    one engine's slot and NOTHING else — deliberately does NOT validate
+    `libraryUuid`, so a malformed cloned slot (missing/non-string
+    libraryUuid) still counts as cloned. When in doubt, preserve.
+
+    Contrast with `clonedSlotForEngine`, the RESOLUTION test ("which clone is
+    this, exactly?") for callers that need the uuid to resolve/derive/purge
+    an artifact — that one MUST validate libraryUuid, because it returns it.
+    Do NOT substitute `clonedSlotForEngine` in for this one in a destructive
+    guard: a slot with `provenance: 'cloned'` and a missing/non-string
+    libraryUuid would then read as "not cloned" and get deleted — the exact
+    silent-deletion defect this function exists to prevent.
+*/
+export function hasClonedProvenance(c: { overrideTtsVoices?: unknown }, engine: TtsEngine): boolean {
+  const slots = c.overrideTtsVoices;
+  if (!slots || typeof slots !== 'object') return false;
+
+  const slot = (slots as Record<string, unknown>)[engine];
+  return (
+    !!slot &&
+    typeof slot === 'object' &&
+    'provenance' in slot &&
+    (slot as Record<string, unknown>).provenance === 'cloned'
+  );
+}
+
+/** RESOLUTION test — "which clone is this, exactly?" Used by anything that
+    needs the uuid in order to resolve, derive, or purge an artifact (it
+    RETURNS the libraryUuid, so it MUST validate it — an undefined or
+    non-string libraryUuid is treated as "no usable clone" and returns
+    undefined). Non-clone engines, designed/imported slots, or a cloned slot
+    with a missing/malformed libraryUuid all return undefined.
+
+    Do NOT use this as a fail-safe presence check for a destructive guard —
+    a malformed cloned slot (missing/non-string libraryUuid) returns
+    undefined here, which a guard could misread as "not cloned" and delete
+    the slot. That is the opposite of fail-safe. Use `hasClonedProvenance`
+    (or `characterHasClonedSlot` for the whole-character form) for that case
+    instead — those deliberately skip uuid validation because they only ever
+    answer "might this be cloned?", never "give me the uuid".
 */
 export function clonedSlotForEngine(
   c: { overrideTtsVoices?: unknown },
