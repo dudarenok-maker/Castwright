@@ -193,6 +193,23 @@ jobs:
         if: needs.detect.outputs.server == 'true' || needs.detect.outputs.shared == 'true'
         run: npm run config:check
 
+      # Drift guard, sibling to the one above: src/lib/api-types.ts is
+      # GENERATED from openapi.yaml and is committed, and openapi-typescript
+      # emits each schema `description` into it as JSDoc. So an openapi edit
+      # that skips `npm run openapi:types` ships a generated artifact whose
+      # prose contradicts its own source — which is exactly what happened on
+      # this PR, undetected, because nothing gated codegen drift. Gated on
+      # `frontend` too, so a hand-edit of the generated file is caught the
+      # same way.
+      - name: OpenAPI types up to date
+        if: needs.detect.outputs.openapi == 'true' || needs.detect.outputs.frontend == 'true' || needs.detect.outputs.shared == 'true'
+        run: |
+          npm run openapi:types
+          git diff --exit-code -- src/lib/api-types.ts || {
+            echo "::error::src/lib/api-types.ts is stale. Run 'npm run openapi:types' and commit the result."
+            exit 1
+          }
+
       - name: Hooks tests
         if: needs.detect.outputs.hooks == 'true' || needs.detect.outputs.scripts == 'true' || needs.detect.outputs.shared == 'true'
         run: npm run test:hooks

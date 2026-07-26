@@ -317,7 +317,15 @@ No new Playwright e2e in 3a — added in 3b1 (below).
   vitest configs' `forceRerunTriggers`, as its own `openapi` scope in
   `verify.yml` (its own flag, not `frontend`, which would also fire the four
   e2e shards and the visual battery for a contract-only change), and in
-  `verify-cache.mjs`'s `test`/`test:server` inputs. Note `forceRerunTriggers`
+  `verify-cache.mjs`'s `test`/`test:server` inputs. A sibling `OpenAPI types
+  up to date` step guards the *other* half: `src/lib/api-types.ts` is
+  generated from `openapi.yaml` and committed, and openapi-typescript emits
+  each schema `description` into it as JSDoc — so editing the contract without
+  re-running `npm run openapi:types` ships a generated artifact whose prose
+  contradicts its source. That happened on this very PR (the removed
+  "Capped at 2000 characters…" paragraph survived in the generated file) and
+  nothing caught it, because codegen drift was ungated. Note
+  `forceRerunTriggers`
   **replaces** vitest's defaults rather than extending them, so both configs
   re-list `**/package.json/**` and `**/{vitest,vite}.config.*/**`. Measured:
   omitting them does not currently collapse a manifest-only server run to zero
