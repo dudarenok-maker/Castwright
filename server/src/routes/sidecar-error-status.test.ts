@@ -26,6 +26,37 @@ describe('httpStatusForSidecarError', () => {
     expect(httpStatusForSidecarError(Object.assign(new Error('x'), { status: 200 }))).toBe(502);
   });
 
+  /* 4xx describes OUR request to the sidecar, not the caller's request to us.
+     Forwarding it would misattribute the fault AND collide with meanings these
+     routes already assign — /design-voice uses 409 for "design run in
+     progress" and for gpu_busy, so a client reading 409 as "busy, retry
+     shortly" would retry forever on the sidecar's `voice_not_designed` 409,
+     which waiting never resolves. */
+  it('does NOT forward a sidecar 4xx — those stay 502', () => {
+    expect(
+      httpStatusForSidecarError(
+        Object.assign(new Error('Local voice engine returned 409: voice_not_designed'), {
+          transient: false,
+          status: 409,
+          poisoned: false,
+        }),
+      ),
+    ).toBe(502);
+    expect(httpStatusForSidecarError(new SidecarDesignError('instruct too long', 400))).toBe(502);
+    expect(httpStatusForSidecarError(new SidecarDesignError('rejected', 422))).toBe(502);
+  });
+
+  /* ConsentRequiredError (workspace/voice-library.ts) carries status 422 and is
+     thrown by writeEntry, which /design calls inside the new catch's try. It
+     can't fire on a 'designed' entry today, but the 5xx-only rule means it
+     could never leak a 422 out of a sidecar-boundary catch even if Wave 3
+     later routes a cloned entry through there. */
+  it('does not leak a non-sidecar 422 (ConsentRequiredError shape) as the route status', () => {
+    expect(
+      httpStatusForSidecarError(Object.assign(new Error('consent required'), { status: 422 })),
+    ).toBe(502);
+  });
+
   /* NoCapacityError is the ONE capacity signal that carries no `.status` —
      it's raised by withCapacityRetry after the poll window, not by an HTTP
      response, and it reaches the sample route un-wrapped (unlike the design
@@ -51,9 +82,5 @@ describe('httpStatusForSidecarError', () => {
   it('falls back to 502 for an error with no status at all', () => {
     expect(httpStatusForSidecarError(new Error('sidecar not reachable'))).toBe(502);
     expect(httpStatusForSidecarError(undefined)).toBe(502);
-  });
-
-  it('honours an explicit fallback', () => {
-    expect(httpStatusForSidecarError(new Error('x'), 500)).toBe(500);
   });
 });

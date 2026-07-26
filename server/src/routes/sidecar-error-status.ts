@@ -22,13 +22,31 @@
    after its poll window rather than by an HTTP response. The design path
    converts it into a `SidecarDesignError(…, 503)`; the synth path does not, so
    it reaches the sample route un-wrapped and is matched by name here. */
-export function httpStatusForSidecarError(e: unknown, fallback = 502): number {
+export function httpStatusForSidecarError(e: unknown): number {
   const err = e as { name?: string; status?: number } | undefined;
   if (err?.name === 'NoCapacityError') return 503;
   const status = err?.status;
-  /* Anything outside 400–599 falls back — notably the `0` design-voice-core
-     stamps on its unreachable / cancelled / timed-out branches, which would
-     make `res.status(0)` throw a RangeError and degrade into a generic HTML
-     500, defeating the whole point of preserving the status. */
-  return typeof status === 'number' && status >= 400 && status <= 599 ? status : fallback;
+  /* Only 5xx passes through — deliberately NOT 4xx.
+
+     A 4xx from the sidecar describes OUR request to IT, not the caller's
+     request to us, so forwarding it misattributes the fault and collides with
+     meanings these routes already assign. The sidecar answers 409 for
+     `voice_not_designed`, but /design-voice already uses 409 for "a Design
+     full cast run is in progress" and for `gpu_busy` — a client treating 409
+     as "busy, retry shortly" would retry forever on a condition that waiting
+     never resolves. Likewise a sidecar 400 ("instruct too long") would tell
+     the caller its own valid request was malformed. Those stay 502: the
+     gateway leg failed, which is exactly what 502 means.
+
+     (The sibling POST /api/voices/:voiceId/sample in voice-sample.ts maps
+     `voice_not_designed` to a 409 with a friendly message and a `code` field
+     rather than echoing the sidecar's body. Giving the library routes that
+     same treatment is worth doing, but it's a separate change from #1801.)
+
+     Anything outside the range also falls back — notably the `0`
+     design-voice-core stamps on its unreachable / cancelled / timed-out
+     branches, which would make `res.status(0)` throw a RangeError and degrade
+     into a generic HTML 500, defeating the whole point of preserving the
+     status. */
+  return typeof status === 'number' && status >= 500 && status <= 599 ? status : 502;
 }
