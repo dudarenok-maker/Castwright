@@ -702,6 +702,94 @@ def test_bump_evict_epoch_drops_a_resident_cache_entry(monkeypatch, tmp_path) ->
     assert "xtts-evict1" not in eng._latents_cache
 
 
+class _DistinctLatentsXttsModel(_FakeXttsModel):
+    """Task 10 fix round 1 — `get_conditioning_latents` returns a distinct
+    latents pair on each call (unlike the base fixture's fixed "LATENT"/
+    "EMBEDDING"), keyed off `len(self.derive_calls)`. Lets a test prove a
+    render used the SECOND clone's latents rather than a stale FIRST pair
+    still sitting in `_latents_cache`.
+
+    Mirrors the base class's full named-parameter list (not **kwargs) —
+    same reason `_SlowFakeXttsModel` above does: `clone_voice` introspects
+    `inspect.signature(tts_model.get_conditioning_latents)` to find each
+    named keyword's default, which a `**kwargs`-only override would hide."""
+
+    def get_conditioning_latents(
+        self,
+        audio_path: Any,
+        max_ref_length: int = 30,
+        gpt_cond_len: int = 6,
+        gpt_cond_chunk_len: int = 6,
+        librosa_trim_db: Any = None,
+        sound_norm_refs: bool = False,
+        load_sr: int = 22050,
+    ) -> tuple[str, str]:
+        # Delegates to the base implementation for its path/isfile assertion
+        # and `derive_calls` bookkeeping; overrides only the return value.
+        super().get_conditioning_latents(
+            audio_path,
+            max_ref_length=max_ref_length,
+            gpt_cond_len=gpt_cond_len,
+            gpt_cond_chunk_len=gpt_cond_chunk_len,
+            librosa_trim_db=librosa_trim_db,
+            sound_norm_refs=sound_norm_refs,
+            load_sr=load_sr,
+        )
+        n = len(self.derive_calls)
+        return (f"LATENT-{n}", f"EMBEDDING-{n}")
+
+
+def test_reclone_same_voice_id_invalidates_stale_latents_cache(monkeypatch, tmp_path) -> None:
+    """Review Important #1 (task-10-review.md), fix round 1. `clone_voice`
+    must bump `_evict_epoch` on a RE-clone of the same `voice_id` — without
+    it, a voice_id re-cloned from new reference audio (the Coqui-parity
+    counterpart of Qwen's shipped re-derive-same-uuid repair flow,
+    `clone-voice-resolver.ts:301-334`) would keep serving the OLD tensors
+    from `_latents_cache` indefinitely, with `substituted_from` staying
+    `None` — Property 1's silent-substitution shape via a stale cache
+    instead of a stale file. Newly reachable: Task 11's
+    `POST /xtts/clone-voice` (891770af) means a repeat clone of the same
+    uuid now reaches `CoquiEngine.clone_voice` for real.
+
+    Scenario: clone -> render (warms the cache with the FIRST latents) ->
+    re-clone the SAME voice_id with DIFFERENT reference audio -> render
+    again. The second render must use the NEW latents, not the cached OLD
+    ones — asserted on the actual `gpt_cond_latent`/`speaker_embedding`
+    values `inference()` received, not merely that the call succeeded."""
+    config = _FakeXttsConfig()
+    tts_model = _DistinctLatentsXttsModel(config=config)
+    tts_instance = _FakeTTS(
+        "tts_models/multilingual/multi-dataset/xtts_v2",
+        synthesizer=_FakeSynthesizer(tts_model=tts_model),
+    )
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path, tts_instance=tts_instance)
+
+    # First clone + render — warms `_latents_cache` with the FIRST pair.
+    eng.clone_voice("xtts-reclone", _ref_audio(4800), 24000, "an audition line")
+    tts_model.infer_calls.clear()  # drop clone_voice's own audition call
+    eng.synthesize("xtts_v2", "xtts-reclone", "hello there")
+
+    assert len(tts_model.infer_calls) == 1
+    assert tts_model.infer_calls[0]["gpt_cond_latent"] == "LATENT-1"
+    assert tts_model.infer_calls[0]["speaker_embedding"] == "EMBEDDING-1"
+    assert eng._latents_cache["xtts-reclone"] == ("LATENT-1", "EMBEDDING-1")
+
+    # Re-clone the SAME voice_id from DIFFERENT reference audio — the .pt on
+    # disk (and, per the fix, the epoch) both advance to the SECOND pair.
+    eng.clone_voice("xtts-reclone", _ref_audio(9600), 24000, "an audition line")
+    tts_model.infer_calls.clear()  # drop the re-clone's own audition call
+
+    result = eng.synthesize("xtts_v2", "xtts-reclone", "hello again")
+
+    assert isinstance(result.pcm, bytes) and len(result.pcm) > 0
+    assert len(tts_model.infer_calls) == 1
+    # The load-bearing assertions: the second render's actual inference call
+    # carried the NEW latents, not the ones warmed by the first render.
+    assert tts_model.infer_calls[0]["gpt_cond_latent"] == "LATENT-2"
+    assert tts_model.infer_calls[0]["speaker_embedding"] == "EMBEDDING-2"
+    assert eng._latents_cache["xtts-reclone"] == ("LATENT-2", "EMBEDDING-2")
+
+
 # ── Task 11 — POST /xtts/clone-voice + POST /xtts/evict-voice ──────────────
 #
 # HTTP-layer coverage. Reuses the Task 9/10 fake-runtime fixtures above

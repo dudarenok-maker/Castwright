@@ -1685,6 +1685,19 @@ class CoquiEngine(Engine):
                 pt_path,
             )
 
+            # A re-clone of the SAME voice_id (repair/re-derive from fresh
+            # reference audio — the same pattern already shipped for Qwen via
+            # `resolveClonedVoicesForChapter`'s re-derive branch,
+            # clone-voice-resolver.ts:301-334) must invalidate any latents
+            # for this voice already resident in `_latents_cache` from an
+            # earlier synth. Without this, `_load_voice_latents` would keep
+            # serving the OLD tensors on a cache hit — indefinitely, with
+            # `substituted_from` staying None — which is exactly Property 1's
+            # silent-substitution shape, just via a stale cache instead of a
+            # stale file. `_bump_evict_epoch` is idempotent/cheap when
+            # nothing is cached yet (the common first-clone case).
+            self._bump_evict_epoch(voice_id)
+
             # model_id resolution mirrors `_ensure_loaded`'s own mapping.
             model_id = {
                 "xtts_v2": "tts_models/multilingual/multi-dataset/xtts_v2",
