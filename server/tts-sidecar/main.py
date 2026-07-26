@@ -1059,6 +1059,29 @@ class CoquiEngine(Engine):
         # call would race past the `_tts is None` check and load XTTS twice.
         self._loading: bool = False
         self._load_lock: asyncio.Lock = asyncio.Lock()
+        # Serialises the cold load AND the GPU forward under ONE lock (unlike
+        # QwenEngine's split `_cold_load_lock`/`_synth_lock` — Coqui has only
+        # one model and one forward path, so one lock covers both). `_load_lock`
+        # above is an asyncio.Lock scoped to the /load ROUTE, so it only
+        # serialises concurrent /load clicks against each other; it does
+        # nothing for a /synthesize call, which reaches `_ensure_loaded` via
+        # `asyncio.to_thread` on a worker thread that never touches `_load_lock`.
+        # Wave 3c adds a second concurrent entry point into the same `self._tts`
+        # (clone-voice synthesis), so without a thread-level lock a /load and a
+        # /synthesize (or two /synthesize calls) can both observe `self._tts is
+        # None` and both cold-load the ~3 GB model, leaving `self._tts` set to
+        # whichever thread's assignment lands last while the other's partially
+        # built instance is silently dropped. `_ensure_loaded` double-checks
+        # `self._tts is not None` AFTER acquiring this lock, so a caller that
+        # loses the race simply observes the fully-loaded model instead of
+        # redoing the load. `synthesize()` takes it again (separately, not
+        # nested — `_ensure_loaded` releases it before returning) around the
+        # forward itself, since the underlying XTTS model object is not
+        # thread-safe for concurrent `tts()` calls any more than Qwen's Base
+        # model is. NON-REENTRANT: `_ensure_loaded` must never be called again
+        # from inside a `with self._synth_lock:` block in the same thread —
+        # `threading.Lock` isn't reentrant and that would deadlock.
+        self._synth_lock = threading.Lock()
         self._language = os.environ.get("COQUI_LANGUAGE", "en")
         self._device = _read_device_env("COQUI_DEVICE") or "auto"  # auto | cpu | cuda | cuda:N
         self._requested_device = self._device  # preserved before any auto-resolution
@@ -1167,87 +1190,95 @@ class CoquiEngine(Engine):
                 "--index-url https://download.pytorch.org/whl/cpu` in server/tts-sidecar."
             ) from e
 
-        _apply_torch_perf_flags(torch)
+        # Everything below mutates `self._tts`/`self._torch`/etc — see
+        # `_synth_lock` in __init__. Double-checked: a caller that lost the
+        # race to a concurrent /load or /synthesize blocks here, then finds
+        # `self._tts` already set and returns without redoing the ~3 GB load.
+        with self._synth_lock:
+            if self._tts is not None:
+                return
 
-        model_id = {
-            "xtts_v2": "tts_models/multilingual/multi-dataset/xtts_v2",
-        }.get(model, model)
+            _apply_torch_perf_flags(torch)
 
-        opts = self._resolve_runtime_options(torch, device_override=device)
-        device, want_half, want_deepspeed = opts["device"], opts["half"], opts["deepspeed"]
-        _validate_cuda_index(device, torch)
-        # Single startup log line — `npm run tts:sidecar` users can grep
-        # logs/tts.log for this to confirm GPU mode is actually on. If you
-        # set COQUI_DEVICE=cuda but this prints device=cpu, the venv has the
-        # CPU PyTorch wheel installed (see README.md "GPU install" section).
-        log.info(
-            "Loading Coqui model=%s on device=%s half=%s deepspeed=%s …",
-            model_id, device, want_half, want_deepspeed,
-        )
+            model_id = {
+                "xtts_v2": "tts_models/multilingual/multi-dataset/xtts_v2",
+            }.get(model, model)
 
-        tts = TTS(model_id)
+            opts = self._resolve_runtime_options(torch, device_override=device)
+            device, want_half, want_deepspeed = opts["device"], opts["half"], opts["deepspeed"]
+            _validate_cuda_index(device, torch)
+            # Single startup log line — `npm run tts:sidecar` users can grep
+            # logs/tts.log for this to confirm GPU mode is actually on. If you
+            # set COQUI_DEVICE=cuda but this prints device=cpu, the venv has the
+            # CPU PyTorch wheel installed (see README.md "GPU install" section).
+            log.info(
+                "Loading Coqui model=%s on device=%s half=%s deepspeed=%s …",
+                model_id, device, want_half, want_deepspeed,
+            )
 
-        # DeepSpeed inference engine. Wires in BEFORE `.to(device)` because
-        # init_gpt_for_inference rebuilds the GPT module against the deepspeed
-        # runtime — moving to GPU afterwards transfers the rebuilt module.
-        # Best-effort: if deepspeed isn't installed or the hook drifts in a
-        # future coqui-tts release, log and continue without it rather than
-        # failing the whole sidecar boot.
-        if want_deepspeed:
+            tts = TTS(model_id)
+
+            # DeepSpeed inference engine. Wires in BEFORE `.to(device)` because
+            # init_gpt_for_inference rebuilds the GPT module against the deepspeed
+            # runtime — moving to GPU afterwards transfers the rebuilt module.
+            # Best-effort: if deepspeed isn't installed or the hook drifts in a
+            # future coqui-tts release, log and continue without it rather than
+            # failing the whole sidecar boot.
+            if want_deepspeed:
+                try:
+                    tts.synthesizer.tts_model.gpt.init_gpt_for_inference(
+                        kv_cache=True, use_deepspeed=True,
+                    )
+                    log.info("DeepSpeed inference enabled.")
+                except Exception as e:
+                    log.warning(
+                        "DeepSpeed enable failed (%s) — continuing without it. "
+                        "If you want this speedup, install deepspeed in the sidecar venv.",
+                        e,
+                    )
+
+            tts.to(device)
+
+            # fp16 mode. NOTE: we do NOT call `tts_model.half()` here — that
+            # casts every weight including LayerNorm to fp16, but XTTS's inputs
+            # (text tokens, audio conditioning latents) arrive as fp32 and the
+            # LayerNorm forward then dies with `expected Float but found Half`.
+            # Instead we record the intent and use `torch.autocast` around the
+            # `tts()` call in `synthesize()` — autocast keeps LayerNorm in fp32
+            # and only casts the ops where fp16 is safe (matmuls, attention),
+            # which is where the speedup lives anyway.
+            self._tts = tts
+            self._torch = torch
+            self._resolved_device = device
+            # Keep the shared `self._device` in step with the card the model is
+            # ACTUALLY on (#1730 gap 3): an admitted `device` override resolves here
+            # but previously left `self._device` stale at the env pref, so any reader
+            # of `self._device` saw a card the model wasn't on. `unload()` restores
+            # the requested pref so a later flag-off reload still re-resolves cleanly.
+            self._device = device
+            self._use_half = bool(want_half and _parse_device(device)[0] == "cuda")
+            if self._use_half:
+                log.info("fp16 autocast enabled for /synthesize.")
+
+            # Snapshot the speaker manifest so /synthesize can validate inbound
+            # `voice` against what the model actually knows. Different coqui-tts
+            # releases ship slightly different speaker lists; without this, any
+            # drift between our Node-side catalog and the model's catalog
+            # manifests as "index out of range in self" mid-chapter.
             try:
-                tts.synthesizer.tts_model.gpt.init_gpt_for_inference(
-                    kv_cache=True, use_deepspeed=True,
-                )
-                log.info("DeepSpeed inference enabled.")
+                speaker_manager = self._tts.synthesizer.tts_model.speaker_manager
+                names = list(getattr(speaker_manager, "name_to_id", {}).keys())
+                if not names:
+                    # Fallback for older speaker-manager APIs that expose
+                    # `speaker_names` directly.
+                    names = list(getattr(speaker_manager, "speaker_names", []))
+                self._speakers = sorted(names)
+                log.info("Coqui ready — %d speakers in manifest.", len(self._speakers))
             except Exception as e:
-                log.warning(
-                    "DeepSpeed enable failed (%s) — continuing without it. "
-                    "If you want this speedup, install deepspeed in the sidecar venv.",
-                    e,
-                )
-
-        tts.to(device)
-
-        # fp16 mode. NOTE: we do NOT call `tts_model.half()` here — that
-        # casts every weight including LayerNorm to fp16, but XTTS's inputs
-        # (text tokens, audio conditioning latents) arrive as fp32 and the
-        # LayerNorm forward then dies with `expected Float but found Half`.
-        # Instead we record the intent and use `torch.autocast` around the
-        # `tts()` call in `synthesize()` — autocast keeps LayerNorm in fp32
-        # and only casts the ops where fp16 is safe (matmuls, attention),
-        # which is where the speedup lives anyway.
-        self._tts = tts
-        self._torch = torch
-        self._resolved_device = device
-        # Keep the shared `self._device` in step with the card the model is
-        # ACTUALLY on (#1730 gap 3): an admitted `device` override resolves here
-        # but previously left `self._device` stale at the env pref, so any reader
-        # of `self._device` saw a card the model wasn't on. `unload()` restores
-        # the requested pref so a later flag-off reload still re-resolves cleanly.
-        self._device = device
-        self._use_half = bool(want_half and _parse_device(device)[0] == "cuda")
-        if self._use_half:
-            log.info("fp16 autocast enabled for /synthesize.")
-
-        # Snapshot the speaker manifest so /synthesize can validate inbound
-        # `voice` against what the model actually knows. Different coqui-tts
-        # releases ship slightly different speaker lists; without this, any
-        # drift between our Node-side catalog and the model's catalog
-        # manifests as "index out of range in self" mid-chapter.
-        try:
-            speaker_manager = self._tts.synthesizer.tts_model.speaker_manager
-            names = list(getattr(speaker_manager, "name_to_id", {}).keys())
-            if not names:
-                # Fallback for older speaker-manager APIs that expose
-                # `speaker_names` directly.
-                names = list(getattr(speaker_manager, "speaker_names", []))
-            self._speakers = sorted(names)
-            log.info("Coqui ready — %d speakers in manifest.", len(self._speakers))
-        except Exception as e:
-            # Don't crash startup if the manifest API drifts — synth will
-            # still work, but validation falls back to permissive mode.
-            log.warning("Could not enumerate Coqui speakers (%s). Skipping pre-validation.", e)
-            self._speakers = []
+                # Don't crash startup if the manifest API drifts — synth will
+                # still work, but validation falls back to permissive mode.
+                log.warning("Could not enumerate Coqui speakers (%s). Skipping pre-validation.", e)
+                self._speakers = []
 
     def unload(self) -> None:
         """Drop references to the loaded XTTS model and free GPU memory.
@@ -1288,55 +1319,62 @@ class CoquiEngine(Engine):
 
     def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
         self._ensure_loaded(model)
-        assert self._tts is not None
         effective_language = language or self._language
 
-        # Pre-flight validation. If the caller's `voice` isn't in this model's
-        # manifest, substitute the fallback rather than letting XTTS fail with
-        # a cryptic embedding index error mid-chapter. The actual_voice
-        # carries forward into the synth so the swap is invisible at the
-        # protocol level except for the X-Voice-Substituted-From header set
-        # by the route handler.
-        actual_voice = voice
-        substituted_from: Optional[str] = None
-        if self._speakers and voice not in self._speakers:
-            substituted_from = voice
-            actual_voice = (
-                self.FALLBACK_SPEAKER
-                if self.FALLBACK_SPEAKER in self._speakers
-                else self._speakers[0]
-            )
-            log.warning(
-                "Speaker '%s' not in XTTS v2 manifest — substituting '%s'. "
-                "Update the Node-side voice catalog (server/src/tts/voice-mapping.ts) "
-                "to remove this name. Valid sample: %s",
-                voice, actual_voice, ", ".join(self._speakers[:8]),
-            )
+        # Serialise the forward — see `_synth_lock` in __init__ (the XTTS
+        # model isn't thread-safe for concurrent `tts()` calls, mirroring
+        # QwenEngine's Base model). NOT nested with `_ensure_loaded` above:
+        # that call already acquired and released `_synth_lock` internally
+        # before returning, so by this point the load is guaranteed complete
+        # and re-acquiring here is a fresh, non-reentrant acquisition.
+        with self._synth_lock:
+            assert self._tts is not None
+            # Pre-flight validation. If the caller's `voice` isn't in this
+            # model's manifest, substitute the fallback rather than letting
+            # XTTS fail with a cryptic embedding index error mid-chapter. The
+            # actual_voice carries forward into the synth so the swap is
+            # invisible at the protocol level except for the
+            # X-Voice-Substituted-From header set by the route handler.
+            actual_voice = voice
+            substituted_from: Optional[str] = None
+            if self._speakers and voice not in self._speakers:
+                substituted_from = voice
+                actual_voice = (
+                    self.FALLBACK_SPEAKER
+                    if self.FALLBACK_SPEAKER in self._speakers
+                    else self._speakers[0]
+                )
+                log.warning(
+                    "Speaker '%s' not in XTTS v2 manifest — substituting '%s'. "
+                    "Update the Node-side voice catalog (server/src/tts/voice-mapping.ts) "
+                    "to remove this name. Valid sample: %s",
+                    voice, actual_voice, ", ".join(self._speakers[:8]),
+                )
 
-        # XTTS returns a list[float] at the model's sample rate. We convert
-        # to int16 LE bytes here so the network payload is half the size of
-        # float32 (and Node side already speaks 16-bit PCM).
-        #
-        # fp16 path: wrap inference in `torch.autocast`. Unlike a global
-        # `model.half()`, autocast leaves LayerNorm + input tensors in fp32
-        # (where mixed-precision would otherwise hit `expected Float but found
-        # Half`) and casts only the matmul/attention ops that benefit from
-        # tensor cores. This is the supported PyTorch pattern for fp16
-        # inference on a model that wasn't trained mixed-precision.
-        if self._use_half and self._torch is not None:
-            with self._torch.autocast(device_type="cuda", dtype=self._torch.float16):
+            # XTTS returns a list[float] at the model's sample rate. We convert
+            # to int16 LE bytes here so the network payload is half the size of
+            # float32 (and Node side already speaks 16-bit PCM).
+            #
+            # fp16 path: wrap inference in `torch.autocast`. Unlike a global
+            # `model.half()`, autocast leaves LayerNorm + input tensors in fp32
+            # (where mixed-precision would otherwise hit `expected Float but found
+            # Half`) and casts only the matmul/attention ops that benefit from
+            # tensor cores. This is the supported PyTorch pattern for fp16
+            # inference on a model that wasn't trained mixed-precision.
+            if self._use_half and self._torch is not None:
+                with self._torch.autocast(device_type="cuda", dtype=self._torch.float16):
+                    audio = self._tts.tts(
+                        text=text,
+                        speaker=actual_voice,
+                        language=effective_language,
+                    )
+            else:
                 audio = self._tts.tts(
                     text=text,
                     speaker=actual_voice,
                     language=effective_language,
                 )
-        else:
-            audio = self._tts.tts(
-                text=text,
-                speaker=actual_voice,
-                language=effective_language,
-            )
-        sample_rate = int(getattr(self._tts.synthesizer, "output_sample_rate", 24000))
+            sample_rate = int(getattr(self._tts.synthesizer, "output_sample_rate", 24000))
         pcm = _float_audio_to_int16_le(audio)
         return SynthResult(pcm=pcm, sample_rate=sample_rate, substituted_from=substituted_from)
 
