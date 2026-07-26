@@ -26,6 +26,38 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { installRecipe } from './accelerator-profile.mjs';
 
+// onnxruntime-gpu version constraint (side-28): without one, the runtime a user
+// actually runs Kokoro on is whatever happened to be latest on PyPI on their
+// install date — this dev box validated 1.27.0, a fresh install today lands
+// 1.28.0, and nobody chose that drift on purpose. Floor-plus-cap on the MINOR
+// line rather than an exact `==` so a same-line patch release (a security fix)
+// still flows without a code change; only crossing the minor boundary needs a
+// deliberate bump of this constant (bump the runtime and this pin together,
+// once 1.28 is desk-validated — never bump one without the other).
+// This is the ONLY place the constraint can live: it must NOT move into
+// requirements/*.txt, because onnxruntime-gpu can never appear there AT ALL —
+// those overlays are also read on macOS (no onnxruntime-gpu wheel exists for
+// Apple Silicon), and test_no_bare_unmarked_onnxruntime_gpu
+// (tests/test_requirements.py) enforces that a bare, unmarked
+// `onnxruntime-gpu` line never lands there and aborts `pip install` on that
+// platform. The swap in this file is reached only for the nvidia profile
+// (win/linux), so pinning it here never touches the mac path.
+const ONNXRUNTIME_GPU_CONSTRAINT = '>=1.27,<1.28';
+
+/**
+ * Apply the onnxruntime-gpu version constraint to an ortPackage name for the
+ * INSTALL step only — the uninstall step takes bare package names (a version
+ * spec there is meaningless to `pip uninstall` and would be a silent no-op).
+ * Any other ortPackage (e.g. a future onnxruntime-directml re-enable) installs
+ * unconstrained until it has its own desk-validated line. Pure — no I/O.
+ * @returns {string}
+ */
+function constrainForInstall(ortPackage) {
+  return ortPackage === 'onnxruntime-gpu'
+    ? `onnxruntime-gpu${ONNXRUNTIME_GPU_CONSTRAINT}`
+    : ortPackage;
+}
+
 /**
  * Decide the ordered pip steps to put the correct ONNX runtime in place after the
  * overlay install. The overlay always lands plain `onnxruntime` (kokoro-onnx's
@@ -55,7 +87,7 @@ export function planOrtSwap(profile, platform) {
       // __version__/get_available_providers) and Kokoro silently fails to load.
       // `--no-deps` keeps the overlay's numpy/protobuf/etc. pins untouched.
       ['uninstall', '-y', 'onnxruntime', ortPackage],
-      ['install', '--force-reinstall', '--no-deps', ortPackage],
+      ['install', '--force-reinstall', '--no-deps', constrainForInstall(ortPackage)],
     ],
   };
 }
