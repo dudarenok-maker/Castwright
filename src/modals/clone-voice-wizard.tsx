@@ -11,6 +11,7 @@ import { cloneVoice } from '../store/voice-library-slice';
 import { CloneCapturePanel, type ConsentDraft } from '../components/voices/clone-capture-panel';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { api, type VoiceLibraryEntry } from '../lib/api';
+import { modelKeyForEngineChoice } from '../lib/tts-models';
 import { IconClose, IconSpinner, IconPlay, IconPause } from '../lib/icons';
 
 interface Props {
@@ -21,6 +22,7 @@ export function CloneVoiceWizard({ onClose }: Props) {
   const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
   const clonePending = useAppSelector((s) => s.voiceLibrary.clonePending);
+  const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const [ready, setReady] = useState<{ candidateId: string; consent: ConsentDraft } | null>(null);
   const [name, setName] = useState('');
   const [saved, setSaved] = useState<VoiceLibraryEntry | null>(null);
@@ -40,7 +42,15 @@ export function CloneVoiceWizard({ onClose }: Props) {
       ).unwrap();
       setSaved(entry);
       try {
-        const { url } = await api.sampleLibraryVoice(entry.voiceUuid);
+        /* Finding 2 (#1842 review) — this post-save preview shares the same
+           `qwen-<uuid>` scope as the My-voices card's Play button, which
+           already auditions at the session tier (voice-library-card.tsx).
+           Without this, a 1.7B session would save a clone here at 0.6B and
+           hear it differently one click later on the card — same voice,
+           two tiers. */
+        const { url } = await api.sampleLibraryVoice(entry.voiceUuid, {
+          modelKey: modelKeyForEngineChoice('qwen', ttsModelKey),
+        });
         setPreviewUrl(url);
       } catch {
         /* preview is best-effort — the entry is already saved */

@@ -12,6 +12,7 @@ import { voiceLibrarySlice, type VoiceLibraryEntry } from '../store/voice-librar
 import { castDesignSlice } from '../store/cast-design-slice';
 import { uiSlice } from '../store/ui-slice';
 import { CreateLibraryVoiceModal } from './create-library-voice';
+import type { TtsModelKey } from '../lib/types';
 
 const designLibraryVoice = vi.fn();
 const listVoiceLibrary = vi.fn(() => Promise.resolve({ voices: [] }));
@@ -38,13 +39,14 @@ function makeDesignResult(overrides: Partial<VoiceLibraryEntry> = {}) {
   return { entry, previewUrl: '/preview.mp3' };
 }
 
-function renderModal(onClose = vi.fn()) {
+function renderModal(onClose = vi.fn(), ttsModelKey?: TtsModelKey) {
   const store = configureStore({
     reducer: {
       voiceLibrary: voiceLibrarySlice.reducer,
       castDesign: castDesignSlice.reducer,
       ui: uiSlice.reducer,
     },
+    preloadedState: ttsModelKey ? { ui: { ...uiSlice.getInitialState(), ttsModelKey } } : undefined,
   });
   render(
     <Provider store={store}>
@@ -84,6 +86,31 @@ describe('CreateLibraryVoiceModal', () => {
     );
     await waitFor(() => expect(screen.getByTestId('create-library-voice-save')).not.toBeDisabled());
     expect(screen.getByTestId('create-library-voice-audition')).toBeInTheDocument();
+  });
+
+  /* Finding 4 (#1842 review) — the default-session test above leaves
+     ttsModelKey at its DEFAULT_TTS_MODEL ('kokoro-v1'), for which
+     modelKeyForEngineChoice('qwen', …) floors to 'qwen3-tts-0.6b' — the
+     SAME value a hardcoded literal would produce. This variant proves the
+     session tier actually reaches designVoice, not a hardcode wearing a
+     mapper's clothing. */
+  it('"Design & audition" dispatches designVoice at a 1.7B session tier', async () => {
+    designLibraryVoice.mockResolvedValue(makeDesignResult());
+    renderModal(vi.fn(), 'qwen3-tts-1.7b');
+    fireEvent.change(screen.getByTestId('create-library-voice-name'), {
+      target: { value: 'Captain Halloran' },
+    });
+    fireEvent.change(screen.getByTestId('create-library-voice-persona'), {
+      target: { value: 'A gruff captain' },
+    });
+    fireEvent.click(screen.getByTestId('create-library-voice-design'));
+    await waitFor(() =>
+      expect(designLibraryVoice).toHaveBeenCalledWith({
+        name: 'Captain Halloran',
+        persona: 'A gruff captain',
+        modelKey: 'qwen3-tts-1.7b',
+      }),
+    );
   });
 
   it('fs-38 Wave 1, Task 16 — opens a book-less (bookId: null) cast-design snapshot while designing, and clears it when done', async () => {

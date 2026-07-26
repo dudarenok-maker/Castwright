@@ -13,6 +13,7 @@ import { Provider } from 'react-redux';
 import { voiceLibrarySlice, type VoiceLibraryEntry } from '../../store/voice-library-slice';
 import { uiSlice } from '../../store/ui-slice';
 import { VoiceLibraryCard } from './voice-library-card';
+import type { TtsModelKey } from '../../lib/types';
 
 const patchVoiceLibrary = vi.fn();
 const sampleLibraryVoice = vi.fn();
@@ -42,7 +43,11 @@ function makeEntry(overrides: Partial<VoiceLibraryEntry> = {}): VoiceLibraryEntr
 
 function renderCard(
   entry: VoiceLibraryEntry,
-  props: { onAssign?: (e: VoiceLibraryEntry) => void; onEdit?: (e: VoiceLibraryEntry) => void } = {},
+  props: {
+    onAssign?: (e: VoiceLibraryEntry) => void;
+    onEdit?: (e: VoiceLibraryEntry) => void;
+  } = {},
+  ttsModelKey?: TtsModelKey,
 ) {
   const store = configureStore({
     reducer: { voiceLibrary: voiceLibrarySlice.reducer, ui: uiSlice.reducer },
@@ -54,6 +59,7 @@ function renderCard(
         clonePending: false,
         lastFetchedAt: Date.now(),
       },
+      ui: ttsModelKey ? { ...uiSlice.getInitialState(), ttsModelKey } : uiSlice.getInitialState(),
     },
   });
   render(
@@ -159,6 +165,23 @@ describe('VoiceLibraryCard', () => {
     await waitFor(() =>
       expect(sampleLibraryVoice).toHaveBeenCalledWith(entry.voiceUuid, {
         modelKey: 'qwen3-tts-0.6b',
+      }),
+    );
+  });
+
+  /* Finding 4 (#1842 review) — the default-session test above leaves
+     ttsModelKey at DEFAULT_TTS_MODEL ('kokoro-v1'), for which
+     modelKeyForEngineChoice('qwen', …) floors to 'qwen3-tts-0.6b' —
+     numerically identical to a hardcoded literal. This variant proves the
+     session tier actually reaches the call. */
+  it('preview-play passes a 1.7B session tier through to api.sampleLibraryVoice', async () => {
+    sampleLibraryVoice.mockResolvedValue({ url: '/preview.mp3' });
+    const entry = makeEntry();
+    renderCard(entry, {}, 'qwen3-tts-1.7b');
+    fireEvent.click(screen.getByTestId(`voice-library-play-${entry.voiceUuid}`));
+    await waitFor(() =>
+      expect(sampleLibraryVoice).toHaveBeenCalledWith(entry.voiceUuid, {
+        modelKey: 'qwen3-tts-1.7b',
       }),
     );
   });

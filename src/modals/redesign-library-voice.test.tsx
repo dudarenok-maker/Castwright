@@ -46,37 +46,13 @@ function makeEntry(overrides: Partial<VoiceLibraryEntry> = {}): VoiceLibraryEntr
   };
 }
 
-function renderModal(entry: VoiceLibraryEntry = makeEntry(), onClose = vi.fn(), ttsModelKey?: TtsModelKey) {
+function renderModal(
+  entry: VoiceLibraryEntry = makeEntry(),
+  onClose = vi.fn(),
+  ttsModelKey?: TtsModelKey,
+) {
   const preloadedState = ttsModelKey
-    ? {
-        ui: {
-          stage: { kind: 'voices' as const },
-          currentTrack: null,
-          matchDetailFor: null,
-          regenChapter: null,
-          regenInitialScope: null,
-          regenCharacterCtx: null,
-          previewRegen: null,
-          staleAudio: null,
-          showRevisionPlayer: false,
-          revisionHistoryFor: null,
-          showDriftReport: false,
-          driftReportCharacterFilter: null,
-          driftReportScope: 'book' as const,
-          previewMode: false,
-          selectedModel: 'local-ollama',
-          ttsModelKey,
-          selectedModelExplicit: false,
-          ttsModelKeyExplicit: false,
-          themeOverride: null,
-          reuploadingBookId: null,
-          queueModalOpen: false,
-          rebaselineModalOpen: false,
-          rebaselineBookId: null,
-          startGenPrompt: null,
-          voiceReadinessGate: null,
-        },
-      }
+    ? { ui: { ...uiSlice.getInitialState(), ttsModelKey } }
     : undefined;
   const store = configureStore({
     reducer: { voiceLibrary: voiceLibrarySlice.reducer, ui: uiSlice.reducer },
@@ -122,6 +98,24 @@ describe('RedesignLibraryVoiceModal', () => {
     );
     await waitFor(() =>
       expect(screen.getByTestId('redesign-library-voice-keep-new')).not.toBeDisabled(),
+    );
+  });
+
+  /* Finding 4 (#1842 review) — the default-session test above leaves
+     ttsModelKey at its DEFAULT_TTS_MODEL ('kokoro-v1'), for which
+     modelKeyForEngineChoice('qwen', …) floors to 'qwen3-tts-0.6b' — the
+     same value a hardcoded literal would produce. This variant proves the
+     session tier actually reaches redesignVoice. */
+  it('"Re-design from persona" dispatches redesignVoice at a 1.7B session tier', async () => {
+    redesignLibraryVoice.mockResolvedValue({ previewUrl: '/new-preview.mp3' });
+    const entry = makeEntry();
+    renderModal(entry, vi.fn(), 'qwen3-tts-1.7b');
+    fireEvent.click(screen.getByTestId('redesign-library-voice-redesign'));
+    await waitFor(() =>
+      expect(redesignLibraryVoice).toHaveBeenCalledWith(entry.voiceUuid, {
+        persona: entry.persona,
+        modelKey: 'qwen3-tts-1.7b',
+      }),
     );
   });
 

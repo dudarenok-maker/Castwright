@@ -21,6 +21,7 @@ import { NoCapacityError } from './tts-errors.js';
 import { encodePcmToAudio } from './mp3.js';
 import {
   buildSampleText,
+  djb2,
   voiceSampleAudioDir,
   voiceSampleFileName,
   voiceSampleFilePath,
@@ -79,6 +80,15 @@ export interface PostDesignAndCacheParams {
   modelKey: TtsModelKey;
   /** The audition line — also the cache-key text. */
   calibrationText: string;
+  /** Finding 1 (#1842 review) — the SAME extra hash input the voice-library
+      `/:voiceUuid/sample` route folds in (`voice-library.ts`'s `contentToken =
+      djb2(entry.persona).toString(36)`). Omitted by the character-scoped
+      design route (qwen-voice.ts), which pairs with a play route that never
+      passes one either — passing it here only for the library's
+      runVoiceDesign() caller keeps that pairing intact while giving the
+      library design ↔ play pairing a REAL shared filename instead of two
+      that silently diverge. */
+  contentToken?: string;
   /** Resolved sidecar base URL (for error messages). */
   sidecarUrl: string;
   /** External cancel — aborts the in-flight sidecar call (e.g. a bulk job). */
@@ -106,6 +116,7 @@ export async function postDesignAndCacheAudition(
     sidecarUrl,
     signal,
     logContext,
+    contentToken,
   } = params;
 
   const controller = new AbortController();
@@ -201,12 +212,15 @@ export async function postDesignAndCacheAudition(
     }
     const sampleRate = Number(upstream.headers.get('X-Sample-Rate') ?? '24000') || 24000;
     const pcm = Buffer.from(await upstream.arrayBuffer());
-    const fileName = voiceSampleFileName({
-      cacheScope,
-      modelKey,
-      text: calibrationText,
-      voiceName: outVoiceId,
-    });
+    const fileName = voiceSampleFileName(
+      {
+        cacheScope,
+        modelKey,
+        text: calibrationText,
+        voiceName: outVoiceId,
+      },
+      contentToken,
+    );
     const filePath = voiceSampleFilePath(fileName);
     const url = voiceSamplePublicUrl(fileName);
     try {
@@ -267,6 +281,15 @@ export async function runVoiceDesign(
   });
   const language = sidecarLanguageName(opts.languageCode ?? 'en');
   const sidecarUrl = getResolvedSidecarUrl();
+  /* Finding 1 (#1842 review) — derive the SAME contentToken the play route
+     computes from the persisted entry's persona (voice-library.ts:
+     `contentToken = entry.persona ? djb2(entry.persona).toString(36) :
+     undefined`). For a LIVE (non-preview) design, opts.persona is the exact
+     string the /design route then persists as entry.persona, so the two
+     sides derive an identical token from an identical source — by
+     construction, not coincidence. Harmless for a preview design too (its
+     previewUrl is played directly, never looked up by filename). */
+  const contentToken = opts.persona ? djb2(opts.persona).toString(36) : undefined;
 
   const { url } = await postDesignAndCacheAudition({
     target: `${sidecarUrl}/qwen/design-voice`,
@@ -288,6 +311,7 @@ export async function runVoiceDesign(
     calibrationText,
     sidecarUrl,
     logContext: `library storageKey=${opts.storageKey}${opts.preview ? ' (preview)' : ''}`,
+    contentToken,
   });
 
   return { storageKey: opts.storageKey, previewUrl: url };

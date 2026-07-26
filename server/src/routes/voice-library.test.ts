@@ -646,6 +646,69 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
   });
 });
 
+/* Finding 1 (#1842 review) — /design computed its cached audition's filename
+   without the persona contentToken /:voiceUuid/sample folds in, so the two
+   never actually agreed on a filename despite the module comments claiming
+   they did: a card's first Play after designing always missed cache and
+   re-synthesised. Proven behaviourally (a /sample call resolves the SAME
+   cache entry /design just warmed — `cached: true`, no `synthesize` call),
+   not by asserting on filename internals directly. */
+describe('design → sample cache pairing (#1842 finding 1)', () => {
+  function okSidecarResponse(pcm = new Uint8Array(24_000 * 2 * 0.3)) {
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'Content-Type': 'audio/L16', 'X-Sample-Rate': '24000' }),
+      arrayBuffer: async () => pcm.buffer,
+      json: async () => ({}),
+    } as unknown as Response;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('a /sample call right after /design hits the SAME cached file design already warmed', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+
+    const designRes = await request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'Nova', persona: 'a calm, measured narrator' });
+    expect(designRes.status).toBe(201);
+    const { voiceUuid } = designRes.body.entry as { voiceUuid: string };
+    const previewUrl = designRes.body.previewUrl as string;
+
+    const sampleRes = await request(app).post(`/api/voice-library/${voiceUuid}/sample`).send({});
+
+    expect(sampleRes.status).toBe(200);
+    expect(sampleRes.body.cached).toBe(true);
+    expect(sampleRes.body.url).toBe(previewUrl);
+    expect(synthesize).not.toHaveBeenCalled();
+  });
+
+  it('the pairing holds at the 1.7B tier too', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+
+    const designRes = await request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'Nova', persona: 'a calm, measured narrator', modelKey: 'qwen3-tts-1.7b' });
+    expect(designRes.status).toBe(201);
+    const { voiceUuid } = designRes.body.entry as { voiceUuid: string };
+    const previewUrl = designRes.body.previewUrl as string;
+    expect(previewUrl).toContain('qwen3-tts-1.7b');
+
+    const sampleRes = await request(app)
+      .post(`/api/voice-library/${voiceUuid}/sample`)
+      .send({ modelKey: 'qwen3-tts-1.7b' });
+
+    expect(sampleRes.status).toBe(200);
+    expect(sampleRes.body.cached).toBe(true);
+    expect(sampleRes.body.url).toBe(previewUrl);
+    expect(synthesize).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/voice-library/:voiceUuid/assign', () => {
   function castPathFor(bookDir: string) {
     return join(bookDir, '.audiobook', 'cast.json');

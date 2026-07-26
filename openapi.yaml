@@ -1997,6 +1997,10 @@ paths:
                 name: { type: string }
                 persona: { type: string }
                 languageCode: { type: string }
+                modelKey:
+                  type: string
+                  enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+                  description: The Qwen tier to design at (#1842). Must route to the qwen engine or the request 400s. Omitted defaults to qwen3-tts-0.6b.
       responses:
         '201':
           description: Voice designed and added to the library
@@ -2008,6 +2012,15 @@ paths:
                 properties:
                   entry: { $ref: '#/components/schemas/VoiceLibraryEntry' }
                   previewUrl: { type: string }
+        '400':
+          description: modelKey is present but does not route to the qwen engine
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: string }
+                  message: { type: string }
 
   /api/voice-library/{voiceUuid}/redesign:
     post:
@@ -2029,6 +2042,10 @@ paths:
               required: [persona]
               properties:
                 persona: { type: string }
+                modelKey:
+                  type: string
+                  enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+                  description: The Qwen tier to redesign at (#1842). Must route to the qwen engine or the request 400s. Omitted defaults to qwen3-tts-0.6b.
       responses:
         '200':
           description: Redesign preview ready
@@ -2039,6 +2056,15 @@ paths:
                 required: [previewUrl]
                 properties:
                   previewUrl: { type: string }
+        '400':
+          description: modelKey is present but does not route to the qwen engine
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: string }
+                  message: { type: string }
         '404':
           description: No library entry with that voiceUuid
 
@@ -2177,6 +2203,15 @@ paths:
                 required: [url]
                 properties:
                   url: { type: string }
+        '400':
+          description: modelKey is present but does not route to the qwen engine
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: string }
+                  message: { type: string }
         '404':
           description: No library entry with that voiceUuid
 

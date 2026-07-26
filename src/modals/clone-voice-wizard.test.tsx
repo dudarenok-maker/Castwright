@@ -3,12 +3,15 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 
-const { cloneVoiceApi } = vi.hoisted(() => ({ cloneVoiceApi: vi.fn() }));
+const { cloneVoiceApi, sampleLibraryVoiceApi } = vi.hoisted(() => ({
+  cloneVoiceApi: vi.fn(),
+  sampleLibraryVoiceApi: vi.fn(),
+}));
 vi.mock('../lib/api', () => ({
   api: {
     cloneVoice: cloneVoiceApi,
     listVoiceLibrary: vi.fn().mockResolvedValue({ voices: [] }),
-    sampleLibraryVoice: vi.fn().mockResolvedValue({ url: 'blob:preview' }),
+    sampleLibraryVoice: sampleLibraryVoiceApi,
   },
 }));
 
@@ -34,10 +37,17 @@ vi.mock('../lib/use-sample-playback', () => ({
 }));
 
 import { voiceLibrarySlice } from '../store/voice-library-slice';
+import { uiSlice } from '../store/ui-slice';
 import { CloneVoiceWizard } from './clone-voice-wizard';
+import type { TtsModelKey } from '../lib/types';
 
-function renderWizard(onClose = vi.fn()) {
-  const store = configureStore({ reducer: { voiceLibrary: voiceLibrarySlice.reducer } });
+function renderWizard(onClose = vi.fn(), ttsModelKey?: TtsModelKey) {
+  const store = configureStore({
+    reducer: { voiceLibrary: voiceLibrarySlice.reducer, ui: uiSlice.reducer },
+    preloadedState: {
+      ui: ttsModelKey ? { ...uiSlice.getInitialState(), ttsModelKey } : uiSlice.getInitialState(),
+    },
+  });
   render(
     <Provider store={store}>
       <CloneVoiceWizard onClose={onClose} />
@@ -46,7 +56,10 @@ function renderWizard(onClose = vi.fn()) {
   return { onClose };
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  sampleLibraryVoiceApi.mockResolvedValue({ url: 'blob:preview' });
+});
 
 describe('CloneVoiceWizard', () => {
   it('advances from phase 1 (onReady) to phase 2', () => {
@@ -74,5 +87,25 @@ describe('CloneVoiceWizard', () => {
       consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
     });
     expect(await screen.findByTestId('clone-voice-wizard-fidelity-warning')).toBeInTheDocument();
+  });
+
+  /* Finding 2 (#1842 review) — the post-save preview shares the `qwen-<uuid>`
+     scope with the My-voices card's Play button, which already auditions at
+     the session tier. Without threading modelKey here, a 1.7B session would
+     save a clone at this wizard's default (0.6B) and hear it differently one
+     click later on the card — the exact divergence #1842 exists to remove. */
+  it('post-save preview calls api.sampleLibraryVoice with the session Qwen tier', async () => {
+    cloneVoiceApi.mockResolvedValue({
+      voiceUuid: 'lib-clone-x', name: 'Mum', provenance: 'cloned', tags: [], pinned: false,
+      engines: { qwen: { status: 'ready', baseModel: 'q' } },
+      createdAt: 'a', updatedAt: 'b',
+    });
+    renderWizard(vi.fn(), 'qwen3-tts-1.7b');
+    fireEvent.click(screen.getByTestId('fake-continue'));
+    fireEvent.change(screen.getByTestId('clone-voice-wizard-name'), { target: { value: 'My Mum' } });
+    fireEvent.click(screen.getByTestId('clone-voice-wizard-save'));
+    await waitFor(() =>
+      expect(sampleLibraryVoiceApi).toHaveBeenCalledWith('lib-clone-x', { modelKey: 'qwen3-tts-1.7b' }),
+    );
   });
 });
