@@ -46,9 +46,8 @@ export function CloneCapturePanel({ onReady }: { onReady: (r: { candidateId: str
       {busy && <p>Processing sample…</p>}
       {error && <p className="text-magenta">{error}</p>}
       {warnings.map((w) => <p key={w} className="text-amber-600 text-xs">{w}</p>)}
-      {/* maxLength mirrors the server cap + CloneVoiceRequest.maxLength (#1836). */}
       {candidateId && (
-        <label>Transcript<textarea aria-label="transcript" maxLength={4000} value={transcript} onChange={(e) => setTranscript(e.target.value)} /></label>
+        <label>Transcript<textarea aria-label="transcript" value={transcript} onChange={(e) => setTranscript(e.target.value)} /></label>
       )}
 
       <fieldset className="flex flex-col gap-2">

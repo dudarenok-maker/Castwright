@@ -121,8 +121,12 @@ history at cut time.
   unreachable), decided server-side rather than from a client flag. Blank/whitespace falls back
   to the Whisper text, since Whisper can legitimately return an empty transcript for a non-speech
   clip. As the first client-controlled value to reach the derive's `refText` — which travels to
-  the sidecar as a base64 `X-Ref-Text` header — it is capped at 4000 chars in the contract, the
-  textarea, and the route, and over-length is a 400 rather than a silent truncation.
+  the sidecar as a base64 `X-Ref-Text` header — it is capped at 2000 chars in both the contract
+  and the route (pinned against drift by a test), sized so the header stays bounded in BYTES for
+  multi-byte ja/zh/ru text rather than only for ASCII. Over-length is a 400, never a truncation:
+  the textarea deliberately carries no `maxLength`, because a browser-side cap would silently drop
+  the tail of a correction and persist the remainder as `transcriptSource: 'user'` — the same
+  silent-discard shape this fixes.
   `mockCloneVoice` mirrors the same semantics so mock/e2e mode stops reproducing the bug. Adds
   Invariant 12 to `docs/features/267-fs38-wave3-voice-clone.md`. Closes the run sheet's KL-k
   finding.

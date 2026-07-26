@@ -1583,13 +1583,43 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
       .post('/api/voice-library/clone')
       .send({
         candidateId: 'cand-long',
-        transcript: 'x'.repeat(4001),
+        transcript: 'x'.repeat(2001),
         consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
       });
 
     expect(res.status).toBe(400);
     expect(deriveMock).not.toHaveBeenCalled(); // rejected before any GPU work
     expect(await readCandidate('cand-long')).not.toBeNull(); // candidate intact
+  });
+
+  /* The cap is expressed in CHARACTERS but the constraint it protects is a
+     BYTE budget: refText travels to the sidecar as a base64 X-Ref-Text header,
+     and base64 applies to UTF-8 bytes. This pins the arithmetic that makes a
+     character cap sufficient — worst case is a 3-byte BMP character per UTF-16
+     unit — so that raising the cap without redoing the sums fails here rather
+     than silently producing an oversized header for ja/zh/ru text (fs-59). */
+  it('the character cap bounds the base64 X-Ref-Text header for multi-byte text', () => {
+    const atCap = '漢'.repeat(2000); // CJK: 1 UTF-16 unit, 3 UTF-8 bytes each
+    expect(atCap.length).toBe(2000); // exactly at the cap, so it is accepted
+    const bytes = Buffer.byteLength(atCap, 'utf8');
+    const base64Bytes = Buffer.from(atCap, 'utf8').toString('base64').length;
+    expect(bytes).toBe(6000);
+    expect(base64Bytes).toBe(8000);
+    /* h11's fallback budget is 16 KiB for the WHOLE request line + header
+       block, and the 3b2 repair path adds X-Audition-Text alongside this. */
+    expect(base64Bytes).toBeLessThan(16_384 / 2);
+  });
+
+  /* The cap lives in two places — MAX_CLONE_TRANSCRIPT_CHARS and the
+     contract's CloneVoiceRequest.transcript.maxLength — tied together only by
+     prose. Nothing else fails if one drifts, so pin them. */
+  it('the route cap and openapi.yaml maxLength agree', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const yaml = await readFile(new URL('../../../openapi.yaml', import.meta.url), 'utf8');
+    const schema = yaml.slice(yaml.indexOf('    CloneVoiceRequest:'));
+    const transcriptBlock = schema.slice(schema.indexOf('        transcript:'));
+    const maxLength = /maxLength:\s*(\d+)/.exec(transcriptBlock)?.[1];
+    expect(maxLength).toBe('2000'); // === MAX_CLONE_TRANSCRIPT_CHARS
   });
 
   it('ignores a non-string transcript and falls back to the Whisper text', async () => {

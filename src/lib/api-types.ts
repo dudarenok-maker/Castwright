@@ -3914,10 +3914,14 @@ export interface components {
              *     falls back to the stored transcript (which may itself legitimately
              *     be empty for a non-speech clip).
              *
-             *     Capped at 4000 characters — comfortably above any transcript of the
-             *     ≤60 s sample clip, and bounded because this value is forwarded to
-             *     the sidecar as a base64 `X-Ref-Text` HTTP header. Over-length is a
-             *     400, never a silent truncation.
+             *     Capped at 2000 characters — a sanity bound, already far above any
+             *     real transcript of the ≤60 s sample clip. The server additionally
+             *     enforces an 8000-byte UTF-8 bound, because this value reaches the
+             *     sidecar as a base64 `X-Ref-Text` header and base64 applies to bytes
+             *     (2000 CJK characters are 6000 bytes). Any request satisfying
+             *     `maxLength` also satisfies the byte bound, so the latter can only
+             *     fire on a raw API client. Over-length is a 400, never a silent
+             *     truncation.
              */
             transcript?: string;
             consent: {

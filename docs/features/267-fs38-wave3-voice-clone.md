@@ -169,7 +169,7 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
     generic 500 (regression class of #1801).
 12. **The transcript the clone was distilled against is the one persisted.**
     `POST /clone` accepts an optional `transcript` (`CloneVoiceRequest`,
-    capped at 4000 chars) and prefers it over the candidate's Whisper text as
+    capped at 2000 chars) and prefers it over the candidate's Whisper text as
     the derive's `refText` when non-blank, writing that same value to
     **`master.transcript`** as well as `sampleTranscript`. Persisting to
     `master.transcript` is load-bearing, not cosmetic: the 3b2 repair path
@@ -181,7 +181,13 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
     so the persisted text and its recorded source can't disagree. Blank input
     falls back to the stored transcript (Whisper can legitimately return an
     empty transcript for a non-speech clip); over-length is a 400, never a
-    truncation (#1836).
+    truncation — including in the UI, which deliberately carries no textarea
+    `maxLength`, since a browser-side cap would silently drop the tail of a
+    correction and persist the remainder as `transcriptSource: 'user'`. The
+    2000-char cap is chosen so the base64 `X-Ref-Text` header stays bounded in
+    BYTES for multi-byte scripts (worst case 3 bytes per UTF-16 unit → ≤6000
+    bytes → ≤8000 base64), which a character cap does not otherwise guarantee
+    (#1836).
 
 ## Test plan
 

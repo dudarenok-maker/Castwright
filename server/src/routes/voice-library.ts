@@ -69,10 +69,28 @@ export const voiceLibraryRouter = Router();
 const cloneUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 /** Cap on a client-supplied clone transcript (#1836) — mirrors
- *  `CloneVoiceRequest.transcript`'s `maxLength` in openapi.yaml. Far above any
- *  real transcript of the ≤60 s sample clip, and bounded because the value is
- *  forwarded to the sidecar as a base64 `X-Ref-Text` header. */
-const MAX_CLONE_TRANSCRIPT_CHARS = 4000;
+ *  `CloneVoiceRequest.transcript`'s `maxLength` in openapi.yaml, so the route
+ *  enforces exactly what the contract advertises. A sanity bound: 2000
+ *  characters is already far above any real transcript of the ≤60 s sample
+ *  clip (~1000 chars of English speech).
+ *
+ *  Why 2000 specifically, in characters, is enough to bound the WIRE: the
+ *  value reaches the sidecar as a base64 `X-Ref-Text` header, and base64
+ *  applies to UTF-8 BYTES, not characters — so the cap has to survive
+ *  multi-byte text (ja/zh/ru per fs-59 is exactly the content most likely to
+ *  need a correction). `.length` counts UTF-16 units, and the worst case is a
+ *  3-byte BMP character per unit (astral chars cost 4 bytes but 2 units, so
+ *  they're cheaper per unit). 2000 units ⇒ ≤6000 UTF-8 bytes ⇒ ≤8000 base64
+ *  bytes. A separate byte check would therefore be unreachable.
+ *
+ *  What this does and doesn't protect: the SHIPPED sidecar installs
+ *  `uvicorn[standard]` → httptools, which enforces no header limit at all, so
+ *  on the default stack this is purely a sanity bound. It earns its keep on
+ *  the h11 fallback (httptools absent), whose 16 KiB budget covers the WHOLE
+ *  request line + header block — and the 3b2 repair path re-sends this same
+ *  persisted text plus an `X-Audition-Text` header, sharing that budget.
+ *  8000 base64 bytes leaves ample room for both. */
+const MAX_CLONE_TRANSCRIPT_CHARS = 2000;
 
 /* Library single-flight lock (spec §3). A module-level in-flight set keyed by
    voiceUuid (plus one `'library:new'` key for creates) serializes design work
@@ -641,12 +659,14 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
   const candidateId = typeof body.candidateId === 'string' ? body.candidateId : '';
   if (!candidateId) return res.status(400).json({ error: '`candidateId` is required.' });
   /* #1836 — `transcript` is the first CLIENT-controlled value to reach
-     deriveEngineArtifact's `refText`, which forwards it to the sidecar as a
-     base64 `X-Ref-Text` HTTP header. Unbounded input would blow the sidecar's
-     header limit and surface as a misleading "sidecar unreachable" error, so
-     cap it here (matching CloneVoiceRequest.maxLength). Rejected outright
-     rather than truncated — silently dropping part of a correction is the
-     class of bug this whole change fixes. */
+     deriveEngineArtifact's `refText` (and, via master.transcript, every later
+     re-derive). Bound it in both units — see the constants above for why the
+     byte bound is the one that actually holds for non-ASCII.
+
+     Rejected outright rather than truncated: silently dropping the tail of a
+     correction would persist a PARTIAL transcript as `transcriptSource:
+     'user'`, which every subsequent repair would then faithfully re-derive
+     from — the same silent-discard shape this whole change exists to fix. */
   if (typeof body.transcript === 'string' && body.transcript.length > MAX_CLONE_TRANSCRIPT_CHARS) {
     return res
       .status(400)
