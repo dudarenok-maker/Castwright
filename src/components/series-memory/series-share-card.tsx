@@ -24,12 +24,12 @@ export function SeriesShareCard({ detail, seriesName, owner }: {
     >
       {/* Wordmark */}
       <div className="flex items-center gap-1.5 font-semibold">
-        <CastwaveGlyph className="w-3.5 h-3.5 text-magenta" />
+        <CastwaveGlyph className="w-3.5 h-3.5 text-magenta-on-dark" />
         Castwright
       </div>
 
       {/* Series label */}
-      <p className="text-[10px] uppercase tracking-[0.2em] text-magenta font-semibold mt-4">
+      <p className="text-[10px] uppercase tracking-[0.2em] text-magenta-on-dark font-semibold mt-4">
         Series memory · {seriesName}
       </p>
 
@@ -53,7 +53,7 @@ export function SeriesShareCard({ detail, seriesName, owner }: {
           <span key={n + i} className={`font-serif ${nameSize} inline-flex items-center`}>
             {n}
             {i < shown.length - 1 && (
-              <CastwaveGlyph className="w-2 h-2 text-magenta/60 mx-1.5" />
+              <CastwaveGlyph className="w-2 h-2 text-magenta-on-dark/60 mx-1.5" />
             )}
           </span>
         ))}
@@ -69,7 +69,7 @@ export function SeriesShareCard({ detail, seriesName, owner }: {
         <span className="text-cream/60">
           {owner ? `${owner}'s` : 'Your'} cast · kept true
         </span>
-        <span className="text-magenta font-bold">castwright.ai</span>
+        <span className="text-magenta-on-dark font-bold">castwright.ai</span>
       </div>
     </div>
   );

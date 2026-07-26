@@ -29,6 +29,16 @@
      and .floating-pill-inverse's pinned color (below). */
   --color-cream: #f4efec;
 
+  /* The accent counterpart to --color-cream, and pinned for the same reason.
+     `text-magenta` resolves through the theme-flipping --magenta, which is
+     #A43C6C in light — only 2.9:1 on the #1b1714 surface those hardcoded-dark
+     cards use, so it fails WCAG AA as text for anyone on the light theme. The
+     surface never flips, so its accent must not either. Same literal as
+     dark-mode --magenta (line ~181), where the lift to 7.6:1 was already
+     worked out. Use on a pinned-dark surface ONLY — on normal
+     canvas-following UI, `text-magenta` is still correct. */
+  --color-magenta-on-dark: #e58fb8;
+
   --font-sans: 'General Sans', 'Neue Montreal', Inter, system-ui, sans-serif;
   --font-serif: Lora, Georgia, serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
