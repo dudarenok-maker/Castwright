@@ -9,14 +9,18 @@
    user hears. The Voice-library response (GET /api/voices) is authoritative;
    prefer reading `voice.ttsVoice` when it's available. */
 
-import type { Character, Voice, TtsModelKey } from './types';
+import type { Character, Voice, TtsModelKey, TtsEngine } from './types';
 
-/* qwen is a BESPOKE per-character engine (plan 108) — no preset catalog;
-   its "voice" is a designed voiceId living in overrideTtsVoices.qwen.name.
-   Kept in this union so the engine-aware resolver below can label it
-   ("Designed voice" / "No voice designed yet") instead of falsely picking
-   a Coqui/Kokoro preset for it. */
-export type TtsEngine = 'coqui' | 'gemini' | 'piper' | 'kokoro' | 'qwen';
+/* Single source of truth for the engine union: the OpenAPI-derived type in
+   ./types (BaseVoice.engine). Re-exported here so the many
+   `import { TtsEngine } from './tts-voice-mapping'` call sites keep working,
+   while there is exactly ONE declaration to keep in step with the contract.
+
+   qwen is a BESPOKE per-character engine (plan 108) — no preset catalog; its
+   "voice" is a designed voiceId living in overrideTtsVoices.qwen.name. It is in
+   the union so the engine-aware resolver below can label it ("Designed voice" /
+   "No voice designed yet") instead of falsely picking a Coqui/Kokoro preset. */
+export type { TtsEngine };
 
 export interface TtsVoiceAssignment {
   provider: TtsEngine;
