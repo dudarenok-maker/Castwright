@@ -43,8 +43,20 @@ test.describe('Status popover ↔ cast drawer coexistence', () => {
 
     /* Click Stop on the Kokoro control INSIDE the popover (mock Kokoro is
        preloaded → "Stop (voice engine)" is present). This is the exact action
-       that used to dismiss the drawer. */
-    const stopButton = page.getByRole('button', { name: /^stop \(voice engine\)$/i }).first();
+       that used to dismiss the drawer. Scoped to the Kokoro pill's own group
+       (ModelControlPill wraps pill+button in `role="group" aria-label="Kokoro
+       <state>"`) rather than just the popover container: the popover can show
+       several engines' pills at once (Kokoro, Qwen, Qwen 1.7B in this mock
+       account), all sharing the generic "Stop (voice engine)" / "Load model
+       (voice engine)" button aria-label, so the popover alone isn't a unique
+       scope. This is also distinct from the loaded-models banner's OWN Kokoro
+       Stop control (Task 10 / #1839), named "Stop Kokoro" instead — see
+       ModelControlPill's `actionAriaLabel` prop — and that banner copy sits
+       behind the cast drawer's scrim in this exact state, which is why an
+       unscoped `.first()` locator here used to time out clicking a control it
+       could never actually reach. */
+    const kokoroGroup = popover.getByRole('group', { name: /^Kokoro/i });
+    const stopButton = kokoroGroup.getByRole('button', { name: /^stop \(voice engine\)$/i });
     await expect(stopButton).toBeVisible({ timeout: 5_000 });
     await stopButton.click();
 
@@ -53,9 +65,9 @@ test.describe('Status popover ↔ cast drawer coexistence', () => {
     await expect(popover, 'popover must stay open after clicking Stop').toBeVisible();
 
     /* And the control actually acted — it flipped to Load. */
-    await expect(page.getByRole('button', { name: /^load model \(voice engine\)$/i }).first()).toBeVisible(
-      { timeout: 5_000 },
-    );
+    await expect(kokoroGroup.getByRole('button', { name: /^load model \(voice engine\)$/i })).toBeVisible({
+      timeout: 5_000,
+    });
     await expect(drawerOpen, 'drawer still open after the engine flipped').toBeVisible();
   });
 });

@@ -413,8 +413,12 @@ describe('useTtsLifecycle', () => {
       qwenBase17WeightsPresent: false,
     });
     const { result } = renderHook(() => useTtsLifecycle());
-    await waitFor(() => expect(result.current.coqui.state).toBe('idle'));
-    expect(result.current.qwen1_7bInstalled).toBe(false);
+    /* Gate on the actual field under test, not `coqui.state === 'idle'` —
+       that's true BOTH before sidecarHealth is set (the hook's synchronous
+       initial-render default) AND after the mocked health probe resolves,
+       so it doesn't distinguish pre- from post-probe and the very next
+       assertion below used to race the mock's promise (#1841 CI triage). */
+    await waitFor(() => expect(result.current.qwen1_7bInstalled).toBe(false));
   });
 
   it('#1841 finding 2: reports qwen1_7bInstalled=undefined (unknown), NOT false, when the sidecar is unreachable', async () => {

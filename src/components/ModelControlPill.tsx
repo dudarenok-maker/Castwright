@@ -55,6 +55,15 @@ interface Props {
       when a more specific BlockerDiagnosis fix action is rendered alongside
       this pill, so the user doesn't see two buttons for one problem. */
   suppressUnreachableAction?: boolean;
+  /** Overrides the action button's aria-label from the default
+      "<Action> (<kind>)" (e.g. "Stop (voice engine)") to "<Action> <name>"
+      (e.g. "Stop Kokoro"). Needed when a second, simultaneously-visible
+      ModelControlPill for the SAME engine is on screen at once — e.g. the
+      loaded-models banner's resident-engine Stop control duplicates the
+      Status popover's pill for that engine (Task 10 / #1839) — so the two
+      controls' accessible names no longer collide. Omit to keep the
+      existing aria-label byte-identical; every current call site omits it. */
+  actionAriaLabel?: string;
 }
 
 interface Tone {
@@ -150,6 +159,7 @@ export function ModelControlPill({
   unreachableLabel,
   engineLabel,
   suppressUnreachableAction,
+  actionAriaLabel,
 }: Props) {
   const tone = TONES[state];
   const action = actionFor(state);
@@ -174,7 +184,11 @@ export function ModelControlPill({
           onClick={action.handler === 'load' ? onLoad : onStop}
           disabled={action.disabled}
           aria-disabled={action.disabled}
-          aria-label={`${action.label} (${kindNoun(kind).toLowerCase()})`}
+          aria-label={
+            actionAriaLabel
+              ? `${action.label} ${actionAriaLabel}`
+              : `${action.label} (${kindNoun(kind).toLowerCase()})`
+          }
           className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${tone.button}`}
         >
           {action.label}

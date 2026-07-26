@@ -7,6 +7,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { TtsNoticeBanner } from './tts-notice-banner';
+import type { EngineLifecycle } from '../lib/use-tts-lifecycle';
+
+function makeReadyLifecycle(): EngineLifecycle {
+  return { state: 'ready', onLoad: vi.fn(), onStop: vi.fn() };
+}
 
 describe('TtsNoticeBanner', () => {
   it('renders nothing when both notices are clear', () => {
@@ -54,5 +59,51 @@ describe('TtsNoticeBanner', () => {
     );
     expect(screen.getByText(/Analyzer unloaded/i)).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent(/failed to load/i);
+  });
+
+  describe('resident-model Stop row (Task 10 / #1839)', () => {
+    it("names the engine in the Stop button's aria-label, not the generic kind noun", () => {
+      /* This control duplicates the Status popover's own Stop pill for the
+         same engine whenever that engine is resident (#1841 CI triage) — the
+         two must have different accessible names. This banner copy names the
+         engine directly ("Stop Kokoro") instead of the popover's unchanged,
+         generic "Stop (voice engine)". */
+      render(
+        <TtsNoticeBanner
+          evictionNotice={null}
+          loadErrorNotice={null}
+          onDismiss={vi.fn()}
+          kokoro={makeReadyLifecycle()}
+        />,
+      );
+      expect(screen.getByRole('button', { name: 'Stop Kokoro' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^stop \(voice engine\)$/i })).not.toBeInTheDocument();
+    });
+
+    it('gives Kokoro and Coqui XTTS distinct Stop buttons when both are resident', () => {
+      render(
+        <TtsNoticeBanner
+          evictionNotice={null}
+          loadErrorNotice={null}
+          onDismiss={vi.fn()}
+          kokoro={makeReadyLifecycle()}
+          coqui={makeReadyLifecycle()}
+        />,
+      );
+      expect(screen.getByRole('button', { name: 'Stop Kokoro' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Stop Coqui XTTS' })).toBeInTheDocument();
+    });
+
+    it('renders nothing extra when neither engine is resident', () => {
+      const { container } = render(
+        <TtsNoticeBanner
+          evictionNotice={null}
+          loadErrorNotice={null}
+          onDismiss={vi.fn()}
+          kokoro={{ state: 'idle', onLoad: vi.fn(), onStop: vi.fn() }}
+        />,
+      );
+      expect(container).toBeEmptyDOMElement();
+    });
   });
 });

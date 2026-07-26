@@ -37,7 +37,15 @@ interface TtsNoticeBannerProps {
    Gated on residency (`state === 'ready'`), not `enginesInUse` — residency
    is what costs VRAM. Exactly the moment a voice preview fails for capacity
    (see server/src/gpu/describe-vram-blockers.ts, whose remedy copy now points
-   here). Renders nothing when there's no notice AND nothing resident. */
+   here). Renders nothing when there's no notice AND nothing resident.
+
+   This row can be on screen at the same time as the Status popover's own
+   Stop pill for the same engine (the popover is residency-gated too, so
+   both surface together whenever an engine is resident). Passes
+   `actionAriaLabel` so this copy's Stop button reads "Stop Kokoro" /
+   "Stop Coqui XTTS" — distinct from the popover's unchanged generic
+   "Stop (voice engine)" — so the two controls have different accessible
+   names (#1839 / #1841 CI triage). */
 export function TtsNoticeBanner({
   evictionNotice,
   loadErrorNotice,
@@ -83,6 +91,7 @@ export function TtsNoticeBanner({
               key={label}
               kind="tts"
               engineLabel={label}
+              actionAriaLabel={label}
               state={lifecycle.state}
               onLoad={() => {
                 void lifecycle.onLoad();
