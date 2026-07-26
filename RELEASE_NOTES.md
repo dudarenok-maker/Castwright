@@ -6,6 +6,12 @@
   Fallen for a voice you built for one character? Save it to My voices and hand it to someone
   else next time, in a different book entirely.
 - **In-app Help now answers "Is my data private?" and "Does it work offline?"** — the same plain-language answers as the website, so both agree: analysis reads your book on a local model by default, and the optional cloud fallback is on by default but a single switch turns it off for good.
+- **The series cast card reads properly on a light screen — and travels that way.** The card you
+  share to show a cast kept true across a series is always dark, but its pink accent was quietly
+  taking its cue from whichever theme you were using. On a light theme that left the wording on it
+  too dim to read comfortably — and because the card saves out as an image, that dimmed version was
+  what you sent to other people. The card now looks the same wherever you are, and the buttons
+  around it read cleanly too.
 - **The demo library shows the right covers again.** In the built-in sample library, _Saltgrave_ and _The Tidewatcher's Oath_ were wearing each other's cover art — they now each show their own.
 - **Re-detect one chapter, not the whole book.** Edited a single chapter? "Detect emotions" now works on just the chapter you're reading — the whole-book pass is one click away in its menu.
 - **You can see the chapter title on the timeline now.** Every chapter opens with its title read
