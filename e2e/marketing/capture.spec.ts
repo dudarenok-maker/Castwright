@@ -63,6 +63,13 @@ for (const scene of SCENES) {
   test(`capture ${scene.id}`, async ({ page }, testInfo) => {
     const vp = testInfo.project.name as Viewport;
     test.skip(!viewports.includes(vp), `viewport ${vp} not requested for ${scene.id}`);
+    /* An export scene does real work after the page is already posed —
+       html-to-image walks the node, inlines every stylesheet, re-fetches each
+       url() resource under cacheBust, then rasterises. Stacked on top of the
+       cold Vite compile the stock 120s budget is already sized for, that was
+       enough to blow the deadline (the download event never arrived in time)
+       on a cold first run, while the identical scene finishes in ~2s warm. */
+    if (scene.downloadAction) test.slow();
 
     /* Hydrate the library slice first — several views (e.g. the listen cover at
        routes/index.tsx:833) read book data from `s.library.books`, which is
@@ -130,9 +137,18 @@ for (const scene of SCENES) {
        "system", so emulating `prefers-color-scheme` re-themes it without any
        app change. Default: both light + dark; `CAPTURE_THEME=light|dark` limits
        to one. Output: `<scene>.<viewport>.<theme>.png`. */
-    const themes = (
+    const requested = (
       process.env.CAPTURE_THEME ? [process.env.CAPTURE_THEME] : ['light', 'dark']
     ) as ('light' | 'dark')[];
+    /* A scene may pin itself to a subset of themes (a fixed-treatment surface
+       like the exported cast card). Intersect rather than override, so
+       CAPTURE_THEME still narrows — and skip when the intersection is empty,
+       rather than silently writing a theme the scene disowns. */
+    const themes = scene.themes ? requested.filter((t) => scene.themes!.includes(t)) : requested;
+    test.skip(
+      themes.length === 0,
+      `scene ${scene.id} is ${scene.themes?.join('+')}-only; requested ${requested.join('+')}`,
+    );
     const fullPage = scene.fullPage ?? process.env.CAPTURE_FULLPAGE === '1';
     /* Full-page screenshots scroll-and-stitch multiple viewport-sized strips
        together. top-bar.tsx's `<header className="sticky top-0 z-40 …">`
@@ -158,10 +174,21 @@ for (const scene of SCENES) {
     for (const theme of themes) {
       await page.emulateMedia({ colorScheme: theme });
       await page.waitForTimeout(400); // settle the theme re-render
-      await page.screenshot({
-        path: resolve(OUT, `${scene.id}.${vp}.${theme}.png`),
-        fullPage,
-      });
+      const path = resolve(OUT, `${scene.id}.${vp}.${theme}.png`);
+      if (scene.downloadAction) {
+        /* Export scene: keep the file the app produced rather than a shot of
+           the page. The click has to be armed BEFORE it fires — the export is
+           synchronous once html-to-image resolves, so a waitForEvent started
+           afterwards can miss it. Never non-fatal: an export scene that fell
+           back to a screenshot would write a plausible-looking PNG of the
+           wrong thing (the modal, chrome and all) under the export's filename,
+           which is worse than a red run. */
+        const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+        await scene.downloadAction(page);
+        await (await downloadPromise).saveAs(path);
+      } else {
+        await page.screenshot({ path, fullPage });
+      }
     }
   });
 }

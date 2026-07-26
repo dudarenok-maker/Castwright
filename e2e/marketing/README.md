@@ -59,7 +59,44 @@ Add one row to `scenes.ts`:
   `#/books/:bookId/<view>`, `#/account`, `#/voices`.
 - `waitFor` is an optional content selector (non-fatal) so the shot isn't taken
   on the loading shell.
+- `themes` pins a scene to `['dark']` or `['light']`. Only for a fixed-treatment
+  surface where the other theme is not a second look but a worse version of the
+  same one (see `series-cast-card-export`). It intersects with `CAPTURE_THEME`
+  rather than overriding it, so a scene never writes a theme it disowns.
 - `viewports` defaults to `['desktop']`.
+
+## Export scenes (capturing what the app *produces*, not what it shows)
+
+Most scenes screenshot the page. A scene with a **`downloadAction`** instead
+presses an in-app export button and keeps the file the browser downloads — so
+the output PNG is the real user-facing artefact, byte for byte, rather than the
+harness's own re-render of the same pixels.
+
+```ts
+{ id: 'series-cast-card-export', hash: '#/', themes: ['dark'],
+  waitFor: '[data-testid="series-memory-chip"]',
+  action: async (page) => { /* …open the modal… */ },
+  waitForAfterAction: '[data-testid="series-share-card"]',
+  downloadAction: async (page) =>
+    page.getByRole('button', { name: /download image \(\.png\)/i }).click(),
+  strict: true },
+```
+
+Two ordering rules matter:
+
+- **`action` reaches the export affordance; `downloadAction` presses it.**
+  `action` runs once, before the theme loop; `downloadAction` runs *inside* it,
+  because an exported card bakes the active theme's tokens into the file, so the
+  click has to happen after `emulateMedia`.
+- **Export scenes never degrade to a screenshot.** A fallback would write a
+  plausible-looking PNG of the wrong thing (the modal, chrome and all) under the
+  export's filename — worse than a red run.
+
+Export scenes are marked `test.slow()` automatically. `html-to-image` walks the
+node, inlines every stylesheet, re-fetches each `url()` under `cacheBust`, then
+rasterises; stacked on the cold Vite compile the stock 120s budget already
+assumes, that overran the deadline mid-render on a cold first run (the button
+was still reading "Rendering…") while finishing in ~2s warm.
 
 ## Covers
 
