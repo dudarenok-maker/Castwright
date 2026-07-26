@@ -921,9 +921,16 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
    entry still carries a complete consent record, just a revoked one). A 409
    guards the (should-be-impossible-for-a-cloned-voice) case of an entry with
    no consent record at all — nothing to revoke. Wave 3b2, Task 3: revocation
-   also erases the resynthesis-capable clone artifacts (`purgeCloneArtifacts`,
-   no `deleteEntryDir` — the manifest + `master.wav` are retained so the
-   entry stays visible/inspectable, only the engine `.pt`/cache files go). */
+   also erases the resynthesis-capable clone artifacts via `purgeCloneArtifacts`
+   (no `deleteEntryDir` — the manifest is retained so the entry stays
+   visible/inspectable, revoked). User-directed fix (consent-erasure, same
+   wave): revoke ALSO erases the entry-dir recording itself — the person's
+   actual `master.wav` — via `deleteMasterClip: true`, since "revoke consent"
+   that leaves the original clip sitting on disk isn't really revoked.
+   `purgeCloneArtifacts` clears the entry's `master` field when it erases the
+   clip, so this handler re-reads the entry afterward rather than returning
+   the pre-purge snapshot, keeping the response's `master` in sync with what's
+   actually on disk. */
 voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
@@ -932,8 +939,10 @@ voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response
     if (!entry.consent) return res.status(409).json({ error: 'Entry has no consent record to revoke.' });
     const updated = { ...entry, consent: { ...entry.consent, revokedAt: new Date().toISOString() } };
     await writeEntry(updated); // passes the guard — revokedAt is orthogonal (Task 7)
-    await purgeCloneArtifacts(voiceUuid); // erase resynthesis-capable artifacts on revoke
-    return res.status(200).json(updated);
+    // Erase resynthesis-capable artifacts AND the original recording itself.
+    await purgeCloneArtifacts(voiceUuid, { deleteMasterClip: true });
+    const final = (await readEntry(voiceUuid)) ?? updated;
+    return res.status(200).json(final);
   } catch (e) {
     return res.status(502).json({ error: (e as Error).message || 'Revoke failed.' });
   }

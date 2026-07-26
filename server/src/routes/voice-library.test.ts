@@ -1509,14 +1509,13 @@ describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
     expect(res.status).toBe(404);
   });
 
-  /* Wave 3b2, Task 3 — revoke now purges resynthesis-capable clone
-     artifacts via purgeCloneArtifacts, WITHOUT deleting the entry dir: the
-     manifest (voice.json) + retained clip (master.wav) stay readable so the
-     revoked entry is still visible/inspectable in the library, just no
-     longer resynthesisable. Proven via real erasure effects (not a spy) —
-     see the file-header note above the hoisted mocks for why a self-mocked
-     spy on purgeCloneArtifacts was rejected. */
-  it('purges clone artifacts (no deleteEntryDir) and leaves voice.json + master.wav readable', async () => {
+  /* Wave 3b2, Task 3 — revoke purges resynthesis-capable clone artifacts via
+     purgeCloneArtifacts, WITHOUT deleting the entry dir: the manifest
+     (voice.json) stays readable so the revoked entry is still
+     visible/inspectable in the library. Proven via real erasure effects (not
+     a spy) — see the file-header note above the hoisted mocks for why a
+     self-mocked spy on purgeCloneArtifacts was rejected. */
+  it('purges clone artifacts (no deleteEntryDir) and leaves voice.json readable', async () => {
     const voiceUuid = 'r-purge-1';
     await vl.writeEntry(
       makeEntry({
@@ -1529,6 +1528,14 @@ describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
           permittedUse: 'personal',
           attestedAt: '2026-01-01T00:00:00.000Z',
           attestedBy: 'me',
+        },
+        master: {
+          clipFile: 'master.wav',
+          sampleRate: 24_000,
+          durationSeconds: 5,
+          transcript: 'hello there',
+          transcriptSource: 'whisper',
+          captureMethod: 'record',
         },
       }),
     );
@@ -1551,10 +1558,66 @@ describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
       // The engine artifacts (resynthesis-capable) are purged...
       expect(existsSync(qwenVoice.qwenVoicePtPath(qwenName))).toBe(false);
       expect(existsSync(pt17bPath)).toBe(false);
-      // ...but the manifest dir + retained clip survive (no deleteEntryDir).
-      expect(existsSync(masterPath)).toBe(true);
+      // ...but the manifest dir survives (no deleteEntryDir).
       const onDisk = await vl.readEntry(voiceUuid);
       expect(onDisk?.consent?.revokedAt).toBeTruthy();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  /* User-directed fix — revoke must ALSO erase the person's original
+     recording (the entry-dir clip), behind the two-step frontend confirm.
+     Node-side: the file itself is unlinked AND the manifest's `master`
+     field is cleared (a manifest pointing at a deleted file would be a
+     lie — and the resolver/card already treat an absent `master` as
+     Broken, which a revoked voice already is via the revoked rule). This
+     test would have failed before the fix (the prior behaviour retained
+     `master.wav` on disk — see the "leaves voice.json readable" test above,
+     which asserted survival until this same change flipped it). */
+  it('also erases the entry-dir recording (master.wav) and clears the manifest master field', async () => {
+    const voiceUuid = 'r-erase-master';
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid,
+        name: 'Mum',
+        provenance: 'cloned',
+        consent: {
+          personName: 'Mum',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00.000Z',
+          attestedBy: 'me',
+        },
+        master: {
+          clipFile: 'master.wav',
+          sampleRate: 24_000,
+          durationSeconds: 5,
+          transcript: 'hello there',
+          transcriptSource: 'whisper',
+          captureMethod: 'record',
+        },
+      }),
+    );
+    const masterPath = join(vl.entryDir(voiceUuid), 'master.wav');
+    writeFileSync(masterPath, 'fake-wav-bytes');
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('sidecar unreachable'));
+    try {
+      const res = await request(app).post(`/api/voice-library/${voiceUuid}/revoke`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.consent.revokedAt).toBeTruthy();
+      expect(res.body.master).toBeUndefined(); // response reflects the post-purge state
+
+      // The actual recording is gone...
+      expect(existsSync(masterPath)).toBe(false);
+      // ...and the manifest no longer points at it, but is still intact/readable.
+      const onDisk = await vl.readEntry(voiceUuid);
+      expect(onDisk).not.toBeNull();
+      expect(onDisk?.master).toBeUndefined();
+      expect(onDisk?.consent?.revokedAt).toBeTruthy();
+      expect(onDisk?.name).toBe('Mum');
     } finally {
       fetchSpy.mockRestore();
     }

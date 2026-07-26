@@ -11,15 +11,21 @@
    between the evict and the unlink. */
 
 import { rm } from 'node:fs/promises';
-import { qwenVoicePtPath } from '../routes/qwen-voice.js';
-import { qwenVoiceSidecarPath, qwenVoiceWavPath } from './paths.js';
-import { removeEntryDir } from './voice-library.js';
+import { join } from 'node:path';
+// Review I5 — qwenVoicePtPath now comes from paths.js, its actual home
+// (alongside its qwenVoiceSidecarPath/qwenVoiceWavPath siblings), not from
+// routes/qwen-voice.js. That route module re-exports it only for its own
+// legacy call sites; pulling it from there dragged an Express router — and
+// transitively synthesise-chapter.ts — into the workspace layer for what is
+// just a path.join. No cycle exists today, but this removes a latent one.
+import { qwenVoicePtPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from './paths.js';
+import { entryDir, readEntry, removeEntryDir, writeEntry } from './voice-library.js';
 import { purgeVoiceSamples } from '../tts/voice-sample-cache.js';
 import { getResolvedSidecarUrl } from './user-settings.js';
 
 export async function purgeCloneArtifacts(
   voiceUuid: string,
-  opts: { deleteEntryDir?: boolean } = {},
+  opts: { deleteEntryDir?: boolean; deleteMasterClip?: boolean } = {},
 ): Promise<void> {
   const key = `qwen-${voiceUuid}`;
   const files = [
@@ -28,6 +34,9 @@ export async function purgeCloneArtifacts(
     qwenVoicePtPath(`${key}__1.7b`),
     qwenVoicePtPath(`${key}-preview`),
     qwenVoiceSidecarPath(`${key}-preview`),
+    // M2 (review) — the preview's own 1.7B variant, the same gap the base
+    // key's `__1.7b.pt` fix (above) closed, just for the `-preview` key.
+    qwenVoicePtPath(`${key}-preview__1.7b`),
     // §2.3 (fs-38 Wave 3b2, optional Task 11) — a DESIGNED voice's retained
     // reference clip. No-op (rm force) for a plain clone, which never has one.
     qwenVoiceWavPath(`${key}__master`),
@@ -43,14 +52,39 @@ export async function purgeCloneArtifacts(
   // TODO(3c): when XTTS clone lands, also erase voices/xtts/xtts-<uuid>.pt here
   //   (spec §5.6). No xtts artifact exists on disk in 3b2, so omit it for now —
   //   but a future xtts clone would be un-erasable via this path if forgotten.
-  if (opts.deleteEntryDir) await removeEntryDir(voiceUuid);
-  try {
-    await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ voiceId: key }),
-    });
-  } catch {
-    /* sidecar unreachable — non-fatal */
+  if (opts.deleteEntryDir) {
+    await removeEntryDir(voiceUuid);
+  } else if (opts.deleteMasterClip) {
+    /* User-directed (revoke must also erase the recording) — this is still
+       revoke, not delete: the manifest + entry dir are kept so the card
+       stays visible with its revoked state, but the person's actual
+       recording is erased right alongside the derived engine artifacts
+       above. Read the entry to find the clip's filename (it doesn't follow
+       the `qwen-<uuid>*` naming convention the `files` list above uses —
+       it's whatever `clipFile` the ingest step wrote), unlink it, then clear
+       `master` so the manifest never points at a file that's gone. A plain
+       delete (`deleteEntryDir`, above) doesn't need any of this — it removes
+       the whole entry dir, clip included, in one shot. No-op when the entry
+       or its `master` field is already absent. */
+    const entry = await readEntry(voiceUuid);
+    if (entry?.master) {
+      await rm(join(entryDir(voiceUuid), entry.master.clipFile), { force: true }).catch(() => {});
+      await writeEntry({ ...entry, master: undefined });
+    }
+  }
+  // M2 (review) — evict both the base and `-preview` sidecar cache entries so
+  // a `-preview` clone-prompt can't linger resident in sidecar memory after
+  // "every artifact" was supposedly erased. Each POST is independently
+  // best-effort — one failing must not skip the other.
+  for (const voiceId of [key, `${key}-preview`]) {
+    try {
+      await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ voiceId }),
+      });
+    } catch {
+      /* sidecar unreachable — non-fatal */
+    }
   }
 }
