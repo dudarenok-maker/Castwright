@@ -228,6 +228,16 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     (s) => (s as { config?: { values?: ConfigValues } }).config?.values ?? EMPTY_CONFIG_VALUES,
   );
   const myVoicesLibraryEnabled = configValues['voices.library.enabled']?.effective !== false;
+  /* fs-38 Wave 1 follow-up (#1802) — the gate can read `false` after the user
+     has already opened My voices, because the unhydrated config above is
+     treated as enabled-pending: a click landing before the boot-time
+     `fetchConfig` resolves leaves `section` on a segment whose nav button
+     unmounts and whose body renders null — a blank pane under the nav strip.
+     Derive the active section rather than correcting `section` in an effect,
+     so the fallback happens during render and the empty pane is never
+     painted. Every read below goes through this, not `section`. */
+  const activeSection =
+    !myVoicesLibraryEnabled && section === 'my-voices' ? 'in-use' : section;
   const playback = useSamplePlayback();
   const activeEngine = engineForModelKey(ttsModelKey);
 
@@ -1079,34 +1089,34 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         {myVoicesLibraryEnabled && (
           <button
             type="button"
-            aria-pressed={section === 'my-voices'}
+            aria-pressed={activeSection === 'my-voices'}
             onClick={() => setSection('my-voices')}
-            className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${section === 'my-voices' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
+            className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${activeSection === 'my-voices' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
           >
             My voices
           </button>
         )}
         <button
           type="button"
-          aria-pressed={section === 'in-use'}
+          aria-pressed={activeSection === 'in-use'}
           onClick={() => setSection('in-use')}
-          className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${section === 'in-use' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
+          className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${activeSection === 'in-use' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
         >
           In use
         </button>
         <button
           type="button"
-          aria-pressed={section === 'catalogue'}
+          aria-pressed={activeSection === 'catalogue'}
           onClick={() => setSection('catalogue')}
-          className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${section === 'catalogue' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
+          className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors min-h-[44px] fine-pointer:min-h-0 ${activeSection === 'catalogue' ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink'}`}
         >
           Catalogue
         </button>
       </div>
 
-      {section === 'my-voices' && <MyVoicesSection enabled={myVoicesLibraryEnabled} />}
+      {activeSection === 'my-voices' && <MyVoicesSection enabled={myVoicesLibraryEnabled} />}
 
-      {section === 'catalogue' && (
+      {activeSection === 'catalogue' && (
         <BaseVoiceCatalogPanel
           baseVoices={baseVoices}
           baseVoicesLoaded={baseVoicesLoaded}
@@ -1117,7 +1127,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         />
       )}
 
-      {section === 'in-use' && (
+      {activeSection === 'in-use' && (
         <>
           <div className="grid grid-cols-4 gap-4 mb-6">
             <StatTile label="Voices" value={library.length} />

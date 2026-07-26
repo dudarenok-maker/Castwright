@@ -71,6 +71,15 @@ history at cut time.
   request to the sidecar, not the caller's request to us, and forwarding it would collide with
   the 409 these routes already use for "design run in progress" / `gpu_busy`. The `0` the
   unreachable/cancelled paths carry also clamps to 502. (#1801)
+- **`#/voices` no longer strands you on a blank pane when the voice library is turned off**
+  (#1802). The view's section state is local; `voices.library.enabled` reading `false` after the
+  user had already opened **My voices** unmounted that nav segment and rendered
+  `MyVoicesSection` as `null`, leaving the nav strip with nothing beneath it until another
+  segment was picked. In practice the reachable trigger is the boot-time race — the config read
+  treats an unhydrated knob as enabled-pending, so a click landing before `fetchConfig` resolves
+  could strand on a disabled library. The active section is now **derived** rather than reset by
+  an effect, so the fallback to `in-use` happens during render and the empty pane is never
+  painted at all.
 
 ---
 
