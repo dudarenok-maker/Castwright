@@ -3903,6 +3903,31 @@ export interface components {
             candidateId: string;
             /** @description Optional display name; defaults to the consent personName */
             name?: string;
+            /**
+             * @description Optional corrected transcript of the sample clip. When present and
+             *     non-blank this is what the clone is distilled against (`ref_text`)
+             *     instead of the candidate's Whisper transcript, and it is persisted
+             *     as the entry's `master.transcript` so a later re-derive/repair uses
+             *     it too. `master.transcriptSource` becomes `user` when it differs
+             *     from the candidate's stored transcript, and otherwise keeps the
+             *     candidate's own source (always `whisper` today). Blank/whitespace
+             *     falls back to the stored transcript (which may itself legitimately
+             *     be empty for a non-speech clip).
+             *
+             *     Bounded by `maxLength` above — a sanity limit, already far above
+             *     any real transcript of the ≤60 s sample clip. It is expressed in
+             *     characters only, and sized so the value stays bounded in BYTES too:
+             *     the text reaches the sidecar as a base64 `X-Ref-Text` header, and
+             *     base64 applies to UTF-8 bytes rather than characters. Worst case is
+             *     3 UTF-8 bytes per UTF-16 unit, then 4/3 again for base64, so
+             *     `maxLength` implies the byte bound and no separate byte check is
+             *     needed. Over-length is a 400, never a silent truncation.
+             *
+             *     The number itself appears ONCE, in `maxLength`. Restating it in
+             *     prose is how this schema previously came to document two different
+             *     caps at the same time (#1836).
+             */
+            transcript?: string;
             consent: {
                 personName: string;
                 /** @enum {string} */

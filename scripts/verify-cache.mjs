@@ -71,6 +71,10 @@ export const STEPS = [
         'tailwind.config.ts',
         'postcss.config.js',
         'index.html',
+        /* api.clone-voice.test.ts pins the clone-transcript cap against the
+           contract, so an openapi-only edit must bust this step's cache —
+           otherwise the local run reports [cached] and the pin never fires. */
+        'openapi.yaml',
       ],
       includeLockfiles: ['root'],
     },
@@ -79,7 +83,9 @@ export const STEPS = [
     name: 'test:server',
     inputs: {
       globs: ['server/src/**'],
-      extraFiles: ['server/vitest.config.ts', 'server/tsconfig.json'],
+      /* openapi.yaml: voice-library.test.ts pins the clone-transcript cap
+         against it (see the `test` step above for the same reasoning). */
+      extraFiles: ['server/vitest.config.ts', 'server/tsconfig.json', 'openapi.yaml'],
       includeLockfiles: ['server'],
     },
   },

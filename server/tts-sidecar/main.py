@@ -37,7 +37,7 @@ import threading
 import time
 import wave
 from collections import deque
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any, Callable, Optional
 
 import numpy as np
@@ -536,7 +536,74 @@ def _log_meta_device_params(model: Any) -> None:
         pass
 
 
-app = FastAPI(title="audiobook-generator local TTS sidecar")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Startup/shutdown sequence for the sidecar (side-27a).
+
+    Replaces the twelve `@app.on_event("startup"|"shutdown")` decorators this
+    module used to carry. That decorator was NOT a hard blocker for the
+    FastAPI bump this branch also makes: Starlette did drop `_DefaultLifespan`
+    and the `on_startup`/`on_shutdown` machinery from `Router`
+    (Kludex/starlette#3117), but FastAPI re-implemented all of it locally
+    (`fastapi/routing.py`) — its own `_DefaultLifespan`,
+    `APIRouter._startup()`/`._shutdown()`, `add_event_handler()`, and
+    `on_event()` itself all still work, so the decorator keeps resolving fine
+    against the pinned FastAPI 0.140. The real reason to migrate: `on_event`
+    is `@deprecated` there, kept only on a compatibility shim FastAPI's own
+    source marks with a "remove this once the lifespan interface is
+    improved" TODO — `lifespan` is the supported interface going forward.
+    This is a pure mechanical migration: nothing about WHAT runs, or in
+    WHICH order, changes.
+
+    The handlers themselves are untouched — each is still a module-level
+    `async def` under its original name, defined much further down this file
+    (some of them ~5000 lines below here), because tests call several of them
+    directly (e.g. `main._preload_default_engines`). Naming them here before
+    they exist is fine: Python resolves module globals at CALL time, not at
+    `def` time, so this context manager can sit above the definitions without
+    forcing a reorder of the module.
+
+    Ordering is a verbatim copy of the old registration order in BOTH
+    directions. FastAPI's `APIRouter._startup()` ran `on_startup` handlers in
+    registration order and `_shutdown()` ran `on_shutdown` handlers in
+    registration order too — neither ever reversed them — so reversing the
+    teardown here would be a behaviour change smuggled into a migration whose
+    whole premise is that nothing changes. (The four stop handlers are
+    mutually independent anyway; each just cancels its own task.)
+
+    Failure semantics match the decorator form as well. The startup awaits are
+    sequential and unguarded, so a raising handler aborts boot and skips the
+    handlers after it — as FastAPI's `APIRouter._startup()` did. The teardown
+    sits in a `finally` because FastAPI's `_DefaultLifespan.__aexit__`
+    ignores its `exc_info` and runs `APIRouter._shutdown()` unconditionally
+    (`fastapi/routing.py:265-266`) — not Starlette's: the shipped Starlette
+    `_DefaultLifespan.__aenter__`/`__aexit__` are two bare `pass`es, and
+    `Router.startup()`/`Router.shutdown()`/`Router.on_startup` don't exist on
+    Starlette's `Router` at all. Without the `finally`, an exception thrown
+    at the `yield` (a cancelled lifespan task) would skip teardown entirely,
+    which the `on_event` form did not do.
+
+    `tests/test_lifespan_order.py` drives this very context manager and pins
+    both sequences by name, so a later edit cannot quietly drop or reshuffle a
+    handler."""
+    await _configure_vd_kokoro_coupling()
+    await _start_design_idle_watchdog()
+    await _start_asr_idle_watchdog()
+    await _start_spk_idle_watchdog()
+    await _start_device_probe()
+    await _start_memory_watchdog()
+    await _preload_default_engines()
+    await _startup_cuda_env_shadow_check()
+    try:
+        yield
+    finally:
+        await _stop_design_idle_watchdog()
+        await _stop_asr_idle_watchdog()
+        await _stop_spk_idle_watchdog()
+        await _stop_memory_watchdog()
+
+
+app = FastAPI(title="audiobook-generator local TTS sidecar", lifespan=_lifespan)
 
 
 async def _read_json_body(req: Request):
@@ -1007,7 +1074,6 @@ class _VdKokoroArbiter:
 _VD_KOKORO = _VdKokoroArbiter()
 
 
-@app.on_event("startup")
 async def _configure_vd_kokoro_coupling() -> None:
     """Resolve the real QWEN_DEVICE/KOKORO_DEVICE coupling at startup (not at
     module import time — torch must stay a lazily-imported dependency so
@@ -5000,7 +5066,6 @@ async def _qwen_design_idle_watchdog() -> None:
             log.warning("Qwen idle watchdog tick failed (%s).", e)
 
 
-@app.on_event("startup")
 async def _start_design_idle_watchdog() -> None:
     """Launch the Qwen idle watchdog (frees VoiceDesign + 1.7B-Base on idle;
     see _qwen_design_idle_watchdog)."""
@@ -5012,7 +5077,6 @@ async def _start_design_idle_watchdog() -> None:
     )
 
 
-@app.on_event("shutdown")
 async def _stop_design_idle_watchdog() -> None:
     global _design_idle_task
     if _design_idle_task is not None:
@@ -5060,14 +5124,12 @@ async def _asr_idle_watchdog() -> None:
             log.warning("ASR idle watchdog tick failed (%s).", e)
 
 
-@app.on_event("startup")
 async def _start_asr_idle_watchdog() -> None:
     global _asr_idle_task
     _asr_idle_task = asyncio.create_task(_asr_idle_watchdog())
     log.info("Whisper ASR idle watchdog started (ttl=%.0fs).", _asr_idle_ttl())
 
 
-@app.on_event("shutdown")
 async def _stop_asr_idle_watchdog() -> None:
     global _asr_idle_task
     if _asr_idle_task is not None:
@@ -5114,14 +5176,12 @@ async def _spk_idle_watchdog() -> None:
             log.warning("SPK idle watchdog tick failed (%s).", e)
 
 
-@app.on_event("startup")
 async def _start_spk_idle_watchdog() -> None:
     global _spk_idle_task
     _spk_idle_task = asyncio.create_task(_spk_idle_watchdog())
     log.info("ECAPA speaker idle watchdog started (ttl=%.0fs).", _spk_idle_ttl())
 
 
-@app.on_event("shutdown")
 async def _stop_spk_idle_watchdog() -> None:
     global _spk_idle_task
     if _spk_idle_task is not None:
@@ -5133,7 +5193,6 @@ async def _stop_spk_idle_watchdog() -> None:
         _spk_idle_task = None
 
 
-@app.on_event("startup")
 async def _start_device_probe() -> None:
     """side-14 — resolve per-engine devices in the background. Runs on a worker
     thread (torch import takes seconds); /health reports devices_state='pending'
@@ -5842,7 +5901,6 @@ async def _memory_watchdog() -> None:
             log.warning("sidecar memory watchdog tick failed (%s).", e)
 
 
-@app.on_event("startup")
 async def _start_memory_watchdog() -> None:
     """Launch the host-memory watchdog (see _memory_watchdog)."""
     global _mem_watchdog_task
@@ -5864,7 +5922,6 @@ async def _start_memory_watchdog() -> None:
     )
 
 
-@app.on_event("shutdown")
 async def _stop_memory_watchdog() -> None:
     global _mem_watchdog_task
     if _mem_watchdog_task is not None:
@@ -5876,7 +5933,6 @@ async def _stop_memory_watchdog() -> None:
         _mem_watchdog_task = None
 
 
-@app.on_event("startup")
 async def _preload_default_engines() -> None:
     """Engine preload at startup.
 
@@ -5981,7 +6037,6 @@ def _warn_if_cuda_env_shadow_active() -> None:
         )
 
 
-@app.on_event("startup")
 async def _startup_cuda_env_shadow_check() -> None:
     _warn_if_cuda_env_shadow_active()
 

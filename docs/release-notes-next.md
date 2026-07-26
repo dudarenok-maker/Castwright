@@ -126,6 +126,30 @@ history at cut time.
   refusing a preview on capacity, and when capacity is genuinely exhausted the
   error names the resident model that is holding it and the control that frees it.
   (#1812, #1839, #1841, #1842)
+- **fs-38 — clone-wizard transcript edits now reach the derive** (#1840, closes #1836, refs #624). The
+  wizard's transcript textarea was editable but write-only: `onReady` forwarded just
+  `{ candidateId, consent }` and `CloneVoiceRequest` had no transcript field, so `POST /clone`
+  always distilled against `candidate.master.transcript` — the raw Whisper output. Adds an
+  optional `transcript` to `CloneVoiceRequest` (OpenAPI-first), forwards the edited value from
+  the capture panel through the wizard, and prefers it as the derive's `ref_text` when non-blank.
+  The corrected text is persisted as **`master.transcript`** as well as `sampleTranscript` —
+  load-bearing, because the Wave 3b2 repair path re-derives from `entry.master.transcript`
+  (`readMasterPcmDefault`), so storing it only in `sampleTranscript` would let a later repair
+  silently revert to the Whisper text. `master.transcriptSource` now records `'user'` when the
+  text differs from the stored Whisper transcript (previously the enum's `'user'` arm was
+  unreachable), decided server-side rather than from a client flag. Blank/whitespace falls back
+  to the Whisper text, since Whisper can legitimately return an empty transcript for a non-speech
+  clip. As the first client-controlled value to reach the derive's `refText` — which travels to
+  the sidecar as a base64 `X-Ref-Text` header — it is capped at 2000 chars in both the contract
+  and the route (pinned against drift by a test that derives from the exported constant), sized so
+  the header stays bounded in BYTES for multi-byte ja/zh/ru text rather than only for ASCII. Over-
+  length is a 400, never a truncation: the textarea deliberately carries no `maxLength`, because a
+  browser-side cap would silently drop the tail of a correction and persist the remainder as
+  `transcriptSource: 'user'` — the same silent-discard shape this fixes. The wizard blocks Continue
+  with a visible reason instead, while the field is still editable.
+  `mockCloneVoice` mirrors the same semantics so mock/e2e mode stops reproducing the bug. Adds
+  Invariant 12 to `docs/features/267-fs38-wave3-voice-clone.md`. Closes the run sheet's KL-k
+  finding.
 
 ---
 
@@ -178,3 +202,43 @@ history at cut time.
   the cloud fallback is opt-out (on by default, switchable off), never framed as opt-in-only or
   "never touches the cloud". Guarded by `src/data/help-topics.test.ts`; item-count assertions bumped
   43 → 45.
+
+---
+
+## 🔒 Security & dependencies
+
+- **Sidecar engine deps: kokoro-onnx 0.5.0, a real ONNX Runtime pin, and FastAPI 0.140 via `lifespan`** (#1846).
+  Clears the actionable half of the `side-17` umbrella (#893), which an audit found was carrying three
+  stale rationales.
+  - `kokoro-onnx` `>=0.4.0,<0.5.0` → `>=0.5.0,<0.6.0` across all three overlays. The entire upstream
+    delta is `kokoro_onnx/log.py` dropping `colorlog` for stdlib `logging`; `Kokoro.create()`'s signature
+    and the private `.sess` attribute are unchanged. Two new contract tests in `test_kokoro.py` run
+    against the REAL installed package (the rest of that file stubs `kokoro_onnx` via `sys.modules`) —
+    they exist because the indexed-device pin rebuilds `.sess` in a warn-only `try/except`, so an
+    upstream rename would silently unpin the device rather than raise.
+  - `onnxruntime-gpu` gets an explicit `>=1.27,<1.28` constraint in `scripts/install-ort.mjs`. There was
+    no pin before — the swap ran `pip install --force-reinstall --no-deps onnxruntime-gpu` unversioned,
+    so the runtime executing Kokoro was whatever was latest on the user's install date. The constraint
+    lives in the installer, never the overlays (macOS reads those and has no wheel).
+    **Existing installs on 1.28.x will step back to 1.27.x on first upgrade** — both upgrade paths
+    (`bootstrap-venv.mjs`, `apply.ts`) re-run the swap.
+  - All 12 `@app.on_event` handlers → one `lifespan` context manager (`main.py`), then `fastapi`
+    `0.115` → `0.140` and `uvicorn` `0.30` → `0.51` (starlette rides transitively to 1.3.1).
+    Startup order preserved exactly; shutdown stays in registration order (FastAPI runs it forwards —
+    reversing would be a behaviour change). Teardown is in a `finally`, not after a bare `yield`,
+    because `_DefaultLifespan.__aexit__` discards `exc_info` and runs shutdown unconditionally.
+    `test_lifespan_order.py` pins both sequences against the actually-wired `lifespan_context`.
+  - **Correction to the rationale**: the migration was NOT a hard prerequisite, contrary to what the
+    working notes claimed. FastAPI 0.140 re-implements `_DefaultLifespan`, `APIRouter._startup()`,
+    `._shutdown()`, `.add_event_handler()` and `.on_event()` locally to preserve backward compatibility
+    after Starlette removed them. `on_event` is deprecated on a compat shim carrying its own removal
+    TODO — that is the real reason to move, and the comments now say so.
+  - Follow-ups folded in: `httpx2` adopted in `requirements-dev.txt` (#1843) so Starlette 1.3.1's
+    `testclient` stops warning about the deprecated `httpx` fallback (`httpx` stays — gradio and
+    safehttpx still import it); and `install-ort.mjs` now reports the package it actually swapped in
+    (#1844) instead of hardcoding `onnxruntime-directml`, which was wrong on every profile that
+    reaches the swap.
+  - Still upstream-blocked, with corrected reasons in #893: `torch` 2.12/2.13 is blocked because
+    **torchaudio's last release is 2.11.0**, NOT by the cu130 driver bump originally recorded;
+    `transformers` 5.x and `huggingface_hub` 1.x are both frozen by `qwen-tts==0.1.1`'s exact
+    `transformers==4.57.3` pin (#1228).

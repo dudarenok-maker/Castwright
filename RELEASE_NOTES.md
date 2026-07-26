@@ -1,5 +1,10 @@
 # Castwright 1.15.0
 
+- **The speech engine now runs on a version we've actually tested.** Until now, the exact
+  speech runtime Castwright installed depended on the day you installed it — two people with
+  identical machines could quietly end up on different builds, which made "it sounds different
+  on my computer" almost impossible to chase down. It's pinned now. Some installs will step
+  back to the tested version the next time they update.
 - **Build your own stable of narrators in My voices.** Design a voice once — from a persona, with
   a live audition — and it's yours to cast in any book, not just the one you designed it for.
   Not happy with a take? Redesign it and compare old against new side by side before you commit.
@@ -28,6 +33,11 @@
   short sample, confirm it's yours (or a family member's, with their say-so), and Castwright
   builds a reusable voice you can hand to any character. It'll never quietly swap in a
   stand-in: if it can't use your cloned voice, it tells you rather than faking it.
+- **Fixing a misheard word in your voice sample now actually counts.** When you record a sample
+  for cloning, Castwright writes down what it heard — and if it misheard you, you can correct it.
+  Until now those corrections were quietly ignored, and the clone was built against the wrong
+  words. Your edit is now what the voice is built from, and it sticks, so a later touch-up
+  doesn't undo it.
 - **The Voices page never shows you an empty room.** If My voices turns out to be switched off
   just as you open it, the page now shows your in-use voices instead of leaving you staring at a
   blank pane.
