@@ -22,10 +22,11 @@ export class NoCapacityError extends Error {
     /* Name what is actually holding the memory (#1839). The generic "free VRAM"
        line is the fallback for when nothing user-controlled is resident — in
        that case the GPU is genuinely busy and there is no button to press. */
-    const named = blockers.length
-      ? ` ${blockers.map((b) => `${b.model} is loaded — ${b.remedy}`).join(' ')}`
-      : ' — free VRAM or attach a second GPU.';
-    super(`Not enough GPU memory for ${engine} (${neededMb}MB).${named}`);
+    const base = `Not enough GPU memory for ${engine} (${neededMb}MB)`;
+    const message = blockers.length
+      ? `${base}. ${blockers.map((b) => `${b.model} is loaded — ${b.remedy}`).join(' ')}`
+      : `${base} — free VRAM or attach a second GPU.`;
+    super(message);
     this.name = 'NoCapacityError';
     this.engine = engine;
     this.neededMb = neededMb;

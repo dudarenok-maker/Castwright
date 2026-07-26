@@ -404,8 +404,12 @@ Adding a new view? Append a case to `e2e/responsive/coverage.spec.ts` — it aut
   engine"). Resident ≠ default-for-generation.
   - **Kokoro v1 (eagerly-resident fallback, new in 2026-05)**: eagerly loaded at sidecar
     startup, ~1 s cold load, ~1 GB VRAM. Permanently resident alongside
-    the analyzer Ollama on an 8 GB GPU. NO Load/Stop pill — it's just
-    always available once `server/tts-sidecar/scripts/install-kokoro.ps1` (or its
+    the analyzer Ollama on an 8 GB GPU. A Stop pill exists (the same
+    `ModelControlPill` Coqui uses) and, since Task 10 (#1839), is reachable
+    wherever Kokoro is resident — gated on residency, not the open book's
+    cast — via the global TTS notice banner (`src/components/tts-notice-banner.tsx`)
+    as well as the Status popover. It's just always available once
+    `server/tts-sidecar/scripts/install-kokoro.ps1` (or its
     cross-platform `install-kokoro.mjs`/`.sh` wrappers) has dropped the
     weights into `server/tts-sidecar/voices/kokoro/`. Voice catalog
     filtered to English-only (28 voices: `af_*`, `am_*`, `bf_*`, `bm_*`).

@@ -1654,6 +1654,8 @@ export function Layout() {
           evictionNotice={ttsLifecycle.evictionNotice}
           loadErrorNotice={ttsLifecycle.loadErrorNotice}
           onDismiss={ttsLifecycle.dismissNotices}
+          kokoro={ttsLifecycle.kokoro}
+          coqui={ttsLifecycle.coqui}
         />
       )}
 

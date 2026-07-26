@@ -76,6 +76,13 @@ vi.mock('../lib/api', () => ({
        prefix). Stub to an empty queue so the pill renders without the
        prefix in these tests. */
     getGpuQueueState: vi.fn(async () => ({ queueDepth: 0, devices: [] })),
+    /* Task 10 (#1839) — the resident-model Stop control in the global TTS
+       notice banner calls ttsLifecycle.kokoro/coqui.onStop(), which hits
+       these. Not exercised by most tests in this file, but useTtsLifecycle
+       needs both defined on the mocked api module or a real Stop click
+       throws "api.unloadSidecar is not a function". */
+    loadSidecar: vi.fn(async () => ({ status: 'ready' })),
+    unloadSidecar: vi.fn(async () => ({ status: 'idle' })),
     /* Voice matching fires on the confirm stage only; we render at
        'ready' here so it shouldn't trigger, but keep a stub so any
        drift in that guard doesn't crash the test. */
@@ -1395,5 +1402,78 @@ describe('Layout — analysis sub-stage runtime fields forward to the Status pil
     expect(await findByTestId('substage-fallback-note')).toHaveTextContent(
       'Switched to Gemini — Ollama unreachable',
     );
+  });
+});
+
+describe('Layout — resident-model Stop control in the global TTS notice banner (Task 10 / #1839)', () => {
+  /* Kokoro is eagerly resident (PRELOAD_KOKORO). Before this task, its only
+     Stop control lived in the generation view behind enginesInUse — so on a
+     book-less view (or the cast/voices view of a book whose cast doesn't use
+     Kokoro) it held ~1GB with no control in reach. That's exactly the moment
+     a voice preview fails for capacity (Task 9's NoCapacityError names the
+     model but has nothing to point the user at without this). The banner now
+     renders a Stop control per resident engine, gated on
+     ttsLifecycle.<engine>.state === 'ready' rather than enginesInUse — and
+     unlike the pre-existing Status-popover pill (also residency-gated, but
+     hidden until the user clicks the Status pill), this one is visible
+     without any extra click. */
+  it('offers a Stop control for a resident voice model outside the generation view', async () => {
+    vi.mocked(api.getSidecarHealth).mockResolvedValue({
+      status: 'reachable',
+      url: '(test)',
+      kokoroLoaded: true,
+    });
+    vi.mocked(api.unloadSidecar).mockClear();
+
+    render(
+      <Provider store={makeStore()}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    /* Found WITHOUT opening the Status popover (no click on status-pill) —
+       that's the point: reachable directly, not behind a popover click. */
+    const kokoroGroup = await screen.findByRole('group', { name: /^Kokoro ready$/i });
+    fireEvent.click(within(kokoroGroup).getByRole('button', { name: /stop/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(api.unloadSidecar)).toHaveBeenCalledWith({ engine: 'kokoro' });
+    });
+  });
+
+  it('shows no Stop control when nothing is resident', async () => {
+    vi.mocked(api.getSidecarHealth).mockResolvedValue({
+      status: 'reachable',
+      url: '(test)',
+      kokoroLoaded: false,
+    });
+
+    const { findByTestId } = render(
+      <Provider store={makeStore()}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    /* Settle the async health probe by opening the Status popover and
+       confirming Kokoro resolved to 'idle' (its own pill's action there is
+       "Load", not "Stop") — proves the negative assertion below isn't just
+       a pre-hydration race. The default engine (kokoro-v1) keeps that pill
+       reachable on this book-less view regardless of residency — a
+       pre-existing, separate affordance from the banner control under test. */
+    fireEvent.click(await findByTestId('status-pill'));
+    await screen.findByRole('group', { name: /^Kokoro idle$/i });
+
+    /* No Stop control anywhere on the page — neither the popover's own idle
+       pill nor the new banner control, which only renders a Stop affordance
+       when a resident engine's state is 'ready'. */
+    expect(screen.queryByRole('button', { name: /^stop/i })).toBeNull();
   });
 });

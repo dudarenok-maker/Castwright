@@ -4,8 +4,13 @@
    Only lists models the USER controls and that admission deliberately will not
    auto-evict. A resident Qwen base is excluded on purpose: evict-idle-tts.ts
    already frees an idle one, so naming it here would be noise on top of an
-   action already taken. The two remedies differ because the two models are
-   controlled differently — Coqui has a Load/Stop pill, Kokoro does not. */
+   action already taken. Both Coqui and Kokoro have a Stop pill reachable
+   wherever they're resident (the pill in the top bar / global TTS notice
+   banner — see src/components/tts-notice-banner.tsx, Task 10), but the
+   remedies still differ: stopping Coqui is a durable fix (nothing reloads
+   it), while Kokoro is the eagerly-resident fallback gated by the "Preload
+   Kokoro at startup" setting — stopping it only frees the VRAM until the
+   sidecar next restarts, so the actionable fix names the setting instead. */
 
 export interface VramBlocker {
   /** Display name, as the user sees it in the UI. */
@@ -24,10 +29,10 @@ export interface VramBlockerHealth {
 export function describeVramBlockers(health: VramBlockerHealth): VramBlocker[] {
   const out: VramBlocker[] = [];
   if (health.coquiLoaded) {
-    out.push({ model: 'Coqui XTTS', remedy: 'Stop it in the Models panel.' });
+    out.push({ model: 'Coqui XTTS', remedy: 'Stop it from its pill in the top bar.' });
   }
   if (health.kokoroLoaded) {
-    out.push({ model: 'Kokoro', remedy: 'Turn off "Preload Kokoro" in settings.' });
+    out.push({ model: 'Kokoro', remedy: 'Turn off "Preload Kokoro at startup" in settings.' });
   }
   return out;
 }
