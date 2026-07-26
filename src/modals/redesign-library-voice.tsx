@@ -2,11 +2,12 @@
 
    A/B old-vs-new redesign for a "My voices" library entry — the plan-161
    compare idiom (see src/modals/voice-compare-modal.tsx), reused here via
-   the same `AbCompareShell` + `useAbAudition` building blocks: OLD plays
-   `api.sampleLibraryVoice(entry.voiceUuid)`, NEW plays the previewUrl the
-   Task 13 `redesignVoice` thunk resolves with. "Keep new" / "Keep old"
-   dispatch `promoteRedesign` / `discardRedesign` and close the modal once
-   the server call succeeds. */
+   the same `AbCompareShell` + `useAbAudition` building blocks: both OLD and
+   NEW play at the session tier (via modelKey) so the A/B comparison is
+   like-for-like. OLD fetches via `api.sampleLibraryVoice(entry.voiceUuid,
+   opts)`, NEW plays the previewUrl the Task 13 `redesignVoice` thunk
+   resolves with. "Keep new" / "Keep old" dispatch `promoteRedesign` /
+   `discardRedesign` and close the modal once the server call succeeds. */
 
 import { useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
@@ -50,7 +51,9 @@ export function RedesignLibraryVoiceModal({ entry, onClose }: Props) {
       matchUrl: oldPreviewUrl ?? '',
       matchMode: 'exact',
       play: async () => {
-        const { url } = await api.sampleLibraryVoice(entry.voiceUuid);
+        const { url } = await api.sampleLibraryVoice(entry.voiceUuid, {
+          modelKey: modelKeyForEngineChoice('qwen', ttsModelKey),
+        });
         setOldPreviewUrl(url);
         await playback.play(url);
       },

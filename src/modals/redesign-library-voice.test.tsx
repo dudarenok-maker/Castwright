@@ -3,8 +3,8 @@
    "Re-design from persona" dispatches the Task 13 `redesignVoice` thunk and
    unblocks "Keep new"; "Keep new" dispatches `promoteRedesign` and closes;
    "Keep old" dispatches `discardRedesign` (available immediately, no
-   redesign required first) and closes; OLD play calls
-   `api.sampleLibraryVoice(entry.voiceUuid)`. */
+   redesign required first) and closes; both OLD and NEW play at the session
+   tier so the A/B comparison is like-for-like. */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -13,6 +13,7 @@ import { Provider } from 'react-redux';
 import { voiceLibrarySlice, type VoiceLibraryEntry } from '../store/voice-library-slice';
 import { uiSlice } from '../store/ui-slice';
 import { RedesignLibraryVoiceModal } from './redesign-library-voice';
+import type { TtsModelKey } from '../lib/types';
 
 const sampleLibraryVoice = vi.fn();
 const redesignLibraryVoice = vi.fn();
@@ -45,9 +46,41 @@ function makeEntry(overrides: Partial<VoiceLibraryEntry> = {}): VoiceLibraryEntr
   };
 }
 
-function renderModal(entry: VoiceLibraryEntry = makeEntry(), onClose = vi.fn()) {
+function renderModal(entry: VoiceLibraryEntry = makeEntry(), onClose = vi.fn(), ttsModelKey?: TtsModelKey) {
+  const preloadedState = ttsModelKey
+    ? {
+        ui: {
+          stage: { kind: 'voices' as const },
+          currentTrack: null,
+          matchDetailFor: null,
+          regenChapter: null,
+          regenInitialScope: null,
+          regenCharacterCtx: null,
+          previewRegen: null,
+          staleAudio: null,
+          showRevisionPlayer: false,
+          revisionHistoryFor: null,
+          showDriftReport: false,
+          driftReportCharacterFilter: null,
+          driftReportScope: 'book' as const,
+          previewMode: false,
+          selectedModel: 'local-ollama',
+          ttsModelKey,
+          selectedModelExplicit: false,
+          ttsModelKeyExplicit: false,
+          themeOverride: null,
+          reuploadingBookId: null,
+          queueModalOpen: false,
+          rebaselineModalOpen: false,
+          rebaselineBookId: null,
+          startGenPrompt: null,
+          voiceReadinessGate: null,
+        },
+      }
+    : undefined;
   const store = configureStore({
     reducer: { voiceLibrary: voiceLibrarySlice.reducer, ui: uiSlice.reducer },
+    preloadedState,
   });
   render(
     <Provider store={store}>
@@ -123,12 +156,28 @@ describe('RedesignLibraryVoiceModal', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
-  it('OLD play calls api.sampleLibraryVoice with the entry uuid', async () => {
+  it('OLD play calls api.sampleLibraryVoice with the entry uuid and session tier modelKey', async () => {
     sampleLibraryVoice.mockResolvedValue({ url: '/old-sample.mp3' });
     const entry = makeEntry();
     renderModal(entry);
     fireEvent.click(screen.getByTestId('redesign-library-voice-play-old'));
-    await waitFor(() => expect(sampleLibraryVoice).toHaveBeenCalledWith(entry.voiceUuid));
+    await waitFor(() =>
+      expect(sampleLibraryVoice).toHaveBeenCalledWith(entry.voiceUuid, {
+        modelKey: 'qwen3-tts-0.6b',
+      }),
+    );
+  });
+
+  it('OLD play passes the session tier modelKey so A/B comparison is like-for-like', async () => {
+    sampleLibraryVoice.mockResolvedValue({ url: '/old-sample.mp3' });
+    const entry = makeEntry();
+    renderModal(entry, vi.fn(), 'qwen3-tts-1.7b');
+    fireEvent.click(screen.getByTestId('redesign-library-voice-play-old'));
+    await waitFor(() =>
+      expect(sampleLibraryVoice).toHaveBeenCalledWith(entry.voiceUuid, {
+        modelKey: 'qwen3-tts-1.7b',
+      }),
+    );
   });
 
   it('NEW play is disabled until a redesign result exists', () => {
