@@ -814,7 +814,28 @@ def test_clone_voice_route_cuda_poison_shaped_exception_returns_503(monkeypatch,
     forces a CUDA-poison-shaped exception out of the derive call and asserts
     both the 503 response AND that the process-wide poison flag actually
     flipped — a wrong-name bug would blow up this test with a NameError
-    instead of a clean assertion failure, which is exactly the point."""
+    instead of a clean assertion failure, which is exactly the point.
+
+    `_mark_cuda_poisoned` (real, unstubbed, so the flag genuinely flips) also
+    arms a `threading.Timer`-based `os._exit(42)` via `_schedule_poison_exit`
+    — the production self-restart the sidecar relies on when a real CUDA
+    context is poisoned. Left un-stubbed, that timer fires ~500ms later and
+    kills the whole pytest process out from under the rest of the suite
+    (green dots, then a stray exit 42). Every other poison-triggering test
+    module in this package stubs `threading.Timer` to a no-op for exactly
+    this reason (see test_synthesize.py's `_stub_poison_exit_timer`); this
+    is the first poison test in this file, so it gets its own scoped stub
+    rather than a file-wide autouse fixture no other test here needs."""
+
+    class _NoOpTimer:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr(main.threading, "Timer", _NoOpTimer)
+
     config = _FakeXttsConfig()
     tts_model = _FakeXttsModel(config=config)
     tts_model.derive_exc = RuntimeError("CUDA error: out of memory")
