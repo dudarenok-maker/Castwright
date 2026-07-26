@@ -77,7 +77,11 @@ history at cut time.
   brick a voice. `purgeCloneArtifacts(uuid)` gives revoke and delete one shared, total erasure
   routine (base `.pt`, `__1.7b.pt`, manifest, both `-preview` variants, both `__master.wav`
   variants, sample cache) — closing gaps where revoke erased nothing and delete missed the 1.7B
-  cache. Sidecar `.pt` writes for `clone_voice`/`design_voice` are now atomic (temp file +
+  cache. A user-directed follow-up widened revoke further: it now also erases the entry-dir
+  recording itself (`{ deleteMasterClip: true }`, clearing the entry's `master` field), gated
+  behind a two-step confirm dialog that spells out the consequence up front — "revoke" now
+  really does mean the person's original recording is gone, not just retained-but-inert.
+  Sidecar `.pt` writes for `clone_voice`/`design_voice` are now atomic (temp file +
   `os.replace`, absorbing #1804). A distinct `wrong-engine` `BrokenClonedVoice` reason (+ a new
   `cloned-voice-broken` `FailureCode` with a toast + help link) diagnoses a cloned voice assigned
   to a character/book that simply doesn't route to Qwen, separately from Qwen being unavailable;

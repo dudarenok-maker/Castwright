@@ -60,16 +60,16 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
     (`classifyClonedVoice: ClassifyInput -> ClonedVoiceState`) plus two async
     orchestrators: `resolveClonedVoicesForChapter` (cloned voices — throws on
     Broken) and `resolveDesignedVoicesForChapter` (designed voices — Task 12,
-    §2.3 — best-effort, never throws). Both take fully injected deps, so the
-    classifier and orchestrator logic are unit-testable with zero real fs/
-    sidecar access.
+    §2.3 — best-effort, never throws except a deliberate abort). Both take
+    fully injected deps, so the classifier and orchestrator logic are
+    unit-testable with zero real fs/sidecar access.
   - An async **per-chapter pre-pass** in `synthesiseChapter`
     (`server/src/tts/synthesise-chapter.ts`, right after
     `buildSentenceGroups`/`castById` and before the title beat) that calls the
     cloned-voice resolver over exactly the cloned Qwen voices whose character
     speaks in this chapter, then (Task 12) the designed-voice self-heal over
     the same in-chapter set.
-  - `purgeCloneArtifacts(uuid, { deleteEntryDir? })`
+  - `purgeCloneArtifacts(uuid, { deleteEntryDir?, deleteMasterClip? })`
     (`server/src/workspace/purge-clone-artifacts.ts`) — the single erasure
     routine both `/revoke` and `DELETE /:voiceUuid` now call; erases the base
     `.pt`, `__1.7b.pt`, `.json`, both `-preview` variants, `__master.wav` (a
@@ -77,6 +77,10 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
     preview design's retained clip — a 2nd consent-erasure gap the Task-11
     review found and fixed alongside the first), then the sample cache, then a
     best-effort sidecar cache-evict (files first, sidecar last).
+    `deleteMasterClip` (a later, user-directed addition) also unlinks the
+    entry-dir recording (`entry.master.clipFile`) and clears the entry's
+    `master` field — `/revoke` passes this; `DELETE` erases the whole entry
+    dir instead via `deleteEntryDir`, which covers the recording either way.
   - `qwenVoicePtPath` moved from `routes/qwen-voice.ts` to
     `server/src/workspace/paths.ts`, alongside a new `qwenVoiceWavPath` —
     both are now the single source of truth for a qwen voice's on-disk
@@ -101,11 +105,15 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
   throws before that branch is reached (see Invariant 1 below). The write-time
   consent guard (267's Invariant 1) and the assign-readiness gate (267's
   Invariant 10) are unchanged.
-- **Migration story:** additive only. No `cast.json`/voice-library manifest
-  shape change — `resolveClonedVoicesForChapter` only writes
-  `engines.qwen.{status,baseModel}` fields that already existed pre-3b2. A
-  pre-Wave-3 entry (no `master`, no `consent`) never enters the cloned
-  resolver path at all (it's gated on `provenance === 'cloned'`).
+- **Migration story:** additive to the data shape, not to render behaviour.
+  No `cast.json`/voice-library manifest shape change — `resolveClonedVoicesForChapter`
+  only writes `engines.qwen.{status,baseModel}` fields that already existed
+  pre-3b2, and a pre-Wave-3 entry (no `master`, no `consent`) never enters the
+  cloned resolver path at all (it's gated on `provenance === 'cloned'`). It is
+  **not** behaviourally additive for an existing cloned assignment that
+  routes to a non-Qwen engine, though — see Known limitations (g) for the one
+  real behaviour delta this wave introduces against `cast.json` data written
+  before this branch.
 - **Reversibility:** everything here is inert for a non-cloned character; a
   revert leaves designed/imported voices and pre-existing cloned entries
   exactly as `resolveClonedVoicesForChapter` never having existed — the only
@@ -114,17 +122,17 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
 ## Invariants to preserve
 
 1. **A cloned voice is never silently substituted.** The async per-chapter
-   pre-pass in `synthesiseChapter` (`server/src/tts/synthesise-chapter.ts:1172-1212`)
+   pre-pass in `synthesiseChapter` (`server/src/tts/synthesise-chapter.ts:1195-1235`)
    classifies every in-chapter cloned voice Healthy/Repairable/Broken **before
    any synth call** (title or body); any Broken voice aborts the whole chapter
-   via `UnresolvableClonedVoiceError.fromList` (`clone-voice-resolver.ts:247`) —
+   via `UnresolvableClonedVoiceError.fromList` (`clone-voice-resolver.ts:75`) —
    never reroutes to Kokoro/Coqui/another voice. `applyQwenFallback`'s own
-   cloned-voice exemption (`synthesise-chapter.ts:1130-1133`) is retained as a
+   cloned-voice exemption (`synthesise-chapter.ts:1153-1156`) is retained as a
    documented backstop for any future caller that bypasses the pre-pass, not
    the live guard.
 2. **Fail-fast wastes zero GPU.** The pre-pass sits right after
-   `buildSentenceGroups` (`synthesise-chapter.ts:1162,1184`) and before the
-   title beat (`~1315`) — a Broken voice throws before any sidecar synth call,
+   `buildSentenceGroups` (`synthesise-chapter.ts:1185`) and before the
+   title beat (`~1346`) — a Broken voice throws before any sidecar synth call,
    title or body, fires this chapter.
 3. **The readiness gate is intersected to THIS chapter's characters — both
    narrator paths included.** `inChapterCharacterIds` starts from
@@ -132,12 +140,12 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
    **either** a title beat will actually narrate (`Boolean(titleText)`) **or**
    a group carries a `characterId` not present in `cast` at all (the
    "orphaned characterId safety net" that `resolveNarratorChar()` backstops
-   further down) — `synthesise-chapter.ts:1184-1192`. A cloned voice not cast
+   further down) — `synthesise-chapter.ts:1207-1215`. A cloned voice not cast
    on any in-chapter character is never resolved, so an unrelated Broken
    cloned voice elsewhere in the book can't fail a chapter it doesn't appear
    in.
 4. **Transient vs. permanent derive failure.** `isTransientDeriveFailure`
-   (`clone-voice-resolver.ts:168-172`) treats a thrown error as **permanent**
+   (`clone-voice-resolver.ts:184-188`) treats a thrown error as **permanent**
    ONLY when it carries a numeric `status` in `[400, 500)` — status `0`
    (unreachable), any `5xx`, or no numeric status at all is **transient**.
    A transient failure collects Broken/`derive-failed` **without** persisting
@@ -146,24 +154,35 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
    rule 3 (`qwen.status === 'failed'` → Broken) fires unconditionally — a
    persisted `'failed'` is terminal until a fresh derive clears it, so a
    transient outage must never reach that state.
-5. **Consent-scoped erasure is total.** `purgeCloneArtifacts`
-   (`server/src/workspace/purge-clone-artifacts.ts:24-40`) erases, under
-   `voices/qwen/`: `qwen-<uuid>.pt`, `.json`, `__1.7b.pt`, both `-preview`
-   variants, `__master.wav`, and `-preview__master.wav`, plus the sample cache
-   (`purgeVoiceSamples`) — wired into **both** `/revoke`
-   (`voice-library.ts:935`, no `deleteEntryDir` — manifest + entry-dir
-   `master.wav` retained) and `DELETE /:voiceUuid` (`deleteEntryDir: true`).
+5. **Consent-scoped erasure is total — including the original recording on
+   revoke.** `purgeCloneArtifacts` (`server/src/workspace/purge-clone-artifacts.ts:26-50`)
+   erases, under `voices/qwen/`: `qwen-<uuid>.pt`, `.json`, `__1.7b.pt`, both
+   `-preview` variants, `__master.wav`, and `-preview__master.wav`, plus the
+   sample cache (`purgeVoiceSamples`) — wired into **both** `/revoke`
+   (`voice-library.ts:943`, `{ deleteMasterClip: true }`, no `deleteEntryDir`)
+   and `DELETE /:voiceUuid` (`voice-library.ts:960`, `{ deleteEntryDir: true }`).
+   `deleteMasterClip` (`purge-clone-artifacts.ts:57-74`) is a later,
+   user-directed widening on top of that original list: revoke now ALSO
+   unlinks the entry-dir recording itself (`entry.master.clipFile`, read off
+   the entry — it doesn't follow the `qwen-<uuid>*` naming convention the
+   `files` array above uses) and clears the entry's `master` field so the
+   manifest never points at a file that's gone. The entry dir itself, and the
+   manifest, are still retained on revoke (unlike `DELETE`) so the card stays
+   visible in a "revoked" state — only the recording and derived artifacts
+   are gone. The frontend gates this behind a two-step `ConfirmDialog`
+   (`voice-library-card.tsx`) that states every consequence up front, since
+   it's irreversible.
 6. **Atomic sidecar `.pt` writes.** `_atomic_torch_save`
    (`server/tts-sidecar/main.py:202-`) writes to a temp sibling then
-   `os.replace`s onto the live path, used by both `clone_voice` (~3940) and
-   `design_voice` (~3828) — matching the pre-existing 1.7B persist pattern, so
+   `os.replace`s onto the live path, used by both `clone_voice` (~3945) and
+   `design_voice` (~3831) — matching the pre-existing 1.7B persist pattern, so
    a crash/kill mid-write can no longer corrupt a live `.pt` (#1804). A third
-   bare `torch.save` at `mint_variant` (~4011, emotion-variant clone prompt)
+   bare `torch.save` at `mint_variant` (~4099, emotion-variant clone prompt)
    is explicitly **out of scope** — it's off the resolver's re-derive path.
 7. **`wrong-engine` is diagnosed distinctly from `engine-unavailable`, and
    the assign-time guard checks the client's INTENDED `modelKey`, not the
    persisted default.** `classifyClonedVoice` checks `wrongEngine` before
-   `engineUnavailable` (`clone-voice-resolver.ts:125-126` — the more specific
+   `engineUnavailable` (`clone-voice-resolver.ts:139-140` — the more specific
    diagnosis wins). The assign-time guard (`voice-library.ts:869-891`) prefers
    `body.modelKey` (the caller's pending/session engine choice) over
    `getResolvedTtsModelKey()` (the persisted account default) when present —
@@ -172,15 +191,34 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
    session key. The guard is advisory (see Known limitations); the render-time
    pre-pass is the hard boundary either way.
 8. **Designed-voice self-heal is scoped to a MISSING `.pt` only, and never
-   introduces a new hard failure.** `resolveDesignedVoicesForChapter`
-   (`clone-voice-resolver.ts:297-323`) skips entirely when `ptExists` is true —
-   a **stale** `.pt` (old `baseModel`) is deliberately left alone, matching
-   today's "renders fine, just from an older embedding" behaviour; only a
-   missing `.pt` triggers a re-derive attempt from the retained
-   `qwen-<uuid>__master.wav` (Task 11). Any failure along that path (no
-   retained clip, sidecar down, derive error) is swallowed — the function
-   never throws, so a failed self-heal degrades to exactly today's
-   missing-designed-voice behaviour, not a new abort shape.
+   introduces a new hard failure — except a deliberate abort.**
+   `resolveDesignedVoicesForChapter` (`clone-voice-resolver.ts:337-440`) skips
+   entirely when `ptExists` is true (checked at `:353`) — a **stale** `.pt`
+   (old `baseModel`) is deliberately left alone, matching today's "renders
+   fine, just from an older embedding" behaviour; only a missing `.pt`
+   triggers a re-derive attempt from the retained `qwen-<uuid>__master.wav`
+   (Task 11). Most failure modes along that path (no retained clip, sidecar
+   down, derive error) are swallowed and logged — the function degrades to
+   exactly today's missing-designed-voice behaviour, not a new abort shape.
+   The one deliberate exception: an `AbortError` (or an already-aborted
+   `signal`) is deliberately RETHROWN, not swallowed (`:424-428`), so a
+   paused/cancelled run stops the self-heal loop too instead of spending more
+   GPU time on a re-derive nobody wants anymore.
+9. **A designed voice's persona survives a self-heal.** The sidecar's
+   `clone_voice` handler truncate-rewrites `qwen-<uuid>.json` into a bare
+   clone manifest — it has no notion that a given voiceId was ever
+   *designed*, so a self-heal driven through `/qwen/clone-voice` would
+   otherwise drop `instruct`/`designModel`/`mintMethod`/`fallbackFor` on the
+   very first re-derive. That's load-bearing, not cosmetic: an emptied
+   persona then trips the empty-persona guard on any subsequent re-design
+   attempt (the plan-149 bug). `resolveDesignedVoicesForChapter`
+   (`clone-voice-resolver.ts:371-395`) restores those fields by spreading a
+   manifest snapshot taken BEFORE the derive call back over whatever the
+   sidecar just wrote, refreshing only `refText`/`baseModel` to the derive's
+   fresh values; the restore write is best-effort — a write failure here
+   must not turn a successful re-derive (the `.pt` IS on disk now) into a
+   reported self-heal failure. Covered by `clone-voice-resolver.test.ts` and
+   `synthesise-chapter-designed-resolver.test.ts`.
 
 ## Test plan
 
@@ -206,12 +244,12 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
   character-level `ttsEngine` override, with cause-specific copy for each;
   `modelKey` in the assign body overrides the persisted default for the
   guard's decision.
-- Vitest server (`server/src/routes/voice-library.clone.test.ts`, extended) —
+- Vitest server (`server/src/routes/voice-library.test.ts`, extended) —
   a `transient`-tagged `assessCloneFidelity` throw (ECAPA embed unreachable,
   including a `NoCapacityError`) still 200s and persists
   `cloneFidelityUnavailable: true` with no `cloneCosine`; a genuine
   `SidecarDesignError` from the same call still aborts as before.
-- Vitest server (`server/src/tts/synthesise-chapter-error.test.ts`) —
+- Vitest server (`server/src/tts/clone-voice-resolver.test.ts`) —
   `UnresolvableClonedVoiceError.fromList` carries the structured broken list
   and reason-aware remedy copy (`wrong-engine` gets its own accurate sentence,
   never folded into "re-enable Qwen"); the legacy single-name constructor
@@ -226,7 +264,9 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
   failures are Broken without persisting `'failed'`; a `422` permanent
   failure IS persisted `'failed'`; two Broken voices both surface in one
   thrown error; `resolveDesignedVoicesForChapter`'s narrower rules (missing-
-  `.pt`-only trigger, never throws, stale `.pt` explicitly untouched).
+  `.pt`-only trigger, ordinary failures swallowed/never thrown, an
+  `AbortError` explicitly the one exception that propagates (M-1), stale
+  `.pt` explicitly untouched).
 - Vitest server (`server/src/tts/synthesise-chapter-cloned-resolver.test.ts`)
   — integration-level: a revoked cloned voice rejects the whole
   `synthesiseChapter` call with **zero** recorded synth calls (fail-fast); a
@@ -272,10 +312,10 @@ Qwen-capable book) — mock mode only exercises the frontend/store seams.
    that chapter. Expected: the chapter fails immediately (before any audible
    synth), with a `cloned-voice-broken` toast naming the character and
    "engine-unavailable"-flavoured detail.
-2. Revoke that same cloned voice's consent (`My voices` → card → Revoke),
-   restart the sidecar, and generate the chapter again. Expected: fails loud
-   with a "revoked" detail; the card in My voices shows the "Needs attention"
-   chip.
+2. Revoke that same cloned voice's consent (`My voices` → card → Revoke,
+   confirming the two-step "Revoke & delete recording" dialog), restart the
+   sidecar, and generate the chapter again. Expected: fails loud with a
+   "revoked" detail; the card in My voices shows the "Needs attention" chip.
 3. Manually delete the voice's `voices/qwen/qwen-<uuid>.pt` on disk (simulating
    a corrupted/evicted cache) without touching the manifest, then generate
    the chapter. Expected: a brief re-derive happens transparently (no error),
@@ -293,8 +333,9 @@ Qwen-capable book) — mock mode only exercises the frontend/store seams.
 > voice fails a live render loud, exactly as described in step 2 above; (b) a
 > voice re-derives identically after a real base-model bump (step 3, but
 > triggered by an actual `currentQwenBaseModel()` change rather than a
-> manually deleted `.pt`); (c) after a real revoke, `__1.7b.pt` and both
-> `__master.wav` variants (base + preview) are confirmed gone via `ls`, not
+> manually deleted `.pt`); (c) after a real revoke, `__1.7b.pt`, both
+> `__master.wav` variants (base + preview), AND the entry-dir recording
+> itself (`deleteMasterClip`) are confirmed gone via `ls`, not
 > just asserted against a temp-workspace test fixture. Track alongside the
 > existing 267 on-box acceptance debt.
 
@@ -306,9 +347,10 @@ Qwen-capable book) — mock mode only exercises the frontend/store seams.
   unit- and integration-tested against a synthetic `currentBaseModel`
   mismatch, but not yet exercised against an actual model-version bump on a
   live box.
-- **(c)** After a real revoke, `__1.7b.pt` and both `__master.wav` variants
-  are confirmed gone by inspecting disk directly, not just via the
-  `voice-library.test.ts` temp-workspace assertions.
+- **(c)** After a real revoke, `__1.7b.pt`, both `__master.wav` variants, and
+  the entry-dir recording itself (`deleteMasterClip`) are confirmed gone by
+  inspecting disk directly, not just via the `voice-library.test.ts` /
+  `purge-clone-artifacts.test.ts` temp-workspace assertions.
 - **(d)** The assign-time `wrong-engine` guard (`voice-library.ts:869-891`) is
   **advisory only** — it checks the caller's supplied `modelKey`, but a
   client can omit or misrepresent it, so this 409 is a nicety, not a
@@ -331,6 +373,36 @@ Qwen-capable book) — mock mode only exercises the frontend/store seams.
   gap — the chapter still completes — but an observability one. Filed as
   [#1813](https://github.com/dudarenok-maker/Castwright/issues/1813)
   (type:chore).
+- **(g)** A `cast.json` entry written BEFORE this branch — a cloned voice
+  assigned to a character that routes to a non-Qwen engine — behaves
+  differently today than it did yesterday. Previously that combination
+  rendered as a silently substituted Kokoro voice (exactly the failure this
+  wave exists to stop); it now hard-fails the chapter with `wrong-engine`.
+  That's the intended headline behaviour going forward, and the new
+  assign-time guard (Invariant 7) stops any *new* occurrence at the source —
+  but for existing data it's a genuine behaviour delta, not a pure addition.
+  No migration/backfill exists or is planned; the fix once the failure
+  surfaces is reassigning the character or switching the book/character back
+  to Qwen.
+- **(h)** The My-voices card's Broken/Repairable state chip
+  (`deriveClonedVoiceState`, `voice-library-card.tsx`) is a client-side
+  approximation of the server's `classifyClonedVoice`, not the same
+  classifier — it only has `entry.consent.revokedAt`, `entry.master`, and
+  `entry.engines.qwen.status` to work with, so it can't see `.pt` presence
+  on disk or the character's actual routed engine. It can diverge from what
+  the render-time resolver pre-pass actually decides (e.g. a `wrong-engine`
+  case the server would reject shows no warning on the card at all). The
+  card is a heads-up, not the source of truth — the resolver pre-pass is.
+- **(i)** The structured `cloned-voice-broken` `FailureCode` (the toast +
+  help-link surfacing) is wired at the generation route only
+  (`server/src/routes/generation.ts`). Chapter-splice
+  (`server/src/routes/chapter-splice.ts`) and QA-repair
+  (`server/src/routes/chapter-qa-repair.ts`) both also run through
+  `synthesiseChapter` and so can hit the same `UnresolvableClonedVoiceError`,
+  but neither classifies it — they surface the thrown error's plain
+  `.message` via `fail(...)`, not a structured `code`. A cloned-voice failure
+  during a splice or a QA repair is visible in the failure text, just not as
+  the same distinct, reason-neutral code the generation-view toast keys off.
 
 ## Out of scope
 
