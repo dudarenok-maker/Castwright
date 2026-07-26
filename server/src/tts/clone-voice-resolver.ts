@@ -246,3 +246,78 @@ export async function resolveClonedVoicesForChapter(
 
   if (broken.length > 0) throw UnresolvableClonedVoiceError.fromList(broken);
 }
+
+/* --- Task 12 (§2.3): designed-voice orphan self-heal ---------------------
+
+   A CLONED voice's resolver above throws when a re-derive fails, because a
+   cloned voice is consent-scoped — never substitute, fail loud. A DESIGNED
+   voice carries no consent and already renders fine today even when stale
+   (a base-model upgrade just means it's using an older embedding, not a
+   correctness bug), so this self-heal is deliberately narrower and gentler:
+
+     - ONLY triggers when the `.pt` is missing from disk entirely. A stale
+       `baseModel`/`status` on an otherwise-present `.pt` is untouched —
+       auto-re-deriving on every base-model bump has drift/quality
+       implications nobody has designed (plan's §2.3 self-review recommended
+       deferring exactly this); leave the existing render-fine-from-stale
+       behaviour alone. This function never even looks at a
+       VoiceLibraryEntry's `engines.qwen` — only the on-disk `.pt`
+       presence — so there's no seam for that case to sneak in through.
+     - NEVER throws. Unlike the cloned resolver, a failure here must not
+       introduce a new hard failure mode: if the retained clip/ref-text is
+       missing, or the re-derive itself fails (sidecar down, GPU busy,
+       whatever), this swallows the error and lets the chapter proceed to
+       whatever happens today for a missing designed voice (the sidecar's
+       own error at synth time) — unchanged behaviour, not a differently-
+       shaped abort. */
+
+export interface DesignedVoiceRequest {
+  characterName: string;
+  libraryUuid: string | undefined;
+}
+
+export interface ResolveDesignedVoiceDeps {
+  /** result of stat()-ing voices/qwen/qwen-<uuid>.pt */
+  ptExists(storageKey: string): Promise<boolean>;
+  /** Reads the retained `qwen-<uuid>__master.wav` (Task 11) plus its
+      matching ref_text off the sidecar's own disk. Returns `null` — never
+      throws — when either artifact is absent/unreadable, so the caller can
+      fall through cleanly instead of surfacing a new failure. */
+  readDesignedMasterPcm(
+    uuid: string,
+  ): Promise<{ pcm: Buffer; sampleRate: number; refText: string } | null>;
+  deriveEngineArtifact: typeof deriveEngineArtifact;
+  reportProgress?(msg: string): void;
+  signal?: AbortSignal;
+}
+
+/** For each requested designed voice whose `.pt` is missing: best-effort
+ *  re-derive from its retained clip. Never throws — a failed or impossible
+ *  self-heal just leaves the `.pt` missing, exactly as it is today. */
+export async function resolveDesignedVoicesForChapter(
+  requests: DesignedVoiceRequest[],
+  deps: ResolveDesignedVoiceDeps,
+): Promise<void> {
+  for (const { characterName, libraryUuid } of requests) {
+    if (!libraryUuid) continue;
+    const storageKey = `qwen-${libraryUuid}`;
+    const ptExists = await deps.ptExists(storageKey);
+    if (ptExists) continue; // present (healthy OR merely stale, out of scope) — leave it alone.
+
+    const master = await deps.readDesignedMasterPcm(libraryUuid);
+    if (!master) continue; // no retained clip / no ref_text — fall through to today's behaviour.
+
+    deps.reportProgress?.(`Preparing voice "${characterName}"…`);
+    try {
+      await deps.deriveEngineArtifact(
+        libraryUuid,
+        'qwen',
+        { masterPcm: master.pcm, sampleRate: master.sampleRate, refText: master.refText },
+        { signal: deps.signal },
+      );
+    } catch {
+      // Best-effort only — swallow and fall through to today's behaviour
+      // (the sidecar raises its own error for a missing designed voice).
+    }
+  }
+}

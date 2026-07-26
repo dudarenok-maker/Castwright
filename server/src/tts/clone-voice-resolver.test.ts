@@ -9,8 +9,10 @@ import {
   UnresolvableClonedVoiceError,
   classifyClonedVoice,
   resolveClonedVoicesForChapter,
+  resolveDesignedVoicesForChapter,
   type ClassifyInput,
   type ResolveChapterDeps,
+  type ResolveDesignedVoiceDeps,
 } from './clone-voice-resolver.js';
 import type { VoiceLibraryEntry } from '../workspace/voice-library.js';
 
@@ -490,6 +492,140 @@ describe('resolveClonedVoicesForChapter', () => {
       thrown = e as UnresolvableClonedVoiceError;
     }
     expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'misconfigured' }]);
+    expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+});
+
+/* --- Task 12 (§2.3): designed-voice orphan self-heal ---------------------- */
+
+function makeDesignedDeps(
+  overrides: Partial<ResolveDesignedVoiceDeps> = {},
+): ResolveDesignedVoiceDeps & {
+  ptExists: ReturnType<typeof vi.fn>;
+  readDesignedMasterPcm: ReturnType<typeof vi.fn>;
+  deriveEngineArtifact: ReturnType<typeof vi.fn>;
+} {
+  return {
+    ptExists: vi.fn(async () => true),
+    readDesignedMasterPcm: vi.fn(async () => null),
+    deriveEngineArtifact: vi.fn(async () => ({
+      previewPcm: Buffer.alloc(0),
+      sampleRate: 24000,
+      baseModel: 'qwen3-0.6b',
+    })),
+    ...overrides,
+  } as ResolveDesignedVoiceDeps & {
+    ptExists: ReturnType<typeof vi.fn>;
+    readDesignedMasterPcm: ReturnType<typeof vi.fn>;
+    deriveEngineArtifact: ReturnType<typeof vi.fn>;
+  };
+}
+
+describe('resolveDesignedVoicesForChapter', () => {
+  it('.pt missing + retained clip present -> re-derives once with the right voice id + ref text', async () => {
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm: vi.fn(async (uuid: string) =>
+        uuid === 'lib-designed'
+          ? { pcm: Buffer.alloc(1000), sampleRate: 24000, refText: 'A calibration line.' }
+          : null,
+      ),
+    });
+
+    await expect(
+      resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        deps,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(deps.ptExists).toHaveBeenCalledWith('qwen-lib-designed');
+    expect(deps.readDesignedMasterPcm).toHaveBeenCalledWith('lib-designed');
+    expect(deps.deriveEngineArtifact).toHaveBeenCalledTimes(1);
+    expect(deps.deriveEngineArtifact).toHaveBeenCalledWith(
+      'lib-designed',
+      'qwen',
+      { masterPcm: expect.any(Buffer), sampleRate: 24000, refText: 'A calibration line.' },
+      { signal: undefined },
+    );
+  });
+
+  it('.pt PRESENT -> no re-derive attempted (no needless GPU work), and the retained clip is never even read', async () => {
+    const deps = makeDesignedDeps({ ptExists: vi.fn(async () => true) });
+
+    await resolveDesignedVoicesForChapter(
+      [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+      deps,
+    );
+
+    expect(deps.readDesignedMasterPcm).not.toHaveBeenCalled();
+    expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+
+  it('.pt missing + NO retained clip -> no crash, no re-derive, falls through to today\'s behaviour', async () => {
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm: vi.fn(async () => null),
+    });
+
+    await expect(
+      resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        deps,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+
+  it('a stale-baseModel designed entry (i.e. .pt still present on disk) -> NO re-derive — explicitly out of scope, pinned so nobody widens it', async () => {
+    // This function never inspects a VoiceLibraryEntry's engines.qwen.baseModel
+    // at all — it only checks on-disk `.pt` presence — so "stale" and
+    // "healthy" are indistinguishable to it by design. Pinning this here so a
+    // future edit that threads `currentBaseModel`/`baseModel` into this
+    // function (widening the self-heal to the stale case) has to consciously
+    // change this test, not silently pass it.
+    const deps = makeDesignedDeps({ ptExists: vi.fn(async () => true) });
+
+    await resolveDesignedVoicesForChapter(
+      [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+      deps,
+    );
+
+    expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+
+  it('a re-derive failure is swallowed — never throws, never bricks the run', async () => {
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm: vi.fn(async () => ({
+        pcm: Buffer.alloc(10),
+        sampleRate: 24000,
+        refText: 'x',
+      })),
+      deriveEngineArtifact: vi.fn(async () => {
+        throw new Error('sidecar unreachable');
+      }),
+    });
+
+    await expect(
+      resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        deps,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('no libraryUuid -> skipped without touching ptExists/derive', async () => {
+    const deps = makeDesignedDeps();
+
+    await resolveDesignedVoicesForChapter(
+      [{ characterName: 'Orin', libraryUuid: undefined }],
+      deps,
+    );
+
+    expect(deps.ptExists).not.toHaveBeenCalled();
+    expect(deps.readDesignedMasterPcm).not.toHaveBeenCalled();
     expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
   });
 });

@@ -41,14 +41,17 @@ import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import {
   UnresolvableClonedVoiceError,
   resolveClonedVoicesForChapter,
+  resolveDesignedVoicesForChapter,
   type ResolveChapterDeps,
+  type ResolveDesignedVoiceDeps,
 } from './clone-voice-resolver.js';
 import { readEntry, writeEntry, entryDir, type VoiceLibraryEntry } from '../workspace/voice-library.js';
 import { deriveEngineArtifact } from './derive-engine-artifact.js';
 import { currentQwenBaseModel } from './model-paths.js';
 import { decodeAudioToPcm } from './mp3.js';
-import { qwenVoicePtPath } from '../workspace/paths.js';
+import { qwenVoicePtPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from '../workspace/paths.js';
 import { safeSegment, sanitizeIdSegment, assertContained } from '../util/safe-path.js';
+import { readJson } from '../workspace/state-io.js';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -738,6 +741,12 @@ export interface SynthesiseChapterOpts {
       + `mp3.js` wiring (production behaviour). Merged shallowly over the real
       deps, so a test can override just one function. */
   cloneResolverDepsOverride?: Partial<ResolveChapterDeps>;
+  /** fs-38 Wave 3b2, Task 12 (§2.3) — override some/all of the DESIGNED-voice
+      self-heal pre-pass's dependencies (ptExists/readDesignedMasterPcm/
+      deriveEngineArtifact), mirroring `cloneResolverDepsOverride` above.
+      Absent → the real sidecar-disk wiring (production behaviour). Merged
+      shallowly over the real deps, so a test can override just one function. */
+  designedResolverDepsOverride?: Partial<ResolveDesignedVoiceDeps>;
 }
 
 /** Options for the per-sentence ASR content-QA pass (srv-31). */
@@ -907,6 +916,17 @@ async function readMasterPcmDefault(
   return { pcm, sampleRate: entry.master.sampleRate, refText: entry.master.transcript };
 }
 
+/** Shared by both the cloned- and designed-voice resolver deps builders — a
+    real stat() of the cached `.pt` under the given storage key. */
+async function defaultPtExists(storageKey: string): Promise<boolean> {
+  try {
+    await stat(qwenVoicePtPath(storageKey));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /* fs-38 Wave 3b2 — the resolver pre-pass's real (production) dependency
    wiring: the actual voice-library manifest store, the actual sidecar
    clone-derive call, and a real stat() of the cached `.pt`. `synthesiseChapter`
@@ -916,14 +936,7 @@ function buildDefaultCloneResolverDeps(signal: AbortSignal | undefined): Resolve
   return {
     readEntry,
     writeEntry,
-    ptExists: async (storageKey: string) => {
-      try {
-        await stat(qwenVoicePtPath(storageKey));
-        return true;
-      } catch {
-        return false;
-      }
-    },
+    ptExists: defaultPtExists,
     deriveEngineArtifact,
     readMasterPcm: readMasterPcmDefault,
     currentBaseModel: currentQwenBaseModel,
@@ -932,6 +945,63 @@ function buildDefaultCloneResolverDeps(signal: AbortSignal | undefined): Resolve
        Forcing a "Preparing voice…" message through one of those would misuse
        a differently-shaped callback, so this stays unwired (undefined) until
        a real channel exists. */
+    reportProgress: undefined,
+    signal,
+  };
+}
+
+/* fs-38 Wave 3b2, Task 12 (§2.3) — the fixed decode rate for a DESIGNED
+   voice's retained reference clip. Mirrors clone-ingest.ts's own SAMPLE_RATE
+   constant (24 kHz) for a cloned voice's captured clip: the on-disk wav is a
+   proper self-describing RIFF file (Python's `wave` module wrote it), so
+   `decodeAudioToPcm` resamples to whatever target we ask for regardless of
+   the source rate — this just picks the SAME target the rest of the codebase
+   already treats as this pipeline's canonical PCM rate, so the reported
+   `X-Sample-Rate` is exactly the rate of the bytes actually sent. */
+const DESIGNED_MASTER_SAMPLE_RATE = 24_000;
+
+/* fs-38 Wave 3b2, Task 12 (§2.3) — read a DESIGNED voice's retained reference
+   clip (`qwen-<uuid>__master.wav`, written by the sidecar's design_voice
+   since Task 11) plus the matching ref_text off that SAME design's sidecar
+   manifest (`qwen-<uuid>.json`'s `refText` field is the exact calibration
+   text `design_voice` used to produce the retained clip — see main.py ~3838).
+   Both files are sidecar-local (workspace/paths.js), NOT the
+   workspace/voice-library.ts entry-dir `master` a CLONED voice's ingested
+   clip lives in — a designed voice never populates that field. Returns
+   `null` (never throws) when either artifact is missing/unreadable, so the
+   caller falls through to today's behaviour instead of a new failure mode. */
+async function readDesignedMasterPcmDefault(
+  uuid: string,
+): Promise<{ pcm: Buffer; sampleRate: number; refText: string } | null> {
+  const storageKey = `qwen-${uuid}`;
+  let refText = '';
+  try {
+    const manifest = await readJson<{ refText?: string }>(qwenVoiceSidecarPath(storageKey));
+    refText = typeof manifest?.refText === 'string' ? manifest.refText.trim() : '';
+  } catch {
+    return null;
+  }
+  if (!refText) return null;
+  let raw: Buffer;
+  try {
+    raw = await readFile(qwenVoiceWavPath(`${storageKey}__master`));
+  } catch {
+    return null;
+  }
+  const pcm = await decodeAudioToPcm(raw, DESIGNED_MASTER_SAMPLE_RATE);
+  return { pcm, sampleRate: DESIGNED_MASTER_SAMPLE_RATE, refText };
+}
+
+/* fs-38 Wave 3b2, Task 12 (§2.3) — the designed-voice self-heal pre-pass's
+   real (production) dependency wiring, mirroring
+   `buildDefaultCloneResolverDeps` above. */
+function buildDefaultDesignedResolverDeps(
+  signal: AbortSignal | undefined,
+): ResolveDesignedVoiceDeps {
+  return {
+    ptExists: defaultPtExists,
+    readDesignedMasterPcm: readDesignedMasterPcmDefault,
+    deriveEngineArtifact,
     reportProgress: undefined,
     signal,
   };
@@ -976,6 +1046,7 @@ export async function synthesiseChapter(
     onRecoverRecycle,
     maxRecycleRecoveries = 2,
     cloneResolverDepsOverride,
+    designedResolverDepsOverride,
   } = opts;
 
   /* fs-53: resolve the book language to a concrete BCP-47 primary subtag ONCE,
@@ -1138,6 +1209,32 @@ export async function synthesiseChapter(
       ...cloneResolverDepsOverride,
     };
     await resolveClonedVoicesForChapter(clonedVoiceRequests, cloneResolverDeps);
+  }
+
+  /* fs-38 Wave 3b2, Task 12 (§2.3) — designed-voice orphan self-heal, over the
+     SAME in-chapter readiness gate as the cloned pre-pass above. Narrower and
+     gentler than the cloned resolver (see resolveDesignedVoicesForChapter's
+     doc comment): only a missing `.pt` is repaired, never a stale one, and a
+     failed self-heal never throws — it just leaves the chapter to whatever
+     happens today for a missing designed voice. Skipped entirely for a
+     character that doesn't actually route to Qwen this run (a book on
+     Kokoro/Coqui, or Qwen globally unavailable) — self-healing a `.pt` that
+     wouldn't be used this render anyway is pure waste. */
+  const designedVoiceRequests = cast
+    .filter(
+      (c) => inChapterCharacterIds.has(c.id) && c.overrideTtsVoices?.qwen?.provenance === 'designed',
+    )
+    .filter((c) => !qwenUnavailable && routeFor(c).engine === 'qwen')
+    .map((c) => ({
+      characterName: c.name ?? c.id,
+      libraryUuid: c.overrideTtsVoices?.qwen?.libraryUuid,
+    }));
+  if (designedVoiceRequests.length > 0) {
+    const designedResolverDeps: ResolveDesignedVoiceDeps = {
+      ...buildDefaultDesignedResolverDeps(signal),
+      ...designedResolverDepsOverride,
+    };
+    await resolveDesignedVoicesForChapter(designedVoiceRequests, designedResolverDeps);
   }
 
   /* Shared synthetic-narrator stub, used wherever a narrator CastCharacter is
