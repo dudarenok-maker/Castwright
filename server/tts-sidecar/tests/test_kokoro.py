@@ -798,3 +798,56 @@ def test_kokoro_provider_options_none_when_not_indexed() -> None:
     assert main._kokoro_provider_options("cpu", ["CPUExecutionProvider"]) is None
     assert main._kokoro_provider_options("cuda", []) is None
     assert main._kokoro_provider_options("auto", []) is None
+
+
+# ── real-package contract (side-26) ──────────────────────────────────────
+#
+# Everything above stubs `kokoro_onnx` via sys.modules, so nothing in this
+# file would notice upstream renaming the two things the device-pin path
+# actually reaches into.  These tests run against the REAL installed package
+# and skip when it's absent (CI / a fresh clone before install-kokoro).
+#
+# Why they matter: the indexed-device pin rebuilds `self._kokoro.sess` inside
+# a try/except that only WARNS on failure — so an upstream rename would not
+# raise, it would silently drop Kokoro back to an unpinned device.  A pin
+# bump must fail here instead.
+
+# NOTE: importorskip lives INSIDE each test, never at module scope — at module
+# scope it would skip this entire file on the CI boxes that never install
+# kokoro-onnx, silently taking the ~40 stubbed tests above with it.
+
+
+def _real_kokoro():
+    """The real installed kokoro_onnx, or skip. Re-imported per test so a
+    leftover sys.modules stub from a fixture can never be mistaken for it."""
+    import importlib
+
+    mod = pytest.importorskip("kokoro_onnx", reason="kokoro-onnx not installed")
+    mod = importlib.reload(mod)
+    if isinstance(mod, types.ModuleType) and not getattr(mod, "__file__", None):
+        pytest.skip("kokoro_onnx present only as a test stub")
+    return mod
+
+
+def test_real_kokoro_still_exposes_the_sess_attribute() -> None:
+    """The indexed-device pin assigns `self._kokoro.sess = rt.InferenceSession(...)`.
+    `sess` is private API, so every kokoro-onnx bump must re-confirm it."""
+    import inspect
+    import re
+
+    src = inspect.getsource(_real_kokoro().Kokoro.__init__)
+    assert re.search(r"self\.sess\s*=", src), (
+        "kokoro_onnx.Kokoro no longer assigns `self.sess` — the indexed-device "
+        "pin in main.py rebuilds that attribute and fails SILENTLY (warn-only) "
+        "if it moves. Update the pin before lifting the kokoro-onnx floor."
+    )
+
+
+def test_real_kokoro_create_keeps_the_positional_signature_we_call() -> None:
+    """main.py calls `create(text, voice, speed, lang)` positionally."""
+    import inspect
+
+    params = list(inspect.signature(_real_kokoro().Kokoro.create).parameters)
+    assert params[:5] == ["self", "text", "voice", "speed", "lang"], (
+        f"kokoro_onnx.Kokoro.create signature drifted: {params}"
+    )

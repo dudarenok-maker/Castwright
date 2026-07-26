@@ -49,7 +49,13 @@ torchaudio==2.11.0
 # macOS/Apple-Silicon keeps the plain CPU/CoreML runtime (no swap for non-nvidia).
 # Run scripts/install-kokoro.{ps1,sh} once to fetch the model + voices manifest
 # into voices/kokoro/ (gitignored, ~330 MB).
-kokoro-onnx>=0.4.0,<0.5.0
+# 0.5.0 floor (side-26): the whole 0.4.9 -> 0.5.0 delta is kokoro_onnx/log.py
+# swapping colorlog for stdlib logging. Kokoro.create()'s signature and the
+# private `.sess` attribute we rebuild for indexed device pinning (see the
+# InferenceSession rebuild in main.py's Kokoro loader) are both unchanged, and
+# the dist metadata is identical — so this moves no transitive deps and does not
+# interact with the install-ort.mjs runtime swap.
+kokoro-onnx>=0.5.0,<0.6.0
 
 # Qwen3-TTS — per-character bespoke voices; weights fetched by install-qwen3.mjs.
 # Pinned to 0.1.1: the raw model.generate() bypass in _icl_instruct_synth (fs-55)
