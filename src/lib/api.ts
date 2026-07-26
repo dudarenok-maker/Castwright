@@ -9754,11 +9754,16 @@ export async function mockSampleLibraryVoice(voiceUuid: string): Promise<{ url: 
   return { url: stubAudioA };
 }
 
+/** The canned "Whisper" transcript mock ingest returns. Shared with
+ *  mockCloneVoice so the two can't drift — if they did, mock mode would report
+ *  `transcriptSource: 'user'` for a transcript the user never touched (#1836). */
+const MOCK_WHISPER_TRANSCRIPT = 'the quick brown fox jumped';
+
 export async function mockCloneVoiceSample(_form: FormData): Promise<CloneSampleCandidate> {
   await wait(300);
   return {
     candidateId: `cand-${Math.random().toString(36).slice(2, 10)}`,
-    transcript: 'the quick brown fox jumped',
+    transcript: MOCK_WHISPER_TRANSCRIPT,
     durationSeconds: 9,
     sampleRate: 24_000,
     qualityWarnings: [],
@@ -9768,6 +9773,11 @@ export async function mockCloneVoiceSample(_form: FormData): Promise<CloneSample
 export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibraryEntry> {
   await wait(300);
   const now = new Date().toISOString();
+  /* #1836 — mirror the real route: a supplied non-blank transcript wins over
+     the canned Whisper text and flips transcriptSource to 'user'. Without
+     this the mock keeps reproducing the very bug the real path just fixed. */
+  const supplied = body.transcript?.trim() ?? '';
+  const transcript = supplied || MOCK_WHISPER_TRANSCRIPT;
   const entry: VoiceLibraryEntry = {
     voiceUuid: `lib-clone-${Math.random().toString(36).slice(2, 10)}`,
     name: body.name?.trim() || body.consent.personName,
@@ -9779,10 +9789,11 @@ export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibrary
       clipFile: 'master.wav',
       sampleRate: 24_000,
       durationSeconds: 10,
-      transcript: 'the quick brown fox jumped',
-      transcriptSource: 'whisper',
+      transcript,
+      transcriptSource: supplied && supplied !== MOCK_WHISPER_TRANSCRIPT ? 'user' : 'whisper',
       captureMethod: 'upload',
     },
+    sampleTranscript: transcript,
     sampleMeta: { qualityChecks: { cloneCosine: 0.62 } },
     engines: { qwen: { status: 'ready', baseModel: 'qwen3-tts-0.6b-2026-05' } },
     createdAt: now,

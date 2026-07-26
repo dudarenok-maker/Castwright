@@ -14,12 +14,17 @@ vi.mock('../lib/api', () => ({
 
 // Fake phase-1 panel: a single button that fires onReady with a fixed candidate.
 vi.mock('../components/voices/clone-capture-panel', () => ({
-  CloneCapturePanel: ({ onReady }: { onReady: (r: { candidateId: string; consent: unknown }) => void }) => (
+  CloneCapturePanel: ({
+    onReady,
+  }: {
+    onReady: (r: { candidateId: string; transcript: string; consent: unknown }) => void;
+  }) => (
     <button
       data-testid="fake-continue"
       onClick={() =>
         onReady({
           candidateId: 'cand-1',
+          transcript: 'the corrected transcript',
           consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
         })
       }
@@ -71,6 +76,10 @@ describe('CloneVoiceWizard', () => {
     expect(cloneVoiceApi.mock.calls[0][0]).toMatchObject({
       candidateId: 'cand-1',
       name: 'My Mum',
+      /* #1836 — pins the wizard's link of the panel → wizard → API chain.
+         Without this the `transcript` hop could be deleted and every other
+         test would stay green, silently restoring the original bug. */
+      transcript: 'the corrected transcript',
       consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
     });
     expect(await screen.findByTestId('clone-voice-wizard-fidelity-warning')).toBeInTheDocument();

@@ -3903,6 +3903,27 @@ export interface components {
             candidateId: string;
             /** @description Optional display name; defaults to the consent personName */
             name?: string;
+            /**
+             * @description Optional corrected transcript of the sample clip. When present and
+             *     non-blank this is what the clone is distilled against (`ref_text`)
+             *     instead of the candidate's Whisper transcript, and it is persisted
+             *     as the entry's `master.transcript` so a later re-derive/repair uses
+             *     it too. `master.transcriptSource` becomes `user` when it differs
+             *     from the candidate's stored transcript, and otherwise keeps the
+             *     candidate's own source (always `whisper` today). Blank/whitespace
+             *     falls back to the stored transcript (which may itself legitimately
+             *     be empty for a non-speech clip).
+             *
+             *     Capped at 2000 characters — a sanity bound, already far above any
+             *     real transcript of the ≤60 s sample clip. The limit is enforced in
+             *     characters only; it is set at 2000 so that the value stays bounded
+             *     in BYTES too, since it reaches the sidecar as a base64 `X-Ref-Text`
+             *     header and base64 applies to UTF-8 bytes rather than characters.
+             *     No UTF-16 string of 2000 units exceeds 6000 UTF-8 bytes (8000
+             *     base64), so the character limit is the only one needed. Over-length
+             *     is a 400, never a silent truncation.
+             */
+            transcript?: string;
             consent: {
                 personName: string;
                 /** @enum {string} */

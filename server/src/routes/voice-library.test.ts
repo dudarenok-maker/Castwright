@@ -1461,6 +1461,207 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     expect(await readCandidate('cand-1')).toBeNull(); // candidate consumed
   });
 
+  /* #1836 — the wizard's transcript box is editable, so a correction must
+     reach the derive as `ref_text` AND be persisted. Persisting to
+     `master.transcript` (not just `sampleTranscript`) is load-bearing: the
+     Wave 3b2 repair path re-derives from `entry.master.transcript`
+     (tts/synthesise-chapter.ts readMasterPcmDefault), so storing the
+     correction only in `sampleTranscript` would let a later repair silently
+     revert to the Whisper text. */
+  it('distils an edited transcript and persists it as master.transcript with transcriptSource=user', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-edit',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sandwich',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFFfake-wav-bytes'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-edit',
+        transcript: 'my own voice sample',
+        consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    // the corrected text is what the clone was distilled against
+    expect(deriveMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'qwen',
+      expect.objectContaining({ refText: 'my own voice sample' }),
+    );
+    // …and what survives on the entry, for both display and any later re-derive
+    expect(res.body.sampleTranscript).toBe('my own voice sample');
+    expect(res.body.master.transcript).toBe('my own voice sample');
+    expect(res.body.master.transcriptSource).toBe('user');
+  });
+
+  it('keeps transcriptSource=whisper when the transcript comes back unedited', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-unedited',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-unedited',
+        transcript: 'my own voice sample',
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.master.transcriptSource).toBe('whisper');
+    expect(res.body.master.transcript).toBe('my own voice sample');
+  });
+
+  /* Whisper can legitimately return an empty transcript for a non-speech
+     clip (tts/clone-ingest.ts trims `.text`), so a blank edit falls back to
+     the stored text rather than deriving against nothing. */
+  it('falls back to the Whisper transcript when the supplied one is blank', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-blank',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-blank',
+        transcript: '   ',
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(deriveMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'qwen',
+      expect.objectContaining({ refText: 'my own voice sample' }),
+    );
+    expect(res.body.master.transcript).toBe('my own voice sample');
+    expect(res.body.master.transcriptSource).toBe('whisper');
+  });
+
+  /* The transcript is the first CLIENT-controlled value to reach the derive's
+     refText, which travels to the sidecar as a base64 X-Ref-Text header — so
+     it is bounded, and rejected rather than truncated. */
+  it('400s an over-length transcript instead of truncating it', async () => {
+    const { writeCandidate, readCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-long',
+      { sampleRate: 24000, durationSeconds: 12, transcript: 't', transcriptSource: 'whisper', captureMethod: 'upload' },
+      Buffer.from('RIFF'),
+    );
+
+    const { MAX_CLONE_TRANSCRIPT_CHARS } = await import('./voice-library.js');
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-long',
+        transcript: 'x'.repeat(MAX_CLONE_TRANSCRIPT_CHARS + 1),
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(400);
+    expect(deriveMock).not.toHaveBeenCalled(); // rejected before any GPU work
+    expect(await readCandidate('cand-long')).not.toBeNull(); // candidate intact
+  });
+
+  /* The cap is expressed in CHARACTERS but the constraint it protects is a
+     BYTE budget: refText travels to the sidecar as a base64 X-Ref-Text header,
+     and base64 applies to UTF-8 bytes. This pins the arithmetic that makes a
+     character cap sufficient — worst case is a 3-byte BMP character per UTF-16
+     unit — so that raising the cap without redoing the sums fails here rather
+     than silently producing an oversized header for ja/zh/ru text (fs-59). */
+  it('the character cap bounds the base64 X-Ref-Text header for multi-byte text', async () => {
+    const { MAX_CLONE_TRANSCRIPT_CHARS } = await import('./voice-library.js');
+    /* Worst case per UTF-16 unit is a 3-byte BMP character (astral chars cost
+       4 bytes but 2 units; lone surrogates encode as 3-byte U+FFFD), so a
+       cap-length CJK string is the byte-heaviest input the route accepts. */
+    const atCap = '漢'.repeat(MAX_CLONE_TRANSCRIPT_CHARS);
+    const base64Bytes = Buffer.from(atCap, 'utf8').toString('base64').length;
+    expect(Buffer.byteLength(atCap, 'utf8')).toBe(MAX_CLONE_TRANSCRIPT_CHARS * 3);
+    /* h11's fallback budget is 16 KiB for the WHOLE request line + header
+       block, and the 3b2 repair path re-sends this text plus a short
+       X-Audition-Text. Derived from the constant, so RAISING THE CAP WITHOUT
+       REDOING THE SUMS FAILS HERE — which is the entire justification for the
+       route carrying no separate byte check. */
+    expect(base64Bytes).toBeLessThan(16_384 - 2_048);
+  });
+
+  /* The cap lives in two places — MAX_CLONE_TRANSCRIPT_CHARS and the
+     contract's CloneVoiceRequest.transcript.maxLength — tied together only by
+     prose. Nothing else fails if one drifts, so pin them against each other
+     (not against a second hardcoded literal, which pins nothing). */
+  it('the route cap and openapi.yaml maxLength agree', async () => {
+    const { MAX_CLONE_TRANSCRIPT_CHARS } = await import('./voice-library.js');
+    const { readFile } = await import('node:fs/promises');
+    const yaml = await readFile(new URL('../../../openapi.yaml', import.meta.url), 'utf8');
+    const anchor = yaml.indexOf('    CloneVoiceRequest:');
+    expect(anchor).toBeGreaterThan(-1); // fail closed if the schema is renamed
+    const transcriptBlock = yaml.slice(yaml.indexOf('        transcript:', anchor));
+    const maxLength = /maxLength:\s*(\d+)/.exec(transcriptBlock)?.[1];
+    expect(maxLength).toBe(String(MAX_CLONE_TRANSCRIPT_CHARS));
+  });
+
+  it('ignores a non-string transcript and falls back to the Whisper text', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-nonstring',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-nonstring',
+        transcript: { nope: true },
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(deriveMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'qwen',
+      expect.objectContaining({ refText: 'my own voice sample' }),
+    );
+    expect(res.body.master.transcriptSource).toBe('whisper');
+  });
+
   it('404s a missing candidate', async () => {
     const res = await request(app)
       .post('/api/voice-library/clone')

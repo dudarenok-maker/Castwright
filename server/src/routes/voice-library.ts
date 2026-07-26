@@ -68,6 +68,30 @@ export const voiceLibraryRouter = Router();
 
 const cloneUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
+/** Cap on a client-supplied clone transcript (#1836) — mirrors
+ *  `CloneVoiceRequest.transcript`'s `maxLength` in openapi.yaml, so the route
+ *  enforces exactly what the contract advertises. A sanity bound: 2000
+ *  characters is already far above any real transcript of the ≤60 s sample
+ *  clip (~1000 chars of English speech).
+ *
+ *  Why 2000 specifically, in characters, is enough to bound the WIRE: the
+ *  value reaches the sidecar as a base64 `X-Ref-Text` header, and base64
+ *  applies to UTF-8 BYTES, not characters — so the cap has to survive
+ *  multi-byte text (ja/zh/ru per fs-59 is exactly the content most likely to
+ *  need a correction). `.length` counts UTF-16 units, and the worst case is a
+ *  3-byte BMP character per unit (astral chars cost 4 bytes but 2 units, so
+ *  they're cheaper per unit). 2000 units ⇒ ≤6000 UTF-8 bytes ⇒ ≤8000 base64
+ *  bytes. A separate byte check would therefore be unreachable.
+ *
+ *  What this does and doesn't protect: the SHIPPED sidecar installs
+ *  `uvicorn[standard]` → httptools, which enforces no header limit at all, so
+ *  on the default stack this is purely a sanity bound. It earns its keep on
+ *  the h11 fallback (httptools absent), whose 16 KiB budget covers the WHOLE
+ *  request line + header block — and the 3b2 repair path re-sends this same
+ *  persisted text plus an `X-Audition-Text` header, sharing that budget.
+ *  8000 base64 bytes leaves ample room for both. */
+export const MAX_CLONE_TRANSCRIPT_CHARS = 2000;
+
 /* Library single-flight lock (spec §3). A module-level in-flight set keyed by
    voiceUuid (plus one `'library:new'` key for creates) serializes design work
    for one voice so a double-submit can't race two designs onto the same `.pt`.
@@ -626,9 +650,29 @@ voiceLibraryRouter.post(
    structurally-equal fakes) — not flattened like the /design + /redesign
    catches (#1801). */
 voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
-  const body = (req.body ?? {}) as { candidateId?: unknown; consent?: unknown; name?: unknown };
+  const body = (req.body ?? {}) as {
+    candidateId?: unknown;
+    consent?: unknown;
+    name?: unknown;
+    transcript?: unknown;
+  };
   const candidateId = typeof body.candidateId === 'string' ? body.candidateId : '';
   if (!candidateId) return res.status(400).json({ error: '`candidateId` is required.' });
+  /* #1836 — `transcript` is the first CLIENT-controlled value to reach
+     deriveEngineArtifact's `refText` (and, via master.transcript, every later
+     re-derive), so it is bounded. Characters only: see the constant above for
+     why that also bounds the base64 header in bytes, and why a separate byte
+     check would be unreachable at this cap.
+
+     Rejected outright rather than truncated: silently dropping the tail of a
+     correction would persist a PARTIAL transcript as `transcriptSource:
+     'user'`, which every subsequent repair would then faithfully re-derive
+     from — the same silent-discard shape this whole change exists to fix. */
+  if (typeof body.transcript === 'string' && body.transcript.length > MAX_CLONE_TRANSCRIPT_CHARS) {
+    return res
+      .status(400)
+      .json({ error: `Transcript is too long (max ${MAX_CLONE_TRANSCRIPT_CHARS} characters).` });
+  }
   if (!validateConsentDraft(body.consent)) {
     return res
       .status(422)
@@ -644,10 +688,29 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
       const masterWav = await readFile(candidateMasterPath(candidateId));
       const masterPcm = await decodeAudioToPcm(masterWav, candidate.master.sampleRate);
 
+      /* #1836 — the wizard's transcript box is editable, so an optional
+         corrected `transcript` on the request wins over the candidate's
+         Whisper text as the `ref_text` the clone is distilled against.
+
+         Blank/whitespace falls back to the Whisper transcript rather than
+         erroring: Whisper itself can legitimately return an empty transcript
+         for a non-speech clip (tts/clone-ingest.ts trims `.text`), so a blank
+         value carries no correction to honour.
+
+         `transcriptSource` is decided HERE, by comparing against the stored
+         Whisper text — not taken from a client-supplied "was edited" flag —
+         so it can't disagree with the text actually persisted below. */
+      const suppliedTranscript = typeof body.transcript === 'string' ? body.transcript.trim() : '';
+      const refText = suppliedTranscript || candidate.master.transcript;
+      const transcriptSource: VoiceMaster['transcriptSource'] =
+        suppliedTranscript && suppliedTranscript !== candidate.master.transcript
+          ? 'user'
+          : candidate.master.transcriptSource;
+
       const derived = await deriveEngineArtifact(voiceUuid, 'qwen', {
         masterPcm,
         sampleRate: candidate.master.sampleRate,
-        refText: candidate.master.transcript,
+        refText,
       });
 
       const dir = entryDir(voiceUuid);
@@ -742,7 +805,18 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
         attestedAt: now,
         attestedBy: consentDraft.personName,
       };
-      const master: VoiceMaster = { ...candidate.master, clipFile: 'master.wav' };
+      /* Persist the text the clone was ACTUALLY distilled against — into
+         `master.transcript`, not just `sampleTranscript` below. The Wave 3b2
+         repair path re-derives from `entry.master.transcript`
+         (tts/synthesise-chapter.ts readMasterPcmDefault), so leaving the raw
+         Whisper text here would make a later repair silently revert to it and
+         undo the user's correction. */
+      const master: VoiceMaster = {
+        ...candidate.master,
+        clipFile: 'master.wav',
+        transcript: refText,
+        transcriptSource,
+      };
       const cloned: VoiceLibraryEntry = {
         voiceUuid,
         name,
@@ -751,7 +825,7 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
         pinned: false,
         consent,
         master,
-        sampleTranscript: candidate.master.transcript,
+        sampleTranscript: refText,
         sampleMeta: {
           durationSeconds: candidate.master.durationSeconds,
           sampleRate: candidate.master.sampleRate,
