@@ -192,13 +192,20 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
     ≤8000 base64); a separate byte check would be unreachable at that cap, and
     a test derives the arithmetic from the constant so raising it without
     redoing the sums fails (#1836). **`mockCloneVoice` enforces the same cap**,
-    so mock/e2e mode is never more permissive than the real server on the one
-    rejection the wizard can surface. The number lives in four places — the
-    route's `MAX_CLONE_TRANSCRIPT_CHARS`, the frontend's
-    (`src/lib/clone-transcript-limit.ts`, its own module so a `vi.mock` of
-    `lib/api` can't blank the panel's guard), `openapi.yaml`'s `maxLength`, and
-    the types generated from it — with a test on each side of the wire pinning
-    its copy against the contract.
+    with a message byte-identical to the one `realCloneVoice` builds from the
+    route's JSON body — a prettier mock string would hide a real-mode wart the
+    wizard renders verbatim. The number lives in two implementations plus the
+    contract: the route's `MAX_CLONE_TRANSCRIPT_CHARS`, the frontend's
+    (`src/lib/clone-transcript-limit.ts` — its own module because `e2e/` must
+    import it into a Node process), and `openapi.yaml`'s `maxLength` *and* the
+    byte arithmetic in that schema's description. A test on each side of the
+    wire pins its implementation against the contract, and the frontend one
+    also scans the schema block for any stale number, since #1840 shipped a
+    contract documenting two caps 2× apart. `src/lib/api-types.ts` is not a
+    fourth copy — openapi-typescript does not encode `maxLength`. Note this
+    closes ONE of the route's six documented failure modes in mock mode
+    (400/404/409/422/502/503): the mock still validates neither `candidateId`
+    nor consent, so it stays materially more permissive than the route.
 
 ## Test plan
 
@@ -292,11 +299,19 @@ No new Playwright e2e in 3a — added in 3b1 (below).
   mirrors the real precedence (supplied wins, blank/absent falls back,
   matching text stays `'whisper'`), so mock/e2e mode can't keep reproducing
   the bug the real route fixed. It also mirrors the route's **rejection**:
-  over-cap throws and appends no entry, at-cap is accepted. A fourth test pins
-  `MAX_CLONE_TRANSCRIPT_CHARS` against `openapi.yaml`'s `maxLength` — the
-  frontend-side twin of the server's pin, so the cap can't drift on one side
-  of the wire alone. All three were mutation-checked: raising the constant to
-  6000 fails the pin, and deleting the mock's guard fails the rejection test.
+  over-cap throws the exact message `realCloneVoice` would build (JSON envelope
+  included) and appends no entry; at-cap is accepted (the discriminating
+  mutation being `>` → `>=`). Two further tests pin
+  `MAX_CLONE_TRANSCRIPT_CHARS` against `openapi.yaml` — one on `maxLength`, one
+  scanning the schema block and the clone `400` for stale numbers. Both are the
+  frontend-side twin of the server's pin. Mutation-checked: raising the
+  constant to 6000 fails the pin, deleting the mock's guard fails the rejection
+  test. Both pins read `openapi.yaml` at runtime with no module-graph edge to
+  it, so `openapi.yaml` is registered in both vitest configs'
+  `forceRerunTriggers`, in `verify.yml`'s **frontend** scope regex, and in
+  `verify-cache.mjs`'s `test`/`test:server` inputs — without those four, CI's
+  `vitest --changed` would never select the pins on the openapi-only diff they
+  exist to catch.
 - Playwright (`e2e/voice-library.spec.ts`, step 6) — the clone wizard's
   transcript field in a real browser: the ingested Whisper text lands in the
   box, an over-cap value disables Continue with the reason rendered on screen

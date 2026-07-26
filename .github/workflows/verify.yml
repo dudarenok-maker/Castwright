@@ -141,7 +141,11 @@ jobs:
           match() { echo "$FILES" | grep -qE "$1"; }
           frontend=false; server=false; sidecar=false
           e2e=false; scripts=false; hooks=false; pinokio=false; shared=false
-          match '^(src/|index\.html$|vite\.config\.ts$|tailwind\.config\.ts$|tsconfig\.json$|tsconfig\.node\.json$|postcss\.config\.js$|eslint\.config\.(js|mjs)$)' && frontend=true
+          # openapi.yaml is a FRONTEND input too, not just a server one: it
+          # generates src/lib/api-types.ts, and api.clone-voice.test.ts pins
+          # the clone-transcript cap against it. Without this an openapi-only
+          # diff skipped the frontend job entirely and that pin never ran.
+          match '^(src/|index\.html$|vite\.config\.ts$|tailwind\.config\.ts$|tsconfig\.json$|tsconfig\.node\.json$|postcss\.config\.js$|eslint\.config\.(js|mjs)$|openapi\.yaml$)' && frontend=true
           match '^(server/src/|server/package(-lock)?\.json$|server/tsconfig\.json$|server/vitest\.config(\.slow)?\.ts$|openapi\.yaml$|server/\.env\.example$|server/scripts/sync-env-example\.ts$)' && server=true
           match '^server/tts-sidecar/' && sidecar=true
           match '^(e2e/|playwright\.config\.ts$)' && e2e=true

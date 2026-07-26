@@ -248,9 +248,10 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
     /* #1836 — the transcript box, which this spec previously walked straight
        past. The mock ingest's canned "Whisper" text lands in an editable
        field; waiting on its value also gates on ingest having resolved. */
-    /* getByRole, not getByLabel: the textarea sits inside a wrapping <label>
-       that also holds the over-cap message, and getByLabel resolves to that
-       wrapper ("Not an input element") rather than the control. */
+    /* getByRole, not getByLabel. Observed, not assumed: getByLabel('transcript')
+       failed here with "Not an input element" — despite the textarea carrying
+       aria-label="transcript" — so it resolved to the wrapping <label> (which
+       also holds the over-cap message) rather than the control. */
     const transcriptBox = page.getByRole('textbox', { name: 'transcript' });
     await expect(transcriptBox).toHaveValue('the quick brown fox jumped', { timeout: 10_000 });
 

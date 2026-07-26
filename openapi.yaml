@@ -3223,7 +3223,7 @@ paths:
             schema: { $ref: '#/components/schemas/CloneVoiceRequest' }
       responses:
         '200': { description: Cloned voice created, content: { application/json: { schema: { $ref: '#/components/schemas/VoiceLibraryEntry' } } } }
-        '400': { description: Missing candidateId, or a transcript longer than 2000 characters }
+        '400': { description: Missing candidateId, or a transcript longer than the CloneVoiceRequest transcript maxLength }
         '404': { description: No such candidate / voice library disabled }
         '409': { description: A clone for this candidate is already running }
         '422': { description: Consent is absent or structurally invalid }

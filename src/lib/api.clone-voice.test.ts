@@ -67,13 +67,20 @@ describe('mockCloneVoice', () => {
      would only ever appear against a real backend. */
   it('rejects an over-length transcript the way the route does', async () => {
     const before = (await mockListVoiceLibrary()).voices.length;
+    /* The exact string realCloneVoice would build: it interpolates
+       `await res.text()` and the route replies `res.status(400).json({ error })`,
+       so the JSON envelope is part of the message. Pinned in full, because
+       a mock that renders a *prettier* error than production hides a real
+       wart the wizard shows verbatim — and no test could catch it. */
     await expect(
       mockCloneVoice({
         candidateId: 'cand-1',
         transcript: 'x'.repeat(MAX_CLONE_TRANSCRIPT_CHARS + 1),
         consent,
       }),
-    ).rejects.toThrow(/too long/i);
+    ).rejects.toThrow(
+      `Voice clone failed (400): {"error":"Transcript is too long (max ${MAX_CLONE_TRANSCRIPT_CHARS} characters)."}`,
+    );
     /* Rejected outright, not truncated-and-saved — no entry appears. */
     expect((await mockListVoiceLibrary()).voices.length).toBe(before);
   });
@@ -104,5 +111,35 @@ describe('MAX_CLONE_TRANSCRIPT_CHARS', () => {
     const transcriptBlock = yaml.slice(yaml.indexOf('        transcript:', anchor));
     const maxLength = /maxLength:\s*(\d+)/.exec(transcriptBlock)?.[1];
     expect(maxLength).toBe(String(MAX_CLONE_TRANSCRIPT_CHARS));
+  });
+
+  /* `maxLength` is not the only place the contract states the number: the
+     schema description explains the byte arithmetic, and #1840 already shipped
+     a version documenting two caps 2x apart. Pinning `maxLength` alone leaves
+     that prose free to rot, so scan the whole transcript block plus the clone
+     400 for any 4-digit number and require each to be the cap or one of its
+     two derived bounds. Reword-proof in a way phrase-matching wouldn't be. */
+  it('states no stale copy of the cap anywhere in the clone contract', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { resolve } = await import('node:path');
+    const yaml = await readFile(resolve(process.cwd(), 'openapi.yaml'), 'utf8');
+
+    const schemaAnchor = yaml.indexOf('    CloneVoiceRequest:');
+    const blockStart = yaml.indexOf('        transcript:', schemaAnchor);
+    const blockEnd = yaml.indexOf('        consent:', blockStart);
+    // Fail closed if the schema is renamed or its properties reordered.
+    expect(schemaAnchor).toBeGreaterThan(-1);
+    expect(blockEnd).toBeGreaterThan(blockStart);
+    const fourHundred = /'400': \{ description: Missing candidateId[^}]*\}/.exec(yaml)?.[0];
+    expect(fourHundred).toBeDefined();
+
+    const cap = MAX_CLONE_TRANSCRIPT_CHARS;
+    // The cap itself, its worst-case UTF-8 byte bound (3 bytes per UTF-16
+    // unit), and that bound base64-encoded (4/3). Nothing else belongs here.
+    const allowed = [cap, cap * 3, cap * 4].map(String);
+    const region = `${yaml.slice(blockStart, blockEnd)}\n${fourHundred}`;
+    for (const found of region.match(/\d{4,}/g) ?? []) {
+      expect(allowed).toContain(found);
+    }
   });
 });
