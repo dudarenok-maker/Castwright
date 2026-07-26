@@ -9,6 +9,7 @@ import {
   engineGroupForModelKey,
   formatEngineBreakdown,
   modelKeyForEngineChoice,
+  higherQwenTier,
 } from './tts-models';
 
 describe('formatEngineBreakdown (mixed-engine chapter caption)', () => {
@@ -156,8 +157,57 @@ describe('modelKeyForEngineChoice (fs-38 Wave 3b2, T6b review — resolves a dra
     expect(modelKeyForEngineChoice('gemini', 'kokoro-v1')).toBe('gemini-2.5-flash');
   });
 
-  it("'piper' has no UI-stable model key yet, so it falls back to the session key like 'default'", () => {
-    expect(modelKeyForEngineChoice('piper', 'kokoro-v1')).toBe('kokoro-v1');
-    expect(modelKeyForEngineChoice('piper', 'qwen3-tts-1.7b')).toBe('qwen3-tts-1.7b');
+  it('carries a Qwen session tier through instead of flattening to 0.6B', () => {
+    /* The audition path resolves its tier from the SESSION key (the
+       Start-generation modal writes ui.ttsModelKey and the cast pins together —
+       layout.tsx:1731-1760), so a 1.7B book must preview at 1.7B. */
+    expect(modelKeyForEngineChoice('qwen', 'qwen3-tts-1.7b')).toBe('qwen3-tts-1.7b');
+  });
+
+  it('elevates to an explicit character tier over a lower session tier', () => {
+    expect(modelKeyForEngineChoice('qwen', 'qwen3-tts-0.6b', 'qwen3-tts-1.7b')).toBe(
+      'qwen3-tts-1.7b',
+    );
+  });
+
+  it('never lets a lower character tier drag a higher session tier down', () => {
+    /* Mirrors higherQwenTier's contract (server/src/tts/model-keys.ts:118). */
+    expect(modelKeyForEngineChoice('qwen', 'qwen3-tts-1.7b', 'qwen3-tts-0.6b')).toBe(
+      'qwen3-tts-1.7b',
+    );
+  });
+
+  it('resolves a non-Qwen engine against a mismatched session key', () => {
+    /* The table the retired sampleModelKeyForEngine got wrong: it returned the
+       SESSION key for every non-Qwen engine. */
+    expect(modelKeyForEngineChoice('kokoro', 'coqui-xtts-v2')).toBe('kokoro-v1');
+    expect(modelKeyForEngineChoice('coqui', 'kokoro-v1')).toBe('coqui-xtts-v2');
+  });
+
+  it('leaves a matching engine/key pair alone', () => {
+    expect(modelKeyForEngineChoice('kokoro', 'kokoro-v1')).toBe('kokoro-v1');
+    expect(modelKeyForEngineChoice('coqui', 'coqui-xtts-v2')).toBe('coqui-xtts-v2');
+    expect(modelKeyForEngineChoice('gemini', 'gemini-2.5-flash')).toBe('gemini-2.5-flash');
+  });
+
+  it('maps piper to its canonical key, mirroring the server table', () => {
+    /* Changed here: previously fell back to the session key. Unreachable from
+       the UI (piper is absent from TTS_ENGINES and from the engine picker's
+       installedEngines), so this is alignment with
+       server/src/tts/model-keys.ts canonicalModelKeyForEngine, not a behaviour
+       change any user can observe. */
+    expect(modelKeyForEngineChoice('piper', 'kokoro-v1')).toBe('piper-en-us-medium');
+    expect(modelKeyForEngineChoice('piper', 'qwen3-tts-1.7b')).toBe('piper-en-us-medium');
+  });
+});
+
+describe('higherQwenTier', () => {
+  it('picks 1.7B over 0.6B in either argument order', () => {
+    expect(higherQwenTier('qwen3-tts-1.7b', 'qwen3-tts-0.6b')).toBe('qwen3-tts-1.7b');
+    expect(higherQwenTier('qwen3-tts-0.6b', 'qwen3-tts-1.7b')).toBe('qwen3-tts-1.7b');
+  });
+
+  it('keeps `a` on a tie', () => {
+    expect(higherQwenTier('qwen3-tts-0.6b', 'qwen3-tts-0.6b')).toBe('qwen3-tts-0.6b');
   });
 });

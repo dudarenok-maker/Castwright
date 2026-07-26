@@ -189,37 +189,66 @@ export function engineGroupForModelKey(key: TtsModelKey): TtsEngineId {
 
 import type { TtsEngine } from './types';
 
-/* Fix wave 2 (fs-38 Wave 3b2, T6b review) — mirror of the backend's
-   canonicalModelKeyForEngine (server/src/tts/model-keys.ts). Resolves a
-   profile-drawer-style engine CHOICE ('default' means "use the session
-   default", any real TtsEngine is a per-character override) to a concrete
-   TtsModelKey the caller can send as the assign request's intended
-   `modelKey` — so the server's cloned-voice wrong-engine guard checks the
-   engine that will ACTUALLY render (the drawer's pending, not-yet-Saved
-   choice) rather than only the persisted account default. `qwenTier` lets a
-   caller that already knows it's pinning the 1.7B tier carry that through;
-   omitted/null falls back to the 0.6B key (only the ENGINE half of the
-   result matters to the guard, not the tier). `piper` has no UI-stable
-   TtsModelKey yet (it's not in the frontend's TTS_ENGINES groups — "future
-   local", per model-keys.ts) and isn't offered by the engine picker, so it
-   falls back to the session key like 'default' rather than fabricating an
-   unrepresentable model key. */
+/* Ordinal rank of the two Qwen quality tiers — 1.7B outranks 0.6B. Non-Qwen
+   keys rank 0 (never meaningfully compared; callers only invoke this once both
+   sides are known to be Qwen tiers). Mirror of server/src/tts/model-keys.ts. */
+function qwenTierRank(key: TtsModelKey): number {
+  return key === 'qwen3-tts-1.7b' ? 1 : 0;
+}
+
+/* The higher-ranked of two Qwen model keys. Mirror of the backend's
+   higherQwenTier (server/src/tts/model-keys.ts): a per-character tier override
+   is meant to ELEVATE one character above the run's default, so a character
+   whose stored tier happens to be the lower one (stale, or simply never
+   elevated) can never drag a run explicitly started at the higher tier back
+   down. Ties keep `a`. */
+export function higherQwenTier(a: TtsModelKey, b: TtsModelKey): TtsModelKey {
+  return qwenTierRank(a) >= qwenTierRank(b) ? a : b;
+}
+
+/* THE frontend engine→modelKey mapper — mirror of the backend's
+   canonicalModelKeyForEngine (server/src/tts/model-keys.ts). Resolves an engine
+   CHOICE ('default' = use the session default; any real TtsEngine = a
+   per-character override) to the concrete TtsModelKey that will ACTUALLY route.
+
+   This is the only such mapper on the frontend. `sampleModelKeyForEngine`
+   (formerly src/lib/tts-voice-mapping.ts) was a lossy second copy that returned
+   the SESSION key for every non-Qwen engine — so a book on Coqui with a
+   character overridden to Kokoro auditioned in Coqui (#1839). Add new engines
+   here and in the server mirror together; there is nowhere else to add them.
+
+   TWO CALLER SHAPES, and the difference matters:
+
+   - Audition / design call sites pass TWO arguments. Their result is a shared
+     CACHE KEY (server/src/tts/voice-sample-cache.ts) — the sample player and
+     the design routes must land on one filename — so the tier must come from
+     the session key alone. Passing a per-character tier there would split the
+     key, since bulk design sends one modelKey for N characters.
+   - The cloned-voice assign guard passes THREE, carrying a pending per-character
+     1.7B pin. That guard reads only the ENGINE half
+     (server/src/routes/voice-library.ts:886), so the tier is inert for it. */
 export function modelKeyForEngineChoice(
   engineChoice: 'default' | TtsEngine,
   sessionModelKey: TtsModelKey,
-  qwenTier?: TtsModelKey | null,
+  characterTier?: TtsModelKey | null,
 ): TtsModelKey {
   if (engineChoice === 'default') return sessionModelKey;
   switch (engineChoice) {
     case 'kokoro':
       return 'kokoro-v1';
-    case 'qwen':
-      return qwenTier ?? 'qwen3-tts-0.6b';
+    case 'qwen': {
+      /* A non-Qwen session key carries no tier, so the 0.6B base is the floor. */
+      const sessionTier: TtsModelKey = sessionModelKey.startsWith('qwen')
+        ? sessionModelKey
+        : 'qwen3-tts-0.6b';
+      return higherQwenTier(characterTier ?? sessionTier, sessionTier);
+    }
     case 'coqui':
       return 'coqui-xtts-v2';
+    case 'piper':
+      return 'piper-en-us-medium';
     case 'gemini':
       return sessionModelKey.startsWith('gemini-') ? sessionModelKey : 'gemini-2.5-flash';
-    case 'piper':
     default:
       return sessionModelKey;
   }
