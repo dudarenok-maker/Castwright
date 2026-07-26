@@ -351,6 +351,24 @@ export function xttsVoiceSidecarPath(name: string): string {
   return p;
 }
 
+/** Path to a cloned XTTS voice's transient derive-source reference WAV
+    (fs-38 Wave 3c, Task 13) — `CoquiEngine.clone_voice` (main.py) writes the
+    normalised reference clip here as `<latents-basename>.derive-src.tmp.wav`
+    beside the `.pt`, feeds it to `get_conditioning_latents` (which takes an
+    audio PATH, not an array), then deletes it in a `finally` on every
+    testable path. It SURVIVES a hard/external process kill, though — the
+    one on-disk XTTS clone artifact that isn't cleaned up by the happy path
+    — so `purgeCloneArtifacts` must attempt-delete it too (tolerating
+    not-found) for Property 2 ("erasure is total") to hold: this is the
+    real person's source audio, not a derived artifact. Same sanitisation as
+    `xttsVoiceLatentsPath`, so this always names the exact sibling file the
+    sidecar would have written for the same `name`. */
+export function xttsVoiceDeriveSrcTmpWavPath(name: string): string {
+  const p = join(xttsVoicesDir(), `${sanitizeIdSegment(safeSegment(name))}.derive-src.tmp.wav`);
+  assertContained(xttsVoicesDir(), p);
+  return p;
+}
+
 /** fs-38 Wave 1 — workspace-level voice-library manifest jail. Each library
     entry gets its own directory keyed by voiceUuid, holding `voice.json` (the
     manifest, see workspace/voice-library.ts) plus future per-entry sidecar

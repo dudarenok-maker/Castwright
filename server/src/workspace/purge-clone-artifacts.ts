@@ -18,7 +18,14 @@ import { join } from 'node:path';
 // legacy call sites; pulling it from there dragged an Express router — and
 // transitively synthesise-chapter.ts — into the workspace layer for what is
 // just a path.join. No cycle exists today, but this removes a latent one.
-import { qwenVoicePtPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from './paths.js';
+import {
+  qwenVoicePtPath,
+  qwenVoiceSidecarPath,
+  qwenVoiceWavPath,
+  xttsVoiceDeriveSrcTmpWavPath,
+  xttsVoiceLatentsPath,
+  xttsVoiceSidecarPath,
+} from './paths.js';
 import { entryDir, readEntry, removeEntryDir, writeEntry } from './voice-library.js';
 import { djb2, purgeVoiceSamples } from '../tts/voice-sample-cache.js';
 import { CLONE_ENGINE_LIST, cloneStorageKey } from '../tts/clone-engines.js';
@@ -43,6 +50,29 @@ async function unlinkTracked(f: string, voiceUuid: string, failed: string[]): Pr
   }
 }
 
+/** fs-38 Wave 3c, Task 13 — one best-effort sidecar cache-evict POST, shared
+    by the qwen base/`-preview` calls and the new xtts call below (same
+    shape: `{ voiceId }` JSON body, independently swallow-on-failure so one
+    engine's unreachable sidecar can't skip another's evict). Evict is
+    ALWAYS best-effort — file erasure (the `files` loop above) is what must
+    be reliable. For XTTS specifically this matters more than for qwen: an
+    unreachable sidecar here leaves the voice's latents resident in
+    `CoquiEngine._latents_cache` for the rest of the sidecar process's
+    lifetime — unlike the qwen prompt cache, which IS cleared whenever the
+    base Qwen model itself unloads, XTTS's latents cache has no TTL/idle
+    reclaim of its own to fall back on. */
+async function evictSidecarVoice(route: 'qwen' | 'xtts', voiceId: string): Promise<void> {
+  try {
+    await fetch(`${getResolvedSidecarUrl()}/${route}/evict-voice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ voiceId }),
+    });
+  } catch {
+    /* sidecar unreachable — non-fatal */
+  }
+}
+
 /** Review I-2 — returns the paths (if any) that could NOT be removed, so a
     caller (e.g. the revoke route) can surface a partial-erasure warning
     instead of silently claiming a clean 200. Still best-effort/never-throws
@@ -52,6 +82,11 @@ export async function purgeCloneArtifacts(
   opts: { deleteEntryDir?: boolean; deleteMasterClip?: boolean } = {},
 ): Promise<{ failed: string[] }> {
   const key = `qwen-${voiceUuid}`;
+  // fs-38 Wave 3c, Task 13 — the canonical `xtts-<uuid>` storage key
+  // (cloneStorageKey('coqui', uuid)), same convention Task 24's audition
+  // cache will match. Unlike qwen, Coqui/XTTS has no design/preview flow, so
+  // there's no `-preview` variant to sweep here.
+  const xttsKey = cloneStorageKey('coqui', voiceUuid);
   const files = [
     qwenVoicePtPath(key),
     qwenVoiceSidecarPath(key),
@@ -70,6 +105,17 @@ export async function purgeCloneArtifacts(
     // promote-voice best-effort rename), so an unpromoted/rejected preview's
     // clip must be erasable here too, mirroring the preview .pt/.json above.
     qwenVoiceWavPath(`${key}-preview__master`),
+    // fs-38 Wave 3c, Task 13 — the Coqui/XTTS clone artifact set. THREE
+    // paths, not two: `_pt`/`_json` are the durable derived latents +
+    // manifest, but `xttsVoiceDeriveSrcTmpWavPath` is the real person's
+    // SOURCE audio — `CoquiEngine.clone_voice` (main.py) writes it to derive
+    // the latents and deletes it in a `finally` on every testable path, but
+    // it survives a hard/external process kill. A leftover copy is exactly
+    // the Phase 0 consent-hole class this wave exists to close, so purge
+    // must attempt-delete it too (rm force already tolerates not-found).
+    xttsVoiceLatentsPath(xttsKey),
+    xttsVoiceSidecarPath(xttsKey),
+    xttsVoiceDeriveSrcTmpWavPath(xttsKey),
   ];
   const failed: string[] = [];
   for (const f of files) await unlinkTracked(f, voiceUuid, failed);
@@ -132,15 +178,11 @@ export async function purgeCloneArtifacts(
   // "every artifact" was supposedly erased. Each POST is independently
   // best-effort — one failing must not skip the other.
   for (const voiceId of [key, `${key}-preview`]) {
-    try {
-      await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ voiceId }),
-      });
-    } catch {
-      /* sidecar unreachable — non-fatal */
-    }
+    await evictSidecarVoice('qwen', voiceId);
   }
+  // fs-38 Wave 3c, Task 13 — the xtts-<uuid> sidecar cache entry
+  // (CoquiEngine._latents_cache), via /xtts/evict-voice (Task 11). No
+  // `-preview` variant — see the `xttsKey` comment above.
+  await evictSidecarVoice('xtts', xttsKey);
   return { failed };
 }

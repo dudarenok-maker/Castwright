@@ -68,6 +68,13 @@ function seed(name: string, ext: 'pt' | 'json' | 'wav'): string {
   return p;
 }
 
+// fs-38 Wave 3c, Task 13 — same idea as `seed` above, but under xttsVoicesDir.
+function seedXtts(name: string, ext: 'pt' | 'json'): string {
+  const p = join(paths.xttsVoicesDir(), `${name}.${ext}`);
+  writeFileSync(p, ext === 'json' ? '{}' : 'binary-stub');
+  return p;
+}
+
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'cw-purge-clone-'));
   process.env.WORKSPACE_DIR = dir;
@@ -92,6 +99,7 @@ beforeEach(async () => {
   cache = await import('../tts/voice-sample-cache.js');
 
   mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+  mkdirSync(paths.xttsVoicesDir(), { recursive: true });
 });
 
 afterEach(() => {
@@ -200,6 +208,46 @@ describe('purgeCloneArtifacts', () => {
     }
   });
 
+  /* fs-38 Wave 3c, Task 13 — the Coqui/XTTS on-disk artifact set is THREE
+     paths, not two: the latents `.pt`, the `.json` sidecar manifest, and a
+     `<key>.derive-src.tmp.wav` reference-audio temp file that Task 9's
+     `clone_voice` writes and cleans up on every testable path but which
+     SURVIVES a hard/external process kill. That surviving copy is the real
+     person's source audio — a Phase-0-consent-hole-class leftover unless
+     purge attempt-deletes it too. */
+  it('fs-38 Wave 3c, Task 13: erases the xtts latents, sidecar json, and derive-src tmp wav', async () => {
+    const ptFile = seedXtts('xtts-u1', 'pt');
+    const jsonFile = seedXtts('xtts-u1', 'json');
+    const tmpWavFile = paths.xttsVoiceDeriveSrcTmpWavPath('xtts-u1');
+    writeFileSync(tmpWavFile, 'binary-stub');
+
+    await purge.purgeCloneArtifacts('u1');
+
+    for (const f of [ptFile, jsonFile, tmpWavFile]) {
+      expect(existsSync(f)).toBe(false);
+    }
+  });
+
+  it('fs-38 Wave 3c, Task 13: a failing xtts unlink is reported in `failed`, not swallowed', async () => {
+    const ptFile = seedXtts('xtts-u1', 'pt');
+    rmMock.mockImplementation(async (f: string, opts?: unknown) => {
+      if (f === ptFile) {
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+      }
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      return actual.rm(f, opts as never);
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await purge.purgeCloneArtifacts('u1');
+
+    expect(result.failed).toContain(ptFile);
+    expect(existsSync(ptFile)).toBe(true); // never actually removed
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(ptFile), expect.anything());
+
+    warnSpy.mockRestore();
+  });
+
   it('removes the entry dir only when deleteEntryDir is set', async () => {
     await purge.purgeCloneArtifacts('u1');
     expect(removeEntryDir).not.toHaveBeenCalled();
@@ -221,7 +269,9 @@ describe('purgeCloneArtifacts', () => {
     // M2 (review) — evicts BOTH the base key and its `-preview` sidecar so a
     // `-preview` clone-prompt can't linger resident after "every artifact"
     // was supposedly erased.
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // fs-38 Wave 3c, Task 13 — plus the xtts-<uuid> voice on /xtts/evict-voice
+    // (Coqui has no `-preview` design flow, so just the one canonical key).
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       'http://127.0.0.1:9000/qwen/evict-voice',
@@ -236,6 +286,14 @@ describe('purgeCloneArtifacts', () => {
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({ voiceId: 'qwen-u1-preview' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      'http://127.0.0.1:9000/xtts/evict-voice',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ voiceId: 'xtts-u1' }),
       }),
     );
     expect(ptFileExistedAtFirstEvict).toBe(false);
@@ -282,7 +340,28 @@ describe('purgeCloneArtifacts', () => {
 
     await purge.purgeCloneArtifacts('u1');
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // fs-38 Wave 3c, Task 13 — +1 for the xtts evict, now always attempted too.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  /* fs-38 Wave 3c, Task 13 — evict is best-effort while file erasure must be
+     reliable: an unreachable sidecar leaves latents resident in
+     `CoquiEngine._latents_cache` for the rest of the process's lifetime
+     (unlike the qwen prompt cache, which IS cleared on the base model's own
+     `/unload`, there is no TTL reclaim for XTTS's cache) — but that must not
+     stop the qwen evicts (or anything else) from running. */
+  it('an xtts evict failure does not skip anything else, and files are still gone', async () => {
+    const ptFile = seedXtts('xtts-u1', 'pt');
+    fetchMock
+      .mockResolvedValueOnce({ ok: true }) // qwen base
+      .mockResolvedValueOnce({ ok: true }) // qwen -preview
+      .mockRejectedValueOnce(new Error('ECONNREFUSED')); // xtts
+
+    const result = await purge.purgeCloneArtifacts('u1');
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(existsSync(ptFile)).toBe(false);
+    expect(result.failed).toEqual([]);
   });
 });
 

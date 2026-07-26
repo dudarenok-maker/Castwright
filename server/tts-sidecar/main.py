@@ -7751,9 +7751,12 @@ async def xtts_evict_voice(req: Request) -> Response:
     cache-epoch contract). Mirrors /qwen/evict-voice's shape and idempotence,
     but the payload is Property 2 ("erasure is total"): called by the
     server's clone-revoke/purge flow (Task 13's `purgeCloneArtifacts`) AFTER
-    it deletes the on-disk `.pt`/`.json`, so neither a stale resident cache
-    entry NOR an in-flight `torch.load` racing the purge can keep a revoked
-    voice renderable — `_load_voice_latents` re-checks the epoch immediately
+    it deletes the on-disk `.pt`/`.json` AND the `.derive-src.tmp.wav`
+    reference-audio leftover a hard/external process kill can strand beside
+    them (Task 13's job, not this route's — this route only ever touches the
+    in-memory cache), so neither a stale resident cache entry NOR an
+    in-flight `torch.load` racing the purge can keep a revoked voice
+    renderable — `_load_voice_latents` re-checks the epoch immediately
     before installing into the cache. Deliberately NOT gated on the engine's
     load state (`coqui._tts`): a voice can have warm latents cached from an
     earlier synth even after the model itself was later unloaded (e.g. the
