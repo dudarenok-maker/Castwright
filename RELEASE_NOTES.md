@@ -38,6 +38,10 @@
   a voice now really does erase it: your original recording, and everything Castwright built
   from it, is gone for good — not just the visible entry. Castwright tells you exactly what
   you're about to lose and asks you to confirm before it happens.
+- Voice previews now play in the engine you picked for that character, at the quality your book is set to render in — what you hear in the cast list is what you'll hear in the book. The same voice now sounds the same wherever you play it: on a cast row, on its card in My voices, while you're designing it, and on both sides of a redesign comparison.
+- Auditioning a voice you just designed no longer re-records it. The take from the design was already sitting there; now it actually gets used, so the first play is instant.
+- The higher-quality 1.7B voice model is greyed out until you've actually downloaded it, instead of failing partway into a run.
+- Previewing a voice will now put away a voice model it isn't using to make room, rather than giving up when your graphics card looks full. If something it can't put away is in the way, it tells you which model that is and where the button to stop it lives — instead of just saying the card is full.
 
 # Castwright 1.14.0
 

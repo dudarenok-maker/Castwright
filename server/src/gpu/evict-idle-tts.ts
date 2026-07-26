@@ -85,13 +85,14 @@ export interface EvictIdleQwenBaseOpts {
   _isAnyGenerationActive?: typeof isAnyGenerationActive;
 }
 
-/** Returns true when it actually freed something — i.e. the underlying
-    `reconcileResidentQwenTiers` issued a real `/unload` (see that function's
-    doc comment). `false` covers every other outcome, including "called
-    successfully but the tier to drop was never resident" — that used to
-    collapse into `true` here (#1839 finding 1), which made
-    `capacity-retry.ts` `continue` into an immediate, wasted retry attempt
-    instead of falling through to its bounded poll. */
+/** Returns true when the underlying `reconcileResidentQwenTiers` actually
+    issued a real `/unload` request (see that function's doc comment) — not
+    that anything was necessarily freed, since that function's `unload()`
+    swallows its own fetch failures and never checks `res.ok`. `false` covers
+    every other outcome, including "called successfully but the tier to drop
+    was never resident" — that used to collapse into `true` here (#1839
+    finding 1), which made `capacity-retry.ts` `continue` into an immediate,
+    wasted retry attempt instead of falling through to its bounded poll. */
 export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<boolean> {
   const anyGenerationActive = opts._isAnyGenerationActive ?? isAnyGenerationActive;
   const { modelKey } = opts;

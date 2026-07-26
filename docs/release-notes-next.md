@@ -107,6 +107,25 @@ history at cut time.
   `qwen-<uuid>__master.wav`, scoped to a missing `.pt` only and never throwing) shipped alongside
   as the wave's optional tail. Plan: `docs/features/268-fs38-wave3b2-resolver.md`. Spec:
   `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md` §5.
+- **Voice previews use the character's engine and the book's quality tier** — the
+  audition request resolves its `modelKey` through the single
+  `modelKeyForEngineChoice` mapper instead of the lossy `sampleModelKeyForEngine`
+  copy, which returned the book's default key for every non-Qwen engine (so a
+  Kokoro-overridden character in a Coqui book previewed in Coqui) and pinned every
+  Qwen preview to 0.6B. The tier resolves from the session key, so the play and
+  design paths keep landing on one shared cache file. Thirteen audition/design call
+  sites now go through that one mapper; the three `TtsEngine` declarations and the
+  four engine→modelKey mappers collapse to one per side of the wire. The My-voices
+  card, the design/redesign preview, the clone wizard and both sides of the A/B
+  compare all follow the session tier, so one voice cannot sound different in two
+  places. A designed voice's cached audition is now genuinely reused by its first
+  Play — the design and play paths previously hashed different filenames because
+  only one folded in the persona token, so every first Play silently re-synthesised.
+  The Start-generation tier picker disables 1.7B when its separately-downloaded
+  weights are absent. GPU admission now frees an idle Qwen base tier before
+  refusing a preview on capacity, and when capacity is genuinely exhausted the
+  error names the resident model that is holding it and the control that frees it.
+  (#1812, #1839, #1841, #1842)
 
 ---
 
