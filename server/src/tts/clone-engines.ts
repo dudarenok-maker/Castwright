@@ -142,7 +142,13 @@ export function hasClonedProvenance(c: { overrideTtsVoices?: unknown }, engine: 
     load/derive/purge") — the uuid is never used here, so validating it would
     only add a way for a malformed-but-real cloned slot to be silently
     skipped and forced onto qwen anyway, which is the exact regression this
-    function exists to close. */
+    function exists to close.
+
+    Tie-break: if the character is cloned+eligible on BOTH qwen and coqui and
+    `currentEngine` matches neither (e.g. the book's default is kokoro or
+    gemini), this resolves to `candidates[0]` — i.e. whichever engine
+    `CLONE_ENGINE_LIST` (above) declares first ('qwen') — mirroring the
+    historical unconditional qwen force for that doubly-ambiguous case. */
 export function resolveClonedRetargetEngine(
   c: { overrideTtsVoices?: unknown },
   eligibleEngines: readonly TtsEngine[],

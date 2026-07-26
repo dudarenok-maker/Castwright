@@ -446,6 +446,29 @@ describe('clone-engines vocabulary', () => {
       expect(resolveClonedRetargetEngine(character, ['qwen', 'coqui'], 'coqui')).toBe('coqui');
     });
 
+    it('ties resolve to qwen (CLONE_ENGINE_LIST order) when both slots are cloned+eligible but currentEngine is neither', () => {
+      const character = {
+        overrideTtsVoices: {
+          qwen: {
+            name: 'Qwen Clone',
+            libraryUuid: 'uuid-qwen',
+            provenance: 'cloned' as const,
+          },
+          coqui: {
+            name: 'Coqui Clone',
+            libraryUuid: 'uuid-coqui',
+            provenance: 'cloned' as const,
+          },
+        },
+      };
+      // currentEngine ('kokoro') is not clone-capable, so it can't match
+      // either candidate — the tie resolves to candidates[0], i.e. whichever
+      // engine CLONE_ENGINE_LIST declares first ('qwen'). This pins that
+      // ordering dependency: swapping CLONE_ENGINE_LIST's member order would
+      // flip this assertion to 'coqui'.
+      expect(resolveClonedRetargetEngine(character, ['qwen', 'coqui'], 'kokoro')).toBe('qwen');
+    });
+
     it('falls back to the sole eligible clone engine when currentEngine does not qualify', () => {
       const character = {
         overrideTtsVoices: {
