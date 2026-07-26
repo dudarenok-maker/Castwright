@@ -81,13 +81,12 @@ owner: null
   describe block in the file) — 2 cases: the wake lock engages on the one
   in-flight chapter and releases once it completes; stays engaged while a
   second concurrent chapter is still in flight, releasing only after both
-  drain. **Quarantined** (`quarantinedIt`, `docs/testing/flaky-register.md`)
-  — this file is a documented "Hook timed out under Windows tmpdir/fs
-  contention" hot file, and a throwaway unrelated single-request test
-  reproduced an identical hang under real system load regardless of file
-  position, proving this is pre-existing file-level flakiness rather than a
-  defect in these two tests or the feature. Both pass reliably in isolation
-  under normal load; run with `RUN_QUARANTINE=1` to exercise them locally.
+  drain. Both gate normally. They shipped quarantined on a
+  Windows-fs-contention diagnosis that turned out to be wrong — they were red
+  100% of the time from the day they landed, deadlocked on an un-dispatched
+  supertest request (a superagent `Request` only sends on `.then()`/`.end()`,
+  and both tests assert mid-flight so neither could await its response).
+  Fixed and graduated back into the gating lane 2026-07-27 (#1854).
 
 ### Manual acceptance walkthrough
 
