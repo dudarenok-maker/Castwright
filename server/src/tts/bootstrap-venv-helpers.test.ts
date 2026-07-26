@@ -52,7 +52,10 @@ describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
     // so onnxruntime-gpu unambiguously owns the shared onnxruntime/ namespace.
     expect(joined[1]).toMatch(/install -r .*nvidia-cuda\.txt/);
     expect(joined[2]).toBe('uninstall -y onnxruntime onnxruntime-gpu');
-    expect(joined[3]).toBe('install --force-reinstall --no-deps onnxruntime-gpu');
+    // side-28: the install step now carries an explicit version constraint (see
+    // install-ort.mjs's ONNXRUNTIME_GPU_CONSTRAINT) so the runtime isn't whatever
+    // happened to be latest on PyPI on install date.
+    expect(joined[3]).toBe('install --force-reinstall --no-deps onnxruntime-gpu>=1.27,<1.28');
     expect(pip.calls).toHaveLength(4);
   });
 

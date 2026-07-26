@@ -10,3 +10,9 @@
 pytest>=9.0.3,<10
 # FastAPI's TestClient depends on httpx — pin a recent stable line.
 httpx>=0.27,<1.0
+# starlette.testclient (1.3.1+) prefers httpx2 over httpx and warns
+# (StarletteDeprecationWarning) when only httpx is present — see side-29
+# (#1843). httpx is kept too: gradio/gradio_client/safehttpx (transitive
+# deps pulled in by the sidecar's own requirements) still import plain
+# `httpx` directly, so it can't be dropped.
+httpx2>=2.9,<3.0

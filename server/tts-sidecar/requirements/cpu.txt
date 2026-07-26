@@ -22,6 +22,6 @@ torchaudio==2.11.0
 # Kokoro v1 — plain (no [gpu] extra) so the CPU/CoreML onnxruntime is used; the
 # explicit onnxruntime below is the CPU execution provider. Run
 # scripts/install-kokoro.{ps1,sh} once to fetch the model + voices manifest.
-kokoro-onnx>=0.4.0,<0.5.0
+kokoro-onnx>=0.5.0,<0.6.0
 onnxruntime
 -r speaker-qa.txt

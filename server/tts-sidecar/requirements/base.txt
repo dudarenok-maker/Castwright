@@ -1,10 +1,24 @@
 # Vendor-neutral sidecar dependencies (Phase 1 layered-requirements groundwork).
 # These install the same on every box; the torch-engine deps live in the
-# vendor overlay (nvidia-cuda.txt today). Lines moved verbatim from the old
-# flat requirements.txt — same packages, same pins.
+# vendor overlay (nvidia-cuda.txt today). Lines moved from the old flat
+# requirements.txt with the same packages; most pins carried over verbatim,
+# but fastapi/uvicorn below are bumped ~25 minor versions as part of this
+# branch's on_event -> lifespan migration (side-27a).
 
-fastapi>=0.115,<0.116
-uvicorn[standard]>=0.30,<0.32
+# fastapi/uvicorn were pinned to the 0.115/0.30 line while this module still used
+# the twelve `@app.on_event("startup"|"shutdown")` decorators (side-27a). That
+# decorator was not actually at risk from this bump: Starlette dropped
+# `_DefaultLifespan`/`on_startup`/`on_shutdown` from `Router`, but FastAPI
+# re-implemented all of it locally (`fastapi/routing.py`'s own
+# `_DefaultLifespan`, `APIRouter._startup()`/`._shutdown()`, and `on_event()`
+# itself), so it still resolves fine against the pinned FastAPI 0.140. The
+# real reason to migrate is that `on_event` is `@deprecated` there, kept only
+# on a compatibility shim FastAPI's own source flags for future removal —
+# `lifespan` is the supported interface. side-27a replaced those decorators
+# with a `lifespan` context manager (`main.py`'s `_lifespan`) ahead of this
+# bump.
+fastapi>=0.140,<0.141
+uvicorn[standard]>=0.51,<0.52
 
 # Numpy 2.x is required by kokoro-onnx>=0.4.0; coqui-tts 0.27.x only floors
 # at numpy>=1.26 (no upper cap) so the bump is safe. The earlier `<2.0`

@@ -1,5 +1,10 @@
 # Castwright 1.15.0
 
+- **The speech engine now runs on a version we've actually tested.** Until now, the exact
+  speech runtime Castwright installed depended on the day you installed it — two people with
+  identical machines could quietly end up on different builds, which made "it sounds different
+  on my computer" almost impossible to chase down. It's pinned now. Some installs will step
+  back to the tested version the next time they update.
 - **Build your own stable of narrators in My voices.** Design a voice once — from a persona, with
   a live audition — and it's yours to cast in any book, not just the one you designed it for.
   Not happy with a take? Redesign it and compare old against new side by side before you commit.
