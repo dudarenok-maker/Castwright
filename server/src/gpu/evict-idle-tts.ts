@@ -2,6 +2,10 @@
    evicts the analyzer Ollama once; this frees a resident Qwen BASE TIER the
    current op does not need, so an interactive preview can make room for itself
    instead of polling for ~60 s and failing while an idle base holds the VRAM.
+   A non-Qwen op (Coqui/Kokoro) needs NEITHER Qwen tier, so for it BOTH are
+   "does not need" and reclaimable — the likeliest real blocker on an 8 GB
+   card is an idle Qwen 1.7B base sitting under a Coqui/Kokoro preview
+   (#1839 finding 5).
 
    Deliberately narrow:
    - Qwen bases only. Coqui and Kokoro are button-driven — the user loaded them
@@ -73,7 +77,13 @@ type ReconcileResidentQwenTiersFn = (
 ) => Promise<boolean>;
 
 export interface EvictIdleQwenBaseOpts {
-  /** The model key the blocked op is asking for. Its tier is the one KEPT. */
+  /** The model key the blocked op is asking for. When it's a Qwen key, its
+      own tier is the one KEPT (the elevate-only rule: an op only reclaims
+      the Qwen tier it doesn't need). When it's a NON-Qwen key (Coqui,
+      Kokoro), neither Qwen tier is anything that op could ever need, so
+      BOTH are reclaimable (#1839 finding 5) — a Coqui/Kokoro preview no
+      longer goes politely unmet just because the blocker is Qwen and not
+      itself. */
   modelKey?: TtsModelKey;
   signal?: AbortSignal;
   /** Injected for tests. Defaults to the registered-accessor leaf gate
@@ -97,11 +107,17 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
   const anyGenerationActive = opts._isAnyGenerationActive ?? isAnyGenerationActive;
   const { modelKey } = opts;
 
-  if (!modelKey || engineForModelKey(modelKey) !== 'qwen') return false;
+  if (!modelKey) return false;
   if (anyGenerationActive()) return false;
 
+  /* #1839 finding 5 — a non-Qwen op (Coqui/Kokoro) can never need either
+     Qwen base resident, so it may reclaim BOTH idle tiers rather than
+     bailing out here just because the blocker isn't its own engine. A Qwen
+     op keeps the same elevate-only behaviour as before: it only reclaims
+     the ONE tier it doesn't itself want. */
+  const isQwenOp = engineForModelKey(modelKey) === 'qwen';
   const wants17 = modelKey === 'qwen3-tts-1.7b';
-  const keep = { keep06: !wants17, keep17: wants17 };
+  const keep = isQwenOp ? { keep06: !wants17, keep17: wants17 } : { keep06: false, keep17: false };
 
   if (opts._reconcile) {
     return opts._reconcile(keep, opts.signal);

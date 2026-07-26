@@ -4,7 +4,11 @@
    Only lists models the USER controls and that admission deliberately will not
    auto-evict. A resident Qwen base is excluded on purpose: evict-idle-tts.ts
    already frees an idle one, so naming it here would be noise on top of an
-   action already taken. Both Coqui and Kokoro have a Stop pill reachable
+   action already taken — and (since finding 5) that holds regardless of
+   whether the blocked op is itself Qwen or a non-Qwen engine (Coqui/Kokoro):
+   evictIdleQwenBase now reclaims BOTH idle Qwen tiers for a non-Qwen op, not
+   just the one tier a Qwen op's own elevate-only rule would free. Both Coqui
+   and Kokoro have a Stop pill reachable
    wherever they're resident (the pill in the top bar / global TTS notice
    banner — see src/components/tts-notice-banner.tsx, Task 10), but the
    remedies still differ: stopping Coqui is a durable fix (nothing reloads

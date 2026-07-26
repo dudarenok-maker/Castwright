@@ -63,16 +63,65 @@ describe('evictIdleQwenBase', () => {
     expect(reconcile).not.toHaveBeenCalled();
   });
 
-  it('does nothing for a non-Qwen op', async () => {
-    const reconcile = vi.fn();
+  it('#1839 finding 5: frees BOTH idle Qwen bases for a non-Qwen op (Coqui/Kokoro can never need either)', async () => {
+    /* Before the fix this bailed out with `false` and never called reconcile
+       at all — a Coqui/Kokoro preview blocked by an idle Qwen base (the
+       likeliest real blocker on an 8 GB card) was neither freed nor named. */
+    const reconcile = vi.fn().mockResolvedValue(true);
     const freed = await evictIdleQwenBase({
       modelKey: 'kokoro-v1',
       _reconcile: reconcile,
       _isAnyGenerationActive: () => false,
     });
 
+    expect(freed).toBe(true);
+    expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: false }, undefined);
+  });
+
+  it('#1839 finding 5: a Coqui op also frees both idle Qwen bases (same non-Qwen rule)', async () => {
+    const reconcile = vi.fn().mockResolvedValue(true);
+    const freed = await evictIdleQwenBase({
+      modelKey: 'coqui-xtts-v2',
+      _reconcile: reconcile,
+      _isAnyGenerationActive: () => false,
+    });
+
+    expect(freed).toBe(true);
+    expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: false }, undefined);
+  });
+
+  it('#1839 finding 5: a non-Qwen op still declines while any render is in flight (gate unchanged)', async () => {
+    const reconcile = vi.fn();
+    const freed = await evictIdleQwenBase({
+      modelKey: 'kokoro-v1',
+      _reconcile: reconcile,
+      _isAnyGenerationActive: () => true,
+    });
+
     expect(freed).toBe(false);
     expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it('#1839 finding 5: the lever never reaches beyond Qwen — its ONLY vocabulary is keep06/keep17, for either op shape', async () => {
+    /* Documents the blast-radius guarantee: widening WHICH Qwen tiers a
+       non-Qwen op may reclaim never grows into touching Coqui/Kokoro
+       residency itself — the reconcile call's keep-map has no other keys to
+       express that, for a Qwen op OR a non-Qwen one. */
+    const reconcile = vi.fn().mockResolvedValue(true);
+    await evictIdleQwenBase({
+      modelKey: 'kokoro-v1',
+      _reconcile: reconcile,
+      _isAnyGenerationActive: () => false,
+    });
+    expect(Object.keys(reconcile.mock.calls[0][0]).sort()).toEqual(['keep06', 'keep17']);
+
+    reconcile.mockClear();
+    await evictIdleQwenBase({
+      modelKey: 'qwen3-tts-1.7b',
+      _reconcile: reconcile,
+      _isAnyGenerationActive: () => false,
+    });
+    expect(Object.keys(reconcile.mock.calls[0][0]).sort()).toEqual(['keep06', 'keep17']);
   });
 
   it('fails closed when the active-generation gate is unregistered (default)', async () => {
