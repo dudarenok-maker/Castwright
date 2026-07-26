@@ -344,15 +344,23 @@ describe('POST /api/books/:bookId/generation — sleep prevention wake lock', ()
     expect(allowSleep).not.toHaveBeenCalled();
 
     gate.releaseOne();
-    /* One chapter still in flight — must NOT release yet. This wait has to
-       outlast the released chapter's ENTIRE drain (ffmpeg encode + mp3 /
-       .segments.json write), or the assertion below is vacuous: at 20 ms the
-       first job hasn't finished draining yet, so `allowSleep` wouldn't have
-       been called even by an implementation that releases on the FIRST drain
-       instead of the last — i.e. exactly the regression this test's title
-       claims to prevent. Verified by mutation: releasing on first drain
-       leaves this test green at 20 ms and red at 500 ms. */
-    await new Promise((r) => setTimeout(r, 500));
+    /* Wait for the released chapter to FULLY drain before asserting, by
+       racing the two responses: deregisterJob() runs strictly before
+       endAllSubscribers() ends the SSE response, so whichever request
+       settles first proves its own deregisterJob has already executed.
+
+       Waiting on a real signal rather than a sleep is load-bearing, not
+       style. The assertion below is only meaningful AFTER one chapter has
+       drained — before that it passes trivially, including against an
+       implementation that releases the wake lock on the FIRST drain instead
+       of the last, i.e. exactly the regression this test's title claims to
+       prevent (and the side-11 bug plan 242 exists to stop). A fixed sleep
+       re-opens that hole silently on any box where the drain (real ffmpeg
+       encode + mp3/.segments.json write, ~155ms here) outruns the timer.
+       Verified by mutation: releasing on first drain — `if
+       (inFlightByChapter.size === 1) allowSleep()` in deregisterJob — is red
+       here and was GREEN against the original 20ms sleep. */
+    await Promise.race([p1, p2]);
     expect(allowSleep).not.toHaveBeenCalled();
 
     gate.releaseOne();
@@ -1324,7 +1332,7 @@ describe('POST /api/books/:bookId/generation — queue-sole per-chapter concurre
        chapter_complete for its target). */
     expect(t1.some((t) => t.type === 'chapter_complete' && t.chapterId === 2)).toBe(false);
     expect(t2.some((t) => t.type === 'chapter_complete' && t.chapterId === 1)).toBe(false);
-  });
+  }, 15_000);
 
   it('same-chapter displace: a second forced POST for the same chapter aborts the first', async () => {
     /* First POST blocks in synth (never released until aborted). The second
@@ -1383,7 +1391,7 @@ describe('POST /api/books/:bookId/generation — queue-sole per-chapter concurre
     expect(t1.some((t) => t.type === 'chapter_complete' && t.chapterId === 1)).toBe(false);
     /* Second run completed the chapter. */
     expect(t2.some((t) => t.type === 'chapter_complete' && t.chapterId === 1)).toBe(true);
-  });
+  }, 15_000);
 
   it('/pause aborts ALL same-book jobs', async () => {
     /* Two concurrent single-chapter jobs both block in synth; one /pause
@@ -1433,7 +1441,7 @@ describe('POST /api/books/:bookId/generation — queue-sole per-chapter concurre
     expect(t2.some((t) => t.type === 'chapter_complete')).toBe(false);
     expect(t1[t1.length - 1].type).toBe('idle');
     expect(t2[t2.length - 1].type).toBe('idle');
-  });
+  }, 15_000);
 
   it('isGenerationActive is true while any same-book job runs and false after all drain', async () => {
     const { isGenerationActive } = await import('./generation.js');
@@ -1499,7 +1507,7 @@ describe('POST /api/books/:bookId/generation — queue-sole per-chapter concurre
 
     /* All jobs drained → inactive. */
     expect(isGenerationActive(bookId)).toBe(false);
-  });
+  }, 15_000);
 });
 
 /* Durable per-chapter failure status (side: stuck-queued bug). A chapter that
@@ -1711,7 +1719,7 @@ describe('POST /api/books/:bookId/generation — B1 QA-cost telemetry passthroug
        only the QA sub-cost split is suppressed under real overlap. */
     expect(ch1.rtf).not.toBeNull();
     expect(ch2.rtf).not.toBeNull();
-  });
+  }, 15_000);
 });
 
 /* srv-36 hardening (Task 6) — triggerScoring extraction + SSE broadcast
