@@ -384,6 +384,59 @@ describe('useTtsLifecycle', () => {
     expect(result.current.gpuQueueDepth).toBeUndefined();
   });
 
+  it('reports qwen1_7bInstalled=true when /health (reachable) affirms the 1.7B weights are present', async () => {
+    mocks.getSidecarHealth.mockResolvedValueOnce({
+      status: 'reachable',
+      url: '',
+      loading: false,
+      modelLoaded: false,
+      kokoroLoaded: false,
+      kokoroLoading: false,
+      qwenLoaded: false,
+      qwenLoading: false,
+      qwenBase17WeightsPresent: true,
+    });
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.qwen1_7bInstalled).toBe(true));
+  });
+
+  it('reports qwen1_7bInstalled=false when /health (reachable) affirms the 1.7B weights are absent', async () => {
+    mocks.getSidecarHealth.mockResolvedValueOnce({
+      status: 'reachable',
+      url: '',
+      loading: false,
+      modelLoaded: false,
+      kokoroLoaded: false,
+      kokoroLoading: false,
+      qwenLoaded: false,
+      qwenLoading: false,
+      qwenBase17WeightsPresent: false,
+    });
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.coqui.state).toBe('idle'));
+    expect(result.current.qwen1_7bInstalled).toBe(false);
+  });
+
+  it('#1841 finding 2: reports qwen1_7bInstalled=undefined (unknown), NOT false, when the sidecar is unreachable', async () => {
+    /* This is the actual bug: an unreachable/down/recycling sidecar carries
+       no qwenBase17WeightsPresent field at all, and reading that as "not
+       installed" (false) disables 1.7B in the Start-generation modal and,
+       on confirm, silently clears every 1.7B pin across the whole cast. */
+    mocks.getSidecarHealth.mockResolvedValueOnce({
+      status: 'unreachable',
+      url: '',
+      error: 'Sidecar returned 503',
+    });
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.coqui.state).toBe('unreachable'));
+    expect(result.current.qwen1_7bInstalled).toBeUndefined();
+  });
+
+  it('#1841 finding 2: reports qwen1_7bInstalled=undefined before the first probe resolves', () => {
+    const { result } = renderHook(() => useTtsLifecycle());
+    expect(result.current.qwen1_7bInstalled).toBeUndefined();
+  });
+
   it('dismissNotices clears both banner strings without calling the API', async () => {
     mocks.loadSidecar.mockResolvedValueOnce({ status: 'error', error: 'X' });
     const { result } = renderHook(() => useTtsLifecycle());

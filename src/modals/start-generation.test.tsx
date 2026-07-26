@@ -57,3 +57,42 @@ describe('StartGenerationModal — 1.7B gated on installed weights (#1841)', () 
     ).toBe(false);
   });
 });
+
+describe('StartGenerationModal — unknown weights state is NOT "not installed" (#1841 finding 2)', () => {
+  /* qwenBase17WeightsPresent only exists on a reachable /health response
+     (server/src/routes/sidecar-health.ts). While the sidecar is down,
+     recycling, or unprobed, useTtsLifecycle now reports `undefined` — and
+     the caller (layout.tsx) passes that straight through as
+     `qwen17bInstalled`. Unknown must read as available: offering a tier that
+     turns out to be missing costs a recoverable failed run; disabling it
+     silently clears every 1.7B cast pin, which is not recoverable. */
+  it('leaves 1.7B selectable when qwen17bInstalled is undefined (unknown, sidecar unreachable)', () => {
+    render(
+      <StartGenerationModal
+        defaultTier="qwen3-tts-0.6b"
+        qwen17bInstalled={undefined}
+        onClose={() => {}}
+        onConfirm={() => {}}
+      />,
+    );
+
+    const tier = screen.getByRole('button', { name: /1\.7B/i }) as HTMLButtonElement;
+    expect(tier.disabled).toBe(false);
+    expect(screen.queryByText(/not downloaded/i)).toBeNull();
+  });
+
+  it('keeps a cast pinned to 1.7B selected — does NOT silently fall back to 0.6B — when installed-state is unknown', () => {
+    const onConfirm = vi.fn();
+    render(
+      <StartGenerationModal
+        defaultTier="qwen3-tts-1.7b"
+        qwen17bInstalled={undefined}
+        onClose={() => {}}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /start/i }));
+    expect(onConfirm).toHaveBeenCalledWith('qwen3-tts-1.7b');
+  });
+});
