@@ -15,6 +15,7 @@ import {
   hasClonedProvenance,
   resolveClonedRetargetEngine,
   libraryVoiceForEngine,
+  isArtifactVersionStale,
 } from './clone-engines.js';
 
 describe('clone-engines vocabulary', () => {
@@ -617,6 +618,37 @@ describe('clone-engines vocabulary', () => {
         },
       };
       expect(resolveClonedRetargetEngine(character, ['qwen', 'coqui'], 'gemini')).toBe('coqui');
+    });
+  });
+
+  /* fs-38 Wave 3c, Task 18 — the shared staleness comparand. Both an unknown
+     STORED and an unknown CURRENT version read as "not stale" (see the
+     function's own doc comment for why); a genuine mismatch between two
+     known values is the only path to `true`. */
+  describe('isArtifactVersionStale', () => {
+    it('a real mismatch between a known stored and known current version is stale', () => {
+      expect(isArtifactVersionStale('qwen3-old', 'qwen3-new')).toBe(true);
+      expect(isArtifactVersionStale('v2.0.3', 'v2.0.5')).toBe(true);
+    });
+
+    it('a matching stored and current version is not stale', () => {
+      expect(isArtifactVersionStale('qwen3-0.6b', 'qwen3-0.6b')).toBe(false);
+    });
+
+    it('an empty stored version is never stale, regardless of current', () => {
+      expect(isArtifactVersionStale('', 'qwen3-new')).toBe(false);
+    });
+
+    it('a missing (undefined) stored version is never stale', () => {
+      expect(isArtifactVersionStale(undefined, 'qwen3-new')).toBe(false);
+    });
+
+    it('an empty current version is never stale, even against a real stored version — the coqui no-oracle-yet case', () => {
+      expect(isArtifactVersionStale('v2.0.3', '')).toBe(false);
+    });
+
+    it('both stored and current empty is never stale', () => {
+      expect(isArtifactVersionStale('', '')).toBe(false);
     });
   });
 });

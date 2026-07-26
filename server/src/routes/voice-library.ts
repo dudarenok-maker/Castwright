@@ -31,6 +31,7 @@ import {
   type VoiceMaster,
 } from '../workspace/voice-library.js';
 import { currentQwenBaseModel } from '../tts/model-paths.js';
+import { isArtifactVersionStale } from '../tts/clone-engines.js';
 import { runVoiceDesign } from '../tts/design-voice-core.js';
 import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace/voice-library-usage.js';
 import { castJsonPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from '../workspace/paths.js';
@@ -332,11 +333,30 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/discard', async (req: Request, res
    manifest recorded the Qwen base model it was derived from no longer
    matches the CURRENT base model once that model is upgraded. Returning
    'stale' here — without touching the on-disk manifest — lets the list
-   route reflect an upgrade immediately, with no migration/backfill step. */
+   route reflect an upgrade immediately, with no migration/backfill step.
+
+   fs-38 Wave 3c, Task 18 — recomputes the `xtts` slot too, via the SAME
+   `isArtifactVersionStale` comparand `clone-voice-resolver.ts`'s per-chapter
+   classifier uses, so this list-time view can't silently disagree with what
+   a chapter render would decide. Coqui has no live "installed coqui-tts
+   version" oracle yet (unlike qwen's `currentQwenBaseModel()`) — `''` is
+   passed as the current version, which `isArtifactVersionStale` treats as
+   "unknown, never stale" (see its doc comment in clone-engines.ts), so this
+   recomputation is a structural no-op for coqui today. It stays parallel to
+   the qwen arm on purpose: a future oracle only has to replace the `''`
+   below, not add a second, independently-drifting comparison. */
 function withComputedStaleness(entry: VoiceLibraryEntry): VoiceLibraryEntry {
+  let result = entry;
   const qwen = entry.engines.qwen;
-  if (!qwen?.baseModel || qwen.baseModel === currentQwenBaseModel()) return entry;
-  return { ...entry, engines: { ...entry.engines, qwen: { ...qwen, status: 'stale' } } };
+  if (qwen && isArtifactVersionStale(qwen.baseModel, currentQwenBaseModel())) {
+    result = { ...result, engines: { ...result.engines, qwen: { ...qwen, status: 'stale' } } };
+  }
+  const xtts = entry.engines.xtts;
+  const currentCoquiVersion = ''; // no live oracle yet — see the comment above.
+  if (xtts && isArtifactVersionStale(xtts.coquiVersion, currentCoquiVersion)) {
+    result = { ...result, engines: { ...result.engines, xtts: { ...xtts, status: 'stale' } } };
+  }
+  return result;
 }
 
 function sortEntries(entries: VoiceLibraryEntry[]): VoiceLibraryEntry[] {

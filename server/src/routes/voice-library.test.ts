@@ -267,6 +267,62 @@ describe('GET /api/voice-library', () => {
     const onDisk = await vl.readEntry('stale-1');
     expect(onDisk?.engines.qwen?.status).toBe('ready');
   });
+
+  /* fs-38 Wave 3c, Task 18 — withComputedStaleness now recomputes the xtts
+     slot too (via the same isArtifactVersionStale comparand the resolver
+     pre-pass uses). Coqui has no live "current installed coqui-tts version"
+     oracle yet, so the current value passed for coqui is always '' — which
+     isArtifactVersionStale treats as "unknown, never stale". This test
+     pins that DELIBERATE, documented behaviour (not a bug): a coqui-cloned
+     voice with a real recorded coquiVersion never spontaneously reads
+     'stale' through this route today, and — the sibling-preservation half —
+     recomputing xtts must never disturb an independently-stale qwen slot on
+     the SAME entry, or vice versa. */
+  it('recomputes the xtts slot alongside qwen: a real recorded coquiVersion never reads stale (no live oracle yet), and each engine slot is computed independently of the other', async () => {
+    const current = modelPaths.currentQwenBaseModel();
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'mixed-1',
+        engines: {
+          qwen: { status: 'ready', baseModel: 'some/other-model' }, // stale
+          xtts: { status: 'ready', coquiVersion: 'v2.0.3' }, // NOT stale — no oracle
+        },
+      }),
+    );
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'mixed-2',
+        engines: {
+          qwen: { status: 'ready', baseModel: current }, // fresh
+          xtts: { status: 'ready', coquiVersion: '' }, // older-sidecar fallback — never stale
+        },
+      }),
+    );
+
+    const res = await request(app).get('/api/voice-library');
+    const byId = new Map(
+      (
+        res.body.voices as Array<{
+          voiceUuid: string;
+          engines: { qwen?: { status: string }; xtts?: { status: string } };
+        }>
+      ).map((v) => [v.voiceUuid, v]),
+    );
+
+    // qwen's own staleness is unaffected by adding the xtts recomputation.
+    expect(byId.get('mixed-1')?.engines.qwen?.status).toBe('stale');
+    expect(byId.get('mixed-2')?.engines.qwen?.status).toBe('ready');
+    // xtts never reads 'stale' today (no live oracle) — for EITHER a real
+    // or an empty stored coquiVersion — and each entry's own computation
+    // doesn't leak the other's qwen staleness onto xtts.
+    expect(byId.get('mixed-1')?.engines.xtts?.status).toBe('ready');
+    expect(byId.get('mixed-2')?.engines.xtts?.status).toBe('ready');
+
+    // On-disk manifest is untouched for both slots.
+    const onDisk = await vl.readEntry('mixed-1');
+    expect(onDisk?.engines.qwen?.status).toBe('ready');
+    expect(onDisk?.engines.xtts?.status).toBe('ready');
+  });
 });
 
 describe('PATCH /api/voice-library/:voiceUuid', () => {

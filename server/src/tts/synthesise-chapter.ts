@@ -55,6 +55,7 @@ import {
 import { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
 import { deriveEngineArtifact } from './derive-engine-artifact.js';
 import { currentQwenBaseModel } from './model-paths.js';
+import type { CloneEngine } from './clone-engines.js';
 import { decodeAudioToPcm } from './mp3.js';
 import { qwenVoicePtPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from '../workspace/paths.js';
 import { safeSegment, sanitizeIdSegment, assertContained } from '../util/safe-path.js';
@@ -996,7 +997,19 @@ function buildDefaultCloneResolverDeps(signal: AbortSignal | undefined): Resolve
     ptExists: defaultPtExists,
     deriveEngineArtifact,
     readMasterPcm: readMasterPcmDefault,
-    currentBaseModel: currentQwenBaseModel,
+    /* fs-38 Wave 3c, Task 18 — qwen keeps its existing oracle
+       (`currentQwenBaseModel()`, an env-configured Node-side constant).
+       Coqui has NO analogous oracle yet — there's no per-deployment
+       model-repo choice to track the way Qwen has, and the installed
+       coqui-tts PACKAGE version (what `coquiVersion` actually stamps) isn't
+       something this synchronous, non-sidecar-calling accessor can observe.
+       `''` is deliberate, not a placeholder bug: `isArtifactVersionStale`
+       (clone-engines.ts) treats an unknown CURRENT version as "not stale",
+       so this makes coqui staleness-by-version a structural no-op today
+       rather than forcing a spurious re-derive of every cloned coqui voice
+       on every chapter. See clone-voice-resolver.ts's ClassifyInput doc
+       comment for the full reasoning. */
+    currentArtifactVersion: (engine) => (engine === 'coqui' ? '' : currentQwenBaseModel()),
     purgeCloneArtifacts,
     /* No free-text progress channel exists on SynthesiseChapterOpts today —
        only typed per-group/per-title ticks (onGroupStart/onTitleStart etc.).
@@ -1289,6 +1302,12 @@ export async function synthesiseChapter(
       return {
         characterName: c.name ?? c.id,
         libraryUuid: c.overrideTtsVoices?.qwen?.libraryUuid,
+        // fs-38 Wave 3c, Task 18 — this filter/map is still qwen-only (it
+        // reads `overrideTtsVoices.qwen` above); the resolver itself is now
+        // engine-parametric, but generalising this call site to the union
+        // filter over every clone-capable slot is Task 20's job, not this
+        // one's — see clone-engines.ts's characterHasClonedSlot.
+        engine: 'qwen' as CloneEngine,
         wrongEngine: routedEngine !== 'qwen',
         engineUnavailable: qwenUnavailable,
       };

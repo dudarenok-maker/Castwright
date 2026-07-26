@@ -5,7 +5,7 @@
    the resolver needs this error). T5 adds the classifier + async
    orchestrator (`resolveClonedVoicesForChapter`) on top. */
 
-import type { VoiceLibraryEntry } from '../workspace/voice-library.js';
+import type { VoiceLibraryEntry, VoiceLibraryEngineStatus } from '../workspace/voice-library.js';
 import type { deriveEngineArtifact } from './derive-engine-artifact.js';
 import { currentQwenBaseModel } from './model-paths.js';
 // Review C-1 — type-only: this module's whole design is injected deps for
@@ -13,6 +13,13 @@ import { currentQwenBaseModel } from './model-paths.js';
 // (synthesise-chapter.ts's buildDefaultCloneResolverDeps), never imported
 // here at runtime.
 import type { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
+// fs-38 Wave 3c, Task 18 — the shared clone vocabulary: manifestSlotFor/
+// cloneStorageKey so this module never re-derives them locally (a rejected
+// pattern earlier on this branch — see Task 15's review), and the shared
+// isArtifactVersionStale comparand so the classifier and
+// routes/voice-library.ts's withComputedStaleness can never drift on what
+// "stale" means.
+import { manifestSlotFor, cloneStorageKey, isArtifactVersionStale, type CloneEngine } from './clone-engines.js';
 
 /* Review I1 — a repair-path derive (below, both the cloned and the designed
    orchestrator) only needs the sidecar to write the `.pt`; the `previewPcm`
@@ -45,6 +52,13 @@ export interface BrokenClonedVoice {
     | 'derive-failed'
     | 'misconfigured'
     | 'wrong-engine';
+  /** fs-38 Wave 3c, Task 18 — which engine this voice was being resolved on,
+      set ONLY for `reason: 'engine-unavailable'` (the one reason whose
+      remedy text below actually names an engine). Left unset for every
+      other reason so `toEqual` against a pre-3c literal (no `engine` key)
+      still matches — `toEqual` treats a missing key and an explicit
+      `undefined` the same way. */
+  engine?: CloneEngine;
 }
 
 /* fs-38 Wave 3b1 (C1) — a cloned-provenance Qwen group must never be silently
@@ -91,7 +105,23 @@ export class UnresolvableClonedVoiceError extends Error {
     const hasOtherReason = broken.some((b) => b.reason !== 'wrong-engine');
     const remedies: string[] = [];
     if (hasOtherReason) {
-      remedies.push('Re-enable Qwen or restore the missing voice(s)');
+      /* Task 18 — engine-aware remedy: name whichever engine(s) were
+         actually reported unavailable ('engine-unavailable' is the only
+         reason `engine` is set for — see BrokenClonedVoice's doc comment)
+         instead of hardcoding "Qwen", which misdiagnoses a broken-on-coqui
+         voice. Falls back to 'Qwen' when no `engine`-carrying entry is
+         present (the pre-3c shape: revoked/missing-master/etc. with no
+         engine-unavailable entries at all, or the legacy single-name
+         constructor's un-engine-tagged item) — byte-identical to the old
+         hardcoded text for that case. */
+      const unavailableEngines = new Set(
+        broken.filter((b) => b.reason === 'engine-unavailable').map((b) => b.engine ?? 'qwen'),
+      );
+      const engineLabel =
+        [...unavailableEngines]
+          .map((e) => (e === 'coqui' ? 'Coqui' : 'Qwen'))
+          .join(' or ') || 'Qwen';
+      remedies.push(`Re-enable ${engineLabel} or restore the missing voice(s)`);
     }
     if (hasWrongEngine) {
       remedies.push('switch the book to Qwen');
@@ -118,40 +148,52 @@ export interface ClonedVoiceClassification {
 
 export interface ClassifyInput {
   entry: VoiceLibraryEntry;
-  /** true when this character's effective route is not qwen at all this run
-      (e.g. assigned on a Kokoro-default book) — distinct from Qwen itself
-      being unavailable; see `BrokenClonedVoice`'s `wrong-engine` reason. */
+  /** fs-38 Wave 3c, Task 18 — which clone-capable engine this voice is being
+      resolved on this run. Selects both the manifest slot read
+      (`entry.engines[manifestSlotFor(engine)]`) and which stamped version
+      field is the staleness comparand (`baseModel` for qwen, `coquiVersion`
+      for coqui). */
+  engine: CloneEngine;
+  /** true when this character's effective route is not this engine at all
+      this run (e.g. a qwen-cloned voice assigned on a Coqui-default book) —
+      distinct from the engine itself being unavailable; see
+      `BrokenClonedVoice`'s `wrong-engine` reason. */
   wrongEngine: boolean;
-  /** true when the character DOES route to qwen, but qwen is unavailable this run. */
+  /** true when the character DOES route to `engine`, but `engine` is unavailable this run. */
   engineUnavailable: boolean;
-  /** result of stat()-ing voices/qwen/qwen-<uuid>.pt */
+  /** result of stat()-ing the engine's storage key (`cloneStorageKey(engine, uuid)`) */
   ptExists: boolean;
-  /** currentQwenBaseModel() snapshot */
-  currentBaseModel: string;
+  /** fs-38 Wave 3c, Task 18 (rename of `currentBaseModel`) — the engine's
+      current expected artifact-version snapshot: `currentQwenBaseModel()`
+      for qwen; for coqui, no live "installed coqui-tts version" oracle
+      exists yet, so this is `''` in production (see
+      `isArtifactVersionStale`'s doc comment in clone-engines.ts for why an
+      empty/unknown value on EITHER side of the comparison reads as "not
+      stale" rather than forcing a derive). */
+  currentArtifactVersion: string;
 }
 
 /* Pure — no fs, no async. Order matters: revoked beats every other reason
    (a revoked person's .pt surviving on disk must never read as merely
    "repairable"); within the engine-problem tier, wrongEngine is checked
    FIRST (Task 6b) since it's the more specific diagnosis — a character that
-   doesn't route to qwen at all is not the same failure as qwen itself being
-   unreachable, and reporting the wrong one misdirects the fix. engine-
-   unavailable then beats a stale/missing .pt, and a persisted 'failed'
-   status is terminal (never silently retried here — a retry has to come
-   from a fresh derive attempt that clears it). */
+   doesn't route to this engine at all is not the same failure as the engine
+   itself being unreachable, and reporting the wrong one misdirects the fix.
+   engine-unavailable then beats a stale/missing artifact, and a persisted
+   'failed' status is terminal (never silently retried here — a retry has to
+   come from a fresh derive attempt that clears it). */
 export function classifyClonedVoice(input: ClassifyInput): ClonedVoiceClassification {
-  const { entry, wrongEngine, engineUnavailable, ptExists, currentBaseModel } = input;
+  const { entry, engine, wrongEngine, engineUnavailable, ptExists, currentArtifactVersion } = input;
   if (entry.consent?.revokedAt) return { state: 'broken', reason: 'revoked' };
   if (wrongEngine) return { state: 'broken', reason: 'wrong-engine' };
   if (engineUnavailable) return { state: 'broken', reason: 'engine-unavailable' };
-  const qwen = entry.engines.qwen;
-  if (qwen?.status === 'failed') return { state: 'broken', reason: 'derive-failed' };
+  const slot = entry.engines[manifestSlotFor(engine)];
+  if (slot?.status === 'failed') return { state: 'broken', reason: 'derive-failed' };
   // M3 (review) — 'deriving' is declared on VoiceLibraryEngineStatus['status']
   // but nothing ever persists it; no branch here handles it intentionally.
+  const storedVersion = engine === 'qwen' ? slot?.baseModel : slot?.coquiVersion;
   const needsDerive =
-    !ptExists ||
-    (Boolean(qwen?.baseModel) && qwen?.baseModel !== currentBaseModel) ||
-    qwen?.status === 'stale';
+    !ptExists || isArtifactVersionStale(storedVersion, currentArtifactVersion) || slot?.status === 'stale';
   if (needsDerive) {
     return entry.master ? { state: 'repairable' } : { state: 'broken', reason: 'missing-master' };
   }
@@ -183,7 +225,10 @@ export interface ResolveChapterDeps {
     uuid: string,
     entry: VoiceLibraryEntry,
   ): Promise<{ pcm: Buffer; sampleRate: number; refText: string }>;
-  currentBaseModel(): string;
+  /** fs-38 Wave 3c, Task 18 (rename + parametrize of `currentBaseModel`) —
+      see `ClassifyInput.currentArtifactVersion`'s doc comment for what this
+      returns per engine and why coqui's is `''` in production today. */
+  currentArtifactVersion(engine: CloneEngine): string;
   /** Review C-1 — re-run after a post-derive re-read finds the entry gone or
       revoked, so a `.pt` the sidecar wrote DURING the derive (after an
       in-flight revoke's own purge already ran) doesn't survive it. Same
@@ -198,9 +243,12 @@ export interface ResolveChapterDeps {
 export interface ClonedVoiceRequest {
   characterName: string;
   libraryUuid: string | undefined;
-  /** true when this character's effective route is not qwen at all this run. */
+  /** fs-38 Wave 3c, Task 18 — which clone-capable engine this request is
+      being resolved on this run. */
+  engine: CloneEngine;
+  /** true when this character's effective route is not `engine` at all this run. */
   wrongEngine: boolean;
-  /** true when the character DOES route to qwen, but qwen is unavailable this run. */
+  /** true when the character DOES route to `engine`, but `engine` is unavailable this run. */
   engineUnavailable: boolean;
 }
 
@@ -301,7 +349,7 @@ export async function resolveClonedVoicesForChapter(
       throw abortRejection(undefined, deps);
     }
 
-    const { characterName, libraryUuid, wrongEngine, engineUnavailable } = request;
+    const { characterName, libraryUuid, engine, wrongEngine, engineUnavailable } = request;
 
     if (!libraryUuid) {
       broken.push({ name: characterName, reason: 'misconfigured' });
@@ -314,20 +362,29 @@ export async function resolveClonedVoicesForChapter(
       continue;
     }
 
-    const currentBaseModel = deps.currentBaseModel();
-    const ptExists = await deps.ptExists(`qwen-${libraryUuid}`);
+    const currentArtifactVersion = deps.currentArtifactVersion(engine);
+    const slotKey = manifestSlotFor(engine);
+    const ptExists = await deps.ptExists(cloneStorageKey(engine, libraryUuid));
     const classification = classifyClonedVoice({
       entry,
+      engine,
       wrongEngine,
       engineUnavailable,
       ptExists,
-      currentBaseModel,
+      currentArtifactVersion,
     });
 
     if (classification.state === 'healthy') continue;
 
     if (classification.state === 'broken') {
-      broken.push({ name: characterName, reason: classification.reason! });
+      broken.push({
+        name: characterName,
+        reason: classification.reason!,
+        // Task 18 — only 'engine-unavailable' names an engine in its remedy
+        // text (UnresolvableClonedVoiceError.fromList); every other reason
+        // leaves `engine` unset so pre-3c `.broken` assertions keep matching.
+        ...(classification.reason === 'engine-unavailable' ? { engine } : {}),
+      });
       continue;
     }
 
@@ -335,19 +392,38 @@ export async function resolveClonedVoicesForChapter(
     deps.reportProgress?.(`Preparing voice "${characterName}"…`);
     try {
       const { pcm, sampleRate, refText } = await deps.readMasterPcm(libraryUuid, entry);
-      await deps.deriveEngineArtifact(
+      const result = await deps.deriveEngineArtifact(
         libraryUuid,
-        'qwen',
+        engine,
         { masterPcm: pcm, sampleRate, refText, auditionText: REPAIR_AUDITION_TEXT },
         { signal: deps.signal },
       );
+      /* Task 18 — per-engine ready stamp. qwen keeps its EXISTING (pre-3c)
+         shape unchanged: `baseModel` is the pre-derive `currentArtifactVersion`
+         snapshot, never the derive response's own `result.baseModel` — that
+         was already this codebase's established choice (see the designed
+         self-heal's own DELTA-I4 note for the same tension resolved the
+         OTHER way there) and this task doesn't touch qwen's tested behaviour.
+         coqui is a brand-new path with no such precedent, and has no live
+         "current" oracle to fall back to (see ClassifyInput's doc comment) —
+         so it prefers the derive's own reported `coquiVersion`/`modelId`,
+         falling back to `currentArtifactVersion` only if the response itself
+         came back empty (the older-sidecar-fallback case). */
+      const readySlot: VoiceLibraryEngineStatus =
+        engine === 'qwen'
+          ? { status: 'ready', baseModel: currentArtifactVersion }
+          : {
+              status: 'ready',
+              coquiVersion: result.coquiVersion || currentArtifactVersion,
+              modelId: result.modelId,
+            };
       const written = await deps.updateEntry(
         libraryUuid,
         statusStampMutate(deps, libraryUuid, characterName, broken, (fresh) => ({
           ...fresh,
           engines: {
             ...fresh.engines,
-            qwen: { ...fresh.engines.qwen, status: 'ready', baseModel: currentBaseModel },
+            [slotKey]: { ...fresh.engines[slotKey], ...readySlot },
           },
         })),
       );
@@ -372,7 +448,7 @@ export async function resolveClonedVoicesForChapter(
           libraryUuid,
           statusStampMutate(deps, libraryUuid, characterName, broken, (fresh) => ({
             ...fresh,
-            engines: { ...fresh.engines, qwen: { ...fresh.engines.qwen, status: 'failed' } },
+            engines: { ...fresh.engines, [slotKey]: { ...fresh.engines[slotKey], status: 'failed' } },
           })),
         );
         if (written) {

@@ -178,7 +178,7 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
         ptExists: async () => false, // missing — triggers repairable, not healthy
         readMasterPcm,
         deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
-        currentBaseModel: () => 'qwen3-tts-0.6b',
+        currentArtifactVersion: () => 'qwen3-tts-0.6b',
       },
     });
 

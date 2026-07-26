@@ -257,3 +257,37 @@ export function libraryVoiceForEngine(
 
   return { libraryUuid, provenance };
 }
+
+/** fs-38 Wave 3c, Task 18 — the shared staleness comparand, used by BOTH
+    `clone-voice-resolver.ts`'s classifier (the per-chapter pre-pass) and
+    `routes/voice-library.ts`'s `withComputedStaleness` (the list route), so
+    the two can never independently drift on what "stale" means. Compares a
+    STORED artifact-version stamp (`baseModel` for qwen, `coquiVersion` for
+    coqui) against the engine's CURRENT expected version.
+
+    Both sides of the comparison default to the empty string somewhere in
+    this codebase — `derive-engine-artifact.ts` stamps `baseModel`/
+    `coquiVersion` as `''` when the sidecar's response is missing the header,
+    and coqui has no live "currently installed coqui-tts version" oracle yet
+    (unlike qwen's `currentQwenBaseModel()`, an env-configured Node-side
+    constant — nothing analogous exists for coqui, which has no
+    per-deployment model-repo choice to track). Both an unknown STORED and an
+    unknown CURRENT version read as "not stale" here — deliberately:
+
+    - Unknown STORED (`''`/missing) never stale: there is nothing to compare
+      against, so claiming staleness would be a guess, not a fact. This was
+      qwen's existing behaviour pre-3c; extended to coqui unchanged.
+    - Unknown CURRENT (`''`) never stale: for a CLONED voice specifically, the
+      alternative (unknown current => always stale) would force a real GPU
+      re-derive against the sidecar on every single classify call for any
+      voice whose stored version happens to be non-empty — including every
+      already-healthy coqui-cloned voice today, since coqui's current is
+      always `''` until a real oracle exists. Repeated, needless re-derives
+      cost real GPU time and risk flipping a perfectly good voice to
+      Broken/derive-failed on a transient sidecar hiccup, which is a worse
+      outcome for a consent-scoped cloned voice than temporarily under-
+      detecting a genuine staleness this codebase has no way to observe yet
+      (see the module-level "never substitute" invariant). */
+export function isArtifactVersionStale(stored: string | undefined, current: string): boolean {
+  return Boolean(stored) && Boolean(current) && stored !== current;
+}
