@@ -3223,7 +3223,7 @@ paths:
             schema: { $ref: '#/components/schemas/CloneVoiceRequest' }
       responses:
         '200': { description: Cloned voice created, content: { application/json: { schema: { $ref: '#/components/schemas/VoiceLibraryEntry' } } } }
-        '400': { description: Missing candidateId, or a transcript longer than 2000 characters }
+        '400': { description: Missing candidateId, or a transcript longer than the CloneVoiceRequest transcript maxLength }
         '404': { description: No such candidate / voice library disabled }
         '409': { description: A clone for this candidate is already running }
         '422': { description: Consent is absent or structurally invalid }
@@ -5123,14 +5123,18 @@ components:
             falls back to the stored transcript (which may itself legitimately
             be empty for a non-speech clip).
 
-            Capped at 2000 characters — a sanity bound, already far above any
-            real transcript of the ≤60 s sample clip. The limit is enforced in
-            characters only; it is set at 2000 so that the value stays bounded
-            in BYTES too, since it reaches the sidecar as a base64 `X-Ref-Text`
-            header and base64 applies to UTF-8 bytes rather than characters.
-            No UTF-16 string of 2000 units exceeds 6000 UTF-8 bytes (8000
-            base64), so the character limit is the only one needed. Over-length
-            is a 400, never a silent truncation.
+            Bounded by `maxLength` above — a sanity limit, already far above
+            any real transcript of the ≤60 s sample clip. It is expressed in
+            characters only, and sized so the value stays bounded in BYTES too:
+            the text reaches the sidecar as a base64 `X-Ref-Text` header, and
+            base64 applies to UTF-8 bytes rather than characters. Worst case is
+            3 UTF-8 bytes per UTF-16 unit, then 4/3 again for base64, so
+            `maxLength` implies the byte bound and no separate byte check is
+            needed. Over-length is a 400, never a silent truncation.
+
+            The number itself appears ONCE, in `maxLength`. Restating it in
+            prose is how this schema previously came to document two different
+            caps at the same time (#1836).
         consent:
           type: object
           required: [personName, relationship, permittedUse]

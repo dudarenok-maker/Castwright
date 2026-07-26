@@ -62,6 +62,7 @@ import type {
 import type { components as ApiComponents } from './api-types';
 import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
+import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
 import { initialCharacters } from '../data/characters';
 import { initialSentences } from '../data/sentences';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
@@ -9772,11 +9773,29 @@ export async function mockCloneVoiceSample(_form: FormData): Promise<CloneSample
 
 export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibraryEntry> {
   await wait(300);
+  /* #1836 — mirror the route's 400 on an over-length transcript, so mock mode
+     is never more permissive than the real server on a rejection the wizard
+     can surface. (The panel blocks Continue before this can fire from the UI;
+     the guard is here for parity, and for the day that panel gate moves.)
+     Byte-identical to what realCloneVoice produces — it interpolates
+     `await res.text()`, and the route replies `res.status(400).json({ error })`
+     — JSON envelope and all. The wizard renders the message verbatim, so a
+     prettier mock string would hide a real-mode wart no test could ever
+     catch. */
+  if (typeof body.transcript === 'string' && body.transcript.length > MAX_CLONE_TRANSCRIPT_CHARS) {
+    throw new Error(
+      `Voice clone failed (400): {"error":"Transcript is too long (max ${MAX_CLONE_TRANSCRIPT_CHARS} characters)."}`,
+    );
+  }
   const now = new Date().toISOString();
   /* #1836 — mirror the real route: a supplied non-blank transcript wins over
      the canned Whisper text and flips transcriptSource to 'user'. Without
      this the mock keeps reproducing the very bug the real path just fixed. */
-  const supplied = body.transcript?.trim() ?? '';
+  /* typeof-narrowed like the guard above and like the route, which pins
+     "ignores a non-string transcript and falls back to the Whisper text".
+     `body.transcript?.trim()` alone would TypeError in the mock on a truthy
+     non-string, where the real route 200s. */
+  const supplied = typeof body.transcript === 'string' ? body.transcript.trim() : '';
   const transcript = supplied || MOCK_WHISPER_TRANSCRIPT;
   const entry: VoiceLibraryEntry = {
     voiceUuid: `lib-clone-${Math.random().toString(36).slice(2, 10)}`,

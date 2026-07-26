@@ -1,5 +1,10 @@
 import { test, expect } from '@playwright/test';
 import { waitForRouteReady } from './helpers';
+/* The one src import in the e2e suite: the clone-transcript cap is already
+   duplicated across the panel, the route, and openapi.yaml, and a fourth
+   hardcoded copy here would fail this spec on any legitimate cap change.
+   `clone-transcript-limit.ts` is a zero-dependency constant module. */
+import { MAX_CLONE_TRANSCRIPT_CHARS } from '../src/lib/clone-transcript-limit';
 
 /**
  * fs-38 Wave 1, Task 17 — Voice library golden path (create / assign /
@@ -239,10 +244,46 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
       mimeType: 'audio/wav',
       buffer: Buffer.from('RIFFfake-wav-bytes-for-mock-ingest'),
     });
+
+    /* #1836 — the transcript box, which this spec previously walked straight
+       past. The mock ingest's canned "Whisper" text lands in an editable
+       field; waiting on its value also gates on ingest having resolved. */
+    /* getByRole, not getByLabel. The only claim made here is the observation:
+       getByLabel('transcript') failed in this spec with "Not an input
+       element", despite the textarea carrying aria-label="transcript". Why is
+       undiagnosed — Playwright's `retarget(…, 'follow-label')` should have
+       followed the wrapping <label> to its control — so no mechanism is
+       asserted. getByRole works and is unambiguous here. */
+    const transcriptBox = page.getByRole('textbox', { name: 'transcript' });
+    await expect(transcriptBox).toHaveValue('the quick brown fox jumped', { timeout: 10_000 });
+
     await page.getByLabel('person name').fill('Mum');
     await page.getByLabel('relationship').selectOption('family-with-permission');
     await page.getByLabel('I attest').check();
-    await page.getByRole('button', { name: 'Continue' }).click();
+    const continueBtn = page.getByRole('button', { name: 'Continue' });
+    await expect(continueBtn).toBeEnabled();
+
+    /* Over the cap → Continue is blocked with the reason on screen, in the
+       phase where the field is still editable. jsdom can't tell you that the
+       message actually renders next to the box the user has to fix, nor that
+       the over-length text survives intact for trimming (the textarea carries
+       no `maxLength`, so nothing is silently cut). After Continue the panel
+       unmounts, which is why the gate can't live on the server 400 alone. */
+    const overCap = 'x'.repeat(MAX_CLONE_TRANSCRIPT_CHARS + 1);
+    await transcriptBox.fill(overCap);
+    await expect(continueBtn).toBeDisabled();
+    await expect(page.getByText(/transcript is too long/i)).toBeVisible();
+    await expect(transcriptBox).toHaveValue(overCap);
+
+    /* Correct the transcript instead — the edit #1836 used to discard. The
+       assertion that this text reaches the wire stays in Vitest
+       (api.clone-voice.test.ts / clone-voice-wizard.test.tsx): no view
+       renders `sampleTranscript`, so there is nothing for the browser to
+       observe here without adding UI purely for the test. */
+    await transcriptBox.fill('the quick brown fox jumped over Thea');
+    await expect(page.getByText(/transcript is too long/i)).toHaveCount(0);
+    await expect(continueBtn).toBeEnabled();
+    await continueBtn.click();
 
     // Phase 2: name + Save.
     await page.getByTestId('clone-voice-wizard-name').fill('E2E Mum');

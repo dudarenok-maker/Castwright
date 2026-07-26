@@ -191,7 +191,26 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
     multi-byte scripts (worst case 3 bytes per UTF-16 unit → ≤6000 bytes →
     ≤8000 base64); a separate byte check would be unreachable at that cap, and
     a test derives the arithmetic from the constant so raising it without
-    redoing the sums fails (#1836).
+    redoing the sums fails (#1836). **`mockCloneVoice` enforces the same cap**,
+    with a message byte-identical to the one `realCloneVoice` builds from the
+    route's JSON body — a prettier mock string would hide a real-mode wart the
+    wizard renders verbatim. The number exists in three places: two that
+    actually enforce it — the route's `MAX_CLONE_TRANSCRIPT_CHARS` and the
+    frontend's (`src/lib/clone-transcript-limit.ts`, its own module because
+    `e2e/` must import it into a Node process) — plus `openapi.yaml`'s
+    `maxLength`, which is normative but enforces nothing at runtime (no request
+    is validated against the schema; the route hand-validates). A test on each
+    side of the wire pins its implementation against that contract.
+    `src/lib/api-types.ts` is not a fourth: openapi-typescript does not encode
+    `maxLength`. #1840 shipped a contract documenting two caps 2×
+    apart because the schema description and the `400` both restated the
+    number; both now defer to `maxLength`, so the contract states it exactly
+    once and a test asserts that. Descriptive prose elsewhere (this plan, the
+    release notes) still cites the value and is deliberately not pinned. Note
+    this
+    closes ONE of the route's six documented failure modes in mock mode
+    (400/404/409/422/502/503): the mock still validates neither `candidateId`
+    nor consent, so it stays materially more permissive than the route.
 
 ## Test plan
 
@@ -284,7 +303,45 @@ No new Playwright e2e in 3a — added in 3b1 (below).
 - Vitest frontend (`src/lib/api.clone-voice.test.ts`) — `mockCloneVoice`
   mirrors the real precedence (supplied wins, blank/absent falls back,
   matching text stays `'whisper'`), so mock/e2e mode can't keep reproducing
-  the bug the real route fixed.
+  the bug the real route fixed. It also mirrors the route's **rejection**:
+  over-cap throws the exact message `realCloneVoice` would build (JSON envelope
+  included) and appends no entry; at-cap is accepted (the discriminating
+  mutation being `>` → `>=`). Two further tests pin
+  `MAX_CLONE_TRANSCRIPT_CHARS` against `openapi.yaml`: one on `maxLength`, one
+  asserting the schema states the number exactly *once* so that first pin
+  covers the whole contract. Both are the frontend-side twin of the server's
+  pin. Mutation-checked: raising the constant to 6000 fails the pin, deleting
+  the mock's guard fails the rejection test.
+- **The pins only run because CI was taught about them.** Both read
+  `openapi.yaml` at runtime, so neither has a module-graph edge to it and
+  `vitest --changed` — what CI runs — selected *zero* files on an openapi-only
+  diff (measured, both ways). `openapi.yaml` is therefore registered in both
+  vitest configs' `forceRerunTriggers`, as its own `openapi` scope in
+  `verify.yml` (its own flag, not `frontend`, which would also fire the four
+  e2e shards and the visual battery for a contract-only change), and in
+  `verify-cache.mjs`'s `test`/`test:server` inputs. A sibling `OpenAPI types
+  up to date` step guards the *other* half: `src/lib/api-types.ts` is
+  generated from `openapi.yaml` and committed, and openapi-typescript emits
+  each schema `description` into it as JSDoc — so editing the contract without
+  re-running `npm run openapi:types` ships a generated artifact whose prose
+  contradicts its source. That happened on this very PR (the removed
+  "Capped at 2000 characters…" paragraph survived in the generated file) and
+  nothing caught it, because codegen drift was ungated. Note
+  `forceRerunTriggers`
+  **replaces** vitest's defaults rather than extending them, so both configs
+  re-list `**/package.json/**` and `**/{vitest,vite}.config.*/**`. That is
+  load-bearing, measured on a clean tree: with them stripped, a root-manifest
+  diff makes `cd server && vitest run --changed` report *"No test files found"*
+  and exit 0 — so a release-cut version bump would run zero server tests and
+  report green — while the same diff with them restored selects 5389.
+- Playwright (`e2e/voice-library.spec.ts`, step 6) — the clone wizard's
+  transcript field in a real browser: the ingested Whisper text lands in the
+  box, an over-cap value disables Continue with the reason rendered on screen
+  *and leaves the full text intact* for trimming, and a corrected value
+  re-enables it. jsdom can't attest that the message renders beside the field
+  the user has to fix. The assertion that the corrected text reaches the wire
+  stays in Vitest — no view renders `sampleTranscript`, so there is nothing
+  for the browser to observe without adding UI purely for the test.
 - Vitest server (`server/src/tts/synthesise-chapter-cloned-exemption.test.ts`)
   — `applyQwenFallback` raises `UnresolvableClonedVoiceError` for a cloned
   Qwen-routed character when Qwen is unavailable, and leaves every other

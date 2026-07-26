@@ -100,6 +100,7 @@ jobs:
       hooks: ${{ steps.changes.outputs.hooks }}
       pinokio: ${{ steps.changes.outputs.pinokio }}
       shared: ${{ steps.changes.outputs.shared }}
+      openapi: ${{ steps.changes.outputs.openapi }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -114,7 +115,7 @@ jobs:
           # A manual dispatch has no PR base/head to diff against — run the
           # FULL battery (every scope true) and skip the diff logic.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            for k in frontend server sidecar e2e scripts hooks pinokio shared; do
+            for k in frontend server sidecar e2e scripts hooks pinokio shared openapi; do
               echo "$k=true" >> "$GITHUB_OUTPUT"
               echo "scope $k=true (workflow_dispatch → full run)"
             done
@@ -141,6 +142,7 @@ jobs:
           match() { echo "$FILES" | grep -qE "$1"; }
           frontend=false; server=false; sidecar=false
           e2e=false; scripts=false; hooks=false; pinokio=false; shared=false
+          openapi=false
           match '^(src/|index\.html$|vite\.config\.ts$|tailwind\.config\.ts$|tsconfig\.json$|tsconfig\.node\.json$|postcss\.config\.js$|eslint\.config\.(js|mjs)$)' && frontend=true
           match '^(server/src/|server/package(-lock)?\.json$|server/tsconfig\.json$|server/vitest\.config(\.slow)?\.ts$|openapi\.yaml$|server/\.env\.example$|server/scripts/sync-env-example\.ts$)' && server=true
           match '^server/tts-sidecar/' && sidecar=true
@@ -148,10 +150,18 @@ jobs:
           match '^scripts/' && scripts=true
           match '^(\.husky/|scripts/run-hooks-tests\.mjs$|scripts/validate-commit-msg\.mjs$)' && hooks=true
           match '^(pinokio\.js$|pinokio-scripts/|scripts/run-pinokio-tests\.mjs$)' && pinokio=true
+          # openapi.yaml is a frontend input too (it generates
+          # src/lib/api-types.ts, and api.clone-voice.test.ts pins the
+          # clone-transcript cap against it), but its own flag rather than
+          # `frontend=true`: the frontend flag ALSO gates the 4-shard e2e job
+          # and the visual battery, and nothing under e2e/ reads the contract.
+          # Before this, an openapi-only diff matched only the server regex, so
+          # the frontend job was skipped and that pin could never run.
+          match '^openapi\.yaml$' && openapi=true
           # `shared` = a ROOT dependency manifest changed → treat as global
           # (a dep/lockfile bump can affect every leg), so run everything.
           match '^(package\.json|package-lock\.json)$' && shared=true
-          for k in frontend server sidecar e2e scripts hooks pinokio shared; do
+          for k in frontend server sidecar e2e scripts hooks pinokio shared openapi; do
             echo "$k=${!k}" >> "$GITHUB_OUTPUT"
             echo "scope $k=${!k}"
           done
@@ -182,6 +192,23 @@ jobs:
       - name: Config check
         if: needs.detect.outputs.server == 'true' || needs.detect.outputs.shared == 'true'
         run: npm run config:check
+
+      # Drift guard, sibling to the one above: src/lib/api-types.ts is
+      # GENERATED from openapi.yaml and is committed, and openapi-typescript
+      # emits each schema `description` into it as JSDoc. So an openapi edit
+      # that skips `npm run openapi:types` ships a generated artifact whose
+      # prose contradicts its own source — which is exactly what happened on
+      # this PR, undetected, because nothing gated codegen drift. Gated on
+      # `frontend` too, so a hand-edit of the generated file is caught the
+      # same way.
+      - name: OpenAPI types up to date
+        if: needs.detect.outputs.openapi == 'true' || needs.detect.outputs.frontend == 'true' || needs.detect.outputs.shared == 'true'
+        run: |
+          npm run openapi:types
+          git diff --exit-code -- src/lib/api-types.ts || {
+            echo "::error::src/lib/api-types.ts is stale. Run 'npm run openapi:types' and commit the result."
+            exit 1
+          }
 
       - name: Hooks tests
         if: needs.detect.outputs.hooks == 'true' || needs.detect.outputs.scripts == 'true' || needs.detect.outputs.shared == 'true'
@@ -227,7 +254,7 @@ jobs:
       # default triggers. test:a11y stays always-on as a cheap core-view gate.
       # See docs/features/118-ci-cost-round-2.md.
       - name: Frontend tests + a11y
-        if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true'
+        if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true' || needs.detect.outputs.openapi == 'true'
         run: |
           BASE="${{ github.event.pull_request.base.sha }}"
           # On a manual dispatch BASE is empty (no PR) → run the full suite.

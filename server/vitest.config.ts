@@ -81,6 +81,24 @@ export default defineConfig({
     ],
     testTimeout: 15_000,
     hookTimeout: 30_000,
+    /* Setting this key REPLACES vitest's defaults rather than extending them,
+       so the first two entries re-list them — same note the root
+       vitest.config.ts has always carried. This is load-bearing, measured on a
+       clean tree: with them stripped, a root-manifest diff makes `cd server &&
+       vitest run --changed` report "No test files found" and exit 0 — a
+       release-cut version bump would run ZERO server tests and show green.
+       With them restored the same diff selects 5389. (An earlier run here
+       appeared to contradict that; it was measuring a dirty tree whose other
+       modified files matched the openapi trigger below.)
+       openapi.yaml: voice-library.test.ts pins MAX_CLONE_TRANSCRIPT_CHARS
+       against it by reading the file at RUNTIME — no module-graph edge, so
+       `--changed` would otherwise skip the pin on the openapi-only diff it
+       exists to catch. */
+    forceRerunTriggers: [
+      '**/package.json/**',
+      '**/{vitest,vite}.config.*/**',
+      '**/openapi.yaml/**',
+    ],
     pool: 'forks',
     /* Vitest 4 removed `poolOptions`; `poolOptions.forks.maxForks` is now the
        top-level `maxWorkers` (and `minForks` was dropped). `pool: 'forks'`

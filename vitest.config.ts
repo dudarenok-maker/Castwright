@@ -41,6 +41,14 @@ export default defineConfig({
       '**/package.json/**',
       '**/{vitest,vite}.config.*/**',
       '**/src/test/setup.ts',
+      /* Tests that pin a value against the contract (e.g. the clone-transcript
+         cap in api.clone-voice.test.ts) read openapi.yaml at RUNTIME, so they
+         have no module-graph edge to it and `vitest --changed` — which CI uses
+         — would never select them for an openapi-only diff. That is exactly
+         the drift they exist to catch. Every api-types import is `import
+         type`, erased at transform time, so regenerating the types doesn't
+         create an edge either. */
+      '**/openapi.yaml/**',
     ],
     /* One retry to absorb transient jsdom/timer flakes inside a single
        verify run instead of forcing a full pre-push re-execution. See
