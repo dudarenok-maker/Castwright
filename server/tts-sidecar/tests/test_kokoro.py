@@ -823,8 +823,16 @@ def _real_kokoro():
     import importlib
 
     mod = pytest.importorskip("kokoro_onnx", reason="kokoro-onnx not installed")
-    mod = importlib.reload(mod)
-    if isinstance(mod, types.ModuleType) and not getattr(mod, "__file__", None):
+    try:
+        mod = importlib.reload(mod)
+    except ModuleNotFoundError:
+        # A bare stub module (no __spec__/__file__) left in sys.modules makes
+        # reload() fall back to module.__name__ for the spec lookup; if the
+        # real package isn't installed, that lookup fails and reload() raises
+        # instead of returning the stub. Treat that the same as "stub, not
+        # real" — skip cleanly rather than ERROR-ing.
+        pytest.skip("kokoro_onnx present only as a test stub (reload found no real package)")
+    if not getattr(mod, "__file__", None):
         pytest.skip("kokoro_onnx present only as a test stub")
     return mod
 
@@ -844,10 +852,25 @@ def test_real_kokoro_still_exposes_the_sess_attribute() -> None:
 
 
 def test_real_kokoro_create_keeps_the_positional_signature_we_call() -> None:
-    """main.py calls `create(text, voice, speed, lang)` positionally."""
+    """main.py:1363 calls `create(text, voice, speed, lang)` fully positionally."""
     import inspect
 
-    params = list(inspect.signature(_real_kokoro().Kokoro.create).parameters)
+    sig = inspect.signature(_real_kokoro().Kokoro.create)
+    params = list(sig.parameters)
     assert params[:5] == ["self", "text", "voice", "speed", "lang"], (
         f"kokoro_onnx.Kokoro.create signature drifted: {params}"
     )
+    # Names/order alone don't prove the real call site still works: if
+    # upstream kept these names/order but made voice/speed/lang keyword-only
+    # (`def create(self, text, *, voice, speed, lang, ...)`), the assertion
+    # above would still pass while main.py:1363's positional call would raise
+    # TypeError at runtime. Pin the parameter *kind* too.
+    positional_kinds = (
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+    for name in ("voice", "speed", "lang"):
+        assert sig.parameters[name].kind in positional_kinds, (
+            f"kokoro_onnx.Kokoro.create's '{name}' parameter became keyword-only — "
+            "main.py:1363 calls create() positionally and would raise TypeError"
+        )
