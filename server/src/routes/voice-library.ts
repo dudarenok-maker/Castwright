@@ -21,7 +21,6 @@ import {
   entryDir,
   listEntries,
   readEntry,
-  removeEntryDir,
   writeEntry,
   ConsentRequiredError,
   type VoiceConsentRecord,
@@ -32,10 +31,16 @@ import {
 import { currentQwenBaseModel } from '../tts/model-paths.js';
 import { runVoiceDesign } from '../tts/design-voice-core.js';
 import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace/voice-library-usage.js';
-import { castJsonPath, qwenVoiceSidecarPath } from '../workspace/paths.js';
+import { castJsonPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from '../workspace/paths.js';
 import { qwenVoicePtPath } from './qwen-voice.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
-import { selectTtsProvider, type TtsModelKey } from '../tts/index.js';
+import {
+  selectTtsProvider,
+  engineForModelKey,
+  isTtsModelKey,
+  type TtsModelKey,
+} from '../tts/index.js';
+import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { encodePcmToAudio, decodeAudioToPcm } from '../tts/mp3.js';
 import {
   buildSampleText,
@@ -46,7 +51,7 @@ import {
   voiceSampleFilePath,
   voiceSamplePublicUrl,
 } from '../tts/voice-sample-cache.js';
-import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { getResolvedSidecarUrl, getResolvedTtsModelKey } from '../workspace/user-settings.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
@@ -54,6 +59,9 @@ import { ingestCloneSample } from '../tts/clone-ingest.js';
 import { readCandidate, candidateMasterPath, removeCandidate } from '../workspace/clone-candidate.js';
 import { deriveEngineArtifact } from '../tts/derive-engine-artifact.js';
 import { assessCloneFidelity } from '../tts/clone-fidelity.js';
+import { isTransient } from '../tts/retry.js';
+import { NoCapacityError } from '../tts/tts-errors.js';
+import { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
 import { httpStatusForSidecarError } from './sidecar-error-status.js';
 
 export const voiceLibraryRouter = Router();
@@ -233,6 +241,17 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/promote', async (req: Request, res
     await rm(qwenVoiceSidecarPath(storageKey), { force: true }).catch(() => {});
     await rename(qwenVoiceSidecarPath(previewKey), qwenVoiceSidecarPath(storageKey)).catch(() => {});
 
+    /* Fix wave (consent-erasure gap, mirrors qwen-voice.ts's promote-voice) —
+       carry the preview's retained reference clip (§2.3) onto the live key too.
+       Best-effort like the .json above (only the .pt is required): a voice
+       designed before this fix, or one whose sidecar never wrote a clip, has
+       no `-preview__master.wav` to move — must not 409 the whole promote. */
+    await rm(qwenVoiceWavPath(`${storageKey}__master`), { force: true }).catch(() => {});
+    await rename(
+      qwenVoiceWavPath(`${previewKey}__master`),
+      qwenVoiceWavPath(`${storageKey}__master`),
+    ).catch(() => {});
+
     /* Drop the stale live + preview auditions (both cached under storageKey) so
        the next "Play" re-synthesises from the promoted `.pt`. */
     purgeVoiceSamples(storageKey);
@@ -277,6 +296,9 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/discard', async (req: Request, res
     const previewKey = `qwen-${voiceUuid}-preview`;
     await rm(qwenVoicePtPath(previewKey), { force: true }).catch(() => {});
     await rm(qwenVoiceSidecarPath(previewKey), { force: true }).catch(() => {});
+    // Fix wave (consent-erasure gap) — erase the preview's retained reference
+    // clip too (§2.3), mirroring the pt/json cleanup above. No-op when absent.
+    await rm(qwenVoiceWavPath(`${previewKey}__master`), { force: true }).catch(() => {});
     try {
       await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
         method: 'POST',
@@ -443,6 +465,12 @@ voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response
 interface AssignBody {
   bookId?: unknown;
   characterId?: unknown;
+  /** Fix wave 2 (review) — the model key the CALLER actually intends to
+      render with (e.g. the profile drawer's PENDING engine-picker choice,
+      not yet Saved). Optional; the wrong-engine guard below falls back to
+      the persisted account default when absent. See the guard's own
+      comment for why the persisted default alone was unsound. */
+  modelKey?: unknown;
 }
 
 interface CastJson {
@@ -588,12 +616,15 @@ voiceLibraryRouter.post(
    Qwen clone artifact, auditions + ECAPA-scores it, and atomically persists a
    `cloned` entry — the atomicity guarantee is ORDERING, not re-validation:
    `writeEntry` (which internally runs `assertConsentForClone`) is called only
-   as the LAST step, after derive + the fidelity check succeed, so no entry is
-   written if any earlier step throws (spec §7). SidecarDesignError status is
-   preserved (503/502/500) by duck-typing the error's shape in the catch below
-   — NOT `instanceof`, because the real sidecar-transport error crosses a
-   module boundary (and tests reject with structurally-equal fakes) — not
-   flattened like the /design + /redesign catches (#1801). */
+   as the LAST step, after derive succeeds and the fidelity check either
+   succeeds or fails transiently (Task 10 — a merely-unreachable ECAPA
+   /embed is advisory, not blocking; see the fidelity try/catch below), so
+   no entry is written if any OTHER earlier step throws (spec §7).
+   SidecarDesignError status is preserved (503/502/500) by duck-typing the
+   error's shape in the catch below — NOT `instanceof`, because the real
+   sidecar-transport error crosses a module boundary (and tests reject with
+   structurally-equal fakes) — not flattened like the /design + /redesign
+   catches (#1801). */
 voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { candidateId?: unknown; consent?: unknown; name?: unknown };
   const candidateId = typeof body.candidateId === 'string' ? body.candidateId : '';
@@ -628,8 +659,67 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
          sample cache (a re-synth off the cloned .pt). On-disk layout for a
          3b1 cloned entry is master.wav + voice.json only (the .pt lives
          under voices/qwen/, keyed by voiceUuid — see entryDir vs. the
-         sidecar's own voice dir). */
-      const fidelity = await assessCloneFidelity(masterPcm, derived.previewPcm, candidate.master.sampleRate);
+         sidecar's own voice dir).
+
+         Task 10 follow-up: by this point the sidecar has ALREADY written
+         the .pt (deriveEngineArtifact succeeded above) — assessCloneFidelity
+         is an ADVISORY quality check on top of a real, usable clone. If the
+         ECAPA /embed call itself is merely unreachable (embed-client.ts
+         tags the thrown Error `{ transient: true }`), aborting here would
+         orphan that .pt and leak the candidate for no benefit — the clone
+         still works, we just couldn't score it. So a transient throw is
+         swallowed and the clone proceeds without a cosine.
+
+         Predicate: `isTransient` (tts/retry.ts) — the SAME `err.transient
+         === true` duck-type the TTS auto-retry path already uses, not
+         re-invented here. Deliberately NOT widened to "no numeric status
+         => transport", the heuristic clone-voice-resolver.ts's
+         isTransientDeriveFailure uses for SidecarDesignError-shaped repair
+         failures: every throw inside assessCloneFidelity funnels through
+         embed-client.ts's embedSegment, which already tags EVERY one of its
+         throw paths with an explicit `transient` boolean (network-unreachable
+         => true, HTTP 5xx => true, HTTP 4xx => false — see embed-client.ts)
+         and never sets `.status`. A "no status" fallback would therefore
+         swallow that explicit `transient: false` (a 4xx really is permanent)
+         AND any unrelated code-level bug (e.g. a malformed embedding tripping
+         cosineToCentroid) as mere "fidelity unavailable" — masking real
+         defects behind a silent 200 instead of surfacing them. Any non-
+         transient throw (an explicit 4xx, or a genuine SidecarDesignError
+         surfaced from a shared client) still aborts — handled by the outer
+         catch's existing duck-typed status mapping.
+
+         NoCapacityError is a SEPARATE special case, ALSO treated as
+         "fidelity unavailable" here: embed-client.ts's embedSegment
+         deliberately rethrows it bare (see embed-client.ts:73) rather than
+         tagging it `transient: true`, because in the SYNTH path a capacity
+         error is genuinely non-retryable (replaying the same doomed call
+         against a still-full GPU wastes a retry budget for nothing — see
+         tts-errors.ts's NoCapacityError doc comment). But this is the
+         CLONE ROUTE's ADVISORY fidelity step, not a synth path: by this
+         point deriveEngineArtifact has already succeeded and written the
+         .pt, so a GPU-contention failure of the /embed call is exactly as
+         recoverable-by-not-scoring as a transport failure — aborting here
+         would orphan that .pt and leak the candidate for no benefit, same
+         as the transient case above. This does NOT change NoCapacityError's
+         general non-retryable semantics anywhere else (synth, design,
+         redesign) — only how this one advisory check reacts to it.
+         Detected via `instanceof`, matching every OTHER NoCapacityError call
+         site in this module graph (embed-client.ts, design-voice-core.ts,
+         derive-engine-artifact.ts, sidecar-health.ts, transcribe-client.ts)
+         — unlike SidecarDesignError above, NoCapacityError never crosses a
+         module boundary that defeats `instanceof` here, and its own tests
+         construct real instances, so `instanceof` is proven in-process. */
+      let fidelity: { cosine: number; warning?: string } | undefined;
+      let fidelityUnavailable = false;
+      try {
+        fidelity = await assessCloneFidelity(masterPcm, derived.previewPcm, candidate.master.sampleRate);
+      } catch (e) {
+        if (isTransient(e) || e instanceof NoCapacityError) {
+          fidelityUnavailable = true;
+        } else {
+          throw e;
+        }
+      }
 
       /* Re-derive the typed consent draft (parsing only — body.consent was
          already validated at request entry and is immutable, so this can't
@@ -665,10 +755,12 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
         sampleMeta: {
           durationSeconds: candidate.master.durationSeconds,
           sampleRate: candidate.master.sampleRate,
-          qualityChecks: {
-            cloneCosine: fidelity.cosine,
-            ...(fidelity.warning ? { cloneFidelityWarning: fidelity.warning } : {}),
-          },
+          qualityChecks: fidelityUnavailable
+            ? { cloneFidelityUnavailable: true }
+            : {
+                cloneCosine: fidelity!.cosine,
+                ...(fidelity!.warning ? { cloneFidelityWarning: fidelity!.warning } : {}),
+              },
         },
         engines: { qwen: { status: 'ready', baseModel: derived.baseModel || currentQwenBaseModel() } },
         createdAt: now,
@@ -698,8 +790,16 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
        below. Duck-typing preserves status for both. */
     const sde = e as { name?: string; status?: number; code?: string; reason?: string; message?: string };
     if (sde?.name === 'SidecarDesignError' && typeof sde.status === 'number') {
-      const status = sde.status >= 400 && sde.status <= 599 ? sde.status : 502;
-      return res.status(status).json({ error: sde.reason ?? sde.message ?? 'Clone derivation failed.', code: sde.code });
+      /* Status policy comes from the shared helper (#1822) so this route and
+         the design/sample routes above can't drift apart on what a sidecar
+         failure means to OUR caller — notably that a sidecar 4xx describes our
+         request to IT, so it surfaces as 502 rather than misattributing the
+         fault to the client. The duck-type above stays: it decides WHETHER
+         this is a sidecar-shaped error, the helper decides what status it maps
+         to. Body shape (reason/code) is this route's own. */
+      return res
+        .status(httpStatusForSidecarError(sde))
+        .json({ error: sde.reason ?? sde.message ?? 'Clone derivation failed.', code: sde.code });
     }
     console.error('[voice-library] clone failed', e);
     return res.status(502).json({ error: (e as Error).message || 'Voice clone failed.' });
@@ -757,6 +857,64 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
     }
 
     const character = characters[charIndex];
+
+    /* Task 6b — a cloned voice renders on Qwen ONLY. Assigning one to a
+       character that doesn't route to Qwen this run would produce exactly
+       the same 3b2 resolver-pre-pass hard-fail this task exists to give an
+       accurate reason for ('wrong-engine') — but discovered only at RENDER
+       time, chapters deep. Catch it here instead, at assign time, so the
+       user gets an actionable 409 immediately.
+
+       Fix wave 2 (review) — the guard's FIRST cut computed the book's
+       effective default purely from the PERSISTED `getResolvedTtsModelKey()`
+       account default. That default is not what actually renders: the
+       engine picker on the Voices page (and the session `ui.ttsModelKey` it
+       writes) is never persisted, and generation itself routes off the
+       REQUEST's modelKey, not the account default — so a session pick of
+       Qwen against a non-Qwen persisted default produced a false 409, and
+       the reverse produced a false 200 (assign succeeds, render then fails).
+       The caller now optionally sends the modelKey it actually intends to
+       render with (`body.modelKey` — e.g. the profile drawer's PENDING
+       engine-picker choice); that wins when present. Only when the caller
+       has no meaningful engine context (and omits the field) do we fall
+       back to the persisted default. A character's own `ttsEngine` override
+       (if any) still wins via `resolveCharacterEngine`, so a character
+       explicitly cast on Qwen is unaffected by the book/session default
+       sitting elsewhere. */
+    if (entry.provenance === 'cloned') {
+      const requestedModelKey = isTtsModelKey(body.modelKey) ? body.modelKey : undefined;
+      const bookDefaultEngine = engineForModelKey(requestedModelKey ?? getResolvedTtsModelKey());
+      const routedEngine = resolveCharacterEngine(character, bookDefaultEngine);
+      if (routedEngine !== 'qwen') {
+        /* I-2 — name the ACTUAL cause. When the character carries its own
+           `ttsEngine` override, THAT is why it's not routing to Qwen — the
+           book/session default is irrelevant, and telling the user to
+           "switch the book's engine" would send them to fix the wrong
+           thing (the same misdiagnosis class Part A eliminated for the
+           render-time error). */
+        const characterCaused = Boolean(character.ttsEngine);
+        const cause = characterCaused
+          ? `"${character.name ?? characterId}" is cast on ${routedEngine}`
+          : `this book is set to ${routedEngine}`;
+        const fix = characterCaused
+          ? `Switch the character's engine to Qwen (or reassign the character)`
+          : `Switch the book's engine to Qwen`;
+        return res.status(409).json({
+          error: `Cloned voices render on Qwen, but ${cause}. ${fix} before assigning "${character.name ?? characterId}".`,
+        });
+      }
+    }
+
+    /* Review I-4 — a prior DESIGNED voice's minted emotion `variants` are
+       anchored to that base identity (qwen-<old-uuid>__<emotion>). Assigning
+       a library voice swaps the base identity to qwen-<voiceUuid>, and
+       `pickEmotionVariantVoice` re-derives the variant key from the NEW
+       base — so a carried-over `variants` map would point at a `.pt` that
+       never existed for this voice. The pre-render pre-pass only validates
+       the BASE `.pt`, so that dangling variant key would die mid-GPU-work at
+       synth time on the sidecar's own VoiceNotDesignedError, breaking the
+       fail-fast promise. Drop `variants` here — they're semantically tied to
+       the previous base and don't carry over. */
     const nextCharacters = [...characters];
     nextCharacters[charIndex] = {
       ...character,
@@ -767,6 +925,7 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
           name: `qwen-${voiceUuid}`,
           libraryUuid: voiceUuid,
           provenance: entry.provenance,
+          variants: undefined,
         },
       },
     };
@@ -787,7 +946,27 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
    guard, since revokedAt is orthogonal to structural consent validity (the
    entry still carries a complete consent record, just a revoked one). A 409
    guards the (should-be-impossible-for-a-cloned-voice) case of an entry with
-   no consent record at all — nothing to revoke. */
+   no consent record at all — nothing to revoke. Wave 3b2, Task 3: revocation
+   also erases the resynthesis-capable clone artifacts via `purgeCloneArtifacts`
+   (no `deleteEntryDir` — the manifest is retained so the entry stays
+   visible/inspectable, revoked). User-directed fix (consent-erasure, same
+   wave): revoke ALSO erases the entry-dir recording itself — the person's
+   actual `master.wav` — via `deleteMasterClip: true`, since "revoke consent"
+   that leaves the original clip sitting on disk isn't really revoked.
+   `purgeCloneArtifacts` clears the entry's `master` field when it erases the
+   clip, so this handler re-reads the entry afterward rather than returning
+   the pre-purge snapshot, keeping the response's `master` in sync with what's
+   actually on disk.
+
+   Review I-2 — `purgeCloneArtifacts` now reports any file it could NOT
+   remove (e.g. a Windows EBUSY from the sidecar holding a `.pt` open
+   mid-load). The consent flag itself (`revokedAt`) still blocks rendering
+   either way — see the resolver's `revoked` classification, which never
+   consults on-disk artifact presence — so the response STAYS 200 and
+   `revokedAt` is set regardless. But a partial erasure must not read as a
+   silent, total success: when any path survives, this adds
+   `artifactPurgeIncomplete`/`artifactPurgeFailedPaths` to the response
+   rather than claiming clean erasure it didn't achieve. */
 voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
@@ -796,7 +975,21 @@ voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response
     if (!entry.consent) return res.status(409).json({ error: 'Entry has no consent record to revoke.' });
     const updated = { ...entry, consent: { ...entry.consent, revokedAt: new Date().toISOString() } };
     await writeEntry(updated); // passes the guard — revokedAt is orthogonal (Task 7)
-    return res.status(200).json(updated);
+    // Erase resynthesis-capable artifacts AND the original recording itself.
+    const purgeResult = await purgeCloneArtifacts(voiceUuid, { deleteMasterClip: true });
+    const final = (await readEntry(voiceUuid)) ?? updated;
+    if (purgeResult.failed.length > 0) {
+      console.warn(
+        `[voice-library] revoke for "${voiceUuid}" left ${purgeResult.failed.length} artifact(s) ` +
+          `un-erased:`,
+        purgeResult.failed,
+      );
+    }
+    return res.status(200).json(
+      purgeResult.failed.length > 0
+        ? { ...final, artifactPurgeIncomplete: true, artifactPurgeFailedPaths: purgeResult.failed }
+        : final,
+    );
   } catch (e) {
     return res.status(502).json({ error: (e as Error).message || 'Revoke failed.' });
   }
@@ -804,37 +997,14 @@ voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response
 
 /* Erase EVERY on-disk artifact of a library voice — not just the manifest
    dir — so "local-only, never leaves the machine" holds through deletion
-   (spec §2.4). Windows-safety ordering (spec §7, copied from qwen-voice.ts's
-   `tearDownEmotionVariant`): the file removals happen FIRST; the sidecar
-   `/qwen/evict-voice` call is a separate, best-effort in-memory-cache-
-   coherency step that fires AFTER — never before, and its failure must
-   never fail the delete (the sidecar caches prompts in memory; it doesn't
-   hold the `.pt` open, so ordering here is about cache freshness, not file
-   locking). */
+   (spec §2.4). Thin wrapper around the Wave 3b2 Task 2 `purgeCloneArtifacts`
+   (workspace/purge-clone-artifacts.ts), which is the single source of truth
+   for "every consent-scoped clone artifact" — including the `__1.7b.pt`
+   variant this route's prior ad-hoc erasure missed. `deleteEntryDir: true`
+   also removes the manifest dir (voice.json + master.wav), unlike the
+   revoke route above. */
 async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<void> {
-  await removeEntryDir(voiceUuid);
-
-  const qwenVoiceId = `qwen-${voiceUuid}`;
-  await rm(qwenVoicePtPath(qwenVoiceId), { force: true }).catch(() => {});
-  await rm(qwenVoiceSidecarPath(qwenVoiceId), { force: true }).catch(() => {});
-
-  /* Purge by the REAL cache scope (`qwen-<uuid>`, the storageKey) — design/
-     promote (Task 9) and the sample route (Task 10) both cache auditions
-     there, not under the bare voiceUuid. Purging `voiceUuid` here (the
-     pre-fix behaviour) silently orphaned every cached sample MP3 on
-     delete — see the Task 10 reconciliation note above the sample route. */
-  purgeVoiceSamples(qwenVoiceId);
-
-  try {
-    await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ voiceId: qwenVoiceId }),
-    });
-  } catch {
-    /* sidecar unreachable — non-fatal, generation reads the fresh (now-
-       deleted) state from disk regardless. */
-  }
+  await purgeCloneArtifacts(voiceUuid, { deleteEntryDir: true });
 }
 
 /* DELETE /api/voice-library/:voiceUuid

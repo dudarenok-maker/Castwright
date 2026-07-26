@@ -14,12 +14,19 @@ import { VoiceCard, VoiceLibraryPanel } from './voice-library-panel';
 import type { Character, Voice } from '../lib/types';
 
 const assignLibraryVoiceMock =
-  vi.fn<(voiceUuid: string, args: { bookId: string; characterId: string }) => Promise<{ updated: number }>>();
+  vi.fn<
+    (
+      voiceUuid: string,
+      args: { bookId: string; characterId: string; modelKey?: string },
+    ) => Promise<{ updated: number }>
+  >();
 
 vi.mock('../lib/api', () => ({
   api: {
-    assignLibraryVoice: (voiceUuid: string, args: { bookId: string; characterId: string }) =>
-      assignLibraryVoiceMock(voiceUuid, args),
+    assignLibraryVoice: (
+      voiceUuid: string,
+      args: { bookId: string; characterId: string; modelKey?: string },
+    ) => assignLibraryVoiceMock(voiceUuid, args),
     listVoiceLibrary: () => Promise.resolve({ voices: [] }),
   },
 }));
@@ -695,7 +702,33 @@ describe('VoiceLibraryPanel — "My voices" group (fs-38 Wave 1, Task 16)', () =
     expect(within(group).getByText('Captain Halloran')).toBeInTheDocument();
   });
 
-  it('tapping Assign then a character dispatches assignVoice(uuid, {bookId, characterId})', async () => {
+  it('tapping Assign then a character dispatches assignVoice(uuid, {bookId, characterId, modelKey}) — modelKey falls back to the session default for an unengined character', async () => {
+    assignLibraryVoiceMock.mockResolvedValue({ updated: 1 });
+    render(
+      <VoiceLibraryPanel
+        {...noopProps}
+        bookId="b1"
+        characters={[marlow]}
+        ttsModelKey="kokoro-v1"
+      />,
+      { myVoices: [entry] },
+    );
+    fireEvent.click(screen.getByTestId('my-voices-panel-assign-lib1'));
+    fireEvent.click(screen.getByTestId('my-voices-panel-assign-target-lib1-marlow'));
+    /* marlow has no persisted `ttsEngine` — engineChoice resolves to
+       'default', so modelKeyForEngineChoice falls back to the session key. */
+    await waitFor(() =>
+      expect(assignLibraryVoiceMock).toHaveBeenCalledWith('lib1', {
+        bookId: 'b1',
+        characterId: 'marlow',
+        modelKey: 'kokoro-v1',
+      }),
+    );
+    /* The inline picker closes after a completed assign. */
+    expect(screen.queryByTestId('my-voices-panel-assign-target-lib1-marlow')).toBeNull();
+  });
+
+  it('omits modelKey when the caller has no session ttsModelKey context (pre-fix behaviour preserved)', async () => {
     assignLibraryVoiceMock.mockResolvedValue({ updated: 1 });
     render(<VoiceLibraryPanel {...noopProps} bookId="b1" characters={[marlow]} />, {
       myVoices: [entry],
@@ -708,7 +741,63 @@ describe('VoiceLibraryPanel — "My voices" group (fs-38 Wave 1, Task 16)', () =
         characterId: 'marlow',
       }),
     );
-    /* The inline picker closes after a completed assign. */
-    expect(screen.queryByTestId('my-voices-panel-assign-target-lib1-marlow')).toBeNull();
+  });
+
+  /* Fix wave 3 (T6b re-review) — the previously-false-409/false-200 case:
+     a character with NO persisted `ttsEngine` override resolves to the
+     SESSION default engine at render time (mirrors `c.ttsEngine ?? ttsEngine`
+     elsewhere in cast.tsx/profile-drawer.tsx). Before this fix wave, this
+     call site sent no `modelKey` at all, so the server's cloned-voice guard
+     fell back to checking the PERSISTED account default instead — wrong
+     whenever the session default (here, Qwen) and the account default
+     disagree. Now the session's actual Qwen key is threaded through. */
+  it('sends the session Qwen model key for an unengined character on a Qwen session default — the false-409/false-200 fix', async () => {
+    assignLibraryVoiceMock.mockResolvedValue({ updated: 1 });
+    render(
+      <VoiceLibraryPanel
+        {...noopProps}
+        bookId="b1"
+        characters={[marlow]}
+        ttsModelKey="qwen3-tts-0.6b"
+      />,
+      { myVoices: [entry] },
+    );
+    fireEvent.click(screen.getByTestId('my-voices-panel-assign-lib1'));
+    fireEvent.click(screen.getByTestId('my-voices-panel-assign-target-lib1-marlow'));
+    await waitFor(() =>
+      expect(assignLibraryVoiceMock).toHaveBeenCalledWith('lib1', {
+        bookId: 'b1',
+        characterId: 'marlow',
+        modelKey: 'qwen3-tts-0.6b',
+      }),
+    );
+  });
+
+  it('sends the character\'s own pinned 1.7B tier for a character already persisted onto Qwen, even when the session default is a different engine', async () => {
+    assignLibraryVoiceMock.mockResolvedValue({ updated: 1 });
+    const qwenChar: Character = {
+      ...marlow,
+      id: 'halloran',
+      ttsEngine: 'qwen',
+      ttsModelKey: 'qwen3-tts-1.7b',
+    };
+    render(
+      <VoiceLibraryPanel
+        {...noopProps}
+        bookId="b1"
+        characters={[qwenChar]}
+        ttsModelKey="kokoro-v1"
+      />,
+      { myVoices: [entry] },
+    );
+    fireEvent.click(screen.getByTestId('my-voices-panel-assign-lib1'));
+    fireEvent.click(screen.getByTestId('my-voices-panel-assign-target-lib1-halloran'));
+    await waitFor(() =>
+      expect(assignLibraryVoiceMock).toHaveBeenCalledWith('lib1', {
+        bookId: 'b1',
+        characterId: 'halloran',
+        modelKey: 'qwen3-tts-1.7b',
+      }),
+    );
   });
 });

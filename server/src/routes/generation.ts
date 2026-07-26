@@ -2049,6 +2049,17 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          cross-chapter cascade can never escalate). The cascade still escalates
          only on the back-compat `*` job, which loops many chapters in one POST. */
       const isRecycleStorm = (e as { name?: string })?.name === 'RecycleStormError';
+      /* T7 (Wave 3b2) — UnresolvableClonedVoiceError: the resolver pre-pass
+         in synthesiseChapter found one or more assigned cloned voices that
+         can't render as themselves this run. Short-circuit BEFORE
+         describeSynthesisError (same reason as isStall/isRecycleStorm above)
+         so the error's OWN message — which already names every affected
+         voice and its reason (revoked / missing sample / wrong engine / ...)
+         via UnresolvableClonedVoiceError.fromList — rides through as
+         errorReason instead of being replaced by the taxonomy's static,
+         reason-neutral copy. The taxonomy entry (failure-taxonomy.ts) still
+         owns the code/remediation classification for any other caller. */
+      const isClonedVoiceBroken = (e as { name?: string })?.name === 'UnresolvableClonedVoiceError';
       const initial = isStall
         ? {
             errorReason: (e as Error).message,
@@ -2068,7 +2079,14 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
                 'generation concurrency, then Retry. If it persists, the host-memory leak ' +
                 '(side-11) needs headroom.',
             }
-          : describeSynthesisError(e, engine);
+          : isClonedVoiceBroken
+            ? {
+                errorReason: (e as Error).message,
+                fatal: false,
+                code: 'cloned-voice-broken' as FailureCode,
+                remediation: FAILURE_REMEDIATIONS['cloned-voice-broken'].remediation,
+              }
+            : describeSynthesisError(e, engine);
       let { errorReason, fatal } = initial;
       /* fs-19 — the structured code + remediation ride alongside the legacy
          reason on both the broadcast and the persisted state. Const (not part of

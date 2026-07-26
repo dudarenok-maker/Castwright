@@ -233,4 +233,8 @@ describe('helpHrefForFailureCode — fe-29', () => {
     expect(helpHrefForFailureCode('unknown')).toBeNull();
     expect(helpHrefForFailureCode(undefined)).toBeNull();
   });
+
+  it('fs-38 Wave 3b2: maps cloned-voice-broken to its help anchor', () => {
+    expect(helpHrefForFailureCode('cloned-voice-broken')).toBe('#/help?code=cloned-voice-broken');
+  });
 });

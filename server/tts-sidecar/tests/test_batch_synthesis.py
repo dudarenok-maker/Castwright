@@ -29,6 +29,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import re
 import sys
 import types
@@ -285,6 +286,21 @@ def qwen_batch_runtime(monkeypatch, tmp_path):
 
     def _load(path: str, **_kwargs: Any) -> Any:
         return _store.get(str(path), [_FakePromptItem(0, "")])
+
+    # main.py persists the .pt atomically (temp file + os.replace, so a crash
+    # mid-write can't corrupt a live voice). The fake above keys its in-memory
+    # store by path, so that store has to follow the rename exactly as the real
+    # file's bytes do — otherwise the save lands under the temp key, a load of
+    # the final path misses, and the silent `_FakePromptItem(0, "")` default
+    # makes a voice look undesigned instead of failing loudly.
+    _real_replace = os.replace
+
+    def _replace(src: Any, dst: Any) -> None:
+        _real_replace(src, dst)
+        if str(src) in _store:
+            _store[str(dst)] = _store.pop(str(src))
+
+    monkeypatch.setattr(os, "replace", _replace)
 
     fake_torch.save = _save  # type: ignore[attr-defined]
     fake_torch.load = _load  # type: ignore[attr-defined]

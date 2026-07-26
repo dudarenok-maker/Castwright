@@ -163,6 +163,26 @@ export const FAILURE_REMEDIATIONS = {
       'Kokoro fallback cannot stand in.',
     remediation: 'Design the missing voice(s) in the cast view, then retry the chapter.',
   },
+  'cloned-voice-broken': {
+    /* fs-38 Wave 3b2 (T7) — a cloned voice must never be silently substituted
+       with another, so the resolver fails the chapter instead. This copy is
+       deliberately reason-NEUTRAL (never names Qwen specifically, so a
+       wrong-engine break — the character just doesn't route to Qwen this
+       run, which Qwen itself may be perfectly healthy — can never misread as
+       "Qwen is unavailable"). The reason-specific detail (which voice, and
+       why: revoked / missing sample / wrong engine / re-derive failed) rides
+       in the chapter's own errorReason line, sourced straight from
+       UnresolvableClonedVoiceError's message (see generation.ts's short-
+       circuit before describeSynthesisError, mirroring the isStall/
+       isRecycleStorm precedent) — this static copy is the fallback shown by
+       the offline Help view. */
+    userMessage:
+      "A cloned voice in this chapter can't be used as itself — a real person's voice is never " +
+      'substituted with another. See the reason above for which voice and why.',
+    remediation:
+      "Re-upload the voice's sample, restore consent, switch the book to the engine the voice was " +
+      'cloned for, or reassign the character — then generate again.',
+  },
   unknown: {
     /* Rendered by the Help view only — the live unknown path shows trimRaw(raw) instead. */
     userMessage:

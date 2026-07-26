@@ -1773,7 +1773,7 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
     expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
   });
 
-  it('clicking a "My voices" entry dispatches assignVoice(uuid, {bookId, characterId})', async () => {
+  it('clicking a "My voices" entry dispatches assignVoice(uuid, {bookId, characterId, modelKey}) — modelKey reflects the qwen engine choice', async () => {
     assignLibraryVoice.mockResolvedValue({ updated: 1 });
     renderDrawer(
       { ...baseChar, ttsEngine: 'qwen' },
@@ -1784,6 +1784,36 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
       expect(assignLibraryVoice).toHaveBeenCalledWith('lib1', {
         bookId: 'book-1',
         characterId: 'halloran',
+        modelKey: 'qwen3-tts-0.6b',
+      }),
+    );
+  });
+
+  /* Fix wave 2 (review) — the "ordering trap". The engine picker's choice is
+     held in LOCAL drawer state (`engineChoice`) and only written onto
+     `character.ttsEngine` on Save; useMyVoice fires the assign IMMEDIATELY,
+     ahead of Save. A character with NO saved ttsEngine (so the "My voices"
+     group is hidden until Qwen is picked) proves the assign call reads the
+     drawer's PENDING engine choice, not the character's still-empty saved
+     one — the bug this fix wave closes. */
+  it('sends the PENDING (not-yet-Saved) engine choice as modelKey — the ordering-trap fix', async () => {
+    assignLibraryVoice.mockResolvedValue({ updated: 1 });
+    renderDrawer(
+      { ...baseChar, ttsEngine: undefined },
+      { bookId: 'book-1', myVoices: myVoicesFixture },
+    );
+    // The character has no saved ttsEngine yet, so "My voices" isn't shown
+    // until the (unsaved) engine picker is switched to Qwen.
+    expect(screen.queryByTestId('profile-drawer-my-voice-lib1')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Voice engine for this character'), {
+      target: { value: 'qwen' },
+    });
+    fireEvent.click(screen.getByTestId('profile-drawer-my-voice-lib1'));
+    await waitFor(() =>
+      expect(assignLibraryVoice).toHaveBeenCalledWith('lib1', {
+        bookId: 'book-1',
+        characterId: 'halloran',
+        modelKey: 'qwen3-tts-0.6b',
       }),
     );
   });

@@ -31,6 +31,13 @@
 - **The Voices page never shows you an empty room.** If My voices turns out to be switched off
   just as you open it, the page now shows your in-use voices instead of leaving you staring at a
   blank pane.
+- **A cloned voice now tells you clearly when it can't be used — instead of quietly rendering
+  as someone else.** If Castwright can't rebuild a cloned voice as itself, it stops and says so,
+  right down to the reason — a revoked voice, a missing sample, or a book set to the wrong
+  engine — so you always know a chapter used the real voice or didn't run at all. And revoking
+  a voice now really does erase it: your original recording, and everything Castwright built
+  from it, is gone for good — not just the visible entry. Castwright tells you exactly what
+  you're about to lose and asks you to confirm before it happens.
 
 # Castwright 1.14.0
 

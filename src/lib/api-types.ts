@@ -4267,7 +4267,7 @@ export interface components {
          *     catch-all for an unmapped error (the raw message is surfaced verbatim).
          * @enum {string}
          */
-        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown" | "recycle-storm" | "analyzer-daily-quota" | "analyzer-truncated" | "analyzer-unreachable" | "analyzer-content-blocked" | "attribution-incomplete" | "gpu-acceleration-unavailable" | "voice-not-designed";
+        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown" | "recycle-storm" | "analyzer-daily-quota" | "analyzer-truncated" | "analyzer-unreachable" | "analyzer-content-blocked" | "attribution-incomplete" | "gpu-acceleration-unavailable" | "voice-not-designed" | "cloned-voice-broken";
         /**
          * @description srv-27 — advisory post-synthesis audio QA verdict for a rendered
          *     chapter. ADVISORY only: a `suspect` status drives a badge but never
@@ -7495,6 +7495,16 @@ export interface operations {
                 "application/json": {
                     bookId: string;
                     characterId: string;
+                    /**
+                     * @description Optional — the model key this assign's caller actually intends to
+                     *     render with (e.g. the profile drawer's PENDING engine-picker
+                     *     choice, not-yet-saved). Used only to compute the correct engine
+                     *     for the cloned-voice wrong-engine 409 guard below; when absent
+                     *     the guard falls back to the persisted account default
+                     *     (`getResolvedTtsModelKey()`).
+                     * @enum {string}
+                     */
+                    modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
                 };
             };
         };
@@ -7516,6 +7526,21 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /**
+             * @description The library entry is a cloned voice, but the character would route to a
+             *     non-Qwen engine (cloned voices only render on Qwen) — or the entry's
+             *     consent has been revoked, or the entry hasn't finished deriving yet.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
             };
         };
     };
@@ -8785,13 +8810,23 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Revoked */
+            /**
+             * @description Revoked — `revokedAt` is always set and rendering is always blocked
+             *     regardless of artifact-erasure outcome. `artifactPurgeIncomplete` /
+             *     `artifactPurgeFailedPaths` (review I-2) are present only when some
+             *     on-disk clone artifact could not be removed (e.g. a file held open
+             *     by the sidecar) — a partial erasure that must not read as a silent
+             *     total success.
+             */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["VoiceLibraryEntry"];
+                    "application/json": components["schemas"]["VoiceLibraryEntry"] & {
+                        artifactPurgeIncomplete?: boolean;
+                        artifactPurgeFailedPaths?: string[];
+                    };
                 };
             };
             /** @description No such entry / disabled */

@@ -28,11 +28,14 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { rename, rm, copyFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
 import { sidecarLanguageName } from '../tts/language.js';
-import { castJsonPath, qwenVoiceSidecarPath, qwenVoicesDir } from '../workspace/paths.js';
-import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
+import {
+  castJsonPath,
+  qwenVoiceSidecarPath,
+  qwenVoicePtPath,
+  qwenVoiceWavPath,
+} from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
@@ -214,11 +217,16 @@ const PREVIEW_SUFFIX = '-preview';
 function previewVoiceIdFor(realVoiceId: string): string {
   return `${realVoiceId}${PREVIEW_SUFFIX}`;
 }
-export function qwenVoicePtPath(name: string): string {
-  const p = join(qwenVoicesDir(), `${sanitizeIdSegment(safeSegment(name))}.pt`);
-  assertContained(qwenVoicesDir(), p);
-  return p;
-}
+/* fs-38 Wave 3b2 MINOR-1 — moved to workspace/paths.ts (cycle-free; this
+   module imports from tts/synthesise-chapter.ts, which needs this helper
+   too). Imported above (with the rest of this module's `paths.js` imports)
+   and re-exported here — a bare `export { x } from 'mod'` does NOT bind `x`
+   as a local name, and this module's own route handlers call
+   `qwenVoicePtPath(...)` directly, so it needs both the import AND the
+   re-export. Re-exported so this module's existing importers
+   (voice-library.ts, workspace/purge-clone-artifacts.ts, qwen-voice.test.ts)
+   are unaffected. */
+export { qwenVoicePtPath };
 
 /* GET /api/books/:bookId/cast/:characterId/designed-persona
 
@@ -627,6 +635,16 @@ qwenVoiceRouter.post(
     await rename(qwenVoiceSidecarPath(previewVoiceId), qwenVoiceSidecarPath(realVoiceId)).catch(
       () => {},
     );
+    /* Fix wave (consent-erasure gap) — carry the preview's retained reference
+       clip (§2.3, written by the sidecar's design_voice) onto the real key too.
+       Best-effort like the .json above (only the .pt is required): a voice
+       designed before this fix, or one whose sidecar never wrote a clip, has
+       no `-preview__master.wav` to move — must not 409 the whole promote. */
+    await rm(qwenVoiceWavPath(`${realVoiceId}__master`), { force: true }).catch(() => {});
+    await rename(
+      qwenVoiceWavPath(`${previewVoiceId}__master`),
+      qwenVoiceWavPath(`${realVoiceId}__master`),
+    ).catch(() => {});
 
     /* Refresh the cached audition under the real id (same text, voiceName flips
        preview → real). Best-effort — a miss just means the next "Play 12s"
@@ -725,6 +743,11 @@ qwenVoiceRouter.post(
 
     await rm(qwenVoicePtPath(previewVoiceId), { force: true }).catch(() => {});
     await rm(qwenVoiceSidecarPath(previewVoiceId), { force: true }).catch(() => {});
+    // Fix wave (consent-erasure gap) — the preview design may also have
+    // written its own retained reference clip (§2.3); erase it on reject too,
+    // matching the pt/json cleanup above. No-op when absent (plain clone /
+    // pre-fix design never wrote one).
+    await rm(qwenVoiceWavPath(`${previewVoiceId}__master`), { force: true }).catch(() => {});
     if (typeof body.sampleVoiceId === 'string' && isTtsModelKey(body.modelKey)) {
       const calibrationText = buildSampleText(toVoiceLike(character), buildHintFromCast(character));
       const previewMp3 = voiceSampleFilePath(

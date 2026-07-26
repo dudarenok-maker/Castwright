@@ -42,25 +42,41 @@ vi.mock('../tts/transcribe-client.js', () => ({ transcribeSegment }));
    /qwen/clone-voice) and assessCloneFidelity (ECAPA embed + cosine). Stub
    both, plus the ffmpeg decode boundary, so no sidecar/ffmpeg is hit in this
    route-level test. */
-const { deriveMock, decodeMock } = vi.hoisted(() => ({
+const { deriveMock, decodeMock, assessFidelityMock } = vi.hoisted(() => ({
   deriveMock: vi.fn(),
   decodeMock: vi.fn(),
+  assessFidelityMock: vi.fn(),
 }));
 vi.mock('../tts/derive-engine-artifact.js', () => ({ deriveEngineArtifact: deriveMock }));
 vi.mock('../tts/clone-fidelity.js', async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
-  return { ...actual, assessCloneFidelity: vi.fn().mockResolvedValue({ cosine: 0.72 }) };
+  return { ...actual, assessCloneFidelity: assessFidelityMock };
 });
 vi.mock('../tts/mp3.js', async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
   return { ...actual, decodeAudioToPcm: decodeMock };
 });
 
+/* Wave 3b2, Task 3 — revoke + delete both wire through purgeCloneArtifacts
+   (workspace/purge-clone-artifacts.ts, Task 2), left UNMOCKED here so the
+   revoke/delete tests below prove real Node-side erasure (not a stand-in).
+   NOTE: a self-wrapping `vi.mock('../workspace/purge-clone-artifacts.js',
+   (importOriginal) => ...)` spy was tried and rejected — Vitest's
+   importOriginal() resolves purge-clone-artifacts.ts's OWN transitive
+   import of workspace/voice-library.js through a second, parallel module
+   graph, so `removeEntryDir` inside the real purge function silently
+   erases a DIFFERENT `entryDir(voiceUuid)` instance than the one this
+   test file's own `vl` binding reads/asserts against — a real, sneaky bug
+   made assertions like existsSync(artifacts.entryDir) flake pathologically
+   depending on test order. Asserting on real file-existence effects (as the
+   rest of this DELETE describe already does) sidesteps it entirely. */
+
 let dir: string;
 let app: Express;
 let vl: typeof import('../workspace/voice-library.js');
 let modelPaths: typeof import('../tts/model-paths.js');
 let writeConfigOverride: typeof import('../workspace/user-settings.js').writeConfigOverride;
+let setUserSettingsCacheForTest: typeof import('../workspace/user-settings.js')._setUserSettingsCacheForTest;
 let paths: typeof import('../workspace/paths.js');
 let qwenVoice: typeof import('./qwen-voice.js');
 let sampleCache: typeof import('../tts/voice-sample-cache.js');
@@ -142,6 +158,7 @@ beforeEach(async () => {
   vl = voiceLibMod;
   modelPaths = modelPathsMod;
   writeConfigOverride = userSettings.writeConfigOverride;
+  setUserSettingsCacheForTest = userSettings._setUserSettingsCacheForTest;
   paths = pathsMod;
   qwenVoice = qwenVoiceMod;
   sampleCache = sampleCacheMod;
@@ -167,6 +184,8 @@ beforeEach(async () => {
 
   deriveMock.mockReset();
   deriveMock.mockResolvedValue({ previewPcm: Buffer.from([1, 2, 3, 4]), sampleRate: 24_000, baseModel: 'qwen3-0.6b' });
+  assessFidelityMock.mockReset();
+  assessFidelityMock.mockResolvedValue({ cosine: 0.72 });
   /* decodeMock defaults to the REAL ffmpeg decode (pass-through) — the
      clone-sample ingest route (Task 6) also calls decodeAudioToPcm and needs
      genuine decoding to run its quality gate against real uploaded audio.
@@ -411,6 +430,33 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
     expect(existsSync(artifacts.samplePath)).toBe(false);
   });
 
+  /* Wave 3b2, Task 3 — DELETE now routes through purgeCloneArtifacts, which
+     closes the `__1.7b.pt` gap the prior ad-hoc erasure missed. The fetch
+     stub below is load-bearing (non-placebo requirement): the OLD
+     `/qwen/evict-voice` sidecar call already erases a live sidecar's
+     `__1.7b.pt` copy, so an unstubbed test here could pass against
+     un-fixed Node-side code as long as a sidecar happened to be reachable.
+     Rejecting the sidecar call proves the file is gone via the Node-side
+     `rm`, not the sidecar. */
+  it('erases the qwen-<uuid>__1.7b.pt clone variant on delete (Node-side, sidecar unreachable)', async () => {
+    const artifacts = await seedFullVoiceArtifacts('unused-17b');
+    const qwenName = `qwen-unused-17b`;
+    const pt17bPath = qwenVoice.qwenVoicePtPath(`${qwenName}__1.7b`);
+    writeFileSync(pt17bPath, 'fake-1.7b-pt-bytes');
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('sidecar unreachable'));
+    try {
+      const res = await request(app).delete('/api/voice-library/unused-17b');
+
+      expect(res.status).toBe(200);
+      expect(existsSync(pt17bPath)).toBe(false); // the 1.7B gap this closes
+      expect(existsSync(artifacts.ptPath)).toBe(false);
+      expect(existsSync(artifacts.entryDir)).toBe(false); // deleteEntryDir: true
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it('with confirm=1: clears the referencing override slot, then erases every artifact (erasure completeness)', async () => {
     const artifacts = await seedFullVoiceArtifacts('used-2');
     writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-one', [
@@ -627,6 +673,11 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
       .send({ bookId: 'book-three', characterId: 'char-marlow' });
 
     expect(res.status).toBe(409);
+    /* M-2 (review) — three separate guards on this route now produce 409
+       for a cloned entry (revoked consent, not-ready-to-assign, wrong-engine).
+       Assert the MESSAGE too so this test fails for the right reason if the
+       revoked-consent check ever stops running first. */
+    expect(res.body.error).toBe('Consent for this voice has been revoked.');
   });
 
   it('stamps the qwen slot with name/libraryUuid/provenance, merges with (not clobbers) a sibling kokoro slot, and never touches character.voiceUuid', async () => {
@@ -648,6 +699,11 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
       {
         id: 'char-marlow',
         name: 'Marlow',
+        // Task 6b — the character must route to Qwen for this assign to
+        // succeed (a cloned voice on a non-Qwen route now 409s). Explicit
+        // per-character override so this test doesn't depend on the
+        // process-wide Qwen install-state default.
+        ttsEngine: 'qwen',
         voiceUuid: 'original-marlow-voice-uuid',
         overrideTtsVoices: { kokoro: { name: 'af_heart' } },
       },
@@ -673,6 +729,65 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
       provenance: 'cloned',
     });
     expect(cast.characters[0].overrideTtsVoices?.kokoro).toEqual({ name: 'af_heart' });
+  });
+
+  /* Review I-4 — a character who previously had a DESIGNED voice with minted
+     emotion `variants` keeps them after assign merges the qwen slot
+     (`...character.overrideTtsVoices?.qwen` spreads the OLD slot's fields
+     first). Those variants are keyed off the OLD base (`qwen-<old-uuid>
+     __<emotion>`); after assign, `pickEmotionVariantVoice` derives the
+     variant key from the NEW base (`qwen-<voiceUuid>__<emotion>`), a `.pt`
+     that never existed for this voice. The pre-render pre-pass only
+     validates the BASE `.pt`, so an emotion-tagged sentence would die
+     mid-GPU-work on the sidecar's own VoiceNotDesignedError — breaking the
+     fail-fast promise this whole readiness gate exists for. This test fails
+     before the fix (`variants` survives the assign). */
+  it('review I-4: assigning a library voice CLEARS a carried-over emotion `variants` map — it is anchored to the previous base identity', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'assign-variants-1',
+        provenance: 'cloned',
+        engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+        consent: {
+          personName: 'Test',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00Z',
+          attestedBy: 'test',
+        },
+      }),
+    );
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-variants', [
+      {
+        id: 'char-marlow',
+        name: 'Marlow',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: {
+            name: 'qwen-old-designed-uuid',
+            provenance: 'designed',
+            // Minted against the OLD base — must not survive onto the new one.
+            variants: { angry: { name: 'qwen-old-designed-uuid__angry' } },
+          },
+        },
+      },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/assign-variants-1/assign')
+      .send({ bookId: 'book-variants', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+
+    const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
+      characters: Array<{ overrideTtsVoices?: { qwen?: Record<string, unknown> } }>;
+    };
+    expect(cast.characters[0].overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-assign-variants-1',
+      libraryUuid: 'assign-variants-1',
+      provenance: 'cloned',
+    });
+    expect(cast.characters[0].overrideTtsVoices?.qwen?.variants).toBeUndefined();
   });
 });
 
@@ -705,12 +820,157 @@ describe('POST /:uuid/assign — cloned readiness gate (fs-38 Wave 3b1)', () => 
        ~line 562 of this file): `writeBookOnDisk(dir, author, series, title,
        bookId, characters)`, then post with that same bookId/characterId.
        Without this the route 404s on findBookByBookId before ever reaching
-       the readiness gate, and this case would never actually prove 200. */
+       the readiness gate, and this case would never actually prove 200.
+       Task 6b — `ttsEngine: 'qwen'` so this character routes to Qwen (the
+       wrong-engine guard added in this task would otherwise 409 it, since
+       this test environment's process-wide Qwen default is not installed). */
     writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-four', [
-      { id: 'char-marlow', name: 'Marlow' },
+      { id: 'char-marlow', name: 'Marlow', ttsEngine: 'qwen' },
     ]);
     const res = await request(app).post('/api/voice-library/clone-ready/assign')
       .send({ bookId: 'book-four', characterId: 'char-marlow' });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('POST /:uuid/assign — wrong-engine guard (fs-38 Wave 3b2, Task 6b)', () => {
+  it('409s assigning a ready cloned voice to a character that does not route to Qwen', async () => {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    await writeEntry({
+      voiceUuid: 'clone-wrong-engine', name: 'Mum', provenance: 'cloned', tags: [], pinned: false,
+      consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal',
+                 attestedAt: '2026-07-25T00:00:00Z', attestedBy: 'Mum' },
+      engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+      createdAt: '2026-07-25T00:00:00Z', updatedAt: '2026-07-25T00:00:00Z',
+    });
+    // No per-character `ttsEngine` override, and this test environment's
+    // process-wide Qwen default is "not installed" -> the book's effective
+    // default engine resolves to kokoro, NOT qwen.
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-five', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-wrong-engine/assign')
+      .send({ bookId: 'book-five', characterId: 'char-marlow' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/qwen/i);
+  });
+
+  it('allows assigning a ready cloned voice to a character that DOES route to Qwen (200, regression)', async () => {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    await writeEntry({
+      voiceUuid: 'clone-right-engine', name: 'Mum', provenance: 'cloned', tags: [], pinned: false,
+      consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal',
+                 attestedAt: '2026-07-25T00:00:00Z', attestedBy: 'Mum' },
+      engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+      createdAt: '2026-07-25T00:00:00Z', updatedAt: '2026-07-25T00:00:00Z',
+    });
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-six', [
+      { id: 'char-marlow', name: 'Marlow', ttsEngine: 'qwen' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-right-engine/assign')
+      .send({ bookId: 'book-six', characterId: 'char-marlow' });
+    expect(res.status).toBe(200);
+  });
+
+  it('does not guard a non-cloned (designed) voice, even on a non-Qwen-routed character', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-1', provenance: 'designed' }));
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-seven', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/designed-1/assign')
+      .send({ bookId: 'book-seven', characterId: 'char-marlow' });
+    expect(res.status).toBe(200);
+  });
+});
+
+/* Fix wave 2 (review) — the guard's first cut computed the effective engine
+   purely from the PERSISTED account default (getResolvedTtsModelKey()), which
+   is not what actually renders: the Voices-page engine picker (and the
+   session ui.ttsModelKey it writes) is never persisted, and generation itself
+   routes off the REQUEST's modelKey. These cases pin the fixed contract: the
+   caller's OWN intended modelKey (body.modelKey) wins when sent, and the
+   persisted default is only a fallback for a caller with no engine context. */
+describe('POST /:uuid/assign — request modelKey guard accuracy (fs-38 Wave 3b2, fix wave 2)', () => {
+  async function seedReadyClone(voiceUuid: string) {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    await writeEntry({
+      voiceUuid, name: 'Mum', provenance: 'cloned', tags: [], pinned: false,
+      consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal',
+                 attestedAt: '2026-07-25T00:00:00Z', attestedBy: 'Mum' },
+      engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+      createdAt: '2026-07-25T00:00:00Z', updatedAt: '2026-07-25T00:00:00Z',
+    });
+  }
+
+  it('a request modelKey routing to Qwen wins over a non-Qwen persisted default (the false-409 case, now fixed)', async () => {
+    await seedReadyClone('clone-req-qwen');
+    setUserSettingsCacheForTest({ defaultTtsModelKey: 'kokoro-v1', defaultTtsModelKeyExplicit: true });
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-req-1', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-req-qwen/assign')
+      .send({ bookId: 'book-req-1', characterId: 'char-marlow', modelKey: 'qwen3-tts-0.6b' });
+    expect(res.status).toBe(200);
+  });
+
+  it('a request modelKey routing to a non-Qwen engine still 409s, even against a Qwen persisted default (the false-200 case, now fixed)', async () => {
+    await seedReadyClone('clone-req-kokoro');
+    setUserSettingsCacheForTest({ defaultTtsModelKey: 'qwen3-tts-0.6b', defaultTtsModelKeyExplicit: true });
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-req-2', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-req-kokoro/assign')
+      .send({ bookId: 'book-req-2', characterId: 'char-marlow', modelKey: 'kokoro-v1' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/qwen/i);
+  });
+
+  it('I-1: falls back to the persisted default when no modelKey is sent, and 200s when that default is Qwen', async () => {
+    await seedReadyClone('clone-default-qwen');
+    setUserSettingsCacheForTest({ defaultTtsModelKey: 'qwen3-tts-0.6b', defaultTtsModelKeyExplicit: true });
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-req-3', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-default-qwen/assign')
+      .send({ bookId: 'book-req-3', characterId: 'char-marlow' });
+    expect(res.status).toBe(200);
+  });
+
+  it('falls back to the persisted default when no modelKey is sent, and 409s when that default is not Qwen', async () => {
+    await seedReadyClone('clone-default-kokoro');
+    setUserSettingsCacheForTest({ defaultTtsModelKey: 'kokoro-v1', defaultTtsModelKeyExplicit: true });
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-req-4', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-default-kokoro/assign')
+      .send({ bookId: 'book-req-4', characterId: 'char-marlow' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('this book is set to');
+  });
+
+  it('I-2: 409s with character-cause copy when the character has its own non-Qwen ttsEngine override, regardless of a Qwen book default', async () => {
+    await seedReadyClone('clone-char-override');
+    setUserSettingsCacheForTest({ defaultTtsModelKey: 'qwen3-tts-0.6b', defaultTtsModelKeyExplicit: true });
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-req-5', [
+      { id: 'char-marlow', name: 'Marlow', ttsEngine: 'kokoro' },
+    ]);
+    const res = await request(app).post('/api/voice-library/clone-char-override/assign')
+      .send({ bookId: 'book-req-5', characterId: 'char-marlow' });
+    expect(res.status).toBe(409);
+    // Names the CHARACTER as the cause, not the book/session default — the
+    // book default here is actually Qwen, so "this book is set to" would be
+    // an outright misdiagnosis.
+    expect(res.body.error).toContain('"Marlow" is cast on kokoro');
+    expect(res.body.error).not.toContain('this book is set to');
+  });
+
+  it('does not guard a designed (non-cloned) voice, even with a request modelKey routing off Qwen', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-req', provenance: 'designed' }));
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-req-6', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app).post('/api/voice-library/designed-req/assign')
+      .send({ bookId: 'book-req-6', characterId: 'char-marlow', modelKey: 'kokoro-v1' });
     expect(res.status).toBe(200);
   });
 });
@@ -894,6 +1154,60 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     expect(new Date(after!.updatedAt).getTime()).toBeGreaterThan(
       new Date(before!.updatedAt).getTime(),
     );
+  });
+
+  it('redesign/promote carries the preview’s retained reference clip onto the live key (fix wave, §2.3 consent gap)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    const { writeFileSync: wf } = await import('node:fs');
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+
+    await vl.writeEntry(makeEntry({ voiceUuid: 'promo-wav-1', provenance: 'designed' }));
+    wf(qwenVoice.qwenVoicePtPath('qwen-promo-wav-1'), 'LIVE');
+    wf(qwenVoice.qwenVoicePtPath('qwen-promo-wav-1-preview'), 'PREVIEW');
+    const liveWav = paths.qwenVoiceWavPath('qwen-promo-wav-1__master');
+    const previewWav = paths.qwenVoiceWavPath('qwen-promo-wav-1-preview__master');
+    wf(previewWav, 'REF-CLIP');
+
+    const res = await request(app)
+      .post('/api/voice-library/promo-wav-1/redesign/promote')
+      .send({ persona: 'new persona' });
+
+    expect(res.status).toBe(200);
+    expect(existsSync(liveWav)).toBe(true);
+    expect(existsSync(previewWav)).toBe(false);
+  });
+
+  it('redesign/promote still succeeds when the preview has no retained reference clip (pre-fix design, best-effort)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    const { writeFileSync: wf } = await import('node:fs');
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+
+    await vl.writeEntry(makeEntry({ voiceUuid: 'promo-wav-2', provenance: 'designed' }));
+    wf(qwenVoice.qwenVoicePtPath('qwen-promo-wav-2'), 'LIVE');
+    wf(qwenVoice.qwenVoicePtPath('qwen-promo-wav-2-preview'), 'PREVIEW');
+    /* No `-preview__master.wav` seeded at all. */
+
+    const res = await request(app)
+      .post('/api/voice-library/promo-wav-2/redesign/promote')
+      .send({ persona: 'new persona' });
+
+    expect(res.status).toBe(200);
+    expect(existsSync(paths.qwenVoiceWavPath('qwen-promo-wav-2__master'))).toBe(false);
+  });
+
+  it('redesign/discard also erases the preview’s retained reference clip (fix wave, §2.3 consent gap)', async () => {
+    const { writeFileSync: wf } = await import('node:fs');
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+
+    await vl.writeEntry(makeEntry({ voiceUuid: 'disc-wav-1', provenance: 'designed' }));
+    wf(qwenVoice.qwenVoicePtPath('qwen-disc-wav-1-preview'), 'PREVIEW');
+    const previewWav = paths.qwenVoiceWavPath('qwen-disc-wav-1-preview__master');
+    wf(previewWav, 'REF-CLIP');
+
+    const res = await request(app).post('/api/voice-library/disc-wav-1/redesign/discard').send({});
+
+    expect(res.status).toBe(200);
+    expect(existsSync(previewWav)).toBe(false);
   });
 
   it('redesign/discard removes the preview and leaves the live .pt untouched', async () => {
@@ -1214,6 +1528,97 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     expect((await listEntries()).filter((e) => e.provenance === 'cloned')).toHaveLength(0);
     expect(await readCandidate('cand-fail')).not.toBeNull(); // candidate intact
   });
+
+  /* Task 10 follow-up — a TRANSPORT failure of the advisory ECAPA fidelity
+     check must not orphan an otherwise-successful clone. By this point the
+     sidecar has already written the .pt artifact (deriveEngineArtifact
+     succeeded); only the /embed cosine check is unreachable. */
+  it('persists without a cosine when the ECAPA embed is unreachable (transient) — candidate still removed', async () => {
+    const { writeCandidate, readCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-transient',
+      { sampleRate: 24000, durationSeconds: 12, transcript: 't', transcriptSource: 'whisper', captureMethod: 'upload' },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+    assessFidelityMock.mockRejectedValueOnce(Object.assign(new Error('embed down'), { transient: true }));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-transient',
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.sampleMeta.qualityChecks.cloneFidelityUnavailable).toBe(true);
+    expect(res.body.sampleMeta.qualityChecks.cloneCosine).toBeUndefined();
+
+    expect(await readCandidate('cand-transient')).toBeNull(); // candidate consumed, same as the happy path
+  });
+
+  /* Review follow-up on Task 10 — embed-client.ts rethrows NoCapacityError
+     BARE (not tagged `transient: true`), so a GPU-contention failure of the
+     advisory /embed call must ALSO be swallowed here, exactly like a
+     transport failure — otherwise it reproduces the orphaned-.pt +
+     leaked-candidate bug Task 10 exists to eliminate. */
+  it('persists without a cosine when the ECAPA embed fails on GPU capacity contention — candidate still removed', async () => {
+    const { writeCandidate, readCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-nocapacity',
+      { sampleRate: 24000, durationSeconds: 12, transcript: 't', transcriptSource: 'whisper', captureMethod: 'upload' },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+    // A REAL NoCapacityError instance — this is what embedSegment actually
+    // throws on GPU contention (see embed-client.ts:73); it deliberately
+    // does NOT carry `{ transient: true }`. Imported dynamically (post
+    // beforeEach's vi.resetModules()) so this is the SAME class instance
+    // the freshly re-imported route module's `instanceof` check sees —
+    // a static top-level import here would be a stale pre-reset instance,
+    // exactly the module-boundary trap #1801 warns about elsewhere in
+    // this route file.
+    const { NoCapacityError } = await import('../tts/tts-errors.js');
+    assessFidelityMock.mockRejectedValueOnce(new NoCapacityError('coqui', 512, 'cuda:0'));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-nocapacity',
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.sampleMeta.qualityChecks.cloneFidelityUnavailable).toBe(true);
+    expect(res.body.sampleMeta.qualityChecks.cloneCosine).toBeUndefined();
+
+    expect(await readCandidate('cand-nocapacity')).toBeNull(); // candidate consumed, same as the transient path
+  });
+
+  it('still aborts (and persists nothing) on a genuine SidecarDesignError from the fidelity check', async () => {
+    const { writeCandidate, readCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-fidelity-sde',
+      { sampleRate: 24000, durationSeconds: 12, transcript: 't', transcriptSource: 'whisper', captureMethod: 'upload' },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+    // A REAL SidecarDesignError instance — not merely `{ transient: true }` —
+    // proving the catch doesn't over-broaden past the transient duck-type.
+    assessFidelityMock.mockRejectedValueOnce(new SidecarDesignError('sidecar overloaded', 503));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-fidelity-sde',
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(503);
+    const { listEntries } = await import('../workspace/voice-library.js');
+    expect((await listEntries()).filter((e) => e.provenance === 'cloned')).toHaveLength(0);
+    expect(await readCandidate('cand-fidelity-sde')).not.toBeNull(); // candidate intact, nothing persisted
+  });
 });
 
 describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
@@ -1242,5 +1647,119 @@ describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
   it('404s an unknown entry', async () => {
     const res = await request(app).post('/api/voice-library/nope/revoke');
     expect(res.status).toBe(404);
+  });
+
+  /* Wave 3b2, Task 3 — revoke purges resynthesis-capable clone artifacts via
+     purgeCloneArtifacts, WITHOUT deleting the entry dir: the manifest
+     (voice.json) stays readable so the revoked entry is still
+     visible/inspectable in the library. Proven via real erasure effects (not
+     a spy) — see the file-header note above the hoisted mocks for why a
+     self-mocked spy on purgeCloneArtifacts was rejected. */
+  it('purges clone artifacts (no deleteEntryDir) and leaves voice.json readable', async () => {
+    const voiceUuid = 'r-purge-1';
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid,
+        name: 'Dad',
+        provenance: 'cloned',
+        consent: {
+          personName: 'Dad',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00.000Z',
+          attestedBy: 'me',
+        },
+        master: {
+          clipFile: 'master.wav',
+          sampleRate: 24_000,
+          durationSeconds: 5,
+          transcript: 'hello there',
+          transcriptSource: 'whisper',
+          captureMethod: 'record',
+        },
+      }),
+    );
+    const masterPath = join(vl.entryDir(voiceUuid), 'master.wav');
+    writeFileSync(masterPath, 'fake-wav-bytes');
+
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    const qwenName = `qwen-${voiceUuid}`;
+    writeFileSync(qwenVoice.qwenVoicePtPath(qwenName), 'fake-pt-bytes');
+    const pt17bPath = qwenVoice.qwenVoicePtPath(`${qwenName}__1.7b`);
+    writeFileSync(pt17bPath, 'fake-1.7b-pt-bytes');
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('sidecar unreachable'));
+    try {
+      const res = await request(app).post(`/api/voice-library/${voiceUuid}/revoke`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.consent.revokedAt).toBeTruthy();
+
+      // The engine artifacts (resynthesis-capable) are purged...
+      expect(existsSync(qwenVoice.qwenVoicePtPath(qwenName))).toBe(false);
+      expect(existsSync(pt17bPath)).toBe(false);
+      // ...but the manifest dir survives (no deleteEntryDir).
+      const onDisk = await vl.readEntry(voiceUuid);
+      expect(onDisk?.consent?.revokedAt).toBeTruthy();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  /* User-directed fix — revoke must ALSO erase the person's original
+     recording (the entry-dir clip), behind the two-step frontend confirm.
+     Node-side: the file itself is unlinked AND the manifest's `master`
+     field is cleared (a manifest pointing at a deleted file would be a
+     lie — and the resolver/card already treat an absent `master` as
+     Broken, which a revoked voice already is via the revoked rule). This
+     test would have failed before the fix (the prior behaviour retained
+     `master.wav` on disk — see the "leaves voice.json readable" test above,
+     which asserted survival until this same change flipped it). */
+  it('also erases the entry-dir recording (master.wav) and clears the manifest master field', async () => {
+    const voiceUuid = 'r-erase-master';
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid,
+        name: 'Mum',
+        provenance: 'cloned',
+        consent: {
+          personName: 'Mum',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00.000Z',
+          attestedBy: 'me',
+        },
+        master: {
+          clipFile: 'master.wav',
+          sampleRate: 24_000,
+          durationSeconds: 5,
+          transcript: 'hello there',
+          transcriptSource: 'whisper',
+          captureMethod: 'record',
+        },
+      }),
+    );
+    const masterPath = join(vl.entryDir(voiceUuid), 'master.wav');
+    writeFileSync(masterPath, 'fake-wav-bytes');
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('sidecar unreachable'));
+    try {
+      const res = await request(app).post(`/api/voice-library/${voiceUuid}/revoke`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.consent.revokedAt).toBeTruthy();
+      expect(res.body.master).toBeUndefined(); // response reflects the post-purge state
+
+      // The actual recording is gone...
+      expect(existsSync(masterPath)).toBe(false);
+      // ...and the manifest no longer points at it, but is still intact/readable.
+      const onDisk = await vl.readEntry(voiceUuid);
+      expect(onDisk).not.toBeNull();
+      expect(onDisk?.master).toBeUndefined();
+      expect(onDisk?.consent?.revokedAt).toBeTruthy();
+      expect(onDisk?.name).toBe('Mum');
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });

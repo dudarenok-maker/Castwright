@@ -43,6 +43,7 @@ const CATEGORIES = {
   'cuda-poisoned': 'performance',
   'gpu-acceleration-unavailable': 'performance',
   'voice-not-designed': 'voices',
+  'cloned-voice-broken': 'voices',
   auth: 'analysis',
   unknown: 'other',
 } satisfies Record<FailureCode, CategoryId>;
@@ -65,6 +66,7 @@ const TITLES = {
   'cuda-poisoned': 'GPU error (auto-recovering)',
   'gpu-acceleration-unavailable': 'Running on CPU (GPU acceleration unavailable)',
   'voice-not-designed': 'Non-English chapter missing a designed voice',
+  'cloned-voice-broken': "Cloned voice can't render as itself",
   auth: 'Gemini API key problem',
   unknown: 'Unrecognised error',
 } satisfies Record<FailureCode, string>;

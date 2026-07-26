@@ -43,6 +43,7 @@ export type FailureCode =
   | 'cuda-poisoned'
   | 'gpu-acceleration-unavailable'
   | 'voice-not-designed'
+  | 'cloned-voice-broken'
   | 'auth'
   | 'unknown';
 
@@ -179,6 +180,44 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     source: 'generation',
     match: (raw, ctx) =>
       ctx.name === 'RecycleStormError' || /recycled \d+× while rendering/.test(raw),
+  },
+  /* T7 (Wave 3b2) — the cloned-voice resolver pre-pass in synthesiseChapter
+     (clone-voice-resolver.ts) raises UnresolvableClonedVoiceError when one or
+     more assigned cloned voices can't render as themselves this run (revoked
+     consent, missing master, Qwen unavailable, wrong-engine routing, a failed
+     re-derive, or a misconfigured library entry) — a real person's voice must
+     never be silently substituted with another. Matched on `err.name`
+     (duck-typed, not `instanceof`: the error crosses the tts/ → routes/ module
+     boundary, and a prior regression — #1801 — came from an `instanceof`
+     check across exactly this kind of boundary), with a raw-message regex
+     fallback on the error's own distinctive wording (mirrors the
+     analyzer-content-blocked pattern above) so a bare Error carrying the same
+     text still classifies correctly. MUST come before the broader
+     analyzer-rate-limit/auth/gpu-acceleration-unavailable signatures below:
+     none of them currently match this error's wording, but the named match
+     keeps it pinned regardless of future message edits.
+
+     fatal: false — this is a per-chapter, per-character failure (mirrors
+     voice-not-designed's chapter-scoped model): a chapter that doesn't use
+     the broken voice should still render. There is NO cross-chapter backstop
+     on the common queue path: the dispatcher fires one POST per chapter, so
+     the cascade counter in generation.ts (recordNonFatal, a fresh job-local
+     state per POST) never sees a second chapter's failure and can't
+     escalate this to a run-stop (mirrors the corrected recycle-storm
+     framing at generation.ts, not the stale isStall comment above it). Each
+     affected chapter therefore fails independently with its own accurate,
+     per-voice message — accepted deliberately, because a broken cloned
+     voice is character-scoped: other chapters (that don't cast it) and
+     other books sharing the queue should keep rendering. A blanket
+     queue-pause like recycle-storm's would be an overcorrection here — that
+     case is a systemic sidecar failure, this one is scoped to whichever
+     voices are broken. */
+  {
+    code: 'cloned-voice-broken',
+    fatal: false,
+    source: 'generation',
+    matchName: 'UnresolvableClonedVoiceError',
+    match: (raw) => /cloned voice.*must never be substituted/i.test(raw),
   },
   /* CUDA out-of-memory — the GPU allocator itself refused. Distinct from the
      host-RAM OOM kill below. Comes BEFORE the cuda-poisoned check because an

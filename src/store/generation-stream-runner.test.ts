@@ -290,6 +290,44 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
     expect(toasts[0].dedupeKey).toBe('voice-not-designed:b1:3');
   });
 
+  it('fs-38 Wave 3b2 T8: surfaces a cloned-voice-broken chapter_failed tick as an immediate error toast', () => {
+    /* Same immediate-visibility rationale as voice-not-designed above: a
+       cloned voice must never silently render as someone else, so the
+       resolver's abort must reach the user right away rather than waiting on
+       the streak breaker. The per-voice specifics (which voice, which
+       reason) ride in errorReason from the server — assert it survives
+       verbatim to the toast and onto the chapter row (generationErrorCode /
+       generationRemediation / errorReason), proving the voice names aren't
+       swallowed by a generic message. */
+    const { store, runner } = makeRunner();
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    store.dispatch(chaptersSlice.actions.setChapters([ch(3)]));
+    runner.open('b1', 'qwen3-tts-0.6b', { chapterIds: [3], force: true }, { chapterId: 3 });
+    onTickFor('b1', 3)({
+      type: 'chapter_failed',
+      chapterId: 3,
+      errorReason:
+        "Bob's cloned voice can't be used — consent was revoked; Nia's cloned voice is missing its master sample.",
+      errorCode: 'cloned-voice-broken',
+      remediation: "Restore consent or re-upload the voice's sample, then retry.",
+    } as unknown as GenerationTick);
+    const toasts = store.getState().notifications.toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].kind).toBe('error');
+    expect(toasts[0].message).toMatch(/Chapter 3/);
+    expect(toasts[0].message).toMatch(/consent was revoked/);
+    expect(toasts[0].message).toMatch(/missing its master sample/);
+    expect(toasts[0].dedupeKey).toBe('cloned-voice-broken:b1:3');
+
+    const row = store.getState().chapters.chapters.find((c) => c.id === 3)!;
+    expect(row.state).toBe('failed');
+    expect(row.generationErrorCode).toBe('cloned-voice-broken');
+    expect(row.generationRemediation).toBe(
+      "Restore consent or re-upload the voice's sample, then retry.",
+    );
+    expect(row.errorReason).toMatch(/consent was revoked/);
+  });
+
   it('does NOT toast an ordinary chapter_failed tick without the voice-not-designed code', () => {
     const { store, runner } = makeRunner();
     runner.open('b1', 'qwen3-tts-0.6b', { chapterIds: [3], force: true }, { chapterId: 3 });

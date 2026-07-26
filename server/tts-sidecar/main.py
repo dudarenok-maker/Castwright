@@ -35,6 +35,7 @@ import sys
 import tempfile
 import threading
 import time
+import wave
 from collections import deque
 from contextlib import contextmanager
 from typing import Any, Callable, Optional
@@ -196,6 +197,54 @@ def _apply_torch_perf_flags(torch: Any) -> None:
             log.info("torch.backends.mkldnn.enabled = False (SIDECAR_DISABLE_MKLDNN).")
     except Exception as e:  # pragma: no cover - defensive against API drift
         log.warning("Could not apply torch perf flags (%s) — continuing.", e)
+
+
+def _atomic_torch_save(torch: Any, obj: Any, pt_path: str) -> None:
+    """Write a torch object to pt_path atomically: temp sibling + os.replace,
+    matching _load_voice_prompt_17b's persist (#1804 — no corruption window).
+    `torch` is passed in (not imported at module scope) — see
+    _apply_torch_perf_flags above for the same pattern in this file.
+
+    Temp-name shape mirrors _load_voice_prompt_17b exactly (basename-prefixed,
+    `.tmp`-suffixed) rather than a bare dot-prefixed mkstemp name: real
+    torch's PyTorchFileWriter rejects a dot-leading, extension-less filename
+    on Windows ("invalid file name") — only caught by the GPU-backed
+    regression tests here since the sidecar unit fixtures stub torch.save."""
+    d = os.path.dirname(pt_path)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=f"{os.path.basename(pt_path)}.", suffix=".tmp")
+    os.close(fd)
+    try:
+        torch.save(obj, tmp)
+        os.replace(tmp, pt_path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_wav_save(pcm: bytes, sample_rate: int, wav_path: str) -> None:
+    """Write mono 16-bit PCM to wav_path atomically: temp sibling + os.replace,
+    same shape as `_atomic_torch_save` above (temp-name basename-prefixed,
+    `.tmp`-suffixed, in the SAME directory so `os.replace` is a same-filesystem
+    rename — no partial-file window for a concurrent reader)."""
+    d = os.path.dirname(wav_path)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=f"{os.path.basename(wav_path)}.", suffix=".tmp")
+    os.close(fd)
+    try:
+        with wave.open(tmp, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)  # int16
+            wf.setframerate(sample_rate)
+            wf.writeframes(pcm)
+        os.replace(tmp, wav_path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 _CODEC_TIMING: dict = {"total_ms": 0.0, "calls": 0}
@@ -3453,6 +3502,21 @@ class QwenEngine(Engine):
             os.path.join(self._voices_dir, f"{safe}.json"),
         )
 
+    def _voice_master_wav_path(self, voice_id: str) -> str:
+        """Path for a DESIGNED voice's retained reference clip — the SAME
+        sanitised-id scheme as `_voice_paths`, keyed with a `__master` suffix
+        (mirroring the `__1.7b` derived-prompt cache key) so Node's path
+        builder (`qwenVoiceWavPath`) resolves the identical filename:
+        `<safe-voice_id>__master.wav`. §2.3 (fs-38 Wave 3b2) — lets a
+        DESIGNED voice re-derive a fresh embedding from the same reference
+        clip after a base-model upgrade (M-4 review: Node's reader resamples
+        this clip to a fixed 24kHz before re-deriving, so the result isn't
+        byte-identical to the original design — same clip content, not an
+        identical embedding), mirroring the `master.wav` a CLONED voice
+        already keeps from its uploaded sample (Wave 3b1)."""
+        pt_path, _json_path = self._voice_paths(f"{voice_id}__master")
+        return os.path.splitext(pt_path)[0] + ".wav"
+
     def _evict_17b_prompt(self, voice_id: str) -> None:
         """Drop BOTH the in-memory and on-disk 1.7B-native prompt cache for a
         voice. Called anywhere the base (0.6B) embedding is replaced or evicted
@@ -3764,7 +3828,7 @@ class QwenEngine(Engine):
             # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
             os.makedirs(self._voices_dir, exist_ok=True)
             pt_path, json_path = self._voice_paths(voice_id)
-            torch.save(prompt, pt_path)
+            _atomic_torch_save(torch, prompt, pt_path)
             import json as _json
 
             with open(json_path, "w", encoding="utf-8") as fh:
@@ -3784,6 +3848,30 @@ class QwenEngine(Engine):
                     ensure_ascii=False,
                     indent=2,
                 )
+
+            # 3b. retain the reference clip as WAV (§2.3, fs-38 Wave 3b2) — lets
+            # this DESIGNED voice re-derive a fresh embedding from the same
+            # clip after a base-model upgrade (not byte-identical — Node's
+            # reader resamples it to a fixed 24kHz first), the way a CLONED
+            # voice already can from its retained `master.wav` (Wave 3b1).
+            # Strictly additive: the HTTP
+            # response, the audition PCM, and the `.pt`/`.json` above are
+            # already complete by this point, so a failure here must never
+            # break voice design — it's a future re-derivation aid, not part
+            # of the design contract. Log-and-continue, not propagate.
+            try:
+                _atomic_wav_save(
+                    _float_audio_to_int16_le(ref_audio),
+                    int(ref_sr),
+                    self._voice_master_wav_path(voice_id),
+                )
+            except Exception:
+                log.warning(
+                    "Failed to persist reference clip for voice '%s' — "
+                    "continuing (design itself is unaffected).",
+                    voice_id, exc_info=True,
+                )
+
             log.info("Designed + cached Qwen voice '%s' (instruct=%r).", voice_id, instruct[:80])
 
             # Evict any stale in-memory entry so a RE-designed voice can't keep
@@ -3854,7 +3942,7 @@ class QwenEngine(Engine):
             # 2. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
             os.makedirs(self._voices_dir, exist_ok=True)
             pt_path, json_path = self._voice_paths(voice_id)
-            torch.save(prompt, pt_path)
+            _atomic_torch_save(torch, prompt, pt_path)
             import json as _json
             with open(json_path, "w", encoding="utf-8") as fh:
                 _json.dump(

@@ -80,6 +80,33 @@ history at cut time.
   could strand on a disabled library. The active section is now **derived** rather than reset by
   an effect, so the fallback to `in-use` happens during render and the empty pane is never
   painted at all.
+- **fs-38 Wave 3b2 — cloned-voice resolver + lifecycle** (Refs #624). Closes the resolver/
+  lifecycle half of the never-substitute invariant 3b1's single `applyQwenFallback` exemption
+  only partially covered. A new `clone-voice-resolver.ts` (pure Healthy/Repairable/Broken
+  classifier + two async orchestrators) is wired as a per-chapter pre-pass in `synthesiseChapter`,
+  running BEFORE any synth call: it transparently re-derives a Repairable cloned voice from its
+  retained `master.wav`, and hard-fails the whole chapter via `UnresolvableClonedVoiceError`
+  (never a silent reroute) on a Broken one — revoked, missing-master, engine-unavailable,
+  wrong-engine, or a persisted derive failure. The readiness gate is intersected to exactly this
+  chapter's in-chapter characters, including both the title-beat and orphaned-`characterId`
+  narrator paths. Transient re-derive failures (sidecar unreachable, any 5xx) collect Broken
+  without persisting `engines.qwen.status:'failed'` — only a genuine 4xx does, so a hiccup can't
+  brick a voice. `purgeCloneArtifacts(uuid)` gives revoke and delete one shared, total erasure
+  routine (base `.pt`, `__1.7b.pt`, manifest, both `-preview` variants, both `__master.wav`
+  variants, sample cache) — closing gaps where revoke erased nothing and delete missed the 1.7B
+  cache. A user-directed follow-up widened revoke further: it now also erases the entry-dir
+  recording itself (`{ deleteMasterClip: true }`, clearing the entry's `master` field), gated
+  behind a two-step confirm dialog that spells out the consequence up front — "revoke" now
+  really does mean the person's original recording is gone, not just retained-but-inert.
+  Sidecar `.pt` writes for `clone_voice`/`design_voice` are now atomic (temp file +
+  `os.replace`, absorbing #1804). A distinct `wrong-engine` `BrokenClonedVoice` reason (+ a new
+  `cloned-voice-broken` `FailureCode` with a toast + help link) diagnoses a cloned voice assigned
+  to a character/book that simply doesn't route to Qwen, separately from Qwen being unavailable;
+  an advisory `POST /:voiceUuid/assign` 409 guard (optional `modelKey` body field) catches the
+  same case at assign time. §2.3 (designed-voice clip-persist + orphan self-heal from a retained
+  `qwen-<uuid>__master.wav`, scoped to a missing `.pt` only and never throwing) shipped alongside
+  as the wave's optional tail. Plan: `docs/features/268-fs38-wave3b2-resolver.md`. Spec:
+  `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md` §5.
 
 ---
 

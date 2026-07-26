@@ -8,6 +8,7 @@ import {
   engineForModelKey,
   engineGroupForModelKey,
   formatEngineBreakdown,
+  modelKeyForEngineChoice,
 } from './tts-models';
 
 describe('formatEngineBreakdown (mixed-engine chapter caption)', () => {
@@ -124,5 +125,39 @@ describe('effectiveModelKey (the key behind effectiveEngineLabel, for comparison
     ];
     expect(effectiveModelKey(cast, 'qwen3-tts-0.6b')).toBe('qwen3-tts-1.7b');
     expect(effectiveEngineLabel(cast, 'qwen3-tts-0.6b')).toBe('Qwen3-TTS 1.7B');
+  });
+});
+
+describe('modelKeyForEngineChoice (fs-38 Wave 3b2, T6b review — resolves a drawer-style engine CHOICE to a concrete modelKey for the assign-guard fix)', () => {
+  it("'default' returns the session model key as-is, whatever it is", () => {
+    expect(modelKeyForEngineChoice('default', 'kokoro-v1')).toBe('kokoro-v1');
+    expect(modelKeyForEngineChoice('default', 'gemini-3.1-flash')).toBe('gemini-3.1-flash');
+  });
+
+  it("'kokoro' always resolves to the single Kokoro model key, regardless of the session key", () => {
+    expect(modelKeyForEngineChoice('kokoro', 'gemini-2.5-flash')).toBe('kokoro-v1');
+  });
+
+  it("'qwen' falls back to the 0.6B tier when no qwenTier is given", () => {
+    expect(modelKeyForEngineChoice('qwen', 'kokoro-v1')).toBe('qwen3-tts-0.6b');
+    expect(modelKeyForEngineChoice('qwen', 'kokoro-v1', null)).toBe('qwen3-tts-0.6b');
+  });
+
+  it("'qwen' carries through a pinned 1.7B qwenTier", () => {
+    expect(modelKeyForEngineChoice('qwen', 'kokoro-v1', 'qwen3-tts-1.7b')).toBe('qwen3-tts-1.7b');
+  });
+
+  it("'coqui' always resolves to the single Coqui model key, regardless of the session key", () => {
+    expect(modelKeyForEngineChoice('coqui', 'gemini-2.5-flash')).toBe('coqui-xtts-v2');
+  });
+
+  it("'gemini' keeps the session key when it's already a Gemini model, else falls back to the default Gemini model", () => {
+    expect(modelKeyForEngineChoice('gemini', 'gemini-3.1-flash')).toBe('gemini-3.1-flash');
+    expect(modelKeyForEngineChoice('gemini', 'kokoro-v1')).toBe('gemini-2.5-flash');
+  });
+
+  it("'piper' has no UI-stable model key yet, so it falls back to the session key like 'default'", () => {
+    expect(modelKeyForEngineChoice('piper', 'kokoro-v1')).toBe('kokoro-v1');
+    expect(modelKeyForEngineChoice('piper', 'qwen3-tts-1.7b')).toBe('qwen3-tts-1.7b');
   });
 });
