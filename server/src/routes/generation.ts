@@ -97,6 +97,7 @@ import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { AVG_CHAPTER_BYTES, diskGuardMode, evaluateDiskGuard } from '../workspace/disk-guard.js';
 import { configValue } from '../config/resolver.js';
 import { scoreBook } from '../audio/render-integrity/aggregate.js';
+import { setActiveGenerationBooksProvider } from '../gpu/active-generation-gate.js';
 import { writeAttempted, attemptedPath } from '../audio/render-integrity/verdicts-io.js';
 
 export const generationRouter = Router();
@@ -606,6 +607,14 @@ export function activeGenerationBooks(): string[] {
   }
   return out;
 }
+
+/* Register this module's own accessor into the stateless leaf gate
+   (../gpu/active-generation-gate.ts) so gpu/evict-idle-tts.ts can read
+   "is any render in flight" without statically importing this heavy route
+   module — that import would close a cycle through tts/index.ts ->
+   tts/sidecar.ts. See active-generation-gate.ts's file header for the
+   fail-closed contract this registration satisfies. */
+setActiveGenerationBooksProvider(activeGenerationBooks);
 
 function broadcast(job: RunningJob, ev: unknown): void {
   /* Inject run-level aggregates into every outgoing tick (Bug E).

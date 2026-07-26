@@ -135,6 +135,44 @@ describe('withCapacityRetry', () => {
     expect(capacityProbeRead).not.toHaveBeenCalled();
   });
 
+  it('frees an idle TTS base before falling back to the poll', async () => {
+    const evictIdleTts = vi.fn().mockResolvedValue(true);
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      return calls === 1 ? noCapacityResponse(4000, 'cuda:0') : new Response('ok', { status: 200 });
+    });
+
+    const res = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      evictIdleTts,
+      /* Analyzer lever off, so the TTS lever is the only thing that can rescue it. */
+      analyzerEvictWouldHelp: async () => false,
+      pollMs: 0,
+    });
+
+    expect(res.status).toBe(200);
+    expect(evictIdleTts).toHaveBeenCalledTimes(1);
+    expect(doPost).toHaveBeenCalledTimes(2); // refused, freed, retried OK
+  });
+
+  it('does not retry the TTS eviction more than once', async () => {
+    const evictIdleTts = vi.fn().mockResolvedValue(true);
+    const doPost = vi.fn(async () => noCapacityResponse(4000, 'cuda:0'));
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'qwen',
+        evictIdleTts,
+        analyzerEvictWouldHelp: async () => false,
+        pollMs: 0,
+        maxAttempts: 3,
+      }),
+    ).rejects.toThrow(NoCapacityError);
+
+    expect(evictIdleTts).toHaveBeenCalledTimes(1);
+  });
+
   it('(f) getCapacityWaiterCount() reflects a parked waiter while polling, back to 0 after', async () => {
     expect(getCapacityWaiterCount()).toBe(0);
     let calls = 0;

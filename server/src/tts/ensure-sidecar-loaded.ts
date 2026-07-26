@@ -38,6 +38,7 @@
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { forceSidecarRecycle } from './sidecar-supervisor.js';
 import type { TtsEngine } from './index.js';
+import { setReconcileResidentQwenTiersProvider } from '../gpu/qwen-tier-reconcile-gate.js';
 
 /* Engines whose model lives in the local sidecar and must be loaded before
    synth. Gemini is a cloud API (nothing to preload); unknown engines are left
@@ -216,6 +217,15 @@ export async function reconcileResidentQwenTiers(
   );
   await Promise.allSettled(evictions);
 }
+
+/* Register this module's own reconciler into the stateless leaf gate
+   (../gpu/qwen-tier-reconcile-gate.ts) so gpu/evict-idle-tts.ts can free an
+   idle Qwen base without statically importing this module — this module's
+   OTHER exports reach gpu/engine-device.ts (dynamic import) ->
+   gpu/engine-device-state.ts -> routes/sidecar-health.ts, which closes a
+   cycle back through tts/index.ts. See qwen-tier-reconcile-gate.ts's file
+   header for the fail-closed contract this registration satisfies. */
+setReconcileResidentQwenTiersProvider(reconcileResidentQwenTiers);
 
 /* Abort-aware sleep — resolves after `ms`, or rejects promptly if `signal`
    fires (so a run-level Stop tears down the wait without serving the full gap). */

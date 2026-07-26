@@ -68,6 +68,10 @@ export interface CapacityRetryOpts {
   /** Injected cap on no-capacity retry attempts before giving up with
       `NoCapacityError`. */
   maxAttempts?: number;
+  /** Injected "free a resident TTS model this op doesn't need" action —
+      defaults to `evictIdleQwenBase` bound to this call's model key. Returns
+      true when it actually unloaded something. */
+  evictIdleTts?: () => Promise<boolean>;
 }
 
 /* Capacity-aware admission (vram-aware placement, Task 8b). Calls `doPost` and,
@@ -93,8 +97,10 @@ export async function withCapacityRetry(
     opts.isAnalysisInFlight ?? (() => getAnalyzerConcurrencyStats().inFlight > 0);
   const pollMs = opts.pollMs ?? GPU_CAPACITY_POLL_MS;
   const maxAttempts = opts.maxAttempts ?? GPU_CAPACITY_MAX_ATTEMPTS;
+  const evictIdleTts = opts.evictIdleTts ?? (async () => false);
 
   let evicted = false;
+  let evictedTts = false;
   let waiting = false;
   try {
     for (let attempt = 0; ; attempt++) {
@@ -117,6 +123,14 @@ export async function withCapacityRetry(
         await evictOllama();
         evicted = true;
         continue; // immediate retry after freeing the analyzer
+      }
+
+      /* Second lever: free a resident Qwen base this op doesn't need. Guarded to
+         "no render in flight" inside evictIdleQwenBase, so it is inert during
+         generation by construction. At most once per call, like the analyzer. */
+      if (!evictedTts) {
+        evictedTts = true;
+        if (await evictIdleTts()) continue; // immediate retry after freeing VRAM
       }
 
       if (attempt + 1 >= maxAttempts) {
