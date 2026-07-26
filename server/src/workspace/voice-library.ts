@@ -113,6 +113,17 @@ export async function readEntry(voiceUuid: string): Promise<VoiceLibraryEntry | 
   }
 }
 
+/* Fix wave (fs-38 Wave 3c, Task 2 review) — the "is this cloned voice
+   playable" condition used to be hand-duplicated verbatim in two routes
+   (voice-library.ts's own /sample route and voice-sample.ts's cast-view
+   route). Two copies of a security check drift; extracted here so both
+   call sites share one definition. `entry` may be null/undefined — callers
+   that haven't 404'd on a missing entry yet can pass the lookup straight
+   through. */
+export function clonedVoiceLacksConsent(entry: VoiceLibraryEntry | null | undefined): boolean {
+  return Boolean(entry && entry.provenance === 'cloned' && (!entry.consent || entry.consent.revokedAt));
+}
+
 export class ConsentRequiredError extends Error {
   status = 422;
   constructor() {

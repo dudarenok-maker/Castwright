@@ -535,6 +535,72 @@ describe('voice-sample router', () => {
       expect(synthesize).toHaveBeenCalledTimes(1);
     });
 
+    it('fix wave (finding 1): a cloned character caches under the resolved storage-key scope, not the character id — a designed character is unaffected', async () => {
+      /* This is what makes the purge sweep (purge-clone-artifacts.ts, which
+         already sweeps `qwen-<uuid>`/`xtts-<uuid>`) able to reach the
+         cast-view route's cache at all: before this fix, a cloned
+         character's audition here was cached under `voiceId`
+         (`v_cloned-scope-1`), a scope no purge call could ever derive from
+         `voiceUuid` alone. */
+      const clonedUuid = 'cloned-scope-1';
+      await writeEntry({
+        voiceUuid: clonedUuid,
+        name: 'Scoped Clone',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        consent: { ...baseConsent },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+      const clonedRes = await request(app)
+        .post('/api/voices/v_cloned_scope/sample')
+        .send({
+          modelKey: 'qwen3-tts-0.6b',
+          voice: {
+            id: 'v_cloned_scope',
+            character: 'Scoped Clone',
+            overrideTtsVoices: {
+              qwen: { name: `qwen-${clonedUuid}`, libraryUuid: clonedUuid, provenance: 'cloned' as const },
+            },
+          },
+          text: 'Cache scope check.',
+        });
+      expect(clonedRes.status).toBe(200);
+      // Scoped by the resolved storage key (qwen-<uuid>), NOT the character id.
+      expect(clonedRes.body.url).toMatch(new RegExp(`^/audio/voices/qwen-${clonedUuid}-`));
+      expect(clonedRes.body.url).not.toContain('v_cloned_scope');
+
+      const designedUuid = 'designed-scope-1';
+      await writeEntry({
+        voiceUuid: designedUuid,
+        name: 'Scoped Designed',
+        provenance: 'designed',
+        tags: [],
+        pinned: false,
+        engines: {},
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+      const designedRes = await request(app)
+        .post('/api/voices/v_designed_scope/sample')
+        .send({
+          modelKey: 'qwen3-tts-0.6b',
+          voice: {
+            id: 'v_designed_scope',
+            character: 'Scoped Designed',
+            overrideTtsVoices: {
+              qwen: { name: `qwen-${designedUuid}`, libraryUuid: designedUuid, provenance: 'designed' as const },
+            },
+          },
+          text: 'Cache scope check.',
+        });
+      expect(designedRes.status).toBe(200);
+      // Unchanged: still scoped by the character id (voiceId), byte-for-byte.
+      expect(designedRes.body.url).toMatch(/^\/audio\/voices\/v_designed_scope-/);
+    });
+
     it('(c) the raw-speaker bypass refuses a cloned storage key with revoked consent', async () => {
       const voiceUuid = 'revoked-raw-1';
       await writeEntry({
@@ -558,6 +624,36 @@ describe('voice-sample router', () => {
       expect(res.status).toBe(403);
       expect(res.body.error).toMatch(/consent/i);
       expect(synthesize).not.toHaveBeenCalled();
+    });
+
+    it('(raw analogue of d) a non-cloned (designed) library voice is unaffected via the raw-speaker bypass', async () => {
+      /* Fix wave (finding 4) — (a)/(c)/(d) above cover the raw branch's
+         REVOKED case (c) and the normal branch's designed case (d), but
+         there was no raw-branch analogue of (d): a designed voice's storage
+         key handed straight to rawSpeaker should sail through the gate
+         exactly like the normal branch does. Same code path (the gate reads
+         `engine`/`voiceName` generically, not branch-specific), so risk is
+         low, but nothing pinned it. */
+      const voiceUuid = 'designed-raw-1';
+      await writeEntry({
+        voiceUuid,
+        name: 'Designed Raw',
+        provenance: 'designed',
+        tags: [],
+        pinned: false,
+        engines: {},
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const res = await request(app).post('/api/voices/v_anyone/sample').send({
+        modelKey: 'coqui-xtts-v2',
+        rawEngine: 'coqui',
+        rawSpeaker: `xtts-${voiceUuid}`,
+      });
+
+      expect(res.status).toBe(200);
+      expect(synthesize).toHaveBeenCalledTimes(1);
     });
 
     it('(d) a non-cloned (designed) library voice is unaffected — cache behaviour unchanged', async () => {

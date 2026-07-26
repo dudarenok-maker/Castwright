@@ -18,7 +18,7 @@ import {
   type TtsEngine,
   type TtsModelKey,
 } from '../tts/index.js';
-import { isCloneEngine, manifestSlotFor } from '../tts/clone-engines.js';
+import { cloneStorageKey, isCloneEngine, manifestSlotFor } from '../tts/clone-engines.js';
 import { encodePcmToAudio } from '../tts/mp3.js';
 import { pcmDurationSec } from '../tts/pcm.js';
 import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from '../tts/voice-mapping.js';
@@ -30,7 +30,7 @@ import {
   voiceSampleFilePath,
   voiceSamplePublicUrl,
 } from '../tts/voice-sample-cache.js';
-import { readEntry } from '../workspace/voice-library.js';
+import { clonedVoiceLacksConsent, readEntry } from '../workspace/voice-library.js';
 
 export const voiceSampleRouter = Router();
 
@@ -134,20 +134,42 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
      object — the raw-speaker bypass (isRawSample, above) has no character
      context at all, so a client could otherwise hand a cloned storage key
      straight to `rawSpeaker` and skip any character-level gate entirely.
-     Mirrors the consent check in routes/voice-library.ts:428. A designed
-     (non-cloned) voice resolves to the identical `qwen-<uuid>` key shape
-     (see voice-mapping.ts qwenStorageKey) — provenance, not key shape, is
-     what distinguishes them, so this reads the library entry rather than
-     trusting the client-supplied `provenance` field. */
+     Mirrors the consent check in routes/voice-library.ts:428 (now shared via
+     clonedVoiceLacksConsent). A designed (non-cloned) voice resolves to the
+     identical `qwen-<uuid>` key shape (see voice-mapping.ts qwenStorageKey)
+     — provenance, not key shape, is what distinguishes them, so this reads
+     the library entry rather than trusting the client-supplied `provenance`
+     field. */
   if (isCloneEngine(engine)) {
     const prefix = `${manifestSlotFor(engine)}-`;
     if (voiceName.startsWith(prefix)) {
       const libraryUuid = voiceName.slice(prefix.length);
       const entry = await readEntry(libraryUuid);
-      if (entry?.provenance === 'cloned' && (!entry.consent || entry.consent.revokedAt)) {
+      if (clonedVoiceLacksConsent(entry)) {
         return res.status(403).json({
           error: 'This cloned voice has no valid consent and cannot be played.',
         });
+      }
+      /* Fix wave (cache-scope gap) — for a CLONED voice reached via the
+         normal (non-raw) branch, cache under the resolved storage key
+         (`qwen-<uuid>` / `xtts-<uuid>`) instead of the character id,
+         mirroring what routes/voice-library.ts:439 already does for its own
+         /sample route. This makes the scope derivable from `voiceUuid`
+         alone, so the EXISTING storageKey-scoped sweep in
+         purge-clone-artifacts.ts reaches it on revoke — previously a file
+         cached here (character-id scoped) was unreachable by any purge and
+         outlived a revoke on disk (the consent gate above still stopped it
+         being served, but "present but unreachable" fails total erasure).
+         Only cloned slots: a designed/imported voice's cache scope must
+         stay byte-for-byte unchanged. The raw branch is untouched — it
+         already caches under its own engine+speaker scope, unrelated to
+         `voiceId`. Note: a cloned audition cached under the OLD
+         (character-id) scope before this change is now a cache miss and
+         re-renders once — acceptable, and the stale file itself is inert
+         (the gate above already refuses to serve any revoked voice
+         regardless of cache scope). */
+      if (!isRawSample && entry?.provenance === 'cloned') {
+        cacheScope = cloneStorageKey(engine, libraryUuid);
       }
     }
   }

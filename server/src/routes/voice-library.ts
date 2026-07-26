@@ -23,6 +23,7 @@ import {
   readEntry,
   writeEntry,
   ConsentRequiredError,
+  clonedVoiceLacksConsent,
   type VoiceConsentRecord,
   type VoiceLibraryEntry,
   type VoiceLibraryEngineStatus,
@@ -425,7 +426,7 @@ voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response
     const { voiceUuid } = req.params;
     const entry = await readEntry(voiceUuid);
     if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
-    if (entry.provenance === 'cloned' && (!entry.consent || entry.consent.revokedAt)) {
+    if (clonedVoiceLacksConsent(entry)) {
       return res.status(403).json({ error: 'This cloned voice has no valid consent and cannot be played.' });
     }
 

@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import { qwenVoicePtPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from './paths.js';
 import { entryDir, readEntry, removeEntryDir, writeEntry } from './voice-library.js';
 import { djb2, purgeVoiceSamples } from '../tts/voice-sample-cache.js';
-import { CLONE_CAPABLE_ENGINES, cloneStorageKey, isCloneEngine } from '../tts/clone-engines.js';
+import { CLONE_CAPABLE_ENGINES, cloneStorageKey, type CloneEngine } from '../tts/clone-engines.js';
 import { getResolvedSidecarUrl } from './user-settings.js';
 
 /** Review I-2 — a single file's best-effort unlink. `force: true` already
@@ -95,8 +95,11 @@ export async function purgeCloneArtifacts(
   // what actually closes that path (checked fresh on every request, cache
   // hit or not) — this sweep is defence in depth on top, not the primary
   // guarantee.
-  for (const engine of CLONE_CAPABLE_ENGINES) {
-    if (!isCloneEngine(engine)) continue;
+  // Review (minor) — CLONE_CAPABLE_ENGINES is, by its own definition
+  // (clone-engines.ts), always exactly {'qwen','coqui'}; a per-iteration
+  // isCloneEngine() guard here was therefore unreachable dead code. The
+  // asserted cast documents that same guarantee at the type level instead.
+  for (const engine of CLONE_CAPABLE_ENGINES as ReadonlySet<CloneEngine>) {
     const storageKey = cloneStorageKey(engine, voiceUuid);
     purgeVoiceSamples(storageKey);
     const hash6 = djb2(storageKey).toString(36).slice(0, 6);

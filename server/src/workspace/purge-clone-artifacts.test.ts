@@ -17,9 +17,18 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const { purgeVoiceSamples } = vi.hoisted(() => ({ purgeVoiceSamples: vi.fn() }));
+const { purgeVoiceSamples, purgeVoiceSamplesActual } = vi.hoisted(() => ({
+  purgeVoiceSamples: vi.fn(),
+  // Fix wave — most tests in this file only assert on purgeVoiceSamples'
+  // CALL ARGUMENTS (it's a bare vi.fn() stub with no implementation). The
+  // real-file end-to-end test below needs the actual sweep implementation,
+  // so the mock factory stashes it here for that one test to opt into via
+  // `purgeVoiceSamples.mockImplementation(purgeVoiceSamplesActual.fn!)`.
+  purgeVoiceSamplesActual: { fn: null as null | typeof import('../tts/voice-sample-cache.js').purgeVoiceSamples },
+}));
 vi.mock('../tts/voice-sample-cache.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../tts/voice-sample-cache.js')>();
+  purgeVoiceSamplesActual.fn = actual.purgeVoiceSamples;
   return { ...actual, purgeVoiceSamples };
 });
 
@@ -145,6 +154,42 @@ describe('purgeCloneArtifacts', () => {
     expect(purgeVoiceSamples).toHaveBeenCalledWith('xtts-u1');
     expect(purgeVoiceSamples).toHaveBeenCalledWith(qwenRawScope);
     expect(purgeVoiceSamples).toHaveBeenCalledWith(xttsRawScope);
+  });
+
+  /* Fix wave (fs-38 Wave 3c, Task 2 review, finding 1) — the two tests above
+     only assert purgeVoiceSamples was CALLED with the right scope string;
+     they don't prove the sweep actually deletes anything, which is exactly
+     how the real gap (routes/voice-sample.ts's cast-view route caching a
+     cloned voice under the character-id scope, unreachable by any purge)
+     survived review. This test opts the mock into the REAL sweep
+     implementation and plants an actual file under the storage-key scope
+     that voice-sample.ts's cache-scope fix now uses for a cloned voice's
+     normal (non-raw) audition — proving purgeCloneArtifacts erases it
+     end-to-end, not just that it calls the right function with the right
+     argument. */
+  it('fix wave: erases a REAL file cached under the resolved storage-key scope (end-to-end, not just a call-arg assertion)', async () => {
+    const audioDir = join(dir, 'audio-voices');
+    mkdirSync(audioDir, { recursive: true });
+    process.env.VOICE_SAMPLE_AUDIO_DIR = audioDir;
+    try {
+      purgeVoiceSamples.mockImplementation(purgeVoiceSamplesActual.fn!);
+
+      const fileName = cache.voiceSampleFileName({
+        cacheScope: 'qwen-u1',
+        modelKey: 'qwen3-tts-0.6b',
+        text: 'Hello there.',
+        voiceName: 'qwen-u1',
+      });
+      const filePath = cache.voiceSampleFilePath(fileName);
+      writeFileSync(filePath, 'fake-mp3-bytes');
+      expect(existsSync(filePath)).toBe(true);
+
+      await purge.purgeCloneArtifacts('u1');
+
+      expect(existsSync(filePath)).toBe(false);
+    } finally {
+      delete process.env.VOICE_SAMPLE_AUDIO_DIR;
+    }
   });
 
   it('removes the entry dir only when deleteEntryDir is set', async () => {
