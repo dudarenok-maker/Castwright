@@ -9,8 +9,12 @@
 **Tech Stack:** Vite + React 18 + TypeScript + Redux Toolkit (frontend), Node/Express + TypeScript (server), Vitest for both.
 
 **Spec:** `docs/superpowers/specs/2026-07-26-audition-engine-and-tier-fidelity-design.md`
-**Issues:** Closes #1812, Closes #1839. Follow-ups already filed: #1841, #1842.
+**Issues:** Closes #1812, #1839, #1841, #1842.
 **Branch:** `fix/frontend-audition-engine-tier`
+
+**Wave 1 of two.** Wave 2 is the resolver progress signal (#1813), specified at
+`docs/superpowers/specs/2026-07-26-resolver-prepass-progress-phase-design.md` and
+planned once this merges. Independent in code; same delivery arc.
 
 ## Global Constraints
 
@@ -691,7 +695,303 @@ Refs #1839"
 
 ---
 
-### Task 6: Release notes
+### Task 6: The library-card preview follows the session tier (#1842)
+
+The My-voices card hardcodes 0.6B on **both** sides of its own design/play pair —
+`voice-library.ts:434` and `design-voice-core.ts:281` — and both use cache scope
+`qwen-<uuid>`, so they share a cache key with each other. Same invariant as Task 3,
+one level over: they move together or not at all.
+
+The card and the cast row keep separate files regardless (different scopes:
+`qwen-<uuid>` vs `voiceId ?? char-…`). What this fixes is the same voice
+*sounding different* in the two places.
+
+**Files:**
+- Modify: `server/src/routes/voice-library.ts:432-434`
+- Modify: `server/src/tts/design-voice-core.ts:281`
+- Modify: `src/lib/api.ts:9556` (`realSampleLibraryVoice`)
+- Modify: the My-voices card caller(s) that invoke `api.sampleLibraryVoice`
+- Test: `server/src/routes/voice-library.test.ts`
+
+**Interfaces:**
+- Consumes: `modelKeyForEngineChoice` (two-argument form) from Task 2.
+- Produces: `POST /api/voice-library/:voiceUuid/sample` accepts an optional
+  `modelKey` in the body; `sampleLibraryVoice(voiceUuid, opts)` gains a `modelKey`.
+
+- [ ] **Step 1: Write the failing server test**
+
+```ts
+it('renders a library sample at the requested Qwen tier', async () => {
+  const res = await request(app)
+    .post('/api/voice-library/uuid-1/sample')
+    .send({ modelKey: 'qwen3-tts-1.7b' });
+
+  expect(res.status).toBe(200);
+  expect(res.body.url).toContain('qwen3-tts-1.7b');
+});
+
+it('defaults to 0.6B when the caller sends no modelKey', async () => {
+  const res = await request(app).post('/api/voice-library/uuid-1/sample').send({});
+
+  expect(res.status).toBe(200);
+  expect(res.body.url).toContain('qwen3-tts-0.6b');
+});
+
+it('rejects a modelKey that does not route to Qwen', async () => {
+  const res = await request(app)
+    .post('/api/voice-library/uuid-1/sample')
+    .send({ modelKey: 'kokoro-v1' });
+
+  expect(res.status).toBe(400);
+});
+```
+
+Match the file's existing app/fixture setup and its voiceUuid — read the
+neighbouring `/sample` tests first and reuse their entry rather than inventing
+`uuid-1`.
+
+- [ ] **Step 2: Run to verify the first and third fail**
+
+Run: `npm run test:server -- server/src/routes/voice-library.test.ts`
+Expected: the default-0.6B test PASSES (current behaviour); the 1.7B and the
+reject-non-Qwen tests FAIL.
+
+- [ ] **Step 3: Implement the route**
+
+In `server/src/routes/voice-library.ts`, replace lines 432-434:
+
+```ts
+    const body = (req.body ?? {}) as { text?: unknown; modelKey?: unknown };
+    const voiceName = `qwen-${voiceUuid}`;
+    /* #1842 — the card previews at the tier the caller's session will render at,
+       so the same voice doesn't sound different on the card and on the cast row.
+       Qwen-only: this endpoint synthesises `qwen-<uuid>`, which no other engine
+       can voice. Omitted → the 0.6B base, keeping older callers working. */
+    if (body.modelKey !== undefined) {
+      if (!isTtsModelKey(body.modelKey) || engineForModelKey(body.modelKey) !== 'qwen') {
+        return res.status(400).json({
+          code: 'invalid_model',
+          message: 'modelKey must be a Qwen model key.',
+        });
+      }
+    }
+    const modelKey: TtsModelKey = isTtsModelKey(body.modelKey) ? body.modelKey : 'qwen3-tts-0.6b';
+```
+
+Add `isTtsModelKey` and `engineForModelKey` to the file's existing `../tts/index.js`
+import if they are not already there.
+
+- [ ] **Step 4: Thread the tier into the preview design**
+
+`design-voice-core.ts:281` hardcodes `modelKey: 'qwen3-tts-0.6b'` for the library
+preview design, sharing scope `opts.storageKey` with the play route above. Add an
+optional `modelKey` to that function's `opts` and use it, defaulting to
+`'qwen3-tts-0.6b'`:
+
+```ts
+    modelKey: opts.modelKey ?? 'qwen3-tts-0.6b',
+```
+
+Declare it on the `opts` interface as `modelKey?: TtsModelKey` with a comment
+pointing at the shared-cache-key reason. Then pass the caller's tier from whichever
+route invokes it for the library preview, so design and play agree.
+
+- [ ] **Step 5: Send the tier from the client**
+
+In `src/lib/api.ts:9556`, add `modelKey` to the request body that
+`realSampleLibraryVoice` posts, and to its signature plus the mock twin at
+`:10396` (`mockSampleLibraryVoice`) so both halves of the `api` surface match.
+
+At the My-voices card call site, pass the same expression every other site uses:
+
+```ts
+  modelKey: modelKeyForEngineChoice('qwen', ttsModelKey),
+```
+
+Find the caller with: `grep -rn "sampleLibraryVoice" src/`
+
+- [ ] **Step 6: Run the tests**
+
+Run: `npm run test:server -- server/src/routes/voice-library.test.ts`
+Expected: PASS.
+
+Run: `npm run test`
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add server/src/routes/voice-library.ts server/src/routes/voice-library.test.ts server/src/tts/design-voice-core.ts src/lib/api.ts
+git commit -m "fix(server,frontend): preview a library voice at the session tier
+
+Closes #1842"
+```
+
+---
+
+### Task 7: Gate the 1.7B tier picker on installed weights (#1841)
+
+The signal already reaches the server — the sidecar reports
+`qwen_base17_weights_present` (`main.py:6408`) and `sidecar-health.ts:204,279`
+forwards it as `qwenBase17WeightsPresent`. Only the frontend `SidecarHealth` type
+stops short. This is **installed**, not **loaded**: `VoiceEnginePicker`'s existing
+`qwen17bAvailable` is residency-based and is deliberately left alone.
+
+**Files:**
+- Modify: `src/lib/api.ts:6073-6084` (type) and `:7491` (the mapping)
+- Modify: `src/lib/use-tts-lifecycle.ts`
+- Modify: `src/components/layout.tsx:1722-1728`
+- Modify: `src/modals/start-generation.tsx:11-33`
+- Test: `src/modals/start-generation.test.tsx`
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks.
+- Produces: `TtsLifecycle.qwen1_7bInstalled: boolean`; `StartGenerationModal` gains
+  `qwen17bInstalled?: boolean` (defaulting to `true`, so existing renders and tests
+  are unaffected).
+
+- [ ] **Step 1: Write the failing tests**
+
+In `src/modals/start-generation.test.tsx` (create it if absent, following a
+sibling modal test for the render harness):
+
+```tsx
+it('disables the 1.7B tier when its weights are not installed', () => {
+  render(
+    <StartGenerationModal
+      defaultTier="qwen3-tts-0.6b"
+      qwen17bInstalled={false}
+      onClose={() => {}}
+      onConfirm={() => {}}
+    />,
+  );
+
+  const tier = screen.getByRole('radio', { name: /1\.7B/i }) as HTMLInputElement;
+  expect(tier.disabled).toBe(true);
+  expect(screen.getByText(/not downloaded/i)).toBeTruthy();
+});
+
+it('falls back to 0.6B when the cast is pinned to an uninstalled 1.7B', () => {
+  /* Guard rail: layout passes defaultTier='qwen3-tts-1.7b' whenever any cast
+     member is pinned there, which can outlive the weights being removed. */
+  const onConfirm = vi.fn();
+  render(
+    <StartGenerationModal
+      defaultTier="qwen3-tts-1.7b"
+      qwen17bInstalled={false}
+      onClose={() => {}}
+      onConfirm={onConfirm}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: /start/i }));
+  expect(onConfirm).toHaveBeenCalledWith('qwen3-tts-0.6b');
+});
+
+it('leaves 1.7B selectable when the weights are present', () => {
+  render(
+    <StartGenerationModal
+      defaultTier="qwen3-tts-0.6b"
+      qwen17bInstalled
+      onClose={() => {}}
+      onConfirm={() => {}}
+    />,
+  );
+
+  expect((screen.getByRole('radio', { name: /1\.7B/i }) as HTMLInputElement).disabled).toBe(false);
+});
+```
+
+Adjust the role queries to the modal's real markup — read `start-generation.tsx:58`
+onward first; if the tiers are buttons rather than radios, query by button name.
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `npm run test -- src/modals/start-generation.test.tsx`
+Expected: FAIL — the prop does not exist.
+
+- [ ] **Step 3: Carry the field through the API type**
+
+In `src/lib/api.ts`, add to the `SidecarHealth` interface beside
+`qwenBase17Loaded` (`:6073`):
+
+```ts
+  /** 1.7B base WEIGHTS present on disk — distinct from `qwenBase17Loaded`,
+      which is residency. The tier picker gates on this: the 1.7B base is a
+      separate download (tts-sidecar `_qwen_base17_weights_present`). */
+  qwenBase17WeightsPresent?: boolean;
+```
+
+and map it in the response parse near `:7491`, mirroring the adjacent
+`qwenWeightsPresent` line.
+
+- [ ] **Step 4: Expose it from the lifecycle hook**
+
+In `src/lib/use-tts-lifecycle.ts`, add to the `TtsLifecycle` interface:
+
+```ts
+  /** True when the Qwen 1.7B base weights are on disk. INSTALLED, not loaded —
+      `qwen1_7b.state === 'ready'` is residency and is a different question. */
+  qwen1_7bInstalled: boolean;
+```
+
+and populate it from `sidecarHealth?.qwenBase17WeightsPresent === true` in the
+returned object.
+
+- [ ] **Step 5: Pass it to the modal**
+
+In `src/components/layout.tsx`, on the `<StartGenerationModal …>` at `:1723`:
+
+```tsx
+          qwen17bInstalled={ttsLifecycle.qwen1_7bInstalled}
+```
+
+- [ ] **Step 6: Implement the gate**
+
+In `src/modals/start-generation.tsx`, add the prop and apply it. Default it to
+`true` so any caller that does not pass it behaves exactly as today:
+
+```tsx
+  /** False when the 1.7B base weights are not on disk — the tier is offered but
+      disabled, since choosing it pins the whole cast (layout.tsx:1731-1760) to a
+      model the box would have to download mid-run. Defaults true so an unwired
+      caller keeps today's behaviour. */
+  qwen17bInstalled?: boolean;
+```
+
+In the body, treat an uninstalled 1.7B as unselectable — both for the initial
+selection and for the rendered option:
+
+```tsx
+  const tierAvailable = (id: TtsModelKey) => id !== 'qwen3-tts-1.7b' || qwen17bInstalled;
+  const initial =
+    TIERS.some((t) => t.id === defaultTier) && tierAvailable(defaultTier)
+      ? defaultTier
+      : 'qwen3-tts-0.6b';
+```
+
+Render the 1.7B row disabled when `!tierAvailable(t.id)`, with the reason
+alongside its hint — "Not downloaded — add it from Models" — using the modal's
+existing muted-text classes. Do not invent new colour literals; the file already
+uses `text-ink/60`-style tokens.
+
+- [ ] **Step 7: Run the tests**
+
+Run: `npm run test -- src/modals/start-generation.test.tsx src/components/layout.test.tsx`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/lib/api.ts src/lib/use-tts-lifecycle.ts src/components/layout.tsx src/modals/start-generation.tsx src/modals/start-generation.test.tsx
+git commit -m "fix(frontend): gate the 1.7B tier picker on installed weights
+
+Closes #1841"
+```
+
+---
+
+### Task 8: Release notes
 
 **Files:**
 - Modify: `docs/release-notes-next.md`
@@ -711,15 +1011,19 @@ Expected: an in-progress version section at the top. If the newest section is a 
   copy, which returned the book's default key for every non-Qwen engine (so a
   Kokoro-overridden character in a Coqui book previewed in Coqui) and pinned every
   Qwen preview to 0.6B. The tier resolves from the session key, so previews and
-  the design routes keep sharing one cached file. The three `TtsEngine`
-  declarations and the four engine→modelKey mappers collapse to one per side.
-  (#1812, #1839)
+  the design routes keep sharing one cached file. The My-voices card follows the
+  same tier, so a voice can't sound different there than on the cast row. The
+  Start-generation tier picker now disables 1.7B when its separately-downloaded
+  weights aren't on disk. The three `TtsEngine` declarations and the four
+  engine→modelKey mappers collapse to one per side.
+  (#1812, #1839, #1841, #1842)
 ```
 
 - [ ] **Step 3: Append the user-facing line to `RELEASE_NOTES.md`**
 
 ```markdown
-- Voice previews now play in the engine you picked for that character, at the quality your book is set to render in — what you hear in the cast list is what you'll hear in the book.
+- Voice previews now play in the engine you picked for that character, at the quality your book is set to render in — what you hear in the cast list is what you'll hear in the book, and the same voice sounds the same wherever you play it.
+- The higher-quality 1.7B voice model is now greyed out until you've actually downloaded it, instead of failing partway into a run.
 ```
 
 - [ ] **Step 4: Commit**
@@ -734,7 +1038,7 @@ Refs #1839"
 
 ---
 
-### Task 7: Verify and open the PR
+### Task 9: Verify and open the PR
 
 - [ ] **Step 1: Run the branch-scoped battery**
 
@@ -755,14 +1059,17 @@ Title (must match the commit convention or `pr-title-lint.yml` rejects it):
 fix(frontend,server): audition in the character's engine at the book's tier
 ```
 
-Body keeps the template's `## Summary` / `## Test plan` sections and must contain both literal lines:
+Body keeps the template's `## Summary` / `## Test plan` sections and must contain all four literal lines:
 
 ```
 Closes #1812
 Closes #1839
+Closes #1841
+Closes #1842
 ```
 
-Mention #1841 and #1842 as the deliberate out-of-scope follow-ups.
+Note it as **Wave 1 of two**, with Wave 2 (#1813, the resolver progress signal) to
+follow on its own branch.
 
 - [ ] **Step 4: Mandatory independent review**
 
@@ -784,13 +1091,17 @@ Run the `code-review` gate (no `--fix`) per CLAUDE.md's Before-shipping checklis
 | One `TtsEngine` | 1 |
 | One mapper per side | 2 (frontend), 4 (server) |
 | "Sampled" scan + OpenAPI description | 5 |
-| Release notes | 6 |
+| Library-card preview tier (#1842) | 6 |
+| 1.7B tier picker weights gate (#1841) | 7 |
+| Release notes | 8 |
 
 No gaps.
 
 **2. Placeholder scan**
 
-Three steps deliberately say "read the file's existing helpers first and reuse them" — Task 3 Step 3 (`cast.test.tsx` harness), Task 4 Step 1 (provider spy), Task 5 Step 1 (already pinned to the real fixture pattern). These are instructions to match a harness this plan has read only in part, not missing content: the assertions each must produce are stated exactly. Every other step carries its literal code.
+Five steps deliberately say "read the file's existing helpers first and reuse them" — Task 3 Step 3 (`cast.test.tsx` harness), Task 4 Step 1 (provider spy), Task 5 Step 1 (already pinned to the real fixture pattern), Task 6 Step 1 (`voice-library.test.ts` fixture uuid), and Task 7 Step 1 (the modal's real markup: radios vs buttons). These are instructions to match a harness this plan has read only in part, not missing content: the assertions each must produce are stated exactly. Every other step carries its literal code.
+
+Task 6 Step 5 and Task 7 Step 6 each end with a `grep` rather than a file:line, because the call sites are a small open set this plan did not enumerate exhaustively. The grep is the instruction, not a gap.
 
 **3. Type consistency**
 

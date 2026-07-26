@@ -1,9 +1,16 @@
 # Audition engine + tier fidelity, and one engine→modelKey source of truth
 
 **Date:** 2026-07-26
-**Issues:** #1812 (mapper consolidation) + #1839 (the two live defects behind it)
+**Issues:** #1812 (mapper consolidation), #1839 (the two live defects behind it),
+#1841 (ungated 1.7B tier picker), #1842 (library-card preview tier)
 **Branch:** `fix/frontend-audition-engine-tier`
 **Status:** design approved, revised after adversarial review
+
+**This is Wave 1 of a two-wave delivery.** Wave 2 is the cloned/designed voice
+resolver progress signal (#1813), specified in
+`2026-07-26-resolver-prepass-progress-phase-design.md` and shipped on its own
+branch once this merges. The two waves are independent in code and share only
+this delivery arc — both are fs-38 Wave 3b2 follow-ups.
 
 ## Context
 
@@ -202,23 +209,58 @@ either tier, and `openapi.yaml`'s `sampled` field description (mirrored into
 - The `sampleModelKeyForEngine` describe block retires with the function; its
   cases move to `tts-models.test.ts` first, so no coverage is lost.
 
+### Gate the 1.7B tier picker on installed weights (#1841)
+
+`start-generation.tsx:11-18` offers the 1.7B tier unconditionally, while the
+1.7B base is a **separately downloaded** model (`main.py:6070`
+`_qwen_base17_weights_present`, `:3146` `Base17UnavailableError`). Picking it on
+a box without those weights is already broken for *generation*; once the preview
+tier tracks the session key, previews inherit that exposure too — so the gate
+belongs here, on the control that sets the tier.
+
+The signal already exists end to end and needs no new plumbing: the sidecar
+reports `qwen_base17_weights_present` in `/health` (`main.py:6408`), and the
+server already forwards it as `qwenBase17WeightsPresent`
+(`sidecar-health.ts:204,279`). Only the **frontend** stops short — `SidecarHealth`
+in `src/lib/api.ts:6073-6084` carries `qwenBase17Loaded` and `qwenWeightsPresent`
+but not the 1.7B weights field. Thread it through `useTtsLifecycle` → `layout.tsx`
+→ the modal, and disable the 1.7B option with a reason when the weights are
+absent.
+
+Note this is **installed**, not **loaded** — the distinction that matters
+throughout this design. `VoiceEnginePicker`'s existing `qwen17bAvailable` gate is
+residency-based and therefore stricter; it is left alone, since a stricter gate is
+not a bug.
+
+### Make the library-card preview follow the same tier (#1842)
+
+The My-voices card hardcodes 0.6B on both sides of its own design/play pair:
+`voice-library.ts:434` (`POST /:voiceUuid/sample`) and `design-voice-core.ts:281`
+(the preview design). Both use cache scope `qwen-<uuid>`, so **they share a cache
+key with each other** exactly as the character sites do — the same invariant, one
+level over. They must move together or not at all.
+
+`POST /api/voice-library/:voiceUuid/sample` currently accepts only `{ text }` and
+has no session context, so the tier has to be passed in: accept an optional
+`modelKey`, validate it resolves to the Qwen engine, and default to
+`qwen3-tts-0.6b` for any caller that omits it (so the endpoint stays
+backward-compatible). The frontend sends the same
+`modelKeyForEngineChoice('qwen', ttsModelKey)` expression every other call site
+uses. `ui.ttsModelKey` is a global session setting, so this works on the
+book-less `#/voices` tab too.
+
+To be precise about what this fixes: the card and the cast row keep **separate
+files** either way, because their cache scopes differ (`qwen-<uuid>` vs
+`voiceId ?? char-…`). The defect is that the same voice could *sound different*
+in the two places. After this they render at the same tier.
+
 ## Out of scope
 
-- **The Start-generation tier picker is ungated.** `start-generation.tsx:11-18`
-  offers 1.7B with no weights-installed check, while the 1.7B base is separately
-  downloaded (`main.py:6070`, `:3146`). Picking it on a box without those weights
-  is already broken for *generation*; because the audition tier now tracks the
-  session key, previews inherit that exposure rather than adding to it. Filed as
-  [#1841](https://github.com/dudarenok-maker/Castwright/issues/1841).
-- **The library-card preview stays at 0.6B** (`voice-library.ts:434`,
-  `design-voice-core.ts:281`, cache scope `qwen-<uuid>`). Once a library voice is
-  assigned to a character in a 1.7B book, the card and the character preview are
-  two files. Filed as
-  [#1842](https://github.com/dudarenok-maker/Castwright/issues/1842).
 - **The no-capacity UI copy.** Whether the frontend surfaces a sample request's
   error body is unverified; this spec only commits to not masking it.
 - **Auditions already on disk at the old tier.** They stay valid and playable; no
   migration, no purge.
+- **Wave 2 (#1813)** — the resolver pre-pass progress signal, on its own branch.
 
 ## Corrections after review
 
