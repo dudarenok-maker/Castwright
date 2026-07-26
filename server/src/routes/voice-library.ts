@@ -890,6 +890,16 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
       }
     }
 
+    /* Review I-4 — a prior DESIGNED voice's minted emotion `variants` are
+       anchored to that base identity (qwen-<old-uuid>__<emotion>). Assigning
+       a library voice swaps the base identity to qwen-<voiceUuid>, and
+       `pickEmotionVariantVoice` re-derives the variant key from the NEW
+       base — so a carried-over `variants` map would point at a `.pt` that
+       never existed for this voice. The pre-render pre-pass only validates
+       the BASE `.pt`, so that dangling variant key would die mid-GPU-work at
+       synth time on the sidecar's own VoiceNotDesignedError, breaking the
+       fail-fast promise. Drop `variants` here — they're semantically tied to
+       the previous base and don't carry over. */
     const nextCharacters = [...characters];
     nextCharacters[charIndex] = {
       ...character,
@@ -900,6 +910,7 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
           name: `qwen-${voiceUuid}`,
           libraryUuid: voiceUuid,
           provenance: entry.provenance,
+          variants: undefined,
         },
       },
     };
@@ -930,7 +941,17 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
    `purgeCloneArtifacts` clears the entry's `master` field when it erases the
    clip, so this handler re-reads the entry afterward rather than returning
    the pre-purge snapshot, keeping the response's `master` in sync with what's
-   actually on disk. */
+   actually on disk.
+
+   Review I-2 — `purgeCloneArtifacts` now reports any file it could NOT
+   remove (e.g. a Windows EBUSY from the sidecar holding a `.pt` open
+   mid-load). The consent flag itself (`revokedAt`) still blocks rendering
+   either way — see the resolver's `revoked` classification, which never
+   consults on-disk artifact presence — so the response STAYS 200 and
+   `revokedAt` is set regardless. But a partial erasure must not read as a
+   silent, total success: when any path survives, this adds
+   `artifactPurgeIncomplete`/`artifactPurgeFailedPaths` to the response
+   rather than claiming clean erasure it didn't achieve. */
 voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
@@ -940,9 +961,20 @@ voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response
     const updated = { ...entry, consent: { ...entry.consent, revokedAt: new Date().toISOString() } };
     await writeEntry(updated); // passes the guard — revokedAt is orthogonal (Task 7)
     // Erase resynthesis-capable artifacts AND the original recording itself.
-    await purgeCloneArtifacts(voiceUuid, { deleteMasterClip: true });
+    const purgeResult = await purgeCloneArtifacts(voiceUuid, { deleteMasterClip: true });
     const final = (await readEntry(voiceUuid)) ?? updated;
-    return res.status(200).json(final);
+    if (purgeResult.failed.length > 0) {
+      console.warn(
+        `[voice-library] revoke for "${voiceUuid}" left ${purgeResult.failed.length} artifact(s) ` +
+          `un-erased:`,
+        purgeResult.failed,
+      );
+    }
+    return res.status(200).json(
+      purgeResult.failed.length > 0
+        ? { ...final, artifactPurgeIncomplete: true, artifactPurgeFailedPaths: purgeResult.failed }
+        : final,
+    );
   } catch (e) {
     return res.status(502).json({ error: (e as Error).message || 'Revoke failed.' });
   }

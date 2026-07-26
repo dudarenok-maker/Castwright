@@ -163,3 +163,67 @@ describe('applyQwenFallback — cloned exemption (C1)', () => {
     expect(body?.renderedFallbackEngine).toBe('kokoro');
   });
 });
+
+/* Review I-3 — `applyQwenFallback`'s cloned exemption used to trigger ONLY
+   on `qwenUnavailable`, not on the OTHER reason `needsFallback` can fire
+   (`!voiceName`). The voice-mapping.ts half of this same review fix (moving
+   the `libraryUuid` check ahead of the empty-`designedName` early-return)
+   closes the one known way a cloned+libraryUuid slot could resolve to an
+   empty voiceName today — which means, with BOTH halves of the fix applied,
+   this branch is no longer reachable via the real `pickVoiceForEngine`
+   (mirrors the sibling `qwenUnavailable` branch above, which the file header
+   already documents as a "now unreachable in production" backstop once the
+   resolver pre-pass fully subsumed it).
+
+   To still prove THIS half's own logic in isolation — independent of
+   whether the voice-mapping.ts half holds — this test substitutes
+   `pickVoiceForEngine` itself (`vi.doMock` + a fresh dynamic import, the same
+   pattern `ensure-sidecar-loaded.test.ts`'s withGpuLoad-gate suite uses) so a
+   cloned character's voiceName resolves empty NO MATTER what
+   `overrideTtsVoices.qwen` actually contains — simulating a future
+   regression that reopens the empty-voiceName gap some other way. Before the
+   `synthesise-chapter.ts` half of the I-3 fix, this scenario (cloned +
+   healthy Qwen + empty voiceName) fell through the `qwenUnavailable`-only
+   guard and rendered silently on Kokoro; this test fails before that fix. */
+describe('review I-3 — applyQwenFallback throws for a cloned slot on EITHER needsFallback reason, not just qwenUnavailable', () => {
+  afterEach(() => {
+    vi.doUnmock('./voice-mapping.js');
+    vi.resetModules();
+  });
+
+  it('a cloned character whose voiceName resolves empty (Qwen otherwise HEALTHY) still raises UnresolvableClonedVoiceError, never silently renders on Kokoro', async () => {
+    vi.resetModules();
+    vi.doMock('./voice-mapping.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./voice-mapping.js')>();
+      return {
+        ...actual,
+        // Simulate a future regression re-opening the empty-voiceName gap
+        // for a cloned qwen slot, regardless of what the real picker would
+        // do today — everything else (kokoro/coqui picks, emotion variants)
+        // stays real.
+        pickVoiceForEngine: (engine: string, voice: unknown, hint?: unknown) =>
+          engine === 'qwen' ? '' : actual.pickVoiceForEngine(engine as never, voice as never, hint as never),
+      };
+    });
+    const {
+      synthesiseChapter: synthesiseChapterFresh,
+      UnresolvableClonedVoiceError: UnresolvableClonedVoiceErrorFresh,
+    } = await import('./synthesise-chapter.js');
+
+    const { qwen, kokoro, resolveForEngine } = multiEngine();
+    await expect(
+      synthesiseChapterFresh({
+        sentences: [sentence(1)],
+        cast: clonedCast,
+        provider: qwen,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        resolveForEngine,
+        qwenUnavailable: false, // Qwen is HEALTHY — the old guard's only trigger
+        cloneResolverDepsOverride: fakeCloneResolverDeps('lib-clone'),
+      }),
+    ).rejects.toBeInstanceOf(UnresolvableClonedVoiceErrorFresh);
+    expect(qwen.calls).toHaveLength(0);
+    expect(kokoro.calls).toHaveLength(0); // never silently substituted
+  });
+});

@@ -690,6 +690,65 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
     });
     expect(cast.characters[0].overrideTtsVoices?.kokoro).toEqual({ name: 'af_heart' });
   });
+
+  /* Review I-4 — a character who previously had a DESIGNED voice with minted
+     emotion `variants` keeps them after assign merges the qwen slot
+     (`...character.overrideTtsVoices?.qwen` spreads the OLD slot's fields
+     first). Those variants are keyed off the OLD base (`qwen-<old-uuid>
+     __<emotion>`); after assign, `pickEmotionVariantVoice` derives the
+     variant key from the NEW base (`qwen-<voiceUuid>__<emotion>`), a `.pt`
+     that never existed for this voice. The pre-render pre-pass only
+     validates the BASE `.pt`, so an emotion-tagged sentence would die
+     mid-GPU-work on the sidecar's own VoiceNotDesignedError — breaking the
+     fail-fast promise this whole readiness gate exists for. This test fails
+     before the fix (`variants` survives the assign). */
+  it('review I-4: assigning a library voice CLEARS a carried-over emotion `variants` map — it is anchored to the previous base identity', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'assign-variants-1',
+        provenance: 'cloned',
+        engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+        consent: {
+          personName: 'Test',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00Z',
+          attestedBy: 'test',
+        },
+      }),
+    );
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-variants', [
+      {
+        id: 'char-marlow',
+        name: 'Marlow',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: {
+            name: 'qwen-old-designed-uuid',
+            provenance: 'designed',
+            // Minted against the OLD base — must not survive onto the new one.
+            variants: { angry: { name: 'qwen-old-designed-uuid__angry' } },
+          },
+        },
+      },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/assign-variants-1/assign')
+      .send({ bookId: 'book-variants', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+
+    const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
+      characters: Array<{ overrideTtsVoices?: { qwen?: Record<string, unknown> } }>;
+    };
+    expect(cast.characters[0].overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-assign-variants-1',
+      libraryUuid: 'assign-variants-1',
+      provenance: 'cloned',
+    });
+    expect(cast.characters[0].overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
 });
 
 describe('POST /:uuid/assign — cloned readiness gate (fs-38 Wave 3b1)', () => {

@@ -242,6 +242,7 @@ function makeDeps(overrides: Partial<ResolveChapterDeps> = {}): ResolveChapterDe
   ptExists: ReturnType<typeof vi.fn>;
   deriveEngineArtifact: ReturnType<typeof vi.fn>;
   readMasterPcm: ReturnType<typeof vi.fn>;
+  purgeCloneArtifacts: ReturnType<typeof vi.fn>;
 } {
   return {
     readEntry: vi.fn(async () => null),
@@ -254,6 +255,9 @@ function makeDeps(overrides: Partial<ResolveChapterDeps> = {}): ResolveChapterDe
     })),
     readMasterPcm: vi.fn(async () => ({ pcm: Buffer.alloc(0), sampleRate: 24000, refText: 'hi' })),
     currentBaseModel: () => 'qwen3-0.6b',
+    // Review C-1 — defaults to a no-op success; only the revoke/gone-mid-
+    // derive tests need to observe this being called.
+    purgeCloneArtifacts: vi.fn(async () => ({ failed: [] })),
     ...overrides,
   } as ResolveChapterDeps & {
     readEntry: ReturnType<typeof vi.fn>;
@@ -261,6 +265,7 @@ function makeDeps(overrides: Partial<ResolveChapterDeps> = {}): ResolveChapterDe
     ptExists: ReturnType<typeof vi.fn>;
     deriveEngineArtifact: ReturnType<typeof vi.fn>;
     readMasterPcm: ReturnType<typeof vi.fn>;
+    purgeCloneArtifacts: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -536,6 +541,251 @@ describe('resolveClonedVoicesForChapter', () => {
     }
     expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'misconfigured' }]);
     expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+
+  /* --- review C-1: revoke landing mid-derive is a lost-update, not a re-vivify --- */
+
+  describe('review C-1 — a revoke/delete landing during an in-flight repair', () => {
+    it('a revoke that lands between classify and derive-completion: revokedAt is NOT clobbered, the voice is reported Broken/revoked, the purge is re-run, and no ready stamp is written', async () => {
+      const preDeriveEntry = baseEntry({
+        master: MASTER,
+        engines: { qwen: { status: 'stale', baseModel: 'old' } },
+      });
+      // What the entry looks like on disk AFTER a concurrent revoke landed
+      // while the derive was in flight — this is what a fresh re-read must
+      // see, in place of the stale `preDeriveEntry` snapshot classify() read.
+      const postRevokeEntry = baseEntry({
+        master: undefined, // purgeCloneArtifacts's deleteMasterClip already cleared it
+        engines: { qwen: { status: 'stale', baseModel: 'old' } },
+        consent: {
+          personName: 'x',
+          relationship: 'self',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00Z',
+          attestedBy: 'x',
+          revokedAt: '2026-02-01T00:00:00Z',
+        },
+      });
+      const readEntry = vi
+        .fn()
+        .mockResolvedValueOnce(preDeriveEntry) // classify's read
+        .mockResolvedValueOnce(postRevokeEntry); // guardPostDeriveWrite's re-read, post-derive
+      const deps = makeDeps({
+        readEntry,
+        ptExists: vi.fn(async () => true),
+        currentBaseModel: () => 'qwen3-new',
+      });
+
+      let thrown: UnresolvableClonedVoiceError | undefined;
+      try {
+        await resolveClonedVoicesForChapter(
+          [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+          deps,
+        );
+      } catch (e) {
+        thrown = e as UnresolvableClonedVoiceError;
+      }
+
+      // (b) reported Broken/revoked.
+      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'revoked' }]);
+      // (d) no ready stamp written — and more generally NO write at all, so
+      // the concurrent revoke's own on-disk `revokedAt` is never touched by
+      // this function (a): a write here using the stale `preDeriveEntry`
+      // snapshot (no `revokedAt`) is exactly the clobber this fix closes.
+      expect(deps.writeEntry).not.toHaveBeenCalled();
+      // (c) the artifact purge is re-run — the derive that just completed
+      // may have written a fresh `.pt` AFTER the revoke's own purge already
+      // ran; this call is what erases it.
+      expect(deps.purgeCloneArtifacts).toHaveBeenCalledWith('u1', {});
+      expect(readEntry).toHaveBeenCalledTimes(2);
+    });
+
+    it('the entry disappearing entirely mid-derive (deleted) is treated the same as revoked: Broken/revoked, purge re-run, no write', async () => {
+      const preDeriveEntry = baseEntry({ master: MASTER, engines: { qwen: { status: 'stale' } } });
+      const readEntry = vi.fn().mockResolvedValueOnce(preDeriveEntry).mockResolvedValueOnce(null);
+      const deps = makeDeps({ readEntry, ptExists: vi.fn(async () => true) });
+
+      let thrown: UnresolvableClonedVoiceError | undefined;
+      try {
+        await resolveClonedVoicesForChapter(
+          [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+          deps,
+        );
+      } catch (e) {
+        thrown = e as UnresolvableClonedVoiceError;
+      }
+
+      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'revoked' }]);
+      expect(deps.writeEntry).not.toHaveBeenCalled();
+      expect(deps.purgeCloneArtifacts).toHaveBeenCalledWith('u1', {});
+    });
+
+    it('a successful repair merges the status stamp into the FRESH re-read entry, not the stale pre-derive snapshot — a concurrent unrelated sibling-engine edit survives', async () => {
+      const preDeriveEntry = baseEntry({
+        master: MASTER,
+        engines: { qwen: { status: 'stale', baseModel: 'old' }, xtts: { status: 'ready' } },
+      });
+      // A totally unrelated concurrent edit landed on the entry while the
+      // derive was running (e.g. an xtts re-derive elsewhere) — the sibling
+      // engine's status flipped. The success write must pick this up, not
+      // the pre-derive snapshot's stale `xtts: ready`.
+      const postDeriveEntry = baseEntry({
+        master: MASTER,
+        engines: { qwen: { status: 'stale', baseModel: 'old' }, xtts: { status: 'stale' } },
+      });
+      const readEntry = vi
+        .fn()
+        .mockResolvedValueOnce(preDeriveEntry)
+        .mockResolvedValueOnce(postDeriveEntry);
+      const deps = makeDeps({ readEntry, ptExists: vi.fn(async () => true), currentBaseModel: () => 'qwen3-new' });
+
+      await resolveClonedVoicesForChapter(
+        [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+        deps,
+      );
+
+      expect(deps.writeEntry).toHaveBeenCalledTimes(1);
+      const written = deps.writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
+      expect(written.engines.qwen).toEqual({ status: 'ready', baseModel: 'qwen3-new' });
+      // The concurrent edit (xtts flipped to stale) survives — proof the
+      // write merged into the FRESH read, not the stale pre-derive one.
+      expect(written.engines.xtts).toEqual({ status: 'stale' });
+      expect(deps.purgeCloneArtifacts).not.toHaveBeenCalled();
+    });
+
+    it('permanent (4xx) derive failure: a revoke landing before the failed-persist write is NOT clobbered — Broken/revoked (not derive-failed), purge re-run, no failed stamp written', async () => {
+      const preDeriveEntry = baseEntry({ master: MASTER });
+      const postRevokeEntry = baseEntry({
+        master: undefined,
+        consent: {
+          personName: 'x',
+          relationship: 'self',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00Z',
+          attestedBy: 'x',
+          revokedAt: '2026-02-01T00:00:00Z',
+        },
+      });
+      const readEntry = vi.fn().mockResolvedValueOnce(preDeriveEntry).mockResolvedValueOnce(postRevokeEntry);
+      const deps = makeDeps({
+        readEntry,
+        ptExists: vi.fn(async () => false),
+        deriveEngineArtifact: vi.fn(async () => {
+          throw Object.assign(new Error('rejected clip'), { status: 422 });
+        }),
+      });
+
+      let thrown: UnresolvableClonedVoiceError | undefined;
+      try {
+        await resolveClonedVoicesForChapter(
+          [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+          deps,
+        );
+      } catch (e) {
+        thrown = e as UnresolvableClonedVoiceError;
+      }
+
+      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'revoked' }]);
+      expect(deps.writeEntry).not.toHaveBeenCalled();
+      expect(deps.purgeCloneArtifacts).toHaveBeenCalledWith('u1', {});
+    });
+  });
+
+  /* --- review I-1: an abort mid-derive must propagate as an AbortError, ---
+     --- never be misreported as a chapter/voice failure ------------------- */
+
+  describe('review I-1 — an abort mid-derive propagates as AbortError, not a derive-failed report', () => {
+    it('deriveEngineArtifact rejecting with a genuine AbortError propagates unchanged and skips the rest of the loop', async () => {
+      const abortErr = Object.assign(new Error('aborted'), { name: 'AbortError' });
+      const entry = baseEntry({ master: MASTER });
+      const deriveEngineArtifact = vi.fn(async () => {
+        throw abortErr;
+      });
+      const readEntry = vi.fn(async () => entry);
+      const deps = makeDeps({ readEntry, ptExists: vi.fn(async () => false), deriveEngineArtifact });
+
+      await expect(
+        resolveClonedVoicesForChapter(
+          [
+            { characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false },
+            { characterName: 'Second', libraryUuid: 'u2', wrongEngine: false, engineUnavailable: false },
+          ],
+          deps,
+        ),
+      ).rejects.toBe(abortErr);
+
+      // The loop stopped at the first request — the second was never reached.
+      expect(deriveEngineArtifact).toHaveBeenCalledTimes(1);
+      expect(deps.writeEntry).not.toHaveBeenCalled();
+    });
+
+    /* This is the REALISTIC production shape: derive-engine-artifact.ts's
+       fetch layer converts EVERY rejection, abort included, into a
+       SidecarDesignError(status 0) — so `err.name` is NOT 'AbortError' here.
+       Only `deps.signal.aborted` (set by the same `controller.abort()` call
+       that caused the fetch to reject) proves this was actually a pause, not
+       a real sidecar-unreachable failure. This is the case that used to
+       produce a scary "cloned voice … derive-failed" chapter failure on a
+       plain Pause click. */
+    it('deriveEngineArtifact rejecting with the real wrapped SidecarDesignError(status 0) shape, with deps.signal aborted, still rejects as AbortError — not UnresolvableClonedVoiceError', async () => {
+      const controller = new AbortController();
+      const entry = baseEntry({ master: MASTER });
+      const deriveEngineArtifact = vi.fn(async () => {
+        controller.abort();
+        throw Object.assign(new Error('TTS sidecar (…) is unreachable — The operation was aborted.'), {
+          name: 'SidecarDesignError',
+          status: 0,
+        });
+      });
+      const readEntry = vi.fn(async () => entry);
+      const deps = makeDeps({
+        readEntry,
+        ptExists: vi.fn(async () => false),
+        deriveEngineArtifact,
+        signal: controller.signal,
+      });
+
+      let rejection: unknown;
+      try {
+        await resolveClonedVoicesForChapter(
+          [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+          deps,
+        );
+        throw new Error('expected rejection');
+      } catch (e) {
+        rejection = e;
+      }
+
+      expect(rejection).not.toBeInstanceOf(UnresolvableClonedVoiceError);
+      expect((rejection as { name?: string })?.name).toBe('AbortError');
+      expect(deps.writeEntry).not.toHaveBeenCalled();
+    });
+
+    it('an already-aborted signal is checked at the TOP of each loop iteration — a second requested voice is never even classified', async () => {
+      const controller = new AbortController();
+      controller.abort();
+      const entry = baseEntry({ master: MASTER });
+      const readEntry = vi.fn(async () => entry);
+      const deps = makeDeps({ readEntry, signal: controller.signal });
+
+      let rejection: unknown;
+      try {
+        await resolveClonedVoicesForChapter(
+          [
+            { characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false },
+            { characterName: 'Second', libraryUuid: 'u2', wrongEngine: false, engineUnavailable: false },
+          ],
+          deps,
+        );
+        throw new Error('expected rejection');
+      } catch (e) {
+        rejection = e;
+      }
+
+      expect((rejection as { name?: string })?.name).toBe('AbortError');
+      expect(readEntry).not.toHaveBeenCalled();
+      expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -864,6 +1114,60 @@ describe('resolveDesignedVoicesForChapter', () => {
     const written = writeEntry.mock.calls[0][0];
     expect(written.engines.qwen).toEqual({ status: 'ready', baseModel: 'qwen3-new' });
     expect(written.engines.xtts).toEqual({ status: 'ready' }); // sibling engine survives
+  });
+
+  /* Review C-1 — a designed voice carries no consent dimension, so there's
+     no revoke race to guard against here, but the SAME lost-update shape
+     the cloned resolver fixes (stamping a status write into a STALE
+     pre-derive snapshot) would be just as real if this function's `readEntry`
+     were called before the derive. It isn't: `readEntry` (deps.readEntry)
+     is only ever called ONCE in this whole function, and that call sits
+     immediately before the write — AFTER the derive has already completed
+     — so whatever a concurrent, unrelated edit changed on the entry WHILE
+     the derive was running is picked up here, not clobbered. This test
+     pins that: it does NOT fail on the pre-existing code (no separate
+     stale-snapshot variable exists in this function to fix), which is
+     itself the finding — confirming there is no analogous C-1 gap on the
+     designed self-heal's own write, only the documentation debt of proving
+     it. */
+  it('C-1 (designed path): a concurrent unrelated entry edit made while the derive was running is NOT clobbered — the stamp merges into whatever readEntry returns post-derive', async () => {
+    const entryAfterConcurrentEdit = {
+      voiceUuid: 'lib-designed',
+      name: 'Orin',
+      provenance: 'designed' as const,
+      tags: ['edited-during-derive'], // a concurrent, unrelated write landed mid-derive
+      pinned: true,
+      engines: { qwen: { status: 'stale' as const }, xtts: { status: 'ready' as const } },
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+    const writeEntry = vi.fn(async (_entry: typeof entryAfterConcurrentEdit) => {});
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm: vi.fn(async () => ({
+        pcm: Buffer.alloc(10),
+        sampleRate: 24000,
+        refText: 'x',
+        manifest: { refText: 'x' },
+      })),
+      deriveEngineArtifact: vi.fn(async () => ({
+        previewPcm: Buffer.alloc(0),
+        sampleRate: 24000,
+        baseModel: 'qwen3-new',
+      })),
+      readEntry: vi.fn(async () => entryAfterConcurrentEdit),
+      writeEntry,
+    });
+
+    await resolveDesignedVoicesForChapter([{ characterName: 'Orin', libraryUuid: 'lib-designed' }], deps);
+
+    expect(writeEntry).toHaveBeenCalledTimes(1);
+    const written = writeEntry.mock.calls[0][0];
+    // The concurrent edit survives in the write — proof this merges into
+    // whatever the fresh (post-derive) readEntry call returns.
+    expect(written.tags).toEqual(['edited-during-derive']);
+    expect(written.pinned).toBe(true);
+    expect(written.engines.qwen).toEqual({ status: 'ready', baseModel: 'qwen3-new' });
   });
 
   it('I-2: readEntry returning null skips the stamp without throwing', async () => {

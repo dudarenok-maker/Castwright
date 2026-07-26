@@ -325,18 +325,27 @@ export function pickVoiceForEngine(
      → '' (cast view shows "no voice designed yet"). Handle before the generic
      slot return so the uuid path wins. */
   if (engine === 'qwen') {
+    /* Review I-3 — an explicit voice-library assignment wins outright, and
+       must be checked BEFORE the `designedName` empty-string early-return
+       below: a qwen slot can legitimately carry a `libraryUuid` +
+       `provenance:'cloned'` with an empty/missing `name` (data drift — this
+       branch's own assign route always writes `name` today, but nothing
+       else in the type guarantees it). Falling through to `!designedName ->
+       ''` in that case would resolve a cloned character to "no voice
+       designed", which `needsFallback` (synthesise-chapter.ts) then reads as
+       silent permission to substitute a Kokoro voice for a real person's
+       clone — exactly the never-substitute invariant this feature exists to
+       hold. The slot's libraryUuid IS the storage key, not something to
+       re-derive from the character's own voiceUuid/id via qwenStorageKey. */
+    const qwenSlot = voice.overrideTtsVoices?.qwen;
+    if (qwenSlot?.libraryUuid) return `qwen-${qwenSlot.libraryUuid}`;
     /* Preserve the legacy singular `overrideTtsVoice` fallback too — a qwen
        voice carrying only the un-normalised singular field must still count as
        designed (matches the generic path's behavior). */
     const designedName =
-      voice.overrideTtsVoices?.qwen?.name ??
+      qwenSlot?.name ??
       (voice.overrideTtsVoice?.engine === 'qwen' ? voice.overrideTtsVoice.name : undefined);
     if (!designedName) return '';
-    /* fs-38 Wave 1 — an explicit voice-library assignment wins outright: the
-       slot's libraryUuid IS the storage key, not something to re-derive from
-       the character's own voiceUuid/id via qwenStorageKey. */
-    const qwenSlot = voice.overrideTtsVoices?.qwen;
-    if (qwenSlot?.libraryUuid) return `qwen-${qwenSlot.libraryUuid}`;
     return qwenStorageKey(voice, voice.id);
   }
 

@@ -23,10 +23,33 @@ import { entryDir, readEntry, removeEntryDir, writeEntry } from './voice-library
 import { purgeVoiceSamples } from '../tts/voice-sample-cache.js';
 import { getResolvedSidecarUrl } from './user-settings.js';
 
+/** Review I-2 — a single file's best-effort unlink. `force: true` already
+    swallows "doesn't exist" (the common case — most callers only have SOME
+    of these artifacts); a `.catch` firing here means the file exists but
+    couldn't be removed (e.g. Windows EBUSY/EPERM because the sidecar has it
+    open mid-`torch.load`). For a contract whose whole promise is *total*
+    erasure, that must not be swallowed silently — log it loudly and report
+    the path back to the caller instead. */
+async function unlinkTracked(f: string, voiceUuid: string, failed: string[]): Promise<void> {
+  try {
+    await rm(f, { force: true });
+  } catch (err) {
+    failed.push(f);
+    console.warn(
+      `[purge-clone-artifacts] failed to erase "${f}" for voice "${voiceUuid}" — artifact may still be on disk:`,
+      err,
+    );
+  }
+}
+
+/** Review I-2 — returns the paths (if any) that could NOT be removed, so a
+    caller (e.g. the revoke route) can surface a partial-erasure warning
+    instead of silently claiming a clean 200. Still best-effort/never-throws
+    for every other step — only the per-file removal outcome is tracked. */
 export async function purgeCloneArtifacts(
   voiceUuid: string,
   opts: { deleteEntryDir?: boolean; deleteMasterClip?: boolean } = {},
-): Promise<void> {
+): Promise<{ failed: string[] }> {
   const key = `qwen-${voiceUuid}`;
   const files = [
     qwenVoicePtPath(key),
@@ -47,7 +70,8 @@ export async function purgeCloneArtifacts(
     // clip must be erasable here too, mirroring the preview .pt/.json above.
     qwenVoiceWavPath(`${key}-preview__master`),
   ];
-  for (const f of files) await rm(f, { force: true }).catch(() => {});
+  const failed: string[] = [];
+  for (const f of files) await unlinkTracked(f, voiceUuid, failed);
   purgeVoiceSamples(key);
   // TODO(3c): when XTTS clone lands, also erase voices/xtts/xtts-<uuid>.pt here
   //   (spec §5.6). No xtts artifact exists on disk in 3b2, so omit it for now —
@@ -68,7 +92,7 @@ export async function purgeCloneArtifacts(
        or its `master` field is already absent. */
     const entry = await readEntry(voiceUuid);
     if (entry?.master) {
-      await rm(join(entryDir(voiceUuid), entry.master.clipFile), { force: true }).catch(() => {});
+      await unlinkTracked(join(entryDir(voiceUuid), entry.master.clipFile), voiceUuid, failed);
       await writeEntry({ ...entry, master: undefined });
     }
   }
@@ -87,4 +111,5 @@ export async function purgeCloneArtifacts(
       /* sidecar unreachable — non-fatal */
     }
   }
+  return { failed };
 }

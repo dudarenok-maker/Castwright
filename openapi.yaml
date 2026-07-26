@@ -3236,7 +3236,23 @@ paths:
       parameters:
         - { name: voiceUuid, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: Revoked, content: { application/json: { schema: { $ref: '#/components/schemas/VoiceLibraryEntry' } } } }
+        '200':
+          description: |
+            Revoked — `revokedAt` is always set and rendering is always blocked
+            regardless of artifact-erasure outcome. `artifactPurgeIncomplete` /
+            `artifactPurgeFailedPaths` (review I-2) are present only when some
+            on-disk clone artifact could not be removed (e.g. a file held open
+            by the sidecar) — a partial erasure that must not read as a silent
+            total success.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/VoiceLibraryEntry'
+                  - type: object
+                    properties:
+                      artifactPurgeIncomplete: { type: boolean }
+                      artifactPurgeFailedPaths: { type: array, items: { type: string } }
         '404': { description: No such entry / disabled }
 
 # ---------------------------------------------------------------------

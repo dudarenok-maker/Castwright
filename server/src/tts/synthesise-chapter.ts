@@ -46,6 +46,7 @@ import {
   type ResolveDesignedVoiceDeps,
 } from './clone-voice-resolver.js';
 import { readEntry, writeEntry, entryDir, type VoiceLibraryEntry } from '../workspace/voice-library.js';
+import { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
 import { deriveEngineArtifact } from './derive-engine-artifact.js';
 import { currentQwenBaseModel } from './model-paths.js';
 import { decodeAudioToPcm } from './mp3.js';
@@ -940,6 +941,7 @@ function buildDefaultCloneResolverDeps(signal: AbortSignal | undefined): Resolve
     deriveEngineArtifact,
     readMasterPcm: readMasterPcmDefault,
     currentBaseModel: currentQwenBaseModel,
+    purgeCloneArtifacts,
     /* No free-text progress channel exists on SynthesiseChapterOpts today —
        only typed per-group/per-title ticks (onGroupStart/onTitleStart etc.).
        Forcing a "Preparing voice…" message through one of those would misuse
@@ -1151,11 +1153,19 @@ export async function synthesiseChapter(
        .test.ts` case 1, which now documents (rather than exercises) this
        gap between the two guards. */
     const cloned = c.overrideTtsVoices?.qwen?.provenance === 'cloned';
-    if (route.engine === 'qwen' && cloned && qwenUnavailable) {
-      throw new UnresolvableClonedVoiceError(c.name ?? c.id, detail);
-    }
     const needsFallback =
       route.engine === 'qwen' && (!voiceName || qwenUnavailable) && !!resolveForEngine;
+    /* Review I-3 — this must fire for EITHER reason `needsFallback` would
+       fire (empty `voiceName` OR `qwenUnavailable`), not just
+       `qwenUnavailable`. The prior `qwenUnavailable`-only check left a gap:
+       a cloned slot that resolves to an empty voiceName (e.g. a
+       libraryUuid-only slot with a missing `name` — the I-3 voice-mapping
+       fix closes the one known way that happens) with Qwen otherwise
+       HEALTHY would fall through past this guard and hit `needsFallback`
+       below, silently rerouting a real person's voice to Kokoro. */
+    if (route.engine === 'qwen' && cloned && needsFallback) {
+      throw new UnresolvableClonedVoiceError(c.name ?? c.id, detail);
+    }
     if (!needsFallback || !resolveForEngine) return { route, voiceName };
     /* fs-2 — on a non-English book the Kokoro fallback is forbidden: it would
        read the book's language through an English-only voice. fs-60 — if

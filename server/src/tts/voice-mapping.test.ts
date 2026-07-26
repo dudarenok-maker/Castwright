@@ -317,6 +317,25 @@ describe('fs-38 Wave 1 — pickVoiceForEngine passes through an explicit voice-l
     expect(pickEmotionVariantVoice('qwen', variants, 'angry', 'qwen-abc')).toBe('qwen-abc__angry');
     expect(pickEmotionVariantVoice('qwen', variants, 'neutral', 'qwen-abc')).toBe('qwen-abc');
   });
+
+  /* Review I-3 — a cloned-provenance qwen slot with a `libraryUuid` but an
+     empty/missing `name` is data drift this branch's own assign route never
+     produces today, but nothing in the TYPE guarantees it either. Before the
+     fix, `!designedName` short-circuited to '' BEFORE the libraryUuid check
+     ever ran, so this exact shape silently read as "no voice designed" —
+     which `synthesise-chapter.ts`'s `needsFallback` (`!voiceName`) then reads
+     as permission to substitute a Kokoro voice for a cloned, consent-scoped
+     character. This test fails before the fix (picked === ''). */
+  it('review I-3: returns qwen-<libraryUuid> even when the slot has NO `name` at all (never falls through to the empty-designedName early-return)', () => {
+    const picked = pickVoiceForEngine('qwen', {
+      id: 'char-x',
+      voiceUuid: 'abc',
+      overrideTtsVoices: {
+        qwen: { name: '', libraryUuid: 'lib1', provenance: 'cloned' },
+      },
+    });
+    expect(picked).toBe('qwen-lib1');
+  });
 });
 
 describe('fs-25 — pickEmotionVariantVoice (Qwen-gated emotion variant selection)', () => {

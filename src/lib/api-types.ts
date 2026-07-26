@@ -8810,13 +8810,23 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Revoked */
+            /**
+             * @description Revoked — `revokedAt` is always set and rendering is always blocked
+             *     regardless of artifact-erasure outcome. `artifactPurgeIncomplete` /
+             *     `artifactPurgeFailedPaths` (review I-2) are present only when some
+             *     on-disk clone artifact could not be removed (e.g. a file held open
+             *     by the sidecar) — a partial erasure that must not read as a silent
+             *     total success.
+             */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["VoiceLibraryEntry"];
+                    "application/json": components["schemas"]["VoiceLibraryEntry"] & {
+                        artifactPurgeIncomplete?: boolean;
+                        artifactPurgeFailedPaths?: string[];
+                    };
                 };
             };
             /** @description No such entry / disabled */

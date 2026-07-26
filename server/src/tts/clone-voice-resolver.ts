@@ -7,6 +7,11 @@
 
 import type { VoiceLibraryEntry } from '../workspace/voice-library.js';
 import type { deriveEngineArtifact } from './derive-engine-artifact.js';
+// Review C-1 — type-only: this module's whole design is injected deps for
+// testability, so the REAL purgeCloneArtifacts is wired in by the caller
+// (synthesise-chapter.ts's buildDefaultCloneResolverDeps), never imported
+// here at runtime.
+import type { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
 
 /* Review I1 — a repair-path derive (below, both the cloned and the designed
    orchestrator) only needs the sidecar to write the `.pt`; the `previewPcm`
@@ -162,6 +167,13 @@ export interface ResolveChapterDeps {
     entry: VoiceLibraryEntry,
   ): Promise<{ pcm: Buffer; sampleRate: number; refText: string }>;
   currentBaseModel(): string;
+  /** Review C-1 — re-run after a post-derive re-read finds the entry gone or
+      revoked, so a `.pt` the sidecar wrote DURING the derive (after an
+      in-flight revoke's own purge already ran) doesn't survive it. Same
+      function that backs the revoke/delete routes
+      (workspace/purge-clone-artifacts.ts) — injected here, not imported
+      directly, to keep this module's dependency-injection pattern intact. */
+  purgeCloneArtifacts: typeof purgeCloneArtifacts;
   reportProgress?(msg: string): void;
   signal?: AbortSignal;
 }
@@ -187,6 +199,64 @@ function isTransientDeriveFailure(err: unknown): boolean {
   return !(status >= 400 && status < 500);
 }
 
+/** Review I-1 — true for the caller's own abort (the `AbortSignal` this loop
+    was given actually fired), whether it surfaced as a named `AbortError` or
+    just left `deps.signal.aborted` true. `deriveEngineArtifact`'s fetch
+    layer converts EVERY rejection — abort included — into a
+    `SidecarDesignError(…, 0)`, so `err.name` alone can't be trusted; the
+    signal itself is the ground truth. */
+function isAbort(err: unknown, deps: ResolveChapterDeps): boolean {
+  return (err as { name?: string } | null)?.name === 'AbortError' || Boolean(deps.signal?.aborted);
+}
+
+/** Review I-1 — the error this pre-pass rejects with when it detects an
+    abort. Prefers the signal's own `.reason` (a real `AbortError`
+    DOMException when `controller.abort()` was called with no argument), then
+    falls back to `err` itself when IT already carries the right name (the
+    direct-mock-throws-AbortError shape a unit-test harness would use), and
+    only synthesizes a fresh one as a last resort. This guarantees callers
+    further up the stack — synthesiseChapter's own signal-aborted checks, and
+    ultimately `routes/generation.ts`'s `err.name === 'AbortError'` pause
+    detector — see a genuine `AbortError` even though `deriveEngineArtifact`
+    stripped that identity off the underlying fetch rejection before it ever
+    reached this module. Without this, `deps.signal?.aborted` alone (matched
+    in `isAbort` above) would correctly SKIP misreporting broken/derive-failed
+    here, but the SidecarDesignError this rethrows verbatim would still read
+    as a real failure one level up — silently reintroducing the exact
+    "Pause reads as a chapter failure" bug this fix exists to close. */
+function abortRejection(err: unknown, deps: ResolveChapterDeps): unknown {
+  if ((err as { name?: string } | null)?.name === 'AbortError') return err;
+  return deps.signal?.reason ?? Object.assign(new Error('Aborted'), { name: 'AbortError' });
+}
+
+/** Review C-1 — after a derive completes (a real, seconds+ GPU op), the
+    voice-library entry may have changed underneath the in-flight repair: a
+    revoke can land mid-derive (stamping `consent.revokedAt` and purging
+    artifacts) before this write goes out, or the entry can be deleted
+    outright. Re-read fresh right before every post-derive write so that
+    write can never resurrect a revoked/deleted entry — or clobber
+    `revokedAt` — from the STALE pre-derive snapshot the caller classified
+    against. Returns the fresh entry to merge the status stamp into, or
+    `undefined` when the write must be skipped entirely (gone/revoked) — in
+    which case this reports the voice Broken/revoked and re-runs the
+    artifact purge, so a `.pt` (and sidecar in-memory prompt) the derive just
+    produced AFTER an in-flight revoke's own purge already ran doesn't
+    survive it. */
+async function guardPostDeriveWrite(
+  deps: ResolveChapterDeps,
+  libraryUuid: string,
+  characterName: string,
+  broken: BrokenClonedVoice[],
+): Promise<VoiceLibraryEntry | undefined> {
+  const fresh = await deps.readEntry(libraryUuid);
+  if (!fresh || fresh.consent?.revokedAt) {
+    broken.push({ name: characterName, reason: 'revoked' });
+    await deps.purgeCloneArtifacts(libraryUuid, {});
+    return undefined;
+  }
+  return fresh;
+}
+
 /** For each requested cloned voice: classify, derive Repairable, collect Broken.
  *  Throws UnresolvableClonedVoiceError with the full Broken list if any is Broken. */
 export async function resolveClonedVoicesForChapter(
@@ -196,6 +266,14 @@ export async function resolveClonedVoicesForChapter(
   const broken: BrokenClonedVoice[] = [];
 
   for (const request of requests) {
+    // Review I-1 — a paused/cancelled run must stop here, not keep spending
+    // GPU time (or "instantly failing" against an already-aborted signal on
+    // every remaining voice) — see isAbort's doc comment for why the signal
+    // itself, not err.name, is the ground truth.
+    if (deps.signal?.aborted) {
+      throw abortRejection(undefined, deps);
+    }
+
     const { characterName, libraryUuid, wrongEngine, engineUnavailable } = request;
 
     if (!libraryUuid) {
@@ -236,26 +314,38 @@ export async function resolveClonedVoicesForChapter(
         { masterPcm: pcm, sampleRate, refText, auditionText: REPAIR_AUDITION_TEXT },
         { signal: deps.signal },
       );
+      const fresh = await guardPostDeriveWrite(deps, libraryUuid, characterName, broken);
+      if (!fresh) continue; // gone/revoked mid-derive — guard already reported + purged.
       await deps.writeEntry({
-        ...entry,
+        ...fresh,
         engines: {
-          ...entry.engines,
-          qwen: { ...entry.engines.qwen, status: 'ready', baseModel: currentBaseModel },
+          ...fresh.engines,
+          qwen: { ...fresh.engines.qwen, status: 'ready', baseModel: currentBaseModel },
         },
       });
     } catch (err) {
+      // Review I-1 — the caller's own abort must propagate as a real
+      // AbortError (see abortRejection's doc comment), stopping the whole
+      // pre-pass, never reclassified as a derive failure.
+      if (isAbort(err, deps)) throw abortRejection(err, deps);
       if (isTransientDeriveFailure(err)) {
         // Transient (unreachable / 5xx) — do NOT persist 'failed'; a retry
         // must be able to re-attempt (classify rule 3 makes 'failed'
         // terminal, so persisting here would brick the voice on a hiccup).
         broken.push({ name: characterName, reason: 'derive-failed' });
       } else {
-        // Permanent (4xx) — the sidecar rejected the clip itself.
-        await deps.writeEntry({
-          ...entry,
-          engines: { ...entry.engines, qwen: { ...entry.engines.qwen, status: 'failed' } },
-        });
-        broken.push({ name: characterName, reason: 'derive-failed' });
+        // Permanent (4xx) — the sidecar rejected the clip itself. Same
+        // re-read guard as the success path (review C-1): a revoke landing
+        // between the (failed) derive attempt and this write must not have
+        // its revokedAt clobbered by the stale pre-derive snapshot.
+        const fresh = await guardPostDeriveWrite(deps, libraryUuid, characterName, broken);
+        if (fresh) {
+          await deps.writeEntry({
+            ...fresh,
+            engines: { ...fresh.engines, qwen: { ...fresh.engines.qwen, status: 'failed' } },
+          });
+          broken.push({ name: characterName, reason: 'derive-failed' });
+        }
       }
     }
   }

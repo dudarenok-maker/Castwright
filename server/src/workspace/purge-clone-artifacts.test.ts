@@ -35,6 +35,17 @@ vi.mock('./user-settings.js', async (importOriginal) => {
   return { ...actual, getResolvedSidecarUrl };
 });
 
+// Review I-2 — `rmMock` defaults to the REAL `rm` (delegated in the factory
+// below) so every other test in this file is unaffected; only the I-2 test
+// overrides a single call via `mockImplementationOnce` to simulate an unlink
+// that fails for a reason other than "already gone" (e.g. Windows EBUSY).
+const { rmMock } = vi.hoisted(() => ({ rmMock: vi.fn() }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  rmMock.mockImplementation(actual.rm);
+  return { ...actual, rm: rmMock };
+});
+
 let dir: string;
 let purge: typeof import('./purge-clone-artifacts.js');
 let paths: typeof import('./paths.js');
@@ -155,7 +166,36 @@ describe('purgeCloneArtifacts', () => {
 
   it('does not throw when the sidecar is unreachable', async () => {
     fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
-    await expect(purge.purgeCloneArtifacts('u1')).resolves.toBeUndefined();
+    await expect(purge.purgeCloneArtifacts('u1')).resolves.toEqual({ failed: [] });
+  });
+
+  /* Review I-2 — every unlink used to be `rm(f, { force: true }).catch(() =>
+     {})`: a real removal failure (not "file doesn't exist" — `force` already
+     swallows that) was silently dropped, so a Windows EBUSY from the sidecar
+     holding a `.pt` open mid-load would leave a live, resynthesis-capable
+     artifact on disk while the caller believed erasure was total. This test
+     fails before the fix — the prior signature always resolved `undefined`
+     regardless of any unlink outcome, so there was no way to observe (or
+     even detect) a partial failure. */
+  it('review I-2: a failing unlink is reported in `failed`, logged, and does not skip the rest', async () => {
+    // `qwenVoicePtPath(key)` is the FIRST entry in purgeCloneArtifacts'
+    // internal `files` list, so the next `rm` call the module makes is for
+    // this exact path — no path-matching needed in the mock.
+    const ptFile = seed('qwen-u1', 'pt');
+    const jsonFile = seed('qwen-u1', 'json');
+    rmMock.mockImplementationOnce(async () => {
+      throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await purge.purgeCloneArtifacts('u1');
+
+    expect(result.failed).toEqual([ptFile]);
+    expect(existsSync(ptFile)).toBe(true); // never actually removed
+    expect(existsSync(jsonFile)).toBe(false); // the OTHER file's removal still ran
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(ptFile), expect.anything());
+
+    warnSpy.mockRestore();
   });
 
   it('a base-key evict failure does not skip the -preview evict', async () => {
@@ -243,7 +283,7 @@ describe('purgeCloneArtifacts — deleteMasterClip (revoke recording erasure)', 
 
     await expect(
       purge.purgeCloneArtifacts(voiceUuid, { deleteMasterClip: true }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ failed: [] });
     const onDisk = await vl.readEntry(voiceUuid);
     expect(onDisk?.master).toBeUndefined();
   });
@@ -251,7 +291,7 @@ describe('purgeCloneArtifacts — deleteMasterClip (revoke recording erasure)', 
   it('is a no-op when the entry itself does not exist', async () => {
     await expect(
       purge.purgeCloneArtifacts('does-not-exist', { deleteMasterClip: true }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ failed: [] });
   });
 
   it('leaves the recording untouched when deleteMasterClip is not set (existing revoke path)', async () => {
