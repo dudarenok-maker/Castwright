@@ -852,7 +852,13 @@ def test_real_kokoro_still_exposes_the_sess_attribute() -> None:
 
 
 def test_real_kokoro_create_keeps_the_positional_signature_we_call() -> None:
-    """main.py:1416 calls `create(text, voice, speed, lang)` fully positionally."""
+    """main.py has two call sites for `create()`, and they are not equivalent.
+    `KokoroEngine.synthesize` (the real synthesis hot path, runs on every synth)
+    calls `create(text, voice=..., speed=..., lang=...)` by keyword.
+    `KokoroEngine._directml_selftest_or_fallback` (the DirectML proof-of-life
+    probe — disabled today, see the `amd-rocm.txt` overlay comment and
+    `installRecipe` in `scripts/accelerator-profile.mjs`) calls
+    `create(text, voice, speed, lang)` fully positionally."""
     import inspect
 
     sig = inspect.signature(_real_kokoro().Kokoro.create)
@@ -860,11 +866,14 @@ def test_real_kokoro_create_keeps_the_positional_signature_we_call() -> None:
     assert params[:5] == ["self", "text", "voice", "speed", "lang"], (
         f"kokoro_onnx.Kokoro.create signature drifted: {params}"
     )
-    # Names/order alone don't prove the real call site still works: if
+    # Names/order alone guard the keyword call in `KokoroEngine.synthesize`: a
+    # rename of `voice`/`speed`/`lang` breaks that call site even though it's
+    # keyword-based. They do NOT prove the positional probe still works: if
     # upstream kept these names/order but made voice/speed/lang keyword-only
     # (`def create(self, text, *, voice, speed, lang, ...)`), the assertion
-    # above would still pass while main.py:1416's positional call would raise
-    # TypeError at runtime. Pin the parameter *kind* too.
+    # above would still pass while `_directml_selftest_or_fallback`'s positional
+    # call would raise TypeError at runtime. Pin the parameter *kind* too — this
+    # only guards the (currently disabled) DirectML path, not the live hot path.
     positional_kinds = (
         inspect.Parameter.POSITIONAL_ONLY,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
@@ -872,5 +881,7 @@ def test_real_kokoro_create_keeps_the_positional_signature_we_call() -> None:
     for name in ("voice", "speed", "lang"):
         assert sig.parameters[name].kind in positional_kinds, (
             f"kokoro_onnx.Kokoro.create's '{name}' parameter became keyword-only — "
-            "main.py:1416 calls create() positionally and would raise TypeError"
+            "KokoroEngine._directml_selftest_or_fallback calls create() "
+            "positionally and would raise TypeError (latent on the disabled "
+            "DirectML path, but still shipped code)"
         )
