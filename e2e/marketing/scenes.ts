@@ -1284,12 +1284,17 @@ export const SCENES: Scene[] = [
        counts voices kept true ACROSS books, so a single-book library would
        render a meaningless card).
 
-       Dark-only, deliberately. The card is a fixed dark surface
-       (series-share-card.tsx hardcodes `bg-[#1b1714] text-cream`) but it draws
-       its accent from the themed `--magenta` token, which is #a43c6c in light
-       and #e58fb8 in dark (src/styles.css). Only the dark value has usable
-       contrast on a near-black card, so a light capture is not a second
-       treatment to choose from — it is the same card with a muddy accent. */
+       Dark-only because there is nothing a light capture would add: the card
+       pins every colour it paints (`bg-[#1b1714] text-cream` plus the pinned
+       `--color-magenta-on-dark` accent), so both themes now render the same
+       bytes and a second file would be a duplicate.
+
+       It used to be dark-only for a sharper reason — the accent still resolved
+       through the themed `--magenta`, so a light capture produced the same card
+       with a #a43c6c accent at 2.9:1, failing WCAG AA. That's fixed (#1831), and
+       `e2e/series-memory.spec.ts` now asserts the card is theme-invariant. If
+       that assertion is ever relaxed, revisit this: one file is only correct
+       while both themes agree. */
     id: 'series-cast-card-export',
     hash: '#/',
     viewports: ['desktop'],

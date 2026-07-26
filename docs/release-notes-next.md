@@ -94,6 +94,23 @@ history at cut time.
   on-disk index the splice route addresses, so Listen-view "Fix this line" targeted the line before
   the marked one.
 
+- **Series-memory's hardcoded-dark surfaces no longer borrow the theme's accent** (#1832). The
+  three `src/components/series-memory/` surfaces pin a `#1b1714` background that never follows the
+  app theme, but their accent resolved through the theme-flipping `--magenta` — `#A43C6C` on light,
+  **2.918:1** on that surface, failing WCAG AA as text. New pinned `--color-magenta-on-dark` token
+  (the accent counterpart to the existing pinned `--color-cream`), applied to the share card's
+  label/glyph/separators/footer, the reveal's carried-badge and section label, and both gradient
+  CTAs. The reveal's per-book dots are included because they encode which books a character appears
+  in — meaningful graphics under WCAG 1.4.11 (3:1), also missed. Pinning their gradient forced the
+  CTA ink off flipping `text-ink` (near-white on light pink under dark) onto the already-pinned
+  `text-peach-ink`, 5.3–5.8:1 across the gradient. **Matters more than a normal contrast bug
+  because the card is exported as a PNG** — a light-theme user shipped the failing version rather
+  than merely seeing it. Regression cases live in Playwright, not vitest (jsdom doesn't resolve
+  these tokens) and assert *identity across themes* rather than a literal, since the defect was a
+  colour that moved when its surface didn't. Trade-off: the card no longer responds to
+  `[data-contrast='high']` — ~11:1 → a fixed 7.6:1 for high-contrast dark, but it also stops
+  high-contrast light resolving to a near-invisible `#7A1B49`.
+
 ---
 
 ## 📱 Companion app

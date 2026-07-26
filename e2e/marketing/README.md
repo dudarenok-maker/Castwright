@@ -59,10 +59,15 @@ Add one row to `scenes.ts`:
   `#/books/:bookId/<view>`, `#/account`, `#/voices`.
 - `waitFor` is an optional content selector (non-fatal) so the shot isn't taken
   on the loading shell.
-- `themes` pins a scene to `['dark']` or `['light']`. Only for a fixed-treatment
-  surface where the other theme is not a second look but a worse version of the
-  same one (see `series-cast-card-export`). It intersects with `CAPTURE_THEME`
-  rather than overriding it, so a scene never writes a theme it disowns.
+- `themes` pins a scene to `['dark']` or `['light']`. Only for a surface that
+  pins its own colours, so the other theme would render the same bytes and its
+  file would be a pure duplicate (see `series-cast-card-export`). It intersects
+  with `CAPTURE_THEME` rather than overriding it, so a scene never writes a
+  theme it disowns. Don't reach for it to hide a theme that merely looks
+  *worse* — that's a contrast bug in the component, and pinning the capture
+  hides it from everyone except the marketing shot (which is exactly how
+  #1831 stayed invisible: the card was already failing WCAG AA on the light
+  theme for real users while the captures only ever showed dark).
 - `viewports` defaults to `['desktop']`.
 
 ## Export scenes (capturing what the app *produces*, not what it shows)
