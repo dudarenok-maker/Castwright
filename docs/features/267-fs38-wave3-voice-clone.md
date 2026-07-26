@@ -191,7 +191,14 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
     multi-byte scripts (worst case 3 bytes per UTF-16 unit → ≤6000 bytes →
     ≤8000 base64); a separate byte check would be unreachable at that cap, and
     a test derives the arithmetic from the constant so raising it without
-    redoing the sums fails (#1836).
+    redoing the sums fails (#1836). **`mockCloneVoice` enforces the same cap**,
+    so mock/e2e mode is never more permissive than the real server on the one
+    rejection the wizard can surface. The number lives in four places — the
+    route's `MAX_CLONE_TRANSCRIPT_CHARS`, the frontend's
+    (`src/lib/clone-transcript-limit.ts`, its own module so a `vi.mock` of
+    `lib/api` can't blank the panel's guard), `openapi.yaml`'s `maxLength`, and
+    the types generated from it — with a test on each side of the wire pinning
+    its copy against the contract.
 
 ## Test plan
 
@@ -284,7 +291,20 @@ No new Playwright e2e in 3a — added in 3b1 (below).
 - Vitest frontend (`src/lib/api.clone-voice.test.ts`) — `mockCloneVoice`
   mirrors the real precedence (supplied wins, blank/absent falls back,
   matching text stays `'whisper'`), so mock/e2e mode can't keep reproducing
-  the bug the real route fixed.
+  the bug the real route fixed. It also mirrors the route's **rejection**:
+  over-cap throws and appends no entry, at-cap is accepted. A fourth test pins
+  `MAX_CLONE_TRANSCRIPT_CHARS` against `openapi.yaml`'s `maxLength` — the
+  frontend-side twin of the server's pin, so the cap can't drift on one side
+  of the wire alone. All three were mutation-checked: raising the constant to
+  6000 fails the pin, and deleting the mock's guard fails the rejection test.
+- Playwright (`e2e/voice-library.spec.ts`, step 6) — the clone wizard's
+  transcript field in a real browser: the ingested Whisper text lands in the
+  box, an over-cap value disables Continue with the reason rendered on screen
+  *and leaves the full text intact* for trimming, and a corrected value
+  re-enables it. jsdom can't attest that the message renders beside the field
+  the user has to fix. The assertion that the corrected text reaches the wire
+  stays in Vitest — no view renders `sampleTranscript`, so there is nothing
+  for the browser to observe without adding UI purely for the test.
 - Vitest server (`server/src/tts/synthesise-chapter-cloned-exemption.test.ts`)
   — `applyQwenFallback` raises `UnresolvableClonedVoiceError` for a cloned
   Qwen-routed character when Qwen is unavailable, and leaves every other

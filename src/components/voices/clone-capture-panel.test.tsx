@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { voiceLibrarySlice } from '../../store/voice-library-slice';
+import { MAX_CLONE_TRANSCRIPT_CHARS } from '../../lib/clone-transcript-limit';
 import { CloneCapturePanel } from './clone-capture-panel';
 
 const cloneVoiceSample = vi.fn().mockResolvedValue({ candidateId: 'cand-1', transcript: 'hi there', durationSeconds: 9, sampleRate: 24_000, qualityWarnings: [] });
@@ -81,17 +82,22 @@ describe('CloneCapturePanel', () => {
     const cont = () => screen.getByRole('button', { name: /continue/i });
     await waitFor(() => expect(cont()).toBeEnabled());
 
+    /* Derived from the constant, not from a literal: a literal would keep
+       passing if the panel's cap drifted away from the contract's. */
+    const atCap = 'x'.repeat(MAX_CLONE_TRANSCRIPT_CHARS);
+    const overCap = 'x'.repeat(MAX_CLONE_TRANSCRIPT_CHARS + 1);
+
     // Over the cap → blocked, with the reason on screen rather than a silent cut.
-    fireEvent.change(screen.getByLabelText('transcript'), { target: { value: 'x'.repeat(2001) } });
+    fireEvent.change(screen.getByLabelText('transcript'), { target: { value: overCap } });
     await waitFor(() => expect(cont()).toBeDisabled());
     expect(screen.getByText(/too long/i)).toBeInTheDocument();
     fireEvent.click(cont());
     expect(onReady).not.toHaveBeenCalled();
 
     // Trimming to the cap unblocks it, with the full text preserved.
-    fireEvent.change(screen.getByLabelText('transcript'), { target: { value: 'x'.repeat(2000) } });
+    fireEvent.change(screen.getByLabelText('transcript'), { target: { value: atCap } });
     await waitFor(() => expect(cont()).toBeEnabled());
     fireEvent.click(cont());
-    expect(onReady).toHaveBeenCalledWith(expect.objectContaining({ transcript: 'x'.repeat(2000) }));
+    expect(onReady).toHaveBeenCalledWith(expect.objectContaining({ transcript: atCap }));
   });
 });

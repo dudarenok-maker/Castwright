@@ -62,6 +62,7 @@ import type {
 import type { components as ApiComponents } from './api-types';
 import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
+import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
 import { initialCharacters } from '../data/characters';
 import { initialSentences } from '../data/sentences';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
@@ -9772,6 +9773,16 @@ export async function mockCloneVoiceSample(_form: FormData): Promise<CloneSample
 
 export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibraryEntry> {
   await wait(300);
+  /* #1836 — mirror the route's 400 on an over-length transcript. Without it
+     mock mode accepts what the real server rejects, so the one rejection path
+     the wizard can surface is unreachable in mock/e2e. Message shape matches
+     realCloneVoice's (`Voice clone failed (<status>): <body>`), since the
+     wizard renders it verbatim. */
+  if (typeof body.transcript === 'string' && body.transcript.length > MAX_CLONE_TRANSCRIPT_CHARS) {
+    throw new Error(
+      `Voice clone failed (400): Transcript is too long (max ${MAX_CLONE_TRANSCRIPT_CHARS} characters).`,
+    );
+  }
   const now = new Date().toISOString();
   /* #1836 — mirror the real route: a supplied non-blank transcript wins over
      the canned Whisper text and flips transcriptSource to 'user'. Without

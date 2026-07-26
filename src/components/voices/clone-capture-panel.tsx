@@ -1,11 +1,8 @@
 import { useState } from 'react';
 import { useAppDispatch } from '../../store';
 import { cloneSample } from '../../store/voice-library-slice';
+import { MAX_CLONE_TRANSCRIPT_CHARS } from '../../lib/clone-transcript-limit';
 import { VoiceRecorder } from './voice-recorder';
-
-/** Keep in step with `CloneVoiceRequest.transcript`'s `maxLength` in
- *  openapi.yaml and `MAX_CLONE_TRANSCRIPT_CHARS` in the clone route. */
-const MAX_TRANSCRIPT_CHARS = 2000;
 
 type Relationship = 'self' | 'family-with-permission' | 'guardian-of-minor';
 export interface ConsentDraft { personName: string; relationship: Relationship; permittedUse: 'personal'; }
@@ -34,14 +31,13 @@ export function CloneCapturePanel({ onReady }: { onReady: (r: { candidateId: str
     finally { setBusy(false); }
   }
 
-  /* Mirrors CloneVoiceRequest.transcript's maxLength / the route's
-     MAX_CLONE_TRANSCRIPT_CHARS (#1836). Deliberately NOT a textarea
-     `maxLength`: the browser would silently drop the tail of a long paste,
-     and a half-a-correction is exactly the silent discard this fixes. Caught
-     here instead, while the field is still on screen and editable — after
-     Continue the panel unmounts, so a server 400 would leave nowhere to fix
-     it. The route still enforces the same cap for non-UI callers. */
-  const transcriptTooLong = transcript.length > MAX_TRANSCRIPT_CHARS;
+  /* #1836 — deliberately NOT a textarea `maxLength`: the browser would
+     silently drop the tail of a long paste, and half a correction is exactly
+     the silent discard this fixes. Caught here instead, while the field is
+     still on screen and editable — after Continue the panel unmounts, so a
+     server 400 would leave nowhere to fix it. The route (and the mock) still
+     enforce the same cap for non-UI callers. */
+  const transcriptTooLong = transcript.length > MAX_CLONE_TRANSCRIPT_CHARS;
   const consentComplete = personName.trim().length > 0 && attested;
   const canContinue = !!candidateId && consentComplete && !busy && !transcriptTooLong;
 
@@ -64,7 +60,7 @@ export function CloneCapturePanel({ onReady }: { onReady: (r: { candidateId: str
           {transcriptTooLong && (
             <p className="text-magenta text-xs">
               That transcript is too long — {transcript.length.toLocaleString()} characters, and the
-              limit is {MAX_TRANSCRIPT_CHARS.toLocaleString()}. Trim it to continue.
+              limit is {MAX_CLONE_TRANSCRIPT_CHARS.toLocaleString()}. Trim it to continue.
             </p>
           )}
         </label>
