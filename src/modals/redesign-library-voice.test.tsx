@@ -11,6 +11,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { voiceLibrarySlice, type VoiceLibraryEntry } from '../store/voice-library-slice';
+import { uiSlice } from '../store/ui-slice';
 import { RedesignLibraryVoiceModal } from './redesign-library-voice';
 
 const sampleLibraryVoice = vi.fn();
@@ -45,7 +46,9 @@ function makeEntry(overrides: Partial<VoiceLibraryEntry> = {}): VoiceLibraryEntr
 }
 
 function renderModal(entry: VoiceLibraryEntry = makeEntry(), onClose = vi.fn()) {
-  const store = configureStore({ reducer: { voiceLibrary: voiceLibrarySlice.reducer } });
+  const store = configureStore({
+    reducer: { voiceLibrary: voiceLibrarySlice.reducer, ui: uiSlice.reducer },
+  });
   render(
     <Provider store={store}>
       <RedesignLibraryVoiceModal entry={entry} onClose={onClose} />
@@ -81,6 +84,7 @@ describe('RedesignLibraryVoiceModal', () => {
     await waitFor(() =>
       expect(redesignLibraryVoice).toHaveBeenCalledWith(entry.voiceUuid, {
         persona: entry.persona,
+        modelKey: 'qwen3-tts-0.6b',
       }),
     );
     await waitFor(() =>

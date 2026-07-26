@@ -9,7 +9,7 @@
    the server call succeeds. */
 
 import { useState } from 'react';
-import { useAppDispatch } from '../store';
+import { useAppDispatch, useAppSelector } from '../store';
 import {
   redesignVoice,
   promoteRedesign,
@@ -20,6 +20,7 @@ import { AbCompareShell } from '../components/ab-compare-shell';
 import { useAbAudition, type AbSide, type AbRowState } from '../lib/use-ab-audition';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { api } from '../lib/api';
+import { modelKeyForEngineChoice } from '../lib/tts-models';
 import { IconPlay, IconPause, IconSpinner, IconSparkle, IconCheck } from '../lib/icons';
 
 interface Props {
@@ -30,6 +31,7 @@ interface Props {
 export function RedesignLibraryVoiceModal({ entry, onClose }: Props) {
   const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
+  const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const [persona, setPersona] = useState(entry.persona ?? '');
   const [oldPreviewUrl, setOldPreviewUrl] = useState<string | null>(null);
   const [proposed, setProposed] = useState<{ previewUrl: string } | null>(null);
@@ -81,8 +83,15 @@ export function RedesignLibraryVoiceModal({ entry, onClose }: Props) {
     setRedesignBusy(true);
     setError(null);
     try {
+      /* #1842 — the A/B modal's "Proposed voice" side must audition at the
+         tier this session will render at, matching every other Qwen call
+         site (create-library-voice.tsx, voice-library-card.tsx). */
       const result = await dispatch(
-        redesignVoice({ voiceUuid: entry.voiceUuid, persona: trimmed }),
+        redesignVoice({
+          voiceUuid: entry.voiceUuid,
+          persona: trimmed,
+          modelKey: modelKeyForEngineChoice('qwen', ttsModelKey),
+        }),
       ).unwrap();
       setProposed({ previewUrl: result.previewUrl });
       await playback.play(result.previewUrl);

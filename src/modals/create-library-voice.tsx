@@ -14,6 +14,7 @@ import { useAppDispatch, useAppSelector } from '../store';
 import { designVoice } from '../store/voice-library-slice';
 import { castDesignActions } from '../store/cast-design-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
+import { modelKeyForEngineChoice } from '../lib/tts-models';
 import { IconClose, IconSparkle, IconSpinner, IconPlay, IconPause } from '../lib/icons';
 
 interface Props {
@@ -24,6 +25,7 @@ export function CreateLibraryVoiceModal({ onClose }: Props) {
   const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
   const designPending = useAppSelector((s) => s.voiceLibrary.designPending);
+  const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const [name, setName] = useState('');
   const [persona, setPersona] = useState('');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -59,8 +61,15 @@ export function CreateLibraryVoiceModal({ onClose }: Props) {
       }),
     );
     try {
+      /* #1842 — audition at the tier this session will actually render at,
+         matching the card's own Play (voice-library-card.tsx) so the two
+         never disagree on a filename for the same voice. */
       const result = await dispatch(
-        designVoice({ name: trimmedName, persona: trimmedPersona }),
+        designVoice({
+          name: trimmedName,
+          persona: trimmedPersona,
+          modelKey: modelKeyForEngineChoice('qwen', ttsModelKey),
+        }),
       ).unwrap();
       setPreviewUrl(result.previewUrl);
       await playback.play(result.previewUrl);

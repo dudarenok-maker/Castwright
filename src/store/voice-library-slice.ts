@@ -65,7 +65,7 @@ export const fetchVoiceLibrary = createAsyncThunk('voiceLibrary/fetch', async ()
 export const designVoice = createAsyncThunk(
   'voiceLibrary/design',
   async (
-    body: { name: string; persona: string; languageCode?: string },
+    body: { name: string; persona: string; languageCode?: string; modelKey?: TtsModelKey },
     { dispatch },
   ) => {
     const result = await api.designLibraryVoice(body);
@@ -76,8 +76,11 @@ export const designVoice = createAsyncThunk(
 
 export const redesignVoice = createAsyncThunk(
   'voiceLibrary/redesign',
-  async (args: { voiceUuid: string; persona: string }) => {
-    return api.redesignLibraryVoice(args.voiceUuid, { persona: args.persona });
+  async (args: { voiceUuid: string; persona: string; modelKey?: TtsModelKey }) => {
+    return api.redesignLibraryVoice(args.voiceUuid, {
+      persona: args.persona,
+      modelKey: args.modelKey,
+    });
   },
 );
 

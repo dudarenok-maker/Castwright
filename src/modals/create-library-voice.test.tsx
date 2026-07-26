@@ -10,6 +10,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { voiceLibrarySlice, type VoiceLibraryEntry } from '../store/voice-library-slice';
 import { castDesignSlice } from '../store/cast-design-slice';
+import { uiSlice } from '../store/ui-slice';
 import { CreateLibraryVoiceModal } from './create-library-voice';
 
 const designLibraryVoice = vi.fn();
@@ -39,7 +40,11 @@ function makeDesignResult(overrides: Partial<VoiceLibraryEntry> = {}) {
 
 function renderModal(onClose = vi.fn()) {
   const store = configureStore({
-    reducer: { voiceLibrary: voiceLibrarySlice.reducer, castDesign: castDesignSlice.reducer },
+    reducer: {
+      voiceLibrary: voiceLibrarySlice.reducer,
+      castDesign: castDesignSlice.reducer,
+      ui: uiSlice.reducer,
+    },
   });
   render(
     <Provider store={store}>
@@ -74,6 +79,7 @@ describe('CreateLibraryVoiceModal', () => {
       expect(designLibraryVoice).toHaveBeenCalledWith({
         name: 'Captain Halloran',
         persona: 'A gruff captain',
+        modelKey: 'qwen3-tts-0.6b',
       }),
     );
     await waitFor(() => expect(screen.getByTestId('create-library-voice-save')).not.toBeDisabled());

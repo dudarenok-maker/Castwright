@@ -9450,6 +9450,7 @@ async function realDesignLibraryVoice(body: {
   name: string;
   persona: string;
   languageCode?: string;
+  modelKey?: TtsModelKey;
 }): Promise<{ entry: VoiceLibraryEntry; previewUrl: string }> {
   const res = await fetch('/api/voice-library/design', {
     method: 'POST',
@@ -9465,7 +9466,7 @@ async function realDesignLibraryVoice(body: {
 
 async function realRedesignLibraryVoice(
   voiceUuid: string,
-  body: { persona: string },
+  body: { persona: string; modelKey?: TtsModelKey },
 ): Promise<{ previewUrl: string }> {
   const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}/redesign`, {
     method: 'POST',
@@ -9662,6 +9663,7 @@ export async function mockDesignLibraryVoice(body: {
   name: string;
   persona: string;
   languageCode?: string;
+  modelKey?: TtsModelKey;
 }): Promise<{ entry: VoiceLibraryEntry; previewUrl: string }> {
   await wait(300);
   const now = new Date().toISOString();
@@ -9683,7 +9685,7 @@ export async function mockDesignLibraryVoice(body: {
 
 export async function mockRedesignLibraryVoice(
   voiceUuid: string,
-  _body: { persona: string },
+  _body: { persona: string; modelKey?: TtsModelKey },
 ): Promise<{ previewUrl: string }> {
   await wait(300);
   const entry = mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid);
