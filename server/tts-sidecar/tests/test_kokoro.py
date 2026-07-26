@@ -852,7 +852,7 @@ def test_real_kokoro_still_exposes_the_sess_attribute() -> None:
 
 
 def test_real_kokoro_create_keeps_the_positional_signature_we_call() -> None:
-    """main.py:1363 calls `create(text, voice, speed, lang)` fully positionally."""
+    """main.py:1416 calls `create(text, voice, speed, lang)` fully positionally."""
     import inspect
 
     sig = inspect.signature(_real_kokoro().Kokoro.create)
@@ -863,7 +863,7 @@ def test_real_kokoro_create_keeps_the_positional_signature_we_call() -> None:
     # Names/order alone don't prove the real call site still works: if
     # upstream kept these names/order but made voice/speed/lang keyword-only
     # (`def create(self, text, *, voice, speed, lang, ...)`), the assertion
-    # above would still pass while main.py:1363's positional call would raise
+    # above would still pass while main.py:1416's positional call would raise
     # TypeError at runtime. Pin the parameter *kind* too.
     positional_kinds = (
         inspect.Parameter.POSITIONAL_ONLY,
@@ -872,5 +872,5 @@ def test_real_kokoro_create_keeps_the_positional_signature_we_call() -> None:
     for name in ("voice", "speed", "lang"):
         assert sig.parameters[name].kind in positional_kinds, (
             f"kokoro_onnx.Kokoro.create's '{name}' parameter became keyword-only — "
-            "main.py:1363 calls create() positionally and would raise TypeError"
+            "main.py:1416 calls create() positionally and would raise TypeError"
         )

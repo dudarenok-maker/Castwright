@@ -2,11 +2,15 @@
 context manager runs.
 
 Twelve `@app.on_event("startup"|"shutdown")` handlers were collapsed into a
-single `main._lifespan` so the web stack could move past Starlette 1.3.1, which
-deletes `Router.on_event` outright. With the decorators gone, the ordering is no
-longer expressed by twelve registration sites that are hard to reorder by
-accident — it is twelve consecutive `await` lines that a careless edit could
-reshuffle, drop, or duplicate silently. Hence this file.
+single `main._lifespan` ahead of the Starlette bump this branch also makes.
+That collapse wasn't forced by import-time breakage — FastAPI re-implements
+`on_startup`/`on_shutdown`/`on_event` locally (`fastapi/routing.py`), so the
+decorators still resolve fine against the pinned FastAPI 0.140. It was done
+because `on_event` is formally deprecated there, kept only on a compatibility
+shim FastAPI's own source marks for future removal. With the decorators gone,
+the ordering is no longer expressed by twelve registration sites that are hard
+to reorder by accident — it is twelve consecutive `await` lines that a
+careless edit could reshuffle, drop, or duplicate silently. Hence this file.
 
 These tests drive the ACTUAL wired-up `app.router.lifespan_context`, with every
 handler monkeypatched to a recorder, and compare the observed call order against
@@ -18,7 +22,7 @@ CLAUDE.md), and it works here because `_lifespan` resolves each handler as a
 module global at call time.
 
 Note the shutdown order is registration order, NOT the reverse of startup:
-Starlette's `Router.shutdown()` iterated `on_shutdown` forwards, and the
+FastAPI's `APIRouter._shutdown()` iterates `on_shutdown` forwards, and the
 migration preserved that rather than "tidying" it into a reversal."""
 
 from __future__ import annotations
@@ -84,9 +88,13 @@ async def _run_lifespan(calls: list[str]) -> None:
 
 def test_app_is_wired_to_the_lifespan_context_manager():
     # Guards the seam the other tests depend on: if the app were ever
-    # constructed without `lifespan=`, Starlette would fall back to
-    # `_DefaultLifespan` over the (now empty) on_event lists and every ordering
-    # assertion below would pass against nothing at all.
+    # constructed without `lifespan=`, it would fall back to FastAPI's own
+    # `_DefaultLifespan` over the (now empty) `on_startup`/`on_shutdown` lists
+    # and every ordering assertion below would pass against nothing at all.
+    # The two asserts below only make sense against FastAPI's `APIRouter`,
+    # which keeps `on_startup`/`on_shutdown` as instance lists for backward
+    # compatibility after Starlette dropped them outright — this would
+    # `AttributeError` on a plain Starlette `Router`, which has no such lists.
     assert main.app.router.lifespan_context is main._lifespan
     assert main.app.router.on_startup == []
     assert main.app.router.on_shutdown == []

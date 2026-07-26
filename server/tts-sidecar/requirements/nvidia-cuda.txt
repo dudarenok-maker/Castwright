@@ -53,8 +53,8 @@ torchaudio==2.11.0
 # swapping colorlog for stdlib logging. Kokoro.create()'s signature and the
 # private `.sess` attribute we rebuild for indexed device pinning (see the
 # InferenceSession rebuild in main.py's Kokoro loader) are both unchanged, and
-# the dist metadata is identical — so this moves no transitive deps and does not
-# interact with the install-ort.mjs runtime swap.
+# the only metadata delta is the dropped `colorlog` dependency; no runtime dep
+# moves, and this does not interact with the install-ort.mjs runtime swap.
 kokoro-onnx>=0.5.0,<0.6.0
 
 # Qwen3-TTS — per-character bespoke voices; weights fetched by install-qwen3.mjs.

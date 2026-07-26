@@ -492,11 +492,19 @@ async def _lifespan(_app: FastAPI):
     """Startup/shutdown sequence for the sidecar (side-27a).
 
     Replaces the twelve `@app.on_event("startup"|"shutdown")` decorators this
-    module used to carry. FastAPI still exposes that decorator, but its body is
-    a straight delegation to `starlette.routing.Router.on_event`, which Starlette
-    1.3.1 deletes outright — so the decorator had to go before the web stack
-    could be bumped. This is a pure mechanical migration: nothing about WHAT
-    runs, or in WHICH order, changes.
+    module used to carry. That decorator was NOT a hard blocker for the
+    FastAPI bump this branch also makes: Starlette did drop `_DefaultLifespan`
+    and the `on_startup`/`on_shutdown` machinery from `Router`
+    (Kludex/starlette#3117), but FastAPI re-implemented all of it locally
+    (`fastapi/routing.py`) — its own `_DefaultLifespan`,
+    `APIRouter._startup()`/`._shutdown()`, `add_event_handler()`, and
+    `on_event()` itself all still work, so the decorator keeps resolving fine
+    against the pinned FastAPI 0.140. The real reason to migrate: `on_event`
+    is `@deprecated` there, kept only on a compatibility shim FastAPI's own
+    source marks with a "remove this once the lifespan interface is
+    improved" TODO — `lifespan` is the supported interface going forward.
+    This is a pure mechanical migration: nothing about WHAT runs, or in
+    WHICH order, changes.
 
     The handlers themselves are untouched — each is still a module-level
     `async def` under its original name, defined much further down this file
@@ -507,19 +515,24 @@ async def _lifespan(_app: FastAPI):
     forcing a reorder of the module.
 
     Ordering is a verbatim copy of the old registration order in BOTH
-    directions. Starlette ran `on_startup` in registration order and
-    `on_shutdown` in registration order too — it never reversed them — so
-    reversing the teardown here would be a behaviour change smuggled into a
-    migration whose whole premise is that nothing changes. (The four stop
-    handlers are mutually independent anyway; each just cancels its own task.)
+    directions. FastAPI's `APIRouter._startup()` ran `on_startup` handlers in
+    registration order and `_shutdown()` ran `on_shutdown` handlers in
+    registration order too — neither ever reversed them — so reversing the
+    teardown here would be a behaviour change smuggled into a migration whose
+    whole premise is that nothing changes. (The four stop handlers are
+    mutually independent anyway; each just cancels its own task.)
 
     Failure semantics match the decorator form as well. The startup awaits are
     sequential and unguarded, so a raising handler aborts boot and skips the
-    handlers after it — as `Router.startup()` did. The teardown sits in a
-    `finally` because Starlette's `_DefaultLifespan.__aexit__` ignores its
-    `exc_info` and runs `Router.shutdown()` unconditionally; without the
-    `finally`, an exception thrown in at the `yield` (a cancelled lifespan task)
-    would skip teardown entirely, which the `on_event` form did not do.
+    handlers after it — as FastAPI's `APIRouter._startup()` did. The teardown
+    sits in a `finally` because FastAPI's `_DefaultLifespan.__aexit__`
+    ignores its `exc_info` and runs `APIRouter._shutdown()` unconditionally
+    (`fastapi/routing.py:265-266`) — not Starlette's: the shipped Starlette
+    `_DefaultLifespan.__aenter__`/`__aexit__` are two bare `pass`es, and
+    `Router.startup()`/`Router.shutdown()`/`Router.on_startup` don't exist on
+    Starlette's `Router` at all. Without the `finally`, an exception thrown
+    at the `yield` (a cancelled lifespan task) would skip teardown entirely,
+    which the `on_event` form did not do.
 
     `tests/test_lifespan_order.py` drives this very context manager and pins
     both sequences by name, so a later edit cannot quietly drop or reshuffle a
