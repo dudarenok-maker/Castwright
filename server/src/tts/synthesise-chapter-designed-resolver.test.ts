@@ -102,7 +102,14 @@ describe('synthesiseChapter — designed-voice orphan self-heal pre-pass (fs-38 
     expect(deriveEngineArtifact).toHaveBeenCalledWith(
       'lib-designed',
       'qwen',
-      { masterPcm: expect.any(Buffer), sampleRate: 24000, refText: 'A retained calibration clip.' },
+      {
+        masterPcm: expect.any(Buffer),
+        sampleRate: 24000,
+        refText: 'A retained calibration clip.',
+        // Review I1 — the self-heal derive discards previewPcm, so it must
+        // never voice the full retained ref_text on the GPU hot path.
+        auditionText: expect.any(String),
+      },
       expect.objectContaining({}),
     );
     expect(writeSidecarManifest).toHaveBeenCalledTimes(1);

@@ -8,6 +8,20 @@
 import type { VoiceLibraryEntry } from '../workspace/voice-library.js';
 import type { deriveEngineArtifact } from './derive-engine-artifact.js';
 
+/* Review I1 — a repair-path derive (below, both the cloned and the designed
+   orchestrator) only needs the sidecar to write the `.pt`; the `previewPcm`
+   `deriveEngineArtifact` returns is discarded immediately by both callers.
+   Left without an `auditionText`, the sidecar falls back to the caller's
+   FULL `ref_text` (the whisper transcript, up to 60s of audio) and
+   synthesises that just to build a preview nobody uses — real GPU time
+   inside the sidecar's `_synth_lock`, on the hot path, on every Repairable
+   resolve. A short fixed line sidesteps that fallback entirely; the words
+   don't matter since the audio is thrown away. `/clone`'s own derive call
+   (routes/voice-library.ts) is untouched — it genuinely uses `previewPcm`
+   for ECAPA scoring + the wizard audition, so it keeps voicing the real
+   ref_text/calibration line. */
+export const REPAIR_AUDITION_TEXT = 'Voice check.';
+
 /* Why a cloned voice can't be used this run. `engine-unavailable` is the
    coarse 3b1 reason (Qwen unreachable) preserved for the legacy single-name
    constructor; the finer-grained reasons are for T5's classifier.
@@ -126,6 +140,8 @@ export function classifyClonedVoice(input: ClassifyInput): ClonedVoiceClassifica
   if (engineUnavailable) return { state: 'broken', reason: 'engine-unavailable' };
   const qwen = entry.engines.qwen;
   if (qwen?.status === 'failed') return { state: 'broken', reason: 'derive-failed' };
+  // M3 (review) — 'deriving' is declared on VoiceLibraryEngineStatus['status']
+  // but nothing ever persists it; no branch here handles it intentionally.
   const needsDerive =
     !ptExists ||
     (Boolean(qwen?.baseModel) && qwen?.baseModel !== currentBaseModel) ||
@@ -217,7 +233,7 @@ export async function resolveClonedVoicesForChapter(
       await deps.deriveEngineArtifact(
         libraryUuid,
         'qwen',
-        { masterPcm: pcm, sampleRate, refText },
+        { masterPcm: pcm, sampleRate, refText, auditionText: REPAIR_AUDITION_TEXT },
         { signal: deps.signal },
       );
       await deps.writeEntry({
@@ -343,7 +359,12 @@ export async function resolveDesignedVoicesForChapter(
       const result = await deps.deriveEngineArtifact(
         libraryUuid,
         'qwen',
-        { masterPcm: master.pcm, sampleRate: master.sampleRate, refText: master.refText },
+        {
+          masterPcm: master.pcm,
+          sampleRate: master.sampleRate,
+          refText: master.refText,
+          auditionText: REPAIR_AUDITION_TEXT,
+        },
         { signal: deps.signal },
       );
 

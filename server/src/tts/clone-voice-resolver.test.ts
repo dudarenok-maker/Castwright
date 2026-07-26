@@ -10,6 +10,7 @@ import {
   classifyClonedVoice,
   resolveClonedVoicesForChapter,
   resolveDesignedVoicesForChapter,
+  REPAIR_AUDITION_TEXT,
   type ClassifyInput,
   type ResolveChapterDeps,
   type ResolveDesignedVoiceDeps,
@@ -343,13 +344,55 @@ describe('resolveClonedVoicesForChapter', () => {
     expect(deps.deriveEngineArtifact).toHaveBeenCalledWith(
       'u1',
       'qwen',
-      { masterPcm: expect.any(Buffer), sampleRate: 24000, refText: 'hi' },
+      {
+        masterPcm: expect.any(Buffer),
+        sampleRate: 24000,
+        refText: 'hi',
+        auditionText: REPAIR_AUDITION_TEXT,
+      },
       { signal: controller.signal },
     );
     expect(deps.writeEntry).toHaveBeenCalledTimes(1);
     const written = deps.writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
     expect(written.engines.qwen).toEqual({ status: 'ready', baseModel: 'qwen3-new' });
     expect(written.engines.xtts).toEqual({ status: 'ready' });
+  });
+
+  /* Review I1 — pins the GPU-cost fix directly: even when the retained clip's
+     `refText` is a full whisper transcript (up to 60s of speech), the
+     resolver's derive call must never let that leak through as the audition
+     text — the sidecar falls back to voicing `ref_text` in full when no
+     `auditionText` is supplied, burning real synth time on a preview this
+     orchestrator immediately discards. Fails before the I1 fix (no
+     `auditionText` was sent at all, so the sidecar's fallback chain would
+     have reached the long `refText`); passes after. */
+  it('repairable: derive call requests a short audition, never the full-transcript refText', async () => {
+    const longTranscript =
+      'This is a long whisper transcript that stands in for up to sixty seconds of ' +
+      'recorded speech, which must never be resynthesised just to build a preview ' +
+      'that resolveClonedVoicesForChapter immediately discards.';
+    const entry = baseEntry({ master: MASTER, engines: { qwen: { status: 'stale', baseModel: 'old' } } });
+    const deps = makeDeps({
+      readEntry: vi.fn(async () => entry),
+      ptExists: vi.fn(async () => true),
+      currentBaseModel: () => 'qwen3-new',
+      readMasterPcm: vi.fn(async () => ({
+        pcm: Buffer.alloc(0),
+        sampleRate: 24000,
+        refText: longTranscript,
+      })),
+    });
+
+    await resolveClonedVoicesForChapter(
+      [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+      deps,
+    );
+
+    const [, , input] = deps.deriveEngineArtifact.mock.calls[0];
+    expect(input.refText).toBe(longTranscript); // refText itself is untouched...
+    expect(input.auditionText).toBe(REPAIR_AUDITION_TEXT); // ...but a short audition is requested instead
+    expect(input.auditionText).not.toBe(longTranscript);
+    expect(input.auditionText.length).toBeLessThan(longTranscript.length);
   });
 
   it.each([
@@ -559,7 +602,12 @@ describe('resolveDesignedVoicesForChapter', () => {
     expect(deps.deriveEngineArtifact).toHaveBeenCalledWith(
       'lib-designed',
       'qwen',
-      { masterPcm: expect.any(Buffer), sampleRate: 24000, refText: 'A calibration line.' },
+      {
+        masterPcm: expect.any(Buffer),
+        sampleRate: 24000,
+        refText: 'A calibration line.',
+        auditionText: REPAIR_AUDITION_TEXT,
+      },
       { signal: undefined },
     );
   });
