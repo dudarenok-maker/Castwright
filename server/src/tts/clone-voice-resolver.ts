@@ -234,14 +234,26 @@ function abortRejection(err: unknown, deps: ResolveChapterDeps): unknown {
     revoke can land mid-derive (stamping `consent.revokedAt` and purging
     artifacts) before this write goes out, or the entry can be deleted
     outright. Re-read fresh right before every post-derive write so that
-    write can never resurrect a revoked/deleted entry — or clobber
+    write doesn't resurrect a revoked/deleted entry — or clobber
     `revokedAt` — from the STALE pre-derive snapshot the caller classified
     against. Returns the fresh entry to merge the status stamp into, or
     `undefined` when the write must be skipped entirely (gone/revoked) — in
     which case this reports the voice Broken/revoked and re-runs the
     artifact purge, so a `.pt` (and sidecar in-memory prompt) the derive just
     produced AFTER an in-flight revoke's own purge already ran doesn't
-    survive it. */
+    survive it.
+
+    NOT a lock: `writeEntry` is tmp+rename with no compare-and-swap (true of
+    every manifest write in this codebase), so this closes the seconds-wide
+    GPU window, not the millisecond one between this re-read and the write
+    that follows. If a revoke lands in THAT window the flag can still be
+    clobbered — but the revoke's purge runs strictly after its own
+    `writeEntry`, hence after this re-read, so it lands last and the
+    artifacts still go: the residue is a stale un-revoked flag with nothing
+    renderable behind it (the next render fails loud on the missing master),
+    recoverable by revoking again. Per-uuid write serialization / an
+    `updatedAt` CAS would close it properly — tracked as a follow-up, which
+    also names the two-worker compound corner. */
 async function guardPostDeriveWrite(
   deps: ResolveChapterDeps,
   libraryUuid: string,

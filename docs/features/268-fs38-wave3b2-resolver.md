@@ -403,6 +403,30 @@ Qwen-capable book) — mock mode only exercises the frontend/store seams.
   `.message` via `fail(...)`, not a structured `code`. A cloned-voice failure
   during a splice or a QA repair is visible in the failure text, just not as
   the same distinct, reason-neutral code the generation-view toast keys off.
+- **(j)** **Entry writes are not serialized.** `writeEntry`
+  (`server/src/workspace/voice-library.ts`) is a tmp+rename with no
+  compare-and-swap and no lock — true of every manifest write in this
+  codebase, not something this wave introduced. The resolver's
+  `guardPostDeriveWrite` re-reads immediately before every post-derive write,
+  which closes the **seconds-wide** window a GPU derive opens; it does not
+  close the **millisecond** one between that re-read and the write itself.
+  Two residuals, both surfaced by the independent review of this branch and
+  both accepted for now:
+  **(1)** a revoke landing in that millisecond window can still clobber
+  `revokedAt` — benign in effect, because the revoke route's purge runs
+  strictly *after* its own `writeEntry` and therefore lands last, so the
+  artifacts are still erased and what survives is a stale un-revoked flag
+  with nothing renderable behind it (the next render fails loud on the
+  missing master; revoking again fixes the flag);
+  **(2)** the one case where an artifact can outlive a revoke — two chapter
+  workers repairing the *same* voice concurrently (simultaneous multi-book
+  renders sharing one library voice), where residual (1) fires for worker A
+  *and* worker B's derive completes after the revoke's purge: B's re-read
+  then sees the un-revoked entry, skips its re-purge, and B's `.pt` survives.
+  Requires (1) to fire first plus a dual-render precondition, so it is orders
+  of magnitude less likely than the bug the guard fixed — but it is real.
+  Proper fix (per-uuid write lock or an `updatedAt` CAS) is filed as
+  [#1826](https://github.com/dudarenok-maker/Castwright/issues/1826).
 
 ## Out of scope
 
