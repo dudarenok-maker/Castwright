@@ -8,8 +8,8 @@
 
 Turn a manuscript into a finished, **full-cast** audiobook on your own machine —
 every character in their own voice, consistent across a whole series. Castwright
-runs locally end-to-end; nothing leaves your computer unless you opt into a cloud
-analyzer.
+runs locally end-to-end; with no cloud analyzer key set, nothing leaves your
+computer.
 
 Upload `.md` / `.txt` / `.epub` / `.pdf` / `.mobi` / `.azw3` → an analyzer
 extracts characters, chapters, and per-sentence speaker tags → assign a voice to
@@ -26,8 +26,9 @@ or MP3.
 - **Designed voices** — every character gets a unique voice designed from its persona (Qwen3-TTS), kept consistent across the series; Kokoro ships a ready-made catalogue alongside it. (Cloning a voice from your own sample is the next major release.)
 - **Seven languages** — performs English, Russian, Spanish, French, German, Chinese, and Japanese end-to-end, with the manuscript's language detected on import. A cast never crosses languages within a book. (CJK attribution leans on the analyzer model — a local Qwen analyzer is recommended for Chinese and Japanese.)
 - **Quality-checked automatically** — every chapter is gated before it's assembled: acoustic checks (dead air, over-long lines, timing drift), optional word-for-word ASR transcript verification, and an opt-in speaker-fingerprint check that catches a voice drifting out of character even when the words are right. Flagged takes are surfaced on the waveform and re-recorded automatically.
-- **On-device by default** — analysis and speech run on your machine; cloud is
-  opt-in.
+- **On-device by default** — speech is always local. The analyzer is local too;
+  add a cloud key and it falls back to the cloud automatically unless you switch
+  that off.
 - **Listen on your phone or tablet** — an Android companion app plays from your library over your home network, opening into a two-pane layout on tablets and foldables. Chapters you haven't downloaded play instantly on-network, with no OS certificate install.
 - **You own the files** — export standard M4B (cover and chapter markers), MP3, AAC/M4A or Opus, a native **Audiobookshelf** export (series metadata, `metadata.json`, and a folder cover), and SRT/VTT captions (per sentence or per line, whole-book or per-chapter). EBU R128 loudness normalisation is on by default. No lock-in.
 
