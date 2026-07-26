@@ -29,7 +29,7 @@ export interface VramBlockerHealth {
 export function describeVramBlockers(health: VramBlockerHealth): VramBlocker[] {
   const out: VramBlocker[] = [];
   if (health.coquiLoaded) {
-    out.push({ model: 'Coqui XTTS', remedy: 'Stop it from its pill in the top bar.' });
+    out.push({ model: 'Coqui XTTS', remedy: 'Stop it from the Stop control.' });
   }
   if (health.kokoroLoaded) {
     out.push({ model: 'Kokoro', remedy: 'Turn off "Preload Kokoro at startup" in settings.' });

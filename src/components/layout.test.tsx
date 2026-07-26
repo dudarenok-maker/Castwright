@@ -1406,10 +1406,9 @@ describe('Layout — analysis sub-stage runtime fields forward to the Status pil
 });
 
 describe('Layout — resident-model Stop control in the global TTS notice banner (Task 10 / #1839)', () => {
-  /* Kokoro is eagerly resident (PRELOAD_KOKORO). Before this task, its only
-     Stop control lived in the generation view behind enginesInUse — so on a
-     book-less view (or the cast/voices view of a book whose cast doesn't use
-     Kokoro) it held ~1GB with no control in reach. That's exactly the moment
+  /* Kokoro is eagerly resident (PRELOAD_KOKORO). Before this task, its Stop
+     control was reachable only via the Status popover (residency-gated, but
+     hidden behind a click). That's exactly the moment
      a voice preview fails for capacity (Task 9's NoCapacityError names the
      model but has nothing to point the user at without this). The banner now
      renders a Stop control per resident engine, gated on

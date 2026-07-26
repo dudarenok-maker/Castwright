@@ -31,13 +31,13 @@ interface TtsNoticeBannerProps {
    render.
 
    Task 10 (#1839) — also the home for a resident-model Stop control. Kokoro
-   is the eagerly-resident fallback (PRELOAD_KOKORO); its Stop pill used to
-   live only in the generation view behind `enginesInUse`, so it held ~1GB on
-   the cast/voices view with nothing in reach — exactly the moment a voice
-   preview fails for capacity (see server/src/gpu/describe-vram-blockers.ts,
-   whose remedy copy now points here). Gated on residency (`state ===
-   'ready'`), not `enginesInUse` — residency is what costs VRAM. Renders
-   nothing when there's no notice AND nothing resident. */
+   is the eagerly-resident fallback (PRELOAD_KOKORO); its Stop pill was
+   reachable only via the Status popover (which is residency-gated), not the
+   generation view — this control makes one visible without that extra click.
+   Gated on residency (`state === 'ready'`), not `enginesInUse` — residency
+   is what costs VRAM. Exactly the moment a voice preview fails for capacity
+   (see server/src/gpu/describe-vram-blockers.ts, whose remedy copy now points
+   here). Renders nothing when there's no notice AND nothing resident. */
 export function TtsNoticeBanner({
   evictionNotice,
   loadErrorNotice,

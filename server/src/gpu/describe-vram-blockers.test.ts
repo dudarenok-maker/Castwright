@@ -5,7 +5,7 @@ describe('describeVramBlockers', () => {
   it('names Coqui with the top-bar-pill remedy', () => {
     const out = describeVramBlockers({ coquiLoaded: true });
     expect(out).toEqual([
-      { model: 'Coqui XTTS', remedy: 'Stop it from its pill in the top bar.' },
+      { model: 'Coqui XTTS', remedy: 'Stop it from the Stop control.' },
     ]);
   });
 
