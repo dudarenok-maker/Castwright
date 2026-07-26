@@ -6,25 +6,49 @@
    public/screenshots/. Replaces the ad hoc process used before this script
    existed; re-run after any capture-rail change instead of hand-converting.
 
+   Two sets land in that folder, and both are maintained here:
+
+     - The CURATED set (always) — `MANIFEST` below renames a chosen capture to
+       the stable name the website embeds (`cast-reuse.webp` /
+       `cast-reuse-dark.webp`). This is the set the site actually consumes.
+     - The FULL MIRROR (`--all`) — every capture under its own raw name
+       (`cast-reuse.desktop.dark.webp`), so the whole set can be browsed and
+       picked from without re-running a capture.
+
+   The mirror exists because the raw-name files were originally produced by a
+   one-off hand pass, which meant they silently rotted: they sat in the same
+   folder as the curated set, looking equally current, while actually
+   predating both a fixture fix and an app version. Anything in that folder
+   has to be regenerable by this script, or it will happen again.
+
+   Overrides (both optional, mainly for running from a git worktree whose own
+   mockups//brand/ dirs aren't the ones you want to touch):
+     MARKETING_SRC=<dir>   read captures from here
+     MARKETING_DEST=<dir>  write webp here
+
    Out of scope: companion-app screenshots (scripts/capture-companion.mjs is
    a separate pipeline) — not touched here. */
 
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const SOURCE_DIR = path.join(ROOT, 'mockups', 'marketing-screens');
-const DEST_DIR = path.join(
-  ROOT,
-  'brand',
-  'go-to-market',
-  'launch-post-images',
-  'marketing-site',
-  'screenshots',
-);
+const SOURCE_DIR = process.env.MARKETING_SRC
+  ? path.resolve(process.env.MARKETING_SRC)
+  : path.join(ROOT, 'mockups', 'marketing-screens');
+const DEST_DIR = process.env.MARKETING_DEST
+  ? path.resolve(process.env.MARKETING_DEST)
+  : path.join(
+      ROOT,
+      'brand',
+      'go-to-market',
+      'launch-post-images',
+      'marketing-site',
+      'screenshots',
+    );
 
 // scene/viewport → output filename. By default every entry is staged in BOTH
 // themes: `<output>.webp` (light) and `<output>-dark.webp` (dark).
@@ -106,9 +130,32 @@ export function stagingPlan(manifest = MANIFEST, sourceDir = SOURCE_DIR, destDir
   return plan;
 }
 
+/* Pure — the raw-name mirror. Every `<scene>.<viewport>.<theme>.png` in the
+   source becomes `<same stem>.webp` in the destination: no renaming, no theme
+   pairing, no manifest. Takes the filename list rather than reading the
+   directory so the test can exercise it without real files. */
+export function mirrorPlan(filenames, sourceDir = SOURCE_DIR, destDir = DEST_DIR) {
+  return filenames
+    .filter((f) => /\.(desktop|phone|tablet)\.(light|dark)\.png$/.test(f))
+    .map((f) => ({
+      src: path.join(sourceDir, f),
+      dest: path.join(destDir, `${f.slice(0, -'.png'.length)}.webp`),
+    }));
+}
+
 function main() {
   mkdirSync(DEST_DIR, { recursive: true });
+  const mirrorAll = process.argv.includes('--all');
   const plan = stagingPlan();
+  if (mirrorAll) {
+    /* Deduped against the curated plan: an entry appearing in both would
+       otherwise be encoded twice, and the second pass would race the first
+       on the same output path. */
+    const claimed = new Set(plan.map((p) => p.dest));
+    for (const entry of mirrorPlan(readdirSync(SOURCE_DIR))) {
+      if (!claimed.has(entry.dest)) plan.push(entry);
+    }
+  }
   let missing = 0;
   let failed = 0;
   for (const { src, dest } of plan) {

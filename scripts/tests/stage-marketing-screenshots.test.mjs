@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { MANIFEST, stagingPlan } from '../stage-marketing-screenshots.mjs';
+import { MANIFEST, stagingPlan, mirrorPlan } from '../stage-marketing-screenshots.mjs';
 
 test('stagingPlan produces one file per theme per manifest entry (a pair by default)', () => {
   const plan = stagingPlan(MANIFEST, '/src', '/dest');
@@ -92,6 +92,61 @@ test('no two manifest entries stage to the same destination file', () => {
   // would both claim foo.webp. Assert on the resolved plan, not the manifest.
   const dests = stagingPlan(MANIFEST, '/src', '/dest').map((p) => p.dest);
   assert.equal(new Set(dests).size, dests.length);
+});
+
+test('mirrorPlan converts every capture under its own raw name, no renaming', () => {
+  const plan = mirrorPlan(
+    ['cast-reuse.desktop.dark.png', 'listen.phone.light.png', 'listen.tablet.dark.png'],
+    '/src',
+    '/dest',
+  );
+  assert.deepEqual(plan, [
+    { src: path.join('/src', 'cast-reuse.desktop.dark.png'), dest: path.join('/dest', 'cast-reuse.desktop.dark.webp') },
+    { src: path.join('/src', 'listen.phone.light.png'), dest: path.join('/dest', 'listen.phone.light.webp') },
+    { src: path.join('/src', 'listen.tablet.dark.png'), dest: path.join('/dest', 'listen.tablet.dark.webp') },
+  ]);
+});
+
+test('mirrorPlan ignores anything that is not a <scene>.<viewport>.<theme>.png capture', () => {
+  // The source dir also accumulates subfolders, non-captures and stray files;
+  // feeding those to ffmpeg would produce garbage webp or a red run.
+  const plan = mirrorPlan(
+    [
+      'README.md',
+      'companion', // a directory
+      'cast-reuse.desktop.dark.png.bak',
+      'cast-reuse.desktop.png', // no theme segment
+      'cast-reuse.watch.dark.png', // unknown viewport
+      'cast-reuse.desktop.sepia.png', // unknown theme
+      'cast-reuse.desktop.dark.webp', // already converted
+      'cast-reuse.desktop.dark.png', // the only real capture here
+    ],
+    '/src',
+    '/dest',
+  );
+  assert.deepEqual(
+    plan.map((p) => path.basename(p.dest)),
+    ['cast-reuse.desktop.dark.webp'],
+  );
+});
+
+test('the mirror never collides with a curated destination name', () => {
+  /* The curated set writes `<output>.webp`; the mirror writes
+     `<scene>.<viewport>.<theme>.webp`. If a manifest entry were ever named so
+     its output equalled a raw capture stem, both would claim one path and the
+     encodes would race. main() dedupes, but the two naming schemes should not
+     overlap in the first place — assert that on the real manifest. */
+  const curated = new Set(stagingPlan(MANIFEST, '/src', '/dest').map((p) => p.dest));
+  const mirrored = mirrorPlan(
+    MANIFEST.flatMap((e) =>
+      (e.themes ?? ['light', 'dark']).map((t) => `${e.scene}.${e.viewport}.${t}.png`),
+    ),
+    '/src',
+    '/dest',
+  ).map((p) => p.dest);
+  for (const dest of mirrored) {
+    assert.ok(!curated.has(dest), `mirror name ${path.basename(dest)} collides with a curated output`);
+  }
 });
 
 test('the manifest stages the exported series cast card, dark-only', () => {
