@@ -263,13 +263,20 @@ export async function resolveClonedVoicesForChapter(
        behaviour alone. This function never even looks at a
        VoiceLibraryEntry's `engines.qwen` — only the on-disk `.pt`
        presence — so there's no seam for that case to sneak in through.
-     - NEVER throws. Unlike the cloned resolver, a failure here must not
-       introduce a new hard failure mode: if the retained clip/ref-text is
-       missing, or the re-derive itself fails (sidecar down, GPU busy,
-       whatever), this swallows the error and lets the chapter proceed to
-       whatever happens today for a missing designed voice (the sidecar's
-       own error at synth time) — unchanged behaviour, not a differently-
-       shaped abort. */
+     - NEVER throws, EXCEPT an abort (review M-1) — a paused/cancelled run
+       must stop here too, not keep spending GPU time on a self-heal nobody
+       wants anymore. Every other failure mode is swallowed: if the retained
+       clip/ref-text is missing, or the re-derive itself fails (sidecar
+       down, GPU busy, whatever), this logs a warning and lets the chapter
+       proceed to whatever happens today for a missing designed voice (the
+       sidecar's own error at synth time) — unchanged behaviour, not a
+       differently-shaped abort.
+     - A successful re-derive restores the designed-only manifest fields the
+       sidecar's clone_voice handler would otherwise truncate away (review
+       C-1), and stamps the voice-library entry ready with the fresh
+       baseModel so it stops reading "stale" forever (review I-2). Both are
+       best-effort on top of an already-successful derive — see the inline
+       comments below. */
 
 export interface DesignedVoiceRequest {
   characterName: string;
@@ -282,42 +289,131 @@ export interface ResolveDesignedVoiceDeps {
   /** Reads the retained `qwen-<uuid>__master.wav` (Task 11) plus its
       matching ref_text off the sidecar's own disk. Returns `null` — never
       throws — when either artifact is absent/unreadable, so the caller can
-      fall through cleanly instead of surfacing a new failure. */
+      fall through cleanly instead of surfacing a new failure. Also returns
+      the FULL parsed sidecar manifest (review C-1) — the pre-derive
+      snapshot the caller needs to restore designed-only fields the
+      sidecar's clone_voice handler would otherwise truncate away. */
   readDesignedMasterPcm(
     uuid: string,
-  ): Promise<{ pcm: Buffer; sampleRate: number; refText: string } | null>;
+  ): Promise<
+    { pcm: Buffer; sampleRate: number; refText: string; manifest: Record<string, unknown> } | null
+  >;
+  /** Review C-1 — atomically re-write `qwen-<uuid>.json` after a successful
+      self-heal derive, restoring the designed-only fields (`instruct`,
+      `designModel`, `mintMethod`, `fallbackFor`, `voiceUuid`, `language`)
+      the sidecar's clone_voice handler truncates away, while keeping the
+      derive's fresh `baseModel`/`refText`. */
+  writeSidecarManifest(uuid: string, manifest: Record<string, unknown>): Promise<void>;
+  /** Review I-2 — read/write the voice-library entry so a successful
+      self-heal can stamp `engines.qwen` ready with the derive's baseModel,
+      mirroring the cloned resolver's success write. */
+  readEntry(uuid: string): Promise<VoiceLibraryEntry | null>;
+  writeEntry(entry: VoiceLibraryEntry): Promise<void>;
   deriveEngineArtifact: typeof deriveEngineArtifact;
   reportProgress?(msg: string): void;
   signal?: AbortSignal;
 }
 
 /** For each requested designed voice whose `.pt` is missing: best-effort
- *  re-derive from its retained clip. Never throws — a failed or impossible
- *  self-heal just leaves the `.pt` missing, exactly as it is today. */
+ *  re-derive from its retained clip. Never throws (except an abort — see
+ *  M-1 below) — a failed or impossible self-heal just leaves the `.pt`
+ *  missing, exactly as it is today. */
 export async function resolveDesignedVoicesForChapter(
   requests: DesignedVoiceRequest[],
   deps: ResolveDesignedVoiceDeps,
 ): Promise<void> {
   for (const { characterName, libraryUuid } of requests) {
     if (!libraryUuid) continue;
-    const storageKey = `qwen-${libraryUuid}`;
-    const ptExists = await deps.ptExists(storageKey);
-    if (ptExists) continue; // present (healthy OR merely stale, out of scope) — leave it alone.
 
-    const master = await deps.readDesignedMasterPcm(libraryUuid);
-    if (!master) continue; // no retained clip / no ref_text — fall through to today's behaviour.
-
-    deps.reportProgress?.(`Preparing voice "${characterName}"…`);
+    /* I-1 (review) — the ENTIRE per-voice body now lives in one try/catch.
+       Previously `ptExists`/`readDesignedMasterPcm` were called outside any
+       try here (only the derive call itself was guarded), so a throw from
+       either — or an escaped throw from `readDesignedMasterPcm` despite its
+       own "never throws" contract — would propagate straight out of this
+       function and abort a chapter that would otherwise have rendered. */
     try {
-      await deps.deriveEngineArtifact(
+      const storageKey = `qwen-${libraryUuid}`;
+      const ptExists = await deps.ptExists(storageKey);
+      if (ptExists) continue; // present (healthy OR merely stale, out of scope) — leave it alone.
+
+      const master = await deps.readDesignedMasterPcm(libraryUuid);
+      if (!master) continue; // no retained clip / no ref_text — fall through to today's behaviour.
+
+      deps.reportProgress?.(`Preparing voice "${characterName}"…`);
+      const result = await deps.deriveEngineArtifact(
         libraryUuid,
         'qwen',
         { masterPcm: master.pcm, sampleRate: master.sampleRate, refText: master.refText },
         { signal: deps.signal },
       );
-    } catch {
-      // Best-effort only — swallow and fall through to today's behaviour
-      // (the sidecar raises its own error for a missing designed voice).
+
+      /* C-1 (review) — the sidecar's clone_voice handler TRUNCATE-REWRITES
+         qwen-<uuid>.json to a bare clone manifest (voiceId/voiceUuid/
+         refText/language/baseModel/designModel:null/clone:true) — it has no
+         idea this voiceId was ever DESIGNED, so `instruct`/`designModel`/
+         `mintMethod`/`fallbackFor` are lost on the very first self-heal
+         (and a re-DESIGN then fails on the resulting empty persona). Restore
+         them: spread the manifest read BEFORE the derive back over whatever
+         the sidecar just wrote, refreshing only `refText`/`baseModel` to the
+         derive's actual values. Best-effort — a write failure here must not
+         turn a successful re-derive (the `.pt` IS on disk now) into a
+         reported self-heal failure. */
+      const restoredManifest: Record<string, unknown> = {
+        ...master.manifest,
+        refText: master.refText,
+        baseModel: result.baseModel || master.manifest.baseModel,
+      };
+      try {
+        await deps.writeSidecarManifest(libraryUuid, restoredManifest);
+      } catch (manifestErr) {
+        console.warn(
+          `[clone-voice-resolver] designed self-heal for "${characterName}" (${libraryUuid}) re-derived ` +
+            `successfully but failed to restore its sidecar manifest:`,
+          manifestErr,
+        );
+      }
+
+      /* I-2 (review) — stamp the voice-library entry ready with the
+         derive's fresh baseModel, mirroring the cloned resolver's success
+         write (~:223-229 above), so a voice this feature just healed
+         doesn't keep reading "stale" forever: a promote-with-no-.pt entry
+         is created as `{status:'stale'}` with NO baseModel at all
+         (routes/voice-library.ts ~:545), which `withComputedStaleness`
+         can't repair on its own. Preserve sibling engines + other qwen
+         fields via spreads, same as the cloned path. Best-effort, same
+         rationale as the manifest write above. */
+      try {
+        const entry = await deps.readEntry(libraryUuid);
+        if (entry) {
+          await deps.writeEntry({
+            ...entry,
+            engines: {
+              ...entry.engines,
+              qwen: { ...entry.engines.qwen, status: 'ready', baseModel: result.baseModel },
+            },
+          });
+        }
+      } catch (entryErr) {
+        console.warn(
+          `[clone-voice-resolver] designed self-heal for "${characterName}" (${libraryUuid}) re-derived ` +
+            `successfully but failed to stamp its voice-library entry ready:`,
+          entryErr,
+        );
+      }
+    } catch (err) {
+      /* M-1 (review) — an abort must stop the loop, not be swallowed as an
+         ordinary best-effort failure. */
+      const name = (err as { name?: string } | null)?.name;
+      if (name === 'AbortError' || deps.signal?.aborted) throw err;
+      /* M-3 (review) — a bare `catch {}` here made a self-heal failing on
+         EVERY render undiagnosable. Name the voice + error so it shows up
+         in the server log; still best-effort — never throws, never bricks
+         the chapter (the sidecar raises its own error for a missing
+         designed voice). */
+      console.warn(
+        `[clone-voice-resolver] designed voice self-heal failed for "${characterName}" (${libraryUuid}):`,
+        err,
+      );
     }
   }
 }

@@ -504,6 +504,9 @@ function makeDesignedDeps(
   ptExists: ReturnType<typeof vi.fn>;
   readDesignedMasterPcm: ReturnType<typeof vi.fn>;
   deriveEngineArtifact: ReturnType<typeof vi.fn>;
+  writeSidecarManifest: ReturnType<typeof vi.fn>;
+  readEntry: ReturnType<typeof vi.fn>;
+  writeEntry: ReturnType<typeof vi.fn>;
 } {
   return {
     ptExists: vi.fn(async () => true),
@@ -513,11 +516,17 @@ function makeDesignedDeps(
       sampleRate: 24000,
       baseModel: 'qwen3-0.6b',
     })),
+    writeSidecarManifest: vi.fn(async () => {}),
+    readEntry: vi.fn(async () => null),
+    writeEntry: vi.fn(async () => {}),
     ...overrides,
   } as ResolveDesignedVoiceDeps & {
     ptExists: ReturnType<typeof vi.fn>;
     readDesignedMasterPcm: ReturnType<typeof vi.fn>;
     deriveEngineArtifact: ReturnType<typeof vi.fn>;
+    writeSidecarManifest: ReturnType<typeof vi.fn>;
+    readEntry: ReturnType<typeof vi.fn>;
+    writeEntry: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -527,7 +536,12 @@ describe('resolveDesignedVoicesForChapter', () => {
       ptExists: vi.fn(async () => false),
       readDesignedMasterPcm: vi.fn(async (uuid: string) =>
         uuid === 'lib-designed'
-          ? { pcm: Buffer.alloc(1000), sampleRate: 24000, refText: 'A calibration line.' }
+          ? {
+              pcm: Buffer.alloc(1000),
+              sampleRate: 24000,
+              refText: 'A calibration line.',
+              manifest: { voiceId: 'qwen-lib-designed', refText: 'A calibration line.' },
+            }
           : null,
       ),
     });
@@ -602,11 +616,13 @@ describe('resolveDesignedVoicesForChapter', () => {
         pcm: Buffer.alloc(10),
         sampleRate: 24000,
         refText: 'x',
+        manifest: { refText: 'x' },
       })),
       deriveEngineArtifact: vi.fn(async () => {
         throw new Error('sidecar unreachable');
       }),
     });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     await expect(
       resolveDesignedVoicesForChapter(
@@ -614,6 +630,13 @@ describe('resolveDesignedVoicesForChapter', () => {
         deps,
       ),
     ).resolves.toBeUndefined();
+
+    // M-3 (review) — the failure is logged, not silently swallowed.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Orin'),
+      expect.any(Error),
+    );
+    warnSpy.mockRestore();
   });
 
   it('no libraryUuid -> skipped without touching ptExists/derive', async () => {
@@ -627,5 +650,226 @@ describe('resolveDesignedVoicesForChapter', () => {
     expect(deps.ptExists).not.toHaveBeenCalled();
     expect(deps.readDesignedMasterPcm).not.toHaveBeenCalled();
     expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+
+  /* --- review C-1: designed manifest fields survive a self-heal ---------- */
+
+  it('C-1: a successful self-heal PRESERVES instruct/designModel/language, refreshing only refText/baseModel', async () => {
+    // The sidecar's clone_voice handler truncate-rewrites qwen-<uuid>.json to
+    // a bare clone shape on a successful derive — it has no idea this
+    // voiceId was ever DESIGNED. The pre-derive manifest snapshot below is
+    // what a real design_voice call would have left on disk; the fix must
+    // restore its designed-only fields after the derive succeeds.
+    const originalManifest = {
+      voiceId: 'qwen-lib-designed',
+      voiceUuid: 'lib-designed',
+      instruct: 'A gravelly, world-weary tone.',
+      language: 'en',
+      refText: 'A calibration line.',
+      baseModel: 'qwen3-old',
+      designModel: 'qwen3-voicedesign-1.7b',
+      mintMethod: 'anchored-icl-instruct',
+    };
+    const writeSidecarManifest = vi.fn(async (_uuid: string, _manifest: Record<string, unknown>) => {});
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm: vi.fn(async () => ({
+        pcm: Buffer.alloc(1000),
+        sampleRate: 24000,
+        refText: 'A calibration line.',
+        manifest: originalManifest,
+      })),
+      deriveEngineArtifact: vi.fn(async () => ({
+        previewPcm: Buffer.alloc(0),
+        sampleRate: 24000,
+        baseModel: 'qwen3-new',
+      })),
+      writeSidecarManifest,
+    });
+
+    await resolveDesignedVoicesForChapter(
+      [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+      deps,
+    );
+
+    expect(writeSidecarManifest).toHaveBeenCalledTimes(1);
+    const [writtenUuid, writtenManifest] = writeSidecarManifest.mock.calls[0];
+    expect(writtenUuid).toBe('lib-designed');
+    // Designed-only fields survive — this is what the sidecar's clone_voice
+    // handler would otherwise drop entirely.
+    expect(writtenManifest.instruct).toBe('A gravelly, world-weary tone.');
+    expect(writtenManifest.designModel).toBe('qwen3-voicedesign-1.7b');
+    expect(writtenManifest.mintMethod).toBe('anchored-icl-instruct');
+    expect(writtenManifest.language).toBe('en');
+    expect(writtenManifest.voiceUuid).toBe('lib-designed');
+    // ...while baseModel is refreshed to the derive's actual value.
+    expect(writtenManifest.baseModel).toBe('qwen3-new');
+  });
+
+  it('C-1: a manifest-restore failure is logged but does not make a successful self-heal throw', async () => {
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm: vi.fn(async () => ({
+        pcm: Buffer.alloc(10),
+        sampleRate: 24000,
+        refText: 'x',
+        manifest: { refText: 'x', instruct: 'y' },
+      })),
+      writeSidecarManifest: vi.fn(async () => {
+        throw new Error('disk full');
+      }),
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(
+      resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        deps,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  /* --- review I-1: ptExists / readDesignedMasterPcm throwing never escapes */
+
+  it('I-1: readDesignedMasterPcm throwing (contract violation) is still swallowed, not propagated', async () => {
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm: vi.fn(async () => {
+        throw new Error('undecodable clip (ffmpeg exited 1)');
+      }),
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(
+      resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        deps,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('I-1: ptExists throwing is still swallowed, not propagated', async () => {
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => {
+        throw new Error('stat blew up');
+      }),
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(
+      resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        deps,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(deps.readDesignedMasterPcm).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  /* --- review I-2: a healed voice is stamped ready, not stuck stale ------ */
+
+  it('I-2: a successful self-heal stamps engines.qwen ready with the derive baseModel, preserving a sibling engine', async () => {
+    const entry = {
+      voiceUuid: 'lib-designed',
+      name: 'Orin',
+      provenance: 'designed' as const,
+      tags: [],
+      pinned: false,
+      // A promote-with-no-.pt entry is created exactly this way — `stale`,
+      // no baseModel at all — which `withComputedStaleness` can't repair.
+      engines: { qwen: { status: 'stale' as const }, xtts: { status: 'ready' as const } },
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+    const writeEntry = vi.fn(async (_entry: typeof entry) => {});
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm: vi.fn(async () => ({
+        pcm: Buffer.alloc(10),
+        sampleRate: 24000,
+        refText: 'x',
+        manifest: { refText: 'x' },
+      })),
+      deriveEngineArtifact: vi.fn(async () => ({
+        previewPcm: Buffer.alloc(0),
+        sampleRate: 24000,
+        baseModel: 'qwen3-new',
+      })),
+      readEntry: vi.fn(async () => entry),
+      writeEntry,
+    });
+
+    await resolveDesignedVoicesForChapter(
+      [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+      deps,
+    );
+
+    expect(writeEntry).toHaveBeenCalledTimes(1);
+    const written = writeEntry.mock.calls[0][0];
+    expect(written.engines.qwen).toEqual({ status: 'ready', baseModel: 'qwen3-new' });
+    expect(written.engines.xtts).toEqual({ status: 'ready' }); // sibling engine survives
+  });
+
+  it('I-2: readEntry returning null skips the stamp without throwing', async () => {
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm: vi.fn(async () => ({
+        pcm: Buffer.alloc(10),
+        sampleRate: 24000,
+        refText: 'x',
+        manifest: { refText: 'x' },
+      })),
+      readEntry: vi.fn(async () => null),
+    });
+
+    await expect(
+      resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        deps,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(deps.writeEntry).not.toHaveBeenCalled();
+  });
+
+  /* --- review M-1: an abort stops the loop instead of being swallowed ---- */
+
+  it('M-1: an AbortError from the derive propagates (is NOT swallowed) and stops the loop', async () => {
+    const abortErr = Object.assign(new Error('aborted'), { name: 'AbortError' });
+    const deriveEngineArtifact = vi.fn(async () => {
+      throw abortErr;
+    });
+    const readDesignedMasterPcm = vi.fn(async () => ({
+      pcm: Buffer.alloc(10),
+      sampleRate: 24000,
+      refText: 'x',
+      manifest: { refText: 'x' },
+    }));
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm,
+      deriveEngineArtifact,
+    });
+
+    await expect(
+      resolveDesignedVoicesForChapter(
+        [
+          { characterName: 'Orin', libraryUuid: 'lib-designed' },
+          { characterName: 'Second', libraryUuid: 'lib-second' },
+        ],
+        deps,
+      ),
+    ).rejects.toBe(abortErr);
+
+    // The loop stopped at the first request — the second was never reached.
+    expect(readDesignedMasterPcm).toHaveBeenCalledTimes(1);
   });
 });

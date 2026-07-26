@@ -51,7 +51,7 @@ import { currentQwenBaseModel } from './model-paths.js';
 import { decodeAudioToPcm } from './mp3.js';
 import { qwenVoicePtPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from '../workspace/paths.js';
 import { safeSegment, sanitizeIdSegment, assertContained } from '../util/safe-path.js';
-import { readJson } from '../workspace/state-io.js';
+import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -969,27 +969,47 @@ const DESIGNED_MASTER_SAMPLE_RATE = 24_000;
    workspace/voice-library.ts entry-dir `master` a CLONED voice's ingested
    clip lives in — a designed voice never populates that field. Returns
    `null` (never throws) when either artifact is missing/unreadable, so the
-   caller falls through to today's behaviour instead of a new failure mode. */
+   caller falls through to today's behaviour instead of a new failure mode.
+
+   Also returns the FULL parsed manifest (review C-1): the sidecar's
+   `clone_voice` handler truncate-rewrites `qwen-<uuid>.json` to a bare clone
+   shape on a successful re-derive, dropping `instruct`/`designModel`/
+   `mintMethod`/`fallbackFor` entirely — the caller needs this PRE-derive
+   snapshot to restore those fields afterwards. */
 async function readDesignedMasterPcmDefault(
   uuid: string,
-): Promise<{ pcm: Buffer; sampleRate: number; refText: string } | null> {
+): Promise<
+  { pcm: Buffer; sampleRate: number; refText: string; manifest: Record<string, unknown> } | null
+> {
   const storageKey = `qwen-${uuid}`;
-  let refText = '';
+  /* I-1 (review) — the whole body now lives in ONE try/catch. Previously
+     `decodeAudioToPcm` sat outside every try here, so a corrupt/undecodable
+     retained clip (ffmpeg spawn failure or non-zero exit — mp3.ts ~523-535)
+     threw straight out of this "never throws" function, up through the
+     caller's unguarded await, and aborted a chapter that would otherwise
+     have rendered fine. */
   try {
-    const manifest = await readJson<{ refText?: string }>(qwenVoiceSidecarPath(storageKey));
-    refText = typeof manifest?.refText === 'string' ? manifest.refText.trim() : '';
+    const manifest = await readJson<Record<string, unknown>>(qwenVoiceSidecarPath(storageKey));
+    const refText = typeof manifest?.refText === 'string' ? (manifest.refText as string).trim() : '';
+    if (!manifest || !refText) return null;
+    const raw = await readFile(qwenVoiceWavPath(`${storageKey}__master`));
+    const pcm = await decodeAudioToPcm(raw, DESIGNED_MASTER_SAMPLE_RATE);
+    return { pcm, sampleRate: DESIGNED_MASTER_SAMPLE_RATE, refText, manifest };
   } catch {
     return null;
   }
-  if (!refText) return null;
-  let raw: Buffer;
-  try {
-    raw = await readFile(qwenVoiceWavPath(`${storageKey}__master`));
-  } catch {
-    return null;
-  }
-  const pcm = await decodeAudioToPcm(raw, DESIGNED_MASTER_SAMPLE_RATE);
-  return { pcm, sampleRate: DESIGNED_MASTER_SAMPLE_RATE, refText };
+}
+
+/* fs-38 Wave 3b2, Task 12 (§2.3), review C-1 — atomically re-write a designed
+   voice's sidecar manifest (`qwen-<uuid>.json`) after a successful self-heal
+   derive, restoring the designed-only fields the sidecar's `clone_voice`
+   handler otherwise truncates away. Mirrors the atomic-write convention used
+   for every other JSON manifest in this codebase (state-io.ts). */
+async function writeSidecarManifestDefault(
+  uuid: string,
+  manifest: Record<string, unknown>,
+): Promise<void> {
+  await writeJsonAtomic(qwenVoiceSidecarPath(`qwen-${uuid}`), manifest);
 }
 
 /* fs-38 Wave 3b2, Task 12 (§2.3) — the designed-voice self-heal pre-pass's
@@ -1001,6 +1021,9 @@ function buildDefaultDesignedResolverDeps(
   return {
     ptExists: defaultPtExists,
     readDesignedMasterPcm: readDesignedMasterPcmDefault,
+    writeSidecarManifest: writeSidecarManifestDefault,
+    readEntry,
+    writeEntry,
     deriveEngineArtifact,
     reportProgress: undefined,
     signal,
@@ -1230,6 +1253,14 @@ export async function synthesiseChapter(
       libraryUuid: c.overrideTtsVoices?.qwen?.libraryUuid,
     }));
   if (designedVoiceRequests.length > 0) {
+    /* M-1 (review) — the abort check above (~:1181) only covers the cloned
+       pre-pass; the cloned resolver's own re-derive can run for a while, so
+       the signal may abort meanwhile. Re-check before starting the designed
+       block rather than let a paused/cancelled run keep spending GPU time
+       here. */
+    if (signal?.aborted) {
+      throw new DOMException('synthesiseChapter aborted', 'AbortError');
+    }
     const designedResolverDeps: ResolveDesignedVoiceDeps = {
       ...buildDefaultDesignedResolverDeps(signal),
       ...designedResolverDepsOverride,

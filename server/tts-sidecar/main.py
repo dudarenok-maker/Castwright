@@ -3508,9 +3508,12 @@ class QwenEngine(Engine):
         (mirroring the `__1.7b` derived-prompt cache key) so Node's path
         builder (`qwenVoiceWavPath`) resolves the identical filename:
         `<safe-voice_id>__master.wav`. §2.3 (fs-38 Wave 3b2) — lets a
-        DESIGNED voice re-derive its embedding identically after a base-model
-        upgrade, mirroring the `master.wav` a CLONED voice already keeps from
-        its uploaded sample (Wave 3b1)."""
+        DESIGNED voice re-derive a fresh embedding from the same reference
+        clip after a base-model upgrade (M-4 review: Node's reader resamples
+        this clip to a fixed 24kHz before re-deriving, so the result isn't
+        byte-identical to the original design — same clip content, not an
+        identical embedding), mirroring the `master.wav` a CLONED voice
+        already keeps from its uploaded sample (Wave 3b1)."""
         pt_path, _json_path = self._voice_paths(f"{voice_id}__master")
         return os.path.splitext(pt_path)[0] + ".wav"
 
@@ -3847,9 +3850,11 @@ class QwenEngine(Engine):
                 )
 
             # 3b. retain the reference clip as WAV (§2.3, fs-38 Wave 3b2) — lets
-            # this DESIGNED voice re-derive its embedding identically after a
-            # base-model upgrade, the way a CLONED voice already can from its
-            # retained `master.wav` (Wave 3b1). Strictly additive: the HTTP
+            # this DESIGNED voice re-derive a fresh embedding from the same
+            # clip after a base-model upgrade (not byte-identical — Node's
+            # reader resamples it to a fixed 24kHz first), the way a CLONED
+            # voice already can from its retained `master.wav` (Wave 3b1).
+            # Strictly additive: the HTTP
             # response, the audition PCM, and the `.pt`/`.json` above are
             # already complete by this point, so a failure here must never
             # break voice design — it's a future re-derivation aid, not part

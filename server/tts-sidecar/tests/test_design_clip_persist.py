@@ -1,7 +1,9 @@
 """fs-38 Wave 3b2, §2.3 (Task 11) — `design_voice` retains its reference clip
 as a real WAV file alongside the `.pt`/`.json` it already caches, so a
-DESIGNED voice can later re-derive its embedding identically after a
-base-model upgrade (Task 12 consumes this; not implemented here). Mirrors the
+DESIGNED voice can later re-derive a fresh embedding from the same clip after
+a base-model upgrade (Task 12 consumes this; not implemented here — and
+Node's reader resamples the clip to a fixed 24kHz before re-deriving, so the
+result isn't byte-identical to the original design). Mirrors the
 `master.wav` a CLONED voice already keeps from its uploaded sample (Wave 3b1).
 
 Strictly additive: this must not change `design_voice`'s HTTP response, its

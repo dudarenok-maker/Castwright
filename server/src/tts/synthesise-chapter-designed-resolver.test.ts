@@ -60,7 +60,12 @@ describe('synthesiseChapter — designed-voice orphan self-heal pre-pass (fs-38 
     const ptExists = vi.fn(async () => false);
     const readDesignedMasterPcm = vi.fn(async (uuid: string) =>
       uuid === 'lib-designed'
-        ? { pcm: Buffer.alloc(1000), sampleRate: 24000, refText: 'A retained calibration clip.' }
+        ? {
+            pcm: Buffer.alloc(1000),
+            sampleRate: 24000,
+            refText: 'A retained calibration clip.',
+            manifest: { refText: 'A retained calibration clip.' },
+          }
         : null,
     );
     const deriveEngineArtifact = vi.fn(async (..._args: unknown[]) => ({
@@ -68,6 +73,12 @@ describe('synthesiseChapter — designed-voice orphan self-heal pre-pass (fs-38 
       sampleRate: 24000,
       baseModel: 'qwen3-tts-0.6b',
     }));
+    // C-1/I-2 (review) — a successful derive now also restores the sidecar
+    // manifest and stamps the voice-library entry ready. Mock these too so
+    // this wiring test doesn't hit the real on-disk workspace.
+    const writeSidecarManifest = vi.fn(async () => {});
+    const readEntry = vi.fn(async () => null);
+    const writeEntry = vi.fn(async () => {});
 
     const result = await synthesiseChapter({
       sentences: [sentence(1, 'orin')],
@@ -79,6 +90,9 @@ describe('synthesiseChapter — designed-voice orphan self-heal pre-pass (fs-38 
         ptExists,
         readDesignedMasterPcm,
         deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveDesignedVoiceDeps['deriveEngineArtifact'],
+        writeSidecarManifest,
+        readEntry: readEntry as unknown as ResolveDesignedVoiceDeps['readEntry'],
+        writeEntry,
       },
     });
 
@@ -91,6 +105,7 @@ describe('synthesiseChapter — designed-voice orphan self-heal pre-pass (fs-38 
       { masterPcm: expect.any(Buffer), sampleRate: 24000, refText: 'A retained calibration clip.' },
       expect.objectContaining({}),
     );
+    expect(writeSidecarManifest).toHaveBeenCalledTimes(1);
     expect(provider.calls.length).toBeGreaterThan(0); // the chapter synthesises normally
     expect(result.segments.length).toBeGreaterThan(0);
   });
