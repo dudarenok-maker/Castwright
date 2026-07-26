@@ -79,7 +79,12 @@ export interface LinkableCharacter {
   voiceUuid?: string;
   voiceState?: 'generated' | 'tuned' | 'reused' | 'locked';
   ttsEngine?: TtsEngine | null;
-  overrideTtsVoices?: Partial<Record<TtsEngine, { name: string }>> | null;
+  /** [ADV-C3][EX-10] — widened to carry `libraryUuid`/`provenance` so a
+      cloned slot's identity is type-visible here too, mirroring the
+      canonical shape in voice-mapping.ts and hydrate-reused-voice.ts. */
+  overrideTtsVoices?: Partial<
+    Record<TtsEngine, { name: string; libraryUuid?: string; provenance?: 'designed' | 'cloned' | 'imported' }>
+  > | null;
   voiceStyle?: string;
   matchedFrom?: {
     bookId?: string;

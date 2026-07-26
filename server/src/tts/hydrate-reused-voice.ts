@@ -20,12 +20,24 @@
    a real workspace; `hydrateReusedVoice` wires the default workspace loader. */
 
 import type { TtsEngine } from './index.js';
+import { characterHasClonedSlot } from './clone-engines.js';
 
 /* fs-25 — the per-engine override slot, carrying optional Qwen emotion
    `variants`. Declared here so the reuse-carry path is type-honest: a reused
    character must inherit the source's variants alongside its base voice (plan
-   177 Wave 6a), mirroring how `voiceStyle` already travels (plan 150). */
-type OverrideSlot = { name: string; variants?: Partial<Record<string, { name: string }>> };
+   177 Wave 6a), mirroring how `voiceStyle` already travels (plan 150).
+
+   [ADV-C3][EX-10] — also carries `libraryUuid`/`provenance`, mirroring the
+   canonical shape in voice-mapping.ts. Omitting these here was exactly why
+   the compiler couldn't flag a cloned slot being laundered through this
+   reuse path: type-checking a cloned slot's fields as if they didn't exist
+   let the merge/engine logic below treat it as an ordinary designed slot. */
+type OverrideSlot = {
+  name: string;
+  libraryUuid?: string;
+  provenance?: 'designed' | 'cloned' | 'imported';
+  variants?: Partial<Record<string, { name: string }>>;
+};
 type OverrideMap = Partial<Record<TtsEngine, OverrideSlot>>;
 
 /** The reuse-relevant slice of a cast.json character this resolver reads. Kept
@@ -52,9 +64,13 @@ export interface ReuseHydratable {
 export type CastLoader = (bookId: string) => Promise<ReuseHydratable[] | null>;
 
 /** True when the character already carries a usable bespoke (qwen) voice on its
-    own record — nothing to hydrate. */
-function hasOwnQwenVoice(c: ReuseHydratable): boolean {
-  return !!c.overrideTtsVoices?.qwen?.name;
+    own record — nothing to hydrate. A slot counts if it has a `name` OR a
+    `libraryUuid` — a cloned qwen slot can legitimately carry a libraryUuid
+    with an empty/missing name (see voice-mapping.ts's storage-key fallback),
+    so name-only was a fail-unsafe test for that case. */
+function hasOwnVoice(c: ReuseHydratable): boolean {
+  const slot = c.overrideTtsVoices?.qwen;
+  return !!slot?.name || !!slot?.libraryUuid;
 }
 
 /** The voice fields a reused character should inherit from its source, or null
@@ -76,7 +92,19 @@ export async function resolveReusedVoiceFields(
   maxHops = 8,
 ): Promise<ResolvedReusedVoice | null> {
   /* A character that already owns a qwen voice needs no hydration. */
-  if (hasOwnQwenVoice(character)) return null;
+  if (hasOwnVoice(character)) return null;
+
+  /* [ADV-C3][EX-10] — a character that already carries a CLONED voice on some
+     other clone-capable engine (e.g. coqui) must never inherit or default
+     onto qwen here: it already has its own established engine + identity (a
+     real person's likeness), and rerouting it would launder the source
+     book's designed qwen voice onto it as if it belonged to this character.
+     Fail-safe test (provenance only, doesn't require a valid libraryUuid) —
+     when in doubt, preserve. This also protects every other caller of this
+     resolver (e.g. series-reuse-link.ts), not just hydrateCharacterVoice
+     below, since none of them may default `source.ttsEngine ?? 'qwen'`
+     for such a character either. */
+  if (characterHasClonedSlot(character)) return null;
 
   const seen = new Set<string>();
   let cursor: ReuseHydratable = character;
@@ -102,7 +130,7 @@ export async function resolveReusedVoiceFields(
        override. (Engine may be absent on the source even when the override is
        present — e.g. a source written before the per-character engine field;
        callers fold this over the project default, so undefined is fine.) */
-    if (hasOwnQwenVoice(source)) {
+    if (hasOwnVoice(source)) {
       return {
         ttsEngine: source.ttsEngine ?? 'qwen',
         overrideTtsVoices: source.overrideTtsVoices ?? {},
@@ -129,6 +157,12 @@ export async function hydrateCharacterVoice<T extends ReuseHydratable>(
 ): Promise<T & Pick<ReuseHydratable, 'ttsEngine' | 'overrideTtsVoices' | 'voiceStyle'>> {
   const resolved = await resolveReusedVoiceFields(character, load);
   if (!resolved) return character;
+
+  /* [ADV-C3][EX-10] — belt-and-suspenders alongside the same guard inside
+     resolveReusedVoiceFields: this merge step must never inherit or default
+     ttsEngine (nor merge in a foreign engine's slot) for a character that
+     already carries a cloned voice on another engine. */
+  if (characterHasClonedSlot(character)) return character;
 
   const mergedOverrides: OverrideMap = {
     ...resolved.overrideTtsVoices,

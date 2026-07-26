@@ -113,6 +113,24 @@ describe('resolveReusedVoiceFields', () => {
     const r = await resolveReusedVoiceFields(a, loaderFrom({ A: [a], B: [b] }));
     expect(r).toBeNull();
   });
+
+  it('[ADV-C3][EX-10] refuses to resolve a coqui-cloned character onto the source book\'s qwen voice', async () => {
+    /* A coqui clone (a real person's likeness) with matchedFrom pointing at a
+       book whose matched character carries a qwen-DESIGNED voice, and no
+       explicit ttsEngine of its own. resolveReusedVoiceFields must not
+       reroute this character onto qwen and hand it the source's designed
+       voice — the [ADV-C3] laundering bug. */
+    const clonedCoqui: ReuseHydratable = {
+      id: 'x',
+      overrideTtsVoices: {
+        coqui: { name: 'Real Person', libraryUuid: 'uuid-real-person', provenance: 'cloned' },
+      },
+      matchedFrom: { bookId: 'src', characterId: 'x' },
+    };
+    const source: ReuseHydratable = designed('x', 'qwen-someone-else');
+    const r = await resolveReusedVoiceFields(clonedCoqui, loaderFrom({ src: [source] }));
+    expect(r).toBeNull();
+  });
 });
 
 describe('hydrateCharacterVoice', () => {
@@ -167,5 +185,26 @@ describe('hydrateCharacterVoice', () => {
     const source: ReuseHydratable = { ...designed('x', 'qwen-x'), voiceStyle: 'source persona' };
     const out = await hydrateCharacterVoice(reused, loaderFrom({ src: [source] }));
     expect(out.voiceStyle).toBe('hand-edited persona');
+  });
+
+  it('[ADV-C3][EX-10] never reroutes a coqui-cloned character onto qwen or merges the source\'s foreign qwen slot', async () => {
+    /* Same laundering bug, exercised through the public hydrateCharacterVoice
+       entry point (the hot-path caller, generation.ts:775) rather than the
+       resolver directly — a fix that only touches resolveReusedVoiceFields
+       could still leave this merge step defaulting ttsEngine to the
+       resolved value. */
+    const clonedCoqui: ReuseHydratable = {
+      id: 'x',
+      overrideTtsVoices: {
+        coqui: { name: 'Real Person', libraryUuid: 'uuid-real-person', provenance: 'cloned' },
+      },
+      matchedFrom: { bookId: 'src', characterId: 'x' },
+    };
+    const source: ReuseHydratable = designed('x', 'qwen-someone-else');
+    const out = await hydrateCharacterVoice(clonedCoqui, loaderFrom({ src: [source] }));
+
+    expect(out.ttsEngine).not.toBe('qwen');
+    expect(out.overrideTtsVoices?.qwen).toBeUndefined();
+    expect(out.overrideTtsVoices?.coqui?.name).toBe('Real Person'); // own clone kept
   });
 });
