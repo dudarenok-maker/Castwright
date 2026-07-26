@@ -29,8 +29,7 @@ import { notificationsActions } from '../store/notifications-slice';
 import { api } from '../lib/api';
 import { CreateCharacterForm } from './create-character-form';
 import { IconClose } from '../lib/icons';
-import { engineForModelKey } from '../lib/tts-models';
-import { sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
+import { engineForModelKey, modelKeyForEngineChoice } from '../lib/tts-models';
 import type { TtsModelKey } from '../lib/types';
 
 /* Human-readable class labels. */
@@ -71,7 +70,7 @@ export function maybePushVoiceNudge(
       nudge: {
         bookId: startBookId,
         characterIds: createdCharacters.map((c) => c.id),
-        modelKey: sampleModelKeyForEngine('qwen', ttsModelKey),
+        modelKey: modelKeyForEngineChoice('qwen', ttsModelKey),
         names: createdCharacters.map((c) => c.name),
       },
     }),

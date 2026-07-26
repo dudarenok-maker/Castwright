@@ -370,22 +370,12 @@ export function resolveDisplayTtsVoice(
   return voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c, projectEngine);
 }
 
-/* The single model key the Qwen bespoke engine routes through. Mirror of
-   the server's engineForModelKey: any 'qwen…' key maps to engine 'qwen'. */
+/* The 0.6B Qwen base key. Still used by the emotion-variant player
+   (src/lib/play-emotion-variant.ts), which is pinned to that tier.
+   To resolve the model key for an AUDITION or a design, use
+   modelKeyForEngineChoice (src/lib/tts-models.ts) — the single
+   engine→modelKey mapper on this side of the wire. */
 export const QWEN_MODEL_KEY: TtsModelKey = 'qwen3-tts-0.6b';
-
-/* Resolve the modelKey a sample/audition should use for a character whose
-   effective engine may diverge from the project default. Qwen is the only
-   per-character override that diverges (the picker offers kokoro|qwen), and
-   it needs its own model key so the server routes to the bespoke engine
-   instead of the project's Kokoro/Coqui key. Every non-qwen engine keeps the
-   project key — that key already routes to the engine the character uses. */
-export function sampleModelKeyForEngine(
-  effectiveEngine: TtsEngine,
-  projectModelKey: TtsModelKey,
-): TtsModelKey {
-  return effectiveEngine === 'qwen' ? QWEN_MODEL_KEY : projectModelKey;
-}
 
 /* Profile-only resolver — same mapping as resolveTtsVoiceForCharacter,
    exposed so the compare modal can label the inferred bucket

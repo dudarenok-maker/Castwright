@@ -46,7 +46,7 @@ import { selectPrincipalCast } from '../lib/principal-cast';
 import { mergeSeriesCast } from '../lib/merge-series-cast';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
 import { sampleScopeFor } from '../lib/sample-scope';
-import { sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
+import { modelKeyForEngineChoice } from '../lib/tts-models';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { buildCharacterHint } from '../lib/build-character-hint';
@@ -274,7 +274,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
       const { voiceId, previewUrl } = await api.designQwenVoice(bookId, characterId, {
         persona,
         sampleVoiceId,
-        modelKey: sampleModelKeyForEngine('qwen', ttsModelKey),
+        modelKey: modelKeyForEngineChoice('qwen', ttsModelKey),
       });
       dispatch(
         rebaselineActions.proposalReady({
