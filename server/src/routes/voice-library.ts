@@ -626,7 +626,12 @@ voiceLibraryRouter.post(
    structurally-equal fakes) — not flattened like the /design + /redesign
    catches (#1801). */
 voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
-  const body = (req.body ?? {}) as { candidateId?: unknown; consent?: unknown; name?: unknown };
+  const body = (req.body ?? {}) as {
+    candidateId?: unknown;
+    consent?: unknown;
+    name?: unknown;
+    transcript?: unknown;
+  };
   const candidateId = typeof body.candidateId === 'string' ? body.candidateId : '';
   if (!candidateId) return res.status(400).json({ error: '`candidateId` is required.' });
   if (!validateConsentDraft(body.consent)) {
@@ -644,10 +649,29 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
       const masterWav = await readFile(candidateMasterPath(candidateId));
       const masterPcm = await decodeAudioToPcm(masterWav, candidate.master.sampleRate);
 
+      /* #1836 — the wizard's transcript box is editable, so an optional
+         corrected `transcript` on the request wins over the candidate's
+         Whisper text as the `ref_text` the clone is distilled against.
+
+         Blank/whitespace falls back to the Whisper transcript rather than
+         erroring: Whisper itself can legitimately return an empty transcript
+         for a non-speech clip (tts/clone-ingest.ts trims `.text`), so a blank
+         value carries no correction to honour.
+
+         `transcriptSource` is decided HERE, by comparing against the stored
+         Whisper text — not taken from a client-supplied "was edited" flag —
+         so it can't disagree with the text actually persisted below. */
+      const suppliedTranscript = typeof body.transcript === 'string' ? body.transcript.trim() : '';
+      const refText = suppliedTranscript || candidate.master.transcript;
+      const transcriptSource: VoiceMaster['transcriptSource'] =
+        suppliedTranscript && suppliedTranscript !== candidate.master.transcript
+          ? 'user'
+          : candidate.master.transcriptSource;
+
       const derived = await deriveEngineArtifact(voiceUuid, 'qwen', {
         masterPcm,
         sampleRate: candidate.master.sampleRate,
-        refText: candidate.master.transcript,
+        refText,
       });
 
       const dir = entryDir(voiceUuid);
@@ -742,7 +766,18 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
         attestedAt: now,
         attestedBy: consentDraft.personName,
       };
-      const master: VoiceMaster = { ...candidate.master, clipFile: 'master.wav' };
+      /* Persist the text the clone was ACTUALLY distilled against — into
+         `master.transcript`, not just `sampleTranscript` below. The Wave 3b2
+         repair path re-derives from `entry.master.transcript`
+         (tts/synthesise-chapter.ts readMasterPcmDefault), so leaving the raw
+         Whisper text here would make a later repair silently revert to it and
+         undo the user's correction. */
+      const master: VoiceMaster = {
+        ...candidate.master,
+        clipFile: 'master.wav',
+        transcript: refText,
+        transcriptSource,
+      };
       const cloned: VoiceLibraryEntry = {
         voiceUuid,
         name,
@@ -751,7 +786,7 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
         pinned: false,
         consent,
         master,
-        sampleTranscript: candidate.master.transcript,
+        sampleTranscript: refText,
         sampleMeta: {
           durationSeconds: candidate.master.durationSeconds,
           sampleRate: candidate.master.sampleRate,

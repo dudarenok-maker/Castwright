@@ -32,4 +32,26 @@ describe('CloneCapturePanel', () => {
     fireEvent.click(cont());
     expect(onReady).toHaveBeenCalledWith(expect.objectContaining({ candidateId: 'cand-1', consent: expect.objectContaining({ personName: 'Mum' }) }));
   });
+
+  /* #1836 — the transcript box is editable, so the edit has to leave the
+     panel; otherwise a correction is silently discarded and the clone is
+     still distilled against the raw Whisper text. */
+  it('forwards the edited transcript, not the raw Whisper text', async () => {
+    const onReady = vi.fn();
+    render(wrap(<CloneCapturePanel onReady={onReady} />));
+
+    const file = new File([new Uint8Array([1, 2, 3])], 's.wav', { type: 'audio/wav' });
+    fireEvent.change(screen.getByLabelText(/upload/i), { target: { files: [file] } });
+    await waitFor(() => expect(screen.getByLabelText('transcript')).toHaveValue('hi there'));
+
+    fireEvent.change(screen.getByLabelText('transcript'), { target: { value: 'hi, Thea' } });
+    fireEvent.change(screen.getByLabelText(/person/i), { target: { value: 'Mum' } });
+    fireEvent.click(screen.getByLabelText(/i attest/i));
+
+    const cont = screen.getByRole('button', { name: /continue/i });
+    await waitFor(() => expect(cont).toBeEnabled());
+    fireEvent.click(cont);
+
+    expect(onReady).toHaveBeenCalledWith(expect.objectContaining({ transcript: 'hi, Thea' }));
+  });
 });

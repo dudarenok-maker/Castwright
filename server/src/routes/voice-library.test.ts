@@ -1461,6 +1461,113 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     expect(await readCandidate('cand-1')).toBeNull(); // candidate consumed
   });
 
+  /* #1836 — the wizard's transcript box is editable, so a correction must
+     reach the derive as `ref_text` AND be persisted. Persisting to
+     `master.transcript` (not just `sampleTranscript`) is load-bearing: the
+     Wave 3b2 repair path re-derives from `entry.master.transcript`
+     (tts/synthesise-chapter.ts readMasterPcmDefault), so storing the
+     correction only in `sampleTranscript` would let a later repair silently
+     revert to the Whisper text. */
+  it('distils an edited transcript and persists it as master.transcript with transcriptSource=user', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-edit',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sandwich',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFFfake-wav-bytes'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-edit',
+        transcript: 'my own voice sample',
+        consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    // the corrected text is what the clone was distilled against
+    expect(deriveMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'qwen',
+      expect.objectContaining({ refText: 'my own voice sample' }),
+    );
+    // …and what survives on the entry, for both display and any later re-derive
+    expect(res.body.sampleTranscript).toBe('my own voice sample');
+    expect(res.body.master.transcript).toBe('my own voice sample');
+    expect(res.body.master.transcriptSource).toBe('user');
+  });
+
+  it('keeps transcriptSource=whisper when the transcript comes back unedited', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-unedited',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-unedited',
+        transcript: 'my own voice sample',
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.master.transcriptSource).toBe('whisper');
+    expect(res.body.master.transcript).toBe('my own voice sample');
+  });
+
+  /* Whisper can legitimately return an empty transcript for a non-speech
+     clip (tts/clone-ingest.ts trims `.text`), so a blank edit falls back to
+     the stored text rather than deriving against nothing. */
+  it('falls back to the Whisper transcript when the supplied one is blank', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-blank',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-blank',
+        transcript: '   ',
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(deriveMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'qwen',
+      expect.objectContaining({ refText: 'my own voice sample' }),
+    );
+    expect(res.body.master.transcript).toBe('my own voice sample');
+    expect(res.body.master.transcriptSource).toBe('whisper');
+  });
+
   it('404s a missing candidate', async () => {
     const res = await request(app)
       .post('/api/voice-library/clone')

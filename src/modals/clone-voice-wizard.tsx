@@ -21,7 +21,7 @@ export function CloneVoiceWizard({ onClose }: Props) {
   const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
   const clonePending = useAppSelector((s) => s.voiceLibrary.clonePending);
-  const [ready, setReady] = useState<{ candidateId: string; consent: ConsentDraft } | null>(null);
+  const [ready, setReady] = useState<{ candidateId: string; transcript: string; consent: ConsentDraft } | null>(null);
   const [name, setName] = useState('');
   const [saved, setSaved] = useState<VoiceLibraryEntry | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -36,7 +36,14 @@ export function CloneVoiceWizard({ onClose }: Props) {
     setError(null);
     try {
       const entry = await dispatch(
-        cloneVoice({ candidateId: ready.candidateId, name: name.trim() || undefined, consent: ready.consent }),
+        cloneVoice({
+          candidateId: ready.candidateId,
+          name: name.trim() || undefined,
+          /* #1836 — carry the (possibly corrected) transcript through; the
+             server distils against it and persists it. */
+          transcript: ready.transcript,
+          consent: ready.consent,
+        }),
       ).unwrap();
       setSaved(entry);
       try {

@@ -9768,6 +9768,12 @@ export async function mockCloneVoiceSample(_form: FormData): Promise<CloneSample
 export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibraryEntry> {
   await wait(300);
   const now = new Date().toISOString();
+  /* #1836 — mirror the real route: a supplied non-blank transcript wins over
+     the canned Whisper text and flips transcriptSource to 'user'. Without
+     this the mock keeps reproducing the very bug the real path just fixed. */
+  const whisperTranscript = 'the quick brown fox jumped';
+  const supplied = body.transcript?.trim() ?? '';
+  const transcript = supplied || whisperTranscript;
   const entry: VoiceLibraryEntry = {
     voiceUuid: `lib-clone-${Math.random().toString(36).slice(2, 10)}`,
     name: body.name?.trim() || body.consent.personName,
@@ -9779,10 +9785,11 @@ export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibrary
       clipFile: 'master.wav',
       sampleRate: 24_000,
       durationSeconds: 10,
-      transcript: 'the quick brown fox jumped',
-      transcriptSource: 'whisper',
+      transcript,
+      transcriptSource: supplied && supplied !== whisperTranscript ? 'user' : 'whisper',
       captureMethod: 'upload',
     },
+    sampleTranscript: transcript,
     sampleMeta: { qualityChecks: { cloneCosine: 0.62 } },
     engines: { qwen: { status: 'ready', baseModel: 'qwen3-tts-0.6b-2026-05' } },
     createdAt: now,

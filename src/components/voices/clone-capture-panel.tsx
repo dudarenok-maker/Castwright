@@ -6,7 +6,7 @@ import { VoiceRecorder } from './voice-recorder';
 type Relationship = 'self' | 'family-with-permission' | 'guardian-of-minor';
 export interface ConsentDraft { personName: string; relationship: Relationship; permittedUse: 'personal'; }
 
-export function CloneCapturePanel({ onReady }: { onReady: (r: { candidateId: string; consent: ConsentDraft }) => void }) {
+export function CloneCapturePanel({ onReady }: { onReady: (r: { candidateId: string; transcript: string; consent: ConsentDraft }) => void }) {
   const dispatch = useAppDispatch();
   const [tab, setTab] = useState<'record' | 'upload'>('upload');
   const [candidateId, setCandidateId] = useState<string | null>(null);
@@ -69,7 +69,7 @@ export function CloneCapturePanel({ onReady }: { onReady: (r: { candidateId: str
       <button
         className="min-h-[44px] fine-pointer:min-h-0"
         disabled={!canContinue}
-        onClick={() => candidateId && onReady({ candidateId, consent: { personName: personName.trim(), relationship, permittedUse: 'personal' } })}
+        onClick={() => candidateId && onReady({ candidateId, transcript, consent: { personName: personName.trim(), relationship, permittedUse: 'personal' } })}
       >Continue</button>
     </div>
   );

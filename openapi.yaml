@@ -5109,6 +5109,17 @@ components:
       properties:
         candidateId: { type: string }
         name: { type: string, description: Optional display name; defaults to the consent personName }
+        transcript:
+          type: string
+          description: |
+            Optional corrected transcript of the sample clip. When present and
+            non-blank this is what the clone is distilled against (`ref_text`)
+            instead of the candidate's Whisper transcript, and it is persisted
+            as the entry's `master.transcript` so a later re-derive/repair uses
+            it too. `master.transcriptSource` becomes `user` when it differs
+            from the Whisper text, `whisper` otherwise. Blank/whitespace falls
+            back to the Whisper transcript (which may itself legitimately be
+            empty for a non-speech clip).
         consent:
           type: object
           required: [personName, relationship, permittedUse]

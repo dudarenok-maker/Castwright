@@ -107,6 +107,21 @@ history at cut time.
   `qwen-<uuid>__master.wav`, scoped to a missing `.pt` only and never throwing) shipped alongside
   as the wave's optional tail. Plan: `docs/features/268-fs38-wave3b2-resolver.md`. Spec:
   `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md` §5.
+- **fs-38 — clone-wizard transcript edits now reach the derive** (Closes #1836, refs #624). The
+  wizard's transcript textarea was editable but write-only: `onReady` forwarded just
+  `{ candidateId, consent }` and `CloneVoiceRequest` had no transcript field, so `POST /clone`
+  always distilled against `candidate.master.transcript` — the raw Whisper output. Adds an
+  optional `transcript` to `CloneVoiceRequest` (OpenAPI-first), forwards the edited value from
+  the capture panel through the wizard, and prefers it as the derive's `ref_text` when non-blank.
+  The corrected text is persisted as **`master.transcript`** as well as `sampleTranscript` —
+  load-bearing, because the Wave 3b2 repair path re-derives from `entry.master.transcript`
+  (`readMasterPcmDefault`), so storing it only in `sampleTranscript` would let a later repair
+  silently revert to the Whisper text. `master.transcriptSource` now records `'user'` when the
+  text differs from the stored Whisper transcript (previously the enum's `'user'` arm was
+  unreachable), decided server-side rather than from a client flag. Blank/whitespace falls back
+  to the Whisper text, since Whisper can legitimately return an empty transcript for a non-speech
+  clip. `mockCloneVoice` mirrors the same semantics so mock/e2e mode stops reproducing the bug.
+  Closes the run sheet's KL-k finding.
 
 ---
 
