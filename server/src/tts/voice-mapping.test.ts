@@ -365,17 +365,24 @@ describe('fs-38 Wave 3c Task 16 [ADV-H3] — pickVoiceForEngine resolves a libra
   });
 
   it('neither the cloned nor the designed resolution returns a COQUI_PROFILE_VOICES member', () => {
+    /* fix round 1, M-1 — the slot names are deliberately real
+       COQUI_PROFILE_VOICES members (not arbitrary strings like 'Cloned
+       Voice'), so a regression that falls through to the generic slotName
+       lookup returns a GENUINE catalogue member here and this assertion
+       actually fails. With an arbitrary made-up name, a fallthrough would
+       also fail to be "a catalogue member" trivially, so the check would
+       pass either way and prove nothing. */
     const catalogNames = new Set(Object.values(COQUI_PROFILE_VOICES).flat());
     const cloned = pickVoiceForEngine('coqui', {
       id: 'char-brann',
       overrideTtsVoices: {
-        coqui: { name: 'Cloned Voice', libraryUuid: 'u1', provenance: 'cloned' },
+        coqui: { name: 'Damien Black', libraryUuid: 'u1', provenance: 'cloned' },
       },
     });
     const designed = pickVoiceForEngine('coqui', {
       id: 'char-brann',
       overrideTtsVoices: {
-        coqui: { name: 'Designed Voice', libraryUuid: 'u1', provenance: 'designed' },
+        coqui: { name: 'Wulf Carlevaro', libraryUuid: 'u1', provenance: 'designed' },
       },
     });
     expect(catalogNames.has(cloned)).toBe(false);
@@ -406,6 +413,49 @@ describe('fs-38 Wave 3c Task 16 [ADV-H3] — pickVoiceForEngine resolves a libra
       overrideTtsVoices: { coqui: { name: 'Legacy Voice', libraryUuid: 'u1' } },
     });
     expect(picked).toBe('Legacy Voice');
+  });
+
+  /* fix round 1, I-1 — KNOWN GAP, pinned rather than fixed here.
+     libraryVoiceForEngine requires a non-empty-string libraryUuid (the
+     coordinator's ruling: a RESOLUTION helper must validate what it
+     returns). So a slot with provenance:'cloned' but a malformed
+     libraryUuid ('' or missing) makes libraryVoiceForEngine return
+     undefined, and pickVoiceForEngine falls through to the generic
+     slotName lookup — resolving to the human-readable NAME, not the
+     clone. That is the exact class of bug this wave's Phase 0 fixed seven
+     times, and it is NOT fixed by this test or by this task: this
+     function is a pure, synchronous resolver with no way to know whether
+     an artifact actually exists on disk, so it cannot hard-fail here.
+
+     The hard-fail belongs to the Task 20/20a pre-pass. Its guard is:
+       hasClonedProvenance(c, 'coqui') && !libraryVoiceForEngine(c, 'coqui')
+     — true exactly when a slot CLAIMS to be cloned but can't actually be
+     resolved. There is today no coqui analogue of the qwen `cloned` guard
+     in synthesise-chapter.ts; Task 20/20a owns adding one for coqui too.
+     The coordinator is carrying this requirement into Tasks 20/20a.
+
+     Also pins a deliberate disagreement between the two RESOLUTION
+     helpers: clonedSlotForEngine accepts `libraryUuid: ''` (it only
+     checks `typeof libraryUuid === 'string'`), but libraryVoiceForEngine
+     rejects it (requires non-empty). This test locks
+     libraryVoiceForEngine's stricter contract — the one pickVoiceForEngine
+     actually uses. */
+  it('[I-1 KNOWN GAP, hard-fail owed to Task 20/20a] a cloned coqui slot with a malformed libraryUuid falls through and resolves to the human-readable NAME today, not the clone', () => {
+    const emptyUuid = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: {
+        coqui: { name: 'Real Person Clone', libraryUuid: '', provenance: 'cloned' },
+      },
+    });
+    expect(emptyUuid).toBe('Real Person Clone');
+
+    const missingUuid = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: {
+        coqui: { name: 'Real Person Clone', provenance: 'cloned' },
+      },
+    });
+    expect(missingUuid).toBe('Real Person Clone');
   });
 });
 

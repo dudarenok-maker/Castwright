@@ -1399,6 +1399,53 @@ describe('PUT /api/voices/:voiceId/override — clears a stale libraryUuid/prove
   });
 });
 
+describe('applyOverrideToCastFiles — direct-call coverage for the qwen half of the clearing change (fs-38 Wave 3c Task 16 fix round 1, I-2)', () => {
+  /* The clearing change added in Task 16 lives inside applyOverrideToCastFiles,
+     which has three non-test callers: this route's PUT /override (already
+     covered, coqui-only, through the picker route above) AND the two
+     consent-critical design flows — routes/cast-design.ts (bulk qwen
+     design) and routes/single-design.ts (single-character qwen design) —
+     which both call applyOverrideToCastFiles directly with `engine:
+     'qwen'`. Nothing pinned that a provenance:'cloned' qwen slot survives
+     THOSE calls. This exercises the same call shape directly (bypassing
+     the HTTP route) and asserts on the real persisted cast.json, not on
+     mock call arguments, per the coordinator's instruction. */
+  function castPath(title: string) {
+    return join(workspaceRoot, 'books', AUTHOR, SERIES, title, '.audiobook', 'cast.json');
+  }
+
+  afterEach(() => {
+    for (const title of [BOOK_ONE, BOOK_TWO]) {
+      const path = castPath(title);
+      const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+        characters: Array<Record<string, unknown>>;
+      };
+      delete cast.characters[0].overrideTtsVoices;
+      writeFileSync(path, JSON.stringify(cast));
+    }
+  });
+
+  it('[I-2] a direct applyOverrideToCastFiles(qwen) call preserves libraryUuid/provenance on a CLONED qwen slot', async () => {
+    const path = castPath(BOOK_ONE);
+    const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    cast.characters[0].overrideTtsVoices = {
+      qwen: { name: 'brann-qwen-clone', libraryUuid: 'lib-qwen-clone-1', provenance: 'cloned' },
+    };
+    writeFileSync(path, JSON.stringify(cast));
+
+    await applyOverrideToCastFiles('v_brann', { engine: 'qwen', name: 'qwen-catalogue-pick' });
+
+    const after = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slot = (after.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.qwen;
+    expect(slot?.name).toBe('qwen-catalogue-pick');
+    expect(slot?.libraryUuid).toBe('lib-qwen-clone-1');
+    expect(slot?.provenance).toBe('cloned');
+  });
+});
+
 describe('PUT /api/voices/:voiceId/override — series scope (plan 108)', () => {
   afterEach(async () => {
     /* Clear all three casts between cases so the cross-series assertions
