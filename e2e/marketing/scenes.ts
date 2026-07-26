@@ -45,6 +45,23 @@ export interface Scene {
       loaded before any click happens). Existing/legacy scenes stay
       non-strict. */
   strict?: boolean;
+  /** Restrict this scene to a subset of themes. Defaults to whatever the
+      runner asks for (both light + dark, or `CAPTURE_THEME`). Only for a
+      scene whose output is a FIXED-treatment surface, where the second theme
+      is not a second look but a worse version of the same one — see the
+      series-cast-card-export scene for the motivating case. */
+  themes?: ('light' | 'dark')[];
+  /** Capture the artefact the app itself EXPORTS, instead of a screenshot of
+      the page. When present, the runner triggers this (the in-app export
+      click) inside the theme loop and saves the resulting browser download
+      as the scene's PNG — so the output is the real user-facing file, byte
+      for byte, not the harness's re-render of the same pixels.
+
+      Runs INSIDE the theme loop, unlike `action`, which runs once before it.
+      That ordering matters: an exported card bakes the active theme's tokens
+      into the file, so the click has to happen after `emulateMedia`. Use
+      `action` to reach the export affordance, this to press it. */
+  downloadAction?: (page: Page) => Promise<void>;
 }
 
 /* fs-1318 Tier D — real Cyrillic text (ported from
@@ -901,7 +918,8 @@ export const SCENES: Scene[] = [
     strict: true,
   },
   {
-    /* der-bernsteinturm — new German-language standalone (hollow-tide.ts) —
+    /* coalfall-commission-de ("Der Auftrag von Coalfall") — the German edition
+       (hollow-tide.ts) —
        non-English cast confirmation, names shown in their own language.
        ADAPTED from the brief's `[data-testid^="cast-row-"]` — that testid
        belongs to src/views/cast.tsx (the post-confirm cast VIEW, used by
@@ -913,7 +931,7 @@ export const SCENES: Scene[] = [
        (confirm-cast.tsx:419), which also happens to double-confirm the
        row is showing the character's own-language name. */
     id: 'language-cast-confirm-german',
-    hash: '#/books/der-bernsteinturm/confirm',
+    hash: '#/books/coalfall-commission-de/confirm',
     viewports: ['desktop'],
     waitFor: '[aria-label^="Open profile for"]',
     /* confirm-cast.tsx:80 resolves the shown suggested-voice engine from the
@@ -922,9 +940,9 @@ export const SCENES: Scene[] = [
        the product's actual default engine now, so force ttsModelKey to a
        Qwen key before the shot rather than letting whatever the marketing
        account's default happens to be (previously Kokoro) show instead —
-       bernsteinturmCast's characters already carry a designed
+       coalfallDeCast's characters already carry a designed
        `overrideTtsVoices.qwen.name`, so switching the engine renders their
-       real designed voice ("Qwen · qwen-erzaehlerin · Designed voice")
+       real designed voice ("Qwen · qwen-narrator-de · Designed voice")
        instead of a generic Kokoro preset suggestion. */
     action: async (page) => {
       await page.evaluate(() => {
@@ -939,7 +957,7 @@ export const SCENES: Scene[] = [
        provider-label span unconditionally whenever ttsVoice.provider is
        'qwen', even on the "No voice designed yet" fallback (tts-voice-
        mapping.ts:333), so 'text=Qwen ·' alone would still pass if
-       bernsteinturmCast's overrideTtsVoices.qwen.name ever regressed. */
+       coalfallDeCast's overrideTtsVoices.qwen.name ever regressed. */
     waitForAfterAction: 'text=Designed voice',
     strict: true,
   },
@@ -1250,6 +1268,47 @@ export const SCENES: Scene[] = [
       await page.getByRole('button', { name: 'Share this cast' }).click({ timeout: 5000 });
     },
     waitForAfterAction: 'text=Download image',
+    strict: true,
+  },
+  {
+    /* Series memory — the portrait cast card as the app EXPORTS it, not as the
+       page shows it. The sibling series-share-card scene above frames the modal
+       in context (dimmed library behind, close button, both download buttons);
+       this one presses "Download image (.png)" and keeps the file that comes
+       back, so the output is the standalone 4:5 share unit with no app chrome
+       — the one launch asset that has to travel on its own, off-app (Reddit,
+       the marketing site) rather than as a screenshot of a window.
+
+       Same chip + Hollow Tide fixture dependency as the two scenes above; a
+       real multi-book series is the whole point of the card (its hero line
+       counts voices kept true ACROSS books, so a single-book library would
+       render a meaningless card).
+
+       Dark-only because there is nothing a light capture would add: the card
+       pins every colour it paints (`bg-[#1b1714] text-cream` plus the pinned
+       `--color-magenta-on-dark` accent), so both themes now render the same
+       bytes and a second file would be a duplicate.
+
+       It used to be dark-only for a sharper reason — the accent still resolved
+       through the themed `--magenta`, so a light capture produced the same card
+       with a #a43c6c accent at 2.9:1, failing WCAG AA. That's fixed (#1831), and
+       `e2e/series-memory.spec.ts` now asserts the card is theme-invariant. If
+       that assertion is ever relaxed, revisit this: one file is only correct
+       while both themes agree. */
+    id: 'series-cast-card-export',
+    hash: '#/',
+    viewports: ['desktop'],
+    themes: ['dark'],
+    waitFor: '[data-testid="series-memory-chip"]',
+    action: async (page) => {
+      await page.getByTestId('series-memory-chip').click({ timeout: 5000 });
+      await page.waitForSelector('text=books in, and the cast carries through', { timeout: 5000 });
+      await page.getByRole('button', { name: 'Share this cast' }).click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="series-share-card"]',
+    downloadAction: async (page) => {
+      await page.getByRole('button', { name: /download image \(\.png\)/i }).click({ timeout: 5000 });
+    },
     strict: true,
   },
 ];

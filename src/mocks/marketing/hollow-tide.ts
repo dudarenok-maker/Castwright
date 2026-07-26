@@ -428,53 +428,61 @@ const coalfallRu = bookState({
   language: 'ru',
 });
 
-/* ── Der Bernsteinturm — original German-language standalone — fs-1318 Tier D ──
-   Authored fresh (no existing German fixture to port), short single-chapter
-   shape matching the Coalfall fixture's length. Fully Qwen-designed cast,
-   same reasoning as the Russian edition above. */
-const BERNSTEINTURM_CHAPTERS: BookStateResponse['state']['chapters'] = [
-  { id: 1, title: 'Kapitel Eins — Der Ruf', slug: '01-der-ruf', duration: '36:05' },
+/* ── Der Auftrag von Coalfall — German edition — fs-1318 Tier D ──────────────
+   Ported from the real German render in the maintainer's library
+   (books/Castwright/Standalones/Der Auftrag von Coalfall) — same story, same
+   two leads, translated, exactly like the Russian edition above. It replaced
+   an invented standalone ("Der Bernsteinturm") that corresponded to no real
+   book and therefore had no cover art, so it fell back to the ENGLISH Coalfall
+   cover and the library showed the same cover twice. Keep this book a
+   translation: the cover art has its German title baked in, so an invented
+   title can only ever disagree with it. Both cast members are fully
+   Qwen-designed (non-English books narrate on Qwen — see Voice Engines). */
+const COALFALL_DE_CHAPTERS: BookStateResponse['state']['chapters'] = [
+  { id: 1, title: 'Kapitel Eins — Das Klopfen', slug: '01-kapitel-eins-das-klopfen', duration: '36:05' },
 ];
 
-const bernsteinturmCast: Character[] = [
+const coalfallDeCast: Character[] = [
   {
-    id: 'erzaehlerin',
-    name: 'Erzählerin',
+    id: 'narrator-de',
+    name: 'Erzähler',
     role: 'Narrator',
     color: '#3D3D5C',
-    voiceId: 'v_de_erzaehlerin',
+    voiceId: 'v_de_narrator',
     voiceState: 'generated',
     tone: { warmth: 0.55, pace: 0.5, authority: 0.55, emotion: 0.4 },
-    description: 'Ruhige Stimme, die durch den Bernsteinturm führt.',
+    description: 'Ruhige Stimme, die den Leser durch die kalte Nacht von Coalfall führt.',
     ttsEngine: 'qwen',
-    overrideTtsVoices: { qwen: { name: 'qwen-erzaehlerin' } },
+    overrideTtsVoices: { qwen: { name: 'qwen-narrator-de' } },
   },
   {
-    id: 'wachtmeister-brandt',
-    name: 'Wachtmeister Brandt',
-    role: 'Tower warden',
+    id: 'wren-de',
+    name: 'Wren',
+    role: 'Blacksmith apprentice',
     color: '#7B5A26',
-    voiceId: 'v_de_brandt',
+    voiceId: 'v_de_wren',
     voiceState: 'generated',
-    tone: { warmth: 0.4, pace: 0.45, authority: 0.75, emotion: 0.35 },
-    description: 'Wortkarger Wärter des alten Bernsteinturms.',
+    tone: { warmth: 0.55, pace: 0.5, authority: 0.4, emotion: 0.6 },
+    /* Mirrors the Russian edition's «называемая Воробушком» — the same
+       called-by-another-name beat the coalfall-wren-drawer scene leans on. */
+    description: 'Schmiedelehrling, Spatz genannt.',
     ttsEngine: 'qwen',
-    overrideTtsVoices: { qwen: { name: 'qwen-brandt' } },
+    overrideTtsVoices: { qwen: { name: 'qwen-wren-de' } },
   },
 ];
 
-const bernsteinturm = bookState({
-  bookId: 'der-bernsteinturm',
-  title: 'Der Bernsteinturm',
+const coalfallDe = bookState({
+  bookId: 'coalfall-commission-de',
+  title: 'Der Auftrag von Coalfall',
   author: 'Castwright',
   series: 'Standalones',
   seriesPosition: null,
   isStandalone: true,
   coverGradient: ['#4A3728', '#100D09'],
   castConfirmed: true,
-  chapters: BERNSTEINTURM_CHAPTERS,
-  cast: bernsteinturmCast,
-  completedSlugs: BERNSTEINTURM_CHAPTERS.map((c) => c.slug),
+  chapters: COALFALL_DE_CHAPTERS,
+  cast: coalfallDeCast,
+  completedSlugs: COALFALL_DE_CHAPTERS.map((c) => c.slug),
   language: 'de',
 });
 
@@ -485,7 +493,7 @@ export const HOLLOW_TIDE_BOOK_STATES = new Map<string, BookStateResponse>([
   ['hollow-tide-4', harborlight],
   ['coalfall-commission', coalfallCommission],
   ['coalfall-commission-ru', coalfallRu],
-  ['der-bernsteinturm', bernsteinturm],
+  ['coalfall-commission-de', coalfallDe],
 ]);
 
 /* Distinct voice ids behind a book's voiceCount (voiceId ?? id), mirroring the
@@ -707,15 +715,10 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               language: 'ru',
             },
             {
-              /* Still reuses the English Coalfall cover as a placeholder —
-                 unlike coalfall-commission-ru above, the maintainer's
-                 workspace only has a German cover for a literally-translated
-                 "Der Auftrag von Coalfall", not this book's invented title
-                 ("Der Bernsteinturm" — a distinct story, not a Coalfall
-                 translation), so that asset's baked-in title wouldn't match.
-                 Swap once a real Der-Bernsteinturm cover exists. */
-              bookId: 'der-bernsteinturm',
-              title: 'Der Bernsteinturm',
+              /* Same deal as the Russian edition above — its own localized
+                 cover, translated title baked in. */
+              bookId: 'coalfall-commission-de',
+              title: 'Der Auftrag von Coalfall',
               author: 'Castwright',
               series: 'Standalones',
               seriesPosition: null,
@@ -725,12 +728,12 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               completedChapters: 1,
               characterCount: 2,
               voiceCount: 2,
-              voiceIds: voiceIdsOf(bernsteinturm),
+              voiceIds: voiceIdsOf(coalfallDe),
               progress: 1,
               runtime: '36m',
               lastWorkedOn: 'Last week',
               coverGradient: ['#4A3728', '#100D09'],
-              coverImageUrl: COVER('coalfall-commission'),
+              coverImageUrl: COVER('coalfall-commission-de'),
               coverFraming: TITLE_TOP_FRAME,
               tags: [],
               language: 'de',

@@ -70,3 +70,64 @@ test.describe('series-memory: chip → reveal → share card', () => {
     expect(download.suggestedFilename()).toMatch(/\.png$/);
   });
 });
+
+/* The pinned-dark accent (see --color-magenta-on-dark in src/styles.css).
+ *
+ * These surfaces hardcode a #1b1714 background that never follows the app
+ * theme, but their accent used to resolve through the theme-flipping
+ * --magenta. On the light theme that gave #A43C6C — 2.9:1 on that surface,
+ * failing WCAG AA as text — and the share card is EXPORTED as a PNG, so a
+ * light-theme user shipped the low-contrast version to wherever the card
+ * travelled.
+ *
+ * Asserting "identical across themes" rather than a literal is the point: the
+ * bug wasn't a wrong colour, it was a colour that moved when the surface it
+ * sat on didn't. A jsdom test can't catch this — the tokens only resolve in a
+ * real engine. */
+test.describe('series-memory: pinned-dark surfaces do not follow the app theme', () => {
+  const RELATIVE_LUMINANCE = (rgb: string) => {
+    const [r, g, b] = rgb.match(/\d+/g)!.slice(0, 3).map(Number);
+    const lin = (c: number) => {
+      const s = c / 255;
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    };
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  };
+  const contrast = (a: string, b: string) => {
+    const [hi, lo] = [RELATIVE_LUMINANCE(a), RELATIVE_LUMINANCE(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+
+  async function sampleCard(page: import('@playwright/test').Page) {
+    await page.goto('/');
+    await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
+      timeout: 10_000,
+    });
+    await page.getByTestId('series-memory-chip').first().click();
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5_000 });
+    await page.getByText('Share this cast').click();
+    const card = page.getByTestId('series-share-card');
+    await expect(card).toBeVisible({ timeout: 5_000 });
+    return card.evaluate((el) => ({
+      surface: getComputedStyle(el).backgroundColor,
+      // The "Series memory · <name>" label — the accent as text.
+      accent: getComputedStyle(el.querySelector('p')!).color,
+    }));
+  }
+
+  for (const scheme of ['light', 'dark'] as const) {
+    test(`the exported card's accent clears WCAG AA on the ${scheme} theme`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      const { surface, accent } = await sampleCard(page);
+      expect(contrast(accent, surface)).toBeGreaterThanOrEqual(4.5);
+    });
+  }
+
+  test('the card renders identically whichever theme the app is on', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' });
+    const light = await sampleCard(page);
+    await page.emulateMedia({ colorScheme: 'dark' });
+    const dark = await sampleCard(page);
+    expect(light).toEqual(dark);
+  });
+});

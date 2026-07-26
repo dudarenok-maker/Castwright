@@ -6,7 +6,7 @@
    voices.test.tsx, unmodified by this task. */
 
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, within } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { castSlice } from '../store/cast-slice';
@@ -14,7 +14,7 @@ import { manuscriptSlice } from '../store/manuscript-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { uiSlice } from '../store/ui-slice';
 import { voicesSlice } from '../store/voices-slice';
-import { configSlice, type ConfigState } from '../store/config-slice';
+import { configSlice, fetchConfig, type ConfigState } from '../store/config-slice';
 import { voiceLibrarySlice } from '../store/voice-library-slice';
 import { LibraryView } from './voices';
 import type { BaseVoice, ConfigValues, Voice } from '../lib/types';
@@ -132,5 +132,55 @@ describe('LibraryView restructure — three-way section nav (fs-38 Wave 1 Task 1
   it('keeps showing the My-voices segment while config is unhydrated ({} values — enabled-pending)', () => {
     renderView({});
     expect(screen.getByRole('button', { name: 'My voices' })).toBeInTheDocument();
+  });
+
+  /* #1802 — the boot-time race: the unhydrated config above reads as
+     enabled-pending, so the user can open My voices before `fetchConfig`
+     (dispatched at store boot, src/store/index.ts) resolves with the knob
+     disabled. The nav segment then unmounts and MyVoicesSection renders
+     null, so a `section` still pointing at 'my-voices' would leave the nav
+     strip with nothing beneath it. Dispatching the fulfilled action directly
+     is byte-for-byte what that boot dispatch produces. */
+  it('falls back to the In-use section when the gate reads false while My voices is active', () => {
+    const store = makeStore({});
+    render(
+      <Provider store={store}>
+        <LibraryView library={library} />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'My voices' }));
+    expect(screen.getByText('No voices in your library yet')).toBeInTheDocument();
+
+    act(() => {
+      store.dispatch(
+        fetchConfig.fulfilled(
+          {
+            groups: [],
+            descriptors: [],
+            cudaEnvShadow: false,
+            restartPending: false,
+            values: {
+              'voices.library.enabled': {
+                key: 'voices.library.enabled',
+                effective: false,
+                source: 'override',
+                locked: false,
+                overridden: true,
+              },
+            },
+          },
+          'req-1802',
+          undefined,
+        ),
+      );
+    });
+
+    expect(screen.queryByRole('button', { name: 'My voices' })).not.toBeInTheDocument();
+    /* Not a blank pane: the In-use rollup is showing and the segment reads as pressed. */
+    expect(screen.getByRole('button', { name: /This book/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'In use' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
   });
 });

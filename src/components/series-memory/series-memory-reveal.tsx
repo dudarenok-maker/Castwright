@@ -45,7 +45,7 @@ function CarriedRow({ c, bookCount }: { c: CarriedCharacter; bookCount: number }
         <div className="text-[11px] text-cream/55">
           {c.voiceLabel}
           {c.voiceKind !== 'preset' && (
-            <span className="ml-1.5 rounded px-1 py-0.5 bg-magenta/10 text-magenta text-[10px] font-semibold">
+            <span className="ml-1.5 rounded px-1 py-0.5 bg-magenta-on-dark/10 text-magenta-on-dark text-[10px] font-semibold">
               {c.voiceKind === 'designed' ? 'Designed' : 'Cloned'}
             </span>
           )}
@@ -58,7 +58,7 @@ function CarriedRow({ c, bookCount }: { c: CarriedCharacter; bookCount: number }
         {Array.from({ length: bookCount }, (_, i) => i + 1).map((idx) => (
           <span
             key={idx}
-            className={`w-3 h-3 rounded-full ${present.has(idx) ? 'bg-gradient-to-r from-magenta to-peach' : 'bg-white/12'}`}
+            className={`w-3 h-3 rounded-full ${present.has(idx) ? 'bg-gradient-to-r from-magenta-on-dark to-peach' : 'bg-white/12'}`}
           />
         ))}
       </div>
@@ -140,7 +140,7 @@ export function SeriesMemoryReveal({
           <p className="text-cream/60">Loading…</p>
         ) : (
           <>
-            <p className="text-[11px] uppercase tracking-[0.14em] text-magenta font-semibold">
+            <p className="text-[11px] uppercase tracking-[0.14em] text-magenta-on-dark font-semibold">
               series memory · {series}
             </p>
             <h2 id="sm-reveal-heading" className="font-serif text-2xl mt-2">
@@ -155,7 +155,7 @@ export function SeriesMemoryReveal({
             <div className="mt-5 flex justify-between items-center">
               <button
                 onClick={() => onShare(detail)}
-                className="rounded-full px-5 py-2.5 font-semibold text-ink bg-gradient-to-r from-magenta to-peach"
+                className="rounded-full px-5 py-2.5 font-semibold text-peach-ink bg-gradient-to-r from-magenta-on-dark to-peach"
               >
                 Share this cast
               </button>
