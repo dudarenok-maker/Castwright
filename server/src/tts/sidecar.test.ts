@@ -478,6 +478,78 @@ describe('SidecarTtsProvider error classification', () => {
   });
 });
 
+describe('fs-38 Wave 3c Task 17 — substituted cloned coqui voice is fatal [EX-8]', () => {
+  /* D-F: cloned ⇒ fail loud, designed ⇒ fail soft (never a NEW hard
+     failure). The `xtts-` storage-key prefix is Coqui's clone-capable
+     manifest slot key (server/src/tts/clone-engines.ts `manifestSlotFor`)
+     and, since Task 16, is minted for BOTH `cloned` and `designed`
+     provenance — so this gate is deliberately keyed on the `xtts-` prefix
+     alone, not on provenance. Gating on the `qwen-` prefix instead would be
+     wrong: that prefix is qwen's storage key for designed voices too, and
+     making a designed-qwen substitution fatal would violate D-F. */
+  function makeQwenProvider() {
+    return new SidecarTtsProvider({ url: 'http://localhost:9000/', engine: 'qwen' });
+  }
+
+  function substitutionResponse(substitutedFrom: string): Response {
+    const pcm = Buffer.from([0x01, 0x02, 0x03, 0x04]);
+    return new Response(pcm, {
+      status: 200,
+      headers: {
+        'content-type': 'audio/L16;codec=pcm;rate=24000',
+        'x-sample-rate': '24000',
+        'x-voice-substituted-from': substitutedFrom,
+      },
+    });
+  }
+
+  it('throws when the sidecar substitutes a stock speaker for an xtts- prefixed cloned voice', async () => {
+    stubFetch(async () => substitutionResponse('xtts-1111-2222-3333'));
+
+    const err = await makeProvider()
+      .synthesize(SYNTH_INPUT)
+      .then(
+        () => null,
+        (e) => e,
+      );
+
+    /* Assert on the actual code path (the new fatal-substitution branch),
+       not merely "something rejected" — a placebo throw from an unrelated
+       branch would also make a bare `.rejects` assertion pass. */
+    expect(err).not.toBeNull();
+    expect(err.message).toMatch(/xtts-1111-2222-3333/);
+    expect(err.message).toMatch(/substitut/i);
+    expect(err.transient).toBeUndefined();
+  });
+
+  it('still only warns when the substituted voice is a plain catalog name', async () => {
+    stubFetch(async () => substitutionResponse('Nonexistent Voice'));
+
+    const result = await makeProvider().synthesize(SYNTH_INPUT);
+
+    /* Must actually reach the return — a widened gate that fired on every
+       substitution would turn this into a rejection instead. */
+    expect(result.voiceSubstitutedFrom).toBe('Nonexistent Voice');
+  });
+
+  it('still only warns when a qwen- prefixed DESIGNED voice is substituted (regression guard for D-F)', async () => {
+    /* Regression guard for the failure-policy split: `qwen-<uuid>` is also
+       the storage key for designed voices (server/src/tts/clone-engines.ts
+       `libraryVoiceForEngine`), so gating on the `qwen-` prefix — instead of
+       `xtts-` — would make this case fatal too, which D-F forbids. This
+       test would fail if someone widened the gate that way. */
+    stubFetch(async () => substitutionResponse('qwen-4444-5555-6666'));
+
+    const result = await makeQwenProvider().synthesize({
+      text: 'hello',
+      voiceName: 'qwen-4444-5555-6666',
+      modelKey: 'qwen3-tts-0.6b',
+    });
+
+    expect(result.voiceSubstitutedFrom).toBe('qwen-4444-5555-6666');
+  });
+});
+
 describe('capacity-aware admission retry (vram-aware placement, Task 8b)', () => {
   /* The sidecar returns this shape on a 503 when SEG_CAPACITY_ADMISSION
      decides an op can't fit. `postWithCapacityRetry` peeks for it before

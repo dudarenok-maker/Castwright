@@ -34,6 +34,7 @@ import {
 import { getAnalyzerConcurrencyStats } from '../analyzer/analyzer-concurrency.js';
 import { withCapacityRetry, getCapacityWaiterCount } from '../gpu/capacity-retry.js';
 import { coquiLanguageCode } from './voice-mapping.js';
+import { manifestSlotFor } from './clone-engines.js';
 
 /* Re-exported from ../gpu/capacity-retry.ts (the no-capacity poll-wait counter
    moved there in Task 5, #1720) so server/src/routes/gpu-queue.ts's import
@@ -192,6 +193,35 @@ export class SidecarTtsProvider implements TtsProvider {
             `Update server/src/tts/voice-mapping.ts to remove this name. ` +
             `Run \`curl ${this.url}/speakers\` to see the model's actual speaker list.`,
         );
+
+        /* fs-38 Wave 3c Task 17 [EX-8] — defence-in-depth, NOT a live guard
+           against the current sidecar: server/tts-sidecar/main.py's
+           CoquiEngine.synthesize already routes every `xtts-`-prefixed voice
+           into a latents-only branch (gated on XTTS_KEY_PREFIX) that raises
+           rather than falling through to substitution, so this branch is
+           unreachable today. It exists so a future regression — an older
+           sidecar, a reverted branch, a new engine path — can't silently
+           reintroduce substituting a stock speaker for a cloned voice.
+           Gate on the `xtts-` prefix ONLY, mirroring the sidecar's own
+           key-shape gate — it fires for both `cloned` and `designed`
+           provenance, because since Task 16 `xtts-<uuid>` is minted for
+           BOTH (server/src/tts/clone-engines.ts `libraryVoiceForEngine`),
+           and the sidecar's gate doesn't distinguish them either. D-F's
+           fail-soft guarantee for designed voices is NOT enforced here — it
+           lives in the Task 20/20a pre-pass that reverts a designed
+           character to a catalogue voice before synth ever runs. Do NOT
+           extend this to the `qwen-` prefix: that prefix is also qwen's
+           storage key for designed voices, and gating there would turn
+           substitution of a designed qwen voice into a new hard failure,
+           which D-F forbids. */
+        if (substitutedFrom.startsWith(`${manifestSlotFor('coqui')}-`)) {
+          throw new Error(
+            `Sidecar substituted a cloned Coqui voice: requested "${substitutedFrom}" was not ` +
+              `found in the XTTS v2 manifest and a stock speaker was rendered instead. This ` +
+              `should be unreachable — the sidecar's own XTTS_KEY_PREFIX gate should have ` +
+              `failed loud before returning a response.`,
+          );
+        }
       }
 
       return {
