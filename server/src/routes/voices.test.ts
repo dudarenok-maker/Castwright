@@ -1233,6 +1233,72 @@ describe('PUT /api/voices/:voiceId/override', () => {
   });
 });
 
+describe('PUT /api/voices/:voiceId/override — refuses to clear a cloned slot (fs-38 Wave 3c Task 4)', () => {
+  function castPath(title: string) {
+    return join(workspaceRoot, 'books', AUTHOR, SERIES, title, '.audiobook', 'cast.json');
+  }
+
+  function seedClonedSlot(path: string) {
+    const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    cast.characters[0].overrideTtsVoices = {
+      qwen: { name: 'brann-clone', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+    };
+    writeFileSync(path, JSON.stringify(cast));
+  }
+
+  afterEach(() => {
+    /* Undo the cloned slot so later describe blocks in this file start
+       clean — this suite writes the slot directly to disk, bypassing the
+       route (which is the whole point: to seed a state the route itself
+       must refuse to clear). */
+    for (const title of [BOOK_ONE, BOOK_TWO]) {
+      const path = castPath(title);
+      const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+        characters: Array<Record<string, unknown>>;
+      };
+      delete cast.characters[0].overrideTtsVoices;
+      writeFileSync(path, JSON.stringify(cast));
+    }
+  });
+
+  it('409s a workspace-wide clear when a linked character carries a cloned slot, and writes nothing', async () => {
+    seedClonedSlot(castPath(BOOK_TWO));
+    const res = await request(app).put('/api/voices/v_brann/override').send({ override: null });
+    expect(res.status).toBe(409);
+
+    const two = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO);
+    const slot = (two.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.qwen;
+    expect(slot?.provenance).toBe('cloned');
+    expect(slot?.libraryUuid).toBe('lib-clone-1');
+  });
+
+  it('409s a series-scoped clear when the anchor character itself is cloned', async () => {
+    seedClonedSlot(castPath(BOOK_ONE));
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: null, scope: 'series', bookId: bookOneId });
+    expect(res.status).toBe(409);
+
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slot = (one.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.qwen;
+    expect(slot?.provenance).toBe('cloned');
+  });
+
+  it('still clears normally when no linked character is cloned', async () => {
+    await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+    const res = await request(app).put('/api/voices/v_brann/override').send({ override: null });
+    expect(res.status).toBe(204);
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    expect(one.characters[0].overrideTtsVoices).toBeUndefined();
+  });
+});
+
 describe('PUT /api/voices/:voiceId/override — series scope (plan 108)', () => {
   afterEach(async () => {
     /* Clear all three casts between cases so the cross-series assertions

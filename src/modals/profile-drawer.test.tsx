@@ -871,6 +871,47 @@ describe('ProfileDrawer model-voice override picker', () => {
     });
   });
 
+  it('surfaces a 409 refusal and does not leave the optimistic clear as the settled state (fs-38 Wave 3c Task 4)', async () => {
+    /* A character whose Coqui slot is a CONSENTED CLONE. Clicking "Auto" to
+       clear it applies optimistically (voicesActions.setOverride(null))
+       before the server round-trips — the server (voices.ts's clear branch)
+       refuses this with a 409 since it would silently revert a real
+       person's voice to a catalog voice. The refusal must (a) surface as an
+       error and (b) not leave the clear as the final redux state. */
+    setVoiceOverride.mockClear();
+    setVoiceOverride.mockRejectedValueOnce(
+      new Error(
+        'Voice override update failed (409): refused — a linked character carries a consented cloned voice.',
+      ),
+    );
+    const cloned: Voice = {
+      ...brannVoice,
+      overrideTtsVoices: {
+        coqui: { name: 'Asya Anara', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+      },
+    };
+    const { store } = renderDrawer(brann, {
+      voice: cloned,
+      voices: [cloned],
+      baseVoices: baseCatalog,
+    });
+    const trigger = await screen.findByRole('button', { name: /Model voice override/i });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('option', { name: /Auto — currently Coqui/i }));
+
+    /* The refusal is surfaced to the user. */
+    await waitFor(() => {
+      expect(screen.getByText(/409/)).toBeTruthy();
+    });
+
+    /* The optimistic clear (overrideTtsVoices: null) must not survive as
+       the settled redux state — the slot is restored, not left cleared. */
+    const brannState = store
+      .getState()
+      .voices.voices.find((v: Voice) => v.id === 'v_brann');
+    expect(brannState?.overrideTtsVoices?.coqui?.name).toBe('Asya Anara');
+  });
+
   it('shows a filled-slot indicator on the engine tab when that engine has an override', async () => {
     /* The "dot" badge on a tab tells the user at a glance which engines
        have a manual assignment without having to click each tab. */

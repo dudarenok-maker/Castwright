@@ -216,6 +216,123 @@ describe('POST /api/books/:bookId/cast/:characterId/voice-override-linked', () =
     expect(res.body.updated[0].characterId).toBe('loner');
   });
 
+  it('preserves libraryUuid/provenance on the set path (designed slot)', async () => {
+    /* fs-38 Wave 3c Task 4 — the set path used to replace the whole slot with
+       a bare {name}, dropping libraryUuid/provenance even for a NON-cloned
+       (designed) voice. Copy the spread shape voices.ts:781 already uses. */
+    writeBookOnDisk(AUTHOR, SERIES, BOOK_A, bookA, [
+      {
+        id: 'wren',
+        name: 'Wren',
+        role: 'character',
+        color: 'unset',
+        aliases: ['Wren Sparrow'],
+        lines: 100,
+        overrideTtsVoices: {
+          qwen: { name: 'wren-old', libraryUuid: 'lib-designed-1', provenance: 'designed' },
+        },
+      },
+    ]);
+    const res = await callLinked(bookA, 'wren', {
+      override: { engine: 'qwen', name: 'wren-new' },
+    });
+    expect(res.status).toBe(200);
+    const c = findChar(BOOK_A, 'wren');
+    const slot = (c?.overrideTtsVoices as Record<string, Record<string, unknown>>)?.qwen;
+    expect(slot?.name).toBe('wren-new');
+    expect(slot?.libraryUuid).toBe('lib-designed-1');
+    expect(slot?.provenance).toBe('designed');
+  });
+
+  it('refuses (does not write) a group SET that would replace a cloned slot', async () => {
+    /* Wren in book A carries a CONSENTED clone on qwen. A linked set must
+       never silently repoint a real person's voice to a different one. */
+    writeBookOnDisk(AUTHOR, SERIES, BOOK_A, bookA, [
+      {
+        id: 'wren',
+        name: 'Wren',
+        role: 'character',
+        color: 'unset',
+        aliases: ['Wren Sparrow'],
+        lines: 100,
+        voiceUuid: 'U-CLONE',
+        overrideTtsVoices: {
+          qwen: { name: 'wren-clone', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+        },
+      },
+    ]);
+    const res = await callLinked(bookA, 'wren', {
+      override: { engine: 'qwen', name: 'someone-else' },
+    });
+    /* Book A's write is refused (surfaced as a per-book failure, nothing
+       applied there); B/C — the non-cloned siblings — still update. */
+    expect(res.body.updated.some((u: { bookId: string }) => u.bookId === bookA)).toBe(false);
+    expect(res.body.failed.some((f: { bookId: string }) => f.bookId === bookA)).toBe(true);
+    const c = findChar(BOOK_A, 'wren');
+    const slot = (c?.overrideTtsVoices as Record<string, Record<string, unknown>>)?.qwen;
+    /* Unchanged: name, libraryUuid, provenance, AND voiceUuid (the dangerous
+       rewrite that would otherwise make a different qwen storage key resolve
+       once libraryUuid was gone). */
+    expect(slot?.name).toBe('wren-clone');
+    expect(slot?.libraryUuid).toBe('lib-clone-1');
+    expect(slot?.provenance).toBe('cloned');
+    expect(c?.voiceUuid).toBe('U-CLONE');
+  });
+
+  it('refuses (does not write) a group CLEAR that would wipe a cloned slot', async () => {
+    writeBookOnDisk(AUTHOR, SERIES, BOOK_A, bookA, [
+      {
+        id: 'wren',
+        name: 'Wren',
+        role: 'character',
+        color: 'unset',
+        aliases: ['Wren Sparrow'],
+        lines: 100,
+        overrideTtsVoices: {
+          qwen: { name: 'wren-clone', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+        },
+      },
+    ]);
+    const res = await callLinked(bookA, 'wren', { override: null });
+    expect(res.body.updated.some((u: { bookId: string }) => u.bookId === bookA)).toBe(false);
+    expect(res.body.failed.some((f: { bookId: string }) => f.bookId === bookA)).toBe(true);
+    const c = findChar(BOOK_A, 'wren');
+    const slot = (c?.overrideTtsVoices as Record<string, Record<string, unknown>>)?.qwen;
+    expect(slot?.provenance).toBe('cloned');
+    expect(slot?.libraryUuid).toBe('lib-clone-1');
+  });
+
+  it('a cloned sibling in ANOTHER book blocks only that book, not the whole group', async () => {
+    /* B/wren-sparrow has an independent cloned voice; the source book A/wren
+       is a plain designed voice. The set must still reach A and C, and must
+       refuse ONLY B. */
+    writeBookOnDisk(AUTHOR, SERIES, BOOK_B, bookB, [
+      {
+        id: 'wren-sparrow',
+        name: 'Wren Sparrow',
+        role: 'character',
+        color: 'unset',
+        lines: 90,
+        overrideTtsVoices: {
+          qwen: { name: 'sparrow-clone', libraryUuid: 'lib-clone-2', provenance: 'cloned' },
+        },
+      },
+    ]);
+    const res = await callLinked(bookA, 'wren', {
+      override: { engine: 'qwen', name: 'wren-designed' },
+    });
+    const updatedIds = (res.body.updated as Array<{ characterId: string }>)
+      .map((u) => u.characterId)
+      .sort();
+    expect(updatedIds).toEqual(['wren', 'wren']); // A + C, not B
+    expect(res.body.failed.some((f: { bookId: string }) => f.bookId === bookB)).toBe(true);
+    const sparrow = findChar(BOOK_B, 'wren-sparrow');
+    const sparrowSlot = (sparrow?.overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.qwen;
+    expect(sparrowSlot?.provenance).toBe('cloned');
+    expect(sparrowSlot?.libraryUuid).toBe('lib-clone-2');
+  });
+
   it('converges voiceUuid to canonical on manual unify — both rows get U1', async () => {
     /* Seed: two Wren rows with DIFFERENT voiceUuids; canonical (source) has U1. */
     writeBookOnDisk(AUTHOR, SERIES, BOOK_A, bookA, [

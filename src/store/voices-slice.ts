@@ -76,7 +76,11 @@ export const voicesSlice = createSlice({
         return;
       }
       const map = { ...(v.overrideTtsVoices ?? {}) };
-      map[override.engine] = { name: override.name };
+      /* fs-38 Wave 3c Task 4 — spread the existing slot (mirrors the server's
+         applyOverrideToCastFiles, voices.ts:781) so setting a new name
+         doesn't drop the slot's other fields — notably libraryUuid/
+         provenance, which identify a consented clone. */
+      map[override.engine] = { ...(map[override.engine] ?? {}), name: override.name };
       v.overrideTtsVoices = map;
       /* Project the active engine's slot back into the legacy field
          so legacy badge/UI code keeps working until it's migrated to

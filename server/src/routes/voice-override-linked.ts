@@ -36,18 +36,24 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
+import { characterHasClonedSlot, clonedSlotForEngine } from '../tts/clone-engines.js';
 
 export const voiceOverrideLinkedRouter = Router();
 
 type Engine = 'coqui' | 'gemini' | 'piper' | 'kokoro' | 'qwen';
 
 /* cast.json carries fields the analyzer schema doesn't declare — widen here so
-   the round-trip read/write preserves them. */
+   the round-trip read/write preserves them. libraryUuid/provenance are the
+   fields fs-38 Wave 3c Task 4 fixes this route to stop dropping — a slot
+   carrying `provenance: 'cloned'` identifies a consented clone, never a
+   catalog/designed voice safe to silently replace. */
 type PersistedCharacter = CharacterOutput & {
   voiceId?: string;
   /** srv-43 — immutable per-voice identity (nanoid) minted at design time. */
   voiceUuid?: string;
-  overrideTtsVoices?: Partial<Record<Engine, { name: string }>>;
+  overrideTtsVoices?: Partial<
+    Record<Engine, { name: string; libraryUuid?: string; provenance?: 'designed' | 'cloned' | 'imported' }>
+  >;
   overrideTtsVoice?: unknown; // legacy singular field — dropped on write
   ttsEngine?: Engine | null;
   notLinkedTo?: Array<{ bookId: string; characterId: string }>;
@@ -167,7 +173,17 @@ voiceOverrideLinkedRouter.post(
 );
 
 /* Set voiceId + the voice override on the given character ids in ONE book.
-   Returns the ids actually written (present in that book's cast). */
+   Returns the ids actually written (present in that book's cast).
+
+   fs-38 Wave 3c Task 4 — a series rebaseline is a designed-voice operation;
+   silently repointing or clearing a CONSENTED CLONE is never correct (on
+   qwen, dropping a cloned slot's libraryUuid makes the resolver fall back to
+   the character's own voiceUuid — which this same write also unifies to the
+   canonical one — so a completely different person's voice renders, with no
+   error). Refuse the whole book's write, before touching anything, if any
+   targeted character's slot would be removed (clear) or replaced (set) while
+   carrying `provenance: 'cloned'`. A designed/imported slot rebaselines
+   exactly as before. */
 async function applyToBook(
   bookDir: string,
   ids: string[],
@@ -178,6 +194,19 @@ async function applyToBook(
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   if (!cast?.characters?.length) throw new Error('Cast on disk is empty');
   const want = new Set(ids);
+
+  for (const c of cast.characters) {
+    if (!want.has(c.id)) continue;
+    const blocked =
+      override === null ? characterHasClonedSlot(c) : Boolean(clonedSlotForEngine(c, override.engine));
+    if (blocked) {
+      throw new Error(
+        `Character "${c.name ?? c.id}" has a consented cloned voice — series rebaseline refuses to ` +
+          `remove or replace it. Reassign the character directly instead.`,
+      );
+    }
+  }
+
   const wrote: string[] = [];
   let dirty = false;
   cast.characters = cast.characters.map((c) => {
@@ -187,7 +216,14 @@ async function applyToBook(
     if (override === null) {
       delete next.overrideTtsVoices;
     } else {
-      next.overrideTtsVoices = { ...(c.overrideTtsVoices ?? {}), [override.engine]: { name: override.name } };
+      /* Spread the existing slot (voices.ts:781's shape) so a re-baseline
+         doesn't drop libraryUuid/provenance for a designed/imported voice —
+         only `name` (and, for qwen, the resolver's storage key derived from
+         it) is what this write is meant to change. */
+      next.overrideTtsVoices = {
+        ...(c.overrideTtsVoices ?? {}),
+        [override.engine]: { ...(c.overrideTtsVoices?.[override.engine] ?? {}), name: override.name },
+      };
       next.ttsEngine = override.engine;
     }
     delete next.overrideTtsVoice; // fold away the legacy singular field

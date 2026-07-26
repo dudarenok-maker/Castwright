@@ -193,6 +193,34 @@ describe('voicesSlice — setOverride', () => {
     );
     expect(next.voices).toEqual(start.voices);
   });
+
+  it('preserves libraryUuid/provenance on the touched slot when only the name changes (fs-38 Wave 3c Task 4)', () => {
+    /* Mirrors the server-side spread at voices.ts:781 — setting a new name
+       for an engine must not drop the slot's other fields (notably
+       libraryUuid/provenance, which the resolver depends on). */
+    const start = voicesSlice.reducer(
+      undefined,
+      voicesActions.hydrate({
+        voices: [
+          voice('v_brann', {
+            overrideTtsVoices: {
+              qwen: { name: 'brann-old', libraryUuid: 'lib-1', provenance: 'designed' },
+            },
+          }),
+        ],
+      }),
+    );
+    const next = voicesSlice.reducer(
+      start,
+      voicesActions.setOverride({
+        voiceId: 'v_brann',
+        override: { engine: 'qwen', name: 'brann-new' },
+      }),
+    );
+    expect(next.voices[0].overrideTtsVoices).toEqual({
+      qwen: { name: 'brann-new', libraryUuid: 'lib-1', provenance: 'designed' },
+    });
+  });
 });
 
 describe('voicesSlice — hydrateBaseVoices', () => {

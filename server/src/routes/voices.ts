@@ -61,6 +61,7 @@ import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { collectRenderedQwenVoiceNames } from '../audio/segments-io.js';
 import { listVoiceSampleFiles, sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
+import { characterHasClonedSlot } from '../tts/clone-engines.js';
 
 /* The single model key the bespoke Qwen engine synthesises under (mirror of
    the frontend's QWEN_MODEL_KEY / sampleModelKeyForEngine). Cached auditions
@@ -575,13 +576,57 @@ voicesRouter.put('/:voiceId/pin', async (req: Request, res: Response) => {
   }
 });
 
+/* fs-38 Wave 3c Task 4 — read-only pre-check for the clear branch below.
+   `applyOverrideToCastFiles(voiceId, null, ...)` wipes overrideTtsVoices
+   entirely for every matching character — including any OTHER engine slot
+   that carries a consented clone (`provenance: 'cloned'`), silently
+   reverting a real person's voice to a catalog voice. Walks the SAME
+   (workspace- or series-scoped) match set `forEachMatchingCastCharacter`
+   does, but read-only — it must run BEFORE any write so the caller can
+   refuse the whole clear atomically instead of wiping some books before
+   discovering a conflict in another. Deliberately NOT implemented by
+   reusing `forEachMatchingCastCharacter` itself (which always persists,
+   even for a no-op mutate) — a validation pass must not touch disk. */
+async function hasClonedSlotAmongMatches(
+  voiceId: string,
+  seriesFilter?: { author: string; series: string },
+): Promise<boolean> {
+  for (const authorName of listDirs(BOOKS_ROOT)) {
+    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
+      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
+        const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
+        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        if (!state || !state.castConfirmed) continue;
+        if (seriesFilter) {
+          if (state.isStandalone === true) continue;
+          if (state.author !== seriesFilter.author || state.series !== seriesFilter.series) continue;
+        }
+        const cast = await readJson<CastJson>(castJsonPath(bookDir));
+        if (!cast?.characters?.length) continue;
+        for (const c of cast.characters) {
+          if ((c.voiceId ?? c.id) !== voiceId) continue;
+          if (characterHasClonedSlot(c)) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 /* PUT /api/voices/:voiceId/override — set or clear the manual base-voice
    override for every cast.json character whose voiceId matches. Body shape:
        { override: { engine, name } }   to set
        { override: null }               to clear
    Walks every confirmed-cast book in the workspace because the same voiceId
    can recur across a series — they're meant to be the same character, so
-   one override applies to all. */
+   one override applies to all.
+
+   fs-38 Wave 3c Task 4 — the CLEAR branch (`override: null`) refuses with
+   409 when any matching character carries a consented cloned voice on any
+   engine: a rebaseline is a designed-voice operation, and silently
+   reverting a real person's voice to a catalog voice is never correct. The
+   SET branch is unaffected — `applyOverrideToCastFiles` already spreads the
+   existing slot (line ~781), so it never drops libraryUuid/provenance. */
 voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
   const { voiceId } = req.params;
   const body = (req.body ?? {}) as { override?: unknown; scope?: unknown; bookId?: unknown };
@@ -627,6 +672,13 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
           .json({ error: `Book "${bookId}" not found — can't resolve its series.` });
       }
       seriesFilter = resolved;
+    }
+    if (parsed === null && (await hasClonedSlotAmongMatches(voiceId, seriesFilter))) {
+      return res.status(409).json({
+        error:
+          `Voice "${voiceId}" has a consented cloned voice on a linked character — clearing the ` +
+          `override would silently revert it to a catalog voice. Reassign that character directly instead.`,
+      });
     }
     const updates = await applyOverrideToCastFiles(voiceId, parsed, seriesFilter);
     if (updates === 0) {
