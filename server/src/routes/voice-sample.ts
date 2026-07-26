@@ -18,6 +18,7 @@ import {
   type TtsEngine,
   type TtsModelKey,
 } from '../tts/index.js';
+import { isCloneEngine, manifestSlotFor } from '../tts/clone-engines.js';
 import { encodePcmToAudio } from '../tts/mp3.js';
 import { pcmDurationSec } from '../tts/pcm.js';
 import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from '../tts/voice-mapping.js';
@@ -29,6 +30,7 @@ import {
   voiceSampleFilePath,
   voiceSamplePublicUrl,
 } from '../tts/voice-sample-cache.js';
+import { readEntry } from '../workspace/voice-library.js';
 
 export const voiceSampleRouter = Router();
 
@@ -123,6 +125,33 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     voiceName = pickVoiceForEngine(engine, voice, body.characterHint);
     cacheScope = voiceId;
   }
+
+  /* fs-38 Wave 3c, Task 2 — a cloned voice whose consent has been revoked
+     must never be played again, from either branch, cache hit or not. This
+     runs BEFORE the existsSync short-circuit below: a cache entry written
+     while consent was valid must not outlive a later revoke. Keyed off the
+     RESOLVED (engine, voiceName) rather than the client-supplied `voice`
+     object — the raw-speaker bypass (isRawSample, above) has no character
+     context at all, so a client could otherwise hand a cloned storage key
+     straight to `rawSpeaker` and skip any character-level gate entirely.
+     Mirrors the consent check in routes/voice-library.ts:428. A designed
+     (non-cloned) voice resolves to the identical `qwen-<uuid>` key shape
+     (see voice-mapping.ts qwenStorageKey) — provenance, not key shape, is
+     what distinguishes them, so this reads the library entry rather than
+     trusting the client-supplied `provenance` field. */
+  if (isCloneEngine(engine)) {
+    const prefix = `${manifestSlotFor(engine)}-`;
+    if (voiceName.startsWith(prefix)) {
+      const libraryUuid = voiceName.slice(prefix.length);
+      const entry = await readEntry(libraryUuid);
+      if (entry?.provenance === 'cloned' && (!entry.consent || entry.consent.revokedAt)) {
+        return res.status(403).json({
+          error: 'This cloned voice has no valid consent and cannot be played.',
+        });
+      }
+    }
+  }
+
   const fileName = voiceSampleFileName({ cacheScope, modelKey: effectiveModelKey, text, voiceName });
   const filePath = voiceSampleFilePath(safeSegment(fileName));
   const publicUrl = voiceSamplePublicUrl(fileName);

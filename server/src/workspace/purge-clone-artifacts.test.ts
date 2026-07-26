@@ -50,6 +50,7 @@ let dir: string;
 let purge: typeof import('./purge-clone-artifacts.js');
 let paths: typeof import('./paths.js');
 let vl: typeof import('./voice-library.js');
+let cache: typeof import('../tts/voice-sample-cache.js');
 let fetchMock: ReturnType<typeof vi.fn>;
 
 function seed(name: string, ext: 'pt' | 'json' | 'wav'): string {
@@ -79,6 +80,7 @@ beforeEach(async () => {
   vl = await import('./voice-library.js');
   purge = await import('./purge-clone-artifacts.js');
   paths = await import('./paths.js');
+  cache = await import('../tts/voice-sample-cache.js');
 
   mkdirSync(paths.qwenVoicesDir(), { recursive: true });
 });
@@ -121,6 +123,28 @@ describe('purgeCloneArtifacts', () => {
     }
     expect(purgeVoiceSamples).toHaveBeenCalledWith(key);
     expect(removeEntryDir).not.toHaveBeenCalled();
+  });
+
+  /* fs-38 Wave 3c, Task 2 — routes/voice-sample.ts (the cast-view audition
+     route) caches under scopes purgeCloneArtifacts never used to know
+     about: the canonical `xtts-<uuid>` form (this function only ever swept
+     `qwen-<uuid>`), and the raw-speaker bypass's own
+     `raw-<engine>-<djb2(voiceName)-hash6>` scope (:112) — a DIFFERENT scope
+     string that embeds no literal `<uuid>` substring, but IS fully
+     reconstructable from voiceName alone (its hash has no sample-text
+     input), unlike the cast-view's regular per-character scope. Erasure
+     must reach every one of these — "regardless of cache scope" — not just
+     the one scope this function happened to already know about. */
+  it('fs-38 Wave 3c: sweeps the xtts canonical scope and both engines\' raw-branch scopes, regardless of cache scope', async () => {
+    await purge.purgeCloneArtifacts('u1');
+
+    const qwenRawScope = `raw-qwen-${cache.djb2('qwen-u1').toString(36).slice(0, 6)}`;
+    const xttsRawScope = `raw-coqui-${cache.djb2('xtts-u1').toString(36).slice(0, 6)}`;
+
+    expect(purgeVoiceSamples).toHaveBeenCalledWith('qwen-u1');
+    expect(purgeVoiceSamples).toHaveBeenCalledWith('xtts-u1');
+    expect(purgeVoiceSamples).toHaveBeenCalledWith(qwenRawScope);
+    expect(purgeVoiceSamples).toHaveBeenCalledWith(xttsRawScope);
   });
 
   it('removes the entry dir only when deleteEntryDir is set', async () => {

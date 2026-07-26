@@ -20,7 +20,8 @@ import { join } from 'node:path';
 // just a path.join. No cycle exists today, but this removes a latent one.
 import { qwenVoicePtPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from './paths.js';
 import { entryDir, readEntry, removeEntryDir, writeEntry } from './voice-library.js';
-import { purgeVoiceSamples } from '../tts/voice-sample-cache.js';
+import { djb2, purgeVoiceSamples } from '../tts/voice-sample-cache.js';
+import { CLONE_CAPABLE_ENGINES, cloneStorageKey, isCloneEngine } from '../tts/clone-engines.js';
 import { getResolvedSidecarUrl } from './user-settings.js';
 
 /** Review I-2 — a single file's best-effort unlink. `force: true` already
@@ -72,10 +73,35 @@ export async function purgeCloneArtifacts(
   ];
   const failed: string[] = [];
   for (const f of files) await unlinkTracked(f, voiceUuid, failed);
-  purgeVoiceSamples(key);
-  // TODO(3c): when XTTS clone lands, also erase voices/xtts/xtts-<uuid>.pt here
-  //   (spec §5.6). No xtts artifact exists on disk in 3b2, so omit it for now —
-  //   but a future xtts clone would be un-erasable via this path if forgotten.
+  // fs-38 Wave 3c, Task 2 — sweep every audition-cache scope this voice
+  // could have been rendered under, not just the canonical `qwen-<uuid>`
+  // scope. Two independent gaps closed here:
+  //   1. `xtts-<uuid>` — this used to only ever sweep the qwen prefix, so an
+  //      XTTS clone's own canonical-scope auditions (voice-library.ts's own
+  //      /sample mirror route, once XTTS clone assignment lands) were never
+  //      reachable by ANY purge call.
+  //   2. `raw-<engine>-<djb2(storageKey)-hash6>` — the cast-view audition
+  //      route's raw-speaker bypass (routes/voice-sample.ts:112) caches
+  //      under this scope when a client hands a cloned storage key straight
+  //      to `rawSpeaker`. It never contains the voiceUuid as a literal
+  //      prefix, but it IS fully reconstructable here with no cast/book
+  //      context — its hash has no sample-text input, unlike the regular
+  //      per-character cache scope below.
+  // This does NOT reach the cast-view route's regular (non-raw) per-
+  // character scope (`char-<bookId>__<id>` or the character's own voiceId)
+  // — that scope folds the sample TEXT into its hash too, which this
+  // function has no way to know, so a stale file cached there before a
+  // revoke can outlive this sweep. The consent gate in voice-sample.ts is
+  // what actually closes that path (checked fresh on every request, cache
+  // hit or not) — this sweep is defence in depth on top, not the primary
+  // guarantee.
+  for (const engine of CLONE_CAPABLE_ENGINES) {
+    if (!isCloneEngine(engine)) continue;
+    const storageKey = cloneStorageKey(engine, voiceUuid);
+    purgeVoiceSamples(storageKey);
+    const hash6 = djb2(storageKey).toString(36).slice(0, 6);
+    purgeVoiceSamples(`raw-${engine}-${hash6}`);
+  }
   if (opts.deleteEntryDir) {
     await removeEntryDir(voiceUuid);
   } else if (opts.deleteMasterClip) {

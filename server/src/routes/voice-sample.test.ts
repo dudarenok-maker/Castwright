@@ -24,15 +24,25 @@ vi.mock('../tts/index.js', async (importOriginal) => {
 });
 
 let audioDir: string;
+let workspaceDir: string;
 let app: Express;
+let writeEntry: typeof import('../workspace/voice-library.js').writeEntry;
 
 beforeAll(async () => {
   audioDir = mkdtempSync(join(tmpdir(), 'audiobook-voice-sample-test-'));
   process.env.VOICE_SAMPLE_AUDIO_DIR = audioDir;
+  /* fs-38 Wave 3c, Task 2 — the consent gate reads voice-library entries via
+     readEntry(), which resolves WORKSPACE_ROOT (workspace/paths.ts) once at
+     module-load time. Redirect it to a throwaway tempdir, same pattern as
+     VOICE_SAMPLE_AUDIO_DIR above, so the consent-gate tests below can seed
+     real entries without touching (or depending on) the dev workspace. */
+  workspaceDir = mkdtempSync(join(tmpdir(), 'audiobook-voice-sample-workspace-'));
+  process.env.WORKSPACE_DIR = workspaceDir;
 
-  /* Defer import so the route module reads VOICE_SAMPLE_AUDIO_DIR at load
-     time (it's captured in a module-level const). */
+  /* Defer import so the route module reads VOICE_SAMPLE_AUDIO_DIR / WORKSPACE_DIR
+     at load time (they're captured in module-level consts). */
   const { voiceSampleRouter } = await import('./voice-sample.js');
+  ({ writeEntry } = await import('../workspace/voice-library.js'));
 
   app = express();
   app.use(express.json());
@@ -41,7 +51,9 @@ beforeAll(async () => {
 
 afterAll(() => {
   if (audioDir) rmSync(audioDir, { recursive: true, force: true });
+  if (workspaceDir) rmSync(workspaceDir, { recursive: true, force: true });
   delete process.env.VOICE_SAMPLE_AUDIO_DIR;
+  delete process.env.WORKSPACE_DIR;
 });
 
 beforeEach(() => {
@@ -448,6 +460,141 @@ describe('voice-sample router', () => {
         .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
       expect(res.status).toBe(502);
       expect(res.body.code).toBe('tts_failed');
+    });
+  });
+
+  describe('cloned-voice consent gate (fs-38 Wave 3c, Task 2)', () => {
+    /* The bug this closes: the cast-view sample route cached under
+       `cacheScope = voiceId` (the CHARACTER's id, not the voice's storage
+       key) and served a cache hit via a bare `existsSync` short-circuit with
+       no consent check anywhere in the route. After a revoke, every other
+       artifact was erased, but this route kept serving the cached MP3 —
+       permanently, since nothing ever busts that cache entry. The gate must
+       run BEFORE the existsSync check so a pre-existing cache hit can't
+       bypass it. */
+    const baseConsent = {
+      personName: 'Gran',
+      relationship: 'family-with-permission' as const,
+      permittedUse: 'personal' as const,
+      attestedAt: '2026-01-01T00:00:00.000Z',
+      attestedBy: 'me',
+    };
+
+    it('(a) refuses a revoked cloned character even when a cached file already exists', async () => {
+      const voiceUuid = 'revoked-cast-1';
+      await writeEntry({
+        voiceUuid,
+        name: 'Gran',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        consent: { ...baseConsent },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const body = {
+        modelKey: 'qwen3-tts-0.6b',
+        voice: {
+          id: 'v_gran',
+          character: 'Gran',
+          overrideTtsVoices: {
+            qwen: { name: `qwen-${voiceUuid}`, libraryUuid: voiceUuid, provenance: 'cloned' as const },
+          },
+        },
+        text: 'Hello, dear.',
+      };
+
+      /* Consent is currently valid — the audition plays and gets cached, same
+         as any other character. */
+      const before = await request(app).post('/api/voices/v_gran/sample').send(body);
+      expect(before.status).toBe(200);
+      expect(before.body.cached).toBe(false);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+
+      /* Revoke. The cached MP3 from the call above is still sitting on disk —
+         this is the exact scenario the bug allowed through. */
+      await writeEntry({
+        voiceUuid,
+        name: 'Gran',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        consent: { ...baseConsent, revokedAt: '2026-07-20T00:00:00.000Z' },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const after = await request(app).post('/api/voices/v_gran/sample').send(body);
+      expect(after.status).toBe(403);
+      expect(after.body.error).toMatch(/consent/i);
+      /* Not re-synthesised (still refused) AND not served from the stale
+         cache either — the gate precedes the existsSync short-circuit. */
+      expect(synthesize).toHaveBeenCalledTimes(1);
+    });
+
+    it('(c) the raw-speaker bypass refuses a cloned storage key with revoked consent', async () => {
+      const voiceUuid = 'revoked-raw-1';
+      await writeEntry({
+        voiceUuid,
+        name: 'Uncle',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        consent: { ...baseConsent, revokedAt: '2026-07-20T00:00:00.000Z' },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const res = await request(app).post('/api/voices/v_anyone/sample').send({
+        modelKey: 'coqui-xtts-v2',
+        rawEngine: 'coqui',
+        rawSpeaker: `xtts-${voiceUuid}`,
+      });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/consent/i);
+      expect(synthesize).not.toHaveBeenCalled();
+    });
+
+    it('(d) a non-cloned (designed) library voice is unaffected — cache behaviour unchanged', async () => {
+      const voiceUuid = 'designed-1';
+      await writeEntry({
+        voiceUuid,
+        name: 'Designed Bard',
+        provenance: 'designed',
+        tags: [],
+        pinned: false,
+        engines: {},
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const body = {
+        modelKey: 'qwen3-tts-0.6b',
+        voice: {
+          id: 'v_bard',
+          character: 'Bard',
+          overrideTtsVoices: {
+            qwen: { name: `qwen-${voiceUuid}`, libraryUuid: voiceUuid, provenance: 'designed' as const },
+          },
+        },
+        text: 'A designed voice, unaffected by the clone consent gate.',
+      };
+
+      const res1 = await request(app).post('/api/voices/v_bard/sample').send(body);
+      expect(res1.status).toBe(200);
+      expect(res1.body.cached).toBe(false);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+
+      /* Second identical request — still a normal cache hit, unaffected. */
+      const res2 = await request(app).post('/api/voices/v_bard/sample').send(body);
+      expect(res2.status).toBe(200);
+      expect(res2.body.cached).toBe(true);
+      expect(synthesize).toHaveBeenCalledTimes(1);
     });
   });
 });
