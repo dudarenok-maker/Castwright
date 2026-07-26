@@ -1249,14 +1249,23 @@ describe('Layout — tier-modal 1.7B eligibility converges on the shared voice-r
   ];
 
   afterEach(() => {
-    /* This describe block overrides two mocks shared with the rest of the
+    /* This describe block overrides three mocks shared with the rest of the
        file — restore their defaults so later tests aren't affected. */
     vi.mocked(api.getVoices).mockResolvedValue({ voices: [], dropped: [] } as never);
     vi.mocked(api.setCastTier).mockReset();
     vi.mocked(api.setCastTier).mockResolvedValue({ updated: 0 });
+    vi.mocked(api.getSidecarHealth).mockResolvedValue({ status: 'unreachable', url: '(test)' });
   });
 
   it('pins the tier onto exactly the characters the shared selector marks as designed', async () => {
+    /* This test clicks the 1.7B tier row (#1841 gates it on installed
+       weights) — report the base as installed so the click isn't a no-op. */
+    vi.mocked(api.getSidecarHealth).mockResolvedValue({
+      status: 'reachable',
+      url: '(test)',
+      qwenBase17WeightsPresent: true,
+    });
+
     getBookStateMock.mockResolvedValue({
       state: {
         bookId: 'b1',

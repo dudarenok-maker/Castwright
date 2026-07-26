@@ -20,16 +20,32 @@ const TIERS: { id: TtsModelKey; label: string; hint: string }[] = [
 interface Props {
   /** Pre-selected tier — 1.7B when the cast is already pinned to it, else 0.6B. */
   defaultTier: TtsModelKey;
+  /** False when the 1.7B base weights are not on disk — the tier is offered but
+      disabled, since choosing it pins the whole cast (layout.tsx:1731-1760) to a
+      model the box would have to download mid-run. Defaults true so an unwired
+      caller keeps today's behaviour. */
+  qwen17bInstalled?: boolean;
   /** True while the host applies the chosen tier to the cast (disables the CTA). */
   busy?: boolean;
   onClose: () => void;
   onConfirm: (tier: TtsModelKey) => void;
 }
 
-export function StartGenerationModal({ defaultTier, busy = false, onClose, onConfirm }: Props) {
-  /* If the cast is pinned to a tier not in TIERS (shouldn't happen), fall back
-     to 0.6B so the modal always has a valid selection. */
-  const initial = TIERS.some((t) => t.id === defaultTier) ? defaultTier : 'qwen3-tts-0.6b';
+export function StartGenerationModal({
+  defaultTier,
+  qwen17bInstalled = true,
+  busy = false,
+  onClose,
+  onConfirm,
+}: Props) {
+  const tierAvailable = (id: TtsModelKey) => id !== 'qwen3-tts-1.7b' || qwen17bInstalled;
+  /* If the cast is pinned to a tier not in TIERS (shouldn't happen), or to
+     1.7B whose weights are no longer installed, fall back to 0.6B so the
+     modal always has a valid, selectable selection. */
+  const initial =
+    TIERS.some((t) => t.id === defaultTier) && tierAvailable(defaultTier)
+      ? defaultTier
+      : 'qwen3-tts-0.6b';
   const [tier, setTier] = useState<TtsModelKey>(initial);
   return (
     <>
@@ -61,19 +77,28 @@ export function StartGenerationModal({ defaultTier, busy = false, onClose, onCon
               more VRAM. Applied to the whole cast for this book.
             </p>
             <div className="grid grid-cols-1 gap-2">
-              {TIERS.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => setTier(t.id)}
-                  aria-pressed={tier === t.id}
-                  data-testid={`start-gen-tier-${t.id}`}
-                  className={`text-left p-3 rounded-2xl border transition-all min-h-[44px] ${tier === t.id ? 'border-peach bg-peach/6' : 'border-ink/10 hover:border-ink/20'}`}
-                >
-                  <p className="text-sm font-semibold text-ink">{t.label}</p>
-                  <p className="text-xs text-ink/55 mt-0.5">{t.hint}</p>
-                </button>
-              ))}
+              {TIERS.map((t) => {
+                const available = tierAvailable(t.id);
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => available && setTier(t.id)}
+                    disabled={!available}
+                    aria-pressed={tier === t.id}
+                    data-testid={`start-gen-tier-${t.id}`}
+                    className={`text-left p-3 rounded-2xl border transition-all min-h-[44px] disabled:opacity-40 disabled:cursor-not-allowed ${tier === t.id ? 'border-peach bg-peach/6' : 'border-ink/10 hover:border-ink/20'}`}
+                  >
+                    <p className="text-sm font-semibold text-ink">{t.label}</p>
+                    <p className="text-xs text-ink/55 mt-0.5">{t.hint}</p>
+                    {!available && (
+                      <p className="text-xs text-ink/40 mt-0.5">
+                        Not downloaded — add it from Models
+                      </p>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

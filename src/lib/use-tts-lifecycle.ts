@@ -60,6 +60,9 @@ export interface TtsLifecycle {
   qwen1_7b: EngineLifecycle;
   /** Whisper ASR content-QA engine (srv-31). Display-only — no Load/Stop. */
   asr: AsrLifecycle;
+  /** True when the Qwen 1.7B base weights are on disk. INSTALLED, not loaded —
+      `qwen1_7b.state === 'ready'` is residency and is a different question. */
+  qwen1_7bInstalled: boolean;
   /** Inline banner copy: "Analyzer unloaded to free VRAM for TTS." Shared
       slot — only one engine load is in flight at a time so a single notice
       surface is correct. */
@@ -296,6 +299,7 @@ export function useTtsLifecycle(): TtsLifecycle {
       state: asrState,
       device: sidecarHealth?.asrDevice ?? null,
     },
+    qwen1_7bInstalled: sidecarHealth?.qwenBase17WeightsPresent === true,
     evictionNotice,
     loadErrorNotice,
     dismissNotices,

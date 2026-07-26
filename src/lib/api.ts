@@ -6071,6 +6071,10 @@ export interface SidecarHealth {
   kokoroLoading?: boolean;
   qwenLoaded?: boolean;
   qwenBase17Loaded?: boolean;
+  /** 1.7B base WEIGHTS present on disk — distinct from `qwenBase17Loaded`,
+      which is residency. The tier picker gates on this: the 1.7B base is a
+      separate download (tts-sidecar `_qwen_base17_weights_present`). */
+  qwenBase17WeightsPresent?: boolean;
   qwenLoading?: boolean;
   /* Qwen install-state, distinct from load-state (qwenLoaded). Drives the
      conditional default (Qwen-when-installed) + the install-check warning:
@@ -7492,6 +7496,11 @@ export async function mockGetSidecarHealth(): Promise<SidecarHealth> {
       MOCK_SIDECAR_QWEN_LOADED ||
       MOCK_SIDECAR_QWEN_INSTALL_STATE === 'ready' ||
       MOCK_SIDECAR_QWEN_INSTALL_STATE === 'loaded',
+    /* Mocks pretend the 1.7B base is installed so the tier picker stays fully
+       selectable under VITE_USE_MOCKS=true — no separate mock flag exists for
+       the 1.7B download the way MOCK_SIDECAR_QWEN_INSTALL_STATE tracks the
+       0.6B base. */
+    qwenBase17WeightsPresent: true,
     whisperPackageInstalled: true,
     device:
       MOCK_SIDECAR_MODEL_LOADED || MOCK_SIDECAR_KOKORO_LOADED || MOCK_SIDECAR_QWEN_LOADED

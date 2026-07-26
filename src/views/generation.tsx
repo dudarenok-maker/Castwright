@@ -41,6 +41,7 @@ const INERT_TTS_LIFECYCLE: TtsLifecycle = {
   qwen: INERT_ENGINE_LIFECYCLE,
   qwen1_7b: INERT_ENGINE_LIFECYCLE,
   asr: { enabled: false, state: 'idle', device: null },
+  qwen1_7bInstalled: false,
   evictionNotice: null,
   loadErrorNotice: null,
   dismissNotices: () => {},
