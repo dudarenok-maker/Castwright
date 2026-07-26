@@ -478,7 +478,7 @@ describe('voice-sample router', () => {
     it('503 no_capacity with the named blockers when admission gives up (#1839)', async () => {
       synthesize.mockRejectedValueOnce(
         new NoCapacityError('qwen', 4100, 'cuda:0', [
-          { model: 'Coqui XTTS', remedy: 'Stop it in the Models panel.' },
+          { model: 'Coqui XTTS', remedy: 'Use its Stop button, at the top of the window.' },
         ]),
       );
       const res = await request(app)
@@ -487,7 +487,7 @@ describe('voice-sample router', () => {
       expect(res.status).toBe(503);
       expect(res.body.code).toBe('no_capacity');
       expect(res.body.blockers).toEqual([
-        { model: 'Coqui XTTS', remedy: 'Stop it in the Models panel.' },
+        { model: 'Coqui XTTS', remedy: 'Use its Stop button, at the top of the window.' },
       ]);
       expect(res.body.message).toContain('Coqui XTTS');
     });
