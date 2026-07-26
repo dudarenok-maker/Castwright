@@ -521,6 +521,46 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
     const res = await request(app).post('/api/voice-library/s1/sample').send({});
     expect(res.status).toBe(403);
   });
+
+  /* #1801 — the sample route's failures arrive from a DIFFERENT layer than
+     design/redesign's: `SidecarTtsProvider` throws a plain Error annotated
+     `{ transient, status, poisoned }` (tts/sidecar.ts `throwForResponse`), or
+     a `NoCapacityError` that carries no `.status` at all. Both used to flatten
+     to 502, losing the retryable/"free VRAM" signal. */
+  it('POST /:uuid/sample surfaces the sidecar status instead of flattening to 502', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'sample-503', name: 'Nova', provenance: 'designed' }));
+    synthesize.mockRejectedValueOnce(
+      Object.assign(new Error('Local voice engine returned 503: model loading'), {
+        transient: true,
+        status: 503,
+        poisoned: false,
+      }),
+    );
+    const res = await request(app).post('/api/voice-library/sample-503/sample').send({});
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatch(/model loading/);
+  });
+
+  it('POST /:uuid/sample maps a NoCapacityError (no .status) to 503, not 502', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'sample-cap', name: 'Nova', provenance: 'designed' }));
+    const { NoCapacityError } = await import('../tts/tts-errors.js');
+    synthesize.mockRejectedValueOnce(new NoCapacityError('qwen', 4096, 'cuda:0'));
+    const res = await request(app).post('/api/voice-library/sample-cap/sample').send({});
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatch(/free VRAM/i);
+  });
+
+  it('POST /:uuid/sample still 502s a status-less failure (sidecar unreachable)', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'sample-down', name: 'Nova', provenance: 'designed' }));
+    synthesize.mockRejectedValueOnce(
+      Object.assign(new Error('Local TTS sidecar not reachable at http://127.0.0.1:9000.'), {
+        transient: true,
+        cause: 'network',
+      }),
+    );
+    const res = await request(app).post('/api/voice-library/sample-down/sample').send({});
+    expect(res.status).toBe(502);
+  });
 });
 
 describe('POST /api/voice-library/:voiceUuid/assign', () => {
@@ -776,6 +816,47 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
     const res = await request(app).post('/api/voice-library/nope/redesign').send({ persona: 'p' });
     expect(res.status).toBe(404);
+  });
+
+  /* #1801 — a 503 from the sidecar is the "no GPU capacity, free VRAM and
+     retry" signal; flattening it to 502 tells the UI "the gateway is broken"
+     instead. A real `Response` (not the plain okSidecarResponse stub) because
+     withCapacityRetry calls `.clone()` on a non-ok body to check for
+     `{ noCapacity: true }` — this body lacks it, so the response is returned
+     untouched and design-voice-core throws SidecarDesignError(503). No retry
+     loop, so the test can't hang. */
+  it('design surfaces a sidecar 503 instead of flattening it to 502', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'GPU is saturated' }), { status: 503 }),
+    );
+    const res = await request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'Nova', persona: 'a calm narrator' });
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatch(/GPU is saturated/);
+  });
+
+  it('redesign surfaces a sidecar 503 instead of flattening it to 502', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 're-503', name: 'Nova', provenance: 'designed' }));
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'GPU is saturated' }), { status: 503 }),
+    );
+    const res = await request(app)
+      .post('/api/voice-library/re-503/redesign')
+      .send({ persona: 'a brighter read' });
+    expect(res.status).toBe(503);
+  });
+
+  /* The unreachable/cancelled branches of design-voice-core carry status 0.
+     `res.status(0)` is a RangeError that would blow up as an HTML 500 — the
+     mapping must clamp anything outside 400–599 back to 502. */
+  it('design clamps a status-0 (sidecar unreachable) error to 502, not a RangeError', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+    const res = await request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'Nova', persona: 'a calm narrator' });
+    expect(res.status).toBe(502);
+    expect(res.body.error).toMatch(/unreachable/i);
   });
 
   it('redesign/promote swaps the live .pt with the preview and bumps updatedAt', async () => {
