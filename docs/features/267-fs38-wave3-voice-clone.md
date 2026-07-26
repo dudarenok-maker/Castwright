@@ -200,8 +200,9 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
     `e2e/` must import it into a Node process) — plus `openapi.yaml`'s
     `maxLength`, which is normative but enforces nothing at runtime (no request
     is validated against the schema; the route hand-validates). A test on each
-    side of the wire pins its implementation against that contract. `src/lib/api-types.ts` is not a fourth: openapi-typescript does
-    not encode `maxLength`. #1840 shipped a contract documenting two caps 2×
+    side of the wire pins its implementation against that contract.
+    `src/lib/api-types.ts` is not a fourth: openapi-typescript does not encode
+    `maxLength`. #1840 shipped a contract documenting two caps 2×
     apart because the schema description and the `400` both restated the
     number; both now defer to `maxLength`, so the contract states it exactly
     once and a test asserts that. Descriptive prose elsewhere (this plan, the
