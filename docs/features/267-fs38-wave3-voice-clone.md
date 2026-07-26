@@ -194,12 +194,13 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
     redoing the sums fails (#1836). **`mockCloneVoice` enforces the same cap**,
     with a message byte-identical to the one `realCloneVoice` builds from the
     route's JSON body — a prettier mock string would hide a real-mode wart the
-    wizard renders verbatim. Three *enforcing* copies of the number exist —
-    the route's `MAX_CLONE_TRANSCRIPT_CHARS`, the frontend's
-    (`src/lib/clone-transcript-limit.ts`, its own module because `e2e/` must
-    import it into a Node process), and `openapi.yaml`'s `maxLength` — with a
-    test on each side of the wire pinning its implementation against the
-    contract. `src/lib/api-types.ts` is not a fourth: openapi-typescript does
+    wizard renders verbatim. The number exists in three places: two that
+    actually enforce it — the route's `MAX_CLONE_TRANSCRIPT_CHARS` and the
+    frontend's (`src/lib/clone-transcript-limit.ts`, its own module because
+    `e2e/` must import it into a Node process) — plus `openapi.yaml`'s
+    `maxLength`, which is normative but enforces nothing at runtime (no request
+    is validated against the schema; the route hand-validates). A test on each
+    side of the wire pins its implementation against that contract. `src/lib/api-types.ts` is not a fourth: openapi-typescript does
     not encode `maxLength`. #1840 shipped a contract documenting two caps 2×
     apart because the schema description and the `400` both restated the
     number; both now defer to `maxLength`, so the contract states it exactly
@@ -327,11 +328,11 @@ No new Playwright e2e in 3a — added in 3b1 (below).
   nothing caught it, because codegen drift was ungated. Note
   `forceRerunTriggers`
   **replaces** vitest's defaults rather than extending them, so both configs
-  re-list `**/package.json/**` and `**/{vitest,vite}.config.*/**`. Measured:
-  omitting them does not currently collapse a manifest-only server run to zero
-  tests — vitest full-runs when the changed set falls outside the project root
-  — but leaning on that fallback to cover a documented default is how a gate
-  quietly stops gating, so they stay listed.
+  re-list `**/package.json/**` and `**/{vitest,vite}.config.*/**`. That is
+  load-bearing, measured on a clean tree: with them stripped, a root-manifest
+  diff makes `cd server && vitest run --changed` report *"No test files found"*
+  and exit 0 — so a release-cut version bump would run zero server tests and
+  report green — while the same diff with them restored selects 5389.
 - Playwright (`e2e/voice-library.spec.ts`, step 6) — the clone wizard's
   transcript field in a real browser: the ingested Whisper text lands in the
   box, an over-cap value disables Continue with the reason rendered on screen

@@ -9791,7 +9791,11 @@ export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibrary
   /* #1836 — mirror the real route: a supplied non-blank transcript wins over
      the canned Whisper text and flips transcriptSource to 'user'. Without
      this the mock keeps reproducing the very bug the real path just fixed. */
-  const supplied = body.transcript?.trim() ?? '';
+  /* typeof-narrowed like the guard above and like the route, which pins
+     "ignores a non-string transcript and falls back to the Whisper text".
+     `body.transcript?.trim()` alone would TypeError in the mock on a truthy
+     non-string, where the real route 200s. */
+  const supplied = typeof body.transcript === 'string' ? body.transcript.trim() : '';
   const transcript = supplied || MOCK_WHISPER_TRANSCRIPT;
   const entry: VoiceLibraryEntry = {
     voiceUuid: `lib-clone-${Math.random().toString(36).slice(2, 10)}`,

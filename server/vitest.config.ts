@@ -83,12 +83,13 @@ export default defineConfig({
     hookTimeout: 30_000,
     /* Setting this key REPLACES vitest's defaults rather than extending them,
        so the first two entries re-list them — same note the root
-       vitest.config.ts has always carried. (Measured: dropping them does NOT
-       currently collapse a manifest-only run to zero tests — vitest full-runs
-       when the changed set falls outside the project root, which `cd server`
-       makes true for most of this repo. Re-listed anyway: relying on that
-       fallback to cover a documented default is how a gate quietly stops
-       gating.)
+       vitest.config.ts has always carried. This is load-bearing, measured on a
+       clean tree: with them stripped, a root-manifest diff makes `cd server &&
+       vitest run --changed` report "No test files found" and exit 0 — a
+       release-cut version bump would run ZERO server tests and show green.
+       With them restored the same diff selects 5389. (An earlier run here
+       appeared to contradict that; it was measuring a dirty tree whose other
+       modified files matched the openapi trigger below.)
        openapi.yaml: voice-library.test.ts pins MAX_CLONE_TRANSCRIPT_CHARS
        against it by reading the file at RUNTIME — no module-graph edge, so
        `--changed` would otherwise skip the pin on the openapi-only diff it

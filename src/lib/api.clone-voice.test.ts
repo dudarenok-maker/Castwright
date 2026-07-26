@@ -94,6 +94,18 @@ describe('mockCloneVoice', () => {
     const entry = await mockCloneVoice({ candidateId: 'cand-1', transcript: atCap, consent });
     expect(entry.master?.transcript).toBe(atCap);
   });
+
+  /* The route pins the same fallback ("ignores a non-string transcript"), so
+     the mock has to survive it rather than TypeError on `.trim()`. */
+  it('ignores a non-string transcript the way the route does', async () => {
+    const entry = await mockCloneVoice({
+      candidateId: 'cand-1',
+      transcript: 42 as unknown as string,
+      consent,
+    });
+    expect(entry.master?.transcript).toBe('the quick brown fox jumped');
+    expect(entry.master?.transcriptSource).toBe('whisper');
+  });
 });
 
 /* The cap exists in three places — this constant, the route's
@@ -113,8 +125,18 @@ describe('MAX_CLONE_TRANSCRIPT_CHARS', () => {
        which is the repo root. */
     const yaml = await readFile(resolve(process.cwd(), 'openapi.yaml'), 'utf8');
     const anchor = yaml.indexOf('    CloneVoiceRequest:');
-    expect(anchor).toBeGreaterThan(-1); // fail closed if the schema is renamed
-    const transcriptBlock = yaml.slice(yaml.indexOf('        transcript:', anchor));
+    const blockStart = yaml.indexOf('        transcript:', anchor);
+    const blockEnd = yaml.indexOf('        consent:', blockStart);
+    /* Fail closed if the schema is renamed or its properties reordered — and
+       BOUND the slice at the next property. Slicing to EOF would let a
+       `maxLength` from any later schema satisfy this test if transcript's own
+       were deleted; it only fails today because transcript's happens to be the
+       file's last one. `maxLength: 2000` already appears elsewhere (an
+       unrelated `path` field), so that coincidence is not load-bearing. */
+    expect(anchor).toBeGreaterThan(-1);
+    expect(blockStart).toBeGreaterThan(-1);
+    expect(blockEnd).toBeGreaterThan(blockStart);
+    const transcriptBlock = yaml.slice(blockStart, blockEnd);
     const maxLength = /maxLength:\s*(\d+)/.exec(transcriptBlock)?.[1];
     expect(maxLength).toBe(String(MAX_CLONE_TRANSCRIPT_CHARS));
   });
