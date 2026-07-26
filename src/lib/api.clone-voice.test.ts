@@ -69,9 +69,11 @@ describe('mockCloneVoice', () => {
     const before = (await mockListVoiceLibrary()).voices.length;
     /* The exact string realCloneVoice would build: it interpolates
        `await res.text()` and the route replies `res.status(400).json({ error })`,
-       so the JSON envelope is part of the message. Pinned in full, because
-       a mock that renders a *prettier* error than production hides a real
-       wart the wizard shows verbatim — and no test could catch it. */
+       so the JSON envelope is part of the message. A mock rendering a
+       *prettier* error than production would hide a real wart the wizard
+       shows verbatim, and no test could catch it. Passed as an Error, not a
+       string — `toThrow('…')` is a SUBSTRING match, which would accept a mock
+       that appended to the message. */
     await expect(
       mockCloneVoice({
         candidateId: 'cand-1',
@@ -79,7 +81,9 @@ describe('mockCloneVoice', () => {
         consent,
       }),
     ).rejects.toThrow(
-      `Voice clone failed (400): {"error":"Transcript is too long (max ${MAX_CLONE_TRANSCRIPT_CHARS} characters)."}`,
+      new Error(
+        `Voice clone failed (400): {"error":"Transcript is too long (max ${MAX_CLONE_TRANSCRIPT_CHARS} characters)."}`,
+      ),
     );
     /* Rejected outright, not truncated-and-saved — no entry appears. */
     expect((await mockListVoiceLibrary()).voices.length).toBe(before);
@@ -92,10 +96,12 @@ describe('mockCloneVoice', () => {
   });
 });
 
-/* The cap exists in four places — this constant, the route's
-   MAX_CLONE_TRANSCRIPT_CHARS, openapi.yaml's CloneVoiceRequest.transcript
-   maxLength, and (generated from that) api-types.ts — tied together only by
-   prose. The server suite pins its copy against the contract; this pins the
+/* The cap exists in three places — this constant, the route's
+   MAX_CLONE_TRANSCRIPT_CHARS, and openapi.yaml's
+   CloneVoiceRequest.transcript.maxLength — tied together only by prose.
+   (api-types.ts is NOT a fourth: openapi-typescript does not encode
+   `maxLength`, so the generated type carries no bound and cannot drift.)
+   The server suite pins its copy against the contract; this pins the
    frontend's, so raising one in isolation fails on both sides of the wire.
    Asserting against a second literal here would pin nothing. */
 describe('MAX_CLONE_TRANSCRIPT_CHARS', () => {
@@ -113,13 +119,15 @@ describe('MAX_CLONE_TRANSCRIPT_CHARS', () => {
     expect(maxLength).toBe(String(MAX_CLONE_TRANSCRIPT_CHARS));
   });
 
-  /* `maxLength` is not the only place the contract states the number: the
-     schema description explains the byte arithmetic, and #1840 already shipped
-     a version documenting two caps 2x apart. Pinning `maxLength` alone leaves
-     that prose free to rot, so scan the whole transcript block plus the clone
-     400 for any 4-digit number and require each to be the cap or one of its
-     two derived bounds. Reword-proof in a way phrase-matching wouldn't be. */
-  it('states no stale copy of the cap anywhere in the clone contract', async () => {
+  /* #1840 shipped a contract documenting two caps 2x apart, because the
+     schema description and the 400 both restated the number. The durable fix
+     was to delete those restatements rather than to pin them: `maxLength` is
+     now the only place the contract states it, so the single pin above covers
+     the whole contract. A prose-scanning test was tried here and removed —
+     it could not tell a stale `200` from a deliberate one, treated the byte
+     and base64 bounds as interchangeable, and false-positived on an issue
+     reference like (#1836). Fewer numbers beats a cleverer test. */
+  it('states the cap only once, so the pin above covers the whole contract', async () => {
     const { readFile } = await import('node:fs/promises');
     const { resolve } = await import('node:path');
     const yaml = await readFile(resolve(process.cwd(), 'openapi.yaml'), 'utf8');
@@ -127,19 +135,19 @@ describe('MAX_CLONE_TRANSCRIPT_CHARS', () => {
     const schemaAnchor = yaml.indexOf('    CloneVoiceRequest:');
     const blockStart = yaml.indexOf('        transcript:', schemaAnchor);
     const blockEnd = yaml.indexOf('        consent:', blockStart);
-    // Fail closed if the schema is renamed or its properties reordered.
+    /* Fail closed if the schema is renamed or its properties reordered.
+       blockStart needs its own guard: indexOf clamps a -1 fromIndex to 0, so
+       blockEnd would resolve against a DIFFERENT schema's `consent:` and the
+       slice would silently collapse to empty. */
     expect(schemaAnchor).toBeGreaterThan(-1);
+    expect(blockStart).toBeGreaterThan(-1);
     expect(blockEnd).toBeGreaterThan(blockStart);
-    const fourHundred = /'400': \{ description: Missing candidateId[^}]*\}/.exec(yaml)?.[0];
-    expect(fourHundred).toBeDefined();
 
-    const cap = MAX_CLONE_TRANSCRIPT_CHARS;
-    // The cap itself, its worst-case UTF-8 byte bound (3 bytes per UTF-16
-    // unit), and that bound base64-encoded (4/3). Nothing else belongs here.
-    const allowed = [cap, cap * 3, cap * 4].map(String);
-    const region = `${yaml.slice(blockStart, blockEnd)}\n${fourHundred}`;
-    for (const found of region.match(/\d{4,}/g) ?? []) {
-      expect(allowed).toContain(found);
-    }
+    const block = yaml.slice(blockStart, blockEnd);
+    expect(block).toContain('base64'); // the slice really is the transcript block
+    /* Exactly one occurrence, and it is the maxLength the test above pins. */
+    const occurrences = block.match(new RegExp(String(MAX_CLONE_TRANSCRIPT_CHARS), 'g')) ?? [];
+    expect(occurrences).toHaveLength(1);
+    expect(block).toContain(`maxLength: ${MAX_CLONE_TRANSCRIPT_CHARS}`);
   });
 });

@@ -81,11 +81,23 @@ export default defineConfig({
     ],
     testTimeout: 15_000,
     hookTimeout: 30_000,
-    /* voice-library.test.ts pins MAX_CLONE_TRANSCRIPT_CHARS against
-       openapi.yaml by reading the file at RUNTIME — no module-graph edge, so
-       `vitest --changed` (what CI runs) would skip it on the openapi-only diff
-       it exists to catch. Mirrors the root vitest.config.ts trigger. */
-    forceRerunTriggers: ['**/openapi.yaml/**'],
+    /* Setting this key REPLACES vitest's defaults rather than extending them,
+       so the first two entries re-list them — same note the root
+       vitest.config.ts has always carried. (Measured: dropping them does NOT
+       currently collapse a manifest-only run to zero tests — vitest full-runs
+       when the changed set falls outside the project root, which `cd server`
+       makes true for most of this repo. Re-listed anyway: relying on that
+       fallback to cover a documented default is how a gate quietly stops
+       gating.)
+       openapi.yaml: voice-library.test.ts pins MAX_CLONE_TRANSCRIPT_CHARS
+       against it by reading the file at RUNTIME — no module-graph edge, so
+       `--changed` would otherwise skip the pin on the openapi-only diff it
+       exists to catch. */
+    forceRerunTriggers: [
+      '**/package.json/**',
+      '**/{vitest,vite}.config.*/**',
+      '**/openapi.yaml/**',
+    ],
     pool: 'forks',
     /* Vitest 4 removed `poolOptions`; `poolOptions.forks.maxForks` is now the
        top-level `maxWorkers` (and `minForks` was dropped). `pool: 'forks'`

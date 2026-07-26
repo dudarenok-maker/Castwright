@@ -7,7 +7,7 @@
  *
  * Deliberately its own module rather than a `src/lib/api.ts` export, for two
  * reasons: `e2e/voice-library.spec.ts` needs the value in a Node/Playwright
- * process, and dragging ~9,900 lines of browser-facing api.ts in for one
+ * process, and dragging ~10,500 lines of browser-facing api.ts in for one
  * number is not viable; and 81 files under `src/` do `vi.mock('…lib/api')`, so
  * an api.ts export would be one forgotten factory key away from resolving to
  * `undefined` in some future test. (That failure would be loud, not silent —

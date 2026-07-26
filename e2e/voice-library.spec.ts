@@ -248,10 +248,12 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
     /* #1836 — the transcript box, which this spec previously walked straight
        past. The mock ingest's canned "Whisper" text lands in an editable
        field; waiting on its value also gates on ingest having resolved. */
-    /* getByRole, not getByLabel. Observed, not assumed: getByLabel('transcript')
-       failed here with "Not an input element" — despite the textarea carrying
-       aria-label="transcript" — so it resolved to the wrapping <label> (which
-       also holds the over-cap message) rather than the control. */
+    /* getByRole, not getByLabel. The only claim made here is the observation:
+       getByLabel('transcript') failed in this spec with "Not an input
+       element", despite the textarea carrying aria-label="transcript". Why is
+       undiagnosed — Playwright's `retarget(…, 'follow-label')` should have
+       followed the wrapping <label> to its control — so no mechanism is
+       asserted. getByRole works and is unambiguous here. */
     const transcriptBox = page.getByRole('textbox', { name: 'transcript' });
     await expect(transcriptBox).toHaveValue('the quick brown fox jumped', { timeout: 10_000 });
 

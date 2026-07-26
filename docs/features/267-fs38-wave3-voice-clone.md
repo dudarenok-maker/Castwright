@@ -194,15 +194,18 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
     redoing the sums fails (#1836). **`mockCloneVoice` enforces the same cap**,
     with a message byte-identical to the one `realCloneVoice` builds from the
     route's JSON body — a prettier mock string would hide a real-mode wart the
-    wizard renders verbatim. The number lives in two implementations plus the
-    contract: the route's `MAX_CLONE_TRANSCRIPT_CHARS`, the frontend's
-    (`src/lib/clone-transcript-limit.ts` — its own module because `e2e/` must
-    import it into a Node process), and `openapi.yaml`'s `maxLength` *and* the
-    byte arithmetic in that schema's description. A test on each side of the
-    wire pins its implementation against the contract, and the frontend one
-    also scans the schema block for any stale number, since #1840 shipped a
-    contract documenting two caps 2× apart. `src/lib/api-types.ts` is not a
-    fourth copy — openapi-typescript does not encode `maxLength`. Note this
+    wizard renders verbatim. Three *enforcing* copies of the number exist —
+    the route's `MAX_CLONE_TRANSCRIPT_CHARS`, the frontend's
+    (`src/lib/clone-transcript-limit.ts`, its own module because `e2e/` must
+    import it into a Node process), and `openapi.yaml`'s `maxLength` — with a
+    test on each side of the wire pinning its implementation against the
+    contract. `src/lib/api-types.ts` is not a fourth: openapi-typescript does
+    not encode `maxLength`. #1840 shipped a contract documenting two caps 2×
+    apart because the schema description and the `400` both restated the
+    number; both now defer to `maxLength`, so the contract states it exactly
+    once and a test asserts that. Descriptive prose elsewhere (this plan, the
+    release notes) still cites the value and is deliberately not pinned. Note
+    this
     closes ONE of the route's six documented failure modes in mock mode
     (400/404/409/422/502/503): the mock still validates neither `candidateId`
     nor consent, so it stays materially more permissive than the route.
@@ -302,16 +305,25 @@ No new Playwright e2e in 3a — added in 3b1 (below).
   over-cap throws the exact message `realCloneVoice` would build (JSON envelope
   included) and appends no entry; at-cap is accepted (the discriminating
   mutation being `>` → `>=`). Two further tests pin
-  `MAX_CLONE_TRANSCRIPT_CHARS` against `openapi.yaml` — one on `maxLength`, one
-  scanning the schema block and the clone `400` for stale numbers. Both are the
-  frontend-side twin of the server's pin. Mutation-checked: raising the
-  constant to 6000 fails the pin, deleting the mock's guard fails the rejection
-  test. Both pins read `openapi.yaml` at runtime with no module-graph edge to
-  it, so `openapi.yaml` is registered in both vitest configs'
-  `forceRerunTriggers`, in `verify.yml`'s **frontend** scope regex, and in
-  `verify-cache.mjs`'s `test`/`test:server` inputs — without those four, CI's
-  `vitest --changed` would never select the pins on the openapi-only diff they
-  exist to catch.
+  `MAX_CLONE_TRANSCRIPT_CHARS` against `openapi.yaml`: one on `maxLength`, one
+  asserting the schema states the number exactly *once* so that first pin
+  covers the whole contract. Both are the frontend-side twin of the server's
+  pin. Mutation-checked: raising the constant to 6000 fails the pin, deleting
+  the mock's guard fails the rejection test.
+- **The pins only run because CI was taught about them.** Both read
+  `openapi.yaml` at runtime, so neither has a module-graph edge to it and
+  `vitest --changed` — what CI runs — selected *zero* files on an openapi-only
+  diff (measured, both ways). `openapi.yaml` is therefore registered in both
+  vitest configs' `forceRerunTriggers`, as its own `openapi` scope in
+  `verify.yml` (its own flag, not `frontend`, which would also fire the four
+  e2e shards and the visual battery for a contract-only change), and in
+  `verify-cache.mjs`'s `test`/`test:server` inputs. Note `forceRerunTriggers`
+  **replaces** vitest's defaults rather than extending them, so both configs
+  re-list `**/package.json/**` and `**/{vitest,vite}.config.*/**`. Measured:
+  omitting them does not currently collapse a manifest-only server run to zero
+  tests — vitest full-runs when the changed set falls outside the project root
+  — but leaning on that fallback to cover a documented default is how a gate
+  quietly stops gating, so they stay listed.
 - Playwright (`e2e/voice-library.spec.ts`, step 6) — the clone wizard's
   transcript field in a real browser: the ingested Whisper text lands in the
   box, an over-cap value disables Continue with the reason rendered on screen
