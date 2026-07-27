@@ -1,5 +1,14 @@
 # Castwright 1.15.0
 
+- **Castwright now needs Node 22.22 or newer.** If you install Castwright yourself, please check your
+  Node version before you update — and check it deliberately, because nothing will stop you: the
+  installer only prints a warning that's easy to miss in the scroll, then carries on and installs
+  anyway. On an older Node you may not find out until something fails later, with nothing pointing at
+  the real cause. Run `node --version` first. Node 20 stopped receiving security fixes in April 2026,
+  so this moves us onto a version that's still being looked after. If you installed through Pinokio,
+  Castwright uses the Node that Pinokio itself supplies — we haven't yet confirmed which version that
+  is on every platform, so if a Pinokio install starts misbehaving after this update, that's the first
+  thing worth telling us about.
 - **The speech engine now runs on a version we've actually tested.** Until now, the exact
   speech runtime Castwright installed depended on the day you installed it — two people with
   identical machines could quietly end up on different builds, which made "it sounds different

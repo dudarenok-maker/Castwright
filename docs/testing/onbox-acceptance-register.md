@@ -391,7 +391,32 @@ in `pinokio-scripts/start.js`.
 **What genuinely remains:** **macOS has had zero on-box exercise on any axis**
 (install, venv-from-conda, API spelling are all Windows-only confirmations); plus two
 Windows items never explicitly re-confirmed — **native Stop actually reaping the
-sidecar**, and **Pinokio's bundled Node ≥ 20.19**.
+sidecar**, and **Pinokio's bundled Node ≥ 22.22**.
+
+> **Escalated 2026-07-27 by [#1859](https://github.com/dudarenok-maker/Castwright/issues/1859).**
+> That Node threshold was **20.19** until react-router 8 raised the product floor to
+> **22.22**, so this item went from "probably fine, never checked" to a live risk. It
+> now matters more, for two compounding reasons:
+>
+> 1. `pinokio-scripts/install.js` step 1 conda-installs `ffmpeg mkcert` only — **never
+>    `nodejs`** — so Castwright runs on whatever Node the Pinokio *kernel* ships. That
+>    file has carried an unimplemented TODO on exactly this point since it was written.
+> 2. **`engines.node` does not enforce anything.** npm emits `EBADENGINE` and exits 0
+>    without `engine-strict`, and this repo sets no `.npmrc` (see
+>    `docs/features/164-deps-ci-hygiene.md:31`). So a too-old Pinokio Node does not
+>    fail the install — it installs cleanly and fails later, somewhere unrelated.
+>
+> **What to observe, concretely:** on a machine with Pinokio installed, run
+> `node --version` using Pinokio's own bundled node (not the system one — resolve it
+> the way `shell.run` does, from the kernel's bundled runtime). Record the exact
+> version and the Pinokio version it came with, on **both** Windows and macOS, since
+> the kernels may differ. If it is below 22.22, add `nodejs` to `install.js` step 1's
+> conda install and re-run a full Install → Start pass.
+>
+> Criteria live in `docs/features/218-pinokio-installer.md` open-verification item 2
+> (threshold updated in the same PR). **The release notes for 1.15.0 deliberately do
+> not promise Pinokio users this is handled** — an earlier draft did, and it was
+> unsupported.
 
 *Needs* a clean macOS machine with Pinokio, plus a short Windows follow-up. Budget
 20–40 min for the macOS install alone.

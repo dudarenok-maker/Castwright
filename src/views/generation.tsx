@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from 'react-redux';
-import { useOutletContext } from 'react-router-dom';
+import { useOutletContext } from 'react-router';
 import { helpHrefForFailureCode } from '../lib/router';
 import { MANIFESTO } from '../lib/brand';
 import {

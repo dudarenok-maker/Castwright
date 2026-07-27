@@ -4,7 +4,7 @@
    the version pill clears in the same tick via the shared update-notice store).
    Dark in mock mode unless ?e2eUpdate is set. */
 
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { useAppInfo } from '../lib/use-app-info';
 import { useDismissedVersion, dismissUpdate, shouldShowUpdateNotice } from '../lib/update-notice';
 

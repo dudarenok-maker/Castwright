@@ -48,7 +48,7 @@ Clean-machine Pinokio install → **Install** → **Start** → **Open Web UI** 
 
 Resolve the open verifications:
 1. **[highest risk] `start.js` foreground launch** — `node server/dist/index.js` from the app root autostarts the sidecar and loads `server/.env`/`WORKSPACE_DIR`; if not, set `WORKSPACE_DIR` explicitly in the `start.js` step env. Confirm Pinokio's native Stop reaps the sidecar.
-2. Pinokio's bundled Node ≥ 20.19 (Vite 8 floor) — else add `conda install -c conda-forge nodejs` to `install.js` step 1.
+2. Pinokio's bundled Node ≥ 22.22 — else add `conda install -c conda-forge nodejs` to `install.js` step 1. **Threshold raised 2026-07-27 (#1859)**: was 20.19 (the Vite 8 floor); the binding constraint is now react-router 8, which declares `engines.node >=22.22.0`. Raising the floor makes this item materially likelier to bite, and it is still unverified — tracked in `docs/testing/onbox-acceptance-register.md`.
 3. `python -m venv` from a conda interpreter on all 3 OSes.
 4. Confirm the Pinokio API spelling on-box: `conda: { path, python }`, `info.exists`/`info.running`/`info.local(script)`, `fs.rm`, `script.start` uri base-dir, `on:` regex capture. (Validated against shipping apps — TRELLIS/comfy/facefusion — but no headless runtime exists.) **Partially confirmed 2026-07-11**: real on-box Install surfaced that `shell.run`/`fs.rm` steps default their cwd to the *script's own* directory, not the app root — see invariant 2a. Fixed in code; still needs a full on-box Install→Start→Update→Reset pass to confirm nothing else in this list is also off.
 5. **AMD-Windows** inherits the known Phase-2 DirectML→CPU degrade (not Pinokio-specific).

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { IconUpload, IconSpinner } from '../lib/icons';
 import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primitives';
 import { api } from '../lib/api';

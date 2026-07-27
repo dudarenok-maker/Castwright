@@ -11,7 +11,7 @@ import {
   useNavigate,
   useParams,
   useSearchParams,
-} from 'react-router-dom';
+} from 'react-router';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow, store } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
