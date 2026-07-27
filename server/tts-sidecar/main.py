@@ -1418,19 +1418,56 @@ class CoquiEngine(Engine):
         Used by POST /unload when the UI's Stop button fires (or when the
         Analysing screen's Load button auto-evicts the TTS model to make
         room for the analyzer LLM). Idempotent — safe to call when nothing
-        is loaded."""
-        if self._tts is None:
-            return
-        torch_module = self._torch
-        self._tts = None
-        self._torch = None
-        self._speakers = []
-        self._resolved_device = "cpu"
-        # Restore the env pref (#1730 gap 3): `_ensure_loaded` overwrote
-        # `self._device` with the resolved card, so a later flag-off reload must
-        # re-resolve from the ORIGINAL request (e.g. 'auto'), not the last card.
-        self._device = self._requested_device
-        self._use_half = False
+        is loaded.
+
+        Acquires `_synth_lock` before nulling — mirrors `QwenEngine.unload()`
+        and for the same reason (Task 8a, folded from Task 8's review):
+        `synthesize()`'s forward re-dereferences `self._tts` AFTER the
+        (possibly multi-second) `tts()` / `_infer_from_latents()` call
+        returns (e.g. to read `self._tts.synthesizer.output_sample_rate`),
+        all still inside its own `with self._synth_lock:` block. Without
+        this lock, a racing `/unload` could null `self._tts` mid-forward —
+        killing the request with an `AttributeError` AFTER the expensive GPU
+        work already ran — and would leave the in-flight thread holding the
+        old model past the null, so `gc.collect()` + `empty_cache()` below
+        can't reclaim its VRAM; the next idempotent `/load` (seeing
+        `self._tts is None`) would then allocate a SECOND copy. Taking
+        `_synth_lock` here makes `unload` wait for any in-flight forward to
+        finish and drop its own reference first — the forward's post-call
+        re-dereference needs no separate local-reference capture once this
+        holds. MUST NOT be called while already holding `_synth_lock` (it is
+        a non-reentrant threading.Lock) — only the /unload route calls this,
+        and it holds no lock.
+
+        Deliberately does NOT clear `_latents_cache` — contrast
+        `QwenEngine.unload()`, which DOES clear its analogous
+        `_prompt_cache`. The two caches are not analogous: Qwen's cached
+        clone prompts are GPU tensors that would otherwise survive
+        `empty_cache()` below (see that method's own docstring), while
+        every `_latents_cache` entry is loaded via `_load_voice_latents`
+        with `map_location='cpu'` — it never holds VRAM, so clearing it here
+        would free no GPU memory, only force the next cloned-voice request
+        to re-`torch.load` its `.pt` for no benefit. `unload` is a
+        VRAM-reclaim operation, not an erasure one: Property 2 ("erasure is
+        total") is owned by `POST /xtts/evict-voice` (`_bump_evict_epoch`),
+        which DOES pop this cache and is deliberately NOT gated on
+        `self._tts` being loaded (see that route's docstring) — a voice
+        revoked via evict-voice cannot render through a stale entry
+        surviving an `unload`, because revoke and unload are independent
+        paths and only evict-voice sits on the revoke path."""
+        with self._synth_lock:
+            if self._tts is None:
+                return
+            torch_module = self._torch
+            self._tts = None
+            self._torch = None
+            self._speakers = []
+            self._resolved_device = "cpu"
+            # Restore the env pref (#1730 gap 3): `_ensure_loaded` overwrote
+            # `self._device` with the resolved card, so a later flag-off reload must
+            # re-resolve from the ORIGINAL request (e.g. 'auto'), not the last card.
+            self._device = self._requested_device
+            self._use_half = False
         # Break the dropped model's reference cycles NOW (see
         # _reclaim_host_and_vram) — nn.Module graphs aren't refcount-freed, and
         # a lagging cyclic GC under load is what leaked host RAM (2026-05-30).

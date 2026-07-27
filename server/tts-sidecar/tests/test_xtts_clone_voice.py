@@ -1104,3 +1104,92 @@ def test_evict_voice_route_evicts_even_when_model_unloaded(monkeypatch, tmp_path
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "evicted": True}
     assert "xtts-evict-unloaded" not in eng._latents_cache
+
+
+# ── Task 8a — CoquiEngine.unload() races an in-flight forward ──────────────
+#
+# Folded in from Task 8's review (pre-existing defect, not introduced by
+# Task 8): `unload()` took no lock and nulled `self._tts` outright, while
+# `synthesize()`'s forward re-dereferences `self._tts` AFTER the possibly
+# multi-second `tts()` call returns (still inside its own `with
+# self._synth_lock:` block) — a racing /unload could null the model
+# mid-flight and kill the request with an AttributeError after the
+# expensive GPU work already ran. The fix mirrors QwenEngine.unload():
+# take `_synth_lock` before nulling, so unload waits for an in-flight
+# forward to finish and drop its own reference first.
+#
+# `test_evict_voice_route_evicts_even_when_model_unloaded` above already
+# pins the companion Defect-2 decision (unload() deliberately does NOT
+# clear `_latents_cache`; evict-voice does, even when unloaded) — no new
+# test is added for that here, this section only covers the race.
+
+
+def test_unload_blocks_until_inflight_forward_completes_and_no_attribute_error(
+    monkeypatch, tmp_path
+) -> None:
+    """The regression: force the forward to block INSIDE `tts()` — still
+    holding `_synth_lock` — and race a concurrent `unload()` in during that
+    window. Before the fix, `unload()` took no lock, so it could null
+    `self._tts` right then; the forward's post-`tts()` re-dereference
+    (`self._tts.synthesizer.output_sample_rate`) would raise `AttributeError`
+    on `None`. Deterministic via a `threading.Event` handshake (not sleeps):
+    the fake `tts()` doesn't return until this test explicitly releases it,
+    so `unload()` gets every opportunity to race in before the forward's
+    post-call dereference — the classic race-test placebo is timing that
+    never actually interleaves, which this handshake rules out."""
+    tts_entered = threading.Event()
+    proceed_with_tts = threading.Event()
+    events: list[str] = []
+    events_lock = threading.Lock()
+
+    class _BlockingFakeTTS(_FakeTTS):
+        def tts(self, text: str, speaker: str, language: str) -> list[float]:
+            with events_lock:
+                events.append("forward:enter")
+            tts_entered.set()
+            assert proceed_with_tts.wait(timeout=5), "test stalled waiting to release the forward"
+            with events_lock:
+                events.append("forward:tts-returns")
+            return [0.0, 0.0]
+
+    tts_model = _FakeXttsModel()
+    tts_model.speaker_manager = types.SimpleNamespace(name_to_id={"Claribel Dervla": 0})
+    tts_instance = _BlockingFakeTTS(
+        "tts_models/multilingual/multi-dataset/xtts_v2",
+        synthesizer=_FakeSynthesizer(tts_model=tts_model),
+    )
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path, tts_instance=tts_instance)
+    eng._ensure_loaded("xtts_v2")  # warm first, so both threads race on the FORWARD only
+
+    outcome: dict[str, Any] = {}
+
+    def _do_synth() -> None:
+        try:
+            outcome["result"] = eng.synthesize("xtts_v2", "Claribel Dervla", "hello there")
+        except Exception as exc:  # noqa: BLE001 — captured for the assertion below
+            outcome["error"] = exc
+
+    def _do_unload() -> None:
+        eng.unload()
+        with events_lock:
+            events.append("unload:done")
+
+    t_synth = threading.Thread(target=_do_synth)
+    t_synth.start()
+    assert tts_entered.wait(timeout=5), "the forward never entered tts()"
+
+    t_unload = threading.Thread(target=_do_unload)
+    t_unload.start()
+    time.sleep(0.1)  # give unload() every chance to race in while the forward blocks in tts()
+    assert eng._tts is not None, "unload() must not null the model while the forward still holds _synth_lock"
+
+    proceed_with_tts.set()
+    t_synth.join(timeout=5)
+    t_unload.join(timeout=5)
+
+    assert "error" not in outcome, f"the forward must not raise: {outcome.get('error')!r}"
+    assert outcome["result"].pcm  # the forward actually completed, not a placebo
+    assert events == ["forward:enter", "forward:tts-returns", "unload:done"], (
+        f"unload() must not interleave with the in-flight forward: {events}"
+    )
+    assert eng._tts is None, "unload() must still run to completion, just after the forward releases the lock"
