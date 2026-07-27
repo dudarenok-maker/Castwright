@@ -34,12 +34,17 @@ export default defineConfig({
        setup change forces a FULL run. The first two entries below are vitest's
        built-in defaults (package.json + the vite/vitest config files) — they
        must be re-listed because setting this key replaces the defaults rather
-       than extending them. Shared fixtures/mocks need NO entry: tests import
-       them statically, so the module graph already covers them.
+       than extending them. The config-file entry pins the extension to `.ts`
+       (not vitest's own `.*`): under picomatch 4 a wildcard inside that path
+       segment kills the trailing-`/**`-also-matches-the-file behaviour, so
+       vitest's documented default matches NOTHING here and a config-only diff
+       silently selected zero tests — ops-30/#1848.
+       Shared fixtures/mocks need NO entry: tests import them statically, so
+       the module graph already covers them.
        See docs/features/118-ci-cost-round-2.md. */
     forceRerunTriggers: [
       '**/package.json/**',
-      '**/{vitest,vite}.config.*/**',
+      '**/{vitest,vite}.config.ts/**',
       '**/src/test/setup.ts',
       /* Tests that pin a value against the contract (e.g. the clone-transcript
          cap in api.clone-voice.test.ts) read openapi.yaml at RUNTIME, so they

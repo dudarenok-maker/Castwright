@@ -1,0 +1,80 @@
+name: Quarantine Lane Health
+
+# ops-32 (#1864) — the quarantine lane (`npm run test:quarantine`,
+# non-gating by design) had no health signal: a PERMANENTLY red quarantined
+# test was indistinguishable from a genuinely flaky one. The two
+# sleep-prevention wake-lock tests in server/src/routes/generation.test.ts
+# failed 100% of the time for three weeks (#1854) before anyone noticed, only
+# because a human happened to read docs/testing/flaky-register.md.
+#
+# This runs `npm run quarantine:health` (scripts/quarantine-health.mjs),
+# which re-runs each quarantined test several times and reports, per test,
+# whether it's intermittent (genuinely flaky), never-passes (broken — the
+# register row is likely lying), or not-found (stale row). See that script's
+# header comment for the full design, and
+# docs/superpowers/specs/2026-06-17-flaky-test-release-hardening-design.md
+# for the lane this completes the observability half of.
+#
+# `workflow_dispatch` + cron, not a per-PR leg (per the issue's own framing):
+# the lane is by definition unreliable, so a per-PR report would be noise —
+# and this must never gate a merge, so it isn't wired into verify.yml or any
+# required status check. Modelled on cross-os.yml, the repo's existing
+# precedent for a non-gating scheduled job: same `permissions`, same
+# `concurrency` idiom (a manual dispatch supersedes an in-flight cron run and
+# vice versa).
+#
+# Cadence: weekly (Monday 03:00 UTC), clear of cross-os.yml's Wed/Sun slots
+# and the routine weekday PR-verify traffic. Weekly bounds how long a newly
+# quarantined-but-actually-broken test can rot unnoticed to at most a few
+# days past whenever it was quarantined — well inside the three weeks #1854
+# went undetected — without paying for anything more frequent than the
+# register realistically needs (it is usually empty, and even non-empty this
+# job is cheap: only the specific quarantined files run, not the full gating
+# suites).
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 1' # Monday 03:00 UTC
+
+permissions:
+  contents: read
+  # scripts/quarantine-health.mjs shells out to `gh issue view <n> --json
+  # state` to flag a register row citing a CLOSED tracking issue (#1854's
+  # predecessor row cited #399, a closed unrelated issue, for three weeks).
+  issues: read
+
+# A manual dispatch while a cron run is in flight supersedes it, and vice
+# versa — same idiom as cross-os.yml.
+concurrency:
+  group: quarantine-health-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quarantine-health:
+    name: npm run quarantine:health
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Belt-and-suspenders alongside the script's own always-exit-0-for-test-
+    # outcomes contract: this job's result can never block anything even if
+    # the runner itself crashes (e.g. an unreadable register file).
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node + deps
+        uses: ./.github/actions/setup
+
+      # A quarantined server test may exercise real-ffmpeg integration paths
+      # (per CLAUDE.md: "Server: Vitest + node env, real-ffmpeg integration
+      # where relevant") — installed unconditionally since which files are
+      # quarantined, if any, is exactly what this job doesn't know ahead of
+      # time.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Quarantine lane health report
+        run: npm run quarantine:health
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -83,20 +83,25 @@ export default defineConfig({
     hookTimeout: 30_000,
     /* Setting this key REPLACES vitest's defaults rather than extending them,
        so the first two entries re-list them — same note the root
-       vitest.config.ts has always carried. This is load-bearing, measured on a
-       clean tree: with them stripped, a root-manifest diff makes `cd server &&
-       vitest run --changed` report "No test files found" and exit 0 — a
-       release-cut version bump would run ZERO server tests and show green.
-       With them restored the same diff selects 5389. (An earlier run here
-       appeared to contradict that; it was measuring a dirty tree whose other
-       modified files matched the openapi trigger below.)
+       vitest.config.ts has always carried. The config-file entry pins `.ts`
+       (not vitest's own `.*`): under picomatch 4 a wildcard inside that path
+       segment kills the trailing-`/**`-also-matches-the-file behaviour, so
+       vitest's documented default matches NOTHING here and a config-only
+       diff silently selected zero tests — ops-30/#1848. This is load-bearing,
+       measured on a clean tree: with them stripped, a root-manifest diff
+       makes `cd server && vitest run --changed` report "No test files found"
+       and exit 0 — a release-cut version bump would run ZERO server tests
+       and show green. With them restored the same diff selects 5389. (An
+       earlier run here appeared to contradict that; it was measuring a
+       dirty tree whose other modified files matched the openapi trigger
+       below.)
        openapi.yaml: voice-library.test.ts pins MAX_CLONE_TRANSCRIPT_CHARS
        against it by reading the file at RUNTIME — no module-graph edge, so
        `--changed` would otherwise skip the pin on the openapi-only diff it
        exists to catch. */
     forceRerunTriggers: [
       '**/package.json/**',
-      '**/{vitest,vite}.config.*/**',
+      '**/{vitest,vite}.config.ts/**',
       '**/openapi.yaml/**',
     ],
     pool: 'forks',
