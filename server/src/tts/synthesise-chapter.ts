@@ -1506,8 +1506,18 @@ export async function synthesiseChapter(
       const failed = new Set(softFailedUuids);
       for (const c of cast) {
         if (!inChapterCharacterIds.has(c.id)) continue;
-        const coquiUuid = c.overrideTtsVoices?.coqui?.libraryUuid;
-        if (!coquiUuid || !failed.has(coquiUuid)) continue;
+        /* Task 20a fix round 1 (F3) — re-check provenance here too, via the
+           SAME `libraryVoiceForEngine` RESOLUTION predicate the selection
+           set above is built from, so this removal set is provably equal to
+           the selection set. Without it, a uuid SHARED by two characters —
+           one `designed`, one `cloned` — would delete the cloned slot too:
+           `softFailedUuids` only carries uuids, not which slot(s) reported
+           them, so a bare `.libraryUuid` match here would silently swap a
+           real person's clone for a catalogue voice, the exact incidental-
+           invariant shape `[DELTA-verified]` made explicit one function
+           away (clone-voice-resolver.ts). */
+        const coquiLib = libraryVoiceForEngine(c, 'coqui');
+        if (coquiLib?.provenance !== 'designed' || !failed.has(coquiLib.libraryUuid)) continue;
         const { coqui: _coqui, ...restVoices } = c.overrideTtsVoices ?? {};
         castById.set(c.id, { ...c, overrideTtsVoices: restVoices });
       }

@@ -1959,6 +1959,100 @@ describe('resolveDesignedVoicesForChapter', () => {
       expect(result).toEqual({ softFailedUuids: [] });
     });
 
+    /* Task 20a fix round 1 (F1, the blocker) — a STALE-but-PRESENT artifact
+       renders correctly TODAY (that's what "stale" means, as opposed to
+       "missing"). A failed re-derive attempt must never downgrade it to a
+       catalogue voice — fail-soft exists to AVOID a downgrade, not cause
+       one. Concrete trigger the reviewer named: a designed voice minted
+       before Task 11's clip-retention (no `qwen-<uuid>__master.wav`) plus a
+       real coqui-tts version bump (Task 19 made `currentArtifactVersion`
+       live) — that voice now has NOTHING to re-derive from, so pre-fix it
+       silently lost its slot on every render. */
+    describe('F1 — a stale-but-present artifact must survive a failed refresh attempt', () => {
+      it('stale + derive throws -> the slot survives (softFailedUuids stays empty), keeping the existing artifact', async () => {
+        const entry = designedEntry({ engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } } });
+        const deps = makeDesignedDeps({
+          readEntry: vi.fn(async () => entry),
+          ptExists: vi.fn(async () => true), // present!
+          currentArtifactVersion: vi.fn(() => 'v2.0.5'), // stale.
+          readDesignedMasterPcm: vi.fn(async () => ({
+            pcm: Buffer.alloc(10),
+            sampleRate: 24000,
+            refText: '',
+            manifest: {},
+          })),
+          deriveEngineArtifact: vi.fn(async () => {
+            throw Object.assign(new Error('sidecar rejected the clip'), { status: 422 });
+          }),
+        });
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const result = await resolveDesignedVoicesForChapter(
+          [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+          deps,
+        );
+
+        // The load-bearing assertion: NOT reported as a soft failure, so the
+        // call site never removes the slot — the character keeps rendering
+        // as xtts-lib-designed off the existing (stale) latents.
+        expect(result).toEqual({ softFailedUuids: [] });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('keeping the existing'),
+          expect.any(Error),
+        );
+        warnSpy.mockRestore();
+      });
+
+      it('stale + no retained clip to refresh from -> the slot ALSO survives (a missing clip only removes a MISSING artifact, never a stale one)', async () => {
+        const entry = designedEntry({ engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } } });
+        const deps = makeDesignedDeps({
+          readEntry: vi.fn(async () => entry),
+          ptExists: vi.fn(async () => true),
+          currentArtifactVersion: vi.fn(() => 'v2.0.5'),
+          readDesignedMasterPcm: vi.fn(async () => null), // no clip at all — e.g. minted before Task 11.
+        });
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const result = await resolveDesignedVoicesForChapter(
+          [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+          deps,
+        );
+
+        expect(result).toEqual({ softFailedUuids: [] });
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('keeping the existing'));
+        warnSpy.mockRestore();
+      });
+
+      /* The direct contrast — MISSING (not stale) + a failed derive still
+         removes the slot, exactly as the pre-F1 "load-bearing case" test
+         above already pins. Re-asserted here, side by side with the two
+         stale cases, so a future reader sees both halves of F1's contract
+         in one place. */
+      it('missing (never derived) + derive throws -> the slot IS removed, unlike the stale case above', async () => {
+        const entry = designedEntry(); // no engines.xtts at all — never derived.
+        const deps = makeDesignedDeps({
+          readEntry: vi.fn(async () => entry),
+          ptExists: vi.fn(async () => false), // missing, not stale.
+          readDesignedMasterPcm: vi.fn(async () => ({
+            pcm: Buffer.alloc(10),
+            sampleRate: 24000,
+            refText: '',
+            manifest: {},
+          })),
+          deriveEngineArtifact: vi.fn(async () => {
+            throw Object.assign(new Error('sidecar rejected the clip'), { status: 422 });
+          }),
+        });
+
+        const result = await resolveDesignedVoicesForChapter(
+          [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+          deps,
+        );
+
+        expect(result).toEqual({ softFailedUuids: ['lib-designed'] });
+      });
+    });
+
     it('present AND current -> healthy, no derive, no entry read of the retained clip', async () => {
       const entry = designedEntry({ engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.5' } } });
       const readDesignedMasterPcm = vi.fn();

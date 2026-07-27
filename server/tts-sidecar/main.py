@@ -1509,14 +1509,20 @@ class CoquiEngine(Engine):
         # both provenances — Task 16 review), so the prefix alone no longer
         # tells you which. This branch has NO catalogue fallback either way —
         # `_load_voice_latents` raises `VoiceNotDesignedError` (below) if the
-        # `.pt` is missing, unconditionally. The guarantee that never fires
-        # for a stranded/never-derived designed voice comes from the Node
-        # side's pre-render pre-pass (`resolveDesignedVoicesForChapter`'s
-        # coqui arm, clone-voice-resolver.ts), NOT from the key shape:
-        # that pre-pass removes a designed voice's coqui slot for the
-        # chapter whenever it can't guarantee an artifact backs it, so an
-        # `xtts-<uuid>` request only ever reaches this engine with cached
-        # latents actually available (or already cloned this session). A
+        # `.pt` is missing, unconditionally. On the CHAPTER-RENDER path, the
+        # guarantee that never fires for a stranded/never-derived designed
+        # voice comes from the Node side's pre-render pre-pass
+        # (`resolveDesignedVoicesForChapter`'s coqui arm, clone-voice-resolver
+        # .ts), NOT from the key shape: that pre-pass removes a designed
+        # voice's coqui slot for the chapter whenever it can't guarantee an
+        # artifact backs it, so a chapter-render `xtts-<uuid>` request only
+        # ever reaches this engine with cached latents actually available (or
+        # already cloned this session). That pre-pass does NOT run ahead of
+        # every caller, though — `routes/voice-sample.ts` and the voice-
+        # library `/sample` route reach this engine directly with a
+        # `pickVoiceForEngine`-resolved `xtts-<uuid>`, so THIS branch (the
+        # `.pt`-presence check below) is still the only thing standing
+        # between those callers and a stranded designed voice. A
         # non-`xtts-`-prefixed request (a baked catalog speaker name, or any
         # other id) skips this branch entirely and falls through to the
         # existing fail-soft substitution logic, unchanged.

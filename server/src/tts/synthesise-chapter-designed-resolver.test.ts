@@ -30,8 +30,15 @@ import {
 import { COQUI_PROFILE_VOICES } from './voice-mapping.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
+import {
+  setLastKnownCoquiInstallState,
+  _resetUserSettingsCache,
+} from '../workspace/user-settings.js';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  _resetUserSettingsCache();
+});
 
 const COQUI_CATALOG_NAMES = new Set(Object.values(COQUI_PROFILE_VOICES).flat());
 
@@ -390,6 +397,119 @@ describe('synthesiseChapter — designed-voice coqui self-heal, fail-SOFT (fs-38
     expect(result.segments.length).toBeGreaterThan(0);
   });
 
+  /* Task 20a fix round 1 (F1, the blocker) — a stale-but-PRESENT artifact
+     renders correctly today; a failed refresh attempt must never downgrade
+     it. Wiring-level proof (the unit-level pin lives in
+     clone-voice-resolver.test.ts): the character still renders as
+     xtts-<uuid>, on the SAME latents it had before this chapter, not a
+     catalogue name. */
+  it('[F1] a stale-but-present artifact survives a failed derive: still renders as xtts-<uuid>, never downgraded to a catalogue voice', async () => {
+    const provider = makeProvider();
+    const entry = designedEntry();
+    entry.engines = { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } };
+    const readEntry = vi.fn(async () => entry);
+    const ptExists = vi.fn(async () => true); // present!
+    const currentArtifactVersion = vi.fn(() => 'v2.0.5'); // stale against "current".
+    const readDesignedMasterPcm = vi.fn(async () => null); // nothing to refresh from (e.g. pre-Task-11 voice).
+    const deriveEngineArtifact = vi.fn();
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'orin')],
+      cast: coquiDesignedCast,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      designedResolverDepsOverride: {
+        readEntry: readEntry as unknown as ResolveDesignedVoiceDeps['readEntry'],
+        ptExists,
+        currentArtifactVersion: currentArtifactVersion as unknown as ResolveDesignedVoiceDeps['currentArtifactVersion'],
+        readDesignedMasterPcm,
+        deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveDesignedVoiceDeps['deriveEngineArtifact'],
+      },
+    });
+
+    expect(deriveEngineArtifact).not.toHaveBeenCalled();
+    // The load-bearing assertion — the slot survived, so this still renders
+    // on the existing (stale) latents rather than a catalogue pick.
+    expect(provider.calls[0].voiceName).toBe('xtts-lib-designed');
+    expect(result.segments.length).toBeGreaterThan(0);
+  });
+
+  /* Task 20a fix round 1 (F3) — the removal loop must re-check provenance,
+     not just match on a bare libraryUuid. Two characters share the SAME
+     uuid: one carries it as `cloned`, the other as `designed`. Only the
+     designed one's self-heal fails (soft); the cloned one's slot must
+     survive untouched — a bare uuid match in the removal loop would delete
+     BOTH, silently swapping a real person's clone for a catalogue voice. */
+  it('[F3] the removal loop never touches a CLONED slot that happens to share a failed uuid with a designed one', async () => {
+    setLastKnownCoquiInstallState('ready'); // Task 19 signal — coqui usable this run, so Wren's clone validates.
+    const provider = makeProvider();
+    const sharedUuid = 'lib-shared';
+    const entry = designedEntry();
+    entry.voiceUuid = sharedUuid;
+    const readEntry = vi.fn(async (uuid: string) => (uuid === sharedUuid ? entry : null));
+    const readDesignedMasterPcm = vi.fn(async () => null); // no clip -> soft fail for the designed character.
+    const castWithSharedUuid: CastCharacter[] = [
+      {
+        id: 'orin',
+        name: 'Orin',
+        gender: 'male',
+        overrideTtsVoices: {
+          coqui: { name: 'xtts-lib-shared', libraryUuid: sharedUuid, provenance: 'designed' },
+        },
+      },
+      {
+        id: 'wren',
+        name: 'Wren',
+        gender: 'female',
+        overrideTtsVoices: {
+          coqui: { name: 'xtts-lib-shared', libraryUuid: sharedUuid, provenance: 'cloned' },
+        },
+      },
+    ];
+
+    await synthesiseChapter({
+      sentences: [sentence(1, 'orin'), sentence(2, 'wren')],
+      cast: castWithSharedUuid,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      designedResolverDepsOverride: {
+        readEntry: readEntry as unknown as ResolveDesignedVoiceDeps['readEntry'],
+        ptExists: vi.fn(async () => false),
+        readDesignedMasterPcm,
+      },
+      // The cloned resolver must see Wren's slot as healthy so the chapter
+      // completes (this test is about the DESIGNED resolver's removal loop,
+      // not the cloned resolver's own gate) — real ptExists=true.
+      cloneResolverDepsOverride: {
+        readEntry: (async (uuid: string) =>
+          uuid === sharedUuid
+            ? {
+                voiceUuid: sharedUuid,
+                name: 'Wren',
+                provenance: 'cloned' as const,
+                tags: [],
+                pinned: false,
+                engines: {},
+                createdAt: '2026-01-01T00:00:00Z',
+                updatedAt: '2026-01-01T00:00:00Z',
+              }
+            : null) as unknown as ResolveChapterDeps['readEntry'],
+        ptExists: (async () => true) as unknown as ResolveChapterDeps['ptExists'],
+      },
+    });
+
+    // Exactly ONE of the two characters ends up rendering the shared-uuid
+    // clone: Orin (designed, soft-failed) lost his slot to a catalogue
+    // voice; Wren (cloned) kept hers. A provenance-blind removal would
+    // either delete both (count 0) or, on the pre-fix bug, wrongly delete
+    // Wren's too if she happened to be iterated after Orin.
+    expect(provider.calls).toHaveLength(2);
+    const sharedVoiceRenders = provider.calls.filter((c) => c.voiceName === 'xtts-lib-shared');
+    expect(sharedVoiceRenders).toHaveLength(1);
+  });
+
   /* [DELTA-C2] vector 1 — fs-60's Qwen->Coqui fallback reroutes a
      QWEN-ROUTED character onto coqui. This character has NO qwen slot at
      all (voiceName resolves empty), so `applyQwenFallback`'s `needsFallback`
@@ -429,6 +549,49 @@ describe('synthesiseChapter — designed-voice coqui self-heal, fail-SOFT (fs-38
     expect(coquiProvider.calls.length).toBeGreaterThan(0);
     expect(coquiProvider.calls[0].voiceName).toBe('xtts-lib-designed'); // rendered via the reroute, on her own clone.
     expect(qwenProvider.calls).toHaveLength(0);
+    expect(result.segments.length).toBeGreaterThan(0);
+  });
+
+  /* Task 20a fix round 1 (F5) — vector 1 above only proves the arm QUEUES
+     the character (voiceName passes identically if the arm never ran at
+     all, since `ptExists: true` short-circuits to healthy). This is the
+     missing half: an ACTUAL soft failure on the SAME reroute shape, proving
+     the reroute renders a catalogue voice instead of the 409 a
+     `routeFor`-gated selection (never queuing this character at all) would
+     have produced by reaching `pickVoiceForEngine('coqui', …)` with a
+     dangling `xtts-<uuid>` slot still in place. */
+  it('[DELTA-C2] vector 1 + a real soft failure — the reroute renders a catalogue voice, never a 409, when the coqui self-heal actually fails', async () => {
+    const qwenProvider = makeProvider();
+    const coquiProvider = makeProvider();
+    const entry = designedEntry();
+    const readEntry = vi.fn(async () => entry);
+    const ptExists = vi.fn(async () => false); // missing — the self-heal must actually attempt, then fail.
+    const readDesignedMasterPcm = vi.fn(async () => null); // no retained clip -> soft fail.
+    const resolveForEngine = (e: string) =>
+      e === 'coqui'
+        ? { provider: coquiProvider, modelKey: 'coqui-xtts-v2' as const }
+        : { provider: qwenProvider, modelKey: 'qwen3-tts-0.6b' as const };
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'orin')],
+      cast: coquiDesignedCast,
+      provider: qwenProvider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      resolveForEngine,
+      forbidKokoroFallback: true,
+      coquiEligible: true,
+      bookLanguage: 'ru',
+      designedResolverDepsOverride: {
+        readEntry: readEntry as unknown as ResolveDesignedVoiceDeps['readEntry'],
+        ptExists,
+        readDesignedMasterPcm,
+      },
+    });
+
+    expect(coquiProvider.calls.length).toBeGreaterThan(0); // the reroute still rendered — no 409.
+    expect(coquiProvider.calls[0].voiceName).not.toBe('xtts-lib-designed'); // the slot WAS removed.
+    expect(COQUI_CATALOG_NAMES.has(coquiProvider.calls[0].voiceName)).toBe(true);
     expect(result.segments.length).toBeGreaterThan(0);
   });
 

@@ -652,6 +652,17 @@ export async function resolveDesignedVoicesForChapter(
   for (const { characterName, libraryUuid, engine } of requests) {
     if (!libraryUuid) continue;
 
+    /* Task 20a fix round 1 (F1) — set from inside the coqui branch below the
+       moment `ptExists` is actually known, and consulted by the shared catch
+       at the bottom: a STALE-but-PRESENT artifact must never be downgraded
+       to a catalogue voice just because its re-derive failed (a stale
+       artifact still renders correctly today — the whole point of fail-soft
+       is to avoid a downgrade, not cause one). Stays `false` (the safe
+       default — never confirmed present) for every other case: the qwen
+       arm, the provenance-skip, and any unexpected throw from `readEntry`/
+       `ptExists` itself before this gets set. */
+    let coquiPtExists = false;
+
     /* I-1 (review) — the ENTIRE per-voice body now lives in one try/catch.
        Previously `ptExists`/`readDesignedMasterPcm` were called outside any
        try here (only the derive call itself was guarded), so a throw from
@@ -674,6 +685,7 @@ export async function resolveDesignedVoicesForChapter(
 
         const storageKey = cloneStorageKey('coqui', libraryUuid);
         const ptExists = await deps.ptExists(storageKey);
+        coquiPtExists = ptExists;
         /* [DELTA-I3] — unlike qwen's presence-only check, the coqui arm
            ALSO re-derives on a coquiVersion bump, via the SAME shared
            comparand the cloned resolver's classifier uses — never a
@@ -686,14 +698,25 @@ export async function resolveDesignedVoicesForChapter(
 
         const master = await deps.readDesignedMasterPcm(libraryUuid, 'coqui');
         if (!master) {
-          /* [DELTA-C2] contract — no retained clip: do not raise, report
-             this uuid so the call site removes the coqui slot for this
-             chapter (never leave one with no artifact behind it — D-F). */
-          softFailedUuids.add(libraryUuid);
-          console.warn(
-            `[clone-voice-resolver] designed coqui voice for "${characterName}" (${libraryUuid}) has ` +
-              `no retained clip to derive from — removing its coqui slot for this chapter.`,
-          );
+          /* [DELTA-C2] contract — no retained clip to derive/refresh from.
+             Task 20a fix round 1 (F1): only REMOVE the slot when there is
+             no artifact backing it at all (`!ptExists`) — a stale-but-
+             present `.pt` renders correctly today, so keep it rather than
+             downgrading to a catalogue voice on a re-derive this function
+             couldn't even attempt. */
+          if (!ptExists) {
+            softFailedUuids.add(libraryUuid);
+            console.warn(
+              `[clone-voice-resolver] designed coqui voice for "${characterName}" (${libraryUuid}) has ` +
+                `no retained clip to derive from — removing its coqui slot for this chapter.`,
+            );
+          } else {
+            console.warn(
+              `[clone-voice-resolver] designed coqui voice for "${characterName}" (${libraryUuid}) is ` +
+                `stale but has no retained clip to refresh from — keeping the existing artifact rather ` +
+                `than downgrading to a catalogue voice.`,
+            );
+          }
           continue;
         }
 
@@ -847,15 +870,28 @@ export async function resolveDesignedVoicesForChapter(
       if (name === 'AbortError' || deps.signal?.aborted) throw err;
       if (engine === 'coqui') {
         /* Task 20a — an unexpected throw anywhere in the coqui arm (readEntry,
-           ptExists, the derive itself) is treated as a soft failure: never a
-           new hard failure (D-F) beats "we don't know exactly why this
-           broke". */
-        softFailedUuids.add(libraryUuid);
-        console.warn(
-          `[clone-voice-resolver] designed coqui voice self-heal failed for "${characterName}" ` +
-            `(${libraryUuid}) — removing its coqui slot for this chapter:`,
-          err,
-        );
+           ptExists, the derive itself) is treated as a soft failure UNLESS
+           `coquiPtExists` proves an artifact is already on disk (fix round 1,
+           F1): a stale-but-present `.pt` must survive a failed re-derive
+           attempt rather than being swapped for a catalogue voice — "we
+           don't know exactly why this broke" only overrides "never a new
+           hard failure" (D-F) when we genuinely don't know whether ANY
+           artifact exists at all. */
+        if (!coquiPtExists) {
+          softFailedUuids.add(libraryUuid);
+          console.warn(
+            `[clone-voice-resolver] designed coqui voice self-heal failed for "${characterName}" ` +
+              `(${libraryUuid}) — removing its coqui slot for this chapter:`,
+            err,
+          );
+        } else {
+          console.warn(
+            `[clone-voice-resolver] designed coqui voice self-heal failed for "${characterName}" ` +
+              `(${libraryUuid}) — keeping the existing (stale) artifact rather than downgrading to a ` +
+              `catalogue voice:`,
+            err,
+          );
+        }
         continue;
       }
       /* M-3 (review) — a bare `catch {}` here made a self-heal failing on

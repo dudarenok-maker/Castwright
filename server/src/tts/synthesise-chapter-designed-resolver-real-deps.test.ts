@@ -61,6 +61,32 @@ function fakeFailingFfmpegChild(): {
   };
 }
 
+/* Task 20a fix round 1 (F2) — a SUCCEEDING fake decode child (exit code 0,
+   empty stdout is fine: `readDesignedMasterPcmDefault` only cares whether
+   `decodeAudioToPcm` resolves at all, not the byte content). Mirrors
+   mp3-spawn-args.test.ts's `fakeFfmpegChild` shape. */
+function fakeSucceedingFfmpegChild(): {
+  on: ReturnType<typeof vi.fn>;
+  stdin: { on: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
+  stdout: { on: ReturnType<typeof vi.fn> };
+  stderr: { on: ReturnType<typeof vi.fn> };
+} {
+  let closeHandler: ((code: number) => void) | null = null;
+  return {
+    on: vi.fn((event: string, handler: (code: number) => void) => {
+      if (event === 'close') closeHandler = handler;
+    }),
+    stdin: {
+      on: vi.fn(),
+      end: vi.fn(() => {
+        queueMicrotask(() => closeHandler?.(0));
+      }),
+    },
+    stdout: { on: vi.fn() },
+    stderr: { on: vi.fn() },
+  };
+}
+
 function makeProvider(): TtsProvider & { calls: SynthesizeInput[] } {
   const calls: SynthesizeInput[] = [];
   return {
@@ -145,5 +171,110 @@ describe('synthesise-chapter designed-voice self-heal pre-pass — REAL producti
     expect(deriveEngineArtifact).not.toHaveBeenCalled(); // readDesignedMasterPcm returned null -> no re-derive
     expect(provider.calls.length).toBeGreaterThan(0); // the chapter still rendered (fall-through, no abort)
     expect(result.segments.length).toBeGreaterThan(0);
+  });
+});
+
+/* fs-38 Wave 3c, Task 20a fix round 1 (F2) — the REAL `readDesignedMasterPcmDefault`
+   against a REAL decode, proving the `[DELTA-M1]` refText-split engine gate
+   actually executes: a coqui derive proceeds past an EMPTY refText (never
+   sent on the wire — derive-engine-artifact.ts), while a qwen derive with the
+   identical empty-refText manifest is gated exactly as before. Every prior
+   coqui unit test mocked `readDesignedMasterPcm` wholesale, so this gate
+   never ran with `engine: 'coqui'` until now — the reviewer's own words. */
+describe('synthesise-chapter designed-voice self-heal — REAL readDesignedMasterPcmDefault, the DELTA-M1 refText split (fs-38 Wave 3c, Task 20a fix round 1)', () => {
+  const COQUI_UUID = 'lib-real-coqui-designed';
+  const coquiDesignedCast: CastCharacter[] = [
+    {
+      id: 'orin',
+      name: 'Orin',
+      gender: 'male',
+      overrideTtsVoices: {
+        coqui: { name: 'xtts-lib-real-coqui-designed', libraryUuid: COQUI_UUID, provenance: 'designed' },
+      },
+    },
+  ];
+
+  function designedEntry(uuid: string) {
+    return {
+      voiceUuid: uuid,
+      name: 'Orin',
+      provenance: 'designed' as const,
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+  }
+
+  it('a COQUI derive proceeds past a real decode with an EMPTY refText manifest (refText is never required off this branch)', async () => {
+    const storageKey = `qwen-${COQUI_UUID}`; // the retained clip always lives under the qwen- prefix (DELTA-M1).
+    writeFileSync(
+      paths.qwenVoiceSidecarPath(storageKey),
+      JSON.stringify({ voiceId: storageKey, refText: '' }), // deliberately EMPTY.
+    );
+    writeFileSync(paths.qwenVoiceWavPath(`${storageKey}__master`), Buffer.from('not really a wav'));
+    spawnMock.mockImplementation(() => fakeSucceedingFfmpegChild()); // this test's whole point: decode SUCCEEDS.
+
+    const provider = makeProvider();
+    const entry = designedEntry(COQUI_UUID);
+    const deriveEngineArtifact = vi.fn(async (..._args: unknown[]) => ({
+      previewPcm: Buffer.alloc(0),
+      sampleRate: 24000,
+      coquiVersion: 'v2.0.5',
+    }));
+
+    await mod.synthesiseChapter({
+      sentences: [sentence(1, 'orin')],
+      cast: coquiDesignedCast,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      designedResolverDepsOverride: {
+        readEntry: (async (uuid: string) =>
+          uuid === COQUI_UUID ? entry : null) as unknown as ResolveDesignedVoiceDeps['readEntry'],
+        ptExists: (async () => false) as unknown as ResolveDesignedVoiceDeps['ptExists'],
+        currentArtifactVersion: (() => '') as unknown as ResolveDesignedVoiceDeps['currentArtifactVersion'],
+        deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveDesignedVoiceDeps['deriveEngineArtifact'],
+      },
+    });
+
+    expect(spawnMock).toHaveBeenCalled(); // the real decode really ran (and succeeded).
+    // The load-bearing assertion: the REAL readDesignedMasterPcmDefault did
+    // NOT gate on the empty refText for a coqui request — the derive fired.
+    expect(deriveEngineArtifact).toHaveBeenCalledTimes(1);
+    const [, , input] = deriveEngineArtifact.mock.calls[0];
+    expect((input as { refText: string }).refText).toBe('');
+  });
+
+  it('the SAME empty-refText manifest gates a QWEN derive (the contrast — unchanged pre-3c behaviour)', async () => {
+    const storageKey = `qwen-${UUID}`;
+    writeFileSync(
+      paths.qwenVoiceSidecarPath(storageKey),
+      JSON.stringify({ voiceId: storageKey, refText: '' }), // same empty refText.
+    );
+    writeFileSync(paths.qwenVoiceWavPath(`${storageKey}__master`), Buffer.from('not really a wav'));
+    spawnMock.mockImplementation(() => fakeSucceedingFfmpegChild()); // decode would succeed if reached...
+
+    const provider = makeProvider();
+    const deriveEngineArtifact = vi.fn();
+
+    await mod.synthesiseChapter({
+      sentences: [sentence(1, 'orin')],
+      cast: designedCast, // the qwen-slot fixture from the top of this file.
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      designedResolverDepsOverride: {
+        deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveDesignedVoiceDeps['deriveEngineArtifact'],
+      },
+    });
+
+    // ...but the qwen arm's refText gate fires BEFORE decodeAudioToPcm is
+    // even reached (readDesignedMasterPcmDefault's own !refText check), so
+    // spawn never runs — the gate, not the decode, is what's proven here.
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(deriveEngineArtifact).not.toHaveBeenCalled();
+    expect(provider.calls.length).toBeGreaterThan(0); // falls through, chapter still renders.
   });
 });
