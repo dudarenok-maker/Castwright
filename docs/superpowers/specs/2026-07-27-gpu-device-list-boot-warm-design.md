@@ -134,13 +134,22 @@ B1 is what actually closes the initial-spawn case, at the correct seam.
 
 ### Change 1 — `QWEN_CODEC_DEVICE` parity (`server/tts-sidecar/main.py`)
 
-Replace the bare read at `main.py:2995-2997` with `_read_device_env`:
+Replace the bare read at `main.py:2995-2997` with `_read_device_env`, extracted
+into a named helper beside `_resolve_codec_device`:
 
 ```python
-codec_device = _resolve_codec_device(
-    _read_device_env("QWEN_CODEC_DEVICE") or "cpu", self._device
-)
+def _codec_device_pref() -> str:
+    return _read_device_env("QWEN_CODEC_DEVICE") or "cpu"
+
+# at the call site, main.py:2995-2997:
+codec_device = _resolve_codec_device(_codec_device_pref(), self._device)
 ```
+
+The helper is named rather than inlined for testability: the call site is inside
+`_load_qwen_model`, which needs real Qwen weights and a GPU to invoke, so a test
+asserting on a hand-composed `_resolve_codec_device(_read_device_env(...) or
+"cpu", …)` would pass identically before and after the fix — a placebo. Testing
+`_codec_device_pref()` exercises the function production actually calls.
 
 Behaviour is unchanged for every value that works today:
 
