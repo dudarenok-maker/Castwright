@@ -47,7 +47,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 18 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 19 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -278,6 +278,34 @@ after the index actually changes.
 
 *Needs:* both cards, and the ability to change enumeration order between boots (the
 eGPU is not hot-pluggable, so batch this with A2 step 9 and A3). *Cost:* short.
+
+### A19 · Mixed Qwen+Coqui evict fails soft ([#1893](https://github.com/dudarenok-maker/Castwright/issues/1893)) · **single 8 GB card**
+
+fs-60's mid-chapter `/unload` is now best-effort: a failed evict logs a warning and
+the Coqui phase renders anyway, instead of aborting the chapter. Unit tests prove the
+chapter survives the failure; what they **cannot** reach is the consequence that
+motivated the old fail-loud behaviour — Coqui loading while Qwen is still resident on
+a card too small for both. Worth watching once, because the failure mode if the
+judgement is wrong is a sidecar OOM, which is worse than the abort it replaced.
+
+- Render a chapter that genuinely mixes Qwen and Coqui — a non-English book (the
+  Russian Coalfall chapter) with one designed-Qwen character and one undesigned
+  character that falls back to Coqui. Force the evict to fail: point
+  `SIDECAR_URL` at a proxy that 500s `POST /unload` and passes everything else
+  through, or stop the sidecar's unload path by hand.
+- Confirm the chapter **completes** and the server log carries
+  `fs-60 Qwen→Coqui evict failed; continuing into the Coqui phase`.
+- The thing actually being judged: whether the sidecar then survives Qwen+Coqui
+  co-residency on 8 GB. Record which it is — clean completion, a sidecar OOM error
+  that fails the chapter with its own message, or a crash/recycle storm. **The third
+  outcome means the fail-soft policy needs revisiting** (retry-then-abort rather than
+  warn-and-continue) — file it back on #1893.
+- Also confirm pausing the run **during** a stalled evict stops it promptly rather
+  than waiting out the 10-minute ceiling — the abort is forwarded to the fetch now.
+
+*Needs:* the 8 GB card only, a non-English book with a mixed cast, and a way to make
+`/unload` fail. *Criteria:* PR for #1893; the fail-soft rationale is in the comment at
+the call site in `server/src/tts/synthesise-chapter.ts`. *Cost:* short.
 
 ---
 

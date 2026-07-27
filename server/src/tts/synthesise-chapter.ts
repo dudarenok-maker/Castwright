@@ -877,12 +877,13 @@ export function buildHintFromCast(c: CastCharacter): CharacterHint {
    locks), not a Node-side mutex. This does NOT check activeGenerationBooks/
    refuse when a render is active: it's deliberately called *during* an active
    render, as part of this chapter's own sequencing. */
-async function evictQwenForCoquiPhase(): Promise<void> {
+async function evictQwenForCoquiPhase(signal?: AbortSignal): Promise<void> {
   const url = getResolvedSidecarUrl();
   const res = await fetch(`${url}/unload`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ engine: 'qwen' }),
+    signal,
   });
   if (!res.ok) {
     throw new Error(`Sidecar /unload returned ${res.status} ${res.statusText}`);
@@ -1939,7 +1940,37 @@ export async function synthesiseChapter(
     const preEvictGroups = groupList.filter((g) => resolveGroup(g).route.engine !== 'coqui');
     const out = new Map<number, GroupResult>();
     for (const [k, v] of await synthGroupsBatched(preEvictGroups, onDone)) out.set(k, v);
-    await evictQwenForCoquiPhase();
+    /* #1893 — the evict is VRAM hygiene, not a correctness gate, so a failed
+       one must not abort a chapter that would otherwise render. Two gaps were
+       open here: `evictQwenForCoquiPhase` throws on a non-ok `/unload` and
+       `fetch` rejects on a dead socket, and neither had any enclosing
+       try/catch between here and `synthesiseChapter`'s head — so a transient
+       sidecar hiccup killed the chapter. Failing soft costs little: the
+       sidecar's `/unload` is idempotent and 200s even when nothing was
+       resident (main.py's unload_model), so a failure here means an unhealthy
+       sidecar, which the Coqui phase below surfaces with its own, more
+       specific error anyway. Fail-soft policy + abort-rethrow mirror
+       clone-voice-resolver.ts's best-effort self-heal.
+
+       Bounded by the same per-call ceiling the synth calls use rather than a
+       tighter one: this `/unload` can legitimately queue behind ANOTHER
+       book's in-flight synth on the sidecar's `_synth_lock` (see this
+       function's header — cross-book serialization lives in the sidecar
+       now), so waiting is often correct and only waiting FOREVER is not. An
+       unbounded fetch here stalled the chapter with no way to cancel it. */
+    try {
+      await withCallTimeout('qwen-evict-for-coqui', (sig) => evictQwenForCoquiPhase(sig));
+    } catch (err) {
+      /* An abort is the run being paused/cancelled — stop, don't swallow it
+         as an ordinary best-effort failure (clone-voice-resolver.ts's M-1). */
+      const name = (err as { name?: string } | null)?.name;
+      if (name === 'AbortError' || signal?.aborted) throw err;
+      console.warn(
+        `[synthesise-chapter] fs-60 Qwen→Coqui evict failed; continuing into the Coqui phase ` +
+          `without it (Coqui may load alongside a still-resident Qwen):`,
+        err,
+      );
+    }
     for (const [k, v] of await synthGroupsBatched(coquiGroups, onDone)) out.set(k, v);
     return out;
   }
