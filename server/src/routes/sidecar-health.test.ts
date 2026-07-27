@@ -1119,7 +1119,7 @@ describe('GET /api/sidecar/health — coqui install-state trusts the wire (fs-38
     expect(mockCoquiWeightsPresent).not.toHaveBeenCalled();
   });
 
-  it('coqui_package_installed: true + weights present locally → "ready", via the WEIGHTS-only probe (not the full disk probe)', async () => {
+  it('coqui_package_installed: true + coqui_weights_present ABSENT (a sidecar that has the former field but not the latter) falls back to the LOCAL weights-only probe → "ready"', async () => {
     mockCoquiWeightsPresent.mockReturnValue(true);
     fetchMock.mockResolvedValue(
       new Response(
@@ -1134,7 +1134,7 @@ describe('GET /api/sidecar/health — coqui install-state trusts the wire (fs-38
     expect(mockDetectCoqui).not.toHaveBeenCalled(); // the wire already settled the package half
   });
 
-  it('coqui_package_installed: true + weights absent locally → "weights-missing"', async () => {
+  it('coqui_package_installed: true + coqui_weights_present ABSENT + weights absent locally (fallback path) → "weights-missing"', async () => {
     mockCoquiWeightsPresent.mockReturnValue(false);
     fetchMock.mockResolvedValue(
       new Response(
@@ -1145,6 +1145,48 @@ describe('GET /api/sidecar/health — coqui install-state trusts the wire (fs-38
 
     await request(makeApp()).get('/api/sidecar/health');
     expect(getLastKnownCoquiInstallState()).toBe('weights-missing');
+  });
+
+  it('Task 20 fix round 1 (IMPORTANT-1) — coqui_weights_present: true on the wire is trusted directly; the LOCAL probe is never called (the remote-sidecar case)', async () => {
+    mockCoquiWeightsPresent.mockReturnValue(false); // if this got read, the test would read weights-missing instead
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['coqui'],
+          model_loaded: false,
+          coqui_package_installed: true,
+          coqui_weights_present: true,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    await request(makeApp()).get('/api/sidecar/health');
+    expect(getLastKnownCoquiInstallState()).toBe('ready');
+    expect(mockCoquiWeightsPresent).not.toHaveBeenCalled(); // wire settled it — no local stat at all
+    expect(mockDetectCoqui).not.toHaveBeenCalled();
+  });
+
+  it('Task 20 fix round 1 (IMPORTANT-1) — coqui_weights_present: false on the wire is trusted directly, even when the LOCAL probe would disagree', async () => {
+    mockCoquiWeightsPresent.mockReturnValue(true); // if this got read, the test would read ready instead
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['coqui'],
+          model_loaded: false,
+          coqui_package_installed: true,
+          coqui_weights_present: false,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    await request(makeApp()).get('/api/sidecar/health');
+    expect(getLastKnownCoquiInstallState()).toBe('weights-missing');
+    expect(mockCoquiWeightsPresent).not.toHaveBeenCalled();
+    expect(mockDetectCoqui).not.toHaveBeenCalled();
   });
 
   it('coqui_package_installed absent (older sidecar) falls back to the FULL local disk probe, unchanged from before this fix', async () => {

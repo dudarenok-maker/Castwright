@@ -31,11 +31,12 @@ export const sidecarHealthRouter = Router();
 
 /* server/src/routes/sidecar-health.ts → repo root is three levels up. Mirrors
    routes/coqui-install.ts's REPO_ROOT resolution — needed here too because
-   the health-poll refresh below re-probes coqui's WEIGHTS presence off this
-   repo's disk when the wire says the package is installed (see
-   deriveCoquiInstallState). This is a LOCAL probe: it only agrees with
-   reality when the sidecar's venv is on this same box — see that function's
-   doc comment for the remote-sidecar caveat this does NOT close. */
+   the health-poll refresh below FALLS BACK to re-probing coqui's WEIGHTS
+   presence off this repo's disk when the wire body doesn't carry
+   `coqui_weights_present` (an older sidecar) or omits `coqui_package_installed`
+   entirely (see deriveCoquiInstallState). This local probe only agrees with
+   reality when the sidecar's venv is on this same box — a caveat the wire
+   field (Task 20 fix round 1) closes for any sidecar new enough to send it. */
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 /* Short by design — a hung sidecar shouldn't pin a UI polling request. The
@@ -95,6 +96,12 @@ interface SidecarHealthBody {
   /* Task 8 — per-engine pip-importability booleans from the sidecar's
      find_spec probe. Absent on an older sidecar → false (default-safe). */
   coqui_package_installed?: boolean;
+  /* fs-38 Wave 3c, Task 20 fix round 1 (IMPORTANT-1) — the wire counterpart
+     of `qwen_weights_present`: a real stat() of the XTTS v2 `model.pth`
+     blob, from the sidecar's OWN box. Absent on an older sidecar predating
+     this field → `deriveCoquiInstallState` falls back to a local disk
+     probe (see that function's doc comment). */
+  coqui_weights_present?: boolean;
   kokoro_package_installed?: boolean;
   whisper_package_installed?: boolean;
   /* fs-38 Wave 3c Task 19 — the currently-installed coqui-tts version
@@ -208,18 +215,20 @@ function deriveQwenInstallState(body: SidecarHealthBody): QwenInstallState {
   return normaliseQwenInstallState(body.qwen_install_state);
 }
 
-/* fs-38 Wave 3c Task 19 fix round 1 (IMPORTANT-1) — Coqui's health-poll
-   refresh, mirroring deriveQwenInstallState's shape but not its mechanism:
-   unlike Qwen, the sidecar does not report a full coqui_install_state enum.
-   It DOES report `coqui_package_installed` (a real boolean from the venv the
-   sidecar is actually running in) and `model_loaded`/`loading` (which the
-   sidecar reuses for Coqui specifically — see SidecarHealthBody's
-   `model_loaded` doc above). Trust the wire for what the wire knows —
-   getResolvedSidecarUrl's SSRF guard permits any private/LAN host, not just
-   loopback, so "the sidecar's venv" and "this repo's local disk" are
-   DIFFERENT machines for a remote-sidecar deployment (a LAN box, or a
-   Pinokio install with its own venv); a local-only disk probe would pin
-   `not-installed` forever on a box where Coqui works fine.
+/* fs-38 Wave 3c Task 19 fix round 1 (IMPORTANT-1), Task 20 fix round 1
+   (IMPORTANT-1) — Coqui's health-poll refresh, mirroring
+   deriveQwenInstallState's shape but not its mechanism: unlike Qwen, the
+   sidecar does not report a full coqui_install_state enum. It DOES report
+   `coqui_package_installed` + (as of this fix round) `coqui_weights_present`
+   — real booleans from the venv/disk the sidecar is actually running
+   against — and `model_loaded`/`loading` (which the sidecar reuses for
+   Coqui specifically — see SidecarHealthBody's `model_loaded` doc above).
+   Trust the wire for what the wire knows — getResolvedSidecarUrl's SSRF
+   guard permits any private/LAN host, not just loopback, so "the sidecar's
+   venv/disk" and "this repo's local disk" are DIFFERENT machines for a
+   remote-sidecar deployment (a LAN box, or a Pinokio install with its own
+   venv); a local-only disk probe would pin `not-installed`/`weights-missing`
+   forever on a box where Coqui works fine.
 
      - `model_loaded: true` is the strongest "definitely usable" proof (same
        as `qwen_loaded`), and is always correct regardless of where the
@@ -227,23 +236,35 @@ function deriveQwenInstallState(body: SidecarHealthBody): QwenInstallState {
      - `coqui_package_installed: false` is equally trustworthy — a real
        find_spec() result from the sidecar's own venv — so it's `not-installed`
        immediately, no local probe involved.
-     - `coqui_package_installed: true`: the package half is settled by the
-       wire, but there is NO wire signal for WEIGHTS presence at all (unlike
-       qwen's `qwen_weights_present`) — so this falls back to a LOCAL
-       `coquiWeightsPresent()` stat() for that half only. This is CORRECT
-       when the sidecar's venv is on this same box (the common/default
-       case), but for a remote sidecar it is a real, undisclosed-nowhere-else
-       gap: a box with Coqui fully `ready` there can still read
-       `weights-missing` here, because no wire field exists yet to close it.
-     - `coqui_package_installed` absent (an older sidecar predating this
-       field): no wire signal for EITHER half, so this falls back to the
-       full local disk probe — unchanged from this function's original
+     - `coqui_package_installed: true`: read `coqui_weights_present` off the
+       SAME wire body when the sidecar sent it (a real `os.path.isfile`
+       stat() of `model.pth` under the SIDECAR's own resolved TTS user-data
+       dir — `main.py`'s `_coqui_weights_present()`, which mirrors this
+       module's `coquiWeightsPresent()` field-for-field so the two probes
+       can never disagree on WHERE to look, only on WHICH box they're
+       looking at). This closes the exact bug the pre-fix version of this
+       comment flagged as "a real, undisclosed-nowhere-else gap": a remote
+       sidecar with Coqui fully `ready` used to read `weights-missing` here
+       forever (no self-correction — Coqui isn't loaded until first synth,
+       which the cloned-voice pre-pass precedes), hard-failing every
+       coqui-cloned chapter. `coqui_weights_present` absent on the body
+       (an older sidecar predating this field) falls back to the LOCAL
+       `coquiWeightsPresent()` stat() — correct only when the sidecar's venv
+       is on this same box, same caveat as before, but strictly an upgrade
+       path now rather than the only option.
+     - `coqui_package_installed` absent (an even older sidecar predating
+       BOTH fields): no wire signal for EITHER half, so this falls back to
+       the full local disk probe — unchanged from this function's original
        (pre-fix-round) behaviour, and no worse than it was. */
 function deriveCoquiInstallState(body: SidecarHealthBody): CloneEngineInstallState {
   if (body.model_loaded === true) return 'loaded';
   if (body.coqui_package_installed === false) return 'not-installed';
   if (body.coqui_package_installed === true) {
-    return coquiWeightsPresent() ? 'ready' : 'weights-missing';
+    const weightsPresent =
+      typeof body.coqui_weights_present === 'boolean'
+        ? body.coqui_weights_present
+        : coquiWeightsPresent();
+    return weightsPresent ? 'ready' : 'weights-missing';
   }
   return detectCoquiInstallStateOnDisk(REPO_ROOT);
 }

@@ -183,8 +183,17 @@ voiceOverrideLinkedRouter.post(
    error). Refuse the whole book's write, before touching anything, if any
    targeted character's slot would be removed (clear) or replaced (set) while
    carrying `provenance: 'cloned'`. A designed/imported slot rebaselines
-   exactly as before. */
-async function applyToBook(
+   exactly as before.
+
+   fs-38 Wave 3c, Task 20 fix round 1 (MINOR-1) — exported (was module-
+   private) so `synthesise-chapter-cloned-resolver.test.ts`'s Task-4 mutator
+   test can drive the REAL guard here directly (a temp bookDir with its own
+   cast.json is enough — this function has no other dependency on the route's
+   express req/res or the series-discovery scan above it), rather than
+   re-stating `characterHasClonedSlot`/`hasClonedProvenance` next to a
+   fixture built one line earlier — a tautology that stays green even if this
+   function's guard collapsed onto the uuid-validating `clonedSlotForEngine`. */
+export async function applyToBook(
   bookDir: string,
   ids: string[],
   canonicalVoiceId: string,

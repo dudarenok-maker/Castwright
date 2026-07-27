@@ -6509,6 +6509,55 @@ def _coqui_installed_version() -> Optional[str]:
         return None
 
 
+_XTTS_MODEL_DIR_NAME = "tts_models--multilingual--multi-dataset--xtts_v2"
+
+
+def _coqui_tts_data_dir() -> str:
+    """Resolve the `TTS` lib's user-data dir exactly as trainer.io's
+    `get_user_data_dir("tts")` does, WITHOUT importing TTS/trainer (same
+    non-importing cost class as `_qwen_weights_present` — this runs on every
+    /health poll). Mirrors `coqui-install-detect.ts`'s `ttsDataDir()` on the
+    Node side, field-for-field (TTS_HOME -> XDG_DATA_HOME -> platform
+    default), so the wire probe and the Node-side local-disk probe can never
+    disagree on where XTTS v2 weights land."""
+    tts_home = os.environ.get("TTS_HOME")
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if tts_home:
+        base = tts_home
+    elif xdg:
+        base = xdg
+    elif sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or os.path.join(
+            os.path.expanduser("~"), "AppData", "Local"
+        )
+    elif sys.platform == "darwin":
+        base = os.path.join(os.path.expanduser("~"), "Library", "Application Support")
+    else:
+        base = os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(base, "tts")
+
+
+def _coqui_weights_present() -> bool:
+    """True if the XTTS v2 model blob (`model.pth`) is present under the
+    resolved TTS user-data dir. Mirrors `coqui-install-detect.ts`'s
+    `coquiWeightsPresent()` — same directory resolution, same "requires the
+    real blob, not just metadata" caution.
+
+    fs-38 Wave 3c, Task 20 fix round 1 (IMPORTANT-1) — this is the wire
+    counterpart of `qwen_weights_present`: before this field existed,
+    `sidecar-health.ts`'s `deriveCoquiInstallState` fell back to a LOCAL
+    stat() of THIS box's disk whenever `coqui_package_installed` came back
+    true, which silently disagreed with a remote/Pinokio sidecar (weights
+    live on the sidecar's box, not this one) and permanently classified
+    every coqui-cloned voice as `weights-missing` -> `engineUnavailable` ->
+    a hard chapter failure that never self-corrected (Coqui isn't loaded
+    until first synth, and the pre-pass runs before that). Reporting this on
+    the wire — the same fix `qwen_weights_present` already applied — closes
+    that gap the same way qwen closed it."""
+    model_dir = os.path.join(_coqui_tts_data_dir(), _XTTS_MODEL_DIR_NAME)
+    return os.path.isfile(os.path.join(model_dir, "model.pth"))
+
+
 def _kokoro_package_installed() -> bool:
     """True if the `kokoro_onnx` package is importable without importing it."""
     try:
@@ -6909,6 +6958,7 @@ def health() -> dict[str, Any]:
         "qwen_base17_weights_present": _qwen_base17_weights_present(),
         "qwen_install_state": qwen_install_state,
         "coqui_package_installed": _coqui_package_installed(),
+        "coqui_weights_present": _coqui_weights_present(),
         "coqui_version": _coqui_installed_version(),
         "kokoro_package_installed": _kokoro_package_installed(),
         "whisper_package_installed": _whisper_package_installed(),

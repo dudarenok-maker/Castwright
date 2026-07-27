@@ -20,6 +20,9 @@
    now fully subsumes C1 for every character `applyQwenFallback` sees (case 4
    above pins the last gap that let C1 stay reachable). */
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { synthesiseChapter, type CastCharacter } from './synthesise-chapter.js';
 import { UnresolvableClonedVoiceError, type ResolveChapterDeps } from './clone-voice-resolver.js';
 import type { VoiceLibraryEntry } from '../workspace/voice-library.js';
@@ -337,37 +340,50 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass, coqui generalisa
     expect(result.segments.length).toBeGreaterThan(0);
   });
 
-  it('Property-1 hole (Task 16 review) — a cloned coqui slot with a malformed libraryUuid hard-fails loud, never falls through to a stock catalogue voice', async () => {
-    // Task 16's pinning test (voice-mapping.test.ts) proves pickVoiceForEngine
-    // itself — a pure, synchronous function with no way to check whether an
-    // artifact exists — still falls through to the human-readable `name` for
-    // a malformed libraryUuid; that is unchanged and by design. What Task 20
-    // closes is that `synthesiseChapter`'s pre-pass now hard-fails the WHOLE
-    // chapter BEFORE pickVoiceForEngine('coqui', ...) is ever reached for
-    // such a character in production: `libraryUuid` is extracted here via
-    // `libraryVoiceForEngine` (the same RESOLUTION predicate pickVoiceForEngine
-    // gates on), so a malformed uuid resolves to `undefined` and
-    // `resolveClonedVoicesForChapter`'s existing `!libraryUuid` guard reports
-    // 'misconfigured' — never silently rendering the catalogue pick.
-    //
-    // The third case (a truthy but NON-STRING libraryUuid) is the one that
-    // actually distinguishes this fix from the pre-existing `!libraryUuid`
-    // check alone: `''`/missing are already falsy and would hard-fail even
-    // via a raw `.libraryUuid` read; a truthy non-string (corrupted
-    // cast.json data — the type system declares `libraryUuid?: string`, but
-    // nothing enforces that on disk) is NOT falsy, so a raw read would sail
-    // straight through to `readEntry(<garbage>)`. Only routing extraction
-    // through `libraryVoiceForEngine`'s `typeof libraryUuid !== 'string'`
-    // check catches it.
-    for (const malformed of [
-      { name: 'Real Person Clone', libraryUuid: '', provenance: 'cloned' as const }, // empty
-      { name: 'Real Person Clone', provenance: 'cloned' as const }, // missing
+  /* fs-38 Wave 3c, Task 20 fix round 1 (MINOR-2) — split from a single `for`
+     loop into `it.each` so a whole-feature revert (or any other regression)
+     reports EACH malformed-uuid sub-case's pass/fail independently instead
+     of the suite stopping at the first failing iteration and leaving the
+     other two unproven for that run. Under the pre-Task-20 baseline all
+     three fail — a coqui-only-cloned character never even entered the old
+     qwen-only filter (`c.overrideTtsVoices?.qwen?.provenance === 'cloned'`),
+     so the specific malformation of `.coqui.libraryUuid` was never reached
+     regardless of shape — confirmed by running each case individually
+     against that baseline (task-20-report.md, "Fix round 1"). */
+  it.each([
+    ['empty', { name: 'Real Person Clone', libraryUuid: '', provenance: 'cloned' as const }],
+    ['missing', { name: 'Real Person Clone', provenance: 'cloned' as const }],
+    [
+      'truthy non-string (data corruption)',
       {
         name: 'Real Person Clone',
-        libraryUuid: 12345 as unknown as string, // truthy, non-string (data corruption)
+        libraryUuid: 12345 as unknown as string,
         provenance: 'cloned' as const,
       },
-    ]) {
+    ],
+  ])(
+    'Property-1 hole (Task 16 review) — a cloned coqui slot with a malformed libraryUuid (%s) hard-fails loud, never falls through to a stock catalogue voice',
+    async (_label, malformed) => {
+      // Task 16's pinning test (voice-mapping.test.ts) proves pickVoiceForEngine
+      // itself — a pure, synchronous function with no way to check whether an
+      // artifact exists — still falls through to the human-readable `name` for
+      // a malformed libraryUuid; that is unchanged and by design. What Task 20
+      // closes is that `synthesiseChapter`'s pre-pass now hard-fails the WHOLE
+      // chapter BEFORE pickVoiceForEngine('coqui', ...) is ever reached for
+      // such a character in production: `libraryUuid` is extracted here via
+      // `libraryVoiceForEngine` (the same RESOLUTION predicate pickVoiceForEngine
+      // gates on), so a malformed uuid resolves to `undefined` and
+      // `resolveClonedVoicesForChapter`'s existing `!libraryUuid` guard reports
+      // 'misconfigured' — never silently rendering the catalogue pick.
+      //
+      // The 'truthy non-string' case is the one that actually distinguishes
+      // this fix from the pre-existing `!libraryUuid` check alone: `''`/missing
+      // are already falsy and would hard-fail even via a raw `.libraryUuid`
+      // read; a truthy non-string (the type system declares `libraryUuid?:
+      // string`, but nothing enforces that on disk) is NOT falsy, so a raw
+      // read would sail straight through to `readEntry(<garbage>)`. Only
+      // routing extraction through `libraryVoiceForEngine`'s `typeof
+      // libraryUuid !== 'string'` check catches it.
       const provider = makeProvider();
       const cast: CastCharacter[] = [
         { id: 'wren', name: 'Wren', overrideTtsVoices: { coqui: malformed } },
@@ -393,8 +409,8 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass, coqui generalisa
       // Never even reaches the voice-library lookup, and never a stock voice.
       expect(readEntry).not.toHaveBeenCalled();
       expect(provider.calls).toHaveLength(0);
-    }
-  });
+    },
+  );
 
   it('a coqui-routed clone with no coqui slot fails loud as wrong-engine — never a catalog voice', async () => {
     // 'wren' is cloned on QWEN only, but THIS run's book default is 'coqui'
@@ -515,40 +531,113 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass, coqui generalisa
     expect(result.segments.length).toBeGreaterThan(0);
   });
 
-  it('Task 4 (voice-override-linked guard predicates) — a coqui-cloned character blocks the rebaseline write, and the untouched marker still validates in the pre-pass', async () => {
-    const { characterHasClonedSlot, hasClonedProvenance } = await import('./clone-engines.js');
-    const c: CastCharacter = {
-      id: 'wren',
-      name: 'Wren',
-      overrideTtsVoices: {
-        coqui: { name: 'Wren (unused)', libraryUuid: 'lib-coqui-t4', provenance: 'cloned' },
-      },
-    };
+  it('Task 4 (voice-override-linked.applyToBook, driven for real) — a coqui-cloned character blocks BOTH the SET and the CLEAR rebaseline write, and the untouched-on-disk marker still validates in the pre-pass', async () => {
+    // fs-38 Wave 3c, Task 20 fix round 1 (MINOR-1) — the earlier version of
+    // this test re-stated applyToBook's own predicates
+    // (characterHasClonedSlot/hasClonedProvenance) next to a fixture built
+    // one line earlier: a tautology that would stay green even if the route
+    // collapsed onto the uuid-validating clonedSlotForEngine (the exact
+    // substitution-bug regression 5 reviewers have proposed on this branch).
+    // This drives the REAL exported applyToBook (voice-override-linked.ts)
+    // against a real temp bookDir + cast.json on disk — the same mutator
+    // Tasks 3/5/6's tests drive for their own guards.
+    const { applyToBook } = await import('../routes/voice-override-linked.js');
+    const bookDir = mkdtempSync(join(tmpdir(), 'task20-fixround1-task4-'));
+    const castPath = join(bookDir, '.audiobook', 'cast.json');
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    const clonedSlot = { name: 'Wren (unused)', libraryUuid: 'lib-coqui-t4', provenance: 'cloned' as const };
+    writeFileSync(
+      castPath,
+      JSON.stringify({
+        characters: [{ id: 'wren', name: 'Wren', overrideTtsVoices: { coqui: clonedSlot } }],
+      }),
+    );
 
-    // The EXACT predicates + call shape voice-override-linked.ts's applyToBook
-    // uses (`:207-208`): `override === null ? characterHasClonedSlot(c) :
-    // hasClonedProvenance(c, override.engine)`. Both branches must refuse
-    // BEFORE the route touches disk, which is why the character below is
-    // still byte-identical — there is nothing to "restore".
-    expect(characterHasClonedSlot(c)).toBe(true); // CLEAR path (override === null) refuses
-    expect(hasClonedProvenance(c, 'coqui')).toBe(true); // SET path (override.engine === 'coqui') refuses
+    try {
+      // CLEAR path (override === null) refuses.
+      await expect(applyToBook(bookDir, ['wren'], 'canonical-voice-id', undefined, null)).rejects.toThrow(
+        /consented cloned voice/,
+      );
+      // SET path (override.engine === 'coqui') refuses too.
+      await expect(
+        applyToBook(bookDir, ['wren'], 'canonical-voice-id', undefined, {
+          engine: 'coqui',
+          name: 'Someone Else',
+        }),
+      ).rejects.toThrow(/consented cloned voice/);
 
-    setLastKnownCoquiInstallState('ready');
-    const provider = makeProvider();
-    const entry = baseEntry({ voiceUuid: 'lib-coqui-t4' });
-    const readEntry = vi.fn(async (uuid: string) => (uuid === 'lib-coqui-t4' ? entry : null));
-    const result = await synthesiseChapter({
-      sentences: [sentence(1, 'wren')],
-      cast: [c],
-      provider,
-      modelKey: 'coqui-xtts-v2',
-      engine: 'coqui',
-      cloneResolverDepsOverride: { readEntry, ptExists: async () => true },
-    });
-    expect(readEntry).toHaveBeenCalledWith('lib-coqui-t4');
-    expect(provider.calls.length).toBeGreaterThan(0);
-    expect(provider.calls[0].voiceName).toBe('xtts-lib-coqui-t4');
-    expect(result.segments.length).toBeGreaterThan(0);
+      // Both refusals happen BEFORE any write (applyToBook checks every
+      // targeted character up front) — cast.json on disk must be
+      // byte-identical to what was written above.
+      const onDisk = JSON.parse(readFileSync(castPath, 'utf8')) as {
+        characters: Array<{ overrideTtsVoices?: { coqui?: typeof clonedSlot } }>;
+      };
+      expect(onDisk.characters[0].overrideTtsVoices?.coqui).toEqual(clonedSlot);
+
+      setLastKnownCoquiInstallState('ready');
+      const provider = makeProvider();
+      const entry = baseEntry({ voiceUuid: 'lib-coqui-t4' });
+      const readEntry = vi.fn(async (uuid: string) => (uuid === 'lib-coqui-t4' ? entry : null));
+      const cast: CastCharacter[] = [
+        { id: 'wren', name: 'Wren', overrideTtsVoices: onDisk.characters[0].overrideTtsVoices },
+      ];
+      const result = await synthesiseChapter({
+        sentences: [sentence(1, 'wren')],
+        cast,
+        provider,
+        modelKey: 'coqui-xtts-v2',
+        engine: 'coqui',
+        cloneResolverDepsOverride: { readEntry, ptExists: async () => true },
+      });
+      expect(readEntry).toHaveBeenCalledWith('lib-coqui-t4');
+      expect(provider.calls.length).toBeGreaterThan(0);
+      expect(provider.calls[0].voiceName).toBe('xtts-lib-coqui-t4');
+      expect(result.segments.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(bookDir, { recursive: true, force: true });
+    }
+  });
+
+  it('Task 4, malformed-libraryUuid case — the SET/CLEAR guard still refuses a cloned slot with NO usable uuid (closes the M2 gap; the one input that actually distinguishes the fail-safe guard from the collapse onto clonedSlotForEngine)', async () => {
+    // The prior test's fixture uses a WELL-FORMED libraryUuid, so it can't
+    // tell characterHasClonedSlot/hasClonedProvenance (provenance-only, fail
+    // safe) apart from clonedSlotForEngine (uuid-validating) — both agree on
+    // a well-formed uuid. This is the one input where they diverge: a
+    // malformed (missing) libraryUuid still counts as cloned for the
+    // fail-safe pair, but clonedSlotForEngine would return undefined for it,
+    // making `blocked` false and letting the write through — the exact
+    // silent-substitution regression the M2 minor-roll-up flagged as
+    // untested on this route's SET path.
+    const { applyToBook } = await import('../routes/voice-override-linked.js');
+    const bookDir = mkdtempSync(join(tmpdir(), 'task20-fixround1-task4-malformed-'));
+    const castPath = join(bookDir, '.audiobook', 'cast.json');
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    const malformedClonedSlot = { name: 'Wren (unused)', provenance: 'cloned' as const }; // no libraryUuid
+    writeFileSync(
+      castPath,
+      JSON.stringify({
+        characters: [{ id: 'wren', name: 'Wren', overrideTtsVoices: { coqui: malformedClonedSlot } }],
+      }),
+    );
+
+    try {
+      await expect(applyToBook(bookDir, ['wren'], 'canonical-voice-id', undefined, null)).rejects.toThrow(
+        /consented cloned voice/,
+      );
+      await expect(
+        applyToBook(bookDir, ['wren'], 'canonical-voice-id', undefined, {
+          engine: 'coqui',
+          name: 'Someone Else',
+        }),
+      ).rejects.toThrow(/consented cloned voice/);
+
+      const onDisk = JSON.parse(readFileSync(castPath, 'utf8')) as {
+        characters: Array<{ overrideTtsVoices?: { coqui?: typeof malformedClonedSlot } }>;
+      };
+      expect(onDisk.characters[0].overrideTtsVoices?.coqui).toEqual(malformedClonedSlot);
+    } finally {
+      rmSync(bookDir, { recursive: true, force: true });
+    }
   });
 
   it('Task 5 (hydrate-reused-voice.hydrateCharacterVoice) — a coqui-cloned reused character is not rerouted onto the source’s qwen slot, and still validates in the pre-pass', async () => {

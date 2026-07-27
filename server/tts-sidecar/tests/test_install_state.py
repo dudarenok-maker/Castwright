@@ -155,3 +155,83 @@ def test_coqui_installed_version_reads_the_coqui_tts_distribution(monkeypatch) -
     result = main._coqui_installed_version()
     assert seen == ["coqui-tts"]
     assert result == "9.9.9"
+
+
+# ── coqui_weights_present (fs-38 Wave 3c, Task 20 fix round 1, IMPORTANT-1) ──
+#
+# The wire counterpart of qwen_weights_present. Before this field existed,
+# sidecar-health.ts's deriveCoquiInstallState fell back to a LOCAL stat() of
+# THIS box's disk whenever coqui_package_installed came back true — wrong for
+# a remote/Pinokio sidecar (weights live on the sidecar's own box), and with
+# no self-correction: Coqui isn't loaded until first synth, which the
+# cloned-voice pre-pass runs before. A coqui-cloned chapter hard-failed
+# "Re-enable Coqui" forever on a box where XTTS was installed and working.
+
+
+def test_health_exposes_coqui_weights_present(client: TestClient) -> None:
+    """/health body must contain coqui_weights_present (bool) — mirrors
+    qwen_weights_present's shape exactly."""
+    body = client.get("/health").json()
+    assert "coqui_weights_present" in body
+    assert isinstance(body["coqui_weights_present"], bool)
+
+
+def test_coqui_weights_present_reflects_monkeypatch(
+    client: TestClient, monkeypatch
+) -> None:
+    """When _coqui_weights_present is patched to True, the key reports True —
+    same pattern as every other engine boolean in this file."""
+    monkeypatch.setattr(main, "_coqui_weights_present", lambda: True)
+    body = client.get("/health").json()
+    assert body["coqui_weights_present"] is True
+
+
+def test_coqui_weights_present_independent_of_package(
+    client: TestClient, monkeypatch
+) -> None:
+    """coqui_weights_present must be reported even when coqui_package_installed
+    is False — mirrors the qwen short-circuit-fix test above (both booleans
+    must be independently visible to the Node side, never short-circuited)."""
+    monkeypatch.setattr(main, "_coqui_package_installed", lambda: False)
+    monkeypatch.setattr(main, "_coqui_weights_present", lambda: True)
+    body = client.get("/health").json()
+    assert body["coqui_package_installed"] is False
+    assert body["coqui_weights_present"] is True
+
+
+# ── _coqui_weights_present scans the TTS user-data dir for the real blob ────
+
+
+def _make_xtts_model_dir(data_dir: Path, *, filename: str) -> None:
+    model_dir = data_dir / "tts" / main._XTTS_MODEL_DIR_NAME
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / filename).write_bytes(b"\x00" * 16)
+
+
+def test_coqui_weights_present_true_when_model_pth_present(monkeypatch, tmp_path):
+    monkeypatch.setenv("TTS_HOME", str(tmp_path))
+    _make_xtts_model_dir(tmp_path, filename="model.pth")
+    assert main._coqui_weights_present() is True
+
+
+def test_coqui_weights_present_false_when_only_config(monkeypatch, tmp_path):
+    # A half-finished download (config.json only, no model.pth) must NOT
+    # read as ready — mirrors _qwen_weights_present's identical caution.
+    monkeypatch.setenv("TTS_HOME", str(tmp_path))
+    _make_xtts_model_dir(tmp_path, filename="config.json")
+    assert main._coqui_weights_present() is False
+
+
+def test_coqui_weights_present_false_when_dir_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("TTS_HOME", str(tmp_path))
+    assert main._coqui_weights_present() is False
+
+
+def test_coqui_tts_data_dir_honours_env_precedence(monkeypatch, tmp_path):
+    # Mirrors coqui-install-detect.ts's ttsDataDir() env precedence exactly:
+    # TTS_HOME wins over XDG_DATA_HOME.
+    monkeypatch.setenv("TTS_HOME", str(tmp_path / "explicit"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    assert main._coqui_tts_data_dir() == str(tmp_path / "explicit" / "tts")
+    monkeypatch.delenv("TTS_HOME")
+    assert main._coqui_tts_data_dir() == str(tmp_path / "xdg" / "tts")
