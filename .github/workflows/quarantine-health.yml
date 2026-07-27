@@ -19,9 +19,11 @@ name: Quarantine Lane Health
 # the lane is by definition unreliable, so a per-PR report would be noise —
 # and this must never gate a merge, so it isn't wired into verify.yml or any
 # required status check. Modelled on cross-os.yml, the repo's existing
-# precedent for a non-gating scheduled job: same `permissions`, same
-# `concurrency` idiom (a manual dispatch supersedes an in-flight cron run and
-# vice versa).
+# precedent for a non-gating scheduled job: same `concurrency` idiom (a
+# manual dispatch supersedes an in-flight cron run and vice versa).
+# `permissions` is NOT identical to cross-os.yml's — cross-os.yml declares
+# only `contents: read`; this job adds `issues: read` on top, needed for the
+# `gh issue view` call below.
 #
 # Cadence: weekly (Monday 03:00 UTC), clear of cross-os.yml's Wed/Sun slots
 # and the routine weekday PR-verify traffic. Weekly bounds how long a newly

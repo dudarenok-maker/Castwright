@@ -50,10 +50,20 @@ function matchesTrigger(triggers: string[], absPath: string): boolean {
    REAL on-disk absolute path would spuriously fail here regardless of the
    trigger patterns. A CI/production checkout has no such dot segment; the
    synthetic root keeps the assertion about the patterns, not about where
-   this worktree sits. */
+   this worktree sits.
+
+   The synthetic path reflects `root`'s real nesting under the repo (`/repo`
+   for REPO_ROOT, `/repo/server` for SERVER_ROOT) — finding 11 (ops-30
+   review): this used to always return `/repo/${relFromRoot}` regardless of
+   `root`, so "server package.json" actually asserted against
+   `/repo/package.json`, not `/repo/server/package.json`. Both trigger
+   patterns start with a leading globstar segment, so nested paths match in
+   reality either way, which is why the bug never failed a test — but the
+   test wasn't proving what its own label claimed. */
 function realFileAsAbsPath(root: string, relFromRoot: string): string {
   expect(existsSync(resolve(root, relFromRoot))).toBe(true);
-  return `/repo/${relFromRoot}`;
+  const syntheticRoot = root === SERVER_ROOT ? '/repo/server' : '/repo';
+  return `${syntheticRoot}/${relFromRoot}`;
 }
 
 describe('server/vitest.config.ts forceRerunTriggers', () => {

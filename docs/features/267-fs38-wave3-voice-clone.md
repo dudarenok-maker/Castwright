@@ -329,11 +329,24 @@ No new Playwright e2e in 3a — added in 3b1 (below).
   nothing caught it, because codegen drift was ungated. Note
   `forceRerunTriggers`
   **replaces** vitest's defaults rather than extending them, so both configs
-  re-list `**/package.json/**` and `**/{vitest,vite}.config.*/**`. That is
+  re-list `**/package.json/**` and `**/{vitest,vite}.config.ts/**`. That is
   load-bearing, measured on a clean tree: with them stripped, a root-manifest
   diff makes `cd server && vitest run --changed` report *"No test files found"*
   and exit 0 — so a release-cut version bump would run zero server tests and
   report green — while the same diff with them restored selects 5389.
+  **Correction (2026-07-27, ops-30/#1848):** the config-file glob above was
+  originally written `**/{vitest,vite}.config.*/**` (a wildcarded
+  extension) — that is vitest's own *documented* default, but under
+  picomatch 4 a wildcard inside that path segment kills the trailing-`/**`-
+  also-matches-the-file behaviour the whole idiom depends on, so it matched
+  nothing and this measurement was never actually exercising the
+  config-file trigger, only the package.json one. Both `vitest.config.ts`
+  and `server/vitest.config.ts` had silently inherited the dead glob since
+  it was first written. The pattern above (`.ts`, not `.*`) is the
+  corrected one both configs carry now; see
+  `src/test/force-rerun-triggers.test.ts` and
+  `server/src/force-rerun-triggers.test.ts` for the regression coverage
+  that would have caught this.
 - Playwright (`e2e/voice-library.spec.ts`, step 6) — the clone wizard's
   transcript field in a real browser: the ingested Whisper text lands in the
   box, an over-cap value disables Continue with the reason rendered on screen

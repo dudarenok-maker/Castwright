@@ -64,9 +64,20 @@ of the suite each run executes**.
 2. Every expensive leg keeps its scope `if:` (plan 103) — `--changed` narrows
    *within* a leg that already decided to run; it does not replace the gate.
 3. `vitest.config.ts` `forceRerunTriggers` MUST re-list the vitest defaults
-   (`**/package.json/**`, `**/{vitest,vite}.config.*/**`) alongside the added
-   `**/src/test/setup.ts` — setting the key replaces the defaults, and losing the
-   package.json/config triggers would let a dep bump skip affected tests.
+   alongside the added `**/src/test/setup.ts` — setting the key replaces the
+   defaults, and losing the package.json/config triggers would let a dep bump
+   skip affected tests. **Correction (2026-07-27, ops-30/#1848):** this
+   invariant originally named the pattern `**/{vitest,vite}.config.*/**` as
+   "the vitest defaults" — that is what vitest's docs describe, but under
+   picomatch 4 a wildcard inside that path segment (the `.*` extension)
+   kills the trailing-`/**`-also-matches-the-file behaviour the whole idiom
+   depends on, so the pattern matches NOTHING and never did. Both
+   `vitest.config.ts` and `server/vitest.config.ts` had silently inherited
+   this dead glob since it was first written here — a config-only diff
+   selected zero tests under `vitest run --changed`. The corrected pattern
+   is `**/{vitest,vite}.config.ts/**` (pinned to the real `.ts` extension,
+   not a wildcarded one); see `src/test/force-rerun-triggers.test.ts` and
+   `server/src/force-rerun-triggers.test.ts` for the regression coverage.
 4. The setup file is the *only* added trigger needed: it is runner-injected, not
    import-reachable, so `--changed` can't see it via the module graph. Shared
    fixtures/mocks (`src/data/**`, `src/mocks/**`) are statically imported, so the
@@ -75,9 +86,16 @@ of the suite each run executes**.
 5. e2e stays scope-gated — do NOT apply Playwright `--only-changed` to
    app-source changes (a spec's import graph ≠ the app source the browser loads,
    so it would silently skip e2e).
-6. Server vitest configs need NO `forceRerunTriggers` edit — they have no
-   `setupFiles`, so vitest's default triggers (package.json + config) already
-   force a full run on the only non-graph-reachable inputs.
+6. **Correction (2026-07-27, ops-30/#1848):** this invariant originally said
+   server vitest configs need no `forceRerunTriggers` edit because "vitest's
+   default triggers (package.json + config) already force a full run" — that
+   default is the same dead glob described in invariant 3, so it was never
+   true. `server/vitest.config.ts` explicitly re-lists the corrected pattern
+   (same as invariant 3), and `server/vitest.config.slow.ts` — which has no
+   `setupFiles` either but previously relied on vitest's default entirely,
+   silently inheriting the dead glob — now sets its own explicit
+   `forceRerunTriggers` too. Neither server config gets away with "no edit
+   needed" any more.
 
 ## Test plan
 
