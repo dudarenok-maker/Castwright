@@ -4,7 +4,7 @@ shipped: null
 owner: null
 ---
 
-# 270 — fs-38 Wave 3c: cloned + designed voices on Coqui XTTS v2
+# 271 — fs-38 Wave 3c: cloned + designed voices on Coqui XTTS v2
 
 > Status: active — live-GPU acceptance owed (see §"Owed on-box acceptance" below)
 > Key files: `server/tts-sidecar/main.py` (`CoquiEngine.clone_voice`,
@@ -115,9 +115,15 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
   - `synthesise-chapter.ts`'s per-chapter pre-pass gained a genuinely
     parallel **designed-voice-on-Coqui** arm (Task 20a, D-B) with its own,
     opposite failure policy from the cloned arm, plus per-arm
-    evict-before-first-derive VRAM hooks (Task 22) so a chapter with many
-    in-chapter designed speakers doesn't co-resident Qwen-1.7B-tier and
-    XTTS on an 8 GB card.
+    evict-before-first-derive VRAM hooks (Task 22) — **scoped to the
+    pre-pass itself**, so a chapter with many in-chapter designed speakers
+    doesn't co-resident Qwen-1.7B-tier and XTTS **for the duration of the
+    pre-pass's own derives**. The invariant is explicitly narrower than
+    "never co-resident in this chapter": it does not extend past the
+    pre-pass's own return — the anchor group rendered immediately after can
+    still reload XTTS, and the code says so in its own comment. See
+    Invariant 8 and Known limitation (o) for the two gaps this
+    scoping leaves open by design.
   - `POST /:voiceUuid/assign` (`server/src/routes/voice-library.ts`, Task
     24) now writes **both** clone-capable slots when the entry can actually
     render on both — `provenance === 'cloned'`, or `provenance === 'designed'`
@@ -244,13 +250,24 @@ against:
    `qwen_weights_present` field exactly; the local-disk-stat fallback is
    retained only for talking to an older sidecar that doesn't send the new
    field, never preferred over it when present.
-8. **Per-arm VRAM eviction is policy-scoped and memoised once per chapter.**
-   The leading/trailing coqui↔qwen evict hooks each run from *inside* their
-   own resolver arm's existing `try`/`catch` — cloned's evict failure is
-   fail-loud, designed's is fail-soft — never a single shared eviction call
-   whose failure mode is ambiguous between the two policies. Memoisation is
-   per-chapter: a chapter with 8–15 in-chapter designed speakers pays the
-   evict cost once, not once per character.
+8. **Per-arm VRAM eviction is policy-scoped, memoised once per chapter, and
+   scoped to the pre-pass only.** The leading/trailing coqui↔qwen evict
+   hooks each run from *inside* their own resolver arm's existing
+   `try`/`catch` — cloned's evict failure is fail-loud, designed's is
+   fail-soft — never a single shared eviction call whose failure mode is
+   ambiguous between the two policies. Memoisation is per-chapter: a
+   chapter with 8–15 in-chapter designed speakers pays the evict cost once,
+   not once per character. **The guarantee does not extend past the
+   pre-pass's own return** — this is stated explicitly in the code's own
+   comment, not just inferred. Two gaps this leaves open by design: **(1)
+   the anchor group** rendered immediately after the pre-pass returns can
+   still reload XTTS, so the pre-pass's own VRAM discipline doesn't cover
+   the very next synth call; **(2) two books on one card** — this hook has
+   no cross-book awareness, so a second book's chapter starting its own
+   pre-pass while the first book's anchor-group render still holds Coqui
+   resident is not accounted for at all. Neither is a regression (nothing
+   evicted either before this wave); both are the honest boundary of what
+   Task 22 actually closes.
 9. **The narrator stub resolves its real cast row before any resolver runs
    (Task 23).** An orphaned-`characterId` narrator with a cloned/designed
    voice is looked up by its real uuid, not treated as a synthetic stub with
@@ -311,10 +328,19 @@ against:
   slots; the read-modify-write window stays hoisted above the async work so
   it does not reopen the cast.json clobber class Task 14 closed.
 - Playwright e2e (`e2e/voice-library.spec.ts` / a Coqui cast/audition spec,
-  Task 30) — a cloned voice cast on a Coqui-routed character, mirroring the
-  real `/assign` guard order (revoked → not-ready → wrong-engine) against
-  the mock layer's now-failure-capable responses (Task 29), so a message
-  asserted in mock mode matches what the real backend would say.
+  Task 30) — **covers the assign-time rejection path, not a successful
+  Coqui assign.** The mock layer rejects a cloned-voice assign to any
+  non-qwen engine, so this spec asserts the real `/assign` guard order
+  (revoked → not-ready → wrong-engine) against the mock's now-failure-capable
+  responses (Task 29) — nothing in this spec exercises an assign
+  *succeeding* on Coqui. That gap is exactly this wave's own signature
+  defect class ("an artifact asserts what its source no longer says")
+  reproduced inside its own plan on a first draft of this line — corrected
+  here rather than left standing. A cloned-voice-cast-on-Coqui **success**
+  path is covered at the integration level by the Vitest suites above
+  (`clone-voice-resolver.test.ts`, `synthesise-chapter-cloned-resolver.test.ts`),
+  not by this e2e spec; a real browser-level success walkthrough is what
+  Section E's E-01 (on-box) exists to close.
 - Pytest sidecar golden gate (`server/tts-sidecar/tests/golden/test_cross_engine_sanity.py`,
   Task 31) — `test_coqui_sanity` now actually runs on a Coqui-only box (an
   `import TTS` probe replaces a Kokoro-shaped weights-path check that never
@@ -373,37 +399,77 @@ CLAUDE.md's Before-shipping checklist step 3.
   against a genuinely hand-corrupted file on a real filesystem (permissions,
   partial write, encoding — the class of thing that only happens on real
   disk).
+- **E-6 — sidecar-side derive WRITE path vs. Node-side READ path, on a real
+  round trip.** Task 18 fixed the Node READ side to look for a coqui
+  artifact under `xttsVoiceLatentsPath`; whether the sidecar's derive
+  actually WRITES there was verified this wave only **statically** (both
+  the `nanoid()` and `crypto.randomUUID()` mint-site alphabets are strict
+  subsets of the Python sanitizer's allowlist, so it's a no-op on both
+  sides for every id this codebase mints) — never exercised via an actual
+  live derive-then-classify round trip on hardware. If they ever disagree
+  in practice, every classify sees a missing artifact and re-derives on
+  every chapter of every book, so this is worth a real confirmation, not
+  just a paper one.
+- **E-7 — does an undetected coqui-tts version mismatch self-heal or loop?**
+  The equivalent Qwen-side residual (Task 19) was proven bounded — a stale
+  `coquiVersion` stamp converts "loops forever" into "self-heals after at
+  most one spurious re-derive," because the re-derive itself writes a fresh
+  version stamp. The Coqui side inherits the identical code shape, but that
+  specific bounded-not-infinite property has not been independently
+  confirmed for Coqui on real hardware — it is inferred from code symmetry
+  with the Qwen case, not observed.
 
 ## Known limitations
 
-- **(a) Three tasks in the plan did not land in this delivery — 10a, 14a,
-  27 — and are tracked as their own follow-up issues, not silently deferred.**
-  - **Task 10a — the manual-link consent hole (open, and made more
-    exploitable by Task 24, not less).**
-    `voice-override-linked.ts` blocks a coqui-slot rewrite only when the
-    **existing** slot is already `cloned`; a character with no coqui slot,
-    or a `designed` one, is unguarded. `parseOverride` accepts any
-    non-empty client-supplied string as `name`; the resolution path falls
-    through to returning that raw string as the storage key; and
-    `xtts-<other-uuid>` is byte-identical to `cloneStorageKey('coqui',
-    otherUuid)` — a real clone key. Before this wave, no route could write
-    a coqui `libraryUuid` and no `xtts-` artifacts existed, so a planted key
-    resolved to nothing; Task 24 is the route that starts minting real ones,
-    which is what activates this latent hole rather than closing it. Filed
-    as [#1884](https://github.com/dudarenok-maker/Castwright/issues/1884).
-  - **Task 14a — a failed/timed-out sidecar evict on revoke is invisible.**
-    The revoke route's sidecar-evict call is wrapped in a bare `catch {}`,
-    and the response's `{failed}` array tracks only file-unlink failures —
-    so revoke can answer `200` with no `artifactPurgeIncomplete` signal
-    while the sidecar's XTTS latents cache (no TTL) may still hold the
-    voice until the process restarts. Pre-existing in kind (not introduced
-    by this wave), but a genuine Property 2 residual. Filed as
-    [#1886](https://github.com/dudarenok-maker/Castwright/issues/1886).
-  - **Task 27 — no engine-aware library sample route yet.** `POST
-    /:voiceUuid/sample` still hardcodes a Qwen voice name, model key, and
-    cache scope — so a Coqui-cloned card's Play button auditions the Qwen
-    artifact (and 409s if Qwen is stale while the Coqui artifact is ready).
-    Filed as [#1887](https://github.com/dudarenok-maker/Castwright/issues/1887).
+> **This list is not exhaustive, and the wave has had no whole-branch
+> review yet.** Every task-level review on this branch left a roll-up of
+> deferred Minor findings (M1–M24 in the implementation ledger) for GATE 1
+> (a whole-branch review) to triage; **GATE 1 has not run, nor has GATE 2
+> (independent review) or GATE 3 (verify/push/PR/CI).** Roughly five of
+> those Minors are folded into the items below because they were judged
+> consent-adjacent or otherwise load-bearing enough to record now; the
+> other ~19 are still sitting in the ledger, untriaged, and this list
+> should not be read as their replacement. A future reader who wants the
+> full picture needs the ledger, not just this section.
+
+- **(a) One of the plan's three originally-not-landed tasks is still
+  outstanding; the other two landed after this plan's first draft.**
+  - **Task 10a landed** (`493d6b8f` + a same-day fix round) — the
+    manual-link consent hole (`voice-override-linked.ts` accepting an
+    arbitrary client-supplied coqui slot name) is **closed**. The guard
+    derives its reserved-prefix test from `manifestSlotFor(engine)` (no
+    hardcoded `'xtts-'`/`'qwen-'` literal) and — closing a review-caught
+    bypass — the prefix comparison is **case-folded**: the original guard
+    was case-sensitive while the sidecar's filesystem lookup is not, so
+    `name:'XTTS-<uuid>'` would have sailed past a case-sensitive check on
+    NTFS/APFS. [#1884](https://github.com/dudarenok-maker/Castwright/issues/1884)
+    is closed. **But that fix's own review found a wider, still-open hole
+    it does not close**: `PUT /api/books/:bookId` with `{slice: 'cast'}`
+    persists the client's cast wholesale, with no clone-key or provenance
+    guard at all, and `voiceUuid` is not in `PRESERVED_DESIGN_FIELDS` — a
+    client can restamp `voiceUuid` and the matching engine-slot name in two
+    requests through this route directly, without needing
+    `voice-override-linked.ts` as an intermediate step. Filed as
+    [#1899](https://github.com/dudarenok-maker/Castwright/issues/1899).
+  - **Task 14a landed** (`1bed9ed8`) — a failed/timed-out sidecar evict on
+    revoke is no longer invisible: `artifactPurgeFailedPaths` now reports it
+    instead of the old bare `catch {}`.
+    [#1886](https://github.com/dudarenok-maker/Castwright/issues/1886) is
+    closed. Two Medium findings from that fix's own review are worth
+    tracking even though they didn't block the fix: **(1)** a stopped
+    sidecar (autostart off) reports the same "purge incomplete" signal as a
+    genuine evict failure, even though a non-running sidecar has no
+    in-process cache to leak from — the signal can cry wolf on a common,
+    benign case; **(2)** the fix's `/revoke`-only scope was justified on
+    blast-radius grounds the review found backwards — after `/revoke` the
+    entry survives so a second revoke can retry the purge, but after
+    `DELETE` (not covered by this fix) the manifest is gone with no way to
+    retrigger, so `DELETE` arguably needs the fix *more*, not less.
+  - **Task 27 — still open.** No engine-aware library sample route exists
+    yet. `POST /:voiceUuid/sample` still hardcodes a Qwen voice name, model
+    key, and cache scope — so a Coqui-cloned card's Play button auditions
+    the Qwen artifact (and 409s if Qwen is stale while the Coqui artifact is
+    ready). Filed as [#1887](https://github.com/dudarenok-maker/Castwright/issues/1887).
 - **(b) The synthetic-clip→latents quality claim is delivered but validated
   only at format level in CI.** Format-level checks (RMS/duration/no-crash)
   can prove a designed-voice-on-Coqui derive is not broken; only a human ear
@@ -482,6 +548,25 @@ CLAUDE.md's Before-shipping checklist step 3.
   regression test added in this wave's Task 29); this second surface, one
   panel over, was found but deliberately left — the same class of gap Task
   29 closed, in a different component. Filed as [#1896](https://github.com/dudarenok-maker/Castwright/issues/1896).
+- **(o) An explicit stock-voice pick over a cloned slot still renders the
+  clone — the user's choice is ignored, and a real person's voice plays
+  instead** `[DELTA-I5]`. The "unassign a library voice" affordance this
+  needs was carried forward twice — first to Task 24, then to Task 25 — and
+  never actually delivered in either. Consent-adjacent: this isn't a
+  substitution *away* from a real person's voice (which Property 1 already
+  forbids), it's the opposite failure — a user trying to move *off* a
+  cloned voice and not succeeding. Not yet filed as its own issue; flagged
+  here from the ledger's roll-up (`DELTA-I5`) rather than lost.
+- **(p) A revoke's timing guarantee is scoped to the pre-pass, not the
+  chapter.** Task 22's per-arm VRAM-eviction discipline (Invariant 8) is
+  explicit in its own code comment that it does not extend past the
+  pre-pass's own return: the **anchor group** rendered immediately
+  afterward can still reload XTTS, and there is no cross-book awareness at
+  all for a **second book's** chapter starting its own pre-pass while a
+  first book's anchor-group render still holds Coqui resident. Neither is a
+  regression — nothing evicted for either case before this wave — but both
+  are the honest boundary of what Task 22 actually closes, not an
+  oversight to be surprised by later.
 
 ## Out of scope
 

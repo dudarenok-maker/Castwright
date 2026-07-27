@@ -94,7 +94,7 @@ E-03 deliberately races a revoke against an in-flight Coqui derive.
 Coalfall fixture with ≥2 speaking characters/chapter, the 9 audio fixtures in §4,
 and (for Section E) a Coqui-capable sidecar plus a non-English (e.g. Russian)
 book fixture that actually routes to Coqui.
-*Plans:* 267, 268, 270 — all `status: active`, Ship notes empty. *Cost:* multi-hour.
+*Plans:* 267, 268, 271 — all `status: active`, Ship notes empty. *Cost:* multi-hour.
 
 ### A2 · Capacity-aware GPU placement (plan 264) · **two distinct debts**
 

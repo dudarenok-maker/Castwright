@@ -10,7 +10,7 @@
 > `C:\Claude\Projects\Audiobook-Generator\.claude\worktrees\feat+fs38-wave3c-xtts`)
 > Plans of record: [`docs/features/267-fs38-wave3-voice-clone.md`](../../267),
 > [`docs/features/268-fs38-wave3b2-resolver.md`](../../268),
-> [`docs/features/270-fs38-wave3c-xtts.md`](../../270)
+> [`docs/features/271-fs38-wave3c-xtts.md`](../../271)
 > Spec: `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md`
 > Umbrella: fs-38 · GitHub [#624](https://github.com/dudarenok-maker/Castwright/issues/624)
 
@@ -39,18 +39,27 @@ all three plans:
 - 267 "Owed — on-box live-GPU acceptance (spec §8)" items (a) and (b).
 - 268 "Owed — on-box live-GPU acceptance" items (a), (b), (c), and the
   Known-limitations list (a)–(c).
-- 270 "Owed on-box acceptance" items E-1 through E-5.
+- 271 "Owed on-box acceptance" items E-1 through E-7.
 
 ### 1.2 What this sheet deliberately does NOT accept
 
-- **3c is shipped, but three of its planned tasks are not — do not test them,
-  and do not log their absence as a defect.** No engine-aware library sample
-  route exists yet (`POST /:voiceUuid/sample` still always auditions the Qwen
-  artifact, even for a Coqui card — [#1887](https://github.com/dudarenok-maker/Castwright/issues/1887));
-  the manual cast-link consent bypass on `cast-link-prior.ts`/
-  `series-reuse-link.ts` is still open ([#1885](https://github.com/dudarenok-maker/Castwright/issues/1885));
-  a failed/timed-out sidecar evict on revoke is still invisible to the
-  caller ([#1886](https://github.com/dudarenok-maker/Castwright/issues/1886)).
+- **3c is shipped, but one of its planned tasks is not — do not test it,
+  and do not log its absence as a defect.** No engine-aware library sample
+  route exists yet: `POST /:voiceUuid/sample` still always auditions the Qwen
+  artifact, even for a Coqui card
+  ([#1887](https://github.com/dudarenok-maker/Castwright/issues/1887)). Two
+  originally-planned tasks that were open when this sheet's Section E was
+  first written have since landed and are **fixed, not open**: the manual
+  override-link consent hole, and the invisible sidecar-evict-on-revoke
+  failure — see §6 KL-q.
+- **Two still-open consent gaps, neither directly exercisable from this
+  sheet's normal UI flows.** A manual cast-link route bypass
+  ([#1885](https://github.com/dudarenok-maker/Castwright/issues/1885), §6
+  KL-p) and a wholesale cast-write route with no consent check
+  ([#1899](https://github.com/dudarenok-maker/Castwright/issues/1899), §6
+  KL-r) can each, in principle, let a cloned voice's identity reach a
+  character that never had consent captured for it. Neither has a normal-UI
+  repro on this sheet — recorded for awareness, not as tests to run here.
 - **Catalogue rebuild (Wave 2)** — deferred, unaffected by this arc.
 - **A first-class progress channel for the resolver pre-pass** — deliberately
   unwired (`reportProgress: undefined`), filed as
@@ -2364,8 +2373,9 @@ it, tick "seen" and move on. **Do not open a defect for these.**
 | **KL-m** | ~~Cloning on **XTTS/Coqui** is nowhere to be found.~~ **Shipped in 3c** — see Section E. | Historical row, kept for context. | — (superseded) | ☐ |
 | **KL-n** | `mint_variant` (emotion-variant `.pt`) still uses a **bare `torch.save`**, not the atomic write. | Explicitly out of scope for 268 Invariant 6 — it is off the resolver's re-derive path. Do not test it here. | — (out of scope) | ☐ |
 | **KL-o** | The library card's Play button auditions the **Qwen** artifact even for a Coqui-only or Coqui-primary card — E-05's caveat. | `POST /:voiceUuid/sample` still hardcodes a Qwen voice name/model key/cache scope (Task 27 not yet implemented). Watch for this in **E-05**. | [#1887](https://github.com/dudarenok-maker/Castwright/issues/1887) | ☐ |
-| **KL-p** | A cloned voice's coqui slot can, in principle, be reachable through a route this sheet does not exercise (the manual cast-link routes), copying a cloned voice onto a character in a book that never had consent captured for it. | `cast-link-prior.ts`/`series-reuse-link.ts` bypass the library consent check `[ADV-M4]` (Task 10a not yet implemented). Not directly exercisable from this sheet's normal flows — recorded here so a tester who notices anomalous consent state on a linked/series book knows this is the known cause, not a new defect. | [#1885](https://github.com/dudarenok-maker/Castwright/issues/1885) | ☐ |
-| **KL-q** | A revoke's response is `200` even when the sidecar-side XTTS latents-cache evict silently failed or timed out. | The revoke route's sidecar-evict call is wrapped in a bare `catch {}` (Task 14a not yet implemented) — `{failed}` tracks only file-unlink failures. Every artifact listing check in this sheet (E-02, E-03, E-09) still verifies the **disk** state directly, which is unaffected by this gap; only the sidecar's own in-memory cache state is unverifiable from this sheet. | [#1886](https://github.com/dudarenok-maker/Castwright/issues/1886) | ☐ |
+| **KL-p** | A cloned voice's coqui slot can, in principle, be reachable through a route this sheet does not exercise (the manual cast-link routes), copying a cloned voice onto a character in a book that never had consent captured for it. | `cast-link-prior.ts`/`series-reuse-link.ts` bypass the library consent check `[ADV-M4]`. Not directly exercisable from this sheet's normal flows — recorded here so a tester who notices anomalous consent state on a linked/series book knows this is the known cause, not a new defect. | [#1885](https://github.com/dudarenok-maker/Castwright/issues/1885) | ☐ |
+| ~~KL-q~~ | ~~A revoke's `200` could mask a silently-failed sidecar evict.~~ **Fixed** — a failed/timed-out sidecar evict now surfaces via `artifactPurgeFailedPaths` instead of a bare swallowed `catch {}`. Watch **E-02/E-03** for the (separately tracked, non-blocking) residual: a **stopped** sidecar currently reports the same signal as a genuine failure, even though it has no in-process cache to leak from. | — (fixed) | ☐ |
+| **KL-r** | A wholesale `PUT /api/books/:bookId {slice:'cast'}` can, in principle, let a client restamp a character's `voiceUuid` and matching engine-slot name directly, with no consent check on this route at all. | `voiceUuid` is not in `PRESERVED_DESIGN_FIELDS`. Not directly exercisable from this sheet's normal UI flows — recorded here for the same reason as KL-p. | [#1899](https://github.com/dudarenok-maker/Castwright/issues/1899) | ☐ |
 
 ---
 

@@ -469,7 +469,7 @@ Still missing after 3b1:
 
 - **No clone extraction on XTTS.** `POST /xtts/clone-voice`
   (`get_conditioning_latents` + low-level `inference`) is 3c — see
-  [270](270-fs38-wave3c-xtts.md).
+  [271](271-fs38-wave3c-xtts.md).
 - **No resolver / lifecycle abstraction** (spec §5, beyond the single
   `applyQwenFallback` exemption 3b1 ships) — that's 3b2.
 - **No stat-before-remove / artifact purge on revoke or delete** (spec §5.6)

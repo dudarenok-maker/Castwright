@@ -244,17 +244,20 @@ history at cut time.
   Coqui (`test_coqui_sanity` previously never fired on a Coqui-only box — a Kokoro-shaped
   weights-path probe never matched Coqui's lazy-fetched weights) plus new `test_xtts_clone_sanity`
   / `test_xtts_designed_sanity` loose-check cases, including a long-sentence case for the
-  `enable_text_splitting` crash class. **Three planned tasks did not land in this delivery**,
-  each tracked as its own follow-up issue rather than silently dropped: an engine-aware library
-  sample route (the card's Play button still always auditions the Qwen artifact —
-  [#1887](https://github.com/dudarenok-maker/Castwright/issues/1887)); a manual cast-link route
-  that bypasses the library consent check
-  ([#1885](https://github.com/dudarenok-maker/Castwright/issues/1885)); and a failed/timed-out
-  sidecar-evict-on-revoke that's currently invisible to the caller
-  ([#1886](https://github.com/dudarenok-maker/Castwright/issues/1886)). Ten further pre-existing
-  or adjacent gaps this wave's review surfaced are catalogued in the plan's Known limitations,
-  each with its own follow-up issue. Plan: `docs/features/270-fs38-wave3c-xtts.md`. Spec:
-  `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md` §2.3/§3.2/§5.3/§5.6.
+  `enable_text_splitting` crash class. **One planned task did not land in this delivery** — an
+  engine-aware library sample route, so the card's Play button still always auditions the Qwen
+  artifact even for a Coqui-primary card
+  ([#1887](https://github.com/dudarenok-maker/Castwright/issues/1887)). Two other consent-adjacent
+  gaps this wave's review surfaced are still open: a manual cast-link route that bypasses the
+  library consent check ([#1885](https://github.com/dudarenok-maker/Castwright/issues/1885)), and
+  a wholesale `PUT /api/books/:bookId {slice:'cast'}` route that lets a client restamp a
+  character's `voiceUuid`/engine-slot pair with no guard at all
+  ([#1899](https://github.com/dudarenok-maker/Castwright/issues/1899), found during this wave's
+  own review). Roughly twenty further pre-existing or adjacent gaps this wave's review surfaced —
+  most still untriaged in the implementation ledger's Minor roll-up — are catalogued in the plan's
+  Known limitations, with follow-up issues for the load-bearing ones. **The whole-branch review
+  gates (GATE 1/2/3) have not run on this branch yet.** Plan: `docs/features/271-fs38-wave3c-xtts.md`.
+  Spec: `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md` §2.3/§3.2/§5.3/§5.6.
   Live-GPU acceptance owed — see the plan's "Owed on-box acceptance" and Section E of
   `docs/testing/fs38-wave3-onbox-acceptance.md`.
 
