@@ -1092,6 +1092,41 @@ describe('resolveClonedVoicesForChapter', () => {
       expect(written.engines.qwen).toEqual({ status: 'ready', baseModel: 'qwen3-0.6b' });
     });
 
+    /* fix wave (Task 18 review, MINOR-5) — `deriveEngineArtifact` defaults
+       `modelId` to `''` when the sidecar's response omits `X-Model-Id` (an
+       older-sidecar derive). The ready-stamp spreads over the EXISTING slot,
+       so an unconditional `modelId: result.modelId` would erase a
+       previously-recorded real modelId with `''`. */
+    it('coqui repairable with an older-sidecar derive response (empty modelId) preserves the PREVIOUSLY recorded modelId, never overwrites it with empty', async () => {
+      const entry = baseEntry({
+        master: MASTER,
+        engines: { xtts: { status: 'stale', coquiVersion: 'v2.0.3', modelId: 'tts_models/multilingual/multi-dataset/xtts_v2' } },
+      });
+      const deps = makeDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => true),
+        currentArtifactVersion: () => '',
+        deriveEngineArtifact: vi.fn(async () => ({
+          previewPcm: Buffer.alloc(0),
+          sampleRate: 24000,
+          coquiVersion: 'v2.0.5',
+          modelId: '', // older-sidecar fallback — see derive-engine-artifact.ts
+        })),
+      });
+
+      await resolveClonedVoicesForChapter(
+        [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
+        deps,
+      );
+
+      const written = deps.writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
+      expect(written.engines.xtts).toEqual({
+        status: 'ready',
+        coquiVersion: 'v2.0.5',
+        modelId: 'tts_models/multilingual/multi-dataset/xtts_v2', // preserved, not wiped to ''
+      });
+    });
+
     it('coqui: a stat()/derive call is keyed on the xtts- storage key, not qwen-', async () => {
       const entry = baseEntry({ master: MASTER, engines: { xtts: { status: 'stale' } } });
       const ptExists = vi.fn(async () => false);

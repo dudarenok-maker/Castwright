@@ -408,14 +408,23 @@ export async function resolveClonedVoicesForChapter(
          "current" oracle to fall back to (see ClassifyInput's doc comment) —
          so it prefers the derive's own reported `coquiVersion`/`modelId`,
          falling back to `currentArtifactVersion` only if the response itself
-         came back empty (the older-sidecar-fallback case). */
+         came back empty (the older-sidecar-fallback case).
+
+         fix wave (Task 18 review, MINOR-5) — `modelId` is only included when
+         the derive response actually reported one. `deriveEngineArtifact`
+         defaults it to `''` when `X-Model-Id` is absent (an older-sidecar
+         response), and this object is spread OVER the existing slot below
+         (`{...fresh.engines[slotKey], ...readySlot}`) — an unconditional
+         `modelId: result.modelId` would overwrite a previously-recorded real
+         modelId with `''` on that older-sidecar path. Omitting the key
+         entirely lets the spread's LHS (the existing slot) survive instead. */
       const readySlot: VoiceLibraryEngineStatus =
         engine === 'qwen'
           ? { status: 'ready', baseModel: currentArtifactVersion }
           : {
               status: 'ready',
               coquiVersion: result.coquiVersion || currentArtifactVersion,
-              modelId: result.modelId,
+              ...(result.modelId ? { modelId: result.modelId } : {}),
             };
       const written = await deps.updateEntry(
         libraryUuid,

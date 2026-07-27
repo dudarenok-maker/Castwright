@@ -55,9 +55,14 @@ import {
 import { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
 import { deriveEngineArtifact } from './derive-engine-artifact.js';
 import { currentQwenBaseModel } from './model-paths.js';
-import type { CloneEngine } from './clone-engines.js';
+import { manifestSlotFor, type CloneEngine } from './clone-engines.js';
 import { decodeAudioToPcm } from './mp3.js';
-import { qwenVoicePtPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from '../workspace/paths.js';
+import {
+  qwenVoicePtPath,
+  qwenVoiceSidecarPath,
+  qwenVoiceWavPath,
+  xttsVoiceLatentsPath,
+} from '../workspace/paths.js';
 import { safeSegment, sanitizeIdSegment, assertContained } from '../util/safe-path.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { readFile, stat } from 'node:fs/promises';
@@ -924,11 +929,34 @@ async function readMasterPcmDefault(
   return { pcm, sampleRate: entry.master.sampleRate, refText: entry.master.transcript };
 }
 
+/* fix wave (Task 18 review, CRITICAL-1) — the coqui artifact lives under
+   `xttsVoicesDir()`, a different directory from `qwenVoicesDir()`
+   (workspace/paths.js), so a storage key of `xtts-<uuid>` must resolve
+   through `xttsVoiceLatentsPath`, not `qwenVoicePtPath` — stat()-ing the
+   wrong directory always misses, which reads as "missing" and drives every
+   healthy coqui-cloned voice through a full GPU derive on every chapter.
+   Dispatched on the storage key's prefix (derived from `manifestSlotFor`,
+   never hand-built — Task 15's local `manifestSlotFor` copy was rejected for
+   exactly this reason) rather than threading `engine` through the
+   `ResolveChapterDeps.ptExists(storageKey)` signature, since this same
+   function also backs the designed-voice resolver's qwen-only `ptExists`. */
+const COQUI_STORAGE_KEY_PREFIX = `${manifestSlotFor('coqui')}-`; // 'xtts-'
+
 /** Shared by both the cloned- and designed-voice resolver deps builders — a
-    real stat() of the cached `.pt` under the given storage key. */
-async function defaultPtExists(storageKey: string): Promise<boolean> {
+    real stat() of the cached artifact under the given storage key, resolved
+    to the right per-engine directory (see the comment above). */
+// fix wave (Task 18 review, CRITICAL-1) — exported so a real-deps test can
+// exercise the per-engine path resolution directly (writing a fixture file
+// at the REAL `xttsVoiceLatentsPath`/`qwenVoicePtPath` locations) rather than
+// only indirectly through `synthesiseChapter`, whose sole production call
+// site still hardcodes `engine: 'qwen'` (Task 20 lifts that literal) and so
+// cannot reach the coqui branch of this function today.
+export async function defaultPtExists(storageKey: string): Promise<boolean> {
+  const path = storageKey.startsWith(COQUI_STORAGE_KEY_PREFIX)
+    ? xttsVoiceLatentsPath(storageKey)
+    : qwenVoicePtPath(storageKey);
   try {
-    await stat(qwenVoicePtPath(storageKey));
+    await stat(path);
     return true;
   } catch {
     return false;
