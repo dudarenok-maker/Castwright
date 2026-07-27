@@ -499,6 +499,13 @@ Observe, in order:
 5. Set `castwright.ffmpeg.minimum` to `null`, repeat step 1 — preflight passes, no warning
    anywhere. (The documented rollback.)
 
+6. **Check the upgrade advice actually works before trusting it.** The Linux copy deliberately
+   does *not* name a one-command fix for 22.04, because none exists in-repo (the `ffmpeg` snap
+   is 4.3.1, older than 22.04's own 4.4.2 — see plan 269 "Known limitations"). On the box,
+   confirm that whatever route you take to ≥ 6.0 actually changes what `ffmpeg -version`
+   reports **and** clears the wizard card. A route that installs a newer build but leaves it
+   shadowed on `PATH` is the failure this hint exists to pre-empt.
+
 Also owed, and **not** coverable by the above: the Pinokio `"ffmpeg>=6"` constraint on a
 real conda env, install **and** update. Group with E1, which already owns the Pinokio box.
 Expect the documented one-update lag — a user updating *from* a pre-ops-35 release runs

@@ -178,6 +178,23 @@ Requires a box where ffmpeg can be swapped — see the on-box register row.
 
 ## Known limitations
 
+- **Do not recommend the `ffmpeg` snap.** Its stable channel is **4.3.1**,
+  published 2020-11-08 (verified against `api.snapcraft.io/v2/snaps/info/ffmpeg`)
+  — *older* than Ubuntu 22.04's own archive build of 4.4.2. An earlier draft of
+  this work told below-floor users to `apt remove ffmpeg && snap install ffmpeg`,
+  which would have destroyed a working install to **downgrade** them, leaving the
+  warning up against a worse binary. Two further reasons it is the wrong target
+  even if it were current: both candidate snaps are strictly confined, and
+  `WORKSPACE_ROOT` defaults relative to the install dir
+  (`server/src/workspace/paths.ts:39`), so a deployer install under `/opt` or an
+  external drive would hit `EACCES` on every encode — turning a cosmetic warning
+  into a hard generation failure. The sibling `ffmpeg-2404` snap is 7.1.5 but
+  exposes `/snap/bin/ffmpeg-2404`, not `ffmpeg`, so the PATH probe would not
+  find it.
+- **Ubuntu 22.04 has no supported in-repo route to the floor.** The docs say so
+  plainly rather than inventing one; the honest options are an OS upgrade or a
+  user-supplied build placed first on `PATH`.
+
 - `pinokio-scripts/lib/ffmpeg-pin.test.js` compares **majors only**, so a future
   floor of `"7.1"` would be satisfied by `"ffmpeg>=7"`, which conda can resolve
   to 7.0. Fine while the floor is `x.0`; tighten the guard if a non-zero minor

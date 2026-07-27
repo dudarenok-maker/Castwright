@@ -96,17 +96,21 @@ export function StepFfmpeg({ readiness, onRefetch }: Props) {
 
             <div className="space-y-1">
               <p className="text-xs font-semibold text-ink/60 uppercase tracking-wide">Linux</p>
-              {/* Remove the apt build first: on Ubuntu, /usr/bin precedes
-                  /snap/bin, so installing the snap alongside an existing apt
-                  ffmpeg leaves the old one still resolving. */}
+              {/* Deliberately NOT the `ffmpeg` snap: its stable channel is
+                  4.3.1 (2020), older than Ubuntu 22.04's own 4.4.2, so it
+                  would downgrade the very users this card is shown to. */}
               <pre className="text-xs bg-ink/5 text-ink rounded-lg p-3 overflow-x-auto leading-relaxed">
-                {'sudo apt remove ffmpeg\nsudo snap install ffmpeg'}
+                {'sudo apt install ffmpeg'}
               </pre>
+              <p className="text-xs text-ink/50">
+                Ubuntu 24.04+ and Debian 13+ ship a supported build. Ubuntu 22.04 tops out
+                at 4.4 — you’ll need to upgrade the OS, or install a newer ffmpeg yourself.
+              </p>
             </div>
           </div>
 
           <p className="text-xs text-amber-900/70">
-            Still showing the old version after upgrading? Run{' '}
+            Still showing the old version afterwards? Run{' '}
             <code className="font-mono">ffmpeg -version</code> — if it hasn’t changed, an older
             copy earlier on your PATH is shadowing the new one.
           </p>

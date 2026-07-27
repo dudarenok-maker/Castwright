@@ -100,11 +100,27 @@ describe('StepFfmpeg', () => {
       expect(screen.getByText(/ffmpeg 4\.4 is older than Castwright supports \(6\.0\+\)/i)).toBeInTheDocument();
     });
 
-    it('offers UPGRADE commands, not install commands', () => {
+    it('offers upgrade commands for an already-installed ffmpeg', () => {
       render(<StepFfmpeg readiness={makeReadiness('outdated')} onRefetch={vi.fn()} />);
       expect(screen.getByText(/winget upgrade Gyan\.FFmpeg/i)).toBeInTheDocument();
       expect(screen.getByText(/brew upgrade ffmpeg/i)).toBeInTheDocument();
+      // The missing card's Windows/macOS *install* commands must not appear here.
       expect(screen.queryByText(/winget install ffmpeg/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/brew install ffmpeg/i)).not.toBeInTheDocument();
+    });
+
+    /* The `ffmpeg` snap's stable channel is 4.3.1 (2020) — OLDER than Ubuntu
+       22.04's own 4.4.2 — so recommending it would downgrade the exact users
+       this card is shown to. An earlier draft did; this pins that it doesn't. */
+    it('never recommends the ffmpeg snap, which is older than the build it would replace', () => {
+      render(<StepFfmpeg readiness={makeReadiness('outdated')} onRefetch={vi.fn()} />);
+      expect(screen.queryByText(/snap install/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/apt remove/i)).not.toBeInTheDocument();
+    });
+
+    it('says plainly that Ubuntu 22.04 has no in-repo route to the floor', () => {
+      render(<StepFfmpeg readiness={makeReadiness('outdated')} onRefetch={vi.fn()} />);
+      expect(screen.getByText(/22\.04 tops out at 4\.4/i)).toBeInTheDocument();
     });
 
     it('links the documentation so the floor can be verified', () => {
