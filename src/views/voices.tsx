@@ -266,14 +266,27 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     () => [...new Set(library.map((v) => v.languageCode).filter(Boolean))] as string[],
     [library],
   );
+  /* fs-41/fs-50 seam 4b follow-up (#1834) — the chip row above is the only
+     control that can clear `languageFilter`, and it renders only while the
+     library still carries the codes it offers. A mid-session library change
+     (a book switch through the book-scoped mount, an engine switch, a
+     re-hydrate that drops the Russian voices) can pull that row out from
+     under an active filter, leaving it narrowing the rollup to nothing with
+     no way to clear it. Derive the effective filter during render rather
+     than correcting `languageFilter` in an effect, so the empty rollup is
+     never painted. Every read below goes through this, not `languageFilter`;
+     `setLanguageFilter` stays the sole state writer. Same shape and same
+     treatment as `activeSection` for #1802. */
+  const activeLanguageFilter =
+    languageFilter !== null && languages.includes(languageFilter) ? languageFilter : null;
   /* fs-41/fs-50 seam 4b — language-filtered preset library fed into
      buildFamilies; mirrors how variantFilter narrows filteredQwenLibrary. */
   const languageFilteredPresetLibrary = useMemo(
     () =>
-      languageFilter === null
+      activeLanguageFilter === null
         ? presetLibrary
-        : presetLibrary.filter((v) => v.languageCode === languageFilter),
-    [presetLibrary, languageFilter],
+        : presetLibrary.filter((v) => v.languageCode === activeLanguageFilter),
+    [presetLibrary, activeLanguageFilter],
   );
   const families = useMemo(
     () => buildFamilies(languageFilteredPresetLibrary, tab),
@@ -319,13 +332,19 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   }, [qwenLibrary, currentBookId, characters, globalCastCache, openBookSentences, sentencesByBookId]);
   const filteredQwenLibrary = useMemo(() => {
     const langFiltered =
-      languageFilter === null
+      activeLanguageFilter === null
         ? qwenLibrary
-        : qwenLibrary.filter((v) => v.languageCode === languageFilter);
+        : qwenLibrary.filter((v) => v.languageCode === activeLanguageFilter);
     if (variantFilter === 'all') return langFiltered;
     const map = variantFilter === 'has' ? variantCountByVoiceId : missingVariantCountByVoiceId;
     return langFiltered.filter((v) => (map.get(v.familyKey ?? v.id) ?? 0) > 0);
-  }, [qwenLibrary, languageFilter, variantFilter, variantCountByVoiceId, missingVariantCountByVoiceId]);
+  }, [
+    qwenLibrary,
+    activeLanguageFilter,
+    variantFilter,
+    variantCountByVoiceId,
+    missingVariantCountByVoiceId,
+  ]);
   const qwenGroups = useMemo(
     () => buildQwenStatusGroups(filteredQwenLibrary, tab),
     [filteredQwenLibrary, tab],
@@ -1233,7 +1252,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                   de: 'German',
                 };
                 const label = code === null ? 'All' : (LANGUAGE_LABELS[code] ?? code);
-                const active = languageFilter === code;
+                const active = activeLanguageFilter === code;
                 return (
                   <button
                     key={code ?? '__all__'}

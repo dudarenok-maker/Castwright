@@ -155,6 +155,18 @@ history at cut time.
   `mockCloneVoice` mirrors the same semantics so mock/e2e mode stops reproducing the bug. Adds
   Invariant 12 to `docs/features/267-fs38-wave3-voice-clone.md`. Closes the run sheet's KL-k
   finding.
+- **`#/voices`' language filter can no longer strand the rollup** (#1834). `languageFilter` was
+  raw local state, but the chip row that clears it renders only while the library still carries
+  the codes it offers — and it lives inside the rollup's non-empty branch. So a mid-session
+  library change that drops the filtered language (a book switch through the book-scoped mount,
+  an engine switch, a re-hydrate) left the filter matching nothing, collapsing the view to the
+  "No voices yet" empty state with the chips gone: a filter still applied and no control left to
+  clear it. The effective filter is now derived during render
+  (`languages.includes(languageFilter) ? languageFilter : null`) so the empty rollup is never
+  painted; `setLanguageFilter` stays the sole state writer. Same shape and same treatment as
+  `activeSection` for #1802 (that derivation is gone with the flag in #1833; this one is not
+  gate-dependent). Two regression cases in `voices.test.tsx` cover the row unmounting entirely
+  and the row surviving with the selected code dropped (the "All" chip reads pressed again).
 
 ---
 
