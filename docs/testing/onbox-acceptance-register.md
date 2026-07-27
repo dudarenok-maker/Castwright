@@ -392,32 +392,48 @@ in `pinokio-scripts/start.js`.
 **What genuinely remains:** **macOS has had zero on-box exercise on any axis**
 (install, venv-from-conda, API spelling are all Windows-only confirmations); plus two
 Windows items never explicitly re-confirmed — **native Stop actually reaping the
-sidecar**, and **Pinokio's bundled Node ≥ 22.22**.
+sidecar**, and **confirming the pinned Node is the one actually used**.
 
-> **Escalated 2026-07-27 by [#1859](https://github.com/dudarenok-maker/Castwright/issues/1859).**
-> That Node threshold was **20.19** until react-router 8 raised the product floor to
-> **22.22**, so this item went from "probably fine, never checked" to a live risk. It
-> now matters more, for two compounding reasons:
+> **Escalated 2026-07-27 by [#1859](https://github.com/dudarenok-maker/Castwright/issues/1859);
+> the pin landed in a follow-up chore.** The Node question used to be "which Node does
+> Pinokio's bundled kernel ship, and is it ≥ 22.22" — that's now moot: `install.js`
+> step 1 conda-installs `nodejs=24` (matching `.nvmrc`/CI), and `update.js` re-asserts
+> the same pin so a pre-existing install picks it up on its next Update rather than
+> staying on whatever Node it started with. `pinokio-scripts/lib/node-pin.test.js`
+> pins both the pin itself and that it satisfies `package.json`'s `engines.node` floor
+> in code, so a future floor raise without a matching pin bump fails that test — this
+> register row is now about what a test can't reach: the real Pinokio runtime.
 >
-> 1. `pinokio-scripts/install.js` step 1 conda-installs `ffmpeg mkcert` only — **never
->    `nodejs`** — so Castwright runs on whatever Node the Pinokio *kernel* ships. That
->    file has carried an unimplemented TODO on exactly this point since it was written.
-> 2. **`engines.node` does not enforce anything.** npm emits `EBADENGINE` and exits 0
->    without `engine-strict`, and this repo sets no `.npmrc` (see
->    `docs/features/164-deps-ci-hygiene.md:31`). So a too-old Pinokio Node does not
->    fail the install — it installs cleanly and fails later, somewhere unrelated.
+> **What to observe, concretely:** on a machine with Pinokio installed, run a fresh
+> Install, then from a `shell.run` step (or the Pinokio terminal, once the conda env is
+> active) run `node --version` and confirm it reports **24.x**, not whatever Pinokio's
+> kernel bundles — conda envs prepend to PATH, so the pinned Node should shadow the
+> bundled one, but that shadowing is unverified outside this repo's reasoning. Then
+> confirm Install → Start still completes end to end (this pin adds a package to the
+> conda env; a bad channel/solve would surface here, not in any local test).
 >
-> **What to observe, concretely:** on a machine with Pinokio installed, run
-> `node --version` using Pinokio's own bundled node (not the system one — resolve it
-> the way `shell.run` does, from the kernel's bundled runtime). Record the exact
-> version and the Pinokio version it came with, on **both** Windows and macOS, since
-> the kernels may differ. If it is below 22.22, add `nodejs` to `install.js` step 1's
-> conda install and re-run a full Install → Start pass.
+> **The mid-life-upgrade path, and the lag you should EXPECT rather than report as a
+> bug.** Pinokio loads `update.js` from the release the user currently has checked out
+> and iterates the `run[]` it loaded; `resolve-release.js` `git checkout`s the new tag
+> *inside* that run, replacing the file on disk without affecting the loaded array. So
+> updating **from a pre-pin release runs the OLD `update.js`** — no pin step — and does
+> that update's `npm ci`/build on Pinokio's bundled Node. **This is expected.** The pin
+> takes effect from the *next* Update.
+>
+> Concretely: take an install from a pre-pin release, Update once, and check
+> `node --version` — reporting the **bundled** version here is the correct result, not a
+> failure. Update a second time and it should report **24.x**. A tester who sees the
+> first result and files "the pin doesn't work" has found the documented behaviour, not
+> a defect. What genuinely wants confirming is that the second Update converges, and
+> that `node_modules` still works across that Node-major swap (native-module ABI is the
+> nominal risk, though every native artifact in both trees is a prebuilt N-API binary,
+> and `npm ci` deletes and rebuilds `node_modules` anyway — so this should self-heal;
+> unproven on-box).
 >
 > Criteria live in `docs/features/218-pinokio-installer.md` open-verification item 2
-> (threshold updated in the same PR). **The release notes for 1.15.0 deliberately do
-> not promise Pinokio users this is handled** — an earlier draft did, and it was
-> unsupported.
+> (updated in the same PR). **The release notes for 1.15.0 deliberately do not promise
+> Pinokio users this is handled** — an earlier draft did, and it was unsupported; the
+> current entry describes the pin without claiming on-box confirmation.
 
 *Needs* a clean macOS machine with Pinokio, plus a short Windows follow-up. Budget
 20–40 min for the macOS install alone.
