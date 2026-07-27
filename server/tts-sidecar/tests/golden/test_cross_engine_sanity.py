@@ -6,11 +6,19 @@ checks rather than Kokoro's exact length baseline: correct wire format
 voice substitution. This catches the "engine returns garbage / silence / wrong
 format" regression class across all three engines without a brittle baseline.
 
-Both are gated behind explicit opt-in env flags so a casual run never triggers
+All are gated behind explicit opt-in env flags so a casual run never triggers
 a multi-GB model download:
   - GOLDEN_COQUI=1                  → run the Coqui XTTS check (weights lazy-load)
   - GOLDEN_QWEN_VOICE=<voiceId>     → run the Qwen check against an already-
                                       designed voice (a .pt under voices/qwen/)
+  - GOLDEN_XTTS_CLONE=<voiceUuid>   → run the XTTS cloned-voice check against an
+                                      already-cloned voice (a .pt under
+                                      voices/xtts/, fs-38 Wave 3c)
+  - GOLDEN_XTTS_DESIGNED=<voiceUuid> → run the XTTS designed-voice check against
+                                      an XTTS clone derived from a designed
+                                      voice's synthetic Qwen calibration clip
+                                      (same voices/xtts/ .pt shape, different
+                                      provenance — see D-B, wave3c plan §2.3)
 
 Marked `@pytest.mark.golden` (excluded from the fast `test:sidecar` tier)."""
 from __future__ import annotations
@@ -32,14 +40,31 @@ from tests.golden.compare import measure_pcm, rms  # noqa: E402
 pytestmark = pytest.mark.golden
 
 SANITY_TEXT = "The quiet harbour town woke slowly to a cold morning."
+# 318 chars — comfortably over XTTS's English `char_limits` split threshold of
+# 250 (TTS/tts/layers/xtts/tokenizer.py). With `enable_text_splitting=False`
+# (the low-level `Xtts.inference()` default, xtts.py:448-462) a text this long
+# can trip `assert text_tokens.shape[-1] < gpt_max_text_tokens` and hard-crash
+# — exactly the bug `_infer_from_latents` fixed by passing
+# `enable_text_splitting=True` explicitly. A short SANITY_TEXT render alone
+# would never exercise that path.
+LONG_SANITY_TEXT = (
+    "The harbourmaster read the manifest twice, checked the tide tables against "
+    "the almanac pinned above his desk, counted the crates stacked along the "
+    "pier a second time to be certain, and only then signed the release form "
+    "that let the freighter slip its lines and head out past the breakwater "
+    "into the grey morning swell."
+)
 MIN_RMS = 0.01
 # Generous plausible-duration band (seconds) for one short clause — only a
 # truncated (near-zero) or runaway (tens of seconds) render trips it.
 MIN_DURATION_SEC = 0.4
 MAX_DURATION_SEC = 30.0
+# Wider band for LONG_SANITY_TEXT — several clauses, so a longer plausible
+# render is expected; still tight enough to catch a truncated or runaway one.
+MAX_DURATION_SEC_LONG = 60.0
 
 
-def _assert_sane(res, requested_voice: str) -> None:
+def _assert_sane(res, requested_voice: str, *, max_duration: float = MAX_DURATION_SEC) -> None:
     assert res.sample_rate == 24000, f"sample_rate {res.sample_rate} != 24000"
     # 16-bit mono → even byte length.
     assert len(res.pcm) % 2 == 0, "PCM length not a whole number of int16 samples"
@@ -48,7 +73,7 @@ def _assert_sane(res, requested_voice: str) -> None:
     )
     assert rms(res.pcm) >= MIN_RMS, "near-silent render"
     dur = measure_pcm(res.pcm, res.sample_rate)["duration_sec"]
-    assert MIN_DURATION_SEC <= dur <= MAX_DURATION_SEC, f"implausible duration {dur:.2f}s"
+    assert MIN_DURATION_SEC <= dur <= max_duration, f"implausible duration {dur:.2f}s"
 
 
 def test_coqui_sanity():
@@ -75,3 +100,54 @@ def test_qwen_sanity():
     except Exception as e:  # pragma: no cover - environment-dependent
         pytest.skip(f"Qwen engine/voice unavailable: {e}")
     _assert_sane(res, voice)
+
+
+def test_xtts_clone_sanity():
+    """XTTS cloned-voice check (fs-38 Wave 3c) — mirrors `test_qwen_sanity`'s
+    shape against an already-cloned voice, plus a long-sentence case that
+    specifically exercises the `enable_text_splitting` path (see
+    `LONG_SANITY_TEXT`'s docstring)."""
+    voice = os.environ.get("GOLDEN_XTTS_CLONE")
+    if not voice:
+        pytest.skip(
+            "Set GOLDEN_XTTS_CLONE=<voiceUuid> (an already-cloned voice under "
+            "voices/xtts/) to run the XTTS clone sanity check."
+        )
+    engine = main.CoquiEngine()
+    requested_voice = f"{engine.XTTS_KEY_PREFIX}{voice}"
+    try:
+        res = engine.synthesize("xtts_v2", requested_voice, SANITY_TEXT)
+        long_res = engine.synthesize("xtts_v2", requested_voice, LONG_SANITY_TEXT)
+    except Exception as e:  # pragma: no cover - environment-dependent
+        pytest.skip(f"Coqui engine/voice unavailable: {e}")
+    _assert_sane(res, requested_voice)
+    _assert_sane(long_res, requested_voice, max_duration=MAX_DURATION_SEC_LONG)
+
+
+def test_xtts_designed_sanity():
+    """XTTS designed-voice check (fs-38 Wave 3c, D-B) — same loose checks as
+    `test_xtts_clone_sanity`, against a voice cloned from a DESIGNED voice's
+    synthetic Qwen calibration clip rather than a real recorded reference.
+    Coqui has no native "designed" concept (CoquiEngine's own docstring), so
+    on disk this is the same `voices/xtts/<uuid>.pt` shape as any other
+    clone — only its provenance differs, set up ahead of time via the
+    Node-side design→clone flow (D-B). §2.3 of the wave3c plan called
+    synthetic-clip→latents "quality-unvalidated" as a deferral rationale;
+    this check converts that into a delivery gate. NOTE: format-level
+    assertions below can only prove the render isn't broken, not that it
+    sounds right — the listening test that actually settles quality belongs
+    on the on-box acceptance sheet."""
+    voice = os.environ.get("GOLDEN_XTTS_DESIGNED")
+    if not voice:
+        pytest.skip(
+            "Set GOLDEN_XTTS_DESIGNED=<voiceUuid> (a voice cloned from a designed "
+            "voice's synthetic calibration clip, under voices/xtts/) to run the "
+            "XTTS designed-voice sanity check."
+        )
+    engine = main.CoquiEngine()
+    requested_voice = f"{engine.XTTS_KEY_PREFIX}{voice}"
+    try:
+        res = engine.synthesize("xtts_v2", requested_voice, SANITY_TEXT)
+    except Exception as e:  # pragma: no cover - environment-dependent
+        pytest.skip(f"Coqui engine/voice unavailable: {e}")
+    _assert_sane(res, requested_voice)
