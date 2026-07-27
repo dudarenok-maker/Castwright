@@ -379,7 +379,13 @@ describe('synthesiseChapter — mixed-phase evict failure isolation (#1893)', ()
        it did not cost the user the chapter. */
     expect(coqui.calls.length).toBeGreaterThan(0);
     expect(result.segments.filter((s) => s.kind !== 'title')).toHaveLength(3);
-    expect(warn).toHaveBeenCalled();
+    /* Pin the message, not just "something warned" — synthesiseChapter has
+       four other console.warn sites, and this exact string is what register
+       row A19 tells the operator to grep the server log for. */
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('evict failed'),
+      expect.anything(),
+    );
   });
 
   it('renders the chapter anyway when the /unload fetch rejects (dead sidecar socket)', async () => {
@@ -391,9 +397,19 @@ describe('synthesiseChapter — mixed-phase evict failure isolation (#1893)', ()
 
     expect(coqui.calls.length).toBeGreaterThan(0);
     expect(result.segments.filter((s) => s.kind !== 'title')).toHaveLength(3);
-    expect(warn).toHaveBeenCalled();
+    /* Pin the message, not just "something warned" — synthesiseChapter has
+       four other console.warn sites, and this exact string is what register
+       row A19 tells the operator to grep the server log for. */
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('evict failed'),
+      expect.anything(),
+    );
   });
 
+  /* Both abort tests assert on `.name`, not the message: `.name ===
+     'AbortError'` is the property routes/generation.ts's pause detector keys
+     on to tell "the user paused" from "this chapter failed". A message-only
+     assertion would stay green even if the rethrow lost that identity. */
   it('does NOT swallow an abort — a paused/cancelled run still stops at the evict', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(global, 'fetch').mockRejectedValue(
@@ -403,7 +419,25 @@ describe('synthesiseChapter — mixed-phase evict failure isolation (#1893)', ()
     /* Guards the risk this fix introduces rather than the bug it fixes: the
        new catch must stay narrow enough that a cancel isn't downgraded into
        a warning and a chapter that keeps rendering. */
-    await expect(mixedChapter().promise).rejects.toThrow(/aborted/i);
+    await expect(mixedChapter().promise).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('rethrows a live abort AS an AbortError even when the fetch died some other way', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ctrl = new AbortController();
+    /* The race that makes this more than a duplicate of the test above: the
+       user pauses while the sidecar socket is dying, so the rejection that
+       surfaces is a plain TypeError and only `signal.aborted` reveals the
+       cancel. Rethrowing that TypeError verbatim would read as a real
+       chapter failure upstream. */
+    vi.spyOn(global, 'fetch').mockImplementation(async () => {
+      ctrl.abort();
+      throw new TypeError('fetch failed');
+    });
+
+    await expect(mixedChapter({ signal: ctrl.signal }).promise).rejects.toMatchObject({
+      name: 'AbortError',
+    });
   });
 
   it('bounds a hanging /unload instead of stalling the chapter forever', async () => {
@@ -419,6 +453,12 @@ describe('synthesiseChapter — mixed-phase evict failure isolation (#1893)', ()
 
     expect(coqui.calls.length).toBeGreaterThan(0);
     expect(result.segments.filter((s) => s.kind !== 'title')).toHaveLength(3);
-    expect(warn).toHaveBeenCalled();
+    /* Pin the message, not just "something warned" — synthesiseChapter has
+       four other console.warn sites, and this exact string is what register
+       row A19 tells the operator to grep the server log for. */
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('evict failed'),
+      expect.anything(),
+    );
   });
 });

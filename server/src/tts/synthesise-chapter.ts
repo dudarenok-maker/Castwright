@@ -650,7 +650,11 @@ export interface SynthesiseChapterOpts {
       synth/batch call so a runaway/never-returning call fails the chapter
       instead of hanging the queue. Defaults to `SYNTH_CALL_TIMEOUT_MS`
       (env `SIDECAR_CALL_TIMEOUT_MS`, default 600 000). `<= 0` disables.
-      An explicit small value lets tests drive the timeout deterministically. */
+      An explicit small value lets tests drive the timeout deterministically.
+      Since #1893 it ALSO bounds the mixed-phase Qwen `/unload` — not a synth
+      call, and one whose timeout is caught and warned rather than failing
+      the chapter (see `synthGroupsSerialized`). `<= 0` re-opens the
+      unbounded wait there. */
   callTimeoutMs?: number;
   /** How many Qwen sentences to pack per batched synth call (plan 112).
       Defaults to the module-level `QWEN_BATCH_SIZE` (env `QWEN_BATCH_SIZE`,
@@ -1947,24 +1951,48 @@ export async function synthesiseChapter(
        try/catch between here and `synthesiseChapter`'s head — so a transient
        sidecar hiccup killed the chapter. Failing soft costs little: the
        sidecar's `/unload` is idempotent and 200s even when nothing was
-       resident (main.py's unload_model), so a failure here means an unhealthy
-       sidecar, which the Coqui phase below surfaces with its own, more
-       specific error anyway. Fail-soft policy + abort-rethrow mirror
-       clone-voice-resolver.ts's best-effort self-heal.
+       resident (main.py's unload_model), so a failure here usually means an
+       unhealthy sidecar, which the Coqui phase below then surfaces with its
+       own error. NOT always, though — a wrong/proxied SIDECAR_URL can 5xx
+       `/unload` while the synth path is perfectly healthy, in which case
+       Coqui really does load on top of a resident Qwen and an 8 GB card can
+       OOM. That residue is what on-box register row A19 exists to settle;
+       if it shows a recycle storm rather than a clean render or a specific
+       sidecar error, this policy is the thing to revisit. Fail-soft +
+       abort-rethrow mirror clone-voice-resolver.ts's best-effort self-heal.
 
        Bounded by the same per-call ceiling the synth calls use rather than a
        tighter one: this `/unload` can legitimately queue behind ANOTHER
        book's in-flight synth on the sidecar's `_synth_lock` (see this
        function's header — cross-book serialization lives in the sidecar
        now), so waiting is often correct and only waiting FOREVER is not. An
-       unbounded fetch here stalled the chapter with no way to cancel it. */
+       unbounded fetch here stalled the chapter with no way to cancel it.
+       Two consequences of reusing that ceiling, both fine at defaults but
+       worth knowing: `callTimeoutMs: 0` disables it and re-opens the
+       unbounded wait; and the evict is not inside `withHeartbeat`, so a
+       full-ceiling timeout burns 600s of the 720s CHAPTER_NO_PROGRESS_MS
+       budget (generation.ts sizes that default deliberately above this
+       ceiling) — raising SIDECAR_CALL_TIMEOUT_MS or lowering the watchdog
+       makes the stall guard fire before this fail-soft path is reached. */
     try {
       await withCallTimeout('qwen-evict-for-coqui', (sig) => evictQwenForCoquiPhase(sig));
     } catch (err) {
       /* An abort is the run being paused/cancelled — stop, don't swallow it
-         as an ordinary best-effort failure (clone-voice-resolver.ts's M-1). */
+         as an ordinary best-effort failure (clone-voice-resolver.ts's M-1).
+         Rethrow something that still NAMES itself an abort, rather than the
+         raw rejection: `signal.aborted` catches a pause that raced a plain
+         socket-death rejection, but rethrowing that TypeError verbatim would
+         read as a real chapter failure at routes/generation.ts's
+         `err.name === 'AbortError'` pause detector — the same trap
+         clone-voice-resolver.ts's `abortRejection` (review I-1) exists to
+         avoid. Prefer the signal's own reason, which is a genuine AbortError
+         DOMException for the bare `controller.abort()` every caller uses. */
       const name = (err as { name?: string } | null)?.name;
-      if (name === 'AbortError' || signal?.aborted) throw err;
+      if (name === 'AbortError' || signal?.aborted) {
+        throw name === 'AbortError'
+          ? err
+          : (signal?.reason ?? Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+      }
       console.warn(
         `[synthesise-chapter] fs-60 Qwen→Coqui evict failed; continuing into the Coqui phase ` +
           `without it (Coqui may load alongside a still-resident Qwen):`,

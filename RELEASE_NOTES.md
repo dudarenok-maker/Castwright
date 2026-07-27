@@ -75,12 +75,12 @@
 - The Voices list stops telling you it's empty when it's simply filtered. Narrow it to Russian and then look at "This book", and if that book has no Russian voices the list used to go blank and invite you to go and set up a book — on a library that was perfectly full — while quietly taking the language buttons away with it. Now it says plainly that nothing matches, tells you which filter is doing it, and leaves every button you'd need to undo it right there on screen. The "Variants" filter got the same treatment, and it needed it more: switching your speech engine away from Qwen used to make its buttons vanish with the filter still on, emptying the whole list with no way back short of reloading the page.
 - When you link a character to the same person from an earlier book, they no longer arrive carrying a voice engine this book can't use. Linking copies the earlier character's engine across, and if that book was in another language the engine came too — invisibly. The picker showed "Default", so there was nothing to see and nothing to correct, but saving the character quietly wrote the old engine back. The picker and what gets saved now agree. Your books always rendered correctly regardless — Castwright picks the right engine at recording time no matter what the character says. (Characters picked up automatically from earlier books in a series were never affected: Castwright already refuses to carry a voice across a language boundary there.)
 - A chapter that uses two different voice engines no longer gives up over a piece of housekeeping.
-  When a chapter needs both Qwen and the engine we use for other languages, Castwright records them
-  in turn and puts the first one away in between, so a smaller graphics card only ever has one of
-  them loaded. If putting it away didn't work, the whole chapter stopped there — even though the
-  recording itself was fine. Now it says so quietly in the log and carries on with the chapter. It
-  also no longer waits forever if the speech engine is busy with another book, and stops promptly
-  when you pause.
+  When one chapter needs both of your speech engines, Castwright records them in turn and puts the
+  first one away in between, so a smaller graphics card only ever holds one at a time. If putting
+  it away didn't work, the whole chapter stopped there — even though the recording itself was
+  fine. Now it notes the problem in the log and carries on with the chapter. It also no longer
+  waits forever when the speech engine is busy with another book, and it stops promptly when you
+  pause.
 - **Security housekeeping on the parts you don't see.** We've taken the latest patched versions of the
   outside code Castwright is built on — including the component that opens your EPUB files, where a
   malformed book could previously have made Castwright try to swallow far more memory than it should.

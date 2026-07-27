@@ -303,9 +303,14 @@ judgement is wrong is a sidecar OOM, which is worse than the abort it replaced.
 - Also confirm pausing the run **during** a stalled evict stops it promptly rather
   than waiting out the 10-minute ceiling — the abort is forwarded to the fetch now.
 
+**Run this with A5** — same card, same Russian-book-with-an-undesigned-character setup,
+and A5 already owes the evict-and-reload sequencing this row stresses. Doing them in one
+sitting costs barely more than either alone.
+
 *Needs:* the 8 GB card only, a non-English book with a mixed cast, and a way to make
-`/unload` fail. *Criteria:* PR for #1893; the fail-soft rationale is in the comment at
-the call site in `server/src/tts/synthesise-chapter.ts`. *Cost:* short.
+`/unload` fail. *Criteria:* #1898; the fail-soft rationale is in the comment at the call
+site in `server/src/tts/synthesise-chapter.ts`, and plan 249's accepted limitation #4
+records what it weakened. *Cost:* short.
 
 ---
 

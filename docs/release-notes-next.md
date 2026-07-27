@@ -286,10 +286,16 @@ history at cut time.
   `clone-voice-resolver.ts`'s self-heal policy — an abort still propagates, so a paused or
   cancelled run stops here as before. The call is also bounded by the chapter's existing
   `callTimeoutMs` and now forwards the abort signal; previously it could queue behind another
-  book's in-flight synth on the sidecar's `_synth_lock` and stall forever, uncancellable. Failing
-  soft is cheap because the sidecar's `/unload` is idempotent and returns 200 even when nothing was
-  resident, so a failure means an unhealthy sidecar — which the Coqui phase then surfaces with its
-  own, more specific error. Four regression tests in
+  book's in-flight synth on the sidecar's `_synth_lock` and stall forever, uncancellable. An abort
+  is rethrown *as* an `AbortError` rather than verbatim, so a pause that raced a socket-death
+  rejection can't read as a chapter failure at `routes/generation.ts`'s pause detector (the trap
+  `clone-voice-resolver.ts`'s `abortRejection` already exists to avoid). Failing soft is usually
+  cheap — the sidecar's `/unload` is idempotent and returns 200 even when nothing was resident, so
+  a failure normally means an unhealthy sidecar, which the Coqui phase then surfaces itself — but
+  not always: a wrong/proxied `SIDECAR_URL` can 5xx `/unload` while the synth path is healthy, and
+  then Coqui really does load onto a resident Qwen. That residue is deliberately accepted, recorded
+  as plan 249's accepted limitation #4 (it weakens that plan's invariant #4 from a guarantee to a
+  success-path property) and owed on-box as register row A19. Five regression tests in
   `server/src/tts/synthesise-chapter-coqui-fallback.test.ts`; the sibling residency asymmetry
   (nothing ever evicts Coqui after the last Coqui chapter) stays open as #1894.
 
