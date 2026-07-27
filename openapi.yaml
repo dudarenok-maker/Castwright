@@ -3297,6 +3297,39 @@ paths:
                       artifactPurgeFailedPaths: { type: array, items: { type: string } }
         '404': { description: No such entry / disabled }
 
+  /api/setup/readiness:
+    get:
+      summary: First-run readiness probe
+      operationId: getSetupReadiness
+      responses:
+        '200':
+          description: Readiness snapshot across sidecar, ffmpeg, voice engine and analyzer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SetupReadiness' }
+
+  /api/setup/complete:
+    post:
+      summary: Mark the setup wizard complete
+      operationId: completeSetup
+      responses:
+        '200':
+          description: The timestamp written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SetupCompleteResponse' }
+
+  /api/setup/smoke:
+    post:
+      summary: End-to-end synth smoke check
+      operationId: runSetupSmoke
+      responses:
+        '200':
+          description: Result. `ok:false` carries the failing stage — never a 5xx.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SetupSmokeResponse' }
+
 # ---------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------
@@ -6804,3 +6837,106 @@ components:
             bespokeCount: { type: integer }
             designedCount: { type: integer }
             characters: { type: array, items: { $ref: '#/components/schemas/CarriedCharacter' } }
+
+    # --- Setup readiness (fe-57 / #1883) -----------------------------
+    BlockerCause:
+      type: string
+      description: |
+        Terminal reason a setup blocker is in its current state. `pass` is the
+        shared healthy value. Mirrors BlockerCause in
+        server/src/routes/setup-readiness.ts — keep them in lockstep.
+      enum: [python-missing, venv-missing, venv-broken, supervisor-exhausted,
+             supervisor-tripped, unreachable-transient, unreachable-no-supervisor,
+             sidecar-blocked, no-engine-installed, weights-missing,
+             cannot-confirm-engine, package-broken, ffmpeg-missing,
+             ffprobe-missing, both-missing, ffmpeg-too-old, ollama-unreachable,
+             model-not-pulled, no-gemini-key, pass]
+
+    BlockerActionKind:
+      type: string
+      enum: [venv-bootstrap, qwen-install, kokoro-install, coqui-install,
+             sidecar-restart, ollama-install, ollama-pull, navigate]
+
+    BlockerAction:
+      type: object
+      description: A safe automated fix offered alongside a diagnosis.
+      required: [kind, label]
+      properties:
+        kind: { $ref: '#/components/schemas/BlockerActionKind' }
+        label: { type: string }
+        params:
+          type: object
+          additionalProperties: { type: string }
+          description: 'Extra data the action needs, e.g. `{ model: ''qwen3.5:9b'' }`.'
+        href:
+          type: string
+          description: For `navigate` only — an in-app hash route (e.g. `#/models`).
+
+    BlockerDiagnosis:
+      type: object
+      required: [status, cause, message, remediation]
+      properties:
+        status:
+          type: string
+          enum: [pass, warn, fail]
+          description: |
+            `warn` does NOT block: GET /api/setup/readiness computes `ready` as
+            every blocker being `pass` OR `warn`.
+        cause: { $ref: '#/components/schemas/BlockerCause' }
+        message: { type: string }
+        remediation: { type: string }
+        action: { $ref: '#/components/schemas/BlockerAction' }
+
+    SetupReadiness:
+      type: object
+      required: [ready, completedAt, blockers, info]
+      properties:
+        ready:
+          type: boolean
+          description: True when every blocker is `pass` or `warn`.
+        completedAt:
+          type: string
+          nullable: true
+          description: ISO-8601 timestamp the wizard was completed, or null.
+        blockers:
+          type: object
+          required: [sidecar, ffmpeg, tts, analyzer]
+          properties:
+            sidecar: { $ref: '#/components/schemas/BlockerDiagnosis' }
+            ffmpeg: { $ref: '#/components/schemas/BlockerDiagnosis' }
+            tts: { $ref: '#/components/schemas/BlockerDiagnosis' }
+            analyzer: { $ref: '#/components/schemas/BlockerDiagnosis' }
+        info:
+          type: object
+          required: [gpu, vramTotalMb]
+          properties:
+            gpu: { type: string }
+            vramTotalMb: { type: integer, nullable: true }
+
+    SetupCompleteResponse:
+      type: object
+      required: [completedAt]
+      properties:
+        completedAt: { type: string, description: ISO-8601 timestamp just written. }
+
+    SetupSmokeResponse:
+      type: object
+      description: |
+        End-to-end synth check. Returns ok:false (never 5xx) on failure so the
+        setup UI can render a diagnosis instead of an error page. The success
+        branch additionally reports the analyzer probe.
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        stage:
+          type: string
+          description: Which phase failed, when ok is false (e.g. `synth`).
+        error: { type: string }
+        url: { type: string, description: Public URL of the rendered sample. }
+        durationSec: { type: number }
+        analyzerOk:
+          type: boolean
+          description: Success branch only — whether the analyzer probe succeeded.
+        analyzerDetail:
+          type: string
+          description: Success branch only — analyzer probe detail or error text.
