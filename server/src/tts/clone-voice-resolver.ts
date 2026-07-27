@@ -507,32 +507,101 @@ export async function resolveClonedVoicesForChapter(
 export interface DesignedVoiceRequest {
   characterName: string;
   libraryUuid: string | undefined;
+  /** fs-38 Wave 3c, Task 20a — which clone-capable engine this self-heal
+      request targets. 'qwen' preserves the pre-3c self-heal BYTE-FOR-BYTE:
+      presence-only (`ptExists`), never removes anything on failure — a
+      failed or impossible qwen self-heal just leaves the `.pt` missing,
+      exactly as before this task. 'coqui' is the NEW D-B/D-F fail-SOFT arm:
+      it also checks `coquiVersion` staleness (not just presence —
+      `[DELTA-I3]`), and on a failed derive or a missing retained clip it
+      reports the uuid via the returned `softFailedUuids` instead of
+      leaving a slot with no artifact behind it — CoquiEngine.synthesize's
+      cached-latents branch (main.py) has no catalogue fallback, so an
+      unresolved `xtts-<uuid>` slot hard-fails the chapter (D-F). The two
+      arms share this loop but never their failure policy — see the
+      module-level note above `resolveClonedVoicesForChapter` on why
+      fail-loud (that function) and fail-soft (this one) must never share a
+      code path; that boundary holds INSIDE this function too, between the
+      two engine arms. */
+  engine: CloneEngine;
+}
+
+/** fs-38 Wave 3c, Task 20a — the designed-voice pre-pass's result. This
+    module holds no `CastCharacter` (it's built on injected deps, keyed by
+    uuid), so a soft coqui failure can't mutate `cast` itself — the call
+    site (synthesise-chapter.ts, which owns `cast`) does that, using this
+    uuid list. */
+export interface ResolveDesignedVoicesResult {
+  /** libraryUuids whose COQUI self-heal failed this chapter — the derive
+      threw, or no retained clip was found to derive from. Never populated
+      for a 'qwen' request (see `DesignedVoiceRequest.engine`'s doc
+      comment). The call site must remove the affected character(s)'
+      `overrideTtsVoices.coqui` slot for THIS CHAPTER ONLY — a per-chapter
+      copy, never `cast` itself (`[DELTA-I2]`: a resumed run re-reads
+      cast.json, so a whole-run downgrade would make a transient failure in
+      chapter 1 silently change chapter 40's voice too) — so
+      `pickVoiceForEngine` falls through to a catalogue voice instead of
+      re-reaching an `xtts-<uuid>` key with no artifact behind it. */
+  softFailedUuids: string[];
 }
 
 export interface ResolveDesignedVoiceDeps {
-  /** result of stat()-ing voices/qwen/qwen-<uuid>.pt */
+  /** result of stat()-ing the engine's storage key
+      (`cloneStorageKey(engine, uuid)`: `voices/qwen/qwen-<uuid>.pt` or
+      `voices/xtts/xtts-<uuid>.pt`). */
   ptExists(storageKey: string): Promise<boolean>;
   /** Reads the retained `qwen-<uuid>__master.wav` (Task 11) plus its
-      matching ref_text off the sidecar's own disk. Returns `null` — never
-      throws — when either artifact is absent/unreadable, so the caller can
-      fall through cleanly instead of surfacing a new failure. Also returns
-      the FULL parsed sidecar manifest (review C-1) — the pre-derive
-      snapshot the caller needs to restore designed-only fields the
-      sidecar's clone_voice handler would otherwise truncate away. */
+      matching ref_text off the sidecar's own disk — ALWAYS under the
+      `qwen-` prefix regardless of `engine`: the retained calibration clip
+      is a property of the DESIGN (minted once, only ever via qwen
+      VoiceDesign), not of whichever engine later derives an artifact from
+      it. `engine` gates only whether an empty/missing `refText`
+      disqualifies the read (`[DELTA-M1]`) — a QWEN derive needs a
+      transcript (`deriveEngineArtifact` validates this at call time), so
+      `engine === 'qwen'` still requires a non-empty `refText`; a COQUI
+      derive is purely acoustic and never sends `refText` on the wire (see
+      derive-engine-artifact.ts), so gating a coqui self-heal on `refText`
+      presence would misreport "no retained clip" for a design whose
+      manifest merely lacks one. Returns `null` — never throws — when the
+      manifest, the wav, or (qwen only) the refText is absent/unreadable,
+      so the caller can fall through cleanly instead of surfacing a new
+      failure. Also returns the FULL parsed sidecar manifest (review C-1) —
+      the pre-derive snapshot the QWEN arm needs to restore designed-only
+      fields the sidecar's clone_voice handler would otherwise truncate
+      away (the coqui arm never needs this — see `writeSidecarManifest`'s
+      doc comment). */
   readDesignedMasterPcm(
     uuid: string,
+    engine: CloneEngine,
   ): Promise<
     { pcm: Buffer; sampleRate: number; refText: string; manifest: Record<string, unknown> } | null
   >;
-  /** Review C-1 — atomically re-write `qwen-<uuid>.json` after a successful
-      self-heal derive, restoring the designed-only fields (`instruct`,
-      `designModel`, `mintMethod`, `fallbackFor`, `voiceUuid`, `language`)
-      the sidecar's clone_voice handler truncates away, while keeping the
-      derive's fresh `baseModel`/`refText`. */
+  /** QWEN ARM ONLY. Review C-1 — atomically re-write `qwen-<uuid>.json`
+      after a successful QWEN self-heal derive, restoring the designed-only
+      fields (`instruct`, `designModel`, `mintMethod`, `fallbackFor`,
+      `voiceUuid`, `language`) the sidecar's clone_voice handler truncates
+      away, while keeping the derive's fresh `baseModel`/`refText`. The
+      coqui arm never calls this: a coqui derive's `clone_voice` writes a
+      SEPARATE `xtts-<uuid>.json` (main.py's `CoquiEngine.clone_voice`),
+      never touching `qwen-<uuid>.json` — there is nothing on this file for
+      a coqui derive to truncate or restore. */
   writeSidecarManifest(uuid: string, manifest: Record<string, unknown>): Promise<void>;
-  /** Review I-2 — read/write the voice-library entry so a successful
-      self-heal can stamp `engines.qwen` ready with the derive's baseModel,
-      mirroring the cloned resolver's success write. */
+  /** Review I-2 — read the voice-library entry. The qwen arm reads it only
+      indirectly, via `updateEntry` below, at its final success stamp. The
+      coqui arm ALSO reads it directly, up front, per request, for two
+      Task 20a reasons: (1) an explicit provenance re-check —
+      `entry.provenance !== 'designed' => skip` — so this self-heal (and
+      its slot-REMOVAL power) can never reach a cloned voice's slot, even
+      if a future call-site regression ever fed one in. Today it can't, but
+      only incidentally — a cloned voice's uuid yields no `__master.wav`
+      under this naming convention, two modules away; this makes the
+      invariant explicit instead of relying on that coincidence
+      (`[DELTA-verified]`). (2) `coquiVersion` staleness (`[DELTA-I3]`):
+      unlike the qwen arm's deliberately presence-only check, the coqui arm
+      ALSO re-derives when `entry.engines.xtts?.coquiVersion` reads stale
+      against `currentArtifactVersion('coqui')`, via the SAME
+      `isArtifactVersionStale` comparand the cloned resolver's classifier
+      uses. */
   readEntry(uuid: string): Promise<VoiceLibraryEntry | null>;
   writeEntry(entry: VoiceLibraryEntry): Promise<void>;
   /** fs-38 Wave 3c, Task 14 — the shared, per-uuid-locked read-modify-write
@@ -540,7 +609,11 @@ export interface ResolveDesignedVoiceDeps {
       success-stamp write below routes through this instead of a bare
       readEntry+writeEntry pair for the same reason as the cloned resolver's
       derive-success write: the lock has to span the fresh read AND the
-      write as one critical section, not just the write. */
+      write as one critical section, not just the write. Task 20a raises the
+      stakes on this: a coqui designed derive now writes `engines.xtts` on
+      the SAME entry a cloned coqui repair (`resolveClonedVoicesForChapter`)
+      can concurrently write `engines.xtts`/`engines.qwen` on — exactly the
+      cross-slot lost-update hazard Task 14 built this primitive to close. */
   updateEntry(
     uuid: string,
     mutate: (
@@ -548,19 +621,35 @@ export interface ResolveDesignedVoiceDeps {
     ) => Promise<VoiceLibraryEntry | null | undefined> | VoiceLibraryEntry | null | undefined,
   ): Promise<VoiceLibraryEntry | null>;
   deriveEngineArtifact: typeof deriveEngineArtifact;
+  /** COQUI ARM ONLY — mirrors `ResolveChapterDeps.currentArtifactVersion`;
+      see that doc comment for what this returns per engine and why coqui's
+      reads `''` before the sidecar's first reachable /health poll. The
+      qwen arm never calls this — presence-only, unchanged (`[DELTA-I3]`). */
+  currentArtifactVersion(engine: CloneEngine): string;
   reportProgress?(msg: string): void;
   signal?: AbortSignal;
 }
 
-/** For each requested designed voice whose `.pt` is missing: best-effort
- *  re-derive from its retained clip. Never throws (except an abort — see
- *  M-1 below) — a failed or impossible self-heal just leaves the `.pt`
- *  missing, exactly as it is today. */
+/** For each requested designed voice: best-effort re-derive from its
+ *  retained clip. QWEN ARM: presence-only, byte-for-byte pre-3c behaviour —
+ *  a failed or impossible self-heal just leaves the `.pt` missing, exactly
+ *  as it is today. COQUI ARM (fs-38 Wave 3c, Task 20a — D-B/D-F): also
+ *  checks `coquiVersion` staleness, and on a failed derive or a missing
+ *  retained clip reports the uuid via the returned `softFailedUuids` so the
+ *  call site can drop the character's coqui slot for this chapter rather
+ *  than leave one with no artifact behind it. Never THROWS on either arm,
+ *  except a genuine abort (M-1 below) — the two arms' failure POLICIES
+ *  differ (soft-removal vs. leave-alone), but neither ever raises
+ *  `UnresolvableClonedVoiceError` or any other error; that separation from
+ *  `resolveClonedVoicesForChapter`'s fail-loud contract is the whole point
+ *  of this being a different function. */
 export async function resolveDesignedVoicesForChapter(
   requests: DesignedVoiceRequest[],
   deps: ResolveDesignedVoiceDeps,
-): Promise<void> {
-  for (const { characterName, libraryUuid } of requests) {
+): Promise<ResolveDesignedVoicesResult> {
+  const softFailedUuids = new Set<string>();
+
+  for (const { characterName, libraryUuid, engine } of requests) {
     if (!libraryUuid) continue;
 
     /* I-1 (review) — the ENTIRE per-voice body now lives in one try/catch.
@@ -568,13 +657,97 @@ export async function resolveDesignedVoicesForChapter(
        try here (only the derive call itself was guarded), so a throw from
        either — or an escaped throw from `readDesignedMasterPcm` despite its
        own "never throws" contract — would propagate straight out of this
-       function and abort a chapter that would otherwise have rendered. */
+       function and abort a chapter that would otherwise have rendered.
+       Task 20a: the coqui arm's `readEntry`/`ptExists`/derive calls live
+       under this SAME try, so an unexpected throw from any of them is
+       treated the same as a genuine derive failure — softFailed, never
+       propagated (see the shared catch below). */
     try {
+      if (engine === 'coqui') {
+        /* [DELTA-verified] — explicit provenance re-check before this
+           self-heal's slot-REMOVAL power touches anything. See
+           ResolveDesignedVoiceDeps.readEntry's doc comment: this is what
+           stops it from ever reaching a cloned voice's slot on purpose,
+           rather than by the pre-3c naming-convention coincidence. */
+        const entry = await deps.readEntry(libraryUuid);
+        if (!entry || entry.provenance !== 'designed') continue;
+
+        const storageKey = cloneStorageKey('coqui', libraryUuid);
+        const ptExists = await deps.ptExists(storageKey);
+        /* [DELTA-I3] — unlike qwen's presence-only check, the coqui arm
+           ALSO re-derives on a coquiVersion bump, via the SAME shared
+           comparand the cloned resolver's classifier uses — never a
+           locally re-derived one. */
+        const stale = isArtifactVersionStale(
+          entry.engines.xtts?.coquiVersion,
+          deps.currentArtifactVersion('coqui'),
+        );
+        if (ptExists && !stale) continue; // present and current — leave alone.
+
+        const master = await deps.readDesignedMasterPcm(libraryUuid, 'coqui');
+        if (!master) {
+          /* [DELTA-C2] contract — no retained clip: do not raise, report
+             this uuid so the call site removes the coqui slot for this
+             chapter (never leave one with no artifact behind it — D-F). */
+          softFailedUuids.add(libraryUuid);
+          console.warn(
+            `[clone-voice-resolver] designed coqui voice for "${characterName}" (${libraryUuid}) has ` +
+              `no retained clip to derive from — removing its coqui slot for this chapter.`,
+          );
+          continue;
+        }
+
+        deps.reportProgress?.(`Preparing voice "${characterName}"…`);
+        const result = await deps.deriveEngineArtifact(
+          libraryUuid,
+          'coqui',
+          {
+            masterPcm: master.pcm,
+            sampleRate: master.sampleRate,
+            refText: master.refText,
+            auditionText: REPAIR_AUDITION_TEXT,
+          },
+          { signal: deps.signal },
+        );
+
+        /* [DELTA-I4] — engines.xtts only: coquiVersion/modelId, NEVER
+           baseModel (that field is the qwen arm's, below). Best-effort,
+           same rationale as the qwen arm's stamp write: a write failure
+           here must not turn a successful re-derive (the `.pt` IS on disk
+           now) into a reported self-heal failure. */
+        try {
+          await deps.updateEntry(libraryUuid, (fresh) =>
+            fresh
+              ? {
+                  ...fresh,
+                  engines: {
+                    ...fresh.engines,
+                    xtts: {
+                      ...fresh.engines.xtts,
+                      status: 'ready',
+                      coquiVersion: result.coquiVersion ?? '',
+                      ...(result.modelId ? { modelId: result.modelId } : {}),
+                    },
+                  },
+                }
+              : null,
+          );
+        } catch (entryErr) {
+          console.warn(
+            `[clone-voice-resolver] designed coqui self-heal for "${characterName}" (${libraryUuid}) ` +
+              `re-derived successfully but failed to stamp its voice-library entry ready:`,
+            entryErr,
+          );
+        }
+        continue;
+      }
+
+      // --- qwen arm — byte-for-byte pre-3c behaviour, unchanged below. ---
       const storageKey = `qwen-${libraryUuid}`;
       const ptExists = await deps.ptExists(storageKey);
       if (ptExists) continue; // present (healthy OR merely stale, out of scope) — leave it alone.
 
-      const master = await deps.readDesignedMasterPcm(libraryUuid);
+      const master = await deps.readDesignedMasterPcm(libraryUuid, 'qwen');
       if (!master) continue; // no retained clip / no ref_text — fall through to today's behaviour.
 
       deps.reportProgress?.(`Preparing voice "${characterName}"…`);
@@ -672,6 +845,19 @@ export async function resolveDesignedVoicesForChapter(
          ordinary best-effort failure. */
       const name = (err as { name?: string } | null)?.name;
       if (name === 'AbortError' || deps.signal?.aborted) throw err;
+      if (engine === 'coqui') {
+        /* Task 20a — an unexpected throw anywhere in the coqui arm (readEntry,
+           ptExists, the derive itself) is treated as a soft failure: never a
+           new hard failure (D-F) beats "we don't know exactly why this
+           broke". */
+        softFailedUuids.add(libraryUuid);
+        console.warn(
+          `[clone-voice-resolver] designed coqui voice self-heal failed for "${characterName}" ` +
+            `(${libraryUuid}) — removing its coqui slot for this chapter:`,
+          err,
+        );
+        continue;
+      }
       /* M-3 (review) — a bare `catch {}` here made a self-heal failing on
          EVERY render undiagnosable. Name the voice + error so it shows up
          in the server log; still best-effort — never throws, never bricks
@@ -683,4 +869,6 @@ export async function resolveDesignedVoicesForChapter(
       );
     }
   }
+
+  return { softFailedUuids: [...softFailedUuids] };
 }

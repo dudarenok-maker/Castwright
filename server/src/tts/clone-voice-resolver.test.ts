@@ -1259,6 +1259,7 @@ function makeDesignedDeps(
   readEntry: ReturnType<typeof vi.fn>;
   writeEntry: ReturnType<typeof vi.fn>;
   updateEntry: ReturnType<typeof vi.fn>;
+  currentArtifactVersion: ReturnType<typeof vi.fn>;
 } {
   // fs-38 Wave 3c, Task 14 — same call-through default as makeDeps above, so
   // pre-existing tests asserting on `readEntry`/`writeEntry` directly keep
@@ -1294,6 +1295,11 @@ function makeDesignedDeps(
     readEntry,
     writeEntry,
     updateEntry: defaultUpdateEntry,
+    // fs-38 Wave 3c, Task 20a — coqui-arm-only dep; default reads as
+    // "unknown current version" (never stale, see isArtifactVersionStale),
+    // mirroring makeDeps' own qwen-only default's neutrality for tests that
+    // don't care about staleness.
+    currentArtifactVersion: vi.fn(() => ''),
     ...overrides,
   } as ResolveDesignedVoiceDeps & {
     ptExists: ReturnType<typeof vi.fn>;
@@ -1303,6 +1309,7 @@ function makeDesignedDeps(
     readEntry: ReturnType<typeof vi.fn>;
     writeEntry: ReturnType<typeof vi.fn>;
     updateEntry: ReturnType<typeof vi.fn>;
+    currentArtifactVersion: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -1324,13 +1331,13 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ softFailedUuids: [] });
 
     expect(deps.ptExists).toHaveBeenCalledWith('qwen-lib-designed');
-    expect(deps.readDesignedMasterPcm).toHaveBeenCalledWith('lib-designed');
+    expect(deps.readDesignedMasterPcm).toHaveBeenCalledWith('lib-designed', 'qwen');
     expect(deps.deriveEngineArtifact).toHaveBeenCalledTimes(1);
     expect(deps.deriveEngineArtifact).toHaveBeenCalledWith(
       'lib-designed',
@@ -1349,7 +1356,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     const deps = makeDesignedDeps({ ptExists: vi.fn(async () => true) });
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+      [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
       deps,
     );
 
@@ -1365,10 +1372,10 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ softFailedUuids: [] });
 
     expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
   });
@@ -1383,7 +1390,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     const deps = makeDesignedDeps({ ptExists: vi.fn(async () => true) });
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+      [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
       deps,
     );
 
@@ -1407,10 +1414,10 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ softFailedUuids: [] });
 
     // M-3 (review) — the failure is logged, not silently swallowed.
     expect(warnSpy).toHaveBeenCalledWith(
@@ -1424,7 +1431,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     const deps = makeDesignedDeps();
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: undefined }],
+      [{ characterName: 'Orin', libraryUuid: undefined, engine: 'qwen' as const }],
       deps,
     );
 
@@ -1469,7 +1476,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     });
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+      [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
       deps,
     );
 
@@ -1504,10 +1511,10 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ softFailedUuids: [] });
 
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
@@ -1526,10 +1533,10 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ softFailedUuids: [] });
 
     expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalled();
@@ -1546,10 +1553,10 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ softFailedUuids: [] });
 
     expect(deps.readDesignedMasterPcm).not.toHaveBeenCalled();
     warnSpy.mockRestore();
@@ -1589,7 +1596,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     });
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+      [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
       deps,
     );
 
@@ -1638,7 +1645,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     });
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+      [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
       deps,
     );
 
@@ -1690,7 +1697,7 @@ describe('resolveDesignedVoicesForChapter', () => {
       writeEntry,
     });
 
-    await resolveDesignedVoicesForChapter([{ characterName: 'Orin', libraryUuid: 'lib-designed' }], deps);
+    await resolveDesignedVoicesForChapter([{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }], deps);
 
     expect(writeEntry).toHaveBeenCalledTimes(1);
     const written = writeEntry.mock.calls[0][0];
@@ -1715,10 +1722,10 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ softFailedUuids: [] });
 
     expect(deps.writeEntry).not.toHaveBeenCalled();
   });
@@ -1745,8 +1752,8 @@ describe('resolveDesignedVoicesForChapter', () => {
     await expect(
       resolveDesignedVoicesForChapter(
         [
-          { characterName: 'Orin', libraryUuid: 'lib-designed' },
-          { characterName: 'Second', libraryUuid: 'lib-second' },
+          { characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const },
+          { characterName: 'Second', libraryUuid: 'lib-second', engine: 'qwen' as const },
         ],
         deps,
       ),
@@ -1754,5 +1761,264 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     // The loop stopped at the first request — the second was never reached.
     expect(readDesignedMasterPcm).toHaveBeenCalledTimes(1);
+  });
+
+  /* --- fs-38 Wave 3c, Task 20a — the coqui arm: fail-SOFT (D-B/D-F), not the
+     qwen arm's fail-alone-and-leave-it. Same loop, different policy — see
+     DesignedVoiceRequest.engine's doc comment. */
+  describe('the coqui arm (fs-38 Wave 3c, Task 20a)', () => {
+    function designedEntry(overrides: Partial<VoiceLibraryEntry> = {}): VoiceLibraryEntry {
+      return {
+        voiceUuid: 'lib-designed',
+        name: 'Orin',
+        provenance: 'designed',
+        tags: [],
+        pinned: false,
+        engines: {},
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        ...overrides,
+      };
+    }
+
+    it('missing .pt + retained clip present -> derives once on the xtts slot, stamps engines.xtts ready with coquiVersion/modelId — NEVER baseModel (DELTA-I4) — and softFailedUuids stays empty', async () => {
+      const entry = designedEntry();
+      const writeEntry = vi.fn(async (_entry: VoiceLibraryEntry) => {});
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async (uuid: string) => (uuid === 'lib-designed' ? entry : null)),
+        writeEntry,
+        ptExists: vi.fn(async () => false),
+        readDesignedMasterPcm: vi.fn(async () => ({
+          pcm: Buffer.alloc(1000),
+          sampleRate: 24000,
+          refText: '', // DELTA-M1 — a coqui derive never needs refText.
+          manifest: {},
+        })),
+        deriveEngineArtifact: vi.fn(async () => ({
+          previewPcm: Buffer.alloc(0),
+          sampleRate: 24000,
+          coquiVersion: 'v2.0.5',
+          modelId: 'tts_models/multilingual/multi-dataset/xtts_v2',
+        })),
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(result).toEqual({ softFailedUuids: [] });
+      expect(deps.ptExists).toHaveBeenCalledWith('xtts-lib-designed');
+      expect(deps.deriveEngineArtifact).toHaveBeenCalledWith(
+        'lib-designed',
+        'coqui',
+        expect.objectContaining({ masterPcm: expect.any(Buffer), sampleRate: 24000 }),
+        { signal: undefined },
+      );
+      expect(writeEntry).toHaveBeenCalledTimes(1);
+      const written = writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
+      expect(written.engines.xtts).toEqual({
+        status: 'ready',
+        coquiVersion: 'v2.0.5',
+        modelId: 'tts_models/multilingual/multi-dataset/xtts_v2',
+      });
+      expect(written.engines.xtts).not.toHaveProperty('baseModel');
+      // Placebo-proof half 2 — the qwen-only sidecar-manifest restore never
+      // runs for a coqui derive (main.py's coqui clone_voice writes a
+      // SEPARATE xtts-<uuid>.json, never touching qwen-<uuid>.json).
+      expect(deps.writeSidecarManifest).not.toHaveBeenCalled();
+    });
+
+    it('the load-bearing case — a derive failure is swallowed (never throws) and reports the uuid via softFailedUuids so the call site can remove the slot', async () => {
+      const entry = designedEntry();
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => false),
+        readDesignedMasterPcm: vi.fn(async () => ({
+          pcm: Buffer.alloc(10),
+          sampleRate: 24000,
+          refText: '',
+          manifest: {},
+        })),
+        deriveEngineArtifact: vi.fn(async () => {
+          throw Object.assign(new Error('sidecar rejected the clip'), { status: 422 });
+        }),
+      });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      // Half 1: never throws, never constructs UnresolvableClonedVoiceError
+      // (the fail-loud shape) — it just RESOLVES with the failed uuid.
+      expect(result).toEqual({ softFailedUuids: ['lib-designed'] });
+      // Half 2: no entry write happened — a failed derive must not stamp
+      // engines.xtts ready.
+      expect(deps.writeEntry).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Orin'), expect.any(Error));
+      warnSpy.mockRestore();
+    });
+
+    it('no retained clip -> no derive attempted, reports the uuid via softFailedUuids', async () => {
+      const entry = designedEntry();
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => false),
+        readDesignedMasterPcm: vi.fn(async () => null),
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(result).toEqual({ softFailedUuids: ['lib-designed'] });
+      expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+    });
+
+    /* [DELTA-verified] — the discriminating fixture: a WELL-FORMED
+       cast-slot-shaped request (provenance implied 'designed' by the
+       caller) whose backing voice-library ENTRY actually reads 'cloned'.
+       A well-formed "everything agrees" fixture can't tell "this function
+       trusts the request" apart from "this function verifies against the
+       entry" — only a fixture where the two DISAGREE can. This is the one
+       lesson this branch's reviewers keep re-learning (Task 20's own
+       malformed-uuid tests, same rationale). */
+    it('a request whose backing entry is actually provenance "cloned" (drift) is skipped entirely — never derived, never soft-failed — protecting a cloned voice from this self-heal', async () => {
+      const cloneEntry = designedEntry({ provenance: 'cloned' });
+      const ptExists = vi.fn(async () => false);
+      const readDesignedMasterPcm = vi.fn();
+      const deriveEngineArtifact = vi.fn();
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => cloneEntry),
+        ptExists,
+        readDesignedMasterPcm,
+        deriveEngineArtifact,
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Wren', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(result).toEqual({ softFailedUuids: [] });
+      // Not merely "didn't derive" — never even progressed past the
+      // provenance check, so a cloned voice's `.pt` presence/staleness was
+      // never touched by this fail-soft machinery at all.
+      expect(ptExists).not.toHaveBeenCalled();
+      expect(readDesignedMasterPcm).not.toHaveBeenCalled();
+      expect(deriveEngineArtifact).not.toHaveBeenCalled();
+    });
+
+    it('a missing entry (deleted from the library) is skipped entirely, same as a cloned one', async () => {
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => null),
+        ptExists: vi.fn(async () => false),
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(result).toEqual({ softFailedUuids: [] });
+      expect(deps.ptExists).not.toHaveBeenCalled();
+    });
+
+    /* [DELTA-I3] — the direct contrast with the qwen arm's pinned
+       presence-only test above ("a stale-baseModel designed entry ...
+       explicitly out of scope"): on the coqui arm, staleness ALONE (no
+       missing .pt) is enough to trigger a re-derive. */
+    it('DELTA-I3: coquiVersion staleness triggers a re-derive even though the .pt is PRESENT — the direct contrast with the qwen arm\'s presence-only pin above', async () => {
+      const entry = designedEntry({ engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } } });
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => true), // present!
+        currentArtifactVersion: vi.fn(() => 'v2.0.5'), // but stale against "current".
+        readDesignedMasterPcm: vi.fn(async () => ({
+          pcm: Buffer.alloc(10),
+          sampleRate: 24000,
+          refText: '',
+          manifest: {},
+        })),
+        deriveEngineArtifact: vi.fn(async () => ({
+          previewPcm: Buffer.alloc(0),
+          sampleRate: 24000,
+          coquiVersion: 'v2.0.5',
+        })),
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(deps.deriveEngineArtifact).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ softFailedUuids: [] });
+    });
+
+    it('present AND current -> healthy, no derive, no entry read of the retained clip', async () => {
+      const entry = designedEntry({ engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.5' } } });
+      const readDesignedMasterPcm = vi.fn();
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => true),
+        currentArtifactVersion: vi.fn(() => 'v2.0.5'),
+        readDesignedMasterPcm,
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(result).toEqual({ softFailedUuids: [] });
+      expect(readDesignedMasterPcm).not.toHaveBeenCalled();
+      expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+    });
+
+    it('an unexpected throw from readEntry itself is swallowed and reported as a soft failure (never a new hard failure)', async () => {
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => {
+          throw new Error('disk blew up');
+        }),
+      });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(result).toEqual({ softFailedUuids: ['lib-designed'] });
+      warnSpy.mockRestore();
+    });
+
+    it('a mixed request list — one qwen, one coqui — keeps each arm\'s policy independent: a coqui failure never touches the qwen write, and vice versa', async () => {
+      const qwenReadDesignedMasterPcm = vi.fn(async () => null); // qwen: no retained clip -> silent no-op.
+      const coquiEntry = designedEntry({ voiceUuid: 'lib-coqui' });
+      const readEntry = vi.fn(async (uuid: string) => (uuid === 'lib-coqui' ? coquiEntry : null));
+      const deps = makeDesignedDeps({
+        readEntry,
+        ptExists: vi.fn(async () => false),
+        readDesignedMasterPcm: qwenReadDesignedMasterPcm,
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [
+          { characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' },
+          { characterName: 'Wren', libraryUuid: 'lib-coqui', engine: 'coqui' },
+        ],
+        deps,
+      );
+
+      // The qwen request's "no retained clip" fell through silently (no
+      // softFail — that's the byte-for-byte qwen behaviour); the coqui
+      // request's own missing clip DID report — proving the two requests'
+      // policies never bleed into each other.
+      expect(result).toEqual({ softFailedUuids: ['lib-coqui'] });
+    });
   });
 });

@@ -1500,14 +1500,26 @@ class CoquiEngine(Engine):
         # check below: `xtts-<uuid>` is never in the loaded model's manifest,
         # so without this branch a cloned-voice request would fall through
         # and silently substitute FALLBACK_SPEAKER (Property 1 violation).
-        # Gated on the storage-key prefix (`XTTS_KEY_PREFIX`), which — unlike
-        # Qwen's `qwen-<uuid>` — is unambiguous for this engine: Coqui has no
-        # "designed" voice concept, so every `xtts-<uuid>` request reaching
-        # this engine came from `cloneStorageKey('coqui', uuid)` for a
-        # provenance==='cloned' slot (clone-engines.ts) and nothing else ever
-        # mints that shape. A non-cloned request (a baked catalog speaker
-        # name, or any other id) skips this branch entirely and falls through
-        # to the existing fail-soft substitution logic, unchanged.
+        # Gated on the storage-key prefix (`XTTS_KEY_PREFIX`) — every
+        # `xtts-<uuid>` request reaching this engine came from
+        # `cloneStorageKey('coqui', uuid)` (clone-engines.ts), for EITHER a
+        # provenance==='cloned' OR a provenance==='designed' slot: fs-38
+        # Wave 3c Task 20a gave Coqui a "designed" voice concept too
+        # (`libraryVoiceForEngine` mints this same `xtts-<uuid>` shape for
+        # both provenances — Task 16 review), so the prefix alone no longer
+        # tells you which. This branch has NO catalogue fallback either way —
+        # `_load_voice_latents` raises `VoiceNotDesignedError` (below) if the
+        # `.pt` is missing, unconditionally. The guarantee that never fires
+        # for a stranded/never-derived designed voice comes from the Node
+        # side's pre-render pre-pass (`resolveDesignedVoicesForChapter`'s
+        # coqui arm, clone-voice-resolver.ts), NOT from the key shape:
+        # that pre-pass removes a designed voice's coqui slot for the
+        # chapter whenever it can't guarantee an artifact backs it, so an
+        # `xtts-<uuid>` request only ever reaches this engine with cached
+        # latents actually available (or already cloned this session). A
+        # non-`xtts-`-prefixed request (a baked catalog speaker name, or any
+        # other id) skips this branch entirely and falls through to the
+        # existing fail-soft substitution logic, unchanged.
         if voice.startswith(self.XTTS_KEY_PREFIX):
             assert self._tts is not None
             config = self._tts.synthesizer.tts_model.config

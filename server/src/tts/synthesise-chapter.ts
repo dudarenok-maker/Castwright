@@ -1093,8 +1093,20 @@ const DESIGNED_MASTER_SAMPLE_RATE = 24_000;
    shape on a successful re-derive, dropping `instruct`/`designModel`/
    `mintMethod`/`fallbackFor` entirely — the caller needs this PRE-derive
    snapshot to restore those fields afterwards. */
+/* fs-38 Wave 3c, Task 20a [DELTA-M1] — `engine` gates whether an empty
+   `refText` disqualifies the read. A QWEN derive needs a transcript
+   (`deriveEngineArtifact` validates `refText` at call time for `engine ===
+   'qwen'`); a COQUI derive is purely acoustic and never sends `refText` on
+   the wire at all, so gating a coqui self-heal on `refText` presence would
+   misreport "no retained clip" for a design whose manifest merely lacks
+   one — the master.wav clip itself is still perfectly usable. The storage
+   key stays hardcoded to the `qwen-` prefix regardless of `engine`: the
+   retained clip is a property of the DESIGN (minted once, only ever via
+   qwen VoiceDesign), not of whichever engine later derives an artifact
+   from it. */
 async function readDesignedMasterPcmDefault(
   uuid: string,
+  engine: CloneEngine,
 ): Promise<
   { pcm: Buffer; sampleRate: number; refText: string; manifest: Record<string, unknown> } | null
 > {
@@ -1107,8 +1119,9 @@ async function readDesignedMasterPcmDefault(
      have rendered fine. */
   try {
     const manifest = await readJson<Record<string, unknown>>(qwenVoiceSidecarPath(storageKey));
+    if (!manifest) return null;
     const refText = typeof manifest?.refText === 'string' ? (manifest.refText as string).trim() : '';
-    if (!manifest || !refText) return null;
+    if (engine === 'qwen' && !refText) return null;
     const raw = await readFile(qwenVoiceWavPath(`${storageKey}__master`));
     const pcm = await decodeAudioToPcm(raw, DESIGNED_MASTER_SAMPLE_RATE);
     return { pcm, sampleRate: DESIGNED_MASTER_SAMPLE_RATE, refText, manifest };
@@ -1143,6 +1156,12 @@ function buildDefaultDesignedResolverDeps(
     writeEntry,
     updateEntry,
     deriveEngineArtifact,
+    /* fs-38 Wave 3c, Task 20a — coqui arm only (DELTA-I3 staleness check);
+       identical wiring to buildDefaultCloneResolverDeps's own
+       currentArtifactVersion above, so the two resolvers can never
+       independently drift on what "current" means per engine. */
+    currentArtifactVersion: (engine) =>
+      engine === 'coqui' ? getLastKnownCoquiVersion() : currentQwenBaseModel(),
     reportProgress: undefined,
     signal,
   };
@@ -1418,21 +1437,47 @@ export async function synthesiseChapter(
   /* fs-38 Wave 3b2, Task 12 (§2.3) — designed-voice orphan self-heal, over the
      SAME in-chapter readiness gate as the cloned pre-pass above. Narrower and
      gentler than the cloned resolver (see resolveDesignedVoicesForChapter's
-     doc comment): only a missing `.pt` is repaired, never a stale one, and a
-     failed self-heal never throws — it just leaves the chapter to whatever
-     happens today for a missing designed voice. Skipped entirely for a
-     character that doesn't actually route to Qwen this run (a book on
+     doc comment): the QWEN arm only repairs a missing `.pt`, never a stale
+     one, and a failed self-heal never throws — it just leaves the chapter to
+     whatever happens today for a missing designed voice. Skipped entirely for
+     a character that doesn't actually route to Qwen this run (a book on
      Kokoro/Coqui, or Qwen globally unavailable) — self-healing a `.pt` that
-     wouldn't be used this render anyway is pure waste. */
-  const designedVoiceRequests = cast
-    .filter(
-      (c) => inChapterCharacterIds.has(c.id) && c.overrideTtsVoices?.qwen?.provenance === 'designed',
-    )
-    .filter((c) => !qwenUnavailable && routeFor(c).engine === 'qwen')
-    .map((c) => ({
-      characterName: c.name ?? c.id,
-      libraryUuid: c.overrideTtsVoices?.qwen?.libraryUuid,
-    }));
+     wouldn't be used this render anyway is pure waste.
+
+     fs-38 Wave 3c, Task 20a [D-B][D-G] — the COQUI arm below is deliberately
+     built on a DIFFERENT selection set, not `routeFor`/`qwenUnavailable`:
+     select on "the character has an xtts slot with provenance 'designed'",
+     full stop. Gating it the same way the qwen arm is gated would leave
+     [DELTA-C2]'s three vectors each hitting a hard 409 where the chapter
+     renders today: (1) fs-60's Qwen->Coqui fallback below reroutes a
+     QWEN-ROUTED character onto coqui — `routeFor` reads 'qwen' for it, so a
+     routeFor-based filter would never validate the coqui slot it's about to
+     render; (2) `qwenUnavailable` has nothing to do with whether COQUI is
+     usable — gating on it would skip the coqui self-heal on every run where
+     Qwen merely happens to be off; (3) `clearMismatchedDesignedVoices`
+     (verify-designed-voice-language.ts) deletes only the qwen slot on a
+     language mismatch, leaving a stranded xtts slot with no `overrideTtsVoices
+     .qwen` at all — `routeFor` still resolves an engine for that character,
+     but never via a qwen-slot check, so this arm must not depend on one. */
+  const designedVoiceRequests = [
+    ...cast
+      .filter(
+        (c) => inChapterCharacterIds.has(c.id) && c.overrideTtsVoices?.qwen?.provenance === 'designed',
+      )
+      .filter((c) => !qwenUnavailable && routeFor(c).engine === 'qwen')
+      .map((c) => ({
+        characterName: c.name ?? c.id,
+        libraryUuid: c.overrideTtsVoices?.qwen?.libraryUuid,
+        engine: 'qwen' as const,
+      })),
+    ...cast
+      .filter((c) => inChapterCharacterIds.has(c.id))
+      .flatMap((c) => {
+        const lib = libraryVoiceForEngine(c, 'coqui');
+        if (lib?.provenance !== 'designed') return [];
+        return [{ characterName: c.name ?? c.id, libraryUuid: lib.libraryUuid, engine: 'coqui' as const }];
+      }),
+  ];
   if (designedVoiceRequests.length > 0) {
     /* M-1 (review) — the abort check above (~:1181) only covers the cloned
        pre-pass; the cloned resolver's own re-derive can run for a while, so
@@ -1446,7 +1491,27 @@ export async function synthesiseChapter(
       { ...buildDefaultDesignedResolverDeps(signal), ...designedResolverDepsOverride },
       designedResolverDepsOverride,
     );
-    await resolveDesignedVoicesForChapter(designedVoiceRequests, designedResolverDeps);
+    const { softFailedUuids } = await resolveDesignedVoicesForChapter(
+      designedVoiceRequests,
+      designedResolverDeps,
+    );
+    /* fs-38 Wave 3c, Task 20a [D-I2] — scope the drop to THIS CHAPTER, never
+       `cast` itself (which `generation.ts` reads once and reuses for every
+       chapter in the run). Replacing the affected character(s)' `castById`
+       entry with a fresh object — never mutating `c.overrideTtsVoices` in
+       place — means a resumed run (which re-reads cast.json) or the next
+       chapter's own `synthesiseChapter` call (which rebuilds `castById` from
+       the ORIGINAL `cast` array) never sees this removal. */
+    if (softFailedUuids.length > 0) {
+      const failed = new Set(softFailedUuids);
+      for (const c of cast) {
+        if (!inChapterCharacterIds.has(c.id)) continue;
+        const coquiUuid = c.overrideTtsVoices?.coqui?.libraryUuid;
+        if (!coquiUuid || !failed.has(coquiUuid)) continue;
+        const { coqui: _coqui, ...restVoices } = c.overrideTtsVoices ?? {};
+        castById.set(c.id, { ...c, overrideTtsVoices: restVoices });
+      }
+    }
   }
 
   /* Shared synthetic-narrator stub, used wherever a narrator CastCharacter is
