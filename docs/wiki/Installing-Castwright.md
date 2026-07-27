@@ -28,7 +28,7 @@ After install you'll have a single command (`npm run start:prod`) that brings up
   - macOS: `brew install python@3.12`
   - Linux (Ubuntu / Debian): `sudo apt install python3.12 python3.12-venv`
   - Linux (Fedora / RHEL): `sudo dnf install python3.12`
-- **ffmpeg 6.0 or newer on PATH** (server encodes chapter audio to MP3, and reads ffmpeg's loudness measurements back — that output is version-sensitive, so we state a floor). Ubuntu 24.04+, current Homebrew, winget and conda-forge all satisfy it; Ubuntu 22.04's archive build (4.4) does not — use snap or a PPA there.
+- **ffmpeg 6.0 or newer on PATH** (server encodes chapter audio to MP3, and reads ffmpeg's loudness measurements back — that output is version-sensitive, so we state a floor). Ubuntu 24.04+, current Homebrew, winget and conda-forge all satisfy it. Ubuntu 22.04's archive build (4.4) does not — there, run `sudo apt remove ffmpeg && sudo snap install ffmpeg` (removing the apt build first matters: `/usr/bin` precedes `/snap/bin`, so the snap alone would stay shadowed).
   - Windows: `winget install Gyan.FFmpeg`
   - macOS: `brew install ffmpeg`
   - Linux: `sudo apt install ffmpeg` (or `sudo dnf install ffmpeg`)

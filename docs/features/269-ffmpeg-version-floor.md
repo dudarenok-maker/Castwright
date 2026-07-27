@@ -86,12 +86,22 @@ deferred drift half) · ops-35 · [#1877](https://github.com/dudarenok-maker/Cas
    diagnostics board's 30 s refresh both exist so a user can install or upgrade
    ffmpeg and see the result without restarting the server. A process-lifetime
    cache would freeze the first answer forever.
-7. **`BlockerCause` is mirrored by hand in `src/lib/api.ts:7247`** — it is not
+7. **`StepFfmpeg` branches on `status`, never on `cause`.** `warn` → the
+   outdated card, `fail` → the missing card. Keying the outdated card on
+   `cause === 'ffmpeg-too-old'` would send the *next* warn cause down the
+   "ffmpeg isn't installed yet" path — reintroducing the exact bug this plan
+   fixed. The card leads with `diagnosis.message`, so any warn reads correctly.
+8. **Each summary row owns its own `warn` screen-reader phrasing**
+   (`SummaryRow.warnLabel`). `warn` means different things per row — the
+   analyzer's is "no cloud backup", ffmpeg's is "older than we support" — so a
+   shared string announces something untrue. Before this, an outdated ffmpeg
+   announced "Audio assembly: ready, no backup".
+9. **`BlockerCause` is mirrored by hand in `src/lib/api.ts:7247`** — it is not
    generated, because `/api/setup/readiness` is absent from `openapi.yaml`. Any
    new cause must be added to both. (That mirror has already drifted on `info`:
    server sends `{ gpu, vramTotalMb }`, frontend declares `{ gpu }` —
    pre-existing, out of scope, recorded here so it isn't mistaken for new.)
-8. **The preflight's side effects sit behind `require.main === module`.**
+10. **The preflight's side effects sit behind `require.main === module`.**
    Without it, `require`ing the module runs the check and calls `process.exit`,
    which kills the `node --test` run and scores the file as one passing test —
    a placebo that hides every parser assertion.
@@ -110,11 +120,27 @@ deferred drift half) · ops-35 · [#1877](https://github.com/dudarenok-maker/Cas
   tests** pinning invariant 6 (install-then-Re-check, and upgrade-clears-warning).
 - **Shared corpus:** both of the above read
   `scripts/tests/fixtures/ffmpeg-version-cases.json`, so the CJS and TS parsers
-  cannot drift apart.
+  cannot drift apart. **The corpus is wired into both steps' cache inputs and
+  CI scopes** — `scripts/verify-cache.mjs` lists it under `test:hooks` (with
+  `preflight-ffmpeg.cjs`) *and* `test:server`, and `verify.yml`'s `server` scope
+  regex matches `scripts/tests/fixtures/`. Without that, a fixture-only diff —
+  the intended way to add a drift case — would re-check only the CJS side, and
+  neither side locally. Same #1847 trap `test:pinokio` already documents.
 - `server/src/routes/setup-diagnosis.test.ts` (vitest) — below floor yields
   `status: 'warn'` + `cause: 'ffmpeg-too-old'` with both versions in the
-  message; absence still fails; unparseable and null-floor pass; and an explicit
-  assertion that `every(pass || warn)` still holds (invariant 4).
+  message; unparseable and null-floor pass; and the ordering guard (invariant 5)
+  driven with the **contradictory** input `ffmpegPresent: false, belowFloor: true`
+  — with `belowFloor: false` the assertion cannot detect a hoisted floor check
+  and is a placebo.
+- `server/src/routes/setup-readiness.orchestration.test.ts` (vitest + supertest)
+  — **invariant 4 through the real route**: a below-floor probe yields
+  `blockers.ffmpeg.status === 'warn'` *and* `ready === true`, while an absent
+  ffmpeg still yields `ready === false`. Asserted here rather than in a unit
+  test because re-implementing `every(pass || warn)` over a local array is a
+  tautology that passes whatever `setup-readiness.ts:96` actually says. Both
+  cases were mutation-checked: flipping `:96` to `every(pass)` fails them.
+- `server/src/routes/diagnostics.test.ts` (vitest) — the board's version detail
+  string, the below-floor `warn`, and the unparseable-version fallback.
 - `src/components/setup/step-ffmpeg.test.tsx` (vitest + RTL) — the outdated card
   renders, and is **neither** the ready card **nor** the missing card; shows the
   version and floor; offers upgrade rather than install commands; links the wiki.
@@ -142,6 +168,24 @@ Requires a box where ffmpeg can be swapped — see the on-box register row.
    probe has been cached somewhere.
 5. **Rollback.** Set `castwright.ffmpeg.minimum` to `null`, re-run step 2 →
    preflight passes, surfaces show no warning.
+
+## Ship steps
+
+- **Run `npm run wiki:sync` after merge.** The Setup Wizard's outdated card links
+  to the *published* GitHub wiki, which keeps saying "ffmpeg on PATH" with no
+  floor until the sync runs — so the in-app "verify the floor" link is dead on
+  arrival without it.
+
+## Known limitations
+
+- `pinokio-scripts/lib/ffmpeg-pin.test.js` compares **majors only**, so a future
+  floor of `"7.1"` would be satisfied by `"ffmpeg>=7"`, which conda can resolve
+  to 7.0. Fine while the floor is `x.0`; tighten the guard if a non-zero minor
+  floor is ever declared.
+- The below-floor warning is **not** surfaced in the status popover
+  (`status-popover.tsx:274` gates its ffmpeg banner on `status === 'fail'`), so
+  "every user-facing surface warns" means the wizard, the diagnostics board and
+  the top-bar health dot — not the popover.
 
 ## Ship notes
 

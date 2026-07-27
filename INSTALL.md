@@ -186,7 +186,13 @@ The server pipes chapter PCM through ffmpeg at encode time; missing it = no audi
 
 Castwright is tested against **ffmpeg 6.0 and newer**. Below that we simply haven't verified the audio path — the encoder doesn't just call ffmpeg, it reads ffmpeg's loudness measurements back, and that output has changed shape between versions. This is a support line, not a known break: Castwright still runs, and the Setup Wizard and diagnostics board show a warning rather than blocking you.
 
-Upgrade with `winget upgrade Gyan.FFmpeg` (Windows), `brew upgrade ffmpeg` (macOS), or `sudo snap install ffmpeg` (Ubuntu 22.04, whose archive build is 4.4). Then click **Re-check** in the wizard.
+Upgrade with `winget upgrade Gyan.FFmpeg` (Windows) or `brew upgrade ffmpeg` (macOS). On Ubuntu 22.04, whose archive build is 4.4, **remove the apt package first** — `/usr/bin` comes before `/snap/bin` on the default PATH, so installing the snap alongside it leaves the old build still resolving:
+
+```bash
+sudo apt remove ffmpeg && sudo snap install ffmpeg
+```
+
+Then click **Re-check** in the wizard. If `ffmpeg -version` still reports the old build, an earlier PATH entry is shadowing the new one. (If the binary came from a zip or a different package manager, upgrade it the same way you installed it — `winget`/`brew` will report "no installed package" for something they didn't install.)
 
 ### Port :8080 already in use
 

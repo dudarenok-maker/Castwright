@@ -489,6 +489,10 @@ Observe, in order:
    Confirm the wizard still **advances** and `GET /api/setup/readiness` reports
    `ready: true` with `blockers.ffmpeg.status === 'warn'`.
 3. Admin → diagnostics shows the ffmpeg row at status `warn` with the version in its detail.
+   **Also confirm the top-bar Admin health dot goes amber and stays amber** — `diagnostics.ts`'s
+   `worst()` bubbles the new `warn` into `overall`, which `admin-pill.tsx:84` renders on every
+   screen with no dismiss. That is intended, but it is a permanent nag for a below-floor user and
+   should be seen before it surprises someone.
 4. **Upgrade ffmpeg to ≥ 6.0 and click Re-check WITHOUT restarting the server** — the card
    must flip to the green ready state. This is plan 269 invariant 6; if it stays amber, a
    cache has been reintroduced into `probeFfmpeg()`.

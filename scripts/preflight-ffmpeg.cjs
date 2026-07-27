@@ -152,12 +152,19 @@ function emitGenericHint() {
    from the "not installed" hints — the user has ffmpeg, they need to upgrade
    it, and the two remedies are different commands. */
 function emitTooOldHint(found, minimum) {
+  /* The Linux hint MUST remove the apt package first. The population this
+     fires on is Ubuntu 22.04 with the archive build (4.4) already at
+     /usr/bin/ffmpeg, and Ubuntu's default PATH puts /usr/bin BEFORE
+     /snap/bin — so a bare `snap install` leaves 4.4 still resolving and the
+     user sees the identical error after "upgrading". */
   const upgrade =
     os.platform() === 'win32'
       ? '  winget upgrade Gyan.FFmpeg'
       : os.platform() === 'darwin'
         ? '  brew upgrade ffmpeg'
-        : '  # Ubuntu 24.04+ ships a supported build; on 22.04 the archive has 4.4:\n  sudo snap install ffmpeg';
+        : '  # Ubuntu 24.04+ ships a supported build. On 22.04 the archive has 4.4 —\n' +
+          '  # remove it first, or /usr/bin/ffmpeg keeps shadowing /snap/bin/ffmpeg:\n' +
+          '  sudo apt remove ffmpeg && sudo snap install ffmpeg';
   process.stderr.write(
     `\n${BOLD}${RED}[preflight] ffmpeg ${found} is older than Castwright supports.${RESET}\n\n` +
       `Castwright is tested against ffmpeg ${BOLD}${minimum}${RESET} and newer. The audio\n` +

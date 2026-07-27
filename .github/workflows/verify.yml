@@ -144,7 +144,12 @@ jobs:
           e2e=false; scripts=false; hooks=false; pinokio=false; shared=false
           openapi=false
           match '^(src/|index\.html$|vite\.config\.ts$|tailwind\.config\.ts$|tsconfig\.json$|tsconfig\.node\.json$|postcss\.config\.js$|eslint\.config\.(js|mjs)$)' && frontend=true
-          match '^(server/src/|server/package(-lock)?\.json$|server/tsconfig\.json$|server/vitest\.config(\.slow)?\.ts$|openapi\.yaml$|server/\.env\.example$|server/scripts/sync-env-example\.ts$)' && server=true
+          # scripts/tests/fixtures/: server/src/diagnostics/ffmpeg.test.ts reads
+          # ffmpeg-version-cases.json at runtime, sharing that corpus with the CJS
+          # preflight parser so the two cannot drift (ops-35). Without it here, a
+          # fixture-only diff fires the `scripts` leg (CJS side) but not `server`,
+          # so the TS parser is never re-checked against the case just added.
+          match '^(server/src/|server/package(-lock)?\.json$|server/tsconfig\.json$|server/vitest\.config(\.slow)?\.ts$|openapi\.yaml$|server/\.env\.example$|server/scripts/sync-env-example\.ts$|scripts/tests/fixtures/)' && server=true
           match '^server/tts-sidecar/' && sidecar=true
           match '^(e2e/|playwright\.config\.ts$)' && e2e=true
           match '^scripts/' && scripts=true

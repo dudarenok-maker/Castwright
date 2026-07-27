@@ -320,6 +320,11 @@ interface SummaryRow {
   label: string;
   detail: string;
   status: SummaryStatus;
+  /** Screen-reader phrasing for this row's `warn` state, appended after
+   *  "<label>: ". Warn means different things per row — the analyzer's is
+   *  "no cloud backup", ffmpeg's is "older than we support" — so a shared
+   *  string would announce something untrue. Defaults to a generic phrase. */
+  warnLabel?: string;
   /** Which guided step this row drills into. */
   stepIndex: number;
 }
@@ -357,6 +362,7 @@ function buildSummaryRows(readiness: SetupReadiness): SummaryRow[] {
          blocker in the summary when it isn't one. */
       status:
         blockers.ffmpeg.status === 'pass' ? 'ok' : blockers.ffmpeg.status === 'warn' ? 'warn' : 'attention',
+      warnLabel: 'installed, but older than we support',
       stepIndex: 1,
     },
     {
@@ -364,6 +370,7 @@ function buildSummaryRows(readiness: SetupReadiness): SummaryRow[] {
       label: 'Analyzer',
       detail: blockers.analyzer.status === 'pass' ? 'Ready' : blockers.analyzer.message,
       status: analyzerStatus,
+      warnLabel: 'ready, no backup',
       stepIndex: 2,
     },
     {
@@ -450,11 +457,16 @@ function SetupSummary({
                 'inline-block w-2.5 h-2.5 rounded-full shrink-0',
                 r.status === 'ok' ? 'bg-emerald-500' : r.status === 'warn' ? 'bg-amber-400' : 'bg-amber-500',
               ].join(' ')}
+              /* `warnLabel` is per-row: "no backup" is the ANALYZER's meaning of
+                 warn (no cloud fallback) and would announce "Audio assembly:
+                 ready, no backup" for an outdated ffmpeg, contradicting the
+                 visible detail beside it. Rows that don't set one get a generic
+                 phrasing. */
               aria-label={
                 r.status === 'ok'
                   ? `${r.label}: ready`
                   : r.status === 'warn'
-                    ? `${r.label}: ready, no backup`
+                    ? `${r.label}: ${r.warnLabel ?? 'ready, with a warning'}`
                     : `${r.label}: needs attention`
               }
             />

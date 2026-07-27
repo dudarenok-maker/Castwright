@@ -1,7 +1,12 @@
-/* fs-21 wave 2 — Step 2: ffmpeg.
-   Hard-blocker step. ffmpeg is an OS-level dependency — no in-app installer.
-   Shows a green "found" card on pass; shows per-OS install instructions + a
-   Re-check button on fail (mirrors the venv-bootstrap decision-Z pattern). */
+/* fs-21 wave 2 — Step 2: ffmpeg. ffmpeg is an OS-level dependency — no in-app
+   installer. Three render states, keyed off `status` (NOT off `cause`, so a
+   future warn cause can't fall through to the missing card):
+     pass  — green "found" card.
+     warn  — amber "installed but unsupported" card: upgrade commands + a docs
+             link, and it does NOT block. ops-35 (#1877) added this; the floor
+             is a support line, so untested is not broken.
+     fail  — per-OS install instructions + Re-check (the venv-bootstrap
+             decision-Z pattern). This is the only blocking state. */
 
 import type { SetupReadiness } from '../../lib/api';
 import { wikiUrl, WIZARD_STEP_WIKI } from '../../lib/wiki-links';
@@ -14,10 +19,11 @@ interface Props {
 export function StepFfmpeg({ readiness, onRefetch }: Props) {
   const diagnosis = readiness.blockers.ffmpeg;
   const passed = diagnosis.status === 'pass';
-  /* ops-35 (#1877): present, but older than the declared support floor. This
-     used to fall through to the "isn't installed yet" branch, which told a
-     user who HAS ffmpeg to install it. */
-  const outdated = diagnosis.cause === 'ffmpeg-too-old';
+  /* Any 'warn' renders the outdated card, not just cause 'ffmpeg-too-old'.
+     Keying on the cause would send the next warn cause added down the "isn't
+     installed yet" path — exactly the bug ops-35 fixed here. The card leads
+     with diagnosis.message, so a different warn still reads correctly. */
+  const outdated = diagnosis.status === 'warn';
 
   if (passed) {
     return (
@@ -90,11 +96,20 @@ export function StepFfmpeg({ readiness, onRefetch }: Props) {
 
             <div className="space-y-1">
               <p className="text-xs font-semibold text-ink/60 uppercase tracking-wide">Linux</p>
+              {/* Remove the apt build first: on Ubuntu, /usr/bin precedes
+                  /snap/bin, so installing the snap alongside an existing apt
+                  ffmpeg leaves the old one still resolving. */}
               <pre className="text-xs bg-ink/5 text-ink rounded-lg p-3 overflow-x-auto leading-relaxed">
-                {'sudo snap install ffmpeg'}
+                {'sudo apt remove ffmpeg\nsudo snap install ffmpeg'}
               </pre>
             </div>
           </div>
+
+          <p className="text-xs text-amber-900/70">
+            Still showing the old version after upgrading? Run{' '}
+            <code className="font-mono">ffmpeg -version</code> — if it hasn’t changed, an older
+            copy earlier on your PATH is shadowing the new one.
+          </p>
 
           <div className="flex flex-wrap items-center gap-3">
             <button

@@ -335,10 +335,22 @@ describe('diagnoseFfmpeg — version floor', () => {
     expect(d.remediation).not.toBe('');
   });
 
-  it('still FAILS when ffmpeg is absent — absence outranks staleness', () => {
-    const d = diagnoseFfmpeg({ ...base, ffmpegPresent: false, version: null, belowFloor: false });
+  /* The contradictory input is the whole point: belowFloor MUST be true here,
+     otherwise moving the belowFloor branch above the presence checks changes
+     nothing and the test cannot detect the inversion it exists to guard. */
+  it('still FAILS when ffmpeg is absent, even if belowFloor is set — absence outranks staleness', () => {
+    const d = diagnoseFfmpeg({
+      ...base, ffmpegPresent: false, ffprobePresent: true, version: '4.4', belowFloor: true,
+    });
     expect(d.status).toBe('fail');
     expect(d.cause).toBe('ffmpeg-missing');
+  });
+
+  it('reports both-missing ahead of the floor check too', () => {
+    const d = diagnoseFfmpeg({
+      ...base, ffmpegPresent: false, ffprobePresent: false, version: '4.4', belowFloor: true,
+    });
+    expect(d.cause).toBe('both-missing');
   });
 
   it('passes when the version is unparseable (git build)', () => {
@@ -351,9 +363,8 @@ describe('diagnoseFfmpeg — version floor', () => {
     expect(d.status).toBe('pass');
   });
 
-  it('keeps readiness true — warn is not a blocker', () => {
-    const d = diagnoseFfmpeg({ ...base, version: '4.4', belowFloor: true });
-    const blockers = [{ status: 'pass' }, { status: 'pass' }, { status: 'pass' }, d];
-    expect(blockers.every((b) => b.status === 'pass' || b.status === 'warn')).toBe(true);
-  });
+  /* Invariant 4 (ready stays true) is deliberately NOT asserted here. Building a
+     local array and re-implementing `every(pass || warn)` is a tautology — it
+     passes whatever setup-readiness.ts:96 actually says. It is pinned for real,
+     through the route, in setup-readiness.orchestration.test.ts. */
 });
