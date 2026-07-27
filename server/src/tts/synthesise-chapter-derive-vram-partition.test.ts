@@ -23,7 +23,11 @@
    a call-ORDER assertion can and does (see the second test below). */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { synthesiseChapter, type CastCharacter } from './synthesise-chapter.js';
-import type { ResolveChapterDeps, ResolveDesignedVoiceDeps } from './clone-voice-resolver.js';
+import {
+  UnresolvableClonedVoiceError,
+  type ResolveChapterDeps,
+  type ResolveDesignedVoiceDeps,
+} from './clone-voice-resolver.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
 import { setLastKnownCoquiInstallState, _resetUserSettingsCache } from '../workspace/user-settings.js';
@@ -325,6 +329,262 @@ describe('synthesiseChapter — engine-partitioned derive pre-pass (fs-38 Wave 3
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(callOrder).toEqual(['derive:qwen']);
     expect(coquiProvider.calls).toHaveLength(0);
+  });
+});
+
+/* fs-38 Wave 3c, Task 22 fix round 1 — review findings F1 (Critical), F2 and
+   F3 (Important). */
+describe('synthesiseChapter — engine-partitioned derive pre-pass, fix round 1 (fs-38 Wave 3c, Task 22)', () => {
+  it('F1: designed-only chapter + a failed evict stays fail-SOFT — the chapter still completes', async () => {
+    const provider = makeProvider();
+    const cast: CastCharacter[] = [
+      {
+        id: 'mira',
+        name: 'Mira',
+        gender: 'female',
+        overrideTtsVoices: {
+          coqui: { name: 'xtts-lib-mira', libraryUuid: 'lib-mira', provenance: 'designed' },
+        },
+      },
+    ];
+    const entry = {
+      voiceUuid: 'lib-mira',
+      name: 'Mira',
+      provenance: 'designed' as const,
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const deriveEngineArtifact = vi.fn();
+    // Simulates "the sidecar is in a recycle window and /unload returns 502" (F1's own scenario).
+    vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 502, statusText: 'Bad Gateway' }));
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'mira')],
+      cast,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      designedResolverDepsOverride: {
+        readEntry: async (uuid: string) => (uuid === 'lib-mira' ? entry : null),
+        ptExists: async () => false, // missing — triggers the self-heal
+        readDesignedMasterPcm: async () => ({
+          pcm: Buffer.alloc(1000),
+          sampleRate: 24000,
+          refText: '',
+          manifest: {},
+        }),
+        deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveDesignedVoiceDeps['deriveEngineArtifact'],
+        writeEntry: async () => {},
+      },
+    });
+
+    // The evict failure is caught inside the resolver's OWN fail-soft catch
+    // — deriveEngineArtifact is never reached (the hook throws first)...
+    expect(deriveEngineArtifact).not.toHaveBeenCalled();
+    // ...and the chapter completes anyway, rendering Mira on SOME voice
+    // (never the never-derived xtts-lib-mira slot) rather than aborting.
+    // Pre-fix (an eager, unguarded evict in front of the whole coqui block)
+    // this `synthesiseChapter` call rejects instead of resolving.
+    expect(provider.calls[0]?.voiceName).not.toBe('xtts-lib-mira');
+    expect(result.segments.length).toBeGreaterThan(0);
+  });
+
+  it('F1: a cloned voice present + a failed evict still raises (fail-loud policy unchanged)', async () => {
+    const provider = makeProvider();
+    const cast: CastCharacter[] = [
+      {
+        id: 'nova',
+        name: 'Nova',
+        gender: 'female',
+        overrideTtsVoices: {
+          coqui: { name: 'Nova (unused)', libraryUuid: 'lib-nova', provenance: 'cloned' },
+        },
+      },
+    ];
+    const clonedEntry = {
+      voiceUuid: 'lib-nova',
+      name: 'Nova clone',
+      provenance: 'cloned' as const,
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      master: {
+        clipFile: 'master.wav',
+        sampleRate: 24000,
+        durationSeconds: 8,
+        transcript: 'A retained reference clip.',
+        transcriptSource: 'whisper' as const,
+        captureMethod: 'upload' as const,
+      },
+    };
+    const deriveEngineArtifact = vi.fn();
+    setLastKnownCoquiInstallState('ready');
+    vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 502, statusText: 'Bad Gateway' }));
+
+    let thrown: unknown;
+    try {
+      await synthesiseChapter({
+        sentences: [sentence(1, 'nova')],
+        cast,
+        provider,
+        modelKey: 'coqui-xtts-v2',
+        engine: 'coqui',
+        cloneResolverDepsOverride: {
+          readEntry: async (uuid: string) => (uuid === 'lib-nova' ? clonedEntry : null),
+          writeEntry: async () => {},
+          ptExists: async () => false,
+          readMasterPcm: async () => ({
+            pcm: Buffer.alloc(1000),
+            sampleRate: 24000,
+            refText: 'A retained reference clip.',
+          }),
+          deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
+          currentArtifactVersion: () => 'v2.0.5',
+        },
+      });
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
+    expect((thrown as InstanceType<typeof UnresolvableClonedVoiceError>).broken).toEqual([
+      { name: 'Nova', reason: 'derive-failed' },
+    ]);
+    expect(deriveEngineArtifact).not.toHaveBeenCalled();
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it('F2: a coqui-only-BODY chapter still evicts coqui before a qwen-routed TITLE narrator self-heal (a qwen load about to happen is not just about body groups)', async () => {
+    const callOrder: string[] = [];
+    const coquiProvider = makeProvider();
+    const qwenProvider = makeProvider();
+    const resolveForEngine = (e: string) =>
+      e === 'qwen'
+        ? { provider: qwenProvider, modelKey: 'qwen3-tts-0.6b' as const }
+        : { provider: coquiProvider, modelKey: 'coqui-xtts-v2' as const };
+
+    const cast: CastCharacter[] = [
+      {
+        id: 'mira',
+        name: 'Mira',
+        gender: 'female',
+        overrideTtsVoices: {
+          coqui: { name: 'xtts-lib-mira', libraryUuid: 'lib-mira', provenance: 'designed' },
+        },
+      },
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        ttsEngine: 'qwen', // pinned off the book's coqui default — the whole point of this test
+        overrideTtsVoices: {
+          qwen: { name: 'Narrator (unused)', libraryUuid: 'lib-narrator', provenance: 'designed' },
+        },
+      },
+    ];
+    const miraEntry = {
+      voiceUuid: 'lib-mira',
+      name: 'Mira',
+      provenance: 'designed' as const,
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const deriveEngineArtifact = mockDeriveEngineArtifact(callOrder);
+    mockEvictFetch(callOrder);
+
+    const result = await synthesiseChapter({
+      // Only Mira (coqui) speaks a BODY line — chapterHasQwenGroups reads
+      // false on `groups` alone. The narrator only enters via the TITLE
+      // beat (chapterTitleNarration below), never a SentenceGroup.
+      sentences: [sentence(1, 'mira')],
+      cast,
+      provider: coquiProvider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      resolveForEngine,
+      chapterTitleNarration: 'Chapter One',
+      designedResolverDepsOverride: {
+        readEntry: async (uuid: string) => (uuid === 'lib-mira' ? miraEntry : null),
+        ptExists: async () => false, // both Mira's coqui slot and the narrator's qwen slot are missing
+        readDesignedMasterPcm: async () => ({
+          pcm: Buffer.alloc(1000),
+          sampleRate: 24000,
+          refText: 'A retained calibration clip.',
+          manifest: {},
+        }),
+        deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveDesignedVoiceDeps['deriveEngineArtifact'],
+        writeSidecarManifest: async () => {},
+        writeEntry: async () => {},
+      },
+    });
+
+    /* The exact bracket, proving the trailing coqui evict fired even though
+       chapterHasQwenGroups is false: evict qwen -> Mira's coqui derive ->
+       evict coqui (ONLY reachable via the F2 OR-condition here) -> the
+       narrator's qwen derive. Pre-fix (gate = chapterHasQwenGroups alone)
+       this reads ['evict:qwen', 'derive:coqui', 'derive:qwen'] — no
+       'evict:coqui' — Coqui would still be resident when the narrator's
+       qwen derive/render runs right after. */
+    expect(callOrder).toEqual(['evict:qwen', 'derive:coqui', 'evict:coqui', 'derive:qwen']);
+    expect(result.segments.length).toBeGreaterThan(0);
+  });
+
+  it('F3: a HEALTHY coqui-cloned voice (no derive needed) issues NO evict at all', async () => {
+    setLastKnownCoquiInstallState('ready');
+    const provider = makeProvider();
+    const cast: CastCharacter[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        gender: 'female',
+        overrideTtsVoices: {
+          coqui: { name: 'Wren (unused)', libraryUuid: 'lib-wren', provenance: 'cloned' },
+        },
+      },
+    ];
+    const entry = {
+      voiceUuid: 'lib-wren',
+      name: 'Wren clone',
+      provenance: 'cloned' as const,
+      tags: [],
+      pinned: false,
+      engines: {}, // no stored version at all -> never reads stale (isArtifactVersionStale's own contract)
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const deriveEngineArtifact = vi.fn();
+    const fetchSpy = mockFetchSpy();
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'wren')],
+      cast,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      cloneResolverDepsOverride: {
+        readEntry: async (uuid: string) => (uuid === 'lib-wren' ? entry : null),
+        ptExists: async () => true, // present -> healthy, no derive
+        deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
+      },
+    });
+
+    // Placebo-proof: the resolver DID look up and validate the voice
+    // (healthy, not skipped) and the chapter DID render on it...
+    expect(provider.calls[0]?.voiceName).toBe('xtts-lib-wren');
+    expect(result.segments.length).toBeGreaterThan(0);
+    // ...but since nothing needed deriving, NOTHING touched the sidecar's
+    // /unload — the exact "healthy → no evict" case F3 was about. Pre-fix
+    // (evict gated on request EXISTENCE, not derive NECESSITY) this fetch
+    // spy would have recorded exactly one 'qwen' unload call here.
+    expect(deriveEngineArtifact).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 

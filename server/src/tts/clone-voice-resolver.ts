@@ -238,6 +238,16 @@ export interface ResolveChapterDeps {
   purgeCloneArtifacts: typeof purgeCloneArtifacts;
   reportProgress?(msg: string): void;
   signal?: AbortSignal;
+  /** fs-38 Wave 3c, Task 22 fix round 1 (F1/F3) — invoked immediately before
+      the FIRST real coqui derive this call issues (never for a healthy or
+      broken/skipped request, and never for a qwen derive) — see the call
+      site below. Lets synthesise-chapter.ts's pre-pass defer its VRAM-
+      freeing sidecar evict until there's genuine coqui derive work to
+      protect, instead of evicting for every request that merely EXISTS
+      (F3), and lets a failed evict be classified exactly like any other
+      derive failure by THIS function's own existing fail-loud policy (F1) —
+      no separate try/catch needed at the call site. */
+  beforeFirstDerive?(): Promise<void>;
 }
 
 export interface ClonedVoiceRequest {
@@ -391,6 +401,11 @@ export async function resolveClonedVoicesForChapter(
     // repairable — re-derive from the retained master.wav.
     deps.reportProgress?.(`Preparing voice "${characterName}"…`);
     try {
+      /* Task 22 fix round 1 (F1/F3) — coqui only: fires exactly once we
+         KNOW a real coqui derive is about to happen, still inside this
+         try/catch, so a failed evict is reported exactly like any other
+         derive failure below (fail-loud, same as always). */
+      if (engine === 'coqui') await deps.beforeFirstDerive?.();
       const { pcm, sampleRate, refText } = await deps.readMasterPcm(libraryUuid, entry);
       const result = await deps.deriveEngineArtifact(
         libraryUuid,
@@ -628,6 +643,13 @@ export interface ResolveDesignedVoiceDeps {
   currentArtifactVersion(engine: CloneEngine): string;
   reportProgress?(msg: string): void;
   signal?: AbortSignal;
+  /** fs-38 Wave 3c, Task 22 fix round 1 (F1/F3) — same contract as
+      `ResolveChapterDeps.beforeFirstDerive`: fires once, immediately before
+      the FIRST real coqui derive (COQUI ARM ONLY — the qwen arm never calls
+      this). A thrown/rejected hook is caught by this function's own
+      existing fail-SOFT catch below, exactly like any other unexpected coqui
+      self-heal failure — never a new hard failure (§2.3). */
+  beforeFirstDerive?(): Promise<void>;
 }
 
 /** For each requested designed voice: best-effort re-derive from its
@@ -721,6 +743,11 @@ export async function resolveDesignedVoicesForChapter(
         }
 
         deps.reportProgress?.(`Preparing voice "${characterName}"…`);
+        /* Task 22 fix round 1 (F1/F3) — same hook as the cloned resolver's
+           coqui branch, still inside this per-voice try (I-1 above), so a
+           failed evict is caught by the shared catch below exactly like any
+           other coqui self-heal failure — soft, never a new hard failure. */
+        await deps.beforeFirstDerive?.();
         const result = await deps.deriveEngineArtifact(
           libraryUuid,
           'coqui',
