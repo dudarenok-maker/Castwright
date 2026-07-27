@@ -142,9 +142,9 @@ in v1.
    [`docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md`](../superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md)
    §1.1 (supersedes this doc's earlier "XTTS then Qwen" ordering — **Qwen leads**, it's the
    default engine and a refactor of already-proven `design_voice` code):
-   - **3a — Ingest, consent, recorder.** **Delivered** (behind `voices.library.enabled`,
-     no reachable production caller until 3b1 — see plan
-     [267](267-fs38-wave3-voice-clone.md)).
+   - **3a — Ingest, consent, recorder.** **Delivered** (originally behind the
+     since-removed `voices.library.enabled` flag, no reachable production
+     caller until 3b1 — see plan [267](267-fs38-wave3-voice-clone.md)).
    - **3b1 — Qwen clone (happy path).** `POST /qwen/clone-voice` extraction, `POST
      /api/voice-library/clone`, wizard phase 2, cast assignment, ECAPA fidelity, and the
      `applyQwenFallback` cloned-voice exemption (closing the first silent-substitution

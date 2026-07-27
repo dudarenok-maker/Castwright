@@ -47,13 +47,9 @@ import { distinctDriftChapterCount } from '../store/revisions-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { sampleScopeFor } from '../lib/sample-scope';
-import {
-  resolveDisplayTtsVoice,
-  resolveTtsVoiceForCharacter,
-  sampleModelKeyForEngine,
-} from '../lib/tts-voice-mapping';
+import { resolveDisplayTtsVoice, resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
 import { gradientForTtsVoice } from '../lib/voice-palette';
-import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
+import { TTS_MODEL_OPTIONS, engineForModelKey, modelKeyForEngineChoice } from '../lib/tts-models';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
 import { buildCharacterHint } from '../lib/build-character-hint';
 import { CompareCastModal } from '../modals/compare-cast-modal';
@@ -424,7 +420,7 @@ export function CastView({
   const startDesign = (scope: CastDesignScope) => {
     setScopeOpen(false);
     if (!bookId) return;
-    const modelKey = sampleModelKeyForEngine('qwen', ttsModelKey);
+    const modelKey = modelKeyForEngineChoice('qwen', ttsModelKey);
     /* 'variants' alone can only synthesise on top of an existing base, so it
        ships ONLY the ready (has-base) tasks — the server would silently skip
        the rest. 'both' designs the bases first, so it ships every task. Strip
@@ -497,7 +493,7 @@ export function CastView({
   async function playSampleFor(c: Character, voice: Voice | undefined) {
     const sampleVoiceId = sampleScopeFor(c, bookId ?? undefined);
     const effectiveEngine = effectiveEngineFor(c);
-    const effectiveModelKey = sampleModelKeyForEngine(effectiveEngine, ttsModelKey);
+    const effectiveModelKey = modelKeyForEngineChoice(effectiveEngine, ttsModelKey);
     /* Server appends a hash of (text, voiceName) to the cached filename so
        attribute edits don't return stale audio. Match by prefix (keyed on the
        *effective* model key so a Qwen-pinned row still detects its own
@@ -1015,7 +1011,7 @@ export function CastView({
             const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
             const sampleVoiceId = sampleScopeFor(c, bookId ?? undefined);
-            const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${sampleModelKeyForEngine(
+            const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${modelKeyForEngineChoice(
               effectiveEngineFor(c),
               ttsModelKey,
             )}`;
@@ -1220,7 +1216,7 @@ export function CastView({
             const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
             const sampleVoiceId = sampleScopeFor(c, bookId ?? undefined);
-            const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${sampleModelKeyForEngine(
+            const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${modelKeyForEngineChoice(
               effectiveEngineFor(c),
               ttsModelKey,
             )}`;

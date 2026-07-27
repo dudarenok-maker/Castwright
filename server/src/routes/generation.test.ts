@@ -20,7 +20,6 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 import type { Response } from '../http.js';
 import { preventSleep, allowSleep } from '../system/prevent-sleep.js';
-import { quarantinedIt } from '../test-utils/quarantine.js';
 /* Safe to statically import — this module is fully vi.mock'd above, so its
    real implementation (and real implementation's transitive imports, e.g.
    workspace/paths.js) never loads. `configValue`/`scoreBook`/embeddings-io
@@ -257,17 +256,16 @@ beforeEach(() => {
    process (not per-book): engage on the first job to register, release only
    once the LAST job across every book has deregistered.
 
-   The two `it`s below are QUARANTINED (`quarantinedIt`, see
-   docs/testing/flaky-register.md) — this file is a documented "Hook timed
-   out under Windows tmpdir/fs contention" hot file (vitest.config.slow.ts's
-   file-level comment). Verified this is pre-existing file-level flakiness,
-   not a defect in these tests or the feature: a throwaway, completely
-   unrelated single-request test (no prevent-sleep involvement at all)
-   reproduced an identical indefinite hang under the same real-Windows-fs-I/O
-   load, regardless of where in the file it was placed (including as the very
-   first describe block, before anything else runs). Both tests pass
-   reliably and deterministically in isolation under normal system load —
-   run with RUN_QUARANTINE=1 to exercise them locally. */
+   Both tests hold the synth open mid-request to assert on the wake lock WHILE
+   a job is in flight, so they can't `await` the response before asserting.
+   That makes the supertest dispatch trap load-bearing here: a superagent
+   `Request` is lazy — `.post().send()` builds the request but does NOT send
+   it; only `.then()`/`.end()` does. Awaiting `started`/`bothStarted()` (which
+   resolve from inside the mocked synth) while holding an un-dispatched
+   request deadlocks forever. The `.then((r) => r)` on each request is what
+   actually fires it; keep it. Every other test in this file awaits its
+   request directly, which dispatches implicitly — that's why only these two
+   were affected. */
 describe('POST /api/books/:bookId/generation — sleep prevention wake lock', () => {
   beforeEach(() => {
     /* Other describe blocks later in this file also trigger registerJob/
@@ -284,7 +282,7 @@ describe('POST /api/books/:bookId/generation — sleep prevention wake lock', ()
     if (fs.existsSync(audioRoot)) fs.rmSync(audioRoot, { recursive: true, force: true });
   });
 
-  quarantinedIt('engages on the one in-flight chapter and releases once it completes', async () => {
+  it('engages on the one in-flight chapter and releases once it completes', async () => {
     let resolveStarted: () => void;
     const started = new Promise<void>((r) => {
       resolveStarted = r;
@@ -314,7 +312,8 @@ describe('POST /api/books/:bookId/generation — sleep prevention wake lock', ()
 
     const p = request(app)
       .post(`/api/books/${bookId}/generation`)
-      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] })
+      .then((r) => r);
     await started;
 
     expect(preventSleep).toHaveBeenCalledTimes(1);
@@ -324,17 +323,19 @@ describe('POST /api/books/:bookId/generation — sleep prevention wake lock', ()
     await p;
 
     expect(allowSleep).toHaveBeenCalledTimes(1);
-  }, 15_000);
+  });
 
-  quarantinedIt('stays engaged while a second chapter is still in flight, releases only after both drain', async () => {
+  it('stays engaged while a second chapter is still in flight, releases only after both drain', async () => {
     const gate = gatedSleepLockSynth(2);
 
     const p1 = request(app)
       .post(`/api/books/${bookId}/generation`)
-      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] })
+      .then((r) => r);
     const p2 = request(app)
       .post(`/api/books/${bookId}/generation`)
-      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [2] });
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [2] })
+      .then((r) => r);
     await gate.bothStarted();
 
     /* Two concurrent jobs, but the wake lock only engages ONCE (idempotent —
@@ -343,15 +344,30 @@ describe('POST /api/books/:bookId/generation — sleep prevention wake lock', ()
     expect(allowSleep).not.toHaveBeenCalled();
 
     gate.releaseOne();
-    /* One chapter still in flight — must NOT release yet. */
-    await new Promise((r) => setTimeout(r, 20));
+    /* Wait for the released chapter to FULLY drain before asserting, by
+       racing the two responses: deregisterJob() runs strictly before
+       endAllSubscribers() ends the SSE response, so whichever request
+       settles first proves its own deregisterJob has already executed.
+
+       Waiting on a real signal rather than a sleep is load-bearing, not
+       style. The assertion below is only meaningful AFTER one chapter has
+       drained — before that it passes trivially, including against an
+       implementation that releases the wake lock on the FIRST drain instead
+       of the last, i.e. exactly the regression this test's title claims to
+       prevent (and the side-11 bug plan 242 exists to stop). A fixed sleep
+       re-opens that hole silently on any box where the drain (real ffmpeg
+       encode + mp3/.segments.json write, ~155ms here) outruns the timer.
+       Verified by mutation: releasing on first drain — `if
+       (inFlightByChapter.size === 1) allowSleep()` in deregisterJob — is red
+       here and was GREEN against the original 20ms sleep. */
+    await Promise.race([p1, p2]);
     expect(allowSleep).not.toHaveBeenCalled();
 
     gate.releaseOne();
     await Promise.all([p1, p2]);
 
     expect(allowSleep).toHaveBeenCalledTimes(1);
-  }, 15_000);
+  });
 });
 
 /* Two-deferred gate for the wake-lock tests above: each call blocks until

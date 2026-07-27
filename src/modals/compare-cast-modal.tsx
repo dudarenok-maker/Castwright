@@ -4,7 +4,7 @@ import { Avatar, Pill, PrimaryButton } from '../components/primitives';
 import { ToneSlider } from './profile-drawer';
 import { AbCompareShell } from '../components/ab-compare-shell';
 import { useAbAudition, type AbSide } from '../lib/use-ab-audition';
-import { engineForModelKey } from '../lib/tts-models';
+import { engineForModelKey, modelKeyForEngineChoice } from '../lib/tts-models';
 import { resolveTtsVoiceForCharacter, resolveProfileForCharacter } from '../lib/tts-voice-mapping';
 import { gradientForTtsVoice } from '../lib/voice-palette';
 import { sampleScopeFor, sampleUrlPrefix } from '../lib/sample-scope';
@@ -118,18 +118,28 @@ export function CompareCastModal({
   const [a, b] = characters;
   const [bookIdA, bookIdB] = bookIds;
   const ttsEngine = engineForModelKey(ttsModelKey);
+  /* Each side auditions in ITS OWN character's effective engine, not the
+     book's default (#1839) — mirrors cast.tsx's effectiveEngineFor /
+     profile-drawer.tsx's currentEngine: the character's own ttsEngine
+     override wins, else the session default. The resolved modelKey then
+     flows into both the play() request and buildSideContext's sample
+     prefix so the two agree on the same cache filename. */
+  const engineA = a.ttsEngine ?? ttsEngine;
+  const engineB = b.ttsEngine ?? ttsEngine;
+  const modelKeyA = modelKeyForEngineChoice(engineA, ttsModelKey);
+  const modelKeyB = modelKeyForEngineChoice(engineB, ttsModelKey);
   const playback = useSamplePlayback();
 
   const [draftA, setDraftA] = useState<SideDraft>(() => draftFromCharacter(a));
   const [draftB, setDraftB] = useState<SideDraft>(() => draftFromCharacter(b));
 
   const sideA = useMemo(
-    () => buildSideContext(a, draftA, library, ttsEngine, ttsModelKey, bookIdA),
-    [a, draftA, library, ttsEngine, ttsModelKey, bookIdA],
+    () => buildSideContext(a, draftA, library, engineA, modelKeyA, bookIdA),
+    [a, draftA, library, engineA, modelKeyA, bookIdA],
   );
   const sideB = useMemo(
-    () => buildSideContext(b, draftB, library, ttsEngine, ttsModelKey, bookIdB),
-    [b, draftB, library, ttsEngine, ttsModelKey, bookIdB],
+    () => buildSideContext(b, draftB, library, engineB, modelKeyB, bookIdB),
+    [b, draftB, library, engineB, modelKeyB, bookIdB],
   );
 
   const dirtyA = isDirty(a, draftA);
@@ -148,7 +158,7 @@ export function CompareCastModal({
           args: {
             voiceId: sideA.sampleVoiceId,
             voice: sideA.subject,
-            modelKey: ttsModelKey,
+            modelKey: modelKeyA,
             characterHint: buildCharacterHint(a, draftToHintOverrides(draftA)),
           },
           playback,
@@ -163,7 +173,7 @@ export function CompareCastModal({
           args: {
             voiceId: sideB.sampleVoiceId,
             voice: sideB.subject,
-            modelKey: ttsModelKey,
+            modelKey: modelKeyB,
             characterHint: buildCharacterHint(b, draftToHintOverrides(draftB)),
           },
           playback,

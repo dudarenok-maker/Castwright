@@ -8,10 +8,24 @@ Empty register = done. See the rewrite playbook in
 
 | Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| `engages on the one in-flight chapter and releases once it completes`, `stays engaged while a second chapter is still in flight, releases only after both drain` | `server/src/routes/generation.test.ts` | Windows tmpdir/fs contention (pre-existing file-level hot-file class, see `vitest.config.slow.ts`'s file comment) | Test times out waiting for a mocked `synthesiseChapter` call that never arrives — the POST never reaches the route's synth call at all under real system load. Verified NOT a defect in these tests or the sleep-prevention feature they cover: a throwaway, completely unrelated single-request test (no relation to prevent-sleep) reproduced an identical indefinite hang under the same load, regardless of position in the file (including as the very first describe block). Both pass reliably and deterministically in isolation under normal load. | #399 (side-11) | 2026-07-06 |
 
-<!-- 2026-07-06: NOT empty — see the row above, added alongside the side-11 investigation's 1.7B prompt-cache fix + the generation.ts sleep-prevention wake-lock hook. -->
-_~~Empty — no tests are currently quarantined.~~_
+_Empty — no tests are currently quarantined._
+
+<!-- Graduated 2026-07-27: the two sleep-prevention wake-lock tests in
+`server/src/routes/generation.test.ts` (#1854). They were never flaky. They
+failed 100% of the time and had been red since the day they were quarantined
+(9cf2e1e0) — the quarantine lane is non-gating, so nothing ever surfaced it,
+and the row here recorded a "Windows tmpdir/fs contention" diagnosis the
+evidence did not support (it also cited #399, a closed, unrelated sidecar
+memory-leak issue). Root cause: a superagent `Request` is lazy — `.post().send()`
+never sends; only `.then()`/`.end()` dispatches. Both tests hold the synth open
+to assert mid-flight, so they awaited a promise resolved from inside the mocked
+synth while their own request had never been dispatched. Deadlock. Fixed by
+dispatching each request with `.then((r) => r)`. Cautionary note for the next
+investigation: the original "passes reliably in isolation" claim, and my own
+first several runs, were both artifacts of instrumentation — adding a
+`p.then(...)` diagnostic to observe the hang was itself dispatching the request
+and making the test pass. Measure with the probe removed. -->
 
 <!-- Graduated 2026-06-30: `e2e/start-generation-tier-prompt.spec.ts` (#1178). The
 "cold-load race" was three spec-local defects masked by implicit timing — the

@@ -23,7 +23,9 @@ import { goToConfirm } from './helpers';
    confirm / ready). */
 async function openStatusPopover(page: import('@playwright/test').Page) {
   await page.getByTestId('status-pill').click();
-  await expect(page.getByTestId('status-popover')).toBeVisible({ timeout: 5_000 });
+  const popover = page.getByTestId('status-popover');
+  await expect(popover).toBeVisible({ timeout: 5_000 });
+  return popover;
 }
 
 test.describe('Kokoro Stop pill — bidirectional Load/Stop in the Status popover', () => {
@@ -33,31 +35,38 @@ test.describe('Kokoro Stop pill — bidirectional Load/Stop in the Status popove
        `kokoro-v1` (per FRONTEND_ACCOUNT_DEFAULTS) so the engines-in-use
        selector resolves to {kokoro} and the Kokoro control mounts. */
     await goToConfirm(page);
-    await openStatusPopover(page);
+    const popover = await openStatusPopover(page);
 
-    /* Wait for the first /health probe to resolve and the control to render
-       its real state. The button has aria-label "Stop (voice engine)" when the
-       engine is ready. The displayed text reads "Kokoro ready" via the
-       engineLabel override. */
-    const stopButton = page.getByRole('button', { name: /^stop \(voice engine\)$/i }).first();
+    /* Scope to the Kokoro pill's own group (ModelControlPill wraps
+       pill+button in `role="group" aria-label="Kokoro <state>"`), not just
+       the popover container: the popover can show several engines' pills at
+       once (Kokoro, Qwen, Qwen 1.7B in this mock account), all sharing the
+       same generic "Load model (voice engine)" / "Stop (voice engine)"
+       button aria-label — scoping to the popover alone isn't unique once
+       more than one is idle. This is also distinct from the loaded-models
+       banner's OWN Kokoro Stop control (Task 10 / #1839), whose button is
+       named "Stop Kokoro" instead so it never collides with this one — see
+       ModelControlPill's `leadWithAction` prop. */
+    const kokoroGroup = popover.getByRole('group', { name: /^Kokoro/i });
+    const stopButton = kokoroGroup.getByRole('button', { name: /^stop \(voice engine\)$/i });
     await expect(stopButton).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText(/Kokoro ready/i).first()).toBeVisible();
+    await expect(kokoroGroup.getByText(/Kokoro ready/i)).toBeVisible();
 
     /* Click Stop — pill should optimistically flip to "idle" before the
        /health repoll comes back, and the Load button replaces Stop. */
     await stopButton.click();
-    const loadButton = page.getByRole('button', { name: /^load model \(voice engine\)$/i }).first();
+    const loadButton = kokoroGroup.getByRole('button', { name: /^load model \(voice engine\)$/i });
     await expect(loadButton).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText(/Kokoro idle/i).first()).toBeVisible();
+    await expect(kokoroGroup.getByText(/Kokoro idle/i)).toBeVisible();
 
     /* Click Load — pill should flip back through "loading" then to "ready"
        again. The mock loadSidecar resolves after a short wait and the
        hook re-probes /health, picking up kokoroLoaded:true. */
     await loadButton.click();
-    await expect(page.getByRole('button', { name: /^stop \(voice engine\)$/i }).first()).toBeVisible({
+    await expect(kokoroGroup.getByRole('button', { name: /^stop \(voice engine\)$/i })).toBeVisible({
       timeout: 5_000,
     });
-    await expect(page.getByText(/Kokoro ready/i).first()).toBeVisible();
+    await expect(kokoroGroup.getByText(/Kokoro ready/i)).toBeVisible();
   });
 
   test('Coqui control is NOT rendered when the book default is Kokoro', async ({ page }) => {

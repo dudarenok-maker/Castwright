@@ -86,6 +86,16 @@ vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
   };
 });
 
+/* #1839 finding 3 — the route used to carry its own local canonicalModelKeyForEngine
+   lambda (pinning every 'qwen' resolution to the 0.6B constant) instead of calling
+   the shared server/src/tts/model-keys.ts mapper. Spy-wrap the real export so a
+   test can assert the route's `resolveForEngine` actually DELEGATES to it, mirroring
+   the same regression net added in chapter-qa-repair.test.ts. */
+vi.mock('../tts/model-keys.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../tts/model-keys.js')>();
+  return { ...real, canonicalModelKeyForEngine: vi.fn(real.canonicalModelKeyForEngine) };
+});
+
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-splice-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
@@ -346,6 +356,36 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-le
     expect(String(failed!.errorReason)).toBe(
       'No re-recordable lines for this character in this chapter (title-only).',
     );
+  });
+
+  it('#1839 finding 3 — resolveForEngine("qwen") delegates to the shared canonicalModelKeyForEngine mapper, not a local hardcoded copy', async () => {
+    const synth = await import('../tts/synthesise-chapter.js');
+    const synthesiseChapterMock = vi.mocked(synth.synthesiseChapter);
+    synthesiseChapterMock.mockClear();
+
+    const modelKeys = await import('../tts/model-keys.js');
+    const spy = vi.mocked(modelKeys.canonicalModelKeyForEngine);
+    spy.mockClear();
+
+    // Primary run engine is Kokoro (non-Qwen) so a per-character Qwen route is
+    // a providerCache MISS and must fall through to the mapper — the only
+    // reachable path that actually calls resolveForEngine('qwen').
+    await request(app)
+      .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+
+    expect(synthesiseChapterMock).toHaveBeenCalled();
+    const opts = synthesiseChapterMock.mock.calls[synthesiseChapterMock.mock.calls.length - 1][0] as {
+      resolveForEngine: (e: string) => { modelKey: string };
+    };
+    spy.mockClear();
+    const resolved = opts.resolveForEngine('qwen');
+
+    // The old local lambda never touched the shared export at all — this call
+    // count is exactly what distinguishes "we deleted the duplicate table" from
+    // "we still have a local copy that happens to agree on this input".
+    expect(spy).toHaveBeenCalledWith('qwen', 'kokoro-v1');
+    expect(resolved.modelKey).toBe('qwen3-tts-0.6b');
   });
 });
 

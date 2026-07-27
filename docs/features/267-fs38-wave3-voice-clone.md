@@ -100,17 +100,16 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
   - The Qwen `.pt` cache location is unchanged (`voices/qwen/qwen-<uuid>.pt`)
     — `master.wav` is a **new sibling file** in the entry directory, not a
     relocation (spec §2.2).
-  - Everything in 3a is gated by the pre-existing `voices.library.enabled`
-    config key (`server/src/config/registry.ts:645`); flipping it off hides
-    the routes and UI with no other behaviour change.
 - **Migration story:** additive only — pre-Wave-3 entries have no `master`
   field and are unaffected; `sampleTranscript` stays in sync with
   `master.transcript` per spec §2.1.
-- **Reversibility:** every route/component in this plan is inert unless
-  `voices.library.enabled` is on. With 3b1 landed, the consent guard/revoke
-  route/cloned-section UI now have a real production caller (the wizard's
-  `POST /clone`); reverting the whole Wave-3-to-date branch is still a clean
-  no-op for any pre-existing, non-cloned entry.
+- **Reversibility:** the `voices.library.enabled` config key that once gated
+  this surface was **removed** (2026-07-27) — it hid `#/voices`'s My-voices
+  tab while leaving Cast-view entry points (the profile drawer's assign /
+  "Save to my voices", the In-use card's "View in My voices", #1833) wired to
+  routes that then 404'd, so "off" was a broken state rather than a clean
+  one. Reverting the whole Wave-3-to-date branch is still a clean no-op for
+  any pre-existing, non-cloned entry.
 
 ## Invariants to preserve
 
@@ -137,8 +136,9 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
 6. **The recorder never dead-ends on a permission denial.** `VoiceRecorder`'s
    `denied` phase (`voice-recorder.tsx`) surfaces copy pointing at the
    Upload tab rather than leaving the user stuck.
-7. **Everything here is gated by `voices.library.enabled`.** No route or UI
-   surface in this plan is reachable with the flag off.
+7. **The voice library has no feature gate.** The `voices.library.enabled`
+   knob was removed (2026-07-27); every route and UI surface in this plan is
+   unconditionally available, and a stale persisted `false` override is inert.
 
 ### 3b1 invariants
 
@@ -167,6 +167,50 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
     through a mocked `deriveEngineArtifact`/`assessCloneFidelity` in tests)
     still branches to the right 503/502/500 instead of falling through to a
     generic 500 (regression class of #1801).
+12. **The transcript the clone was distilled against is the one persisted.**
+    `POST /clone` accepts an optional `transcript` (`CloneVoiceRequest`,
+    capped at 2000 chars) and prefers it over the candidate's Whisper text as
+    the derive's `refText` when non-blank, writing that same value to
+    **`master.transcript`** as well as `sampleTranscript`. Persisting to
+    `master.transcript` is load-bearing, not cosmetic: the 3b2 repair path
+    re-derives from `entry.master.transcript` (`readMasterPcmDefault`,
+    `server/src/tts/synthesise-chapter.ts`), so a correction stored only in
+    `sampleTranscript` would be silently reverted to the Whisper text by the
+    next repair. `master.transcriptSource` is decided server-side by comparing
+    against the candidate's stored text — never from a client-supplied flag —
+    so the persisted text and its recorded source can't disagree. Blank input
+    falls back to the stored transcript (Whisper can legitimately return an
+    empty transcript for a non-speech clip); over-length is a 400, never a
+    truncation. The UI deliberately carries **no textarea `maxLength`** — a
+    browser-side cap would silently drop the tail of a long paste and persist
+    half a correction as `transcriptSource: 'user'` — and instead blocks
+    Continue with a visible reason while the field is still on screen and
+    editable, since the panel unmounts after Continue and a server 400 would
+    leave nowhere to fix it. The 2000-char cap is enforced in characters only,
+    chosen so the base64 `X-Ref-Text` header stays bounded in BYTES for
+    multi-byte scripts (worst case 3 bytes per UTF-16 unit → ≤6000 bytes →
+    ≤8000 base64); a separate byte check would be unreachable at that cap, and
+    a test derives the arithmetic from the constant so raising it without
+    redoing the sums fails (#1836). **`mockCloneVoice` enforces the same cap**,
+    with a message byte-identical to the one `realCloneVoice` builds from the
+    route's JSON body — a prettier mock string would hide a real-mode wart the
+    wizard renders verbatim. The number exists in three places: two that
+    actually enforce it — the route's `MAX_CLONE_TRANSCRIPT_CHARS` and the
+    frontend's (`src/lib/clone-transcript-limit.ts`, its own module because
+    `e2e/` must import it into a Node process) — plus `openapi.yaml`'s
+    `maxLength`, which is normative but enforces nothing at runtime (no request
+    is validated against the schema; the route hand-validates). A test on each
+    side of the wire pins its implementation against that contract.
+    `src/lib/api-types.ts` is not a fourth: openapi-typescript does not encode
+    `maxLength`. #1840 shipped a contract documenting two caps 2×
+    apart because the schema description and the `400` both restated the
+    number; both now defer to `maxLength`, so the contract states it exactly
+    once and a test asserts that. Descriptive prose elsewhere (this plan, the
+    release notes) still cites the value and is deliberately not pinned. Note
+    this
+    closes ONE of the route's six documented failure modes in mock mode
+    (400/404/409/422/502/503): the mock still validates neither `candidateId`
+    nor consent, so it stays materially more permissive than the route.
 
 ## Test plan
 
@@ -197,7 +241,7 @@ Umbrella doc: [`194-voice-cloning.md`](194-voice-cloning.md) · fs-38 · [#624](
   too-short/unusable one; `POST /:voiceUuid/revoke`: 200 + `revokedAt`
   stamped, 404 on an unknown uuid, 409 when the entry has no consent record
   to revoke; the sample route's new 403 on revoked/consent-absent cloned
-  entries; all three gated behind `voices.library.enabled` (404 when off).
+  entries.
 - Vitest unit (`src/components/voices/voice-recorder.test.tsx`) — granted
   (record → stop → blob), denied (falls into the `denied` phase with the
   Upload-tab fallback copy), and re-take flows.
@@ -238,6 +282,66 @@ No new Playwright e2e in 3a — added in 3b1 (below).
   assign-readiness gate: 409 on a cloned entry with
   `engines.qwen.status !== 'ready'`, 200 on a ready one against a real
   seeded book/character.
+- Vitest server (`server/src/routes/voice-library.test.ts`) — Invariant 12
+  (#1836): an edited `transcript` is what reaches `deriveEngineArtifact`'s
+  `refText` and lands in `sampleTranscript` + `master.transcript` with
+  `transcriptSource: 'user'`; an unedited one stays `'whisper'`; a blank or
+  non-string one falls back to the stored text; an over-length one 400s
+  before any GPU work with the candidate left intact. Two guard tests derive
+  from the exported `MAX_CLONE_TRANSCRIPT_CHARS`: one pins the byte arithmetic
+  that justifies having no separate byte check, the other pins the constant
+  against `openapi.yaml`'s `maxLength`. Both fail if the cap is raised alone.
+- Vitest frontend (`src/components/voices/clone-capture-panel.test.tsx`) — the
+  transcript textarea carries no `maxlength` attribute, and an over-cap value
+  disables Continue with an on-screen reason instead of truncating or letting
+  the user reach an unrecoverable server 400.
+- Vitest frontend (`src/components/voices/clone-capture-panel.test.tsx`,
+  `src/modals/clone-voice-wizard.test.tsx`) — the panel forwards the *edited*
+  transcript via `onReady`, and the wizard forwards it on into the
+  `cloneVoice` body. Both links of the panel → wizard → API chain are pinned
+  separately, because #1836 was precisely a dropped hop in that chain.
+- Vitest frontend (`src/lib/api.clone-voice.test.ts`) — `mockCloneVoice`
+  mirrors the real precedence (supplied wins, blank/absent falls back,
+  matching text stays `'whisper'`), so mock/e2e mode can't keep reproducing
+  the bug the real route fixed. It also mirrors the route's **rejection**:
+  over-cap throws the exact message `realCloneVoice` would build (JSON envelope
+  included) and appends no entry; at-cap is accepted (the discriminating
+  mutation being `>` → `>=`). Two further tests pin
+  `MAX_CLONE_TRANSCRIPT_CHARS` against `openapi.yaml`: one on `maxLength`, one
+  asserting the schema states the number exactly *once* so that first pin
+  covers the whole contract. Both are the frontend-side twin of the server's
+  pin. Mutation-checked: raising the constant to 6000 fails the pin, deleting
+  the mock's guard fails the rejection test.
+- **The pins only run because CI was taught about them.** Both read
+  `openapi.yaml` at runtime, so neither has a module-graph edge to it and
+  `vitest --changed` — what CI runs — selected *zero* files on an openapi-only
+  diff (measured, both ways). `openapi.yaml` is therefore registered in both
+  vitest configs' `forceRerunTriggers`, as its own `openapi` scope in
+  `verify.yml` (its own flag, not `frontend`, which would also fire the four
+  e2e shards and the visual battery for a contract-only change), and in
+  `verify-cache.mjs`'s `test`/`test:server` inputs. A sibling `OpenAPI types
+  up to date` step guards the *other* half: `src/lib/api-types.ts` is
+  generated from `openapi.yaml` and committed, and openapi-typescript emits
+  each schema `description` into it as JSDoc — so editing the contract without
+  re-running `npm run openapi:types` ships a generated artifact whose prose
+  contradicts its source. That happened on this very PR (the removed
+  "Capped at 2000 characters…" paragraph survived in the generated file) and
+  nothing caught it, because codegen drift was ungated. Note
+  `forceRerunTriggers`
+  **replaces** vitest's defaults rather than extending them, so both configs
+  re-list `**/package.json/**` and `**/{vitest,vite}.config.*/**`. That is
+  load-bearing, measured on a clean tree: with them stripped, a root-manifest
+  diff makes `cd server && vitest run --changed` report *"No test files found"*
+  and exit 0 — so a release-cut version bump would run zero server tests and
+  report green — while the same diff with them restored selects 5389.
+- Playwright (`e2e/voice-library.spec.ts`, step 6) — the clone wizard's
+  transcript field in a real browser: the ingested Whisper text lands in the
+  box, an over-cap value disables Continue with the reason rendered on screen
+  *and leaves the full text intact* for trimming, and a corrected value
+  re-enables it. jsdom can't attest that the message renders beside the field
+  the user has to fix. The assertion that the corrected text reaches the wire
+  stays in Vitest — no view renders `sampleTranscript`, so there is nothing
+  for the browser to observe without adding UI purely for the test.
 - Vitest server (`server/src/tts/synthesise-chapter-cloned-exemption.test.ts`)
   — `applyQwenFallback` raises `UnresolvableClonedVoiceError` for a cloned
   Qwen-routed character when Qwen is unavailable, and leaves every other
@@ -265,9 +369,9 @@ No new Playwright e2e in 3a — added in 3b1 (below).
 
 ### Manual acceptance walkthrough
 
-Run against the real server (`voices.library.enabled` on) since 3a's ingest
-pipeline depends on real ffmpeg decode + Whisper transcription — mock mode
-only exercises the frontend thunks/components in isolation.
+Run against the real server since 3a's ingest pipeline depends on real ffmpeg
+decode + Whisper transcription — mock mode only exercises the frontend
+thunks/components in isolation.
 
 1. `POST /api/voice-library/clone-sample` with a clean ≥8s clip (multipart
    `audio` field). Expected: `202` with `{ candidateId, transcript,

@@ -798,3 +798,90 @@ def test_kokoro_provider_options_none_when_not_indexed() -> None:
     assert main._kokoro_provider_options("cpu", ["CPUExecutionProvider"]) is None
     assert main._kokoro_provider_options("cuda", []) is None
     assert main._kokoro_provider_options("auto", []) is None
+
+
+# ── real-package contract (side-26) ──────────────────────────────────────
+#
+# Everything above stubs `kokoro_onnx` via sys.modules, so nothing in this
+# file would notice upstream renaming the two things the device-pin path
+# actually reaches into.  These tests run against the REAL installed package
+# and skip when it's absent (CI / a fresh clone before install-kokoro).
+#
+# Why they matter: the indexed-device pin rebuilds `self._kokoro.sess` inside
+# a try/except that only WARNS on failure — so an upstream rename would not
+# raise, it would silently drop Kokoro back to an unpinned device.  A pin
+# bump must fail here instead.
+
+# NOTE: importorskip lives INSIDE each test, never at module scope — at module
+# scope it would skip this entire file on the CI boxes that never install
+# kokoro-onnx, silently taking the ~40 stubbed tests above with it.
+
+
+def _real_kokoro():
+    """The real installed kokoro_onnx, or skip. Re-imported per test so a
+    leftover sys.modules stub from a fixture can never be mistaken for it."""
+    import importlib
+
+    mod = pytest.importorskip("kokoro_onnx", reason="kokoro-onnx not installed")
+    try:
+        mod = importlib.reload(mod)
+    except ModuleNotFoundError:
+        # A bare stub module (no __spec__/__file__) left in sys.modules makes
+        # reload() fall back to module.__name__ for the spec lookup; if the
+        # real package isn't installed, that lookup fails and reload() raises
+        # instead of returning the stub. Treat that the same as "stub, not
+        # real" — skip cleanly rather than ERROR-ing.
+        pytest.skip("kokoro_onnx present only as a test stub (reload found no real package)")
+    if not getattr(mod, "__file__", None):
+        pytest.skip("kokoro_onnx present only as a test stub")
+    return mod
+
+
+def test_real_kokoro_still_exposes_the_sess_attribute() -> None:
+    """The indexed-device pin assigns `self._kokoro.sess = rt.InferenceSession(...)`.
+    `sess` is private API, so every kokoro-onnx bump must re-confirm it."""
+    import inspect
+    import re
+
+    src = inspect.getsource(_real_kokoro().Kokoro.__init__)
+    assert re.search(r"self\.sess\s*=", src), (
+        "kokoro_onnx.Kokoro no longer assigns `self.sess` — the indexed-device "
+        "pin in main.py rebuilds that attribute and fails SILENTLY (warn-only) "
+        "if it moves. Update the pin before lifting the kokoro-onnx floor."
+    )
+
+
+def test_real_kokoro_create_keeps_the_positional_signature_we_call() -> None:
+    """main.py has two call sites for `create()`, and they are not equivalent.
+    `KokoroEngine.synthesize` (the real synthesis hot path, runs on every synth)
+    calls `create(text, voice=..., speed=..., lang=...)` by keyword.
+    `KokoroEngine._directml_selftest_or_fallback` (the DirectML proof-of-life
+    probe — disabled today, see the `amd-rocm.txt` overlay comment and
+    `installRecipe` in `scripts/accelerator-profile.mjs`) calls
+    `create(text, voice, speed, lang)` fully positionally."""
+    import inspect
+
+    sig = inspect.signature(_real_kokoro().Kokoro.create)
+    params = list(sig.parameters)
+    assert params[:5] == ["self", "text", "voice", "speed", "lang"], (
+        f"kokoro_onnx.Kokoro.create signature drifted: {params}"
+    )
+    # Names/order alone guard the keyword call in `KokoroEngine.synthesize`: a
+    # rename of `voice`/`speed`/`lang` breaks that call site even though it's
+    # keyword-based. They do NOT prove the positional probe still works: if
+    # upstream kept these names/order but made voice/speed/lang keyword-only
+    # (`def create(self, text, *, voice, speed, lang, ...)`), the assertion
+    # above would still pass while `_directml_selftest_or_fallback`'s positional
+    # call would raise TypeError at runtime. Pin the parameter *kind* too — this
+    # only guards the (currently disabled) DirectML path, not the live hot path.
+    positional_kinds = (
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+    for name in ("voice", "speed", "lang"):
+        assert sig.parameters[name].kind in positional_kinds, (
+            f"kokoro_onnx.Kokoro.create's '{name}' parameter became keyword-only — "
+            "KokoroEngine._directml_selftest_or_fallback calls create() "
+            "positionally and would raise TypeError (latent on the disabled "
+            "DirectML path, but still shipped code)"
+        )

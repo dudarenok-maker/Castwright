@@ -62,6 +62,7 @@ import type {
 import type { components as ApiComponents } from './api-types';
 import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
+import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
 import { initialCharacters } from '../data/characters';
 import { initialSentences } from '../data/sentences';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
@@ -6071,6 +6072,10 @@ export interface SidecarHealth {
   kokoroLoading?: boolean;
   qwenLoaded?: boolean;
   qwenBase17Loaded?: boolean;
+  /** 1.7B base WEIGHTS present on disk — distinct from `qwenBase17Loaded`,
+      which is residency. The tier picker gates on this: the 1.7B base is a
+      separate download (tts-sidecar `_qwen_base17_weights_present`). */
+  qwenBase17WeightsPresent?: boolean;
   qwenLoading?: boolean;
   /* Qwen install-state, distinct from load-state (qwenLoaded). Drives the
      conditional default (Qwen-when-installed) + the install-check warning:
@@ -7492,6 +7497,11 @@ export async function mockGetSidecarHealth(): Promise<SidecarHealth> {
       MOCK_SIDECAR_QWEN_LOADED ||
       MOCK_SIDECAR_QWEN_INSTALL_STATE === 'ready' ||
       MOCK_SIDECAR_QWEN_INSTALL_STATE === 'loaded',
+    /* Mocks pretend the 1.7B base is installed so the tier picker stays fully
+       selectable under VITE_USE_MOCKS=true — no separate mock flag exists for
+       the 1.7B download the way MOCK_SIDECAR_QWEN_INSTALL_STATE tracks the
+       0.6B base. */
+    qwenBase17WeightsPresent: true,
     whisperPackageInstalled: true,
     device:
       MOCK_SIDECAR_MODEL_LOADED || MOCK_SIDECAR_KOKORO_LOADED || MOCK_SIDECAR_QWEN_LOADED
@@ -9450,6 +9460,7 @@ async function realDesignLibraryVoice(body: {
   name: string;
   persona: string;
   languageCode?: string;
+  modelKey?: TtsModelKey;
 }): Promise<{ entry: VoiceLibraryEntry; previewUrl: string }> {
   const res = await fetch('/api/voice-library/design', {
     method: 'POST',
@@ -9465,7 +9476,7 @@ async function realDesignLibraryVoice(body: {
 
 async function realRedesignLibraryVoice(
   voiceUuid: string,
-  body: { persona: string },
+  body: { persona: string; modelKey?: TtsModelKey },
 ): Promise<{ previewUrl: string }> {
   const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}/redesign`, {
     method: 'POST',
@@ -9552,11 +9563,14 @@ async function realAssignLibraryVoice(
   return res.json();
 }
 
-async function realSampleLibraryVoice(voiceUuid: string): Promise<{ url: string }> {
+async function realSampleLibraryVoice(
+  voiceUuid: string,
+  opts?: { modelKey?: TtsModelKey },
+): Promise<{ url: string }> {
   const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}/sample`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ modelKey: opts?.modelKey }),
   });
   if (!res.ok)
     throw new Error(
@@ -9659,6 +9673,7 @@ export async function mockDesignLibraryVoice(body: {
   name: string;
   persona: string;
   languageCode?: string;
+  modelKey?: TtsModelKey;
 }): Promise<{ entry: VoiceLibraryEntry; previewUrl: string }> {
   await wait(300);
   const now = new Date().toISOString();
@@ -9680,7 +9695,7 @@ export async function mockDesignLibraryVoice(body: {
 
 export async function mockRedesignLibraryVoice(
   voiceUuid: string,
-  _body: { persona: string },
+  _body: { persona: string; modelKey?: TtsModelKey },
 ): Promise<{ previewUrl: string }> {
   await wait(300);
   const entry = mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid);
@@ -9747,18 +9762,26 @@ export async function mockAssignLibraryVoice(
   return { updated: 1 };
 }
 
-export async function mockSampleLibraryVoice(voiceUuid: string): Promise<{ url: string }> {
+export async function mockSampleLibraryVoice(
+  voiceUuid: string,
+  _opts?: { modelKey?: TtsModelKey },
+): Promise<{ url: string }> {
   await wait(60);
   const entry = mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid);
   if (!entry) throw new Error(`No voice-library entry "${voiceUuid}".`);
   return { url: stubAudioA };
 }
 
+/** The canned "Whisper" transcript mock ingest returns. Shared with
+ *  mockCloneVoice so the two can't drift — if they did, mock mode would report
+ *  `transcriptSource: 'user'` for a transcript the user never touched (#1836). */
+const MOCK_WHISPER_TRANSCRIPT = 'the quick brown fox jumped';
+
 export async function mockCloneVoiceSample(_form: FormData): Promise<CloneSampleCandidate> {
   await wait(300);
   return {
     candidateId: `cand-${Math.random().toString(36).slice(2, 10)}`,
-    transcript: 'the quick brown fox jumped',
+    transcript: MOCK_WHISPER_TRANSCRIPT,
     durationSeconds: 9,
     sampleRate: 24_000,
     qualityWarnings: [],
@@ -9767,7 +9790,30 @@ export async function mockCloneVoiceSample(_form: FormData): Promise<CloneSample
 
 export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibraryEntry> {
   await wait(300);
+  /* #1836 — mirror the route's 400 on an over-length transcript, so mock mode
+     is never more permissive than the real server on a rejection the wizard
+     can surface. (The panel blocks Continue before this can fire from the UI;
+     the guard is here for parity, and for the day that panel gate moves.)
+     Byte-identical to what realCloneVoice produces — it interpolates
+     `await res.text()`, and the route replies `res.status(400).json({ error })`
+     — JSON envelope and all. The wizard renders the message verbatim, so a
+     prettier mock string would hide a real-mode wart no test could ever
+     catch. */
+  if (typeof body.transcript === 'string' && body.transcript.length > MAX_CLONE_TRANSCRIPT_CHARS) {
+    throw new Error(
+      `Voice clone failed (400): {"error":"Transcript is too long (max ${MAX_CLONE_TRANSCRIPT_CHARS} characters)."}`,
+    );
+  }
   const now = new Date().toISOString();
+  /* #1836 — mirror the real route: a supplied non-blank transcript wins over
+     the canned Whisper text and flips transcriptSource to 'user'. Without
+     this the mock keeps reproducing the very bug the real path just fixed. */
+  /* typeof-narrowed like the guard above and like the route, which pins
+     "ignores a non-string transcript and falls back to the Whisper text".
+     `body.transcript?.trim()` alone would TypeError in the mock on a truthy
+     non-string, where the real route 200s. */
+  const supplied = typeof body.transcript === 'string' ? body.transcript.trim() : '';
+  const transcript = supplied || MOCK_WHISPER_TRANSCRIPT;
   const entry: VoiceLibraryEntry = {
     voiceUuid: `lib-clone-${Math.random().toString(36).slice(2, 10)}`,
     name: body.name?.trim() || body.consent.personName,
@@ -9779,10 +9825,11 @@ export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibrary
       clipFile: 'master.wav',
       sampleRate: 24_000,
       durationSeconds: 10,
-      transcript: 'the quick brown fox jumped',
-      transcriptSource: 'whisper',
+      transcript,
+      transcriptSource: supplied && supplied !== MOCK_WHISPER_TRANSCRIPT ? 'user' : 'whisper',
       captureMethod: 'upload',
     },
+    sampleTranscript: transcript,
     sampleMeta: { qualityChecks: { cloneCosine: 0.62 } },
     engines: { qwen: { status: 'ready', baseModel: 'qwen3-tts-0.6b-2026-05' } },
     createdAt: now,

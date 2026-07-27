@@ -1654,6 +1654,8 @@ export function Layout() {
           evictionNotice={ttsLifecycle.evictionNotice}
           loadErrorNotice={ttsLifecycle.loadErrorNotice}
           onDismiss={ttsLifecycle.dismissNotices}
+          kokoro={ttsLifecycle.kokoro}
+          coqui={ttsLifecycle.coqui}
         />
       )}
 
@@ -1726,6 +1728,7 @@ export function Layout() {
               ? 'qwen3-tts-1.7b'
               : 'qwen3-tts-0.6b'
           }
+          qwen17bInstalled={ttsLifecycle.qwen1_7bInstalled}
           busy={startGenBusy}
           onClose={() => dispatch(uiActions.closeStartGenPrompt())}
           onConfirm={async (tier) => {

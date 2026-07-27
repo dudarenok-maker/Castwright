@@ -2238,6 +2238,108 @@ describe('fs-41/fs-50 seam 4b — language facet on the global #/voices view', (
     expect(within(group).getByRole('button', { name: 'German' })).toBeInTheDocument();
   });
 
+  /* #1834 — the chip row is the only control that can clear `languageFilter`,
+     and it only renders while the library still carries a non-English
+     languageCode. A mid-session library change (book switch through the
+     book-scoped mount, engine switch, a re-hydrate that drops the Russian
+     voices) can pull the row out from under an active filter, leaving it
+     narrowing the rollup with nothing left to match and no way to clear it.
+     Same shape as #1802's `section`, fixed the same way: derive the effective
+     filter during render instead of trusting the raw local. */
+  it('stops filtering when the filtered language leaves the library mid-session (#1834)', async () => {
+    const store = makeStore();
+    const ivan = makeLangVoice({ id: 'v_ivan', character: 'Ivan', bookId: 'b1', bookTitle: 'Book One', source: 'current', languageCode: 'ru' });
+    const preset = makeLangVoice({ id: 'v_preset', character: 'Preset', bookId: 'b1', bookTitle: 'Book One', source: 'current' });
+    const { rerender } = render(
+      <Provider store={store}>
+        <LibraryView library={[ivan, preset]} />
+      </Provider>,
+    );
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Russian' }));
+    expect(screen.queryByText('Preset')).not.toBeInTheDocument();
+    /* The library's Russian voices go away while the view stays mounted. */
+    rerender(
+      <Provider store={store}>
+        <LibraryView library={[preset]} />
+      </Provider>,
+    );
+    await act(async () => {});
+    /* The chip row that could clear the filter has unmounted… */
+    expect(screen.queryByRole('group', { name: 'Filter by language' })).toBeNull();
+    /* …so the filter must no longer narrow the rollup to nothing. */
+    expect(screen.getByText('Preset')).toBeInTheDocument();
+  });
+
+  /* #1834 — the same case again on the Qwen side. The rollup splits into
+     `presetLibrary` and `qwenLibrary` purely by `ttsVoice.provider`, which
+     `resolveVoiceAssignment` stamps from the ACTIVE ENGINE rather than per
+     voice — so under Qwen (the default generation engine) the whole library
+     lands in `filteredQwenLibrary` and the case above exercises none of it.
+     A `languageCode` is only ever set on a designed Qwen voice, which makes
+     this the leg that actually strands a real user. */
+  it('stops filtering the Qwen library too when the language leaves mid-session (#1834)', async () => {
+    const store = makeStore();
+    const ivan = makeLangVoice({
+      id: 'q_ivan', character: 'Ivan', bookId: 'b1', bookTitle: 'Book One', source: 'current',
+      languageCode: 'ru',
+      overrideTtsVoices: { qwen: { name: 'qwen-ivan' } },
+      ttsVoice: { provider: 'qwen', name: 'qwen-ivan', description: 'Designed voice' },
+    });
+    const marlow = makeLangVoice({
+      id: 'q_marlow', character: 'Marlow', bookId: 'b1', bookTitle: 'Book One', source: 'current',
+      overrideTtsVoices: { qwen: { name: 'qwen-marlow' } },
+      ttsVoice: { provider: 'qwen', name: 'qwen-marlow', description: 'Designed voice' },
+    });
+    const { rerender } = render(
+      <Provider store={store}>
+        <LibraryView library={[ivan, marlow]} />
+      </Provider>,
+    );
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Russian' }));
+    expect(screen.queryByText('Marlow')).not.toBeInTheDocument();
+    /* Ivan's design manifest stops resolving a language (his qwen override is
+       cleared, or the manifest read fails on the next hydrate). */
+    rerender(
+      <Provider store={store}>
+        <LibraryView library={[marlow]} />
+      </Provider>,
+    );
+    await act(async () => {});
+    expect(screen.queryByRole('group', { name: 'Filter by language' })).toBeNull();
+    expect(screen.getByText('Marlow')).toBeInTheDocument();
+  });
+
+  it('falls back to All when the filtered language leaves a still-multilingual library (#1834)', async () => {
+    const store = makeStore();
+    const ivan = makeLangVoice({ id: 'v_ivan', character: 'Ivan', bookId: 'b1', bookTitle: 'Book One', source: 'current', languageCode: 'ru' });
+    const dieter = makeLangVoice({ id: 'v_dieter', character: 'Dieter', bookId: 'b1', bookTitle: 'Book One', source: 'current', languageCode: 'de' });
+    const { rerender } = render(
+      <Provider store={store}>
+        <LibraryView library={[ivan, dieter]} />
+      </Provider>,
+    );
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Russian' }));
+    expect(screen.queryByText('Dieter')).not.toBeInTheDocument();
+    /* Russian goes away but German remains: the row still renders, so the
+       stale 'ru' must read as All rather than as no-chip-pressed. */
+    rerender(
+      <Provider store={store}>
+        <LibraryView library={[dieter]} />
+      </Provider>,
+    );
+    await act(async () => {});
+    const group = screen.getByRole('group', { name: 'Filter by language' });
+    expect(within(group).queryByRole('button', { name: 'Russian' })).toBeNull();
+    expect(within(group).getByRole('button', { name: 'All' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByText('Dieter')).toBeInTheDocument();
+  });
+
   it('falls back to the raw BCP-47 code when the language is not in the label map', async () => {
     const lib: Voice[] = [
       makeLangVoice({ id: 'v_ja', character: 'Tanaka', bookId: 'b1', bookTitle: 'B1', source: 'current', languageCode: 'ja' }),

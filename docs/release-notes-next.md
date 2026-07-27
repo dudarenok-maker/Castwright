@@ -71,15 +71,20 @@ history at cut time.
   request to the sidecar, not the caller's request to us, and forwarding it would collide with
   the 409 these routes already use for "design run in progress" / `gpu_busy`. The `0` the
   unreachable/cancelled paths carry also clamps to 502. (#1801)
-- **`#/voices` no longer strands you on a blank pane when the voice library is turned off**
-  (#1802). The view's section state is local; `voices.library.enabled` reading `false` after the
-  user had already opened **My voices** unmounted that nav segment and rendered
-  `MyVoicesSection` as `null`, leaving the nav strip with nothing beneath it until another
-  segment was picked. In practice the reachable trigger is the boot-time race — the config read
-  treats an unhydrated knob as enabled-pending, so a click landing before `fetchConfig` resolves
-  could strand on a disabled library. The active section is now **derived** rather than reset by
-  an effect, so the fallback to `in-use` happens during render and the empty pane is never
-  painted at all.
+- **The `voices.library.enabled` feature flag is removed outright** (#1833, subsuming #1802). The
+  knob hid the **My voices** tab and 404'd the whole `/api/voice-library` router, but it never
+  gated the library's other entry points: the profile drawer's assign / "Save to my voices"
+  actions and the In-use card's "View in My voices" link kept rendering and calling routes that
+  had just been turned off. "Off" was therefore not a supported state but a half-broken one —
+  designed voices depend on the library surface existing — and the two bugs filed against it
+  (#1802's blank pane, #1833's dead button) were instances of that class rather than independent
+  defects. Deleted: the registry knob and its now-empty `voices-library` settings group,
+  `requireVoiceLibraryEnabled` and its mount at `app.ts:196`, the `myVoicesLibraryEnabled` gate
+  and the derived-`activeSection` masking added for #1802, `MyVoicesSection`'s `enabled` prop,
+  and the boot-time `fetchConfig()` dispatch in `src/store/index.ts` that existed solely to
+  hydrate the gate (`advanced.tsx` still dispatches its own on mount; it was the only other
+  consumer). A stale `voices.library.enabled: false` left in a user's persisted config overrides
+  is inert — pinned by a regression test in `voices.restructure.test.tsx`.
 - **fs-38 Wave 3b2 — cloned-voice resolver + lifecycle** (Refs #624). Closes the resolver/
   lifecycle half of the never-substitute invariant 3b1's single `applyQwenFallback` exemption
   only partially covered. A new `clone-voice-resolver.ts` (pure Healthy/Repairable/Broken
@@ -107,6 +112,74 @@ history at cut time.
   `qwen-<uuid>__master.wav`, scoped to a missing `.pt` only and never throwing) shipped alongside
   as the wave's optional tail. Plan: `docs/features/268-fs38-wave3b2-resolver.md`. Spec:
   `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md` §5.
+- **Voice previews use the character's engine and the book's quality tier** — the
+  audition request resolves its `modelKey` through the single
+  `modelKeyForEngineChoice` mapper instead of the lossy `sampleModelKeyForEngine`
+  copy, which returned the book's default key for every non-Qwen engine (so a
+  Kokoro-overridden character in a Coqui book previewed in Coqui) and pinned every
+  Qwen preview to 0.6B. The tier resolves from the session key, so the play and
+  design paths keep landing on one shared cache file. Thirteen audition/design call
+  sites now go through that one mapper; the three `TtsEngine` declarations and the
+  four engine→modelKey mappers collapse to one per side of the wire. The My-voices
+  card, the design/redesign preview, the clone wizard and both sides of the A/B
+  compare all follow the session tier, so one voice cannot sound different in two
+  places. A designed voice's cached audition is now genuinely reused by its first
+  Play — the design and play paths previously hashed different filenames because
+  only one folded in the persona token, so every first Play silently re-synthesised.
+  The Start-generation tier picker disables 1.7B when its separately-downloaded
+  weights are absent. GPU admission now frees an idle Qwen base tier before
+  refusing a preview on capacity, and when capacity is genuinely exhausted the
+  error names the resident model that is holding it and the control that frees it.
+  (#1812, #1839, #1841, #1842)
+- **fs-38 — clone-wizard transcript edits now reach the derive** (#1840, closes #1836, refs #624). The
+  wizard's transcript textarea was editable but write-only: `onReady` forwarded just
+  `{ candidateId, consent }` and `CloneVoiceRequest` had no transcript field, so `POST /clone`
+  always distilled against `candidate.master.transcript` — the raw Whisper output. Adds an
+  optional `transcript` to `CloneVoiceRequest` (OpenAPI-first), forwards the edited value from
+  the capture panel through the wizard, and prefers it as the derive's `ref_text` when non-blank.
+  The corrected text is persisted as **`master.transcript`** as well as `sampleTranscript` —
+  load-bearing, because the Wave 3b2 repair path re-derives from `entry.master.transcript`
+  (`readMasterPcmDefault`), so storing it only in `sampleTranscript` would let a later repair
+  silently revert to the Whisper text. `master.transcriptSource` now records `'user'` when the
+  text differs from the stored Whisper transcript (previously the enum's `'user'` arm was
+  unreachable), decided server-side rather than from a client flag. Blank/whitespace falls back
+  to the Whisper text, since Whisper can legitimately return an empty transcript for a non-speech
+  clip. As the first client-controlled value to reach the derive's `refText` — which travels to
+  the sidecar as a base64 `X-Ref-Text` header — it is capped at 2000 chars in both the contract
+  and the route (pinned against drift by a test that derives from the exported constant), sized so
+  the header stays bounded in BYTES for multi-byte ja/zh/ru text rather than only for ASCII. Over-
+  length is a 400, never a truncation: the textarea deliberately carries no `maxLength`, because a
+  browser-side cap would silently drop the tail of a correction and persist the remainder as
+  `transcriptSource: 'user'` — the same silent-discard shape this fixes. The wizard blocks Continue
+  with a visible reason instead, while the field is still editable.
+  `mockCloneVoice` mirrors the same semantics so mock/e2e mode stops reproducing the bug. Adds
+  Invariant 12 to `docs/features/267-fs38-wave3-voice-clone.md`. Closes the run sheet's KL-k
+  finding.
+- **`#/voices`' language filter can no longer strand the rollup** (#1834). `languageFilter` was
+  raw local state, but the chip row that clears it renders only while the library still carries
+  the codes it offers — and it lives inside the rollup's non-empty branch. So a mid-session
+  library change that drops the filtered language left the filter matching nothing, collapsing
+  the view to the "No voices yet" empty state (wrong copy, too: "Finish setting up a book") with
+  the chips gone — a filter still applied and no control left to clear it. The reachable trigger
+  is the last voice carrying that language losing it: its qwen override cleared from the profile
+  drawer in this same view, the voice deleted, or its design manifest failing to resolve a
+  language on a later read — surfaced by the next `voicesActions.hydrate`, which refires on
+  `[bookId, stageKind, ttsEngine, genProgress]` while the view stays mounted. Explicitly NOT an
+  engine switch or a book switch, both of which the first draft of this entry claimed: the server
+  reads `languageCode` from the design manifest independently of the `engine` query param, and
+  the voices response walks every book under `BOOKS_ROOT` with `currentBookId` only setting
+  `source` — neither can remove a code from `languages` (`server/src/routes/voices.ts:257-260`,
+  `:402-406`). The effective filter is now derived during render
+  (`languages.includes(languageFilter) ? languageFilter : null`) so the empty rollup is never
+  painted; `setLanguageFilter` stays the sole state writer. Same shape and same treatment as
+  `activeSection` for #1802 (that derivation is gone with the flag in #1833; this one is not
+  gate-dependent). Three regression cases in `voices.test.tsx`: the chip row unmounting entirely,
+  the row surviving with the selected code dropped (the "All" chip reads pressed again), and the
+  same stranding on the **Qwen** leg — `filteredQwenLibrary`, which is where the whole library
+  sits under the default engine (`resolveVoiceAssignment` stamps `provider` from the active
+  engine, not per voice) and therefore the only leg a real user can be stranded on, since
+  `languageCode` is only ever set on a designed Qwen voice. The independent review proved that
+  leg had zero coverage — reverting just its memo left all 69 tests green.
 
 ---
 
@@ -159,3 +232,89 @@ history at cut time.
   the cloud fallback is opt-out (on by default, switchable off), never framed as opt-in-only or
   "never touches the cloud". Guarded by `src/data/help-topics.test.ts`; item-count assertions bumped
   43 → 45.
+
+---
+
+## 🔒 Security & dependencies
+
+- **Sidecar engine deps: kokoro-onnx 0.5.0, a real ONNX Runtime pin, and FastAPI 0.140 via `lifespan`** (#1846).
+  Clears the actionable half of the `side-17` umbrella (#893), which an audit found was carrying three
+  stale rationales.
+  - `kokoro-onnx` `>=0.4.0,<0.5.0` → `>=0.5.0,<0.6.0` across all three overlays. The entire upstream
+    delta is `kokoro_onnx/log.py` dropping `colorlog` for stdlib `logging`; `Kokoro.create()`'s signature
+    and the private `.sess` attribute are unchanged. Two new contract tests in `test_kokoro.py` run
+    against the REAL installed package (the rest of that file stubs `kokoro_onnx` via `sys.modules`) —
+    they exist because the indexed-device pin rebuilds `.sess` in a warn-only `try/except`, so an
+    upstream rename would silently unpin the device rather than raise.
+  - `onnxruntime-gpu` gets an explicit `>=1.27,<1.28` constraint in `scripts/install-ort.mjs`. There was
+    no pin before — the swap ran `pip install --force-reinstall --no-deps onnxruntime-gpu` unversioned,
+    so the runtime executing Kokoro was whatever was latest on the user's install date. The constraint
+    lives in the installer, never the overlays (macOS reads those and has no wheel).
+    **Existing installs on 1.28.x will step back to 1.27.x on first upgrade** — both upgrade paths
+    (`bootstrap-venv.mjs`, `apply.ts`) re-run the swap.
+  - All 12 `@app.on_event` handlers → one `lifespan` context manager (`main.py`), then `fastapi`
+    `0.115` → `0.140` and `uvicorn` `0.30` → `0.51` (starlette rides transitively to 1.3.1).
+    Startup order preserved exactly; shutdown stays in registration order (FastAPI runs it forwards —
+    reversing would be a behaviour change). Teardown is in a `finally`, not after a bare `yield`,
+    because `_DefaultLifespan.__aexit__` discards `exc_info` and runs shutdown unconditionally.
+    `test_lifespan_order.py` pins both sequences against the actually-wired `lifespan_context`.
+  - **Correction to the rationale**: the migration was NOT a hard prerequisite, contrary to what the
+    working notes claimed. FastAPI 0.140 re-implements `_DefaultLifespan`, `APIRouter._startup()`,
+    `._shutdown()`, `.add_event_handler()` and `.on_event()` locally to preserve backward compatibility
+    after Starlette removed them. `on_event` is deprecated on a compat shim carrying its own removal
+    TODO — that is the real reason to move, and the comments now say so.
+  - Follow-ups folded in: `httpx2` adopted in `requirements-dev.txt` (#1843) so Starlette 1.3.1's
+    `testclient` stops warning about the deprecated `httpx` fallback (`httpx` stays — gradio and
+    safehttpx still import it); and `install-ort.mjs` now reports the package it actually swapped in
+    (#1844) instead of hardcoding `onnxruntime-directml`, which was wrong on every profile that
+    reaches the swap.
+  - Still upstream-blocked, with corrected reasons in #893: `torch` 2.12/2.13 is blocked because
+    **torchaudio's last release is 2.11.0**, NOT by the cu130 driver bump originally recorded;
+    `transformers` 5.x and `huggingface_hub` 1.x are both frozen by `qwen-tts==0.1.1`'s exact
+    `transformers==4.57.3` pin (#1228).
+
+- **Dependabot sweep: 9 alerts cleared, 1 dismissed as unreachable, 3 recorded as upstream-blocked** (#1863).
+  Nine bumps, all of which npm resolves within existing ranges except where noted:
+  - Frontend (dev-only, build tooling): `postcss` 8.5.15 → 8.5.23 (GHSA-r28c-9q8g-f849, source-map path
+    traversal), `js-yaml` 4.2.0 → 4.3.0 (GHSA-52cp-r559-cp3m, quadratic merge-key chains),
+    `brace-expansion` on all three of its major lines — 1.1.15 → 1.1.16, 2.1.1 → 2.1.2, 5.0.6 → 5.0.8
+    (GHSA-3jxr-9vmj-r5cp). `nanoid` 3.3.12 → 3.3.16 rides along as postcss's own dependency.
+  - `shell-quote` 1.8.4 → 1.9.0 (GHSA-395f-4hp3-45gv) is reached by bumping **`concurrently`
+    10.0.3 → 10.0.4**, not the leaf: concurrently pins shell-quote exactly, so `npm update shell-quote`
+    is a no-op. 10.0.4 carries 1.9.0 itself.
+  - Server: `postcss` 8.5.15 → 8.5.23 (dev), `protobufjs` 7.6.4 → 7.6.5 via `@google/genai`'s `^7.5.4`
+    (GHSA-j3f2-48v5-ccww, infinite loop parsing `.proto` options).
+  - **`adm-zip` 0.5.17 → 0.6.0 needs an `overrides` entry** in `server/package.json` (GHSA-xcpc-8h2w-3j85,
+    crafted ZIP triggers a 4 GB allocation). It arrives via `epub2@3.0.2` — already the latest release, so
+    no upstream fix is coming — which requires `^0.5.10`, putting 0.6.0 out of range. This is the one
+    runtime-behaviour risk in the sweep: a 0.x minor is breaking by semver, and adm-zip is what parses
+    every uploaded EPUB. Verified rather than assumed — `zipfile` (epub2's optional native preference)
+    is not installed, so the adm-zip fallback in `epub2/zipfile.js` **is** the live path, and epub2's
+    exact call sequence (`new AdmZip(file)` → `getEntries().entryName` → `getEntry` → `readFileAsync`)
+    was exercised against a real fixture EPUB on 0.6.0 alongside the 27 `src/parsers/epub.test.ts` cases.
+  - **Dismissed, not fixed:** `react-router` (GHSA-qwww-vcr4-c8h2) as `not_used`. GitHub-rated **high**
+    (CVSS v4 7.1) but reachable only in RSC/framework mode; we drive a client-side `createHashRouter`,
+    so the vulnerable path does not exist here. Reachability is the whole justification — an earlier
+    draft of this note cited "CVSS 0.0", which was the advisory's *unscored v3 placeholder* (null
+    vector), not a real low rating. The nominal fix is
+    8.3.0, but `react-router-dom` has no v8 — it's frozen at 7.18.1 — so it means rewriting 24 files'
+    imports **and** raising the product's Node floor from `>=20.19.0` to `>=22.22.0`. Tracked as
+    `fe-56` (#1859) on currency grounds rather than as a security fix.
+  - **Still upstream-blocked:** the three `torch` alerts (GHSA-rrmf-rvhw-rf47, low/5.3, `torch.jit.script`
+    memory corruption; patched in 2.13.0). Recorded on #893 with measured evidence: the `cu128` index we
+    install from tops out at torch 2.11.0 while 2.12+ ships only on `cu130`, and — the harder blocker —
+    torchaudio's last release is 2.11.0, with Qwen importing `torchaudio.compliance.kaldi` at runtime.
+  - **`npm audit` is deliberately still not clean, and that is not an oversight.** A *second*
+    brace-expansion advisory (GHSA-mh99-v99m-4gvg, high — unbounded expansion → OOM) expresses its
+    affected range as a single `<= 5.0.7` spanning every major line, first patched in **5.0.8**. The
+    5.x copy here is 5.0.8 and clears it; the 1.1.16 and 2.1.2 copies cannot, because upstream never
+    backported a 1.x or 2.x fix. It is not a Dependabot alert, so the 9-cleared tally above is exact
+    against its own source of truth — but a bare `npm run audit` at root will report high findings, and
+    the next person to run one should know why rather than assume the sweep missed something. No CI leg
+    runs `npm audit`, so nothing goes red on it.
+  - The adm-zip override is written `>=0.6.0`, **not** `^0.6.0`: adm-zip has only ever published `0.x`
+    releases, and for a `0.x` package a caret caps at `<0.7.0` — which would silently hold the tree back
+    the day the next fix lands as 0.7.0, with `npm update` reporting nothing to do.
+    `server/src/parsers/adm-zip-pin.test.ts` guards the block, since deleting it reinstalls a vulnerable
+    0.5.x with no error (epub2's declared `^0.5.10` is satisfied) and the 27 existing parser cases return
+    byte-identical results on both versions, so they cannot detect the regression.

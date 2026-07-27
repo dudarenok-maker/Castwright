@@ -1,5 +1,10 @@
 # Castwright 1.15.0
 
+- **The speech engine now runs on a version we've actually tested.** Until now, the exact
+  speech runtime Castwright installed depended on the day you installed it — two people with
+  identical machines could quietly end up on different builds, which made "it sounds different
+  on my computer" almost impossible to chase down. It's pinned now. Some installs will step
+  back to the tested version the next time they update.
 - **Build your own stable of narrators in My voices.** Design a voice once — from a persona, with
   a live audition — and it's yours to cast in any book, not just the one you designed it for.
   Not happy with a take? Redesign it and compare old against new side by side before you commit.
@@ -28,9 +33,11 @@
   short sample, confirm it's yours (or a family member's, with their say-so), and Castwright
   builds a reusable voice you can hand to any character. It'll never quietly swap in a
   stand-in: if it can't use your cloned voice, it tells you rather than faking it.
-- **The Voices page never shows you an empty room.** If My voices turns out to be switched off
-  just as you open it, the page now shows your in-use voices instead of leaving you staring at a
-  blank pane.
+- **Fixing a misheard word in your voice sample now actually counts.** When you record a sample
+  for cloning, Castwright writes down what it heard — and if it misheard you, you can correct it.
+  Until now those corrections were quietly ignored, and the clone was built against the wrong
+  words. Your edit is now what the voice is built from, and it sticks, so a later touch-up
+  doesn't undo it.
 - **A cloned voice now tells you clearly when it can't be used — instead of quietly rendering
   as someone else.** If Castwright can't rebuild a cloned voice as itself, it stops and says so,
   right down to the reason — a revoked voice, a missing sample, or a book set to the wrong
@@ -38,6 +45,15 @@
   a voice now really does erase it: your original recording, and everything Castwright built
   from it, is gone for good — not just the visible entry. Castwright tells you exactly what
   you're about to lose and asks you to confirm before it happens.
+- Voice previews now play in the engine you picked for that character, at the quality your book is set to render in — so the cast list matches the book you're about to make. The same voice now sounds the same wherever you play it: on a cast row, on its card in My voices, while you're designing it, and on both sides of a redesign comparison. (A character you've pinned to a higher quality than the rest of the book still previews at the book's quality.)
+- Auditioning a voice you just designed no longer re-records it. The take from the design was already sitting there; now it actually gets used, so the first play is instant.
+- The higher-quality 1.7B voice model is greyed out until you've actually downloaded it, instead of failing partway into a run.
+- Previewing a voice will now put away a voice model it isn't using to make room, rather than giving up when your graphics card looks full. If something it can't put away is in the way, it tells you which model that is and where the button to stop it lives — instead of just saying the card is full.
+- Filtering your voices by language can't strand you any more. If you'd narrowed the Voices list to, say, Russian and then the last Russian voice in it went away while you were looking — you cleared its designed voice, or deleted it — the list emptied out and the language buttons went with it, leaving a filter still switched on and nothing on screen to switch it off. Worse, it told you to go and set up a book, on a library that was perfectly full. The list now shows everything again the moment the language you'd picked is no longer there.
+- **Security housekeeping on the parts you don't see.** We've taken the latest patched versions of the
+  outside code Castwright is built on — including the component that opens your EPUB files, where a
+  malformed book could previously have made Castwright try to swallow far more memory than it should.
+  Nothing to do at your end, and nothing looks different.
 
 # Castwright 1.14.0
 

@@ -19,16 +19,7 @@ import { CreateLibraryVoiceModal } from '../../modals/create-library-voice';
 import { RedesignLibraryVoiceModal } from '../../modals/redesign-library-voice';
 import { CloneVoiceWizard } from '../../modals/clone-voice-wizard';
 
-interface Props {
-  /** Reflects the `voices.library.enabled` config gate, computed by the
-   *  parent `voices.tsx` (single source of truth, shared with the nav's
-   *  "My voices" segment visibility). Renders nothing when false — a
-   *  defense-in-depth mirror of the parent already never mounting this
-   *  section's nav entry when the gate is off. */
-  enabled: boolean;
-}
-
-export function MyVoicesSection({ enabled }: Props) {
+export function MyVoicesSection() {
   const dispatch = useAppDispatch();
   const entries = useAppSelector(selectMyVoices);
   const [createOpen, setCreateOpen] = useState(false);
@@ -36,11 +27,8 @@ export function MyVoicesSection({ enabled }: Props) {
   const [editingEntry, setEditingEntry] = useState<VoiceLibraryEntry | null>(null);
 
   useEffect(() => {
-    if (!enabled) return;
     dispatch(fetchVoiceLibrary());
-  }, [enabled, dispatch]);
-
-  if (!enabled) return null;
+  }, [dispatch]);
 
   return (
     <>

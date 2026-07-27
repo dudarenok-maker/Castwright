@@ -5,8 +5,8 @@
    Mirrors the tempdir-workspace integration pattern used by
    workspace/voice-library.test.ts and routes/voices.test.ts: mkdtempSync +
    WORKSPACE_DIR env + vi.resetModules() so paths.ts / model-paths.ts re-read
-   their env-derived state fresh per test, then a real express app mounted
-   with the gate + router exactly as app.ts does. */
+   their env-derived state fresh per test, then a real express app mounting
+   the router exactly as app.ts does. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -75,7 +75,6 @@ let dir: string;
 let app: Express;
 let vl: typeof import('../workspace/voice-library.js');
 let modelPaths: typeof import('../tts/model-paths.js');
-let writeConfigOverride: typeof import('../workspace/user-settings.js').writeConfigOverride;
 let setUserSettingsCacheForTest: typeof import('../workspace/user-settings.js')._setUserSettingsCacheForTest;
 let paths: typeof import('../workspace/paths.js');
 let qwenVoice: typeof import('./qwen-voice.js');
@@ -138,7 +137,6 @@ beforeEach(async () => {
 
   const [
     { voiceLibraryRouter },
-    { requireVoiceLibraryEnabled },
     voiceLibMod,
     modelPathsMod,
     userSettings,
@@ -147,7 +145,6 @@ beforeEach(async () => {
     sampleCacheMod,
   ] = await Promise.all([
     import('./voice-library.js'),
-    import('./voice-library-gate.js'),
     import('../workspace/voice-library.js'),
     import('../tts/model-paths.js'),
     import('../workspace/user-settings.js'),
@@ -157,7 +154,6 @@ beforeEach(async () => {
   ]);
   vl = voiceLibMod;
   modelPaths = modelPathsMod;
-  writeConfigOverride = userSettings.writeConfigOverride;
   setUserSettingsCacheForTest = userSettings._setUserSettingsCacheForTest;
   paths = pathsMod;
   qwenVoice = qwenVoiceMod;
@@ -165,7 +161,7 @@ beforeEach(async () => {
 
   app = express();
   app.use(express.json());
-  app.use('/api/voice-library', requireVoiceLibraryEnabled, voiceLibraryRouter);
+  app.use('/api/voice-library', voiceLibraryRouter);
 
   synthesize.mockReset();
   /* Default: 0.3 s of silence at 24 kHz mono int16 — matches the
@@ -203,12 +199,6 @@ afterEach(() => {
 });
 
 describe('GET /api/voice-library', () => {
-  it('404s when the voice-library feature is off', async () => {
-    await writeConfigOverride('voices.library.enabled', false);
-    const res = await request(app).get('/api/voice-library');
-    expect(res.status).toBe(404);
-  });
-
   it('lists entries sorted pinned-first, then updatedAt desc', async () => {
     await vl.writeEntry(makeEntry({ voiceUuid: 'a', name: 'A', pinned: false, updatedAt: '2026-01-03T00:00:00.000Z' }));
     await vl.writeEntry(makeEntry({ voiceUuid: 'b', name: 'B', pinned: true, updatedAt: '2026-01-01T00:00:00.000Z' }));
@@ -395,13 +385,6 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
     const onDisk = await vl.readEntry('prov-1');
     expect(onDisk?.provenance).toBe('designed');
   });
-
-  it('404s when the voice-library feature is off', async () => {
-    await vl.writeEntry(makeEntry({ voiceUuid: 'gate-1' }));
-    await writeConfigOverride('voices.library.enabled', false);
-    const res = await request(app).patch('/api/voice-library/gate-1').send({ name: 'X' });
-    expect(res.status).toBe(404);
-  });
 });
 
 describe('DELETE /api/voice-library/:voiceUuid', () => {
@@ -442,13 +425,6 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
 
   it('404s for an unknown uuid', async () => {
     const res = await request(app).delete('/api/voice-library/does-not-exist');
-    expect(res.status).toBe(404);
-  });
-
-  it('404s when the voice-library feature is off', async () => {
-    await vl.writeEntry(makeEntry({ voiceUuid: 'gate-1' }));
-    await writeConfigOverride('voices.library.enabled', false);
-    const res = await request(app).delete('/api/voice-library/gate-1');
     expect(res.status).toBe(404);
   });
 
@@ -569,13 +545,6 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
     expect(synthesize).not.toHaveBeenCalled();
   });
 
-  it('404s when the voice-library feature is off', async () => {
-    await vl.writeEntry(makeEntry({ voiceUuid: 'gate-1' }));
-    await writeConfigOverride('voices.library.enabled', false);
-    const res = await request(app).post('/api/voice-library/gate-1/sample').send({});
-    expect(res.status).toBe(404);
-  });
-
   it('synthesises and caches a sample under the qwen-<uuid> scope; a repeat call is a cache hit', async () => {
     await vl.writeEntry(
       makeEntry({ voiceUuid: 'sample-1', name: 'Nova', provenance: 'designed', persona: 'a calm narrator' }),
@@ -663,6 +632,106 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
     const res = await request(app).post('/api/voice-library/sample-down/sample').send({});
     expect(res.status).toBe(502);
   });
+
+  /* #1842 — the library card's preview follows the caller's Qwen tier
+     (mirrors Task 3's cast-row fix, one level over: this route and
+     design-voice-core.ts's library design/redesign path share the
+     `qwen-<uuid>` cache scope, so they must land on the same filename for
+     the same tier). Omitted modelKey keeps older callers on 0.6B; a
+     non-Qwen modelKey is rejected outright since this route only ever
+     synthesises `qwen-<uuid>`. */
+  it('renders a library sample at the requested Qwen tier', async () => {
+    await vl.writeEntry(makeEntry());
+
+    const res = await request(app)
+      .post('/api/voice-library/uuid-1/sample')
+      .send({ modelKey: 'qwen3-tts-1.7b' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.url).toContain('qwen3-tts-1.7b');
+  });
+
+  it('defaults to 0.6B when the caller sends no modelKey', async () => {
+    await vl.writeEntry(makeEntry());
+
+    const res = await request(app).post('/api/voice-library/uuid-1/sample').send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.url).toContain('qwen3-tts-0.6b');
+  });
+
+  it('rejects a modelKey that does not route to Qwen', async () => {
+    await vl.writeEntry(makeEntry());
+
+    const res = await request(app)
+      .post('/api/voice-library/uuid-1/sample')
+      .send({ modelKey: 'kokoro-v1' });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+/* Finding 1 (#1842 review) — /design computed its cached audition's filename
+   without the persona contentToken /:voiceUuid/sample folds in, so the two
+   never actually agreed on a filename despite the module comments claiming
+   they did: a card's first Play after designing always missed cache and
+   re-synthesised. Proven behaviourally (a /sample call resolves the SAME
+   cache entry /design just warmed — `cached: true`, no `synthesize` call),
+   not by asserting on filename internals directly. */
+describe('design → sample cache pairing (#1842 finding 1)', () => {
+  function okSidecarResponse(pcm = new Uint8Array(24_000 * 2 * 0.3)) {
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'Content-Type': 'audio/L16', 'X-Sample-Rate': '24000' }),
+      arrayBuffer: async () => pcm.buffer,
+      json: async () => ({}),
+    } as unknown as Response;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('a /sample call right after /design hits the SAME cached file design already warmed', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+
+    const designRes = await request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'Nova', persona: 'a calm, measured narrator' });
+    expect(designRes.status).toBe(201);
+    const { voiceUuid } = designRes.body.entry as { voiceUuid: string };
+    const previewUrl = designRes.body.previewUrl as string;
+
+    const sampleRes = await request(app).post(`/api/voice-library/${voiceUuid}/sample`).send({});
+
+    expect(sampleRes.status).toBe(200);
+    expect(sampleRes.body.cached).toBe(true);
+    expect(sampleRes.body.url).toBe(previewUrl);
+    expect(synthesize).not.toHaveBeenCalled();
+  });
+
+  it('the pairing holds at the 1.7B tier too', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+
+    const designRes = await request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'Nova', persona: 'a calm, measured narrator', modelKey: 'qwen3-tts-1.7b' });
+    expect(designRes.status).toBe(201);
+    const { voiceUuid } = designRes.body.entry as { voiceUuid: string };
+    const previewUrl = designRes.body.previewUrl as string;
+    expect(previewUrl).toContain('qwen3-tts-1.7b');
+
+    const sampleRes = await request(app)
+      .post(`/api/voice-library/${voiceUuid}/sample`)
+      .send({ modelKey: 'qwen3-tts-1.7b' });
+
+    expect(sampleRes.status).toBe(200);
+    expect(sampleRes.body.cached).toBe(true);
+    expect(sampleRes.body.url).toBe(previewUrl);
+    expect(synthesize).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/voice-library/:voiceUuid/assign', () => {
@@ -673,15 +742,6 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
   it('404s for an unknown voiceUuid', async () => {
     const res = await request(app)
       .post('/api/voice-library/does-not-exist/assign')
-      .send({ bookId: 'book-one', characterId: 'char-marlow' });
-    expect(res.status).toBe(404);
-  });
-
-  it('404s when the voice-library feature is off', async () => {
-    await vl.writeEntry(makeEntry({ voiceUuid: 'gate-1' }));
-    await writeConfigOverride('voices.library.enabled', false);
-    const res = await request(app)
-      .post('/api/voice-library/gate-1/assign')
       .send({ bookId: 'book-one', characterId: 'char-marlow' });
     expect(res.status).toBe(404);
   });
@@ -1086,6 +1146,46 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     expect(noPersona.status).toBe(400);
   });
 
+  /* #1842 — the create modal's previewUrl must follow the caller's session
+     tier the same way POST /:uuid/sample already does (see the sibling
+     describe above): design and play share the `qwen-<uuid>` cache scope,
+     so a tier mismatch between them silently costs a second synthesis on
+     first Play. Asserting on previewUrl (which embeds modelKey via
+     voiceSampleFileName) proves the tier actually reached the sidecar
+     request/cache path, not just that the route accepted the field. */
+  it('designs at the requested Qwen tier', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+
+    const res = await request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'Nova', persona: 'a calm, measured narrator', modelKey: 'qwen3-tts-1.7b' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.previewUrl).toContain('qwen3-tts-1.7b');
+  });
+
+  it('defaults design to 0.6B when the caller sends no modelKey', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+
+    const res = await request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'Nova', persona: 'a calm, measured narrator' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.previewUrl).toContain('qwen3-tts-0.6b');
+  });
+
+  it('rejects a design modelKey that does not route to Qwen', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+
+    const res = await request(app)
+      .post('/api/voice-library/design')
+      .send({ name: 'Nova', persona: 'a calm, measured narrator', modelKey: 'kokoro-v1' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('invalid_model');
+  });
+
   it('returns 409 for a concurrent second design (single-flight lock)', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => {
@@ -1132,6 +1232,45 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
     const res = await request(app).post('/api/voice-library/nope/redesign').send({ persona: 'p' });
     expect(res.status).toBe(404);
+  });
+
+  /* #1842 — same reasoning as the design tests above: the A/B compare
+     modal's previewUrl must land at the caller's session tier, and it
+     shares the same `qwen-<uuid>` cache scope as /design and /sample. */
+  it('redesigns at the requested Qwen tier', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    await vl.writeEntry(makeEntry({ voiceUuid: 're-tier-1', name: 'Nova', provenance: 'designed' }));
+
+    const res = await request(app)
+      .post('/api/voice-library/re-tier-1/redesign')
+      .send({ persona: 'a brighter, warmer read', modelKey: 'qwen3-tts-1.7b' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.previewUrl).toContain('qwen3-tts-1.7b');
+  });
+
+  it('defaults redesign to 0.6B when the caller sends no modelKey', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    await vl.writeEntry(makeEntry({ voiceUuid: 're-tier-2', name: 'Nova', provenance: 'designed' }));
+
+    const res = await request(app)
+      .post('/api/voice-library/re-tier-2/redesign')
+      .send({ persona: 'a brighter, warmer read' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.previewUrl).toContain('qwen3-tts-0.6b');
+  });
+
+  it('rejects a redesign modelKey that does not route to Qwen', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    await vl.writeEntry(makeEntry({ voiceUuid: 're-tier-3', name: 'Nova', provenance: 'designed' }));
+
+    const res = await request(app)
+      .post('/api/voice-library/re-tier-3/redesign')
+      .send({ persona: 'a brighter, warmer read', modelKey: 'kokoro-v1' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('invalid_model');
   });
 
   /* #1801 — a 503 from the sidecar is the "no GPU capacity, free VRAM and
@@ -1515,6 +1654,207 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
 
     const { readCandidate } = await import('../workspace/clone-candidate.js');
     expect(await readCandidate('cand-1')).toBeNull(); // candidate consumed
+  });
+
+  /* #1836 — the wizard's transcript box is editable, so a correction must
+     reach the derive as `ref_text` AND be persisted. Persisting to
+     `master.transcript` (not just `sampleTranscript`) is load-bearing: the
+     Wave 3b2 repair path re-derives from `entry.master.transcript`
+     (tts/synthesise-chapter.ts readMasterPcmDefault), so storing the
+     correction only in `sampleTranscript` would let a later repair silently
+     revert to the Whisper text. */
+  it('distils an edited transcript and persists it as master.transcript with transcriptSource=user', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-edit',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sandwich',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFFfake-wav-bytes'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-edit',
+        transcript: 'my own voice sample',
+        consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    // the corrected text is what the clone was distilled against
+    expect(deriveMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'qwen',
+      expect.objectContaining({ refText: 'my own voice sample' }),
+    );
+    // …and what survives on the entry, for both display and any later re-derive
+    expect(res.body.sampleTranscript).toBe('my own voice sample');
+    expect(res.body.master.transcript).toBe('my own voice sample');
+    expect(res.body.master.transcriptSource).toBe('user');
+  });
+
+  it('keeps transcriptSource=whisper when the transcript comes back unedited', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-unedited',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-unedited',
+        transcript: 'my own voice sample',
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.master.transcriptSource).toBe('whisper');
+    expect(res.body.master.transcript).toBe('my own voice sample');
+  });
+
+  /* Whisper can legitimately return an empty transcript for a non-speech
+     clip (tts/clone-ingest.ts trims `.text`), so a blank edit falls back to
+     the stored text rather than deriving against nothing. */
+  it('falls back to the Whisper transcript when the supplied one is blank', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-blank',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-blank',
+        transcript: '   ',
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(deriveMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'qwen',
+      expect.objectContaining({ refText: 'my own voice sample' }),
+    );
+    expect(res.body.master.transcript).toBe('my own voice sample');
+    expect(res.body.master.transcriptSource).toBe('whisper');
+  });
+
+  /* The transcript is the first CLIENT-controlled value to reach the derive's
+     refText, which travels to the sidecar as a base64 X-Ref-Text header — so
+     it is bounded, and rejected rather than truncated. */
+  it('400s an over-length transcript instead of truncating it', async () => {
+    const { writeCandidate, readCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-long',
+      { sampleRate: 24000, durationSeconds: 12, transcript: 't', transcriptSource: 'whisper', captureMethod: 'upload' },
+      Buffer.from('RIFF'),
+    );
+
+    const { MAX_CLONE_TRANSCRIPT_CHARS } = await import('./voice-library.js');
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-long',
+        transcript: 'x'.repeat(MAX_CLONE_TRANSCRIPT_CHARS + 1),
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(400);
+    expect(deriveMock).not.toHaveBeenCalled(); // rejected before any GPU work
+    expect(await readCandidate('cand-long')).not.toBeNull(); // candidate intact
+  });
+
+  /* The cap is expressed in CHARACTERS but the constraint it protects is a
+     BYTE budget: refText travels to the sidecar as a base64 X-Ref-Text header,
+     and base64 applies to UTF-8 bytes. This pins the arithmetic that makes a
+     character cap sufficient — worst case is a 3-byte BMP character per UTF-16
+     unit — so that raising the cap without redoing the sums fails here rather
+     than silently producing an oversized header for ja/zh/ru text (fs-59). */
+  it('the character cap bounds the base64 X-Ref-Text header for multi-byte text', async () => {
+    const { MAX_CLONE_TRANSCRIPT_CHARS } = await import('./voice-library.js');
+    /* Worst case per UTF-16 unit is a 3-byte BMP character (astral chars cost
+       4 bytes but 2 units; lone surrogates encode as 3-byte U+FFFD), so a
+       cap-length CJK string is the byte-heaviest input the route accepts. */
+    const atCap = '漢'.repeat(MAX_CLONE_TRANSCRIPT_CHARS);
+    const base64Bytes = Buffer.from(atCap, 'utf8').toString('base64').length;
+    expect(Buffer.byteLength(atCap, 'utf8')).toBe(MAX_CLONE_TRANSCRIPT_CHARS * 3);
+    /* h11's fallback budget is 16 KiB for the WHOLE request line + header
+       block, and the 3b2 repair path re-sends this text plus a short
+       X-Audition-Text. Derived from the constant, so RAISING THE CAP WITHOUT
+       REDOING THE SUMS FAILS HERE — which is the entire justification for the
+       route carrying no separate byte check. */
+    expect(base64Bytes).toBeLessThan(16_384 - 2_048);
+  });
+
+  /* The cap lives in two places — MAX_CLONE_TRANSCRIPT_CHARS and the
+     contract's CloneVoiceRequest.transcript.maxLength — tied together only by
+     prose. Nothing else fails if one drifts, so pin them against each other
+     (not against a second hardcoded literal, which pins nothing). */
+  it('the route cap and openapi.yaml maxLength agree', async () => {
+    const { MAX_CLONE_TRANSCRIPT_CHARS } = await import('./voice-library.js');
+    const { readFile } = await import('node:fs/promises');
+    const yaml = await readFile(new URL('../../../openapi.yaml', import.meta.url), 'utf8');
+    const anchor = yaml.indexOf('    CloneVoiceRequest:');
+    expect(anchor).toBeGreaterThan(-1); // fail closed if the schema is renamed
+    const transcriptBlock = yaml.slice(yaml.indexOf('        transcript:', anchor));
+    const maxLength = /maxLength:\s*(\d+)/.exec(transcriptBlock)?.[1];
+    expect(maxLength).toBe(String(MAX_CLONE_TRANSCRIPT_CHARS));
+  });
+
+  it('ignores a non-string transcript and falls back to the Whisper text', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-nonstring',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-nonstring',
+        transcript: { nope: true },
+        consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(deriveMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'qwen',
+      expect.objectContaining({ refText: 'my own voice sample' }),
+    );
+    expect(res.body.master.transcriptSource).toBe('whisper');
   });
 
   it('404s a missing candidate', async () => {

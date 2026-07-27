@@ -24,7 +24,7 @@ import type {
   TtsEngine,
 } from './index.js';
 import { fetch as undiciFetch, Agent } from 'undici';
-import { sidecarModelId } from './model-keys.js';
+import { sidecarModelId, type TtsModelKey } from './model-keys.js';
 import { CountSemaphore } from '../gpu/count-semaphore.js';
 import { capacityProbe as defaultCapacityProbe, type CapacityProbe } from '../gpu/capacity-probe.js';
 import {
@@ -33,6 +33,7 @@ import {
 } from '../analyzer/ollama-residency.js';
 import { getAnalyzerConcurrencyStats } from '../analyzer/analyzer-concurrency.js';
 import { withCapacityRetry, getCapacityWaiterCount } from '../gpu/capacity-retry.js';
+import { evictIdleQwenBase } from '../gpu/evict-idle-tts.js';
 import { coquiLanguageCode } from './voice-mapping.js';
 import { manifestSlotFor } from './clone-engines.js';
 
@@ -168,7 +169,7 @@ export class SidecarTtsProvider implements TtsProvider {
        analyzer out of the way or wait and retry. */
     const releaseEngine = await engineSynthSem(this.engineSynths, this.engine).acquire();
     try {
-      const response = await this.postWithCapacityRetry('/synthesize', body, signal);
+      const response = await this.postWithCapacityRetry('/synthesize', body, modelKey, signal);
 
       const buf = Buffer.from(await response.arrayBuffer());
       if (buf.length === 0) {
@@ -265,7 +266,7 @@ export class SidecarTtsProvider implements TtsProvider {
     /* Per-engine serialisation — outer gate, same rationale as synthesize(). */
     const releaseEngine = await engineSynthSem(this.engineSynths, this.engine).acquire();
     try {
-      const response = await this.postWithCapacityRetry('/synthesize-batch', body, signal);
+      const response = await this.postWithCapacityRetry('/synthesize-batch', body, modelKey, signal);
 
       const buf = Buffer.from(await response.arrayBuffer());
       if (buf.length === 0) {
@@ -333,6 +334,7 @@ export class SidecarTtsProvider implements TtsProvider {
   private async postWithCapacityRetry(
     path: string,
     body: string,
+    modelKey: TtsModelKey,
     signal?: AbortSignal,
   ): Promise<Response> {
     const response = await withCapacityRetry((s) => this.post(path, body, s), {
@@ -344,6 +346,7 @@ export class SidecarTtsProvider implements TtsProvider {
       isAnalysisInFlight: this.isAnalysisInFlight,
       pollMs: this.capacityPollMs,
       maxAttempts: this.maxCapacityAttempts,
+      evictIdleTts: () => evictIdleQwenBase({ modelKey, signal }),
     });
     if (!response.ok) await throwForResponse(response);
     return response;

@@ -60,6 +60,21 @@ export interface TtsLifecycle {
   qwen1_7b: EngineLifecycle;
   /** Whisper ASR content-QA engine (srv-31). Display-only — no Load/Stop. */
   asr: AsrLifecycle;
+  /** Whether the Qwen 1.7B base weights are on disk. INSTALLED, not loaded —
+      `qwen1_7b.state === 'ready'` is residency and is a different question.
+
+      Tri-state, and the third state matters: `sidecarHealth.qwenBase17WeightsPresent`
+      only exists on a REACHABLE /health response (server/src/routes/sidecar-health.ts
+      only maps it in the reachable branch). While the sidecar is down, recycling, or
+      hasn't answered the first probe yet, there is no signal either way — that is
+      UNKNOWN, not "not installed".
+        - `true`      — probe reachable, weights affirmatively present.
+        - `false`     — probe reachable, weights affirmatively absent.
+        - `undefined` — no reachable answer yet (down / recycling / unprobed).
+      Consumers (the Start-generation modal) MUST treat `undefined` as available,
+      not disabled — see that modal's own comment for why (recoverable failed
+      run vs. unrecoverable silent loss of every 1.7B cast pin). */
+  qwen1_7bInstalled: boolean | undefined;
   /** Inline banner copy: "Analyzer unloaded to free VRAM for TTS." Shared
       slot — only one engine load is in flight at a time so a single notice
       surface is correct. */
@@ -296,6 +311,11 @@ export function useTtsLifecycle(): TtsLifecycle {
       state: asrState,
       device: sidecarHealth?.asrDevice ?? null,
     },
+    /* Only a reachable probe carries an affirmative answer either way (see the
+       tri-state doc comment above) — anything else (unprobed / unreachable)
+       stays undefined = unknown, never coerced down to false. */
+    qwen1_7bInstalled:
+      sidecarHealth?.status === 'reachable' ? sidecarHealth.qwenBase17WeightsPresent === true : undefined,
     evictionNotice,
     loadErrorNotice,
     dismissNotices,

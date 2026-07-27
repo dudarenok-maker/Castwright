@@ -249,6 +249,15 @@ Design rationale:
   `api = USE_MOCKS ? mock : real`. Components only ever import from `api.*`;
   they never know which is which. `.env.development` sets the flag on.
 - **RTK immer** — slice reducers mutate via Immer drafts. Don't rewrite to spreads.
+- **`server/src/gpu/` reaches a route module through a leaf gate, never an
+  import** — a static import, a dynamic `import()`, and even `import type`
+  all close an import cycle through `tts/index.ts`. Anything under
+  `server/src/gpu/` that needs a value from a route module goes through a
+  stateless leaf gate the owning module registers an accessor into instead.
+  Three exist: `gpu/active-generation-gate.ts`, `gpu/qwen-tier-reconcile-gate.ts`,
+  `gpu/sidecar-health-gate.ts` — each fails closed. Verify with
+  `npx madge --circular --extensions ts server/src`, which should stay at
+  its 15-cycle baseline.
 
 ## Testing discipline (REQUIRED for every change)
 
@@ -266,6 +275,7 @@ not replace them.
   router/redux/layout seams (Vitest+jsdom can lie about layout, focus, and
   hashchange timing). One Playwright spec per feature surface is the bar.
 - **Flaky tests** route through `quarantinedIt` (`server/src/test-utils/quarantine.ts`) into the non-gating lane (`npm run test:quarantine`); each is logged in `docs/testing/flaky-register.md`. Never add a raw `it.skipIf(process.env.CI)`.
+- **Behaviour only real hardware can prove** — a live GPU, a real sidecar, a real analyzer, a real book — is logged in [`docs/testing/onbox-acceptance-register.md`](docs/testing/onbox-acceptance-register.md) when it cannot be verified inside its own PR. Complex work routinely cannot be accepted at PR time, so **owed acceptance never blocks a merge — it converts into a row there.** The add/remove rule is Before-shipping checklist step 3.
 
 Harnesses (five tiers):
 
@@ -341,13 +351,14 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 
 1. **Update or create the regression plan** under `docs/features/` — _for substantial/cross-cutting work._ New feature → new file from `TEMPLATE.md` (and tag the issue `needs-plan`). Changed behaviour cited in an existing plan → update that plan in the same diff. Use frontmatter `status:` (`draft` / `active` / `stable` / `scaffolded` / `deferred`). Small/localized items skip the plan doc — the issue body + paired test is the spec.
 2. **Land paired automated test(s).** New behaviour → new test. Bug fix → regression test (fails before, passes after). UI-visible behaviour crossing router/redux/layout seams → Playwright e2e spec under `e2e/`.
-3. **Update `docs/features/INDEX.md`** if the plan is new or moved (new entry under its area, or move to `## Shipped (archive)` per `archive/README.md` when shipping a plan).
-4. **Update the two release-notes documents, in this PR.** Append an entry to `docs/release-notes-next.md` (technical register, PR-refed) AND a matching user-facing, brand-voice line to the in-progress version section at the top of `RELEASE_NOTES.md`. Land both PR-by-PR, not reconstructed from git history at cut time — that's the whole point of this step. The first-PR-after-a-cut bootstrap case (resetting both files) is documented once, in [CONTRIBUTING.md "Release notes"](CONTRIBUTING.md#release-notes) — check there, don't re-derive it. Skip only when the change has no shippable delta (pure docs/process, CI-only, internal chore with no user- or operator-visible effect) — say so explicitly rather than silently omitting.
-5. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask, including for bug-shaped work (a deliberate, scoped override of "The backlog" section's general "the user files [bugs] as they hit them" convention, for this gate only — see [Model routing → PR-gate issue verification](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR, and (since 2026-07-06) a missing link blocks merge outright via `main`'s required-status-check ruleset — see `docs/features/235-model-routing-review-gates.md`.
-6. **Run `npm run verify:fast:branch`** locally (same battery as pre-push) — or the full `npm run verify` if you want more than the branch-scoped subset. Cloud `verify.yml` is the required, authoritative gate either way (see "Commit gate").
-7. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
-8. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
-9. **Independent PR review.** Once every item above is done (or explicitly marked not-applicable) and the branch is pushed, run the mandatory `code-review` pass — see [Model routing → Mandatory independent review (PRs)](.claude/skills/model-routing/SKILL.md#mandatory-independent-review-prs). Triage and fold findings before merge.
+3. **Record any owed on-box acceptance** in [`docs/testing/onbox-acceptance-register.md`](docs/testing/onbox-acceptance-register.md). If this PR ships behaviour that only real hardware can prove — a live GPU, a real sidecar, a real analyzer, a real book — and you did not prove it here, **add a row in this PR.** Not "later", not in a follow-up: later is when it gets lost. Say what to observe (concretely, not "verify it works"), the hardware prerequisites, and where the criteria live. Group it with whatever shares its setup. **This is not a merge blocker** — complex work often cannot be accepted at PR time, and a PR must not sit open waiting for a contended box. A row **comes out** only when (a) the acceptance was run on the box and the result recorded, or (b) the repo owner explicitly confirms it was exercised on a live book or books; either way record what was observed, by whom, and when. "Tests pass, so it's presumably fine" never removes a row.
+4. **Update `docs/features/INDEX.md`** if the plan is new or moved (new entry under its area, or move to `## Shipped (archive)` per `archive/README.md` when shipping a plan).
+5. **Update the two release-notes documents, in this PR.** Append an entry to `docs/release-notes-next.md` (technical register, PR-refed) AND a matching user-facing, brand-voice line to the in-progress version section at the top of `RELEASE_NOTES.md`. Land both PR-by-PR, not reconstructed from git history at cut time — that's the whole point of this step. The first-PR-after-a-cut bootstrap case (resetting both files) is documented once, in [CONTRIBUTING.md "Release notes"](CONTRIBUTING.md#release-notes) — check there, don't re-derive it. Skip only when the change has no shippable delta (pure docs/process, CI-only, internal chore with no user- or operator-visible effect) — say so explicitly rather than silently omitting.
+6. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask, including for bug-shaped work (a deliberate, scoped override of "The backlog" section's general "the user files [bugs] as they hit them" convention, for this gate only — see [Model routing → PR-gate issue verification](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR, and (since 2026-07-06) a missing link blocks merge outright via `main`'s required-status-check ruleset — see `docs/features/235-model-routing-review-gates.md`.
+7. **Run `npm run verify:fast:branch`** locally (same battery as pre-push) — or the full `npm run verify` if you want more than the branch-scoped subset. Cloud `verify.yml` is the required, authoritative gate either way (see "Commit gate").
+8. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
+9. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
+10. **Independent PR review.** Once every item above is done (or explicitly marked not-applicable) and the branch is pushed, run the mandatory `code-review` pass — see [Model routing → Mandatory independent review (PRs)](.claude/skills/model-routing/SKILL.md#mandatory-independent-review-prs). Triage and fold findings before merge.
 
 ## Out of scope until told otherwise
 
@@ -398,14 +409,23 @@ Adding a new view? Append a case to `e2e/responsive/coverage.spec.ts` — it aut
 - **Model lifecycle is split between eager and button-driven** —
   _Don't confuse "default generation engine" with "eagerly-resident model":_
   **Qwen is the default/main generation engine** (the hot path a book render
-  uses); **Kokoro is the always-available fallback** that happens to be the
-  one *eagerly resident* (it's cheap — ~1 GB), gated by the `PRELOAD_KOKORO`
-  setting (`server/src/config/registry.ts:553`, registry key `tts.preload.kokoro` — "Turn off if Qwen is your main
-  engine"). Resident ≠ default-for-generation.
-  - **Kokoro v1 (eagerly-resident fallback, new in 2026-05)**: eagerly loaded at sidecar
-    startup, ~1 s cold load, ~1 GB VRAM. Permanently resident alongside
-    the analyzer Ollama on an 8 GB GPU. NO Load/Stop pill — it's just
-    always available once `server/tts-sidecar/scripts/install-kokoro.ps1` (or its
+  uses); **Kokoro is the always-available fallback**, cheap enough (~1 GB) to
+  optionally keep resident, gated by the `PRELOAD_KOKORO` setting
+  (`server/src/config/registry.ts:635`, registry key `tts.preload.kokoro` —
+  defaults **off** since fs-60, because non-English books can use Coqui too,
+  so an always-hot English-only engine stopped being a universally good
+  default; "Turn off if Qwen is your main engine" still applies for anyone
+  who does turn it on). Resident ≠ default-for-generation.
+  - **Kokoro v1 (fallback engine, new in 2026-05)**: warms on demand at the
+    first synth that needs it (~1 s cold load, ~1 GB VRAM) unless
+    `PRELOAD_KOKORO=1`, in which case it's eagerly loaded at sidecar startup
+    and stays permanently resident alongside the analyzer Ollama on an 8 GB
+    GPU. A Stop pill exists (the same `ModelControlPill` Coqui uses) and is
+    reachable via the Status popover (residency-gated, but behind a click) as
+    well as, since #1839, the global TTS notice banner
+    (`src/components/tts-notice-banner.tsx`) for direct access whenever it
+    happens to be resident. It's available once
+    `server/tts-sidecar/scripts/install-kokoro.ps1` (or its
     cross-platform `install-kokoro.mjs`/`.sh` wrappers) has dropped the
     weights into `server/tts-sidecar/voices/kokoro/`. Voice catalog
     filtered to English-only (28 voices: `af_*`, `am_*`, `bf_*`, `bm_*`).

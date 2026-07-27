@@ -1,10 +1,15 @@
 /* fe-31 (#506) — preview a character's designed Qwen emotion variant straight
    from the manuscript quote chip. Reuses the same cache scope the design route
-   wrote (`${baseScope}__${emotion}` + the variant voiceId), so on a warm sidecar
-   it's a cache hit (no re-synth). When the character has no variant for the
-   chosen emotion we play the BASE voice instead and report it, so the caller can
-   surface a "renders neutral" hint (this also serves fs-25's 5e missing-variant
-   path). Non-Qwen engines never reach here — emotion variants are Qwen-only.
+   wrote (`${baseScope}__${emotion}` + the variant voiceId). The caller passes
+   in the modelKey resolved via modelKeyForEngineChoice('qwen', ttsModelKey) —
+   the same call the designer (EmotionVariantDesigner via profile-drawer's
+   effectiveSampleModelKey) makes — so the chip plays at the session's Qwen
+   tier, matching the tier the variant was actually designed and cached at
+   (a cache hit, no re-synth, on a warm sidecar). When the character has no
+   variant for the chosen emotion we play the BASE voice instead and report
+   it, so the caller can surface a "renders neutral" hint (this also serves
+   fs-25's 5e missing-variant path). Non-Qwen engines never reach here —
+   emotion variants are Qwen-only.
 
    Deliberately NOT folded into emotion-variant-designer.tsx's inline playVariant:
    that one only auditions a known variant and has the designer's session-id
@@ -12,10 +17,10 @@
 
 import { playSampleWithAutoLoad } from './play-sample-with-auto-load';
 import { buildCharacterHint } from './build-character-hint';
-import { resolveTtsVoiceForCharacter, QWEN_MODEL_KEY } from './tts-voice-mapping';
+import { resolveTtsVoiceForCharacter } from './tts-voice-mapping';
 import { sampleScopeFor } from './sample-scope';
 import { gradientForTtsVoice } from './voice-palette';
-import type { Character, Emotion, Voice } from './types';
+import type { Character, Emotion, TtsModelKey, Voice } from './types';
 
 export interface EmotionVariantPlayResult {
   /** True when the character had no variant for this emotion, so the BASE voice
@@ -35,6 +40,9 @@ export async function playEmotionVariantSample(
   character: Character,
   emotion: Exclude<Emotion, 'neutral'>,
   playback: { play: (url: string) => Promise<void> },
+  /** Resolved via modelKeyForEngineChoice('qwen', ttsModelKey) at the call
+      site — the same tier the design route cached the variant at. */
+  modelKey: TtsModelKey,
   bookId?: string,
 ): Promise<EmotionVariantPlayResult> {
   const baseScope = sampleScopeFor(character, bookId);
@@ -64,7 +72,7 @@ export async function playEmotionVariantSample(
     args: {
       voiceId: scope,
       voice: subject,
-      modelKey: QWEN_MODEL_KEY,
+      modelKey,
       characterHint: buildCharacterHint(character),
     },
     playback,

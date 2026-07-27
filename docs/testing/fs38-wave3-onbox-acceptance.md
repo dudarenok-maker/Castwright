@@ -84,7 +84,6 @@ this box is dual-GPU).
 | P-16 | ECAPA `/embed` reachable? | Drives the advisory clone-fidelity cosine. `POST http://localhost:9000/embed`. | |
 | P-17 | `WORKSPACE_ROOT` (resolved) | `curl -s http://localhost:8080/api/workspace` → `{ root, booksRoot, source }`. **Use this value, not a guess** — it can come from `workspaceDirOverride` in `~/.castwright/user-settings.json`, from `WORKSPACE_DIR` in `server/.env`, or from the built-in `<repo>/castwright-workspace` default (`server/src/workspace/paths.ts:20-45`). | |
 | P-18 | Workspace source | from P-17 `source` (`env` / `default`; note `override` is also possible per `paths.ts:41`) | |
-| P-19 | `voices.library.enabled` | `curl -s http://localhost:8080/api/config` → find key `voices.library.enabled` (registry default **true**, `server/src/config/registry.ts:645`). MUST be **on**. | |
 | P-20 | `SEG_CAPACITY_ADMISSION` | `server/.env` line (ships `SEG_CAPACITY_ADMISSION=1`, `server/.env.example:126`). Sidecar default is **ON** when unset (`main.py:2379-2380` — anything but `"0"` enables). **No registry knob exists for this — it is env-only.** | |
 | P-21 | Analyzer engine setting | Account → analyzer settings (or `~/.castwright/user-settings.json`). Record it; the analyzer competes for VRAM. | |
 | P-22 | TTS engine setting (persisted account default) | Account settings → default TTS model. Record the **model key** (e.g. `qwen3-tts-0.6b`). | |
@@ -517,8 +516,7 @@ mock/unit coverage genuinely cannot stand in for. `VoiceRecorder` emits a Blob
 with `type: 'audio/webm'` (`voice-recorder.tsx:19`), which must survive ffmpeg
 decode.
 
-**Preconditions:** a real browser with a working mic and permission **granted**;
-`voices.library.enabled` on.
+**Preconditions:** a real browser with a working mic and permission **granted**.
 
 **Steps**
 1. Open the app, go to `#/voices` → My voices → **Clone a voice**.
@@ -674,26 +672,28 @@ control.
 
 ---
 
-#### A-13 — Everything is gated by `voices.library.enabled`
+#### A-13 — The voice library is unconditionally available
 
-**Proves:** 267 Invariant 7 — flipping the flag off hides the routes and UI with
-no other behaviour change.
+**Proves:** the `voices.library.enabled` flag is gone and cannot be resurrected
+by a stale persisted override.
 
-**Preconditions:** ability to change config (`PUT /api/config`, or the settings
-UI). The key applies **live** (`registry.ts:645`, `apply: 'live'`) — no restart.
+**Preconditions:** none. There is no longer any setting that hides the library.
 
 **Steps**
-1. Turn `voices.library.enabled` **off**.
+1. Add `"voices.library.enabled": false` by hand to the config overrides in
+   `~/.castwright/user-settings.json` (simulating a user who flipped the old
+   knob before it was removed), then restart the server.
 2. `GET /api/voice-library` and `POST /api/voice-library/clone-sample`.
-3. Reload `#/voices` in the UI.
-4. Turn it back **on** and confirm everything returns.
+3. Open `#/voices`, then open a character's profile drawer from the Cast view.
 
 **Expected**
-- With the flag off, both routes return **404** (the `requireVoiceLibraryEnabled`
-  gate at `app.ts:196`).
-- My voices / the "Clone a voice" CTA is not reachable in the UI.
-- No other view regresses.
-- With the flag back on, previously-created entries are all still listed.
+- Neither route 404s — the stale override is inert. `GET` returns the entry
+  list; the bodyless `POST` returns its normal **400** validation error, which
+  is a pass here, not a failure.
+- **My voices** and the "Clone a voice" CTA are present.
+- The profile drawer's assign / "Save to my voices" actions work rather than
+  failing against dead routes (the failure mode that motivated the removal).
+- No "Voice library" group appears in Advanced settings.
 
 **Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
 
@@ -2082,7 +2082,7 @@ it, tick "seen" and move on. **Do not open a defect for these.**
 | **KL-i** | A cloned-voice failure during a **splice** or **QA repair** shows only the raw message — no toast, no help link, no `cloned-voice-broken` code. | The structured `FailureCode` is wired at `routes/generation.ts` only. Both other routes still fail (the guarantee holds); they just don't classify. Explicitly checked in **D-04**. | — (documented, 268 KL-i) | ☐ |
 | **KL-j(1)** | After a revoke that raced an in-flight derive, `consent.revokedAt` is **missing** — but every artifact IS gone, and the next render fails loud on the missing master. Revoking again fixes the flag. | `writeEntry` is tmp+rename with **no CAS and no lock** (true of every manifest write in this codebase). `guardPostDeriveWrite` closes the **seconds-wide** GPU window, not the **millisecond** one between its re-read and the write. Benign in effect: the revoke's purge runs strictly after its own `writeEntry`, so it lands last. Watch for this in **C-01**. | [#1826](https://github.com/dudarenok-maker/Castwright/issues/1826) | ☐ |
 | **KL-j(2)** | The **two-worker corner**: two chapter workers repairing the *same* voice concurrently (simultaneous multi-book renders sharing one library voice), where KL-j(1) fires for worker A *and* worker B's derive completes after the revoke's purge — B re-reads an un-revoked entry, skips its re-purge, and **B's `.pt` survives the revoke**. | Requires KL-j(1) to fire **first** plus a dual-render precondition — orders of magnitude less likely than the bug the guard fixed, but real. Proper fix is a per-uuid write lock or an `updatedAt` CAS. Watch for this in **D-01**'s repeat-with-repair step. | [#1826](https://github.com/dudarenok-maker/Castwright/issues/1826) | ☐ |
-| **KL-k** | The wizard's **Transcript textarea is editable, but edits appear to have no effect** — `POST /clone` reads `candidate.master.transcript` from the candidate store, and phase 1 hands forward only `{ candidateId, consent }`. | ⚠️ **Not documented in either plan.** Confirm the behaviour on box. If edits genuinely do not reach the derive's `ref_text`, this is a **new finding** — file it (see §7) rather than absorbing it silently. | — (**verify on box**) | ☐ |
+| **KL-k** | ~~The wizard's **Transcript textarea is editable, but edits appear to have no effect**.~~ **Confirmed and FIXED** — `CloneVoiceRequest` now carries an optional `transcript`; the panel forwards the edited value, and `POST /clone` distils against it and persists it as `master.transcript` / `sampleTranscript` with `transcriptSource: 'user'`. | Verify the fix rather than the defect: edit the transcript before Save, then confirm the saved entry's `voice.json` shows your corrected text and `transcriptSource: "user"`. A blank edit intentionally falls back to the Whisper text. | [#1836](https://github.com/dudarenok-maker/Castwright/issues/1836) (fixed) | ☐ |
 | **KL-l** | The cloned entry directory has **no `preview.mp3`**, though spec §2.2 shows one. | 3b1 deliberately does not persist a preview — the audition is served on demand by `POST /:uuid/sample` + the sample cache (`voice-library.ts:656-662`). Spec text is stale, code is correct. | — (by design) | ☐ |
 | **KL-m** | Cloning on **XTTS/Coqui** is nowhere to be found. | 3c is **not shipped**. `purgeCloneArtifacts` even carries the `TODO(3c)` for the `voices/xtts/` erasure path that does not exist yet. | — (out of scope) | ☐ |
 | **KL-n** | `mint_variant` (emotion-variant `.pt`) still uses a **bare `torch.save`**, not the atomic write. | Explicitly out of scope for 268 Invariant 6 — it is off the resolver's re-derive path. Do not test it here. | — (out of scope) | ☐ |
@@ -2111,7 +2111,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | A-10 | Write-time consent guard; nothing persisted | | |
 | A-11 | `/revoke` stamps `revokedAt` | | |
 | A-12 | Sample route 403s a revoked voice | | |
-| A-13 | `voices.library.enabled` gates everything | | |
+| A-13 | Voice library unconditionally available | | |
 
 #### Section B — 3b1 (13)
 
@@ -2218,9 +2218,9 @@ loaded, preferences toggled) — and whether you **restored** it:
 | 2 | | | ☐ |
 | 3 | | | ☐ |
 
-Specifically confirm these are back to their P-19 / P-20 / P-22 / P-23 values:
+Specifically confirm these are back to their P-20 / P-22 / P-23 values:
 
-- ☐ `voices.library.enabled` restored (A-13)
+- ☐ the hand-added `voices.library.enabled` override removed again (A-13)
 - ☐ `SEG_CAPACITY_ADMISSION` restored to `1` (B-12)
 - ☐ Session engine picker restored (C-13, C-14)
 - ☐ Any hand-edited `voice.json` restored or the voice re-cloned (B-11, C-07, C-09, C-16, C-18)
@@ -2315,8 +2315,10 @@ For **each** defect in §7.2:
 5. If the defect is a **blocker** per §7.2's guidance, say so in the issue title
    or first line, and mark the overall verdict in §7.4 accordingly.
 6. Do **not** file anything listed in §6 — those are already documented/filed.
-   KL-k (the wizard transcript edit) is the one exception: it is *not* in either
-   plan, so if you confirm it, file it fresh.
+   KL-k (the wizard transcript edit) was confirmed and fixed under
+   [#1836](https://github.com/dudarenok-maker/Castwright/issues/1836) before this
+   run sheet was executed, so it is no longer an exception — verify the fix per
+   its §6 row instead of filing it.
 
 ### 8.4 Release notes
 
