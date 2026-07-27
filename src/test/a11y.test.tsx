@@ -13,7 +13,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen } from '@testing-library/react';
 import { axe } from 'jest-axe';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 
 import { BookLibraryView } from '../views/book-library';
 import { UploadView } from '../views/upload';

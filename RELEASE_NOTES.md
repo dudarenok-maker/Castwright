@@ -1,5 +1,16 @@
 # Castwright 1.15.0
 
+- **Castwright now needs Node 22.22 or newer.** If you install Castwright yourself, please check your
+  Node version before you update — and check it deliberately, because nothing will stop you: the
+  installer only prints a warning that's easy to miss in the scroll, then carries on and installs
+  anyway. On an older Node you may not find out until something fails later, with nothing pointing at
+  the real cause. Run `node --version` first. Node 20 stopped receiving security fixes in April 2026,
+  so this moves us onto a version that's still being looked after. If you installed through Pinokio,
+  there's nothing for you to install by hand — Castwright now sets up its own Node 24 as part of the
+  Pinokio install. One wrinkle if you already have Castwright through Pinokio: the update that brings
+  you to this version still runs on your old setup, and the new Node only takes effect from the update
+  after that. Everything keeps working in between; it just means Pinokio installs settle onto the new
+  version one release later than fresh ones do.
 - **The speech engine now runs on a version we've actually tested.** Until now, the exact
   speech runtime Castwright installed depended on the day you installed it — two people with
   identical machines could quietly end up on different builds, which made "it sounds different
@@ -50,6 +61,7 @@
 - The higher-quality 1.7B voice model is greyed out until you've actually downloaded it, instead of failing partway into a run.
 - Previewing a voice will now put away a voice model it isn't using to make room, rather than giving up when your graphics card looks full. If something it can't put away is in the way, it tells you which model that is and where the button to stop it lives — instead of just saying the card is full.
 - Filtering your voices by language can't strand you any more. If you'd narrowed the Voices list to, say, Russian and then the last Russian voice in it went away while you were looking — you cleared its designed voice, or deleted it — the list emptied out and the language buttons went with it, leaving a filter still switched on and nothing on screen to switch it off. Worse, it told you to go and set up a book, on a library that was perfectly full. The list now shows everything again the moment the language you'd picked is no longer there.
+- The Voices list stops telling you it's empty when it's simply filtered. Narrow it to Russian and then look at "This book", and if that book has no Russian voices the list used to go blank and invite you to go and set up a book — on a library that was perfectly full — while quietly taking the language buttons away with it. Now it says plainly that nothing matches, tells you which filter is doing it, and leaves every button you'd need to undo it right there on screen. The "Variants" filter got the same treatment, and it needed it more: switching your speech engine away from Qwen used to make its buttons vanish with the filter still on, emptying the whole list with no way back short of reloading the page.
 - **Security housekeeping on the parts you don't see.** We've taken the latest patched versions of the
   outside code Castwright is built on — including the component that opens your EPUB files, where a
   malformed book could previously have made Castwright try to swallow far more memory than it should.

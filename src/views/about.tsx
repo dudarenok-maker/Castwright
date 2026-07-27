@@ -5,7 +5,7 @@
    All brand copy comes from src/lib/brand.ts so a tagline change is one diff. */
 
 import type { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { SectionLabel, MixedHeading } from '../components/primitives';
 import { CastwaveMark } from '../lib/icons';
 import { buildInfo } from '../lib/build-info';

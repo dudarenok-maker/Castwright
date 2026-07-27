@@ -7,7 +7,7 @@
    first card in the Account view; not part of the account Save flow. */
 
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { useAppDispatch, useAppSelector } from '../store';
 import {
   stageUpgrade,

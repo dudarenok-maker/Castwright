@@ -5,7 +5,7 @@
    so this never paints a phantom banner. */
 
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { api } from '../lib/api';
 import { useAppInfo } from '../lib/use-app-info';
 import { latestReleaseNote } from '../lib/release-notes';

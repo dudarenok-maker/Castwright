@@ -12,7 +12,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { MemoryRouter, Outlet, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Outlet, Routes, Route } from 'react-router';
 import { uiSlice, uiActions } from '../store/ui-slice';
 import { castSlice, castActions } from '../store/cast-slice';
 import { chaptersSlice } from '../store/chapters-slice';

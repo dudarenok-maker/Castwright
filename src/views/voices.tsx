@@ -121,6 +121,23 @@ const EMPTY_LIBRARY_BOOKS: LibraryBook[] = [];
    sync with `src/modals/profile-drawer.tsx:110-112`. */
 const UNMERGEABLE_IDS = new Set(['narrator', 'unknown-male', 'unknown-female']);
 
+/* fs-41/fs-50 seam 4b — English words for the language-facet chips. Module
+   scope because the empty-filter panel (#1866) names the active language too,
+   so this is no longer single-use to the chip row. Codes with no entry render
+   as the raw BCP-47 tag.
+
+   Deliberately NOT `library-slice.ts`'s exported `LANGUAGE_LABELS` /
+   `languageLabel()`, hence the distinct name: that map is endonyms
+   ('Русский', 'Deutsch') for the book-library language pills, this one is
+   exonyms because the voices facet reads as English UI chrome. Importing the
+   other here would silently swap every chip label. */
+const FACET_LANGUAGE_LABELS: Record<string, string> = {
+  ru: 'Russian',
+  es: 'Spanish',
+  fr: 'French',
+  de: 'German',
+};
+
 export function LibraryView({ library, onOpenCharacter }: Props) {
   const [tab, setTab] = useState<Tab>('all');
   /* fs-38 Wave 1, Task 14 — top-level page section (design spec §1/§Q6).
@@ -289,6 +306,18 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      treatment as `activeSection` for #1802. */
   const activeLanguageFilter =
     languageFilter !== null && languages.includes(languageFilter) ? languageFilter : null;
+  /* #1869 (found while fixing #1866) — the variant facet has the identical
+     shape as #1834's language filter, and its version is a
+     genuine dead end rather than #1834's escapable one: the Variants row
+     renders only while `qwenLibrary` is non-empty, and a non-'all' filter
+     suppresses the preset families outright (`showFamilies` below), so once
+     the row unmounts every tab shows nothing and no control can clear it.
+     `qwenLibrary` empties on an engine switch away from Qwen —
+     `resolveVoiceAssignment` stamps `ttsVoice.provider` from the ACTIVE
+     engine, not per voice — which is a routine click in the top bar. Derived
+     during render for the same reason as the language filter above;
+     `setVariantFilter` stays the sole state writer. */
+  const activeVariantFilter = qwenLibrary.length > 0 ? variantFilter : 'all';
   /* fs-41/fs-50 seam 4b — language-filtered preset library fed into
      buildFamilies; mirrors how variantFilter narrows filteredQwenLibrary. */
   const languageFilteredPresetLibrary = useMemo(
@@ -345,13 +374,14 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       activeLanguageFilter === null
         ? qwenLibrary
         : qwenLibrary.filter((v) => v.languageCode === activeLanguageFilter);
-    if (variantFilter === 'all') return langFiltered;
-    const map = variantFilter === 'has' ? variantCountByVoiceId : missingVariantCountByVoiceId;
+    if (activeVariantFilter === 'all') return langFiltered;
+    const map =
+      activeVariantFilter === 'has' ? variantCountByVoiceId : missingVariantCountByVoiceId;
     return langFiltered.filter((v) => (map.get(v.familyKey ?? v.id) ?? 0) > 0);
   }, [
     qwenLibrary,
     activeLanguageFilter,
-    variantFilter,
+    activeVariantFilter,
     variantCountByVoiceId,
     missingVariantCountByVoiceId,
   ]);
@@ -361,7 +391,27 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   );
   /* When a variant filter is active, preset families + the "Needs a voice" bucket
      aren't variant-relevant, so show only the matching Qwen designed voices. */
-  const showFamilies = variantFilter === 'all';
+  const showFamilies = activeVariantFilter === 'all';
+  /* #1866 — nothing at all reached the grid: no Qwen status groups, and either
+     no preset families or families deliberately suppressed by a variant filter. */
+  const rollupIsEmpty = qwenGroups.length === 0 && (!showFamilies || families.length === 0);
+  /* #1866 — is the user narrowing the rollup at all? "No voices yet" may only
+     claim an empty library when nothing here is on. `variantFilter` already had
+     that guard and its own escape panel; the language facet and the tab strip
+     never did, so e.g. Russian + "This book" collapsed the whole rollup into
+     "Finish setting up a book…" on a fully populated library — and took the
+     language chip row down with it, since that row lives inside the non-empty
+     branch. All three narrowings now read the same way.
+
+     `library.length > 0` guards the onboarding case: on a genuinely empty
+     library every tab is empty too, so "try another tab" would be useless
+     advice — a fresh install clicking "This book (0)" still gets the
+     "Finish setting up a book" copy it needs. That is the ONLY state where
+     this clause changes the outcome: an empty library leaves `languages` and
+     `qwenLibrary` empty, so the other two disjuncts are already false. */
+  const rollupIsNarrowed =
+    library.length > 0 &&
+    (activeVariantFilter !== 'all' || activeLanguageFilter !== null || tab !== 'all');
   const books = [...new Set(library.map((v) => v.bookId))];
 
   /* Compare derivations. Memoised so a transient render doesn't recompute
@@ -1147,7 +1197,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
             ))}
           </div>
 
-          {families.length === 0 && qwenGroups.length === 0 && variantFilter === 'all' ? (
+          {rollupIsEmpty && !rollupIsNarrowed ? (
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10 text-center">
           <p className="text-sm font-bold text-ink">No voices yet</p>
           <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">
@@ -1255,13 +1305,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
             >
               <span className="text-xs text-ink/50">Language:</span>
               {([null, ...languages] as Array<string | null>).map((code) => {
-                const LANGUAGE_LABELS: Record<string, string> = {
-                  ru: 'Russian',
-                  es: 'Spanish',
-                  fr: 'French',
-                  de: 'German',
-                };
-                const label = code === null ? 'All' : (LANGUAGE_LABELS[code] ?? code);
+                const label = code === null ? 'All' : (FACET_LANGUAGE_LABELS[code] ?? code);
                 const active = activeLanguageFilter === code;
                 return (
                   <button
@@ -1291,7 +1335,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               {(['all', 'has', 'needs'] as const).map((key) => {
                 const label =
                   key === 'all' ? 'All' : key === 'has' ? 'Has variants' : 'Needs variants';
-                const active = variantFilter === key;
+                const active = activeVariantFilter === key;
                 return (
                   <button
                     key={key}
@@ -1308,18 +1352,27 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                   </button>
                 );
               })}
-              {variantFilter !== 'all' && (
+              {activeVariantFilter !== 'all' && (
                 <span className="text-[11px] text-ink/45">Counts fill in as other books load.</span>
               )}
             </div>
           )}
-          {variantFilter !== 'all' && qwenGroups.length === 0 && (
+          {/* #1866 — the escape panel for every narrowing, not just Variants.
+              Reaching it inside this branch already implies `rollupIsNarrowed`
+              (the ternary above owns the genuinely-empty case), so it always
+              renders alongside the tab strip and the facet rows that can undo
+              whatever emptied it. */}
+          {rollupIsEmpty && (
             <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10 text-center">
               <p className="text-sm font-bold text-ink">No voices match this filter</p>
               <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">
-                {variantFilter === 'has'
+                {activeVariantFilter === 'has'
                   ? 'No designed voices have emotion variants in the current view.'
-                  : 'No designed voices still need emotion variants in the current view.'}
+                  : activeVariantFilter === 'needs'
+                    ? 'No designed voices still need emotion variants in the current view.'
+                    : activeLanguageFilter !== null
+                      ? `No ${FACET_LANGUAGE_LABELS[activeLanguageFilter] ?? activeLanguageFilter} voices in this tab — try another language or tab.`
+                      : 'No voices in this tab — try another tab.'}
               </p>
             </div>
           )}

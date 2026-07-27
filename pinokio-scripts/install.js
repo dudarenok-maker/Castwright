@@ -1,6 +1,7 @@
 // Castwright — Pinokio install. Fully self-contained: conda provides Python 3.12
-// + ffmpeg; Pinokio's bundled node provides npm. Builds from the latest PUBLISHED
-// release, bootstraps the venv via the SHARED bootstrap-venv.mjs, writes .env.
+// + ffmpeg + a pinned Node 24 (step 1), so nothing here depends on Pinokio's own
+// bundled Node. Builds from the latest PUBLISHED release, bootstraps the venv via
+// the SHARED bootstrap-venv.mjs, writes .env.
 // Kokoro weights are deferred to the in-app fs-21 wizard at first run.
 //
 // Every pinokio-scripts/*.js script here lives ONE LEVEL BELOW the app root (where
@@ -14,14 +15,24 @@ const CONDA = { path: 'env', python: '3.12' }; // conda env created at <app>/env
 
 module.exports = {
   run: [
-    // 1. conda env: Python 3.12 + ffmpeg + mkcert. mkcert is here so the LAN-HTTPS
-    //    default (phone/tablet listening + pairing) can auto-provision certs in
-    //    step 7 — Pinokio runs `node dist/index.js` directly and never goes through
-    //    start-app-prod.mjs's boot auto-provision, so the install must do it.
-    //    (If Pinokio's bundled node < 20.19, add `nodejs` to this message too.)
+    // 1. conda env: Python 3.12 + ffmpeg + mkcert + a pinned Node. mkcert is here so
+    //    the LAN-HTTPS default (phone/tablet listening + pairing) can auto-provision
+    //    certs in step 7 — Pinokio runs `node dist/index.js` directly and never goes
+    //    through start-app-prod.mjs's boot auto-provision, so the install must do it.
+    //    `nodejs=24` pins every later `node`/`npm` step (this file + update.js) to the
+    //    Node major this repo actually tests on (.nvmrc, every CI workflow), instead of
+    //    whatever unpinned/unverifiable Node Pinokio's own kernel happens to bundle —
+    //    which could sit below the `>=22.22.0` engines floor react-router 8 raised in
+    //    #1859. The conda env's Node shadows Pinokio's bundled one on PATH for every
+    //    step below (conda envs prepend to PATH). See docs/testing/onbox-acceptance-register.md
+    //    (E1) for what's still owed on-box.
     {
       method: 'shell.run',
-      params: { path: APP_ROOT, conda: CONDA, message: 'conda install -y -c conda-forge ffmpeg mkcert' },
+      params: {
+        path: APP_ROOT,
+        conda: CONDA,
+        message: 'conda install -y -c conda-forge ffmpeg mkcert nodejs=24',
+      },
     },
     // 2. Fetch + resolve + checkout the latest published release (detached HEAD),
     //    all inside resolve-release.js — no fragile cross-step variable capture.

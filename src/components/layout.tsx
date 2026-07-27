@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, Suspense, type ReactNode } from 'react';
 import { useStore } from 'react-redux';
-import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router';
 import { DelayedSpinner } from './delayed-spinner';
 import { BuildStamp } from './build-stamp';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow, type RootState } from '../store';

@@ -1,7 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { MANIFEST, stagingPlan, mirrorPlan } from '../stage-marketing-screenshots.mjs';
+import {
+  MANIFEST,
+  stagingPlan,
+  mirrorPlan,
+  ffmpegArgs,
+} from '../stage-marketing-screenshots.mjs';
 
 test('stagingPlan produces one file per theme per manifest entry (a pair by default)', () => {
   const plan = stagingPlan(MANIFEST, '/src', '/dest');
@@ -154,4 +159,136 @@ test('the manifest stages the exported series cast card, dark-only', () => {
   assert.ok(entry, 'manifest is missing the series-cast-card-export entry');
   assert.deepEqual(entry.themes, ['dark']);
   assert.equal(entry.output, 'series-cast-card');
+});
+
+test('an entry with no viewport builds a <scene>.<theme>.png source path, no viewport segment', () => {
+  const plan = stagingPlan(
+    [{ output: 'companion-iphone', scene: 'companion/player', scaleWidth: 480 }],
+    '/src',
+    '/dest',
+  );
+  assert.deepEqual(plan, [
+    {
+      src: path.join('/src', 'companion/player.light.png'),
+      dest: path.join('/dest', 'companion-iphone.webp'),
+      scaleWidth: 480,
+    },
+    {
+      src: path.join('/src', 'companion/player.dark.png'),
+      dest: path.join('/dest', 'companion-iphone-dark.webp'),
+      scaleWidth: 480,
+    },
+  ]);
+});
+
+test('an entry without scaleWidth does not carry a scaleWidth field into the plan', () => {
+  const plan = stagingPlan(
+    [{ output: 'library', scene: 'library-shelf', viewport: 'desktop' }],
+    '/src',
+    '/dest',
+  );
+  for (const entry of plan) {
+    assert.ok(!('scaleWidth' in entry), 'a non-companion entry must not gain a scaleWidth field');
+  }
+});
+
+test('the companion manifest entries resolve to the right src -> dest pairs, including the nested tablet10/ path', () => {
+  const companionEntries = MANIFEST.filter((e) => e.scene.startsWith('companion/'));
+  assert.deepEqual(
+    companionEntries.map((e) => e.scene),
+    ['companion/player', 'companion/library-home', 'companion/tablet10/book-detail'],
+  );
+
+  const plan = stagingPlan(companionEntries, '/src', '/dest');
+  assert.deepEqual(plan, [
+    {
+      src: path.join('/src', 'companion/player.light.png'),
+      dest: path.join('/dest', 'companion-iphone.webp'),
+      scaleWidth: 480,
+    },
+    {
+      src: path.join('/src', 'companion/player.dark.png'),
+      dest: path.join('/dest', 'companion-iphone-dark.webp'),
+      scaleWidth: 480,
+    },
+    {
+      src: path.join('/src', 'companion/library-home.light.png'),
+      dest: path.join('/dest', 'companion-pixel.webp'),
+      scaleWidth: 480,
+    },
+    {
+      src: path.join('/src', 'companion/library-home.dark.png'),
+      dest: path.join('/dest', 'companion-pixel-dark.webp'),
+      scaleWidth: 480,
+    },
+    {
+      src: path.join('/src', 'companion/tablet10/book-detail.light.png'),
+      dest: path.join('/dest', 'companion-tablet.webp'),
+      scaleWidth: 720,
+    },
+    {
+      src: path.join('/src', 'companion/tablet10/book-detail.dark.png'),
+      dest: path.join('/dest', 'companion-tablet-dark.webp'),
+      scaleWidth: 720,
+    },
+  ]);
+});
+
+test('existing non-companion entries are unaffected by the viewport-less / scaleWidth support', () => {
+  // Every pre-existing manifest entry still has a `viewport` and produces the
+  // same <scene>.<viewport>.<theme>.png source shape as before.
+  const nonCompanion = MANIFEST.filter((e) => !e.scene.startsWith('companion/'));
+  for (const entry of nonCompanion) {
+    assert.ok(entry.viewport, `non-companion entry "${entry.scene}" must keep a viewport`);
+    assert.ok(!('scaleWidth' in entry), `non-companion entry "${entry.scene}" must not gain scaleWidth`);
+  }
+  const plan = stagingPlan(nonCompanion, '/src', '/dest');
+  for (const p of plan) {
+    assert.match(path.basename(p.src), /\.(desktop|phone|tablet)\.(light|dark)\.png$/);
+    assert.ok(!('scaleWidth' in p));
+  }
+});
+
+test('ffmpegArgs threads scaleWidth into a -vf scale filter, rounding height to even', () => {
+  // The 1280x2856 -> 480x1072 case the companion entries exist for. `-2` is
+  // load-bearing: 2856 * (480/1280) is 1071 exactly, and the marketing site
+  // embeds 480x1072, so `-1` would restage every companion asset one pixel
+  // short. Verified against real ffmpeg during #1838 review.
+  assert.deepEqual(ffmpegArgs({ src: '/s/player.light.png', dest: '/d/x.webp', scaleWidth: 480 }), [
+    '-y',
+    '-i',
+    '/s/player.light.png',
+    '-vf',
+    'scale=480:-2',
+    '-quality',
+    '85',
+    '/d/x.webp',
+  ]);
+});
+
+test('ffmpegArgs omits the scale filter entirely when no scaleWidth is set', () => {
+  // Pins that the pre-#1838 command line is byte-for-byte unchanged for every
+  // non-companion entry — a scale filter applied to the desktop captures would
+  // silently resize the whole marketing set.
+  assert.deepEqual(ffmpegArgs({ src: '/s/cast.desktop.light.png', dest: '/d/cast.webp' }), [
+    '-y',
+    '-i',
+    '/s/cast.desktop.light.png',
+    '-quality',
+    '85',
+    '/d/cast.webp',
+  ]);
+});
+
+test('every companion manifest entry reaches ffmpeg with a scale filter', () => {
+  // Guards the seam end to end: manifest -> stagingPlan -> ffmpegArgs. Dropping
+  // the `if (scaleWidth)` push in ffmpegArgs, or scaleWidth from stagingPlan's
+  // plan entries, fails here rather than silently restaging at native size.
+  const companion = MANIFEST.filter((e) => e.scene.startsWith('companion/'));
+  assert.ok(companion.length > 0, 'manifest must still carry companion entries');
+  for (const p of stagingPlan(companion, '/src', '/dest')) {
+    const args = ffmpegArgs(p);
+    assert.ok(args.includes('-vf'), `${p.dest} must be scaled`);
+    assert.match(args[args.indexOf('-vf') + 1], /^scale=\d+:-2$/);
+  }
 });
