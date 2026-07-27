@@ -70,7 +70,7 @@ const READINESS: SetupReadiness = {
     tts: { status: 'fail', cause: 'venv-missing', message: 'TTS engine not available', remediation: 'Install Kokoro weights' },
     analyzer: { status: 'fail', cause: 'no-gemini-key', message: 'Analyzer not configured', remediation: 'Set up Gemini or Ollama' },
   },
-  info: { gpu: 'CPU — no GPU detected' },
+  info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
 };
 
 const READY_READINESS: SetupReadiness = {
@@ -82,7 +82,7 @@ const READY_READINESS: SetupReadiness = {
     tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
     analyzer: { status: 'pass', cause: 'pass', message: '', remediation: '' },
   },
-  info: { gpu: 'cuda · 0.0 / 8.4 GB reserved' },
+  info: { gpu: 'cuda · 0.0 / 8.4 GB reserved', vramTotalMb: null },
 };
 
 const STEP_TESTIDS = [

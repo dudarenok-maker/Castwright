@@ -50,7 +50,7 @@ const allPassReadiness: SetupReadiness = {
     tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
     analyzer: { status: 'pass', cause: 'pass', message: '', remediation: '' },
   },
-  info: { gpu: '' },
+  info: { gpu: '', vramTotalMb: null },
 };
 
 function modelsStatus(overrides: Partial<ModelsStatus> = {}): ModelsStatus {

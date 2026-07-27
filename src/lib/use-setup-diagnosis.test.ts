@@ -22,7 +22,7 @@ describe('useSetupDiagnosis', () => {
         tts: { status: 'pass' as const, cause: 'pass' as const, message: '', remediation: '' },
         analyzer: { status: 'pass' as const, cause: 'pass' as const, message: '', remediation: '' },
       },
-      info: { gpu: 'cuda' },
+      info: { gpu: 'cuda', vramTotalMb: null },
     };
     vi.spyOn(api.api, 'getSetupReadiness').mockResolvedValue(readiness);
     const { result } = renderHook(() => useSetupDiagnosis());
@@ -38,7 +38,7 @@ describe('useSetupDiagnosis', () => {
         tts: { status: 'pass' as const, cause: 'pass' as const, message: '', remediation: '' },
         analyzer: { status: 'pass' as const, cause: 'pass' as const, message: '', remediation: '' },
       },
-      info: { gpu: '' },
+      info: { gpu: '', vramTotalMb: null },
     });
     renderHook(() => useSetupDiagnosis(5_000));
     await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
@@ -57,7 +57,7 @@ describe('useSetupDiagnosis', () => {
         tts: { status: 'pass' as const, cause: 'pass' as const, message: '', remediation: '' },
         analyzer: { status: 'pass' as const, cause: 'pass' as const, message: '', remediation: '' },
       },
-      info: { gpu: '' },
+      info: { gpu: '', vramTotalMb: null },
     });
     const { result } = renderHook(() => useSetupDiagnosis(60_000));
     await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
@@ -74,7 +74,7 @@ describe('useSetupDiagnosis', () => {
         tts: { status: 'pass' as const, cause: 'pass' as const, message: '', remediation: '' },
         analyzer: { status: 'pass' as const, cause: 'pass' as const, message: '', remediation: '' },
       },
-      info: { gpu: '' },
+      info: { gpu: '', vramTotalMb: null },
     });
     const { unmount } = renderHook(() => useSetupDiagnosis(5_000));
     await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
