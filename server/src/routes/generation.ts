@@ -1612,7 +1612,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         bookLanguage,
         signal: chapterSignal,
         chapterTitleNarration,
-        narratorCharacterId: 'narrator',
+        /* fs-38 Wave 3c, Task 23 — no explicit narratorCharacterId here:
+           `synthesiseChapter`'s own default now resolves the book's REAL
+           narrator row ('narrator' OR 'char-narrator', whichever the cast
+           actually has) rather than this call site hardcoding a literal
+           that only matched one of the two recognised ids. */
         /* Title-beat ticks so the SSE stream doesn't go silent while the
            pre-body title synth runs (Coqui can take a couple of seconds for
            a short phrase, the stall detector fires at 30 s). currentLine: 0

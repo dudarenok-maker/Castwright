@@ -292,6 +292,122 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
     expect(readEntry).toHaveBeenCalledWith('lib-narrator-clone');
     expect(deriveEngineArtifact).not.toHaveBeenCalled();
   });
+
+  /* fs-38 Wave 3c, Task 23 — the narrator stub must resolve its REAL cast
+     row when one exists. Every entry point (generation.ts, chapter-splice
+     .ts, chapter-qa-repair.ts) hardcoded `narratorCharacterId: 'narrator'`,
+     while `voice-mapping.ts`'s `inferProfile` treats 'char-narrator' as an
+     equally valid narrator id. On a book whose narrator row carries THAT id,
+     `castById.get('narrator')` found nothing and fell through to a
+     synthetic `{ id: 'narrator', name: 'Narrator' }` stub with NO overrides:
+     the stub's id can never appear in `cast`, so `cast.filter(…)` in the
+     pre-pass's readiness gate can't match it either — a cloned narrator on
+     such a book silently rendered as a stock catalogue voice, with the
+     cloned-voice validation gate never even looking at it. `char-narrator`
+     is the ONLY fixture id that can distinguish the fix from the bug: a
+     plain `'narrator'`-id book resolves the same row before and after,
+     proving nothing. Neither test below passes `narratorCharacterId`
+     explicitly — matching every real caller after this task, which all
+     dropped the literal override and rely on `synthesiseChapter`'s own
+     default resolution. */
+  it('Task 23: a char-narrator book validates a cloned narrator reached only via the orphaned-characterId net (revoked)', async () => {
+    const provider = makeProvider();
+    const revokedEntry = baseEntry({
+      voiceUuid: 'lib-char-narrator-clone',
+      consent: {
+        personName: 'Real Person',
+        relationship: 'self',
+        permittedUse: 'personal',
+        attestedAt: '2026-01-01T00:00:00.000Z',
+        attestedBy: 'Real Person',
+        revokedAt: '2026-02-01T00:00:00.000Z',
+      },
+    });
+    const narratorCast: CastCharacter[] = [
+      {
+        id: 'char-narrator',
+        name: 'Narrator',
+        overrideTtsVoices: {
+          qwen: {
+            name: 'Narrator (unused)',
+            libraryUuid: 'lib-char-narrator-clone',
+            provenance: 'cloned',
+          },
+        },
+      },
+    ];
+    const readEntry = vi.fn(async (uuid: string) =>
+      uuid === 'lib-char-narrator-clone' ? revokedEntry : null,
+    );
+    const deriveEngineArtifact = vi.fn();
+
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'ghost')],
+        cast: narratorCast,
+        provider,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        cloneResolverDepsOverride: {
+          readEntry,
+          deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
+        },
+      }),
+    ).rejects.toBeInstanceOf(UnresolvableClonedVoiceError);
+
+    // Validation actually reached the real row. A still-hardcoded
+    // narratorCharacterId ('narrator') makes this fail two ways at once:
+    // readEntry is never called (the pre-pass's `cast.filter` can't match
+    // the id-less synthetic stub against 'char-narrator'), and the chapter
+    // RENDERS the 'ghost' line — via `applyQwenFallback`'s Kokoro/Qwen
+    // catalogue picker on the stub's absent overrides — instead of
+    // rejecting, so `provider.calls` would be non-empty rather than 0.
+    expect(readEntry).toHaveBeenCalledWith('lib-char-narrator-clone');
+    expect(provider.calls).toHaveLength(0);
+    expect(deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+
+  it('Task 23: a char-narrator book renders the narrator on its real cloned voice, not a stock catalogue pick', async () => {
+    const provider = makeProvider();
+    const narratorCast: CastCharacter[] = [
+      {
+        id: 'char-narrator',
+        name: 'Narrator',
+        overrideTtsVoices: {
+          qwen: {
+            name: 'Narrator (unused)',
+            libraryUuid: 'lib-char-narrator-clone',
+            provenance: 'cloned',
+          },
+        },
+      },
+    ];
+    const entry = baseEntry({ voiceUuid: 'lib-char-narrator-clone' });
+    const readEntry = vi.fn(async (uuid: string) =>
+      uuid === 'lib-char-narrator-clone' ? entry : null,
+    );
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'ghost')],
+      cast: narratorCast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      cloneResolverDepsOverride: { readEntry, ptExists: async () => true },
+    });
+
+    // The resolver validated the real row (not a no-op against a stub it
+    // could never match), and the render used the cloned voice's own
+    // storage key — never a catalogue narrator-bucket pick synthesised from
+    // the stub's absent gender/tone hints. A still-hardcoded
+    // narratorCharacterId makes `readEntry` never fire (the gate never sees
+    // 'char-narrator') and `voiceName` come back as a plain qwen catalogue
+    // pick instead of `qwen-lib-char-narrator-clone`.
+    expect(readEntry).toHaveBeenCalledWith('lib-char-narrator-clone');
+    expect(provider.calls.length).toBeGreaterThan(0);
+    expect(provider.calls[0].voiceName).toBe('qwen-lib-char-narrator-clone');
+    expect(result.segments.length).toBeGreaterThan(0);
+  });
 });
 
 /* fs-38 Wave 3c, Task 20 [ADV-C1] — the load-bearing generalisation: the

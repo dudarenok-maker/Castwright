@@ -313,7 +313,10 @@ chapterSpliceRouter.post(
               bookLanguage,
               signal: controller.signal,
               chapterTitleNarration: undefined,
-              narratorCharacterId: 'narrator',
+              /* fs-38 Wave 3c, Task 23 — no explicit narratorCharacterId
+                 here: `synthesiseChapter`'s own default now resolves the
+                 book's REAL narrator row ('narrator' OR 'char-narrator',
+                 whichever the cast actually has). */
               maxSegmentRerecords,
               ...(asrOn
                 ? {

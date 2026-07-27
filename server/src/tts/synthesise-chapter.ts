@@ -637,7 +637,16 @@ export interface SynthesiseChapterOpts {
       (`src/views/listen.tsx:139`). The picker falls through to a
       narrator-voice bucket when the character has no gender / age / tone
       hints, which is the correct routing for the title regardless of
-      whether the cast actually contains a `'narrator'` row. */
+      whether the cast actually contains a `'narrator'` row.
+
+      fs-38 Wave 3c, Task 23 — this id is a HINT, not gospel: if the cast has
+      no row under this exact id but DOES carry one under the other
+      recognised narrator id (`'narrator'`/`'char-narrator'` — the same pair
+      `voice-mapping.ts`'s `inferProfile` treats as narrator), the real row
+      is used instead. Every route today passes the literal `'narrator'`
+      unconditionally, so a book whose narrator row is `'char-narrator'`
+      needs this re-resolution to ever reach its real overrides — see
+      the resolution right after `castById` is built. */
   narratorCharacterId?: string;
   /** Tick BEFORE the chapter-title TTS call begins. Lets the SSE route emit
       a "Synthesising chapter title…" hint so the client's stall detector
@@ -1351,6 +1360,28 @@ export async function synthesiseChapter(
   };
 
   const castById = new Map(cast.map((c) => [c.id, c]));
+
+  /* fs-38 Wave 3c, Task 23 — resolve the narrator's REAL cast row when one
+     exists, instead of trusting the caller's `narratorCharacterId` blindly.
+     Every route (generation.ts, chapter-splice.ts, chapter-qa-repair.ts)
+     hardcodes the literal 'narrator', but a book's narrator row can
+     legitimately carry the id 'char-narrator' instead — the id
+     `voice-mapping.ts`'s `inferProfile` already recognises as narrator.
+     Trusting 'narrator' unconditionally on such a book made every
+     stub-fallback site below (the title beat, the orphaned-characterId
+     safety net, and the in-chapter-id gate that decides which characters
+     enter the cloned-voice pre-pass) resolve from a synthetic no-overrides
+     stub instead of the real row — silently dropping to a catalogue voice
+     AND, because `cast.filter`/`inChapterCharacterIds.has` can't match a
+     synthetic id against the real one, skipping cloned-voice validation
+     entirely (a Property-1 violation: never a silent substitution). Only
+     re-resolve when the CALLER's own id has no cast match — a caller that
+     legitimately points `narratorCharacterId` at some other real row keeps
+     its own choice untouched. */
+  const resolvedNarratorCharacterId = castById.has(narratorCharacterId)
+    ? narratorCharacterId
+    : (['narrator', 'char-narrator'].find((id) => castById.has(id)) ?? narratorCharacterId);
+
   const groups = buildSentenceGroups(sentences);
 
   /* Chapter-title narration (moved up from its original site just above the
@@ -1381,7 +1412,7 @@ export async function synthesiseChapter(
      with an orphaned-characterId sentence and no title narration would let a
      cloned-but-stale narrator voice render past the gate untouched. */
   const rendersNarrator = Boolean(titleText) || groups.some((g) => !castById.has(g.characterId));
-  if (rendersNarrator) inChapterCharacterIds.add(narratorCharacterId);
+  if (rendersNarrator) inChapterCharacterIds.add(resolvedNarratorCharacterId);
   /* fs-38 Wave 3c, Task 20 [ADV-C1] — per-engine "is this clone-capable
      engine unavailable this run" signal, generalising the qwen-only
      `qwenUnavailable` opt (still the source of truth for qwen — it's the
@@ -1721,7 +1752,10 @@ export async function synthesiseChapter(
   const chapterHasQwenGroups = groups.some((g) => {
     const character =
       castById.get(g.characterId) ??
-      castById.get(narratorCharacterId) ?? { id: narratorCharacterId, name: 'Narrator' };
+      castById.get(resolvedNarratorCharacterId) ?? {
+        id: resolvedNarratorCharacterId,
+        name: 'Narrator',
+      };
     return routeFor(character).engine === 'qwen';
   });
   /* fix round 2 (Important) — this used to also require `coquiEvict.ok` (a
@@ -1786,7 +1820,10 @@ export async function synthesiseChapter(
      source of truth so the title beat and the orphaned-characterId fallback
      below can never diverge on what a "missing narrator" looks like. */
   const resolveNarratorChar = (): CastCharacter =>
-    castById.get(narratorCharacterId) ?? { id: narratorCharacterId, name: 'Narrator' };
+    castById.get(resolvedNarratorCharacterId) ?? {
+      id: resolvedNarratorCharacterId,
+      name: 'Narrator',
+    };
 
   /* Orphaned characterId safety net. A sentence can reference a characterId
      that has no corresponding entry in `cast` at all — e.g. a stray

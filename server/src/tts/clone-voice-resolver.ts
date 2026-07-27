@@ -668,11 +668,17 @@ export interface ResolveDesignedVoiceDeps {
       `beforeFirstDerive`, QWEN ARM ONLY (the coqui arm never calls this).
       Fires once, immediately before the FIRST real qwen derive. A thrown/
       rejected hook is caught by the SAME shared catch as every other qwen-
-      arm failure — `console.warn` only, never rethrown, byte-for-byte the
-      qwen arm's existing pre-3c fail-soft policy (this arm has NO loop-top
-      abort check of its own, unlike the cloned resolver — see the
-      synthesise-chapter.ts call site for why that makes ITS OWN abort
-      re-checks load-bearing, not redundant, for this arm). */
+      arm failure and, like every other failure there, is fail-soft
+      (`console.warn`, byte-for-byte the qwen arm's existing pre-3c policy)
+      — EXCEPT a genuine abort (M-1 below), which the shared catch still
+      rethrows. Task 23 correction: that escape is unreachable from THIS
+      hook's own body (`evictEngineForPhase`'s fetch carries no signal, so a
+      failed evict can only throw a plain Error, never an AbortError), but a
+      real in-flight `deps.signal` abort DURING the call still rethrows
+      correctly — "never rethrown" was an overstatement (this arm has NO
+      loop-top abort check of its own, unlike the cloned resolver — see the
+      synthesise-chapter.ts call site for why that makes the shared catch's
+      abort escape load-bearing, not redundant, for this arm). */
   beforeFirstQwenDerive?(): Promise<void>;
 }
 
@@ -828,7 +834,10 @@ export async function resolveDesignedVoicesForChapter(
       /* Task 22 fix round 2 [NEW-CRITICAL] — mirror of the coqui arm's
          `beforeFirstDerive` call. Still inside the shared I-1 try, so a
          failed evict is caught by the shared catch below exactly like any
-         other qwen self-heal failure — `console.warn` only, never rethrown. */
+         other qwen self-heal failure — `console.warn` and fail-soft, unless
+         it's a genuine abort (M-1 below), which still rethrows; see
+         `beforeFirstQwenDerive`'s own doc comment above for why that escape
+         isn't reachable from this hook's own failure mode. */
       await deps.beforeFirstQwenDerive?.();
       const result = await deps.deriveEngineArtifact(
         libraryUuid,
