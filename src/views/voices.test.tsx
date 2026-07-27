@@ -2414,12 +2414,17 @@ describe('#1866 — the rollup empty state vs. the facet rows', () => {
   it('keeps the onboarding copy on an empty library whichever tab is selected', async () => {
     renderLib([]);
     await act(async () => {});
-    fireEvent.click(screen.getByRole('button', { name: 'This book (0)' }));
-    expect(screen.getByText('No voices yet')).toBeInTheDocument();
-    expect(screen.queryByText('No voices match this filter')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Series & older (0)' }));
-    expect(screen.getByText('No voices yet')).toBeInTheDocument();
-    expect(screen.queryByText('No voices match this filter')).toBeNull();
+    /* `tab` defaults to 'all', which already renders the onboarding copy — so
+       each click asserts the tab actually took (the strip marks the active tab
+       with `bg-ink`) before asserting the copy survived it. Without that the
+       case would pass vacuously if `setTab` ever came unwired. */
+    for (const label of ['This book (0)', 'Series & older (0)']) {
+      const tabButton = screen.getByRole('button', { name: label });
+      fireEvent.click(tabButton);
+      expect(tabButton).toHaveClass('bg-ink');
+      expect(screen.getByText('No voices yet')).toBeInTheDocument();
+      expect(screen.queryByText('No voices match this filter')).toBeNull();
+    }
   });
 
   /* #1869 — the variant facet had #1834's exact defect, and a worse one:

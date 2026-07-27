@@ -189,7 +189,8 @@ history at cut time.
   non-empty branch. Confirmed repro: one `source: 'library'` Russian voice + one
   `source: 'current'` English voice, pick **Russian**, switch to **This book**. `rollupIsEmpty`
   / `rollupIsNarrowed` now read all three narrowings (variant, language, tab) the same way:
-  "No voices yet" claims an empty library only when none of them is on, and everything else
+  "No voices yet" claims an empty library only when none of them is on and the library actually
+  has voices in it (see the `library.length > 0` gate below), and everything else
   routes to the existing "No voices match this filter" panel, which now names the miss
   ("No Russian voices in this tab — try another language or tab"). Because that panel renders
   inside the non-empty branch, the tab strip and both facet rows stay on screen alongside it.
