@@ -3341,6 +3341,78 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ModelsStatus' }
 
+  /api/setup/venv/detect:
+    get:
+      summary: Probe the Python venv and interpreter
+      operationId: detectVenv
+      responses:
+        '200':
+          description: Venv + Python probe. No job is started.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VenvDetectResult' }
+
+  /api/setup/venv/bootstrap:
+    post:
+      summary: Start a venv bootstrap job
+      operationId: startVenvBootstrap
+      responses:
+        '202':
+          description: Job accepted and started.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VenvBootstrapJob' }
+
+  /api/setup/venv/bootstrap/{id}:
+    get:
+      summary: Poll a venv bootstrap job
+      operationId: getVenvBootstrapJob
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Current job state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VenvBootstrapJob' }
+        '404':
+          description: No such job.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+
+  /api/setup/venv/bootstrap/{id}/recheck:
+    post:
+      summary: Re-probe venv state for a job
+      operationId: recheckVenvBootstrapJob
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Updated job state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VenvBootstrapJob' }
+        '404':
+          description: No such job.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+
 # ---------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------
@@ -7021,3 +7093,27 @@ components:
             gpu: { type: string }
             vramTotalMb: { type: integer, nullable: true }
         recommendation: { $ref: '#/components/schemas/RecommendationSet' }
+
+    # --- Setup venv-bootstrap (fe-57 / #1883) ------------------------
+    VenvDetectResult:
+      type: object
+      required: [state, venvPresent, pythonFound, installed]
+      properties:
+        state: { type: string, enum: [present, absent] }
+        venvPresent: { type: boolean }
+        pythonFound: { type: boolean, description: A Python 3.12 interpreter was found. }
+        installed: { type: boolean }
+
+    VenvBootstrapJob:
+      type: object
+      required: [id, status, step, error, startedAt, updatedAt]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [detecting, bootstrapping, installed, error] }
+        step:
+          type: string
+          nullable: true
+          description: Latest `[bootstrap-venv]` step line, surfaced as UI status text.
+        error: { type: string, nullable: true }
+        startedAt: { type: integer, description: Epoch ms. }
+        updatedAt: { type: integer, description: Epoch ms. }

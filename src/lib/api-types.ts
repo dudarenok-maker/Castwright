@@ -2531,6 +2531,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/setup/venv/detect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Probe the Python venv and interpreter */
+        get: operations["detectVenv"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/venv/bootstrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a venv bootstrap job */
+        post: operations["startVenvBootstrap"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/venv/bootstrap/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Poll a venv bootstrap job */
+        get: operations["getVenvBootstrapJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/venv/bootstrap/{id}/recheck": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Re-probe venv state for a job */
+        post: operations["recheckVenvBootstrapJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -5259,6 +5327,26 @@ export interface components {
                 vramTotalMb: number | null;
             };
             recommendation: components["schemas"]["RecommendationSet"];
+        };
+        VenvDetectResult: {
+            /** @enum {string} */
+            state: "present" | "absent";
+            venvPresent: boolean;
+            /** @description A Python 3.12 interpreter was found. */
+            pythonFound: boolean;
+            installed: boolean;
+        };
+        VenvBootstrapJob: {
+            id: string;
+            /** @enum {string} */
+            status: "detecting" | "bootstrapping" | "installed" | "error";
+            /** @description Latest `[bootstrap-venv]` step line, surfaced as UI status text. */
+            step: string | null;
+            error: string | null;
+            /** @description Epoch ms. */
+            startedAt: number;
+            /** @description Epoch ms. */
+            updatedAt: number;
         };
     };
     responses: never;
@@ -9181,6 +9269,112 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelsStatus"];
+                };
+            };
+        };
+    };
+    detectVenv: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Venv + Python probe. No job is started. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VenvDetectResult"];
+                };
+            };
+        };
+    };
+    startVenvBootstrap: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Job accepted and started. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VenvBootstrapJob"];
+                };
+            };
+        };
+    };
+    getVenvBootstrapJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current job state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VenvBootstrapJob"];
+                };
+            };
+            /** @description No such job. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
+        };
+    };
+    recheckVenvBootstrapJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Updated job state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VenvBootstrapJob"];
+                };
+            };
+            /** @description No such job. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
                 };
             };
         };
