@@ -2105,30 +2105,35 @@ describe('ProfileDrawer — fs-60 eligibility-based engine lock', () => {
     expect(screen.getByTestId('qwen-locked-note')).toBeInTheDocument();
   });
 
-  /* #1534 — a REUSED character can carry an on-disk `ttsEngine` the current
-     book's language no longer allows. Pre-fs-60 every non-English book
-     hard-locked to Qwen so the seed was overwritten; now it isn't, so
-     `engineChoice` seeds to an engine the picker has no option for.
+  /* #1534 — a character linked to a prior one (`cast-link-prior.ts`, which
+     copies `ttsEngine` across with no language check) can carry an on-disk
+     engine the current book's language no longer allows. Pre-fs-60 every
+     non-English book hard-locked to Qwen so the seed was overwritten; now it
+     isn't, so `engineChoice` seeds to an engine the picker has no option for.
 
-     Asserting on `select.value` would NOT catch this: with no matching
-     option, jsdom (per the HTML "selectedness" reset) auto-selects the first
-     option, so the DOM reads 'default' either way. The observable defect is
-     the state/DOM desync behind it — the picker SHOWS "Default (…)" while
-     Save still writes the stale engine the user never chose. Assert on Save. */
+     Asserting on `select.value` ALONE would not catch this: with no matching
+     option React DOM's `updateOptions` selects the first option, so the DOM
+     reads 'default' either way — in a real browser too, not just jsdom. The
+     observable defect is the state/DOM desync behind it: the picker SHOWS
+     "Default (…)" while Save writes the stale engine the user never chose.
+     So each case asserts BOTH halves — the displayed value and what Save
+     emits — since the invariant is that they agree. */
   const saveWithoutTouchingPicker = (character: Character, extra: Parameters<typeof renderDrawer>[1]) => {
     const onSave = vi.fn();
     renderDrawer(character, { ...extra, onSave });
+    const shown = (screen.getByLabelText('Voice engine for this character') as HTMLSelectElement)
+      .value;
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     expect(onSave).toHaveBeenCalledTimes(1);
-    return onSave.mock.calls[0][0] as Character;
+    return { saved: onSave.mock.calls[0][0] as Character, shown };
   };
 
   it('does not save a stale ineligible engine the picker never offered (kokoro on ru)', () => {
-    /* The select displays "Default (…)" — Save must agree with it. */
-    const saved = saveWithoutTouchingPicker(
+    const { saved, shown } = saveWithoutTouchingPicker(
       { ...baseChar, ttsEngine: 'kokoro' },
       { bookId: 'ru-book-1', libraryBook: ruBook },
     );
+    expect(shown).toBe('default');
     expect(saved.ttsEngine).toBeNull();
   });
 
@@ -2137,7 +2142,7 @@ describe('ProfileDrawer — fs-60 eligibility-based engine lock', () => {
      a Russian book yet has no option row, so an eligibility-only clamp would
      leave the same desync in place. */
   it('does not save a stale engine that is language-eligible but has no picker option (gemini)', () => {
-    const saved = saveWithoutTouchingPicker(
+    const { saved, shown } = saveWithoutTouchingPicker(
       { ...baseChar, ttsEngine: 'gemini' },
       {
         bookId: 'ru-book-2',
@@ -2148,17 +2153,54 @@ describe('ProfileDrawer — fs-60 eligibility-based engine lock', () => {
         },
       },
     );
+    expect(shown).toBe('default');
+    /* Normalising to null is deliberate: the drawer renders no control for
+       gemini/piper, so it must not silently re-persist one either. */
     expect(saved.ttsEngine).toBeNull();
   });
 
+  /* #1534 review — the seed clamp alone is not enough. `useState`'s initializer
+     runs once at MOUNT, but `eligibleTtsEngines` arrives on a separate fetch
+     from the cast: on the `?profile=<id>` deep-link cold boot the drawer can
+     mount while `state.library.books` is still empty, where eligibility falls
+     back to ALL_TTS_ENGINES and a stale 'kokoro' passes the clamp. When the
+     library lands the Kokoro option row disappears and nothing re-derives the
+     choice — reopening the exact desync this fixes. A reconcile effect closes
+     the window. */
+  it("re-clamps when the book's eligibility arrives AFTER the drawer mounts", () => {
+    const onSave = vi.fn();
+    /* No libraryBook → eligibility is the ALL_TTS_ENGINES default at mount. */
+    const { store } = renderDrawer(
+      { ...baseChar, ttsEngine: 'kokoro' },
+      { bookId: 'ru-book-1', onSave },
+    );
+    act(() => {
+      store.dispatch(librarySlice.actions.addBook(ruBook));
+    });
+    expect(screen.queryByRole('option', { name: 'Kokoro' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect((onSave.mock.calls[0][0] as Character).ttsEngine).toBeNull();
+  });
+
+  it('leaves a still-eligible choice alone when the library lands', () => {
+    const onSave = vi.fn();
+    const { store } = renderDrawer(
+      { ...baseChar, ttsEngine: 'coqui' },
+      { bookId: 'ru-book-1', onSave },
+    );
+    act(() => {
+      store.dispatch(librarySlice.actions.addBook(ruBook));
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect((onSave.mock.calls[0][0] as Character).ttsEngine).toBe('coqui');
+  });
+
   it('still seeds — and saves — an eligible per-character engine unchanged (coqui on ru)', () => {
-    const saved = saveWithoutTouchingPicker(
+    const { saved, shown } = saveWithoutTouchingPicker(
       { ...baseChar, ttsEngine: 'coqui' },
       { bookId: 'ru-book-1', libraryBook: ruBook },
     );
-    expect(
-      (screen.getByLabelText('Voice engine for this character') as HTMLSelectElement).value,
-    ).toBe('coqui');
+    expect(shown).toBe('coqui');
     expect(saved.ttsEngine).toBe('coqui');
   });
 });

@@ -88,7 +88,7 @@ interface Props {
       "undesigned characters can't be generated" (Qwen is the only eligible
       engine) or "fall back to a generic Coqui voice" (Coqui-eligible
       languages, e.g. ru/es/fr/de/zh/ja) — see `qwenOnly` below. */
-  eligibleTtsEngines?: TtsEngine[];
+  eligibleTtsEngines?: readonly TtsEngine[];
   onOpenProfile: (id: string | null) => void;
   onShowMatchDetail: (id: string) => void;
   driftEvents: DriftEvent[];

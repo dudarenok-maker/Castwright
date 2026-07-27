@@ -262,7 +262,7 @@ export function ProfileDrawer({
      "everything" so a book with no eligibility data (or a test fixture that
      predates fs-60) stays fully unlocked, matching pre-fs-60 behaviour. */
   const eligibleTtsEngines = useAppSelector(
-    (s): TtsEngine[] =>
+    (s): readonly TtsEngine[] =>
       s.library?.books?.find((b) => b.bookId === bookId)?.eligibleTtsEngines ?? ALL_TTS_ENGINES,
   );
   const baseVoices = useAppSelector((s) => s.voices.baseVoices);
@@ -318,17 +318,22 @@ export function ProfileDrawer({
   const pickerEngines: TtsEngine[] = (['kokoro', 'qwen', 'coqui'] as const).filter((e) =>
     eligibleTtsEngines.includes(e),
   );
-  /* #1534 — clamp the seed to an engine the picker can actually show. A
-     REUSED character carries its previous book's `ttsEngine` on disk, and
-     since fs-60 a non-English book no longer hard-locks to Qwen, so a stale
-     'kokoro' (or 'gemini') survives into a ru/es/fr/de book. An unclamped
-     seed leaves the controlled <select> on a value with no matching option:
-     it displays "Default (…)" (the browser's selectedness reset) while Save
-     still writes the stale engine the user never picked. Clamp against
-     `pickerEngines`, NOT `eligibleTtsEngines` — 'gemini' is language-eligible
-     yet has no option row, so an eligibility-only check leaves the same
-     desync. Server-side the force-loop still corrects the engine at render,
-     so this was never wrong audio. */
+  /* #1534 — clamp the seed to an engine the picker can actually show.
+     `cast-link-prior.ts` copies a prior character's `ttsEngine` onto the
+     linked one with no language check, and since fs-60 a non-English book no
+     longer hard-locks to Qwen, so an ineligible 'kokoro' can reach a
+     ru/es/fr/de book. (Automatic series reuse can NOT do this — it vetoes
+     cross-language candidates outright, `series-reuse-link.ts` — which is why
+     the reuse-path comment further down still correctly says a reused
+     character's own `ttsEngine` stays empty.) An unclamped seed leaves the
+     controlled <select> on a value with no matching option: React's
+     `updateOptions` then selects the first option, so it displays
+     "Default (…)" — in a real browser, not just jsdom — while Save writes the
+     stale engine the user never picked. Clamp against `pickerEngines`, NOT
+     `eligibleTtsEngines`: 'gemini'/'piper' are language-eligible yet have no
+     option row, and normalising an engine this drawer cannot represent to
+     'default' is deliberate. Server-side the force-loop still corrects the
+     engine at render, so this was never wrong audio. */
   const [engineChoice, setEngineChoice] = useState<EngineChoice>(
     lockedToQwen
       ? 'qwen'
@@ -336,6 +341,23 @@ export function ProfileDrawer({
         ? character.ttsEngine
         : 'default',
   );
+  /* The seed alone is not enough: `useState`'s initializer runs once at MOUNT,
+     but `eligibleTtsEngines` arrives on a different fetch than the cast. On
+     the `?profile=<id>` deep-link cold boot the drawer can mount while
+     `state.library.books` is still empty — eligibility falls back to
+     ALL_TTS_ENGINES, a stale 'kokoro' passes the clamp, and when the library
+     lands the option row vanishes with nothing re-deriving the choice. Narrow
+     the choice whenever it stops being renderable; a still-renderable choice
+     (including one the user just picked) is left alone. */
+  const pickerEnginesKey = pickerEngines.join(',');
+  useEffect(() => {
+    if (lockedToQwen) return;
+    if (engineChoice !== 'default' && !pickerEngines.includes(engineChoice)) {
+      setEngineChoice('default');
+    }
+    /* `pickerEngines` is a fresh array each render — depend on its contents. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickerEnginesKey, engineChoice, lockedToQwen]);
   /* fs-56 — per-character 1.7B Quality-tier model key. Seeded from the character's
      existing ttsModelKey (if any) so a re-open shows the prior selection. */
   const [charModelKey, setCharModelKey] = useState<'qwen3-tts-1.7b' | null>(
