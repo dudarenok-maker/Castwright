@@ -65,5 +65,17 @@ export default defineConfig({
     /* Vitest 4 removed `poolOptions`; the single-fork serialisation
        (`maxForks: 1`) is now the top-level `maxWorkers: 1`. */
     maxWorkers: 1,
+    /* CI runs this config with `--changed` too (verify.yml server-tests job).
+       Left unset, vitest falls back to its own forceRerunTriggers default,
+       whose config-file glob (brace-alternation + wildcarded extension,
+       followed by a trailing wildcard suffix) matches NOTHING under
+       picomatch 4 — a wildcard inside that path segment kills the
+       trailing-wildcard-suffix-also-matches-the-file behaviour (ops-30/
+       #1848) — so a change to THIS file would silently select zero of the
+       slow suite's 10 files. Set explicitly (`.ts` extension, not `.*`) so
+       it, and package.json, still force a full run. Not extended from the
+       main config's list — see the header comment: no mergeConfig, this
+       file stands alone. */
+    forceRerunTriggers: ['**/package.json/**', '**/vitest.config.slow.ts/**'],
   },
 });

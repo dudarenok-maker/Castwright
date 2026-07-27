@@ -53,6 +53,7 @@ setup rather than repeatedly loading and evicting models.
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 5 |
 | **F** | A real Android device, optionally + a head unit | 1 |
+| **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 1 |
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
@@ -491,6 +492,66 @@ off-Wi-Fi, a "download to play" message rather than a stall.
 *Needs* a real Android phone (the plan names a Pixel 10 Pro), the GPU server reachable
 on the same LAN, and — for app-9 — a real Android Auto / CarPlay head unit. Not
 batchable with any other group.
+
+---
+
+## Group G — GitHub Actions itself
+
+Not physical hardware — the prerequisite is a real dispatch of a specific workflow
+on the real GitHub Actions runner, which local execution cannot substitute for
+(a fresh `ubuntu-latest` image, real `GH_TOKEN`/`gh` wiring, real `apt-get`).
+
+### G1 · Quarantine-lane health report — first live dispatch (ops-32, #1864, PR #1873) · **two distinct debts**
+
+PR #1873's own body discloses both under "Known gaps — stated rather than
+glossed" rather than leaving them to be rediscovered later.
+
+**The workflow has never executed on Actions.** `.github/workflows/quarantine-health.yml`
+parses as valid YAML and `scripts/quarantine-health.mjs` is verified standalone
+(46 unit tests, mutation-checked), but the live runner environment — `gh
+issue view` actually authenticating via the injected `GH_TOKEN`, the `apt-get
+install ffmpeg` step succeeding, the job actually posting to
+`$GITHUB_STEP_SUMMARY` — is unverified until the first dispatch (manual, via
+the Actions tab, or the Monday 03:00 UTC cron). `continue-on-error: true` and
+exclusion from every required check mean a failure here cannot block
+anything, but "the job doesn't crash" is still unconfirmed. **What to
+observe:** a manual dispatch (`gh workflow run quarantine-health.yml`)
+completes and its job summary renders a well-formed report — either the
+clean "nothing to run" no-op (today's empty register) or an actual bucketed
+table if the register is non-empty by then.
+
+**Genuine `intermittent` classification is exercised only by unit tests over
+synthetic run sequences** — no real cross-run nondeterminism has been forced
+through the classifier. This needs an *actual* flaky quarantined test
+present in `docs/testing/flaky-register.md` at dispatch time, which the
+empty register doesn't provide today — the first dispatch alone won't
+discharge this half. **What to observe, next time a genuinely flaky test is
+quarantined:** its row in the report's table lands in the `intermittent`
+bucket (a real mix of passed/failed across the 5 runs), not `always-passes`
+or `never-passes` — confirming the bucket that is this tool's entire reason
+to exist actually fires on real data, not just the synthetic sequences in
+`scripts/tests/quarantine-health.test.mjs`.
+
+*Why this sits here and not as a plain automated-test-gap issue* (per this
+file's own closing rule below): this is NOT closable by writing more unit
+tests — `classifyEntry` is already fully unit- and mutation-tested against
+every synthetic sequence that matters. What's missing is a real occurrence
+of cross-run nondeterminism, which by construction can't be manufactured or
+asserted inside a unit test; the only way to discharge it is to observe live
+data once it exists, the same shape as any other row in this register, just
+triggered by an external event (a future genuine flake) rather than a
+hardware prerequisite. One honest caveat: unlike G1's first debt, this half
+does NOT strictly require the GitHub Actions runner — a local
+`node scripts/quarantine-health.mjs` run against a real flaky register row
+would equally discharge it. It stays grouped under G1 anyway because it
+shares G1's dispatch-triggered, opportunistic-timing framing and "what to
+observe" shape, not because Group G's runner criterion technically applies
+to it.
+
+*Needs:* nothing beyond repo access for the first half; a real quarantined
+flaky test (naturally occurring, not manufactured) for the second.
+*Cost:* minutes for the first dispatch; opportunistic for the second — piggy-back
+on the next real quarantine event rather than manufacturing one.
 
 ---
 
