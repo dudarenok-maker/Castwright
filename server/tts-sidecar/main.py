@@ -403,6 +403,42 @@ def _resolve_codec_device(pref: str, model_device: str) -> Optional[str]:
     return p
 
 
+def _codec_device_pref() -> str:
+    """QWEN_CODEC_DEVICE as a resolved device string, defaulting to 'cpu'.
+
+    QWEN_CODEC_DEVICE is a type:'device' knob, so PUT /api/config persists a
+    picked card as 'cuda-uuid:<uuid>'. A bare os.environ.get (the #1857 bug) let
+    that literal through _validate_cuda_index untouched -- _parse_device reads
+    'cuda-uuid:x' as family cuda with NO index, and the range check only fires on
+    a concrete index -- so it failed later inside torch's .to() in
+    _move_codec_to_device and got rolled back to CPU. The pinned card was simply
+    ignored.
+
+    Deliberately NOT _read_device_env, which the three ENGINE device knobs use:
+    that helper degrades an unresolvable pin to 'auto', and
+    _resolve_codec_device('auto', model_device) means "follow the model". So a
+    vanished card would silently move the codec ONTO the model's card -- adding
+    pressure to exactly the card a user who pinned the codec elsewhere was trying
+    to protect. _move_codec_to_device's rollback only fires if .to() itself
+    raises, so a SUCCESSFUL move that later OOMs a decode never unwinds. 'cpu' is
+    this knob's registry default and is VRAM-neutral.
+
+    Named rather than inlined at the call site so it is reachable from tests: the
+    call site is inside _load_qwen_model, which needs real weights and a GPU.
+    """
+    raw = os.environ.get("QWEN_CODEC_DEVICE")
+    if not raw or not raw.strip():
+        return "cpu"
+    resolved = _resolve_uuid_to_index(raw)
+    if resolved is None:
+        log.warning(
+            "QWEN_CODEC_DEVICE=%s did not match any visible GPU -- leaving the codec on cpu.",
+            raw,
+        )
+        return "cpu"
+    return resolved
+
+
 def _move_codec_to_device(model: Any, device: str, torch_module: Any) -> None:
     """Move the resolved codec (speech_tokenizer.model) to `device` and
     resync its cached `.device` attribute, so every `.to(self.device)` call
@@ -3407,9 +3443,7 @@ class QwenEngine(Engine):
             ) from e
         _apply_torch_perf_flags(torch)
         _validate_cuda_index(self._device, torch)
-        codec_device = _resolve_codec_device(
-            os.environ.get("QWEN_CODEC_DEVICE", "cpu"), self._device
-        )
+        codec_device = _resolve_codec_device(_codec_device_pref(), self._device)
         if codec_device is not None:
             try:
                 _validate_cuda_index(codec_device, torch)

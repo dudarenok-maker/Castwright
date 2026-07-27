@@ -180,6 +180,38 @@ history at cut time.
   engine, not per voice) and therefore the only leg a real user can be stranded on, since
   `languageCode` is only ever set on a designed Qwen voice. The independent review proved that
   leg had zero coverage — reverting just its memo left all 69 tests green.
+- **`#/voices` no longer mislabels a filtered-out rollup as an empty library, and the Variants
+  filter can't blank it outright** (#1866, #1869). Two halves of the structural cause #1834's
+  review left standing. **(a)** The "No voices yet" empty state was gated only on
+  `variantFilter === 'all'`, so any *other* narrowing that matched nothing collapsed the rollup
+  into "Finish setting up a book — once you confirm its cast…" on a fully populated library —
+  and took the language chip row down with it, since that row renders inside the ternary's
+  non-empty branch. Confirmed repro: one `source: 'library'` Russian voice + one
+  `source: 'current'` English voice, pick **Russian**, switch to **This book**. `rollupIsEmpty`
+  / `rollupIsNarrowed` now read all three narrowings (variant, language, tab) the same way:
+  "No voices yet" claims an empty library only when none of them is on and the library actually
+  has voices in it (see the `library.length > 0` gate below), and everything else
+  routes to the existing "No voices match this filter" panel, which now names the miss
+  ("No Russian voices in this tab — try another language or tab"). Because that panel renders
+  inside the non-empty branch, the tab strip and both facet rows stay on screen alongside it.
+  **(b)** The Variants facet had #1834's defect in its worst form: its chip row renders only
+  while `qwenLibrary` is non-empty, and a non-`all` filter sets `showFamilies = false`, so a
+  stale filter blanked *every* tab with no control left to clear it — and `qwenLibrary` empties
+  wholesale on an engine switch away from Qwen, since `resolveVoiceAssignment` stamps
+  `provider` from the active engine rather than per voice. `activeVariantFilter` gets the same
+  derived-during-render treatment `activeLanguageFilter` got; `setVariantFilter` stays the sole
+  state writer. This one is load-bearing for (a): without it a stale `variantFilter` would keep
+  `rollupIsNarrowed` true forever and pin the new panel on a populated library. `rollupIsNarrowed`
+  is additionally gated on `library.length > 0` so the onboarding case is untouched — on an
+  empty library every tab is empty, so "try another tab" would be useless advice and a fresh
+  install clicking "This book (0)" still gets "Finish setting up a book"; the review's truth-table
+  pass proved that clause changes the outcome in exactly that one state and no other. Five cases
+  in `voices.test.tsx`, each placebo-verified against the specific line it locks — including a
+  control asserting a genuinely empty library still says "No voices yet". The facet's label map
+  moves to module scope now that the panel names the language too, as `FACET_LANGUAGE_LABELS`:
+  `library-slice.ts` already exports a `LANGUAGE_LABELS` and it is deliberately different
+  (endonyms — 'Русский', 'Deutsch' — for the book-library pills, against this one's exonyms),
+  so the two must not be confusable at an import site.
 
 ---
 
@@ -236,6 +268,66 @@ history at cut time.
 ---
 
 ## 🔒 Security & dependencies
+
+- **react-router 7 → 8, `react-router-dom` dropped, and the supported Node floor raised to 22.22**
+  (fe-56, #1859). One PR because the upgrade is not adoptable without the floor: react-router 8.3.0
+  declares `engines.node >=22.22.0`.
+  - **Deployer-visible:** the minimum supported Node moves from **20.19 → 22.22**. Node 20 reached EOL
+    in April 2026 and 22 is the active LTS, so the floor was overdue independently of the router.
+    **`engines` is advisory, not enforced** — npm emits `EBADENGINE` and exits 0 without
+    `engine-strict`, and this repo sets no `.npmrc`. The floor documents intent and fails *late and
+    obscurely* on an older Node, it does not block the install. (`164-deps-ci-hygiene.md` already said
+    this; an earlier draft of this entry claimed npm would refuse, which is wrong.)
+  - **Pinokio no longer depends on whatever Node its own kernel bundles.** `pinokio-scripts/install.js`
+    step 1 now conda-installs a pinned `nodejs=24` alongside `ffmpeg mkcert` (matching `.nvmrc` and
+    every CI workflow), replacing the unimplemented TODO that file carried since it was written.
+    `pinokio-scripts/update.js` re-asserts the same pin so an install made before this change converges
+    onto it instead of staying on the bundled Node forever. **It converges one Update late, and that is
+    not fixable here:** Pinokio loads `update.js` from the *currently checked-out* release and iterates
+    the `run[]` it loaded, while `resolve-release.js` `git checkout`s the new tag mid-run — so a user
+    updating FROM a pre-pin release executes their old `update.js` (no pin step) and does that update's
+    `npm ci`/build on the bundled Node. The pin applies from their next Update on; fresh installs get it
+    immediately. An earlier draft of this entry said "picks it up on its next Update", which was wrong.
+    `pinokio-scripts/lib/node-pin.test.js` pins both scripts' pin, asserts each conda step precedes that
+    script's first `node`/`npm` step, and checks the pin satisfies `package.json`'s `engines.node` floor
+    by **parsing both** rather than hardcoding — so a future floor raise without a matching pin bump
+    fails that test. `verify-cache.mjs` gains `package.json` as a `test:pinokio` input, since without it
+    a floor-only change prints `[cached]` and the guard never runs locally. What's still owed on-box:
+    that the conda Node actually shadows Pinokio's bundled one on PATH, that the solve succeeds against
+    the existing env, and that the one-Update lag behaves as described — tracked in
+    `docs/testing/onbox-acceptance-register.md` (E1); plan 218's invariant 2 and open-verification
+    item 2 are both updated to match. (#1878, closes #1876)
+  - `react-router-dom` is now a **dead package**: v8 folded the DOM APIs back into `react-router` and
+    left `react-router-dom` frozen at 7.18.1 permanently. 24 files re-pointed.
+  - **The trap, recorded because it is invisible to `tsc`:** v8 did not simply rename the package.
+    `RouterProvider` (and `HydratedRouter`) live at the DOM-specific subpath **`react-router/dom`**,
+    whose `RouterProvider` wraps the base one with `flushSync: ReactDOM.flushSync`. Both modules export
+    a component of that name, and `dom-router-provider.d.ts` declares
+    `Omit<RouterProviderProps, "flushSync">`, so `<RouterProvider router={router}/>` **compiles against
+    either**. Issue #1859 instructed rewriting every `react-router-dom` import to `react-router`, which
+    would have silently taken the wrong one past `npm run typecheck` — the app has one
+    `RouterProvider` mount site. New `src/main.test.tsx` mocks both modules with distinct sentinels and
+    pins the DOM export; mutation-verified (reverting the import fails it).
+    **Calibration, after review:** the wrong import would be behaviourally *identical today*, not
+    broken. `flushSync` is consumed only behind `if (reactDomFlushSyncImpl && flushSync)`, and the app
+    uses no `viewTransition` and no `flushSync` anywhere — the miss degrades to a dev-only `warnOnce`.
+    The guard is worth keeping because it protects future view-transition adoption, but an earlier
+    draft of this entry called it a runtime break, which overstated it.
+  - `react`/`react-dom` tightened `^19.0.0` → `^19.2.7`. The old range could resolve a React that v8
+    rejects, so the range was itself the defect. Vite was already 8.0.16, above v8's `>=7` floor.
+  - The floor is advertised in **five places that are not generated from each other** and must move
+    together: `package.json` `engines`, `INSTALL.md`, the hand-maintained wiki mirror
+    `docs/wiki/Installing-Castwright.md` (synced by `scripts/sync-wiki.mjs`, *not* derived from
+    INSTALL.md — it drifts silently), `copilot-setup-steps.yml`, which was still pinned to Node 20
+    while every other workflow had moved to 24, and `.github/copilot-instructions.md` — the fifth,
+    caught by review after an earlier draft of this entry claimed there were four. That the count was
+    itself wrong is the argument for the point: nothing mechanical keeps these in sync.
+  - `src/lib/router.ts` has a **zero-line diff** — the plan-01 `RouterStore` adapter seam held across a
+    router major. The `#/…` grammar is byte-identical: 30 unmodified `router.test.ts` tests (39 assertions), 292
+    unmodified e2e specs over ~50 distinct hash shapes, 19 visual snapshots with no drift and nothing
+    blessed. Every v8 SSR/framework-mode breaking change was assessed inapplicable — this app is pure
+    client-side `createHashRouter` with no loaders, actions, or `meta` functions. Plan
+    [269](features/archive/269-react-router-v8-node-floor.md).
 
 - **Sidecar engine deps: kokoro-onnx 0.5.0, a real ONNX Runtime pin, and FastAPI 0.140 via `lifespan`** (#1846).
   Clears the actionable half of the `side-17` umbrella (#893), which an audit found was carrying three
@@ -318,3 +410,31 @@ history at cut time.
     `server/src/parsers/adm-zip-pin.test.ts` guards the block, since deleting it reinstalls a vulnerable
     0.5.x with no error (epub2's declared `^0.5.10` is satisfied) and the 27 existing parser cases return
     byte-identical results on both versions, so they cannot detect the regression.
+
+## 🧪 Test gates
+
+- **`vitest --changed` no longer under-selects to zero from an agent worktree** (ops-33, #1868).
+  picomatch's globstar refuses to cross a dot-prefixed path segment unless `{ dot: true }` is passed,
+  and vitest passes no options when it builds its `forceRerunTriggers` matchers. Agent worktrees live
+  under `.claude/worktrees/…`, so from one, every **glob** trigger matched nothing and
+  `npx vitest run --changed <base>` selected zero tests — reporting `0 tests found, exit 0`, which
+  reads as success. (Vitest also appends resolved `setupFiles` as absolute paths, which carry no
+  wildcard and were never affected.) Measured in a single dotted checkout on an identical
+  `package.json`-only diff, swapping only the configs: **frontend 1 → 323 test files, server 0 → 446,
+  slow tier 0 → 10.** All 10 triggers across `vitest.config.ts`, `server/vitest.config.ts` and
+  `server/vitest.config.slow.ts` now carry an explicit dot-segment alternative, and
+  `server/vitest.config.ts` gained a trigger for `vitest.config.slow.ts` — the
+  `{vitest,vite}.config.ts` brace never matched it, so a slow-config-only diff selected zero tests
+  from the suite that holds its own guard.
+  - The dot tolerance is exactly **one** segment deep; a checkout nested under a second dotted parent
+    still misses. Known bound, and a loud one — the trigger tests' `this checkout` case goes red there
+    rather than under-selecting silently.
+  - **CI was never affected** — GitHub runners check out to `/home/runner/work/Castwright/Castwright`,
+    which has no dot segment, and `verify.yml` holds the repo's only three `--changed` invocations. The
+    cost landed entirely on local verification, which is where essentially all non-trivial work in this
+    repo happens.
+  - This is why the regression tests assert a **synthetic dotted root** rather than only the real
+    checkout path: CI always runs from a clean path, so a regression that dropped the dot-tolerant half
+    would pass CI unnoticed and break only on developer machines — exactly how #1868 survived. It cost
+    real time twice before being fixed: once masquerading as the bug under investigation in #1848, and
+    again in #1873, whose own trigger tests hit it and had to route around it with a synthetic root.

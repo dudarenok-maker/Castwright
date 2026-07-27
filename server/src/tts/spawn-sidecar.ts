@@ -27,7 +27,7 @@ import { WORKSPACE_ROOT } from '../workspace/paths.js';
 import { resolveLogDir, resolveRunDir } from '../app-dirs.js';
 import { formatTimestamp } from '../logger.js';
 import { allKnobs } from '../config/registry.js';
-import { resolveKnob } from '../config/resolver.js';
+import { resolveKnob, resolveKnobForSidecarEnv } from '../config/resolver.js';
 import { readStamp } from '../../tts-sidecar/scripts/venv-migration.mjs';
 // @ts-expect-error — standalone install scripts ship no .d.ts; pure helpers are plain JS.
 import { resolveProfile, ortProviders } from '../../tts-sidecar/scripts/accelerator-profile.mjs';
@@ -471,10 +471,20 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
      explicit registry override for tts.preload.coqui WINS over the
      modelKey-derived PRELOAD_COQUI '0'/'1' set there. tts.preload.kokoro /
      .qwen / .qwenBase17 have no base-block value to win over any more — this
-     loop is their ONLY source (see the buildSidecarEnv docblock above). */
+     loop is their ONLY source (see the buildSidecarEnv docblock above).
+
+     Device knobs resolve through resolveKnobForSidecarEnv, NOT resolveKnob: a
+     'cuda-uuid:' pin is handed to the sidecar VERBATIM so it resolves against
+     live enumeration on every spawn, rather than freezing an index a later
+     respawn can't correct. See that function's docblock (#1857). The two
+     ceiling helpers earlier in this file (expectedSidecarCeilings,
+     expectedFreeFloorMb) deliberately keep using resolveKnob — their knobs are
+     numeric, so the distinction is moot there, and they answer a different
+     question ("what would THIS server configure", for the adopt/recycle
+     mismatch check). */
   for (const knob of allKnobs()) {
     if (knob.apply !== 'restart-sidecar' || !knob.env) continue;
-    const st = resolveKnob(knob);
+    const st = resolveKnobForSidecarEnv(knob);
     if (st.source === 'default') continue;
     // Emit booleans as '1'/'0' — the canonical form every sidecar env reader
     // accepts. Some main.py reads use a bare `== "1"` check that would reject

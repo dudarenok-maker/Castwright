@@ -9,6 +9,31 @@ const CONDA = { path: 'env', python: '3.12' };
 
 module.exports = {
   run: [
+    // 0. Re-assert the pinned Node (see install.js step 1) before any node/npm step
+    //    below. update.js reuses the EXISTING conda env and never otherwise touches
+    //    it, so without this step an install created before the pin existed would
+    //    keep running on Pinokio's bundled Node forever, across every update.
+    //    `conda install` is idempotent, so on an already-pinned env this is a cheap
+    //    no-op (a solve, not a download).
+    //
+    //    ONE-UPDATE LAG — do not read this step as covering the update that
+    //    introduces it. Pinokio loads THIS file from the currently checked-out
+    //    release and iterates the run[] it loaded; step 1 below (resolve-release.js)
+    //    `git checkout`s the new tag mid-run, replacing this file on disk without
+    //    affecting the already-loaded array. So a user updating FROM a pre-pin
+    //    release runs their old update.js — no step 0 — and does that update's
+    //    `npm ci`/build on the bundled Node. The pin applies from their NEXT
+    //    update onward. Nothing here can close that window; it is called out in
+    //    218-pinokio-installer.md open verification 2 and register row E1 so the
+    //    on-box tester expects the lag instead of reporting it as a broken pin.
+    {
+      method: 'shell.run',
+      params: {
+        path: APP_ROOT,
+        conda: CONDA,
+        message: 'conda install -y -c conda-forge nodejs=24',
+      },
+    },
     // Single resolve+checkout step (fetch + API + checkout + guard live inside
     // resolve-release.js) — same fix as install.js, no {{input.event}} capture.
     {

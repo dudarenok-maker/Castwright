@@ -2240,9 +2240,10 @@ describe('fs-41/fs-50 seam 4b — language facet on the global #/voices view', (
 
   /* #1834 — the chip row is the only control that can clear `languageFilter`,
      and it only renders while the library still carries a non-English
-     languageCode. A mid-session library change (book switch through the
-     book-scoped mount, engine switch, a re-hydrate that drops the Russian
-     voices) can pull the row out from under an active filter, leaving it
+     languageCode. A re-hydrate that drops the last voice carrying that
+     language (its qwen override cleared, the voice deleted, its design
+     manifest failing to resolve a language) can pull the row out from under
+     an active filter, leaving it
      narrowing the rollup with nothing left to match and no way to clear it.
      Same shape as #1802's `section`, fixed the same way: derive the effective
      filter during render instead of trusting the raw local. */
@@ -2349,5 +2350,115 @@ describe('fs-41/fs-50 seam 4b — language facet on the global #/voices view', (
     const group = screen.getByRole('group', { name: 'Filter by language' });
     /* 'ja' is not in the label map → rendered as-is. */
     expect(within(group).getByRole('button', { name: 'ja' })).toBeInTheDocument();
+  });
+});
+
+/* #1866 — the follow-up #1834's review surfaced. #1834 fixed a filter that
+   outlived its control; this covers the other half — the "No voices yet"
+   empty state claiming an empty library whenever ANY narrowing matched
+   nothing, which also swallowed the facet rows that live inside the rollup's
+   non-empty branch. */
+describe('#1866 — the rollup empty state vs. the facet rows', () => {
+  function renderLib(lib: Voice[], store = makeStore()) {
+    return render(
+      <Provider store={store}>
+        <LibraryView library={lib} />
+      </Provider>,
+    );
+  }
+
+  it('keeps the language chip row reachable when a tab excludes the filtered language', async () => {
+    /* The issue's confirmed repro: one Russian 'library' voice, one English
+       'current' voice. Russian + "This book" matches nothing. */
+    const lib: Voice[] = [
+      makeVoice({ id: 'v_ivan', character: 'Ivan', bookId: 'b1', bookTitle: 'Book One', source: 'library', languageCode: 'ru' }),
+      makeVoice({ id: 'v_preset', character: 'Preset', bookId: 'b1', bookTitle: 'Book One', source: 'current' }),
+    ];
+    renderLib(lib);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Russian' }));
+    expect(screen.getByText('Ivan')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'This book (1)' }));
+    /* Not "No voices yet" — the library is populated, the filters just miss. */
+    expect(screen.queryByText('No voices yet')).toBeNull();
+    expect(screen.getByText('No voices match this filter')).toBeInTheDocument();
+    expect(screen.getByText(/No Russian voices in this tab/)).toBeInTheDocument();
+    /* …and the row that clears the filter survived, so it's one click out. */
+    const group = screen.getByRole('group', { name: 'Filter by language' });
+    fireEvent.click(within(group).getByRole('button', { name: 'All' }));
+    expect(screen.getByText('Preset')).toBeInTheDocument();
+  });
+
+  it('reads a tab that excludes everything as a filter miss, not an empty library', async () => {
+    const lib: Voice[] = [
+      makeVoice({ id: 'v_preset', character: 'Preset', bookId: 'b1', bookTitle: 'Book One', source: 'current' }),
+    ];
+    renderLib(lib);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Series & older (0)' }));
+    expect(screen.queryByText('No voices yet')).toBeNull();
+    expect(screen.getByText('No voices in this tab — try another tab.')).toBeInTheDocument();
+  });
+
+  it('still says "No voices yet" when the library really is empty', async () => {
+    renderLib([]);
+    await act(async () => {});
+    expect(screen.getByText('No voices yet')).toBeInTheDocument();
+    expect(screen.queryByText('No voices match this filter')).toBeNull();
+  });
+
+  /* Review of #1871 — an empty library has no tab with anything in it, so
+     "try another tab" would be useless advice. A fresh install clicking any
+     tab keeps the onboarding copy, which is why `rollupIsNarrowed` is gated
+     on `library.length > 0`. */
+  it('keeps the onboarding copy on an empty library whichever tab is selected', async () => {
+    renderLib([]);
+    await act(async () => {});
+    /* `tab` defaults to 'all', which already renders the onboarding copy — so
+       each click asserts the tab actually took (the strip marks the active tab
+       with `bg-ink`) before asserting the copy survived it. Without that the
+       case would pass vacuously if `setTab` ever came unwired. */
+    for (const label of ['This book (0)', 'Series & older (0)']) {
+      const tabButton = screen.getByRole('button', { name: label });
+      fireEvent.click(tabButton);
+      expect(tabButton).toHaveClass('bg-ink');
+      expect(screen.getByText('No voices yet')).toBeInTheDocument();
+      expect(screen.queryByText('No voices match this filter')).toBeNull();
+    }
+  });
+
+  /* #1869 — the variant facet had #1834's exact defect, and a worse one:
+     the Variants row renders only while `qwenLibrary` is non-empty, and a
+     non-'all' filter suppresses the preset families outright, so a stale
+     filter blanks every tab with no control left to clear it. `qwenLibrary`
+     empties on an engine switch away from Qwen — `resolveVoiceAssignment`
+     stamps `ttsVoice.provider` from the ACTIVE engine, not per voice. */
+  it('stops suppressing the preset families when the Variants row unmounts mid-session', async () => {
+    const store = makeStore();
+    const qwenIvan = makeVoice({
+      id: 'q_ivan', character: 'Ivan', bookId: 'b1', bookTitle: 'Book One', source: 'current',
+      ttsVoice: { provider: 'qwen', name: 'qwen-ivan', description: 'Designed voice' },
+    });
+    const preset = makeVoice({ id: 'v_preset', character: 'Preset', bookId: 'b1', bookTitle: 'Book One', source: 'current' });
+    const { rerender } = renderLib([qwenIvan, preset], store);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Has variants' }));
+    /* Nothing carries variants, and the filter hides the preset families too. */
+    expect(screen.getByText('No voices match this filter')).toBeInTheDocument();
+    expect(screen.queryByText('Preset')).not.toBeInTheDocument();
+    /* The engine switches away from Qwen — every provider is restamped. */
+    const kokoroIvan = makeVoice({
+      id: 'q_ivan', character: 'Ivan', bookId: 'b1', bookTitle: 'Book One', source: 'current',
+      ttsVoice: { provider: 'kokoro', name: 'af_heart', description: 'Fallback' },
+    });
+    rerender(
+      <Provider store={store}>
+        <LibraryView library={[kokoroIvan, preset]} />
+      </Provider>,
+    );
+    await act(async () => {});
+    expect(screen.queryByRole('group', { name: 'Filter by emotion variants' })).toBeNull();
+    expect(screen.queryByText('No voices match this filter')).toBeNull();
+    expect(screen.getByText('Preset')).toBeInTheDocument();
   });
 });

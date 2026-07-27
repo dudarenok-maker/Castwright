@@ -47,16 +47,17 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 17 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 18 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 5 |
 | **F** | A real Android device, optionally + a head unit | 1 |
+| **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 1 |
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**30 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**31 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -252,6 +253,32 @@ evicted.
 the base voice can only be confirmed on a real sidecar" (`:48`). Ship notes still a
 placeholder — no shipped date recorded.
 
+### A18 · Device-pin resolution survives a respawn ([#1870](https://github.com/dudarenok-maker/Castwright/pull/1870), closes [#1857](https://github.com/dudarenok-maker/Castwright/issues/1857)) · **2-card boot**
+
+`buildSidecarEnv` now hands the sidecar the raw `cuda-uuid:` literal instead of a
+translated `cuda:N`, so the sidecar re-resolves the pin against live torch
+enumeration on every spawn. Verified by unit tests and CI; **never watched on real
+cards.** The behaviour that matters most is the one no test can reach — a respawn
+after the index actually changes.
+
+- Pin Qwen to a specific card in Advanced settings, restart the server, and force a
+  supervisor respawn (`POST /api/sidecar/restart`, or let a recycle fire). The engine
+  lands on the **pinned** card both times.
+- Then change the enumeration order — swap the cards, or set `CUDA_DEVICE_ORDER` —
+  and confirm a respawn still finds the pinned card by UUID rather than failing
+  `_validate_cuda_index` or landing on the wrong one. **This is the regression the
+  change exists to prevent**, and it was previously reachable only when the user had
+  opened Advanced settings during that server session.
+- Pin `tts.qwen.codecDevice` to a card and confirm the codec is actually placed there.
+  Before #1870 the pin was silently ignored — the literal failed inside torch's
+  `.to()` and rolled back to CPU.
+- Point the codec pin at a card that is **not** present and confirm the sidecar logs
+  `QWEN_CODEC_DEVICE=… did not match any visible GPU` and leaves the codec on **cpu**
+  — not on the model's card, which is what `auto` would have done.
+
+*Needs:* both cards, and the ability to change enumeration order between boots (the
+eGPU is not hot-pluggable, so batch this with A2 step 9 and A3). *Cost:* short.
+
 ---
 
 ## Group B — local Ollama analyzer only
@@ -365,7 +392,48 @@ in `pinokio-scripts/start.js`.
 **What genuinely remains:** **macOS has had zero on-box exercise on any axis**
 (install, venv-from-conda, API spelling are all Windows-only confirmations); plus two
 Windows items never explicitly re-confirmed — **native Stop actually reaping the
-sidecar**, and **Pinokio's bundled Node ≥ 20.19**.
+sidecar**, and **confirming the pinned Node is the one actually used**.
+
+> **Escalated 2026-07-27 by [#1859](https://github.com/dudarenok-maker/Castwright/issues/1859);
+> the pin landed in a follow-up chore.** The Node question used to be "which Node does
+> Pinokio's bundled kernel ship, and is it ≥ 22.22" — that's now moot: `install.js`
+> step 1 conda-installs `nodejs=24` (matching `.nvmrc`/CI), and `update.js` re-asserts
+> the same pin so a pre-existing install picks it up on its next Update rather than
+> staying on whatever Node it started with. `pinokio-scripts/lib/node-pin.test.js`
+> pins both the pin itself and that it satisfies `package.json`'s `engines.node` floor
+> in code, so a future floor raise without a matching pin bump fails that test — this
+> register row is now about what a test can't reach: the real Pinokio runtime.
+>
+> **What to observe, concretely:** on a machine with Pinokio installed, run a fresh
+> Install, then from a `shell.run` step (or the Pinokio terminal, once the conda env is
+> active) run `node --version` and confirm it reports **24.x**, not whatever Pinokio's
+> kernel bundles — conda envs prepend to PATH, so the pinned Node should shadow the
+> bundled one, but that shadowing is unverified outside this repo's reasoning. Then
+> confirm Install → Start still completes end to end (this pin adds a package to the
+> conda env; a bad channel/solve would surface here, not in any local test).
+>
+> **The mid-life-upgrade path, and the lag you should EXPECT rather than report as a
+> bug.** Pinokio loads `update.js` from the release the user currently has checked out
+> and iterates the `run[]` it loaded; `resolve-release.js` `git checkout`s the new tag
+> *inside* that run, replacing the file on disk without affecting the loaded array. So
+> updating **from a pre-pin release runs the OLD `update.js`** — no pin step — and does
+> that update's `npm ci`/build on Pinokio's bundled Node. **This is expected.** The pin
+> takes effect from the *next* Update.
+>
+> Concretely: take an install from a pre-pin release, Update once, and check
+> `node --version` — reporting the **bundled** version here is the correct result, not a
+> failure. Update a second time and it should report **24.x**. A tester who sees the
+> first result and files "the pin doesn't work" has found the documented behaviour, not
+> a defect. What genuinely wants confirming is that the second Update converges, and
+> that `node_modules` still works across that Node-major swap (native-module ABI is the
+> nominal risk, though every native artifact in both trees is a prebuilt N-API binary,
+> and `npm ci` deletes and rebuilds `node_modules` anyway — so this should self-heal;
+> unproven on-box).
+>
+> Criteria live in `docs/features/218-pinokio-installer.md` open-verification item 2
+> (updated in the same PR). **The release notes for 1.15.0 deliberately do not promise
+> Pinokio users this is handled** — an earlier draft did, and it was unsupported; the
+> current entry describes the pin without claiming on-box confirmation.
 
 *Needs* a clean macOS machine with Pinokio, plus a short Windows follow-up. Budget
 20–40 min for the macOS install alone.
@@ -440,6 +508,66 @@ off-Wi-Fi, a "download to play" message rather than a stall.
 *Needs* a real Android phone (the plan names a Pixel 10 Pro), the GPU server reachable
 on the same LAN, and — for app-9 — a real Android Auto / CarPlay head unit. Not
 batchable with any other group.
+
+---
+
+## Group G — GitHub Actions itself
+
+Not physical hardware — the prerequisite is a real dispatch of a specific workflow
+on the real GitHub Actions runner, which local execution cannot substitute for
+(a fresh `ubuntu-latest` image, real `GH_TOKEN`/`gh` wiring, real `apt-get`).
+
+### G1 · Quarantine-lane health report — first live dispatch (ops-32, #1864, PR #1873) · **two distinct debts**
+
+PR #1873's own body discloses both under "Known gaps — stated rather than
+glossed" rather than leaving them to be rediscovered later.
+
+**The workflow has never executed on Actions.** `.github/workflows/quarantine-health.yml`
+parses as valid YAML and `scripts/quarantine-health.mjs` is verified standalone
+(46 unit tests, mutation-checked), but the live runner environment — `gh
+issue view` actually authenticating via the injected `GH_TOKEN`, the `apt-get
+install ffmpeg` step succeeding, the job actually posting to
+`$GITHUB_STEP_SUMMARY` — is unverified until the first dispatch (manual, via
+the Actions tab, or the Monday 03:00 UTC cron). `continue-on-error: true` and
+exclusion from every required check mean a failure here cannot block
+anything, but "the job doesn't crash" is still unconfirmed. **What to
+observe:** a manual dispatch (`gh workflow run quarantine-health.yml`)
+completes and its job summary renders a well-formed report — either the
+clean "nothing to run" no-op (today's empty register) or an actual bucketed
+table if the register is non-empty by then.
+
+**Genuine `intermittent` classification is exercised only by unit tests over
+synthetic run sequences** — no real cross-run nondeterminism has been forced
+through the classifier. This needs an *actual* flaky quarantined test
+present in `docs/testing/flaky-register.md` at dispatch time, which the
+empty register doesn't provide today — the first dispatch alone won't
+discharge this half. **What to observe, next time a genuinely flaky test is
+quarantined:** its row in the report's table lands in the `intermittent`
+bucket (a real mix of passed/failed across the 5 runs), not `always-passes`
+or `never-passes` — confirming the bucket that is this tool's entire reason
+to exist actually fires on real data, not just the synthetic sequences in
+`scripts/tests/quarantine-health.test.mjs`.
+
+*Why this sits here and not as a plain automated-test-gap issue* (per this
+file's own closing rule below): this is NOT closable by writing more unit
+tests — `classifyEntry` is already fully unit- and mutation-tested against
+every synthetic sequence that matters. What's missing is a real occurrence
+of cross-run nondeterminism, which by construction can't be manufactured or
+asserted inside a unit test; the only way to discharge it is to observe live
+data once it exists, the same shape as any other row in this register, just
+triggered by an external event (a future genuine flake) rather than a
+hardware prerequisite. One honest caveat: unlike G1's first debt, this half
+does NOT strictly require the GitHub Actions runner — a local
+`node scripts/quarantine-health.mjs` run against a real flaky register row
+would equally discharge it. It stays grouped under G1 anyway because it
+shares G1's dispatch-triggered, opportunistic-timing framing and "what to
+observe" shape, not because Group G's runner criterion technically applies
+to it.
+
+*Needs:* nothing beyond repo access for the first half; a real quarantined
+flaky test (naturally occurring, not manufactured) for the second.
+*Cost:* minutes for the first dispatch; opportunistic for the second — piggy-back
+on the next real quarantine event rather than manufacturing one.
 
 ---
 

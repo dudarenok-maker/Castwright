@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { AboutView } from './about';
 import { buildInfo } from '../lib/build-info';
 import { TAGLINE, MANIFESTO, TEASER, TEASER_FLAG, DOMAIN } from '../lib/brand';

@@ -3,8 +3,8 @@
    easily multiple GB across a 40-chapter book, so running the workspace volume
    dry mid-run is a real failure mode worth surfacing before it bites.
 
-   Uses Node's core `fs.statfs` (stable since Node 18.15; this repo targets
-   Node 20) — no third-party dependency, and it resolves the volume of the
+   Uses Node's core `fs.statfs` (stable since Node 18.15; this repo's floor is
+   Node 22.22) — no third-party dependency, and it resolves the volume of the
    given path on Windows, macOS, and Linux alike. */
 
 import { statfs } from 'node:fs/promises';

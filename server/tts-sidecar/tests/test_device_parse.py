@@ -111,3 +111,40 @@ def test_read_device_env_falls_back_to_auto_when_uuid_unresolved(monkeypatch, ca
     monkeypatch.setenv("QWEN_DEVICE", "cuda-uuid:GONE")
     monkeypatch.setattr(main, "_enumerate_cuda_devices", lambda tm=None: [])
     assert main._read_device_env("QWEN_DEVICE") == "auto"
+
+
+def test_codec_device_pref_resolves_uuid(monkeypatch):
+    """QWEN_CODEC_DEVICE is a type:'device' knob, so a card picked in Advanced
+    Settings is persisted as 'cuda-uuid:<uuid>'. _codec_device_pref is what
+    _load_qwen_model actually calls, so a UUID must never reach torch raw."""
+    monkeypatch.setenv("QWEN_CODEC_DEVICE", "cuda-uuid:GPU-1")
+    monkeypatch.setattr(main, "_enumerate_cuda_devices",
+        lambda tm=None: [{"uuid": "GPU-1", "idx": 1, "name": "x", "total_mb": 16000, "free_mb": 14000}])
+    assert main._codec_device_pref() == "cuda:1"
+    assert main._resolve_codec_device(main._codec_device_pref(), "cuda:0") == "cuda:1"
+
+
+def test_codec_device_pref_vanished_uuid_falls_back_to_cpu(monkeypatch):
+    """A vanished card must NOT degrade to 'auto' -- for the codec that means
+    "follow the model", i.e. move onto the very card the user was spreading VRAM
+    away from. cpu is the knob's registry default and is VRAM-neutral."""
+    monkeypatch.setenv("QWEN_CODEC_DEVICE", "cuda-uuid:GONE")
+    monkeypatch.setattr(main, "_enumerate_cuda_devices", lambda tm=None: [])
+    assert main._codec_device_pref() == "cpu"
+    # _resolve_codec_device('cpu', ...) is None == "leave the codec where it is"
+    assert main._resolve_codec_device(main._codec_device_pref(), "cuda:0") is None
+
+
+def test_codec_device_pref_unset_and_empty_mean_cpu(monkeypatch):
+    monkeypatch.delenv("QWEN_CODEC_DEVICE", raising=False)
+    assert main._codec_device_pref() == "cpu"
+    monkeypatch.setenv("QWEN_CODEC_DEVICE", "   ")
+    assert main._codec_device_pref() == "cpu"
+
+
+def test_codec_device_pref_passes_through_plain_values(monkeypatch):
+    """cpu / auto / cuda:N are unchanged -- no behaviour change for any value
+    that already worked."""
+    for raw, expected in (("cpu", "cpu"), ("auto", "auto"), ("cuda:1", "cuda:1")):
+        monkeypatch.setenv("QWEN_CODEC_DEVICE", raw)
+        assert main._codec_device_pref() == expected

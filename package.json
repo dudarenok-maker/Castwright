@@ -4,7 +4,7 @@
   "private": true,
   "type": "commonjs",
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=22.22.0"
   },
   "scripts": {
     "start": "node scripts/start-app.mjs",
@@ -43,6 +43,7 @@
     "test:e2e:visual": "playwright test --project=chromium --workers=1 e2e/responsive/visual.spec.ts",
     "test:e2e:quarantine": "playwright test --project=chromium --grep=@quarantine --pass-with-no-tests",
     "test:quarantine": "cross-env RUN_QUARANTINE=1 npm run test && cross-env RUN_QUARANTINE=1 npm --prefix server run test && cross-env RUN_QUARANTINE=1 npm --prefix server run test:slow",
+    "quarantine:health": "node scripts/quarantine-health.mjs",
     "capture:marketing": "playwright test --config=playwright.marketing.config.ts --project=desktop",
     "stage:marketing-screenshots": "node scripts/stage-marketing-screenshots.mjs",
     "capture:companion": "node scripts/capture-companion.mjs",
@@ -86,10 +87,10 @@
     "html-to-image": "^1.11.13",
     "multicast-dns": "^7.2.5",
     "qrcode": "^1.5.4",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "react-redux": "^9.2.0",
-    "react-router-dom": "^7.0.0",
+    "react-router": "^8.3.0",
     "redux-persist": "^6.0.0"
   },
   "devDependencies": {
@@ -101,6 +102,7 @@
     "@testing-library/user-event": "^14.6.1",
     "@types/jest-axe": "^3.5.9",
     "@types/node": "^25.7.0",
+    "@types/picomatch": "^4.0.3",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.0.2",
@@ -119,6 +121,7 @@
     "jest-axe": "^10.0.0",
     "jsdom": "^29",
     "openapi-typescript": "^7.0.0",
+    "picomatch": "^4.0.5",
     "postcss": "^8.4.45",
     "prettier": "^3.8.3",
     "sharp": "^0.35.3",

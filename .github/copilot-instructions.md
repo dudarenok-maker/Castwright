@@ -7,7 +7,7 @@ Refer to CLAUDE.md and CONTRIBUTING.md for deeper context; this is a concise, ac
 
 ## 1) Build, test, and lint (quick reference)
 
-Prereqs: Node >= 20.19.0, Python 3.12 (for sidecar), ffmpeg on PATH. See INSTALL.md for platform setup.
+Prereqs: Node >= 22.22.0, Python 3.12 (for sidecar), ffmpeg on PATH. See INSTALL.md for platform setup.
 
 Root-level npm scripts (use from repository root):
 - Start / dev
