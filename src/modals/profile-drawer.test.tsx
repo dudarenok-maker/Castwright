@@ -905,11 +905,19 @@ describe('ProfileDrawer model-voice override picker', () => {
     });
 
     /* The optimistic clear (overrideTtsVoices: null) must not survive as
-       the settled redux state — the slot is restored, not left cleared. */
+       the settled redux state — the slot is restored, not left cleared.
+       Assert the FULL restored slot, not just the name: a fixture that only
+       checks `.name` can't tell a verbatim restore from a revert that
+       rebuilds `{name}` from scratch — which is exactly what silently drops
+       `libraryUuid`/`provenance` and de-marks a consented clone. */
     const brannState = store
       .getState()
       .voices.voices.find((v: Voice) => v.id === 'v_brann');
-    expect(brannState?.overrideTtsVoices?.coqui?.name).toBe('Asya Anara');
+    expect(brannState?.overrideTtsVoices?.coqui).toEqual({
+      name: 'Asya Anara',
+      libraryUuid: 'lib-clone-1',
+      provenance: 'cloned',
+    });
   });
 
   it('shows a filled-slot indicator on the engine tab when that engine has an override', async () => {

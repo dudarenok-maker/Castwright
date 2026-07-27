@@ -1345,10 +1345,15 @@ export function ProfileDrawer({
                       if (prior) {
                         for (const [engine, slot] of Object.entries(prior)) {
                           if (slot?.name) {
+                            /* Restore the slot verbatim (not just its name) —
+                               a bare {engine,name} revert through setOverride
+                               would drop libraryUuid/provenance; see
+                               restoreOverride's own comment. */
                             dispatch(
-                              voicesActions.setOverride({
+                              voicesActions.restoreOverride({
                                 voiceId: voiceIdForApi,
-                                override: { engine: engine as TtsEngine, name: slot.name },
+                                engine: engine as TtsEngine,
+                                slot,
                               }),
                             );
                           }

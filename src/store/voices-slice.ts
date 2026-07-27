@@ -6,7 +6,12 @@
    The slice just holds the latest snapshot for the views to read. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import type { BaseVoice, Voice, VoiceLibraryResponse } from '../lib/types';
+import type { BaseVoice, TtsEngine, Voice, VoiceLibraryResponse } from '../lib/types';
+
+/* A single engine's overrideTtsVoices slot, straight off the generated
+   schema — includes `libraryUuid`/`provenance`, which `BaseVoice` (the wire
+   shape `setOverride` takes) has no room for. */
+type OverrideSlot = NonNullable<Voice['overrideTtsVoices']>[string];
 
 export interface VoicesState {
   loaded: boolean;
@@ -88,6 +93,23 @@ export const voicesSlice = createSlice({
          is normally for the active synth engine, so this is right
          99% of the time. */
       v.overrideTtsVoice = override;
+    },
+    /* fs-38 Wave 3c Task 26 carry-forward — restores a single engine's slot
+       verbatim after a rejected optimistic write. The profile drawer's 409
+       revert used to route through `setOverride` with just `{engine, name}`;
+       after an optimistic full clear (`setOverride(null)`, which nulls the
+       WHOLE map) that reconstructed the slot from an empty map, dropping
+       `libraryUuid`/`provenance` and de-marking a consented clone. This
+       writes the caller's exact prior slot back, marker included. */
+    restoreOverride: (
+      s,
+      a: PayloadAction<{ voiceId: string; engine: TtsEngine; slot: OverrideSlot }>,
+    ) => {
+      const v = s.voices.find((v) => v.id === a.payload.voiceId);
+      if (!v) return;
+      const map = { ...(v.overrideTtsVoices ?? {}) };
+      map[a.payload.engine] = a.payload.slot;
+      v.overrideTtsVoices = map;
     },
     hydrateBaseVoices: (s, a: PayloadAction<BaseVoice[]>) => {
       s.baseVoicesLoaded = true;
