@@ -268,11 +268,21 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   );
   /* fs-41/fs-50 seam 4b follow-up (#1834) — the chip row above is the only
      control that can clear `languageFilter`, and it renders only while the
-     library still carries the codes it offers. A mid-session library change
-     (a book switch through the book-scoped mount, an engine switch, a
-     re-hydrate that drops the Russian voices) can pull that row out from
-     under an active filter, leaving it narrowing the rollup to nothing with
-     no way to clear it. Derive the effective filter during render rather
+     library still carries the codes it offers (and only inside the rollup's
+     non-empty branch). A mid-session library change can therefore pull that
+     row out from under an active filter, leaving it narrowing the rollup to
+     nothing with no way to clear it. The reachable trigger is the last voice
+     carrying that language losing it — its qwen override cleared from the
+     profile drawer in this very view, the voice deleted, or its design
+     manifest failing to resolve a language on a later read (the server's
+     `readJson(...).catch(() => null)`) — surfaced by the next
+     `voicesActions.hydrate` in `layout.tsx`, which refires on
+     `[bookId, stageKind, ttsEngine, genProgress]` while this view stays
+     mounted. NOT an engine switch and NOT a book switch: `languageCode` is
+     read from the design manifest independently of the engine query param,
+     and the voices response walks every book under `BOOKS_ROOT` (see
+     `server/src/routes/voices.ts`), so neither can remove a code from
+     `languages`. Derive the effective filter during render rather
      than correcting `languageFilter` in an effect, so the empty rollup is
      never painted. Every read below goes through this, not `languageFilter`;
      `setLanguageFilter` stays the sole state writer. Same shape and same

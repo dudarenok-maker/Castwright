@@ -2271,6 +2271,46 @@ describe('fs-41/fs-50 seam 4b — language facet on the global #/voices view', (
     expect(screen.getByText('Preset')).toBeInTheDocument();
   });
 
+  /* #1834 — the same case again on the Qwen side. The rollup splits into
+     `presetLibrary` and `qwenLibrary` purely by `ttsVoice.provider`, which
+     `resolveVoiceAssignment` stamps from the ACTIVE ENGINE rather than per
+     voice — so under Qwen (the default generation engine) the whole library
+     lands in `filteredQwenLibrary` and the case above exercises none of it.
+     A `languageCode` is only ever set on a designed Qwen voice, which makes
+     this the leg that actually strands a real user. */
+  it('stops filtering the Qwen library too when the language leaves mid-session (#1834)', async () => {
+    const store = makeStore();
+    const ivan = makeLangVoice({
+      id: 'q_ivan', character: 'Ivan', bookId: 'b1', bookTitle: 'Book One', source: 'current',
+      languageCode: 'ru',
+      overrideTtsVoices: { qwen: { name: 'qwen-ivan' } },
+      ttsVoice: { provider: 'qwen', name: 'qwen-ivan', description: 'Designed voice' },
+    });
+    const marlow = makeLangVoice({
+      id: 'q_marlow', character: 'Marlow', bookId: 'b1', bookTitle: 'Book One', source: 'current',
+      overrideTtsVoices: { qwen: { name: 'qwen-marlow' } },
+      ttsVoice: { provider: 'qwen', name: 'qwen-marlow', description: 'Designed voice' },
+    });
+    const { rerender } = render(
+      <Provider store={store}>
+        <LibraryView library={[ivan, marlow]} />
+      </Provider>,
+    );
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Russian' }));
+    expect(screen.queryByText('Marlow')).not.toBeInTheDocument();
+    /* Ivan's design manifest stops resolving a language (his qwen override is
+       cleared, or the manifest read fails on the next hydrate). */
+    rerender(
+      <Provider store={store}>
+        <LibraryView library={[marlow]} />
+      </Provider>,
+    );
+    await act(async () => {});
+    expect(screen.queryByRole('group', { name: 'Filter by language' })).toBeNull();
+    expect(screen.getByText('Marlow')).toBeInTheDocument();
+  });
+
   it('falls back to All when the filtered language leaves a still-multilingual library (#1834)', async () => {
     const store = makeStore();
     const ivan = makeLangVoice({ id: 'v_ivan', character: 'Ivan', bookId: 'b1', bookTitle: 'Book One', source: 'current', languageCode: 'ru' });

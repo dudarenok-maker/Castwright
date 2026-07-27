@@ -49,7 +49,7 @@
 - Auditioning a voice you just designed no longer re-records it. The take from the design was already sitting there; now it actually gets used, so the first play is instant.
 - The higher-quality 1.7B voice model is greyed out until you've actually downloaded it, instead of failing partway into a run.
 - Previewing a voice will now put away a voice model it isn't using to make room, rather than giving up when your graphics card looks full. If something it can't put away is in the way, it tells you which model that is and where the button to stop it lives — instead of just saying the card is full.
-- Filtering your voices by language can't strand you any more. If you'd narrowed the Voices list to, say, Russian and then moved to a book with no Russian voices in it, the list emptied out and the language buttons went with it — a filter still switched on, and nothing left on screen to switch it off. The list now shows everything again the moment the language you'd picked is no longer there.
+- Filtering your voices by language can't strand you any more. If you'd narrowed the Voices list to, say, Russian and then the last Russian voice in it went away while you were looking — you cleared its designed voice, or deleted it — the list emptied out and the language buttons went with it, leaving a filter still switched on and nothing on screen to switch it off. Worse, it told you to go and set up a book, on a library that was perfectly full. The list now shows everything again the moment the language you'd picked is no longer there.
 
 # Castwright 1.14.0
 
