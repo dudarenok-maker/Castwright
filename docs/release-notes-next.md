@@ -278,13 +278,18 @@ history at cut time.
     `engine-strict`, and this repo sets no `.npmrc`. The floor documents intent and fails *late and
     obscurely* on an older Node, it does not block the install. (`164-deps-ci-hygiene.md` already said
     this; an earlier draft of this entry claimed npm would refuse, which is wrong.)
-  - **Pinokio is an open risk, not a safe path.** `pinokio-scripts/install.js` uses Pinokio's
-    **bundled** Node — step 1 conda-installs `ffmpeg mkcert` only, never `nodejs` — and that file has
-    carried an unimplemented TODO since it was written: *"(If Pinokio's bundled node < 20.19, add
-    `nodejs` to this message too.)"* Raising the floor to 22.22 makes that far likelier to bite. Which
-    Node the Pinokio kernel ships cannot be determined from this repo, so it is recorded as owed on-box
-    acceptance rather than asserted either way; plan 218's open-verification item 2 is updated to the
-    new threshold.
+  - **Pinokio no longer depends on whatever Node its own kernel bundles.** `pinokio-scripts/install.js`
+    step 1 now conda-installs a pinned `nodejs=24` alongside `ffmpeg mkcert` (matching `.nvmrc` and
+    every CI workflow), replacing the unimplemented TODO that file carried since it was written.
+    `pinokio-scripts/update.js` re-asserts the same pin so an install made before this change picks it
+    up on its next Update instead of staying on the bundled Node forever. `pinokio-scripts/lib/node-pin.test.js`
+    pins both scripts' pin and asserts it satisfies `package.json`'s `engines.node` floor by parsing both
+    rather than hardcoding, so a future floor raise without a matching pin bump — exactly what this PR's
+    own floor raise would have been, against the old unpinned state — fails that test. What's still owed
+    on-box: confirming the conda Node actually shadows Pinokio's bundled one on PATH, and that a mid-life
+    Update onto the new pin doesn't strand a `node_modules` built against a different Node ABI — tracked
+    in `docs/testing/onbox-acceptance-register.md` (E1); plan 218's open-verification item 2 is updated
+    to match.
   - `react-router-dom` is now a **dead package**: v8 folded the DOM APIs back into `react-router` and
     left `react-router-dom` frozen at 7.18.1 permanently. 24 files re-pointed.
   - **The trap, recorded because it is invisible to `tsc`:** v8 did not simply rename the package.
