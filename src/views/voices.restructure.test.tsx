@@ -5,7 +5,7 @@
    voices.test.tsx, unmodified by this task. */
 
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, within } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { castSlice } from '../store/cast-slice';
@@ -13,7 +13,7 @@ import { manuscriptSlice } from '../store/manuscript-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { uiSlice } from '../store/ui-slice';
 import { voicesSlice } from '../store/voices-slice';
-import { configSlice, type ConfigState } from '../store/config-slice';
+import { configSlice, fetchConfig, type ConfigState } from '../store/config-slice';
 import { voiceLibrarySlice } from '../store/voice-library-slice';
 import { LibraryView } from './voices';
 import type { BaseVoice, ConfigValues, Voice } from '../lib/types';
@@ -131,6 +131,63 @@ describe('LibraryView restructure — three-way section nav (fs-38 Wave 1 Task 1
     });
     expect(screen.getByRole('button', { name: 'My voices' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'My voices' }));
+    expect(screen.getByText('No voices in your library yet')).toBeInTheDocument();
+  });
+
+  /* #1835 — the boot race the issue describes, played out end to end: the view
+     mounts before `fetchConfig` resolves, the user clicks "My voices" (so focus
+     is on that button by construction), and the resolved config carries
+     `voices.library.enabled: false`. Under the retired gate that config reply
+     unmounted the focused button, dropping `document.activeElement` to
+     `<body>` and restarting Tab at the top of the document. It is gone (#1833), so
+     the segment is unconditional, no section fallback exists, and both the
+     button and the focus on it survive the same config arrival.
+
+     jsdom does not focus a button on click the way a browser does, so the
+     click's focus side effect is applied explicitly rather than assumed. */
+  it('keeps the focused My-voices segment mounted when config resolves with the retired gate off', () => {
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <LibraryView library={library} />
+      </Provider>,
+    );
+
+    const myVoices = screen.getByRole('button', { name: 'My voices' });
+    myVoices.focus();
+    fireEvent.click(myVoices);
+    expect(document.activeElement).toBe(myVoices);
+
+    act(() => {
+      store.dispatch(
+        fetchConfig.fulfilled(
+          {
+            groups: [],
+            descriptors: [],
+            cudaEnvShadow: false,
+            restartPending: false,
+            values: {
+              'voices.library.enabled': {
+                key: 'voices.library.enabled',
+                effective: false,
+                source: 'override',
+                locked: false,
+                overridden: true,
+              },
+            },
+          },
+          'test-request-id',
+          undefined,
+        ),
+      );
+    });
+
+    /* The reported symptom first: an unmount here parks focus on <body>. */
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(myVoices);
+    /* Same node, not merely a same-named one — a remount would also reset focus. */
+    expect(screen.getByRole('button', { name: 'My voices' })).toBe(myVoices);
+    /* And the section itself did not fall back to In use. */
     expect(screen.getByText('No voices in your library yet')).toBeInTheDocument();
   });
 });
