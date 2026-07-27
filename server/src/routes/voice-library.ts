@@ -10,7 +10,7 @@
 
 import { Router } from 'express';
 import { existsSync } from 'node:fs';
-import { mkdir, copyFile, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, copyFile, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { nanoid } from 'nanoid';
@@ -31,7 +31,7 @@ import {
 } from '../workspace/voice-library.js';
 import { currentQwenBaseModel } from '../tts/model-paths.js';
 import { getLastKnownCoquiVersion } from '../tts/coqui-version-state.js';
-import { isArtifactVersionStale } from '../tts/clone-engines.js';
+import { CLONE_CAPABLE_ENGINES, cloneStorageKey, isArtifactVersionStale } from '../tts/clone-engines.js';
 import { runVoiceDesign } from '../tts/design-voice-core.js';
 import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace/voice-library-usage.js';
 import { castJsonPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from '../workspace/paths.js';
@@ -977,17 +977,42 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
   }
 });
 
+/* fs-38 Wave 3c, Task 24 [DELTA-C1] — does this DESIGNED voice have a
+   retained reference clip on disk? NOT `entry.master` (`VoiceLibraryEntry`'s
+   own `master` field, workspace/voice-library.ts) — that field is populated
+   only for a CLONED voice's ingested clip; a designed entry never populates
+   it (see synthesise-chapter.ts's `readDesignedMasterPcmDefault` comment).
+   A designed voice's retained clip instead lives on disk at
+   `qwenVoiceWavPath('qwen-<uuid>__master')` — always the `qwen-` prefix
+   regardless of which engine will eventually consume it (DELTA-M1), written
+   once by the sidecar's `design_voice` call. Point-in-time only: a later
+   re-design or purge can invalidate this the moment after it's checked,
+   which is exactly why Task 20a's render-time pre-pass removes an unbacked
+   slot rather than trusting this gate as a lasting guarantee. */
+async function hasRetainedDesignedClip(voiceUuid: string): Promise<boolean> {
+  try {
+    await stat(qwenVoiceWavPath(`qwen-${voiceUuid}__master`));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /* POST /api/voice-library/:voiceUuid/assign
 
    Assigns a library voice to ONE character in ONE book — a bespoke,
    character-targeted cast write (NOT `applyOverrideToCastFiles` from
    routes/voices.ts, which is keyed by voiceId across every matching book
    and whose `override` param can't carry `libraryUuid`/`provenance`).
-   Reads the book's cast.json, merges the new `qwen` slot into that one
-   character's `overrideTtsVoices` (sibling engine slots + the rest of the
-   qwen slot survive), and writes back atomically. `character.voiceUuid`
-   is never touched — that field is the srv-43 identity key, not something
-   an assign should alias. */
+   Reads the book's cast.json, merges the new `qwen` slot — and, fs-38 Wave
+   3c, ALSO the `coqui` slot when the voice is clone-capable there too (see
+   the both-slots gate below) — into that one character's
+   `overrideTtsVoices` (sibling engine slots + the rest of each merged slot
+   survive), and writes back atomically. `character.voiceUuid` is never
+   touched — that field is the srv-43 identity key, not something an assign
+   should alias. Task 24 also makes this handler do async I/O it didn't do
+   before (`hasRetainedDesignedClip`'s `stat`), gated to the designed-clip
+   branch only. */
 voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
@@ -1029,12 +1054,17 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
 
     const character = characters[charIndex];
 
-    /* Task 6b — a cloned voice renders on Qwen ONLY. Assigning one to a
-       character that doesn't route to Qwen this run would produce exactly
-       the same 3b2 resolver-pre-pass hard-fail this task exists to give an
-       accurate reason for ('wrong-engine') — but discovered only at RENDER
-       time, chapters deep. Catch it here instead, at assign time, so the
-       user gets an actionable 409 immediately.
+    /* Task 6b, widened by fs-38 Wave 3c Task 24 — a cloned voice renders on
+       a clone-capable engine ONLY (Qwen or Coqui XTTS v2 —
+       `CLONE_CAPABLE_ENGINES`, tts/clone-engines.js). Assigning one to a
+       character that routes to neither would produce exactly the same 3b2
+       resolver-pre-pass hard-fail this task exists to give an accurate
+       reason for ('wrong-engine') — but discovered only at RENDER time,
+       chapters deep. Catch it here instead, at assign time, so the user
+       gets an actionable 409 immediately. Scoped to `provenance === 'cloned'`
+       only — a DESIGNED voice has always been free to route anywhere
+       (spec §2.3); widening this guard to designed voices would be a new
+       hard failure for them.
 
        Fix wave 2 (review) — the guard's FIRST cut computed the book's
        effective default purely from the PERSISTED `getResolvedTtsModelKey()`
@@ -1050,31 +1080,50 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
        has no meaningful engine context (and omits the field) do we fall
        back to the persisted default. A character's own `ttsEngine` override
        (if any) still wins via `resolveCharacterEngine`, so a character
-       explicitly cast on Qwen is unaffected by the book/session default
-       sitting elsewhere. */
+       explicitly cast on Qwen or Coqui is unaffected by the book/session
+       default sitting elsewhere. */
     if (entry.provenance === 'cloned') {
       const requestedModelKey = isTtsModelKey(body.modelKey) ? body.modelKey : undefined;
       const bookDefaultEngine = engineForModelKey(requestedModelKey ?? getResolvedTtsModelKey());
       const routedEngine = resolveCharacterEngine(character, bookDefaultEngine);
-      if (routedEngine !== 'qwen') {
+      if (!CLONE_CAPABLE_ENGINES.has(routedEngine)) {
         /* I-2 — name the ACTUAL cause. When the character carries its own
-           `ttsEngine` override, THAT is why it's not routing to Qwen — the
-           book/session default is irrelevant, and telling the user to
-           "switch the book's engine" would send them to fix the wrong
-           thing (the same misdiagnosis class Part A eliminated for the
-           render-time error). */
+           `ttsEngine` override, THAT is why it's not routing to a
+           clone-capable engine — the book/session default is irrelevant,
+           and telling the user to "switch the book's engine" would send
+           them to fix the wrong thing (the same misdiagnosis class Part A
+           eliminated for the render-time error). */
         const characterCaused = Boolean(character.ttsEngine);
         const cause = characterCaused
           ? `"${character.name ?? characterId}" is cast on ${routedEngine}`
           : `this book is set to ${routedEngine}`;
         const fix = characterCaused
-          ? `Switch the character's engine to Qwen (or reassign the character)`
-          : `Switch the book's engine to Qwen`;
+          ? `Switch the character's engine to Qwen or Coqui XTTS v2 (or reassign the character)`
+          : `Switch the book's engine to Qwen or Coqui XTTS v2`;
         return res.status(409).json({
-          error: `Cloned voices render on Qwen, but ${cause}. ${fix} before assigning "${character.name ?? characterId}".`,
+          error: `Cloned voices render on Qwen or Coqui XTTS v2, but ${cause}. ${fix} before assigning "${character.name ?? characterId}".`,
         });
       }
     }
+
+    /* fs-38 Wave 3c, Task 24 — write BOTH the qwen and coqui slots when the
+       library voice is actually clone-capable on both engines, so this
+       route closes the reachability gap: it was the only writer of
+       `libraryUuid` at all, and until this both-slots write lands, no
+       character can carry a resolvable coqui-cloned slot end to end. A
+       CLONED entry always qualifies (§2.3 — an ingested clip derives on
+       either engine). A DESIGNED entry qualifies only when it still has its
+       retained reference clip on disk (`hasRetainedDesignedClip`, above) —
+       without that clip a coqui derive has nothing to derive FROM, so
+       writing a coqui slot here would strand the character on a slot the
+       resolver can never back. `entry.master` is NOT the right test — see
+       `hasRetainedDesignedClip`'s own comment. An IMPORTED entry never
+       qualifies. This check is point-in-time only (see that helper's
+       comment) — Task 20a's render-time pre-pass is what actually enforces
+       the invariant over time, not this gate. */
+    const shouldWriteCoquiSlot =
+      entry.provenance === 'cloned' ||
+      (entry.provenance === 'designed' && (await hasRetainedDesignedClip(voiceUuid)));
 
     /* Review I-4 — a prior DESIGNED voice's minted emotion `variants` are
        anchored to that base identity (qwen-<old-uuid>__<emotion>). Assigning
@@ -1085,7 +1134,8 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
        the BASE `.pt`, so that dangling variant key would die mid-GPU-work at
        synth time on the sidecar's own VoiceNotDesignedError, breaking the
        fail-fast promise. Drop `variants` here — they're semantically tied to
-       the previous base and don't carry over. */
+       the previous base and don't carry over (both slots, when both are
+       written). */
     const nextCharacters = [...characters];
     nextCharacters[charIndex] = {
       ...character,
@@ -1093,11 +1143,22 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
         ...character.overrideTtsVoices,
         qwen: {
           ...character.overrideTtsVoices?.qwen,
-          name: `qwen-${voiceUuid}`,
+          name: cloneStorageKey('qwen', voiceUuid),
           libraryUuid: voiceUuid,
           provenance: entry.provenance,
           variants: undefined,
         },
+        ...(shouldWriteCoquiSlot
+          ? {
+              coqui: {
+                ...character.overrideTtsVoices?.coqui,
+                name: cloneStorageKey('coqui', voiceUuid),
+                libraryUuid: voiceUuid,
+                provenance: entry.provenance,
+                variants: undefined,
+              },
+            }
+          : {}),
       },
     };
 

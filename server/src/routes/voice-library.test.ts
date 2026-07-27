@@ -954,6 +954,97 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
     });
     expect(cast.characters[0].overrideTtsVoices?.qwen?.variants).toBeUndefined();
   });
+
+  /* fs-38 Wave 3c, Task 24 [D-B] — a DESIGNED entry that still has its
+     retained reference clip on disk (`qwen-<uuid>__master.wav`, written by
+     the sidecar's design_voice) is clone-capable on coqui too, so the
+     both-slots write applies to it exactly like a `cloned` entry. A
+     still-broken implementation that tests `entry.master` instead of
+     stat-ing the disk file [DELTA-C1] would find `entry.master` undefined
+     (no designed entry ever sets it) and fail this test the same way as the
+     no-clip case below — the two tests only diverge once the disk check is
+     actually wired in. */
+  it('D-B: a designed entry WITH a retained reference clip on disk also writes the coqui slot (both slots, engine-correct names)', async () => {
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-clip-1', provenance: 'designed' }));
+    writeFileSync(paths.qwenVoiceWavPath('qwen-designed-clip-1__master'), 'REF-CLIP');
+
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-designed-clip', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/designed-clip-1/assign')
+      .send({ bookId: 'book-designed-clip', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
+      characters: Array<{ overrideTtsVoices?: Record<string, unknown> }>;
+    };
+    expect(cast.characters[0].overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-designed-clip-1',
+      libraryUuid: 'designed-clip-1',
+      provenance: 'designed',
+    });
+    expect(cast.characters[0].overrideTtsVoices?.coqui).toEqual({
+      name: 'xtts-designed-clip-1',
+      libraryUuid: 'designed-clip-1',
+      provenance: 'designed',
+    });
+  });
+
+  /* fs-38 Wave 3c, Task 24 [D-E/D-F] — legacy behaviour, byte-for-byte: a
+     designed entry with NO retained clip on disk writes ONLY the qwen slot,
+     exactly as it did before this task. A regression that always writes
+     both slots for a designed entry (ignoring the clip check entirely)
+     would fail this test by producing a `coqui` slot here. */
+  it('D-E/D-F: a designed entry with NO retained reference clip writes ONLY the qwen slot (legacy behaviour, unchanged)', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-noclip-1', provenance: 'designed' }));
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-designed-noclip', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/designed-noclip-1/assign')
+      .send({ bookId: 'book-designed-noclip', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
+      characters: Array<{ overrideTtsVoices?: Record<string, unknown> }>;
+    };
+    expect(cast.characters[0].overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-designed-noclip-1',
+      libraryUuid: 'designed-noclip-1',
+      provenance: 'designed',
+    });
+    expect(cast.characters[0].overrideTtsVoices?.coqui).toBeUndefined();
+  });
+
+  /* fs-38 Wave 3c, Task 24 — an `imported` entry never qualifies for the
+     both-slots write (neither `cloned` nor `designed`); legacy behaviour,
+     byte-for-byte. A regression that widens the gate to any provenance
+     would fail this test by producing a `coqui` slot here. */
+  it('an imported entry writes ONLY the qwen slot (legacy behaviour, unchanged)', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'imported-1', provenance: 'imported' }));
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-imported', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/imported-1/assign')
+      .send({ bookId: 'book-imported', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
+      characters: Array<{ overrideTtsVoices?: Record<string, unknown> }>;
+    };
+    expect(cast.characters[0].overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-imported-1',
+      libraryUuid: 'imported-1',
+      provenance: 'imported',
+    });
+    expect(cast.characters[0].overrideTtsVoices?.coqui).toBeUndefined();
+  });
 });
 
 describe('POST /:uuid/assign — cloned readiness gate (fs-38 Wave 3b1)', () => {
@@ -1018,6 +1109,11 @@ describe('POST /:uuid/assign — wrong-engine guard (fs-38 Wave 3b2, Task 6b)', 
       .send({ bookId: 'book-five', characterId: 'char-marlow' });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/qwen/i);
+    /* fs-38 Wave 3c, Task 24 — the guard now accepts Coqui too, so the 409
+       must name BOTH clone-capable engines, not just Qwen — a caller who
+       only sees "render on Qwen" would be misdirected into switching the
+       book to Qwen when switching to Coqui is an equally valid fix. */
+    expect(res.body.error).toMatch(/coqui/i);
   });
 
   it('allows assigning a ready cloned voice to a character that DOES route to Qwen (200, regression)', async () => {
@@ -1045,6 +1141,73 @@ describe('POST /:uuid/assign — wrong-engine guard (fs-38 Wave 3b2, Task 6b)', 
     const res = await request(app).post('/api/voice-library/designed-1/assign')
       .send({ bookId: 'book-seven', characterId: 'char-marlow' });
     expect(res.status).toBe(200);
+  });
+
+  /* fs-38 Wave 3c, Task 24 — the reachability gap this task closes: this is
+     the FIRST route that can ever write a coqui `libraryUuid`, so a
+     coqui-routed character assigning a ready cloned voice must 200 (the
+     guard now accepts Coqui, not just Qwen) AND get BOTH slots, each with
+     its own engine-correct storage-key prefix (`qwen-<uuid>` /
+     `xtts-<uuid>`, via the shared `cloneStorageKey` helper — never
+     re-derived locally). Also proves the emotion-`variants` clear (review
+     I-4) now applies to BOTH slots, not just qwen — the fixture seeds a
+     stale `variants` map on each. A still-unwidened guard would 409 this
+     case; a slot-write that only ever touches `qwen` would leave
+     `overrideTtsVoices.coqui` at its OLD (stale-variants) value instead of
+     the new cloned identity. */
+  it('fs-38 Wave 3c: allows assigning a ready cloned voice to a Coqui-routed character (200) — writes BOTH engine-correct slots and clears variants on both', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'clone-coqui-route',
+        provenance: 'cloned',
+        engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+        consent: {
+          personName: 'Test',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00Z',
+          attestedBy: 'test',
+        },
+      }),
+    );
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-coqui-route', [
+      {
+        id: 'char-marlow',
+        name: 'Marlow',
+        ttsEngine: 'coqui',
+        overrideTtsVoices: {
+          qwen: {
+            name: 'qwen-old-designed',
+            provenance: 'designed',
+            variants: { angry: { name: 'qwen-old-designed__angry' } },
+          },
+          coqui: {
+            name: 'xtts-old-designed',
+            provenance: 'designed',
+            variants: { angry: { name: 'xtts-old-designed__angry' } },
+          },
+        },
+      },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/clone-coqui-route/assign')
+      .send({ bookId: 'book-coqui-route', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    const cast = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8')) as {
+      characters: Array<{ overrideTtsVoices?: Record<string, unknown> }>;
+    };
+    expect(cast.characters[0].overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-clone-coqui-route',
+      libraryUuid: 'clone-coqui-route',
+      provenance: 'cloned',
+    });
+    expect(cast.characters[0].overrideTtsVoices?.coqui).toEqual({
+      name: 'xtts-clone-coqui-route',
+      libraryUuid: 'clone-coqui-route',
+      provenance: 'cloned',
+    });
   });
 });
 
