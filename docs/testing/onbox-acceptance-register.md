@@ -512,6 +512,50 @@ Expect the documented one-update lag — a user updating *from* a pre-ops-35 rel
 their old `update.js`, so the constraint applies from the update *after* that. That is not
 a bug to report.
 
+**Why every step above is owed:** all of ops-35's automated coverage drives the floor through
+a **mocked `spawnSync`** (`server/src/diagnostics/ffmpeg.test.ts` stubs `node:child_process`;
+`scripts/tests/ffmpeg-version.test.mjs` feeds the parser canned banner strings). Not one
+assertion has met a real ffmpeg binary of any version. The parser is well covered against a
+corpus of real-world banner shapes, but "the preflight exits 1 on a genuinely old build" and
+"Re-check re-probes a genuinely upgraded one" are both unproven.
+
+---
+
+### E7 · fe-57 venv-bootstrap progress card — the fix nothing automated can prove ([#1883](https://github.com/dudarenok-maker/Castwright/issues/1883), plan [270](../features/270-openapi-setup-surface.md))
+
+`src/components/venv-bootstrap.tsx` declared `status: 'installing'` — a value
+`server/src/tts/venv-bootstrap.ts` **never emits** (its states are `detecting` /
+`bootstrapping` / `installed` / `error`; `'installing'` is the sibling ollama/coqui/kokoro
+vocabulary, copied here by mistake). So the in-progress branch was dead in production: through
+a real multi-minute venv bootstrap the card never rendered and the user saw the idle
+"Set up the voice engine runtime" button the whole time. **The suite stayed green because the
+component's own tests mocked `'installing'` too** — a placebo over a wire value the server
+cannot produce.
+
+The fix is now typed against the generated contract, so that class of drift is a compile
+error, and an `it.each(['detecting','bootstrapping'])` regression pins the card. **But every
+one of those tests mocks `fetch`.** No automated test has ever driven this component from a
+real bootstrap job, which is precisely how the bug survived in the first place.
+
+Needs a box with **no** `server/tts-sidecar/.venv` (delete it, or a fresh clone). Any machine,
+no GPU. ~2 GB download, several minutes — that duration is the point.
+
+Observe:
+
+1. Setup Wizard → voice-engine step with the venv absent → the "Set up the voice engine
+   runtime" button.
+2. Click it. **Within ~1.5 s the progress card must appear** — spinner, "Setting up the voice
+   engine runtime…", and a live `job.step` line. Before this fix, nothing happened here.
+3. Watch the step text **change** as the job advances (`Starting venv bootstrap…` → pip
+   output). This proves the poll loop and the card are wired to the same job, not just that a
+   card rendered once.
+4. Let it finish → the green "Voice engine runtime ready" card, and `onBootstrapped` refetches
+   so the parent's status flips without a reload.
+5. **The `detecting` window is brief** — if you miss it, that is fine; step 2 covers the
+   pre-terminal render. Do not report a missed `detecting` frame as a failure.
+6. Failure path, if cheap to induce (e.g. no Python 3.12 on PATH): the red "Setup failed" card
+   with the server's message, and a working "Try again".
+
 ---
 
 ## Group F — a real Android device
