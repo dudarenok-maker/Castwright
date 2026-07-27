@@ -1263,44 +1263,46 @@ export async function synthesiseChapter(
     voiceName: string,
     detail?: string,
   ): { route: Route; voiceName: string; renderedFallbackEngine?: TtsEngine } => {
-    /* C1 — a cloned voice is exempt from fallback: if Qwen is unavailable this
-       run, raise instead of rerouting (never substitute a real person). A
-       cloned voice with a healthy Qwen + a real voiceName falls through
-       unchanged and renders normally.
+    /* C1 — a cloned voice is exempt from fallback/reroute on ANY clone-capable
+       engine, not just Qwen (fs-38 Wave 3c, Task 21 — this guard used to be
+       hardcoded to `route.engine === 'qwen'`, so a coqui-routed clone got NO
+       exemption at all): if the character is cloned on its OWN routed engine
+       and that engine can't actually carry it this run (no resolvable
+       voiceName, OR the routed engine itself reads unavailable), raise
+       instead of ever rerouting (never substitute a real person). A cloned
+       voice with a healthy routed engine + a real voiceName falls through
+       unchanged and renders normally. Built on `hasClonedProvenance` — the
+       FAIL-SAFE, uuid-agnostic test (see clone-engines.ts) — deliberately,
+       not `clonedSlotForEngine`/`libraryVoiceForEngine`: a malformed cloned
+       slot (missing/non-string libraryUuid) must still count as cloned and
+       still be protected here, or a malformed-but-real clone could slip
+       through and get rerouted, which is the exact defect class this wave
+       exists to close.
 
        Defence-in-depth, not the live guard: the cloned-voice resolver
        pre-pass above (`resolveClonedVoicesForChapter`, ~:1119) now runs
        BEFORE any group reaches this function, over exactly the same
-       cloned+qwen-routed characters this branch checks (including the
+       cloned-and-routed characters this branch checks (including the
        orphaned-characterId narrator substitution — see the IMPORTANT-1
-       fix on `rendersNarrator` above). Task 6b split its single
-       `engineUnavailable` input into two: `wrongEngine` (`routedEngine !==
-       'qwen'`) and `engineUnavailable` (`qwenUnavailable`) — together a
-       strict superset of this branch's `route.engine === 'qwen' &&
-       qwenUnavailable` trigger, and `classifyClonedVoice` treats either as
-       broken unconditionally (before any entry-health check) — so the
-       pre-pass always throws `UnresolvableClonedVoiceError` first in
-       production.
+       fix on `rendersNarrator` above). Task 20 generalised its
+       `engineUnavailableFor` signal to both qwen and coqui, so the pre-pass
+       already throws `UnresolvableClonedVoiceError` first in production for
+       either engine, same as it always did for qwen alone.
        This branch is retained as a backstop for any future caller that
        reaches `applyQwenFallback` without going through the pre-pass
        first (e.g. a direct unit-test harness, or a future refactor that
        adds another call site) — see `synthesise-chapter-cloned-exemption
-       .test.ts` case 1, which now documents (rather than exercises) this
-       gap between the two guards. */
-    const cloned = c.overrideTtsVoices?.qwen?.provenance === 'cloned';
-    const needsFallback =
-      route.engine === 'qwen' && (!voiceName || qwenUnavailable) && !!resolveForEngine;
-    /* Review I-3 — this must fire for EITHER reason `needsFallback` would
-       fire (empty `voiceName` OR `qwenUnavailable`), not just
-       `qwenUnavailable`. The prior `qwenUnavailable`-only check left a gap:
-       a cloned slot that resolves to an empty voiceName (e.g. a
-       libraryUuid-only slot with a missing `name` — the I-3 voice-mapping
-       fix closes the one known way that happens) with Qwen otherwise
-       HEALTHY would fall through past this guard and hit `needsFallback`
-       below, silently rerouting a real person's voice to Kokoro. */
-    if (route.engine === 'qwen' && cloned && needsFallback) {
+       .test.ts`'s Task 21 cases, which defeat the pre-pass (mocking
+       `characterHasClonedSlot`) specifically to exercise this backstop in
+       isolation, proving it's real and not just shadowed by the pre-pass. */
+    const routeEngine = route.engine;
+    const clonedOnRoute = isCloneEngine(routeEngine) && hasClonedProvenance(c, routeEngine);
+    const routeEngineUnavailable = isCloneEngine(routeEngine) && engineUnavailableFor(routeEngine);
+    if (clonedOnRoute && (!voiceName || routeEngineUnavailable)) {
       throw new UnresolvableClonedVoiceError(c.name ?? c.id, detail);
     }
+    const needsFallback =
+      route.engine === 'qwen' && (!voiceName || qwenUnavailable) && !!resolveForEngine;
     if (!needsFallback || !resolveForEngine) return { route, voiceName };
     /* fs-2 — on a non-English book the Kokoro fallback is forbidden: it would
        read the book's language through an English-only voice. fs-60 — if
