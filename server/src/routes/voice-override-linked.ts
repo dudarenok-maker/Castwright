@@ -36,7 +36,14 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
-import { characterHasClonedSlot, hasClonedProvenance } from '../tts/clone-engines.js';
+import {
+  characterHasClonedSlot,
+  hasClonedProvenance,
+  isCloneEngine,
+  manifestSlotFor,
+  cloneStorageKey,
+  libraryVoiceForEngine,
+} from '../tts/clone-engines.js';
 
 export const voiceOverrideLinkedRouter = Router();
 
@@ -192,7 +199,22 @@ voiceOverrideLinkedRouter.post(
    express req/res or the series-discovery scan above it), rather than
    re-stating `characterHasClonedSlot`/`hasClonedProvenance` next to a
    fixture built one line earlier — a tautology that stays green even if this
-   function's guard collapsed onto the uuid-validating `clonedSlotForEngine`. */
+   function's guard collapsed onto the uuid-validating `clonedSlotForEngine`.
+
+   fs-38 Wave 3c, Task 10a (consent-defect fix) — a SECOND, narrower guard
+   below closes a gap the CRITICAL-2 guard above doesn't cover: `name` is a
+   client string with no format validation (parseOverride only checks
+   non-empty), and for a clone-capable engine a name shaped like THIS
+   engine's OWN manifest-slot storage-key prefix (`manifestSlotFor(engine) +
+   '-'`, e.g. 'xtts-' or 'qwen-') is not just a display label — per
+   voice-mapping.ts's `pickVoiceForEngine`, once a target character's slot
+   has no validated library uuid of its own, that raw name IS the literal
+   storage key the sidecar loads a .pt/latents file from. A character whose
+   slot is absent, or `provenance:'designed'` without a usable libraryUuid,
+   is unguarded by the CRITICAL-2 check above (which only fires on
+   `provenance:'cloned'`) — so nothing stopped a planted
+   `xtts-<someone-else's-uuid>` from reaching the sidecar and rendering that
+   other person's real consented clone. */
 export async function applyToBook(
   bookDir: string,
   ids: string[],
@@ -220,6 +242,46 @@ export async function applyToBook(
         `Character "${c.name ?? c.id}" has a consented cloned voice — series rebaseline refuses to ` +
           `remove or replace it. Reassign the character directly instead.`,
       );
+    }
+
+    /* Task 10a — reject a planted clone/library storage key (see the
+       function-level comment above). Only fires when `override.name` is
+       actually shaped like THIS engine's reserved manifest-slot prefix; an
+       ordinary display name (the common case — a designed voice's
+       human-readable label, or a catalog name) is untouched. Allowed when
+       the name is provably this write's own already-consented identity:
+       (a) `c`'s OWN existing slot already resolves to that exact key via
+       the uuid-validating `libraryVoiceForEngine` (a self-consistent
+       restatement — render uses the slot's OWN libraryUuid, never `name`,
+       once one is set, so this is a no-op either way), or (b) it matches
+       `cloneStorageKey(engine, canonicalVoiceUuid)` — canonicalVoiceUuid is
+       server-derived from the SOURCE character's own on-disk voiceUuid
+       (never client-supplied — see the route handler above), and is the
+       SAME identity this call is unifying onto every group member's
+       `voiceUuid` field below. That's exactly how a bespoke (non-library)
+       Qwen design's storage key legitimately propagates across a series via
+       this route (rebaseline-modal.tsx's Approve step writes
+       `{engine:'qwen', name: <voiceId returned by designQwenVoice>}` with
+       no libraryUuid at all). Anything else is a foreign key — e.g.
+       'xtts-<someone-else's-uuid>' — that would otherwise render (and
+       consent-breach) another person's real cloned artifact. */
+    if (override !== null && isCloneEngine(override.engine)) {
+      const engine = override.engine;
+      const prefix = `${manifestSlotFor(engine)}-`;
+      if (override.name.startsWith(prefix)) {
+        const ownLib = libraryVoiceForEngine(c, engine);
+        const matchesOwnLibrary =
+          ownLib !== undefined && override.name === cloneStorageKey(engine, ownLib.libraryUuid);
+        const matchesCanonical =
+          canonicalVoiceUuid !== undefined &&
+          override.name === cloneStorageKey(engine, canonicalVoiceUuid);
+        if (!matchesOwnLibrary && !matchesCanonical) {
+          throw new Error(
+            `Character "${c.name ?? c.id}" — refusing to write "${override.name}" as its ${engine} ` +
+              `voice: it doesn't match this character's own consented voice.`,
+          );
+        }
+      }
     }
   }
 

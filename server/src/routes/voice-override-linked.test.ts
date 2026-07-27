@@ -439,4 +439,107 @@ describe('POST /api/books/:bookId/cast/:characterId/voice-override-linked', () =
        propagates to all unified rows so the whole group converges on one identity. */
     expect(findChar(BOOK_B, 'wren-sparrow')?.voiceUuid).toBe('U1');
   });
+
+  /* fs-38 Wave 3c, Task 10a — consent-defect fix. The CRITICAL-2 guard above
+     only fires on `provenance:'cloned'`; a target character whose slot is
+     ABSENT, or `designed` but not backed by the client's planted uuid, was
+     unguarded — a client could write `override.name` shaped like
+     manifestSlotFor's OWN reserved storage-key prefix ('xtts-'/'qwen-')
+     naming a DIFFERENT person's already-consented library uuid, and
+     voice-mapping.ts's pickVoiceForEngine would return that raw name
+     verbatim as the sidecar's load key once the target's own slot had no
+     validated libraryUuid to prefer instead. */
+  describe('Task 10a — rejects a planted clone/library storage key', () => {
+    it('rejects a planted xtts-<uuid> on a character whose coqui slot is ABSENT', async () => {
+      const res = await callLinked(standaloneId, 'loner', {
+        override: { engine: 'coqui', name: 'xtts-someone-elses-uuid' },
+      });
+      expect(res.body.updated).toHaveLength(0);
+      expect(res.body.failed).toHaveLength(1);
+      expect(res.body.failed[0].error).toMatch(/consented voice/);
+      /* Disk untouched — no coqui slot was written. */
+      expect(findChar(STANDALONE, 'loner')?.overrideTtsVoices).toBeUndefined();
+    });
+
+    it('rejects a planted xtts-<uuid> on a character whose coqui slot is DESIGNED (a different uuid)', async () => {
+      writeBookOnDisk(
+        AUTHOR,
+        SERIES,
+        STANDALONE,
+        standaloneId,
+        [
+          {
+            id: 'loner',
+            name: 'Loner',
+            role: 'character',
+            color: 'unset',
+            lines: 9,
+            overrideTtsVoices: {
+              coqui: { name: 'xtts-own-uuid', libraryUuid: 'own-uuid', provenance: 'designed' },
+            },
+          },
+        ],
+        { isStandalone: true },
+      );
+      const res = await callLinked(standaloneId, 'loner', {
+        override: { engine: 'coqui', name: 'xtts-someone-elses-uuid' },
+      });
+      expect(res.body.updated).toHaveLength(0);
+      expect(res.body.failed).toHaveLength(1);
+      expect(res.body.failed[0].error).toMatch(/consented voice/);
+      /* Disk untouched — the character's OWN designed slot survives unmolested. */
+      const slot = (findChar(STANDALONE, 'loner')?.overrideTtsVoices as Record<string, Record<string, unknown>>)
+        ?.coqui;
+      expect(slot?.name).toBe('xtts-own-uuid');
+      expect(slot?.libraryUuid).toBe('own-uuid');
+      expect(slot?.provenance).toBe('designed');
+    });
+
+    it('rejects the qwen- equivalent on a character whose qwen slot is ABSENT', async () => {
+      const res = await callLinked(standaloneId, 'loner', {
+        override: { engine: 'qwen', name: 'qwen-someone-elses-uuid' },
+      });
+      expect(res.body.updated).toHaveLength(0);
+      expect(res.body.failed).toHaveLength(1);
+      expect(res.body.failed[0].error).toMatch(/consented voice/);
+      expect(findChar(STANDALONE, 'loner')?.overrideTtsVoices).toBeUndefined();
+    });
+
+    it('a legitimate write still succeeds: a name matching this write\'s OWN server-derived voiceUuid (the real bespoke-Qwen-propagation shape)', async () => {
+      /* Mirrors rebaseline-modal.tsx's Approve step: it writes
+         `{engine:'qwen', name: <voiceId returned by designQwenVoice>}` with
+         NO libraryUuid at all — voiceMapping's qwen branch (no libraryUuid)
+         resolves the storage key from the character's OWN voiceUuid, not
+         from `name`, so `qwen-<own voiceUuid>` is always self-consistent,
+         never a foreign key. */
+      writeBookOnDisk(
+        AUTHOR,
+        SERIES,
+        STANDALONE,
+        standaloneId,
+        [{ id: 'loner', name: 'Loner', role: 'character', color: 'unset', lines: 9, voiceUuid: 'U-LONER' }],
+        { isStandalone: true },
+      );
+      const res = await callLinked(standaloneId, 'loner', {
+        override: { engine: 'qwen', name: 'qwen-U-LONER' },
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.updated).toHaveLength(1);
+      const c = findChar(STANDALONE, 'loner');
+      expect((c?.overrideTtsVoices as Record<string, { name: string }>)?.qwen?.name).toBe('qwen-U-LONER');
+      expect(c?.voiceUuid).toBe('U-LONER');
+    });
+
+    it('a legitimate write still succeeds: an ordinary display name with no reserved-prefix shape is untouched', async () => {
+      /* The common case — 'Damien Black' (a catalog name) doesn't start with
+         'xtts-' or 'qwen-', so the new guard never inspects it at all. */
+      const res = await callLinked(standaloneId, 'loner', {
+        override: { engine: 'coqui', name: 'Damien Black' },
+      });
+      expect(res.status).toBe(200);
+      expect((findChar(STANDALONE, 'loner')?.overrideTtsVoices as Record<string, { name: string }>)?.coqui?.name).toBe(
+        'Damien Black',
+      );
+    });
+  });
 });
