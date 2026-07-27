@@ -155,6 +155,31 @@ history at cut time.
   `mockCloneVoice` mirrors the same semantics so mock/e2e mode stops reproducing the bug. Adds
   Invariant 12 to `docs/features/267-fs38-wave3-voice-clone.md`. Closes the run sheet's KL-k
   finding.
+- **`#/voices`' language filter can no longer strand the rollup** (#1834). `languageFilter` was
+  raw local state, but the chip row that clears it renders only while the library still carries
+  the codes it offers — and it lives inside the rollup's non-empty branch. So a mid-session
+  library change that drops the filtered language left the filter matching nothing, collapsing
+  the view to the "No voices yet" empty state (wrong copy, too: "Finish setting up a book") with
+  the chips gone — a filter still applied and no control left to clear it. The reachable trigger
+  is the last voice carrying that language losing it: its qwen override cleared from the profile
+  drawer in this same view, the voice deleted, or its design manifest failing to resolve a
+  language on a later read — surfaced by the next `voicesActions.hydrate`, which refires on
+  `[bookId, stageKind, ttsEngine, genProgress]` while the view stays mounted. Explicitly NOT an
+  engine switch or a book switch, both of which the first draft of this entry claimed: the server
+  reads `languageCode` from the design manifest independently of the `engine` query param, and
+  the voices response walks every book under `BOOKS_ROOT` with `currentBookId` only setting
+  `source` — neither can remove a code from `languages` (`server/src/routes/voices.ts:257-260`,
+  `:402-406`). The effective filter is now derived during render
+  (`languages.includes(languageFilter) ? languageFilter : null`) so the empty rollup is never
+  painted; `setLanguageFilter` stays the sole state writer. Same shape and same treatment as
+  `activeSection` for #1802 (that derivation is gone with the flag in #1833; this one is not
+  gate-dependent). Three regression cases in `voices.test.tsx`: the chip row unmounting entirely,
+  the row surviving with the selected code dropped (the "All" chip reads pressed again), and the
+  same stranding on the **Qwen** leg — `filteredQwenLibrary`, which is where the whole library
+  sits under the default engine (`resolveVoiceAssignment` stamps `provider` from the active
+  engine, not per voice) and therefore the only leg a real user can be stranded on, since
+  `languageCode` is only ever set on a designed Qwen voice. The independent review proved that
+  leg had zero coverage — reverting just its memo left all 69 tests green.
 
 ---
 
