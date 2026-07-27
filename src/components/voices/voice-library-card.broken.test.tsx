@@ -109,6 +109,50 @@ describe('deriveClonedVoiceState', () => {
       ),
     ).toBe('broken');
   });
+
+  /* fs-38 Wave 3c, Task 28 — worst-state-wins across engines. A cloned entry
+     can now carry a Coqui artifact (`engines.xtts`) alongside Qwen. Coqui is
+     the alternate engine, so a failed/stale xtts derive caps out at
+     "repairable" — it must NOT brand the whole card broken the way a failed
+     *qwen* derive does, since that would wrongly flag a card as permanently
+     broken for a book that only uses Qwen. This is the discriminating case:
+     engines.qwen stays healthy ('ready') while xtts is the one that failed,
+     so a version of this function that (wrongly) treated any engine's
+     'failed' status the same way would return 'broken' here instead. */
+  it('is "repairable" (not "broken") when engines.xtts.status is "failed" but qwen is healthy', () => {
+    expect(
+      deriveClonedVoiceState(
+        makeCloned({ engines: { qwen: { status: 'ready' }, xtts: { status: 'failed' } } }),
+      ),
+    ).toBe('repairable');
+  });
+
+  it('is "repairable" when engines.xtts.status is "stale" but qwen is healthy', () => {
+    expect(
+      deriveClonedVoiceState(
+        makeCloned({ engines: { qwen: { status: 'ready' }, xtts: { status: 'stale' } } }),
+      ),
+    ).toBe('repairable');
+  });
+
+  it('is "broken" when engines.qwen.status is "failed" even if xtts is healthy (qwen dominates)', () => {
+    expect(
+      deriveClonedVoiceState(
+        makeCloned({ engines: { qwen: { status: 'failed' }, xtts: { status: 'ready' } } }),
+      ),
+    ).toBe('broken');
+  });
+
+  it('is "broken" when consent is revoked even with a healthy xtts engine present', () => {
+    expect(
+      deriveClonedVoiceState(
+        makeCloned({
+          consent: { ...CONSENT, revokedAt: '2026-07-25T00:00:00Z' },
+          engines: { qwen: { status: 'ready' }, xtts: { status: 'ready' } },
+        }),
+      ),
+    ).toBe('broken');
+  });
 });
 
 describe('VoiceLibraryCard — cloned Broken/Repairable chip', () => {
@@ -160,6 +204,18 @@ describe('VoiceLibraryCard — cloned Broken/Repairable chip', () => {
     renderCard(entry);
     expect(screen.getByTestId(`voice-library-clonestate-${entry.voiceUuid}`)).toHaveTextContent(
       'Needs attention',
+    );
+  });
+
+  /* fs-38 Wave 3c, Task 28 — at the rendered-card level: a failed Coqui
+     derive on an otherwise-healthy qwen entry must show "Will re-derive"
+     (repairable), never "Needs attention" (broken). This is the UI-level
+     twin of the deriveClonedVoiceState unit test in the same scenario. */
+  it('shows the warning "Will re-derive" chip (not "Needs attention") when only xtts has failed', () => {
+    const entry = makeCloned({ engines: { qwen: { status: 'ready' }, xtts: { status: 'failed' } } });
+    renderCard(entry);
+    expect(screen.getByTestId(`voice-library-clonestate-${entry.voiceUuid}`)).toHaveTextContent(
+      'Will re-derive',
     );
   });
 });
