@@ -836,6 +836,50 @@ def test_clone_voice_route_happy_path_returns_pcm_and_headers(monkeypatch, tmp_p
     assert os.path.isfile(json_path)
 
 
+def test_clone_voice_route_manifest_read_failure_returns_empty_not_unknown_coqui_version(
+    monkeypatch, tmp_path
+) -> None:
+    """fs-38 Wave 3c Task 19 fix round 1 (IMPORTANT-2). A manifest-read
+    failure after a successful clone must report X-Coqui-Version: "" (empty),
+    NEVER the "unknown" sentinel. Node's derive-engine-artifact.ts stores this
+    header verbatim as the voice's stored coquiVersion; isArtifactVersionStale
+    only treats an EMPTY version as "not stale" — "unknown" is truthy, so it
+    would misclassify every subsequent classify as stale forever (a spurious
+    GPU re-derive on every render, which could re-hit the same failure and
+    loop). Simulates the failure via json.load raising (any manifest-read
+    error the route's broad except Exception already catches), NOT a
+    monkeypatched _voice_paths — the .pt/manifest ARE really written by
+    clone_voice; only the route's OWN re-read of the manifest fails."""
+    eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path, coqui_version="9.9.9-test")
+    client = TestClient(main.app)
+
+    def _raise_on_manifest_read(fh):
+        raise ValueError("simulated corrupt manifest")
+
+    # monkeypatch auto-restores json.load at test teardown — clone_voice's OWN
+    # write path uses `_json.dump` (a separately-imported local alias), so
+    # patching just `.load` leaves the actual clone/persist unaffected.
+    monkeypatch.setattr(main.json, "load", _raise_on_manifest_read)
+
+    resp = client.post(
+        "/xtts/clone-voice",
+        content=_pcm_bytes(),
+        headers={"X-Sample-Rate": "24000", "X-Voice-Id": "xtts-manifest-fail"},
+    )
+
+    assert resp.status_code == 200  # the clone itself succeeded — only the header read failed
+    assert resp.headers["X-Coqui-Version"] == ""
+    assert resp.headers["X-Coqui-Version"] != "unknown"
+    # modelId's own "unknown" sentinel is untouched by this fix — it is never
+    # a staleness comparand (only coquiVersion is), so it keeps its prior
+    # default deliberately.
+    assert resp.headers["X-Model-Id"] == "unknown"
+    # The .pt WAS actually persisted by clone_voice — only the route's
+    # post-hoc manifest re-read failed, not the clone itself.
+    pt_path, _json_path = eng._voice_paths("xtts-manifest-fail")
+    assert os.path.isfile(pt_path)
+
+
 def test_clone_voice_route_rejects_missing_body_and_headers(monkeypatch, tmp_path) -> None:
     _install_engine(monkeypatch, tmp_path)
     client = TestClient(main.app)

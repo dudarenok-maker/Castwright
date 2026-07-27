@@ -404,11 +404,14 @@ export async function resolveClonedVoicesForChapter(
          was already this codebase's established choice (see the designed
          self-heal's own DELTA-I4 note for the same tension resolved the
          OTHER way there) and this task doesn't touch qwen's tested behaviour.
-         coqui is a brand-new path with no such precedent, and has no live
-         "current" oracle to fall back to (see ClassifyInput's doc comment) —
-         so it prefers the derive's own reported `coquiVersion`/`modelId`,
-         falling back to `currentArtifactVersion` only if the response itself
-         came back empty (the older-sidecar-fallback case).
+         coqui is a brand-new path with no such precedent — Task 19 later gave
+         it a live "current" oracle (`getLastKnownCoquiVersion()`, see
+         ClassifyInput's doc comment), but this write-side choice predates
+         and doesn't depend on that: it prefers the derive's own reported
+         `coquiVersion`/`modelId` (the freshest possible truth, straight off
+         the sidecar response that just ran), falling back to
+         `currentArtifactVersion` only if the response itself came back empty
+         (the older-sidecar-fallback case).
 
          fix wave (Task 18 review, MINOR-5) — `modelId` is only included when
          the derive response actually reported one. `deriveEngineArtifact`

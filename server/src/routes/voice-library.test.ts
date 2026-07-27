@@ -310,9 +310,12 @@ describe('GET /api/voice-library', () => {
     // qwen's own staleness is unaffected by adding the xtts recomputation.
     expect(byId.get('mixed-1')?.engines.qwen?.status).toBe('stale');
     expect(byId.get('mixed-2')?.engines.qwen?.status).toBe('ready');
-    // xtts never reads 'stale' today (no live oracle) — for EITHER a real
-    // or an empty stored coquiVersion — and each entry's own computation
-    // doesn't leak the other's qwen staleness onto xtts.
+    // xtts never reads 'stale' here — the oracle (getLastKnownCoquiVersion())
+    // is a fresh, never-seeded module instance in this test (boot window),
+    // so it reads '' regardless of whether the stored coquiVersion is real
+    // or empty — and each entry's own computation doesn't leak the other's
+    // qwen staleness onto xtts. See the NEXT test for the oracle actually
+    // firing once seeded with a real value.
     expect(byId.get('mixed-1')?.engines.xtts?.status).toBe('ready');
     expect(byId.get('mixed-2')?.engines.xtts?.status).toBe('ready');
 

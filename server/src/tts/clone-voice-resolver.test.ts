@@ -318,14 +318,17 @@ describe('classifyClonedVoice', () => {
     /* fs-38 Wave 3c, Task 18 — the ambiguity this task's brief called out
        explicitly: BOTH sides of the version comparison can be empty
        ('' is `derive-engine-artifact.ts`'s older-sidecar fallback for
-       STORED, and coqui has no live "current installed version" oracle at
-       all yet, so `currentArtifactVersion('coqui')` is `''` in production).
-       An empty/unknown value on EITHER side must read as "not stale",
-       never "always stale" — the latter would force a real GPU re-derive
-       of every already-healthy coqui-cloned voice on every single chapter
-       render (see clone-engines.ts's isArtifactVersionStale doc comment
-       for the full reasoning). Pinned at the classifier's own boundary,
-       not just the underlying predicate in isolation. */
+       STORED; `currentArtifactVersion('coqui')` also reads `''` during the
+       boot window before Task 19's live oracle — `getLastKnownCoquiVersion()`
+       — has answered its first reachable /health poll). An empty/unknown
+       value on EITHER side must read as "not stale", never "always stale" —
+       the latter would force a real GPU re-derive of every already-healthy
+       coqui-cloned voice on every single chapter render during that window
+       (see clone-engines.ts's isArtifactVersionStale doc comment for the
+       full reasoning). Pinned at the classifier's own boundary, not just the
+       underlying predicate in isolation — `classifyClonedVoice` takes a
+       plain `currentArtifactVersion` string, so these cases are agnostic to
+       whether it came from the boot window or any other empty source. */
     it('an EMPTY stored coquiVersion (older-sidecar fallback) never reads stale, even against a real known current version', () => {
       const result = classifyClonedVoice(
         classifyInput({
@@ -337,7 +340,7 @@ describe('classifyClonedVoice', () => {
       expect(result).toEqual({ state: 'healthy' });
     });
 
-    it('an EMPTY currentArtifactVersion (no live oracle) never reads a real stored coquiVersion as stale', () => {
+    it('an EMPTY currentArtifactVersion (e.g. the boot window, before the oracle has answered) never reads a real stored coquiVersion as stale', () => {
       const result = classifyClonedVoice(
         classifyInput({
           engine: 'coqui',

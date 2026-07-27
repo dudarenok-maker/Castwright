@@ -267,11 +267,15 @@ export function libraryVoiceForEngine(
 
     Both sides of the comparison default to the empty string somewhere in
     this codebase — `derive-engine-artifact.ts` stamps `baseModel`/
-    `coquiVersion` as `''` when the sidecar's response is missing the header,
-    and coqui has no live "currently installed coqui-tts version" oracle yet
-    (unlike qwen's `currentQwenBaseModel()`, an env-configured Node-side
-    constant — nothing analogous exists for coqui, which has no
-    per-deployment model-repo choice to track). Both an unknown STORED and an
+    `coquiVersion` as `''` when the sidecar's response is missing the header.
+    fs-38 Wave 3c Task 19 gave coqui its own live "currently installed
+    coqui-tts version" oracle (`getLastKnownCoquiVersion()`,
+    tts/coqui-version-state.ts, fed by the sidecar's /health poll — mirrors
+    qwen's `currentQwenBaseModel()`, though qwen's is a static env-configured
+    Node-side constant and coqui's is a runtime cache, since the installed
+    coqui-tts PACKAGE version has no per-deployment env knob the way qwen's
+    model-repo choice does). Before the sidecar's first reachable poll (the
+    boot window) that oracle still reads `''`. Both an unknown STORED and an
     unknown CURRENT version read as "not stale" here — deliberately:
 
     - Unknown STORED (`''`/missing) never stale: there is nothing to compare
@@ -281,13 +285,13 @@ export function libraryVoiceForEngine(
       alternative (unknown current => always stale) would force a real GPU
       re-derive against the sidecar on every single classify call for any
       voice whose stored version happens to be non-empty — including every
-      already-healthy coqui-cloned voice today, since coqui's current is
-      always `''` until a real oracle exists. Repeated, needless re-derives
-      cost real GPU time and risk flipping a perfectly good voice to
-      Broken/derive-failed on a transient sidecar hiccup, which is a worse
-      outcome for a consent-scoped cloned voice than temporarily under-
-      detecting a genuine staleness this codebase has no way to observe yet
-      (see the module-level "never substitute" invariant). */
+      already-healthy coqui-cloned voice during the boot window, before the
+      oracle has answered even once. Repeated, needless re-derives cost real
+      GPU time and risk flipping a perfectly good voice to Broken/derive-
+      failed on a transient sidecar hiccup, which is a worse outcome for a
+      consent-scoped cloned voice than temporarily under-detecting a genuine
+      staleness during that narrow window (see the module-level "never
+      substitute" invariant). */
 export function isArtifactVersionStale(stored: string | undefined, current: string): boolean {
   return Boolean(stored) && Boolean(current) && stored !== current;
 }

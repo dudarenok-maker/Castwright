@@ -13,14 +13,29 @@ import {
   _resetLastKnownCoquiVersionForTests,
 } from '../tts/coqui-version-state.js';
 
-/* fs-38 Wave 3c Task 19 — the coqui health-poll refresh re-runs the Node-side
-   disk probe (no full install-state enum on the wire for Coqui, see
-   sidecar-health.ts's deriveCoquiInstallState doc). Mocked here so tests can
-   drive it deterministically without touching the real filesystem. */
-vi.mock('../tts/coqui-install-detect.js', () => ({
-  detectCoquiInstallStateOnDisk: vi.fn(() => 'not-installed'),
-}));
-import { detectCoquiInstallStateOnDisk } from '../tts/coqui-install-detect.js';
+/* fs-38 Wave 3c Task 19 — the coqui health-poll refresh falls back to the
+   Node-side disk probe for cases the wire doesn't settle (no full
+   install-state enum on the wire for Coqui, see sidecar-health.ts's
+   deriveCoquiInstallState doc). Mocked here so tests can drive it
+   deterministically without touching the real filesystem.
+
+   fix round 1 (MINOR-4) — importOriginal-merged, NOT a bare replacement
+   object: the real module also exports `coquiModelDir` /
+   `coquiPackageInstalled`, and (as of this same round) `sidecar-health.ts`
+   itself now imports `coquiWeightsPresent` too — a bare mock silently
+   returns `undefined` for any export it doesn't list, which crashes with
+   "not a function" the moment the route's import graph reaches it. This is
+   the EXACT defect class that broke `ensure-sidecar-vram.test.ts`'s own
+   bare `user-settings.js` mock earlier this task. */
+vi.mock('../tts/coqui-install-detect.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../tts/coqui-install-detect.js')>();
+  return {
+    ...actual,
+    detectCoquiInstallStateOnDisk: vi.fn(() => 'not-installed'),
+    coquiWeightsPresent: vi.fn(() => false),
+  };
+});
+import { detectCoquiInstallStateOnDisk, coquiWeightsPresent } from '../tts/coqui-install-detect.js';
 
 /* sidecar-supervisor is mocked so restart tests can inject a fake supervisor
    without needing a real sidecar process. vi.mock is hoisted to the module
@@ -53,6 +68,7 @@ function makeApp() {
 const fetchMock = vi.fn();
 const mockWithCapacityRetry = vi.mocked(withCapacityRetry);
 const mockDetectCoqui = vi.mocked(detectCoquiInstallStateOnDisk);
+const mockCoquiWeightsPresent = vi.mocked(coquiWeightsPresent);
 
 beforeEach(() => {
   fetchMock.mockReset();
@@ -62,6 +78,8 @@ beforeEach(() => {
   mockWithCapacityRetry.mockImplementation((doPost, opts) => doPost(opts.signal));
   mockDetectCoqui.mockReset();
   mockDetectCoqui.mockReturnValue('not-installed');
+  mockCoquiWeightsPresent.mockReset();
+  mockCoquiWeightsPresent.mockReturnValue(false);
   _resetLastKnownCoquiVersionForTests();
 });
 
@@ -1082,6 +1100,78 @@ describe('GET /api/sidecar/health — coqui install-state refresh (fs-38 Wave 3c
 
     const { getLastKnownQwenInstallState } = await import('../workspace/user-settings.js');
     expect(getLastKnownQwenInstallState()).toBe('loaded');
+  });
+});
+
+describe('GET /api/sidecar/health — coqui install-state trusts the wire (fs-38 Wave 3c Task 19 fix round 1, IMPORTANT-1)', () => {
+  it('coqui_package_installed: false is "not-installed" immediately, no disk probe at all', async () => {
+    mockDetectCoqui.mockReturnValue('ready'); // if this got called, the test below would still pass by accident — it must NOT be called
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, engines: ['coqui'], model_loaded: false, coqui_package_installed: false }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    await request(makeApp()).get('/api/sidecar/health');
+    expect(getLastKnownCoquiInstallState()).toBe('not-installed');
+    expect(mockDetectCoqui).not.toHaveBeenCalled();
+    expect(mockCoquiWeightsPresent).not.toHaveBeenCalled();
+  });
+
+  it('coqui_package_installed: true + weights present locally → "ready", via the WEIGHTS-only probe (not the full disk probe)', async () => {
+    mockCoquiWeightsPresent.mockReturnValue(true);
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, engines: ['coqui'], model_loaded: false, coqui_package_installed: true }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    await request(makeApp()).get('/api/sidecar/health');
+    expect(getLastKnownCoquiInstallState()).toBe('ready');
+    expect(mockCoquiWeightsPresent).toHaveBeenCalled();
+    expect(mockDetectCoqui).not.toHaveBeenCalled(); // the wire already settled the package half
+  });
+
+  it('coqui_package_installed: true + weights absent locally → "weights-missing"', async () => {
+    mockCoquiWeightsPresent.mockReturnValue(false);
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, engines: ['coqui'], model_loaded: false, coqui_package_installed: true }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    await request(makeApp()).get('/api/sidecar/health');
+    expect(getLastKnownCoquiInstallState()).toBe('weights-missing');
+  });
+
+  it('coqui_package_installed absent (older sidecar) falls back to the FULL local disk probe, unchanged from before this fix', async () => {
+    mockDetectCoqui.mockReturnValue('weights-missing');
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, engines: ['coqui'], model_loaded: false }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await request(makeApp()).get('/api/sidecar/health');
+    expect(getLastKnownCoquiInstallState()).toBe('weights-missing');
+    expect(mockDetectCoqui).toHaveBeenCalled();
+    expect(mockCoquiWeightsPresent).not.toHaveBeenCalled(); // the full-probe path never calls this one directly
+  });
+
+  it('model_loaded: true still overrides even when coqui_package_installed: false is ALSO present (contradictory sidecar body)', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, engines: ['coqui'], model_loaded: true, coqui_package_installed: false }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    await request(makeApp()).get('/api/sidecar/health');
+    expect(getLastKnownCoquiInstallState()).toBe('loaded');
   });
 });
 

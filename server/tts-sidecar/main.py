@@ -7809,7 +7809,21 @@ async def xtts_clone_voice(req: Request) -> Response:
     # "tts_models/multilingual/multi-dataset/xtts_v2"), not the short
     # "xtts_v2" alias — this route is the first consumer of that field and
     # deliberately echoes it verbatim rather than inventing a second form.
-    coqui_version = "unknown"
+    #
+    # fs-38 Wave 3c Task 19 fix round 1 (IMPORTANT-2) — coqui_version's
+    # not-yet-known default MUST be "" (empty), never "unknown". Node's
+    # derive-engine-artifact.ts stores this header verbatim as a voice's
+    # `coquiVersion`, and `isArtifactVersionStale` only treats an EMPTY
+    # stored/current version as "not stale" — "unknown" is truthy, so under
+    # Task 19's live oracle a manifest-read failure here would have
+    # permanently misclassified that voice as stale (every classify triggers
+    # a spurious GPU re-derive, which can itself fail to re-read the
+    # manifest and re-stamp "unknown" — an infinite loop). Under Task 18's
+    # permanent '' current-version this was inert (isArtifactVersionStale
+    # never fires when current is empty, however stored reads); Task 19's
+    # real oracle made it live. `model_id`'s "unknown" default is untouched
+    # — modelId is never a staleness comparand, only coquiVersion is.
+    coqui_version = ""
     model_id = "unknown"
     _pt_path, json_path = coqui._voice_paths(voice_id)
     try:
