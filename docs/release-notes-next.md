@@ -39,9 +39,14 @@ history at cut time.
   (`workspace/voice-library.ts:9-10`), so describing the contract alone would have *relocated*
   the duplicate rather than removed it. The guarantee is
   `server/src/routes/openapi-setup-parity.test.ts`, which asserts the contract's enums equal
-  the server's TypeScript unions and that every mounted `/api/setup/*` route is described —
-  mutation-verified in both directions rather than assumed. Copy count goes three → two.
-  No user-visible delta. Plan:
+  the server's TypeScript unions — via `satisfies Record<Union, 1>` over type-only imports,
+  so a member added to a server union fails `npm run typecheck` inside the test file. (A bare
+  array there would have pinned nothing; the first draft did exactly that and was caught at
+  review.) Copy count goes three → two.
+  **Fixed a live bug found on the way:** `venv-bootstrap.tsx` declared `status: 'installing'`,
+  a value the venv endpoint never emits, so its progress card never rendered during a real
+  multi-minute bootstrap — and its own tests mocked the fictional status, keeping the suite
+  green. That is the only user-visible delta here. Plan:
   [`docs/features/270-openapi-setup-surface.md`](https://github.com/dudarenok-maker/Castwright/blob/main/docs/features/270-openapi-setup-surface.md).
 
 ---

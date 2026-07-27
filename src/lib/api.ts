@@ -7415,15 +7415,10 @@ export function _resetMockTour(): void {
   mockTourCompletedAt = null;
 }
 
-export interface SmokeTestResult {
-  ok: boolean;
-  url?: string;
-  durationSec?: number;
-  analyzerOk?: boolean;
-  analyzerDetail?: string;
-  stage?: string;
-  error?: string;
-}
+/* fe-57 (#1883) — was hand-written and field-for-field identical to the
+   contract's SetupSmokeResponse. Aliased so POST /api/setup/smoke has one
+   author like the rest of the surface. Name kept so consumers don't churn. */
+export type SmokeTestResult = ApiComponents['schemas']['SetupSmokeResponse'];
 
 async function realRunSmokeTest(): Promise<SmokeTestResult> {
   const res = await fetch('/api/setup/smoke', { method: 'POST' });

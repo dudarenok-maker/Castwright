@@ -13,6 +13,15 @@
    parser, no new dependency. */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { readFile } from 'node:fs/promises';
+/* Type-only imports — fully erased at runtime, so they add no module-graph
+   edge (the runtime read of openapi.yaml stays the only file dependency).
+   These are what turn the member lists below from a THIRD hardcoded literal
+   into a compile-time assertion against the server's real unions. */
+import type { BlockerCause, BlockerActionKind } from './setup-readiness.js';
+import type { RuntimeProcessState } from '../tts/models-status.js';
+import type { EngineHealthState } from '../tts/engine-health.js';
+import type { VoiceEngineId } from '../tts/voice-engine-registry.js';
+import type { VenvBootstrapState, VenvBootstrapJobStatus } from '../tts/venv-bootstrap.js';
 
 let yaml: string;
 
@@ -68,56 +77,92 @@ function describedSetupPaths(): string[] {
   return [...yaml.matchAll(/^ {2}(\/api\/setup\/\S*):$/gm)].map((m) => m[1]);
 }
 
-/* The server-side unions restated as runtime arrays — the only hand-maintained
-   duplicates left. When you add a member to the union in the cited file, add
-   it here AND to openapi.yaml; this test is what tells you that you must. */
+/* Each map is `satisfies Record<TheServerUnion, 1>`, which is what makes this
+   test guard the case that matters. A bare array of strings would only pin
+   openapi.yaml against a THIRD hardcoded literal — so editing the server union
+   alone would still pass, which is exactly the #1877/#1881 forget-mode this
+   issue exists to close (and which an earlier draft of this file did not
+   catch).
+
+   With `satisfies`, adding a member to the server union makes THIS FILE fail
+   `npm run typecheck` with a missing key, and removing one fails with an
+   excess key. The runtime assertion below then carries that same set over to
+   openapi.yaml. Same idiom as src/data/help-failures.ts:49.
+
+   Chain: server union --(satisfies, compile time)--> this map
+          --(toEqual, runtime)--> openapi.yaml --(codegen)--> api-types.ts */
+const BLOCKER_CAUSES = {
+  'python-missing': 1, 'venv-missing': 1, 'venv-broken': 1,
+  'supervisor-exhausted': 1, 'supervisor-tripped': 1, 'unreachable-transient': 1,
+  'unreachable-no-supervisor': 1, 'sidecar-blocked': 1, 'no-engine-installed': 1,
+  'weights-missing': 1, 'cannot-confirm-engine': 1, 'package-broken': 1,
+  'ffmpeg-missing': 1, 'ffprobe-missing': 1, 'both-missing': 1,
+  'ffmpeg-too-old': 1, 'ollama-unreachable': 1, 'model-not-pulled': 1,
+  'no-gemini-key': 1, pass: 1,
+} satisfies Record<BlockerCause, 1>;
+
+const BLOCKER_ACTION_KINDS = {
+  'venv-bootstrap': 1, 'qwen-install': 1, 'kokoro-install': 1, 'coqui-install': 1,
+  'sidecar-restart': 1, 'ollama-install': 1, 'ollama-pull': 1, navigate: 1,
+} satisfies Record<BlockerActionKind, 1>;
+
+const RUNTIME_PROCESS_STATES = {
+  ready: 1, starting: 1, down: 1, crashed: 1,
+} satisfies Record<RuntimeProcessState, 1>;
+
+const ENGINE_HEALTH_STATES = {
+  ready: 1, 'package-missing': 1, 'weights-missing': 1, 'not-installed': 1, loaded: 1,
+} satisfies Record<EngineHealthState, 1>;
+
+const VOICE_ENGINE_IDS = {
+  kokoro: 1, qwen: 1, coqui: 1,
+} satisfies Record<VoiceEngineId, 1>;
+
+const VENV_BOOTSTRAP_STATES = {
+  present: 1, absent: 1,
+} satisfies Record<VenvBootstrapState, 1>;
+
+const VENV_BOOTSTRAP_JOB_STATUSES = {
+  detecting: 1, bootstrapping: 1, installed: 1, error: 1,
+} satisfies Record<VenvBootstrapJobStatus, 1>;
+
 const SERVER_UNIONS: Record<
   string,
   { source: string; members: readonly string[]; read: () => string[] }
 > = {
   BlockerCause: {
     source: 'server/src/routes/setup-readiness.ts',
-    members: [
-      'python-missing', 'venv-missing', 'venv-broken', 'supervisor-exhausted',
-      'supervisor-tripped', 'unreachable-transient', 'unreachable-no-supervisor',
-      'sidecar-blocked', 'no-engine-installed', 'weights-missing',
-      'cannot-confirm-engine', 'package-broken', 'ffmpeg-missing',
-      'ffprobe-missing', 'both-missing', 'ffmpeg-too-old', 'ollama-unreachable',
-      'model-not-pulled', 'no-gemini-key', 'pass',
-    ],
+    members: Object.keys(BLOCKER_CAUSES),
     read: () => schemaEnum('BlockerCause'),
   },
   BlockerActionKind: {
     source: 'server/src/routes/setup-readiness.ts',
-    members: [
-      'venv-bootstrap', 'qwen-install', 'kokoro-install', 'coqui-install',
-      'sidecar-restart', 'ollama-install', 'ollama-pull', 'navigate',
-    ],
+    members: Object.keys(BLOCKER_ACTION_KINDS),
     read: () => schemaEnum('BlockerActionKind'),
   },
   RuntimeProcessState: {
     source: 'server/src/tts/models-status.ts',
-    members: ['ready', 'starting', 'down', 'crashed'],
+    members: Object.keys(RUNTIME_PROCESS_STATES),
     read: () => propertyEnum('RuntimeStatus', 'process'),
   },
   EngineHealthState: {
     source: 'server/src/tts/engine-health.ts',
-    members: ['ready', 'package-missing', 'weights-missing', 'not-installed', 'loaded'],
+    members: Object.keys(ENGINE_HEALTH_STATES),
     read: () => propertyEnum('EngineStatus', 'state'),
   },
   VoiceEngineId: {
     source: 'server/src/tts/voice-engine-registry.ts',
-    members: ['kokoro', 'qwen', 'coqui'],
+    members: Object.keys(VOICE_ENGINE_IDS),
     read: () => propertyEnum('EngineRecommendation', 'engine'),
   },
   VenvBootstrapState: {
     source: 'server/src/tts/venv-bootstrap.ts',
-    members: ['present', 'absent'],
+    members: Object.keys(VENV_BOOTSTRAP_STATES),
     read: () => propertyEnum('VenvDetectResult', 'state'),
   },
   VenvBootstrapJobStatus: {
     source: 'server/src/tts/venv-bootstrap.ts',
-    members: ['detecting', 'bootstrapping', 'installed', 'error'],
+    members: Object.keys(VENV_BOOTSTRAP_JOB_STATUSES),
     read: () => propertyEnum('VenvBootstrapJob', 'status'),
   },
 };
@@ -126,16 +171,24 @@ describe('openapi.yaml describes the /api/setup/* surface accurately', () => {
   it.each(Object.entries(SERVER_UNIONS))(
     '%s matches its TypeScript union',
     (name, { source, members, read }) => {
-      expect(read(), `openapi.yaml's ${name} drifted from ${source}`).toEqual(
+      expect(
+        read(),
+        `openapi.yaml's ${name} disagrees with this test's exhaustive map. ` +
+          `The authority is ${source}; if you just changed that union, typecheck ` +
+          `will have failed here too — update openapi.yaml to match.`,
+      ).toEqual(
         [...members].sort(),
       );
     },
   );
 
   it('every /api/setup/* route the server mounts is described', () => {
-    // Guards against a NEW endpoint shipping undescribed — the failure mode
-    // that created this issue in the first place. Mounted in server/src/app.ts
-    // via setupReadinessRouter, modelsStatusRouter, venvBootstrapRouter.
+    /* NOTE the limit of this one: the expected list is a literal, NOT derived
+       from the routers, so it catches a path being REMOVED from openapi.yaml
+       but not a brand-new route being mounted without a description. Deriving
+       it from server/src/app.ts's mounts is the honest fix; recorded as a
+       known limitation in plan 270 rather than overclaimed here.
+       Mounted via setupReadinessRouter, modelsStatusRouter, venvBootstrapRouter. */
     expect(describedSetupPaths().sort()).toEqual([
       '/api/setup/complete',
       '/api/setup/models-status',
