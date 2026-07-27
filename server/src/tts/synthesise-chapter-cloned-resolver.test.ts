@@ -25,8 +25,18 @@ import { UnresolvableClonedVoiceError, type ResolveChapterDeps } from './clone-v
 import type { VoiceLibraryEntry } from '../workspace/voice-library.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
+import {
+  setLastKnownCoquiInstallState,
+  _resetUserSettingsCache,
+} from '../workspace/user-settings.js';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  // fs-38 Wave 3c, Task 20 — several cases below flip the module-level coqui
+  // install-state singleton (Task 19's store) so `engineUnavailableFor('coqui')`
+  // reads 'ready'; reset it so that never leaks into a later test/file.
+  _resetUserSettingsCache();
+});
 
 function makeProvider(): TtsProvider & { calls: SynthesizeInput[] } {
   const calls: SynthesizeInput[] = [];
@@ -278,5 +288,374 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
     expect(provider.calls).toHaveLength(0);
     expect(readEntry).toHaveBeenCalledWith('lib-narrator-clone');
     expect(deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+});
+
+/* fs-38 Wave 3c, Task 20 [ADV-C1] — the load-bearing generalisation: the
+   pre-pass filter above (`clonedVoiceRequests` in synthesise-chapter.ts) was,
+   until this task, a literal `engine: 'qwen'` — every coqui code path this
+   whole wave built (Tasks 7-19) was capable but UNREACHABLE from
+   `synthesiseChapter`. This suite proves the coqui arm is now live: a healthy
+   coqui clone validates and renders; a coqui-routed clone with no coqui slot
+   fails loud (never a stock catalogue voice); an all-non-cloned chapter never
+   touches the resolver at all; and — the brief's explicit ask — one test per
+   Phase-0 upstream mutator (Tasks 3/4/5/6) proving a clone marker those tasks
+   preserve actually reaches (and is correctly classified by) this pre-pass. */
+describe('synthesiseChapter — cloned-voice resolver pre-pass, coqui generalisation (fs-38 Wave 3c Task 20)', () => {
+  it('a cloned coqui slot is validated by the pre-pass and renders normally (healthy, no derive)', async () => {
+    setLastKnownCoquiInstallState('ready'); // Task 19 signal — coqui usable this run
+    const provider = makeProvider();
+    const coquiCloned: CastCharacter[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        gender: 'female',
+        overrideTtsVoices: {
+          coqui: { name: 'Wren (unused)', libraryUuid: 'lib-coqui-1', provenance: 'cloned' },
+        },
+      },
+    ];
+    const entry = baseEntry({ voiceUuid: 'lib-coqui-1' });
+    const readEntry = vi.fn(async (uuid: string) => (uuid === 'lib-coqui-1' ? entry : null));
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'wren')],
+      cast: coquiCloned,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      cloneResolverDepsOverride: { readEntry, ptExists: async () => true },
+    });
+
+    // Placebo-proof: the resolver DID look up the coqui uuid (the union
+    // filter reached it), the voice resolved to the storage key (never the
+    // display `name`, never a catalog pick — pickVoiceForEngine's coqui
+    // branch), and the chapter actually rendered.
+    expect(readEntry).toHaveBeenCalledWith('lib-coqui-1');
+    expect(provider.calls.length).toBeGreaterThan(0);
+    expect(provider.calls[0].voiceName).toBe('xtts-lib-coqui-1');
+    expect(result.segments.length).toBeGreaterThan(0);
+  });
+
+  it('Property-1 hole (Task 16 review) — a cloned coqui slot with a malformed libraryUuid hard-fails loud, never falls through to a stock catalogue voice', async () => {
+    // Task 16's pinning test (voice-mapping.test.ts) proves pickVoiceForEngine
+    // itself — a pure, synchronous function with no way to check whether an
+    // artifact exists — still falls through to the human-readable `name` for
+    // a malformed libraryUuid; that is unchanged and by design. What Task 20
+    // closes is that `synthesiseChapter`'s pre-pass now hard-fails the WHOLE
+    // chapter BEFORE pickVoiceForEngine('coqui', ...) is ever reached for
+    // such a character in production: `libraryUuid` is extracted here via
+    // `libraryVoiceForEngine` (the same RESOLUTION predicate pickVoiceForEngine
+    // gates on), so a malformed uuid resolves to `undefined` and
+    // `resolveClonedVoicesForChapter`'s existing `!libraryUuid` guard reports
+    // 'misconfigured' — never silently rendering the catalogue pick.
+    //
+    // The third case (a truthy but NON-STRING libraryUuid) is the one that
+    // actually distinguishes this fix from the pre-existing `!libraryUuid`
+    // check alone: `''`/missing are already falsy and would hard-fail even
+    // via a raw `.libraryUuid` read; a truthy non-string (corrupted
+    // cast.json data — the type system declares `libraryUuid?: string`, but
+    // nothing enforces that on disk) is NOT falsy, so a raw read would sail
+    // straight through to `readEntry(<garbage>)`. Only routing extraction
+    // through `libraryVoiceForEngine`'s `typeof libraryUuid !== 'string'`
+    // check catches it.
+    for (const malformed of [
+      { name: 'Real Person Clone', libraryUuid: '', provenance: 'cloned' as const }, // empty
+      { name: 'Real Person Clone', provenance: 'cloned' as const }, // missing
+      {
+        name: 'Real Person Clone',
+        libraryUuid: 12345 as unknown as string, // truthy, non-string (data corruption)
+        provenance: 'cloned' as const,
+      },
+    ]) {
+      const provider = makeProvider();
+      const cast: CastCharacter[] = [
+        { id: 'wren', name: 'Wren', overrideTtsVoices: { coqui: malformed } },
+      ];
+      const readEntry = vi.fn();
+
+      let thrown: UnresolvableClonedVoiceError | undefined;
+      try {
+        await synthesiseChapter({
+          sentences: [sentence(1, 'wren')],
+          cast,
+          provider,
+          modelKey: 'coqui-xtts-v2',
+          engine: 'coqui',
+          cloneResolverDepsOverride: { readEntry: readEntry as unknown as ResolveChapterDeps['readEntry'] },
+        });
+      } catch (e) {
+        thrown = e as UnresolvableClonedVoiceError;
+      }
+
+      expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
+      expect(thrown?.broken).toEqual([{ name: 'Wren', reason: 'misconfigured' }]);
+      // Never even reaches the voice-library lookup, and never a stock voice.
+      expect(readEntry).not.toHaveBeenCalled();
+      expect(provider.calls).toHaveLength(0);
+    }
+  });
+
+  it('a coqui-routed clone with no coqui slot fails loud as wrong-engine — never a catalog voice', async () => {
+    // 'wren' is cloned on QWEN only, but THIS run's book default is 'coqui'
+    // (no per-character ttsEngine override, so she rides it). Before Task 20
+    // this character never entered the pre-pass at all (the old filter only
+    // recognised a qwen-cloned+qwen-routed slot); now the union filter picks
+    // her up, resolves to her qwen entry (for the revoked check), and must
+    // still hard-fail — a coqui-routed render must NEVER fall through
+    // pickVoiceForEngine('coqui', ...) to a stock catalogue pick just because
+    // her clone lives on the other engine.
+    const provider = makeProvider();
+    const cast: CastCharacter[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        overrideTtsVoices: {
+          qwen: { name: 'Wren (unused)', libraryUuid: 'lib-clone', provenance: 'cloned' },
+        },
+      },
+    ];
+    const readEntry = vi.fn(async (uuid: string) => (uuid === 'lib-clone' ? baseEntry() : null));
+    const deriveEngineArtifact = vi.fn();
+
+    let thrown: UnresolvableClonedVoiceError | undefined;
+    try {
+      await synthesiseChapter({
+        sentences: [sentence(1, 'wren')],
+        cast,
+        provider,
+        modelKey: 'coqui-xtts-v2',
+        engine: 'coqui',
+        cloneResolverDepsOverride: {
+          readEntry,
+          deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
+        },
+      });
+    } catch (e) {
+      thrown = e as UnresolvableClonedVoiceError;
+    }
+
+    expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
+    expect(thrown?.broken).toEqual([{ name: 'Wren', reason: 'wrong-engine' }]);
+    expect(provider.calls).toHaveLength(0); // never a catalog voice
+    expect(deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+
+  it('a chapter with no clones at all runs the resolver pre-pass zero times', async () => {
+    const provider = makeProvider();
+    const cast: CastCharacter[] = [
+      { id: 'wren', name: 'Wren', gender: 'female' },
+      { id: 'other', name: 'Other', gender: 'male' },
+    ];
+    const readEntry = vi.fn(async () => {
+      throw new Error('resolver must not run when nothing in the cast is cloned');
+    });
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'wren'), sentence(2, 'other')],
+      cast,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      cloneResolverDepsOverride: { readEntry: readEntry as unknown as ResolveChapterDeps['readEntry'] },
+    });
+
+    expect(readEntry).not.toHaveBeenCalled();
+    expect(provider.calls.length).toBeGreaterThan(0);
+    expect(result.segments.length).toBeGreaterThan(0);
+  });
+
+  /* --- one test per Phase-0 upstream mutator (Tasks 3/4/5/6) ------------
+     Each proves TWO things in one test: (1) the real, unmodified mutator
+     function this branch shipped earlier in the wave genuinely preserves a
+     clone marker in the scenario its own fix protects (calling the actual
+     exported function, not a re-implementation of its guard), and (2) the
+     SURVIVING character then reaches and is correctly classified by THIS
+     task's (now coqui-capable) pre-pass — the specific continuity Task 20
+     closes, since before it a preserved coqui marker still had nowhere to
+     go. */
+
+  it('Task 3 (verify-designed-voice-language.clearMismatchedDesignedVoices) — a qwen-cloned marker survives the language-clear sweep and still validates in the pre-pass', async () => {
+    const { clearMismatchedDesignedVoices } = await import('./verify-designed-voice-language.js');
+    const cast: CastCharacter[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        overrideTtsVoices: {
+          qwen: { name: 'Wren (unused)', libraryUuid: 'lib-qwen-t3', provenance: 'cloned' },
+        },
+      },
+    ];
+
+    // Task 3's own bug: pre-fix, this deleted `overrideTtsVoices.qwen` on any
+    // language mismatch because it resolved the wrong manifest path for a
+    // cloned voice. Real call, real mutation-in-place.
+    const cleared = await clearMismatchedDesignedVoices(cast, 'russian', 'ru');
+    expect(cleared).toEqual([]);
+    expect(cast[0].overrideTtsVoices?.qwen).toEqual({
+      name: 'Wren (unused)',
+      libraryUuid: 'lib-qwen-t3',
+      provenance: 'cloned',
+    });
+
+    const provider = makeProvider();
+    const entry = baseEntry({ voiceUuid: 'lib-qwen-t3' });
+    const readEntry = vi.fn(async (uuid: string) => (uuid === 'lib-qwen-t3' ? entry : null));
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'wren')],
+      cast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      cloneResolverDepsOverride: { readEntry, ptExists: async () => true },
+    });
+    expect(readEntry).toHaveBeenCalledWith('lib-qwen-t3');
+    expect(provider.calls.length).toBeGreaterThan(0);
+    expect(provider.calls[0].voiceName).toBe('qwen-lib-qwen-t3');
+    expect(result.segments.length).toBeGreaterThan(0);
+  });
+
+  it('Task 4 (voice-override-linked guard predicates) — a coqui-cloned character blocks the rebaseline write, and the untouched marker still validates in the pre-pass', async () => {
+    const { characterHasClonedSlot, hasClonedProvenance } = await import('./clone-engines.js');
+    const c: CastCharacter = {
+      id: 'wren',
+      name: 'Wren',
+      overrideTtsVoices: {
+        coqui: { name: 'Wren (unused)', libraryUuid: 'lib-coqui-t4', provenance: 'cloned' },
+      },
+    };
+
+    // The EXACT predicates + call shape voice-override-linked.ts's applyToBook
+    // uses (`:207-208`): `override === null ? characterHasClonedSlot(c) :
+    // hasClonedProvenance(c, override.engine)`. Both branches must refuse
+    // BEFORE the route touches disk, which is why the character below is
+    // still byte-identical — there is nothing to "restore".
+    expect(characterHasClonedSlot(c)).toBe(true); // CLEAR path (override === null) refuses
+    expect(hasClonedProvenance(c, 'coqui')).toBe(true); // SET path (override.engine === 'coqui') refuses
+
+    setLastKnownCoquiInstallState('ready');
+    const provider = makeProvider();
+    const entry = baseEntry({ voiceUuid: 'lib-coqui-t4' });
+    const readEntry = vi.fn(async (uuid: string) => (uuid === 'lib-coqui-t4' ? entry : null));
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'wren')],
+      cast: [c],
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      cloneResolverDepsOverride: { readEntry, ptExists: async () => true },
+    });
+    expect(readEntry).toHaveBeenCalledWith('lib-coqui-t4');
+    expect(provider.calls.length).toBeGreaterThan(0);
+    expect(provider.calls[0].voiceName).toBe('xtts-lib-coqui-t4');
+    expect(result.segments.length).toBeGreaterThan(0);
+  });
+
+  it('Task 5 (hydrate-reused-voice.hydrateCharacterVoice) — a coqui-cloned reused character is not rerouted onto the source’s qwen slot, and still validates in the pre-pass', async () => {
+    const { hydrateCharacterVoice } = await import('./hydrate-reused-voice.js');
+    const character = {
+      id: 'wren',
+      name: 'Wren',
+      matchedFrom: { bookId: 'book-a', characterId: 'wren-a' },
+      overrideTtsVoices: {
+        coqui: { name: 'Wren (unused)', libraryUuid: 'lib-coqui-t5', provenance: 'cloned' as const },
+      },
+    };
+    const load = vi.fn(async (bookId: string) =>
+      bookId === 'book-a'
+        ? [
+            {
+              id: 'wren-a',
+              ttsEngine: 'qwen' as const,
+              overrideTtsVoices: { qwen: { name: 'qwen-source-designed-voice' } },
+            },
+          ]
+        : null,
+    );
+
+    // Real call: resolveReusedVoiceFields's characterHasClonedSlot guard must
+    // return the character UNCHANGED — never inheriting/defaulting the
+    // source's qwen engine or slot onto a character that already owns a
+    // coqui clone (that would launder a foreign designed voice onto a real
+    // person's likeness).
+    const hydrated = await hydrateCharacterVoice(character, load);
+    expect(hydrated.ttsEngine).toBeUndefined();
+    expect(hydrated.overrideTtsVoices?.qwen).toBeUndefined();
+    expect(hydrated.overrideTtsVoices?.coqui).toEqual({
+      name: 'Wren (unused)',
+      libraryUuid: 'lib-coqui-t5',
+      provenance: 'cloned',
+    });
+
+    setLastKnownCoquiInstallState('ready');
+    const provider = makeProvider();
+    const entry = baseEntry({ voiceUuid: 'lib-coqui-t5' });
+    const readEntry = vi.fn(async (uuid: string) => (uuid === 'lib-coqui-t5' ? entry : null));
+    const cast: CastCharacter[] = [
+      { id: 'wren', name: 'Wren', overrideTtsVoices: hydrated.overrideTtsVoices },
+    ];
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'wren')],
+      cast,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      cloneResolverDepsOverride: { readEntry, ptExists: async () => true },
+    });
+    expect(readEntry).toHaveBeenCalledWith('lib-coqui-t5');
+    expect(provider.calls.length).toBeGreaterThan(0);
+    expect(provider.calls[0].voiceName).toBe('xtts-lib-coqui-t5');
+    expect(result.segments.length).toBeGreaterThan(0);
+  });
+
+  it('Task 6 (clone-engines.resolveClonedRetargetEngine) — a coqui-cloned character is RETARGETED (not skipped) off a non-owning book default, and renders via her own clone', async () => {
+    const { resolveClonedRetargetEngine } = await import('./clone-engines.js');
+    const c: CastCharacter = {
+      id: 'wren',
+      name: 'Wren',
+      overrideTtsVoices: {
+        coqui: { name: 'Wren (unused)', libraryUuid: 'lib-coqui-t6', provenance: 'cloned' },
+      },
+    };
+
+    // Mirrors the force-loop's own call shape (generation.ts/chapter-splice.ts/
+    // chapter-qa-repair.ts): the book's request-default engine is 'kokoro'
+    // (fs-2's non-English enforcement runs regardless of what the account
+    // default happens to be), and 'coqui' is eligible for this book's
+    // language. Task 6's fix: SET ttsEngine to the eligible clone-capable
+    // engine that actually carries the clone — never skip (which would leave
+    // ttsEngine unset and strand her on the request default).
+    const retarget = resolveClonedRetargetEngine(c, ['qwen', 'coqui'], 'kokoro');
+    expect(retarget).toBe('coqui');
+    c.ttsEngine = retarget ?? 'qwen'; // the exact assignment the three mutators perform
+
+    setLastKnownCoquiInstallState('ready');
+    const kokoroProvider = makeProvider();
+    const coquiProvider = makeProvider();
+    const resolveForEngine = (e: string) =>
+      e === 'coqui'
+        ? { provider: coquiProvider, modelKey: 'coqui-xtts-v2' as const }
+        : { provider: kokoroProvider, modelKey: 'kokoro-v1' as const };
+    const entry = baseEntry({ voiceUuid: 'lib-coqui-t6' });
+    const readEntry = vi.fn(async (uuid: string) => (uuid === 'lib-coqui-t6' ? entry : null));
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'wren')],
+      cast: [c],
+      provider: kokoroProvider,
+      modelKey: 'kokoro-v1',
+      engine: 'kokoro',
+      resolveForEngine,
+      cloneResolverDepsOverride: { readEntry, ptExists: async () => true },
+    });
+
+    // Not wrong-engine: her own ttsEngine ('coqui', from the retarget) is
+    // the engine her clone actually lives on, so wrongEngine is false and
+    // she renders on her OWN provider, never the book-default Kokoro one.
+    expect(readEntry).toHaveBeenCalledWith('lib-coqui-t6');
+    expect(coquiProvider.calls.length).toBeGreaterThan(0);
+    expect(coquiProvider.calls[0].voiceName).toBe('xtts-lib-coqui-t6');
+    expect(kokoroProvider.calls).toHaveLength(0);
+    expect(result.segments.length).toBeGreaterThan(0);
   });
 });

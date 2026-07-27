@@ -37,7 +37,7 @@ import { MIN_DURATION_SEC } from '../audio/render-integrity/constants.js';
 import { textHashForStale } from '../audio/segments-io.js';
 import { resamplePcm16 } from './resample-pcm16.js';
 import { withTtsRetry, isTransient } from './retry.js';
-import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { getResolvedSidecarUrl, getLastKnownCoquiInstallState } from '../workspace/user-settings.js';
 import {
   UnresolvableClonedVoiceError,
   resolveClonedVoicesForChapter,
@@ -56,7 +56,15 @@ import { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
 import { deriveEngineArtifact } from './derive-engine-artifact.js';
 import { currentQwenBaseModel } from './model-paths.js';
 import { getLastKnownCoquiVersion } from './coqui-version-state.js';
-import { manifestSlotFor, type CloneEngine } from './clone-engines.js';
+import {
+  manifestSlotFor,
+  type CloneEngine,
+  CLONE_ENGINE_LIST,
+  isCloneEngine,
+  characterHasClonedSlot,
+  hasClonedProvenance,
+  libraryVoiceForEngine,
+} from './clone-engines.js';
 import { decodeAudioToPcm } from './mp3.js';
 import {
   qwenVoicePtPath,
@@ -1331,23 +1339,72 @@ export async function synthesiseChapter(
      cloned-but-stale narrator voice render past the gate untouched. */
   const rendersNarrator = Boolean(titleText) || groups.some((g) => !castById.has(g.characterId));
   if (rendersNarrator) inChapterCharacterIds.add(narratorCharacterId);
+  /* fs-38 Wave 3c, Task 20 [ADV-C1] — per-engine "is this clone-capable
+     engine unavailable this run" signal, generalising the qwen-only
+     `qwenUnavailable` opt (still the source of truth for qwen — it's the
+     caller's own resolved value, computed from more run context than a bare
+     install-state read, see routes/generation.ts) to coqui via Task 19's
+     per-engine install-state store. Coqui carries no caller-supplied
+     run-level opt — nothing pre-3c ever needed one — so its signal reads
+     straight off `getLastKnownCoquiInstallState()`: 'ready'/'loaded' means
+     usable, everything else (including the cold-boot 'not-installed'
+     default) reads unavailable, mirroring `qwenUnavailable`'s own
+     not-ready-or-loaded-means-unavailable shape (routes/generation.ts). */
+  const engineUnavailableFor = (e: CloneEngine): boolean => {
+    if (e === 'qwen') return qwenUnavailable;
+    const state = getLastKnownCoquiInstallState();
+    return state !== 'ready' && state !== 'loaded';
+  };
+
+  /* fs-38 Wave 3c, Task 20 [ADV-C1] — which clone-capable engine "owns" this
+     character's cloned voice, for building the ONE resolver request per
+     character the brief calls for. Prefers the character's ACTUAL routed
+     engine this run when IT carries the cloned slot (the common case — the
+     character renders through its own clone, `wrongEngine` false). Falls
+     back to whichever clone-capable engine (`CLONE_ENGINE_LIST` order —
+     qwen first, the same tie-break `resolveClonedRetargetEngine` uses) DOES
+     carry `provenance: 'cloned'` when the routed engine doesn't — that
+     fallback is what makes `wrongEngine` diagnosable at all (Task 6b): a
+     character cloned on qwen but routed to coqui/kokoro/etc. this run must
+     still resolve to its qwen library entry (for the revoked check) even
+     though this run's render will never touch qwen. */
+  const clonedEngineFor = (c: CastCharacter, routedEngine: TtsEngine): CloneEngine => {
+    if (isCloneEngine(routedEngine) && hasClonedProvenance(c, routedEngine)) return routedEngine;
+    return CLONE_ENGINE_LIST.find((e) => hasClonedProvenance(c, e)) ?? 'qwen';
+  };
+
+  /* fs-38 Wave 3c, Task 20 [ADV-C1] — the load-bearing filter, generalised
+     from "the routed engine's slot is cloned" to a UNION over every
+     clone-capable slot (`characterHasClonedSlot`, the FAIL-SAFE whole-
+     character test from clone-engines.ts) — a character cloned on Coqui
+     alone now enters this pre-pass too, not just a qwen-cloned one. */
   const clonedVoiceRequests = cast
-    .filter(
-      (c) => inChapterCharacterIds.has(c.id) && c.overrideTtsVoices?.qwen?.provenance === 'cloned',
-    )
+    .filter((c) => inChapterCharacterIds.has(c.id) && characterHasClonedSlot(c))
     .map((c) => {
       const routedEngine = routeFor(c).engine;
+      const engine = clonedEngineFor(c, routedEngine);
       return {
         characterName: c.name ?? c.id,
-        libraryUuid: c.overrideTtsVoices?.qwen?.libraryUuid,
-        // fs-38 Wave 3c, Task 18 — this filter/map is still qwen-only (it
-        // reads `overrideTtsVoices.qwen` above); the resolver itself is now
-        // engine-parametric, but generalising this call site to the union
-        // filter over every clone-capable slot is Task 20's job, not this
-        // one's — see clone-engines.ts's characterHasClonedSlot.
-        engine: 'qwen' as CloneEngine,
-        wrongEngine: routedEngine !== 'qwen',
-        engineUnavailable: qwenUnavailable,
+        /* fs-38 Wave 3c, Task 20 [ADV-C1] — Property-1 hole (Task 16 review):
+           extracted through `libraryVoiceForEngine`, the SAME RESOLUTION
+           predicate `pickVoiceForEngine` (voice-mapping.ts) gates the actual
+           render on — not a raw `.libraryUuid` property read. A
+           `provenance: 'cloned'` slot with an empty/missing/non-string
+           `libraryUuid` therefore resolves to `undefined` HERE exactly as it
+           would for the renderer, which `resolveClonedVoicesForChapter`'s
+           existing `if (!libraryUuid)` guard already turns into a hard
+           `misconfigured` failure — never a silent fall-through to a stock
+           catalogue voice (see clone-voice-resolver.ts's `libraryUuid`
+           handling, unchanged by this task). There is today no coqui
+           analogue of the qwen-only `cloned` exemption guard in
+           `applyQwenFallback` below; routing `libraryUuid` through this
+           validated RESOLUTION test (rather than a raw slot read) is what
+           makes this hard-fail hold for coqui too, without needing new code
+           in clone-voice-resolver.ts. */
+        libraryUuid: libraryVoiceForEngine(c, engine)?.libraryUuid,
+        engine,
+        wrongEngine: routedEngine !== engine,
+        engineUnavailable: engineUnavailableFor(engine),
       };
     });
   if (clonedVoiceRequests.length > 0) {

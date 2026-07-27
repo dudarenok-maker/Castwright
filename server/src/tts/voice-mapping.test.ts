@@ -415,24 +415,32 @@ describe('fs-38 Wave 3c Task 16 [ADV-H3] — pickVoiceForEngine resolves a libra
     expect(picked).toBe('Legacy Voice');
   });
 
-  /* fix round 1, I-1 — KNOWN GAP, pinned rather than fixed here.
+  /* fix round 1, I-1 — pinned here, closed one layer up (Task 20).
      libraryVoiceForEngine requires a non-empty-string libraryUuid (the
      coordinator's ruling: a RESOLUTION helper must validate what it
      returns). So a slot with provenance:'cloned' but a malformed
      libraryUuid ('' or missing) makes libraryVoiceForEngine return
-     undefined, and pickVoiceForEngine falls through to the generic
-     slotName lookup — resolving to the human-readable NAME, not the
-     clone. That is the exact class of bug this wave's Phase 0 fixed seven
-     times, and it is NOT fixed by this test or by this task: this
-     function is a pure, synchronous resolver with no way to know whether
-     an artifact actually exists on disk, so it cannot hard-fail here.
+     undefined, and pickVoiceForEngine — a PURE, synchronous resolver with
+     no way to know whether an artifact actually exists on disk — falls
+     through to the generic slotName lookup, resolving to the
+     human-readable NAME. That is unchanged, and is not expected to
+     change: this function cannot hard-fail on its own.
 
-     The hard-fail belongs to the Task 20/20a pre-pass. Its guard is:
-       hasClonedProvenance(c, 'coqui') && !libraryVoiceForEngine(c, 'coqui')
-     — true exactly when a slot CLAIMS to be cloned but can't actually be
-     resolved. There is today no coqui analogue of the qwen `cloned` guard
-     in synthesise-chapter.ts; Task 20/20a owns adding one for coqui too.
-     The coordinator is carrying this requirement into Tasks 20/20a.
+     fs-38 Wave 3c, Task 20 closed the hole ONE LAYER UP instead:
+     `synthesiseChapter`'s pre-pass (synthesise-chapter.ts) now extracts
+     each cloned-provenance request's `libraryUuid` via
+     `libraryVoiceForEngine` too — the SAME RESOLUTION predicate this test
+     exercises — so a malformed uuid resolves to `undefined` there as well,
+     and `resolveClonedVoicesForChapter`'s existing `!libraryUuid` guard
+     reports the character 'misconfigured' and hard-fails the WHOLE chapter
+     BEFORE this function is ever reached for such a character in
+     production. See `synthesise-chapter-cloned-resolver.test.ts`'s
+     "Property-1 hole (Task 16 review)" case for the end-to-end hard-fail
+     proof. This test now documents (rather than exercises) a gap that is
+     unreachable in production — mirroring how
+     `synthesise-chapter-cloned-exemption.test.ts` treats the qwen
+     `applyQwenFallback` cloned-exemption branch after the pre-pass fully
+     subsumed it.
 
      Also pins a deliberate disagreement between the two RESOLUTION
      helpers: clonedSlotForEngine accepts `libraryUuid: ''` (it only
@@ -440,7 +448,7 @@ describe('fs-38 Wave 3c Task 16 [ADV-H3] — pickVoiceForEngine resolves a libra
      rejects it (requires non-empty). This test locks
      libraryVoiceForEngine's stricter contract — the one pickVoiceForEngine
      actually uses. */
-  it('[I-1 KNOWN GAP, hard-fail owed to Task 20/20a] a cloned coqui slot with a malformed libraryUuid falls through and resolves to the human-readable NAME today, not the clone', () => {
+  it('[I-1 — hard-fail now lives one layer up, in the Task 20 pre-pass] a cloned coqui slot with a malformed libraryUuid falls through and resolves to the human-readable NAME here, but never reaches synth in production', () => {
     const emptyUuid = pickVoiceForEngine('coqui', {
       id: 'char-brann',
       overrideTtsVoices: {
