@@ -1418,19 +1418,56 @@ class CoquiEngine(Engine):
         Used by POST /unload when the UI's Stop button fires (or when the
         Analysing screen's Load button auto-evicts the TTS model to make
         room for the analyzer LLM). Idempotent — safe to call when nothing
-        is loaded."""
-        if self._tts is None:
-            return
-        torch_module = self._torch
-        self._tts = None
-        self._torch = None
-        self._speakers = []
-        self._resolved_device = "cpu"
-        # Restore the env pref (#1730 gap 3): `_ensure_loaded` overwrote
-        # `self._device` with the resolved card, so a later flag-off reload must
-        # re-resolve from the ORIGINAL request (e.g. 'auto'), not the last card.
-        self._device = self._requested_device
-        self._use_half = False
+        is loaded.
+
+        Acquires `_synth_lock` before nulling — mirrors `QwenEngine.unload()`
+        and for the same reason (Task 8a, folded from Task 8's review):
+        `synthesize()`'s forward re-dereferences `self._tts` AFTER the
+        (possibly multi-second) `tts()` / `_infer_from_latents()` call
+        returns (e.g. to read `self._tts.synthesizer.output_sample_rate`),
+        all still inside its own `with self._synth_lock:` block. Without
+        this lock, a racing `/unload` could null `self._tts` mid-forward —
+        killing the request with an `AttributeError` AFTER the expensive GPU
+        work already ran — and would leave the in-flight thread holding the
+        old model past the null, so `gc.collect()` + `empty_cache()` below
+        can't reclaim its VRAM; the next idempotent `/load` (seeing
+        `self._tts is None`) would then allocate a SECOND copy. Taking
+        `_synth_lock` here makes `unload` wait for any in-flight forward to
+        finish and drop its own reference first — the forward's post-call
+        re-dereference needs no separate local-reference capture once this
+        holds. MUST NOT be called while already holding `_synth_lock` (it is
+        a non-reentrant threading.Lock) — only the /unload route calls this,
+        and it holds no lock.
+
+        Deliberately does NOT clear `_latents_cache` — contrast
+        `QwenEngine.unload()`, which DOES clear its analogous
+        `_prompt_cache`. The two caches are not analogous: Qwen's cached
+        clone prompts are GPU tensors that would otherwise survive
+        `empty_cache()` below (see that method's own docstring), while
+        every `_latents_cache` entry is loaded via `_load_voice_latents`
+        with `map_location='cpu'` — it never holds VRAM, so clearing it here
+        would free no GPU memory, only force the next cloned-voice request
+        to re-`torch.load` its `.pt` for no benefit. `unload` is a
+        VRAM-reclaim operation, not an erasure one: Property 2 ("erasure is
+        total") is owned by `POST /xtts/evict-voice` (`_bump_evict_epoch`),
+        which DOES pop this cache and is deliberately NOT gated on
+        `self._tts` being loaded (see that route's docstring) — a voice
+        revoked via evict-voice cannot render through a stale entry
+        surviving an `unload`, because revoke and unload are independent
+        paths and only evict-voice sits on the revoke path."""
+        with self._synth_lock:
+            if self._tts is None:
+                return
+            torch_module = self._torch
+            self._tts = None
+            self._torch = None
+            self._speakers = []
+            self._resolved_device = "cpu"
+            # Restore the env pref (#1730 gap 3): `_ensure_loaded` overwrote
+            # `self._device` with the resolved card, so a later flag-off reload must
+            # re-resolve from the ORIGINAL request (e.g. 'auto'), not the last card.
+            self._device = self._requested_device
+            self._use_half = False
         # Break the dropped model's reference cycles NOW (see
         # _reclaim_host_and_vram) — nn.Module graphs aren't refcount-freed, and
         # a lagging cyclic GC under load is what leaked host RAM (2026-05-30).
@@ -1466,11 +1503,19 @@ class CoquiEngine(Engine):
             self._evict_epoch[voice_id] = self._evict_epoch.get(voice_id, 0) + 1
             self._latents_cache.pop(voice_id, None)
 
-    def _load_voice_latents(self, voice_id: str) -> tuple[Any, Any]:
-        """Return (gpt_cond_latent, speaker_embedding) for a cloned XTTS
-        voice — an in-memory cache hit, or a `torch.load` of the persisted
-        `.pt` on a miss. Raises `VoiceNotDesignedError` if this voice was
-        never cloned (no `.pt` on disk).
+    def _load_voice_latents(self, voice_id: str) -> tuple[Any, Any, int]:
+        """Return (gpt_cond_latent, speaker_embedding, epoch) for a cloned
+        XTTS voice — an in-memory cache hit, or a `torch.load` of the
+        persisted `.pt` on a miss. Raises `VoiceNotDesignedError` if this
+        voice was never cloned (no `.pt` on disk).
+
+        `epoch` is `_evict_epoch[voice_id]` captured ATOMICALLY with the
+        cache read/install (same `_latents_lock` critical section) — Task
+        11a's caller re-checks it immediately before the GPU forward
+        (`synthesize`'s cloned-voice branch, right before
+        `_infer_from_latents`), and that re-check would itself race an
+        evict landing in the gap if it had to re-derive "the epoch this
+        load is valid as of" after the fact instead of receiving it here.
 
         Epoch-safe (`[AC-C7][ADV-M1]`): `purgeCloneArtifacts` is
         files-first / evict-last (delete the `.pt`, THEN best-effort POST
@@ -1492,8 +1537,8 @@ class CoquiEngine(Engine):
         release its cache lock across `torch.load`."""
         with self._latents_lock:
             cached = self._latents_cache.get(voice_id)
-        if cached is not None:
-            return cached
+            if cached is not None:
+                return cached[0], cached[1], self._evict_epoch.get(voice_id, 0)
 
         epoch_before = self._evict_epoch.get(voice_id, 0)
         pt_path, _json_path = self._voice_paths(voice_id)
@@ -1526,7 +1571,7 @@ class CoquiEngine(Engine):
                     f"Voice '{voice_id}' was revoked while its latents were loading."
                 )
             self._latents_cache[voice_id] = latents
-        return latents
+        return latents[0], latents[1], epoch_before
 
     def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
         self._ensure_loaded(model)
@@ -1583,13 +1628,32 @@ class CoquiEngine(Engine):
                     f"Voice '{voice}' cannot render in language '{effective_language}' — "
                     f"not supported by the loaded XTTS model (supported: {config.get('languages', [])})."
                 )
-            gpt_cond_latent, speaker_embedding = self._load_voice_latents(voice)
+            gpt_cond_latent, speaker_embedding, latents_epoch = self._load_voice_latents(voice)
             # `_infer_from_latents` must be called under `_synth_lock` (its own
             # docstring) — the shared helper Task 9 built so a cloned voice
             # renders identically whether reached via clone_voice's audition or
             # this cached-latents synth branch.
             with self._synth_lock:
                 assert self._tts is not None
+                # Task 11a — re-check the epoch here, immediately before the
+                # GPU forward: `_load_voice_latents` can return well before
+                # this lock is acquired (it releases `_latents_lock` across
+                # its own I/O), so an evict landing in that gap was
+                # otherwise never observed again — the forward would run
+                # anyway and `/xtts/evict-voice` reporting success would NOT
+                # mean rendering stopped (Property 2). This closes the
+                # window down to the (unavoidable, undetectable) gap between
+                # this check and the `_infer_from_latents` call immediately
+                # below it — it does NOT abort a forward already inside
+                # `tts_model.inference()` by the time an evict lands; an
+                # evict landing after this check passes still lets that
+                # in-flight GPU call finish and its audio be returned.
+                with self._latents_lock:
+                    if self._evict_epoch.get(voice, 0) != latents_epoch:
+                        raise VoiceNotDesignedError(
+                            f"Voice '{voice}' was revoked while a render was in "
+                            "flight — aborted before the GPU forward."
+                        )
                 audio, sample_rate = self._infer_from_latents(
                     gpt_cond_latent, speaker_embedding, text, effective_language
                 )
@@ -7964,7 +8028,17 @@ async def xtts_evict_voice(req: Request) -> Response:
     load state (`coqui._tts`): a voice can have warm latents cached from an
     earlier synth even after the model itself was later unloaded (e.g. the
     UI's Stop button), and revoke must still reach it. Idempotent: a miss is
-    a no-op `evicted: false`."""
+    a no-op `evicted: false`.
+
+    WHAT THIS RESPONSE DOES NOT GUARANTEE (Task 11a): this route deliberately
+    never takes `_synth_lock` — it must return immediately and can never
+    block or deadlock behind a multi-second forward — so `{"ok": true}` means
+    "the cache entry and epoch are updated", NOT "any in-flight render for
+    this voice has stopped". `synthesize()` re-checks the epoch immediately
+    before its GPU forward and aborts on a mismatch, which closes the window
+    to (at most) a single forward already past that check — a render that
+    had already entered `tts_model.inference()` before this call landed
+    still completes and its audio is still returned to that caller."""
     try:
         body = await _read_json_body(req)
     except Exception:

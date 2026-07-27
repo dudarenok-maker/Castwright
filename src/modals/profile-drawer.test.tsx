@@ -905,11 +905,135 @@ describe('ProfileDrawer model-voice override picker', () => {
     });
 
     /* The optimistic clear (overrideTtsVoices: null) must not survive as
-       the settled redux state — the slot is restored, not left cleared. */
+       the settled redux state — the slot is restored, not left cleared.
+       Assert the FULL restored slot, not just the name: a fixture that only
+       checks `.name` can't tell a verbatim restore from a revert that
+       rebuilds `{name}` from scratch — which is exactly what silently drops
+       `libraryUuid`/`provenance` and de-marks a consented clone. */
     const brannState = store
       .getState()
       .voices.voices.find((v: Voice) => v.id === 'v_brann');
-    expect(brannState?.overrideTtsVoices?.coqui?.name).toBe('Asya Anara');
+    expect(brannState?.overrideTtsVoices?.coqui).toEqual({
+      name: 'Asya Anara',
+      libraryUuid: 'lib-clone-1',
+      provenance: 'cloned',
+    });
+  });
+
+  it('locks the coqui tab and refuses further picks when this character\'s coqui slot is a consented clone (fs-38 Wave 3c Task 26 fix round 1 [F1])', async () => {
+    /* This picker writes the VOICES slice via PUT /api/voices/:id/override;
+       the "My voices" panel writes the CAST slice via setOverrideVoiceName.
+       Neither invalidates the other — an unguarded pick here would clobber
+       a cloned coqui slot server-side. The lock reads off the CAST-slice
+       `character` prop (what "My voices" actually writes), not the `voice`
+       prop this picker otherwise reads from. */
+    setVoiceOverride.mockClear();
+    const clonedCharacter: Character = {
+      ...brann,
+      ttsEngine: 'coqui',
+      overrideTtsVoices: {
+        coqui: { name: 'Asya Anara', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+      },
+    };
+    const clonedVoice: Voice = {
+      ...brannVoice,
+      overrideTtsVoices: {
+        coqui: { name: 'Asya Anara', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+      },
+    };
+    renderDrawer(clonedCharacter, {
+      voice: clonedVoice,
+      voices: [clonedVoice],
+      baseVoices: baseCatalog,
+    });
+
+    const trigger = await screen.findByRole('button', { name: /Model voice override/i });
+    expect(trigger).toBeDisabled();
+    expect(screen.getByTestId('coqui-clone-locked-note')).toBeInTheDocument();
+
+    /* Drive the click anyway (not just assert the attribute) — a disabled
+       native <button> doesn't fire its click handler even via fireEvent,
+       so this proves the popover never opens and the write path is
+       genuinely unreachable, not just visually greyed out. */
+    fireEvent.click(trigger);
+    expect(screen.queryByRole('option', { name: /Damien Black/i })).toBeNull();
+    await Promise.resolve();
+    expect(setVoiceOverride).not.toHaveBeenCalled();
+  });
+
+  it('does not lock the coqui tab when the coqui slot is a plain catalog pick (no provenance)', async () => {
+    /* Guards against the lock being over-broad: a character with an
+       ordinary (non-cloned) coqui override must keep the picker usable. */
+    renderDrawer(brann, {
+      voice: { ...brannVoice, overrideTtsVoices: { coqui: { name: 'Asya Anara' } } },
+      voices: [brannVoice],
+      baseVoices: baseCatalog,
+    });
+    const trigger = await screen.findByRole('button', { name: /Model voice override/i });
+    expect(trigger).not.toBeDisabled();
+    expect(screen.queryByTestId('coqui-clone-locked-note')).toBeNull();
+  });
+
+  it('force-closes an already-open popover when the lock flips on mid-session, so Auto cannot null the clone slot (fs-38 Wave 3c Task 26 fix round 2 [F1 residual])', async () => {
+    /* The gap the first F1 fix missed: picking "Auto" calls onChange(null),
+       which carries no engine info at all, so a guard keyed on
+       `next?.engine === 'coqui'` never fires for it — and `disabled` alone
+       doesn't close an ALREADY-open popover. Reproduces the exact sequence
+       the reviewer described: starts unlocked (popover openable), the
+       character's coqui slot flips to a consented clone WHILE the popover is
+       open (mirrors a cross-tab BroadcastChannel sync updating the cast
+       slice mid-session — layout.tsx re-selects `character` from
+       `s.cast.characters` and passes a fresh prop down), then Auto must be
+       unreachable. */
+    setVoiceOverride.mockClear();
+    const unlockedCharacter: Character = {
+      ...brann,
+      ttsEngine: 'coqui',
+      overrideTtsVoices: { coqui: { name: 'Asya Anara' } }, // no provenance yet — unlocked
+    };
+    const unlockedVoice: Voice = {
+      ...brannVoice,
+      overrideTtsVoices: { coqui: { name: 'Asya Anara' } },
+    };
+    const { store, rerender } = renderDrawer(unlockedCharacter, {
+      voice: unlockedVoice,
+      voices: [unlockedVoice],
+      baseVoices: baseCatalog,
+    });
+
+    const trigger = await screen.findByRole('button', { name: /Model voice override/i });
+    expect(trigger).not.toBeDisabled();
+    fireEvent.click(trigger);
+    /* Popover genuinely open — Auto is a reachable option right now. */
+    expect(screen.getByRole('option', { name: /Auto — currently Coqui/i })).toBeTruthy();
+
+    /* Flip the lock ON while the popover stays open — simulates the clone
+       landing via a source other than this drawer's own click handler. */
+    const lockedCharacter: Character = {
+      ...unlockedCharacter,
+      overrideTtsVoices: {
+        coqui: { name: 'Asya Anara', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+      },
+    };
+    rerender(
+      <Provider store={store}>
+        <ProfileDrawer
+          character={lockedCharacter}
+          voice={unlockedVoice}
+          onClose={() => {}}
+          onSave={() => {}}
+          onLock={() => {}}
+        />
+      </Provider>,
+    );
+
+    /* The popover force-closes — Auto is no longer in the DOM at all, not
+       merely unclickable. */
+    expect(screen.queryByRole('option', { name: /Auto — currently Coqui/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /Model voice override/i })).toBeDisabled();
+
+    await Promise.resolve();
+    expect(setVoiceOverride).not.toHaveBeenCalled();
   });
 
   it('shows a filled-slot indicator on the engine tab when that engine has an override', async () => {
@@ -1937,6 +2061,165 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
         name: 'Captain Halloran',
       }),
     );
+  });
+
+  /* fs-38 Wave 3c Task 26 — coqui is the OTHER clone-capable engine
+     (tts-voice-mapping.ts resolveTtsVoiceForCharacter's coqui branch).
+     "My voices" now surfaces there too, and useMyVoice must route the
+     optimistic write to the coqui slot instead of hardcoding qwen. */
+  it('lists "My voices" entries when Coqui is the effective engine', () => {
+    renderDrawer(
+      { ...baseChar, ttsEngine: 'coqui' },
+      { bookId: 'book-1', myVoices: myVoicesFixture },
+    );
+    expect(screen.getByTestId('profile-drawer-my-voice-lib1')).toHaveTextContent(
+      'Captain Halloran (library)',
+    );
+  });
+
+  it('filters out "imported" entries from the coqui My-voices list (fs-38 Wave 3c Task 26 fix round 1 [F2])', () => {
+    /* resolveTtsVoiceForCharacter's coqui branch only recognises provenance
+       'cloned' | 'designed' (tts-voice-mapping.ts); an 'imported' entry
+       assigned here would write a slot the resolver can't read, so the card
+       line + Play sample would silently show a stock catalog voice until
+       the next cast refetch. */
+    const importedEntry: VoiceLibraryEntry = {
+      voiceUuid: 'lib-imported-1',
+      name: 'Imported voice',
+      provenance: 'imported',
+      tags: [],
+      pinned: false,
+      engines: { xtts: { status: 'ready' } },
+      createdAt: '2026-07-01T09:00:00.000Z',
+      updatedAt: '2026-07-01T09:00:00.000Z',
+    };
+    renderDrawer(
+      { ...baseChar, ttsEngine: 'coqui' },
+      { bookId: 'book-1', myVoices: [...myVoicesFixture, importedEntry] },
+    );
+    /* The 'designed' fixture entry (lib1) is still offered — only the
+       provenance the resolver can't read is filtered. */
+    expect(screen.getByTestId('profile-drawer-my-voice-lib1')).toBeInTheDocument();
+    expect(screen.queryByTestId('profile-drawer-my-voice-lib-imported-1')).toBeNull();
+  });
+
+  it('does NOT filter "imported" entries for a qwen-routed character (the resolver never gates on provenance for qwen)', () => {
+    const importedEntry: VoiceLibraryEntry = {
+      voiceUuid: 'lib-imported-1',
+      name: 'Imported voice',
+      provenance: 'imported',
+      tags: [],
+      pinned: false,
+      engines: { qwen: { status: 'ready' } },
+      createdAt: '2026-07-01T09:00:00.000Z',
+      updatedAt: '2026-07-01T09:00:00.000Z',
+    };
+    renderDrawer(
+      { ...baseChar, ttsEngine: 'qwen' },
+      { bookId: 'book-1', myVoices: [importedEntry] },
+    );
+    expect(screen.getByTestId('profile-drawer-my-voice-lib-imported-1')).toBeInTheDocument();
+  });
+
+  it('clicking a "My voices" entry on a coqui-routed character writes overrideTtsVoices.coqui, not qwen', async () => {
+    /* The load-bearing case per the task: a QWEN-routed character can't
+       distinguish "always writes qwen" from "writes the routed engine" — the
+       assertion would pass either way. Only a coqui-routed fixture proves the
+       write actually follows the routed engine. */
+    assignLibraryVoice.mockResolvedValue({ updated: 1 });
+    fetchDesignedPersona.mockClear();
+    const clonedEntry: VoiceLibraryEntry = {
+      voiceUuid: 'lib-clone-1',
+      name: 'Halloran (cloned)',
+      provenance: 'cloned',
+      tags: [],
+      pinned: false,
+      engines: { xtts: { status: 'ready' } },
+      createdAt: '2026-07-01T09:00:00.000Z',
+      updatedAt: '2026-07-01T09:00:00.000Z',
+    };
+    const coquiChar: Character = { ...baseChar, ttsEngine: 'coqui' };
+    const { store } = renderDrawer(coquiChar, { bookId: 'book-1', myVoices: [clonedEntry] });
+    /* Mirror what a real cast hydrate provides — the optimistic write needs
+       a character in the cast slice to land on (renderDrawer's store starts
+       with an empty cast slice; the drawer itself reads `character` from
+       its own prop, not the store). */
+    store.dispatch(castActions.setCharacters([coquiChar]));
+
+    fireEvent.click(screen.getByTestId('profile-drawer-my-voice-lib-clone-1'));
+
+    await waitFor(() =>
+      expect(assignLibraryVoice).toHaveBeenCalledWith('lib-clone-1', {
+        bookId: 'book-1',
+        characterId: 'halloran',
+        modelKey: 'coqui-xtts-v2',
+      }),
+    );
+
+    const halloran = store.getState().cast.characters.find((c) => c.id === 'halloran');
+    expect(halloran?.overrideTtsVoices?.coqui).toEqual({
+      name: 'xtts-lib-clone-1',
+      libraryUuid: 'lib-clone-1',
+      provenance: 'cloned',
+    });
+    /* Proves the routing, not just that SOME slot got filled: a reducer that
+       (bug-for-bug) still hardwired qwen would leave this populated instead
+       of the coqui assertion above. */
+    expect(halloran?.overrideTtsVoices?.qwen).toBeUndefined();
+
+    /* [F3] Pins the routedEngine === 'qwen' guard on setDesignedVoiceId: an
+       xtts-prefixed designedVoiceId would leak into the plan-149 persona-fetch
+       effect (guarded only on `!designedVoiceId`, not on engine) and fire
+       fetchDesignedPersona for a coqui character. The guard is otherwise
+       unpinned — every other assertion in this describe block never observes
+       designedVoiceId at all. */
+    await Promise.resolve();
+    expect(fetchDesignedPersona).not.toHaveBeenCalled();
+  });
+
+  /* fs-38 Wave 3c, Task 29 [EX-15] — the mock layer now genuinely rejects an
+     assign (revoked/not-ready/wrong-engine 409s — see api.ts's
+     `_mockAssignGuardError`), so this is the first test able to observe
+     what useMyVoice does on a REAL rejection rather than the old
+     unconditional `{ updated: 1 }`. It surfaces the rejection instead of
+     optimistically showing success: no cast-slice write, and the inline
+     error renders. */
+  it('does not write the override and surfaces the error when assignLibraryVoice rejects', async () => {
+    assignLibraryVoice.mockRejectedValueOnce(
+      new Error('Cloned voice is not ready to assign yet.'),
+    );
+    const { store } = renderDrawer(
+      { ...baseChar, ttsEngine: 'qwen' },
+      { bookId: 'book-1', myVoices: myVoicesFixture },
+    );
+    store.dispatch(castActions.setCharacters([{ ...baseChar, ttsEngine: 'qwen' }]));
+
+    fireEvent.click(screen.getByTestId('profile-drawer-my-voice-lib1'));
+
+    expect(
+      await screen.findByTestId('profile-drawer-my-voices-error'),
+    ).toHaveTextContent('Cloned voice is not ready to assign yet.');
+
+    // No optimistic write — the character's override slot stays untouched.
+    const halloran = store.getState().cast.characters.find((c) => c.id === 'halloran');
+    expect(halloran?.overrideTtsVoices?.qwen).toBeUndefined();
+  });
+
+  it('does not show "Save to my voices" for a coqui-routed character, even with a stale designed-Qwen voiceId', () => {
+    /* Companion regression for widening the "My voices" panel to coqui:
+       "Save to my voices" promotes the character's currently-DESIGNED QWEN
+       voice specifically (promoteCharacterVoice), never whatever's in the
+       routed engine's slot. A character that was previously designed on
+       Qwen and then switched to coqui must not resurrect that button. */
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'coqui',
+        overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+      },
+      { bookId: 'book-1', myVoices: myVoicesFixture },
+    );
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
   });
 });
 

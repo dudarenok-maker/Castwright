@@ -84,7 +84,18 @@ export const MOCK_VOICE_LIBRARY_ENTRIES: VoiceLibraryEntry[] = [
       transcriptSource: 'whisper',
       captureMethod: 'record',
     },
-    engines: {},
+    /* fs-38 Wave 3c, Task 29 — a derived, assignable clone: `engines: {}`
+       (the pre-fix shape) is exactly what the real assign route's
+       not-derived-yet guard rejects, so an entry meant to demonstrate a
+       SUCCESSFUL assign has to actually be ready, not just well-formed.
+       The `xtts` slot alongside it exercises the deliberate lag: the real
+       route (as of this task) still only ever validates/writes the qwen
+       slot, so an assign that resolves to a non-Qwen engine still 409s
+       here even though this entry's xtts slot is ready too. */
+    engines: {
+      qwen: { status: 'ready', baseModel: 'qwen3-tts-0.6b-2026-05' },
+      xtts: { status: 'ready', coquiVersion: '0.27.2' },
+    },
     createdAt: '2026-07-20T00:00:00Z',
     updatedAt: '2026-07-20T00:00:00Z',
   },
@@ -113,7 +124,11 @@ export const MOCK_VOICE_LIBRARY_ENTRIES: VoiceLibraryEntry[] = [
       transcriptSource: 'whisper',
       captureMethod: 'record',
     },
-    engines: {},
+    // fs-38 Wave 3c, Task 29 — ready before revocation (realistic: consent
+    // is revoked on a voice that already derived), same as lib-cloned-demo
+    // above. The assign route's revoked-consent guard fires before its
+    // readiness guard regardless, so this stays a 409 either way.
+    engines: { qwen: { status: 'ready', baseModel: 'qwen3-tts-0.6b-2026-05' } },
     createdAt: '2026-07-15T00:00:00Z',
     updatedAt: '2026-07-22T00:00:00Z',
   },

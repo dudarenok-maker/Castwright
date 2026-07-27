@@ -56,6 +56,11 @@
   a voice now really does erase it: your original recording, and everything Castwright built
   from it, is gone for good — not just the visible entry. Castwright tells you exactly what
   you're about to lose and asks you to confirm before it happens.
+- **Cloned and designed voices now work on the second speech engine too, not just the first.**
+  Until now a cloned voice only worked reliably on one of Castwright's two speech engines —
+  cast it on a book that used the other one and you'd either hit a wall or, worse, quietly get
+  a stand-in voice instead. Both are covered now, with the same promise either way: it renders
+  as the real voice, or it tells you it can't — never a silent swap.
 - Voice previews now play in the engine you picked for that character, at the quality your book is set to render in — so the cast list matches the book you're about to make. The same voice now sounds the same wherever you play it: on a cast row, on its card in My voices, while you're designing it, and on both sides of a redesign comparison. (A character you've pinned to a higher quality than the rest of the book still previews at the book's quality.)
 - Auditioning a voice you just designed no longer re-records it. The take from the design was already sitting there; now it actually gets used, so the first play is instant.
 - The higher-quality 1.7B voice model is greyed out until you've actually downloaded it, instead of failing partway into a run.

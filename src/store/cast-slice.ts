@@ -1,7 +1,11 @@
 /* Cast slice — characters + their voice assignments. */
 
 import { createSelector, createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import type { Character, AnalyseResponse, VoiceMatchResponse } from '../lib/types';
+import type { Character, AnalyseResponse, TtsEngine, VoiceMatchResponse } from '../lib/types';
+
+/* A single engine's overrideTtsVoices slot, straight off the generated
+   schema (mirrors voices-slice.ts's OverrideSlot for the Voice-side map). */
+type OverrideVoiceSlot = NonNullable<Character['overrideTtsVoices']>[string];
 
 /* Union two alias lists (case-insensitive dedup, original casing, first-seen
    order). Mirrors the server's union (merge-analysis-cast.ts) so a manually-
@@ -134,6 +138,38 @@ export const castSlice = createSlice({
       const otv = (c.overrideTtsVoices ??= {});
       const qwen = (otv.qwen ??= { name: '' });
       qwen.name = voiceId;
+    },
+    /* fs-38 Wave 3c Task 26 — engine-parameterised sibling of
+       setQwenOverrideName. The "use a My-voices entry" assign flow (profile
+       drawer's useMyVoice) can target ANY clone-capable engine's slot, not
+       just qwen — setQwenOverrideName stays qwen-only because its OTHER
+       caller (the bulk-design SSE stream, cast-design-stream-middleware.ts)
+       only ever designs Qwen voices. Carries libraryUuid/provenance too: the
+       resolver's coqui branch (tts-voice-mapping.ts resolveTtsVoiceForCharacter)
+       only resolves a coqui slot to its clone storage key when BOTH are
+       present, so an optimistic write missing them would display a stock
+       catalog voice until the next cast refetch — the qwen resolver doesn't
+       need them today, but writing them uniformly keeps the mirror correct
+       for whichever engine actually needs them and matches what the server
+       persists. */
+    setOverrideVoiceName: (
+      s,
+      a: PayloadAction<{
+        characterId: string;
+        engine: TtsEngine;
+        name: string;
+        libraryUuid?: string;
+        provenance?: OverrideVoiceSlot['provenance'];
+      }>,
+    ) => {
+      const { characterId, engine, name, libraryUuid, provenance } = a.payload;
+      const c = s.characters.find((x) => x.id === characterId);
+      if (!c) return;
+      const otv = (c.overrideTtsVoices ??= {});
+      const slot = (otv[engine] ??= { name: '' });
+      slot.name = name;
+      if (libraryUuid !== undefined) slot.libraryUuid = libraryUuid;
+      if (provenance !== undefined) slot.provenance = provenance;
     },
     /* srv-43 — mirror a freshly-minted voiceUuid into redux so a "Play 12s"
        immediately after design resolves the uuid-keyed cache entry without

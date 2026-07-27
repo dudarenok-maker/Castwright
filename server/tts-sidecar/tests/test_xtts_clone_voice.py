@@ -1104,3 +1104,306 @@ def test_evict_voice_route_evicts_even_when_model_unloaded(monkeypatch, tmp_path
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "evicted": True}
     assert "xtts-evict-unloaded" not in eng._latents_cache
+
+
+# ── Task 8a — CoquiEngine.unload() races an in-flight forward ──────────────
+#
+# Folded in from Task 8's review (pre-existing defect, not introduced by
+# Task 8): `unload()` took no lock and nulled `self._tts` outright, while
+# `synthesize()`'s forward re-dereferences `self._tts` AFTER the possibly
+# multi-second `tts()` call returns (still inside its own `with
+# self._synth_lock:` block) — a racing /unload could null the model
+# mid-flight and kill the request with an AttributeError after the
+# expensive GPU work already ran. The fix mirrors QwenEngine.unload():
+# take `_synth_lock` before nulling, so unload waits for an in-flight
+# forward to finish and drop its own reference first.
+#
+# `test_evict_voice_route_evicts_even_when_model_unloaded` above already
+# pins the companion Defect-2 decision (unload() deliberately does NOT
+# clear `_latents_cache`; evict-voice does, even when unloaded) — no new
+# test is added for that here, this section only covers the race.
+
+
+def test_unload_blocks_until_inflight_forward_completes_and_no_attribute_error(
+    monkeypatch, tmp_path
+) -> None:
+    """The regression: force the forward to block INSIDE `tts()` — still
+    holding `_synth_lock` — and race a concurrent `unload()` in during that
+    window. Before the fix, `unload()` took no lock, so it could null
+    `self._tts` right then; the forward's post-`tts()` re-dereference
+    (`self._tts.synthesizer.output_sample_rate`) would raise `AttributeError`
+    on `None`. Deterministic via a `threading.Event` handshake (not sleeps):
+    the fake `tts()` doesn't return until this test explicitly releases it,
+    so `unload()` gets every opportunity to race in before the forward's
+    post-call dereference — the classic race-test placebo is timing that
+    never actually interleaves, which this handshake rules out."""
+    tts_entered = threading.Event()
+    proceed_with_tts = threading.Event()
+    events: list[str] = []
+    events_lock = threading.Lock()
+
+    class _BlockingFakeTTS(_FakeTTS):
+        def tts(self, text: str, speaker: str, language: str) -> list[float]:
+            with events_lock:
+                events.append("forward:enter")
+            tts_entered.set()
+            assert proceed_with_tts.wait(timeout=5), "test stalled waiting to release the forward"
+            with events_lock:
+                events.append("forward:tts-returns")
+            return [0.0, 0.0]
+
+    tts_model = _FakeXttsModel()
+    tts_model.speaker_manager = types.SimpleNamespace(name_to_id={"Claribel Dervla": 0})
+    tts_instance = _BlockingFakeTTS(
+        "tts_models/multilingual/multi-dataset/xtts_v2",
+        synthesizer=_FakeSynthesizer(tts_model=tts_model),
+    )
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path, tts_instance=tts_instance)
+    eng._ensure_loaded("xtts_v2")  # warm first, so both threads race on the FORWARD only
+
+    outcome: dict[str, Any] = {}
+
+    def _do_synth() -> None:
+        try:
+            outcome["result"] = eng.synthesize("xtts_v2", "Claribel Dervla", "hello there")
+        except Exception as exc:  # noqa: BLE001 — captured for the assertion below
+            outcome["error"] = exc
+
+    def _do_unload() -> None:
+        eng.unload()
+        with events_lock:
+            events.append("unload:done")
+
+    t_synth = threading.Thread(target=_do_synth)
+    t_synth.start()
+    assert tts_entered.wait(timeout=5), "the forward never entered tts()"
+
+    t_unload = threading.Thread(target=_do_unload)
+    t_unload.start()
+    time.sleep(0.1)  # give unload() every chance to race in while the forward blocks in tts()
+    assert eng._tts is not None, "unload() must not null the model while the forward still holds _synth_lock"
+
+    proceed_with_tts.set()
+    t_synth.join(timeout=5)
+    t_unload.join(timeout=5)
+
+    assert "error" not in outcome, f"the forward must not raise: {outcome.get('error')!r}"
+    assert outcome["result"].pcm  # the forward actually completed, not a placebo
+    assert events == ["forward:enter", "forward:tts-returns", "unload:done"], (
+        f"unload() must not interleave with the in-flight forward: {events}"
+    )
+    assert eng._tts is None, "unload() must still run to completion, just after the forward releases the lock"
+
+
+# ── Task 11a — evict landing after latents load but before the GPU forward ──
+#
+# Folded in from Task 11's review (reasoned from source, not empirically): an
+# already-latents-loaded `/synthesize` forward was never epoch-checked again
+# before the GPU forward, so a voice evicted in the window between
+# `_load_voice_latents` returning and `_infer_from_latents`'s
+# `tts_model.inference()` call would complete and return audio anyway —
+# `/xtts/evict-voice` reporting `evicted: True` did NOT mean "rendering
+# stopped" for a request already past the latents-load step. The fix
+# re-checks `_evict_epoch` immediately before the GPU forward (inside
+# `_synth_lock`, right before `_infer_from_latents`) and raises rather than
+# renders on a mismatch — `_load_voice_latents` now returns the epoch it
+# validated against, captured ATOMICALLY with the cache read/install so the
+# caller's re-check can't itself race an evict landing in the gap. This
+# closes the window down to the (unavoidable, undetectable) gap between that
+# re-check and the forward call itself — it does NOT abort a forward that is
+# already inside `tts_model.inference()` by the time the evict lands. See
+# the code comment at the re-check site and the `/xtts/evict-voice`
+# docstring for that same caveat stated for a caller of the route.
+#
+# Fix round 1 (review): the first test below only covered the cache-MISS
+# branch of `_load_voice_latents` — added the cache-HIT (warm-cache)
+# counterpart, and a third test that pins the check's placement INSIDE
+# `_synth_lock` rather than merely after `_load_voice_latents` returns.
+
+
+def test_evict_landing_after_latents_load_aborts_before_gpu_forward(monkeypatch, tmp_path) -> None:
+    """The regression Task 11's review reasoned to from source: block the
+    synth thread right after `_load_voice_latents` hands back the latents —
+    exactly the window between that return and the GPU forward starting —
+    and land an evict there via `_bump_evict_epoch`, the same call
+    `/xtts/evict-voice` makes. Deterministic via a `threading.Event`
+    handshake (not sleeps): the wrapped `_load_voice_latents` doesn't let the
+    synth thread proceed into `_synth_lock` until this test explicitly
+    releases it, so the evict is GUARANTEED to land inside the window, not
+    merely likely to. Before the fix this reproduces the bug (the forward
+    completes and returns audio despite the evict); after the fix it must
+    raise instead of rendering, and `tts_model.inference()` (the actual GPU
+    forward) must never be called at all — not just that some error
+    surfaces after the fact."""
+    eng, _voices_dir, tts_instance = _make_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-evict-race")
+    tts_model = tts_instance.synthesizer.tts_model
+    tts_model.infer_calls.clear()  # drop clone_voice's own audition call
+
+    latents_loaded = threading.Event()
+    proceed_after_evict = threading.Event()
+    real_load = eng._load_voice_latents
+
+    def _blocking_load(voice_id: str) -> Any:
+        result = real_load(voice_id)
+        latents_loaded.set()
+        assert proceed_after_evict.wait(timeout=5), "test stalled waiting for the evict to land"
+        return result
+
+    monkeypatch.setattr(eng, "_load_voice_latents", _blocking_load)
+
+    outcome: dict[str, Any] = {}
+
+    def _do_synth() -> None:
+        try:
+            outcome["result"] = eng.synthesize("xtts_v2", "xtts-evict-race", "hello there")
+        except Exception as exc:  # noqa: BLE001 — captured for the assertion below
+            outcome["error"] = exc
+
+    t = threading.Thread(target=_do_synth)
+    t.start()
+    assert latents_loaded.wait(timeout=5), "latents were never loaded"
+
+    # Evict lands exactly in the window between `_load_voice_latents`
+    # returning and the forward starting — the same call `/xtts/evict-voice`
+    # makes (Task 13's revoke/purge flow, files-first / evict-last).
+    eng._bump_evict_epoch("xtts-evict-race")
+
+    proceed_after_evict.set()
+    t.join(timeout=5)
+
+    assert "error" in outcome, (
+        f"an evicted voice's forward must fail loud rather than render: {outcome.get('result')!r}"
+    )
+    assert isinstance(outcome["error"], main.VoiceNotDesignedError)
+    assert tts_model.infer_calls == [], "the GPU forward must never run once the evict landed"
+
+
+def test_evict_landing_after_warm_cache_hit_aborts_before_gpu_forward(monkeypatch, tmp_path) -> None:
+    """Fix round 1 (Task 11a review, Medium) — the test above only exercises
+    the cache-MISS/fresh-load branch of `_load_voice_latents`
+    (the `torch.load` path). Every sentence AFTER the first in a chapter
+    render hits the CACHE-HIT branch instead (`main.py` ~1539-1541, a
+    different line that reads `_evict_epoch` at a different point) — exactly
+    the scenario the defect describes, since a chapter's second-and-later
+    sentences are the common case, not the exception. Without this test, a
+    regression that returned a stale/constant epoch on the cache-hit branch
+    specifically (or read it before taking `_latents_lock`) would go inert
+    for every sentence after the first, and this suite would say nothing."""
+    eng, _voices_dir, tts_instance = _make_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-evict-race-warm")
+    tts_model = tts_instance.synthesizer.tts_model
+    tts_model.infer_calls.clear()  # drop clone_voice's own audition call
+
+    # Warm the cache first — this call takes the fresh-load branch and
+    # installs the entry. The race below's `_load_voice_latents` call is
+    # therefore a cache HIT, not a miss.
+    eng._load_voice_latents("xtts-evict-race-warm")
+    assert "xtts-evict-race-warm" in eng._latents_cache
+
+    latents_loaded = threading.Event()
+    proceed_after_evict = threading.Event()
+    real_load = eng._load_voice_latents
+
+    def _blocking_load(voice_id: str) -> Any:
+        result = real_load(voice_id)  # cache HIT this time
+        latents_loaded.set()
+        assert proceed_after_evict.wait(timeout=5), "test stalled waiting for the evict to land"
+        return result
+
+    monkeypatch.setattr(eng, "_load_voice_latents", _blocking_load)
+
+    outcome: dict[str, Any] = {}
+
+    def _do_synth() -> None:
+        try:
+            outcome["result"] = eng.synthesize("xtts_v2", "xtts-evict-race-warm", "hello again")
+        except Exception as exc:  # noqa: BLE001 — captured for the assertion below
+            outcome["error"] = exc
+
+    t = threading.Thread(target=_do_synth)
+    t.start()
+    assert latents_loaded.wait(timeout=5), "latents were never loaded"
+
+    eng._bump_evict_epoch("xtts-evict-race-warm")
+
+    proceed_after_evict.set()
+    t.join(timeout=5)
+
+    assert "error" in outcome, (
+        f"an evicted voice's forward must fail loud on a warm cache hit too: {outcome.get('result')!r}"
+    )
+    assert isinstance(outcome["error"], main.VoiceNotDesignedError)
+    assert tts_model.infer_calls == [], "the GPU forward must never run once the evict landed"
+
+
+def test_evict_re_check_reads_epoch_after_acquiring_synth_lock_not_before(
+    monkeypatch, tmp_path
+) -> None:
+    """Fix round 1 (Task 11a review, Low) — pins WHERE the re-check runs:
+    after `_synth_lock` is actually acquired, not merely after
+    `_load_voice_latents` returns. The two tests above park the synth thread
+    INSIDE `_load_voice_latents` itself, before it ever reaches
+    `with self._synth_lock:` — so they'd still pass even if the re-check
+    were hoisted to run right after `_load_voice_latents` returns instead of
+    inside the lock, because in either placement the evict has already
+    landed before either version's check runs. That hoist would matter in
+    practice: it would widen the real window from microseconds (the gap
+    between the in-lock check and the forward call, both back-to-back
+    statements) to potentially SECONDS (the time a forward can spend queued
+    waiting for `_synth_lock` behind another in-flight render) — while the
+    code comment and the `/xtts/evict-voice` docstring both claim the narrow
+    bound. A comment silently going false is exactly the defect class this
+    branch keeps catching.
+
+    Proven by holding `_synth_lock` in this test's own thread BEFORE
+    starting the synth thread: `_load_voice_latents` still returns
+    immediately (no I/O blocks it here), but the synth thread then MUST
+    queue on `_synth_lock` — held by us — before any in-lock check can run.
+    The evict lands while it is queued (lock still held by us, so the synth
+    thread cannot have reached the forward, or a correctly-placed check, by
+    construction), then we release the lock. Only a check that re-reads the
+    epoch AFTER acquiring the lock — not one that ran before the queue —
+    can observe the evict and raise."""
+    eng, _voices_dir, tts_instance = _make_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-lock-race")
+    tts_model = tts_instance.synthesizer.tts_model
+    tts_model.infer_calls.clear()  # drop clone_voice's own audition call
+
+    load_returned = threading.Event()
+    real_load = eng._load_voice_latents
+
+    def _signalling_load(voice_id: str) -> Any:
+        result = real_load(voice_id)
+        load_returned.set()
+        return result
+
+    monkeypatch.setattr(eng, "_load_voice_latents", _signalling_load)
+
+    outcome: dict[str, Any] = {}
+
+    def _do_synth() -> None:
+        try:
+            outcome["result"] = eng.synthesize("xtts_v2", "xtts-lock-race", "hello there")
+        except Exception as exc:  # noqa: BLE001 — captured for the assertion below
+            outcome["error"] = exc
+
+    assert eng._synth_lock.acquire(timeout=5), "test could not acquire _synth_lock"
+    try:
+        t = threading.Thread(target=_do_synth)
+        t.start()
+        assert load_returned.wait(timeout=5), "latents were never loaded"
+        # The synth thread's `_load_voice_latents` has already returned, and
+        # it cannot have proceeded any further — we hold `_synth_lock`. Evict
+        # now, while it is queued waiting for the lock we hold.
+        eng._bump_evict_epoch("xtts-lock-race")
+    finally:
+        eng._synth_lock.release()
+
+    t.join(timeout=5)
+
+    assert "error" in outcome, (
+        f"the re-check must read the epoch AFTER acquiring _synth_lock, not before: {outcome.get('result')!r}"
+    )
+    assert isinstance(outcome["error"], main.VoiceNotDesignedError)
+    assert tts_model.infer_calls == [], "the GPU forward must never run once the evict landed"

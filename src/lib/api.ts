@@ -61,6 +61,7 @@ import type {
 } from './types';
 import type { components as ApiComponents } from './api-types';
 import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
+import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
 import { initialCharacters } from '../data/characters';
@@ -9752,13 +9753,60 @@ export async function mockPromoteToLibrary(body: {
   return entry;
 }
 
+/* fs-38 Wave 3c, Task 29 — mirrors the three 409 guards on
+   server/src/routes/voice-library.ts's POST /:voiceUuid/assign handler, as
+   of commit e52619d3 on the fs38-wave3c-xtts worktree: revoked consent,
+   then a cloned voice that hasn't finished deriving, then a cloned voice
+   assigned onto a non-Qwen engine. That route still hardcodes the qwen
+   slot and only ever guards a `cloned` entry — a Task 24 landing on that
+   same worktree will make it engine-aware — so this mirrors it AS IT
+   EXISTS NOW, not ahead of it: a cloned entry with a ready `xtts` slot
+   still 409s here on a non-Qwen assign (see the `lib-cloned-demo` fixture
+   and its "deliberate lag" test).
+
+   The real guard also weighs the target character's own `ttsEngine`
+   override and the persisted account default, via
+   `resolveCharacterEngine`/`getResolvedTtsModelKey()` server-side. This
+   mock has no persisted cast or account-default store to read (mock-mode
+   characters live in the redux `cast` slice, never round-tripped through
+   `api.*`), so it only looks at the caller's own explicit `modelKey` —
+   every real caller already sends its pending engine choice (see
+   profile-drawer.tsx's `useMyVoice`) — falling back to 'qwen' (the common
+   case) when omitted.
+
+   Exported so the guard itself can be unit-tested directly against ad-hoc
+   entries, without growing the shared `MOCK_VOICE_LIBRARY_ENTRIES` fixture
+   list (and the e2e voice-library card-count assertions that count it).
+   Returns the error message to reject with, or null when the assign is
+   allowed. */
+export function _mockAssignGuardError(
+  entry: VoiceLibraryEntry,
+  modelKey: TtsModelKey | undefined,
+): string | null {
+  if (entry.consent?.revokedAt) {
+    return 'Consent for this voice has been revoked.';
+  }
+  if (entry.provenance === 'cloned' && entry.engines?.qwen?.status !== 'ready') {
+    return 'Cloned voice is not ready to assign yet.';
+  }
+  if (entry.provenance === 'cloned') {
+    const routedEngine = modelKey ? engineForModelKey(modelKey) : 'qwen';
+    if (routedEngine !== 'qwen') {
+      return `Cloned voices render on Qwen, but this book is set to ${routedEngine}. Switch the book's engine to Qwen before assigning this character.`;
+    }
+  }
+  return null;
+}
+
 export async function mockAssignLibraryVoice(
   voiceUuid: string,
-  _body: { bookId: string; characterId: string; modelKey?: TtsModelKey },
+  body: { bookId: string; characterId: string; modelKey?: TtsModelKey },
 ): Promise<{ updated: number }> {
   await wait(60);
   const entry = mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid);
   if (!entry) throw new Error(`No voice-library entry "${voiceUuid}".`);
+  const guardError = _mockAssignGuardError(entry, body.modelKey);
+  if (guardError) throw new Error(guardError);
   return { updated: 1 };
 }
 

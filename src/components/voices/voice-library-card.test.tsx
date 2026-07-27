@@ -88,6 +88,65 @@ describe('VoiceLibraryCard', () => {
     );
   });
 
+  /* fs-38 Wave 3c, Task 28 — a second, independent engine chip for Coqui,
+     sourced from `entry.engines.xtts` (the manifest slot; the label/testid
+     say "coqui", never "xtts" — labels must say Coqui, not XTTS). */
+  it('renders a Coqui chip from entry.engines.xtts, labelled "Coqui" not "XTTS"', () => {
+    const entry = makeEntry({ engines: { qwen: { status: 'ready' }, xtts: { status: 'ready' } } });
+    renderCard(entry);
+    expect(screen.getByTestId(`voice-library-engine-coqui-${entry.voiceUuid}`)).toHaveTextContent(
+      'Coqui ✓',
+    );
+  });
+
+  /* One chip per POPULATED engine only — an entry with only qwen shows no
+     coqui chip, and vice versa. This is the discriminating half of the
+     "both chips render" test above: a component that always rendered a
+     fixed pair of chips (or defaulted an absent engine to some status)
+     would still pass that test but fail this one. */
+  it('shows only the qwen chip when engines.xtts is absent', () => {
+    const entry = makeEntry({ engines: { qwen: { status: 'ready' } } });
+    renderCard(entry);
+    expect(screen.getByTestId(`voice-library-engine-qwen-${entry.voiceUuid}`)).toBeInTheDocument();
+    expect(
+      screen.queryByTestId(`voice-library-engine-coqui-${entry.voiceUuid}`),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows only the coqui chip when engines.qwen is absent', () => {
+    const entry = makeEntry({ engines: { xtts: { status: 'ready' } } });
+    renderCard(entry);
+    expect(
+      screen.queryByTestId(`voice-library-engine-qwen-${entry.voiceUuid}`),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId(`voice-library-engine-coqui-${entry.voiceUuid}`)).toBeInTheDocument();
+  });
+
+  /* [DELTA-I6] — designed entries can carry an xtts slot too (Wave 3c), but
+     `deriveClonedVoiceState` is cloned-only (its `!entry.master` broken rule
+     keys on a field designed entries never have). A designed card must show
+     both engine chips with no broken/repairable verdict at all — the
+     discriminating assertion is the ABSENCE of the clonestate testid, which
+     a version of ProvenanceMarker that (wrongly) called
+     deriveClonedVoiceState for designed entries would render anyway
+     (master is undefined here, which that function reads as "broken"). */
+  it('a designed card with an xtts slot shows both engine chips and no broken verdict', () => {
+    const entry = makeEntry({
+      provenance: 'designed',
+      engines: { qwen: { status: 'ready' }, xtts: { status: 'ready' } },
+    });
+    renderCard(entry);
+    expect(screen.getByTestId(`voice-library-engine-qwen-${entry.voiceUuid}`)).toHaveTextContent(
+      'Qwen ✓',
+    );
+    expect(screen.getByTestId(`voice-library-engine-coqui-${entry.voiceUuid}`)).toHaveTextContent(
+      'Coqui ✓',
+    );
+    expect(
+      screen.queryByTestId(`voice-library-clonestate-${entry.voiceUuid}`),
+    ).not.toBeInTheDocument();
+  });
+
   it('shows the "My voice" provenance marker for a designed entry', () => {
     const entry = makeEntry({ provenance: 'designed' });
     renderCard(entry);

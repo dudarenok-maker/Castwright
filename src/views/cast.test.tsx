@@ -434,6 +434,84 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
     /* No designed id ⇒ no "qwen-…" segment (guards the `name &&` gate). */
     expect(row.textContent).not.toContain('qwen-');
   });
+
+  describe('fs-38 Wave 3c Task 25 [EX-14][ADV-H1][M-3] — coqui clone counterpart', () => {
+    /* Mirrors marrowQwen above, but for the coqui clone-capable engine
+       (resolveTtsVoiceForCharacter / playSampleFor's second, coqui-specific
+       branch of the same qwen-only gates this describe block already covers
+       for qwen). */
+    const marrowCoquiClone: Character = {
+      ...marrow,
+      ttsEngine: 'coqui',
+      overrideTtsVoices: {
+        coqui: { name: 'Aunt Marta', libraryUuid: 'lib-uuid-1', provenance: 'cloned' },
+      },
+    };
+
+    it('routes a coqui-cloned row through the Coqui model key + injects the library override', async () => {
+      vi.mocked(playSampleWithAutoLoad).mockClear();
+      renderChars([marrowCoquiClone]);
+      const row = rowFor('Mr. Marrow');
+      const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
+      fireEvent.click(swatch);
+      await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+      const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
+      expect(args.modelKey).toBe('coqui-xtts-v2');
+      expect(args.voice.overrideTtsVoices?.coqui).toEqual({
+        name: 'Aunt Marta',
+        libraryUuid: 'lib-uuid-1',
+        provenance: 'cloned',
+      });
+    });
+
+    it('resolves a designed (not yet cloned) coqui library slot the same way', async () => {
+      vi.mocked(playSampleWithAutoLoad).mockClear();
+      renderChars([
+        {
+          ...marrow,
+          ttsEngine: 'coqui',
+          overrideTtsVoices: {
+            coqui: { name: 'Designed Voice', libraryUuid: 'lib-uuid-2', provenance: 'designed' },
+          },
+        },
+      ]);
+      const row = rowFor('Mr. Marrow');
+      const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
+      fireEvent.click(swatch);
+      await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+      const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
+      expect(args.voice.overrideTtsVoices?.coqui?.libraryUuid).toBe('lib-uuid-2');
+    });
+
+    it('injects no coqui override for a coqui row with no library assignment (fallback catalog voice)', async () => {
+      vi.mocked(playSampleWithAutoLoad).mockClear();
+      renderChars([{ ...marrow, ttsEngine: 'coqui' }]);
+      const row = rowFor('Mr. Marrow');
+      const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
+      fireEvent.click(swatch);
+      await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
+      const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
+      expect(args.voice.overrideTtsVoices?.coqui).toBeUndefined();
+    });
+
+    it('shows "Cloned voice" instead of the raw storage key for a hydrated coqui library voice (M-3)', () => {
+      /* Simulates the server's post-Task-16 GET /api/voices response for a
+         coqui library slot: ttsVoice.name is the raw xtts-<uuid> storage
+         key (resolveVoiceAssignment), never a human name. */
+      const clonedLibrary = library.map((v) =>
+        v.id === 'v_marrow'
+          ? {
+              ...v,
+              ttsVoice: { provider: 'coqui' as const, name: 'xtts-lib-uuid-1', description: 'Local voice' },
+            }
+          : v,
+      );
+      renderChars([marrow], clonedLibrary);
+      const row = rowFor('Mr. Marrow');
+      expect(row.textContent).toContain('Cloned voice');
+      expect(row.textContent).not.toContain('xtts-lib-uuid-1');
+    });
+  });
 });
 
 describe('CastView Qwen status pill (plan 117)', () => {

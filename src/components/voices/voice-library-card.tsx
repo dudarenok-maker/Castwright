@@ -1,8 +1,9 @@
 /* fs-38 Wave 1, Task 15 — VoiceLibraryCard.
 
    Presents one "My voices" library entry: name, inline tag editor (add on
-   Enter / remove on ×), pin toggle, language chip, per-engine readiness chip
-   (from `entry.engines.qwen.status`), a preview-play button (calls
+   Enter / remove on ×), pin toggle, language chip, per-engine readiness
+   chips (one per populated engine in `entry.engines` — Qwen and/or Coqui,
+   fs-38 Wave 3c Task 28), a preview-play button (calls
    `api.sampleLibraryVoice`), and a quiet provenance marker. Tag/pin edits
    dispatch the Task 13 `patchEntry` thunk directly — it's optimistic, so the
    slice applies the patch to the matching entry immediately. Assign/Edit are
@@ -27,37 +28,94 @@ interface Props {
   onEdit?: (entry: VoiceLibraryEntry) => void;
 }
 
-type QwenStatus = 'ready' | 'deriving' | 'stale' | 'failed';
+type EngineStatus = 'ready' | 'deriving' | 'stale' | 'failed';
 
-const ENGINE_STATUS_LABEL: Record<QwenStatus, string> = {
-  ready: 'Qwen ✓',
-  deriving: 'Qwen …',
-  stale: 'Qwen ⟳',
-  failed: 'Qwen ⚠',
+/* fs-38 Wave 3c, Task 28 — a cloned/designed entry can now carry artifacts on
+   TWO engines (`entry.engines.qwen` and `entry.engines.xtts`), so the label/
+   color lookups must be keyed per engine, not a single flat `Record<Status,
+   …>` — an earlier draft shipped a literal 'Qwen ✓' that a coqui chip would
+   have reused verbatim. Note the asymmetry: the manifest slot is `xtts`, but
+   the engine itself is `'coqui'` and user-facing copy always says "Coqui",
+   never "XTTS". */
+type EngineKey = 'qwen' | 'coqui';
+
+const ENGINE_STATUS_LABEL: Record<EngineKey, Record<EngineStatus, string>> = {
+  qwen: {
+    ready: 'Qwen ✓',
+    deriving: 'Qwen …',
+    stale: 'Qwen ⟳',
+    failed: 'Qwen ⚠',
+  },
+  coqui: {
+    ready: 'Coqui ✓',
+    deriving: 'Coqui …',
+    stale: 'Coqui ⟳',
+    failed: 'Coqui ⚠',
+  },
 };
 
-const ENGINE_STATUS_COLOR: Record<QwenStatus, 'success' | 'neutral' | 'warning' | 'danger'> = {
-  ready: 'success',
-  deriving: 'neutral',
-  stale: 'warning',
-  failed: 'danger',
+const ENGINE_STATUS_COLOR: Record<EngineKey, Record<EngineStatus, 'success' | 'neutral' | 'warning' | 'danger'>> = {
+  qwen: {
+    ready: 'success',
+    deriving: 'neutral',
+    stale: 'warning',
+    failed: 'danger',
+  },
+  coqui: {
+    ready: 'success',
+    deriving: 'neutral',
+    stale: 'warning',
+    failed: 'danger',
+  },
 };
 
 /* fs-38 Wave 3b2, Task 9 — the server now resolves a cloned voice's Qwen
    model per-chapter and fails loud when it's Broken (see task-9-brief.md).
    Derive the same state here so the My-voices card can warn the user before
    they hit it at render time. Repairable self-heals at next render (a fresh
-   derive request), so it's a softer signal than Broken. */
+   derive request), so it's a softer signal than Broken.
+
+   fs-38 Wave 3c, Task 28 — cloned entries can now also carry a Coqui
+   (`entry.engines.xtts`) artifact alongside Qwen, so this worst-state-wins
+   across BOTH engines rather than reading `engines.qwen` alone. The two
+   engines are NOT symmetric, though: Qwen is the primary/default engine, so
+   `engines.qwen.status === 'failed'` still means the voice is genuinely
+   broken. Coqui is the alternate engine — a transient Coqui derive failure
+   (`engines.xtts.status === 'failed'`) caps out at "repairable" (soft,
+   self-heals at the next derive) rather than branding the whole card
+   permanently broken on what may be a Qwen-only book.
+
+   Only called for `provenance === 'cloned'` cards. Designed entries never
+   carry `entry.master` (their clip lives at a file path keyed by voiceUuid,
+   not a master record), so this must NOT be reused for them — every
+   designed card would read broken. Designed cards get engine chips only,
+   no broken/repairable verdict. */
 type ClonedVoiceState = 'broken' | 'repairable' | null;
 
+function qwenEngineState(status: EngineStatus | undefined): ClonedVoiceState {
+  if (status === 'failed') return 'broken';
+  if (status === 'stale') return 'repairable';
+  return null;
+}
+
+function coquiEngineState(status: EngineStatus | undefined): ClonedVoiceState {
+  if (status === 'failed' || status === 'stale') return 'repairable';
+  return null;
+}
+
+function rank(state: ClonedVoiceState): number {
+  if (state === 'broken') return 2;
+  if (state === 'repairable') return 1;
+  return 0;
+}
+
 export function deriveClonedVoiceState(entry: VoiceLibraryEntry): ClonedVoiceState {
-  if (entry.consent?.revokedAt || !entry.master || entry.engines.qwen?.status === 'failed') {
+  if (entry.consent?.revokedAt || !entry.master) {
     return 'broken';
   }
-  if (entry.engines.qwen?.status === 'stale') {
-    return 'repairable';
-  }
-  return null;
+  const qwenState = qwenEngineState(entry.engines.qwen?.status);
+  const coquiState = coquiEngineState(entry.engines.xtts?.status);
+  return rank(qwenState) >= rank(coquiState) ? qwenState : coquiState;
 }
 
 export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
@@ -70,7 +128,9 @@ export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
   const [sampleUrl, setSampleUrl] = useState<string | null>(null);
   const [confirmRevokeOpen, setConfirmRevokeOpen] = useState(false);
 
-  const qwenStatus = entry.engines.qwen?.status;
+  const engineChips: { key: EngineKey; status: EngineStatus }[] = [];
+  if (entry.engines.qwen?.status) engineChips.push({ key: 'qwen', status: entry.engines.qwen.status });
+  if (entry.engines.xtts?.status) engineChips.push({ key: 'coqui', status: entry.engines.xtts.status });
   const playing = playback.isPlaying && !!sampleUrl && playback.currentUrl === sampleUrl;
 
   function addTag() {
@@ -153,13 +213,13 @@ export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
             </span>
           </Pill>
         )}
-        {qwenStatus && (
-          <Pill color={ENGINE_STATUS_COLOR[qwenStatus]}>
-            <span data-testid={`voice-library-engine-qwen-${entry.voiceUuid}`}>
-              {ENGINE_STATUS_LABEL[qwenStatus]}
+        {engineChips.map(({ key, status }) => (
+          <Pill key={key} color={ENGINE_STATUS_COLOR[key][status]}>
+            <span data-testid={`voice-library-engine-${key}-${entry.voiceUuid}`}>
+              {ENGINE_STATUS_LABEL[key][status]}
             </span>
           </Pill>
-        )}
+        ))}
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">

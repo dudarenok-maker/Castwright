@@ -212,6 +212,54 @@ history at cut time.
   `library-slice.ts` already exports a `LANGUAGE_LABELS` and it is deliberately different
   (endonyms — 'Русский', 'Deutsch' — for the book-library pills, against this one's exonyms),
   so the two must not be confusable at an import site.
+- **fs-38 Wave 3c — cloned + designed voices on Coqui XTTS v2, refs #624.** Extends 268's
+  never-substitute/total-erasure machinery to a second engine. `CoquiEngine.clone_voice`
+  (`server/tts-sidecar/main.py`) derives XTTS conditioning latents (`get_conditioning_latents`,
+  hand-rolled rather than the built-in `CloningMixin` — the built-in's non-atomic `torch.save`
+  to a path we don't control would defeat reliable purge), persisted via the pre-existing
+  `_atomic_torch_save` under a `_synth_lock` shared with `/synthesize` (clone and synthesise are
+  now two serialized concurrent entry points into the model, matching Qwen's existing pattern —
+  not a throughput regression). An epoch-guarded `_latents_cache` (`_evict_epoch`/
+  `_bump_evict_epoch`) backs `POST /xtts/clone-voice` and `POST /xtts/evict-voice`, mirroring the
+  Qwen pair; a re-clone of the same voice_id correctly invalidates a racing render's stale
+  latents. `pickVoiceForEngine`, `clone-voice-resolver.ts`'s classifier + both orchestrators, and
+  `purgeCloneArtifacts` are now engine-parametric instead of Qwen-hardcoded — the artifact set
+  per cloned Coqui voice is three deterministic paths (`.pt`, `.json`, and a reference-audio temp
+  WAV that is the person's actual source clip, not a derived artifact), all purged on revoke and
+  delete via the same `evictSidecarVoice()` helper the Qwen sweep already used. A mid-wave scope
+  widening (delivered at the user's explicit direction) adds a **fail-soft** designed-voice-on-
+  Coqui derive arm — the opposite policy from cloned's fail-loud, kept in a genuinely separate
+  code path at every review pass, since a designed voice isn't a real person's identity and
+  falling back to the stock catalogue on a bad derive is today's acceptable behaviour, not a
+  regression; a designed entry with no retained calibration clip gets no Coqui slot at all and
+  renders byte-for-byte as before this wave. `POST /:voiceUuid/assign` now writes both
+  clone-capable slots when the entry can actually render on both (cloned, or designed with a
+  retained clip) — closing a real Critical an earlier review round caught, where an unconditional
+  dual-slot write meant an engine switch could silently drop a real person's identity to a stock
+  catalogue voice. Also closes a real, reachable defect the engine-parametric refactor exposed:
+  on a remote/LAN sidecar, Coqui availability used to fall back to a local disk stat that's always
+  absent on the box the *server* runs on, aborting chapter 1 of every book on a Coqui-installed-
+  and-working sidecar — fixed with a wire fact (`coqui_weights_present` on `/health`, mirroring
+  the existing `qwen_weights_present`). Golden-audio gate (`test:golden-audio:sidecar`) now covers
+  Coqui (`test_coqui_sanity` previously never fired on a Coqui-only box — a Kokoro-shaped
+  weights-path probe never matched Coqui's lazy-fetched weights) plus new `test_xtts_clone_sanity`
+  / `test_xtts_designed_sanity` loose-check cases, including a long-sentence case for the
+  `enable_text_splitting` crash class. **One planned task did not land in this delivery** — an
+  engine-aware library sample route, so the card's Play button still always auditions the Qwen
+  artifact even for a Coqui-primary card
+  ([#1887](https://github.com/dudarenok-maker/Castwright/issues/1887)). Two other consent-adjacent
+  gaps this wave's review surfaced are still open: a manual cast-link route that bypasses the
+  library consent check ([#1885](https://github.com/dudarenok-maker/Castwright/issues/1885)), and
+  a wholesale `PUT /api/books/:bookId {slice:'cast'}` route that lets a client restamp a
+  character's `voiceUuid`/engine-slot pair with no guard at all
+  ([#1899](https://github.com/dudarenok-maker/Castwright/issues/1899), found during this wave's
+  own review). Roughly twenty further pre-existing or adjacent gaps this wave's review surfaced —
+  most still untriaged in the implementation ledger's Minor roll-up — are catalogued in the plan's
+  Known limitations, with follow-up issues for the load-bearing ones. **The whole-branch review
+  gates (GATE 1/2/3) have not run on this branch yet.** Plan: `docs/features/271-fs38-wave3c-xtts.md`.
+  Spec: `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md` §2.3/§3.2/§5.3/§5.6.
+  Live-GPU acceptance owed — see the plan's "Owed on-box acceptance" and Section E of
+  `docs/testing/fs38-wave3-onbox-acceptance.md`.
 
 ---
 

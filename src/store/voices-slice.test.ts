@@ -223,6 +223,65 @@ describe('voicesSlice — setOverride', () => {
   });
 });
 
+describe('voicesSlice — restoreOverride', () => {
+  it('writes the given slot verbatim, including libraryUuid/provenance (fs-38 Wave 3c Task 26 carry-forward)', () => {
+    /* Simulates the profile drawer's 409 revert after an optimistic full
+       clear (setOverride(null)): the prior slot must come back exactly as
+       it was, not reconstructed from just its name. */
+    const start = voicesSlice.reducer(
+      undefined,
+      voicesActions.hydrate({
+        voices: [voice('v_brann', { overrideTtsVoices: null })],
+      }),
+    );
+    const next = voicesSlice.reducer(
+      start,
+      voicesActions.restoreOverride({
+        voiceId: 'v_brann',
+        engine: 'coqui',
+        slot: { name: 'Asya Anara', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+      }),
+    );
+    expect(next.voices[0].overrideTtsVoices).toEqual({
+      coqui: { name: 'Asya Anara', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+    });
+  });
+
+  it('preserves an untouched engine slot when restoring a different engine', () => {
+    const start = voicesSlice.reducer(
+      undefined,
+      voicesActions.hydrate({
+        voices: [voice('v_brann', { overrideTtsVoices: { kokoro: { name: 'am_onyx' } } })],
+      }),
+    );
+    const next = voicesSlice.reducer(
+      start,
+      voicesActions.restoreOverride({
+        voiceId: 'v_brann',
+        engine: 'coqui',
+        slot: { name: 'Asya Anara', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+      }),
+    );
+    expect(next.voices[0].overrideTtsVoices).toEqual({
+      kokoro: { name: 'am_onyx' },
+      coqui: { name: 'Asya Anara', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+    });
+  });
+
+  it('is a no-op for an unknown voiceId', () => {
+    const start = voicesSlice.reducer(undefined, voicesActions.hydrate({ voices: [voice('v1')] }));
+    const next = voicesSlice.reducer(
+      start,
+      voicesActions.restoreOverride({
+        voiceId: 'missing',
+        engine: 'coqui',
+        slot: { name: 'X' },
+      }),
+    );
+    expect(next.voices).toEqual(start.voices);
+  });
+});
+
 describe('voicesSlice — hydrateBaseVoices', () => {
   it('replaces baseVoices and marks the catalog loaded', () => {
     const next = voicesSlice.reducer(
