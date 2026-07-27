@@ -299,15 +299,42 @@ describe('purgeCloneArtifacts', () => {
     expect(ptFileExistedAtFirstEvict).toBe(false);
   });
 
-  /* Task 14a — this test used to assert `{ failed: [] }` here: a rejected
-     fetch on every evict call (sidecar fully unreachable) used to vanish
-     into a bare `catch {}` with no accumulator of its own, so
-     `purgeCloneArtifacts` never throwing read as "and nothing was lost"
-     too. It does not throw (still true — this stays best-effort), but the
-     three lost evicts (qwen base, qwen -preview, xtts) must now show up in
-     `failed` instead of being silently absorbed. */
-  it('does not throw when the sidecar is unreachable, but reports every lost evict in `failed`', async () => {
+  /* Task 14a fix round 1, MEDIUM-1 — a REFUSED connection means nothing is
+     listening on the sidecar port: no process, no in-process cache, so
+     erasure genuinely IS total. Reporting `artifactPurgeIncomplete` here on
+     every revoke for a user with `autoStartSidecar` off (the common case)
+     would train them to ignore the signal — so this specific, provable
+     shape reports clean, deliberately, not "every failure". Two forms of
+     ECONNREFUSED are both recognised: a plain string message (what a test
+     — or some platforms — hands back with no structured cause) and the
+     real Node/undici shape (`TypeError: fetch failed` + `.cause.code`). */
+  it('does not throw when the sidecar is not running (ECONNREFUSED), and reports failed: [] — erasure IS total', async () => {
     fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
+    const result = await purge.purgeCloneArtifacts('u1');
+    expect(result.failed).toEqual([]);
+  });
+
+  it('recognises the real Node/undici ECONNREFUSED shape (TypeError "fetch failed" + .cause.code), not just the bare string', async () => {
+    fetchMock.mockRejectedValue(
+      Object.assign(new TypeError('fetch failed'), {
+        cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:9000'), {
+          code: 'ECONNREFUSED',
+        }),
+      }),
+    );
+    const result = await purge.purgeCloneArtifacts('u1');
+    expect(result.failed).toEqual([]);
+  });
+
+  /* Task 14a fix round 1, MEDIUM-1 (the other side of the same fix) — a
+     rejection that is NOT provably "nothing is listening" (no ECONNREFUSED
+     code/message — e.g. a generic network error, or the 10s AbortSignal
+     firing on a wedged-but-alive process) carries no proof the sidecar's
+     cache is empty, so it must still surface as a real failure. This is
+     what the OLD (pre-Task-14a) code swallowed entirely via a bare
+     `catch {}` with no accumulator of its own. */
+  it('a non-ECONNREFUSED rejection (e.g. a timeout) still reports every lost evict in `failed`', async () => {
+    fetchMock.mockRejectedValue(new Error('The operation was aborted due to timeout'));
     const result = await purge.purgeCloneArtifacts('u1');
     expect(result.failed).toEqual([
       'sidecar:qwen:qwen-u1',
@@ -390,13 +417,20 @@ describe('purgeCloneArtifacts', () => {
      Task 14a — this test used to assert `result.failed).toEqual([])` here,
      i.e. it pinned the exact defect Task 14a closes: the lost xtts evict
      (the one that matters most, since XTTS's cache has no TTL) vanished
-     with no trace in the return value. Flipped to assert it now shows up. */
+     with no trace in the return value. Flipped to assert it now shows up.
+
+     Fix round 1, MEDIUM-1 — the injected rejection is deliberately NOT
+     ECONNREFUSED (a timeout, not a refused connection): a refused
+     connection is now the one deliberate fail-open case (see the
+     "not running" tests above), so this test — whose whole point is
+     proving a REAL lost evict surfaces — needs a failure shape that isn't
+     that carve-out. */
   it('an xtts evict failure does not skip anything else, and files are still gone', async () => {
     const ptFile = seedXtts('xtts-u1', 'pt');
     fetchMock
       .mockResolvedValueOnce({ ok: true }) // qwen base
       .mockResolvedValueOnce({ ok: true }) // qwen -preview
-      .mockRejectedValueOnce(new Error('ECONNREFUSED')); // xtts
+      .mockRejectedValueOnce(new Error('The operation was aborted due to timeout')); // xtts
 
     const result = await purge.purgeCloneArtifacts('u1');
 

@@ -2320,17 +2320,20 @@ describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
       const onDisk = await vl.readEntry(voiceUuid);
       expect(onDisk?.consent?.revokedAt).toBeTruthy();
 
-      // Task 14a — the sidecar is unreachable for every evict call in this
-      // test, so the revoke response must say so rather than claiming clean
-      // erasure it didn't achieve.
+      // Task 14a — the sidecar is unreachable (a non-ECONNREFUSED rejection
+      // — "sidecar unreachable" carries no proof the sidecar is actually
+      // DOWN, so it's the genuine-failure case, not the ECONNREFUSED
+      // fail-open carve-out) for every evict call in this test, so the
+      // revoke response must say so rather than claiming clean erasure it
+      // didn't achieve. Fix round 1, LOW-2 — all three markers pinned
+      // exactly (was `stringContaining` on the xtts one, which would still
+      // pass with a wrong or empty key).
       expect(res.body.artifactPurgeIncomplete).toBe(true);
-      expect(res.body.artifactPurgeFailedPaths).toEqual(
-        expect.arrayContaining([
-          `sidecar:qwen:${qwenName}`,
-          `sidecar:qwen:${qwenName}-preview`,
-          expect.stringContaining('sidecar:xtts:'),
-        ]),
-      );
+      expect(res.body.artifactPurgeFailedPaths).toEqual([
+        `sidecar:qwen:${qwenName}`,
+        `sidecar:qwen:${qwenName}-preview`,
+        `sidecar:xtts:xtts-${voiceUuid}`,
+      ]);
     } finally {
       fetchSpy.mockRestore();
     }

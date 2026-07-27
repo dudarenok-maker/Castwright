@@ -50,6 +50,30 @@ async function unlinkTracked(f: string, voiceUuid: string, failed: string[]): Pr
   }
 }
 
+/** Task 14a (fix round 1, MEDIUM-1) — "connection refused" specifically means
+    nothing is listening on the sidecar port at all: no process, no
+    in-process cache, so a lost evict against a DOWN sidecar has erased
+    nothing (erasure genuinely IS total). That is the common case for anyone
+    with `autoStartSidecar` off, and treating it identically to a REAL lost
+    evict would mean `artifactPurgeIncomplete` fires on every single revoke
+    for that user — a signal that cries wolf on the common case trains
+    operators to ignore it, including the one time it means a genuine leak.
+
+    Node's fetch surfaces a refused connection as `TypeError: fetch failed`
+    with `.cause.code === 'ECONNREFUSED'`; this also matches a bare
+    "ECONNREFUSED" string so a plain `Error('ECONNREFUSED')` (as used in
+    tests, and as some platforms surface it with no structured cause) is
+    recognised too. Deliberately narrow: a timeout (the AbortSignal below
+    firing — the sidecar IS running but wedged, so its cache is very much
+    still there) and any other network error are NOT treated as
+    "nothing to lose" — those stay reported as failures below, because
+    unlike a refused connection, they carry no proof the cache is empty. */
+function isSidecarNotRunning(err: unknown): boolean {
+  const e = err as { cause?: { code?: string }; code?: string; message?: string } | undefined;
+  if ((e?.cause?.code ?? e?.code) === 'ECONNREFUSED') return true;
+  return /ECONNREFUSED/i.test(e?.message ?? '');
+}
+
 /** fs-38 Wave 3c, Task 13 — one sidecar cache-evict POST, shared by the qwen
     base/`-preview` calls and the xtts call below (same shape: `{ voiceId }`
     JSON body). Independently attempted/reported per call so one engine's
@@ -67,7 +91,8 @@ async function unlinkTracked(f: string, voiceUuid: string, failed: string[]): Pr
     base Qwen model itself unloads, XTTS's latents cache has no TTL/idle
     reclaim of its own to fall back on. Still never retried here — see the
     caller-side note on `purgeCloneArtifacts`'s `failed` accumulator for
-    why. */
+    why. The one exception is `isSidecarNotRunning` above (fix round 1,
+    MEDIUM-1) — a refused connection reports clean, not failed. */
 async function evictSidecarVoice(
   route: 'qwen' | 'xtts',
   voiceId: string,
@@ -77,14 +102,16 @@ async function evictSidecarVoice(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ voiceId }),
-      // Fix wave (review I-2) — this purge can run INSIDE `updateEntry`'s
-      // per-uuid lock (the revoke `deleteMasterClip` branch's mutate, and
-      // the cloned-resolver's revoked/gone status-stamp mutate both call
-      // `purgeCloneArtifacts` from inside a mutate). A wedged/OOM'd
-      // sidecar that accepts the connection but never responds would
-      // otherwise park that uuid's lock indefinitely — including a
-      // user-initiated revoke's own SECOND `updateEntry` call, right after
-      // this one. Bound it instead of leaving it unbounded.
+      // Fix wave (review I-2) — this purge's `deleteMasterClip` branch below
+      // runs its OWN `updateEntry` call (not this one — this evict happens
+      // after that branch returns); the genuine "caller already holds the
+      // per-uuid lock" case is the cloned-resolver's revoked/gone
+      // status-stamp mutate, which calls `purgeCloneArtifacts` from INSIDE
+      // its own `updateEntry` mutate (see `clone-voice-resolver.ts`). A
+      // wedged/OOM'd sidecar that accepts the connection but never responds
+      // would otherwise park that uuid's lock indefinitely in that case —
+      // including a user-initiated revoke's own SECOND `updateEntry` call,
+      // right after this one. Bound it instead of leaving it unbounded.
       //
       // Task 14a correction (Task 14 review) — the 10s figure is NOT sized
       // against a Python-side synth lock. `/qwen/evict-voice` takes only
@@ -103,8 +130,9 @@ async function evictSidecarVoice(
     }
     return { ok: true };
   } catch (err) {
-    // Network error, connection refused, or the 10s AbortSignal firing —
-    // "sidecar unreachable or too slow", the other failure shape.
+    if (isSidecarNotRunning(err)) return { ok: true };
+    // Any other network error, or the 10s AbortSignal firing — the sidecar
+    // IS (or might be) running, so its cache state is genuinely unknown.
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }
 }
