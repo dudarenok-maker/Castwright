@@ -12,7 +12,12 @@ import {
   IconChevD,
 } from '../lib/icons';
 import type { SeriesRosterEntry } from '../lib/api';
-import { TTS_MODEL_OPTIONS, engineForModelKey, modelKeyForEngineChoice } from '../lib/tts-models';
+import {
+  ALL_TTS_ENGINES,
+  TTS_MODEL_OPTIONS,
+  engineForModelKey,
+  modelKeyForEngineChoice,
+} from '../lib/tts-models';
 import type { BaseVoice, TtsEngine, TtsModelKey } from '../lib/types';
 import {
   Avatar,
@@ -258,13 +263,7 @@ export function ProfileDrawer({
      predates fs-60) stays fully unlocked, matching pre-fs-60 behaviour. */
   const eligibleTtsEngines = useAppSelector(
     (s): TtsEngine[] =>
-      s.library?.books?.find((b) => b.bookId === bookId)?.eligibleTtsEngines ?? [
-        'qwen',
-        'kokoro',
-        'coqui',
-        'gemini',
-        'piper',
-      ],
+      s.library?.books?.find((b) => b.bookId === bookId)?.eligibleTtsEngines ?? ALL_TTS_ENGINES,
   );
   const baseVoices = useAppSelector((s) => s.voices.baseVoices);
   const baseVoicesLoaded = useAppSelector((s) => s.voices.baseVoicesLoaded);
@@ -314,8 +313,28 @@ export function ProfileDrawer({
      one eligible engine" — a Kokoro-only or Coqui-only install on an ENGLISH
      book must not hard-lock to a disabled, uninstalled Qwen option. */
   const lockedToQwen = eligibleTtsEngines.length === 1 && eligibleTtsEngines[0] === 'qwen';
+  /* The engines the picker actually renders option rows for: what it offers,
+     narrowed to what this book's language allows. */
+  const pickerEngines: TtsEngine[] = (['kokoro', 'qwen', 'coqui'] as const).filter((e) =>
+    eligibleTtsEngines.includes(e),
+  );
+  /* #1534 — clamp the seed to an engine the picker can actually show. A
+     REUSED character carries its previous book's `ttsEngine` on disk, and
+     since fs-60 a non-English book no longer hard-locks to Qwen, so a stale
+     'kokoro' (or 'gemini') survives into a ru/es/fr/de book. An unclamped
+     seed leaves the controlled <select> on a value with no matching option:
+     it displays "Default (…)" (the browser's selectedness reset) while Save
+     still writes the stale engine the user never picked. Clamp against
+     `pickerEngines`, NOT `eligibleTtsEngines` — 'gemini' is language-eligible
+     yet has no option row, so an eligibility-only check leaves the same
+     desync. Server-side the force-loop still corrects the engine at render,
+     so this was never wrong audio. */
   const [engineChoice, setEngineChoice] = useState<EngineChoice>(
-    lockedToQwen ? 'qwen' : (character.ttsEngine ?? 'default'),
+    lockedToQwen
+      ? 'qwen'
+      : character.ttsEngine != null && pickerEngines.includes(character.ttsEngine)
+        ? character.ttsEngine
+        : 'default',
   );
   /* fs-56 — per-character 1.7B Quality-tier model key. Seeded from the character's
      existing ttsModelKey (if any) so a re-open shows the prior selection. */
@@ -1160,9 +1179,7 @@ export function ProfileDrawer({
             <VoiceEnginePicker
               value={engineChoice}
               onChange={onSelectEngine}
-              installedEngines={(['kokoro', 'qwen', 'coqui'] as const).filter((e) =>
-                eligibleTtsEngines.includes(e),
-              )}
+              installedEngines={pickerEngines}
               defaultEngineLabel={capitalise(ttsEngine)}
               lockedToQwen={lockedToQwen}
               persona={persona}

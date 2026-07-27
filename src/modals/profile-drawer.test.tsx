@@ -151,6 +151,7 @@ function renderDrawer(
     libraryBook?: LibraryBook;
     onReassignLines?: (characterId: string) => void;
     myVoices?: VoiceLibraryEntry[];
+    onSave?: (next: Character, meta: { hadConflict: boolean }) => void;
   } = {},
 ) {
   const store = makeStore({
@@ -168,7 +169,7 @@ function renderDrawer(
           bookId={extra.bookId}
           voice={extra.voice}
           onClose={() => {}}
-          onSave={() => {}}
+          onSave={extra.onSave ?? (() => {})}
           onLock={() => {}}
           mergeCandidates={extra.mergeCandidates}
           mergeCandidatesPrior={extra.mergeCandidatesPrior}
@@ -2102,6 +2103,63 @@ describe('ProfileDrawer — fs-60 eligibility-based engine lock', () => {
       libraryBook: { ...ruBook, bookId: 'zh-book-1', language: 'zh', eligibleTtsEngines: ['qwen'] },
     });
     expect(screen.getByTestId('qwen-locked-note')).toBeInTheDocument();
+  });
+
+  /* #1534 — a REUSED character can carry an on-disk `ttsEngine` the current
+     book's language no longer allows. Pre-fs-60 every non-English book
+     hard-locked to Qwen so the seed was overwritten; now it isn't, so
+     `engineChoice` seeds to an engine the picker has no option for.
+
+     Asserting on `select.value` would NOT catch this: with no matching
+     option, jsdom (per the HTML "selectedness" reset) auto-selects the first
+     option, so the DOM reads 'default' either way. The observable defect is
+     the state/DOM desync behind it — the picker SHOWS "Default (…)" while
+     Save still writes the stale engine the user never chose. Assert on Save. */
+  const saveWithoutTouchingPicker = (character: Character, extra: Parameters<typeof renderDrawer>[1]) => {
+    const onSave = vi.fn();
+    renderDrawer(character, { ...extra, onSave });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    return onSave.mock.calls[0][0] as Character;
+  };
+
+  it('does not save a stale ineligible engine the picker never offered (kokoro on ru)', () => {
+    /* The select displays "Default (…)" — Save must agree with it. */
+    const saved = saveWithoutTouchingPicker(
+      { ...baseChar, ttsEngine: 'kokoro' },
+      { bookId: 'ru-book-1', libraryBook: ruBook },
+    );
+    expect(saved.ttsEngine).toBeNull();
+  });
+
+  /* The clamp is against the options the picker RENDERS (kokoro/qwen/coqui),
+     not against raw `eligibleTtsEngines` — 'gemini' is language-eligible for
+     a Russian book yet has no option row, so an eligibility-only clamp would
+     leave the same desync in place. */
+  it('does not save a stale engine that is language-eligible but has no picker option (gemini)', () => {
+    const saved = saveWithoutTouchingPicker(
+      { ...baseChar, ttsEngine: 'gemini' },
+      {
+        bookId: 'ru-book-2',
+        libraryBook: {
+          ...ruBook,
+          bookId: 'ru-book-2',
+          eligibleTtsEngines: ['qwen', 'coqui', 'gemini'],
+        },
+      },
+    );
+    expect(saved.ttsEngine).toBeNull();
+  });
+
+  it('still seeds — and saves — an eligible per-character engine unchanged (coqui on ru)', () => {
+    const saved = saveWithoutTouchingPicker(
+      { ...baseChar, ttsEngine: 'coqui' },
+      { bookId: 'ru-book-1', libraryBook: ruBook },
+    );
+    expect(
+      (screen.getByLabelText('Voice engine for this character') as HTMLSelectElement).value,
+    ).toBe('coqui');
+    expect(saved.ttsEngine).toBe('coqui');
   });
 });
 

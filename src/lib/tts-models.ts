@@ -189,6 +189,13 @@ export function engineGroupForModelKey(key: TtsModelKey): TtsEngineId {
 
 import type { TtsEngine } from './types';
 
+/* Every engine the app knows about — the "no eligibility reported" default
+   for `LibraryBook.eligibleTtsEngines`. A book with no eligibility data (the
+   library hasn't loaded, or a fixture predating fs-60) stays fully unlocked,
+   matching pre-fs-60 behaviour. Single source of truth so the drawer, the
+   cast view and the voice-readiness selectors can't drift (#1534). */
+export const ALL_TTS_ENGINES: TtsEngine[] = ['qwen', 'kokoro', 'coqui', 'gemini', 'piper'];
+
 /* Ordinal rank of the two Qwen quality tiers — 1.7B outranks 0.6B. Non-Qwen
    keys rank 0 (never meaningfully compared; callers only invoke this once both
    sides are known to be Qwen tiers). Mirror of server/src/tts/model-keys.ts. */
