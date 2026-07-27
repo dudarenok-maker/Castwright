@@ -63,20 +63,33 @@ const ROOT_SHAPES = [
 const COVERED = [
   { rel: 'package.json', file: 'root package.json' },
   { rel: 'vitest.config.ts', file: 'this config file' },
+  /* Pins the `vite` half of the brace. Without a case for it, narrowing the
+     trigger to `vitest.config.ts` would leave every assertion green while
+     silently dropping coverage for the vite build config — plugins, the `@`
+     alias, build options. */
+  { rel: 'vite.config.ts', file: 'the vite build config' },
   { rel: 'src/test/setup.ts', file: 'the injected test-setup file' },
   { rel: 'openapi.yaml', file: 'the API contract' },
 ];
 
-const CASES = COVERED.flatMap((covered) =>
-  ROOT_SHAPES.map((rootShape) => ({ ...covered, ...rootShape })),
-);
+/* Real files that must NOT match. More than one shape, so widening a dead
+   trigger to something like `**` plus a suffix glob is caught rather than
+   only the crudest `**`. */
+const NOT_COVERED = [
+  { rel: 'src/main.tsx', file: 'an ordinary source file' },
+  { rel: 'tsconfig.json', file: 'a JSON file that is not a manifest' },
+  { rel: 'apps/android/pubspec.yaml', file: 'a YAML file that is not the contract' },
+];
+
+const crossProduct = (files: typeof COVERED) =>
+  files.flatMap((entry) => ROOT_SHAPES.map((rootShape) => ({ ...entry, ...rootShape })));
 
 describe('vitest.config.ts forceRerunTriggers', () => {
   it.each(COVERED)('$file is a real file, so the trigger covers something', ({ rel }) => {
     expect(existsSync(resolve(REPO_ROOT, rel))).toBe(true);
   });
 
-  it.each(CASES)(
+  it.each(crossProduct(COVERED))(
     'covers $file from $shape so a config-only diff still forces a full --changed run',
     ({ rel, root }) => {
       expect(matchesTrigger(`${root}/${rel}`)).toBe(true);
@@ -86,7 +99,11 @@ describe('vitest.config.ts forceRerunTriggers', () => {
   /* Guards against "fixing" a dead trigger by widening it to something that
      matches everything — that would force a full run on every diff and
      quietly undo the point of --changed. */
-  it.each(ROOT_SHAPES)('does not match an ordinary source file from $shape', ({ root }) => {
-    expect(matchesTrigger(`${root}/src/App.tsx`)).toBe(false);
+  it.each(NOT_COVERED)('$file is a real file, so the negative control is honest', ({ rel }) => {
+    expect(existsSync(resolve(REPO_ROOT, rel))).toBe(true);
+  });
+
+  it.each(crossProduct(NOT_COVERED))('does not match $file from $shape', ({ rel, root }) => {
+    expect(matchesTrigger(`${root}/${rel}`)).toBe(false);
   });
 });

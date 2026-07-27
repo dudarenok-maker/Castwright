@@ -404,12 +404,19 @@ history at cut time.
 - **`vitest --changed` no longer under-selects to zero from an agent worktree** (ops-33, #1868).
   picomatch's globstar refuses to cross a dot-prefixed path segment unless `{ dot: true }` is passed,
   and vitest passes no options when it builds its `forceRerunTriggers` matchers. Agent worktrees live
-  under `.claude/worktrees/…`, so from one, **every** trigger matched nothing and
+  under `.claude/worktrees/…`, so from one, every **glob** trigger matched nothing and
   `npx vitest run --changed <base>` selected zero tests — reporting `0 tests found, exit 0`, which
-  reads as success. Measured on an identical `package.json`-only diff: **322 test files selected from
-  a non-dotted checkout, 0 from a dotted one, 322 after the fix.** All 9 triggers across
-  `vitest.config.ts`, `server/vitest.config.ts` and `server/vitest.config.slow.ts` now carry an
-  explicit dot-segment alternative.
+  reads as success. (Vitest also appends resolved `setupFiles` as absolute paths, which carry no
+  wildcard and were never affected.) Measured in a single dotted checkout on an identical
+  `package.json`-only diff, swapping only the configs: **frontend 1 → 323 test files, server 0 → 446,
+  slow tier 0 → 10.** All 10 triggers across `vitest.config.ts`, `server/vitest.config.ts` and
+  `server/vitest.config.slow.ts` now carry an explicit dot-segment alternative, and
+  `server/vitest.config.ts` gained a trigger for `vitest.config.slow.ts` — the
+  `{vitest,vite}.config.ts` brace never matched it, so a slow-config-only diff selected zero tests
+  from the suite that holds its own guard.
+  - The dot tolerance is exactly **one** segment deep; a checkout nested under a second dotted parent
+    still misses. Known bound, and a loud one — the trigger tests' `this checkout` case goes red there
+    rather than under-selecting silently.
   - **CI was never affected** — GitHub runners check out to `/home/runner/work/Castwright/Castwright`,
     which has no dot segment, and `verify.yml` holds the repo's only three `--changed` invocations. The
     cost landed entirely on local verification, which is where essentially all non-trivial work in this

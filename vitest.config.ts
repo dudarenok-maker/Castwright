@@ -52,8 +52,18 @@ export default defineConfig({
             path segment unless `{ dot: true }` is passed, and vitest passes
             no options when it builds these matchers. Claude-Code-harness
             worktrees live under `.claude/worktrees/…`, so without that half
-            EVERY entry matches nothing when the suite runs from one —
-            silently, as "0 tests found, exit 0" — ops-33/#1868.
+            every glob entry here matches nothing when the suite runs from
+            one — silently, as "0 tests found, exit 0" — ops-33/#1868.
+            (Vitest also appends resolved `setupFiles` as ABSOLUTE paths,
+            which carry no wildcard and so cross dot segments regardless;
+            that one implicit trigger was never affected.)
+
+            The tolerance is exactly ONE dot segment deep — a path with two,
+            e.g. a dotted checkout nested under a dotted parent, still misses.
+            That is a known bound, not an oversight: no such path exists here,
+            and if one ever did, the `this checkout` case in
+            src/test/force-rerun-triggers.test.ts goes RED rather than
+            under-selecting silently.
 
        Shared fixtures/mocks need NO entry: tests import them statically, so
        the module graph already covers them.

@@ -15,13 +15,25 @@ The failure mode is `0 tests found, exit 0` — it reads as success.
 
 ### Measured
 
-`vitest list --changed HEAD` against a single-file dirty tree; vitest 4.1.9, picomatch 4.0.4, Windows:
+`vitest list --changed HEAD` against a single-file dirty tree; vitest 4.1.9, picomatch 4.0.5, Windows.
+
+First pass, taken against `main` @ `0bf1f411` (before #1873 added a test file, so the suite total was 322):
 
 | checkout | dirty file | test files selected |
 |---|---|---|
 | `C:\Claude\Projects\wt-force-rerun-triggers` (non-dotted) | `package.json` | **322** |
 | `…\.claude\worktrees\ops33-probe` (dotted) | `package.json` | **0** |
 | dotted, with the dot-tolerant pattern applied | `package.json` | **322** |
+
+Confirmed afterwards in a **single** dotted checkout with only the configs swapped between `main` @ `7b0cc955` and this branch — the cleaner comparison, since it varies one thing:
+
+| config | `main` | this branch |
+|---|---|---|
+| `vitest.config.ts` | 1 | **323** |
+| `server/vitest.config.ts` | 0 | **446** |
+| `server/vitest.config.slow.ts` | 0 | **10** |
+
+323 is the full frontend suite post-#1873 (`vitest list --filesOnly` → 323). The lone `1` on `main` is the new test file itself, selected via its real import edge to `vitest.config.ts`.
 
 ## Relationship to ops-30 / #1873
 
@@ -52,10 +64,10 @@ The trailing `/**` is dropped — the new form matches the target file directly.
 | file | triggers today (post-#1873) | count |
 |---|---|---|
 | `vitest.config.ts` | `package.json`, `{vitest,vite}.config.ts`, `src/test/setup.ts`, `openapi.yaml` | 4 |
-| `server/vitest.config.ts` | `package.json`, `{vitest,vite}.config.ts`, `openapi.yaml` | 3 |
+| `server/vitest.config.ts` | `package.json`, `{vitest,vite}.config.ts`, `openapi.yaml`, **`vitest.config.slow.ts`** (added, see Amendments #1) | 4 |
 | `server/vitest.config.slow.ts` | `package.json`, `vitest.config.slow.ts` | 2 |
 
-All 9 are rewritten. Nested braces (`{**/{vitest,vite}.config.ts,…}`) are verified during implementation before being committed.
+All 10 are rewritten. Nested braces (`{**/{vitest,vite}.config.ts,…}`) are verified during implementation before being committed.
 
 ### 2. Tests — extend, do not add
 
@@ -93,6 +105,18 @@ The synthetic-root comments in both files are rewritten: they currently describe
 ## Risks
 
 - **Concurrent session.** PR #1873 touched these exact files and its cleanup deleted an earlier branch and worktree of this work mid-session. Mitigation: commit and push early so the branch survives another prune, and re-check `main` before opening the PR.
+
+## Amendments after independent review
+
+The Opus review pass on PR #1879 returned no HIGH/CRITICAL findings and confirmed the core fix and the tests' non-placebo status by mutation. Seven findings were folded in:
+
+1. **`server/vitest.config.ts` gained a `vitest.config.slow.ts` trigger.** The `{vitest,vite}.config.ts` brace never matched `vitest.config.slow.ts`, and nothing else created an edge (`SLOW_FILES` has no importers; the guard test reaches both configs by runtime-computed dynamic import). So a slow-config-only diff selected **zero** tests from the suite that holds its own guard — the guard could have been reverted with CI green. Trigger count is therefore **10**, not 9.
+2. **Both tests now cover `vite.config.ts`.** Narrowing the brace to `vitest.config.ts` previously left every assertion green while dropping coverage for the vite build config. Mutation-verified: 3 cases go red.
+3. **The one-segment bound is now documented** in the config comment, CONTRIBUTING.md and the release notes. Two dot segments still miss — a known bound, and a loud one: the `this checkout` case goes red rather than under-selecting.
+4. **Negative controls use real files** (`src/main.tsx`, `tsconfig.json`, `apps/android/pubspec.yaml`) with their own `existsSync` guards, replacing `src/App.tsx`, which does not exist in this repo. Three shapes instead of one, so a widening to a suffix glob is caught, not just a bare globstar.
+5. **Measured numbers corrected** — see the two tables above; the original single figure conflated a pre-#1873 total with a post-#1873 one. picomatch is 4.0.5, not 4.0.4.
+6. **"every trigger" softened to "every glob trigger".** Vitest appends resolved `setupFiles` as absolute paths, which carry no wildcard and cross dot segments fine, so one implicit trigger always worked. This does not affect the measured zero-selection result — a `package.json`-only diff never touches the setup file.
+7. **`absPathUnder` derives nesting** via `relative(REPO_ROOT, base)` instead of comparing identity against `SERVER_ROOT`, which would have silently re-introduced the earlier finding-11 bug the moment a third base was added.
 
 ## Out of scope
 

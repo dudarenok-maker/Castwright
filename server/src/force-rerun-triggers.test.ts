@@ -27,7 +27,7 @@
 import { describe, it, expect } from 'vitest';
 import picomatch from 'picomatch';
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const SERVER_ROOT = resolve(__dirname, '..');
@@ -76,30 +76,50 @@ const ROOT_SHAPES = [
   { shape: 'this checkout', root: toPosix(REPO_ROOT) },
 ];
 
-/* Confirms `relFromRoot` (relative to `base`) names a real file, then builds
+/* Confirms `relFromBase` (relative to `base`) names a real file, then builds
    the absolute path to check under the given synthetic/real repo root.
 
    The composed path reflects `base`'s real nesting under the repo — finding
-   11 of the ops-30 review: this used to return `/repo/${relFromRoot}`
+   11 of the ops-30 review: this used to return `/repo/${relFromBase}`
    regardless of `base`, so "server package.json" actually asserted against
    `/repo/package.json`, not `/repo/server/package.json`. Every trigger
    starts with a leading globstar segment, so nested paths match in reality
    either way, which is why the bug never failed a test — but the test wasn't
-   proving what its own label claimed. */
-function absPathUnder(root: string, base: string, relFromRoot: string): string {
-  expect(existsSync(resolve(base, relFromRoot))).toBe(true);
-  return base === SERVER_ROOT ? `${root}/server/${relFromRoot}` : `${root}/${relFromRoot}`;
+   proving what its own label claimed.
+
+   The nesting is derived rather than compared against SERVER_ROOT: an
+   identity check re-introduces exactly that bug the moment a third base is
+   added (it would silently fall through to the repo-root branch). */
+function absPathUnder(root: string, base: string, relFromBase: string): string {
+  expect(existsSync(resolve(base, relFromBase))).toBe(true);
+  return [root, toPosix(relative(REPO_ROOT, base)), relFromBase].filter(Boolean).join('/');
 }
 
 const MAIN_COVERED = [
   { rel: 'package.json', file: 'server package.json', base: SERVER_ROOT },
   { rel: 'vitest.config.ts', file: 'this config file', base: SERVER_ROOT },
+  /* The slow config is NOT matched by the `{vitest,vite}.config.ts` brace —
+     it needs its own trigger, and this suite is where its guard lives. */
+  { rel: 'vitest.config.slow.ts', file: 'the slow-tier config', base: SERVER_ROOT },
+  /* Pins the `vite` half of the brace. Without a case for it, narrowing the
+     trigger to `vitest.config.ts` would leave every assertion green while
+     silently dropping coverage for the vite build config. */
+  { rel: 'vite.config.ts', file: 'the vite build config', base: REPO_ROOT },
   { rel: 'openapi.yaml', file: 'the API contract', base: REPO_ROOT },
 ];
 
 const SLOW_COVERED = [
   { rel: 'package.json', file: 'server package.json', base: SERVER_ROOT },
   { rel: 'vitest.config.slow.ts', file: 'this config file', base: SERVER_ROOT },
+];
+
+/* Real files that must NOT match. More than one shape, so widening a dead
+   trigger to something like `**` + a suffix glob is caught rather than only
+   the crudest `**`. */
+const NOT_COVERED = [
+  { rel: 'src/index.ts', file: 'an ordinary server source file', base: SERVER_ROOT },
+  { rel: 'tsconfig.json', file: 'a JSON file that is not a manifest', base: REPO_ROOT },
+  { rel: 'apps/android/pubspec.yaml', file: 'a YAML file that is not the contract', base: REPO_ROOT },
 ];
 
 const crossProduct = (covered: typeof MAIN_COVERED) =>
@@ -116,8 +136,8 @@ describe('server/vitest.config.ts forceRerunTriggers', () => {
   /* Guards against "fixing" a dead trigger by widening it to something that
      matches everything — that would force a full run on every diff and
      quietly undo the point of --changed. */
-  it.each(ROOT_SHAPES)('does not match an ordinary source file from $shape', ({ root }) => {
-    expect(matchesTrigger(mainTriggers, `${root}/server/src/index.ts`)).toBe(false);
+  it.each(crossProduct(NOT_COVERED))('does not match $file from $shape', ({ rel, base, root }) => {
+    expect(matchesTrigger(mainTriggers, absPathUnder(root, base, rel))).toBe(false);
   });
 });
 
@@ -129,7 +149,7 @@ describe('server/vitest.config.slow.ts forceRerunTriggers', () => {
     },
   );
 
-  it.each(ROOT_SHAPES)('does not match an ordinary source file from $shape', ({ root }) => {
-    expect(matchesTrigger(slowTriggers, `${root}/server/src/index.ts`)).toBe(false);
+  it.each(crossProduct(NOT_COVERED))('does not match $file from $shape', ({ rel, base, root }) => {
+    expect(matchesTrigger(slowTriggers, absPathUnder(root, base, rel))).toBe(false);
   });
 });
