@@ -33,9 +33,23 @@ function findFirstNodeOrNpmStep(run) {
 // Pull the leading major version out of an `engines.node` range like
 // ">=22.22.0" — good enough for the single ">=" floor this repo writes, not a
 // general semver-range parser.
+//
+// It deliberately REFUSES anything more complex rather than reading the floor
+// and ignoring the rest: on ">=22.22.0 <24.0.0" a floor-only read returns 22,
+// the pin (24) clears it, and the test passes green while the declared ceiling
+// actually EXCLUDES the pinned major. A guard that quietly stops guarding is
+// worse than no guard, so an unparseable range is a loud failure telling the
+// reader to check the pin by hand.
 function floorMajor(range) {
   const m = /^>=?\s*(\d+)\./.exec(range);
   if (!m) throw new Error(`unrecognised engines.node range: "${range}"`);
+  const rest = range.slice(m[0].length);
+  if (/[<|]/.test(rest)) {
+    throw new Error(
+      `engines.node "${range}" carries an upper bound or union this floor-only guard cannot reason about — ` +
+        'verify the conda `nodejs=` pin in install.js/update.js against it by hand, then teach floorMajor() the new form',
+    );
+  }
   return Number(m[1]);
 }
 
@@ -49,17 +63,26 @@ test('update.js pins a Node major via conda install', () => {
   assert.ok(pin, 'expected a `conda install … nodejs=<major>` step in update.js');
 });
 
-test('update.js pins Node before its first node/npm step', () => {
-  const pin = findCondaNodePinStep(update.run);
-  const firstUse = findFirstNodeOrNpmStep(update.run);
-  assert.ok(pin, 'expected update.js to pin Node at all');
-  assert.ok(firstUse !== -1, 'expected update.js to have at least one node/npm step');
-  assert.ok(
-    pin.index < firstUse,
-    `conda-install-Node step (index ${pin.index}) must come before the first node/npm step (index ${firstUse}) — ` +
-      'a step that runs before the pin still runs on whatever Node was already on PATH',
-  );
-});
+// Both launchers carry the same ordering constraint, and it is declared as a
+// durable invariant in docs/features/218-pinokio-installer.md (invariant 2).
+// Asserting it for update.js alone let a reorder of install.js's run[] — which
+// reintroduces the whole bug on every FRESH install — ship with all tests green.
+for (const [name, script] of [
+  ['install.js', install],
+  ['update.js', update],
+]) {
+  test(`${name} pins Node before its first node/npm step`, () => {
+    const pin = findCondaNodePinStep(script.run);
+    const firstUse = findFirstNodeOrNpmStep(script.run);
+    assert.ok(pin, `expected ${name} to pin Node at all`);
+    assert.ok(firstUse !== -1, `expected ${name} to have at least one node/npm step`);
+    assert.ok(
+      pin.index < firstUse,
+      `${name}: conda-install-Node step (index ${pin.index}) must come before the first node/npm step (index ${firstUse}) — ` +
+        'a step that runs before the pin still runs on whatever Node was already on PATH',
+    );
+  });
+}
 
 test('install.js and update.js pin the same Node major', () => {
   const installPin = findCondaNodePinStep(install.run);

@@ -7,7 +7,10 @@
   the real cause. Run `node --version` first. Node 20 stopped receiving security fixes in April 2026,
   so this moves us onto a version that's still being looked after. If you installed through Pinokio,
   there's nothing for you to install by hand — Castwright now sets up its own Node 24 as part of the
-  Pinokio install, and an existing Pinokio install picks that up the next time it updates.
+  Pinokio install. One wrinkle if you already have Castwright through Pinokio: the update that brings
+  you to this version still runs on your old setup, and the new Node only takes effect from the update
+  after that. Everything keeps working in between; it just means Pinokio installs settle onto the new
+  version one release later than fresh ones do.
 - **The speech engine now runs on a version we've actually tested.** Until now, the exact
   speech runtime Castwright installed depended on the day you installed it — two people with
   identical machines could quietly end up on different builds, which made "it sounds different

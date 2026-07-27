@@ -410,12 +410,25 @@ sidecar**, and **confirming the pinned Node is the one actually used**.
 > kernel bundles — conda envs prepend to PATH, so the pinned Node should shadow the
 > bundled one, but that shadowing is unverified outside this repo's reasoning. Then
 > confirm Install → Start still completes end to end (this pin adds a package to the
-> conda env; a bad channel/solve would surface here, not in any local test). Also
-> exercise the **mid-life-upgrade path**: an install made before this change, taken
-> through Update, should end up on the pinned Node without requiring a fresh install —
-> confirm `node_modules` still works after that Node-major swap (native-module ABI is
-> the risk; `npm ci` in the same update rebuilds against whatever Node is now on PATH,
-> which should self-heal it, but it's unproven on-box).
+> conda env; a bad channel/solve would surface here, not in any local test).
+>
+> **The mid-life-upgrade path, and the lag you should EXPECT rather than report as a
+> bug.** Pinokio loads `update.js` from the release the user currently has checked out
+> and iterates the `run[]` it loaded; `resolve-release.js` `git checkout`s the new tag
+> *inside* that run, replacing the file on disk without affecting the loaded array. So
+> updating **from a pre-pin release runs the OLD `update.js`** — no pin step — and does
+> that update's `npm ci`/build on Pinokio's bundled Node. **This is expected.** The pin
+> takes effect from the *next* Update.
+>
+> Concretely: take an install from a pre-pin release, Update once, and check
+> `node --version` — reporting the **bundled** version here is the correct result, not a
+> failure. Update a second time and it should report **24.x**. A tester who sees the
+> first result and files "the pin doesn't work" has found the documented behaviour, not
+> a defect. What genuinely wants confirming is that the second Update converges, and
+> that `node_modules` still works across that Node-major swap (native-module ABI is the
+> nominal risk, though every native artifact in both trees is a prebuilt N-API binary,
+> and `npm ci` deletes and rebuilds `node_modules` anyway — so this should self-heal;
+> unproven on-box).
 >
 > Criteria live in `docs/features/218-pinokio-installer.md` open-verification item 2
 > (updated in the same PR). **The release notes for 1.15.0 deliberately do not promise

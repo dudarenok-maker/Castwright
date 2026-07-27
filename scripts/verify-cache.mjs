@@ -57,7 +57,16 @@ export const STEPS = [
     name: 'test:pinokio',
     inputs: {
       globs: ['pinokio-scripts/**'],
-      extraFiles: ['pinokio.js', 'scripts/run-pinokio-tests.mjs'],
+      /* package.json is an input because node-pin.test.js reads `engines.node`
+         at RUNTIME to check the conda `nodejs=` pin still satisfies the floor.
+         Without it the input hash ignores the one file that change lives in, so
+         a floor raise touching nothing under pinokio-scripts/ prints [cached]
+         and the drift guard never runs — green locally on exactly the
+         regression it exists to catch. (Cloud CI still fires it: verify.yml's
+         `shared` scope matches root package.json. This closes the LOCAL half.)
+         Same shape as the runtime-read pin that went inert under
+         `vitest --changed` in #1847. */
+      extraFiles: ['pinokio.js', 'scripts/run-pinokio-tests.mjs', 'package.json'],
       includeLockfiles: [],
     },
   },

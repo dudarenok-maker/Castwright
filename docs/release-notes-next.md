@@ -281,15 +281,22 @@ history at cut time.
   - **Pinokio no longer depends on whatever Node its own kernel bundles.** `pinokio-scripts/install.js`
     step 1 now conda-installs a pinned `nodejs=24` alongside `ffmpeg mkcert` (matching `.nvmrc` and
     every CI workflow), replacing the unimplemented TODO that file carried since it was written.
-    `pinokio-scripts/update.js` re-asserts the same pin so an install made before this change picks it
-    up on its next Update instead of staying on the bundled Node forever. `pinokio-scripts/lib/node-pin.test.js`
-    pins both scripts' pin and asserts it satisfies `package.json`'s `engines.node` floor by parsing both
-    rather than hardcoding, so a future floor raise without a matching pin bump — exactly what this PR's
-    own floor raise would have been, against the old unpinned state — fails that test. What's still owed
-    on-box: confirming the conda Node actually shadows Pinokio's bundled one on PATH, and that a mid-life
-    Update onto the new pin doesn't strand a `node_modules` built against a different Node ABI — tracked
-    in `docs/testing/onbox-acceptance-register.md` (E1); plan 218's open-verification item 2 is updated
-    to match.
+    `pinokio-scripts/update.js` re-asserts the same pin so an install made before this change converges
+    onto it instead of staying on the bundled Node forever. **It converges one Update late, and that is
+    not fixable here:** Pinokio loads `update.js` from the *currently checked-out* release and iterates
+    the `run[]` it loaded, while `resolve-release.js` `git checkout`s the new tag mid-run — so a user
+    updating FROM a pre-pin release executes their old `update.js` (no pin step) and does that update's
+    `npm ci`/build on the bundled Node. The pin applies from their next Update on; fresh installs get it
+    immediately. An earlier draft of this entry said "picks it up on its next Update", which was wrong.
+    `pinokio-scripts/lib/node-pin.test.js` pins both scripts' pin, asserts each conda step precedes that
+    script's first `node`/`npm` step, and checks the pin satisfies `package.json`'s `engines.node` floor
+    by **parsing both** rather than hardcoding — so a future floor raise without a matching pin bump
+    fails that test. `verify-cache.mjs` gains `package.json` as a `test:pinokio` input, since without it
+    a floor-only change prints `[cached]` and the guard never runs locally. What's still owed on-box:
+    that the conda Node actually shadows Pinokio's bundled one on PATH, that the solve succeeds against
+    the existing env, and that the one-Update lag behaves as described — tracked in
+    `docs/testing/onbox-acceptance-register.md` (E1); plan 218's invariant 2 and open-verification
+    item 2 are both updated to match. (#1878, closes #1876)
   - `react-router-dom` is now a **dead package**: v8 folded the DOM APIs back into `react-router` and
     left `react-router-dom` frozen at 7.18.1 permanently. 24 files re-pointed.
   - **The trap, recorded because it is invisible to `tsc`:** v8 did not simply rename the package.
