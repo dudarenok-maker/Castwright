@@ -320,5 +320,68 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
     const clonedPlayBtn = clonedDrawer.getByRole('button', { name: /Play 12s sample/i });
     await expect(clonedPlayBtn).toBeEnabled({ timeout: 5_000 });
     await expect(clonedDrawer.getByTestId('profile-drawer-my-voices-error')).toHaveCount(0);
+
+    /* ── Step 7: Coqui XTTS v2 (fs-38 Wave 3c, Task 30) — appended at the very
+       end so it can't shift the four hardcoded voice-library-card counts
+       earlier in this file (6/7/8/9 at Steps 1/2/5/6 above).
+
+       `lib-cloned-demo` (src/mocks/voice-library.ts) is the one fixture Task
+       29 gave a READY `xtts` slot alongside its `qwen` one, specifically so
+       the card can show BOTH engines' readiness chips — that's the positive
+       half below. The negative half is the only "assign a clone to Coqui"
+       outcome the CURRENT mock actually produces: `mockAssignLibraryVoice`
+       mirrors the real assign route as it exists on server commit
+       `e52619d3`, where the route still hardcodes the Qwen slot (server
+       Task 24, which makes it engine-aware, is landing in the other Wave 3c
+       lane right now, not yet in this branch's mock) — so a cloned voice
+       routed to Coqui 409s today exactly like one routed to Kokoro does, per
+       `_mockAssignGuardError`'s `routedEngine !== 'qwen'` check and the
+       pinned unit test "mockAssignLibraryVoice still 409s lib-cloned-demo on
+       a coqui assign, even though its xtts slot is ready" in
+       src/lib/api.voice-library.test.ts. A "coqui assign succeeds" case
+       is NOT reachable against today's mock — asserting one here would just
+       be a spec written against tomorrow's server, not this branch's. ── */
+
+    // Positive: the card shows readiness chips for BOTH engines.
+    await page.goto('/#/voices');
+    await waitForRouteReady(page);
+    const myVoicesTabCoqui = page.getByRole('button', { name: 'My voices', exact: true });
+    await expect(myVoicesTabCoqui).toBeVisible({ timeout: 10_000 });
+    await myVoicesTabCoqui.click();
+    const clonedDemoCard = page.getByTestId('voice-library-card-lib-cloned-demo');
+    await expect(clonedDemoCard).toBeVisible({ timeout: 10_000 });
+    await expect(
+      clonedDemoCard.getByTestId('voice-library-engine-qwen-lib-cloned-demo'),
+    ).toBeVisible();
+    await expect(
+      clonedDemoCard.getByTestId('voice-library-engine-coqui-lib-cloned-demo'),
+    ).toBeVisible();
+
+    /* Negative: assigning that same cloned voice to a Coqui-routed character
+       is rejected, and the UI says so. Driven through the profile-drawer
+       picker, not VoiceLibraryPanel's "My voices" sidebar group — the
+       latter's onAssignTo dispatch (src/components/voice-library-panel.tsx)
+       has no .unwrap()/catch, so a server rejection there is silently
+       swallowed and a user gets no feedback (a known gap; see #1846-era
+       follow-up filed against that surface). The drawer's `useMyVoice`
+       DOES catch and surface `libraryActionError`, same as the Step 3/4/6
+       assigns above. Halloran is untouched by every earlier step here, so
+       this can't interact with any prior assignment. */
+    await page.goto('/#/books/ns/cast');
+    await waitForRouteReady(page);
+    await expect(page.locator('[data-tour-id="cast-roster"]')).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByTestId('cast-row-halloran')).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId('cast-row-halloran').click();
+
+    const hallorranDrawer = page.locator('[data-tour-id="profile-drawer"]');
+    await expect(hallorranDrawer).toBeVisible({ timeout: 10_000 });
+    await hallorranDrawer.getByLabel('Voice engine for this character').selectOption('coqui');
+    const clonedDemoPick = hallorranDrawer.getByTestId('profile-drawer-my-voice-lib-cloned-demo');
+    await expect(clonedDemoPick).toBeVisible({ timeout: 5_000 });
+    await clonedDemoPick.click();
+
+    const coquiAssignError = hallorranDrawer.getByTestId('profile-drawer-my-voices-error');
+    await expect(coquiAssignError).toBeVisible({ timeout: 5_000 });
+    await expect(coquiAssignError).toContainText(/Cloned voices render on Qwen/);
   });
 });
