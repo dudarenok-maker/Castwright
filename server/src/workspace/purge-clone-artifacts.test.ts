@@ -299,9 +299,45 @@ describe('purgeCloneArtifacts', () => {
     expect(ptFileExistedAtFirstEvict).toBe(false);
   });
 
-  it('does not throw when the sidecar is unreachable', async () => {
+  /* Task 14a — this test used to assert `{ failed: [] }` here: a rejected
+     fetch on every evict call (sidecar fully unreachable) used to vanish
+     into a bare `catch {}` with no accumulator of its own, so
+     `purgeCloneArtifacts` never throwing read as "and nothing was lost"
+     too. It does not throw (still true — this stays best-effort), but the
+     three lost evicts (qwen base, qwen -preview, xtts) must now show up in
+     `failed` instead of being silently absorbed. */
+  it('does not throw when the sidecar is unreachable, but reports every lost evict in `failed`', async () => {
     fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
-    await expect(purge.purgeCloneArtifacts('u1')).resolves.toEqual({ failed: [] });
+    const result = await purge.purgeCloneArtifacts('u1');
+    expect(result.failed).toEqual([
+      'sidecar:qwen:qwen-u1',
+      'sidecar:qwen:qwen-u1-preview',
+      'sidecar:xtts:xtts-u1',
+    ]);
+  });
+
+  /* Task 14a — the OTHER failure shape: the sidecar is reached and responds,
+     but with a non-2xx status (evict itself failed, e.g. the sidecar
+     couldn't find/pop the cache entry). This never threw/rejected before —
+     `fetch` only rejects on a network error/timeout, not on a non-2xx HTTP
+     response — so the prior bare `catch {}` never even ran; the outcome was
+     discarded because nothing checked `res.ok` at all. Timeout/rejection
+     (above) and non-2xx (here) are different code paths through
+     `evictSidecarVoice` and must both be covered. */
+  it('a non-2xx sidecar evict response is reported in `failed` (different code path than a rejection)', async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 500 });
+    const result = await purge.purgeCloneArtifacts('u1');
+    expect(result.failed).toEqual([
+      'sidecar:qwen:qwen-u1',
+      'sidecar:qwen:qwen-u1-preview',
+      'sidecar:xtts:xtts-u1',
+    ]);
+  });
+
+  it('a clean sidecar evict (2xx on every call) still reports failed: []', async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+    const result = await purge.purgeCloneArtifacts('u1');
+    expect(result.failed).toEqual([]);
   });
 
   /* Review I-2 — every unlink used to be `rm(f, { force: true }).catch(() =>
@@ -349,7 +385,12 @@ describe('purgeCloneArtifacts', () => {
      `CoquiEngine._latents_cache` for the rest of the process's lifetime
      (unlike the qwen prompt cache, which IS cleared on the base model's own
      `/unload`, there is no TTL reclaim for XTTS's cache) — but that must not
-     stop the qwen evicts (or anything else) from running. */
+     stop the qwen evicts (or anything else) from running.
+
+     Task 14a — this test used to assert `result.failed).toEqual([])` here,
+     i.e. it pinned the exact defect Task 14a closes: the lost xtts evict
+     (the one that matters most, since XTTS's cache has no TTL) vanished
+     with no trace in the return value. Flipped to assert it now shows up. */
   it('an xtts evict failure does not skip anything else, and files are still gone', async () => {
     const ptFile = seedXtts('xtts-u1', 'pt');
     fetchMock
@@ -361,7 +402,7 @@ describe('purgeCloneArtifacts', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(existsSync(ptFile)).toBe(false);
-    expect(result.failed).toEqual([]);
+    expect(result.failed).toEqual(['sidecar:xtts:xtts-u1']);
   });
 
   /* Fix wave (review I-2) — `purgeCloneArtifacts` can run INSIDE

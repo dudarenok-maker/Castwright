@@ -1221,7 +1221,17 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
    `revokedAt` is set regardless. But a partial erasure must not read as a
    silent, total success: when any path survives, this adds
    `artifactPurgeIncomplete`/`artifactPurgeFailedPaths` to the response
-   rather than claiming clean erasure it didn't achieve. */
+   rather than claiming clean erasure it didn't achieve.
+
+   Task 14a — that same `failed` array (and therefore this same
+   `artifactPurgeIncomplete` gate) now ALSO covers a failed/timed-out
+   sidecar cache evict, not just file unlinks. Before this, a bare
+   `catch {}` inside `purgeCloneArtifacts` swallowed both a non-2xx evict
+   response AND a timeout/rejection, so revoke could answer 200 with no
+   `artifactPurgeIncomplete` while XTTS's TTL-less latents cache
+   (`CoquiEngine._latents_cache`) still held the voice — this route needed
+   no code change of its own to pick that up, since it already forwards
+   `purgeResult.failed` verbatim. */
 voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;

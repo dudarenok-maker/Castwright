@@ -2262,7 +2262,17 @@ describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
      (voice.json) stays readable so the revoked entry is still
      visible/inspectable in the library. Proven via real erasure effects (not
      a spy) — see the file-header note above the hoisted mocks for why a
-     self-mocked spy on purgeCloneArtifacts was rejected. */
+     self-mocked spy on purgeCloneArtifacts was rejected.
+
+     Task 14a — this test used to mock the sidecar as unreachable and assert
+     ONLY a clean 200, i.e. it pinned the OLD swallowing contract: a failed
+     sidecar evict (3 calls here — qwen base, qwen -preview, xtts — all
+     rejecting) never surfaced anywhere in the response. That is exactly the
+     Property-2 residual Task 14a closes, so this test now asserts the NEW
+     contract instead: `artifactPurgeIncomplete` is true and
+     `artifactPurgeFailedPaths` names all three failed sidecar evicts. The
+     revoke still succeeds (200, revokedAt set, files gone) — only the
+     "silent total success" claim is what's fixed. */
   it('purges clone artifacts (no deleteEntryDir) and leaves voice.json readable', async () => {
     const voiceUuid = 'r-purge-1';
     await vl.writeEntry(
@@ -2309,6 +2319,18 @@ describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
       // ...but the manifest dir survives (no deleteEntryDir).
       const onDisk = await vl.readEntry(voiceUuid);
       expect(onDisk?.consent?.revokedAt).toBeTruthy();
+
+      // Task 14a — the sidecar is unreachable for every evict call in this
+      // test, so the revoke response must say so rather than claiming clean
+      // erasure it didn't achieve.
+      expect(res.body.artifactPurgeIncomplete).toBe(true);
+      expect(res.body.artifactPurgeFailedPaths).toEqual(
+        expect.arrayContaining([
+          `sidecar:qwen:${qwenName}`,
+          `sidecar:qwen:${qwenName}-preview`,
+          expect.stringContaining('sidecar:xtts:'),
+        ]),
+      );
     } finally {
       fetchSpy.mockRestore();
     }

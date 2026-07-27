@@ -50,20 +50,30 @@ async function unlinkTracked(f: string, voiceUuid: string, failed: string[]): Pr
   }
 }
 
-/** fs-38 Wave 3c, Task 13 — one best-effort sidecar cache-evict POST, shared
-    by the qwen base/`-preview` calls and the new xtts call below (same
-    shape: `{ voiceId }` JSON body, independently swallow-on-failure so one
-    engine's unreachable sidecar can't skip another's evict). Evict is
-    ALWAYS best-effort — file erasure (the `files` loop above) is what must
-    be reliable. For XTTS specifically this matters more than for qwen: an
-    unreachable sidecar here leaves the voice's latents resident in
+/** fs-38 Wave 3c, Task 13 — one sidecar cache-evict POST, shared by the qwen
+    base/`-preview` calls and the xtts call below (same shape: `{ voiceId }`
+    JSON body). Independently attempted/reported per call so one engine's
+    unreachable sidecar can't skip — or hide — another's evict outcome.
+
+    Task 14a — this used to be a bare `catch {}` that discarded the outcome
+    entirely, and it never even inspected the response status: a *reached*
+    sidecar that answered non-2xx (evict itself failed) read as success
+    exactly like a real one. Both failure shapes — non-2xx and
+    timeout/rejection — are now returned to the caller instead of dropped,
+    because file erasure alone is not "erasure is total" for XTTS: a failed
+    evict here leaves the voice's latents resident in
     `CoquiEngine._latents_cache` for the rest of the sidecar process's
     lifetime — unlike the qwen prompt cache, which IS cleared whenever the
     base Qwen model itself unloads, XTTS's latents cache has no TTL/idle
-    reclaim of its own to fall back on. */
-async function evictSidecarVoice(route: 'qwen' | 'xtts', voiceId: string): Promise<void> {
+    reclaim of its own to fall back on. Still never retried here — see the
+    caller-side note on `purgeCloneArtifacts`'s `failed` accumulator for
+    why. */
+async function evictSidecarVoice(
+  route: 'qwen' | 'xtts',
+  voiceId: string,
+): Promise<{ ok: true } | { ok: false; detail: string }> {
   try {
-    await fetch(`${getResolvedSidecarUrl()}/${route}/evict-voice`, {
+    const res = await fetch(`${getResolvedSidecarUrl()}/${route}/evict-voice`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ voiceId }),
@@ -74,20 +84,58 @@ async function evictSidecarVoice(route: 'qwen' | 'xtts', voiceId: string): Promi
       // sidecar that accepts the connection but never responds would
       // otherwise park that uuid's lock indefinitely — including a
       // user-initiated revoke's own SECOND `updateEntry` call, right after
-      // this one. Bound it instead of leaving it unbounded; still
-      // best-effort — the catch below swallows a timeout exactly like any
-      // other unreachable-sidecar failure, unchanged from before.
+      // this one. Bound it instead of leaving it unbounded.
+      //
+      // Task 14a correction (Task 14 review) — the 10s figure is NOT sized
+      // against a Python-side synth lock. `/qwen/evict-voice` takes only
+      // `qwen._cache_lock` around a dict pop; `/xtts/evict-voice` takes
+      // only `coqui._latents_lock` around a membership test plus an epoch
+      // bump. Neither touches `_synth_lock` or does GPU work, so the
+      // sidecar side of this call is cheap — the bound exists purely to
+      // protect the NODE-side per-uuid lock above from a wedged/OOM'd
+      // process that never responds at all. Three evicts run sequentially
+      // per `purgeCloneArtifacts` call (2× qwen + 1× xtts), so the
+      // worst-case total wait is 3 × 10s = 30s, not 10s.
       signal: AbortSignal.timeout(10_000),
     });
-  } catch {
-    /* sidecar unreachable (or timed out) — non-fatal */
+    if (!res.ok) {
+      return { ok: false, detail: `sidecar responded ${res.status}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    // Network error, connection refused, or the 10s AbortSignal firing —
+    // "sidecar unreachable or too slow", the other failure shape.
+    return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }
 }
 
 /** Review I-2 — returns the paths (if any) that could NOT be removed, so a
     caller (e.g. the revoke route) can surface a partial-erasure warning
-    instead of silently claiming a clean 200. Still best-effort/never-throws
-    for every other step — only the per-file removal outcome is tracked. */
+    instead of silently claiming a clean 200.
+
+    Task 14a — `failed` now ALSO carries a failed/timed-out sidecar cache
+    evict, marked `sidecar:<qwen|xtts>:<voiceId>` (not a real fs path — this
+    is the transport already wired to the caller, and the revoke route only
+    ever checks its length/reads it as opaque diagnostic strings). Before
+    this, a failed evict was swallowed by a bare `catch {}` with no
+    accumulator of its own, so revoke could answer 200 with no
+    `artifactPurgeIncomplete` while XTTS's TTL-less latents cache still held
+    the voice.
+
+    Deliberately NOT retried: `purgeCloneArtifacts` can be called from
+    inside an `updateEntry` per-uuid mutate elsewhere (the cloned-resolver's
+    revoked/gone status-stamp, `clone-voice-resolver.ts`), and a retry loop
+    would extend that lock hold for a best-effort step — the evict endpoint
+    is deliberately lock-free precisely so a slow/wedged sidecar can't block
+    it, but a Node-side retry would still serialise onto the SAME per-uuid
+    lock this function may already be running inside of. The actual
+    security enforcement is the `revokedAt`/entry-deleted state, not sidecar
+    cache residency — the resolver classifies a revoked voice as
+    unrenderable without ever consulting sidecar cache presence — so
+    surfacing the failure (for a human/ops retry via a second revoke call)
+    is enough; silently blocking longer on an operation whose own contract
+    says "never block" is not. Still best-effort/never-throws for every
+    other step — only the per-file and per-evict outcomes are tracked. */
 export async function purgeCloneArtifacts(
   voiceUuid: string,
   opts: { deleteEntryDir?: boolean; deleteMasterClip?: boolean } = {},
@@ -196,13 +244,32 @@ export async function purgeCloneArtifacts(
   // M2 (review) — evict both the base and `-preview` sidecar cache entries so
   // a `-preview` clone-prompt can't linger resident in sidecar memory after
   // "every artifact" was supposedly erased. Each POST is independently
-  // best-effort — one failing must not skip the other.
+  // best-effort — one failing must not skip the other. Task 14a — each
+  // outcome is now recorded into `failed` instead of discarded.
   for (const voiceId of [key, `${key}-preview`]) {
-    await evictSidecarVoice('qwen', voiceId);
+    const result = await evictSidecarVoice('qwen', voiceId);
+    if (!result.ok) {
+      failed.push(`sidecar:qwen:${voiceId}`);
+      console.warn(
+        `[purge-clone-artifacts] sidecar evict failed for qwen voice "${voiceId}" ` +
+          `(library voice "${voiceUuid}") — it may still be resident in the sidecar's ` +
+          `in-process cache:`,
+        result.detail,
+      );
+    }
   }
   // fs-38 Wave 3c, Task 13 — the xtts-<uuid> sidecar cache entry
   // (CoquiEngine._latents_cache), via /xtts/evict-voice (Task 11). No
   // `-preview` variant — see the `xttsKey` comment above.
-  await evictSidecarVoice('xtts', xttsKey);
+  const xttsEvictResult = await evictSidecarVoice('xtts', xttsKey);
+  if (!xttsEvictResult.ok) {
+    failed.push(`sidecar:xtts:${xttsKey}`);
+    console.warn(
+      `[purge-clone-artifacts] sidecar evict failed for xtts voice "${xttsKey}" ` +
+        `(library voice "${voiceUuid}") — XTTS's latents cache has no TTL and may retain ` +
+        `the voice until the sidecar process restarts:`,
+      xttsEvictResult.detail,
+    );
+  }
   return { failed };
 }
