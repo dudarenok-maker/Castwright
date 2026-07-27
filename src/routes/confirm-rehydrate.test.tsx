@@ -15,7 +15,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route } from 'react-router';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { chaptersSlice } from '../store/chapters-slice';

@@ -4,7 +4,7 @@
   "private": true,
   "type": "commonjs",
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=22.22.0"
   },
   "scripts": {
     "start": "node scripts/start-app.mjs",
@@ -86,10 +86,10 @@
     "html-to-image": "^1.11.13",
     "multicast-dns": "^7.2.5",
     "qrcode": "^1.5.4",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "react-redux": "^9.2.0",
-    "react-router-dom": "^7.0.0",
+    "react-router": "^8.3.0",
     "redux-persist": "^6.0.0"
   },
   "devDependencies": {

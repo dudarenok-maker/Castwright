@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router';
 import { api, ApiError } from '../lib/api';
 import { PrimaryButton } from '../components/primitives';
 

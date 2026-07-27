@@ -212,6 +212,36 @@ history at cut time.
 
 ## 🔒 Security & dependencies
 
+- **react-router 7 → 8, `react-router-dom` dropped, and the supported Node floor raised to 22.22**
+  (fe-56, #1859). One PR because the upgrade is not adoptable without the floor: react-router 8.3.0
+  declares `engines.node >=22.22.0`.
+  - **Deployer-visible:** the minimum supported Node moves from **20.19 → 22.22**. Node 20 reached EOL
+    in April 2026 and 22 is the active LTS, so the floor was overdue independently of the router. The
+    Pinokio path is unaffected — it provisions its own Node.
+  - `react-router-dom` is now a **dead package**: v8 folded the DOM APIs back into `react-router` and
+    left `react-router-dom` frozen at 7.18.1 permanently. 24 files re-pointed.
+  - **The trap, recorded because it is invisible to `tsc`:** v8 did not simply rename the package.
+    `RouterProvider` (and `HydratedRouter`) live at the DOM-specific subpath **`react-router/dom`**,
+    whose `RouterProvider` wraps the base one with `flushSync: ReactDOM.flushSync`. Both modules export
+    a component of that name, so importing the wrong one **compiles, typechecks, and only breaks at
+    runtime**. Issue #1859 instructed rewriting every `react-router-dom` import to `react-router`,
+    which would have shipped exactly that break past `npm run typecheck` — the app has one
+    `RouterProvider` mount site. New `src/main.test.tsx` mocks both modules with distinct sentinels and
+    pins the DOM export; mutation-verified (reverting the import fails it).
+  - `react`/`react-dom` tightened `^19.0.0` → `^19.2.7`. The old range could resolve a React that v8
+    rejects, so the range was itself the defect. Vite was already 8.0.16, above v8's `>=7` floor.
+  - The floor is advertised in **four places that are not generated from each other** and must move
+    together: `package.json` `engines`, `INSTALL.md`, the hand-maintained wiki mirror
+    `docs/wiki/Installing-Castwright.md` (synced by `scripts/sync-wiki.mjs`, *not* derived from
+    INSTALL.md — it drifts silently), and `copilot-setup-steps.yml`, which was still pinned to Node 20
+    while every other workflow had moved to 24.
+  - `src/lib/router.ts` has a **zero-line diff** — the plan-01 `RouterStore` adapter seam held across a
+    router major. The `#/…` grammar is byte-identical: 43 unmodified `router.test.ts` assertions, 292
+    unmodified e2e specs over ~50 distinct hash shapes, 19 visual snapshots with no drift and nothing
+    blessed. Every v8 SSR/framework-mode breaking change was assessed inapplicable — this app is pure
+    client-side `createHashRouter` with no loaders, actions, or `meta` functions. Plan
+    [269](features/archive/269-react-router-v8-node-floor.md).
+
 - **Sidecar engine deps: kokoro-onnx 0.5.0, a real ONNX Runtime pin, and FastAPI 0.140 via `lifespan`** (#1846).
   Clears the actionable half of the `side-17` umbrella (#893), which an audit found was carrying three
   stale rationales.
