@@ -974,6 +974,68 @@ describe('ProfileDrawer model-voice override picker', () => {
     expect(screen.queryByTestId('coqui-clone-locked-note')).toBeNull();
   });
 
+  it('force-closes an already-open popover when the lock flips on mid-session, so Auto cannot null the clone slot (fs-38 Wave 3c Task 26 fix round 2 [F1 residual])', async () => {
+    /* The gap the first F1 fix missed: picking "Auto" calls onChange(null),
+       which carries no engine info at all, so a guard keyed on
+       `next?.engine === 'coqui'` never fires for it — and `disabled` alone
+       doesn't close an ALREADY-open popover. Reproduces the exact sequence
+       the reviewer described: starts unlocked (popover openable), the
+       character's coqui slot flips to a consented clone WHILE the popover is
+       open (mirrors a cross-tab BroadcastChannel sync updating the cast
+       slice mid-session — layout.tsx re-selects `character` from
+       `s.cast.characters` and passes a fresh prop down), then Auto must be
+       unreachable. */
+    setVoiceOverride.mockClear();
+    const unlockedCharacter: Character = {
+      ...brann,
+      ttsEngine: 'coqui',
+      overrideTtsVoices: { coqui: { name: 'Asya Anara' } }, // no provenance yet — unlocked
+    };
+    const unlockedVoice: Voice = {
+      ...brannVoice,
+      overrideTtsVoices: { coqui: { name: 'Asya Anara' } },
+    };
+    const { store, rerender } = renderDrawer(unlockedCharacter, {
+      voice: unlockedVoice,
+      voices: [unlockedVoice],
+      baseVoices: baseCatalog,
+    });
+
+    const trigger = await screen.findByRole('button', { name: /Model voice override/i });
+    expect(trigger).not.toBeDisabled();
+    fireEvent.click(trigger);
+    /* Popover genuinely open — Auto is a reachable option right now. */
+    expect(screen.getByRole('option', { name: /Auto — currently Coqui/i })).toBeTruthy();
+
+    /* Flip the lock ON while the popover stays open — simulates the clone
+       landing via a source other than this drawer's own click handler. */
+    const lockedCharacter: Character = {
+      ...unlockedCharacter,
+      overrideTtsVoices: {
+        coqui: { name: 'Asya Anara', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+      },
+    };
+    rerender(
+      <Provider store={store}>
+        <ProfileDrawer
+          character={lockedCharacter}
+          voice={unlockedVoice}
+          onClose={() => {}}
+          onSave={() => {}}
+          onLock={() => {}}
+        />
+      </Provider>,
+    );
+
+    /* The popover force-closes — Auto is no longer in the DOM at all, not
+       merely unclickable. */
+    expect(screen.queryByRole('option', { name: /Auto — currently Coqui/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /Model voice override/i })).toBeDisabled();
+
+    await Promise.resolve();
+    expect(setVoiceOverride).not.toHaveBeenCalled();
+  });
+
   it('shows a filled-slot indicator on the engine tab when that engine has an override', async () => {
     /* The "dot" badge on a tab tells the user at a glance which engines
        have a manual assignment without having to click each tab. */

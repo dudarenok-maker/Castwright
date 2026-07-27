@@ -11,7 +11,7 @@
    - Not loaded: trigger disabled, label collapses to "Loading base
      voice catalog…" (same UX as the legacy `<select disabled>`). */
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { IconCheck, IconChevD, IconPause, IconPlay, IconSpinner } from '../lib/icons';
 import type { BaseVoice, TtsEngine, TtsModelKey } from '../lib/types';
 import { useSamplePlayback } from '../lib/use-sample-playback';
@@ -55,8 +55,15 @@ interface VoiceOverridePickerProps {
       regardless of `baseVoicesLoaded` (e.g. a consented clone occupies
       this engine's slot; picking a catalog voice here would silently
       overwrite it via PUT /api/voices/:id/override). Absent/false
-      preserves the existing loaded/loading behaviour. */
+      preserves the existing loaded/loading behaviour. A popover already
+      open when this flips true is force-closed (see the effect below) —
+      `disabled` alone doesn't touch already-open state. */
   disabled?: boolean;
+  /** fs-38 Wave 3c Task 26 fix round 2 [a11y] — id of an element (e.g. an
+      explanatory note) that documents WHY the trigger is disabled, wired
+      onto the trigger's `aria-describedby` so a screen-reader user gets a
+      programmatic reason instead of only DOM-order discovery. */
+  describedById?: string;
 }
 
 const AUTO_VALUE = 'auto';
@@ -160,9 +167,21 @@ export function VoiceOverridePicker({
   previewText,
   previewModelKey,
   disabled = false,
+  describedById,
 }: VoiceOverridePickerProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
+
+  /* fs-38 Wave 3c Task 26 fix round 2 [F1 residual] — force-close a popover
+     that's already open when `disabled` flips true mid-session (e.g. a
+     clone lands on this character via the cross-tab BroadcastChannel sync
+     while this drawer is open). Without this, "Auto" stays pickable in the
+     already-rendered list even though the trigger itself is now disabled —
+     picking it would still null the whole overrideTtsVoices map. Fixes the
+     class (any future reason to disable while open), not just this one. */
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
 
   const autoLabel =
     engineTab === autoVoiceEngine
@@ -212,6 +231,7 @@ export function VoiceOverridePicker({
         aria-label={`Model voice override (${engineTab})`}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-describedby={describedById}
         disabled={!baseVoicesLoaded || disabled}
         onClick={() => setOpen((v) => !v)}
         className="w-full inline-flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink hover:border-ink/30 focus:outline-hidden focus:ring-2 focus:ring-magenta/30 disabled:opacity-60 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"

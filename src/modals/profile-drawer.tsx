@@ -1378,15 +1378,11 @@ export function ProfileDrawer({
                    since it's the cast-slice write this must guard against. */
                 coquiCloneLocked={character.overrideTtsVoices?.coqui?.provenance === 'cloned'}
                 onChange={async (next) => {
-                  /* Belt-and-suspenders: the picker's trigger is disabled
-                     while locked so this shouldn't fire for coqui, but never
-                     let a coqui write through while the clone marker is set. */
-                  if (
-                    next?.engine === 'coqui' &&
-                    character.overrideTtsVoices?.coqui?.provenance === 'cloned'
-                  ) {
-                    return;
-                  }
+                  /* The lock is enforced inside ModelVoiceOverridePicker,
+                     which guards on `tabLocked` before this ever fires (see
+                     its own onChange wrapper) — that's the only place that
+                     knows which tab a "next === null" (Auto) pick came from.
+                     A next?.engine check here couldn't cover Auto at all. */
                   setOverrideError(null);
                   const voiceIdForApi = voice?.id ?? character.voiceId ?? character.id;
                   /* Optimistic local update — slice mutation only takes effect
@@ -2301,13 +2297,29 @@ function ModelVoiceOverridePicker({
         voicesForTab={voicesForTab}
         selectedValue={selectedValue}
         baseVoicesLoaded={baseVoicesLoaded}
-        onChange={(next) => void onChange(next)}
+        onChange={(next) => {
+          /* fs-38 Wave 3c Task 26 fix round 2 [F1 residual] — guard on
+             `tabLocked` itself, not `next?.engine`: picking "Auto" calls
+             onChange(null), so `next?.engine` is undefined and carries no
+             information about which tab it came from. `tabLocked` is known
+             right here regardless of what was picked, so it's the only
+             correct place to block BOTH a specific coqui voice AND Auto.
+             (The parent drawer's onChange no longer needs its own
+             next?.engine === 'coqui' check — this supersedes it.) */
+          if (tabLocked) return;
+          void onChange(next);
+        }}
         previewText={previewText}
         previewModelKey={previewModelKey}
         disabled={tabLocked}
+        describedById={tabLocked ? `coqui-clone-locked-note-${voiceId}` : undefined}
       />
       {tabLocked && (
-        <p className="mt-2 text-[11px] text-ink/50" data-testid="coqui-clone-locked-note">
+        <p
+          id={`coqui-clone-locked-note-${voiceId}`}
+          className="mt-2 text-[11px] text-ink/50"
+          data-testid="coqui-clone-locked-note"
+        >
           This character's Coqui voice is a cloned voice — pick a different one from "My
           voices" above to replace it. This picker is locked so it can't silently overwrite
           the clone.
