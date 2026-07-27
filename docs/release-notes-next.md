@@ -200,10 +200,17 @@ history at cut time.
   `provider` from the active engine rather than per voice. `activeVariantFilter` gets the same
   derived-during-render treatment `activeLanguageFilter` got; `setVariantFilter` stays the sole
   state writer. This one is load-bearing for (a): without it a stale `variantFilter` would keep
-  `rollupIsNarrowed` true forever and pin the new panel on a populated library. Four cases in
-  `voices.test.tsx`, each placebo-verified against the specific line it locks — including a
-  control asserting a genuinely empty library still says "No voices yet". `LANGUAGE_LABELS`
-  moves to module scope now that the panel names the language too.
+  `rollupIsNarrowed` true forever and pin the new panel on a populated library. `rollupIsNarrowed`
+  is additionally gated on `library.length > 0` so the onboarding case is untouched — on an
+  empty library every tab is empty, so "try another tab" would be useless advice and a fresh
+  install clicking "This book (0)" still gets "Finish setting up a book"; the review's truth-table
+  pass proved that clause changes the outcome in exactly that one state and no other. Five cases
+  in `voices.test.tsx`, each placebo-verified against the specific line it locks — including a
+  control asserting a genuinely empty library still says "No voices yet". The facet's label map
+  moves to module scope now that the panel names the language too, as `FACET_LANGUAGE_LABELS`:
+  `library-slice.ts` already exports a `LANGUAGE_LABELS` and it is deliberately different
+  (endonyms — 'Русский', 'Deutsch' — for the book-library pills, against this one's exonyms),
+  so the two must not be confusable at an import site.
 
 ---
 

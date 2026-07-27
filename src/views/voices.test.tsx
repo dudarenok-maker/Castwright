@@ -2407,7 +2407,22 @@ describe('#1866 — the rollup empty state vs. the facet rows', () => {
     expect(screen.queryByText('No voices match this filter')).toBeNull();
   });
 
-  /* #1866 — the variant facet had #1834's exact defect, and a worse one:
+  /* Review of #1871 — an empty library has no tab with anything in it, so
+     "try another tab" would be useless advice. A fresh install clicking any
+     tab keeps the onboarding copy, which is why `rollupIsNarrowed` is gated
+     on `library.length > 0`. */
+  it('keeps the onboarding copy on an empty library whichever tab is selected', async () => {
+    renderLib([]);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'This book (0)' }));
+    expect(screen.getByText('No voices yet')).toBeInTheDocument();
+    expect(screen.queryByText('No voices match this filter')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Series & older (0)' }));
+    expect(screen.getByText('No voices yet')).toBeInTheDocument();
+    expect(screen.queryByText('No voices match this filter')).toBeNull();
+  });
+
+  /* #1869 — the variant facet had #1834's exact defect, and a worse one:
      the Variants row renders only while `qwenLibrary` is non-empty, and a
      non-'all' filter suppresses the preset families outright, so a stale
      filter blanks every tab with no control left to clear it. `qwenLibrary`

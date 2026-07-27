@@ -124,8 +124,14 @@ const UNMERGEABLE_IDS = new Set(['narrator', 'unknown-male', 'unknown-female']);
 /* fs-41/fs-50 seam 4b — English words for the language-facet chips. Module
    scope because the empty-filter panel (#1866) names the active language too,
    so this is no longer single-use to the chip row. Codes with no entry render
-   as the raw BCP-47 tag. */
-const LANGUAGE_LABELS: Record<string, string> = {
+   as the raw BCP-47 tag.
+
+   Deliberately NOT `library-slice.ts`'s exported `LANGUAGE_LABELS` /
+   `languageLabel()`, hence the distinct name: that map is endonyms
+   ('Русский', 'Deutsch') for the book-library language pills, this one is
+   exonyms because the voices facet reads as English UI chrome. Importing the
+   other here would silently swap every chip label. */
+const FACET_LANGUAGE_LABELS: Record<string, string> = {
   ru: 'Russian',
   es: 'Spanish',
   fr: 'French',
@@ -300,7 +306,8 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      treatment as `activeSection` for #1802. */
   const activeLanguageFilter =
     languageFilter !== null && languages.includes(languageFilter) ? languageFilter : null;
-  /* #1866 — the variant facet has the identical shape, and its version is a
+  /* #1869 (found while fixing #1866) — the variant facet has the identical
+     shape as #1834's language filter, and its version is a
      genuine dead end rather than #1834's escapable one: the Variants row
      renders only while `qwenLibrary` is non-empty, and a non-'all' filter
      suppresses the preset families outright (`showFamilies` below), so once
@@ -394,9 +401,17 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      never did, so e.g. Russian + "This book" collapsed the whole rollup into
      "Finish setting up a book…" on a fully populated library — and took the
      language chip row down with it, since that row lives inside the non-empty
-     branch. All three narrowings now read the same way. */
+     branch. All three narrowings now read the same way.
+
+     `library.length > 0` guards the onboarding case: on a genuinely empty
+     library every tab is empty too, so "try another tab" would be useless
+     advice — a fresh install clicking "This book (0)" still gets the
+     "Finish setting up a book" copy it needs. That is the ONLY state where
+     this clause changes the outcome: an empty library leaves `languages` and
+     `qwenLibrary` empty, so the other two disjuncts are already false. */
   const rollupIsNarrowed =
-    activeVariantFilter !== 'all' || activeLanguageFilter !== null || tab !== 'all';
+    library.length > 0 &&
+    (activeVariantFilter !== 'all' || activeLanguageFilter !== null || tab !== 'all');
   const books = [...new Set(library.map((v) => v.bookId))];
 
   /* Compare derivations. Memoised so a transient render doesn't recompute
@@ -1290,7 +1305,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
             >
               <span className="text-xs text-ink/50">Language:</span>
               {([null, ...languages] as Array<string | null>).map((code) => {
-                const label = code === null ? 'All' : (LANGUAGE_LABELS[code] ?? code);
+                const label = code === null ? 'All' : (FACET_LANGUAGE_LABELS[code] ?? code);
                 const active = activeLanguageFilter === code;
                 return (
                   <button
@@ -1356,7 +1371,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                   : activeVariantFilter === 'needs'
                     ? 'No designed voices still need emotion variants in the current view.'
                     : activeLanguageFilter !== null
-                      ? `No ${LANGUAGE_LABELS[activeLanguageFilter] ?? activeLanguageFilter} voices in this tab — try another language or tab.`
+                      ? `No ${FACET_LANGUAGE_LABELS[activeLanguageFilter] ?? activeLanguageFilter} voices in this tab — try another language or tab.`
                       : 'No voices in this tab — try another tab.'}
               </p>
             </div>
