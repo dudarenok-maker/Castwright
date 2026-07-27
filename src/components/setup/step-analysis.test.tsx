@@ -79,7 +79,7 @@ const readiness: SetupReadiness = {
       remediation: '',
     },
   },
-  info: { gpu: '' },
+  info: { gpu: '', vramTotalMb: null },
 };
 
 function makeStore(

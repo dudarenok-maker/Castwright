@@ -35,7 +35,7 @@ function makeReadiness(overrides: Partial<SetupReadiness> = {}): SetupReadiness 
       tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
       analyzer: { status: 'pass', cause: 'pass', message: '', remediation: '' },
     },
-    info: { gpu: 'cuda · 1.2 / 8.0 GB' },
+    info: { gpu: 'cuda · 1.2 / 8.0 GB', vramTotalMb: null },
     ...overrides,
   };
 }

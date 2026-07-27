@@ -23,7 +23,7 @@ function makeReadiness(overrides: Partial<SetupReadiness> = {}): SetupReadiness 
       tts: { status: 'pass', cause: 'pass', message: '', remediation: '' },
       analyzer: { status: 'pass', cause: 'pass', message: '', remediation: '' },
     },
-    info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
+    info: { gpu: 'cuda · 1.2 / 8.0 GB reserved', vramTotalMb: null },
     ...overrides,
   };
 }
@@ -35,7 +35,7 @@ describe('StepEnvironment', () => {
   });
 
   it('renders the gpu string from readiness.info.gpu', () => {
-    const readiness = makeReadiness({ info: { gpu: 'Apple GPU (Metal)' } });
+    const readiness = makeReadiness({ info: { gpu: 'Apple GPU (Metal)', vramTotalMb: null } });
     render(<StepEnvironment readiness={readiness} onRefetch={vi.fn()} />);
     expect(screen.getByText(/Apple GPU \(Metal\)/)).toBeInTheDocument();
   });

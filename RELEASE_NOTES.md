@@ -16,6 +16,12 @@
   identical machines could quietly end up on different builds, which made "it sounds different
   on my computer" almost impossible to chase down. It's pinned now. Some installs will step
   back to the tested version the next time they update.
+- **Setting up the voice engine now shows you it's working.** Installing the Python runtime
+  takes several minutes and downloads a couple of gigabytes — and until now, the whole time it
+  ran, the screen just showed the "Set up the voice engine runtime" button you'd already
+  pressed. No spinner, no progress line, no sign anything was happening. The progress card was
+  there all along; it was checking for a status the server never actually sends, so it never
+  appeared. It does now, from the moment you press the button until the runtime is ready.
 - **Castwright now tells you when a piece of your setup is too old to trust.** Every finished
   chapter is levelled by a free tool called ffmpeg, and Castwright reads ffmpeg's own loudness
   measurements back to do it. That means the version matters — an old one can quietly hand back

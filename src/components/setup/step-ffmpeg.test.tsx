@@ -31,7 +31,7 @@ function makeReadiness(status: 'pass' | 'fail' | 'outdated'): SetupReadiness {
       analyzer: { status: 'pass', cause: 'pass', message: '', remediation: '' },
       ffmpeg,
     },
-    info: { gpu: '' },
+    info: { gpu: '', vramTotalMb: null },
   };
 }
 

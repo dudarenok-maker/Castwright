@@ -3297,6 +3297,122 @@ paths:
                       artifactPurgeFailedPaths: { type: array, items: { type: string } }
         '404': { description: No such entry / disabled }
 
+  /api/setup/readiness:
+    get:
+      summary: First-run readiness probe
+      operationId: getSetupReadiness
+      responses:
+        '200':
+          description: Readiness snapshot across sidecar, ffmpeg, voice engine and analyzer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SetupReadiness' }
+
+  /api/setup/complete:
+    post:
+      summary: Mark the setup wizard complete
+      operationId: completeSetup
+      responses:
+        '200':
+          description: The timestamp written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SetupCompleteResponse' }
+
+  /api/setup/smoke:
+    post:
+      summary: End-to-end synth smoke check
+      operationId: runSetupSmoke
+      responses:
+        '200':
+          description: Result. `ok:false` carries the failing stage — never a 5xx.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SetupSmokeResponse' }
+
+  /api/setup/models-status:
+    get:
+      summary: Canonical voice-engine status payload
+      operationId: getModelsStatus
+      responses:
+        '200':
+          description: Runtime, per-engine health, GPU info and the engine recommendation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModelsStatus' }
+
+  /api/setup/venv/detect:
+    get:
+      summary: Probe the Python venv and interpreter
+      operationId: detectVenv
+      responses:
+        '200':
+          description: Venv + Python probe. No job is started.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VenvDetectResult' }
+
+  /api/setup/venv/bootstrap:
+    post:
+      summary: Start a venv bootstrap job
+      operationId: startVenvBootstrap
+      responses:
+        '202':
+          description: Job accepted and started.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VenvBootstrapJob' }
+
+  /api/setup/venv/bootstrap/{id}:
+    get:
+      summary: Poll a venv bootstrap job
+      operationId: getVenvBootstrapJob
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Current job state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VenvBootstrapJob' }
+        '404':
+          description: No such job.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+
+  /api/setup/venv/bootstrap/{id}/recheck:
+    post:
+      summary: Re-probe venv state for a job
+      operationId: recheckVenvBootstrapJob
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Updated job state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VenvBootstrapJob' }
+        '404':
+          description: No such job.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+
 # ---------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------
@@ -6804,3 +6920,200 @@ components:
             bespokeCount: { type: integer }
             designedCount: { type: integer }
             characters: { type: array, items: { $ref: '#/components/schemas/CarriedCharacter' } }
+
+    # --- Setup readiness (fe-57 / #1883) -----------------------------
+    BlockerCause:
+      type: string
+      description: |
+        Terminal reason a setup blocker is in its current state. `pass` is the
+        shared healthy value. Mirrors BlockerCause in
+        server/src/routes/setup-readiness.ts — keep them in lockstep.
+      enum: [python-missing, venv-missing, venv-broken, supervisor-exhausted,
+             supervisor-tripped, unreachable-transient, unreachable-no-supervisor,
+             sidecar-blocked, no-engine-installed, weights-missing,
+             cannot-confirm-engine, package-broken, ffmpeg-missing,
+             ffprobe-missing, both-missing, ffmpeg-too-old, ollama-unreachable,
+             model-not-pulled, no-gemini-key, pass]
+
+    BlockerActionKind:
+      type: string
+      enum: [venv-bootstrap, qwen-install, kokoro-install, coqui-install,
+             sidecar-restart, ollama-install, ollama-pull, navigate]
+
+    BlockerAction:
+      type: object
+      description: A safe automated fix offered alongside a diagnosis.
+      required: [kind, label]
+      properties:
+        kind: { $ref: '#/components/schemas/BlockerActionKind' }
+        label: { type: string }
+        params:
+          type: object
+          additionalProperties: { type: string }
+          description: 'Extra data the action needs, e.g. `{ model: ''qwen3.5:9b'' }`.'
+        href:
+          type: string
+          description: For `navigate` only — an in-app hash route (e.g. `#/models`).
+
+    BlockerDiagnosis:
+      type: object
+      required: [status, cause, message, remediation]
+      properties:
+        status:
+          type: string
+          enum: [pass, warn, fail]
+          description: |
+            `warn` does NOT block: GET /api/setup/readiness computes `ready` as
+            every blocker being `pass` OR `warn`.
+        cause: { $ref: '#/components/schemas/BlockerCause' }
+        message: { type: string }
+        remediation: { type: string }
+        action: { $ref: '#/components/schemas/BlockerAction' }
+
+    SetupReadiness:
+      type: object
+      required: [ready, completedAt, blockers, info]
+      properties:
+        ready:
+          type: boolean
+          description: True when every blocker is `pass` or `warn`.
+        completedAt:
+          type: string
+          nullable: true
+          description: ISO-8601 timestamp the wizard was completed, or null.
+        blockers:
+          type: object
+          required: [sidecar, ffmpeg, tts, analyzer]
+          properties:
+            sidecar: { $ref: '#/components/schemas/BlockerDiagnosis' }
+            ffmpeg: { $ref: '#/components/schemas/BlockerDiagnosis' }
+            tts: { $ref: '#/components/schemas/BlockerDiagnosis' }
+            analyzer: { $ref: '#/components/schemas/BlockerDiagnosis' }
+        info:
+          type: object
+          required: [gpu, vramTotalMb]
+          properties:
+            gpu: { type: string }
+            vramTotalMb: { type: integer, nullable: true }
+
+    SetupCompleteResponse:
+      type: object
+      required: [completedAt]
+      properties:
+        completedAt: { type: string, description: ISO-8601 timestamp just written. }
+
+    SetupSmokeResponse:
+      type: object
+      description: |
+        End-to-end synth check. Returns ok:false (never 5xx) on failure so the
+        setup UI can render a diagnosis instead of an error page. The success
+        branch additionally reports the analyzer probe.
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        stage:
+          type: string
+          description: Which phase failed, when ok is false (e.g. `synth`).
+        error: { type: string }
+        url: { type: string, description: Public URL of the rendered sample. }
+        durationSec: { type: number }
+        analyzerOk:
+          type: boolean
+          description: Success branch only — whether the analyzer probe succeeded.
+        analyzerDetail:
+          type: string
+          description: Success branch only — analyzer probe detail or error text.
+
+    # --- Setup models-status (fe-57 / #1883) -------------------------
+    RuntimeStatus:
+      type: object
+      required: [installedOnDisk, pythonFound, process]
+      properties:
+        installedOnDisk: { type: boolean }
+        pythonFound: { type: boolean }
+        process:
+          type: string
+          enum: [ready, starting, down, crashed]
+
+    EngineStatus:
+      type: object
+      required: [state, packageBroken]
+      properties:
+        state:
+          type: string
+          enum: [ready, package-missing, weights-missing, not-installed, loaded]
+        packageBroken:
+          type: boolean
+          description: |
+            Package present on disk but fails to IMPORT in the sidecar.
+            Sidecar-up-only — false when the sidecar is down, which is NOT a
+            first-run "fine" guarantee.
+
+    EngineRecommendation:
+      type: object
+      required: [engine, modelKey, reason, caveat, alternate]
+      properties:
+        engine: { type: string, enum: [kokoro, qwen, coqui] }
+        modelKey:
+          type: string
+          enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2]
+          description: |
+            A three-member literal union on BOTH sides today
+            (voice-engine-registry.ts:21 via VoiceEngineEntry['defaultModelKey'],
+            and src/lib/api.ts:7295). `type: string` alone would silently widen it.
+        reason: { type: string }
+        caveat: { type: string, nullable: true }
+        alternate: { type: string, enum: [kokoro, qwen, coqui], nullable: true }
+
+    RecommendationSet:
+      type: object
+      description: fe-51 — precomputed recommendation for both answers to the wizard's guided question.
+      required: [expressiveOrMultilingual, simpleEnglish]
+      properties:
+        expressiveOrMultilingual: { $ref: '#/components/schemas/EngineRecommendation' }
+        simpleEnglish: { $ref: '#/components/schemas/EngineRecommendation' }
+
+    ModelsStatus:
+      type: object
+      required: [runtime, engines, info, recommendation]
+      properties:
+        runtime: { $ref: '#/components/schemas/RuntimeStatus' }
+        engines:
+          type: object
+          description: Keyed by VoiceEngineId.
+          required: [kokoro, qwen, coqui]
+          properties:
+            kokoro: { $ref: '#/components/schemas/EngineStatus' }
+            qwen: { $ref: '#/components/schemas/EngineStatus' }
+            coqui: { $ref: '#/components/schemas/EngineStatus' }
+        info:
+          type: object
+          required: [gpu, vramTotalMb]
+          properties:
+            gpu: { type: string }
+            vramTotalMb: { type: integer, nullable: true }
+        recommendation: { $ref: '#/components/schemas/RecommendationSet' }
+
+    # --- Setup venv-bootstrap (fe-57 / #1883) ------------------------
+    VenvDetectResult:
+      type: object
+      required: [state, venvPresent, pythonFound, installed]
+      properties:
+        state: { type: string, enum: [present, absent] }
+        venvPresent: { type: boolean }
+        pythonFound: { type: boolean, description: A Python 3.12 interpreter was found. }
+        installed: { type: boolean }
+
+    VenvBootstrapJob:
+      type: object
+      required: [id, status, step, error, startedAt, updatedAt]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [detecting, bootstrapping, installed, error] }
+        step:
+          type: string
+          nullable: true
+          description: Latest `[bootstrap-venv]` step line, surfaced as UI status text.
+        error: { type: string, nullable: true }
+        startedAt: { type: integer, description: Epoch ms. }
+        updatedAt: { type: integer, description: Epoch ms. }

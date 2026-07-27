@@ -24,6 +24,33 @@ PR-by-PR as the v1.15.0 cycle progresses — do not reconstruct from git
 history at cut time.
 -->
 
+## 🧱 Internals
+
+- **The `/api/setup/*` surface is now in the API contract** (fe-57, #1883). `openapi.yaml`
+  described 91 `/api/` paths and **none** of the setup surface, so the frontend types for all
+  8 setup endpoints were hand-written with no mechanical guard — and had already drifted
+  (`info.vramTotalMb` is sent by `setup-readiness.ts:99` and was absent from the frontend
+  type). Describes all 8 endpoints + 14 schemas, regenerates `src/lib/api-types.ts`, and
+  deletes **both** hand-mirrored blocks in `src/lib/api.ts` — the `SetupReadiness` family and
+  the `ModelsStatus` family — replacing them with generated aliases under identical names, so
+  no consumer import changed.
+  **This does not make server↔frontend drift a compile error**, and plan 270 says so
+  explicitly: the server does not consume `src/lib/api-types.ts`
+  (`workspace/voice-library.ts:9-10`), so describing the contract alone would have *relocated*
+  the duplicate rather than removed it. The guarantee is
+  `server/src/routes/openapi-setup-parity.test.ts`, which asserts the contract's enums equal
+  the server's TypeScript unions — via `satisfies Record<Union, 1>` over type-only imports,
+  so a member added to a server union fails `npm run typecheck` inside the test file. (A bare
+  array there would have pinned nothing; the first draft did exactly that and was caught at
+  review.) Copy count goes three → two.
+  **Fixed a live bug found on the way:** `venv-bootstrap.tsx` declared `status: 'installing'`,
+  a value the venv endpoint never emits, so its progress card never rendered during a real
+  multi-minute bootstrap — and its own tests mocked the fictional status, keeping the suite
+  green. That is the only user-visible delta here, and it carries a matching user-facing line in RELEASE_NOTES.md. Plan:
+  [`docs/features/270-openapi-setup-surface.md`](https://github.com/dudarenok-maker/Castwright/blob/main/docs/features/270-openapi-setup-surface.md).
+
+---
+
 ## 🔧 Setup & prerequisites
 
 - **Castwright now declares a minimum ffmpeg version — 6.0 — and checks it.** (ops-35, #1877)

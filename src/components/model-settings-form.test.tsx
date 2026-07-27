@@ -37,7 +37,7 @@ function readinessWith(analyzer: BlockerDiagnosis): SetupReadiness {
     ready: analyzer.status !== 'fail',
     completedAt: null,
     blockers: { sidecar: PASS, ffmpeg: PASS, tts: PASS, analyzer },
-    info: { gpu: '' },
+    info: { gpu: '', vramTotalMb: null },
   };
 }
 

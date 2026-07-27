@@ -2463,6 +2463,142 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/setup/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** First-run readiness probe */
+        get: operations["getSetupReadiness"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark the setup wizard complete */
+        post: operations["completeSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/smoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** End-to-end synth smoke check */
+        post: operations["runSetupSmoke"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/models-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Canonical voice-engine status payload */
+        get: operations["getModelsStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/venv/detect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Probe the Python venv and interpreter */
+        get: operations["detectVenv"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/venv/bootstrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a venv bootstrap job */
+        post: operations["startVenvBootstrap"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/venv/bootstrap/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Poll a venv bootstrap job */
+        get: operations["getVenvBootstrapJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/venv/bootstrap/{id}/recheck": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Re-probe venv state for a job */
+        post: operations["recheckVenvBootstrapJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -5071,6 +5207,146 @@ export interface components {
                 designedCount: number;
                 characters: components["schemas"]["CarriedCharacter"][];
             };
+        };
+        /**
+         * @description Terminal reason a setup blocker is in its current state. `pass` is the
+         *     shared healthy value. Mirrors BlockerCause in
+         *     server/src/routes/setup-readiness.ts — keep them in lockstep.
+         * @enum {string}
+         */
+        BlockerCause: "python-missing" | "venv-missing" | "venv-broken" | "supervisor-exhausted" | "supervisor-tripped" | "unreachable-transient" | "unreachable-no-supervisor" | "sidecar-blocked" | "no-engine-installed" | "weights-missing" | "cannot-confirm-engine" | "package-broken" | "ffmpeg-missing" | "ffprobe-missing" | "both-missing" | "ffmpeg-too-old" | "ollama-unreachable" | "model-not-pulled" | "no-gemini-key" | "pass";
+        /** @enum {string} */
+        BlockerActionKind: "venv-bootstrap" | "qwen-install" | "kokoro-install" | "coqui-install" | "sidecar-restart" | "ollama-install" | "ollama-pull" | "navigate";
+        /** @description A safe automated fix offered alongside a diagnosis. */
+        BlockerAction: {
+            kind: components["schemas"]["BlockerActionKind"];
+            label: string;
+            /** @description Extra data the action needs, e.g. `{ model: 'qwen3.5:9b' }`. */
+            params?: {
+                [key: string]: string;
+            };
+            /** @description For `navigate` only — an in-app hash route (e.g. `#/models`). */
+            href?: string;
+        };
+        BlockerDiagnosis: {
+            /**
+             * @description `warn` does NOT block: GET /api/setup/readiness computes `ready` as
+             *     every blocker being `pass` OR `warn`.
+             * @enum {string}
+             */
+            status: "pass" | "warn" | "fail";
+            cause: components["schemas"]["BlockerCause"];
+            message: string;
+            remediation: string;
+            action?: components["schemas"]["BlockerAction"];
+        };
+        SetupReadiness: {
+            /** @description True when every blocker is `pass` or `warn`. */
+            ready: boolean;
+            /** @description ISO-8601 timestamp the wizard was completed, or null. */
+            completedAt: string | null;
+            blockers: {
+                sidecar: components["schemas"]["BlockerDiagnosis"];
+                ffmpeg: components["schemas"]["BlockerDiagnosis"];
+                tts: components["schemas"]["BlockerDiagnosis"];
+                analyzer: components["schemas"]["BlockerDiagnosis"];
+            };
+            info: {
+                gpu: string;
+                vramTotalMb: number | null;
+            };
+        };
+        SetupCompleteResponse: {
+            /** @description ISO-8601 timestamp just written. */
+            completedAt: string;
+        };
+        /**
+         * @description End-to-end synth check. Returns ok:false (never 5xx) on failure so the
+         *     setup UI can render a diagnosis instead of an error page. The success
+         *     branch additionally reports the analyzer probe.
+         */
+        SetupSmokeResponse: {
+            ok: boolean;
+            /** @description Which phase failed, when ok is false (e.g. `synth`). */
+            stage?: string;
+            error?: string;
+            /** @description Public URL of the rendered sample. */
+            url?: string;
+            durationSec?: number;
+            /** @description Success branch only — whether the analyzer probe succeeded. */
+            analyzerOk?: boolean;
+            /** @description Success branch only — analyzer probe detail or error text. */
+            analyzerDetail?: string;
+        };
+        RuntimeStatus: {
+            installedOnDisk: boolean;
+            pythonFound: boolean;
+            /** @enum {string} */
+            process: "ready" | "starting" | "down" | "crashed";
+        };
+        EngineStatus: {
+            /** @enum {string} */
+            state: "ready" | "package-missing" | "weights-missing" | "not-installed" | "loaded";
+            /**
+             * @description Package present on disk but fails to IMPORT in the sidecar.
+             *     Sidecar-up-only — false when the sidecar is down, which is NOT a
+             *     first-run "fine" guarantee.
+             */
+            packageBroken: boolean;
+        };
+        EngineRecommendation: {
+            /** @enum {string} */
+            engine: "kokoro" | "qwen" | "coqui";
+            /**
+             * @description A three-member literal union on BOTH sides today
+             *     (voice-engine-registry.ts:21 via VoiceEngineEntry['defaultModelKey'],
+             *     and src/lib/api.ts:7295). `type: string` alone would silently widen it.
+             * @enum {string}
+             */
+            modelKey: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2";
+            reason: string;
+            caveat: string | null;
+            /** @enum {string|null} */
+            alternate: "kokoro" | "qwen" | "coqui" | null;
+        };
+        /** @description fe-51 — precomputed recommendation for both answers to the wizard's guided question. */
+        RecommendationSet: {
+            expressiveOrMultilingual: components["schemas"]["EngineRecommendation"];
+            simpleEnglish: components["schemas"]["EngineRecommendation"];
+        };
+        ModelsStatus: {
+            runtime: components["schemas"]["RuntimeStatus"];
+            /** @description Keyed by VoiceEngineId. */
+            engines: {
+                kokoro: components["schemas"]["EngineStatus"];
+                qwen: components["schemas"]["EngineStatus"];
+                coqui: components["schemas"]["EngineStatus"];
+            };
+            info: {
+                gpu: string;
+                vramTotalMb: number | null;
+            };
+            recommendation: components["schemas"]["RecommendationSet"];
+        };
+        VenvDetectResult: {
+            /** @enum {string} */
+            state: "present" | "absent";
+            venvPresent: boolean;
+            /** @description A Python 3.12 interpreter was found. */
+            pythonFound: boolean;
+            installed: boolean;
+        };
+        VenvBootstrapJob: {
+            id: string;
+            /** @enum {string} */
+            status: "detecting" | "bootstrapping" | "installed" | "error";
+            /** @description Latest `[bootstrap-venv]` step line, surfaced as UI status text. */
+            step: string | null;
+            error: string | null;
+            /** @description Epoch ms. */
+            startedAt: number;
+            /** @description Epoch ms. */
+            updatedAt: number;
         };
     };
     responses: never;
@@ -8914,6 +9190,192 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    getSetupReadiness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Readiness snapshot across sidecar, ffmpeg, voice engine and analyzer. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupReadiness"];
+                };
+            };
+        };
+    };
+    completeSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The timestamp written. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupCompleteResponse"];
+                };
+            };
+        };
+    };
+    runSetupSmoke: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result. `ok:false` carries the failing stage — never a 5xx. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupSmokeResponse"];
+                };
+            };
+        };
+    };
+    getModelsStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Runtime, per-engine health, GPU info and the engine recommendation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelsStatus"];
+                };
+            };
+        };
+    };
+    detectVenv: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Venv + Python probe. No job is started. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VenvDetectResult"];
+                };
+            };
+        };
+    };
+    startVenvBootstrap: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Job accepted and started. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VenvBootstrapJob"];
+                };
+            };
+        };
+    };
+    getVenvBootstrapJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current job state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VenvBootstrapJob"];
+                };
+            };
+            /** @description No such job. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
+        };
+    };
+    recheckVenvBootstrapJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Updated job state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VenvBootstrapJob"];
+                };
+            };
+            /** @description No such job. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
             };
         };
     };
