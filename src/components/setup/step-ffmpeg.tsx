@@ -4,6 +4,7 @@
    Re-check button on fail (mirrors the venv-bootstrap decision-Z pattern). */
 
 import type { SetupReadiness } from '../../lib/api';
+import { wikiUrl, WIZARD_STEP_WIKI } from '../../lib/wiki-links';
 
 interface Props {
   readiness: SetupReadiness;
@@ -11,7 +12,12 @@ interface Props {
 }
 
 export function StepFfmpeg({ readiness, onRefetch }: Props) {
-  const passed = readiness.blockers.ffmpeg.status === 'pass';
+  const diagnosis = readiness.blockers.ffmpeg;
+  const passed = diagnosis.status === 'pass';
+  /* ops-35 (#1877): present, but older than the declared support floor. This
+     used to fall through to the "isn't installed yet" branch, which told a
+     user who HAS ffmpeg to install it. */
+  const outdated = diagnosis.cause === 'ffmpeg-too-old';
 
   if (passed) {
     return (
@@ -35,6 +41,77 @@ export function StepFfmpeg({ readiness, onRefetch }: Props) {
                 audiobooks.
               </p>
             </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  /* Installed, but below the support floor. A support floor means "we haven't
+     tested this", not "this is broken" — so this card informs, links out, and
+     never blocks: the wizard stays advanceable because setup-readiness.ts
+     counts 'warn' toward `ready`. */
+  if (outdated) {
+    return (
+      <section className="space-y-4">
+        <h2 className="text-lg font-semibold text-ink">Audio assembly</h2>
+        <p className="text-sm text-ink/60">
+          The final step of every audiobook stitches your generated voice clips into a
+          single, properly-levelled audio file. Castwright does this with a free tool
+          called <span className="font-medium text-ink">ffmpeg</span>.
+        </p>
+        <div
+          data-testid="step-ffmpeg-outdated"
+          className="rounded-2xl border border-amber-200 bg-amber-50 p-4 space-y-4"
+        >
+          <div>
+            <p className="text-sm font-semibold text-amber-900">{diagnosis.message}</p>
+            <p className="mt-1 text-xs text-amber-900/70">
+              Castwright can still assemble audiobooks with this version — it just
+              isn’t one we test against, and chapter loudness may differ. Upgrading
+              is recommended.
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <p className="text-xs font-semibold text-ink/60 uppercase tracking-wide">Windows</p>
+              <pre className="text-xs bg-ink/5 text-ink rounded-lg p-3 overflow-x-auto leading-relaxed">
+                {'winget upgrade Gyan.FFmpeg'}
+              </pre>
+            </div>
+
+            <div className="space-y-1">
+              <p className="text-xs font-semibold text-ink/60 uppercase tracking-wide">macOS</p>
+              <pre className="text-xs bg-ink/5 text-ink rounded-lg p-3 overflow-x-auto leading-relaxed">
+                {'brew upgrade ffmpeg'}
+              </pre>
+            </div>
+
+            <div className="space-y-1">
+              <p className="text-xs font-semibold text-ink/60 uppercase tracking-wide">Linux</p>
+              <pre className="text-xs bg-ink/5 text-ink rounded-lg p-3 overflow-x-auto leading-relaxed">
+                {'sudo snap install ffmpeg'}
+              </pre>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={onRefetch}
+              className="px-3 py-1.5 rounded-full border border-amber-300 bg-white text-xs text-amber-900 hover:bg-amber-100 min-h-[44px] fine-pointer:min-h-0"
+            >
+              Re-check
+            </button>
+            <a
+              href={wikiUrl(WIZARD_STEP_WIKI.ffmpeg)}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs text-amber-900 underline underline-offset-2"
+            >
+              Prerequisites — supported versions
+            </a>
           </div>
         </div>
       </section>

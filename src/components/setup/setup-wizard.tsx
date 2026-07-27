@@ -352,7 +352,11 @@ function buildSummaryRows(readiness: SetupReadiness): SummaryRow[] {
       key: 'ffmpeg',
       label: 'Audio assembly',
       detail: blockers.ffmpeg.status === 'pass' ? 'ffmpeg installed' : blockers.ffmpeg.message,
-      status: blockers.ffmpeg.status === 'pass' ? 'ok' : 'attention',
+      /* ops-35: three-way, mirroring analyzerStatus above. A below-floor
+         ffmpeg is a 'warn' — rendering it as 'attention' would read as a hard
+         blocker in the summary when it isn't one. */
+      status:
+        blockers.ffmpeg.status === 'pass' ? 'ok' : blockers.ffmpeg.status === 'warn' ? 'warn' : 'attention',
       stepIndex: 1,
     },
     {
