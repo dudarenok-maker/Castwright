@@ -26,12 +26,21 @@ module.exports = {
     //    #1859. The conda env's Node shadows Pinokio's bundled one on PATH for every
     //    step below (conda envs prepend to PATH). See docs/testing/onbox-acceptance-register.md
     //    (E1) for what's still owed on-box.
+    //
+    //    `"ffmpeg>=6"` (ops-35, #1877) is a CONSTRAINT, not a pin. The audio path
+    //    parses ffmpeg's loudnorm JSON output, so the version is part of our
+    //    contract, and package.json's `castwright.ffmpeg.minimum` declares the
+    //    supported floor. `>=` excludes builds below that floor while leaving
+    //    security updates free to flow — #1876 wanted exactly this and declined
+    //    only because no validated floor existed yet. conda-forge ships 8.x today,
+    //    so this is a guard, not a behaviour change. ffmpeg-pin.test.js parses the
+    //    major back out of package.json so the two cannot drift apart.
     {
       method: 'shell.run',
       params: {
         path: APP_ROOT,
         conda: CONDA,
-        message: 'conda install -y -c conda-forge ffmpeg mkcert nodejs=24',
+        message: 'conda install -y -c conda-forge "ffmpeg>=6" mkcert nodejs=24',
       },
     },
     // 2. Fetch + resolve + checkout the latest published release (detached HEAD),
