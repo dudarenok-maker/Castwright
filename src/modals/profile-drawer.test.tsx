@@ -2177,6 +2177,34 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
     expect(fetchDesignedPersona).not.toHaveBeenCalled();
   });
 
+  /* fs-38 Wave 3c, Task 29 [EX-15] — the mock layer now genuinely rejects an
+     assign (revoked/not-ready/wrong-engine 409s — see api.ts's
+     `_mockAssignGuardError`), so this is the first test able to observe
+     what useMyVoice does on a REAL rejection rather than the old
+     unconditional `{ updated: 1 }`. It surfaces the rejection instead of
+     optimistically showing success: no cast-slice write, and the inline
+     error renders. */
+  it('does not write the override and surfaces the error when assignLibraryVoice rejects', async () => {
+    assignLibraryVoice.mockRejectedValueOnce(
+      new Error('Cloned voice is not ready to assign yet.'),
+    );
+    const { store } = renderDrawer(
+      { ...baseChar, ttsEngine: 'qwen' },
+      { bookId: 'book-1', myVoices: myVoicesFixture },
+    );
+    store.dispatch(castActions.setCharacters([{ ...baseChar, ttsEngine: 'qwen' }]));
+
+    fireEvent.click(screen.getByTestId('profile-drawer-my-voice-lib1'));
+
+    expect(
+      await screen.findByTestId('profile-drawer-my-voices-error'),
+    ).toHaveTextContent('Cloned voice is not ready to assign yet.');
+
+    // No optimistic write — the character's override slot stays untouched.
+    const halloran = store.getState().cast.characters.find((c) => c.id === 'halloran');
+    expect(halloran?.overrideTtsVoices?.qwen).toBeUndefined();
+  });
+
   it('does not show "Save to my voices" for a coqui-routed character, even with a stale designed-Qwen voiceId', () => {
     /* Companion regression for widening the "My voices" panel to coqui:
        "Save to my voices" promotes the character's currently-DESIGNED QWEN
