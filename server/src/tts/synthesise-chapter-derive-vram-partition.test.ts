@@ -280,7 +280,7 @@ describe('synthesiseChapter — engine-partitioned derive pre-pass (fs-38 Wave 3
     expect(callOrder).toEqual(['evict:qwen', 'derive:coqui']);
   });
 
-  it('a qwen-only chapter issues no coqui load at all (no regression for the common existing book)', async () => {
+  it('a qwen-only chapter (NO coqui presence anywhere) issues no coqui load — and no defensive evict either', async () => {
     const callOrder: string[] = [];
     const qwenProvider = makeProvider();
     const coquiProvider = makeProvider();
@@ -323,9 +323,16 @@ describe('synthesiseChapter — engine-partitioned derive pre-pass (fs-38 Wave 3
     // The qwen self-heal DID run (proving the harness is live, not a placebo)…
     expect(deriveEngineArtifact).toHaveBeenCalledTimes(1);
     expect(deriveEngineArtifact).toHaveBeenCalledWith('lib-orin', 'qwen', expect.anything(), expect.anything());
-    // …but NOTHING ever touched Coqui: no /unload call at all (a
-    // qwen-only derive block never enters the coqui-gated branch), and the
-    // coqui provider was never invoked either.
+    // …but NOTHING ever touched Coqui: no /unload call at all, and the
+    // coqui provider is never invoked. Fix round 2's "Important" gate fix
+    // (drop `coquiEvict.ok`) is deliberately scoped to books that touch
+    // Coqui somewhere (`clonedCoquiRequests`/`designedCoquiRequests` non-
+    // empty) — NOT to "any chapter about to use Qwen", which is nearly
+    // every chapter in this project (Qwen is the default engine): an
+    // unscoped version of that fix broke a plain zero-coqui Qwen chapter
+    // (a real regression caught by synthesise-chapter.test.ts's fake-timer
+    // batching suite while implementing this round) by issuing a real
+    // sidecar round-trip on every single one.
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(callOrder).toEqual(['derive:qwen']);
     expect(coquiProvider.calls).toHaveLength(0);
@@ -585,6 +592,441 @@ describe('synthesiseChapter — engine-partitioned derive pre-pass, fix round 1 
     // spy would have recorded exactly one 'qwen' unload call here.
     expect(deriveEngineArtifact).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+/* fs-38 Wave 3c, Task 22 fix round 2 — review findings: a NEW-CRITICAL
+   (the trailing evict, `evictCoquiForQwenPhase`, had no enclosing try/catch
+   ANYWHERE in the function — the exact mirror of round 1's F1, just on the
+   qwen side) and an Important gate fix (dropped the `coquiEvict.ok`-only
+   condition, which under-covered the cross-chapter "prior chapter left
+   Coqui resident, this chapter only has HEALTHY coqui clones" case). */
+function mockFailingCoquiUnloadFetch(callOrder: string[]) {
+  return vi.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
+    const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? '{}')) as {
+      engine?: string;
+    };
+    if (body.engine === 'coqui') {
+      callOrder.push('evict:coqui:FAILED');
+      return new Response(null, { status: 502, statusText: 'Bad Gateway' });
+    }
+    callOrder.push(`evict:${body.engine}`);
+    return new Response(null, { status: 200 });
+  });
+}
+
+describe('synthesiseChapter — engine-partitioned derive pre-pass, fix round 2 (fs-38 Wave 3c, Task 22)', () => {
+  it('NEW-CRITICAL: a failed TRAILING evict stays fail-SOFT for a designed qwen derive — the chapter still completes', async () => {
+    const provider = makeProvider();
+    const callOrder: string[] = [];
+    const cast: CastCharacter[] = [
+      {
+        id: 'mira',
+        name: 'Mira',
+        gender: 'female',
+        overrideTtsVoices: {
+          coqui: { name: 'xtts-lib-mira', libraryUuid: 'lib-mira', provenance: 'designed' },
+        },
+      },
+      {
+        id: 'orin',
+        name: 'Orin',
+        gender: 'male',
+        ttsEngine: 'qwen', // pinned off the book's coqui default, so she actually routes to qwen
+        overrideTtsVoices: {
+          qwen: { name: 'Orin (unused)', libraryUuid: 'lib-orin', provenance: 'designed' },
+        },
+      },
+    ];
+    const miraEntry = {
+      voiceUuid: 'lib-mira',
+      name: 'Mira',
+      provenance: 'designed' as const,
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const deriveEngineArtifact = mockDeriveEngineArtifact(callOrder);
+    mockFailingCoquiUnloadFetch(callOrder); // leading (qwen) evict succeeds; TRAILING (coqui) evict 502s.
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'mira'), sentence(2, 'orin')],
+      cast,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      resolveForEngine: (e) =>
+        e === 'qwen'
+          ? { provider, modelKey: 'qwen3-tts-0.6b' as const }
+          : { provider, modelKey: 'coqui-xtts-v2' as const },
+      designedResolverDepsOverride: {
+        readEntry: async (uuid: string) => (uuid === 'lib-mira' ? miraEntry : null),
+        ptExists: async () => false, // both Mira's coqui slot and Orin's qwen slot are missing
+        readDesignedMasterPcm: async () => ({
+          pcm: Buffer.alloc(1000),
+          sampleRate: 24000,
+          refText: 'A retained calibration clip.',
+          manifest: {},
+        }),
+        deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveDesignedVoiceDeps['deriveEngineArtifact'],
+        writeSidecarManifest: async () => {},
+        writeEntry: async () => {},
+      },
+    });
+
+    // Mira's coqui derive DID happen (we got past the leading evict fine —
+    // this pins the TRAILING evict specifically, not a repeat of F1).
+    expect(deriveEngineArtifact).toHaveBeenCalledWith('lib-mira', 'coqui', expect.anything(), expect.anything());
+    // Orin's qwen derive never ran: the trailing evict's failure is caught
+    // by the designed resolver's own fail-soft catch (never rethrown) —
+    // pre-fix, the bare unguarded `await evictCoquiForQwenPhase()` would
+    // have thrown straight out of `synthesiseChapter` here instead.
+    expect(deriveEngineArtifact).not.toHaveBeenCalledWith('lib-orin', 'qwen', expect.anything(), expect.anything());
+    expect(callOrder).toContain('evict:coqui:FAILED');
+    expect(result.segments.length).toBeGreaterThan(0);
+  });
+
+  it('NEW-CRITICAL: a failed TRAILING evict still raises for a cloned qwen derive (fail-loud policy unchanged)', async () => {
+    const provider = makeProvider();
+    const callOrder: string[] = [];
+    const cast: CastCharacter[] = [
+      {
+        id: 'mira',
+        name: 'Mira',
+        gender: 'female',
+        overrideTtsVoices: {
+          coqui: { name: 'xtts-lib-mira', libraryUuid: 'lib-mira', provenance: 'designed' },
+        },
+      },
+      {
+        id: 'nova',
+        name: 'Nova',
+        gender: 'female',
+        ttsEngine: 'qwen', // pinned off the book's coqui default, so she actually routes to qwen
+        overrideTtsVoices: {
+          qwen: { name: 'Nova (unused)', libraryUuid: 'lib-nova', provenance: 'cloned' },
+        },
+      },
+    ];
+    const miraEntry = {
+      voiceUuid: 'lib-mira',
+      name: 'Mira',
+      provenance: 'designed' as const,
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const novaEntry = {
+      voiceUuid: 'lib-nova',
+      name: 'Nova clone',
+      provenance: 'cloned' as const,
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      master: {
+        clipFile: 'master.wav',
+        sampleRate: 24000,
+        durationSeconds: 8,
+        transcript: 'A retained reference clip.',
+        transcriptSource: 'whisper' as const,
+        captureMethod: 'upload' as const,
+      },
+    };
+    const deriveEngineArtifact = mockDeriveEngineArtifact(callOrder);
+    mockFailingCoquiUnloadFetch(callOrder);
+
+    let thrown: unknown;
+    try {
+      await synthesiseChapter({
+        sentences: [sentence(1, 'mira'), sentence(2, 'nova')],
+        cast,
+        provider,
+        modelKey: 'coqui-xtts-v2',
+        engine: 'coqui',
+        resolveForEngine: (e) =>
+          e === 'qwen'
+            ? { provider, modelKey: 'qwen3-tts-0.6b' as const }
+            : { provider, modelKey: 'coqui-xtts-v2' as const },
+        designedResolverDepsOverride: {
+          readEntry: async (uuid: string) => (uuid === 'lib-mira' ? miraEntry : null),
+          ptExists: async () => false,
+          readDesignedMasterPcm: async () => ({
+            pcm: Buffer.alloc(1000),
+            sampleRate: 24000,
+            refText: '',
+            manifest: {},
+          }),
+          deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveDesignedVoiceDeps['deriveEngineArtifact'],
+          writeEntry: async () => {},
+        },
+        cloneResolverDepsOverride: {
+          readEntry: async (uuid: string) => (uuid === 'lib-nova' ? novaEntry : null),
+          writeEntry: async () => {},
+          ptExists: async () => false,
+          readMasterPcm: async () => ({
+            pcm: Buffer.alloc(1000),
+            sampleRate: 24000,
+            refText: 'A retained reference clip.',
+          }),
+          deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
+          currentArtifactVersion: () => 'qwen3-tts-0.6b',
+        },
+      });
+    } catch (e) {
+      thrown = e;
+    }
+
+    // Mira's coqui derive DID happen — the failure pins the TRAILING evict.
+    expect(deriveEngineArtifact).toHaveBeenCalledWith('lib-mira', 'coqui', expect.anything(), expect.anything());
+    expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
+    expect((thrown as InstanceType<typeof UnresolvableClonedVoiceError>).broken).toEqual([
+      { name: 'Nova', reason: 'derive-failed' },
+    ]);
+    expect(deriveEngineArtifact).not.toHaveBeenCalledWith('lib-nova', 'qwen', expect.anything(), expect.anything());
+  });
+
+  it('Important: a chapter with only HEALTHY coqui clones + a qwen derive still evicts Coqui (the cross-chapter gap coquiEvict.ok left open)', async () => {
+    setLastKnownCoquiInstallState('ready');
+    const provider = makeProvider();
+    const callOrder: string[] = [];
+    const cast: CastCharacter[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        gender: 'female',
+        overrideTtsVoices: {
+          coqui: { name: 'Wren (unused)', libraryUuid: 'lib-wren', provenance: 'cloned' },
+        },
+      },
+      {
+        id: 'orin',
+        name: 'Orin',
+        gender: 'male',
+        ttsEngine: 'qwen', // pinned off the book's coqui default, so she actually routes to qwen
+        overrideTtsVoices: {
+          qwen: { name: 'Orin (unused)', libraryUuid: 'lib-orin', provenance: 'designed' },
+        },
+      },
+    ];
+    const wrenEntry = {
+      voiceUuid: 'lib-wren',
+      name: 'Wren clone',
+      provenance: 'cloned' as const,
+      tags: [],
+      pinned: false,
+      engines: {}, // no stored version -> never stale; ptExists true below -> healthy.
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const cloneDeriveEngineArtifact = vi.fn(); // must NEVER be called — Wren is healthy.
+    const deriveEngineArtifact = mockDeriveEngineArtifact(callOrder); // Orin's qwen self-heal only.
+    mockEvictFetch(callOrder);
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'wren'), sentence(2, 'orin')],
+      cast,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      resolveForEngine: (e) =>
+        e === 'qwen'
+          ? { provider, modelKey: 'qwen3-tts-0.6b' as const }
+          : { provider, modelKey: 'coqui-xtts-v2' as const },
+      cloneResolverDepsOverride: {
+        readEntry: async (uuid: string) => (uuid === 'lib-wren' ? wrenEntry : null),
+        ptExists: async () => true, // HEALTHY — no derive, no leading evict either.
+        deriveEngineArtifact: cloneDeriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
+      },
+      designedResolverDepsOverride: {
+        ptExists: async () => false,
+        readDesignedMasterPcm: async () => ({
+          pcm: Buffer.alloc(1000),
+          sampleRate: 24000,
+          refText: 'A retained calibration clip.',
+          manifest: {},
+        }),
+        deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveDesignedVoiceDeps['deriveEngineArtifact'],
+        writeSidecarManifest: async () => {},
+        readEntry: async () => null,
+        writeEntry: async () => {},
+      },
+    });
+
+    // Wren really was healthy — no derive, proving the evict below is NOT
+    // explained by a same-chapter coqui derive (the `coquiEvict.ok` case
+    // round 1 already covered); this pins the gap round 1 left open.
+    expect(cloneDeriveEngineArtifact).not.toHaveBeenCalled();
+    // Coqui STILL gets evicted ahead of Orin's qwen derive, because Wren's
+    // request proves this chapter has coqui presence at all — pre-fix
+    // (`coquiEvict.ok` required a real derive to have SUCCEEDED THIS
+    // chapter) this would read ['derive:qwen'] with no 'evict:coqui' at
+    // all, leaving XTTS-if-resident-from-a-prior-chapter unevicted.
+    expect(callOrder).toEqual(['evict:coqui', 'derive:qwen']);
+    expect(result.segments.length).toBeGreaterThan(0);
+  });
+
+  it('Test gap: TWO designed coqui derives in one chapter cost exactly ONE evict:qwen, not two', async () => {
+    const provider = makeProvider();
+    const callOrder: string[] = [];
+    const cast: CastCharacter[] = [
+      {
+        id: 'mira',
+        name: 'Mira',
+        gender: 'female',
+        overrideTtsVoices: {
+          coqui: { name: 'xtts-lib-mira', libraryUuid: 'lib-mira', provenance: 'designed' },
+        },
+      },
+      {
+        id: 'luca',
+        name: 'Luca',
+        gender: 'male',
+        overrideTtsVoices: {
+          coqui: { name: 'xtts-lib-luca', libraryUuid: 'lib-luca', provenance: 'designed' },
+        },
+      },
+    ];
+    const entryFor = (uuid: string, name: string) => ({
+      voiceUuid: uuid,
+      name,
+      provenance: 'designed' as const,
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const deriveEngineArtifact = mockDeriveEngineArtifact(callOrder);
+    mockEvictFetch(callOrder);
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'mira'), sentence(2, 'luca')],
+      cast,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      designedResolverDepsOverride: {
+        readEntry: async (uuid: string) =>
+          uuid === 'lib-mira' ? entryFor('lib-mira', 'Mira') : uuid === 'lib-luca' ? entryFor('lib-luca', 'Luca') : null,
+        ptExists: async () => false, // both missing — both repairable
+        readDesignedMasterPcm: async () => ({
+          pcm: Buffer.alloc(1000),
+          sampleRate: 24000,
+          refText: '',
+          manifest: {},
+        }),
+        deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveDesignedVoiceDeps['deriveEngineArtifact'],
+        writeEntry: async () => {},
+      },
+    });
+
+    // Placebo-proof against deleting the memoisation: BOTH voices really
+    // derived (2 derive:coqui entries) — a naive `beforeFirstCoquiDerive =
+    // () => evictQwenForCoquiPhase()` (no memoisation at all) would ALSO
+    // pass a test that only checks "at least one evict" — the exact-count
+    // check below is what only the memoised version satisfies.
+    expect(callOrder.filter((c) => c === 'derive:coqui')).toHaveLength(2);
+    expect(callOrder.filter((c) => c === 'evict:qwen')).toHaveLength(1);
+    expect(result.segments.length).toBeGreaterThan(0);
+  });
+
+  it('Test gap: a cloned + a designed coqui derive in one chapter still cost exactly ONE evict:qwen (cross-arm reuse)', async () => {
+    setLastKnownCoquiInstallState('ready');
+    const provider = makeProvider();
+    const callOrder: string[] = [];
+    const cast: CastCharacter[] = [
+      {
+        id: 'nova',
+        name: 'Nova',
+        gender: 'female',
+        overrideTtsVoices: {
+          coqui: { name: 'Nova (unused)', libraryUuid: 'lib-nova', provenance: 'cloned' },
+        },
+      },
+      {
+        id: 'mira',
+        name: 'Mira',
+        gender: 'female',
+        overrideTtsVoices: {
+          coqui: { name: 'xtts-lib-mira', libraryUuid: 'lib-mira', provenance: 'designed' },
+        },
+      },
+    ];
+    const novaEntry = {
+      voiceUuid: 'lib-nova',
+      name: 'Nova clone',
+      provenance: 'cloned' as const,
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      master: {
+        clipFile: 'master.wav',
+        sampleRate: 24000,
+        durationSeconds: 8,
+        transcript: 'A retained reference clip.',
+        transcriptSource: 'whisper' as const,
+        captureMethod: 'upload' as const,
+      },
+    };
+    const miraEntry = {
+      voiceUuid: 'lib-mira',
+      name: 'Mira',
+      provenance: 'designed' as const,
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const deriveEngineArtifact = mockDeriveEngineArtifact(callOrder);
+    mockEvictFetch(callOrder);
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'nova'), sentence(2, 'mira')],
+      cast,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      cloneResolverDepsOverride: {
+        readEntry: async (uuid: string) => (uuid === 'lib-nova' ? novaEntry : null),
+        writeEntry: async () => {},
+        ptExists: async () => false,
+        readMasterPcm: async () => ({
+          pcm: Buffer.alloc(1000),
+          sampleRate: 24000,
+          refText: 'A retained reference clip.',
+        }),
+        deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
+        currentArtifactVersion: () => 'v2.0.5',
+      },
+      designedResolverDepsOverride: {
+        readEntry: async (uuid: string) => (uuid === 'lib-mira' ? miraEntry : null),
+        ptExists: async () => false,
+        readDesignedMasterPcm: async () => ({
+          pcm: Buffer.alloc(1000),
+          sampleRate: 24000,
+          refText: '',
+          manifest: {},
+        }),
+        deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveDesignedVoiceDeps['deriveEngineArtifact'],
+        writeEntry: async () => {},
+      },
+    });
+
+    // Cloned resolver runs FIRST (clonedCoquiRequests before
+    // designedCoquiRequests) — Nova's derive pays for the evict; Mira's
+    // designed derive (a DIFFERENT resolver call) reuses the SAME memoised
+    // promise instead of issuing a second one.
+    expect(callOrder).toEqual(['evict:qwen', 'derive:coqui', 'derive:coqui']);
+    expect(result.segments.length).toBeGreaterThan(0);
   });
 });
 

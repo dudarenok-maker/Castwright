@@ -248,6 +248,17 @@ export interface ResolveChapterDeps {
       derive failure by THIS function's own existing fail-loud policy (F1) —
       no separate try/catch needed at the call site. */
   beforeFirstDerive?(): Promise<void>;
+  /** fs-38 Wave 3c, Task 22 fix round 2 [NEW-CRITICAL] — the mirror of
+      `beforeFirstDerive`, QWEN side: invoked immediately before the FIRST
+      real QWEN derive this call issues (never for a healthy or
+      broken/skipped request, and never for a coqui derive). Lets
+      synthesise-chapter.ts's pre-pass evict a possibly-resident Coqui
+      (freshly derived THIS chapter, OR left resident by an earlier chapter
+      in the same run — round 2's "Important" fix removed the THIS-chapter-
+      only `coquiEvict.ok` gate) exactly once, with the failure classified
+      by THIS function's own existing fail-loud policy — same mechanism as
+      `beforeFirstDerive`, just the other direction. */
+  beforeFirstQwenDerive?(): Promise<void>;
 }
 
 export interface ClonedVoiceRequest {
@@ -401,11 +412,14 @@ export async function resolveClonedVoicesForChapter(
     // repairable — re-derive from the retained master.wav.
     deps.reportProgress?.(`Preparing voice "${characterName}"…`);
     try {
-      /* Task 22 fix round 1 (F1/F3) — coqui only: fires exactly once we
-         KNOW a real coqui derive is about to happen, still inside this
-         try/catch, so a failed evict is reported exactly like any other
-         derive failure below (fail-loud, same as always). */
+      /* Task 22 fix round 1 (F1/F3) + round 2 (NEW-CRITICAL) — fires exactly
+         once we KNOW a real derive is about to happen, on WHICHEVER side
+         needs the OTHER engine evicted first, still inside this try/catch,
+         so a failed evict is reported exactly like any other derive failure
+         below (fail-loud, same as always — this resolver's policy is
+         engine-agnostic: any derive failure is fail-loud). */
       if (engine === 'coqui') await deps.beforeFirstDerive?.();
+      else if (engine === 'qwen') await deps.beforeFirstQwenDerive?.();
       const { pcm, sampleRate, refText } = await deps.readMasterPcm(libraryUuid, entry);
       const result = await deps.deriveEngineArtifact(
         libraryUuid,
@@ -650,6 +664,16 @@ export interface ResolveDesignedVoiceDeps {
       existing fail-SOFT catch below, exactly like any other unexpected coqui
       self-heal failure — never a new hard failure (§2.3). */
   beforeFirstDerive?(): Promise<void>;
+  /** fs-38 Wave 3c, Task 22 fix round 2 [NEW-CRITICAL] — mirror of
+      `beforeFirstDerive`, QWEN ARM ONLY (the coqui arm never calls this).
+      Fires once, immediately before the FIRST real qwen derive. A thrown/
+      rejected hook is caught by the SAME shared catch as every other qwen-
+      arm failure — `console.warn` only, never rethrown, byte-for-byte the
+      qwen arm's existing pre-3c fail-soft policy (this arm has NO loop-top
+      abort check of its own, unlike the cloned resolver — see the
+      synthesise-chapter.ts call site for why that makes ITS OWN abort
+      re-checks load-bearing, not redundant, for this arm). */
+  beforeFirstQwenDerive?(): Promise<void>;
 }
 
 /** For each requested designed voice: best-effort re-derive from its
@@ -801,6 +825,11 @@ export async function resolveDesignedVoicesForChapter(
       if (!master) continue; // no retained clip / no ref_text — fall through to today's behaviour.
 
       deps.reportProgress?.(`Preparing voice "${characterName}"…`);
+      /* Task 22 fix round 2 [NEW-CRITICAL] — mirror of the coqui arm's
+         `beforeFirstDerive` call. Still inside the shared I-1 try, so a
+         failed evict is caught by the shared catch below exactly like any
+         other qwen self-heal failure — `console.warn` only, never rethrown. */
+      await deps.beforeFirstQwenDerive?.();
       const result = await deps.deriveEngineArtifact(
         libraryUuid,
         'qwen',

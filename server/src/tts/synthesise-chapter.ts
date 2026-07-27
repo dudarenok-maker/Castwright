@@ -1562,7 +1562,22 @@ export async function synthesiseChapter(
      coqui-arm catch treats it as an ordinary self-heal failure (fail-soft —
      `softFailedUuids`/keep-stale, never rethrown, satisfying "designed-only
      + evict fails still completes the chapter"). No separate try/catch is
-     needed here — see `coquiEvict` below. */
+     needed here — see `coquiEvict` below.
+
+     fix round 2 [NEW-CRITICAL] — round 1 fixed the LEADING evict's fail-
+     soft contract but left its exact mirror: `evictCoquiForQwenPhase` was
+     STILL a bare top-level `await` with no enclosing try/catch anywhere in
+     this function, reachable with only designed voices in the chapter
+     (leading evict + coqui derive both succeed, THEN the sidecar recycles
+     and the trailing evict itself 502s/ECONNREFUSEDs) — the identical
+     §2.3 violation, just on the other side. Fixed the identical way: see
+     `beforeFirstQwenDerive`/`qwenEvict` below, the QWEN-side mirror of
+     `beforeFirstDerive`/`coquiEvict`. Also (Important) dropped the
+     `coquiEvict.ok`-only gate on the trailing evict — it under-covered the
+     cross-chapter case (a PRIOR chapter left Coqui resident; THIS chapter
+     has only healthy coqui clones, so no new coqui derive ever ran, `ok`
+     stayed false, and the trailing evict silently never fired). See the
+     gate's own comment below for the replacement. */
   const clonedCoquiRequests = clonedVoiceRequests.filter((r) => r.engine === 'coqui');
   const clonedQwenRequests = clonedVoiceRequests.filter((r) => r.engine !== 'coqui');
   const designedCoquiRequests = designedVoiceRequests.filter((r) => r.engine === 'coqui');
@@ -1574,18 +1589,52 @@ export async function synthesiseChapter(
      reuses the SAME settled promise (success or rejection), so a genuinely
      unreachable sidecar fails every remaining coqui derive this chapter
      the same way instead of re-attempting (and re-throwing raw) per
-     request. `ok` tracks whether it ever actually succeeded, for the
-     trailing evict's own gate below — never true if nothing ever derived
-     coqui at all this chapter (F3's "healthy → no evict" also covers the
-     trailing side for free). */
-  const coquiEvict: { promise: Promise<void> | null; ok: boolean } = { promise: null, ok: false };
+     request. */
+  const coquiEvict: { promise: Promise<void> | null } = { promise: null };
   const beforeFirstCoquiDerive = (): Promise<void> => {
     if (!coquiEvict.promise) {
-      coquiEvict.promise = evictQwenForCoquiPhase().then(() => {
-        coquiEvict.ok = true;
-      });
+      coquiEvict.promise = evictQwenForCoquiPhase();
     }
     return coquiEvict.promise;
+  };
+
+  /* fs-38 Wave 3c, Task 22 fix round 2 [NEW-CRITICAL] — the mirror, QWEN
+     side. `evictCoquiForQwenPhase` used to be a bare top-level `await` with
+     NO enclosing try/catch anywhere in this function — reachable with ONLY
+     designed voices in the chapter (leading evict succeeds, the coqui
+     derive runs or fails soft correctly, then the SIDECAR recycles and the
+     trailing evict itself gets a 502/ECONNREFUSED), which aborted a chapter
+     that pre-Task-22 would have rendered — the same §2.3 violation F1 fixed
+     on the leading side. Fixed the identical way: no standalone top-level
+     evict call at all. Instead, whichever qwen-subset resolver call reaches
+     a REAL qwen derive first pays for it, from inside ITS OWN try/catch, so
+     the failure is classified by that resolver's own existing policy
+     (fail-loud for cloned, fail-soft for designed — see the two call sites
+     in clone-voice-resolver.ts). Memoised the same way as the coqui side,
+     so 15 serial qwen derives in one chapter still cost one `/unload`, not
+     15. A qwen RENDER with no derive at all (every qwen voice healthy or a
+     stock catalogue pick) has no resolver call to hang this off, so it's
+     also primed once, best-effort, right before the qwen block below.
+
+     `hasCoquiPresence` guard (discovered fixing the Important gate below,
+     see its own comment) — a chapter with ZERO coqui-engine requests
+     (`clonedCoquiRequests`/`designedCoquiRequests` both empty) never
+     attempts the evict at all, even when a real qwen derive fires: Qwen is
+     this project's DEFAULT engine, so a naive "always evict Coqui before
+     any qwen derive" reading would hit the sidecar's `/unload` on EVERY
+     qwen-cloned/designed repair in EVERY book, coqui or not — confirmed a
+     real regression against synthesise-chapter.test.ts's plain, zero-coqui
+     fake-timer batching suite while building this fix. Scoping to books
+     that actually touch Coqui somewhere mirrors the leading evict's own
+     scope (only fires when a coqui-engine request exists at all). */
+  const hasCoquiPresence = clonedCoquiRequests.length > 0 || designedCoquiRequests.length > 0;
+  const qwenEvict: { promise: Promise<void> | null } = { promise: null };
+  const beforeFirstQwenDerive = (): Promise<void> => {
+    if (!hasCoquiPresence) return Promise.resolve();
+    if (!qwenEvict.promise) {
+      qwenEvict.promise = evictCoquiForQwenPhase();
+    }
+    return qwenEvict.promise;
   };
 
   const cloneResolverDeps =
@@ -1594,6 +1643,7 @@ export async function synthesiseChapter(
           {
             ...buildDefaultCloneResolverDeps(signal),
             beforeFirstDerive: beforeFirstCoquiDerive,
+            beforeFirstQwenDerive,
             ...cloneResolverDepsOverride, // an explicit test override still wins, same shallow-merge contract as every other field.
           },
           cloneResolverDepsOverride,
@@ -1605,6 +1655,7 @@ export async function synthesiseChapter(
           {
             ...buildDefaultDesignedResolverDeps(signal),
             beforeFirstDerive: beforeFirstCoquiDerive,
+            beforeFirstQwenDerive,
             ...designedResolverDepsOverride, // ditto.
           },
           designedResolverDepsOverride,
@@ -1673,11 +1724,38 @@ export async function synthesiseChapter(
       castById.get(narratorCharacterId) ?? { id: narratorCharacterId, name: 'Narrator' };
     return routeFor(character).engine === 'qwen';
   });
+  /* fix round 2 (Important) — this used to also require `coquiEvict.ok` (a
+     REAL coqui derive must have SUCCEEDED THIS chapter), which under-covers
+     the cross-chapter case: see `hasCoquiPresence`'s own comment above
+     (`beforeFirstQwenDerive`) for the replacement condition and why a
+     naive "any qwen load, full stop" reading regressed a plain zero-coqui
+     Qwen chapter. The `clonedCoquiRequests`/`designedCoquiRequests` check
+     here is belt-and-braces with that guard (avoids even entering the try
+     below when there's nothing to protect) — the guard alone is sufficient
+     for correctness.
+
+     [NEW-CRITICAL] this priming call is deliberately best-effort: caught
+     and logged, NEVER rethrown, so a sidecar recycle window here can't
+     abort the chapter (the same fail-soft-by-default fix as the leading
+     evict). It shares `beforeFirstQwenDerive`'s memoized promise with the
+     qwen-subset resolver calls below — if it fails here, THEIR OWN
+     try/catch still sees that same failure and reacts per their own policy
+     (fail-loud for a cloned qwen derive, fail-soft for a designed one);
+     this call only covers the "no derive needed at all, just a qwen
+     RENDER" case, which has no resolver call to hang the hook off. */
   if (
-    coquiEvict.ok &&
+    hasCoquiPresence &&
     (chapterHasQwenGroups || clonedQwenRequests.length > 0 || designedQwenRequests.length > 0)
   ) {
-    await evictCoquiForQwenPhase();
+    try {
+      await beforeFirstQwenDerive();
+    } catch (err) {
+      console.warn(
+        '[synthesise-chapter] failed to evict Coqui ahead of a Qwen phase — continuing; a ' +
+          'cloned-voice qwen derive that needs this will still fail loud per its own policy:',
+        err,
+      );
+    }
   }
 
   if (clonedQwenRequests.length > 0) {
