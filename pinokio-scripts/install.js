@@ -18,7 +18,7 @@ module.exports = {
     //    default (phone/tablet listening + pairing) can auto-provision certs in
     //    step 7 — Pinokio runs `node dist/index.js` directly and never goes through
     //    start-app-prod.mjs's boot auto-provision, so the install must do it.
-    //    (If Pinokio's bundled node < 20.19, add `nodejs` to this message too.)
+    //    (If Pinokio's bundled node < 22.22 — the react-router 8 floor, raised from 20.19 in #1859 — add `nodejs` to this message too. STILL UNVERIFIED on-box; see docs/testing/onbox-acceptance-register.md.)
     {
       method: 'shell.run',
       params: { path: APP_ROOT, conda: CONDA, message: 'conda install -y -c conda-forge ffmpeg mkcert' },

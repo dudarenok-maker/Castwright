@@ -216,27 +216,45 @@ history at cut time.
   (fe-56, #1859). One PR because the upgrade is not adoptable without the floor: react-router 8.3.0
   declares `engines.node >=22.22.0`.
   - **Deployer-visible:** the minimum supported Node moves from **20.19 → 22.22**. Node 20 reached EOL
-    in April 2026 and 22 is the active LTS, so the floor was overdue independently of the router. The
-    Pinokio path is unaffected — it provisions its own Node.
+    in April 2026 and 22 is the active LTS, so the floor was overdue independently of the router.
+    **`engines` is advisory, not enforced** — npm emits `EBADENGINE` and exits 0 without
+    `engine-strict`, and this repo sets no `.npmrc`. The floor documents intent and fails *late and
+    obscurely* on an older Node, it does not block the install. (`164-deps-ci-hygiene.md` already said
+    this; an earlier draft of this entry claimed npm would refuse, which is wrong.)
+  - **Pinokio is an open risk, not a safe path.** `pinokio-scripts/install.js` uses Pinokio's
+    **bundled** Node — step 1 conda-installs `ffmpeg mkcert` only, never `nodejs` — and that file has
+    carried an unimplemented TODO since it was written: *"(If Pinokio's bundled node < 20.19, add
+    `nodejs` to this message too.)"* Raising the floor to 22.22 makes that far likelier to bite. Which
+    Node the Pinokio kernel ships cannot be determined from this repo, so it is recorded as owed on-box
+    acceptance rather than asserted either way; plan 218's open-verification item 2 is updated to the
+    new threshold.
   - `react-router-dom` is now a **dead package**: v8 folded the DOM APIs back into `react-router` and
     left `react-router-dom` frozen at 7.18.1 permanently. 24 files re-pointed.
   - **The trap, recorded because it is invisible to `tsc`:** v8 did not simply rename the package.
     `RouterProvider` (and `HydratedRouter`) live at the DOM-specific subpath **`react-router/dom`**,
     whose `RouterProvider` wraps the base one with `flushSync: ReactDOM.flushSync`. Both modules export
-    a component of that name, so importing the wrong one **compiles, typechecks, and only breaks at
-    runtime**. Issue #1859 instructed rewriting every `react-router-dom` import to `react-router`,
-    which would have shipped exactly that break past `npm run typecheck` — the app has one
+    a component of that name, and `dom-router-provider.d.ts` declares
+    `Omit<RouterProviderProps, "flushSync">`, so `<RouterProvider router={router}/>` **compiles against
+    either**. Issue #1859 instructed rewriting every `react-router-dom` import to `react-router`, which
+    would have silently taken the wrong one past `npm run typecheck` — the app has one
     `RouterProvider` mount site. New `src/main.test.tsx` mocks both modules with distinct sentinels and
     pins the DOM export; mutation-verified (reverting the import fails it).
+    **Calibration, after review:** the wrong import would be behaviourally *identical today*, not
+    broken. `flushSync` is consumed only behind `if (reactDomFlushSyncImpl && flushSync)`, and the app
+    uses no `viewTransition` and no `flushSync` anywhere — the miss degrades to a dev-only `warnOnce`.
+    The guard is worth keeping because it protects future view-transition adoption, but an earlier
+    draft of this entry called it a runtime break, which overstated it.
   - `react`/`react-dom` tightened `^19.0.0` → `^19.2.7`. The old range could resolve a React that v8
     rejects, so the range was itself the defect. Vite was already 8.0.16, above v8's `>=7` floor.
-  - The floor is advertised in **four places that are not generated from each other** and must move
+  - The floor is advertised in **five places that are not generated from each other** and must move
     together: `package.json` `engines`, `INSTALL.md`, the hand-maintained wiki mirror
     `docs/wiki/Installing-Castwright.md` (synced by `scripts/sync-wiki.mjs`, *not* derived from
-    INSTALL.md — it drifts silently), and `copilot-setup-steps.yml`, which was still pinned to Node 20
-    while every other workflow had moved to 24.
+    INSTALL.md — it drifts silently), `copilot-setup-steps.yml`, which was still pinned to Node 20
+    while every other workflow had moved to 24, and `.github/copilot-instructions.md` — the fifth,
+    caught by review after an earlier draft of this entry claimed there were four. That the count was
+    itself wrong is the argument for the point: nothing mechanical keeps these in sync.
   - `src/lib/router.ts` has a **zero-line diff** — the plan-01 `RouterStore` adapter seam held across a
-    router major. The `#/…` grammar is byte-identical: 43 unmodified `router.test.ts` assertions, 292
+    router major. The `#/…` grammar is byte-identical: 30 unmodified `router.test.ts` tests (39 assertions), 292
     unmodified e2e specs over ~50 distinct hash shapes, 19 visual snapshots with no drift and nothing
     blessed. Every v8 SSR/framework-mode breaking change was assessed inapplicable — this app is pure
     client-side `createHashRouter` with no loaders, actions, or `meta` functions. Plan

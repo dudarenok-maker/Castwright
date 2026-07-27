@@ -3,9 +3,17 @@
 // react-router/dom's RouterProvider wraps the bare react-router one with
 // `flushSync: ReactDOM.flushSync` wiring (see node_modules/react-router/dist/
 // development/lib/dom-export/dom-router-provider.js). Both modules export a
-// component named RouterProvider, so importing the wrong one still compiles
-// and typechecks — it only breaks at runtime. This test pins main.tsx (the
-// app's sole RouterProvider mount site) to the DOM-specific export.
+// component named RouterProvider, and dom-router-provider.d.ts declares
+// Omit<RouterProviderProps, "flushSync">, so importing the wrong one compiles
+// AND typechecks. This test pins main.tsx (the app's sole RouterProvider mount
+// site) to the DOM-specific export.
+//
+// Honest severity: today the wrong import would behave identically. flushSync
+// is consumed only behind `if (reactDomFlushSyncImpl && flushSync)`, and this
+// app uses no viewTransition and no flushSync, so the miss degrades to a
+// dev-only warnOnce. This guard exists for the moment that stops being true —
+// adopt view transitions with the bare import and navigations silently stop
+// flushing, with nothing else in the suite to catch it.
 
 import { describe, expect, it, vi } from 'vitest';
 
