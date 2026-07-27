@@ -16,6 +16,17 @@
   identical machines could quietly end up on different builds, which made "it sounds different
   on my computer" almost impossible to chase down. It's pinned now. Some installs will step
   back to the tested version the next time they update.
+- **Castwright now tells you when a piece of your setup is too old to trust.** Every finished
+  chapter is levelled by a free tool called ffmpeg, and Castwright reads ffmpeg's own loudness
+  measurements back to do it. That means the version matters — an old one can quietly hand back
+  numbers we don't expect, and the result is audio that's levelled differently with nothing to
+  explain why. Castwright now asks for **ffmpeg 6.0 or newer**, tells you the version you have
+  and the one it wants, and points at the command to upgrade. It won't stop you: if your ffmpeg
+  is older, you'll see a note rather than a locked door, because older doesn't mean broken —
+  it means untested. Two smaller things follow from it. If you install through Pinokio, the
+  setup now asks for a version that clears the bar, on updates as well as fresh installs. And
+  we've moved our tested-on Linux from Ubuntu 22.04 to 24.04, because 22.04's own copy of
+  ffmpeg is too old — 22.04 still works if you install a newer ffmpeg yourself.
 - **Build your own stable of narrators in My voices.** Design a voice once — from a persona, with
   a live audition — and it's yours to cast in any book, not just the one you designed it for.
   Not happy with a take? Redesign it and compare old against new side by side before you commit.

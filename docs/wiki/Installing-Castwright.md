@@ -28,7 +28,7 @@ After install you'll have a single command (`npm run start:prod`) that brings up
   - macOS: `brew install python@3.12`
   - Linux (Ubuntu / Debian): `sudo apt install python3.12 python3.12-venv`
   - Linux (Fedora / RHEL): `sudo dnf install python3.12`
-- **ffmpeg on PATH** (server encodes chapter audio to MP3)
+- **ffmpeg 6.0 or newer on PATH** (server encodes chapter audio to MP3, and reads ffmpeg's loudness measurements back — that output is version-sensitive, so we state a floor). Ubuntu 24.04+, current Homebrew, winget and conda-forge all satisfy it; Ubuntu 22.04's archive build (4.4) does not — use snap or a PPA there.
   - Windows: `winget install Gyan.FFmpeg`
   - macOS: `brew install ffmpeg`
   - Linux: `sudo apt install ffmpeg` (or `sudo dnf install ffmpeg`)
@@ -44,7 +44,7 @@ After install you'll have a single command (`npm run start:prod`) that brings up
 
 > **Upgrading an existing install?** A venv is bound to its Python, so a pre-3.12 (e.g. 3.11) venv can't be upgraded in place — the app detects the mismatch and asks you to reinstall fresh. Delete the old venv (`server/tts-sidecar/.venv`) and re-bootstrap; **your books and designed voices are safe** (they live in `WORKSPACE_DIR`, outside the install).
 
-> **Note for Linux deployers**: validated on Ubuntu 22.04+. The same scripts should work on any glibc Linux with `bash`, `curl`, and the prereqs above. Snap-installed ffmpeg sometimes ends up at `/snap/bin/ffmpeg` instead of `/usr/bin/ffmpeg`; if `which ffmpeg` returns empty after `apt install`, prepend `/snap/bin` to your PATH.
+> **Note for Linux deployers**: validated on Ubuntu 24.04+. The same scripts should work on any glibc Linux with `bash`, `curl`, and the prereqs above. 22.04 was previously listed; it is no longer validated, because its archive ffmpeg (4.4) sits below the 6.0 support floor. Snap-installed ffmpeg sometimes ends up at `/snap/bin/ffmpeg` instead of `/usr/bin/ffmpeg`; if `which ffmpeg` returns empty after `apt install`, prepend `/snap/bin` to your PATH.
 
 ---
 

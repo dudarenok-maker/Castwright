@@ -24,6 +24,33 @@ PR-by-PR as the v1.15.0 cycle progresses — do not reconstruct from git
 history at cut time.
 -->
 
+## 🔧 Setup & prerequisites
+
+- **Castwright now declares a minimum ffmpeg version — 6.0 — and checks it.** (ops-35, #1877)
+  The audio pipeline doesn't merely invoke ffmpeg; `server/src/tts/loudnorm.ts` **parses**
+  ffmpeg's two-pass loudnorm JSON summary, which makes the version a contract we were relying
+  on without ever stating. `castwright.ffmpeg.minimum` in root `package.json` is the single
+  source of truth, read by `scripts/preflight-ffmpeg.cjs` (which previously spawned
+  `ffmpeg -version` and discarded the output), by `server/src/diagnostics/ffmpeg.ts`, and by
+  `pinokio-scripts/lib/ffmpeg-pin.test.js` — never restated anywhere.
+  This is a **support** floor, not a capability floor: loudnorm's JSON shape has been stable
+  since ffmpeg 3.1, so an evidence-derived floor would sit near 4.x and never fire. 6.0 is
+  anchored to Ubuntu 24.04 LTS (6.1.1). **This retires the previously-claimed Ubuntu 22.04**,
+  whose archive ffmpeg is 4.4 — a deliberate, user-visible support reduction; snap or a PPA
+  satisfies the floor on 22.04.
+  Only the preflight hard-fails (it is `server/package.json`'s `pretest`, so it gates
+  pre-commit, pre-push and all three `release.yml` legs — every gate channel was measured at
+  ≥ 6.1.1 first). Every user-facing surface **warns without blocking**: a new
+  `ffmpeg-too-old` `BlockerCause` at `status: 'warn'`, which `setup-readiness.ts:96` already
+  counted toward `ready`. The Setup Wizard gains a third card — before this, a below-floor
+  ffmpeg rendered "ffmpeg isn't installed yet" to a user who has it installed.
+  Pinokio's conda env moves from bare `ffmpeg` to `"ffmpeg>=6"` on **both** `install.js` and
+  `update.js`, unblocking #1876, which declined to pin precisely because no validated floor
+  existed to pin to. Rollback without reverting: set the floor to `null`.
+  Plan: [`docs/features/269-ffmpeg-version-floor.md`](https://github.com/dudarenok-maker/Castwright/blob/main/docs/features/269-ffmpeg-version-floor.md).
+
+---
+
 ## 📝 Script review & manuscript
 
 - Detect emotions can now be scoped to the current chapter — the header button runs the emotion + reaction passes on just the chapter you're viewing, with whole-book still available from its ⌄ menu. (fs-35, #592)
