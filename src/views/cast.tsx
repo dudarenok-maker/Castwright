@@ -514,6 +514,17 @@ export function CastView({
       });
       return;
     }
+    /* fs-38 Wave 3c Task 25 [EX-14] — the coqui counterpart of the qwen slot
+       read above, mirroring the server's isCloneEngine branch
+       (tts/voice-mapping.ts pickVoiceForEngine, Task 16). Unlike qwen, coqui
+       always has a valid catalog fallback (resolveTtsVoiceForCharacter's
+       stableHash bucket below) even with no library assignment, so there is
+       no "no voice yet" error state to gate on here — only the
+       requestSubject injection further down needs this. */
+    const clonedCoquiSlot = c.overrideTtsVoices?.coqui;
+    const isClonedCoqui =
+      !!clonedCoquiSlot?.libraryUuid &&
+      (clonedCoquiSlot.provenance === 'cloned' || clonedCoquiSlot.provenance === 'designed');
     const stubTtsVoice = resolveTtsVoiceForCharacter(c, effectiveEngine);
     const subject: Voice = voice ?? {
       id: sampleVoiceId,
@@ -549,7 +560,23 @@ export function CastView({
               qwen: { name: designedQwenVoiceId },
             },
           }
-        : subject;
+        : /* fs-38 Wave 3c Task 25 [EX-14][ADV-H1] — same injection for a
+             cloned/designed coqui slot, so Play actually samples the clone
+             the chapter will render instead of the stock catalog fallback
+             `stubTtsVoice` above already labels the row with. */
+          effectiveEngine === 'coqui' && isClonedCoqui
+          ? {
+              ...subject,
+              overrideTtsVoices: {
+                ...(subject.overrideTtsVoices ?? {}),
+                coqui: {
+                  name: clonedCoquiSlot!.name,
+                  libraryUuid: clonedCoquiSlot!.libraryUuid,
+                  provenance: clonedCoquiSlot!.provenance,
+                },
+              },
+            }
+          : subject;
     const characterHint = buildCharacterHint(c);
     setRow(c.id, { loading: true, error: undefined });
     try {
@@ -1675,12 +1702,23 @@ function TtsVoiceLine({ ttsVoice }: TtsVoiceLineProps) {
      Qwen-pinned character reads "Qwen · Designed voice" instead of an empty
      name line. Preset engines keep the name · description shape. */
   const isQwen = ttsVoice.provider === 'qwen';
+  /* fs-38 Wave 3c Task 25 [M-3] — a coqui library slot resolves to its raw
+     storage key (xtts-<uuid>; see tts-voice-mapping.ts's
+     resolveTtsVoiceForCharacter and the server's pickVoiceForEngine), never
+     a human name — both the client stub AND the hydrated `voice.ttsVoice`
+     from GET /api/voices carry it verbatim once a library voice is
+     assigned. Surface it as "Cloned voice" instead of printing the storage
+     key. This covers the cast-view/picker third of M-3; the audition route
+     (Task 27) and the library card (Task 28) own the other two. */
+  const isCoquiClone = ttsVoice.provider === 'coqui' && ttsVoice.name.startsWith('xtts-');
   return (
     <span
       title={
         isQwen
           ? `Qwen bespoke voice — ${ttsVoice.description}`
-          : `Prebuilt ${ttsVoice.provider} voice — ${ttsVoice.description}`
+          : isCoquiClone
+            ? `Cloned voice — ${ttsVoice.description}`
+            : `Prebuilt ${ttsVoice.provider} voice — ${ttsVoice.description}`
       }
       className="block text-[11px] text-ink/50 truncate"
     >
@@ -1692,6 +1730,11 @@ function TtsVoiceLine({ ttsVoice }: TtsVoiceLineProps) {
               segment when no voice has been designed yet — keeps the line
               reading "Qwen · No voice designed yet". */}
           {ttsVoice.name && <span className="text-ink/40"> · {ttsVoice.name}</span>}
+          <span className="text-ink/40"> · {ttsVoice.description}</span>
+        </>
+      ) : isCoquiClone ? (
+        <>
+          <span className="font-semibold text-ink/70">Cloned voice</span>
           <span className="text-ink/40"> · {ttsVoice.description}</span>
         </>
       ) : (
