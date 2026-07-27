@@ -1,19 +1,29 @@
-/* Regression coverage for ops-30/#1848: vitest's documented default
-   `forceRerunTriggers` entry for config files — a brace-alternation with a
-   wildcarded extension, followed by a trailing wildcard suffix — matches
-   NOTHING under picomatch 4. A wildcard inside that path segment kills the
-   trailing-wildcard-suffix-also-matches-the-file behaviour. verify.yml runs
-   BOTH server/vitest.config.ts and server/vitest.config.slow.ts with
-   `--changed`; the main config re-lists (and previously inherited the dead
-   copy of) vitest's defaults, and the slow config set no override at all —
-   which means it fell back to vitest's own broken default. Either way, a
-   config-only diff could silently select zero tests and merge unexercised.
+/* Regression coverage for the two independent ways these configs'
+   `forceRerunTriggers` have silently matched nothing:
+
+   ops-30/#1848 — vitest's documented default entry for config files (a
+   brace-alternation with a wildcarded extension, followed by a trailing
+   wildcard suffix) matches NOTHING under picomatch 4: a wildcard inside a
+   path segment kills the trailing-wildcard-suffix-also-matches-the-file
+   behaviour. verify.yml runs BOTH server/vitest.config.ts and
+   server/vitest.config.slow.ts with `--changed`; the main config re-listed
+   the dead copy of vitest's defaults, and the slow config set no override at
+   all, so it fell back to vitest's own broken default.
+
+   ops-33/#1868 — picomatch's `**` refuses to cross a dot-prefixed path
+   segment unless `{ dot: true }` is passed, and vitest passes no options
+   when it builds these matchers. Claude-Code-harness worktrees live under
+   `.claude/worktrees/…`, so every entry matched nothing whenever the suite
+   ran from one.
+
+   Either way the consequence is the same and it reads as success: a
+   config-only diff selects zero tests, exits 0, and merges unexercised.
 
    This imports the REAL forceRerunTriggers array from each config module
-   (not a re-declared copy) and checks it against the absolute path of every
-   file that config documents as needing full-rerun coverage — the same
-   shape vitest itself uses when matching. A regression back to the broken
-   glob, or a covered file going missing, fails this test. */
+   (not a re-declared copy) and checks it against every file that config
+   documents as needing full-rerun coverage, at three checkout shapes. A
+   regression to either broken glob, or a covered file going missing, fails
+   this test. */
 import { describe, it, expect } from 'vitest';
 import picomatch from 'picomatch';
 import { existsSync } from 'node:fs';
@@ -42,45 +52,84 @@ function matchesTrigger(triggers: string[], absPath: string): boolean {
   return triggers.some((pattern) => picomatch(pattern)(absPath));
 }
 
-/* Confirms `relFromRoot` (relative to `root`) names a real file, then
-   returns a SYNTHETIC absolute path (fixed `/repo/...` root, forward
-   slashes) for the picomatch check. picomatch's `**` refuses to cross a
-   dot-prefixed path segment (its default `dot: false`) — this checkout
-   happens to live under `.claude/worktrees/...`, so matching the file's
-   REAL on-disk absolute path would spuriously fail here regardless of the
-   trigger patterns. A CI/production checkout has no such dot segment; the
-   synthetic root keeps the assertion about the patterns, not about where
-   this worktree sits.
+/* Vitest normalises to forward slashes (it resolves through `pathe`) before
+   consulting these patterns, but node's `path.resolve` does not. Without
+   this, the real-checkout assertion below would fail on Windows for reasons
+   that have nothing to do with the patterns. */
+const toPosix = (p: string): string => p.replace(/\\/g, '/');
 
-   The synthetic path reflects `root`'s real nesting under the repo (`/repo`
-   for REPO_ROOT, `/repo/server` for SERVER_ROOT) — finding 11 (ops-30
-   review): this used to always return `/repo/${relFromRoot}` regardless of
-   `root`, so "server package.json" actually asserted against
-   `/repo/package.json`, not `/repo/server/package.json`. Both trigger
-   patterns start with a leading globstar segment, so nested paths match in
-   reality either way, which is why the bug never failed a test — but the
-   test wasn't proving what its own label claimed. */
-function realFileAsAbsPath(root: string, relFromRoot: string): string {
-  expect(existsSync(resolve(root, relFromRoot))).toBe(true);
-  const syntheticRoot = root === SERVER_ROOT ? '/repo/server' : '/repo';
-  return `${syntheticRoot}/${relFromRoot}`;
+/* Every covered file is asserted at all three shapes.
+
+   The dot-prefixed shape is the ops-33 pin, and it is REQUIRED even though
+   CI never runs from such a path: without it, dropping the dot-tolerant half
+   of a trigger would pass CI unnoticed and break only on developer machines
+   — which is precisely how #1868 survived as long as it did.
+
+   The real on-disk shape proves the mechanism works where this suite is
+   actually executing, not merely in the abstract. Before #1868 was fixed
+   that assertion could not be made at all: this suite runs from
+   `.claude/worktrees/…` often enough that it would have failed for reasons
+   unrelated to the patterns. */
+const ROOT_SHAPES = [
+  { shape: 'a clean checkout', root: '/repo' },
+  { shape: 'a dot-prefixed checkout', root: '/repo/.claude/worktrees/wt' },
+  { shape: 'this checkout', root: toPosix(REPO_ROOT) },
+];
+
+/* Confirms `relFromRoot` (relative to `base`) names a real file, then builds
+   the absolute path to check under the given synthetic/real repo root.
+
+   The composed path reflects `base`'s real nesting under the repo — finding
+   11 of the ops-30 review: this used to return `/repo/${relFromRoot}`
+   regardless of `base`, so "server package.json" actually asserted against
+   `/repo/package.json`, not `/repo/server/package.json`. Every trigger
+   starts with a leading globstar segment, so nested paths match in reality
+   either way, which is why the bug never failed a test — but the test wasn't
+   proving what its own label claimed. */
+function absPathUnder(root: string, base: string, relFromRoot: string): string {
+  expect(existsSync(resolve(base, relFromRoot))).toBe(true);
+  return base === SERVER_ROOT ? `${root}/server/${relFromRoot}` : `${root}/${relFromRoot}`;
 }
 
+const MAIN_COVERED = [
+  { rel: 'package.json', file: 'server package.json', base: SERVER_ROOT },
+  { rel: 'vitest.config.ts', file: 'this config file', base: SERVER_ROOT },
+  { rel: 'openapi.yaml', file: 'the API contract', base: REPO_ROOT },
+];
+
+const SLOW_COVERED = [
+  { rel: 'package.json', file: 'server package.json', base: SERVER_ROOT },
+  { rel: 'vitest.config.slow.ts', file: 'this config file', base: SERVER_ROOT },
+];
+
+const crossProduct = (covered: typeof MAIN_COVERED) =>
+  covered.flatMap((entry) => ROOT_SHAPES.map((rootShape) => ({ ...entry, ...rootShape })));
+
 describe('server/vitest.config.ts forceRerunTriggers', () => {
-  it.each([
-    { relFromRoot: 'package.json', label: 'server package.json', root: SERVER_ROOT },
-    { relFromRoot: 'vitest.config.ts', label: 'this config file', root: SERVER_ROOT },
-    { relFromRoot: 'openapi.yaml', label: 'the API contract', root: REPO_ROOT },
-  ])('covers $label so a config-only diff still forces a full --changed run', ({ relFromRoot, root }) => {
-    expect(matchesTrigger(mainTriggers, realFileAsAbsPath(root, relFromRoot))).toBe(true);
+  it.each(crossProduct(MAIN_COVERED))(
+    'covers $file from $shape so a config-only diff still forces a full --changed run',
+    ({ rel, base, root }) => {
+      expect(matchesTrigger(mainTriggers, absPathUnder(root, base, rel))).toBe(true);
+    },
+  );
+
+  /* Guards against "fixing" a dead trigger by widening it to something that
+     matches everything — that would force a full run on every diff and
+     quietly undo the point of --changed. */
+  it.each(ROOT_SHAPES)('does not match an ordinary source file from $shape', ({ root }) => {
+    expect(matchesTrigger(mainTriggers, `${root}/server/src/index.ts`)).toBe(false);
   });
 });
 
 describe('server/vitest.config.slow.ts forceRerunTriggers', () => {
-  it.each([
-    { relFromRoot: 'package.json', label: 'server package.json' },
-    { relFromRoot: 'vitest.config.slow.ts', label: 'this config file' },
-  ])('covers $label so a config-only diff still forces a full --changed run', ({ relFromRoot }) => {
-    expect(matchesTrigger(slowTriggers, realFileAsAbsPath(SERVER_ROOT, relFromRoot))).toBe(true);
+  it.each(crossProduct(SLOW_COVERED))(
+    'covers $file from $shape so a config-only diff still forces a full --changed run',
+    ({ rel, base, root }) => {
+      expect(matchesTrigger(slowTriggers, absPathUnder(root, base, rel))).toBe(true);
+    },
+  );
+
+  it.each(ROOT_SHAPES)('does not match an ordinary source file from $shape', ({ root }) => {
+    expect(matchesTrigger(slowTriggers, `${root}/server/src/index.ts`)).toBe(false);
   });
 });
