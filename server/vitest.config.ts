@@ -83,11 +83,17 @@ export default defineConfig({
     hookTimeout: 30_000,
     /* Setting this key REPLACES vitest's defaults rather than extending them,
        so the first two entries re-list them — same note the root
-       vitest.config.ts has always carried. The config-file entry pins `.ts`
-       (not vitest's own `.*`): under picomatch 4 a wildcard inside that path
-       segment kills the trailing-`/**`-also-matches-the-file behaviour, so
-       vitest's documented default matches NOTHING here and a config-only
-       diff silently selected zero tests — ops-30/#1848. This is load-bearing,
+       vitest.config.ts has always carried. Every entry is a brace
+       alternation of two halves, each guarding a different picomatch
+       failure; the full write-up lives in the root vitest.config.ts. In
+       short: the pinned `.ts` with no trailing globstar suffix is
+       ops-30/#1848 (a wildcard inside a path segment kills the
+       trailing-globstar-also-matches-the-file behaviour, so vitest's own
+       documented default matches NOTHING), and the second alternative — the
+       one naming a dot segment explicitly — is ops-33/#1868 (picomatch's
+       globstar will not cross a dot-prefixed segment without `{ dot: true }`,
+       which vitest never passes, so every entry dies when the suite runs
+       from a `.claude/worktrees/…` checkout). This is load-bearing,
        measured on a clean tree: with them stripped, a root-manifest diff
        makes `cd server && vitest run --changed` report "No test files found"
        and exit 0 — a release-cut version bump would run ZERO server tests
@@ -100,9 +106,19 @@ export default defineConfig({
        `--changed` would otherwise skip the pin on the openapi-only diff it
        exists to catch. */
     forceRerunTriggers: [
-      '**/package.json/**',
-      '**/{vitest,vite}.config.ts/**',
-      '**/openapi.yaml/**',
+      '{**/package.json,**/.*/**/package.json}',
+      '{**/{vitest,vite}.config.ts,**/.*/**/{vitest,vite}.config.ts}',
+      /* vitest.config.slow.ts needs its OWN entry: the brace above matches
+         `vitest.config.ts`, not `vitest.config.slow.ts`. Without this, a
+         slow-config-only diff selects zero tests from THIS suite — which is
+         where force-rerun-triggers.test.ts lives, so the guard protecting the
+         slow config could itself be reverted with CI green. (The slow config's
+         own trigger does fire, but it selects only the 10 slow files, and the
+         guard is not one of them. Nothing creates a module-graph edge either:
+         SLOW_FILES has no importers, and the guard reaches both configs via a
+         runtime-computed dynamic import that vite cannot record as a dep.) */
+      '{**/vitest.config.slow.ts,**/.*/**/vitest.config.slow.ts}',
+      '{**/openapi.yaml,**/.*/**/openapi.yaml}',
     ],
     pool: 'forks',
     /* Vitest 4 removed `poolOptions`; `poolOptions.forks.maxForks` is now the

@@ -210,6 +210,29 @@ manually):
   time they will race on `state.json`. Set `WORKSPACE_DIR=…` in each
   worktree's `.env.local` if you need fully isolated book stores.
 
+**`vitest --changed` and dot-prefixed worktree paths.** `scripts/wt-new.mjs`
+creates worktrees at `../wt-<slug>`, but the Agent tool's `isolation:
+"worktree"` puts them under `.claude/worktrees/<branch>` — inside a
+dot-prefixed directory. picomatch's globstar refuses to cross a dot-prefixed
+path segment unless `{ dot: true }` is passed, and vitest passes no options
+when it builds its `forceRerunTriggers` matchers. Until ops-33/#1868 that
+meant every **glob** trigger silently matched nothing from an agent worktree,
+so `npx vitest run --changed <base>` under-selected — and the failure mode was
+`0 tests found, exit 0`, which reads as success. (Vitest also appends resolved
+`setupFiles` as absolute paths; those carry no wildcard and were never
+affected.) The trigger patterns now carry an explicit dot-segment alternative,
+and `src/test/force-rerun-triggers.test.ts` +
+`server/src/force-rerun-triggers.test.ts` pin that at a synthetic dotted root
+so a regression can't pass CI, which always runs from a clean path. If you are
+measuring anything `--changed`-related and the numbers look impossibly low,
+check those tests first.
+
+The tolerance is exactly **one** dot segment deep. A checkout nested under a
+second dotted parent — say a `.claude/worktrees/` tree inside `~/.local/src/` —
+still misses. No such path exists on the current boxes, and if one appears the
+`this checkout` case in both trigger tests goes red rather than under-selecting
+silently, so the failure is loud.
+
 ## Commit convention
 
 The history is a tool, not a log. Tag every commit by area so

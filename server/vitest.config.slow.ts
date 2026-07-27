@@ -73,9 +73,21 @@ export default defineConfig({
        trailing-wildcard-suffix-also-matches-the-file behaviour (ops-30/
        #1848) — so a change to THIS file would silently select zero of the
        slow suite's 10 files. Set explicitly (`.ts` extension, not `.*`) so
-       it, and package.json, still force a full run. Not extended from the
-       main config's list — see the header comment: no mergeConfig, this
-       file stands alone. */
-    forceRerunTriggers: ['**/package.json/**', '**/vitest.config.slow.ts/**'],
+       it, and package.json, still force a full run.
+
+       The second alternative in each entry — the one naming a dot segment
+       explicitly — guards a second, unrelated picomatch failure: the
+       globstar will not cross a dot-prefixed path segment unless
+       `{ dot: true }` is passed, and vitest passes no options when it builds
+       these matchers, so without it every entry dies when the suite runs
+       from a `.claude/worktrees/…` checkout (ops-33/#1868). Full write-up in
+       the root vitest.config.ts.
+
+       Not extended from the main config's list — see the header comment: no
+       mergeConfig, this file stands alone. */
+    forceRerunTriggers: [
+      '{**/package.json,**/.*/**/package.json}',
+      '{**/vitest.config.slow.ts,**/.*/**/vitest.config.slow.ts}',
+    ],
   },
 });
