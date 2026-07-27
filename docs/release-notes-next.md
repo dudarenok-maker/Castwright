@@ -213,6 +213,42 @@ history at cut time.
   (endonyms — 'Русский', 'Deutsch' — for the book-library pills, against this one's exonyms),
   so the two must not be confusable at an import site.
 
+- **fs-60 follow-up — profile-drawer engine-seed clamp + one shared fallback-engine derivation**
+  (#1534). Two review Minors from the fs-60 whole-branch pass, both now closed. **(1)** The profile
+  drawer seeded `engineChoice` straight from `character.ttsEngine`. Since fs-60 stopped hard-locking
+  every non-English book to Qwen, a character carrying a stale on-disk `ttsEngine` (`'kokoro'`,
+  `'gemini'`) into a ru/es/fr/de book seeded the controlled `<select>` to a value with no matching
+  option — so the picker *displayed* "Default (…)" while Save wrote the stale engine the user never
+  chose. **The reaching path is `cast-link-prior.ts:203`** (manual "link to prior character",
+  `mergedSource.ttsEngine = source.ttsEngine ?? …`, no language check at either end) — **not**
+  automatic series reuse, which vetoes cross-language candidates outright
+  (`series-reuse-link.ts:309`, fs-61) and leaves the character's own `ttsEngine` empty anyway. The
+  first draft of this entry named reuse; a review pass caught that the server refuses to create
+  that state. The seed now clamps to `pickerEngines` (the offered `kokoro`/`qwen`/`coqui`
+  set ∩ `eligibleTtsEngines`), **not** to raw `eligibleTtsEngines` as originally proposed: `gemini`
+  is language-eligible for a Russian book yet has no option row, so an eligibility-only clamp left
+  the same desync. Server-authoritative force-Qwen already corrected the engine at render, so this
+  was never wrong audio. Locked by tests asserting **`onSave`**, not `select.value` — with no
+  matching option React DOM's `updateOptions` selects the first option — in a real browser too, not
+  just jsdom — so the DOM reads `'default'` either way and a value-only assertion passes against the
+  unfixed code. The tests now assert both halves (displayed value AND what Save emits), since the
+  invariant is that they agree. A second review finding added a **reconcile effect**: the seed alone
+  left the bug reachable on the `?profile=<id>` deep-link cold boot, where the drawer mounts before
+  `state.library.books` lands, eligibility falls back to `ALL_TTS_ENGINES`, a stale `'kokoro'` passes
+  the clamp, and nothing re-derives the choice once the option row disappears.
+  **(2)** `selectHasNoFallbackEngine`, `selectFallbackEngineName` and `voiceReadinessGateMessage`
+  each re-derived the book's eligibility. In the fs-70 (#1303) "non-English but Kokoro-eligible, not
+  Coqui-eligible" state they disagreed: soft-gate + a button naming Kokoro + a message naming Coqui
+  + a server `applyQwenFallback` that throws `MissingDesignedVoiceError` — a soft-gate→hard-fail
+  mismatch, not a cosmetic one. All three now read one `getBookFallbackEligibility(state, bookId)`
+  helper whose `fallbackEngine` mirrors `applyQwenFallback` exactly; a table-driven test asserts the
+  message always names the same engine as the button across all four eligibility shapes. Pure
+  refactor for every state reachable today. Also hoists the 5-engine default array duplicated across
+  `profile-drawer.tsx` / `cast.tsx` / `voice-readiness-selectors.ts` into one `ALL_TTS_ENGINES`
+  (`src/lib/tts-models.ts`). Plan 249 gains invariants 7 and 8. The sibling `cast.tsx` banner
+  assumption (`!qwenOnly ⇒ Coqui-eligible`) is prop-driven, does not read the new helper, and stays
+  owed — folded into fs-70.
+
 ---
 
 ## 🎧 Listening & revising

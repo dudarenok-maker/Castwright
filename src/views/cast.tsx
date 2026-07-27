@@ -49,7 +49,12 @@ import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { sampleScopeFor } from '../lib/sample-scope';
 import { resolveDisplayTtsVoice, resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
 import { gradientForTtsVoice } from '../lib/voice-palette';
-import { TTS_MODEL_OPTIONS, engineForModelKey, modelKeyForEngineChoice } from '../lib/tts-models';
+import {
+  ALL_TTS_ENGINES,
+  TTS_MODEL_OPTIONS,
+  engineForModelKey,
+  modelKeyForEngineChoice,
+} from '../lib/tts-models';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
 import { buildCharacterHint } from '../lib/build-character-hint';
 import { CompareCastModal } from '../modals/compare-cast-modal';
@@ -83,7 +88,7 @@ interface Props {
       "undesigned characters can't be generated" (Qwen is the only eligible
       engine) or "fall back to a generic Coqui voice" (Coqui-eligible
       languages, e.g. ru/es/fr/de/zh/ja) — see `qwenOnly` below. */
-  eligibleTtsEngines?: TtsEngine[];
+  eligibleTtsEngines?: readonly TtsEngine[];
   onOpenProfile: (id: string | null) => void;
   onShowMatchDetail: (id: string) => void;
   driftEvents: DriftEvent[];
@@ -136,7 +141,7 @@ export function CastView({
   sentences,
   title,
   bookLanguage = 'en',
-  eligibleTtsEngines = ['qwen', 'kokoro', 'coqui', 'gemini', 'piper'],
+  eligibleTtsEngines = ALL_TTS_ENGINES,
   onOpenProfile,
   onShowMatchDetail,
   driftEvents,

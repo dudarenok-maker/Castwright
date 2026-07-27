@@ -162,6 +162,49 @@ describe('selectFallbackEngineName', () => {
     });
     expect(selectFallbackEngineName(s, 'b1')).toBe('Kokoro');
   });
+
+  /* #1534 — the fs-70 (#1303) state: a non-English language that Kokoro CAN
+     read but Coqui can't. Unreachable while ENGINE_LANGUAGE_SUPPORT.kokoro is
+     ['en'], but the three consumers must already agree about it — they used to
+     each re-derive eligibility, so the button said "Kokoro" while the message
+     said "Coqui". */
+  it("is 'Kokoro' for a Kokoro-eligible, non-Coqui-eligible non-English book", () => {
+    const s = mk({ books: [{ bookId: 'b1', language: 'ru', eligibleTtsEngines: ['qwen', 'kokoro'] }] });
+    expect(selectFallbackEngineName(s, 'b1')).toBe('Kokoro');
+  });
+});
+
+describe('#1534 — the three fallback consumers never disagree', () => {
+  /* One shared eligibility derivation, so soft-gate / button / message can't
+     drift into a soft-gate-then-server-hard-fail mismatch. */
+  const cases: { name: string; language: string; eligible: string[] }[] = [
+    { name: 'English, everything eligible', language: 'en', eligible: ['qwen', 'kokoro', 'coqui'] },
+    { name: 'Coqui-eligible non-English (ru)', language: 'ru', eligible: ['qwen', 'coqui'] },
+    { name: 'Kokoro-eligible non-English (fs-70)', language: 'ru', eligible: ['qwen', 'kokoro'] },
+    { name: 'both fallbacks eligible, non-English', language: 'ru', eligible: ['qwen', 'kokoro', 'coqui'] },
+  ];
+
+  for (const c of cases) {
+    it(`names the same engine in the button and the message — ${c.name}`, () => {
+      const s = mk({
+        characters: [qwenChar({ id: 'a', name: 'Alice', lines: 1 })],
+        books: [{ bookId: 'b1', language: c.language, eligibleTtsEngines: c.eligible }],
+      });
+      /* A fallback exists, so this is the soft gate, not the hard block. */
+      expect(selectHasNoFallbackEngine(s, 'b1')).toBe(false);
+      const named = selectFallbackEngineName(s, 'b1');
+      expect(voiceReadinessGateMessage(s, 'b1')).toContain(named);
+    });
+  }
+
+  it('the hard block fires only when neither fallback is eligible', () => {
+    const s = mk({
+      characters: [qwenChar({ id: 'a', name: 'Alice', lines: 1 })],
+      books: [{ bookId: 'b1', language: 'zh', eligibleTtsEngines: ['qwen'] }],
+    });
+    expect(selectHasNoFallbackEngine(s, 'b1')).toBe(true);
+    expect(voiceReadinessGateMessage(s, 'b1')).toMatch(/can't fall back to a generic voice/);
+  });
 });
 
 describe('voiceReadinessGateMessage', () => {
