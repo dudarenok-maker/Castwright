@@ -7249,7 +7249,7 @@ export type BlockerCause =
   | 'supervisor-tripped' | 'unreachable-transient' | 'unreachable-no-supervisor'
   | 'sidecar-blocked' | 'no-engine-installed' | 'weights-missing'
   | 'cannot-confirm-engine' | 'package-broken'
-  | 'ffmpeg-missing' | 'ffprobe-missing' | 'both-missing'
+  | 'ffmpeg-missing' | 'ffprobe-missing' | 'both-missing' | 'ffmpeg-too-old'
   | 'ollama-unreachable' | 'model-not-pulled' | 'no-gemini-key'
   | 'pass';
 

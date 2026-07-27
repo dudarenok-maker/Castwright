@@ -45,7 +45,7 @@ export type BlockerCause =
   | 'sidecar-blocked' | 'no-engine-installed' | 'weights-missing'
   | 'cannot-confirm-engine' | 'package-broken'
   // ffmpeg
-  | 'ffmpeg-missing' | 'ffprobe-missing' | 'both-missing'
+  | 'ffmpeg-missing' | 'ffprobe-missing' | 'both-missing' | 'ffmpeg-too-old'
   // analyzer
   | 'ollama-unreachable' | 'model-not-pulled' | 'no-gemini-key'
   // shared terminal
@@ -142,8 +142,10 @@ setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {
     qwenPackageConfirmedBroken: models.engines.qwen.packageBroken,
   });
 
-  const { ffmpeg: ffmpegPresent, ffprobe: ffprobePresent } = probeFfmpeg();
-  const ffmpeg = diagnoseFfmpeg({ ffmpegPresent, ffprobePresent });
+  const {
+    ffmpeg: ffmpegPresent, ffprobe: ffprobePresent, version, belowFloor, minimum,
+  } = probeFfmpeg();
+  const ffmpeg = diagnoseFfmpeg({ ffmpegPresent, ffprobePresent, version, belowFloor, minimum });
 
   const engine = getResolvedAnalysisEngine();
   const geminiKeySet = getResolvedGeminiApiKey() != null;

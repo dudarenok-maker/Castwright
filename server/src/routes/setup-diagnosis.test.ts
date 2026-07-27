@@ -191,22 +191,28 @@ describe('diagnoseTts', () => {
 import { diagnoseFfmpeg, diagnoseAnalyzer, anyAnalyzerModelPulled } from './setup-diagnosis.js';
 import type { AnalyzerDiagnosisInput } from './setup-diagnosis.js';
 
+/* ops-35 (#1877) added version / belowFloor / minimum to FfmpegDiagnosisInput.
+   They are REQUIRED rather than optional so the real call site in
+   setup-readiness.ts cannot silently omit them. `SUPPORTED` is the
+   version-is-fine baseline these presence-only cases spread over. */
+const SUPPORTED = { version: '8.1', belowFloor: false, minimum: '6.0' };
+
 describe('diagnoseFfmpeg', () => {
   it('passes when both are present', () => {
-    const r = diagnoseFfmpeg({ ffmpegPresent: true, ffprobePresent: true });
+    const r = diagnoseFfmpeg({ ffmpegPresent: true, ffprobePresent: true, ...SUPPORTED });
     expect(r).toMatchObject({ status: 'pass', cause: 'pass' });
   });
   it('reports ffmpeg-missing', () => {
-    const r = diagnoseFfmpeg({ ffmpegPresent: false, ffprobePresent: true });
+    const r = diagnoseFfmpeg({ ffmpegPresent: false, ffprobePresent: true, ...SUPPORTED, version: null });
     expect(r).toMatchObject({ status: 'fail', cause: 'ffmpeg-missing' });
     expect(r.action).toBeUndefined();
   });
   it('reports ffprobe-missing', () => {
-    const r = diagnoseFfmpeg({ ffmpegPresent: true, ffprobePresent: false });
+    const r = diagnoseFfmpeg({ ffmpegPresent: true, ffprobePresent: false, ...SUPPORTED });
     expect(r.cause).toBe('ffprobe-missing');
   });
   it('reports both-missing', () => {
-    const r = diagnoseFfmpeg({ ffmpegPresent: false, ffprobePresent: false });
+    const r = diagnoseFfmpeg({ ffmpegPresent: false, ffprobePresent: false, ...SUPPORTED, version: null });
     expect(r.cause).toBe('both-missing');
   });
 });
@@ -304,5 +310,50 @@ describe('anyAnalyzerModelPulled', () => {
   });
   it('false for an empty tag list', () => {
     expect(anyAnalyzerModelPulled([], curated)).toBe(false);
+  });
+});
+
+/* ops-35 (#1877) — the ffmpeg SUPPORT floor. Below it we have not tested, which
+   is not the same as "broken", so a stale-but-present ffmpeg must WARN and never
+   block. setup-readiness.ts computes `ready` as every(pass || warn), so 'warn' is
+   the status that keeps the Setup Wizard advanceable. */
+describe('diagnoseFfmpeg — version floor', () => {
+  const base = { ffmpegPresent: true, ffprobePresent: true, minimum: '6.0' };
+
+  it('passes when the version meets the floor', () => {
+    const d = diagnoseFfmpeg({ ...base, version: '6.1', belowFloor: false });
+    expect(d.status).toBe('pass');
+    expect(d.cause).toBe('pass');
+  });
+
+  it('WARNS — never fails — when the version is below the floor', () => {
+    const d = diagnoseFfmpeg({ ...base, version: '4.4', belowFloor: true });
+    expect(d.status).toBe('warn');
+    expect(d.cause).toBe('ffmpeg-too-old');
+    expect(d.message).toContain('4.4');
+    expect(d.message).toContain('6.0');
+    expect(d.remediation).not.toBe('');
+  });
+
+  it('still FAILS when ffmpeg is absent — absence outranks staleness', () => {
+    const d = diagnoseFfmpeg({ ...base, ffmpegPresent: false, version: null, belowFloor: false });
+    expect(d.status).toBe('fail');
+    expect(d.cause).toBe('ffmpeg-missing');
+  });
+
+  it('passes when the version is unparseable (git build)', () => {
+    const d = diagnoseFfmpeg({ ...base, version: null, belowFloor: false });
+    expect(d.status).toBe('pass');
+  });
+
+  it('passes when the floor is disabled (minimum null)', () => {
+    const d = diagnoseFfmpeg({ ...base, minimum: null, version: '4.4', belowFloor: false });
+    expect(d.status).toBe('pass');
+  });
+
+  it('keeps readiness true — warn is not a blocker', () => {
+    const d = diagnoseFfmpeg({ ...base, version: '4.4', belowFloor: true });
+    const blockers = [{ status: 'pass' }, { status: 'pass' }, { status: 'pass' }, d];
+    expect(blockers.every((b) => b.status === 'pass' || b.status === 'warn')).toBe(true);
   });
 });

@@ -194,6 +194,12 @@ export function diagnoseTts(sidecar: BlockerDiagnosis, input: TtsDiagnosisInput)
 export interface FfmpegDiagnosisInput {
   ffmpegPresent: boolean;
   ffprobePresent: boolean;
+  /** Parsed "MAJOR.MINOR", or null when absent / unparseable (git builds). */
+  version: string | null;
+  /** True only when present AND parsed AND below the declared floor. */
+  belowFloor: boolean;
+  /** The declared floor, for the message copy. Null = check disabled. */
+  minimum: string | null;
 }
 
 export function diagnoseFfmpeg(input: FfmpegDiagnosisInput): BlockerDiagnosis {
@@ -209,6 +215,18 @@ export function diagnoseFfmpeg(input: FfmpegDiagnosisInput): BlockerDiagnosis {
   }
   if (!input.ffprobePresent) {
     return diagnosis('fail', 'ffprobe-missing', 'ffprobe is not on PATH.', 'Install ffmpeg (which bundles ffprobe) for your OS, then click Recheck.');
+  }
+  /* ops-35 (#1877): installed, but older than the declared SUPPORT floor.
+     That is "we have not tested this", not "this is broken" — so it WARNS.
+     setup-readiness.ts computes `ready` as every(pass || warn), so the Setup
+     Wizard stays advanceable and generation is never blocked. Only the
+     dev/CI preflight hard-fails. */
+  if (input.belowFloor && input.version && input.minimum) {
+    return diagnosis(
+      'warn', 'ffmpeg-too-old',
+      `ffmpeg ${input.version} is older than Castwright supports (${input.minimum}+).`,
+      `Castwright is tested against ffmpeg ${input.minimum} and newer — the audio pipeline parses ffmpeg's loudness output, which changes between versions. Upgrade ffmpeg, then click Recheck.`,
+    );
   }
   return diagnosis('pass', 'pass', 'ffmpeg and ffprobe are both installed.', '');
 }
