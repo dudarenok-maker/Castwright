@@ -267,8 +267,11 @@ history at cut time.
     is not installed, so the adm-zip fallback in `epub2/zipfile.js` **is** the live path, and epub2's
     exact call sequence (`new AdmZip(file)` → `getEntries().entryName` → `getEntry` → `readFileAsync`)
     was exercised against a real fixture EPUB on 0.6.0 alongside the 27 `src/parsers/epub.test.ts` cases.
-  - **Dismissed, not fixed:** `react-router` (GHSA-qwww-vcr4-c8h2) as `not_used`. Scored CVSS 0.0 and
-    reachable only in RSC/framework mode; we drive a client-side `createHashRouter`. The nominal fix is
+  - **Dismissed, not fixed:** `react-router` (GHSA-qwww-vcr4-c8h2) as `not_used`. GitHub-rated **high**
+    (CVSS v4 7.1) but reachable only in RSC/framework mode; we drive a client-side `createHashRouter`,
+    so the vulnerable path does not exist here. Reachability is the whole justification — an earlier
+    draft of this note cited "CVSS 0.0", which was the advisory's *unscored v3 placeholder* (null
+    vector), not a real low rating. The nominal fix is
     8.3.0, but `react-router-dom` has no v8 — it's frozen at 7.18.1 — so it means rewriting 24 files'
     imports **and** raising the product's Node floor from `>=20.19.0` to `>=22.22.0`. Tracked as
     `fe-56` (#1859) on currency grounds rather than as a security fix.
@@ -276,3 +279,17 @@ history at cut time.
     memory corruption; patched in 2.13.0). Recorded on #893 with measured evidence: the `cu128` index we
     install from tops out at torch 2.11.0 while 2.12+ ships only on `cu130`, and — the harder blocker —
     torchaudio's last release is 2.11.0, with Qwen importing `torchaudio.compliance.kaldi` at runtime.
+  - **`npm audit` is deliberately still not clean, and that is not an oversight.** A *second*
+    brace-expansion advisory (GHSA-mh99-v99m-4gvg, high — unbounded expansion → OOM) expresses its
+    affected range as a single `<= 5.0.7` spanning every major line, first patched in **5.0.8**. The
+    5.x copy here is 5.0.8 and clears it; the 1.1.16 and 2.1.2 copies cannot, because upstream never
+    backported a 1.x or 2.x fix. It is not a Dependabot alert, so the 9-cleared tally above is exact
+    against its own source of truth — but a bare `npm run audit` at root will report high findings, and
+    the next person to run one should know why rather than assume the sweep missed something. No CI leg
+    runs `npm audit`, so nothing goes red on it.
+  - The adm-zip override is written `>=0.6.0`, **not** `^0.6.0`: adm-zip has only ever published `0.x`
+    releases, and for a `0.x` package a caret caps at `<0.7.0` — which would silently hold the tree back
+    the day the next fix lands as 0.7.0, with `npm update` reporting nothing to do.
+    `server/src/parsers/adm-zip-pin.test.ts` guards the block, since deleting it reinstalls a vulnerable
+    0.5.x with no error (epub2's declared `^0.5.10` is satisfied) and the 27 existing parser cases return
+    byte-identical results on both versions, so they cannot detect the regression.
