@@ -920,6 +920,60 @@ describe('ProfileDrawer model-voice override picker', () => {
     });
   });
 
+  it('locks the coqui tab and refuses further picks when this character\'s coqui slot is a consented clone (fs-38 Wave 3c Task 26 fix round 1 [F1])', async () => {
+    /* This picker writes the VOICES slice via PUT /api/voices/:id/override;
+       the "My voices" panel writes the CAST slice via setOverrideVoiceName.
+       Neither invalidates the other — an unguarded pick here would clobber
+       a cloned coqui slot server-side. The lock reads off the CAST-slice
+       `character` prop (what "My voices" actually writes), not the `voice`
+       prop this picker otherwise reads from. */
+    setVoiceOverride.mockClear();
+    const clonedCharacter: Character = {
+      ...brann,
+      ttsEngine: 'coqui',
+      overrideTtsVoices: {
+        coqui: { name: 'Asya Anara', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+      },
+    };
+    const clonedVoice: Voice = {
+      ...brannVoice,
+      overrideTtsVoices: {
+        coqui: { name: 'Asya Anara', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+      },
+    };
+    renderDrawer(clonedCharacter, {
+      voice: clonedVoice,
+      voices: [clonedVoice],
+      baseVoices: baseCatalog,
+    });
+
+    const trigger = await screen.findByRole('button', { name: /Model voice override/i });
+    expect(trigger).toBeDisabled();
+    expect(screen.getByTestId('coqui-clone-locked-note')).toBeInTheDocument();
+
+    /* Drive the click anyway (not just assert the attribute) — a disabled
+       native <button> doesn't fire its click handler even via fireEvent,
+       so this proves the popover never opens and the write path is
+       genuinely unreachable, not just visually greyed out. */
+    fireEvent.click(trigger);
+    expect(screen.queryByRole('option', { name: /Damien Black/i })).toBeNull();
+    await Promise.resolve();
+    expect(setVoiceOverride).not.toHaveBeenCalled();
+  });
+
+  it('does not lock the coqui tab when the coqui slot is a plain catalog pick (no provenance)', async () => {
+    /* Guards against the lock being over-broad: a character with an
+       ordinary (non-cloned) coqui override must keep the picker usable. */
+    renderDrawer(brann, {
+      voice: { ...brannVoice, overrideTtsVoices: { coqui: { name: 'Asya Anara' } } },
+      voices: [brannVoice],
+      baseVoices: baseCatalog,
+    });
+    const trigger = await screen.findByRole('button', { name: /Model voice override/i });
+    expect(trigger).not.toBeDisabled();
+    expect(screen.queryByTestId('coqui-clone-locked-note')).toBeNull();
+  });
+
   it('shows a filled-slot indicator on the engine tab when that engine has an override', async () => {
     /* The "dot" badge on a tab tells the user at a glance which engines
        have a manual assignment without having to click each tab. */
@@ -1961,12 +2015,57 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
     );
   });
 
+  it('filters out "imported" entries from the coqui My-voices list (fs-38 Wave 3c Task 26 fix round 1 [F2])', () => {
+    /* resolveTtsVoiceForCharacter's coqui branch only recognises provenance
+       'cloned' | 'designed' (tts-voice-mapping.ts); an 'imported' entry
+       assigned here would write a slot the resolver can't read, so the card
+       line + Play sample would silently show a stock catalog voice until
+       the next cast refetch. */
+    const importedEntry: VoiceLibraryEntry = {
+      voiceUuid: 'lib-imported-1',
+      name: 'Imported voice',
+      provenance: 'imported',
+      tags: [],
+      pinned: false,
+      engines: { xtts: { status: 'ready' } },
+      createdAt: '2026-07-01T09:00:00.000Z',
+      updatedAt: '2026-07-01T09:00:00.000Z',
+    };
+    renderDrawer(
+      { ...baseChar, ttsEngine: 'coqui' },
+      { bookId: 'book-1', myVoices: [...myVoicesFixture, importedEntry] },
+    );
+    /* The 'designed' fixture entry (lib1) is still offered — only the
+       provenance the resolver can't read is filtered. */
+    expect(screen.getByTestId('profile-drawer-my-voice-lib1')).toBeInTheDocument();
+    expect(screen.queryByTestId('profile-drawer-my-voice-lib-imported-1')).toBeNull();
+  });
+
+  it('does NOT filter "imported" entries for a qwen-routed character (the resolver never gates on provenance for qwen)', () => {
+    const importedEntry: VoiceLibraryEntry = {
+      voiceUuid: 'lib-imported-1',
+      name: 'Imported voice',
+      provenance: 'imported',
+      tags: [],
+      pinned: false,
+      engines: { qwen: { status: 'ready' } },
+      createdAt: '2026-07-01T09:00:00.000Z',
+      updatedAt: '2026-07-01T09:00:00.000Z',
+    };
+    renderDrawer(
+      { ...baseChar, ttsEngine: 'qwen' },
+      { bookId: 'book-1', myVoices: [importedEntry] },
+    );
+    expect(screen.getByTestId('profile-drawer-my-voice-lib-imported-1')).toBeInTheDocument();
+  });
+
   it('clicking a "My voices" entry on a coqui-routed character writes overrideTtsVoices.coqui, not qwen', async () => {
     /* The load-bearing case per the task: a QWEN-routed character can't
        distinguish "always writes qwen" from "writes the routed engine" — the
        assertion would pass either way. Only a coqui-routed fixture proves the
        write actually follows the routed engine. */
     assignLibraryVoice.mockResolvedValue({ updated: 1 });
+    fetchDesignedPersona.mockClear();
     const clonedEntry: VoiceLibraryEntry = {
       voiceUuid: 'lib-clone-1',
       name: 'Halloran (cloned)',
@@ -2005,6 +2104,15 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
        (bug-for-bug) still hardwired qwen would leave this populated instead
        of the coqui assertion above. */
     expect(halloran?.overrideTtsVoices?.qwen).toBeUndefined();
+
+    /* [F3] Pins the routedEngine === 'qwen' guard on setDesignedVoiceId: an
+       xtts-prefixed designedVoiceId would leak into the plan-149 persona-fetch
+       effect (guarded only on `!designedVoiceId`, not on engine) and fire
+       fetchDesignedPersona for a coqui character. The guard is otherwise
+       unpinned — every other assertion in this describe block never observes
+       designedVoiceId at all. */
+    await Promise.resolve();
+    expect(fetchDesignedPersona).not.toHaveBeenCalled();
   });
 
   it('does not show "Save to my voices" for a coqui-routed character, even with a stale designed-Qwen voiceId', () => {

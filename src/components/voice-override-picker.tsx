@@ -51,6 +51,12 @@ interface VoiceOverridePickerProps {
   /** Project-active model key forwarded to the auto-load helper so the
       sidecar re-maps to a compatible model when needed. */
   previewModelKey: TtsModelKey;
+  /** fs-38 Wave 3c Task 26 fix round 1 — locks the trigger closed
+      regardless of `baseVoicesLoaded` (e.g. a consented clone occupies
+      this engine's slot; picking a catalog voice here would silently
+      overwrite it via PUT /api/voices/:id/override). Absent/false
+      preserves the existing loaded/loading behaviour. */
+  disabled?: boolean;
 }
 
 const AUTO_VALUE = 'auto';
@@ -153,6 +159,7 @@ export function VoiceOverridePicker({
   onChange,
   previewText,
   previewModelKey,
+  disabled = false,
 }: VoiceOverridePickerProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -205,7 +212,7 @@ export function VoiceOverridePicker({
         aria-label={`Model voice override (${engineTab})`}
         aria-haspopup="listbox"
         aria-expanded={open}
-        disabled={!baseVoicesLoaded}
+        disabled={!baseVoicesLoaded || disabled}
         onClick={() => setOpen((v) => !v)}
         className="w-full inline-flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink hover:border-ink/30 focus:outline-hidden focus:ring-2 focus:ring-magenta/30 disabled:opacity-60 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
       >

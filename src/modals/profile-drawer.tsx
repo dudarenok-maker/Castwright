@@ -680,6 +680,16 @@ export function ProfileDrawer({
      pickVoiceForEngine returns '' and the sidecar 400s, so we gate the
      Play button instead of firing a request we know will fail. */
   const effectiveEngine: TtsEngine = engineChoice === 'default' ? ttsEngine : engineChoice;
+  /* fs-38 Wave 3c Task 26 fix round 1 [F2] — resolveTtsVoiceForCharacter's
+     coqui branch (tts-voice-mapping.ts) only recognises provenance
+     'cloned' | 'designed'; an 'imported' entry assigned to a coqui slot
+     would write a slot the resolver can't read, so the card line + Play
+     sample would show a stock catalog speaker until the next cast
+     refetch — exactly the failure the libraryUuid/provenance markers
+     exist to prevent. Qwen's branch doesn't gate on provenance at all
+     (it just reads `.name`), so only the coqui path needs filtering. */
+  const myVoicesForPanel =
+    effectiveEngine === 'coqui' ? myVoices.filter((e) => e.provenance !== 'imported') : myVoices;
   const effectiveSampleModelKey = modelKeyForEngineChoice(effectiveEngine, ttsModelKey);
   const qwenSampleBlocked = effectiveEngine === 'qwen' && !designedVoiceId;
   const samplePrefix = sampleUrlPrefixFor(sampleVoiceId, effectiveSampleModelKey);
@@ -1218,13 +1228,13 @@ export function ProfileDrawer({
                 whatever's in this engine's slot. */}
             {(effectiveEngine === 'qwen' || effectiveEngine === 'coqui') && bookId && (
               <div className="space-y-2">
-                {myVoices.length > 0 && (
+                {myVoicesForPanel.length > 0 && (
                   <div className="rounded-2xl border border-ink/10 bg-canvas/60 p-3 space-y-2">
                     <p className="text-[11px] uppercase tracking-widest text-ink/40 font-semibold">
                       Or use a voice from My voices
                     </p>
                     <div className="flex flex-wrap gap-1.5">
-                      {myVoices.map((entry) => (
+                      {myVoicesForPanel.map((entry) => (
                         <button
                           key={entry.voiceUuid}
                           type="button"
@@ -1356,7 +1366,27 @@ export function ProfileDrawer({
                 previewExpanded={showPreviewCandidates}
                 onPreviewExpandedChange={setShowPreviewCandidates}
                 previewModelKey={ttsModelKey}
+                /* fs-38 Wave 3c Task 26 fix round 1 [F1] — this picker writes
+                   the VOICES slice (voicesActions.setOverride + PUT
+                   /api/voices/:id/override); the "My voices" panel above
+                   writes the CAST slice (castActions.setOverrideVoiceName).
+                   Neither invalidates the other, so an unguarded pick here
+                   would clobber a cloned coqui slot server-side — the
+                   upstream-overwrite shape every Phase-0 defect in this wave
+                   had. Read straight off the live `character` prop (kept
+                   fresh by the parent's cast-slice selector), not `voice`,
+                   since it's the cast-slice write this must guard against. */
+                coquiCloneLocked={character.overrideTtsVoices?.coqui?.provenance === 'cloned'}
                 onChange={async (next) => {
+                  /* Belt-and-suspenders: the picker's trigger is disabled
+                     while locked so this shouldn't fire for coqui, but never
+                     let a coqui write through while the clone marker is set. */
+                  if (
+                    next?.engine === 'coqui' &&
+                    character.overrideTtsVoices?.coqui?.provenance === 'cloned'
+                  ) {
+                    return;
+                  }
                   setOverrideError(null);
                   const voiceIdForApi = voice?.id ?? character.voiceId ?? character.id;
                   /* Optimistic local update — slice mutation only takes effect
@@ -2154,6 +2184,15 @@ interface OverridePickerProps {
       sidecar re-maps to a compatible model when the candidate's engine
       doesn't match. */
   previewModelKey: TtsModelKey;
+  /** fs-38 Wave 3c Task 26 fix round 1 [F1] — true when THIS character's
+      coqui slot (in the cast slice, written by the "My voices" panel
+      above) carries `provenance: 'cloned'`. This picker writes a
+      DIFFERENT slice (voices) via a DIFFERENT endpoint
+      (PUT /api/voices/:id/override) — neither invalidates the other, so
+      an unguarded pick here would silently overwrite the clone with a
+      catalog voice server-side. Locks only the coqui tab; other engines'
+      slots are unaffected. */
+  coquiCloneLocked: boolean;
 }
 function ModelVoiceOverridePicker({
   voiceId,
@@ -2170,6 +2209,7 @@ function ModelVoiceOverridePicker({
   previewExpanded,
   onPreviewExpandedChange,
   previewModelKey,
+  coquiCloneLocked,
 }: OverridePickerProps) {
   /* Group base voices by engine. Order tabs deterministically so the UI
      doesn't reshuffle between renders — Coqui first (longest-running),
@@ -2208,6 +2248,9 @@ function ModelVoiceOverridePicker({
   const currentForTab = currentOverrides[engineTab] ?? null;
   const selectedValue = currentForTab ? `${currentForTab.engine}|${currentForTab.name}` : AUTO;
   const voicesForTab = byEngine.get(engineTab) ?? [];
+  /* [F1] Only the coqui tab can ever be locked — coqui is the only
+     clone-capable engine outside qwen in the current TtsEngine union. */
+  const tabLocked = engineTab === 'coqui' && coquiCloneLocked;
 
   return (
     <div className="mt-3 p-3 rounded-2xl bg-canvas border border-ink/10">
@@ -2261,7 +2304,15 @@ function ModelVoiceOverridePicker({
         onChange={(next) => void onChange(next)}
         previewText={previewText}
         previewModelKey={previewModelKey}
+        disabled={tabLocked}
       />
+      {tabLocked && (
+        <p className="mt-2 text-[11px] text-ink/50" data-testid="coqui-clone-locked-note">
+          This character's Coqui voice is a cloned voice — pick a different one from "My
+          voices" above to replace it. This picker is locked so it can't silently overwrite
+          the clone.
+        </p>
+      )}
       {error && <p className="mt-2 text-[11px] text-red-600/90 font-medium">⚠ {error}</p>}
       <p className="mt-2 text-[11px] text-ink/50">
         Each engine has its own voice slot — switching the project's engine picks up the

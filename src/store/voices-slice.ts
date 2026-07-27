@@ -110,6 +110,12 @@ export const voicesSlice = createSlice({
       const map = { ...(v.overrideTtsVoices ?? {}) };
       map[a.payload.engine] = a.payload.slot;
       v.overrideTtsVoices = map;
+      /* fs-38 Wave 3c Task 26 fix round 1 [F4] — deliberately does NOT also
+         restore the legacy singular `overrideTtsVoice` field the old
+         setOverride-based revert used to touch. Every current reader treats
+         it as a fallback used only when the plural map's own slot is
+         absent, and this always restores the map slot — so leaving the
+         legacy field alone is behaviourally inert, not a gap. */
     },
     hydrateBaseVoices: (s, a: PayloadAction<BaseVoice[]>) => {
       s.baseVoicesLoaded = true;
