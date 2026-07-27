@@ -155,3 +155,91 @@ test('the manifest stages the exported series cast card, dark-only', () => {
   assert.deepEqual(entry.themes, ['dark']);
   assert.equal(entry.output, 'series-cast-card');
 });
+
+test('an entry with no viewport builds a <scene>.<theme>.png source path, no viewport segment', () => {
+  const plan = stagingPlan(
+    [{ output: 'companion-iphone', scene: 'companion/player', scaleWidth: 480 }],
+    '/src',
+    '/dest',
+  );
+  assert.deepEqual(plan, [
+    {
+      src: path.join('/src', 'companion/player.light.png'),
+      dest: path.join('/dest', 'companion-iphone.webp'),
+      scaleWidth: 480,
+    },
+    {
+      src: path.join('/src', 'companion/player.dark.png'),
+      dest: path.join('/dest', 'companion-iphone-dark.webp'),
+      scaleWidth: 480,
+    },
+  ]);
+});
+
+test('an entry without scaleWidth does not carry a scaleWidth field into the plan', () => {
+  const plan = stagingPlan(
+    [{ output: 'library', scene: 'library-shelf', viewport: 'desktop' }],
+    '/src',
+    '/dest',
+  );
+  for (const entry of plan) {
+    assert.ok(!('scaleWidth' in entry), 'a non-companion entry must not gain a scaleWidth field');
+  }
+});
+
+test('the companion manifest entries resolve to the right src -> dest pairs, including the nested tablet10/ path', () => {
+  const companionEntries = MANIFEST.filter((e) => e.scene.startsWith('companion/'));
+  assert.deepEqual(
+    companionEntries.map((e) => e.scene),
+    ['companion/player', 'companion/library-home', 'companion/tablet10/book-detail'],
+  );
+
+  const plan = stagingPlan(companionEntries, '/src', '/dest');
+  assert.deepEqual(plan, [
+    {
+      src: path.join('/src', 'companion/player.light.png'),
+      dest: path.join('/dest', 'companion-iphone.webp'),
+      scaleWidth: 480,
+    },
+    {
+      src: path.join('/src', 'companion/player.dark.png'),
+      dest: path.join('/dest', 'companion-iphone-dark.webp'),
+      scaleWidth: 480,
+    },
+    {
+      src: path.join('/src', 'companion/library-home.light.png'),
+      dest: path.join('/dest', 'companion-pixel.webp'),
+      scaleWidth: 480,
+    },
+    {
+      src: path.join('/src', 'companion/library-home.dark.png'),
+      dest: path.join('/dest', 'companion-pixel-dark.webp'),
+      scaleWidth: 480,
+    },
+    {
+      src: path.join('/src', 'companion/tablet10/book-detail.light.png'),
+      dest: path.join('/dest', 'companion-tablet.webp'),
+      scaleWidth: 720,
+    },
+    {
+      src: path.join('/src', 'companion/tablet10/book-detail.dark.png'),
+      dest: path.join('/dest', 'companion-tablet-dark.webp'),
+      scaleWidth: 720,
+    },
+  ]);
+});
+
+test('existing non-companion entries are unaffected by the viewport-less / scaleWidth support', () => {
+  // Every pre-existing manifest entry still has a `viewport` and produces the
+  // same <scene>.<viewport>.<theme>.png source shape as before.
+  const nonCompanion = MANIFEST.filter((e) => !e.scene.startsWith('companion/'));
+  for (const entry of nonCompanion) {
+    assert.ok(entry.viewport, `non-companion entry "${entry.scene}" must keep a viewport`);
+    assert.ok(!('scaleWidth' in entry), `non-companion entry "${entry.scene}" must not gain scaleWidth`);
+  }
+  const plan = stagingPlan(nonCompanion, '/src', '/dest');
+  for (const p of plan) {
+    assert.match(path.basename(p.src), /\.(desktop|phone|tablet)\.(light|dark)\.png$/);
+    assert.ok(!('scaleWidth' in p));
+  }
+});

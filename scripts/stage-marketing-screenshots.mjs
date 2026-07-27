@@ -26,8 +26,12 @@
      MARKETING_SRC=<dir>   read captures from here
      MARKETING_DEST=<dir>  write webp here
 
-   Out of scope: companion-app screenshots (scripts/capture-companion.mjs is
-   a separate pipeline) — not touched here. */
+   Companion-app screenshots: `scripts/capture-companion.mjs` owns CAPTURING
+   them (needs a Flutter emulator) into mockups/marketing-screens/companion/
+   — that stays a separate, manual pipeline, out of scope here. But once
+   captured, STAGING those PNGs into brand/ webp is this script's job like
+   everything else in this folder — "captured elsewhere" doesn't mean "staged
+   elsewhere". See the `companion-*` entries in MANIFEST below (#1838). */
 
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -112,6 +116,20 @@ export const MANIFEST = [
     viewport: 'desktop',
     themes: ['dark'],
   },
+  // --- Companion-app screenshots (#1838) ---
+  // Captured by the separate scripts/capture-companion.mjs pipeline, so these
+  // entries differ from the rest of the manifest in two ways:
+  //   - No `viewport`: the companion app has no desktop/tablet/phone variants
+  //     to switch between, so there's no viewport segment in the source
+  //     filename (`companion/player.light.png`, not `....desktop.light.png`).
+  //     Omit `viewport` and stagingPlan() drops that path segment.
+  //   - `scaleWidth`: captures are at native device resolution, far larger
+  //     than the marketing site's embed width, so these need a downscale the
+  //     rest of the manifest doesn't. `scaleWidth: 480` reproduces the
+  //     480x1072 the site already embeds (1280-wide source × 0.375).
+  { output: 'companion-iphone', scene: 'companion/player', scaleWidth: 480 },
+  { output: 'companion-pixel', scene: 'companion/library-home', scaleWidth: 480 },
+  { output: 'companion-tablet', scene: 'companion/tablet10/book-detail', scaleWidth: 720 },
 ];
 
 // Pure — no filesystem access — so the test can exercise it without real files.
@@ -120,11 +138,16 @@ export function stagingPlan(manifest = MANIFEST, sourceDir = SOURCE_DIR, destDir
   for (const entry of manifest) {
     const themes = entry.themes ?? ['light', 'dark'];
     for (const theme of themes) {
-      const src = path.join(sourceDir, `${entry.scene}.${entry.viewport}.${theme}.png`);
+      const srcName = entry.viewport
+        ? `${entry.scene}.${entry.viewport}.${theme}.png`
+        : `${entry.scene}.${theme}.png`;
+      const src = path.join(sourceDir, srcName);
       const pairing = themes.length > 1;
       const destName =
         pairing && theme === 'dark' ? `${entry.output}-dark.webp` : `${entry.output}.webp`;
-      plan.push({ src, dest: path.join(destDir, destName) });
+      const planEntry = { src, dest: path.join(destDir, destName) };
+      if (entry.scaleWidth) planEntry.scaleWidth = entry.scaleWidth;
+      plan.push(planEntry);
     }
   }
   return plan;
@@ -158,13 +181,20 @@ function main() {
   }
   let missing = 0;
   let failed = 0;
-  for (const { src, dest } of plan) {
+  for (const { src, dest, scaleWidth } of plan) {
     if (!existsSync(src)) {
       console.warn(`[stage-marketing-screenshots] missing source, skipped: ${src}`);
       missing++;
       continue;
     }
-    const result = spawnSync('ffmpeg', ['-y', '-i', src, '-quality', '85', dest], {
+    // -2 lets ffmpeg derive the height from the source aspect ratio while
+    // rounding to the nearest even number (required by the encoder) — see
+    // scripts/tests/stage-marketing-screenshots.test.mjs for the exact
+    // 1280x2856 -> 480x1072 case this reproduces.
+    const args = ['-y', '-i', src];
+    if (scaleWidth) args.push('-vf', `scale=${scaleWidth}:-2`);
+    args.push('-quality', '85', dest);
+    const result = spawnSync('ffmpeg', args, {
       stdio: 'inherit',
     });
     if (result.status !== 0) {
