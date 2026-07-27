@@ -46,7 +46,7 @@ history at cut time.
   **Fixed a live bug found on the way:** `venv-bootstrap.tsx` declared `status: 'installing'`,
   a value the venv endpoint never emits, so its progress card never rendered during a real
   multi-minute bootstrap — and its own tests mocked the fictional status, keeping the suite
-  green. That is the only user-visible delta here. Plan:
+  green. That is the only user-visible delta here, and it carries a matching user-facing line in RELEASE_NOTES.md. Plan:
   [`docs/features/270-openapi-setup-surface.md`](https://github.com/dudarenok-maker/Castwright/blob/main/docs/features/270-openapi-setup-surface.md).
 
 ---

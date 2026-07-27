@@ -7379,13 +7379,17 @@ export async function mockGetModelsStatus(): Promise<ModelsStatus> {
   };
 }
 
-async function realCompleteSetup(): Promise<{ completedAt: string }> {
+/* fe-57 (#1883) — the last /api/setup/* response still written inline. Aliased
+   so invariant 1 of plan 270 holds for the whole surface, not most of it. */
+export type SetupCompleteResponse = ApiComponents['schemas']['SetupCompleteResponse'];
+
+async function realCompleteSetup(): Promise<SetupCompleteResponse> {
   const res = await fetch('/api/setup/complete', { method: 'POST' });
   if (!res.ok) throw new Error(`complete ${res.status}`);
-  return (await res.json()) as { completedAt: string };
+  return (await res.json()) as SetupCompleteResponse;
 }
 
-export async function mockCompleteSetup(): Promise<{ completedAt: string }> {
+export async function mockCompleteSetup(): Promise<SetupCompleteResponse> {
   return { completedAt: '2026-06-12T00:00:00.000Z' };
 }
 
