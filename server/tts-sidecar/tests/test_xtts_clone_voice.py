@@ -1193,3 +1193,82 @@ def test_unload_blocks_until_inflight_forward_completes_and_no_attribute_error(
         f"unload() must not interleave with the in-flight forward: {events}"
     )
     assert eng._tts is None, "unload() must still run to completion, just after the forward releases the lock"
+
+
+# ── Task 11a — evict landing after latents load but before the GPU forward ──
+#
+# Folded in from Task 11's review (reasoned from source, not empirically): an
+# already-latents-loaded `/synthesize` forward was never epoch-checked again
+# before the GPU forward, so a voice evicted in the window between
+# `_load_voice_latents` returning and `_infer_from_latents`'s
+# `tts_model.inference()` call would complete and return audio anyway —
+# `/xtts/evict-voice` reporting `evicted: True` did NOT mean "rendering
+# stopped" for a request already past the latents-load step. The fix
+# re-checks `_evict_epoch` immediately before the GPU forward (inside
+# `_synth_lock`, right before `_infer_from_latents`) and raises rather than
+# renders on a mismatch — `_load_voice_latents` now returns the epoch it
+# validated against, captured ATOMICALLY with the cache read/install so the
+# caller's re-check can't itself race an evict landing in the gap. This
+# closes the window down to the (unavoidable, undetectable) gap between that
+# re-check and the forward call itself — it does NOT abort a forward that is
+# already inside `tts_model.inference()` by the time the evict lands. See
+# the code comment at the re-check site and the `/xtts/evict-voice`
+# docstring for that same caveat stated for a caller of the route.
+
+
+def test_evict_landing_after_latents_load_aborts_before_gpu_forward(monkeypatch, tmp_path) -> None:
+    """The regression Task 11's review reasoned to from source: block the
+    synth thread right after `_load_voice_latents` hands back the latents —
+    exactly the window between that return and the GPU forward starting —
+    and land an evict there via `_bump_evict_epoch`, the same call
+    `/xtts/evict-voice` makes. Deterministic via a `threading.Event`
+    handshake (not sleeps): the wrapped `_load_voice_latents` doesn't let the
+    synth thread proceed into `_synth_lock` until this test explicitly
+    releases it, so the evict is GUARANTEED to land inside the window, not
+    merely likely to. Before the fix this reproduces the bug (the forward
+    completes and returns audio despite the evict); after the fix it must
+    raise instead of rendering, and `tts_model.inference()` (the actual GPU
+    forward) must never be called at all — not just that some error
+    surfaces after the fact."""
+    eng, _voices_dir, tts_instance = _make_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-evict-race")
+    tts_model = tts_instance.synthesizer.tts_model
+    tts_model.infer_calls.clear()  # drop clone_voice's own audition call
+
+    latents_loaded = threading.Event()
+    proceed_after_evict = threading.Event()
+    real_load = eng._load_voice_latents
+
+    def _blocking_load(voice_id: str) -> Any:
+        result = real_load(voice_id)
+        latents_loaded.set()
+        assert proceed_after_evict.wait(timeout=5), "test stalled waiting for the evict to land"
+        return result
+
+    monkeypatch.setattr(eng, "_load_voice_latents", _blocking_load)
+
+    outcome: dict[str, Any] = {}
+
+    def _do_synth() -> None:
+        try:
+            outcome["result"] = eng.synthesize("xtts_v2", "xtts-evict-race", "hello there")
+        except Exception as exc:  # noqa: BLE001 — captured for the assertion below
+            outcome["error"] = exc
+
+    t = threading.Thread(target=_do_synth)
+    t.start()
+    assert latents_loaded.wait(timeout=5), "latents were never loaded"
+
+    # Evict lands exactly in the window between `_load_voice_latents`
+    # returning and the forward starting — the same call `/xtts/evict-voice`
+    # makes (Task 13's revoke/purge flow, files-first / evict-last).
+    eng._bump_evict_epoch("xtts-evict-race")
+
+    proceed_after_evict.set()
+    t.join(timeout=5)
+
+    assert "error" in outcome, (
+        f"an evicted voice's forward must fail loud rather than render: {outcome.get('result')!r}"
+    )
+    assert isinstance(outcome["error"], main.VoiceNotDesignedError)
+    assert tts_model.infer_calls == [], "the GPU forward must never run once the evict landed"
