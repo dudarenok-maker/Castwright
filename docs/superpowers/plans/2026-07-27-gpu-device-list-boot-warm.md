@@ -20,7 +20,7 @@
   Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01VxtGhVyXqmikbXSpsvuEmg
   ```
-- Server tests: `npx vitest run --config server/vitest.config.ts <path>` from the worktree root.
+- Server tests: `npm --prefix server run test -- <path>` from the worktree root, where `<path>` is relative to `server/` (e.g. `src/gpu/foo.test.ts`, **not** `server/src/gpu/foo.test.ts`). `server/vitest.config.ts` has `include: src/**`, resolved against whatever cwd vitest runs in — so `npx vitest run --config server/vitest.config.ts server/src/...` from the worktree root resolves `src/**` against the *frontend* tree, matches nothing, and exits 1 with "No test files found". Verified by running it.
 - Sidecar tests: `server/tts-sidecar/.venv/Scripts/python.exe -m pytest server/tts-sidecar/tests/<file> -v`.
 - No task requires a GPU. Every test added here runs on a CPU-only box.
 
@@ -110,7 +110,7 @@ describe('setLastKnownGpuDevices no-downgrade rule', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/gpu/gpu-device-list-state.test.ts`
+Run: `npm --prefix server run test -- src/gpu/gpu-device-list-state.test.ts`
 Expected: FAIL — `_resetGpuDeviceListForTests` is not exported, and "ignores an empty list when the cache is already warm" returns `[]`.
 
 - [ ] **Step 3: Add the guard and the reset seam**
@@ -142,7 +142,7 @@ export function _resetGpuDeviceListForTests(): void {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/gpu/gpu-device-list-state.test.ts`
+Run: `npm --prefix server run test -- src/gpu/gpu-device-list-state.test.ts`
 Expected: PASS, 5 tests.
 
 - [ ] **Step 5: Migrate the three existing empty-reset call sites**
@@ -184,7 +184,7 @@ import — it passes a non-empty list.
 
 - [ ] **Step 6: Run the affected suites**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/gpu/gpu-device-list-state.test.ts server/src/routes/config.test.ts server/src/routes/gpu-devices.test.ts`
+Run: `npm --prefix server run test -- src/gpu/gpu-device-list-state.test.ts src/routes/config.test.ts src/routes/gpu-devices.test.ts`
 Expected: PASS, all three files green.
 
 - [ ] **Step 7: Commit**
@@ -341,7 +341,7 @@ describe('device-probe-state provider registration', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/routes/sidecar-health-record-state.test.ts`
+Run: `npm --prefix server run test -- src/routes/sidecar-health-record-state.test.ts`
 Expected: FAIL — `probeSidecarHealth` takes no arguments (so the `recordState: false` test still sees all three writes), and `probeDeviceProbeStateIfRegistered` is not exported from the gate.
 
 - [ ] **Step 3: Add the opt to `probeSidecarHealth`**
@@ -435,7 +435,7 @@ setDeviceProbeStateProvider(() =>
 
 - [ ] **Step 6: Run tests**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/routes/sidecar-health-record-state.test.ts server/src/routes/sidecar-health.test.ts`
+Run: `npm --prefix server run test -- src/routes/sidecar-health-record-state.test.ts src/routes/sidecar-health.test.ts`
 Expected: PASS — the four new tests, plus every pre-existing test in the original file unchanged.
 
 **If the new file fails on a mock-resolution error rather than an assertion,
@@ -606,7 +606,7 @@ describe('runGpuDeviceListWarmup', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/gpu/warm-device-list.test.ts`
+Run: `npm --prefix server run test -- src/gpu/warm-device-list.test.ts`
 Expected: FAIL — `Cannot find module './warm-device-list.js'`.
 
 - [ ] **Step 3: Write the module**
@@ -744,7 +744,7 @@ export function startGpuDeviceListWarmup(opts: WarmupOpts = {}): void {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/gpu/warm-device-list.test.ts`
+Run: `npm --prefix server run test -- src/gpu/warm-device-list.test.ts`
 Expected: PASS, 12 tests.
 
 - [ ] **Step 5: Commit**
@@ -805,7 +805,7 @@ Then put a shortened docblock immediately above `configRouter.get('/', …)`, re
 
 - [ ] **Step 2: Verify the config route still passes**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/routes/config.test.ts`
+Run: `npm --prefix server run test -- src/routes/config.test.ts`
 Expected: PASS — identical behaviour, warmer just lives elsewhere now.
 
 - [ ] **Step 3: Start the loop at boot**
@@ -836,7 +836,7 @@ and immediately after `registerActiveSupervisor(sidecarSupervisor);` (line 302),
 Run: `npx tsc -p server/tsconfig.json --noEmit`
 Expected: no errors.
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/index.test.ts`
+Run: `npm --prefix server run test -- src/index.test.ts`
 Expected: PASS — `index.test.ts` imports the module but the main-module guard keeps `main()` (and therefore `listenerCallback` and the timer) from running.
 
 - [ ] **Step 5: Commit**
@@ -920,7 +920,7 @@ describe('buildSidecarEnv device-knob resolution against the GPU device cache', 
 
 - [ ] **Step 2: Run the test**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/tts/sidecar-env.test.ts`
+Run: `npm --prefix server run test -- src/tts/sidecar-env.test.ts`
 Expected: PASS, both new tests plus the pre-existing ones.
 
 - [ ] **Step 3: Commit**
