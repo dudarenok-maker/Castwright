@@ -7,7 +7,20 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { sidecarHealthRouter } from './sidecar-health.js';
-import { _resetUserSettingsCache } from '../workspace/user-settings.js';
+import { _resetUserSettingsCache, getLastKnownCoquiInstallState } from '../workspace/user-settings.js';
+import {
+  getLastKnownCoquiVersion,
+  _resetLastKnownCoquiVersionForTests,
+} from '../tts/coqui-version-state.js';
+
+/* fs-38 Wave 3c Task 19 — the coqui health-poll refresh re-runs the Node-side
+   disk probe (no full install-state enum on the wire for Coqui, see
+   sidecar-health.ts's deriveCoquiInstallState doc). Mocked here so tests can
+   drive it deterministically without touching the real filesystem. */
+vi.mock('../tts/coqui-install-detect.js', () => ({
+  detectCoquiInstallStateOnDisk: vi.fn(() => 'not-installed'),
+}));
+import { detectCoquiInstallStateOnDisk } from '../tts/coqui-install-detect.js';
 
 /* sidecar-supervisor is mocked so restart tests can inject a fake supervisor
    without needing a real sidecar process. vi.mock is hoisted to the module
@@ -39,6 +52,7 @@ function makeApp() {
 
 const fetchMock = vi.fn();
 const mockWithCapacityRetry = vi.mocked(withCapacityRetry);
+const mockDetectCoqui = vi.mocked(detectCoquiInstallStateOnDisk);
 
 beforeEach(() => {
   fetchMock.mockReset();
@@ -46,6 +60,9 @@ beforeEach(() => {
   _resetUserSettingsCache();
   mockWithCapacityRetry.mockReset();
   mockWithCapacityRetry.mockImplementation((doPost, opts) => doPost(opts.signal));
+  mockDetectCoqui.mockReset();
+  mockDetectCoqui.mockReturnValue('not-installed');
+  _resetLastKnownCoquiVersionForTests();
 });
 
 afterEach(() => {
@@ -988,5 +1005,133 @@ describe('GET /api/sidecar/health — side-14 device fields', () => {
     await request(makeApp()).get('/api/sidecar/health');
 
     expect(getLastKnownEngineDevice('kokoro')).toBe('cuda'); // unchanged
+  });
+});
+
+describe('GET /api/sidecar/health — coqui install-state refresh (fs-38 Wave 3c Task 19)', () => {
+  it('feeds the coqui resolver cache from the disk probe on a reachable poll', async () => {
+    mockDetectCoqui.mockReturnValue('weights-missing');
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, engines: ['coqui'], model_loaded: false }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await request(makeApp()).get('/api/sidecar/health');
+    expect(getLastKnownCoquiInstallState()).toBe('weights-missing');
+    expect(mockDetectCoqui).toHaveBeenCalled();
+  });
+
+  it('model_loaded:true overrides the disk probe with "loaded" (same override shape as qwen_loaded)', async () => {
+    /* Mirrors deriveQwenInstallState's qwen_loaded override: a resident model
+       is the strongest possible proof the engine is usable, so it must win
+       even over a disk probe that (e.g. on a non-standard venv layout) can't
+       find the weights. */
+    mockDetectCoqui.mockReturnValue('not-installed');
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, engines: ['coqui'], model_loaded: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await request(makeApp()).get('/api/sidecar/health');
+    expect(getLastKnownCoquiInstallState()).toBe('loaded');
+  });
+
+  it('leaves the coqui resolver cache untouched on an unreachable poll (same "no downgrade on timeout" rule as qwen)', async () => {
+    const { setLastKnownCoquiInstallState } = await import('../workspace/user-settings.js');
+    setLastKnownCoquiInstallState('ready');
+    mockDetectCoqui.mockReturnValue('not-installed');
+
+    fetchMock.mockResolvedValue(new Response('', { status: 503 }));
+    await request(makeApp()).get('/api/sidecar/health');
+
+    expect(getLastKnownCoquiInstallState()).toBe('ready'); // unchanged
+    expect(mockDetectCoqui).not.toHaveBeenCalled();
+  });
+
+  it("a reachable poll re-probes disk every time, so an in-process uninstall downgrades the cache (regression guard for the guard itself)", async () => {
+    mockDetectCoqui.mockReturnValue('ready');
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, engines: ['coqui'], model_loaded: false }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    await request(makeApp()).get('/api/sidecar/health');
+    expect(getLastKnownCoquiInstallState()).toBe('ready');
+
+    mockDetectCoqui.mockReturnValue('not-installed');
+    await request(makeApp()).get('/api/sidecar/health');
+    expect(getLastKnownCoquiInstallState()).toBe('not-installed');
+  });
+
+  it('the qwen install-state refresh behaves identically to before coqui was wired alongside it', async () => {
+    /* Regression guard: adding the coqui feed to the same poll handler must
+       not perturb qwen's own derivation/caching. */
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ ok: true, engines: ['qwen'], qwen_loaded: true, qwen_install_state: 'not-installed' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.qwenInstallState).toBe('loaded');
+
+    const { getLastKnownQwenInstallState } = await import('../workspace/user-settings.js');
+    expect(getLastKnownQwenInstallState()).toBe('loaded');
+  });
+});
+
+describe('GET /api/sidecar/health — coqui_version oracle (fs-38 Wave 3c Task 19)', () => {
+  it('forwards coqui_version as coquiVersion and feeds getLastKnownCoquiVersion() on a reachable poll', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, engines: ['coqui'], coqui_version: '0.27.5' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.coquiVersion).toBe('0.27.5');
+    expect(getLastKnownCoquiVersion()).toBe('0.27.5');
+  });
+
+  it("normalises a missing/null coqui_version (older sidecar, or the sidecar's own resolution failure) to ''", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: true, engines: ['coqui'] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const absent = await request(makeApp()).get('/api/sidecar/health');
+    expect(absent.body.coquiVersion).toBe('');
+    expect(getLastKnownCoquiVersion()).toBe('');
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: true, engines: ['coqui'], coqui_version: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const nullVersion = await request(makeApp()).get('/api/sidecar/health');
+    expect(nullVersion.body.coquiVersion).toBe('');
+  });
+
+  it('leaves the cached coqui version untouched on an unreachable poll (same "no downgrade on timeout" rule as every other cache this route feeds)', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ ok: true, engines: ['coqui'], coqui_version: '0.27.5' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    await request(makeApp()).get('/api/sidecar/health');
+    expect(getLastKnownCoquiVersion()).toBe('0.27.5');
+
+    fetchMock.mockResolvedValueOnce(new Response('', { status: 503 }));
+    await request(makeApp()).get('/api/sidecar/health');
+    expect(getLastKnownCoquiVersion()).toBe('0.27.5'); // unchanged
   });
 });

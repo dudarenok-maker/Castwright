@@ -245,3 +245,23 @@ describe('defaultPtExists resolves the RIGHT per-engine directory (fs-38 Wave 3c
     expect(await mod.defaultPtExists(`qwen-${UUID}`)).toBe(false);
   });
 });
+
+/* fs-38 Wave 3c, Task 19 — buildDefaultCloneResolverDeps's currentArtifactVersion
+   wiring, driven directly (see the export's doc comment: no production or
+   test call site routes a cloned voice through 'coqui' via synthesiseChapter
+   itself yet, so this is the ONLY way to exercise the coqui arm today). */
+describe('buildDefaultCloneResolverDeps — currentArtifactVersion per-engine oracle (fs-38 Wave 3c Task 19)', () => {
+  it("qwen still reads currentQwenBaseModel() — unaffected by adding the coqui arm", async () => {
+    const modelPaths = await import('./model-paths.js');
+    const deps = mod.buildDefaultCloneResolverDeps(undefined);
+    expect(deps.currentArtifactVersion('qwen')).toBe(modelPaths.currentQwenBaseModel());
+  });
+
+  it("coqui reads getLastKnownCoquiVersion() — '' before the sidecar has ever answered, and the seeded value once it has", async () => {
+    const coquiVersionState = await import('./coqui-version-state.js');
+    const deps = mod.buildDefaultCloneResolverDeps(undefined);
+    expect(deps.currentArtifactVersion('coqui')).toBe(''); // boot window
+    coquiVersionState.setLastKnownCoquiVersion('0.27.5');
+    expect(deps.currentArtifactVersion('coqui')).toBe('0.27.5');
+  });
+});

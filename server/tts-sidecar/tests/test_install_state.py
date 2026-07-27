@@ -100,3 +100,58 @@ def test_qwen_weights_present_independent_of_package(
         "qwen_weights_present must be True even when qwen_package_installed "
         "is False — the package-missing state requires both to be visible"
     )
+
+
+# ── coqui_version (fs-38 Wave 3c Task 19 — the current-coqui-version oracle) ──
+
+
+def test_health_exposes_coqui_version(client: TestClient) -> None:
+    """/health body must contain coqui_version (str | None). This is the
+    Node-side clone-voice resolver's currentArtifactVersion('coqui') oracle —
+    without it the resolver can never detect a stale coqui clone."""
+    body = client.get("/health").json()
+    assert "coqui_version" in body
+    assert body["coqui_version"] is None or isinstance(body["coqui_version"], str)
+
+
+def test_coqui_version_reflects_monkeypatch(client: TestClient, monkeypatch) -> None:
+    """When _coqui_installed_version is patched to a concrete version string,
+    /health forwards it verbatim — same shape as the other engine booleans
+    above (test_coqui_package_installed_reflects_monkeypatch)."""
+    monkeypatch.setattr(main, "_coqui_installed_version", lambda: "0.27.5")
+    body = client.get("/health").json()
+    assert body["coqui_version"] == "0.27.5"
+
+
+def test_coqui_installed_version_returns_none_without_importing_tts(monkeypatch) -> None:
+    """_coqui_installed_version must use importlib.metadata (no `import TTS`)
+    — the same non-importing cost class as _coqui_package_installed, so a
+    30-second /health poll never eats TTS's own (torch-pulling) import cost.
+    Simulates the package genuinely not being installed (importlib.metadata
+    raises PackageNotFoundError) and asserts a clean None, not an exception
+    surfacing as a 500 from /health."""
+    import importlib.metadata
+
+    def _raise_not_found(name: str) -> str:
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", _raise_not_found)
+    assert main._coqui_installed_version() is None
+
+
+def test_coqui_installed_version_reads_the_coqui_tts_distribution(monkeypatch) -> None:
+    """Pins the exact distribution name read: pip package `coqui-tts` (the
+    import name is `TTS`, a different string) — a regression here would
+    silently read the wrong package's version, or raise on every poll."""
+    import importlib.metadata
+
+    seen: list[str] = []
+
+    def _fake_version(name: str) -> str:
+        seen.append(name)
+        return "9.9.9"
+
+    monkeypatch.setattr(importlib.metadata, "version", _fake_version)
+    result = main._coqui_installed_version()
+    assert seen == ["coqui-tts"]
+    assert result == "9.9.9"

@@ -5,13 +5,19 @@
    lives here. */
 
 import { Router } from 'express';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Request, Response } from '../http.js';
 import { getCachedCatalogAudit, runCatalogAudit } from '../tts/coqui-catalog-audit.js';
 import {
   getResolvedSidecarUrl,
   setLastKnownQwenInstallState,
+  setLastKnownCoquiInstallState,
   type QwenInstallState,
+  type CloneEngineInstallState,
 } from '../workspace/user-settings.js';
+import { detectCoquiInstallStateOnDisk } from '../tts/coqui-install-detect.js';
+import { setLastKnownCoquiVersion } from '../tts/coqui-version-state.js';
 import { asrEnabled } from '../tts/segment-asr-qa.js';
 import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
 import { setLastKnownVram } from '../gpu/vram-state.js';
@@ -22,6 +28,12 @@ import { NoCapacityError } from '../tts/tts-errors.js';
 import { setProbeSidecarHealthProvider } from '../gpu/sidecar-health-gate.js';
 
 export const sidecarHealthRouter = Router();
+
+/* server/src/routes/sidecar-health.ts → repo root is three levels up. Mirrors
+   routes/coqui-install.ts's REPO_ROOT resolution — needed here too because
+   the health-poll refresh below re-runs the same disk probe that route's
+   /detect endpoint uses (see deriveCoquiInstallState). */
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 /* Short by design — a hung sidecar shouldn't pin a UI polling request. The
    sidecar's /health route is a trivial dict return that responds in <50ms
@@ -82,6 +94,12 @@ interface SidecarHealthBody {
   coqui_package_installed?: boolean;
   kokoro_package_installed?: boolean;
   whisper_package_installed?: boolean;
+  /* fs-38 Wave 3c Task 19 — the currently-installed coqui-tts version
+     (importlib.metadata, no `import TTS`), the clone-voice resolver's
+     currentArtifactVersion('coqui') oracle. null when the sidecar couldn't
+     resolve it OR is older than this field; absent entirely on an even
+     older sidecar reads the same as null via the `?? null` below. */
+  coqui_version?: string | null;
   /* ASR content-QA Whisper engine (srv-31). Display-only in the model-watch
      pill — no per-engine Load/Stop (ASR loads lazily on /transcribe and
      idle-evicts). `asr_device` is 'cpu' | 'cuda' (where Whisper runs). Absent on
@@ -187,6 +205,23 @@ function deriveQwenInstallState(body: SidecarHealthBody): QwenInstallState {
   return normaliseQwenInstallState(body.qwen_install_state);
 }
 
+/* fs-38 Wave 3c Task 19 — Coqui's health-poll refresh, mirroring
+   deriveQwenInstallState's shape but not its mechanism: unlike Qwen, the
+   sidecar does not report a full coqui_install_state enum (only the boolean
+   coqui_package_installed, and model_loaded/loading which the sidecar
+   reuses for Coqui specifically — see SidecarHealthBody's `model_loaded` doc
+   above). `model_loaded: true` is the same strong "definitely usable" proof
+   as `qwen_loaded`, so it overrides. Otherwise there is no weights-presence
+   signal on the wire at all, so this re-runs the same Node-side disk probe
+   coqui-install.ts's GET /api/coqui/detect uses — cheap (an existsSync/
+   readdirSync check), and it keeps the cached state fresh across a
+   package-install/uninstall that happens while the server is already
+   running, not just at boot. */
+function deriveCoquiInstallState(body: SidecarHealthBody): CloneEngineInstallState {
+  if (body.model_loaded === true) return 'loaded';
+  return detectCoquiInstallStateOnDisk(REPO_ROOT);
+}
+
 /* Shape returned by probeSidecarHealth(). The /health route forwards this
    verbatim; the /api/diagnostics aggregator (fs-18) consumes it in-process so
    it never has to HTTP self-call this route (and never double-fires the
@@ -212,6 +247,11 @@ export interface SidecarHealthResult {
   coquiPackageInstalled?: boolean;
   kokoroPackageInstalled?: boolean;
   whisperPackageInstalled?: boolean;
+  /* fs-38 Wave 3c Task 19 — the currently-installed coqui-tts version,
+     forwarded verbatim from the sidecar body's coqui_version. '' (not null)
+     when unknown, matching getLastKnownCoquiVersion()'s own empty-string
+     "no oracle yet" convention. */
+  coquiVersion?: string;
   /* ASR (Whisper) model-watch state (srv-31). `asrEnabled` is the SERVER's
      SEG_ASR_ENABLED (not from the sidecar body) — drives whether the model-watch
      shows an ASR pill at all. `asrLoaded` = the Whisper model is resident in the
@@ -261,6 +301,18 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
        a reachable response — an unreachable poll leaves the last-known state
        intact (a transient timeout shouldn't downgrade a known-ready Qwen). */
     setLastKnownQwenInstallState(qwenInstallState);
+    /* fs-38 Wave 3c Task 19 — same per-poll refresh for Coqui, into the same
+       per-engine store (see deriveCoquiInstallState's doc above for why this
+       is a disk re-probe rather than a wire-reported enum). Only updated on
+       a reachable response, same "don't downgrade on a transient timeout"
+       rule as Qwen. */
+    setLastKnownCoquiInstallState(deriveCoquiInstallState(body));
+    /* fs-38 Wave 3c Task 19 — the current-coqui-version oracle. Only updated
+       on a reachable response, same rule as every other cache fed off this
+       poll (setLastKnownVram/setLastKnownEngineDevices below). */
+    const coquiVersion =
+      typeof body.coqui_version === 'string' ? body.coqui_version : null;
+    setLastKnownCoquiVersion(coquiVersion);
     setLastKnownVram({
       totalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,
     });
@@ -285,6 +337,7 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
       coquiPackageInstalled: typeof body.coqui_package_installed === 'boolean' ? body.coqui_package_installed : undefined,
       kokoroPackageInstalled: typeof body.kokoro_package_installed === 'boolean' ? body.kokoro_package_installed : undefined,
       whisperPackageInstalled: typeof body.whisper_package_installed === 'boolean' ? body.whisper_package_installed : undefined,
+      coquiVersion: coquiVersion ?? '',
       asrEnabled: asrEnabled(),
       asrLoaded: body.asr_loaded === true,
       asrDevice: typeof body.asr_device === 'string' ? body.asr_device : null,

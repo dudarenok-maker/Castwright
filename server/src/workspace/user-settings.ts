@@ -20,6 +20,7 @@ import {
   USER_SETTINGS_PATH,
   LEGACY_USER_SETTINGS_PATH,
 } from './user-settings-path.js';
+import type { CloneEngine } from '../tts/clone-engines.js';
 
 /* Path resolution itself lives in the dependency-free user-settings-path.ts
    (shared with paths.ts's boot-time workspace-override read — see that
@@ -553,19 +554,64 @@ export function getResolvedBackupConfig(): ResolvedBackupConfig {
 
 export type QwenInstallState = 'not-installed' | 'weights-missing' | 'ready' | 'loaded';
 
-/* Last Qwen install-state the sidecar /health proxy observed. Updated on every
-   reachable health poll (and the Qwen-install recheck) so getResolvedTtsModelKey
-   can read it synchronously without blocking on a sidecar fetch. Starts
-   'not-installed' so a cold boot (before the first poll) never optimistically
-   defaults to a Qwen that can't synthesise. */
-let lastKnownQwenInstallState: QwenInstallState = 'not-installed';
+/* fs-38 Wave 3c Task 19 — generalized per-engine install-state store. Same
+   union of states as QwenInstallState above and CoquiInstallState
+   (tts/coqui-install-detect.ts) — the two engines share this ONE store and
+   ONE refresh path (disk probe at boot + health-poll refresh, see index.ts /
+   routes/sidecar-health.ts) instead of a bespoke get/set pair duplicated per
+   engine. `CloneEngine` ('qwen' | 'coqui') is the only pair that currently
+   needs a cached install-state (the resolver's per-engine
+   "is this engine unavailable this run" signal, fs-38 Wave 3c Task 20). */
+export type CloneEngineInstallState = QwenInstallState;
 
+/* Last install-state observed for each clone-capable engine. Both start
+   'not-installed' so a cold boot (before the first disk probe / health poll)
+   never optimistically claims either engine is usable. */
+const lastKnownEngineInstallState: Record<CloneEngine, CloneEngineInstallState> = {
+  qwen: 'not-installed',
+  coqui: 'not-installed',
+};
+
+export function setLastKnownEngineInstallState(
+  engine: CloneEngine,
+  state: CloneEngineInstallState,
+): void {
+  lastKnownEngineInstallState[engine] = state;
+}
+
+export function getLastKnownEngineInstallState(engine: CloneEngine): CloneEngineInstallState {
+  return lastKnownEngineInstallState[engine];
+}
+
+/* Qwen-named wrappers, preserved byte-identical in signature/behaviour so
+   every existing call site (getResolvedTtsModelKey below, the route-level
+   qwenUnavailable checks, qwen-install.ts, and their tests) keeps compiling
+   and behaving exactly as before — they now delegate to the generic
+   per-engine store above instead of a private qwen-only variable. Updated on
+   every reachable health poll (and the Qwen-install recheck) so
+   getResolvedTtsModelKey can read it synchronously without blocking on a
+   sidecar fetch. */
 export function setLastKnownQwenInstallState(state: QwenInstallState): void {
-  lastKnownQwenInstallState = state;
+  setLastKnownEngineInstallState('qwen', state);
 }
 
 export function getLastKnownQwenInstallState(): QwenInstallState {
-  return lastKnownQwenInstallState;
+  return getLastKnownEngineInstallState('qwen');
+}
+
+/* Coqui-named wrappers — same shape as the Qwen pair above, so a coqui-
+   uninstalled (or ready/loaded) state is observable through the identical
+   API. Fed by the disk probe at boot (index.ts) and the health-poll refresh
+   (routes/sidecar-health.ts), mirroring the Qwen wiring exactly. Unlike Qwen,
+   Coqui's install-state does NOT feed getResolvedTtsModelKey (Coqui is never
+   auto-selected as the default engine) — it exists for the cloned-voice
+   resolver's per-engine "is this engine unavailable this run" signal. */
+export function setLastKnownCoquiInstallState(state: CloneEngineInstallState): void {
+  setLastKnownEngineInstallState('coqui', state);
+}
+
+export function getLastKnownCoquiInstallState(): CloneEngineInstallState {
+  return getLastKnownEngineInstallState('coqui');
 }
 
 /** Resolve the EFFECTIVE default TTS model key (Qwen-when-installed, else
@@ -584,7 +630,8 @@ export function getResolvedTtsModelKey(): UserSettings['defaultTtsModelKey'] {
   if (c?.defaultTtsModelKeyExplicit) {
     return c.defaultTtsModelKey;
   }
-  if (lastKnownQwenInstallState === 'ready' || lastKnownQwenInstallState === 'loaded') {
+  const qwenState = lastKnownEngineInstallState.qwen;
+  if (qwenState === 'ready' || qwenState === 'loaded') {
     return 'qwen3-tts-0.6b';
   }
   return 'kokoro-v1';
@@ -773,7 +820,8 @@ export async function clearAllConfigOverrides(): Promise<void> {
 export function _resetUserSettingsCache(): void {
   cached = null;
   writeChain = Promise.resolve();
-  lastKnownQwenInstallState = 'not-installed';
+  lastKnownEngineInstallState.qwen = 'not-installed';
+  lastKnownEngineInstallState.coqui = 'not-installed';
 }
 
 /** Test-only: seed the in-process cache with a partial override atop

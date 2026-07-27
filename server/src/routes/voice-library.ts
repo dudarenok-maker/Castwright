@@ -30,6 +30,7 @@ import {
   type VoiceMaster,
 } from '../workspace/voice-library.js';
 import { currentQwenBaseModel } from '../tts/model-paths.js';
+import { getLastKnownCoquiVersion } from '../tts/coqui-version-state.js';
 import { isArtifactVersionStale } from '../tts/clone-engines.js';
 import { runVoiceDesign } from '../tts/design-voice-core.js';
 import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace/voice-library-usage.js';
@@ -395,13 +396,17 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/discard', async (req: Request, res
    fs-38 Wave 3c, Task 18 — recomputes the `xtts` slot too, via the SAME
    `isArtifactVersionStale` comparand `clone-voice-resolver.ts`'s per-chapter
    classifier uses, so this list-time view can't silently disagree with what
-   a chapter render would decide. Coqui has no live "installed coqui-tts
-   version" oracle yet (unlike qwen's `currentQwenBaseModel()`) — `''` is
-   passed as the current version, which `isArtifactVersionStale` treats as
-   "unknown, never stale" (see its doc comment in clone-engines.ts), so this
-   recomputation is a structural no-op for coqui today. It stays parallel to
-   the qwen arm on purpose: a future oracle only has to replace the `''`
-   below, not add a second, independently-drifting comparison. */
+   a chapter render would decide.
+
+   fs-38 Wave 3c, Task 19 — Coqui now has a live "installed coqui-tts
+   version" oracle: `getLastKnownCoquiVersion()`, fed by the sidecar's
+   /health poll (routes/sidecar-health.ts), mirroring qwen's
+   `currentQwenBaseModel()`. Before the first reachable poll (the boot
+   window) it reads '', which `isArtifactVersionStale` treats as "unknown,
+   never stale" (see its doc comment in clone-engines.ts) — the same
+   fail-safe qwen's own '' (never-fetched) case already relies on, so a
+   cold-started server can't flip every cloned coqui voice to 'stale' before
+   the sidecar has answered even once. */
 function withComputedStaleness(entry: VoiceLibraryEntry): VoiceLibraryEntry {
   let result = entry;
   const qwen = entry.engines.qwen;
@@ -409,8 +414,7 @@ function withComputedStaleness(entry: VoiceLibraryEntry): VoiceLibraryEntry {
     result = { ...result, engines: { ...result.engines, qwen: { ...qwen, status: 'stale' } } };
   }
   const xtts = entry.engines.xtts;
-  const currentCoquiVersion = ''; // no live oracle yet — see the comment above.
-  if (xtts && isArtifactVersionStale(xtts.coquiVersion, currentCoquiVersion)) {
+  if (xtts && isArtifactVersionStale(xtts.coquiVersion, getLastKnownCoquiVersion())) {
     result = { ...result, engines: { ...result.engines, xtts: { ...xtts, status: 'stale' } } };
   }
   return result;

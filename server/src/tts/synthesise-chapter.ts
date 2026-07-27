@@ -55,6 +55,7 @@ import {
 import { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
 import { deriveEngineArtifact } from './derive-engine-artifact.js';
 import { currentQwenBaseModel } from './model-paths.js';
+import { getLastKnownCoquiVersion } from './coqui-version-state.js';
 import { manifestSlotFor, type CloneEngine } from './clone-engines.js';
 import { decodeAudioToPcm } from './mp3.js';
 import {
@@ -1017,7 +1018,14 @@ function withDerivedUpdateEntry<
    clone-derive call, and a real stat() of the cached `.pt`. `synthesiseChapter`
    merges `opts.cloneResolverDepsOverride` shallowly over this so a test can
    replace just the pieces it needs to fake (see that opt's doc comment). */
-function buildDefaultCloneResolverDeps(signal: AbortSignal | undefined): ResolveChapterDeps {
+/* Exported (previously module-private) so fs-38 Wave 3c Task 19's
+   currentArtifactVersion wiring can be driven directly — no production or
+   test call site routes a cloned voice through the 'coqui' engine via
+   synthesiseChapter yet (the sole caller still hardcodes `engine: 'qwen'`
+   per-request; generalising that is Task 20's job), so nothing else
+   exercises this function's coqui arm. Mirrors defaultPtExists's own
+   Task-18-fix-wave export for the identical reason. */
+export function buildDefaultCloneResolverDeps(signal: AbortSignal | undefined): ResolveChapterDeps {
   return {
     readEntry,
     writeEntry,
@@ -1027,17 +1035,19 @@ function buildDefaultCloneResolverDeps(signal: AbortSignal | undefined): Resolve
     readMasterPcm: readMasterPcmDefault,
     /* fs-38 Wave 3c, Task 18 — qwen keeps its existing oracle
        (`currentQwenBaseModel()`, an env-configured Node-side constant).
-       Coqui has NO analogous oracle yet — there's no per-deployment
-       model-repo choice to track the way Qwen has, and the installed
-       coqui-tts PACKAGE version (what `coquiVersion` actually stamps) isn't
-       something this synchronous, non-sidecar-calling accessor can observe.
-       `''` is deliberate, not a placeholder bug: `isArtifactVersionStale`
-       (clone-engines.ts) treats an unknown CURRENT version as "not stale",
-       so this makes coqui staleness-by-version a structural no-op today
-       rather than forcing a spurious re-derive of every cloned coqui voice
-       on every chapter. See clone-voice-resolver.ts's ClassifyInput doc
-       comment for the full reasoning. */
-    currentArtifactVersion: (engine) => (engine === 'coqui' ? '' : currentQwenBaseModel()),
+       Task 19 gives Coqui its own oracle: `getLastKnownCoquiVersion()`,
+       fed by the sidecar's /health poll (routes/sidecar-health.ts) via
+       `main.py`'s `_coqui_installed_version()` — the installed coqui-tts
+       PACKAGE version isn't a Node-side constant like Qwen's; it can only be
+       observed from the running sidecar process. Before the first reachable
+       poll (the boot window) it reads '' — the SAME structural no-op Task 18
+       shipped: `isArtifactVersionStale` (clone-engines.ts) treats an unknown
+       CURRENT version as "not stale", so a cold-started server never forces
+       a spurious re-derive of every cloned coqui voice on its first chapter.
+       See clone-voice-resolver.ts's ClassifyInput doc comment for the full
+       reasoning. */
+    currentArtifactVersion: (engine) =>
+      engine === 'coqui' ? getLastKnownCoquiVersion() : currentQwenBaseModel(),
     purgeCloneArtifacts,
     /* No free-text progress channel exists on SynthesiseChapterOpts today —
        only typed per-group/per-title ticks (onGroupStart/onTitleStart etc.).

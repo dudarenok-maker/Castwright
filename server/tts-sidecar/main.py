@@ -6478,6 +6478,37 @@ def _coqui_package_installed() -> bool:
         return False
 
 
+def _coqui_installed_version() -> Optional[str]:
+    """The currently-installed coqui-tts version, WITHOUT importing TTS (same
+    non-importing cost class as `_coqui_package_installed` above — this is
+    called on every /health poll, and importing TTS pulls torch + a slow
+    startup). Uses `importlib.metadata`, which reads the installed
+    distribution's metadata directly off disk.
+
+    fs-38 Wave 3c Task 19 — this is the Node-side clone-voice resolver's
+    "current coqui version" oracle (`currentArtifactVersion('coqui')` in
+    synthesise-chapter.ts), compared against each voice's stored
+    `coquiVersion` to decide staleness. It MUST return the same string
+    `CoquiEngine.clone_voice` stamps into a cloned voice's manifest as
+    `coquiVersion` — `getattr(_tts_pkg, "__version__", "unknown")` off
+    `import TTS as _tts_pkg` (search `coqui_version = getattr` in this file).
+    `importlib.metadata.version("coqui-tts")` (the pip distribution name;
+    the import name is `TTS`) reads the package's OWN installed-metadata
+    version rather than its `__version__` module attribute — for a normal
+    pip install these agree (coqui-tts sets `__version__` from its own
+    package metadata at build time), but they are not the SAME READ and can
+    diverge for an editable/dev install or a hand-patched `__version__`.
+    None (not "unknown") on any failure — the Node side's staleness
+    predicate treats an empty/missing current version as "not stale", the
+    same fail-safe posture as an unset stored version."""
+    try:
+        import importlib.metadata
+
+        return importlib.metadata.version("coqui-tts")
+    except Exception:
+        return None
+
+
 def _kokoro_package_installed() -> bool:
     """True if the `kokoro_onnx` package is importable without importing it."""
     try:
@@ -6878,6 +6909,7 @@ def health() -> dict[str, Any]:
         "qwen_base17_weights_present": _qwen_base17_weights_present(),
         "qwen_install_state": qwen_install_state,
         "coqui_package_installed": _coqui_package_installed(),
+        "coqui_version": _coqui_installed_version(),
         "kokoro_package_installed": _kokoro_package_installed(),
         "whisper_package_installed": _whisper_package_installed(),
         # ASR (srv-31) load state — its own pair, same pattern as the synth

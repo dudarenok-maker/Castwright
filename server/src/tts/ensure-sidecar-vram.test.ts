@@ -8,6 +8,12 @@ vi.mock('../workspace/user-settings.js', () => ({
   getResolvedSidecarUrl: () => 'http://localhost:9000',
   readConfigOverrides: () => ({}),
   setLastKnownQwenInstallState: () => {},
+  // fs-38 Wave 3c Task 19 — probeSidecarHealth() (routes/sidecar-health.js,
+  // reached via maybeSampleSidecarEngine below) now also calls this on every
+  // reachable poll; an incomplete mock throws "not a function" inside
+  // maybeSampleSidecarEngine's best-effort try/catch, silently swallowing the
+  // VRAM record this test asserts on.
+  setLastKnownCoquiInstallState: () => {},
 }));
 vi.mock('../gpu/gpu-load.js', () => ({
   withGpuLoad: async (fn: () => Promise<unknown>) => fn(),

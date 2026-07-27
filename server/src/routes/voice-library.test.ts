@@ -79,6 +79,7 @@ let setUserSettingsCacheForTest: typeof import('../workspace/user-settings.js').
 let paths: typeof import('../workspace/paths.js');
 let qwenVoice: typeof import('./qwen-voice.js');
 let sampleCache: typeof import('../tts/voice-sample-cache.js');
+let coquiVersionState: typeof import('../tts/coqui-version-state.js');
 
 function writeBookOnDisk(
   workspace: string,
@@ -143,6 +144,7 @@ beforeEach(async () => {
     pathsMod,
     qwenVoiceMod,
     sampleCacheMod,
+    coquiVersionStateMod,
   ] = await Promise.all([
     import('./voice-library.js'),
     import('../workspace/voice-library.js'),
@@ -151,6 +153,7 @@ beforeEach(async () => {
     import('../workspace/paths.js'),
     import('./qwen-voice.js'),
     import('../tts/voice-sample-cache.js'),
+    import('../tts/coqui-version-state.js'),
   ]);
   vl = voiceLibMod;
   modelPaths = modelPathsMod;
@@ -158,6 +161,7 @@ beforeEach(async () => {
   paths = pathsMod;
   qwenVoice = qwenVoiceMod;
   sampleCache = sampleCacheMod;
+  coquiVersionState = coquiVersionStateMod;
 
   app = express();
   app.use(express.json());
@@ -260,15 +264,19 @@ describe('GET /api/voice-library', () => {
 
   /* fs-38 Wave 3c, Task 18 — withComputedStaleness now recomputes the xtts
      slot too (via the same isArtifactVersionStale comparand the resolver
-     pre-pass uses). Coqui has no live "current installed coqui-tts version"
-     oracle yet, so the current value passed for coqui is always '' — which
-     isArtifactVersionStale treats as "unknown, never stale". This test
-     pins that DELIBERATE, documented behaviour (not a bug): a coqui-cloned
-     voice with a real recorded coquiVersion never spontaneously reads
-     'stale' through this route today, and — the sibling-preservation half —
+     pre-pass uses). Task 19 gave coqui a live "current installed coqui-tts
+     version" oracle (getLastKnownCoquiVersion(), fed by the sidecar's
+     /health poll) — but BEFORE the first reachable poll (this test's own
+     starting state: a fresh module import via beforeEach's resetModules,
+     never seeded) it still reads '', which isArtifactVersionStale treats as
+     "unknown, never stale". This test pins that DELIBERATE, documented
+     boot-window behaviour (not a bug): a coqui-cloned voice with a real
+     recorded coquiVersion never spontaneously reads 'stale' before the
+     oracle has a real value, and — the sibling-preservation half —
      recomputing xtts must never disturb an independently-stale qwen slot on
-     the SAME entry, or vice versa. */
-  it('recomputes the xtts slot alongside qwen: a real recorded coquiVersion never reads stale (no live oracle yet), and each engine slot is computed independently of the other', async () => {
+     the SAME entry, or vice versa. See the NEXT test for the oracle
+     actually firing once seeded. */
+  it('recomputes the xtts slot alongside qwen: a real recorded coquiVersion never reads stale before the oracle has been seeded (boot window), and each engine slot is computed independently of the other', async () => {
     const current = modelPaths.currentQwenBaseModel();
     await vl.writeEntry(
       makeEntry({
@@ -311,6 +319,44 @@ describe('GET /api/voice-library', () => {
     // On-disk manifest is untouched for both slots.
     const onDisk = await vl.readEntry('mixed-1');
     expect(onDisk?.engines.qwen?.status).toBe('ready');
+    expect(onDisk?.engines.xtts?.status).toBe('ready');
+  });
+
+  /* fs-38 Wave 3c, Task 19 — the coverage gap Task 18 explicitly could not
+     close: a test that FAILS if the xtts staleness-recompute block is
+     deleted. Task 18's own version could not, because production's coqui
+     current-version was hardcoded '' — every case read 'ready' whether or
+     not the block ran. Now that getLastKnownCoquiVersion() is a real,
+     seedable oracle, a genuine mismatch must flip xtts to 'stale', and a
+     genuine match must NOT — proving the block is load-bearing, not
+     inert. */
+  it('flips xtts to stale once the coqui-version oracle is seeded with a MISMATCHING version, and stays ready on a match', async () => {
+    coquiVersionState.setLastKnownCoquiVersion('0.28.0');
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'live-oracle-mismatch',
+        engines: { xtts: { status: 'ready', coquiVersion: '0.27.5' } }, // stale — mismatch
+      }),
+    );
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'live-oracle-match',
+        engines: { xtts: { status: 'ready', coquiVersion: '0.28.0' } }, // fresh — matches
+      }),
+    );
+
+    const res = await request(app).get('/api/voice-library');
+    const byId = new Map(
+      (
+        res.body.voices as Array<{ voiceUuid: string; engines: { xtts?: { status: string } } }>
+      ).map((v) => [v.voiceUuid, v]),
+    );
+
+    expect(byId.get('live-oracle-mismatch')?.engines.xtts?.status).toBe('stale');
+    expect(byId.get('live-oracle-match')?.engines.xtts?.status).toBe('ready');
+
+    // On-disk manifest is untouched — staleness is computed at list time only.
+    const onDisk = await vl.readEntry('live-oracle-mismatch');
     expect(onDisk?.engines.xtts?.status).toBe('ready');
   });
 });
