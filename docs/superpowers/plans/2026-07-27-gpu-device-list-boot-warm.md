@@ -161,12 +161,14 @@ _resetGpuDeviceListForTests();
 
 Leave line 370/374 alone — that test sets a non-empty list and is unaffected.
 
-In `server/src/routes/gpu-devices.test.ts`, line 10 and line 25:
+In `server/src/routes/gpu-devices.test.ts`, line 10 and line 25. **Drop
+`setLastKnownGpuDevices` from the import** — line 25 is its only use in the file,
+so keeping it would leave an unused binding and fail lint/typecheck.
+`getLastKnownGpuDevices` stays; it is still used at line 87.
 
 ```ts
-// line 10
+// line 10 — was: import { setLastKnownGpuDevices, getLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
 import {
-  setLastKnownGpuDevices,
   getLastKnownGpuDevices,
   _resetGpuDeviceListForTests,
 } from '../gpu/gpu-device-list-state.js';
@@ -174,6 +176,11 @@ import {
 // line 25, inside beforeEach — was: setLastKnownGpuDevices([]);
 _resetGpuDeviceListForTests();
 ```
+
+In `server/src/routes/config.test.ts` the setter is imported dynamically inside
+each test, so removing it from the two dynamic imports at 344 and 383 leaves
+nothing dangling. The test at 370/374 keeps its own `setLastKnownGpuDevices`
+import — it passes a non-empty list.
 
 - [ ] **Step 6: Run the affected suites**
 
@@ -203,7 +210,7 @@ The warm loop needs the sidecar's `devices_state` to tell "no CUDA cards" from "
 **Files:**
 - Modify: `server/src/gpu/sidecar-health-gate.ts:45-58`
 - Modify: `server/src/routes/sidecar-health.ts:235`, `:263-268`, `:331`
-- Modify: `server/src/routes/sidecar-health.test.ts`
+- Create: `server/src/routes/sidecar-health-record-state.test.ts`
 
 **Interfaces:**
 - Consumes: nothing from Task 1.
@@ -211,46 +218,97 @@ The warm loop needs the sidecar's `devices_state` to tell "no CUDA cards" from "
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `server/src/routes/sidecar-health.test.ts`:
+Create `server/src/routes/sidecar-health-record-state.test.ts`. **Its own file,
+not appended to `sidecar-health.test.ts`:** asserting "these setters were NOT
+called" requires the state modules to be mocked, and mocking them wholesale
+inside that file would change what every pre-existing test there exercises.
+`vi.spyOn` on the shared file is not an option either — `server/vitest.config.ts`
+sets no `restoreMocks`, so spies would leak across its tests.
 
 ```ts
+/* #1857 — probeSidecarHealth({ recordState: false }) parses identically but
+   performs NONE of its three last-known-state writes, so the boot-time GPU
+   device-list warm loop can read devices_state without moving Qwen install
+   state / VRAM / per-engine device ground truth while the supervisor is still
+   deciding what to spawn. Also pins that sidecar-health.ts actually REGISTERS
+   the non-recording probe with the gate at module init — without that, the
+   warm loop's early exit silently degrades to "always null, always retry". */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+vi.mock('../tts/sidecar-supervisor.js', () => ({
+  getActiveSupervisor: vi.fn(() => null),
+  registerActiveSupervisor: vi.fn(),
+  createSidecarSupervisor: vi.fn(),
+}));
+vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
+/* All three use the importOriginal SPREAD, not a bare factory. vi.mock replaces
+   the module for every importer in this test's graph, and each of these has
+   other live consumers: vram-state also exports getLastKnownVram (analyzer/
+   ollama.ts, routes/ollama-health.ts), engine-device-state also exports
+   getLastKnownEngineDevice + _resetEngineDevicesForTests (gpu/engine-device.ts),
+   and user-settings exports most of the settings surface. A bare factory
+   listing only the setter would kill the import with "does not provide an
+   export named …". Spread first, override the one setter. */
+vi.mock('../gpu/vram-state.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../gpu/vram-state.js')>()),
+  setLastKnownVram: vi.fn(),
+}));
+vi.mock('../gpu/engine-device-state.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../gpu/engine-device-state.js')>()),
+  setLastKnownEngineDevices: vi.fn(),
+}));
+vi.mock('../workspace/user-settings.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../workspace/user-settings.js')>()),
+  setLastKnownQwenInstallState: vi.fn(),
+}));
+
 import { probeSidecarHealth } from './sidecar-health.js';
-import * as vramMod from '../gpu/vram-state.js';
-import * as engineDeviceMod from '../gpu/engine-device-state.js';
-import * as settingsMod from '../workspace/user-settings.js';
+import { probeDeviceProbeStateIfRegistered } from '../gpu/sidecar-health-gate.js';
+import { setLastKnownVram } from '../gpu/vram-state.js';
+import { setLastKnownEngineDevices } from '../gpu/engine-device-state.js';
+import { setLastKnownQwenInstallState } from '../workspace/user-settings.js';
+
+const fetchMock = vi.fn();
+
+function okHealth() {
+  return new Response(
+    JSON.stringify({
+      model_loaded: true,
+      vram_total_mb: 16000,
+      devices: { qwen: 'cuda' },
+      devices_state: 'ready',
+    }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  );
+}
+
+beforeEach(() => {
+  fetchMock.mockReset();
+  vi.stubGlobal('fetch', fetchMock);
+  vi.mocked(setLastKnownVram).mockClear();
+  vi.mocked(setLastKnownEngineDevices).mockClear();
+  vi.mocked(setLastKnownQwenInstallState).mockClear();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('probeSidecarHealth recordState opt', () => {
-  function okHealth() {
-    return new Response(
-      JSON.stringify({
-        model_loaded: true,
-        vram_total_mb: 16000,
-        devices: { qwen: 'cuda' },
-        devices_state: 'ready',
-      }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } },
-    );
-  }
-
   it('records last-known state by default', async () => {
-    const vramSpy = vi.spyOn(vramMod, 'setLastKnownVram');
-    const devSpy = vi.spyOn(engineDeviceMod, 'setLastKnownEngineDevices');
-    const qwenSpy = vi.spyOn(settingsMod, 'setLastKnownQwenInstallState');
     fetchMock.mockResolvedValue(okHealth());
 
     const res = await probeSidecarHealth();
 
     expect(res.status).toBe('reachable');
     expect(res.devicesState).toBe('ready');
-    expect(vramSpy).toHaveBeenCalled();
-    expect(devSpy).toHaveBeenCalled();
-    expect(qwenSpy).toHaveBeenCalled();
+    expect(setLastKnownVram).toHaveBeenCalled();
+    expect(setLastKnownEngineDevices).toHaveBeenCalled();
+    expect(setLastKnownQwenInstallState).toHaveBeenCalled();
   });
 
   it('performs no state writes when recordState is false, but parses the same result', async () => {
-    const vramSpy = vi.spyOn(vramMod, 'setLastKnownVram');
-    const devSpy = vi.spyOn(engineDeviceMod, 'setLastKnownEngineDevices');
-    const qwenSpy = vi.spyOn(settingsMod, 'setLastKnownQwenInstallState');
     fetchMock.mockResolvedValue(okHealth());
 
     const res = await probeSidecarHealth({ recordState: false });
@@ -258,17 +316,33 @@ describe('probeSidecarHealth recordState opt', () => {
     expect(res.status).toBe('reachable');
     expect(res.devicesState).toBe('ready');
     expect(res.vramTotalMb).toBe(16000);
-    expect(vramSpy).not.toHaveBeenCalled();
-    expect(devSpy).not.toHaveBeenCalled();
-    expect(qwenSpy).not.toHaveBeenCalled();
+    expect(setLastKnownVram).not.toHaveBeenCalled();
+    expect(setLastKnownEngineDevices).not.toHaveBeenCalled();
+    expect(setLastKnownQwenInstallState).not.toHaveBeenCalled();
+  });
+});
+
+describe('device-probe-state provider registration', () => {
+  it('is registered by importing sidecar-health.ts, and does not record state', async () => {
+    fetchMock.mockResolvedValue(okHealth());
+
+    // Not null => sidecar-health.ts called setDeviceProbeStateProvider at init.
+    await expect(probeDeviceProbeStateIfRegistered()).resolves.toBe('ready');
+    expect(setLastKnownVram).not.toHaveBeenCalled();
+  });
+
+  it('resolves null when the sidecar is unreachable, so the warm loop keeps waiting', async () => {
+    fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+
+    await expect(probeDeviceProbeStateIfRegistered()).resolves.toBeNull();
   });
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/routes/sidecar-health.test.ts -t "recordState"`
-Expected: FAIL — `probeSidecarHealth` takes no arguments, so the writes still fire.
+Run: `npx vitest run --config server/vitest.config.ts server/src/routes/sidecar-health-record-state.test.ts`
+Expected: FAIL — `probeSidecarHealth` takes no arguments (so the `recordState: false` test still sees all three writes), and `probeDeviceProbeStateIfRegistered` is not exported from the gate.
 
 - [ ] **Step 3: Add the opt to `probeSidecarHealth`**
 
@@ -361,13 +435,18 @@ setDeviceProbeStateProvider(() =>
 
 - [ ] **Step 6: Run tests**
 
-Run: `npx vitest run --config server/vitest.config.ts server/src/routes/sidecar-health.test.ts`
-Expected: PASS — the two new tests plus every pre-existing test in the file.
+Run: `npx vitest run --config server/vitest.config.ts server/src/routes/sidecar-health-record-state.test.ts server/src/routes/sidecar-health.test.ts`
+Expected: PASS — the four new tests, plus every pre-existing test in the original file unchanged.
+
+**If the new file fails on a mock-resolution error rather than an assertion,
+re-run once before debugging.** This repo has a recorded intermittent failure
+with `importOriginal`-based mocks that clears on a re-run. A *consistent*
+failure is a real defect; a one-off is the known flake.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add server/src/gpu/sidecar-health-gate.ts server/src/routes/sidecar-health.ts server/src/routes/sidecar-health.test.ts
+git add server/src/gpu/sidecar-health-gate.ts server/src/routes/sidecar-health.ts server/src/routes/sidecar-health-record-state.test.ts
 git commit -F - <<'EOF'
 feat(server): side-effect-free devices_state accessor for the health gate
 
@@ -780,6 +859,12 @@ EOF
 
 The cold-cache case is **not** a bug — the sidecar resolves the literal itself. This test documents that so the next reader doesn't "fix" it.
 
+**This task is a characterization test, not a TDD cycle.** Both assertions pass
+against unmodified production code; there is deliberately no "verify it fails"
+step, because there is no behaviour change here to drive. Its value is pinning a
+contract that currently exists only as tribal knowledge — #1857 was filed because
+a reader saw the cold-cache literal and reasonably concluded it was a defect.
+
 **Files:**
 - Modify: `server/src/tts/sidecar-env.test.ts`
 
@@ -942,9 +1027,16 @@ def _codec_device_pref() -> str:
     return _read_device_env("QWEN_CODEC_DEVICE") or "cpu"
 ```
 
-Then replace lines 2995-2997:
+Then replace the call site. **Do not go by line number** — inserting the helper
+above shifts it from 2995-2997 to roughly 3010. Find it by content:
 
 ```python
+        # BEFORE (find this):
+        codec_device = _resolve_codec_device(
+            os.environ.get("QWEN_CODEC_DEVICE", "cpu"), self._device
+        )
+
+        # AFTER:
         codec_device = _resolve_codec_device(_codec_device_pref(), self._device)
 ```
 
@@ -975,7 +1067,11 @@ EOF
 ## Final verification
 
 - [ ] Run the full server suite: `npm run test:server`
-- [ ] Run typecheck: `npx tsc -p server/tsconfig.json --noEmit`
+- [ ] Run typecheck: `npm run typecheck` (the repo script — root `tsc --noEmit` **and** `npm --prefix server run typecheck`; a bare `npx tsc -p server/tsconfig.json` only covers the second half)
 - [ ] Run the sidecar device tests: `server/tts-sidecar/.venv/Scripts/python.exe -m pytest server/tts-sidecar/tests/test_device_parse.py server/tts-sidecar/tests/test_module_import_order.py -v`
-- [ ] Confirm no `gpu/ → routes/` import was introduced: `npx madge --circular --extensions ts server/src` (or the repo's existing cycle check) reports no new cycles.
+- [ ] **Confirm no `gpu/ → routes/` import was introduced.** This repo has **no** cycle checker — `madge` is not a dependency and there is no `import/no-cycle` ESLint rule, so the `gpu/*-gate.ts` pattern is enforced by review alone. Verify by grep instead, which must return nothing:
+  ```bash
+  grep -rn "from '\.\./routes/" server/src/gpu/
+  ```
+  The registration test in Task 2 covers the other half — that routing *around* the cycle didn't leave the provider unregistered.
 - [ ] Open PR with `Closes #1857` in the body, and post the premise correction (the sidecar already resolves `cuda-uuid:` for the three engine knobs; the issue's acceptance criteria are superseded by the spec's).
