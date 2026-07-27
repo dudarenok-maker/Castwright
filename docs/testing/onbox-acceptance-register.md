@@ -47,7 +47,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 17 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 18 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -56,7 +56,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**30 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**31 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -251,6 +251,32 @@ evicted.
 "Live GPU acceptance owed: the **audible** difference between a designed variant and
 the base voice can only be confirmed on a real sidecar" (`:48`). Ship notes still a
 placeholder — no shipped date recorded.
+
+### A18 · Device-pin resolution survives a respawn ([#1870](https://github.com/dudarenok-maker/Castwright/pull/1870), closes [#1857](https://github.com/dudarenok-maker/Castwright/issues/1857)) · **2-card boot**
+
+`buildSidecarEnv` now hands the sidecar the raw `cuda-uuid:` literal instead of a
+translated `cuda:N`, so the sidecar re-resolves the pin against live torch
+enumeration on every spawn. Verified by unit tests and CI; **never watched on real
+cards.** The behaviour that matters most is the one no test can reach — a respawn
+after the index actually changes.
+
+- Pin Qwen to a specific card in Advanced settings, restart the server, and force a
+  supervisor respawn (`POST /api/sidecar/restart`, or let a recycle fire). The engine
+  lands on the **pinned** card both times.
+- Then change the enumeration order — swap the cards, or set `CUDA_DEVICE_ORDER` —
+  and confirm a respawn still finds the pinned card by UUID rather than failing
+  `_validate_cuda_index` or landing on the wrong one. **This is the regression the
+  change exists to prevent**, and it was previously reachable only when the user had
+  opened Advanced settings during that server session.
+- Pin `tts.qwen.codecDevice` to a card and confirm the codec is actually placed there.
+  Before #1870 the pin was silently ignored — the literal failed inside torch's
+  `.to()` and rolled back to CPU.
+- Point the codec pin at a card that is **not** present and confirm the sidecar logs
+  `QWEN_CODEC_DEVICE=… did not match any visible GPU` and leaves the codec on **cpu**
+  — not on the model's card, which is what `auto` would have done.
+
+*Needs:* both cards, and the ability to change enumeration order between boots (the
+eGPU is not hot-pluggable, so batch this with A2 step 9 and A3). *Cost:* short.
 
 ---
 
