@@ -302,6 +302,29 @@ history at cut time.
   (`src/lib/tts-models.ts`). Plan 249 gains invariants 7 and 8. The sibling `cast.tsx` banner
   assumption (`!qwenOnly ⇒ Coqui-eligible`) is prop-driven, does not read the new helper, and stays
   owed — folded into fs-70.
+- **A failed VRAM evict no longer kills a mixed Qwen+Coqui chapter** (#1893). fs-60 partitions a
+  chapter that mixes Qwen and Coqui into two serial phases with a sidecar `/unload` between them,
+  so the two never co-reside on an 8 GB card. That evict call had no failure isolation: it throws
+  on a non-ok `/unload`, `fetch` rejects on a dead socket, and no `try`/`catch` sat anywhere
+  between it and `synthesiseChapter`'s head — so a transient sidecar hiccup aborted a chapter that
+  would otherwise have rendered, at up to three call sites per chapter (initial body dispatch plus
+  the segment-QA and ASR re-record rounds, which share the same wrapper). The evict is now
+  best-effort: a failure logs a named warning and the Coqui phase proceeds, mirroring
+  `clone-voice-resolver.ts`'s self-heal policy — an abort still propagates, so a paused or
+  cancelled run stops here as before. The call is also bounded by the chapter's existing
+  `callTimeoutMs` and now forwards the abort signal; previously it could queue behind another
+  book's in-flight synth on the sidecar's `_synth_lock` and stall forever, uncancellable. An abort
+  is rethrown *as* an `AbortError` rather than verbatim, so a pause that raced a socket-death
+  rejection can't read as a chapter failure at `routes/generation.ts`'s pause detector (the trap
+  `clone-voice-resolver.ts`'s `abortRejection` already exists to avoid). Failing soft is usually
+  cheap — the sidecar's `/unload` is idempotent and returns 200 even when nothing was resident, so
+  a failure normally means an unhealthy sidecar, which the Coqui phase then surfaces itself — but
+  not always: a wrong/proxied `SIDECAR_URL` can 5xx `/unload` while the synth path is healthy, and
+  then Coqui really does load onto a resident Qwen. That residue is deliberately accepted, recorded
+  as plan 249's accepted limitation #4 (it weakens that plan's invariant #4 from a guarantee to a
+  success-path property) and owed on-box as register row A19. Five regression tests in
+  `server/src/tts/synthesise-chapter-coqui-fallback.test.ts`; the sibling residency asymmetry
+  (nothing ever evicts Coqui after the last Coqui chapter) stays open as #1894.
 
 ---
 
