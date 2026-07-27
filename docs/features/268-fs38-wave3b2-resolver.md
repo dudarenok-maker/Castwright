@@ -442,7 +442,7 @@ only exercises the frontend/store seams.
 - **3c — XTTS clone support.** `purgeCloneArtifacts` has no `voices/xtts/`
   path to erase (there is no such artifact on disk in 3b2 — see the `TODO(3c)`
   comment in `purge-clone-artifacts.ts:43-45`); the resolver is Qwen-only.
-  Not shipped here.
+  Not shipped here — see [270](270-fs38-wave3c-xtts.md).
 - **Catalogue rebuild.** Still deferred, per 267 — unaffected by this wave.
 - **A first-class progress channel for the resolver pre-pass.** See Known
   limitations (f) / [#1813](https://github.com/dudarenok-maker/Castwright/issues/1813).

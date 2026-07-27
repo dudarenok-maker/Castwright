@@ -1,13 +1,16 @@
-# fs-38 Wave 3 — on-box acceptance run sheet (voice cloning: 3a + 3b1 + 3b2)
+# fs-38 Wave 3 — on-box acceptance run sheet (voice cloning: 3a + 3b1 + 3b2 + 3c)
 
 > **This is a working document.** Fill it in AS you run it, on the box, with the
 > real GPU + real TTS sidecar. When it is complete it becomes the record of
 > acceptance. Do not pre-fill Pass columns.
 >
-> Source branch: `feat/fs38-wave3b2-resolver` (worktree
-> `C:\Claude\Projects\Audiobook-Generator\.claude\worktrees\feat+fs38-wave3b2-resolver`)
+> Source branches: `feat/fs38-wave3b2-resolver` (3a/3b1/3b2, worktree
+> `C:\Claude\Projects\Audiobook-Generator\.claude\worktrees\feat+fs38-wave3b2-resolver`),
+> `feat/fs38-wave3c-xtts` (3c, worktree
+> `C:\Claude\Projects\Audiobook-Generator\.claude\worktrees\feat+fs38-wave3c-xtts`)
 > Plans of record: [`docs/features/267-fs38-wave3-voice-clone.md`](../../267),
-> [`docs/features/268-fs38-wave3b2-resolver.md`](../../268)
+> [`docs/features/268-fs38-wave3b2-resolver.md`](../../268),
+> [`docs/features/270-fs38-wave3c-xtts.md`](../../270)
 > Spec: `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md`
 > Umbrella: fs-38 · GitHub [#624](https://github.com/dudarenok-maker/Castwright/issues/624)
 
@@ -25,24 +28,29 @@ under "Clone a voice":
 | **3a** | Sample ingest (upload + browser recorder), the quality gate, Whisper transcript, consent capture, `master.wav` retention, the consent-at-write guard, the `/revoke` route, the sample-route consent gate | **A** (13 tests) |
 | **3b1** | The first real clone on Qwen: sidecar `POST /qwen/clone-voice`, `deriveEngineArtifact`, `POST /api/voice-library/clone`, the advisory ECAPA fidelity check, the two-phase wizard, cast assignment, the `applyQwenFallback` cloned exemption, the assign-readiness gate | **B** (13 tests) |
 | **3b2** | The per-chapter cloned-voice resolver pre-pass, transparent re-derive, revocation-at-render, fail-fast + readiness gate, transient-vs-permanent derive buckets, `purgeCloneArtifacts` total erasure (revoke + delete), revoke erasing the original recording behind a confirm, atomic sidecar `.pt` writes, the distinct `wrong-engine` diagnosis + assign-time guard, the `cloned-voice-broken` failure code + toast/help, the Broken/Repairable card chip, and §2.3 designed-voice clip retention + self-heal | **C** (21 tests) |
+| **3c** | Cloned **and designed** voices on Coqui XTTS v2: `CoquiEngine.clone_voice` (hand-rolled latents derive), the engine-parametric resolver/pre-pass/purge (the same never-substitute + total-erasure guarantees, now on a second engine), the fail-**soft** designed-voice-on-Coqui arm (the opposite policy from cloned, on purpose), the epoch-guarded `_latents_cache`, the non-zero revoke-to-silence bound, and the provenance-gated dual-slot assign | **E** (9 tests) |
 | Cross-cutting | Multi-book concurrency, full-book render, restart/cache-independence, the splice/QA-repair surfacing gap | **D** (4 tests) |
 
-**Total: 51 acceptance tests.**
+**Total: 60 acceptance tests.**
 
 This run is intended to discharge the *owed on-box acceptance debt* recorded in
-both plans:
+all three plans:
 
 - 267 "Owed — on-box live-GPU acceptance (spec §8)" items (a) and (b).
 - 268 "Owed — on-box live-GPU acceptance" items (a), (b), (c), and the
   Known-limitations list (a)–(c).
+- 270 "Owed on-box acceptance" items E-1 through E-5.
 
 ### 1.2 What this sheet deliberately does NOT accept
 
-- **3c — XTTS clone support is NOT shipped.** There is no `POST
-  /xtts/clone-voice`, no `voices/xtts/` artifact on disk, and
-  `purgeCloneArtifacts` carries an explicit `TODO(3c)` for the erasure path
-  that does not exist yet (`server/src/workspace/purge-clone-artifacts.ts:76-78`).
-  Do not test XTTS cloning; do not log its absence as a defect.
+- **3c is shipped, but three of its planned tasks are not — do not test them,
+  and do not log their absence as a defect.** No engine-aware library sample
+  route exists yet (`POST /:voiceUuid/sample` still always auditions the Qwen
+  artifact, even for a Coqui card — [#1887](https://github.com/dudarenok-maker/Castwright/issues/1887));
+  the manual cast-link consent bypass on `cast-link-prior.ts`/
+  `series-reuse-link.ts` is still open ([#1885](https://github.com/dudarenok-maker/Castwright/issues/1885));
+  a failed/timed-out sidecar evict on revoke is still invisible to the
+  caller ([#1886](https://github.com/dudarenok-maker/Castwright/issues/1886)).
 - **Catalogue rebuild (Wave 2)** — deferred, unaffected by this arc.
 - **A first-class progress channel for the resolver pre-pass** — deliberately
   unwired (`reportProgress: undefined`), filed as
@@ -137,6 +145,11 @@ $WS
 | **Designed** voice's retained clip (§2.3) | `$WS\voices\qwen\qwen-<uuid>__master.wav` | sidecar `design_voice` step 3b, `_atomic_wav_save` (`main.py:3862-3866`) |
 | Preview design's retained clip | `$WS\voices\qwen\qwen-<uuid>-preview__master.wav` | same, on the preview key |
 | Sample (audition) cache | `<repo>\server\audio\voices\` — files named `qwen-<uuid>-<modelKey>-<hash>.mp3` | `voice-sample-cache.ts:26-28`, `152-166`. **NOT under `$WS`.** Purged by `purgeVoiceSamples("qwen-<uuid>")`. |
+| **(3c) Coqui artifact dir** | `$WS\voices\xtts\` | `xttsVoicesDir()` — `workspace/paths.ts` |
+| **(3c) Latents artifact** | `$WS\voices\xtts\xtts-<uuid>.pt` | sidecar `_atomic_torch_save`, `CoquiEngine.clone_voice` |
+| **(3c) Sidecar manifest** | `$WS\voices\xtts\xtts-<uuid>.json` | sidecar `CoquiEngine.clone_voice` |
+| **(3c) Reference-audio temp WAV** | `$WS\voices\xtts\xtts-<uuid>.derive-src.tmp.wav` | sidecar `clone_voice`, deleted in a `finally` — survives **only** a hard process kill mid-derive. This IS the person's source recording, not a derived artifact — treat it with the same severity as `master.wav`. |
+| **(3c) Sample (audition) cache** | `<repo>\server\audio\voices\` — files named `xtts-<uuid>-<modelKey>-<hash>.mp3` | Same cache, scoped by the `xtts-<uuid>` storage key once Task 27 lands (see §6 KL-o) — **until then this route still writes under a `qwen-<uuid>` scope even for a Coqui card**, so do not expect an `xtts-`-scoped sample file yet. |
 
 > ⚠️ Spec §2.2 lists a `preview.mp3` in the entry dir. **3b1 deliberately does
 > not write one** — the route comment at `voice-library.ts:656-662` states the
@@ -2063,6 +2076,270 @@ structured `cloned-voice-broken` code.
 
 ---
 
+### Section E — 3c: cloned + designed voices on Coqui XTTS v2
+
+Prep note: `$KX = "xtts-$U"` (the Coqui storage key, analogous to `$K`) —
+set it in the same PowerShell session as `$U`/`$K`. See §3.1's new "(3c)"
+rows for the artifact-path shape.
+
+---
+
+#### E-01 — ⭐ Clone → cast on a Coqui-routed (Russian) book → generate
+
+**Proves:** the wave's headline delivery — a cloned voice renders correctly
+on Coqui, not just Qwen. Mirrors 268's C-repro pattern (Task 3's Wave-3c
+equivalent).
+
+**Preconditions:** a healthy cloned voice (`$U`); a Russian (or other
+non-English) book, since that's the common case that routes to Coqui today.
+
+**Steps**
+1. Cast `$U` to a character in the Russian book.
+2. Confirm the book/character actually routes to Coqui (not Qwen) —
+   check the cast picker's resolved engine.
+3. Generate the chapter that character speaks in.
+4. Listen. Check `$WS\voices\xtts\$KX.pt`/`.json` afterwards.
+
+**Expected**
+- The chapter renders. The cloned character sounds like the source person,
+  in Russian, on the Coqui engine.
+- `$KX.pt` and `$KX.json` exist and are non-empty.
+- No re-derive on a second render of the same chapter (the `.pt` is reused).
+
+**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+
+---
+
+#### E-02 — ⭐ Audition, then revoke — confirm Play refuses afterwards
+
+**Proves:** Property 1/2 hold on the audition surface for Coqui, mirroring
+268's C-02/A-12 pattern (Task 2's Wave-3c equivalent).
+
+**Preconditions:** a healthy cloned voice with a Coqui-routed character cast.
+
+**Steps**
+1. Play the library card's sample (or the cast-row audition) — confirm it
+   plays and sounds like the person.
+2. Revoke the voice (My voices → card → Revoke, confirm the two-step
+   dialog).
+3. Try Play again — card sample, and (if reachable) the cast-row audition.
+
+**Expected**
+- Step 1 plays successfully.
+- After revoke, Play **refuses** — a 403/409-class response, never a stale
+  cached clip of the revoked person.
+- The three xtts artifact paths (`.pt`, `.json`, and — if a derive happened
+  recently enough that it might still be present — the reference-audio temp
+  WAV) are gone from disk.
+
+**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+
+---
+
+#### E-03 — Revoke lands during an in-flight Coqui derive
+
+**Proves:** the same `guardPostDeriveWrite` re-read + re-purge race 268's
+C-01 proved for Qwen, now on the Coqui side — and Task 11a's specific
+addition: a forward already past `_load_voice_latents` when the evict lands
+still completes and returns audio (the non-zero revoke-to-silence bound).
+
+**Preconditions:** a healthy, assigned clone cast on a Coqui-routed
+character; the sidecar up. Force a repair first (mirroring 268's C-01
+technique): delete `$KX.pt` but leave the manifest and the original
+recording alone, so the render is guaranteed to derive.
+
+**How to hit the window:** same technique as 268's C-01 — pre-stage the
+revoke command in a second shell, fire it the moment the chapter starts
+generating and before any audio appears.
+
+**Steps**
+1. `Remove-Item "$WS\voices\xtts\$KX.pt"`. Confirm `voice.json` still has
+   `master`/the coqui slot and **no** `revokedAt`.
+2. Start generating the chapter.
+3. Fire the pre-staged revoke in the window between the chapter starting and
+   the first synth call.
+4. Let the chapter finish/fail. Check the artifact set and `voice.json`.
+
+**Expected (all must hold)**
+- `revokedAt` survives (not clobbered back to un-revoked).
+- The chapter fails with a reason naming the character and `revoked`.
+- No `.pt`/`.json`/reference-audio-temp-WAV survives on disk under
+  `$WS\voices\xtts\`, even though the sidecar wrote one during the derive.
+- **If** the revoke instead lands after the derive has already progressed
+  past latents-load (i.e. you miss the narrow window and land later, inside
+  the actual GPU forward), the chapter may still **complete and return
+  audio** for that one in-flight request — this is the documented,
+  non-zero revoke-to-silence bound (Task 11a), not a bug. Record which
+  outcome you hit; both are informative.
+
+**If you miss the window entirely** (revoke lands well before or well after
+the derive), retry — budget 3–5 attempts, same as 268's C-01.
+
+**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Attempts:** ____  **Notes:**
+
+---
+
+#### E-04 — A long sentence on a cloned Coqui voice
+
+**Proves:** the `enable_text_splitting`/language-guard path the golden gate's
+`test_xtts_clone_sanity` was specifically written to catch (a crash class
+XTTS has on long input without it).
+
+**Preconditions:** a healthy cloned Coqui voice cast on a character.
+
+**Steps**
+1. Find or write a chapter line for that character that is unusually long
+   (a full paragraph in one sentence, or several clauses).
+2. Generate that chapter/line.
+
+**Expected**
+- Renders without crashing or truncating audibly mid-sentence.
+- No fallback to a stock catalogue voice.
+
+**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+
+---
+
+#### E-05 — Audition matches render
+
+**Proves:** the card's Play button and the actual chapter render use the
+same underlying artifact — no drift between "what you previewed" and "what
+you got".
+
+**Preconditions:** a healthy cloned Coqui voice.
+
+**Steps**
+1. Play the card's audition sample. Note the voice's character.
+2. Generate a chapter using that voice on the same character.
+3. Compare by ear.
+
+**Expected:** the audition and the rendered chapter sound like the same
+voice — same identity, no perceptible drift. (Note: until
+[#1887](https://github.com/dudarenok-maker/Castwright/issues/1887) lands,
+the card's Play button may actually be auditioning the **Qwen** artifact,
+not the Coqui one, if the entry has both slots — see §6 KL-o. If the
+character has no Qwen slot at all, Play should 404/409 rather than silently
+auditioning nothing; record whichever you observe.)
+
+**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+
+---
+
+#### E-06 — ⭐ A designed voice on a Coqui book — judge it against the stock catalogue voice it replaces (D-B's open question)
+
+**Proves:** the only place D-B's central, explicitly-unresolved quality
+question can actually be answered — format-level CI checks can prove the
+derive isn't broken, never that it sounds better than what it replaces.
+This is the wave's starred acceptance item; treat the verdict as data to
+record, not a pass/fail gate on its own.
+
+**Preconditions:** a **designed** (not cloned) Qwen voice, cast on a
+character in a Coqui-routed book, with no prior Coqui-side artifact for it.
+
+**Steps**
+1. Generate a chapter that character speaks in. This should trigger a
+   lazy designed-voice-on-Coqui derive (Task 20a) from the voice's retained
+   synthetic calibration clip.
+2. Listen to the resulting rendered audio.
+3. Separately, listen to (or recall) how that same character sounds on the
+   **stock Coqui catalogue voice** it would have used before this wave
+   (`COQUI_PROFILE_VOICES`).
+4. Judge: does the derived voice sound closer to the designed persona than
+   the stock catalogue voice did?
+
+**Expected:** no hard pass/fail — record your honest verdict (better /
+worse / about the same) and any specific artifacting you hear. This is
+genuinely open per the plan; a "worse" verdict is useful information, not
+a failure of this test.
+
+**Result:** ☐ Better ☐ Worse ☐ About the same ☐ B ☐ N/A  **Notes:**
+
+---
+
+#### E-07 — ⭐ A designed voice whose derive is forced to fail still renders the chapter (D-F)
+
+**Proves:** the fail-**soft** policy — the opposite of E-02/E-03's cloned
+fail-loud behaviour, on purpose. A designed voice is not a real person's
+identity, so falling back to the catalogue on a bad derive is correct,
+current, acceptable behaviour, not a regression.
+
+**Preconditions:** a designed voice cast on a character in a Coqui-routed
+book, with no existing Coqui artifact for it (so a derive will be
+attempted). Force the derive to fail — e.g. stop the sidecar mid-chapter, or
+(if reachable) temporarily corrupt/remove the voice's retained calibration
+clip on disk before generating.
+
+**Steps**
+1. Force the derive-failure condition above.
+2. Generate the chapter.
+3. Restore whatever you removed/stopped afterwards.
+
+**Expected**
+- The chapter **completes** — no `cloned-voice-broken`, no chapter-level
+  abort.
+- The character renders on the **stock Coqui catalogue voice**
+  (`COQUI_PROFILE_VOICES`), not silence and not a crash.
+- No coqui slot is written to `cast.json`/the entry for this character (the
+  entry stays as it was before the attempt).
+
+**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+
+---
+
+#### E-08 — Assign writes both slots, provenance-gated (Task 24)
+
+**Proves:** D-E's amended condition — a cloned entry, or a designed entry
+**with** a retained clip, gets both `overrideTtsVoices.qwen` and `.coqui`
+written on assign; a designed entry with **no** retained clip gets only the
+qwen slot, byte-for-byte as before this wave.
+
+**Preconditions:** three library entries — a cloned one, a designed one with
+a retained calibration clip, and (if one exists on your box) a designed one
+predating clip retention (no `qwen-<uuid>__master.wav`).
+
+**Steps**
+1. Assign each to a different character.
+2. Inspect each character's `cast.json` entry (or the API response) for
+   `overrideTtsVoices`.
+
+**Expected**
+- The cloned entry: both `qwen` and `coqui` slots present, engine-correct
+  names.
+- The designed-with-clip entry: both slots present.
+- The designed-without-clip entry: **only** `qwen` present — no `coqui`
+  slot at all.
+- Assigning a Kokoro-only or otherwise ineligible entry still 409s as
+  before.
+
+**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+
+---
+
+#### E-09 — Total erasure of the three Coqui artifact paths on delete
+
+**Proves:** `purgeCloneArtifacts`'s Coqui erasure set is genuinely three
+paths (`.pt`, `.json`, and the reference-audio temp WAV), matching 268's
+C-10/C-11 pattern for Qwen.
+
+**Preconditions:** a healthy cloned Coqui voice, recently derived (so a
+reference-audio temp WAV may still be on disk if you catch it fast enough —
+otherwise this only proves the two persistent paths, which is still
+useful).
+
+**Steps**
+1. Run the §3.2-style artifact listing against the `$KX`-prefixed paths
+   under `$WS\voices\xtts\`.
+2. Delete the voice entirely (My voices → card → Delete).
+3. Re-run the listing.
+
+**Expected:** every `xtts-<uuid>*` file under `$WS\voices\xtts\` is gone; the
+entry no longer appears anywhere in the library; the sample cache for this
+voice (once #1887 lands and actually scopes by the coqui key) is also gone.
+
+**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+
+---
+
 ## 6. Known limitations — verify as EXPECTED, do not file as defects
 
 Everything in this table is a **documented, accepted** limitation of the shipped
@@ -2084,8 +2361,11 @@ it, tick "seen" and move on. **Do not open a defect for these.**
 | **KL-j(2)** | The **two-worker corner**: two chapter workers repairing the *same* voice concurrently (simultaneous multi-book renders sharing one library voice), where KL-j(1) fires for worker A *and* worker B's derive completes after the revoke's purge — B re-reads an un-revoked entry, skips its re-purge, and **B's `.pt` survives the revoke**. | Requires KL-j(1) to fire **first** plus a dual-render precondition — orders of magnitude less likely than the bug the guard fixed, but real. Proper fix is a per-uuid write lock or an `updatedAt` CAS. Watch for this in **D-01**'s repeat-with-repair step. | [#1826](https://github.com/dudarenok-maker/Castwright/issues/1826) | ☐ |
 | **KL-k** | ~~The wizard's **Transcript textarea is editable, but edits appear to have no effect**.~~ **Confirmed and FIXED** — `CloneVoiceRequest` now carries an optional `transcript`; the panel forwards the edited value, and `POST /clone` distils against it and persists it as `master.transcript` / `sampleTranscript` with `transcriptSource: 'user'`. | Verify the fix rather than the defect: edit the transcript before Save, then confirm the saved entry's `voice.json` shows your corrected text and `transcriptSource: "user"`. A blank edit intentionally falls back to the Whisper text. | [#1836](https://github.com/dudarenok-maker/Castwright/issues/1836) (fixed) | ☐ |
 | **KL-l** | The cloned entry directory has **no `preview.mp3`**, though spec §2.2 shows one. | 3b1 deliberately does not persist a preview — the audition is served on demand by `POST /:uuid/sample` + the sample cache (`voice-library.ts:656-662`). Spec text is stale, code is correct. | — (by design) | ☐ |
-| **KL-m** | Cloning on **XTTS/Coqui** is nowhere to be found. | 3c is **not shipped**. `purgeCloneArtifacts` even carries the `TODO(3c)` for the `voices/xtts/` erasure path that does not exist yet. | — (out of scope) | ☐ |
+| **KL-m** | ~~Cloning on **XTTS/Coqui** is nowhere to be found.~~ **Shipped in 3c** — see Section E. | Historical row, kept for context. | — (superseded) | ☐ |
 | **KL-n** | `mint_variant` (emotion-variant `.pt`) still uses a **bare `torch.save`**, not the atomic write. | Explicitly out of scope for 268 Invariant 6 — it is off the resolver's re-derive path. Do not test it here. | — (out of scope) | ☐ |
+| **KL-o** | The library card's Play button auditions the **Qwen** artifact even for a Coqui-only or Coqui-primary card — E-05's caveat. | `POST /:voiceUuid/sample` still hardcodes a Qwen voice name/model key/cache scope (Task 27 not yet implemented). Watch for this in **E-05**. | [#1887](https://github.com/dudarenok-maker/Castwright/issues/1887) | ☐ |
+| **KL-p** | A cloned voice's coqui slot can, in principle, be reachable through a route this sheet does not exercise (the manual cast-link routes), copying a cloned voice onto a character in a book that never had consent captured for it. | `cast-link-prior.ts`/`series-reuse-link.ts` bypass the library consent check `[ADV-M4]` (Task 10a not yet implemented). Not directly exercisable from this sheet's normal flows — recorded here so a tester who notices anomalous consent state on a linked/series book knows this is the known cause, not a new defect. | [#1885](https://github.com/dudarenok-maker/Castwright/issues/1885) | ☐ |
+| **KL-q** | A revoke's response is `200` even when the sidecar-side XTTS latents-cache evict silently failed or timed out. | The revoke route's sidecar-evict call is wrapped in a bare `catch {}` (Task 14a not yet implemented) — `{failed}` tracks only file-unlink failures. Every artifact listing check in this sheet (E-02, E-03, E-09) still verifies the **disk** state directly, which is unaffected by this gap; only the sidecar's own in-memory cache state is unverifiable from this sheet. | [#1886](https://github.com/dudarenok-maker/Castwright/issues/1886) | ☐ |
 
 ---
 
@@ -2166,6 +2446,20 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | D-03 | Server + sidecar restart → still renders (cache-independent) | | |
 | D-04 | Splice / QA-repair surface plain text (expected, KL-i) | | |
 
+#### Section E — 3c: cloned + designed voices on Coqui XTTS v2 (9)
+
+| ID | Test | Result | Notes |
+|---|---|---|---|
+| **E-01** ⭐ | Clone → cast on a Coqui-routed (Russian) book → generate | | |
+| **E-02** ⭐ | Audition, then revoke — Play refuses afterwards | | |
+| E-03 | Revoke lands during an in-flight Coqui derive | | |
+| E-04 | A long sentence on a cloned Coqui voice | | |
+| E-05 | Audition matches render (KL-o caveat) | | |
+| **E-06** ⭐ | A designed voice on a Coqui book — judged against the stock voice it replaces (D-B) | | |
+| **E-07** ⭐ | A designed voice's forced derive failure still renders the chapter (D-F) | | |
+| E-08 | Assign writes both slots, provenance-gated (Task 24) | | |
+| E-09 | Total erasure of the three Coqui artifact paths on delete | | |
+
 #### Totals
 
 | Section | Total | P | F | B | N/A |
@@ -2174,7 +2468,8 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | B (3b1) | 13 | | | | |
 | C (3b2) | 21 | | | | |
 | D (cross-cutting) | 4 | | | | |
-| **All** | **51** | | | | |
+| E (3c) | 9 | | | | |
+| **All** | **60** | | | | |
 
 ### 7.2 Defects found
 

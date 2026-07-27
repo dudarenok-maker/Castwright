@@ -68,24 +68,33 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning · **51 tests, entirely unexecuted**
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **60 tests, entirely unexecuted**
 
 The run sheet `docs/testing/fs38-wave3-onbox-acceptance.md` is complete and has
 never been run — every `Result:` line still reads `☐ P ☐ F ☐ B ☐ N/A`, §7.1's
-tables blank. PR #1837 shipped the template, not results.
+tables blank. PR #1837 shipped the template (3a/3b1/3b2, 51 tests); Wave 3c
+added **Section E** (9 tests, cloned + designed voices on Coqui XTTS v2) —
+also unexecuted.
 
 Starred, highest-risk: **C-01** revoke mid-derive leaves no live `.pt` and
 `revokedAt` survives · **C-08** a transient failure does not brick a voice ·
 **C-10** revoke does total erasure including the original recording · **C-17**
 designed-voice self-heal preserves persona · **C-12** a killed mid-write leaves
-no truncated `.pt`.
+no truncated `.pt` · **E-01** clone → cast on Coqui → generate · **E-02**
+audition-then-revoke refuses Play on the Coqui path · **E-06** the one place
+D-B's synthetic-clip-vs-catalogue quality question can actually be judged, by
+ear · **E-07** a forced designed-derive failure still renders the chapter
+(fail-soft, the opposite policy from cloned's fail-loud).
 
 C-08 and C-12 deliberately kill the sidecar mid-write — nothing else in flight.
 D-01 deliberately runs two concurrent book renders sharing one cloned voice.
+E-03 deliberately races a revoke against an in-flight Coqui derive.
 
 *Also needs:* Whisper weights, ECAPA `/embed`, `voices.library.enabled=true`, the
-Coalfall fixture with ≥2 speaking characters/chapter, and the 9 audio fixtures in §4.
-*Plans:* 267, 268 — both `status: active`, Ship notes empty. *Cost:* multi-hour.
+Coalfall fixture with ≥2 speaking characters/chapter, the 9 audio fixtures in §4,
+and (for Section E) a Coqui-capable sidecar plus a non-English (e.g. Russian)
+book fixture that actually routes to Coqui.
+*Plans:* 267, 268, 270 — all `status: active`, Ship notes empty. *Cost:* multi-hour.
 
 ### A2 · Capacity-aware GPU placement (plan 264) · **two distinct debts**
 
