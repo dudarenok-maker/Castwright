@@ -3330,6 +3330,17 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/SetupSmokeResponse' }
 
+  /api/setup/models-status:
+    get:
+      summary: Canonical voice-engine status payload
+      operationId: getModelsStatus
+      responses:
+        '200':
+          description: Runtime, per-engine health, GPU info and the engine recommendation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModelsStatus' }
+
 # ---------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------
@@ -6940,3 +6951,73 @@ components:
         analyzerDetail:
           type: string
           description: Success branch only — analyzer probe detail or error text.
+
+    # --- Setup models-status (fe-57 / #1883) -------------------------
+    RuntimeStatus:
+      type: object
+      required: [installedOnDisk, pythonFound, process]
+      properties:
+        installedOnDisk: { type: boolean }
+        pythonFound: { type: boolean }
+        process:
+          type: string
+          enum: [ready, starting, down, crashed]
+
+    EngineStatus:
+      type: object
+      required: [state, packageBroken]
+      properties:
+        state:
+          type: string
+          enum: [ready, package-missing, weights-missing, not-installed, loaded]
+        packageBroken:
+          type: boolean
+          description: |
+            Package present on disk but fails to IMPORT in the sidecar.
+            Sidecar-up-only — false when the sidecar is down, which is NOT a
+            first-run "fine" guarantee.
+
+    EngineRecommendation:
+      type: object
+      required: [engine, modelKey, reason, caveat, alternate]
+      properties:
+        engine: { type: string, enum: [kokoro, qwen, coqui] }
+        modelKey:
+          type: string
+          enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2]
+          description: |
+            A three-member literal union on BOTH sides today
+            (voice-engine-registry.ts:21 via VoiceEngineEntry['defaultModelKey'],
+            and src/lib/api.ts:7295). `type: string` alone would silently widen it.
+        reason: { type: string }
+        caveat: { type: string, nullable: true }
+        alternate: { type: string, enum: [kokoro, qwen, coqui], nullable: true }
+
+    RecommendationSet:
+      type: object
+      description: fe-51 — precomputed recommendation for both answers to the wizard's guided question.
+      required: [expressiveOrMultilingual, simpleEnglish]
+      properties:
+        expressiveOrMultilingual: { $ref: '#/components/schemas/EngineRecommendation' }
+        simpleEnglish: { $ref: '#/components/schemas/EngineRecommendation' }
+
+    ModelsStatus:
+      type: object
+      required: [runtime, engines, info, recommendation]
+      properties:
+        runtime: { $ref: '#/components/schemas/RuntimeStatus' }
+        engines:
+          type: object
+          description: Keyed by VoiceEngineId.
+          required: [kokoro, qwen, coqui]
+          properties:
+            kokoro: { $ref: '#/components/schemas/EngineStatus' }
+            qwen: { $ref: '#/components/schemas/EngineStatus' }
+            coqui: { $ref: '#/components/schemas/EngineStatus' }
+        info:
+          type: object
+          required: [gpu, vramTotalMb]
+          properties:
+            gpu: { type: string }
+            vramTotalMb: { type: integer, nullable: true }
+        recommendation: { $ref: '#/components/schemas/RecommendationSet' }
