@@ -481,6 +481,22 @@ or `never-passes` — confirming the bucket that is this tool's entire reason
 to exist actually fires on real data, not just the synthetic sequences in
 `scripts/tests/quarantine-health.test.mjs`.
 
+*Why this sits here and not as a plain automated-test-gap issue* (per this
+file's own closing rule below): this is NOT closable by writing more unit
+tests — `classifyEntry` is already fully unit- and mutation-tested against
+every synthetic sequence that matters. What's missing is a real occurrence
+of cross-run nondeterminism, which by construction can't be manufactured or
+asserted inside a unit test; the only way to discharge it is to observe live
+data once it exists, the same shape as any other row in this register, just
+triggered by an external event (a future genuine flake) rather than a
+hardware prerequisite. One honest caveat: unlike G1's first debt, this half
+does NOT strictly require the GitHub Actions runner — a local
+`node scripts/quarantine-health.mjs` run against a real flaky register row
+would equally discharge it. It stays grouped under G1 anyway because it
+shares G1's dispatch-triggered, opportunistic-timing framing and "what to
+observe" shape, not because Group G's runner criterion technically applies
+to it.
+
 *Needs:* nothing beyond repo access for the first half; a real quarantined
 flaky test (naturally occurring, not manufactured) for the second.
 *Cost:* minutes for the first dispatch; opportunistic for the second — piggy-back

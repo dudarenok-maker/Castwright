@@ -10,10 +10,15 @@ Empty register = done. See the rewrite playbook in
 nothing about whether the test is actually flaky vs. permanently broken — a
 single run can't tell those apart. `.github/workflows/quarantine-health.yml`
 (`workflow_dispatch` + a weekly cron) runs `npm run quarantine:health`, which
-re-runs each quarantined test several times and reports, in the run's
-job summary, whether it's intermittent (genuinely flaky — this register's
-framing holds), never-passes (broken — the row is likely lying, e.g. #1854),
-or not-found (stale row). Non-blocking by design; it never gates a merge.
+re-runs each **vitest** (frontend/server) quarantined test several times and
+reports, in the run's job summary, whether it's intermittent (genuinely
+flaky — this register's framing holds), never-passes (broken — the row is
+likely lying, e.g. #1854), not-found (stale row), or unknown (the runner
+itself crashed/timed out too often to render a verdict — not a verdict about
+the test). A Playwright (`e2e/**`) row is reported as not-covered — this
+runner only exercises the vitest quarantine lane, not
+`npm run test:e2e:quarantine` — check those manually. Non-blocking by design;
+it never gates a merge.
 
 | Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|

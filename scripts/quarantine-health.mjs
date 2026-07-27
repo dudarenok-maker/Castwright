@@ -109,6 +109,30 @@
    The main loop also wraps each run in a try/catch so a run that fails in
    a way `classifyRunResult` doesn't anticipate still lets the script emit
    whatever runs it already completed, rather than losing the whole report.
+   That try/catch only fires on a THROWN exception, though, and neither
+   `runVitestJson` nor `classifyRunResult` throws by construction — every
+   spawn/timeout/parse failure is caught and classified, not thrown. A run
+   that legitimately times out therefore does NOT unwind into that catch; it
+   returns normally (as a 'timed-out' outcome) and the loop moves on to the
+   next run.
+
+   That matters because `VITEST_RUN_TIMEOUT_MS` (5 min) applies PER vitest
+   invocation, and one run can make up to three of them (frontend, server
+   main, server slow) — worst case 5 * 3 = 15 min for a single run, and
+   `RUNS` (default 5) of those would be 75 min, well past
+   `.github/workflows/quarantine-health.yml`'s `timeout-minutes: 30` job cap.
+   The REAL guarantee this script makes is a wall-clock BUDGET on the run
+   loop itself (`RUN_LOOP_WALL_CLOCK_BUDGET_MS`, 20 min): before starting
+   each run, it checks whether that run's own worst case (its actual number
+   of domain invocations * VITEST_RUN_TIMEOUT_MS) still fits inside the
+   remaining budget; if not, the loop stops starting new runs and the report
+   is emitted on however many runs actually completed — an honest partial
+   report rather than a promise ("a partial report is emitted even when a
+   later run dies") that a timeout can silently outrun. 20 minutes leaves
+   ~10 minutes of margin inside the 30-minute job cap for checkout/npm
+   install/`apt-get install ffmpeg` and the `gh issue view` calls that run
+   AFTER this loop — see `worstCaseRunMs`/`budgetExceeded` (pure,
+   unit-tested) and the arithmetic pinned in quarantine-health.test.mjs.
 
    `QUARANTINE_HEALTH_RUNS` is guarded (resolveRuns, pure/unit-tested): 0,
    negative, or non-numeric values fall back to the default 5 with a logged
@@ -156,6 +180,28 @@ export function resolveRuns(envValue) {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5;
 }
 
+// Classifies WHY a QUARANTINE_HEALTH_RUNS override needs a warning (or
+// doesn't), separate from resolveRuns's own fallback value (re-review
+// finding 8). Two bugs in the old inline check this replaces:
+//   1. It compared `String(RUNS) !== envValue` against the RAW env string —
+//      a merely whitespace-padded but otherwise valid value (' 5 ') fails
+//      that string comparison even though `Number(' 5 ')` parses to a valid
+//      5, so it tripped a spurious "not a positive integer" warning for
+//      input that was fine.
+//   2. It always said "defaulting to N" — accurate for a genuinely invalid
+//      value (falls back to the true default, 5), but misleading for a
+//      valid-but-fractional value ('2.9' floors to 2, which is NOT "the
+//      default", it's a floor of the value actually given).
+// Returns null (no warning needed), 'invalid' (falls back to the default),
+// or 'fractional' (valid but floored).
+export function classifyRunsOverride(envValue) {
+  if (envValue === undefined) return null;
+  const n = Number(envValue);
+  if (!(Number.isFinite(n) && n > 0)) return 'invalid';
+  if (!Number.isInteger(n)) return 'fractional';
+  return null;
+}
+
 // Parses the register's markdown table into one entry per quarantined TEST
 // (a row can name more than one backtick-quoted test sharing a file, as the
 // wake-lock row did — each becomes its own entry). Never throws on malformed
@@ -164,16 +210,45 @@ export function resolveRuns(envValue) {
 // error case.
 export function parseRegister(markdown) {
   const entries = [];
+  // HTML-comment state carries ACROSS lines — the register's own retirement
+  // convention (see the graduated-row blocks in flaky-register.md) is to wrap
+  // a retired row in a multi-line `<!-- ... -->` block rather than delete it,
+  // so a naive per-line `<!--`/`-->` check (which resets every iteration)
+  // would parse a commented-out row's `| ... |` line as a live entry the
+  // moment it's on its own line inside the block — exactly the "confident,
+  // false classification" this tool exists to avoid (re-review finding 1).
+  let inComment = false;
   for (const rawLine of markdown.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line.startsWith('|')) continue; // prose, HTML comments, blank lines
+    let visible = '';
+    let remainder = rawLine;
+    while (remainder.length > 0) {
+      if (inComment) {
+        const closeIdx = remainder.indexOf('-->');
+        if (closeIdx === -1) {
+          remainder = '';
+        } else {
+          inComment = false;
+          remainder = remainder.slice(closeIdx + 3);
+        }
+      } else {
+        const openIdx = remainder.indexOf('<!--');
+        if (openIdx === -1) {
+          visible += remainder;
+          remainder = '';
+        } else {
+          visible += remainder.slice(0, openIdx);
+          inComment = true;
+          remainder = remainder.slice(openIdx + 4);
+        }
+      }
+    }
+
+    const line = visible.trim();
+    if (!line.startsWith('|')) continue; // prose, blank lines
     if (isSeparatorRow(line)) continue; // the `|---|---|` separator row
     if (isHeaderRow(line)) continue; // the header row
 
-    const cells = line
-      .slice(1, line.endsWith('|') ? -1 : undefined)
-      .split('|')
-      .map((c) => c.trim());
+    const cells = splitTableRow(line);
     if (cells.length < 5) continue; // not a well-formed 6-column data row
 
     const [testCell, fileCell, , , issueCell] = cells;
@@ -209,6 +284,21 @@ export function isSeparatorRow(line) {
 // "Test" text already fails the downstream backtick check on its own.
 export function isHeaderRow(line) {
   return /^\|\s*Test\s*\|/i.test(line);
+}
+
+// Splits one markdown table row into its cells, honouring the standard
+// `\|` escape for a literal pipe INSIDE a cell (e.g. a Symptom cell that
+// describes a `|` character). A naive `line.split('|')` treats every pipe
+// as a column delimiter, so an escaped pipe shifts every subsequent column
+// left by one — silently dropping the Tracking-issue cell into the wrong
+// position and losing `issueNumbers` (re-review finding 1: this disables the
+// closed-tracking-issue check, the whole lesson of the #399 postmortem).
+// The leading/trailing `|` are stripped first (matching the prior
+// behaviour), then the split uses a negative lookbehind so `\|` is never
+// treated as a delimiter, and each cell has its escape unescaped afterward.
+export function splitTableRow(line) {
+  const inner = line.slice(1, line.endsWith('|') ? -1 : undefined);
+  return inner.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
 }
 
 // 'server/src/routes/generation.test.ts' → 'server';
@@ -286,11 +376,34 @@ export function findOutcome(outcomes, file, testName) {
 // `unknown` — deliberately distinct from `not-found` (which would blame the
 // register row) and `never-passes` (which would call a runner crash a
 // broken test).
+//
+// A minimum-usable-runs FLOOR (re-review finding 4) applies on top of that:
+// this tool's entire premise (header comment, "A single run can't tell
+// 'intermittent' from 'never passes' apart") is that a verdict needs several
+// runs' worth of evidence. Without a floor, 4-of-5 runs unavailable + the
+// ONE surviving run passing would render `always-passes` — "candidate to
+// graduate back into the gating suite" — off a single data point, exactly
+// the single-run confidence the tool exists to avoid. The floor requires a
+// MAJORITY of the attempted runs to be usable (ceil(total/2)); below that,
+// the verdict degrades to `unknown` rather than asserting a bucket the
+// available evidence can't actually support. This does not second-guess a
+// deliberately small QUARANTINE_HEALTH_RUNS override (the floor is relative
+// to however many runs were actually attempted, not a fixed count) — it
+// only catches the case where RUNNER FAILURES shrink the effective sample
+// size below what was attempted.
+export function minUsableRuns(totalRuns) {
+  return Math.ceil(totalRuns / 2);
+}
+
 export function classifyEntry(perRunStatuses) {
   const usable = perRunStatuses.filter((s) => s !== 'run-unavailable');
   const unavailable = perRunStatuses.length - usable.length;
-  if (usable.length === 0) {
-    return { bucket: 'unknown', passed: 0, failed: 0, notFound: 0, unavailable };
+  if (usable.length === 0 || usable.length < minUsableRuns(perRunStatuses.length)) {
+    const found = usable.filter((s) => s !== null);
+    const notFound = usable.length - found.length;
+    const passed = found.filter((s) => s === 'passed').length;
+    const failed = found.length - passed;
+    return { bucket: 'unknown', passed, failed, notFound, unavailable };
   }
   const found = usable.filter((s) => s !== null);
   const notFound = usable.length - found.length;
@@ -305,9 +418,23 @@ export function classifyEntry(perRunStatuses) {
 
 // Combines register entries with per-run outcome lists into the final,
 // classified rows the report is built from. `perRunFailedDomains[i]` (a Set
-// of 'frontend' | 'server') names which domains' vitest invocation failed to
-// execute on run i — an entry in that domain gets 'run-unavailable' for that
-// run instead of being matched against (necessarily incomplete) outcomes.
+// of 'frontend' | 'server-main' | 'server-slow') names which vitest
+// invocation(s) failed to execute on run i.
+//
+// The server domain is tracked as TWO sub-flags, not one 'server' flag
+// (re-review finding 5). A server file lives in exactly one of the two
+// configs (main vs. slow) — both are tried per file and whichever owns it
+// reports real results (see the header comment's "mirror invariant"
+// paragraph); the other reports zero matched tests for it, harmlessly. Under
+// the old single 'server' flag, EITHER config crashing marked every
+// server-domain entry 'run-unavailable' for that run, discarding a perfectly
+// good result the surviving config already produced. Now: if only one
+// config failed, an entry actually FOUND in the surviving config's outcomes
+// is trusted (a hit is authoritative regardless of the other config's
+// crash); an entry NOT found is still marked 'run-unavailable' rather than
+// null/not-found, because it might belong to the crashed config, which never
+// got a chance to report it — a genuine "not found" verdict requires BOTH
+// configs to have actually run.
 // An `e2e/**` entry (Playwright) is never matched at all — see fileDomain().
 export function aggregate(entries, perRunOutcomes, perRunFailedDomains = []) {
   return entries.map((entry) => {
@@ -324,7 +451,16 @@ export function aggregate(entries, perRunOutcomes, perRunFailedDomains = []) {
       };
     }
     const perRunStatuses = perRunOutcomes.map((outcomes, i) => {
-      if (perRunFailedDomains[i]?.has(domain)) return 'run-unavailable';
+      const failedSet = perRunFailedDomains[i];
+      if (domain === 'server') {
+        const mainFailed = !!failedSet?.has('server-main');
+        const slowFailed = !!failedSet?.has('server-slow');
+        if (mainFailed && slowFailed) return 'run-unavailable';
+        const hit = findOutcome(outcomes, entry.file, entry.testName);
+        if (hit) return hit.status;
+        return mainFailed || slowFailed ? 'run-unavailable' : null;
+      }
+      if (failedSet?.has(domain)) return 'run-unavailable';
       const hit = findOutcome(outcomes, entry.file, entry.testName);
       return hit ? hit.status : null;
     });
@@ -348,7 +484,16 @@ export function formatReport({ entries, runs, issueStates }) {
     return lines.join('\n');
   }
 
-  lines.push(`Ran the quarantine lane ${runs} time(s). Bucket legend:`);
+  // finding 8: when every registered row is a Playwright (`e2e/**`) spec, the
+  // main loop never spawns a single vitest process — "Ran the quarantine
+  // lane N time(s)" would falsely claim N real runs happened. Say so.
+  if (entries.every((e) => e.bucket === 'not-covered')) {
+    lines.push(
+      'No vitest runs were needed — every registered row is a Playwright (`e2e/**`) spec; check them manually via `npm run test:e2e:quarantine`. Bucket legend:',
+    );
+  } else {
+    lines.push(`Ran the quarantine lane ${runs} time(s). Bucket legend:`);
+  }
   lines.push('');
   lines.push('- **always-passes** — every run passed; candidate to graduate back into the gating suite.');
   lines.push('- **intermittent** — some runs passed, some failed; genuinely flaky, the register row is honest.');
@@ -357,7 +502,7 @@ export function formatReport({ entries, runs, issueStates }) {
     '- **not-found** — could not be located in any usable run; the register row is stale (renamed/moved test or file).',
   );
   lines.push(
-    '- **unknown** — every run that could have covered this test crashed or timed out; no usable data — not a verdict, investigate the runner failures.',
+    '- **unknown** — too few usable runs to render a verdict (every run that could have covered this test crashed/timed out, or fewer than a majority did); not a verdict, investigate the runner failures.',
   );
   lines.push(
     '- **not-covered** — a Playwright (`e2e/**`) row; this runner only exercises vitest quarantine suites — check manually via `npm run test:e2e:quarantine`.',
@@ -387,8 +532,15 @@ export function formatReport({ entries, runs, issueStates }) {
   const neverPasses = entries.filter((e) => e.bucket === 'never-passes');
   if (neverPasses.length) {
     lines.push('');
+    // finding 4/8: the shared `runs` (total attempted) is the WRONG
+    // denominator per-row — a row's own usable-run count (excluding
+    // not-found and unavailable runs) can differ from the total attempted,
+    // and from other rows in this same list. Each row states its own count.
+    const detail = neverPasses
+      .map((e) => `\`${e.testName}\` (${e.runs - (e.notFound ?? 0) - (e.unavailable ?? 0)} usable run(s))`)
+      .join(', ');
     lines.push(
-      `**${neverPasses.length} test(s) never passed across ${runs} run(s)** — not flaky, just broken. Investigate before trusting the register row's diagnosis.`,
+      `**${neverPasses.length} test(s) never passed in every usable run** — not flaky, just broken: ${detail}. Investigate before trusting the register row's diagnosis.`,
     );
   }
 
@@ -396,7 +548,7 @@ export function formatReport({ entries, runs, issueStates }) {
   if (unknownEntries.length) {
     lines.push('');
     lines.push(
-      `**${unknownEntries.length} test(s) have no usable data** — every run that could have covered them crashed or timed out. This is NOT a verdict about the test; investigate the runner failures in the job log first.`,
+      `**${unknownEntries.length} test(s) have no reliable verdict** — too few of their runs were usable (crashed, timed out, or below the majority floor) to tell intermittent from never-passes apart. This is NOT a verdict about the test; investigate the runner failures in the job log first.`,
     );
   }
 
@@ -413,8 +565,12 @@ export function formatReport({ entries, runs, issueStates }) {
   const notFound = entries.filter((e) => e.bucket === 'not-found');
   if (notFound.length) {
     lines.push('');
+    // finding 4/8: same per-row-denominator fix as the never-passes callout
+    // above — a not-found row's usable-run count equals its notFound count
+    // by definition (found === 0 in this bucket), not the shared `runs`.
+    const detail = notFound.map((e) => `\`${e.testName}\` (${e.notFound ?? 0} usable run(s))`).join(', ');
     lines.push(
-      `**${notFound.length} row(s) could not be located** in any of the ${runs} usable run(s) — the register row's Test/File text likely no longer matches the code.`,
+      `**${notFound.length} row(s) could not be located**: ${detail} — the register row's Test/File text likely no longer matches the code.`,
     );
   }
 
@@ -439,23 +595,57 @@ export function formatReport({ entries, runs, issueStates }) {
   return lines.join('\n');
 }
 
+// The worst-case wall-clock time ONE run could take, given how many separate
+// vitest invocations it makes this run (frontend + server main + server
+// slow, each independently bounded by VITEST_RUN_TIMEOUT_MS). Pure —
+// unit-tested. See the header comment's wall-clock-budget paragraph
+// (re-review finding 3).
+export function worstCaseRunMs(frontendFileCount, serverFileCount, perInvocationTimeoutMs) {
+  const invocations = (frontendFileCount > 0 ? 1 : 0) + (serverFileCount > 0 ? 2 : 0);
+  return invocations * perInvocationTimeoutMs;
+}
+
+// True when starting one more run risks exceeding the total wall-clock
+// budget for the run loop — i.e. this run's own worst case would push the
+// elapsed time past the budget. Pure — unit-tested. See the header comment's
+// wall-clock-budget paragraph (re-review finding 3).
+export function budgetExceeded(elapsedMs, oneRunWorstCaseMs, budgetMs) {
+  return elapsedMs + oneRunWorstCaseMs > budgetMs;
+}
+
 // ---------------------------------------------------------------------------
 // I/O (thin — deliberately not unit-tested; the pure functions above own the
 // logic this delegates to)
 // ---------------------------------------------------------------------------
 
 const RUNS = resolveRuns(process.env.QUARANTINE_HEALTH_RUNS);
-if (process.env.QUARANTINE_HEALTH_RUNS !== undefined && String(RUNS) !== process.env.QUARANTINE_HEALTH_RUNS) {
+const runsOverrideIssue = classifyRunsOverride(process.env.QUARANTINE_HEALTH_RUNS);
+if (runsOverrideIssue === 'invalid') {
   console.error(
-    `quarantine-health: QUARANTINE_HEALTH_RUNS="${process.env.QUARANTINE_HEALTH_RUNS}" is not a positive integer — defaulting to ${RUNS} run(s).`,
+    `quarantine-health: QUARANTINE_HEALTH_RUNS="${process.env.QUARANTINE_HEALTH_RUNS}" is not a positive number — defaulting to ${RUNS} run(s).`,
+  );
+} else if (runsOverrideIssue === 'fractional') {
+  console.error(
+    `quarantine-health: QUARANTINE_HEALTH_RUNS="${process.env.QUARANTINE_HEALTH_RUNS}" is not an integer — flooring to ${RUNS} run(s).`,
   );
 }
 
 // Bounded per-invocation budget so a #1854-style deadlock (the process hangs
 // rather than failing) can't block the whole script forever — generous for
 // the small, explicit quarantined-file list this always runs with, but finite.
-const VITEST_RUN_TIMEOUT_MS = 5 * 60 * 1000;
+export const VITEST_RUN_TIMEOUT_MS = 5 * 60 * 1000;
 const GH_TIMEOUT_MS = 30 * 1000;
+
+// Total wall-clock budget for the run loop (re-review finding 3) — see the
+// header comment's wall-clock-budget paragraph. Must stay comfortably under
+// JOB_CAP_MS with margin for checkout/npm-install/apt-get-ffmpeg and the
+// post-loop `gh issue view` calls; pinned by an arithmetic test in
+// quarantine-health.test.mjs so a future bump to either constant can't
+// silently blow the job's timeout budget again.
+export const RUN_LOOP_WALL_CLOCK_BUDGET_MS = 20 * 60 * 1000;
+// Mirrors `timeout-minutes: 30` in .github/workflows/quarantine-health.yml —
+// keep these in sync if that job's cap ever changes.
+export const JOB_CAP_MS = 30 * 60 * 1000;
 
 // Builds vitest's CLI argv (pure — unit-tested). `--retry=0` overrides
 // vitest.config.ts / server/vitest.config.ts's `retry: 1` (plan 45) so each
@@ -474,7 +664,14 @@ export function buildVitestArgs(config, files) {
 // zero-match JSON payload. See the header comment's "Runner failures" section.
 export function classifyRunResult(r) {
   if (r.error) {
-    const timedOut = r.error.code === 'ETIMEDOUT' || r.signal === 'SIGTERM';
+    // `r.error.code` is the ONLY reliable discriminator here — a real
+    // timeout and a maxBuffer overflow both kill the child with SIGTERM
+    // (measured: overflow -> {code:'ENOBUFS', signal:'SIGTERM'}; timeout ->
+    // {code:'ETIMEDOUT', signal:'SIGTERM'}), so the old `|| r.signal ===
+    // 'SIGTERM'` fallback reported every 64 MB-stdout overflow as a hang
+    // (re-review finding 2) — precisely backwards from the header comment's
+    // own claim that a hang and a crash are different diagnoses.
+    const timedOut = r.error.code === 'ETIMEDOUT';
     return {
       runOutcome: timedOut ? 'timed-out' : 'crashed',
       testResults: [],
@@ -482,10 +679,23 @@ export function classifyRunResult(r) {
     };
   }
   if (r.signal) {
-    // Killed by a signal with no explicit spawn error attached (platform-
-    // dependent on how a timeout kill is surfaced) — still a hang, not a
-    // clean exit.
-    return { runOutcome: 'timed-out', testResults: [], errorMessage: `killed by signal ${r.signal}` };
+    // Killed by a signal with no explicit spawn error attached. Node's own
+    // timeout enforcement (verified above) always attaches an `error` with
+    // `code: 'ETIMEDOUT'`, so a bare signal here did NOT come from this
+    // script's own timeout — it's an external kill. SIGTERM is kept as
+    // 'timed-out' (platform-dependent fallback for a timeout surfaced
+    // without an accompanying error), but any other signal — notably a
+    // runner OOM-killer's SIGKILL — must NOT be reported as a hang; that
+    // sends an investigator looking for a deadlock when the real cause is
+    // memory (re-review finding 2).
+    if (r.signal === 'SIGTERM') {
+      return { runOutcome: 'timed-out', testResults: [], errorMessage: `killed by signal ${r.signal}` };
+    }
+    return {
+      runOutcome: 'crashed',
+      testResults: [],
+      errorMessage: `killed by signal ${r.signal} (possible OOM kill, not a timeout)`,
+    };
   }
   let json;
   try {
@@ -576,8 +786,21 @@ function main() {
   const perRunOutcomes = [];
   const perRunFailedDomains = [];
   let abortedEarly = false;
+  let budgetExhausted = false;
+  // See the header comment's wall-clock-budget paragraph (re-review finding
+  // 3): this run's own worst case is fixed for the whole loop (same register,
+  // same file lists every iteration), so it's computed once outside the loop.
+  const oneRunWorstCaseMs = worstCaseRunMs(frontendFiles.length, serverFiles.length, VITEST_RUN_TIMEOUT_MS);
+  const loopStart = Date.now();
   try {
     for (let i = 0; i < RUNS; i++) {
+      if (budgetExceeded(Date.now() - loopStart, oneRunWorstCaseMs, RUN_LOOP_WALL_CLOCK_BUDGET_MS)) {
+        console.error(
+          `quarantine-health: stopping after ${perRunOutcomes.length}/${RUNS} planned run(s) — starting another run risks exceeding the ${RUN_LOOP_WALL_CLOCK_BUDGET_MS / 60000}-minute wall-clock budget.`,
+        );
+        budgetExhausted = true;
+        break;
+      }
       console.log(`quarantine-health: run ${i + 1}/${RUNS}`);
       const outcomes = [];
       const failedDomains = new Set();
@@ -589,7 +812,11 @@ function main() {
       if (serverFiles.length) {
         const serverMain = runVitestJson(serverRoot, 'vitest.config.ts', serverFiles);
         const serverSlow = runVitestJson(serverRoot, 'vitest.config.slow.ts', serverFiles);
-        if (serverMain.runOutcome !== 'ok' || serverSlow.runOutcome !== 'ok') failedDomains.add('server');
+        // Two distinct flags, not one 'server' flag — see aggregate()'s
+        // comment (re-review finding 5): a config crashing must not discard
+        // the OTHER config's good results for the files it owns.
+        if (serverMain.runOutcome !== 'ok') failedDomains.add('server-main');
+        if (serverSlow.runOutcome !== 'ok') failedDomains.add('server-slow');
         outcomes.push(...flattenVitestJson(serverMain), ...flattenVitestJson(serverSlow));
       }
       perRunOutcomes.push(outcomes);
@@ -612,11 +839,13 @@ function main() {
   const issueStates = new Map(uniqueIssues.map((n) => [n, checkIssueState(n)]));
 
   const report = formatReport({ entries, runs: perRunOutcomes.length, issueStates });
-  emit(
-    abortedEarly
-      ? `${report}\n\n**Aborted early after ${perRunOutcomes.length}/${RUNS} planned run(s)** — see the job log for the error.`
-      : report,
-  );
+  let finalReport = report;
+  if (abortedEarly) {
+    finalReport += `\n\n**Aborted early after ${perRunOutcomes.length}/${RUNS} planned run(s)** — see the job log for the error.`;
+  } else if (budgetExhausted) {
+    finalReport += `\n\n**Stopped after ${perRunOutcomes.length}/${RUNS} planned run(s)** — starting another run would have risked exceeding the ${RUN_LOOP_WALL_CLOCK_BUDGET_MS / 60000}-minute wall-clock budget; see the job log.`;
+  }
+  emit(finalReport);
   // Always exit 0 for test outcomes, including "never-passes" and "unknown"
   // — this lane is non-blocking by design (see the header comment).
 }

@@ -8,10 +8,14 @@ name: Quarantine Lane Health
 # because a human happened to read docs/testing/flaky-register.md.
 #
 # This runs `npm run quarantine:health` (scripts/quarantine-health.mjs),
-# which re-runs each quarantined test several times and reports, per test,
-# whether it's intermittent (genuinely flaky), never-passes (broken — the
-# register row is likely lying), or not-found (stale row). See that script's
-# header comment for the full design, and
+# which re-runs each VITEST (frontend/server) quarantined test several times
+# and reports, per test, whether it's intermittent (genuinely flaky),
+# never-passes (broken — the register row is likely lying), not-found (stale
+# row), or unknown (the runner itself crashed/timed out too often to render a
+# verdict — not a verdict about the test). A Playwright (`e2e/**`) register
+# row is reported as not-covered — this job does NOT run
+# `npm run test:e2e:quarantine`; that lane still needs checking manually. See
+# that script's header comment for the full design, and
 # docs/superpowers/specs/2026-06-17-flaky-test-release-hardening-design.md
 # for the lane this completes the observability half of.
 #

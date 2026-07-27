@@ -2,19 +2,27 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   resolveRuns,
+  classifyRunsOverride,
   parseRegister,
   isSeparatorRow,
   isHeaderRow,
+  splitTableRow,
   fileDomain,
   serverRelativePath,
   toRepoRelative,
   flattenVitestJson,
   findOutcome,
   classifyEntry,
+  minUsableRuns,
   aggregate,
   formatReport,
   buildVitestArgs,
   classifyRunResult,
+  worstCaseRunMs,
+  budgetExceeded,
+  VITEST_RUN_TIMEOUT_MS,
+  RUN_LOOP_WALL_CLOCK_BUDGET_MS,
+  JOB_CAP_MS,
 } from '../quarantine-health.mjs';
 
 // --- resolveRuns (finding 12: QUARANTINE_HEALTH_RUNS=0/negative guard) -----
@@ -30,6 +38,34 @@ test('resolveRuns defaults to 5 when unset, zero, negative, or non-numeric', () 
 test('resolveRuns honours a valid positive integer, flooring a fraction', () => {
   assert.equal(resolveRuns('3'), 3);
   assert.equal(resolveRuns('2.9'), 2);
+});
+
+// --- classifyRunsOverride (re-review finding 8: warning-message bugs) ------
+
+test('classifyRunsOverride: unset -> no warning', () => {
+  assert.equal(classifyRunsOverride(undefined), null);
+});
+
+test('classifyRunsOverride: a valid integer -> no warning, even whitespace-padded', () => {
+  // Regression guard: the old `String(RUNS) !== envValue` string comparison
+  // tripped a spurious warning for ' 5 ' even though Number(' 5 ') = 5 is a
+  // perfectly valid override.
+  assert.equal(classifyRunsOverride('5'), null);
+  assert.equal(classifyRunsOverride(' 5 '), null);
+});
+
+test('classifyRunsOverride: zero, negative, non-numeric, or empty -> invalid (falls back to the true default)', () => {
+  assert.equal(classifyRunsOverride('0'), 'invalid');
+  assert.equal(classifyRunsOverride('-3'), 'invalid');
+  assert.equal(classifyRunsOverride('not-a-number'), 'invalid');
+  assert.equal(classifyRunsOverride(''), 'invalid');
+});
+
+test('classifyRunsOverride: a valid but fractional value -> fractional (floored, not defaulted)', () => {
+  // Regression guard: '2.9' floors to 2, which is NOT "the default" (5) —
+  // the old message always said "defaulting to N", which was wrong wording
+  // for this case.
+  assert.equal(classifyRunsOverride('2.9'), 'fractional');
 });
 
 // --- parseRegister -----------------------------------------------------
@@ -109,6 +145,83 @@ test('parseRegister requires the full 6-column row shape, not just any >=2-cell 
 |---|---|
 `;
   assert.deepEqual(parseRegister(markdown), []);
+});
+
+// --- parseRegister: HTML-comment state tracking (re-review finding 1) ------
+//
+// The register's own retirement convention (see the graduated-row blocks in
+// docs/testing/flaky-register.md) is to wrap a retired row in a multi-line
+// `<!-- ... -->` block rather than delete it. bdeb44f9's commit message
+// claimed this was fixed; it was not — parseRegister was functionally
+// unchanged (only isSeparatorRow/isHeaderRow were extracted). A row inside a
+// comment block still parsed as a live entry before this fix.
+
+test('parseRegister does not parse a table row that is entirely inside a SINGLE-line HTML comment', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+<!-- | \`retired test\` | \`f.ts\` | timing | races | #1 | 2026-01-01 | -->
+`;
+  assert.deepEqual(parseRegister(markdown), []);
+});
+
+test('parseRegister does not parse a table row inside a MULTI-line HTML comment block', () => {
+  // This is the shape that actually occurs in the real register: a prose
+  // paragraph opens `<!--` on its own line, a `| ... |` row sits several
+  // lines later, and `-->` closes the block on a later line still. Comment
+  // state must carry ACROSS lines, not reset every iteration.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+
+<!-- Graduated 2026-07-27: retired because it was rewritten. Old row for
+reference:
+| \`retired test\` | \`f.ts\` | timing | races | #1 | 2026-01-01 |
+No longer relevant. -->
+`;
+  assert.deepEqual(parseRegister(markdown), []);
+});
+
+test('parseRegister resumes parsing live rows AFTER a comment block closes', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| \`a live test\` | \`f.ts\` | timing | races | #2 | 2026-02-01 |
+
+<!-- Graduated: | \`retired test\` | \`g.ts\` | timing | races | #1 | 2026-01-01 | -->
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].testName, 'a live test');
+});
+
+test('parseRegister handles a comment that opens and closes on the SAME line as a live row, without eating the row', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| \`a live test\` | \`f.ts\` | timing <!-- inline note --> | races | #2 | 2026-02-01 |
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].testName, 'a live test');
+});
+
+// --- parseRegister / splitTableRow: escaped `|` in a cell (finding 1) ------
+//
+// A Symptom cell describing a literal pipe character must not shift every
+// subsequent column left by one — that used to silently drop `issueNumbers`,
+// disabling the closed-tracking-issue check (the whole lesson of the #399
+// postmortem).
+
+test('splitTableRow does not split on an escaped `\\|`, and unescapes it in the cell', () => {
+  const cells = splitTableRow('| `a test` | `f.ts` | timing | uses a \\| character | #5 | 2026-01-01 |');
+  assert.deepEqual(cells, ['`a test`', '`f.ts`', 'timing', 'uses a | character', '#5', '2026-01-01']);
+});
+
+test('parseRegister keeps issueNumbers intact when the Symptom cell contains an escaped pipe', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| \`a test\` | \`f.ts\` | timing | uses a \\| character | #5 | 2026-01-01 |
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0].issueNumbers, [5]);
 });
 
 // --- fileDomain / serverRelativePath -----------------------------------
@@ -312,6 +425,47 @@ test('classifyEntry: a run-unavailable run is excluded, not treated as not-found
   assert.equal(result.unavailable, 1);
 });
 
+// --- classifyEntry: minimum-usable-runs floor (re-review finding 4) --------
+//
+// The header comment's whole premise ("A single run can't tell 'intermittent'
+// from 'never passes' apart") means a verdict needs a MAJORITY of the
+// attempted runs to actually be usable. Without a floor, 4-of-5 unavailable
+// runs + one surviving pass rendered `always-passes` — "candidate to
+// graduate back into the gating suite" — off a single data point.
+
+test('minUsableRuns requires a majority (ceil(total/2))', () => {
+  assert.equal(minUsableRuns(5), 3);
+  assert.equal(minUsableRuns(4), 2);
+  assert.equal(minUsableRuns(2), 1);
+  assert.equal(minUsableRuns(1), 1);
+});
+
+test('classifyEntry: 4-of-5 runs unavailable + the ONE surviving run passing -> unknown, NOT always-passes', () => {
+  const result = classifyEntry(['run-unavailable', 'run-unavailable', 'run-unavailable', 'run-unavailable', 'passed']);
+  assert.equal(result.bucket, 'unknown');
+  assert.equal(result.unavailable, 4);
+});
+
+test('classifyEntry: 4-of-5 runs unavailable + the ONE surviving run failing -> unknown, NOT never-passes', () => {
+  // The mirror case from the finding: the old code would have rendered
+  // "1 test(s) never passed across 5 run(s)" — a single failing attempt
+  // reported as a five-run verdict.
+  const result = classifyEntry(['run-unavailable', 'run-unavailable', 'run-unavailable', 'run-unavailable', 'failed']);
+  assert.equal(result.bucket, 'unknown');
+  assert.equal(result.unavailable, 4);
+});
+
+test('classifyEntry: exactly at the majority floor (3-of-5 usable) still renders a real verdict', () => {
+  const result = classifyEntry(['run-unavailable', 'run-unavailable', 'passed', 'passed', 'passed']);
+  assert.equal(result.bucket, 'always-passes');
+  assert.equal(result.passed, 3);
+});
+
+test('classifyEntry: one below the majority floor (2-of-5 usable) degrades to unknown', () => {
+  const result = classifyEntry(['run-unavailable', 'run-unavailable', 'run-unavailable', 'passed', 'passed']);
+  assert.equal(result.bucket, 'unknown');
+});
+
 // --- aggregate (end-to-end wiring of the pieces above) ---------------------
 
 test('aggregate ties register entries to per-run outcomes and classifies each', () => {
@@ -348,16 +502,55 @@ test('aggregate routes an e2e/** entry straight to not-covered without matching 
 test('aggregate marks an entry run-unavailable for a run whose domain failed to execute', () => {
   const entries = [{ testName: 'a server test', file: 'server/src/foo.test.ts', issueNumbers: [] }];
   const perRunOutcomes = [
-    [], // run 0: server invocation crashed, no outcomes
+    [], // run 0: BOTH server configs crashed, no outcomes
     [{ file: 'server/src/foo.test.ts', title: 'a server test', fullName: 'a server test', status: 'passed' }], // run 1: ok
   ];
-  const perRunFailedDomains = [new Set(['server']), new Set()];
+  const perRunFailedDomains = [new Set(['server-main', 'server-slow']), new Set()];
   const result = aggregate(entries, perRunOutcomes, perRunFailedDomains);
   // Run 0 is excluded (unavailable), not counted as not-found; run 1 passed.
   assert.equal(result[0].bucket, 'always-passes');
   assert.equal(result[0].passed, 1);
   assert.equal(result[0].notFound, 0);
   assert.equal(result[0].unavailable, 1);
+});
+
+// --- aggregate: per-server-config granularity (re-review finding 5) --------
+
+test('aggregate trusts a hit from the SURVIVING server config when only the other config crashed', () => {
+  const entries = [{ testName: 'a server test', file: 'server/src/foo.test.ts', issueNumbers: [] }];
+  // serverMain succeeded and found the test; serverSlow crashed. The old
+  // single 'server' flag would have discarded serverMain's real result.
+  const perRunOutcomes = [
+    [{ file: 'server/src/foo.test.ts', title: 'a server test', fullName: 'a server test', status: 'passed' }],
+  ];
+  const perRunFailedDomains = [new Set(['server-slow'])];
+  const result = aggregate(entries, perRunOutcomes, perRunFailedDomains);
+  assert.equal(result[0].bucket, 'always-passes');
+  assert.equal(result[0].passed, 1);
+  assert.equal(result[0].unavailable, 0);
+});
+
+test('aggregate treats a MISSING entry as unavailable, not not-found, when one server config crashed', () => {
+  // The entry isn't in the outcomes we DO have — but since one config
+  // crashed, we can't tell whether it belongs to the crashed config (which
+  // never got a chance to report it) or is genuinely absent. Must not be
+  // reported as a confident "not found" (that would blame a stale register
+  // row for a runner failure it didn't cause).
+  const entries = [{ testName: 'a server test', file: 'server/src/foo.test.ts', issueNumbers: [] }];
+  const perRunOutcomes = [[]];
+  const perRunFailedDomains = [new Set(['server-slow'])];
+  const result = aggregate(entries, perRunOutcomes, perRunFailedDomains);
+  assert.equal(result[0].unavailable, 1);
+  assert.equal(result[0].notFound, 0);
+});
+
+test('aggregate reports a genuine not-found when BOTH server configs ran cleanly and neither found the entry', () => {
+  const entries = [{ testName: 'a stale test', file: 'server/src/foo.test.ts', issueNumbers: [] }];
+  const perRunOutcomes = [[]]; // both configs ran fine, neither matched anything
+  const perRunFailedDomains = [new Set()];
+  const result = aggregate(entries, perRunOutcomes, perRunFailedDomains);
+  assert.equal(result[0].notFound, 1);
+  assert.equal(result[0].unavailable, 0);
 });
 
 // --- formatReport ------------------------------------------------------
@@ -384,7 +577,11 @@ test('formatReport flags a never-passes test and a closed tracking issue', () =>
   const issueStates = new Map([[399, 'CLOSED']]);
   const report = formatReport({ entries, runs: 5, issueStates });
   assert.match(report, /never-passes/);
-  assert.match(report, /never passed across 5 run/i);
+  // finding 4/8: the callout now states each row's OWN usable-run count
+  // rather than the shared `runs` total (see the dedicated denominator
+  // tests below for the case where they diverge).
+  assert.match(report, /never passed in every usable run/i);
+  assert.match(report, /`broken test` \(5 usable run\(s\)\)/);
   assert.match(report, /CLOSED tracking issue/i);
   assert.match(report, /broken test/);
 });
@@ -468,7 +665,7 @@ test('formatReport surfaces an unknown-bucket row distinctly, not as not-found o
   const report = formatReport({ entries, runs: 5, issueStates: new Map() });
   const row = report.split('\n').find((l) => l.includes('`mystery test`'));
   assert.match(row, /\| unknown \|/);
-  assert.match(report, /no usable data/i);
+  assert.match(report, /no reliable verdict/i);
   // The legend always mentions "could not be located" in its not-found
   // bullet — assert the specific not-found CALLOUT (which only fires when a
   // row buckets not-found) is absent, not the legend prose.
@@ -493,8 +690,127 @@ test('formatReport surfaces a not-covered (Playwright) row with a pointer to tes
   const report = formatReport({ entries, runs: 5, issueStates: new Map() });
   const row = report.split('\n').find((l) => l.includes('`a playwright spec`'));
   assert.match(row, /\| not-covered \|/);
+  // finding 6 mutation survivor: the not-covered '—' guard in the Passed/found
+  // column must actually render '—', not a numeric found/passed count. Anchor
+  // directly on the bucket->Passed/found column boundary — a loose `| — |`
+  // match elsewhere in the row (e.g. the also-'—' Tracking-issue column) does
+  // NOT prove the Passed/found column itself is the one rendering it.
+  assert.match(row, /\| not-covered \| — \|/);
   assert.match(report, /test:e2e:quarantine/);
   assert.doesNotMatch(report, /row\(s\) could not be located/i);
+});
+
+test('formatReport says no vitest runs were needed when EVERY entry is not-covered (finding 8)', () => {
+  const entries = [
+    {
+      testName: 'a playwright spec',
+      file: 'e2e/foo.spec.ts',
+      issueNumbers: [],
+      bucket: 'not-covered',
+      passed: 0,
+      failed: 0,
+      notFound: 0,
+      unavailable: 0,
+      runs: 5,
+    },
+  ];
+  const report = formatReport({ entries, runs: 5, issueStates: new Map() });
+  assert.match(report, /No vitest runs were needed/i);
+  assert.doesNotMatch(report, /Ran the quarantine lane 5 time\(s\)/i);
+});
+
+test('formatReport still says "Ran the quarantine lane N time(s)" when at least one entry needed a real vitest run', () => {
+  const entries = [
+    { testName: 'a vitest test', file: 'f.ts', issueNumbers: [], bucket: 'always-passes', passed: 5, failed: 0, notFound: 0, unavailable: 0, runs: 5 },
+    { testName: 'a playwright spec', file: 'e2e/foo.spec.ts', issueNumbers: [], bucket: 'not-covered', passed: 0, failed: 0, notFound: 0, unavailable: 0, runs: 5 },
+  ];
+  const report = formatReport({ entries, runs: 5, issueStates: new Map() });
+  assert.match(report, /Ran the quarantine lane 5 time\(s\)/i);
+});
+
+// --- formatReport: Passed/found column honesty (re-review finding 6) -------
+//
+// The reviewer's mutation pass killed everything EXCEPT these — a survivor
+// here is exactly the numeric evidence a reader uses to sanity-check a
+// bucket, plus the partial-data disclosure, silently deleted.
+
+test('formatReport Passed/found column uses FOUND (excluding not-found and unavailable), not the raw run total, and renders both partial-data suffixes', () => {
+  const entries = [
+    {
+      testName: 'partial-data test',
+      file: 'server/src/foo.test.ts',
+      issueNumbers: [],
+      bucket: 'intermittent',
+      passed: 2,
+      failed: 1,
+      notFound: 1,
+      unavailable: 1,
+      runs: 5,
+    },
+  ];
+  const report = formatReport({ entries, runs: 5, issueStates: new Map() });
+  const row = report.split('\n').find((l) => l.includes('`partial-data test`'));
+  // found = runs(5) - notFound(1) - unavailable(1) = 3, NOT runs(5).
+  assert.match(row, /\| 2\/3 \(1 not found\) \(1 run\(s\) crashed\/timed out\) \|/);
+});
+
+test('formatReport omits the "not found" suffix when notFound is zero', () => {
+  const entries = [
+    { testName: 'clean test', file: 'f.ts', issueNumbers: [], bucket: 'always-passes', passed: 5, failed: 0, notFound: 0, unavailable: 0, runs: 5 },
+  ];
+  const report = formatReport({ entries, runs: 5, issueStates: new Map() });
+  const row = report.split('\n').find((l) => l.includes('`clean test`'));
+  assert.match(row, /\| 5\/5 \|/);
+  assert.doesNotMatch(row, /not found/);
+  assert.doesNotMatch(row, /crashed\/timed out/);
+});
+
+// --- formatReport: partiallyUnavailable callout (re-review finding 6) ------
+
+test('formatReport raises the partial-data callout when a row has unavailable runs but is not bucketed unknown', () => {
+  const entries = [
+    {
+      testName: 'mostly ok test',
+      file: 'f.ts',
+      issueNumbers: [],
+      bucket: 'always-passes',
+      passed: 4,
+      failed: 0,
+      notFound: 0,
+      unavailable: 1,
+      runs: 5,
+    },
+  ];
+  const report = formatReport({ entries, runs: 5, issueStates: new Map() });
+  assert.match(report, /row\(s\) had at least one run excluded/i);
+});
+
+test('formatReport does not raise the partial-data callout when nothing has unavailable runs', () => {
+  const entries = [
+    { testName: 'clean test', file: 'f.ts', issueNumbers: [], bucket: 'always-passes', passed: 5, failed: 0, notFound: 0, unavailable: 0, runs: 5 },
+  ];
+  const report = formatReport({ entries, runs: 5, issueStates: new Map() });
+  assert.doesNotMatch(report, /row\(s\) had at least one run excluded/i);
+});
+
+// --- formatReport: per-row denominators (re-review finding 4/8) -----------
+
+test('formatReport never-passes callout states each row\'s OWN usable-run count, not the shared total', () => {
+  const entries = [
+    { testName: 'broken with full coverage', file: 'f.ts', issueNumbers: [], bucket: 'never-passes', passed: 0, failed: 5, notFound: 0, unavailable: 0, runs: 5 },
+    { testName: 'broken with partial coverage', file: 'g.ts', issueNumbers: [], bucket: 'never-passes', passed: 0, failed: 1, notFound: 0, unavailable: 4, runs: 5 },
+  ];
+  const report = formatReport({ entries, runs: 5, issueStates: new Map() });
+  assert.match(report, /`broken with full coverage` \(5 usable run\(s\)\)/);
+  assert.match(report, /`broken with partial coverage` \(1 usable run\(s\)\)/);
+});
+
+test('formatReport not-found callout states each row\'s OWN usable-run count, not the shared total', () => {
+  const entries = [
+    { testName: 'stale row', file: 'f.ts', issueNumbers: [], bucket: 'not-found', passed: 0, failed: 0, notFound: 2, unavailable: 3, runs: 5 },
+  ];
+  const report = formatReport({ entries, runs: 5, issueStates: new Map() });
+  assert.match(report, /`stale row` \(2 usable run\(s\)\)/);
 });
 
 // --- buildVitestArgs (finding 1: --retry=0 forced) --------------------------
@@ -563,4 +879,89 @@ test('classifyRunResult: unparsable stdout -> crashed, not a silent zero-result 
   const result = classifyRunResult(r);
   assert.equal(result.runOutcome, 'crashed');
   assert.deepEqual(result.testResults, []);
+});
+
+// --- classifyRunResult: maxBuffer overflow / OOM misdiagnosis (finding 2) --
+//
+// Measured against the real spawnSync shapes: a maxBuffer overflow AND a
+// real timeout both kill the child with SIGTERM, so a bare `r.signal ===
+// 'SIGTERM'` fallback can't tell them apart — only `r.error.code` can.
+
+test('classifyRunResult: maxBuffer overflow (ENOBUFS + SIGTERM) -> crashed, NOT timed-out', () => {
+  const r = {
+    error: Object.assign(new Error('spawnSync npx ENOBUFS'), { code: 'ENOBUFS' }),
+    signal: 'SIGTERM',
+    status: null,
+    stdout: '',
+    stderr: '',
+  };
+  const result = classifyRunResult(r);
+  assert.equal(result.runOutcome, 'crashed');
+});
+
+test('classifyRunResult: a bare SIGKILL with no attached error (e.g. an OOM kill) -> crashed, NOT timed-out', () => {
+  // Node's own timeout enforcement always attaches `error.code ===
+  // 'ETIMEDOUT'` (verified above); a bare signal with no error is an
+  // EXTERNAL kill, not this script's own timeout. Reporting it as a hang
+  // sends an investigator looking for a deadlock when the real cause is
+  // memory.
+  const r = { error: undefined, signal: 'SIGKILL', status: null, stdout: '', stderr: '' };
+  const result = classifyRunResult(r);
+  assert.equal(result.runOutcome, 'crashed');
+  assert.match(result.errorMessage, /OOM/i);
+});
+
+test('classifyRunResult: a bare SIGTERM with no attached error is still treated as timed-out (platform fallback)', () => {
+  const r = { error: undefined, signal: 'SIGTERM', status: null, stdout: '', stderr: '' };
+  const result = classifyRunResult(r);
+  assert.equal(result.runOutcome, 'timed-out');
+});
+
+// --- worstCaseRunMs / budgetExceeded (re-review finding 3) -----------------
+
+test('worstCaseRunMs counts 1 invocation for frontend-only, 2 for server-only, 3 for both, 0 for neither', () => {
+  assert.equal(worstCaseRunMs(1, 0, 1000), 1000);
+  assert.equal(worstCaseRunMs(0, 1, 1000), 2000);
+  assert.equal(worstCaseRunMs(1, 1, 1000), 3000);
+  assert.equal(worstCaseRunMs(0, 0, 1000), 0);
+});
+
+test('budgetExceeded is true once elapsed + one more run\'s worst case would exceed the budget', () => {
+  assert.equal(budgetExceeded(0, 5000, 10000), false);
+  assert.equal(budgetExceeded(5000, 5000, 10000), false); // exactly at the budget: fits
+  assert.equal(budgetExceeded(5001, 5000, 10000), true);
+  assert.equal(budgetExceeded(9999, 2, 10000), true);
+});
+
+test('the run-loop wall-clock budget fits inside the workflow job cap with margin (finding 3 arithmetic)', () => {
+  // The budget check (`budgetExceeded`, called BEFORE starting each run)
+  // guarantees the run loop's own total worst-case elapsed time never
+  // exceeds RUN_LOOP_WALL_CLOCK_BUDGET_MS: a run only starts if elapsed +
+  // its own worst case still fits inside the budget, so after that run
+  // finishes (worst case), elapsed <= budget by construction. That bound
+  // must leave real margin inside JOB_CAP_MS (mirrors `timeout-minutes: 30`
+  // in .github/workflows/quarantine-health.yml) for checkout/npm-install/
+  // apt-get-ffmpeg and the post-loop `gh issue view` calls, which all run
+  // OUTSIDE this budget.
+  assert.ok(
+    RUN_LOOP_WALL_CLOCK_BUDGET_MS <= JOB_CAP_MS,
+    `run-loop budget (${RUN_LOOP_WALL_CLOCK_BUDGET_MS}ms) must fit inside the job cap (${JOB_CAP_MS}ms)`,
+  );
+  const margin = JOB_CAP_MS - RUN_LOOP_WALL_CLOCK_BUDGET_MS;
+  assert.ok(margin >= 5 * 60 * 1000, `expected at least 5 minutes of margin for the rest of the job, got ${margin}ms`);
+
+  // Concretely: with the default RUNS=5 and a register touching BOTH
+  // frontend and server files (worst case, 3 invocations/run), simulate the
+  // loop's own stopping behaviour and confirm it stops well before RUNS
+  // completes rather than ever letting elapsed exceed the budget.
+  const worstPerRun = worstCaseRunMs(1, 1, VITEST_RUN_TIMEOUT_MS);
+  let elapsed = 0;
+  let started = 0;
+  for (let i = 0; i < 5; i++) {
+    if (budgetExceeded(elapsed, worstPerRun, RUN_LOOP_WALL_CLOCK_BUDGET_MS)) break;
+    started++;
+    elapsed += worstPerRun; // worst case: this run took the full timeout
+  }
+  assert.ok(started < 5, `expected the budget to stop the loop before all 5 runs, but all 5 started`);
+  assert.ok(elapsed <= RUN_LOOP_WALL_CLOCK_BUDGET_MS, `worst-case elapsed (${elapsed}ms) exceeded the budget`);
 });
