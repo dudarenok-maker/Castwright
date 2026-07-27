@@ -210,11 +210,22 @@ voiceOverrideLinkedRouter.post(
    voice-mapping.ts's `pickVoiceForEngine`, once a target character's slot
    has no validated library uuid of its own, that raw name IS the literal
    storage key the sidecar loads a .pt/latents file from. A character whose
-   slot is absent, or `provenance:'designed'` without a usable libraryUuid,
-   is unguarded by the CRITICAL-2 check above (which only fires on
-   `provenance:'cloned'`) — so nothing stopped a planted
-   `xtts-<someone-else's-uuid>` from reaching the sidecar and rendering that
-   other person's real consented clone. */
+   slot is absent, or has a bare `libraryUuid` with no `provenance`, or
+   `provenance:'designed'`/`'cloned'` with no usable `libraryUuid` (legacy
+   drift), is unguarded by the CRITICAL-2 check above (which only fires on
+   `provenance:'cloned'` WITH a validated uuid to compare) — so nothing
+   stopped a planted `xtts-<someone-else's-uuid>` from reaching the sidecar
+   and rendering that other person's real consented clone.
+
+   Case fold, deliberately: the prefix test and both allow-arms below compare
+   lower-cased strings. The sidecar builds `f"{safe}.pt"` and does
+   `os.path.isfile` on it, and NTFS/APFS are case-insensitive — so
+   `XTTS-<uuid>` on disk IS `xtts-<uuid>.pt`. A case-SENSITIVE `startsWith`
+   check here would let `{engine:'coqui', name:'XTTS-<victimUuid>'}` sail
+   past undetected (it doesn't start with lower-case 'xtts-') while still
+   resolving to the victim's real artifact at render time — reintroducing
+   the exact consent breach this guard exists to close, just one shift-key
+   away. */
 export async function applyToBook(
   bookDir: string,
   ids: string[],
@@ -246,35 +257,57 @@ export async function applyToBook(
 
     /* Task 10a — reject a planted clone/library storage key (see the
        function-level comment above). Only fires when `override.name` is
-       actually shaped like THIS engine's reserved manifest-slot prefix; an
-       ordinary display name (the common case — a designed voice's
-       human-readable label, or a catalog name) is untouched. Allowed when
-       the name is provably this write's own already-consented identity:
+       actually shaped like THIS engine's reserved manifest-slot prefix
+       (case-folded — see above); an ordinary display name (the common case
+       — a designed voice's human-readable label, or a catalog name) is
+       untouched: proven by the "ordinary display name … is untouched" test
+       below, not just asserted here. Allowed when the name is provably this
+       write's own already-consented identity (both comparisons case-folded
+       for the same reason as the prefix test):
        (a) `c`'s OWN existing slot already resolves to that exact key via
-       the uuid-validating `libraryVoiceForEngine` (a self-consistent
-       restatement — render uses the slot's OWN libraryUuid, never `name`,
-       once one is set, so this is a no-op either way), or (b) it matches
+       the uuid-validating `libraryVoiceForEngine` — structurally this is a
+       no-op check: render always prefers the slot's OWN `libraryUuid` over
+       `name` once one is set (see voice-mapping.ts), so `name` is inert
+       here either way. This arm exists for defence-in-depth and matters
+       once coqui voice-library propagation lands through this route — until
+       then it is a deferred OVER-block: a client that deliberately restates
+       a target's own already-consented key gets accepted, but nothing today
+       exercises that path, or (b) it matches
        `cloneStorageKey(engine, canonicalVoiceUuid)` — canonicalVoiceUuid is
-       server-derived from the SOURCE character's own on-disk voiceUuid
-       (never client-supplied — see the route handler above), and is the
-       SAME identity this call is unifying onto every group member's
-       `voiceUuid` field below. That's exactly how a bespoke (non-library)
-       Qwen design's storage key legitimately propagates across a series via
-       this route (rebaseline-modal.tsx's Approve step writes
-       `{engine:'qwen', name: <voiceId returned by designQwenVoice>}` with
-       no libraryUuid at all). Anything else is a foreign key — e.g.
-       'xtts-<someone-else's-uuid>' — that would otherwise render (and
+       READ from the SOURCE character's on-disk voiceUuid, not taken from
+       this request's body. That is weaker than "server-controlled": nothing
+       here stops a PRIOR request (e.g. `PUT /api/books/:bookId` with
+       `slice:'cast'`, which persists the client's cast wholesale — voiceUuid
+       is not in that route's `PRESERVED_DESIGN_FIELDS`) from having stamped
+       an attacker-chosen voiceUuid onto the source first. That gap is
+       real, is filed separately, and is NOT this guard's job to close — it
+       already exists independently of this route (that same PUT writes
+       `overrideTtsVoices` directly with no guard at all), so this fix still
+       narrows a real path even though it doesn't close every path to
+       `canonicalVoiceUuid`. What arm (b) DOES correctly authenticate is
+       "this name matches what THIS series-unify call itself is about to
+       stamp everywhere" — which is exactly how a bespoke (non-library) Qwen
+       design's storage key legitimately propagates across a series via this
+       route (rebaseline-modal.tsx's Approve step writes `{engine:'qwen',
+       name: <voiceId returned by designQwenVoice>}` with no libraryUuid at
+       all — the qwen branch of `pickVoiceForEngine` ignores `name` entirely
+       when no libraryUuid is set, so this arm's role is authorisation, not
+       resolution). Anything else is a foreign key — e.g.
+       'xtts-<someone-else's-uuid>' (or a case-varied 'XTTS-<uuid>', folded
+       away by the comparisons above) — that would otherwise render (and
        consent-breach) another person's real cloned artifact. */
     if (override !== null && isCloneEngine(override.engine)) {
       const engine = override.engine;
-      const prefix = `${manifestSlotFor(engine)}-`;
-      if (override.name.startsWith(prefix)) {
+      const prefix = `${manifestSlotFor(engine)}-`; // manifestSlotFor already returns lower-case
+      const nameLower = override.name.toLowerCase();
+      if (nameLower.startsWith(prefix)) {
         const ownLib = libraryVoiceForEngine(c, engine);
         const matchesOwnLibrary =
-          ownLib !== undefined && override.name === cloneStorageKey(engine, ownLib.libraryUuid);
+          ownLib !== undefined &&
+          nameLower === cloneStorageKey(engine, ownLib.libraryUuid).toLowerCase();
         const matchesCanonical =
           canonicalVoiceUuid !== undefined &&
-          override.name === cloneStorageKey(engine, canonicalVoiceUuid);
+          nameLower === cloneStorageKey(engine, canonicalVoiceUuid).toLowerCase();
         if (!matchesOwnLibrary && !matchesCanonical) {
           throw new Error(
             `Character "${c.name ?? c.id}" — refusing to write "${override.name}" as its ${engine} ` +

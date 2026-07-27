@@ -31,9 +31,15 @@ export const CLONE_CAPABLE_ENGINES: ReadonlySet<TtsEngine> = Object.freeze(
     checks against an arbitrary engine value). */
 export const CLONE_ENGINE_LIST: readonly CloneEngine[] = Object.freeze(['qwen', 'coqui']);
 
-/** Type guard: returns true for clone-capable engines. */
+/** Type guard: returns true for clone-capable engines. Derived from
+    `CLONE_CAPABLE_ENGINES` (not a hardcoded `e === 'qwen' || e === 'coqui'`)
+    so a THIRD clone-capable engine only needs adding to that one Set —
+    every caller gated on this guard (including voice-mapping.ts's
+    raw-name-passthrough branch and voice-override-linked.ts's Task 10a
+    consent guard) picks it up automatically, with no second place to
+    remember to update. */
 export function isCloneEngine(e: TtsEngine): e is CloneEngine {
-  return e === 'qwen' || e === 'coqui';
+  return CLONE_CAPABLE_ENGINES.has(e);
 }
 
 /** Maps a clone engine to its manifest slot key.

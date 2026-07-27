@@ -495,9 +495,59 @@ describe('POST /api/books/:bookId/cast/:characterId/voice-override-linked', () =
       expect(slot?.provenance).toBe('designed');
     });
 
-    it('rejects the qwen- equivalent on a character whose qwen slot is ABSENT', async () => {
+    it('rejects the qwen- equivalent on a character whose qwen slot is ABSENT (defence-in-depth — the qwen render branch ignores name entirely, so this isn\'t a live breach today, but the guard is engine-symmetric on purpose)', async () => {
       const res = await callLinked(standaloneId, 'loner', {
         override: { engine: 'qwen', name: 'qwen-someone-elses-uuid' },
+      });
+      expect(res.body.updated).toHaveLength(0);
+      expect(res.body.failed).toHaveLength(1);
+      expect(res.body.failed[0].error).toMatch(/consented voice/);
+      expect(findChar(STANDALONE, 'loner')?.overrideTtsVoices).toBeUndefined();
+    });
+
+    it('rejects a planted xtts-<uuid> on a character whose coqui slot is DESIGNED with NO libraryUuid (the actually-live legacy-drift shape)', async () => {
+      /* MINOR-1 fix-round fixture — provenance:'designed' with an empty/no
+         libraryUuid (or a bare libraryUuid with no provenance) is the
+         shape libraryVoiceForEngine ALSO reads as "no library slot", so a
+         broken guard here really would let the raw planted name pass
+         through to the sidecar unlike the "designed, valid own uuid" test
+         above (where libraryVoiceForEngine wins regardless of the guard). */
+      writeBookOnDisk(
+        AUTHOR,
+        SERIES,
+        STANDALONE,
+        standaloneId,
+        [
+          {
+            id: 'loner',
+            name: 'Loner',
+            role: 'character',
+            color: 'unset',
+            lines: 9,
+            overrideTtsVoices: { coqui: { name: 'xtts-own-uuid', provenance: 'designed' } },
+          },
+        ],
+        { isStandalone: true },
+      );
+      const res = await callLinked(standaloneId, 'loner', {
+        override: { engine: 'coqui', name: 'xtts-someone-elses-uuid' },
+      });
+      expect(res.body.updated).toHaveLength(0);
+      expect(res.body.failed).toHaveLength(1);
+      expect(res.body.failed[0].error).toMatch(/consented voice/);
+      const slot = (findChar(STANDALONE, 'loner')?.overrideTtsVoices as Record<string, Record<string, unknown>>)
+        ?.coqui;
+      expect(slot?.name).toBe('xtts-own-uuid');
+      expect(slot?.libraryUuid).toBeUndefined();
+    });
+
+    it('MAJOR-1 fix-round: rejects a case-varied planted key (XTTS-<uuid> vs the on-disk xtts-<uuid>.pt — NTFS/APFS are case-insensitive)', async () => {
+      /* Case-sensitive startsWith would have missed this entirely — 'XTTS-'
+         doesn't match a literal 'xtts-' prefix — while the sidecar's
+         os.path.isfile still resolves it to the SAME .pt as a lower-case
+         key. This is the exact bypass the fix-round review caught. */
+      const res = await callLinked(standaloneId, 'loner', {
+        override: { engine: 'coqui', name: 'XTTS-someone-elses-uuid' },
       });
       expect(res.body.updated).toHaveLength(0);
       expect(res.body.failed).toHaveLength(1);
