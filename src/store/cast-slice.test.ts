@@ -897,6 +897,92 @@ describe('castSlice — setVoiceStyle (plan 108)', () => {
   });
 });
 
+describe('castSlice — setOverrideVoiceName (fs-38 Wave 3c Task 26)', () => {
+  /* The load-bearing case: a qwen-routed character can't distinguish "always
+     writes qwen" from "writes the routed engine" — engine and the
+     hardcoded destination are the same value either way. Only a
+     COQUI-routed write proves the reducer targets the ENGINE ARGUMENT
+     rather than a hardcoded qwen slot. */
+  it('writes a coqui-routed assignment into overrideTtsVoices.coqui, not qwen', () => {
+    const start = baseState([makeChar('brann')]);
+    const next = castSlice.reducer(
+      start,
+      castActions.setOverrideVoiceName({
+        characterId: 'brann',
+        engine: 'coqui',
+        name: 'xtts-lib-clone-1',
+        libraryUuid: 'lib-clone-1',
+        provenance: 'cloned',
+      }),
+    );
+    const brann = next.characters.find((c) => c.id === 'brann')!;
+    expect(brann.overrideTtsVoices?.coqui).toEqual({
+      name: 'xtts-lib-clone-1',
+      libraryUuid: 'lib-clone-1',
+      provenance: 'cloned',
+    });
+    /* Proves the fix, not just a passing shape: the qwen slot must stay
+       untouched — a reducer that (bug-for-bug) still hardwired qwen would
+       leave THIS assertion failing even though the coqui assertion above
+       could coincidentally look right if the test only checked "a slot
+       exists somewhere". */
+    expect(brann.overrideTtsVoices?.qwen).toBeUndefined();
+  });
+
+  it('still writes qwen when routed to qwen (reducer handles both engines)', () => {
+    const start = baseState([makeChar('brann')]);
+    const next = castSlice.reducer(
+      start,
+      castActions.setOverrideVoiceName({
+        characterId: 'brann',
+        engine: 'qwen',
+        name: 'qwen-lib-1',
+        libraryUuid: 'lib-1',
+        provenance: 'designed',
+      }),
+    );
+    const brann = next.characters.find((c) => c.id === 'brann')!;
+    expect(brann.overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-lib-1',
+      libraryUuid: 'lib-1',
+      provenance: 'designed',
+    });
+    expect(brann.overrideTtsVoices?.coqui).toBeUndefined();
+  });
+
+  it('preserves an existing different-engine slot (engines coexist)', () => {
+    const start = baseState([
+      makeChar('brann', { overrideTtsVoices: { kokoro: { name: 'am_onyx' } } }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.setOverrideVoiceName({
+        characterId: 'brann',
+        engine: 'coqui',
+        name: 'xtts-lib-clone-1',
+        libraryUuid: 'lib-clone-1',
+        provenance: 'cloned',
+      }),
+    );
+    const brann = next.characters.find((c) => c.id === 'brann')!;
+    expect(brann.overrideTtsVoices?.kokoro).toEqual({ name: 'am_onyx' });
+    expect(brann.overrideTtsVoices?.coqui?.name).toBe('xtts-lib-clone-1');
+  });
+
+  it('no-ops when the character id is not in the slice', () => {
+    const start = baseState([makeChar('wren')]);
+    const next = castSlice.reducer(
+      start,
+      castActions.setOverrideVoiceName({
+        characterId: 'ghost',
+        engine: 'coqui',
+        name: 'xtts-x',
+      }),
+    );
+    expect(next).toEqual(start);
+  });
+});
+
 describe('castSlice — renameCharacter (rename + promote alias)', () => {
   it('renames to a brand-new name and demotes the old name into aliases', () => {
     const start = baseState([makeChar('linnet', { name: 'Dame Linnet' })]);

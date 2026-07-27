@@ -388,10 +388,38 @@ export function ProfileDrawer({
           modelKey: intendedModelKey,
         }),
       ).unwrap();
-      const assignedName = `qwen-${entry.voiceUuid}`;
-      setDesignedVoiceId(assignedName);
-      setStagedVoiceUuid(entry.voiceUuid);
-      dispatch(castActions.setQwenOverrideName({ characterId: character.id, voiceId: assignedName }));
+      /* fs-38 Wave 3c Task 26 — target the engine this character is actually
+         routed to (same PENDING-choice source as intendedModelKey above),
+         not a hardcoded qwen slot: a coqui-routed character's "use a My
+         voices entry" pick must land in overrideTtsVoices.coqui, or the UI
+         shows an assignment the server never made on an engine the
+         character isn't rendering with, while the real coqui slot stays
+         untouched. Storage-key prefix mirrors what
+         resolveTtsVoiceForCharacter reads back for a clone
+         (tts-voice-mapping.ts): qwen-<uuid> / xtts-<uuid>. libraryUuid +
+         provenance travel too — the coqui branch of that same resolver only
+         recognises a slot as a clone (vs. falling through to the catalog)
+         when both are present. */
+      const routedEngine = engineForModelKey(intendedModelKey);
+      const assignedName = `${routedEngine === 'coqui' ? 'xtts' : 'qwen'}-${entry.voiceUuid}`;
+      dispatch(
+        castActions.setOverrideVoiceName({
+          characterId: character.id,
+          engine: routedEngine,
+          name: assignedName,
+          libraryUuid: entry.voiceUuid,
+          provenance: entry.provenance,
+        }),
+      );
+      /* designedVoiceId/stagedVoiceUuid feed Qwen-only derived state
+         (sample-subject construction, redesign/compare gating) elsewhere in
+         this component — only meaningful, and only safe to set, when the
+         routed engine actually is qwen; setting them from a coqui pick would
+         leak an xtts-prefixed name into that qwen-only machinery. */
+      if (routedEngine === 'qwen') {
+        setDesignedVoiceId(assignedName);
+        setStagedVoiceUuid(entry.voiceUuid);
+      }
     } catch (e) {
       setLibraryActionError((e as Error).message || 'Could not assign this voice.');
     } finally {
@@ -1181,8 +1209,14 @@ export function ProfileDrawer({
             />
 
             {/* fs-38 Wave 1, Task 16 — "My voices" picker + "Save to my
-                voices", alongside the Qwen design sub-flow above. */}
-            {effectiveEngine === 'qwen' && bookId && (
+                voices", alongside the Qwen design sub-flow above. fs-38 Wave
+                3c Task 26 — widened from qwen-only to also cover coqui, the
+                other clone-capable engine (useMyVoice now routes the write
+                to whichever engine the character is actually on). "Save to
+                my voices" stays qwen-only below — it promotes the
+                character's currently-DESIGNED QWEN voice specifically, not
+                whatever's in this engine's slot. */}
+            {(effectiveEngine === 'qwen' || effectiveEngine === 'coqui') && bookId && (
               <div className="space-y-2">
                 {myVoices.length > 0 && (
                   <div className="rounded-2xl border border-ink/10 bg-canvas/60 p-3 space-y-2">
@@ -1205,7 +1239,7 @@ export function ProfileDrawer({
                     </div>
                   </div>
                 )}
-                {designedVoiceId && (
+                {effectiveEngine === 'qwen' && designedVoiceId && (
                   <button
                     type="button"
                     disabled={libraryActionBusy === 'promote'}

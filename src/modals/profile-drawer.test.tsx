@@ -1946,6 +1946,83 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
       }),
     );
   });
+
+  /* fs-38 Wave 3c Task 26 — coqui is the OTHER clone-capable engine
+     (tts-voice-mapping.ts resolveTtsVoiceForCharacter's coqui branch).
+     "My voices" now surfaces there too, and useMyVoice must route the
+     optimistic write to the coqui slot instead of hardcoding qwen. */
+  it('lists "My voices" entries when Coqui is the effective engine', () => {
+    renderDrawer(
+      { ...baseChar, ttsEngine: 'coqui' },
+      { bookId: 'book-1', myVoices: myVoicesFixture },
+    );
+    expect(screen.getByTestId('profile-drawer-my-voice-lib1')).toHaveTextContent(
+      'Captain Halloran (library)',
+    );
+  });
+
+  it('clicking a "My voices" entry on a coqui-routed character writes overrideTtsVoices.coqui, not qwen', async () => {
+    /* The load-bearing case per the task: a QWEN-routed character can't
+       distinguish "always writes qwen" from "writes the routed engine" — the
+       assertion would pass either way. Only a coqui-routed fixture proves the
+       write actually follows the routed engine. */
+    assignLibraryVoice.mockResolvedValue({ updated: 1 });
+    const clonedEntry: VoiceLibraryEntry = {
+      voiceUuid: 'lib-clone-1',
+      name: 'Halloran (cloned)',
+      provenance: 'cloned',
+      tags: [],
+      pinned: false,
+      engines: { xtts: { status: 'ready' } },
+      createdAt: '2026-07-01T09:00:00.000Z',
+      updatedAt: '2026-07-01T09:00:00.000Z',
+    };
+    const coquiChar: Character = { ...baseChar, ttsEngine: 'coqui' };
+    const { store } = renderDrawer(coquiChar, { bookId: 'book-1', myVoices: [clonedEntry] });
+    /* Mirror what a real cast hydrate provides — the optimistic write needs
+       a character in the cast slice to land on (renderDrawer's store starts
+       with an empty cast slice; the drawer itself reads `character` from
+       its own prop, not the store). */
+    store.dispatch(castActions.setCharacters([coquiChar]));
+
+    fireEvent.click(screen.getByTestId('profile-drawer-my-voice-lib-clone-1'));
+
+    await waitFor(() =>
+      expect(assignLibraryVoice).toHaveBeenCalledWith('lib-clone-1', {
+        bookId: 'book-1',
+        characterId: 'halloran',
+        modelKey: 'coqui-xtts-v2',
+      }),
+    );
+
+    const halloran = store.getState().cast.characters.find((c) => c.id === 'halloran');
+    expect(halloran?.overrideTtsVoices?.coqui).toEqual({
+      name: 'xtts-lib-clone-1',
+      libraryUuid: 'lib-clone-1',
+      provenance: 'cloned',
+    });
+    /* Proves the routing, not just that SOME slot got filled: a reducer that
+       (bug-for-bug) still hardwired qwen would leave this populated instead
+       of the coqui assertion above. */
+    expect(halloran?.overrideTtsVoices?.qwen).toBeUndefined();
+  });
+
+  it('does not show "Save to my voices" for a coqui-routed character, even with a stale designed-Qwen voiceId', () => {
+    /* Companion regression for widening the "My voices" panel to coqui:
+       "Save to my voices" promotes the character's currently-DESIGNED QWEN
+       voice specifically (promoteCharacterVoice), never whatever's in the
+       routed engine's slot. A character that was previously designed on
+       Qwen and then switched to coqui must not resurrect that button. */
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'coqui',
+        overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+      },
+      { bookId: 'book-1', myVoices: myVoicesFixture },
+    );
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
+  });
 });
 
 describe('ProfileDrawer reused Qwen voice (drawer/table parity)', () => {
