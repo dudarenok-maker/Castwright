@@ -180,6 +180,30 @@ history at cut time.
   engine, not per voice) and therefore the only leg a real user can be stranded on, since
   `languageCode` is only ever set on a designed Qwen voice. The independent review proved that
   leg had zero coverage — reverting just its memo left all 69 tests green.
+- **`#/voices` no longer mislabels a filtered-out rollup as an empty library, and the Variants
+  filter can't blank it outright** (#1866, #1869). Two halves of the structural cause #1834's
+  review left standing. **(a)** The "No voices yet" empty state was gated only on
+  `variantFilter === 'all'`, so any *other* narrowing that matched nothing collapsed the rollup
+  into "Finish setting up a book — once you confirm its cast…" on a fully populated library —
+  and took the language chip row down with it, since that row renders inside the ternary's
+  non-empty branch. Confirmed repro: one `source: 'library'` Russian voice + one
+  `source: 'current'` English voice, pick **Russian**, switch to **This book**. `rollupIsEmpty`
+  / `rollupIsNarrowed` now read all three narrowings (variant, language, tab) the same way:
+  "No voices yet" claims an empty library only when none of them is on, and everything else
+  routes to the existing "No voices match this filter" panel, which now names the miss
+  ("No Russian voices in this tab — try another language or tab"). Because that panel renders
+  inside the non-empty branch, the tab strip and both facet rows stay on screen alongside it.
+  **(b)** The Variants facet had #1834's defect in its worst form: its chip row renders only
+  while `qwenLibrary` is non-empty, and a non-`all` filter sets `showFamilies = false`, so a
+  stale filter blanked *every* tab with no control left to clear it — and `qwenLibrary` empties
+  wholesale on an engine switch away from Qwen, since `resolveVoiceAssignment` stamps
+  `provider` from the active engine rather than per voice. `activeVariantFilter` gets the same
+  derived-during-render treatment `activeLanguageFilter` got; `setVariantFilter` stays the sole
+  state writer. This one is load-bearing for (a): without it a stale `variantFilter` would keep
+  `rollupIsNarrowed` true forever and pin the new panel on a populated library. Four cases in
+  `voices.test.tsx`, each placebo-verified against the specific line it locks — including a
+  control asserting a genuinely empty library still says "No voices yet". `LANGUAGE_LABELS`
+  moves to module scope now that the panel names the language too.
 
 ---
 
