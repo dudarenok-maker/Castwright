@@ -1012,7 +1012,11 @@ async function hasRetainedDesignedClip(voiceUuid: string): Promise<boolean> {
    touched — that field is the srv-43 identity key, not something an assign
    should alias. Task 24 also makes this handler do async I/O it didn't do
    before (`hasRetainedDesignedClip`'s `stat`), gated to the designed-clip
-   branch only. */
+   branch only — and (fix round 1, review) that `await` is computed BEFORE
+   the cast.json read-modify-write window (`readJson` -> `nextCharacters` ->
+   `writeJsonAtomic`), which must stay free of any `await` so it stays
+   atomic against a concurrent write to the same cast.json. See the
+   `shouldWriteCoquiSlot` comment below for why. */
 voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
@@ -1030,6 +1034,44 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
     if (entry.provenance === 'cloned' && entry.engines?.qwen?.status !== 'ready') {
       return res.status(409).json({ error: 'Cloned voice is not ready to assign yet.' });
     }
+
+    /* fs-38 Wave 3c, Task 24 (fix round 1, review) — write BOTH the qwen and
+       coqui slots when the library voice is actually clone-capable on both
+       engines, so this route closes the reachability gap: it was the only
+       writer of `libraryUuid` at all, and until this both-slots write
+       lands, no character can carry a resolvable coqui-cloned slot end to
+       end. A CLONED entry always qualifies (§2.3 — an ingested clip derives
+       on either engine). A DESIGNED entry qualifies only when it still has
+       its retained reference clip on disk (`hasRetainedDesignedClip`,
+       above) — without that clip a coqui derive has nothing to derive
+       FROM, so writing a coqui slot here would strand the character on a
+       slot the resolver can never back. `entry.master` is NOT the right
+       test — see `hasRetainedDesignedClip`'s own comment. An IMPORTED entry
+       never qualifies. This check is point-in-time only (see that helper's
+       comment) — Task 20a's render-time pre-pass is what actually enforces
+       the invariant over time, not this gate.
+
+       DELIBERATELY computed here, before `findBookByBookId`/`readJson`
+       below, not next to the `nextCharacters` build where it's consumed.
+       It depends only on `entry` and `voiceUuid` — both already in hand —
+       so nothing requires it to sit inside the cast.json read-modify-write
+       window. Before this task that window (`readJson` cast ->
+       `nextCharacters` -> `writeJsonAtomic`) contained zero `await`s
+       (`getResolvedTtsModelKey`/`engineForModelKey`/`resolveCharacterEngine`
+       are all synchronous), so the RMW was effectively atomic — no
+       yield-to-event-loop between reading `characters` and writing them
+       back. `hasRetainedDesignedClip`'s `stat` is real filesystem I/O; if
+       it sat inside that window instead, a concurrent write to the SAME
+       cast.json (a debounced cast-editor save, `voice-override-linked`'s
+       `applyToBook`, or a second `/assign`) could land in the gap and then
+       get silently clobbered when this handler resumes and writes back the
+       `characters` array it captured before yielding — the "cast.json
+       clobbered" defect class this project has hit before. Keep this
+       `await` OUTSIDE the window; do not move it back down next to
+       `nextCharacters`. */
+    const shouldWriteCoquiSlot =
+      entry.provenance === 'cloned' ||
+      (entry.provenance === 'designed' && (await hasRetainedDesignedClip(voiceUuid)));
 
     const body = (req.body ?? {}) as AssignBody;
     const bookId = typeof body.bookId === 'string' ? body.bookId : undefined;
@@ -1105,25 +1147,6 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
         });
       }
     }
-
-    /* fs-38 Wave 3c, Task 24 — write BOTH the qwen and coqui slots when the
-       library voice is actually clone-capable on both engines, so this
-       route closes the reachability gap: it was the only writer of
-       `libraryUuid` at all, and until this both-slots write lands, no
-       character can carry a resolvable coqui-cloned slot end to end. A
-       CLONED entry always qualifies (§2.3 — an ingested clip derives on
-       either engine). A DESIGNED entry qualifies only when it still has its
-       retained reference clip on disk (`hasRetainedDesignedClip`, above) —
-       without that clip a coqui derive has nothing to derive FROM, so
-       writing a coqui slot here would strand the character on a slot the
-       resolver can never back. `entry.master` is NOT the right test — see
-       `hasRetainedDesignedClip`'s own comment. An IMPORTED entry never
-       qualifies. This check is point-in-time only (see that helper's
-       comment) — Task 20a's render-time pre-pass is what actually enforces
-       the invariant over time, not this gate. */
-    const shouldWriteCoquiSlot =
-      entry.provenance === 'cloned' ||
-      (entry.provenance === 'designed' && (await hasRetainedDesignedClip(voiceUuid)));
 
     /* Review I-4 — a prior DESIGNED voice's minted emotion `variants` are
        anchored to that base identity (qwen-<old-uuid>__<emotion>). Assigning
