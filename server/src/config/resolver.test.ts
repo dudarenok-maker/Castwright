@@ -8,7 +8,12 @@ vi.mock('../gpu/gpu-device-list-state.js', () => ({
   getLastKnownGpuDevices: vi.fn(() => []),
 }));
 
-import { resolveKnob, coerceAndValidate, configValue } from './resolver.js';
+import {
+  resolveKnob,
+  resolveKnobForSidecarEnv,
+  coerceAndValidate,
+  configValue,
+} from './resolver.js';
 import { getKnob } from './registry.js';
 import * as us from '../workspace/user-settings.js';
 import * as gds from '../gpu/gpu-device-list-state.js';
@@ -90,5 +95,65 @@ describe('resolveKnob — device UUID reconcile (Plan 2 §2.1)', () => {
     (gds.getLastKnownGpuDevices as any).mockReturnValue([]);
     const st = resolveKnob(getKnob('tts.qwen.device')!);
     expect(st.staleReason).toBe('uuid_unresolved');
+  });
+});
+
+describe('resolveKnobForSidecarEnv — deliberately does NOT reconcile (#1857)', () => {
+  beforeEach(() => {
+    (gds.getLastKnownGpuDevices as any).mockReturnValue([]);
+    (us.readConfigOverrides as any).mockReturnValue({});
+    delete process.env.QWEN_DEVICE;
+  });
+
+  /* The sidecar resolves 'cuda-uuid:' itself against LIVE enumeration on every
+     spawn (main.py:1873 _read_device_env). Handing it a pre-translated index
+     instead freezes a mapping that buildOpts re-emits on every respawn, which a
+     vanished or renumbered card can no longer correct. So this entry point must
+     emit the uuid form even when the cache COULD translate it. */
+  it('passes a cuda-uuid override through even when the card IS visible', () => {
+    (us.readConfigOverrides as any).mockReturnValue({ 'tts.qwen.device': 'cuda-uuid:GPU-1' });
+    (gds.getLastKnownGpuDevices as any).mockReturnValue([{ uuid: 'GPU-1', idx: 1 }]);
+    const st = resolveKnobForSidecarEnv(getKnob('tts.qwen.device')!);
+    expect(st.effective).toBe('cuda-uuid:GPU-1');
+    expect(st.staleReason).toBeUndefined();
+  });
+
+  it('passes a cuda-uuid override through when no card matches, WITHOUT flagging stale', () => {
+    (us.readConfigOverrides as any).mockReturnValue({ 'tts.qwen.device': 'cuda-uuid:GONE' });
+    (gds.getLastKnownGpuDevices as any).mockReturnValue([]);
+    const st = resolveKnobForSidecarEnv(getKnob('tts.qwen.device')!);
+    expect(st.effective).toBe('cuda-uuid:GONE');
+    // staleReason is a UI concept; the sidecar decides liveness for itself.
+    expect(st.staleReason).toBeUndefined();
+  });
+
+  it('is identical to resolveKnob for a non-uuid device value', () => {
+    (us.readConfigOverrides as any).mockReturnValue({ 'tts.qwen.device': 'cuda:1' });
+    const knob = getKnob('tts.qwen.device')!;
+    expect(resolveKnobForSidecarEnv(knob)).toEqual(resolveKnob(knob));
+  });
+
+  it('is identical to resolveKnob for a non-device knob', () => {
+    (us.readConfigOverrides as any).mockReturnValue({ [KEY]: 0.9 });
+    const knob = getKnob(KEY)!;
+    expect(resolveKnobForSidecarEnv(knob)).toEqual(resolveKnob(knob));
+  });
+
+  it('still honours an env-locked value', () => {
+    process.env.QWEN_DEVICE = 'cpu';
+    try {
+      const st = resolveKnobForSidecarEnv(getKnob('tts.qwen.device')!);
+      expect(st.effective).toBe('cpu');
+      expect(st.source).toBe('env');
+      expect(st.locked).toBe(true);
+    } finally {
+      delete process.env.QWEN_DEVICE;
+    }
+  });
+
+  it('still falls through to the registry default when nothing is set', () => {
+    const st = resolveKnobForSidecarEnv(getKnob('tts.qwen.device')!);
+    expect(st.effective).toBe('auto');
+    expect(st.source).toBe('default');
   });
 });

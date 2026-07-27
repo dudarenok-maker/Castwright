@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 vi.mock('../workspace/user-settings.js', () => ({ readConfigOverrides: vi.fn(() => ({})) }));
 import { buildSidecarEnv } from './spawn-sidecar.js';
 import * as us from '../workspace/user-settings.js';
+import { setLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
 
 describe('buildSidecarEnv injects resolved restart-sidecar knobs', () => {
   beforeEach(() => {
@@ -149,5 +150,53 @@ describe('buildSidecarEnv injects the accelerator profile + Kokoro ORT providers
     expect(env.CASTWRIGHT_ACCELERATOR_PROFILE).toBe('amd');
     // S0.1 found DirectML can't run the Kokoro model → CPU EP on every OS.
     expect(JSON.parse(env.KOKORO_ORT_PROVIDERS as string)).toEqual(['CPUExecutionProvider']);
+  });
+});
+
+describe('buildSidecarEnv hands the sidecar a UUID device pin verbatim (#1857)', () => {
+  beforeEach(() => {
+    setLastKnownGpuDevices([]);
+    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({});
+    delete process.env.QWEN_DEVICE;
+  });
+
+  afterEach(() => {
+    setLastKnownGpuDevices([]);
+  });
+
+  /* Both cache states must agree. Before #1857 the emitted value depended on
+     whether the user had opened Advanced Settings during this server session:
+     a warm cache froze a cuda:N that buildOpts re-emitted on every respawn, so
+     a card that later vanished failed _validate_cuda_index on every retry and
+     one that renumbered landed on the wrong card. The sidecar resolves the uuid
+     form itself, live, per spawn — that is the safe branch, so make it the only
+     branch. */
+  for (const [label, cache] of [
+    ['cold cache', [] as { uuid: string; idx: number }[]],
+    ['warm cache', [{ uuid: 'GPU-1', idx: 1 }]],
+  ] as const) {
+    it(`emits the raw cuda-uuid literal with a ${label}`, () => {
+      (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({
+        'tts.qwen.device': 'cuda-uuid:GPU-1',
+      });
+      setLastKnownGpuDevices([...cache]);
+
+      const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+
+      expect(env.QWEN_DEVICE).toBe('cuda-uuid:GPU-1');
+    });
+  }
+
+  it('still emits a plain cuda:N pin unchanged', () => {
+    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({
+      'tts.qwen.device': 'cuda:1',
+    });
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env.QWEN_DEVICE).toBe('cuda:1');
+  });
+
+  it('leaves a device knob at its registry default unset', () => {
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env.QWEN_DEVICE).toBeUndefined();
   });
 });
