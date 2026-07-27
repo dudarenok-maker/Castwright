@@ -130,6 +130,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks(); // fs-38 Wave 3c, Task 22 — undo the per-test `global.fetch` spy below.
   delete process.env.WORKSPACE_DIR;
   rmSync(dir, { recursive: true, force: true });
 });
@@ -215,6 +216,13 @@ describe('synthesise-chapter designed-voice self-heal — REAL readDesignedMaste
     );
     writeFileSync(paths.qwenVoiceWavPath(`${storageKey}__master`), Buffer.from('not really a wav'));
     spawnMock.mockImplementation(() => fakeSucceedingFfmpegChild()); // this test's whole point: decode SUCCEEDS.
+
+    /* fs-38 Wave 3c, Task 22 — a coqui-engine designed self-heal request now
+       has the pre-pass call `evictQwenForCoquiPhase()` (sidecar `/unload`)
+       BEFORE the resolver runs — see synthesise-chapter.ts's Task 22
+       comment. Mock `global.fetch` so that call doesn't ECONNREFUSED
+       against a real (absent) sidecar. */
+    vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
 
     const provider = makeProvider();
     const entry = designedEntry(COQUI_UUID);

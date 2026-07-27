@@ -20,7 +20,7 @@
         chapter is never resolved.
      6. skipped entirely when the character doesn't route to Qwen this run
         (book default engine != qwen) — no wasted self-heal attempt. */
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { synthesiseChapter, type CastCharacter } from './synthesise-chapter.js';
 import {
   UnresolvableClonedVoiceError,
@@ -264,6 +264,16 @@ describe('synthesiseChapter — designed-voice orphan self-heal pre-pass (fs-38 
    `xtts-<uuid>` — so the assertion that actually distinguishes fixed from
    reverted is the voiceName itself, not the absence of a thrown error). */
 describe('synthesiseChapter — designed-voice coqui self-heal, fail-SOFT (fs-38 Wave 3c, Task 20a)', () => {
+  /* fs-38 Wave 3c, Task 22 — the pre-pass now brackets any coqui-engine
+     designed-voice self-heal request with an `evictQwenForCoquiPhase()`
+     sidecar `/unload` call BEFORE the resolver runs (VRAM co-residency
+     guard — see synthesise-chapter.ts's Task 22 comment), so every test
+     below now hits `global.fetch`. Mock it here so that new, unrelated
+     network call doesn't ECONNREFUSED against a real (absent) sidecar. */
+  beforeEach(() => {
+    vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+  });
+
   function designedEntry() {
     return {
       voiceUuid: 'lib-designed',

@@ -19,7 +19,7 @@
    of but does not replace — except that, per the Task 6 review, the pre-pass
    now fully subsumes C1 for every character `applyQwenFallback` sees (case 4
    above pins the last gap that let C1 stay reachable). */
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -305,6 +305,19 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
    Phase-0 upstream mutator (Tasks 3/4/5/6) proving a clone marker those tasks
    preserve actually reaches (and is correctly classified by) this pre-pass. */
 describe('synthesiseChapter — cloned-voice resolver pre-pass, coqui generalisation (fs-38 Wave 3c Task 20)', () => {
+  /* fs-38 Wave 3c, Task 22 — the pre-pass now brackets any coqui-engine
+     cloned-voice request with an `evictQwenForCoquiPhase()` sidecar
+     `/unload` call BEFORE the resolver even runs (VRAM co-residency guard —
+     see synthesise-chapter.ts's Task 22 comment), so every test below whose
+     character resolves to a COQUI-engine request now hits `global.fetch`
+     even when the voice turns out to be healthy (no derive at all). Mock it
+     here so that new, unrelated network call doesn't ECONNREFUSED against a
+     real (absent) sidecar — same pattern synthesise-chapter-coqui-fallback
+     .test.ts already uses for the render-phase evict. */
+  beforeEach(() => {
+    vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+  });
+
   it('a cloned coqui slot is validated by the pre-pass and renders normally (healthy, no derive)', async () => {
     setLastKnownCoquiInstallState('ready'); // Task 19 signal — coqui usable this run
     const provider = makeProvider();
