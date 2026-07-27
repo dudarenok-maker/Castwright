@@ -92,7 +92,13 @@ beforeEach(() => {
     tripEvent: () => null,
     exhaustedEvent: () => false,
   });
-  probeFfmpeg.mockReturnValue({ ffmpeg: true, ffprobe: true });
+  probeFfmpeg.mockReturnValue({
+    ffmpeg: true,
+    ffprobe: true,
+    version: '8.1',
+    belowFloor: false,
+    minimum: '6.0',
+  });
   probeOllamaHealth.mockResolvedValue({
     status: 'reachable',
     modelPulled: true,
@@ -112,6 +118,41 @@ describe('GET /api/setup/readiness — orchestration wiring', () => {
     expect(res.body.blockers.sidecar.cause).toBe('pass');
     expect(res.body.blockers.tts.cause).toBe('pass');
     expect(res.body.info.vramTotalMb).toBe(8192);
+  });
+
+  /* ops-35 (#1877) invariant 4 — THE load-bearing promise of the ffmpeg floor:
+     a below-floor ffmpeg warns and does not block. This has to run through the
+     real route, because `ready` is computed in setup-readiness.ts:96 and a unit
+     test that re-implements `every(pass || warn)` locally proves nothing —
+     flipping that line to `every(pass)` must fail HERE. */
+  it('a below-floor ffmpeg warns WITHOUT blocking readiness — ready stays true', async () => {
+    probeFfmpeg.mockReturnValue({
+      ffmpeg: true,
+      ffprobe: true,
+      version: '4.4',
+      belowFloor: true,
+      minimum: '6.0',
+    });
+    const res = await request(makeApp()).get('/api/setup/readiness');
+    expect(res.status).toBe(200);
+    expect(res.body.blockers.ffmpeg.status).toBe('warn');
+    expect(res.body.blockers.ffmpeg.cause).toBe('ffmpeg-too-old');
+    expect(res.body.blockers.ffmpeg.message).toContain('4.4');
+    // The whole point: untested is not broken.
+    expect(res.body.ready).toBe(true);
+  });
+
+  it('a MISSING ffmpeg still blocks readiness — absence outranks staleness', async () => {
+    probeFfmpeg.mockReturnValue({
+      ffmpeg: false,
+      ffprobe: true,
+      version: null,
+      belowFloor: false,
+      minimum: '6.0',
+    });
+    const res = await request(makeApp()).get('/api/setup/readiness');
+    expect(res.body.blockers.ffmpeg.status).toBe('fail');
+    expect(res.body.ready).toBe(false);
   });
 
   it("feeds diagnoseSidecar()'s result into diagnoseTts() — a venv-missing sidecar diagnosis surfaces as tts:sidecar-blocked, not an independently-computed tts verdict", async () => {

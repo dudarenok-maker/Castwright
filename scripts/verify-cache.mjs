@@ -48,8 +48,15 @@ export const STEPS = [
   {
     name: 'test:hooks',
     inputs: {
-      globs: ['scripts/tests/*.test.mjs'],
-      extraFiles: ['scripts/validate-commit-msg.mjs'],
+      /* fixtures/** is an input because ffmpeg-version.test.mjs drives its
+         cases from scripts/tests/fixtures/ffmpeg-version-cases.json at RUNTIME
+         — no module-graph edge, so without this a fixture-only diff (the
+         intended way to add a drift case) would skip the very test it adds.
+         Same #1847 trap test:pinokio's comment below documents. */
+      globs: ['scripts/tests/*.test.mjs', 'scripts/tests/fixtures/**'],
+      /* preflight-ffmpeg.cjs is an input because ffmpeg-version.test.mjs
+         requires it — a diff that breaks the parser must run its own test. */
+      extraFiles: ['scripts/validate-commit-msg.mjs', 'scripts/preflight-ffmpeg.cjs'],
       includeLockfiles: ['root'],
     },
   },
@@ -93,8 +100,17 @@ export const STEPS = [
     inputs: {
       globs: ['server/src/**'],
       /* openapi.yaml: voice-library.test.ts pins the clone-transcript cap
-         against it (see the `test` step above for the same reasoning). */
-      extraFiles: ['server/vitest.config.ts', 'server/tsconfig.json', 'openapi.yaml'],
+         against it (see the `test` step above for the same reasoning).
+         ffmpeg-version-cases.json: diagnostics/ffmpeg.test.ts drives its
+         parser cases from that file at runtime, sharing the corpus with the
+         CJS preflight parser so the two cannot drift. Without it here, a
+         fixture-only diff re-checks only the CJS side. */
+      extraFiles: [
+        'server/vitest.config.ts',
+        'server/tsconfig.json',
+        'openapi.yaml',
+        'scripts/tests/fixtures/ffmpeg-version-cases.json',
+      ],
       includeLockfiles: ['server'],
     },
   },

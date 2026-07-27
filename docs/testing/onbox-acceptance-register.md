@@ -474,6 +474,44 @@ The behavioural touch-flash is confirmed by construction but not by an automated
 spec's accepted proof. Four controls: continue-listening play badge, "Add book" tile,
 wizard "Review ›" chip, voice-library drag icon. Minutes, any machine.
 
+### E6 · ops-35 ffmpeg floor — below-floor + Re-check walkthrough ([#1877](https://github.com/dudarenok-maker/Castwright/issues/1877), plan [269](../features/269-ffmpeg-version-floor.md))
+
+Every unit test drives the floor through a **mocked** `spawnSync`, so nothing here has
+been exercised against a real old ffmpeg binary. Needs a box where ffmpeg can be swapped
+(a 22.04 container with archive ffmpeg 4.4 is the cheapest route; any machine, no GPU).
+
+Observe, in order:
+
+1. With ffmpeg **4.4** on PATH, `npm run test:server` — preflight must **exit 1** printing
+   "ffmpeg 4.4 is older than Castwright supports", with the host OS's upgrade command.
+2. Same box, server running, open the Setup Wizard's ffmpeg step — the **amber outdated
+   card** (`data-testid="step-ffmpeg-outdated"`), *not* the "isn't installed yet" card.
+   Confirm the wizard still **advances** and `GET /api/setup/readiness` reports
+   `ready: true` with `blockers.ffmpeg.status === 'warn'`.
+3. Admin → diagnostics shows the ffmpeg row at status `warn` with the version in its detail.
+   **Also confirm the top-bar Admin health dot goes amber and stays amber** — `diagnostics.ts`'s
+   `worst()` bubbles the new `warn` into `overall`, which `admin-pill.tsx:84` renders on every
+   screen with no dismiss. That is intended, but it is a permanent nag for a below-floor user and
+   should be seen before it surprises someone.
+4. **Upgrade ffmpeg to ≥ 6.0 and click Re-check WITHOUT restarting the server** — the card
+   must flip to the green ready state. This is plan 269 invariant 6; if it stays amber, a
+   cache has been reintroduced into `probeFfmpeg()`.
+5. Set `castwright.ffmpeg.minimum` to `null`, repeat step 1 — preflight passes, no warning
+   anywhere. (The documented rollback.)
+
+6. **Check the upgrade advice actually works before trusting it.** The Linux copy deliberately
+   does *not* name a one-command fix for 22.04, because none exists in-repo (the `ffmpeg` snap
+   is 4.3.1, older than 22.04's own 4.4.2 — see plan 269 "Known limitations"). On the box,
+   confirm that whatever route you take to ≥ 6.0 actually changes what `ffmpeg -version`
+   reports **and** clears the wizard card. A route that installs a newer build but leaves it
+   shadowed on `PATH` is the failure this hint exists to pre-empt.
+
+Also owed, and **not** coverable by the above: the Pinokio `"ffmpeg>=6"` constraint on a
+real conda env, install **and** update. Group with E1, which already owns the Pinokio box.
+Expect the documented one-update lag — a user updating *from* a pre-ops-35 release runs
+their old `update.js`, so the constraint applies from the update *after* that. That is not
+a bug to report.
+
 ---
 
 ## Group F — a real Android device

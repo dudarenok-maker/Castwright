@@ -277,9 +277,22 @@ export async function buildDiagnostics(opts?: { skip?: CheckId[] }): Promise<Dia
 
     // ffmpeg + ffprobe presence on PATH.
     { id: 'ffmpeg', label: 'ffmpeg / ffprobe', body: () => {
-      const { ffmpeg, ffprobe } = probeFfmpeg();
+      const { ffmpeg, ffprobe, version, belowFloor, minimum } = probeFfmpeg();
       if (ffmpeg && ffprobe) {
-        return { id: 'ffmpeg', label: 'ffmpeg / ffprobe', status: 'ok', detail: 'both present' };
+        /* ops-35: surface the version — the audio path parses ffmpeg's
+           loudnorm output, so "which ffmpeg" is a support question we get
+           asked. Below the floor warns rather than fails: untested, not
+           broken. */
+        const detail = version ? `both present · ffmpeg ${version}` : 'both present';
+        if (belowFloor) {
+          return {
+            id: 'ffmpeg',
+            label: 'ffmpeg / ffprobe',
+            status: 'warn',
+            detail: `${detail} — older than the supported ${minimum}+`,
+          };
+        }
+        return { id: 'ffmpeg', label: 'ffmpeg / ffprobe', status: 'ok', detail };
       }
       const missing = [!ffmpeg && 'ffmpeg', !ffprobe && 'ffprobe'].filter(Boolean).join(' + ');
       return {

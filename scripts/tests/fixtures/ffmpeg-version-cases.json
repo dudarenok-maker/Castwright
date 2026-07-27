@@ -1,0 +1,27 @@
+{
+  "_comment": "ops-35 (#1877) — shared corpus pinning BOTH ffmpeg version parsers: the CJS one in scripts/preflight-ffmpeg.cjs (scripts/tests/ffmpeg-version.test.mjs, node:test) and the TS one in server/src/diagnostics/ffmpeg.ts (server/src/diagnostics/ffmpeg.test.ts, vitest). One corpus so the two regexes cannot drift. Test-only — never shipped.",
+  "parse": [
+    { "name": "ubuntu 24.04", "stdout": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers", "expected": "6.1" },
+    { "name": "ubuntu 22.04", "stdout": "ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright (c) 2000-2021 the FFmpeg developers", "expected": "4.4" },
+    { "name": "arch n-prefix", "stdout": "ffmpeg version n6.1 Copyright (c) 2000-2023 the FFmpeg developers", "expected": "6.1" },
+    { "name": "windows gyan full build", "stdout": "ffmpeg version 8.1.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers", "expected": "8.1" },
+    { "name": "debian 12", "stdout": "ffmpeg version 5.1.6-0+deb12u1 Copyright (c) 2000-2024 the FFmpeg developers", "expected": "5.1" },
+    { "name": "major.minor only", "stdout": "ffmpeg version 7.0 Copyright (c) 2000-2024 the FFmpeg developers", "expected": "7.0" },
+    { "name": "banner preceded by a blank line", "stdout": "\nffmpeg version 6.1.1 Copyright (c) 2000-2023", "expected": "6.1" },
+    { "name": "git build has no semver", "stdout": "ffmpeg version 2026-01-01-git-abc1234 Copyright (c) 2000-2026 the FFmpeg developers", "expected": null },
+    { "name": "N- nightly has no semver", "stdout": "ffmpeg version N-114293-gabc1234 Copyright (c) 2000-2026 the FFmpeg developers", "expected": null },
+    { "name": "empty output", "stdout": "", "expected": null },
+    { "name": "unrelated banner", "stdout": "some other tool v9.9\n", "expected": null }
+  ],
+  "belowFloor": [
+    { "name": "equal to floor passes", "version": "6.0", "minimum": "6.0", "expected": false },
+    { "name": "higher minor passes", "version": "6.1", "minimum": "6.0", "expected": false },
+    { "name": "higher major passes", "version": "8.1", "minimum": "6.0", "expected": false },
+    { "name": "lower minor fails", "version": "5.9", "minimum": "6.0", "expected": true },
+    { "name": "lower major fails", "version": "4.4", "minimum": "6.0", "expected": true },
+    { "name": "double-digit minor compares numerically not lexically", "version": "6.10", "minimum": "6.9", "expected": false },
+    { "name": "lower major with higher minor still fails", "version": "5.99", "minimum": "6.0", "expected": true },
+    { "name": "unparseable version passes", "version": null, "minimum": "6.0", "expected": false },
+    { "name": "null floor disables the check", "version": "4.4", "minimum": null, "expected": false }
+  ]
+}
