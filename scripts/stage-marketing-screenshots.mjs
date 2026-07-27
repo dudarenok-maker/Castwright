@@ -125,12 +125,41 @@ export const MANIFEST = [
   //     Omit `viewport` and stagingPlan() drops that path segment.
   //   - `scaleWidth`: captures are at native device resolution, far larger
   //     than the marketing site's embed width, so these need a downscale the
-  //     rest of the manifest doesn't. `scaleWidth: 480` reproduces the
-  //     480x1072 the site already embeds (1280-wide source × 0.375).
+  //     rest of the manifest doesn't. Each value is the width the site already
+  //     embeds: 480 for the phone pair (1280-wide source), 720 for the tablet
+  //     (2560-wide source, landing at 720x450).
+  //
+  // Unlike every other entry, these sources come from `capture:companion`, not
+  // `capture:marketing` — so a box that has run only the latter is missing six
+  // sources and this script exits 1 (`missing source, skipped` names each one).
+  // That is the intended loud-not-silent behaviour, but it IS new: before
+  // #1838 a marketing-only capture staged clean. Run both capture rails, or
+  // expect the six warnings. Deliberately not softened to a silent skip —
+  // "companion assets quietly stopped updating" is the exact failure #1838 was
+  // filed for.
   { output: 'companion-iphone', scene: 'companion/player', scaleWidth: 480 },
   { output: 'companion-pixel', scene: 'companion/library-home', scaleWidth: 480 },
   { output: 'companion-tablet', scene: 'companion/tablet10/book-detail', scaleWidth: 720 },
 ];
+
+/* Pure — the ffmpeg command line for one plan entry. Extracted from main() so
+   the scale threading is testable: the encode is the whole point of a
+   `scaleWidth` entry, and inlined in main() nothing pinned it (dropping the
+   -vf push, or `-2` -> `-1`, left every test green while silently restaging
+   the site's assets at the wrong size).
+
+   On `-2`: it derives the height from the source aspect ratio and rounds to an
+   even number. That is NOT an encoder requirement — libwebp encodes odd heights
+   fine — it is dimension-matching. A 1280x2856 capture at width 480 is 1071
+   exactly, but the site embeds 480x1072, so `-1` would restage every companion
+   asset one pixel short. See the 1280x2856 -> 480x1072 case in
+   scripts/tests/stage-marketing-screenshots.test.mjs. */
+export function ffmpegArgs({ src, dest, scaleWidth }) {
+  const args = ['-y', '-i', src];
+  if (scaleWidth) args.push('-vf', `scale=${scaleWidth}:-2`);
+  args.push('-quality', '85', dest);
+  return args;
+}
 
 // Pure — no filesystem access — so the test can exercise it without real files.
 export function stagingPlan(manifest = MANIFEST, sourceDir = SOURCE_DIR, destDir = DEST_DIR) {
@@ -187,14 +216,7 @@ function main() {
       missing++;
       continue;
     }
-    // -2 lets ffmpeg derive the height from the source aspect ratio while
-    // rounding to the nearest even number (required by the encoder) — see
-    // scripts/tests/stage-marketing-screenshots.test.mjs for the exact
-    // 1280x2856 -> 480x1072 case this reproduces.
-    const args = ['-y', '-i', src];
-    if (scaleWidth) args.push('-vf', `scale=${scaleWidth}:-2`);
-    args.push('-quality', '85', dest);
-    const result = spawnSync('ffmpeg', args, {
+    const result = spawnSync('ffmpeg', ffmpegArgs({ src, dest, scaleWidth }), {
       stdio: 'inherit',
     });
     if (result.status !== 0) {

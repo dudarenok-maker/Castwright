@@ -1,7 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { MANIFEST, stagingPlan, mirrorPlan } from '../stage-marketing-screenshots.mjs';
+import {
+  MANIFEST,
+  stagingPlan,
+  mirrorPlan,
+  ffmpegArgs,
+} from '../stage-marketing-screenshots.mjs';
 
 test('stagingPlan produces one file per theme per manifest entry (a pair by default)', () => {
   const plan = stagingPlan(MANIFEST, '/src', '/dest');
@@ -241,5 +246,49 @@ test('existing non-companion entries are unaffected by the viewport-less / scale
   for (const p of plan) {
     assert.match(path.basename(p.src), /\.(desktop|phone|tablet)\.(light|dark)\.png$/);
     assert.ok(!('scaleWidth' in p));
+  }
+});
+
+test('ffmpegArgs threads scaleWidth into a -vf scale filter, rounding height to even', () => {
+  // The 1280x2856 -> 480x1072 case the companion entries exist for. `-2` is
+  // load-bearing: 2856 * (480/1280) is 1071 exactly, and the marketing site
+  // embeds 480x1072, so `-1` would restage every companion asset one pixel
+  // short. Verified against real ffmpeg during #1838 review.
+  assert.deepEqual(ffmpegArgs({ src: '/s/player.light.png', dest: '/d/x.webp', scaleWidth: 480 }), [
+    '-y',
+    '-i',
+    '/s/player.light.png',
+    '-vf',
+    'scale=480:-2',
+    '-quality',
+    '85',
+    '/d/x.webp',
+  ]);
+});
+
+test('ffmpegArgs omits the scale filter entirely when no scaleWidth is set', () => {
+  // Pins that the pre-#1838 command line is byte-for-byte unchanged for every
+  // non-companion entry — a scale filter applied to the desktop captures would
+  // silently resize the whole marketing set.
+  assert.deepEqual(ffmpegArgs({ src: '/s/cast.desktop.light.png', dest: '/d/cast.webp' }), [
+    '-y',
+    '-i',
+    '/s/cast.desktop.light.png',
+    '-quality',
+    '85',
+    '/d/cast.webp',
+  ]);
+});
+
+test('every companion manifest entry reaches ffmpeg with a scale filter', () => {
+  // Guards the seam end to end: manifest -> stagingPlan -> ffmpegArgs. Dropping
+  // the `if (scaleWidth)` push in ffmpegArgs, or scaleWidth from stagingPlan's
+  // plan entries, fails here rather than silently restaging at native size.
+  const companion = MANIFEST.filter((e) => e.scene.startsWith('companion/'));
+  assert.ok(companion.length > 0, 'manifest must still carry companion entries');
+  for (const p of stagingPlan(companion, '/src', '/dest')) {
+    const args = ffmpegArgs(p);
+    assert.ok(args.includes('-vf'), `${p.dest} must be scaled`);
+    assert.match(args[args.indexOf('-vf') + 1], /^scale=\d+:-2$/);
   }
 });
