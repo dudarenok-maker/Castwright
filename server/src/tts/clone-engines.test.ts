@@ -314,6 +314,25 @@ describe('clone-engines vocabulary', () => {
       const result = clonedSlotForEngine(character, 'qwen');
       expect(result).toBeUndefined();
     });
+
+    /* GATE 1 M-1 — the docstring always claimed a "missing/malformed
+       libraryUuid" returns undefined, but the check was `typeof !== 'string'`
+       only, so `''` was accepted and this RESOLUTION helper disagreed with
+       its sibling `libraryVoiceForEngine`. An empty uuid resolves no
+       artifact (`cloneStorageKey` would mint a bare `xtts-`), so both
+       RESOLUTION helpers now agree. The FAIL-SAFE predicates are untouched
+       — they still ignore the uuid entirely, by design, which is what the
+       third assertion pins. */
+    it('[M-1] returns undefined for an EMPTY libraryUuid, agreeing with libraryVoiceForEngine', () => {
+      const character = {
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-voice', libraryUuid: '', provenance: 'cloned' as const },
+        },
+      };
+      expect(clonedSlotForEngine(character, 'qwen')).toBeUndefined();
+      expect(libraryVoiceForEngine(character, 'qwen')).toBeUndefined();
+      expect(hasClonedProvenance(character, 'qwen')).toBe(true);
+    });
   });
 
   /* Task 16 (fs-38 Wave 3c) — libraryVoiceForEngine is the RESOLUTION test

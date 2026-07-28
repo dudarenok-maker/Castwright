@@ -442,12 +442,13 @@ describe('fs-38 Wave 3c Task 16 [ADV-H3] — pickVoiceForEngine resolves a libra
      `applyQwenFallback` cloned-exemption branch after the pre-pass fully
      subsumed it.
 
-     Also pins a deliberate disagreement between the two RESOLUTION
-     helpers: clonedSlotForEngine accepts `libraryUuid: ''` (it only
-     checks `typeof libraryUuid === 'string'`), but libraryVoiceForEngine
-     rejects it (requires non-empty). This test locks
-     libraryVoiceForEngine's stricter contract — the one pickVoiceForEngine
-     actually uses. */
+     Pins libraryVoiceForEngine's contract — the one pickVoiceForEngine
+     actually uses: an empty `libraryUuid` resolves nothing, so the slot
+     falls through to the human-readable name here. GATE 1 M-1 note: the two
+     RESOLUTION helpers used to DISAGREE on `''` (clonedSlotForEngine
+     accepted it, checking only `typeof libraryUuid === 'string'`). That gap
+     is closed — both now reject it — so this test no longer documents a
+     disagreement, just the shared contract. */
   it('[I-1 — hard-fail now lives one layer up, in the Task 20 pre-pass] a cloned coqui slot with a malformed libraryUuid falls through and resolves to the human-readable NAME here, but never reaches synth in production', () => {
     const emptyUuid = pickVoiceForEngine('coqui', {
       id: 'char-brann',

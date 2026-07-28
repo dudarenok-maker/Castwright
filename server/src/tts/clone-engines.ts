@@ -172,7 +172,7 @@ export function resolveClonedRetargetEngine(
 
 /** RESOLUTION test — "which clone is this, exactly?" Used by anything that
     needs the uuid in order to resolve, derive, or purge an artifact (it
-    RETURNS the libraryUuid, so it MUST validate it — an undefined or
+    RETURNS the libraryUuid, so it MUST validate it — a missing, empty, or
     non-string libraryUuid is treated as "no usable clone" and returns
     undefined). Non-clone engines, designed/imported slots, or a cloned slot
     with a missing/malformed libraryUuid all return undefined.
@@ -184,6 +184,24 @@ export function resolveClonedRetargetEngine(
     (or `characterHasClonedSlot` for the whole-character form) for that case
     instead — those deliberately skip uuid validation because they only ever
     answer "might this be cloned?", never "give me the uuid".
+
+    GATE 1 M-1 — TWO notes for the next reader:
+
+    1. This helper has NO production caller today. Every remaining mention
+       of it in `server/src` (three route files, synthesise-chapter.ts,
+       verify-designed-voice-language.ts) is a comment saying "do NOT use
+       this here". It is kept as the named, tested third member of the
+       cloned-ness vocabulary — deleting it would leave the fail-safe/
+       resolution distinction undocumented in code, and five separate
+       reviews have already tried to collapse these predicates. Do not add a
+       caller without re-reading which of the three roles you actually want.
+    2. The `''` case used to be accepted here (the check was a bare
+       `typeof libraryUuid !== 'string'`) while the sibling
+       `libraryVoiceForEngine` rejected it — a disagreement the docstring
+       above did not admit to, and inert only because nothing calls this.
+       Now both RESOLUTION helpers agree: an empty uuid resolves nothing, so
+       it is not a usable clone. This changes nothing about the FAIL-SAFE
+       predicates, which still — deliberately — ignore the uuid entirely.
 */
 export function clonedSlotForEngine(
   c: { overrideTtsVoices?: unknown },
@@ -205,7 +223,7 @@ export function clonedSlotForEngine(
   }
 
   const libraryUuid = (slot as Record<string, unknown>).libraryUuid;
-  if (typeof libraryUuid !== 'string') {
+  if (typeof libraryUuid !== 'string' || libraryUuid.length === 0) {
     return undefined;
   }
 
