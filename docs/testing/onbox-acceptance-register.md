@@ -130,8 +130,24 @@ above — batch them into the same session:**
    partition cloned-voice derives by engine to preserve VRAM
    serialization`). A spike showing both models resident simultaneously is
    a regression, not a variance.
+5. **The `voice_language_mismatch` advisory reaches the screen on all three
+   streams.** The frame is emitted by `generation.ts`, `chapter-splice.ts`,
+   and (since `f879407c`) `chapter-qa-repair.ts` when a non-English book's
+   reused DESIGNED voice is cleared for a baked-manifest-language mismatch.
+   Only mock-mode coverage exists for the two newer frontend consumers, so
+   confirm on the box: open a **non-English** book that has at least one
+   reused designed voice designed for a *different* language, then (a) run a
+   per-character re-record from the cast profile drawer's "Fix … audio", and
+   (b) hit the repair button on a `suspect` chapter row in the Listen view.
+   Each must raise ONE amber toast reading "…designed voice(s) were cleared
+   because they were designed for a different language…", naming the cleared
+   character — once per run, not once per chapter — and the run must still
+   complete rather than fail. An English-only book must raise no such toast
+   on either path. Server-side emission is already covered by
+   `server/src/routes/chapter-qa-repair.test.ts`; what is owed here is that
+   the real (non-mock) stream reaches the real toast stack.
 
-*Pass/fail criteria for all four:* `docs/features/271-fs38-wave3c-xtts.md`.
+*Pass/fail criteria for all five:* `docs/features/271-fs38-wave3c-xtts.md`.
 *Hardware:* the same single 8 GB box as the rest of Group A, XTTS weights
 installed (`install-coqui.mjs`/`.ps1`/`.sh`), no additional prerequisites
 beyond what A1 already lists above.

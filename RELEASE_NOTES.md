@@ -36,6 +36,11 @@
 - **"Fix this line" now fixes the line you marked.** On chapters with a spoken title, marking a
   line for re-recording could quietly re-record the line before it, or fail with a confusing error
   about segment indices. Both are fixed.
+- **Fix a flagged chapter without regenerating the whole thing.** When Castwright marks a
+  finished chapter "Suspect" — a line that came out silent, clipped, or the wrong length — the
+  chapter row now has a button that re-records just those lines and stitches them back in. It
+  keeps your previous take, so you can always go back. Castwright has been able to do this
+  under the hood for a while; there was simply no way to ask for it.
 - **Re-recording a character now tells you when one of their voices had to be dropped.** If a
   voice you'd designed turns out to have been built for a different language than the book
   you're fixing, Castwright sets it aside rather than reading the line in the wrong language —

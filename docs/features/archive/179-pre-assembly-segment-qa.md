@@ -97,8 +97,15 @@ chapter sails through — verified: ch17's `.lufs.json` reads a healthy `i =
 - **ASR content verification** — catching "fluent but wrong/garbled" generations
   that have normal length/loudness needs transcription, which signal-based checks
   can't see. Filed as a backlog item (`srv-31`); see `docs/BACKLOG.md`.
-- Frontend "Scan & repair" affordance — v1 drives the repair route directly; a
-  Listen/Generate-view button is a follow-up.
+- ~~Frontend "Scan & repair" affordance — v1 drives the repair route directly; a
+  Listen/Generate-view button is a follow-up.~~ **Shipped later** (fs-38 Wave 3c
+  branch): the Listen view's chapter row carries a repair button on any chapter
+  the srv-27 gate flagged `suspect`, driving the route through
+  `src/store/qa-repair-runner-middleware.ts` (mirroring `splice-runner-middleware`)
+  and surfacing the stream's `warning` advisory as a toast. Coverage:
+  `src/store/qa-repair-runner-middleware.test.ts`,
+  `src/components/listen/listen-player-region.test.tsx`, `e2e/qa-repair.spec.ts`.
+  The Generate-view equivalent is still a follow-up.
 
 ## Ship notes
 

@@ -18,18 +18,21 @@ import {
   IconShare,
   IconRefresh,
   IconPencil,
+  IconSparkle,
+  IconSpinner,
 } from '../../lib/icons';
 import { SectionLabel, Pill } from '../primitives';
 import { Waveform } from '../waveform';
 import { api } from '../../lib/api';
 import { parseDuration, formatTime } from '../../lib/time';
 import { stripChapterPrefix } from '../../lib/format-chapter-title';
-import { useAppSelector } from '../../store';
+import { useAppDispatch, useAppSelector } from '../../store';
 import {
   selectListenProgress,
   selectLivePlaybackFor,
   type ListenMarker,
 } from '../../store/listen-progress-slice';
+import { qaRepairActions, selectQaRepairRunning } from '../../store/qa-repair-slice';
 import { ShareClipModal } from '../../modals/share-clip';
 import { EditChapterTitleModal } from '../../modals/edit-chapter-title';
 import { LoudnessReport, classifyDrift } from '../loudness-report';
@@ -306,6 +309,10 @@ function ChapterListenRow({
      so only that row re-renders on each ~2 Hz tick. Falls back to the
      chapter-metadata duration until the first live tick lands. */
   const live = useAppSelector(selectLivePlaybackFor(bookId, chapter.id));
+  /* Plan 179 — a QA repair outlives this row (it runs in middleware), so the
+     busy state is read from the store rather than local component state. */
+  const dispatch = useAppDispatch();
+  const qaRepairRunning = useAppSelector(selectQaRepairRunning(bookId, chapter.id));
   const totalSec = live?.durationSec || parseDuration(chapter.duration);
   const elapsedSec = live ? Math.min(live.currentSec, totalSec) : 0;
   const progress = totalSec ? elapsedSec / totalSec : 0;
@@ -426,6 +433,42 @@ function ChapterListenRow({
             )}
           </span>
           <span className="flex items-center gap-1 justify-end">
+            {/* Plan 179 — "Scan & repair" was left as a follow-up when the
+                audio-qa-repair route shipped, so the endpoint had no frontend
+                consumer at all. Renders only on a chapter the srv-27 gate
+                already flagged, so it never invites a pointless GPU pass on
+                healthy audio. The run itself lives in
+                qa-repair-runner-middleware (it must outlive this row). */}
+            {chapter.state === 'done' && chapter.audioQa?.status === 'suspect' && (
+              <button
+                onClick={() =>
+                  dispatch(qaRepairActions.start({ bookId, chapterId: chapter.id }))
+                }
+                disabled={qaRepairRunning}
+                title={
+                  qaRepairRunning
+                    ? 'Re-recording the flagged lines…'
+                    : 'Re-record the flagged lines in this chapter'
+                }
+                aria-label={
+                  qaRepairRunning
+                    ? `Repairing flagged lines in chapter ${chapter.id}`
+                    : `Re-record flagged lines in chapter ${chapter.id}`
+                }
+                data-testid={`chapter-row-${chapter.id}-qa-repair`}
+                className={`grid place-items-center w-11 h-11 md:w-8 md:h-8 rounded-full ${
+                  qaRepairRunning
+                    ? 'text-ink/20 opacity-50 cursor-not-allowed'
+                    : 'text-amber-700 hover:text-magenta hover:bg-ink/4'
+                }`}
+              >
+                {qaRepairRunning ? (
+                  <IconSpinner className="w-4 h-4 animate-spin" />
+                ) : (
+                  <IconSparkle className="w-4 h-4" />
+                )}
+              </button>
+            )}
             <button
               onClick={onRename}
               title="Rename chapter"

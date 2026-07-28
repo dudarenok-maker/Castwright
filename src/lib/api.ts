@@ -657,6 +657,40 @@ export interface SpliceArgs {
   signal?: AbortSignal;
 }
 
+/** Plan 179 — one SSE frame from the per-chapter audio-QA scan-and-repair
+    endpoint. Frame names mirror the openapi `type` enum for
+    `audioQaRepairChapter`; only the fields this frontend actually reads are
+    modelled (the stream also carries per-segment scan detail the Listen-view
+    consumer has no surface for). */
+export type QaRepairTick =
+  | { type: 'qa_scan'; chapterId: number; flaggedCount: number }
+  | { type: 'splice_start'; chapterId: number }
+  | { type: 'progress'; chapterId: number; progress: number }
+  | { type: 'chapter_assembling'; chapterId: number; progress: number }
+  /* Non-fatal advisory: a non-English book's reused DESIGNED voices were
+     cleared because their baked manifest language differs from the book's.
+     The repair still proceeds — but the re-recorded line will come back in a
+     different voice than the one that was cleared, so the user must be told.
+     Handled exactly like the generation and splice streams' `warning` arms. */
+  | { type: 'warning'; code?: string; message: string }
+  | {
+      type: 'qa_repair_complete';
+      chapterId: number;
+      dryRun: boolean;
+      repaired?: number[];
+      stillSuspect?: number[];
+      durationSec?: number;
+    }
+  | { type: 'chapter_failed'; chapterId?: number; errorReason: string };
+
+export interface QaRepairArgs {
+  bookId: string;
+  chapterId: number;
+  onTick: (ev: QaRepairTick) => void;
+  /** Optional cancellation. */
+  signal?: AbortSignal;
+}
+
 export interface AudioArgs {
   bookId: string;
   chapterId: number;
@@ -1688,6 +1722,38 @@ async function mockStreamSplice({
     durationSec: 120,
     segmentCount: 1,
     hasPreviousAudio: true,
+  });
+}
+
+/* Plan 179 mock — emits the scan → repair → complete arc so mock-mode (e2e /
+   unit) drives the QA-repair flow without a backend.
+
+   The `warning` frame is emitted on EVERY mock run on purpose: the real server
+   only sends it for a non-English book whose reused designed voices were
+   cleared, which mock mode has no way to reach, and this is the only frame
+   whose whole point is that it must reach the user. Emitting it here keeps the
+   frontend advisory path exercised in mock mode and in the e2e spec. */
+async function mockStreamQaRepair({ chapterId, onTick }: QaRepairArgs): Promise<void> {
+  onTick({ type: 'qa_scan', chapterId, flaggedCount: 2 });
+  await wait(60);
+  onTick({ type: 'splice_start', chapterId });
+  onTick({
+    type: 'warning',
+    code: 'voice_language_mismatch',
+    message:
+      '1 designed voice(s) were cleared because they were designed for a different language ' +
+      'than this book — re-design Eliza Carrick before generating.',
+  });
+  await wait(60);
+  onTick({ type: 'chapter_assembling', chapterId, progress: 0.99 });
+  await wait(60);
+  onTick({
+    type: 'qa_repair_complete',
+    chapterId,
+    dryRun: false,
+    repaired: [3, 7],
+    stillSuspect: [],
+    durationSec: 222,
   });
 }
 
@@ -5512,6 +5578,70 @@ async function realStreamSplice({
       type: 'chapter_failed',
       chapterId,
       errorReason: (e as Error).message ?? 'Splice failed.',
+    });
+  }
+}
+
+/* Plan 179 — per-chapter audio-QA scan-and-repair. Same short-lived SSE-POST
+   shape as realStreamSplice (the repair runs THROUGH the fs-26 splice engine
+   server-side), so it deliberately reuses that frame-parsing idiom rather than
+   introducing a third one. `dryRun: false` — the Listen-view affordance is
+   "fix it", not "tell me about it"; `modelKey` is omitted so the server
+   defaults to the model the chapter was actually rendered with. */
+async function realStreamQaRepair({
+  bookId,
+  chapterId,
+  onTick,
+  signal,
+}: QaRepairArgs): Promise<void> {
+  try {
+    const res = await fetch(
+      `/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio-qa-repair`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dryRun: false }),
+        signal,
+      },
+    );
+    if (!res.ok || !res.body) {
+      const detail = await res.text().catch(() => '');
+      onTick({
+        type: 'chapter_failed',
+        chapterId,
+        errorReason: `Audio repair failed (${res.status}): ${detail || res.statusText}`,
+      });
+      return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep;
+      while ((sep = buffer.indexOf('\n\n')) >= 0) {
+        const raw = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const dataLines = raw
+          .split('\n')
+          .filter((l) => l.startsWith('data: '))
+          .map((l) => l.slice(6));
+        if (!dataLines.length) continue;
+        try {
+          onTick(JSON.parse(dataLines.join('\n')) as QaRepairTick);
+        } catch (e) {
+          console.warn('[api] malformed qa-repair tick:', dataLines.join('\n'), e);
+        }
+      }
+    }
+  } catch (e) {
+    if ((e as { name?: string })?.name === 'AbortError') return;
+    onTick({
+      type: 'chapter_failed',
+      chapterId,
+      errorReason: (e as Error).message ?? 'Audio repair failed.',
     });
   }
 }
@@ -10086,6 +10216,7 @@ const real = {
   getBaseVoiceSample: realGetBaseVoiceSample,
   streamGeneration: realStreamGeneration,
   streamSplice: realStreamSplice,
+  streamQaRepair: realStreamQaRepair,
   pauseGeneration: realPauseGeneration,
   pauseAnalysis: realPauseAnalysis,
   startCastDesign: realStartCastDesign,
@@ -10390,6 +10521,7 @@ const mock = {
   getBaseVoiceSample: mockGetBaseVoiceSample,
   streamGeneration: mockStreamGeneration,
   streamSplice: mockStreamSplice,
+  streamQaRepair: mockStreamQaRepair,
   pauseGeneration: mockPauseGeneration,
   pauseAnalysis: mockPauseAnalysis,
   startCastDesign: mockStartCastDesign,

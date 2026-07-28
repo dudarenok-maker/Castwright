@@ -332,6 +332,24 @@ history at cut time.
   on-disk index the splice route addresses, so Listen-view "Fix this line" targeted the line before
   the marked one.
 
+- **The audio-QA repair endpoint finally has a frontend consumer** (plan 179). `POST
+  …/chapters/{id}/audio-qa-repair` shipped with its "Scan & repair" affordance listed as a
+  follow-up, and never got one — a grep for the path or any `qaRepair`-shaped symbol across
+  `src/` and `e2e/` hit only the generated types. That also meant the `voice_language_mismatch`
+  advisory the route emits went nowhere at all. Adds `api.streamQaRepair` (real + mock),
+  `qa-repair-slice`, and `qa-repair-runner-middleware` — deliberately mirroring
+  `splice-runner-middleware` rather than inventing a third SSE-consumption idiom, since the
+  repair runs through the fs-26 splice engine server-side anyway — plus a repair button on the
+  Listen view's chapter row, gated on the srv-27 `suspect` verdict so it can't invite a
+  pointless GPU pass on healthy audio. The middleware toasts the stream's `warning` frame the
+  way `generation-stream-runner` toasts its own, refreshes the row's duration + cache-bust
+  stamp on completion, and reports failures. It does NOT enqueue an A/B revision: a repair
+  spans whichever characters owned the flagged sentences and `revisions` is keyed by a single
+  characterId. Coverage: `qa-repair-runner-middleware.test.ts` (warning-emitted vs. not),
+  `listen-player-region.test.tsx` (affordance gating + store-driven start), and
+  `e2e/qa-repair.spec.ts` walking row → middleware → mock stream → rendered toast. No OpenAPI
+  change was needed — the QA-repair response schema already carried every field consumed.
+
 - **The splice stream's `warning` frame no longer falls on the floor.** `chapter-splice.ts`
   has always emitted a `warning` frame when `clearMismatchedDesignedVoices` drops a reused
   designed voice whose baked manifest language differs from the book's — but `warning` was in

@@ -16,6 +16,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { ListenPlayerRegion } from './listen-player-region';
 import { listenProgressSlice, listenProgressActions } from '../../store/listen-progress-slice';
+import { qaRepairSlice, qaRepairActions } from '../../store/qa-repair-slice';
 import type { Chapter, ChapterLoudness } from '../../lib/types';
 
 function makeStore() {
@@ -364,5 +365,77 @@ describe('ListenPlayerRegion — markers panel re-record entry (fs-26)', () => {
     fireEvent.click(fixBtn);
     expect(onFixLine).toHaveBeenCalledTimes(1);
     expect(onFixLine.mock.calls[0][0]).toMatchObject({ id: 'm1', chapterId: 1, sec: 42 });
+  });
+});
+
+/* Plan 179 — the Listen-view entry point for the audio-QA scan-and-repair
+   stream. Until this landed the `audio-qa-repair` endpoint had NO frontend
+   consumer at all, so its `voice_language_mismatch` advisory went nowhere.
+
+   The row-level contract pinned here: the affordance appears only on a chapter
+   the srv-27 gate already flagged `suspect`, and clicking it hands the run to
+   `qa-repair-runner-middleware` via the store (never a local fetch). */
+describe('ListenPlayerRegion — audio-QA repair affordance (plan 179)', () => {
+  function makeQaStore() {
+    return configureStore({
+      reducer: {
+        listenProgress: listenProgressSlice.reducer,
+        qaRepair: qaRepairSlice.reducer,
+      },
+    });
+  }
+
+  function renderWithStore(store: ReturnType<typeof makeQaStore>, chapters: Chapter[]) {
+    return render(
+      <Provider store={store}>
+        <ListenPlayerRegion
+          bookId="test-book"
+          chapters={chapters}
+          listenable={chapters}
+          characters={[]}
+          currentTrack={null}
+          onPlayChapter={vi.fn()}
+          onRegenerate={vi.fn()}
+          onSeekMarker={vi.fn()}
+          onDeleteMarker={vi.fn()}
+          onSetMarkerKind={vi.fn()}
+          onFixLine={vi.fn()}
+        />
+      </Provider>,
+    );
+  }
+
+  const suspect = (id: number) =>
+    makeChapter(id, {
+      state: 'done',
+      audioQa: { status: 'suspect', reasons: ['near-silent segment'] },
+    } as Partial<Chapter>);
+
+  it('renders no repair affordance on a healthy chapter', () => {
+    renderWithStore(makeQaStore(), [makeChapter(1, { state: 'done' })]);
+    expect(screen.queryByTestId('chapter-row-1-qa-repair')).toBeNull();
+  });
+
+  it('renders the repair affordance on a suspect chapter and starts the run through the store', () => {
+    const store = makeQaStore();
+    renderWithStore(store, [suspect(1)]);
+
+    const btn = screen.getByTestId('chapter-row-1-qa-repair');
+    expect(btn).not.toBeDisabled();
+    fireEvent.click(btn);
+
+    /* The click dispatched `qaRepair/start`, which is what the middleware
+       listens for — assert on the resulting store state, not on a spy. */
+    expect(store.getState().qaRepair.running['test-book:1']).toBe(true);
+  });
+
+  it('disables the affordance while that chapter is already repairing', () => {
+    const store = makeQaStore();
+    store.dispatch(qaRepairActions.start({ bookId: 'test-book', chapterId: 1 }));
+    renderWithStore(store, [suspect(1)]);
+
+    expect(screen.getByTestId('chapter-row-1-qa-repair')).toBeDisabled();
+    /* A different chapter's in-flight repair must not disable this one. */
+    expect(store.getState().qaRepair.running['test-book:2']).toBeUndefined();
   });
 });

@@ -500,12 +500,14 @@ CLAUDE.md's Before-shipping checklist step 3.
   footprint** — Task 11's settled simplification; there is no
   clone-specific admission tier, mirroring how a Qwen clone reserves against
   the plain `qwen` footprint.
-- **(f) The splice/repair path's `clearMismatchedDesignedVoices` call is
-  asymmetric.** `chapter-splice.ts` and `generation.ts` both call it (a
-  reused designed voice whose baked manifest language differs from the
-  book's gets re-checked); `chapter-qa-repair.ts` deliberately does not —
-  documented in-line at the call site as a pre-existing asymmetry, not
-  introduced by this wave. Filed as [#1889](https://github.com/dudarenok-maker/Castwright/issues/1889).
+- **(f) ~~The splice/repair path's `clearMismatchedDesignedVoices` call is
+  asymmetric.~~ CLOSED on this branch.** All three routes now call it:
+  `generation.ts`, `chapter-splice.ts`, and — since `d8b34278` /
+  `f879407c` — `chapter-qa-repair.ts`, which also emits the matching
+  `warning` SSE frame. The frontend now reads that frame on every one of the
+  three streams: `generation-stream-runner` already did, and the splice and
+  QA-repair consumers were added afterwards (the QA-repair endpoint had no
+  frontend consumer at all until then). [#1889](https://github.com/dudarenok-maker/Castwright/issues/1889).
 - **(g) `voiceSubstitutedFrom` is not carried through a re-record merge**
   `[ADV-H6]` — the per-line diagnostic field that records when a rendered
   line used a substituted voice does not survive the re-record/merge path
