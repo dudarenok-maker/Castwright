@@ -100,14 +100,20 @@ async function runBatch(mw: MiddlewareAPI, req: SpliceBatchRequest): Promise<voi
           ok = true;
           dispatch(revisionsActions.markRevisionPlayable({ chapterId }));
           /* Refresh the Listen row: re-record changes duration, a gain remix
-             doesn't — the renderedAt stamp is what cache-busts the audio. */
-          dispatch(
-            chaptersActions.markChapterAudioUpdated({
-              chapterId,
-              durationSec: ev.durationSec,
-              renderedAt: String(Date.now()),
-            }),
-          );
+             doesn't — the renderedAt stamp is what cache-busts the audio. Guarded on
+             `currentBookId`, matching qa-repair-runner-middleware: `chapters` is keyed by
+             bare `chapterId` alone (ids repeat 1..N across every book), so a splice that
+             finishes after the user has navigated to a DIFFERENT book would otherwise
+             stamp that other book's same-numbered chapter with this splice's duration. */
+          if (mw.getState().chapters.currentBookId === req.bookId) {
+            dispatch(
+              chaptersActions.markChapterAudioUpdated({
+                chapterId,
+                durationSec: ev.durationSec,
+                renderedAt: String(Date.now()),
+              }),
+            );
+          }
         }
       },
     });

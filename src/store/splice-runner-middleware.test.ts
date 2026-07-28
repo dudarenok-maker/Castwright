@@ -22,7 +22,7 @@ const CHAPTERS: Chapter[] = [
   { id: 2, title: 'Two', duration: '2:00', state: 'done', progress: 1, characters: { castor: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
 ] as Chapter[];
 
-function makeStore() {
+function makeStore(currentBookId = 'bk1') {
   return configureStore({
     reducer: {
       splice: spliceSlice.reducer,
@@ -31,7 +31,7 @@ function makeStore() {
       notifications: notificationsSlice.reducer,
     },
     preloadedState: {
-      chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS },
+      chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS, currentBookId },
     },
     middleware: (getDefault) => getDefault().concat(spliceRunnerMiddleware()),
   });
@@ -167,5 +167,52 @@ describe('spliceRunnerMiddleware', () => {
     expect(
       store.getState().notifications.toasts.filter((t) => t.kind === 'warn'),
     ).toHaveLength(0);
+  });
+
+  it('does not stamp audio update when splice completes for a different book than current', async () => {
+    /* Guard on currentBookId: a splice for book bk1 should not mark chapter
+       audio as updated if the user has since navigated to book bk2. Without
+       the guard, it would stamp bk2's chapter 1 with bk1's audio duration,
+       confusing the user. This test verifies the guard by starting a splice
+       for bk1, switching to bk2 before completion, and asserting bk2's
+       chapter 1 is NOT updated. */
+    let completionCallback: (() => void) | null = null;
+    streamSpliceSpy.mockImplementation(async (args: SpliceArgs) => {
+      /* Defer the completion callback so we can switch books before it fires. */
+      completionCallback = () => {
+        args.onTick({
+          type: 'splice_complete',
+          chapterId: args.chapterId,
+          characterId: args.characterId,
+          mode: args.mode,
+          durationSec: 333,
+          segmentCount: 1,
+          hasPreviousAudio: true,
+        } as SpliceTick);
+      };
+    });
+
+    const store = makeStore('bk1');
+    store.dispatch(
+      spliceActions.startBatch({
+        id: 'b5', bookId: 'bk1', characterId: 'castor', characterName: 'Castor', mode: 'remix',
+        gainDb: 2, chapterIds: [1],
+      }),
+    );
+    /* Let the splice start (mock is called but completion deferred). */
+    await flush();
+
+    /* Now switch to a different book before completion fires. */
+    store.dispatch({ type: 'chapters/setCurrentBookId', payload: 'bk2' });
+
+    /* Now fire the completion callback — the middleware should NOT update
+       chapter 1 because currentBookId is now bk2, not bk1. */
+    completionCallback?.();
+    await flush();
+
+    /* Verify: chapter 1 should NOT have been stamped with the new audio time. */
+    const chapter1 = store.getState().chapters.chapters.find((c) => c.id === 1)!;
+    expect(chapter1.audioRenderedAt).toBeUndefined();
+    expect(chapter1.duration).toBe('2:00'); /* Original duration, unchanged. */
   });
 });
