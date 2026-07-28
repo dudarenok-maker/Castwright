@@ -96,6 +96,9 @@
   handles this itself now, the out-of-memory message no longer asks you to go
   and stop Coqui by hand. And stopping Coqui mid-render can no longer interrupt
   the chapter being recorded.
+- Chapter loudness figures on the Listen view are now measured from the finished audio. The
+  loudness-range and true-peak numbers were previously reported by the normaliser rather than
+  measured, so they could be well off — the integrated loudness reading was always right.
 
 # Castwright 1.14.0
 

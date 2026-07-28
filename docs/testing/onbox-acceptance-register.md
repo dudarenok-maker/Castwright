@@ -77,13 +77,13 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 7 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
 | **F** | A real Android device, optionally + a head unit | 1 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 1 |
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**36 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**37 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -657,6 +657,27 @@ Observe:
    pre-terminal render. Do not report a missed `detecting` frame as a failure.
 6. Failure path, if cheap to induce (e.g. no Python 3.12 on PATH): the red "Setup failed" card
    with the server's message, and a working "Try again".
+
+---
+
+### E8 · ops-36 golden-assembly on a second ffmpeg build ([#1880](https://github.com/dudarenok-maker/Castwright/issues/1880), plan [272](../features/272-golden-assembly-comparison.md))
+
+Run `npm run test:golden-audio:assembly` on a box whose `ffmpeg -version` banner
+differs from the baseline's. Record: which of L1/L2/L3 fire and their deltas;
+whether L4 took the LOOSE path; and L4-loose's actual RMS-error.
+
+**Why owed:** the cross-build half of the design — whether L1–L3's hard
+assertions survive a *different* ffmpeg build — cannot be exercised on a box with
+one ffmpeg, and the tier sits outside `verify.yml`, so CI never runs it.
+
+The LOOSE branch itself is **not** unexecuted: the ops-36 demonstration forced it
+with a synthetic banner mismatch plus 2.0 LU of drift and it rejected at 24.79 %
+RMS-error against a 16 % tolerance. What no box here can prove is the part that
+needs a *genuinely* different build — whether L1/L2/L3 hold across one, and what
+L4-loose's error actually is when the encoder really differs rather than being
+told it does.
+
+Criteria: [`docs/features/272-golden-assembly-comparison.md`](../features/272-golden-assembly-comparison.md).
 
 ---
 

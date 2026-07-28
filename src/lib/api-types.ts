@@ -4106,12 +4106,13 @@ export interface components {
              * @description EBU R128 loudness measurement persisted next to the chapter
              *     audio as `<slug>.lufs.json` (plan 71). Null when no loudnorm
              *     pass landed — legacy chapter, `AUDIO_LOUDNORM_ENABLED=false`,
-             *     or silent-source fallthrough. Consumers MUST gate any
-             *     drift-vs-ground-truth comparison on `twoPass === true`;
-             *     single-pass values are nominal target values, not real
-             *     post-filter measurements. Plan 77 (LUFS report card UI)
-             *     reads this back to surface per-chapter drift badges and a
-             *     book-level loudness summary card on the Listen view.
+             *     or silent-source fallthrough. `i`/`lra`/`tp` are measured from
+             *     the finished file by a real `ebur128` pass regardless of
+             *     `twoPass`, falling back to loudnorm's self-reported figures
+             *     only when that post-write measurement fails (ops-36). Plan 77
+             *     (LUFS report card UI) reads this back to surface per-chapter
+             *     drift badges and a book-level loudness summary card on the
+             *     Listen view.
              */
             lufs?: components["schemas"]["ChapterLoudness"];
         };
@@ -4124,14 +4125,26 @@ export interface components {
          */
         ChapterLoudness: {
             /**
-             * @description Measured integrated loudness (LUFS). In two-pass mode this is
-             *     the FIRST-pass measurement of the source PCM; in single-pass
-             *     mode it is the nominal target (no re-measurement is done).
+             * @description Integrated loudness (LUFS) of the finished chapter, measured by a
+             *     real `ebur128` pass over the encoded file after it lands on disk
+             *     (`server/src/audio/measure-loudness.ts`). If that post-write
+             *     measurement fails, falls back to loudnorm's self-reported
+             *     `output_i`, which is NOT a measurement of the finished file.
              */
             i: number;
-            /** @description Measured loudness range (LU). Same single-pass caveat as `i`. */
+            /**
+             * @description Loudness range (LU), measured by the same post-write `ebur128`
+             *     pass as `i`. Falls back to loudnorm's self-reported `output_lra`
+             *     on measurement failure.
+             */
             lra: number;
-            /** @description Measured true peak (dBTP). Same single-pass caveat as `i`. */
+            /**
+             * @description True peak (dBTP), measured by the same post-write `ebur128` pass
+             *     as `i`. Falls back to loudnorm's self-reported `output_tp` on
+             *     measurement failure — that fallback is the ceiling loudnorm was
+             *     ASKED to hit, not what the audio measured, and can read below the
+             *     true sample peak.
+             */
             tp: number;
             /**
              * @description Target integrated loudness (LUFS) the chapter was normalised
@@ -4141,11 +4154,21 @@ export interface components {
             target: number;
             /**
              * @description `true` when the measure-then-apply flow ran (±0.5 LU vs target);
-             *     `false` for single-pass streaming normalisation. UI consumers
-             *     MUST gate drift comparisons on this — single-pass `i`/`lra`/`tp`
-             *     are NOT post-filter measurements.
+             *     `false` for single-pass streaming normalisation. Does NOT gate
+             *     whether `i`/`lra`/`tp` are real measurements — those are always
+             *     measured from the finished file by `ebur128` (falling back to
+             *     loudnorm's self-reports only when that measurement fails),
+             *     single-pass included (ops-36).
              */
             twoPass: boolean;
+            /**
+             * @description Which mode loudnorm's second pass used. Absent for single-pass
+             *     output, for sidecars written by scripts/relufs-existing.mjs, and
+             *     for a two-pass encode whose second-pass JSON failed to parse —
+             *     so consumers MUST NOT infer presence from `twoPass`.
+             * @enum {string}
+             */
+            normalizationType?: "linear" | "dynamic";
             /**
              * Format: date-time
              * @description ISO-8601 timestamp the measurement was taken (encode time).

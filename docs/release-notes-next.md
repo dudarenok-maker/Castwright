@@ -564,3 +564,19 @@ history at cut time.
     would pass CI unnoticed and break only on developer machines — exactly how #1868 survived. It cost
     real time twice before being fixed: once masquerading as the bug under investigation in #1848, and
     again in #1873, whose own trigger tests hit it and had to route around it with a synthetic root.
+
+- **`golden-audio`: the assembly tier now compares its output against a recorded, ffmpeg-stamped
+  baseline across five layers (plus a dedicated linear-loudnorm-arm baseline) instead of a 20-LU
+  tolerance band; `--bless` is now suite-scoped** (ops-36, #1926). Bare `--bless` re-records both
+  suites' baselines; `--assembly-only --bless` / `--sidecar-only --bless` record only their own.
+  **Fixed a live bug found on the way:** the chapter loudness sidecar (`<slug>.lufs.json`) now
+  persists a real `ebur128` measurement of the finished audio file instead of loudnorm's
+  self-reported `output_i`/`output_lra`/`output_tp` — `output_tp` in particular is the ceiling
+  loudnorm was asked to hit, not a measurement, and could read below the true sample peak. On the
+  golden fixture, `lra` moved `0.5 → 1.7` and `tp` moved off the requested `-1.5`; `i` is
+  effectively unchanged (`-16.3 → -16.2` after the badge's `toFixed(1)` rounding). This is the
+  only user-visible delta here, and it carries a matching user-facing line in RELEASE_NOTES.md.
+  `LoudnormSidecarJson`/`ChapterLoudness` also gain an optional `normalizationType: 'linear' |
+  'dynamic'`, whose absence is meaningful (single-pass output, a failed second-pass JSON parse, or
+  a `scripts/relufs-existing.mjs` rewrite) rather than a bug. Plan:
+  [`docs/features/272-golden-assembly-comparison.md`](https://github.com/dudarenok-maker/Castwright/blob/main/docs/features/272-golden-assembly-comparison.md).
