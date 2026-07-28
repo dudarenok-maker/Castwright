@@ -309,6 +309,13 @@ recurring shapes are recorded in that PR's review notes; the ones that bite here
   torn state / placement bypass §3 closes, which was worse. Deliberately not
   fixed here — it needs a design decision (retry outside the lock vs.
   fail-as-cancelled vs. publish-or-bail) — filed as #1925 rather than folded in.
+- **No runtime knob rolls this work back in full.** `SEG_CAPACITY_ADMISSION=0`
+  stops `_evict_until` running at all, so §4 *is* revertible without a deploy —
+  but it does **not** revert §5's 90 s `/unload` budget, §3's epoch/discard
+  semantics, or the `'unloading'` pill state. `COQUI_IDLE_TTL` only tunes one
+  step's TTL. So if #1925's symptom (a Stop that hangs for a fresh ~90 s reload)
+  shows up badly on the box, the rollback is a code change, not a setting.
+  Worth knowing before treating either knob as the safety valve for this branch.
 
 ## 9. Owed acceptance
 
