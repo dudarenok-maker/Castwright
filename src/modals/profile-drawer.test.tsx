@@ -65,7 +65,15 @@ const discardQwenPreview = vi.fn((_bookId: string, _characterId: string, _args?:
 /* fs-38 Wave 1, Task 16 — "My voices" picker + "Save to my voices". */
 const assignLibraryVoice = vi.fn(
   (_voiceUuid: string, _args: { bookId: string; characterId: string }) =>
-    Promise.resolve({ updated: 1 }),
+    Promise.resolve<{ updated: number; written: ('qwen' | 'coqui')[] }>({
+      updated: 1,
+      written: ['qwen'],
+    }),
+);
+/* GATE 1, owner-decided [DELTA-I5] — the "Remove voice" wire call. */
+const unassignLibraryVoice = vi.fn(
+  (_voiceUuid: string, _args: { bookId: string; characterId: string }) =>
+    Promise.resolve<{ cleared: ('qwen' | 'coqui')[] }>({ cleared: ['qwen', 'coqui'] }),
 );
 const promoteToLibrary = vi.fn(
   (_args: { bookId: string; characterId: string; name: string }) =>
@@ -75,6 +83,8 @@ vi.mock('../lib/api', () => ({
   api: {
     assignLibraryVoice: (voiceUuid: string, args: { bookId: string; characterId: string }) =>
       assignLibraryVoice(voiceUuid, args),
+    unassignLibraryVoice: (voiceUuid: string, args: { bookId: string; characterId: string }) =>
+      unassignLibraryVoice(voiceUuid, args),
     promoteToLibrary: (args: { bookId: string; characterId: string; name: string }) =>
       promoteToLibrary(args),
     listVoiceLibrary: () => Promise.resolve({ voices: [] }),
@@ -1959,6 +1969,7 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
 
   beforeEach(() => {
     assignLibraryVoice.mockClear();
+    unassignLibraryVoice.mockClear();
     promoteToLibrary.mockClear();
   });
 
@@ -1982,7 +1993,7 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
   });
 
   it('clicking a "My voices" entry dispatches assignVoice(uuid, {bookId, characterId, modelKey}) — modelKey reflects the qwen engine choice', async () => {
-    assignLibraryVoice.mockResolvedValue({ updated: 1 });
+    assignLibraryVoice.mockResolvedValue({ updated: 1, written: ['qwen'] });
     renderDrawer(
       { ...baseChar, ttsEngine: 'qwen' },
       { bookId: 'book-1', myVoices: myVoicesFixture },
@@ -2005,7 +2016,7 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
      drawer's PENDING engine choice, not the character's still-empty saved
      one — the bug this fix wave closes. */
   it('sends the PENDING (not-yet-Saved) engine choice as modelKey — the ordering-trap fix', async () => {
-    assignLibraryVoice.mockResolvedValue({ updated: 1 });
+    assignLibraryVoice.mockResolvedValue({ updated: 1, written: ['qwen'] });
     renderDrawer(
       { ...baseChar, ttsEngine: undefined },
       { bookId: 'book-1', myVoices: myVoicesFixture },
@@ -2126,7 +2137,11 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
        distinguish "always writes qwen" from "writes the routed engine" — the
        assertion would pass either way. Only a coqui-routed fixture proves the
        write actually follows the routed engine. */
-    assignLibraryVoice.mockResolvedValue({ updated: 1 });
+    /* GATE 1 [F1] — a CLONED entry is clone-capable on both engines, so the
+       real route writes both slots and says so. The coqui slot is still the
+       discriminator: a client that ignored `written` and hardwired qwen would
+       leave it undefined. */
+    assignLibraryVoice.mockResolvedValue({ updated: 1, written: ['qwen', 'coqui'] });
     fetchDesignedPersona.mockClear();
     const clonedEntry: VoiceLibraryEntry = {
       voiceUuid: 'lib-clone-1',
@@ -2162,10 +2177,14 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
       libraryUuid: 'lib-clone-1',
       provenance: 'cloned',
     });
-    /* Proves the routing, not just that SOME slot got filled: a reducer that
-       (bug-for-bug) still hardwired qwen would leave this populated instead
-       of the coqui assertion above. */
-    expect(halloran?.overrideTtsVoices?.qwen).toBeUndefined();
+    /* The route writes qwen unconditionally alongside coqui, and `written`
+       reports both — so the mirror carries the qwen storage key too, NOT the
+       xtts one (which would mean the loop ignored the per-slot prefix). */
+    expect(halloran?.overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-lib-clone-1',
+      libraryUuid: 'lib-clone-1',
+      provenance: 'cloned',
+    });
 
     /* [F3] Pins the routedEngine === 'qwen' guard on setDesignedVoiceId: an
        xtts-prefixed designedVoiceId would leak into the plan-149 persona-fetch
@@ -2175,6 +2194,155 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
        designedVoiceId at all. */
     await Promise.resolve();
     expect(fetchDesignedPersona).not.toHaveBeenCalled();
+  });
+
+  /* GATE 1 [F1] — the review finding this closes. `POST /assign` always
+     writes qwen but writes coqui only when `shouldWriteCoquiSlot` holds (a
+     designed entry needs its retained reference clip still on disk). Before
+     the fix the drawer mirrored a coqui assignment on ANY 200, so this exact
+     server response produced a "My voice" coqui slot cast.json never carried
+     — and the assign thunk refetches the LIBRARY, not the cast, so nothing
+     ever reconciled it. */
+  it('[F1] does NOT write the coqui slot when the assign response says only qwen was written', async () => {
+    assignLibraryVoice.mockResolvedValue({ updated: 1, written: ['qwen'] });
+    const designedNoClipEntry: VoiceLibraryEntry = {
+      voiceUuid: 'lib-designed-noclip',
+      name: 'Halloran (designed)',
+      provenance: 'designed',
+      tags: [],
+      pinned: false,
+      engines: { qwen: { status: 'ready' } },
+      createdAt: '2026-07-01T09:00:00.000Z',
+      updatedAt: '2026-07-01T09:00:00.000Z',
+    };
+    const coquiChar: Character = { ...baseChar, ttsEngine: 'coqui' };
+    const { store } = renderDrawer(coquiChar, {
+      bookId: 'book-1',
+      myVoices: [designedNoClipEntry],
+    });
+    store.dispatch(castActions.setCharacters([coquiChar]));
+
+    fireEvent.click(screen.getByTestId('profile-drawer-my-voice-lib-designed-noclip'));
+
+    await waitFor(() =>
+      expect(assignLibraryVoice).toHaveBeenCalledWith('lib-designed-noclip', {
+        bookId: 'book-1',
+        characterId: 'halloran',
+        modelKey: 'coqui-xtts-v2',
+      }),
+    );
+
+    const halloran = store.getState().cast.characters.find((c) => c.id === 'halloran');
+    /* THE discriminator: pre-fix this mirrored the ROUTED engine on any 200,
+       so coqui was written here — an assignment cast.json never carried. */
+    expect(halloran?.overrideTtsVoices?.coqui).toBeUndefined();
+    /* And the qwen slot IS written, proving the reconciliation ran rather
+       than the whole mirror being skipped — the opposite failure a lazier
+       fix could produce. */
+    expect(halloran?.overrideTtsVoices?.qwen?.libraryUuid).toBe('lib-designed-noclip');
+    // The partial result is surfaced, not swallowed.
+    expect(screen.getByTestId('profile-drawer-my-voices-error')).toHaveTextContent(
+      'can’t be used on Coqui XTTS v2',
+    );
+  });
+
+  /* GATE 1, owner-decided [DELTA-I5] — the explicit "Remove voice" control.
+     Nothing else in the app can take a library voice back off a character:
+     `PUT /api/voices/:id/override` refuses a clear when a cloned slot is
+     present and preserves cloned provenance on a set. */
+  it('[DELTA-I5] the Remove control is absent until a library voice is assigned', () => {
+    renderDrawer(
+      { ...baseChar, ttsEngine: 'coqui' },
+      { bookId: 'book-1', myVoices: myVoicesFixture },
+    );
+    expect(screen.queryByTestId('profile-drawer-remove-my-voice')).toBeNull();
+  });
+
+  it('[DELTA-I5] Remove clears the routed engine’s library slot and leaves other library voices alone', async () => {
+    unassignLibraryVoice.mockResolvedValue({ cleared: ['qwen', 'coqui'] });
+    /* The character carries THIS library voice on coqui and a DIFFERENT one
+       on qwen. A remove scoped only by engine (or one that trusted `cleared`
+       blindly) would take the qwen voice out too — the "erased a marker for
+       an unrelated voice" shape this wave keeps hitting. */
+    const assignedChar: Character = {
+      ...baseChar,
+      ttsEngine: 'coqui',
+      overrideTtsVoices: {
+        coqui: { name: 'xtts-lib-clone-1', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+        qwen: { name: 'qwen-lib-other', libraryUuid: 'lib-other', provenance: 'designed' },
+      },
+    };
+    const { store } = renderDrawer(assignedChar, { bookId: 'book-1', myVoices: myVoicesFixture });
+    store.dispatch(castActions.setCharacters([assignedChar]));
+
+    fireEvent.click(screen.getByTestId('profile-drawer-remove-my-voice'));
+
+    await waitFor(() =>
+      expect(unassignLibraryVoice).toHaveBeenCalledWith('lib-clone-1', {
+        bookId: 'book-1',
+        characterId: 'halloran',
+      }),
+    );
+    await waitFor(() => {
+      const c = store.getState().cast.characters.find((x) => x.id === 'halloran');
+      expect(c?.overrideTtsVoices?.coqui).toBeUndefined();
+    });
+    const halloran = store.getState().cast.characters.find((c) => c.id === 'halloran');
+    expect(halloran?.overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-lib-other',
+      libraryUuid: 'lib-other',
+      provenance: 'designed',
+    });
+  });
+
+  it('[DELTA-I5] Remove still works for a library voice that is no longer in My voices', async () => {
+    /* A revoked-or-deleted entry is exactly when a character is stuck: the
+       assignment survives on cast.json with nothing in the library to match
+       it. The control must render off the CHARACTER, not the library list. */
+    unassignLibraryVoice.mockResolvedValue({ cleared: ['coqui'] });
+    const orphanedChar: Character = {
+      ...baseChar,
+      ttsEngine: 'coqui',
+      overrideTtsVoices: {
+        coqui: { name: 'xtts-lib-gone', libraryUuid: 'lib-gone', provenance: 'cloned' },
+      },
+    };
+    const { store } = renderDrawer(orphanedChar, { bookId: 'book-1', myVoices: [] });
+    store.dispatch(castActions.setCharacters([orphanedChar]));
+
+    fireEvent.click(screen.getByTestId('profile-drawer-remove-my-voice'));
+
+    await waitFor(() =>
+      expect(unassignLibraryVoice).toHaveBeenCalledWith('lib-gone', {
+        bookId: 'book-1',
+        characterId: 'halloran',
+      }),
+    );
+    await waitFor(() => {
+      const c = store.getState().cast.characters.find((x) => x.id === 'halloran');
+      expect(c?.overrideTtsVoices?.coqui).toBeUndefined();
+    });
+  });
+
+  it('[DELTA-I5] surfaces a failed Remove instead of clearing the slot anyway', async () => {
+    unassignLibraryVoice.mockRejectedValueOnce(new Error('Voice library unassign failed (500).'));
+    const assignedChar: Character = {
+      ...baseChar,
+      ttsEngine: 'coqui',
+      overrideTtsVoices: {
+        coqui: { name: 'xtts-lib-clone-1', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+      },
+    };
+    const { store } = renderDrawer(assignedChar, { bookId: 'book-1', myVoices: myVoicesFixture });
+    store.dispatch(castActions.setCharacters([assignedChar]));
+
+    fireEvent.click(screen.getByTestId('profile-drawer-remove-my-voice'));
+
+    expect(await screen.findByTestId('profile-drawer-my-voices-error')).toHaveTextContent(
+      'Voice library unassign failed (500).',
+    );
+    const halloran = store.getState().cast.characters.find((c) => c.id === 'halloran');
+    expect(halloran?.overrideTtsVoices?.coqui?.libraryUuid).toBe('lib-clone-1');
   });
 
   /* fs-38 Wave 3c, Task 29 [EX-15] — the mock layer now genuinely rejects an

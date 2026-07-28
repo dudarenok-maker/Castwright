@@ -171,6 +171,30 @@ export const castSlice = createSlice({
       if (libraryUuid !== undefined) slot.libraryUuid = libraryUuid;
       if (provenance !== undefined) slot.provenance = provenance;
     },
+    /* GATE 1, owner-decided — mirror of the "Remove voice" unassign
+       (DELETE /api/voice-library/:uuid/assign), which the server has already
+       persisted; this is the local-only reflection, same no-persist rule as
+       setOverrideVoiceName above.
+
+       Scoped by `libraryUuid`, exactly as the route is: the slot is dropped
+       ONLY when it still points at the voice being removed. That predicate is
+       what makes this safe against an over-broad `cleared` list — mock mode
+       cannot narrow its response to the slots that really matched (see
+       mockUnassignLibraryVoice), and a stale response could otherwise erase a
+       slot now holding a DIFFERENT library voice. Removing the whole slot,
+       not just its markers, is deliberate: a slot keeping `name` without
+       `libraryUuid`/`provenance` would strand the character on a raw
+       `xtts-<uuid>` storage key no resolver recognises. */
+    clearOverrideVoiceSlot: (
+      s,
+      a: PayloadAction<{ characterId: string; engine: TtsEngine; libraryUuid: string }>,
+    ) => {
+      const { characterId, engine, libraryUuid } = a.payload;
+      const c = s.characters.find((x) => x.id === characterId);
+      const slot = c?.overrideTtsVoices?.[engine];
+      if (!slot || slot.libraryUuid !== libraryUuid) return;
+      delete c!.overrideTtsVoices![engine];
+    },
     /* srv-43 — mirror a freshly-minted voiceUuid into redux so a "Play 12s"
        immediately after design resolves the uuid-keyed cache entry without
        waiting for the next cast refetch. No-op for an unknown character. */

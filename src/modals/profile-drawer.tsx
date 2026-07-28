@@ -43,7 +43,12 @@ import { VoiceCompareModal } from './voice-compare-modal';
 import { CharacterSearchPicker } from '../components/character-search-picker';
 import { castActions } from '../store/cast-slice';
 import { castDesignActions } from '../store/cast-design-slice';
-import { assignVoice, promoteCharacterVoice, type VoiceLibraryEntry } from '../store/voice-library-slice';
+import {
+  assignVoice,
+  unassignVoice,
+  promoteCharacterVoice,
+  type VoiceLibraryEntry,
+} from '../store/voice-library-slice';
 import { type DesignPhase } from '../lib/design-phase';
 
 /* fs-38 Wave 1, Task 16 — module-level empty array so the defensive
@@ -380,7 +385,7 @@ export function ProfileDrawer({
          a real backend — this thunk fires the assign immediately, ahead of
          Save. `charModelKey` carries a pending 1.7B tier pin, if any. */
       const intendedModelKey = modelKeyForEngineChoice(engineChoice, ttsModelKey, charModelKey);
-      await dispatch(
+      const { written } = await dispatch(
         assignVoice({
           voiceUuid: entry.voiceUuid,
           bookId,
@@ -399,29 +404,95 @@ export function ProfileDrawer({
          (tts-voice-mapping.ts): qwen-<uuid> / xtts-<uuid>. libraryUuid +
          provenance travel too — the coqui branch of that same resolver only
          recognises a slot as a clone (vs. falling through to the catalog)
-         when both are present. */
+         when both are present.
+
+         GATE 1 [F1] — mirror the slots the response says were WRITTEN, not
+         the slot we asked for. `/assign` always writes qwen but writes coqui
+         only when the entry is clone-capable there (`shouldWriteCoquiSlot`),
+         and it used to answer a bare `{ updated: 1 }` — so this mirrored a
+         coqui assignment unconditionally, and a designed entry with no
+         retained reference clip displayed as a "My voice" coqui assignment
+         that cast.json never carried, with nothing to reconcile it (the
+         assign thunk refetches the LIBRARY, not the cast). Driving the loop
+         off `written` makes the optimistic write settle on what the server
+         actually persisted. */
       const routedEngine = engineForModelKey(intendedModelKey);
-      const assignedName = `${routedEngine === 'coqui' ? 'xtts' : 'qwen'}-${entry.voiceUuid}`;
-      dispatch(
-        castActions.setOverrideVoiceName({
-          characterId: character.id,
-          engine: routedEngine,
-          name: assignedName,
-          libraryUuid: entry.voiceUuid,
-          provenance: entry.provenance,
-        }),
-      );
+      for (const engine of written) {
+        dispatch(
+          castActions.setOverrideVoiceName({
+            characterId: character.id,
+            engine,
+            name: `${engine === 'coqui' ? 'xtts' : 'qwen'}-${entry.voiceUuid}`,
+            libraryUuid: entry.voiceUuid,
+            provenance: entry.provenance,
+          }),
+        );
+      }
       /* designedVoiceId/stagedVoiceUuid feed Qwen-only derived state
          (sample-subject construction, redesign/compare gating) elsewhere in
          this component — only meaningful, and only safe to set, when the
          routed engine actually is qwen; setting them from a coqui pick would
          leak an xtts-prefixed name into that qwen-only machinery. */
       if (routedEngine === 'qwen') {
-        setDesignedVoiceId(assignedName);
+        setDesignedVoiceId(`qwen-${entry.voiceUuid}`);
         setStagedVoiceUuid(entry.voiceUuid);
+      }
+      /* The routed engine's slot is the one the user was actually asking
+         for; the server declining it is a partial success, not a silent one.
+         Only reachable for coqui in practice (qwen is unconditional), and
+         the consequence is concrete: with no coqui slot the resolver falls
+         through to a stock catalogue speaker for this character. */
+      if (!written.some((e) => e === routedEngine)) {
+        setLibraryActionError(
+          `“${entry.name}” can’t be used on Coqui XTTS v2 — it has no recording to derive from. ` +
+            `It’s assigned on Qwen only, so this character still uses a catalogue voice on Coqui.`,
+        );
       }
     } catch (e) {
       setLibraryActionError((e as Error).message || 'Could not assign this voice.');
+    } finally {
+      setLibraryActionBusy(null);
+    }
+  }
+
+  /* GATE 1, owner-decided [DELTA-I5] — takes a "My voices" entry back OFF
+     this character, returning it to "no voice assigned". Until now there was
+     no way back: `PUT /api/voices/:id/override` refuses a clear outright when
+     a cloned slot is present (Task 4) and preserves cloned provenance on a
+     SET, so picking a stock catalogue voice over a clone left the character
+     still rendering the clone. Clears the ASSIGNMENT only — the voice itself
+     stays in My voices and is untouched on disk.
+
+     Mirrors the `cleared` slots the route reports, the same
+     reconcile-from-the-response discipline `useMyVoice` uses for `written`. */
+  async function removeAssignedVoice(voiceUuid: string) {
+    if (!bookId) return;
+    setLibraryActionError(null);
+    setLibraryActionBusy('unassign');
+    try {
+      const { cleared } = await dispatch(
+        unassignVoice({ voiceUuid, bookId, characterId: character.id }),
+      ).unwrap();
+      for (const engine of cleared) {
+        dispatch(
+          castActions.clearOverrideVoiceSlot({
+            characterId: character.id,
+            engine,
+            libraryUuid: voiceUuid,
+          }),
+        );
+      }
+      /* Same Qwen-only derived state `useMyVoice` seeds on assign — drop it
+         when the qwen slot is the one that just went, or the drawer keeps
+         offering Play/redesign against a voice this character no longer has.
+         Guarded on the slot having actually pointed at THIS voice, matching
+         the reducer's own predicate. */
+      if (character.overrideTtsVoices?.qwen?.libraryUuid === voiceUuid) {
+        setDesignedVoiceId(null);
+        setStagedVoiceUuid(undefined);
+      }
+    } catch (e) {
+      setLibraryActionError((e as Error).message || 'Could not remove this voice.');
     } finally {
       setLibraryActionBusy(null);
     }
@@ -690,6 +761,16 @@ export function ProfileDrawer({
      (it just reads `.name`), so only the coqui path needs filtering. */
   const myVoicesForPanel =
     effectiveEngine === 'coqui' ? myVoices.filter((e) => e.provenance !== 'imported') : myVoices;
+  /* GATE 1 [DELTA-I5] — the library voice (if any) currently assigned to this
+     character on the engine it will actually render with, which is what the
+     "Remove voice" control below clears. Read off `character` (kept fresh by
+     the parent's cast-slice selector), NOT the library list: the entry can
+     have been deleted or revoked out from under the assignment, and that is
+     exactly when the user most needs to be able to clear it. The library
+     lookup only supplies a display name, and falls back when it misses. */
+  const assignedLibraryUuid = character.overrideTtsVoices?.[effectiveEngine]?.libraryUuid;
+  const assignedLibraryName =
+    myVoices.find((e) => e.voiceUuid === assignedLibraryUuid)?.name ?? 'This voice';
   const effectiveSampleModelKey = modelKeyForEngineChoice(effectiveEngine, ttsModelKey);
   const qwenSampleBlocked = effectiveEngine === 'qwen' && !designedVoiceId;
   const samplePrefix = sampleUrlPrefixFor(sampleVoiceId, effectiveSampleModelKey);
@@ -1228,6 +1309,45 @@ export function ProfileDrawer({
                 whatever's in this engine's slot. */}
             {(effectiveEngine === 'qwen' || effectiveEngine === 'coqui') && bookId && (
               <div className="space-y-2">
+                {/* GATE 1, owner-decided [DELTA-I5] — the way back to "no
+                    voice assigned". Sits directly above the picker because
+                    it answers the same question ("which My-voices entry is
+                    this character on?"), and this drawer is where every
+                    other per-character voice decision is made. Icon-only, so
+                    it carries BOTH touch-target dimensions per the mobile
+                    protocol (`min-h`/`min-w` 44px, dropped only at
+                    fine-pointer — never the `sm:` phone-only variant, which
+                    would remove the target across the whole tablet range). */}
+                {assignedLibraryUuid && (
+                  <div
+                    data-testid="profile-drawer-assigned-my-voice"
+                    className="flex items-center gap-2 rounded-2xl border border-ink/10 bg-canvas/60 px-3 py-2"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] uppercase tracking-widest text-ink/40 font-semibold">
+                        Voice from My voices
+                      </p>
+                      <p className="text-xs font-semibold text-ink truncate">
+                        {assignedLibraryName}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={libraryActionBusy === 'unassign'}
+                      onClick={() => void removeAssignedVoice(assignedLibraryUuid)}
+                      aria-label={`Remove ${assignedLibraryName} from ${character.name}`}
+                      title="Remove voice"
+                      data-testid="profile-drawer-remove-my-voice"
+                      className="shrink-0 w-8 h-8 grid place-items-center rounded-full text-ink/40 hover:text-red-600 hover:bg-red-600/10 disabled:opacity-50 disabled:cursor-wait transition-colors min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0"
+                    >
+                      {libraryActionBusy === 'unassign' ? (
+                        <IconSpinner className="w-3.5 h-3.5" />
+                      ) : (
+                        <IconClose className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
+                )}
                 {myVoicesForPanel.length > 0 && (
                   <div className="rounded-2xl border border-ink/10 bg-canvas/60 p-3 space-y-2">
                     <p className="text-[11px] uppercase tracking-widest text-ink/40 font-semibold">
