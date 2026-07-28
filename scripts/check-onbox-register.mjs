@@ -16,6 +16,57 @@ import { readFileSync } from 'node:fs';
 // as "not a group" rather than special-casing two sections whose rows would
 // buy little coverage for a lot of parser fragility.
 
+// ops-44 (issue #1913) added two edge-case behaviours on top of the above: a
+// row heading that looks row-shaped but isn't a strict `<Letter><N>` (e.g. a
+// sub-lettered `### A19b`) is now rejected with a specific error rather than
+// silently uncounted, and both heading scans below are fence-aware so an
+// example `##`/`###` line inside a fenced code block can't be parsed as a
+// real section or row.
+
+// Blanks the contents of fenced code blocks (``` or ~~~) so neither the
+// section split nor the row-heading scan below can mistake an example
+// heading inside a fence for a real one. Toggling is per-delimiter — a line
+// only closes a fence when it starts with the SAME delimiter that opened it,
+// so a `~~~` line inside a ```-fenced block is just content, not a closer.
+//
+// Also reports whether a fence was left open at EOF, and the (1-based) line
+// it opened on — an unterminated fence blanks everything after it, which
+// must be surfaced as an error rather than silently validating a truncated
+// document (ops-44, issue #1913 review finding: this previously made a
+// stray fence line make the rest of the register invisible to every check
+// below, reporting "no errors" over a truncated read).
+//
+// Residual limitation, deliberately not fixed here: two *balanced* stray
+// fences bracketing a real row still hide that row without leaving anything
+// open at EOF, so this check can't catch it — and the contiguity check (4)
+// only surfaces it when the hidden row isn't the group's highest-numbered
+// one (a hidden top row just looks like a smaller-but-still-contiguous
+// group).
+function stripFences(text) {
+  const lines = text.split('\n');
+  let openFence = null;
+  let openFenceLine = null;
+  const stripped = lines
+    .map((line, i) => {
+      const trimmed = line.trimStart();
+      if (openFence) {
+        if (trimmed.startsWith(openFence)) {
+          openFence = null;
+          openFenceLine = null;
+        }
+        return '';
+      }
+      if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+        openFence = trimmed.startsWith('```') ? '```' : '~~~';
+        openFenceLine = i + 1;
+        return '';
+      }
+      return line;
+    })
+    .join('\n');
+  return { text: stripped, unterminatedFenceLine: openFenceLine };
+}
+
 // Splits the document into `## `-level sections: { title, body } from just
 // after each `## Heading` line to just before the next one. Row headings use
 // `### ` (three `#`s), so a regex requiring the space directly after exactly
@@ -74,16 +125,42 @@ function parseGlanceTable(sectionBody) {
 function parseBodyGroups(sections) {
   const groups = new Map();
   const duplicateLetters = new Set();
+  const invalidRowHeadings = [];
   for (const section of sections) {
     const titleMatch = section.title.match(/^Group ([A-Z])\b/);
     if (!titleMatch) continue;
     const letter = titleMatch[1];
     if (groups.has(letter)) duplicateLetters.add(letter);
-    const rowRegex = new RegExp(`^### ${letter}(\\d+)\\b`, 'gm');
-    const numbers = [...section.body.matchAll(rowRegex)].map((m) => Number(m[1]));
+    // A row candidate is a `### ` heading whose text starts with this
+    // section's own letter followed by a digit — anything else (e.g. a
+    // `### Notes` subheading) isn't row-shaped and is never even looked at,
+    // so group sections may legitimately gain non-row subheadings. A
+    // candidate then either parses as a strict `<Letter><N>` (whitespace or
+    // end-of-string right after the digits) or doesn't — e.g. a sub-lettered
+    // `A19b`, or dotted sub-numbering like `A2.1` (`\b` alone would accept
+    // both: a non-word character, including `.`, `-`, `(`, `/`, `'`, `+`,
+    // satisfies a word boundary just as well as whitespace does) — and is
+    // collected in `invalidRowHeadings` instead of being silently dropped.
+    // `[^\r\n]*` (not `[^\n]*`) so a CRLF line ending doesn't leave a raw
+    // `\r` inside the captured heading text. The trailing `\r?` (outside the
+    // capture group, so it isn't included in `headingText`) absorbs a CRLF
+    // line's `\r` before `$` — `$` in multiline mode only matches directly
+    // before `\n`, so without it a CRLF line would fail to match at all.
+    const candidateRegex = new RegExp(`^### (${letter}\\d[^\\r\\n]*)\\r?$`, 'gm');
+    const rowRegex = new RegExp(`^${letter}(\\d+)(?=\\s|$)`);
+    const numbers = [];
+    for (const match of section.body.matchAll(candidateRegex)) {
+      const headingText = match[1];
+      const rowMatch = headingText.match(rowRegex);
+      if (rowMatch) {
+        numbers.push(Number(rowMatch[1]));
+      } else {
+        invalidRowHeadings.push({ letter, headingText });
+      }
+    }
     groups.set(letter, numbers);
   }
-  return { groups, duplicateLetters };
+  return { groups, duplicateLetters, invalidRowHeadings };
 }
 
 // Formats a group's found row numbers for an error message: a single row is
@@ -103,7 +180,21 @@ function formatRowList(letter, numbers) {
 // Runs all checks and returns a list of human-readable error strings — empty
 // when the register is internally coherent.
 export function checkRegister(text) {
-  const sections = splitSections(text);
+  const { text: fenceStrippedText, unterminatedFenceLine } = stripFences(text);
+  const sections = splitSections(fenceStrippedText);
+
+  // An unterminated fence blanks everything after it (stripFences treats an
+  // open fence's remaining lines as still-inside-the-fence content), so
+  // every check below would silently validate a truncated document. Report
+  // it up front and bail before any other check can run against that
+  // truncated read — a partial check here would just produce more wrong
+  // numbers on top of the missing-rows problem itself.
+  if (unterminatedFenceLine !== null) {
+    return [
+      `Unterminated fenced code block opened at line ${unterminatedFenceLine} — everything after it was ignored.`,
+    ];
+  }
+
   const glanceSection = sections.find((s) => s.title === 'At a glance');
   if (!glanceSection) {
     return ['No "## At a glance" section found — cannot check the register.'];
@@ -115,10 +206,21 @@ export function checkRegister(text) {
     duplicateLetters: duplicateTableLetters,
     malformedLetters,
   } = parseGlanceTable(glanceSection.body);
-  const { groups: bodyGroups, duplicateLetters: duplicateBodyLetters } = parseBodyGroups(sections);
+  const {
+    groups: bodyGroups,
+    duplicateLetters: duplicateBodyLetters,
+    invalidRowHeadings,
+  } = parseBodyGroups(sections);
   const tableLetters = new Set(tableGroups.keys());
   const bodyLetters = new Set(bodyGroups.keys());
   const malformedLetterSet = new Set(malformedLetters);
+  // Mirrors malformedLetterSet: a letter with an invalid row heading (e.g.
+  // `### A2a`/`### A2b` from splitting a row instead of annotating its
+  // title) already gets the rejection message above — suppressing checks 1
+  // and 4 for it avoids also reporting a count/contiguity mismatch that's
+  // just an artifact of the same rejected heading (ops-44, issue #1913
+  // review finding).
+  const invalidRowHeadingLetterSet = new Set(invalidRowHeadings.map((r) => r.letter));
   const errors = [];
 
   // Malformed glance-table rows (wrong cell count, or a non-integer last
@@ -127,6 +229,17 @@ export function checkRegister(text) {
   for (const letter of malformedLetterSet) {
     errors.push(
       `The glance-table row for Group ${letter} could not be parsed — expected exactly three cells, the last a bare integer.`,
+    );
+  }
+
+  // Sub-lettered row headings (e.g. `### A19b`) are the body-side mirror of
+  // the malformed-table-row check above — rejected outright rather than
+  // silently uncounted. The register's own convention for a row covering
+  // more than one debt is to annotate the row's title, not sub-letter it
+  // (ops-44, issue #1913).
+  for (const { letter, headingText } of invalidRowHeadings) {
+    errors.push(
+      `Row heading "### ${headingText}" is not a valid row number. Rows are numbered contiguously (${letter}1, ${letter}2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.`,
     );
   }
 
@@ -164,8 +277,11 @@ export function checkRegister(text) {
 
   // Check 1: per-group counts (only for groups present on both sides —
   // a group missing from one side is already reported by check 3 above).
+  // A letter with an invalid row heading is skipped — see
+  // invalidRowHeadingLetterSet above.
   for (const letter of tableLetters) {
     if (!bodyLetters.has(letter)) continue;
+    if (invalidRowHeadingLetterSet.has(letter)) continue;
     const tableCount = tableGroups.get(letter);
     const bodyNumbers = bodyGroups.get(letter);
     if (tableCount !== bodyNumbers.length) {
@@ -190,9 +306,11 @@ export function checkRegister(text) {
   }
 
   // Check 4: row numbers within a group are contiguous from 1, no gaps or
-  // duplicates.
+  // duplicates. A letter with an invalid row heading is skipped — see
+  // invalidRowHeadingLetterSet above.
   for (const [letter, numbers] of bodyGroups) {
     if (numbers.length === 0) continue;
+    if (invalidRowHeadingLetterSet.has(letter)) continue;
     const sorted = [...numbers].sort((a, b) => a - b);
     const isContiguous =
       new Set(sorted).size === sorted.length && sorted.every((n, i) => n === i + 1);
