@@ -489,9 +489,18 @@ sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
 });
 
 /* POST /api/sidecar/unload — drops a TTS engine's loaded model and frees GPU
-   memory. Fast path on the sidecar side (no model load to await), so the
-   2s probe budget suffices. Idempotent: returns `idle` whether or not the
-   sidecar had a model resident.
+   memory. Idempotent: returns `idle` whether or not the sidecar had a model
+   resident.
+
+   NOT a fast path any more (#1894): `CoquiEngine.unload()` now acquires
+   `_synth_lock` before dropping the model, so an unload that lands during an
+   in-flight synth blocks for the length of that forward — tens of seconds to
+   minutes, not the sub-second case the 2s `PROBE_TIMEOUT_MS` below assumes.
+   The probe can time out and this route returns its unreachable/timeout
+   error to the caller while the unload keeps waiting on the sidecar side and
+   completes afterwards regardless — the Stop pill can report a failure for
+   an unload that in fact succeeds a little late. That behaviour trade is
+   filed separately; not changed here.
 
    Body: `{ engine?: 'coqui' | 'kokoro' | 'qwen' }`, default `'coqui'`. We
    forward the full body so the sidecar can dispatch — the Kokoro / Qwen

@@ -59,7 +59,7 @@ beforeEach(() => {
     modelResident: true,
   });
   readGpuQueueState.mockResolvedValue({ queueDepth: 0, devices: [] });
-  probeFfmpeg.mockReturnValue({ ffmpeg: true, ffprobe: true });
+  probeFfmpeg.mockReturnValue({ ffmpeg: true, ffprobe: true, version: '8.1', belowFloor: false, minimum: '6.0' });
   probeDiskSpace.mockResolvedValue({ status: 'ok', freeGb: 142, path: '/workspace' });
   getResolvedAnalysisEngine.mockReturnValue('local');
   getResolvedGeminiApiKey.mockReturnValue(null);
@@ -188,8 +188,32 @@ describe('GET /api/diagnostics', () => {
     expect(byId(res.body.checks, 'analyzer').status).toBe('warn');
   });
 
+  /* ops-35 (#1877) — the board reports the version, and warns rather than
+     fails below the support floor. */
+  it('shows the ffmpeg version in the detail when both binaries are present', async () => {
+    const res = await request(makeApp()).get('/api/diagnostics');
+    expect(byId(res.body.checks, 'ffmpeg').status).toBe('ok');
+    expect(byId(res.body.checks, 'ffmpeg').detail).toBe('both present · ffmpeg 8.1');
+  });
+
+  it('WARNS (not fails) the ffmpeg row when the version is below the floor', async () => {
+    probeFfmpeg.mockReturnValue({ ffmpeg: true, ffprobe: true, version: '4.4', belowFloor: true, minimum: '6.0' });
+    const res = await request(makeApp()).get('/api/diagnostics');
+    const row = byId(res.body.checks, 'ffmpeg');
+    expect(row.status).toBe('warn');
+    expect(row.detail).toContain('4.4');
+    expect(row.detail).toContain('6.0');
+  });
+
+  it('omits the version from the detail when the banner is unparseable', async () => {
+    probeFfmpeg.mockReturnValue({ ffmpeg: true, ffprobe: true, version: null, belowFloor: false, minimum: '6.0' });
+    const res = await request(makeApp()).get('/api/diagnostics');
+    expect(byId(res.body.checks, 'ffmpeg').detail).toBe('both present');
+    expect(byId(res.body.checks, 'ffmpeg').status).toBe('ok');
+  });
+
   it('fails the ffmpeg row when a binary is missing', async () => {
-    probeFfmpeg.mockReturnValue({ ffmpeg: true, ffprobe: false });
+    probeFfmpeg.mockReturnValue({ ffmpeg: true, ffprobe: false, version: '8.1', belowFloor: false, minimum: '6.0' });
     const res = await request(makeApp()).get('/api/diagnostics');
     expect(byId(res.body.checks, 'ffmpeg').status).toBe('fail');
     expect(byId(res.body.checks, 'ffmpeg').detail).toMatch(/ffprobe/);

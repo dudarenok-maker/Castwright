@@ -24,6 +24,60 @@ PR-by-PR as the v1.15.0 cycle progresses — do not reconstruct from git
 history at cut time.
 -->
 
+## 🧱 Internals
+
+- **The `/api/setup/*` surface is now in the API contract** (fe-57, #1883). `openapi.yaml`
+  described 91 `/api/` paths and **none** of the setup surface, so the frontend types for all
+  8 setup endpoints were hand-written with no mechanical guard — and had already drifted
+  (`info.vramTotalMb` is sent by `setup-readiness.ts:99` and was absent from the frontend
+  type). Describes all 8 endpoints + 14 schemas, regenerates `src/lib/api-types.ts`, and
+  deletes **both** hand-mirrored blocks in `src/lib/api.ts` — the `SetupReadiness` family and
+  the `ModelsStatus` family — replacing them with generated aliases under identical names, so
+  no consumer import changed.
+  **This does not make server↔frontend drift a compile error**, and plan 270 says so
+  explicitly: the server does not consume `src/lib/api-types.ts`
+  (`workspace/voice-library.ts:9-10`), so describing the contract alone would have *relocated*
+  the duplicate rather than removed it. The guarantee is
+  `server/src/routes/openapi-setup-parity.test.ts`, which asserts the contract's enums equal
+  the server's TypeScript unions — via `satisfies Record<Union, 1>` over type-only imports,
+  so a member added to a server union fails `npm run typecheck` inside the test file. (A bare
+  array there would have pinned nothing; the first draft did exactly that and was caught at
+  review.) Copy count goes three → two.
+  **Fixed a live bug found on the way:** `venv-bootstrap.tsx` declared `status: 'installing'`,
+  a value the venv endpoint never emits, so its progress card never rendered during a real
+  multi-minute bootstrap — and its own tests mocked the fictional status, keeping the suite
+  green. That is the only user-visible delta here, and it carries a matching user-facing line in RELEASE_NOTES.md. Plan:
+  [`docs/features/270-openapi-setup-surface.md`](https://github.com/dudarenok-maker/Castwright/blob/main/docs/features/270-openapi-setup-surface.md).
+
+---
+
+## 🔧 Setup & prerequisites
+
+- **Castwright now declares a minimum ffmpeg version — 6.0 — and checks it.** (ops-35, #1877)
+  The audio pipeline doesn't merely invoke ffmpeg; `server/src/tts/loudnorm.ts` **parses**
+  ffmpeg's two-pass loudnorm JSON summary, which makes the version a contract we were relying
+  on without ever stating. `castwright.ffmpeg.minimum` in root `package.json` is the single
+  source of truth, read by `scripts/preflight-ffmpeg.cjs` (which previously spawned
+  `ffmpeg -version` and discarded the output), by `server/src/diagnostics/ffmpeg.ts`, and by
+  `pinokio-scripts/lib/ffmpeg-pin.test.js` — never restated anywhere.
+  This is a **support** floor, not a capability floor: loudnorm's JSON shape has been stable
+  since ffmpeg 3.1, so an evidence-derived floor would sit near 4.x and never fire. 6.0 is
+  anchored to Ubuntu 24.04 LTS (6.1.1). **This retires the previously-claimed Ubuntu 22.04**,
+  whose archive ffmpeg is 4.4 — a deliberate, user-visible support reduction; snap or a PPA
+  satisfies the floor on 22.04.
+  Only the preflight hard-fails (it is `server/package.json`'s `pretest`, so it gates
+  pre-commit, pre-push and all three `release.yml` legs — every gate channel was measured at
+  ≥ 6.1.1 first). Every user-facing surface **warns without blocking**: a new
+  `ffmpeg-too-old` `BlockerCause` at `status: 'warn'`, which `setup-readiness.ts:96` already
+  counted toward `ready`. The Setup Wizard gains a third card — before this, a below-floor
+  ffmpeg rendered "ffmpeg isn't installed yet" to a user who has it installed.
+  Pinokio's conda env moves from bare `ffmpeg` to `"ffmpeg>=6"` on **both** `install.js` and
+  `update.js`, unblocking #1876, which declined to pin precisely because no validated floor
+  existed to pin to. Rollback without reverting: set the floor to `null`.
+  Plan: [`docs/features/269-ffmpeg-version-floor.md`](https://github.com/dudarenok-maker/Castwright/blob/main/docs/features/269-ffmpeg-version-floor.md).
+
+---
+
 ## 📝 Script review & manuscript
 
 - Detect emotions can now be scoped to the current chapter — the header button runs the emotion + reaction passes on just the chapter you're viewing, with whole-book still available from its ⌄ menu. (fs-35, #592)
@@ -318,6 +372,78 @@ history at cut time.
     `VoiceProvenanceBadge` docstring now names its real consuming surface — the My-voices card's
     `ProvenanceMarker`, added by this wave — rather than the stale claim that it has none
     ([#1803](https://github.com/dudarenok-maker/Castwright/issues/1803)).
+
+- **fs-60 follow-up — profile-drawer engine-seed clamp + one shared fallback-engine derivation**
+  (#1534). Two review Minors from the fs-60 whole-branch pass, both now closed. **(1)** The profile
+  drawer seeded `engineChoice` straight from `character.ttsEngine`. Since fs-60 stopped hard-locking
+  every non-English book to Qwen, a character carrying a stale on-disk `ttsEngine` (`'kokoro'`,
+  `'gemini'`) into a ru/es/fr/de book seeded the controlled `<select>` to a value with no matching
+  option — so the picker *displayed* "Default (…)" while Save wrote the stale engine the user never
+  chose. **The reaching path is `cast-link-prior.ts:203`** (manual "link to prior character",
+  `mergedSource.ttsEngine = source.ttsEngine ?? …`, no language check at either end) — **not**
+  automatic series reuse, which vetoes cross-language candidates outright
+  (`series-reuse-link.ts:309`, fs-61) and leaves the character's own `ttsEngine` empty anyway. The
+  first draft of this entry named reuse; a review pass caught that the server refuses to create
+  that state. The seed now clamps to `pickerEngines` (the offered `kokoro`/`qwen`/`coqui`
+  set ∩ `eligibleTtsEngines`), **not** to raw `eligibleTtsEngines` as originally proposed: `gemini`
+  is language-eligible for a Russian book yet has no option row, so an eligibility-only clamp left
+  the same desync. Server-authoritative force-Qwen already corrected the engine at render, so this
+  was never wrong audio. Locked by tests asserting **`onSave`**, not `select.value` — with no
+  matching option React DOM's `updateOptions` selects the first option — in a real browser too, not
+  just jsdom — so the DOM reads `'default'` either way and a value-only assertion passes against the
+  unfixed code. The tests now assert both halves (displayed value AND what Save emits), since the
+  invariant is that they agree. A second review finding added a **reconcile effect**: the seed alone
+  left the bug reachable on the `?profile=<id>` deep-link cold boot, where the drawer mounts before
+  `state.library.books` lands, eligibility falls back to `ALL_TTS_ENGINES`, a stale `'kokoro'` passes
+  the clamp, and nothing re-derives the choice once the option row disappears.
+  **(2)** `selectHasNoFallbackEngine`, `selectFallbackEngineName` and `voiceReadinessGateMessage`
+  each re-derived the book's eligibility. In the fs-70 (#1303) "non-English but Kokoro-eligible, not
+  Coqui-eligible" state they disagreed: soft-gate + a button naming Kokoro + a message naming Coqui
+  + a server `applyQwenFallback` that throws `MissingDesignedVoiceError` — a soft-gate→hard-fail
+  mismatch, not a cosmetic one. All three now read one `getBookFallbackEligibility(state, bookId)`
+  helper whose `fallbackEngine` mirrors `applyQwenFallback` exactly; a table-driven test asserts the
+  message always names the same engine as the button across all four eligibility shapes. Pure
+  refactor for every state reachable today. Also hoists the 5-engine default array duplicated across
+  `profile-drawer.tsx` / `cast.tsx` / `voice-readiness-selectors.ts` into one `ALL_TTS_ENGINES`
+  (`src/lib/tts-models.ts`). Plan 249 gains invariants 7 and 8. The sibling `cast.tsx` banner
+  assumption (`!qwenOnly ⇒ Coqui-eligible`) is prop-driven, does not read the new helper, and stays
+  owed — folded into fs-70.
+- **A failed VRAM evict no longer kills a mixed Qwen+Coqui chapter** (#1893). fs-60 partitions a
+  chapter that mixes Qwen and Coqui into two serial phases with a sidecar `/unload` between them,
+  so the two never co-reside on an 8 GB card. That evict call had no failure isolation: it throws
+  on a non-ok `/unload`, `fetch` rejects on a dead socket, and no `try`/`catch` sat anywhere
+  between it and `synthesiseChapter`'s head — so a transient sidecar hiccup aborted a chapter that
+  would otherwise have rendered, at up to three call sites per chapter (initial body dispatch plus
+  the segment-QA and ASR re-record rounds, which share the same wrapper). The evict is now
+  best-effort: a failure logs a named warning and the Coqui phase proceeds, mirroring
+  `clone-voice-resolver.ts`'s self-heal policy — an abort still propagates, so a paused or
+  cancelled run stops here as before. The call is also bounded by the chapter's existing
+  `callTimeoutMs` and now forwards the abort signal; previously it could queue behind another
+  book's in-flight synth on the sidecar's `_synth_lock` and stall forever, uncancellable. An abort
+  is rethrown *as* an `AbortError` rather than verbatim, so a pause that raced a socket-death
+  rejection can't read as a chapter failure at `routes/generation.ts`'s pause detector (the trap
+  `clone-voice-resolver.ts`'s `abortRejection` already exists to avoid). Failing soft is usually
+  cheap — the sidecar's `/unload` is idempotent and returns 200 even when nothing was resident, so
+  a failure normally means an unhealthy sidecar, which the Coqui phase then surfaces itself — but
+  not always: a wrong/proxied `SIDECAR_URL` can 5xx `/unload` while the synth path is healthy, and
+  then Coqui really does load onto a resident Qwen. That residue is deliberately accepted, recorded
+  as plan 249's accepted limitation #4 (it weakens that plan's invariant #4 from a guarantee to a
+  success-path property) and owed on-box as register row A19. Five regression tests in
+  `server/src/tts/synthesise-chapter-coqui-fallback.test.ts`; the sibling residency asymmetry
+  (nothing ever evicts Coqui after the last Coqui chapter) stays open as #1894.
+- **Idle Coqui XTTS is now reclaimed under VRAM pressure** (#1894, PR #1924) —
+  the sidecar's admission path frees a resident-but-idle XTTS before reporting
+  `noCapacity`, instead of failing the starved operation. Engine-aware (a Coqui
+  op never evicts itself) and device-targeted. Tunable via `COQUI_IDLE_TTL` /
+  `sidecar.coquiIdleTtl` (default 30 s). One accepted user-visible trade: a
+  starved op's `NoCapacityError` no longer carries the "Coqui XTTS is loaded —
+  Use its Stop button" line, since admission now presses that button itself —
+  the message falls back to the generic "free VRAM or attach a second GPU"
+  text when Coqui was the only listed blocker. Also fixes an unguarded
+  `CoquiEngine.unload()` that could crash an in-flight synth when the Stop
+  button fired mid-render, and the same unguarded-unload race in the Whisper
+  (ASR) and ECAPA speaker engines — which, unlike Coqui, were already being
+  auto-evicted, so that one was reachable in production.
 
 ---
 

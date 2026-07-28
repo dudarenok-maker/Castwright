@@ -7378,42 +7378,15 @@ async function mockGetDiagnostics(): Promise<DiagnosticsResponse> {
   };
 }
 
-/* fs-21 — first-run readiness. Mirrors SetupReadiness in
-   server/src/routes/setup-readiness.ts. */
-export type BlockerCause =
-  | 'python-missing' | 'venv-missing' | 'venv-broken' | 'supervisor-exhausted'
-  | 'supervisor-tripped' | 'unreachable-transient' | 'unreachable-no-supervisor'
-  | 'sidecar-blocked' | 'no-engine-installed' | 'weights-missing'
-  | 'cannot-confirm-engine' | 'package-broken'
-  | 'ffmpeg-missing' | 'ffprobe-missing' | 'both-missing'
-  | 'ollama-unreachable' | 'model-not-pulled' | 'no-gemini-key'
-  | 'pass';
-
-export type BlockerActionKind =
-  | 'venv-bootstrap' | 'qwen-install' | 'kokoro-install' | 'coqui-install'
-  | 'sidecar-restart' | 'ollama-install' | 'ollama-pull' | 'navigate';
-
-export interface BlockerAction {
-  kind: BlockerActionKind;
-  label: string;
-  params?: Record<string, string>;
-  href?: string;
-}
-
-export interface BlockerDiagnosis {
-  status: 'pass' | 'warn' | 'fail';
-  cause: BlockerCause;
-  message: string;
-  remediation: string;
-  action?: BlockerAction;
-}
-
-export interface SetupReadiness {
-  ready: boolean;
-  completedAt: string | null;
-  blockers: { sidecar: BlockerDiagnosis; ffmpeg: BlockerDiagnosis; tts: BlockerDiagnosis; analyzer: BlockerDiagnosis };
-  info: { gpu: string };
-}
+/* fs-21 — first-run readiness. Generated from openapi.yaml (fe-57 / #1883):
+   these were hand-mirrored from server/src/routes/setup-readiness.ts until the
+   /api/setup/* surface was described in the contract. Do NOT hand-edit —
+   change openapi.yaml and run `npm run openapi:types`. */
+export type BlockerCause = ApiComponents['schemas']['BlockerCause'];
+export type BlockerActionKind = ApiComponents['schemas']['BlockerActionKind'];
+export type BlockerAction = ApiComponents['schemas']['BlockerAction'];
+export type BlockerDiagnosis = ApiComponents['schemas']['BlockerDiagnosis'];
+export type SetupReadiness = ApiComponents['schemas']['SetupReadiness'];
 
 async function realGetSetupReadiness(): Promise<SetupReadiness> {
   const res = await fetch('/api/setup/readiness');
@@ -7421,28 +7394,20 @@ async function realGetSetupReadiness(): Promise<SetupReadiness> {
   return (await res.json()) as SetupReadiness;
 }
 
-/* fs-38 Part A — models-status wizard single source. Mirrors ModelsStatus in
-   server/src/tts/models-status.ts. */
-export type EngineHealthState = 'ready' | 'package-missing' | 'weights-missing' | 'not-installed' | 'loaded';
-export type RuntimeProcessState = 'ready' | 'starting' | 'down' | 'crashed';
+/* fs-38 Part A — models-status wizard single source. Generated from
+   openapi.yaml (fe-57 / #1883): hand-mirrored from
+   server/src/tts/models-status.ts until the /api/setup/* surface was
+   described in the contract. Do NOT hand-edit — change openapi.yaml and run
+   `npm run openapi:types`. */
+export type EngineHealthState = ApiComponents['schemas']['EngineStatus']['state'];
+export type RuntimeProcessState = ApiComponents['schemas']['RuntimeStatus']['process'];
+/* NeedsAnswer is a UI key-set label (the wizard's guided-question answer
+   key), not a wire field on any /api/setup/* response — openapi.yaml has no
+   schema for it, so it stays hand-written here. */
 export type NeedsAnswer = 'expressive-or-multilingual' | 'simple-english';
-export interface EngineRecommendation {
-  engine: 'kokoro' | 'qwen' | 'coqui';
-  modelKey: 'kokoro-v1' | 'qwen3-tts-0.6b' | 'coqui-xtts-v2';
-  reason: string;
-  caveat: string | null;
-  alternate: 'kokoro' | 'qwen' | 'coqui' | null;
-}
-export interface RecommendationSet {
-  expressiveOrMultilingual: EngineRecommendation;
-  simpleEnglish: EngineRecommendation;
-}
-export interface ModelsStatus {
-  runtime: { installedOnDisk: boolean; pythonFound: boolean; process: RuntimeProcessState };
-  engines: Record<'kokoro' | 'qwen' | 'coqui', { state: EngineHealthState; packageBroken: boolean }>;
-  info: { gpu: string; vramTotalMb: number | null };
-  recommendation: RecommendationSet;
-}
+export type EngineRecommendation = ApiComponents['schemas']['EngineRecommendation'];
+export type RecommendationSet = ApiComponents['schemas']['RecommendationSet'];
+export type ModelsStatus = ApiComponents['schemas']['ModelsStatus'];
 
 async function realGetModelsStatus(): Promise<ModelsStatus> {
   const res = await fetch('/api/setup/models-status');
@@ -7504,13 +7469,13 @@ export async function mockGetSetupReadiness(): Promise<SetupReadiness> {
           tts: mockBlocker('fail'),
           analyzer: mockBlocker('fail'),
         },
-        info: { gpu: 'CPU — no GPU detected' },
+        info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
       }
     : {
         ready: true,
         completedAt: '2026-06-12T00:00:00.000Z',
         blockers: { sidecar: mockBlocker('pass'), ffmpeg: mockBlocker('pass'), tts: mockBlocker('pass'), analyzer: mockBlocker('pass') },
-        info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
+        info: { gpu: 'cuda · 1.2 / 8.0 GB reserved', vramTotalMb: 8192 },
       };
 }
 
@@ -7550,13 +7515,17 @@ export async function mockGetModelsStatus(): Promise<ModelsStatus> {
   };
 }
 
-async function realCompleteSetup(): Promise<{ completedAt: string }> {
+/* fe-57 (#1883) — the last /api/setup/* response still written inline. Aliased
+   so invariant 1 of plan 270 holds for the whole surface, not most of it. */
+export type SetupCompleteResponse = ApiComponents['schemas']['SetupCompleteResponse'];
+
+async function realCompleteSetup(): Promise<SetupCompleteResponse> {
   const res = await fetch('/api/setup/complete', { method: 'POST' });
   if (!res.ok) throw new Error(`complete ${res.status}`);
-  return (await res.json()) as { completedAt: string };
+  return (await res.json()) as SetupCompleteResponse;
 }
 
-export async function mockCompleteSetup(): Promise<{ completedAt: string }> {
+export async function mockCompleteSetup(): Promise<SetupCompleteResponse> {
   return { completedAt: '2026-06-12T00:00:00.000Z' };
 }
 
@@ -7586,15 +7555,10 @@ export function _resetMockTour(): void {
   mockTourCompletedAt = null;
 }
 
-export interface SmokeTestResult {
-  ok: boolean;
-  url?: string;
-  durationSec?: number;
-  analyzerOk?: boolean;
-  analyzerDetail?: string;
-  stage?: string;
-  error?: string;
-}
+/* fe-57 (#1883) — was hand-written and field-for-field identical to the
+   contract's SetupSmokeResponse. Aliased so POST /api/setup/smoke has one
+   author like the rest of the surface. Name kept so consumers don't churn. */
+export type SmokeTestResult = ApiComponents['schemas']['SetupSmokeResponse'];
 
 async function realRunSmokeTest(): Promise<SmokeTestResult> {
   const res = await fetch('/api/setup/smoke', { method: 'POST' });
@@ -8769,6 +8733,18 @@ const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = [
     risk: 'high',
     isPrompt: false,
     default: 120,
+  },
+  {
+    key: 'sidecar.coquiIdleTtl',
+    group: 'gpu-lifecycle',
+    label: 'Coqui (XTTS) idle TTL (s)',
+    help: 'Seconds of Coqui inactivity before a VRAM-starved operation may reclaim the resident XTTS model (~3 GB). Unlike the other idle TTLs there is no background watchdog — this only ever fires when another operation would otherwise fail for want of VRAM. Raise it if a mixed-engine book keeps reloading XTTS between chapters (a reload costs ~90s); lower it if renders still fail while an idle Coqui is loaded. Values below 5 fall back to the default (30) to avoid reload thrash.',
+    type: 'integer',
+    min: 0,
+    apply: 'restart-sidecar',
+    risk: 'high',
+    isPrompt: false,
+    default: 30,
   },
   {
     key: 'sidecar.disableMkldnn',

@@ -19,13 +19,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { PrimaryButton } from './primitives';
 import type { RuntimeProcessState } from '../lib/api';
+import type { components as ApiComponents } from '../lib/api-types';
 
-export interface VenvBootstrapJob {
-  id: string;
-  status: 'installing' | 'installed' | 'error';
-  step: string | null;
-  error: string | null;
-}
+/* fe-57 (#1883): was hand-written, and was WRONG — it declared
+   `status: 'installing'`, which this endpoint never emits. The venv
+   bootstrapper's states are 'detecting' | 'bootstrapping' | 'installed' |
+   'error' (server/src/tts/venv-bootstrap.ts:43); 'installing' is the SIBLING
+   ollama/coqui/kokoro bootstrappers' vocabulary, copied here by mistake. The
+   in-progress branch below therefore never matched in production, so the
+   progress card never rendered during a real multi-minute bootstrap.
+   Now aliased to the generated type so that class of drift is a compile error. */
+export type VenvBootstrapJob = ApiComponents['schemas']['VenvBootstrapJob'];
 
 const POLL_INTERVAL_MS = 1_500;
 
@@ -78,8 +82,9 @@ export function VenvBootstrap({
     }
   };
 
-  // Job in progress
-  if (job && job.status === 'installing') {
+  // Job in progress. BOTH pre-terminal states must render the card: the job
+  // starts at 'detecting' and spends the long tail in 'bootstrapping'.
+  if (job && (job.status === 'detecting' || job.status === 'bootstrapping')) {
     return (
       <div
         data-testid="venv-bootstrap-job"

@@ -713,6 +713,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'restart-sidecar', risk: 'high',
   },
   {
+    key: 'sidecar.coquiIdleTtl',
+    env: 'COQUI_IDLE_TTL',
+    group: 'gpu-lifecycle',
+    label: 'Coqui (XTTS) idle TTL (s)',
+    help: 'Seconds of Coqui inactivity before a VRAM-starved operation may reclaim the resident XTTS model (~3 GB). Unlike the other idle TTLs there is no background watchdog — this only ever fires when another operation would otherwise fail for want of VRAM. Raise it if a mixed-engine book keeps reloading XTTS between chapters (a reload costs ~90s); lower it if renders still fail while an idle Coqui is loaded. Values below 5 fall back to the default (30) to avoid reload thrash.',
+    type: 'integer', min: 0,
+    default: 30, // ← _COQUI_IDLE_TTL_DEFAULT in tts-sidecar/main.py
+    apply: 'restart-sidecar', risk: 'high',
+  },
+  {
     key: 'sidecar.disableMkldnn',
     env: 'SIDECAR_DISABLE_MKLDNN',
     group: 'gpu-lifecycle',

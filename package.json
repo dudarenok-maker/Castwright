@@ -6,6 +6,12 @@
   "engines": {
     "node": ">=22.22.0"
   },
+  "castwright": {
+    "ffmpeg": {
+      "minimum": "6.0",
+      "rationale": "ops-35 (#1877). A SUPPORT floor, not a capability floor: the oldest ffmpeg we test against. Anchored to Ubuntu 24.04 LTS (ships 6.1.1). The audio path parses ffmpeg's loudnorm JSON output, which is a version-sensitive contract. Read by scripts/preflight-ffmpeg.cjs, server/src/diagnostics/ffmpeg.ts and pinokio-scripts/lib/ffmpeg-pin.test.js — never hardcode it elsewhere. Set to null to disable the preflight check (the documented rollback)."
+    }
+  },
   "scripts": {
     "start": "node scripts/start-app.mjs",
     "stop": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/stop-app.ps1",
@@ -44,6 +50,7 @@
     "test:e2e:quarantine": "playwright test --project=chromium --grep=@quarantine --pass-with-no-tests",
     "test:quarantine": "cross-env RUN_QUARANTINE=1 npm run test && cross-env RUN_QUARANTINE=1 npm --prefix server run test && cross-env RUN_QUARANTINE=1 npm --prefix server run test:slow",
     "quarantine:health": "node scripts/quarantine-health.mjs",
+    "check:onbox-register": "node scripts/check-onbox-register.mjs",
     "capture:marketing": "playwright test --config=playwright.marketing.config.ts --project=desktop",
     "stage:marketing-screenshots": "node scripts/stage-marketing-screenshots.mjs",
     "capture:companion": "node scripts/capture-companion.mjs",

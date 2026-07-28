@@ -26,12 +26,20 @@ module.exports = {
     //    update onward. Nothing here can close that window; it is called out in
     //    218-pinokio-installer.md open verification 2 and register row E1 so the
     //    on-box tester expects the lag instead of reporting it as a broken pin.
+    //
+    //    `"ffmpeg>=6"` (ops-35, #1877) rides this SAME step for the same reason:
+    //    an env created before the constraint existed would otherwise keep
+    //    whatever conda-forge ffmpeg it was born with, forever, across every
+    //    update. The ONE-UPDATE LAG above applies to it identically — a user
+    //    updating FROM a pre-ops-35 release runs their old update.js, which has
+    //    no ffmpeg constraint, so it applies from their NEXT update onward.
+    //    See install.js step 1 for why `>=` rather than an equality pin.
     {
       method: 'shell.run',
       params: {
         path: APP_ROOT,
         conda: CONDA,
-        message: 'conda install -y -c conda-forge nodejs=24',
+        message: 'conda install -y -c conda-forge "ffmpeg>=6" nodejs=24',
       },
     },
     // Single resolve+checkout step (fetch + API + checkout + guard live inside

@@ -71,7 +71,7 @@ describe('VenvBootstrap — bootstrap job', () => {
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (url.includes('/bootstrap') && init?.method === 'POST') {
         return Promise.resolve(
-          jsonResponse({ id: '1', status: 'installing', step: 'Creating virtual environment', error: null }),
+          jsonResponse({ id: '1', status: 'bootstrapping', step: 'Creating virtual environment', error: null }),
         );
       }
       return Promise.resolve(jsonResponse({}));
@@ -84,12 +84,36 @@ describe('VenvBootstrap — bootstrap job', () => {
     expect(screen.getByText(/Creating virtual environment/i)).toBeInTheDocument();
   });
 
+  /* fe-57 (#1883) regression. This component declared `status: 'installing'` —
+     a value venv-bootstrap.ts NEVER emits ('installing' is the sibling
+     ollama/coqui/kokoro vocabulary). The in-progress branch therefore never
+     matched in production and the progress card never rendered during a real
+     multi-minute bootstrap; these tests passed only because they mocked the
+     fictional status too. Both REAL pre-terminal states must render the card. */
+  it.each(['detecting', 'bootstrapping'])(
+    'renders the progress card for the real pre-terminal status %s',
+    async (status) => {
+      fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes('/bootstrap') && init?.method === 'POST') {
+          return Promise.resolve(jsonResponse({ id: '7', status, step: 'Working…', error: null }));
+        }
+        return Promise.resolve(jsonResponse({}));
+      });
+      render(
+        <VenvBootstrap status={{ installedOnDisk: false, pythonFound: true, process: 'down' }} />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: /set up the voice engine runtime/i }));
+      await waitFor(() => expect(screen.getByTestId('venv-bootstrap-job')).toBeInTheDocument());
+      expect(screen.getByTestId('venv-bootstrap-job')).toHaveAttribute('data-job-status', status);
+    },
+  );
+
   it('calls onBootstrapped when a poll flips to installed', async () => {
     const onBootstrapped = vi.fn();
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (url.includes('/bootstrap') && init?.method === 'POST') {
         return Promise.resolve(
-          jsonResponse({ id: '42', status: 'installing', step: 'Installing packages…', error: null }),
+          jsonResponse({ id: '42', status: 'bootstrapping', step: 'Installing packages…', error: null }),
         );
       }
       if (url.includes('/bootstrap/42')) {

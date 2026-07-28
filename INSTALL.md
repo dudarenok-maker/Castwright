@@ -14,7 +14,7 @@ After install you'll have a single command (`npm run start:prod`) that brings up
   - macOS: `brew install python@3.12`
   - Linux (Ubuntu / Debian): `sudo apt install python3.12 python3.12-venv`
   - Linux (Fedora / RHEL): `sudo dnf install python3.12`
-- **ffmpeg on PATH** (server encodes chapter audio to MP3)
+- **ffmpeg 6.0 or newer on PATH** (server encodes chapter audio to MP3, and reads ffmpeg's loudness measurements back). Ubuntu 24.04+, current Homebrew, winget and conda-forge all satisfy this; Ubuntu 22.04's archive build (4.4) does not — use snap or a PPA there.
   - Windows: `winget install Gyan.FFmpeg`
   - macOS: `brew install ffmpeg`
   - Linux: `sudo apt install ffmpeg` (or `sudo dnf install ffmpeg`)
@@ -30,7 +30,7 @@ After install you'll have a single command (`npm run start:prod`) that brings up
 
 > **Upgrading an existing install?** A venv is bound to its Python, so a pre-3.12 (e.g. 3.11) venv can't be upgraded in place — the app detects the mismatch and asks you to reinstall fresh. Delete the old venv (`server/tts-sidecar/.venv`) and re-bootstrap; **your books and designed voices are safe** (they live in `WORKSPACE_DIR`, outside the install).
 
-> **Note for Linux deployers**: validated on Ubuntu 22.04+. The same scripts should work on any glibc Linux with `bash`, `curl`, and the prereqs above. Snap-installed ffmpeg sometimes ends up at `/snap/bin/ffmpeg` instead of `/usr/bin/ffmpeg`; if `which ffmpeg` returns empty after `apt install`, prepend `/snap/bin` to your PATH.
+> **Note for Linux deployers**: validated on Ubuntu 24.04+. The same scripts should work on any glibc Linux with `bash`, `curl`, and the prereqs above. 22.04 was previously listed; it is no longer validated, because its archive ffmpeg (4.4) sits below the 6.0 support floor. Snap-installed ffmpeg sometimes ends up at `/snap/bin/ffmpeg` instead of `/usr/bin/ffmpeg`; if `which ffmpeg` returns empty after `apt install`, prepend `/snap/bin` to your PATH.
 
 ---
 
@@ -181,6 +181,16 @@ ships in the bundle; the demo runs the real pipeline locally.
 ### "ffmpeg not found on PATH"
 
 The server pipes chapter PCM through ffmpeg at encode time; missing it = no audio. Confirm with `ffmpeg -version`. If the binary is installed but not on PATH, prepend its directory to PATH in your shell profile (Windows: System → Environment Variables; macOS/Linux: `~/.zshrc` / `~/.bashrc`).
+
+### "ffmpeg X.Y is older than Castwright supports"
+
+Castwright is tested against **ffmpeg 6.0 and newer**. Below that we simply haven't verified the audio path — the encoder doesn't just call ffmpeg, it reads ffmpeg's loudness measurements back, and that output has changed shape between versions. This is a support line, not a known break: Castwright still runs, and the Setup Wizard and diagnostics board show a warning rather than blocking you.
+
+Upgrade with `winget upgrade Gyan.FFmpeg` (Windows), `brew upgrade ffmpeg` (macOS), or `sudo apt install ffmpeg` on Ubuntu 24.04+ / Debian 13+, which ship 6.1 or newer.
+
+**Ubuntu 22.04 has no supported route to 6.0 in its own repositories** — its archive build is 4.4, and the `ffmpeg` snap is 4.3.1 (published 2020), i.e. *older*, so switching to it downgrades you. Either upgrade the OS to 24.04+, or install a newer ffmpeg yourself (a static build or a PPA you trust) and make sure it comes **first** on `PATH` — `/usr/bin` precedes `/snap/bin` and most manual install locations by default.
+
+Then click **Re-check** in the wizard. If `ffmpeg -version` still reports the old build, an earlier PATH entry is shadowing the new one. (If the binary came from a zip or a different package manager, upgrade it the same way you installed it — `winget`/`brew` report "no installed package" for something they didn't install.)
 
 ### Port :8080 already in use
 

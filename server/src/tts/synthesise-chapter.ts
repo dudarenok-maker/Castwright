@@ -692,7 +692,11 @@ export interface SynthesiseChapterOpts {
       synth/batch call so a runaway/never-returning call fails the chapter
       instead of hanging the queue. Defaults to `SYNTH_CALL_TIMEOUT_MS`
       (env `SIDECAR_CALL_TIMEOUT_MS`, default 600 000). `<= 0` disables.
-      An explicit small value lets tests drive the timeout deterministically. */
+      An explicit small value lets tests drive the timeout deterministically.
+      Since #1893 it ALSO bounds the mixed-phase Qwen `/unload` — not a synth
+      call, and one whose timeout is caught and warned rather than failing
+      the chapter (see `synthGroupsSerialized`). `<= 0` re-opens the
+      unbounded wait there. */
   callTimeoutMs?: number;
   /** How many Qwen sentences to pack per batched synth call (plan 112).
       Defaults to the module-level `QWEN_BATCH_SIZE` (env `QWEN_BATCH_SIZE`,
@@ -924,21 +928,28 @@ export function buildHintFromCast(c: CastCharacter): CharacterHint {
    (`manifestSlotFor`); the same standard applies here — the mirror pair
    below is warranted (two distinct, named call sites read better than one
    parameterised call at each site), but the fetch/error-message body is
-   not, so a future timeout or error-message change lands in one place. */
-async function evictEngineForPhase(engine: CloneEngine): Promise<void> {
+   not, so a future timeout or error-message change lands in one place.
+
+   The `signal` parameter is #1893's, kept through Wave 3c's generalisation:
+   this `/unload` takes the sidecar's `_synth_lock`, so it can legitimately
+   queue behind ANOTHER book's in-flight synth. Without a signal it was
+   uncancellable and could stall a chapter forever. Every call site must
+   forward the chapter's signal AND bound the call — see the callers. */
+async function evictEngineForPhase(engine: CloneEngine, signal?: AbortSignal): Promise<void> {
   const url = getResolvedSidecarUrl();
   const res = await fetch(`${url}/unload`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ engine }),
+    signal,
   });
   if (!res.ok) {
     throw new Error(`Sidecar /unload returned ${res.status} ${res.statusText}`);
   }
 }
 
-async function evictQwenForCoquiPhase(): Promise<void> {
-  return evictEngineForPhase('qwen');
+async function evictQwenForCoquiPhase(signal?: AbortSignal): Promise<void> {
+  return evictEngineForPhase('qwen', signal);
 }
 
 /* fs-38 Wave 3c, Task 22 [FAB-I2] — the mirror of `evictQwenForCoquiPhase`
@@ -949,8 +960,8 @@ async function evictQwenForCoquiPhase(): Promise<void> {
    the pre-pass's own Task 22 comment for why this fires only when a qwen
    load is about to happen afterward (evicting XTTS unconditionally would
    unload it right before every Coqui-only chapter's groups reload it). */
-async function evictCoquiForQwenPhase(): Promise<void> {
-  return evictEngineForPhase('coqui');
+async function evictCoquiForQwenPhase(signal?: AbortSignal): Promise<void> {
+  return evictEngineForPhase('coqui', signal);
 }
 
 /* fs-38 Wave 3b2 — read a cloned voice's retained reference clip (its
@@ -1728,7 +1739,19 @@ export async function synthesiseChapter(
   const coquiEvict: { promise: Promise<void> | null } = { promise: null };
   const beforeFirstCoquiDerive = (): Promise<void> => {
     if (!coquiEvict.promise) {
-      coquiEvict.promise = evictQwenForCoquiPhase();
+      /* #1893 reconciliation (main merge) — bounded + cancellable, like the
+         render-phase evict below. The FAILURE policy here is already correct
+         by construction (each resolver calls this from inside its own
+         try/catch, so a failure is classified by that arm's own fail-loud /
+         fail-soft rule — see this block's Task 22 comment above). What was
+         missing is #1893's OTHER half: this `/unload` takes the sidecar's
+         `_synth_lock`, so it can queue behind another book's in-flight synth,
+         and an unbounded fetch stalled the chapter with no way to cancel.
+         `withCallTimeout` is a hoisted declaration below, so it is in scope
+         here; it forwards the chapter's signal and its ceiling. */
+      coquiEvict.promise = withCallTimeout('qwen-evict-for-coqui-prepass', (sig) =>
+        evictQwenForCoquiPhase(sig),
+      );
     }
     return coquiEvict.promise;
   };
@@ -1778,7 +1801,11 @@ export async function synthesiseChapter(
   const beforeFirstQwenDerive = (): Promise<void> => {
     if (!hasCoquiPresence) return Promise.resolve();
     if (!qwenEvict.promise) {
-      qwenEvict.promise = evictCoquiForQwenPhase();
+      /* #1893 reconciliation (main merge) — the qwen-side mirror of
+         `beforeFirstCoquiDerive`'s bound above, for the same reason. */
+      qwenEvict.promise = withCallTimeout('coqui-evict-for-qwen-prepass', (sig) =>
+        evictCoquiForQwenPhase(sig),
+      );
     }
     return qwenEvict.promise;
   };
@@ -2636,7 +2663,61 @@ export async function synthesiseChapter(
     const preEvictGroups = groupList.filter((g) => resolveGroup(g).route.engine !== 'coqui');
     const out = new Map<number, GroupResult>();
     for (const [k, v] of await synthGroupsBatched(preEvictGroups, onDone)) out.set(k, v);
-    await evictQwenForCoquiPhase();
+    /* #1893 — the evict is VRAM hygiene, not a correctness gate, so a failed
+       one must not abort a chapter that would otherwise render. Two gaps were
+       open here: `evictQwenForCoquiPhase` throws on a non-ok `/unload` and
+       `fetch` rejects on a dead socket, and neither had any enclosing
+       try/catch between here and `synthesiseChapter`'s head — so a transient
+       sidecar hiccup killed the chapter. Failing soft costs little: the
+       sidecar's `/unload` is idempotent and 200s even when nothing was
+       resident (main.py's unload_model), so a failure here usually means an
+       unhealthy sidecar, which the Coqui phase below then surfaces with its
+       own error. NOT always, though — a wrong/proxied SIDECAR_URL can 5xx
+       `/unload` while the synth path is perfectly healthy, in which case
+       Coqui really does load on top of a resident Qwen and an 8 GB card can
+       OOM. That residue is what on-box register row A19 exists to settle;
+       if it shows a recycle storm rather than a clean render or a specific
+       sidecar error, this policy is the thing to revisit. Fail-soft +
+       abort-rethrow mirror clone-voice-resolver.ts's best-effort self-heal.
+
+       Bounded by the same per-call ceiling the synth calls use rather than a
+       tighter one: this `/unload` can legitimately queue behind ANOTHER
+       book's in-flight synth on the sidecar's `_synth_lock` (see this
+       function's header — cross-book serialization lives in the sidecar
+       now), so waiting is often correct and only waiting FOREVER is not. An
+       unbounded fetch here stalled the chapter with no way to cancel it.
+       Two consequences of reusing that ceiling, both fine at defaults but
+       worth knowing: `callTimeoutMs: 0` disables it and re-opens the
+       unbounded wait; and the evict is not inside `withHeartbeat`, so a
+       full-ceiling timeout burns 600s of the 720s CHAPTER_NO_PROGRESS_MS
+       budget (generation.ts sizes that default deliberately above this
+       ceiling) — raising SIDECAR_CALL_TIMEOUT_MS or lowering the watchdog
+       makes the stall guard fire before this fail-soft path is reached. */
+    try {
+      await withCallTimeout('qwen-evict-for-coqui', (sig) => evictQwenForCoquiPhase(sig));
+    } catch (err) {
+      /* An abort is the run being paused/cancelled — stop, don't swallow it
+         as an ordinary best-effort failure (clone-voice-resolver.ts's M-1).
+         Rethrow something that still NAMES itself an abort, rather than the
+         raw rejection: `signal.aborted` catches a pause that raced a plain
+         socket-death rejection, but rethrowing that TypeError verbatim would
+         read as a real chapter failure at routes/generation.ts's
+         `err.name === 'AbortError'` pause detector — the same trap
+         clone-voice-resolver.ts's `abortRejection` (review I-1) exists to
+         avoid. Prefer the signal's own reason, which is a genuine AbortError
+         DOMException for the bare `controller.abort()` every caller uses. */
+      const name = (err as { name?: string } | null)?.name;
+      if (name === 'AbortError' || signal?.aborted) {
+        throw name === 'AbortError'
+          ? err
+          : (signal?.reason ?? Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+      }
+      console.warn(
+        `[synthesise-chapter] fs-60 Qwen→Coqui evict failed; continuing into the Coqui phase ` +
+          `without it (Coqui may load alongside a still-resident Qwen):`,
+        err,
+      );
+    }
     for (const [k, v] of await synthGroupsBatched(coquiGroups, onDone)) out.set(k, v);
     /* [#1894] — the missing half of fs-60's eviction. This wrapper evicted
        Qwen FOR the Coqui phase but never the reverse, so XTTS (~3.5 GB)
@@ -2671,7 +2752,13 @@ export async function synthesiseChapter(
        leading evict's own bare `await` is untouched here; it is a separate
        finding with its own reconciliation against main. */
     try {
-      await evictCoquiForQwenPhase();
+      /* #1893 reconciliation (main merge) — bounded + cancellable, matching
+         the leading `qwen-evict-for-coqui` call above. The fail-soft policy
+         here was already right (see the comment above); what main added and
+         this mirror lacked is the ceiling: an unbounded `/unload` queued
+         behind another book's `_synth_lock` could stall a chapter whose
+         groups are ALL already synthesised, purely to free VRAM. */
+      await withCallTimeout('coqui-evict-after-coqui-phase', (sig) => evictCoquiForQwenPhase(sig));
     } catch (err) {
       console.warn(
         '[synthesise-chapter] failed to evict Coqui after the chapter’s Coqui phase — continuing; ' +

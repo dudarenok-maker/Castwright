@@ -36,7 +36,7 @@ function readinessWith(
     ready: false,
     completedAt: null,
     blockers: { sidecar: PASS, tts: PASS, ffmpeg: PASS, analyzer: PASS, ...overrides },
-    info: { gpu: '' },
+    info: { gpu: '', vramTotalMb: null },
   };
 }
 

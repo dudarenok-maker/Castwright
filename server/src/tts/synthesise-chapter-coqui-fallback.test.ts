@@ -343,3 +343,141 @@ describe('synthesiseChapter — Qwen→Coqui fallback (fs-60)', () => {
     expect(coquiIndices.every((i) => i > evictIndex)).toBe(true);
   });
 });
+
+/* #1893 — the mixed-phase evict had no failure isolation: it throws on a
+   non-ok `/unload`, `fetch` rejects on a dead socket, and nothing between the
+   call and `synthesiseChapter`'s head caught either, so a transient sidecar
+   hiccup aborted a chapter that would otherwise have rendered. These pin the
+   fail-soft policy AND its two deliberate limits: an abort still propagates,
+   and the call is bounded rather than able to hang forever. */
+describe('synthesiseChapter — mixed-phase evict failure isolation (#1893)', () => {
+  const cast: CastCharacter[] = [
+    { id: 'marlow', name: 'Marlow', gender: 'male', overrideTtsVoices: { qwen: { name: 'qwen-marlow' } } },
+    { id: 'wren', name: 'Wren', gender: 'female' }, // undesigned -> falls back to Coqui
+  ];
+
+  /* A genuinely mixed qwen+coqui chapter — the only shape that reaches the
+     evict. Sentence 1 (marlow) is the anchor group, rendered standalone
+     before synthGroupsSerialized; 2 (wren -> coqui) and 3 (marlow -> qwen)
+     are the body groups that actually get partitioned across the evict. */
+  function mixedChapter(overrides: Partial<Parameters<typeof synthesiseChapter>[0]> = {}) {
+    const qwen = makeProvider();
+    const coqui = makeProvider();
+    const resolveForEngine = (e: string) =>
+      e === 'coqui'
+        ? { provider: coqui, modelKey: 'coqui-xtts-v2' as const }
+        : { provider: qwen, modelKey: 'qwen3-tts-0.6b' as const };
+    return {
+      qwen,
+      coqui,
+      promise: synthesiseChapter({
+        sentences: [sentence(1, 'marlow'), sentence(2, 'wren'), sentence(3, 'marlow')],
+        cast,
+        provider: qwen,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        resolveForEngine,
+        forbidKokoroFallback: true,
+        coquiEligible: true,
+        bookLanguage: 'ru',
+        ...overrides,
+      }),
+    };
+  }
+
+  it('renders the chapter anyway when the sidecar /unload returns non-ok', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(global, 'fetch').mockImplementation(
+      async () => new Response(null, { status: 500, statusText: 'Internal Server Error' }),
+    );
+
+    const { coqui, promise } = mixedChapter();
+    const result = await promise;
+
+    /* The Coqui phase still runs — the failed evict degraded VRAM hygiene,
+       it did not cost the user the chapter. */
+    expect(coqui.calls.length).toBeGreaterThan(0);
+    expect(result.segments.filter((s) => s.kind !== 'title')).toHaveLength(3);
+    /* Pin the message, not just "something warned" — synthesiseChapter has
+       four other console.warn sites, and this exact string is what register
+       row A19 tells the operator to grep the server log for. */
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('evict failed'),
+      expect.anything(),
+    );
+  });
+
+  it('renders the chapter anyway when the /unload fetch rejects (dead sidecar socket)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(global, 'fetch').mockRejectedValue(new Error('fetch failed'));
+
+    const { coqui, promise } = mixedChapter();
+    const result = await promise;
+
+    expect(coqui.calls.length).toBeGreaterThan(0);
+    expect(result.segments.filter((s) => s.kind !== 'title')).toHaveLength(3);
+    /* Pin the message, not just "something warned" — synthesiseChapter has
+       four other console.warn sites, and this exact string is what register
+       row A19 tells the operator to grep the server log for. */
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('evict failed'),
+      expect.anything(),
+    );
+  });
+
+  /* Both abort tests assert on `.name`, not the message: `.name ===
+     'AbortError'` is the property routes/generation.ts's pause detector keys
+     on to tell "the user paused" from "this chapter failed". A message-only
+     assertion would stay green even if the rethrow lost that identity. */
+  it('does NOT swallow an abort — a paused/cancelled run still stops at the evict', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(global, 'fetch').mockRejectedValue(
+      Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }),
+    );
+
+    /* Guards the risk this fix introduces rather than the bug it fixes: the
+       new catch must stay narrow enough that a cancel isn't downgraded into
+       a warning and a chapter that keeps rendering. */
+    await expect(mixedChapter().promise).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('rethrows a live abort AS an AbortError even when the fetch died some other way', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ctrl = new AbortController();
+    /* The race that makes this more than a duplicate of the test above: the
+       user pauses while the sidecar socket is dying, so the rejection that
+       surfaces is a plain TypeError and only `signal.aborted` reveals the
+       cancel. Rethrowing that TypeError verbatim would read as a real
+       chapter failure upstream. */
+    vi.spyOn(global, 'fetch').mockImplementation(async () => {
+      ctrl.abort();
+      throw new TypeError('fetch failed');
+    });
+
+    await expect(mixedChapter({ signal: ctrl.signal }).promise).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+  });
+
+  it('bounds a hanging /unload instead of stalling the chapter forever', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    /* The real hang this models: the sidecar's unload takes `_synth_lock`, so
+       it can queue behind ANOTHER book's in-flight synth. Before the fix this
+       fetch had no timeout and no signal — the chapter waited forever with no
+       way to cancel. */
+    vi.spyOn(global, 'fetch').mockImplementation(() => new Promise(() => {}));
+
+    const { coqui, promise } = mixedChapter({ callTimeoutMs: 50 });
+    const result = await promise;
+
+    expect(coqui.calls.length).toBeGreaterThan(0);
+    expect(result.segments.filter((s) => s.kind !== 'title')).toHaveLength(3);
+    /* Pin the message, not just "something warned" — synthesiseChapter has
+       four other console.warn sites, and this exact string is what register
+       row A19 tells the operator to grep the server log for. */
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('evict failed'),
+      expect.anything(),
+    );
+  });
+});

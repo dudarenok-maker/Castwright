@@ -3,7 +3,7 @@ import type { RootState } from './index';
 import { compareCastRows } from '../lib/cast-sort';
 import { resolveVoiceStatus } from '../lib/voice-status';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
-import { engineForModelKey } from '../lib/tts-models';
+import { ALL_TTS_ENGINES, engineForModelKey } from '../lib/tts-models';
 
 export interface UndesignedCharacterRow {
   id: string;
@@ -58,51 +58,77 @@ export function selectVoiceReadinessGateShouldFire(state: RootState, bookId: str
   return selectUndesignedQwenCharacters(state, bookId).some((c) => c.lines > 0);
 }
 
+export interface BookFallbackEligibility {
+  isEnglish: boolean;
+  /** False only when NEITHER Coqui nor Kokoro can read this book's language —
+      the gate's hard block. */
+  hasFallback: boolean;
+  /** The engine the "Proceed anyway" button would actually render with.
+      Meaningless when `hasFallback` is false (no proceed button is shown). */
+  fallbackEngine: 'Coqui' | 'Kokoro';
+}
+
+/** fs-60/#1534 — the ONE derivation of a book's Qwen-fallback situation.
+    `selectHasNoFallbackEngine`, `selectFallbackEngineName` and
+    `voiceReadinessGateMessage` all read it, so the soft-gate/hard-block
+    decision, the button's engine name and the gate copy can never name
+    different engines. They used to each re-derive this, and in the
+    (today-unreachable) "non-English but Kokoro-eligible, not Coqui-eligible"
+    state they disagreed: soft-gate + a button saying "Kokoro" + a message
+    saying "Coqui" + a server `applyQwenFallback` that throws. fs-70 (#1303)
+    makes that state reachable by widening Kokoro's language support.
+
+    `fallbackEngine` mirrors the server's applyQwenFallback
+    (server/src/tts/synthesise-chapter.ts) exactly — Coqui when the book is
+    non-English AND Coqui is eligible, Kokoro otherwise — so the UI never
+    promises a fallback the server won't use.
+
+    Missing book data (library not yet loaded) defaults to "every engine is
+    eligible", i.e. NOT blocked — mirroring the old selectIsBookNonEnglish's
+    "defaults to English" posture for the same missing-data case, rather than
+    flashing a hard block while the library is still loading. */
+export function getBookFallbackEligibility(
+  state: RootState,
+  bookId: string,
+): BookFallbackEligibility {
+  const book = state.library?.books?.find((b) => b.bookId === bookId);
+  const eligible = book?.eligibleTtsEngines ?? ALL_TTS_ENGINES;
+  const isEnglish = (book?.language ?? 'en') === 'en';
+  return {
+    isEnglish,
+    hasFallback: eligible.includes('coqui') || eligible.includes('kokoro'),
+    fallbackEngine: !isEnglish && eligible.includes('coqui') ? 'Coqui' : 'Kokoro',
+  };
+}
+
 /** fs-60 — true only when this book's language has NO fallback engine at
     all (neither Coqui nor Kokoro is in eligibleTtsEngines). A Coqui-eligible
     language (en/ru/es/fr/de/zh/ja) gets the soft-gate below instead of a hard
     block, since an undesigned Qwen character falls back to Coqui rather than
     failing. */
 export function selectHasNoFallbackEngine(state: RootState, bookId: string): boolean {
-  const book = state.library?.books?.find((b) => b.bookId === bookId);
-  /* Missing book data (not yet loaded) defaults to "assume every engine is
-     eligible" — i.e. NOT blocked — mirroring the old selectIsBookNonEnglish's
-     "defaults to English (false)" posture for the same missing-data case,
-     rather than flashing a hard-block while the library is still loading. */
-  const eligible = book?.eligibleTtsEngines ?? ['qwen', 'kokoro', 'coqui', 'gemini', 'piper'];
-  return !eligible.includes('coqui') && !eligible.includes('kokoro');
+  return !getBookFallbackEligibility(state, bookId).hasFallback;
 }
 
 /** fs-60 — the display name of the fallback engine the "Proceed anyway"
-    button would actually render with, for this book: `'Coqui'` for a
-    Coqui-eligible non-English book, `'Kokoro'` otherwise (English books keep
-    the original Kokoro fallback). Mirrors the server's applyQwenFallback
-    (server/src/tts/synthesise-chapter.ts): Coqui is the fallback when the
-    book is non-English AND coqui is eligible; Kokoro otherwise. Same
-    book-lookup + eligibleTtsEngines default as `selectHasNoFallbackEngine`
-    above — don't fork the derivation. If `selectHasNoFallbackEngine` is true
-    (no Coqui/Kokoro fallback for this language), the return value here is
-    irrelevant since no proceed button is shown in that case — 'Kokoro' is just
-    the harmless default. */
+    button would actually render with, for this book. */
 export function selectFallbackEngineName(state: RootState, bookId: string): 'Coqui' | 'Kokoro' {
-  const book = state.library?.books?.find((b) => b.bookId === bookId);
-  const eligible = book?.eligibleTtsEngines ?? ['qwen', 'kokoro', 'coqui', 'gemini', 'piper'];
-  const isEnglish = (book?.language ?? 'en') === 'en';
-  return !isEnglish && eligible.includes('coqui') ? 'Coqui' : 'Kokoro';
+  return getBookFallbackEligibility(state, bookId).fallbackEngine;
 }
 
 /** fs-46/fs-60 — message-builder pair mirroring `analysisBusyMessage`. Three
-    branches: English's existing soft-gate (Kokoro fallback), the
-    Coqui-eligible soft-gate (ru/es/fr/de/zh/ja), and the no-fallback-engine
-    hard block (unchanged copy). Returns null when the gate shouldn't fire. */
+    branches: English's existing soft-gate (Kokoro fallback), the non-English
+    soft-gate (ru/es/fr/de/zh/ja), and the no-fallback-engine hard block
+    (unchanged copy). The engine is NAMED from the shared helper rather than
+    re-derived, so it always matches `selectFallbackEngineName` (#1534).
+    Returns null when the gate shouldn't fire. */
 export function voiceReadinessGateMessage(state: RootState, bookId: string): string | null {
   if (!selectVoiceReadinessGateShouldFire(state, bookId)) return null;
-  if (selectHasNoFallbackEngine(state, bookId)) {
+  const { isEnglish, hasFallback, fallbackEngine } = getBookFallbackEligibility(state, bookId);
+  if (!hasFallback) {
     return "This book can't fall back to a generic voice — every speaking character needs a designed voice.";
   }
-  const book = state.library?.books?.find((b) => b.bookId === bookId);
-  const isEnglish = (book?.language ?? 'en') === 'en';
   return isEnglish
-    ? "These speaking characters haven't been designed yet. Design them now, or proceed and they'll render with a generic Kokoro fallback voice."
-    : "These speaking characters haven't been designed yet. Design them now, or proceed and they'll render with a Coqui fallback voice.";
+    ? `These speaking characters haven't been designed yet. Design them now, or proceed and they'll render with a generic ${fallbackEngine} fallback voice.`
+    : `These speaking characters haven't been designed yet. Design them now, or proceed and they'll render with a ${fallbackEngine} fallback voice.`;
 }

@@ -24,18 +24,49 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-if (process.env.SKIP_FFMPEG_PREFLIGHT === '1') process.exit(0);
-
-function ffmpegOnSessionPath() {
+/* ops-35 (#1877): we now need the banner TEXT, not just the exit code — the
+   version lives in the first line of stdout. */
+function probeFfmpeg() {
   try {
-    const r = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' });
-    return r.status === 0;
+    const r = spawnSync('ffmpeg', ['-version'], { encoding: 'utf8', windowsHide: true });
+    return { ok: r.status === 0, stdout: r.stdout || '' };
   } catch {
-    return false;
+    return { ok: false, stdout: '' };
   }
 }
 
-if (ffmpegOnSessionPath()) process.exit(0);
+/* "ffmpeg version 6.1.1-3ubuntu5" -> "6.1"; "n6.1" -> "6.1".
+   Git/nightly banners ("2026-01-01-git-abc1234", "N-114293-g...") carry no
+   semver and yield null, which callers MUST treat as acceptable. */
+function parseFfmpegVersion(stdout) {
+  const m = /^ffmpeg version n?(\d+)\.(\d+)/m.exec(typeof stdout === 'string' ? stdout : '');
+  return m ? `${m[1]}.${m[2]}` : null;
+}
+
+/* Numeric MAJOR.MINOR compare. Fails OPEN: an unparseable version or an
+   absent floor is never "below". Failing a working install over a regex miss
+   would be worse than the drift the floor guards against. */
+function isBelowFloor(version, minimum) {
+  if (!version || !minimum) return false;
+  const [vMaj, vMin] = String(version).split('.').map(Number);
+  const [fMaj, fMin] = String(minimum).split('.').map(Number);
+  if (!Number.isFinite(vMaj) || !Number.isFinite(fMaj)) return false;
+  if (vMaj !== fMaj) return vMaj < fMaj;
+  return (vMin || 0) < (fMin || 0);
+}
+
+/* Single source of truth: root package.json's `castwright.ffmpeg.minimum`.
+   Any read/parse failure yields null, which DISABLES the check rather than
+   breaking every commit — this runs in pre-commit, pre-push and release. */
+function readFfmpegFloor() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+    const min = pkg && pkg.castwright && pkg.castwright.ffmpeg && pkg.castwright.ffmpeg.minimum;
+    return typeof min === 'string' && min ? min : null;
+  } catch {
+    return null;
+  }
+}
 
 const RED = '\x1b[31m';
 const YELLOW = '\x1b[33m';
@@ -117,7 +148,58 @@ function emitGenericHint() {
   );
 }
 
-if (os.platform() === 'win32') emitWindowsHint();
-else emitGenericHint();
+/* ops-35: present, but older than the declared support floor. Distinct copy
+   from the "not installed" hints — the user has ffmpeg, they need to upgrade
+   it, and the two remedies are different commands. */
+function emitTooOldHint(found, minimum) {
+  /* Do NOT recommend the `ffmpeg` snap here. Its stable channel is 4.3.1
+     (published 2020-11-08, verified against api.snapcraft.io) — OLDER than
+     Ubuntu 22.04's own archive build of 4.4.2. Telling a 22.04 user to swap
+     to it downgrades them and leaves this warning up. There is no supported
+     route to >=6.0 inside 22.04's own repositories, so say that plainly
+     rather than inventing one. */
+  const upgrade =
+    os.platform() === 'win32'
+      ? '  winget upgrade Gyan.FFmpeg'
+      : os.platform() === 'darwin'
+        ? '  brew upgrade ffmpeg'
+        : '  sudo apt install ffmpeg        # Ubuntu 24.04+ / Debian 13+ ship 6.1+\n\n' +
+          '  Ubuntu 22.04 tops out at ffmpeg 4.4 in its archive, and the `ffmpeg`\n' +
+          '  snap is older still (4.3.1). Upgrade the OS, or install a newer build\n' +
+          '  yourself and make sure it comes FIRST on PATH.';
+  process.stderr.write(
+    `\n${BOLD}${RED}[preflight] ffmpeg ${found} is older than Castwright supports.${RESET}\n\n` +
+      `Castwright is tested against ffmpeg ${BOLD}${minimum}${RESET} and newer. The audio\n` +
+      `pipeline parses ffmpeg's loudnorm JSON output, which is a version-sensitive\n` +
+      `contract — older builds are not verified and may mis-normalise chapter audio.\n\n` +
+      `${BOLD}Upgrade:${RESET}\n${upgrade}\n\n` +
+      `(Or set ${BOLD}SKIP_FFMPEG_PREFLIGHT=1${RESET} for a single run.)\n\n`,
+  );
+}
 
-process.exit(1);
+function main() {
+  if (process.env.SKIP_FFMPEG_PREFLIGHT === '1') return 0;
+
+  const probe = probeFfmpeg();
+  if (probe.ok) {
+    const minimum = readFfmpegFloor();
+    const found = parseFfmpegVersion(probe.stdout);
+    if (isBelowFloor(found, minimum)) {
+      emitTooOldHint(found, minimum);
+      return 1;
+    }
+    return 0;
+  }
+
+  if (os.platform() === 'win32') emitWindowsHint();
+  else emitGenericHint();
+  return 1;
+}
+
+/* Side effects ONLY when run as a script. scripts/tests/ffmpeg-version.test.mjs
+   requires this module to unit-test the parser — without this guard the
+   require would run the check and process.exit(), silently killing the test
+   run and scoring it as a pass. */
+if (require.main === module) process.exit(main());
+
+module.exports = { parseFfmpegVersion, isBelowFloor, readFfmpegFloor };
