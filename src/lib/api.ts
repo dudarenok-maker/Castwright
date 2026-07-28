@@ -9753,16 +9753,20 @@ export async function mockPromoteToLibrary(body: {
   return entry;
 }
 
-/* fs-38 Wave 3c, Task 29 — mirrors the three 409 guards on
-   server/src/routes/voice-library.ts's POST /:voiceUuid/assign handler, as
-   of commit e52619d3 on the fs38-wave3c-xtts worktree: revoked consent,
-   then a cloned voice that hasn't finished deriving, then a cloned voice
-   assigned onto a non-Qwen engine. That route still hardcodes the qwen
-   slot and only ever guards a `cloned` entry — a Task 24 landing on that
-   same worktree will make it engine-aware — so this mirrors it AS IT
-   EXISTS NOW, not ahead of it: a cloned entry with a ready `xtts` slot
-   still 409s here on a non-Qwen assign (see the `lib-cloned-demo` fixture
-   and its "deliberate lag" test).
+/* fs-38 Wave 3c, Task 41 — mirrors the three 409 guards on
+   server/src/routes/voice-library.ts's POST /:voiceUuid/assign handler,
+   re-verified against that route as it stands after Task 24 made it
+   engine-aware: revoked consent, then a cloned voice that hasn't finished
+   deriving (still gated on the `qwen` slot specifically — Task 24 didn't
+   touch that guard, only the wrong-engine one below and the both-slots
+   write), then a cloned voice assigned onto a non-clone-capable engine.
+   Task 24 widened the wrong-engine rejection from "must be qwen" to "must
+   be qwen OR coqui" (Coqui XTTS v2 is now clone-capable too — see
+   `CLONE_CAPABLE_ENGINES`, tts/clone-engines.ts) — a cloned entry with a
+   ready `xtts` slot now assigns cleanly on a coqui-routed character (see
+   the `lib-cloned-demo` fixture and its now-passing coqui-assign test;
+   Task 29's original "deliberate lag" test for this case is gone — see
+   that test's replacement below for why).
 
    The real guard also weighs the target character's own `ttsEngine`
    override and the persisted account default, via
@@ -9791,8 +9795,8 @@ export function _mockAssignGuardError(
   }
   if (entry.provenance === 'cloned') {
     const routedEngine = modelKey ? engineForModelKey(modelKey) : 'qwen';
-    if (routedEngine !== 'qwen') {
-      return `Cloned voices render on Qwen, but this book is set to ${routedEngine}. Switch the book's engine to Qwen before assigning this character.`;
+    if (routedEngine !== 'qwen' && routedEngine !== 'coqui') {
+      return `Cloned voices render on Qwen or Coqui XTTS v2, but this book is set to ${routedEngine}. Switch the book's engine to Qwen or Coqui XTTS v2 before assigning this character.`;
     }
   }
   return null;

@@ -168,14 +168,24 @@ describe('mock assign guards (fs-38 Wave 3c, Task 29)', () => {
     expect(result).toEqual({ updated: 1 });
   });
 
-  it('mockAssignLibraryVoice still 409s lib-cloned-demo on a coqui assign, even though its xtts slot is ready — deliberate lag, the real route (as mirrored) is still qwen-only', async () => {
-    await expect(
-      mockAssignLibraryVoice('lib-cloned-demo', {
-        bookId: 'b1',
-        characterId: 'c1',
-        modelKey: 'coqui-xtts-v2',
-      }),
-    ).rejects.toThrow(/Cloned voices render on Qwen/);
+  /* fs-38 Wave 3c, Task 41 — this test used to pin the OLD "deliberate lag"
+     contract on purpose: `mockAssignLibraryVoice` mirrored the assign route
+     as it stood before Task 24, which still hardcoded the qwen slot, so a
+     coqui-routed assign 409'd here even though `lib-cloned-demo` carries a
+     ready `xtts` slot too. Task 24 landed on this branch and made the real
+     route engine-aware (coqui joined `CLONE_CAPABLE_ENGINES`), so the mock
+     guard (`_mockAssignGuardError`, api.ts) was re-mirrored to match — this
+     now asserts the NEW contract: a cloned voice with a ready xtts slot
+     assigns cleanly on a coqui-routed character, same as it always did on
+     qwen. Kept as a test, not deleted, so the old defect can't quietly come
+     back the next time the route or the mock changes independently. */
+  it('mockAssignLibraryVoice succeeds for lib-cloned-demo on a coqui assign — its xtts slot is ready', async () => {
+    const result = await mockAssignLibraryVoice('lib-cloned-demo', {
+      bookId: 'b1',
+      characterId: 'c1',
+      modelKey: 'coqui-xtts-v2',
+    });
+    expect(result).toEqual({ updated: 1 });
   });
 
   it('mockAssignLibraryVoice 409s the real lib-cloned-revoked fixture', async () => {
