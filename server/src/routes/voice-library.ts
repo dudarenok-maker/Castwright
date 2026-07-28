@@ -677,6 +677,24 @@ voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response
        to a clean, engine-aware 409 instead, mirroring the sibling
        POST /api/voices/:voiceId/sample (routes/voice-sample.ts). */
     const msg = (e as Error).message ?? '';
+    /* GATE 1 — same gap as the sibling voice-sample.ts arm: the sidecar's
+       `voice_language_unsupported` 409 says the voice IS cloned and loaded
+       but the loaded XTTS model can't speak the requested language. Its
+       detail matches neither token in the arm below, so it fell through to
+       `httpStatusForSidecarError` — which deliberately never forwards a 4xx —
+       and surfaced as an opaque 502 carrying the sidecar's raw JSON. Ordered
+       FIRST, mirroring the sidecar's own MIN-4 ordering (the Python exception
+       subclasses VoiceNotDesignedError). Not gated on `engine` unlike the arm
+       below: this condition is raised only by the Coqui/XTTS branch, so there
+       is no engine name to disambiguate. Chapter render is NOT affected — it
+       never routes through this route's catch. */
+    if (/voice_language_unsupported/i.test(msg)) {
+      return res.status(409).json({
+        code: 'voice_language_unsupported',
+        message:
+          'This voice cannot speak the requested language on the loaded Coqui model — re-preparing it will not help.',
+      });
+    }
     if (engine && /voice_not_designed|not been designed yet/i.test(msg)) {
       return res.status(409).json({
         code: 'voice_not_designed',

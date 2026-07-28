@@ -175,6 +175,35 @@ describe('voice-sample router', () => {
       expect(res.body.message).not.toMatch(/\.pt|POST \/qwen/);
     });
 
+    /* GATE 1 — the sidecar gained a DISTINCT `voice_language_unsupported` 409
+       (a subclass of VoiceNotDesignedError with its own code, main.py's
+       /synthesize handler). Its detail contains neither `voice_not_designed`
+       nor "not been designed yet", so it missed the arm above and fell
+       through to the generic 502 `tts_failed` — the caller was told the
+       gateway broke instead of the one thing it can act on. The rejection
+       string below is the real sidecar body verbatim, wrapped exactly as
+       sidecar.ts's `throwForResponse` wraps it. */
+    it('maps a sidecar voice_language_unsupported 409 to a clean 409, not 502 tts_failed', async () => {
+      synthesize.mockRejectedValueOnce(
+        Object.assign(
+          new Error(
+            'Local voice engine returned 409: {"detail":"Voice \'xtts-abc\' cannot render in language \'cs\' — not supported by the loaded XTTS model (supported: [\'en\', \'es\', \'de\']).","code":"voice_language_unsupported"}',
+          ),
+          { transient: false, status: 409, poisoned: false },
+        ),
+      );
+      const res = await request(app)
+        .post('/api/voices/v_lang/sample')
+        .send({ modelKey: 'coqui-xtts-v2', voice: { id: 'v_lang', character: 'L' }, text: 'Hi.' });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('voice_language_unsupported');
+      // The remedy `voice_not_designed` implies (design/clone it again) is the
+      // WRONG one here and must not be what the user is told.
+      expect(res.body.message).not.toMatch(/design it first/i);
+      // Friendly copy, never the raw sidecar JSON.
+      expect(res.body.message).not.toMatch(/\{"detail"/);
+    });
+
     it('still maps an unrecognised synth failure to 502 tts_failed', async () => {
       synthesize.mockRejectedValueOnce(new Error('some unexpected boom'));
       const res = await request(app)

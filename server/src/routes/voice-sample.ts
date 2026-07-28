@@ -248,6 +248,24 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
       });
     }
     const msg = (err as Error).message ?? 'TTS synthesis failed.';
+    /* GATE 1 — the sidecar's `voice_language_unsupported` 409 (main.py's
+       /synthesize handler): the voice IS cloned and its artifact loaded, the
+       loaded XTTS model just doesn't list the requested language. Its detail
+       text contains neither `voice_not_designed` nor "not been designed yet",
+       so without this arm it missed the arm below and fell through to the
+       generic 502 `tts_failed` — telling the user their sample failed for an
+       unknown gateway reason instead of the one thing they can act on.
+       Ordered FIRST, mirroring the sidecar's own MIN-4 ordering (the Python
+       exception is a SUBCLASS of VoiceNotDesignedError), so a future widening
+       of the arm below can't swallow this one. Chapter render is NOT affected
+       — it never routes through this route's catch. */
+    if (/voice_language_unsupported/i.test(msg)) {
+      return res.status(409).json({
+        code: 'voice_language_unsupported',
+        message:
+          'This voice cannot speak the requested language on the loaded voice model — re-cloning it will not help; pick a supported language or a different engine.',
+      });
+    }
     /* #1063 — the sidecar returns 409 `voice_not_designed` when the requested
        voice/variant has no cached embedding (a bad-input condition, not an
        engine fault). Surface it as a clean 4xx with a distinct code + actionable

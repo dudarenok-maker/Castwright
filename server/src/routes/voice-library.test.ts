@@ -901,6 +901,35 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
     expect(res.body.message).toMatch(/coqui/i);
     expect(res.body.message).not.toMatch(/\{"detail"/); // not the raw sidecar body
   });
+
+  /* GATE 1 — the sidecar gained a DISTINCT `voice_language_unsupported` 409
+     (a subclass of VoiceNotDesignedError carrying its own code, main.py's
+     /synthesize handler). Its detail matches neither token in the arm above,
+     so this route fell through to `httpStatusForSidecarError`, which
+     deliberately never forwards a 4xx — the caller got an opaque 502 with the
+     sidecar's raw JSON as the message. The rejection below is the real
+     sidecar body verbatim, wrapped as sidecar.ts wraps it. */
+  it('a language the loaded model cannot speak returns a 409 voice_language_unsupported, not an opaque 502', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'sample-badlang', name: 'Nova' }));
+    synthesize.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'Local voice engine returned 409: {"detail":"Voice \'xtts-sample-badlang\' cannot render in language \'cs\' — not supported by the loaded XTTS model (supported: [\'en\', \'es\', \'de\']).","code":"voice_language_unsupported"}',
+        ),
+        { transient: false, status: 409, poisoned: false },
+      ),
+    );
+
+    const res = await request(app)
+      .post('/api/voice-library/sample-badlang/sample')
+      .send({ modelKey: 'coqui-xtts-v2' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('voice_language_unsupported');
+    // Must not tell the user to prepare/re-derive the voice — that cannot help.
+    expect(res.body.message).not.toMatch(/hasn't been prepared/i);
+    expect(res.body.message).not.toMatch(/\{"detail"/); // not the raw sidecar body
+  });
 });
 
 /* Finding 1 (#1842 review) — /design computed its cached audition's filename
