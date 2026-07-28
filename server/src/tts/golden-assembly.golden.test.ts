@@ -33,8 +33,8 @@ import {
   type LoudnormFirstPassStats,
   type LoudnormSidecarJson,
 } from './loudnorm.js';
-import { ffmpegBannerLine } from '../diagnostics/ffmpeg.js';
-import { rmsEnvelope, md5, toInt16 } from './golden-baseline.js';
+import { ffmpegBannerLine, parseFfmpegVersion } from '../diagnostics/ffmpeg.js';
+import { rmsEnvelope, md5, toInt16, selectMode, type AssemblyBaseline } from './golden-baseline.js';
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 
@@ -122,6 +122,96 @@ interface Artifacts {
 
 let art: Artifacts;
 let workspaceRoot: string;
+
+const BASELINE_PATH = join(FIXTURE_DIR, 'golden-chapter.baseline.json');
+const DECODED_PATH = join(FIXTURE_DIR, 'golden-chapter.decoded.pcm');
+const BLESS = process.env.GOLDEN_BLESS === '1';
+const BLESS_CMD = 'npm run test:golden-audio -- --assembly-only --bless';
+
+let baseline: AssemblyBaseline | null = null;
+
+/** Thin delegate — the branch logic lives in `golden-baseline.ts` so it can be
+    unit-tested. On any one box only one arm ever runs, and the other arm would
+    otherwise ship having never executed anywhere. */
+function isTight(): boolean {
+  return selectMode(art.banner, baseline?.ffmpegBanner ?? null) === 'TIGHT';
+}
+
+/** Suffix every failure message carries, so a cold reader knows which mode
+    produced the verdict and how to re-record deliberately.
+    (Exported-from-module-scope-only via `export` so `noUnusedLocals` does not
+    flag it between this task, which defines it, and the next, which is the
+    first to call it from a layer's failure message.) */
+export function modeLine(): string {
+  return (
+    `\n  run: ffmpeg ${art.banner ?? '(absent)'}` +
+    `\n  baseline: ffmpeg ${baseline?.ffmpegBanner ?? '(none)'}` +
+    `\n  mode: ${isTight() ? 'TIGHT' : 'LOOSE'}` +
+    `\n  If intended, re-bless: ${BLESS_CMD}`
+  );
+}
+
+function loadBaseline(): AssemblyBaseline {
+  if (!existsSync(BASELINE_PATH)) {
+    throw new Error(
+      `golden assembly: baseline missing at ${BASELINE_PATH}.\n` +
+        `  Both baseline artifacts are committed, so absence means one was deleted.\n` +
+        `  To record a new baseline: ${BLESS_CMD}`,
+    );
+  }
+  return JSON.parse(readFileSync(BASELINE_PATH, 'utf8')) as AssemblyBaseline;
+}
+
+function writeBaseline(): void {
+  /* Refuse to record a baseline whose mode is missing. If the second-pass JSON
+     failed to parse at bless time, `normalizationType` is undefined,
+     JSON.stringify drops the key, and L2 would then compare undefined to
+     undefined and pass forever — defeating the exact absence-diagnosis L2
+     exists for. A poisoned baseline is worse than no baseline. */
+  if (!art.sidecar || art.sidecar.normalizationType === undefined) {
+    throw new Error(
+      `golden assembly BLESS: refusing to record a baseline without ` +
+        `sidecar.normalizationType. The second-pass loudnorm JSON was not ` +
+        `parsed (sidecar ${art.sidecar ? `i=${art.sidecar.i}` : 'absent'}). ` +
+        `Fix that first — recording now would bake in a hole.`,
+    );
+  }
+  const { target, lra, tp } = resolveLoudnormOptions();
+  const floor = 10 ** (-50 / 20);
+  const recorded: AssemblyBaseline = {
+    recordedAt: new Date().toISOString().slice(0, 10),
+    ffmpegBanner: art.banner ?? '',
+    ffmpegVersion: parseFfmpegVersion(art.banner ?? ''),
+    encode: { format: 'mp3', quality: 2, sampleRate: meta.sampleRate, writeXing: true },
+    loudnorm: { target, lra, tp },
+    firstPass: {
+      input_i: art.firstPass.input_i,
+      input_lra: art.firstPass.input_lra,
+      input_tp: art.firstPass.input_tp,
+      input_thresh: art.firstPass.input_thresh,
+    },
+    sidecar: {
+      i: art.sidecar.i,
+      lra: art.sidecar.lra,
+      normalizationType: art.sidecar.normalizationType,
+    },
+    decoded: {
+      bytes: art.decoded.length * 2,
+      quietWindowsSkipped: art.envelope.filter((v) => v < floor).length,
+    },
+    envelope100ms: art.envelope,
+    mp3Md5: art.mp3Md5,
+  };
+  writeFileSync(BASELINE_PATH, `${JSON.stringify(recorded, null, 2)}\n`);
+  writeFileSync(DECODED_PATH, Buffer.from(art.decoded.buffer, 0, art.decoded.length * 2));
+  console.log(
+    `\n[golden-assembly BLESS] wrote:\n` +
+      `  ${BASELINE_PATH}\n` +
+      `  ${DECODED_PATH} (${art.decoded.length * 2} B)\n` +
+      `  ffmpeg: ${art.banner}\n` +
+      `  NO assertions ran. Review the diff before committing.\n`,
+  );
+}
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-golden-assembly-'));
@@ -218,6 +308,26 @@ beforeAll(async () => {
         `verdict and says nothing about audio drift. Cause: ${(e as Error).message}`,
     );
   }
+  if (BLESS) {
+    writeBaseline();
+  } else {
+    baseline = loadBaseline();
+    /* Announce LOOSE on a PASSING run too. Every other mention of the mode
+       lives inside a failure message, so without this an operator running the
+       tier on a second ffmpeg build — the owed on-box acceptance — would get
+       a green run and no way to tell whether the LOOSE path was even taken. */
+    if (!isTight()) {
+      console.warn(
+        `\n[golden-assembly] LOOSE mode — the ffmpeg banner differs from the ` +
+          `baseline's.\n` +
+          `  run:      ${art.banner ?? '(absent)'}\n` +
+          `  baseline: ${baseline.ffmpegBanner}\n` +
+          `  L4 compares decoded RMS-error instead of the MP3 md5. A mismatch ` +
+          `here means the comparison is CONFOUNDED, not that anything ` +
+          `regressed.\n`,
+      );
+    }
+  }
   /* Four ffmpeg spawns (raw first pass, finalize's internal first pass, encode,
      decode) on ~5.7s of audio. The config's hookTimeout is 30s; this explicit
      budget documents the headroom rather than relying on it. */
@@ -229,6 +339,7 @@ afterAll(() => {
 
 describe('golden assembly (GPU-free)', () => {
   it('synthesiseChapter concatenates recorded PCM into deterministic segments', () => {
+    if (BLESS) return;
     expect(art.synth.segments).toHaveLength(meta.segments.length);
     expect(art.synth.sampleRate).toBe(meta.sampleRate);
 
@@ -257,6 +368,7 @@ describe('golden assembly (GPU-free)', () => {
   });
 
   it('finalizeChapterAudioWrite writes the audio and its sidecars', () => {
+    if (BLESS) return;
     /* Carried over from the pre-ops-36 test: this is the repo's only coverage
        of the finalize result's segmentCount / durationSec. */
     expect(art.finalized.segmentCount).toBe(meta.segments.length);
