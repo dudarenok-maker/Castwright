@@ -85,9 +85,24 @@ if (-not $kokoroPresent) {
 # this probe, a Coqui-only box (no Kokoro weights, no importable qwen_tts) hit
 # the "no golden weights found" SKIP below and exited 0 before pytest ever
 # ran -- so `test_coqui_sanity` never executed even with GOLDEN_COQUI=1.
+#
+# Same $ErrorActionPreference relaxation as the Qwen probe above, and for the
+# identical reason (#1892): `import TTS` writes to stderr on plenty of boxes --
+# a torch/transformers deprecation notice, a CUDA notice, or coqui-tts's own
+# import chatter -- and under PowerShell 5.1's `$ErrorActionPreference = 'Stop'`
+# redirecting a NATIVE command's stderr wraps each line in a terminating
+# NativeCommandError, killing the whole gate even when python exited 0. This
+# probe had the same shape as the Qwen one but not the same guard; the stub
+# fixture added for #1892 had to be written deliberately SILENT to route around
+# it (see scripts\tests\fixtures\run-golden-tests-stub-modules\TTS.py, which
+# names this as a latent second instance). $LASTEXITCODE, not the absence of a
+# thrown error, is the presence signal either way.
 $coquiPresent = $false
 if (-not $kokoroPresent -and -not $qwenPresent) {
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     & $venvPython -c "import TTS" *> $null
+    $ErrorActionPreference = $prevEap
     if ($LASTEXITCODE -eq 0) { $coquiPresent = $true }
 }
 
