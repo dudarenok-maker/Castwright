@@ -8,6 +8,8 @@
 
 **Scope note:** this plan folds in **ops-44 (#1910)** as Task 9b and **ops-46 (#1912)** as Task 9c. **ops-45 (#1911)** deliberately stays a separate follow-up — it lives in the Python sidecar harness and needs Kokoro weights, so it cannot be verified in this PR.
 
+**It also carries the only USER-VISIBLE fix in this work** (Tasks 4b + 4c). The chapter loudness sidecar stores ffmpeg `loudnorm`'s self-reported figures, and the Listen view's per-chapter badge renders them to users as measurements. Two of the three are wrong — `lra` reads `0.5` where the audio measures `1.7`, and `tp` reads `-1.5` (the *requested ceiling*) where sample peak is `-1.2`, which is impossible for a true peak. One `ebur128` pass over the finished file makes all three real. Measured cost: **+1.54 s on a 10-minute chapter**, ~9 % of the encode step, against a pipeline dominated by synthesis. **This means `RELEASE_NOTES.md` applies to this PR** — see Task 11 Step 3.
+
 **Tech Stack:** TypeScript, Vitest (node env), real ffmpeg subprocesses, Node `node:crypto` md5, `node:test` for the runner script.
 
 **Spec:** [`docs/superpowers/specs/2026-07-28-golden-assembly-output-comparison-design.md`](../specs/2026-07-28-golden-assembly-output-comparison-design.md) (revision 3)
@@ -911,6 +913,294 @@ Run: `git diff --stat src/lib/api-types.ts` → Expected: a small diff touching 
 ```bash
 git add server/src/tts/loudnorm.ts server/src/tts/mp3.ts server/src/tts/mp3-spawn-args.test.ts openapi.yaml src/lib/api-types.ts
 git commit -m "feat(server): persist loudnorm normalizationType in the chapter sidecar"
+```
+
+---
+
+### Task 4b: Measure the finished audio with `ebur128`
+
+The sidecar stores loudnorm's self-reports and the Listen view displays them as measurements. Two of the three are wrong: `lra` reads `0.5` where the audio measures `1.7`, and `tp` reads `-1.5` (the *requested ceiling*) where sample peak is `-1.2` — a true peak below sample peak is impossible. This task adds the real measurement; Task 4c wires it in.
+
+**Files:**
+- Create: `server/src/audio/measure-loudness.ts`
+- Test: `server/src/audio/measure-loudness.test.ts`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces: `parseEbur128Summary(stderr) → MeasuredLoudness | null` (pure), `measureLoudnessFile(path) → Promise<MeasuredLoudness | null>`, `interface MeasuredLoudness { i: number; lra: number; tp: number }`.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+/* ebur128 summary parsing + one real-ffmpeg integration case. The parser is
+   pure so the drift-prone part (ffmpeg's log shape) is pinned without a
+   subprocess; the integration case proves the wiring end to end. */
+import { describe, it, expect } from 'vitest';
+import { parseEbur128Summary, measureLoudnessFile } from './measure-loudness.js';
+
+/* Captured verbatim from ffmpeg 8.1.1 running ebur128 over the golden fixture's
+   encoded output — not hand-written. Note `LRA low:` / `LRA high:` share a
+   prefix with `LRA:` and must NOT be picked up by the LRA pattern. */
+const SUMMARY = `[Parsed_ebur128_0 @ 0000] Summary:
+
+  Integrated loudness:
+    I:         -16.2 LUFS
+    Threshold: -26.3 LUFS
+
+  Loudness range:
+    LRA:         1.7 LU
+    Threshold: -35.8 LUFS
+    LRA low:   -16.9 LUFS
+    LRA high:  -15.2 LUFS
+
+  True peak:
+    Peak:       -1.2 dBFS
+`;
+
+describe('parseEbur128Summary', () => {
+  it('extracts I, LRA and true peak from a real summary block', () => {
+    expect(parseEbur128Summary(SUMMARY)).toEqual({ i: -16.2, lra: 1.7, tp: -1.2 });
+  });
+
+  it('returns null when the summary is absent rather than throwing', () => {
+    // A failed/short render must degrade to "no measurement", never crash the
+    // finalize path — the audio is already on disk by then.
+    expect(parseEbur128Summary('ffmpeg version 8.1\nno summary here')).toBeNull();
+  });
+
+  it('returns null on a partial summary', () => {
+    expect(parseEbur128Summary('  I:  -16.2 LUFS\n')).toBeNull();
+  });
+
+  it('does not mistake "LRA low:" / "LRA high:" for the LRA value', () => {
+    const noLra = SUMMARY.replace(/^\s*LRA:\s*1\.7 LU\s*$/m, '');
+    expect(parseEbur128Summary(noLra)).toBeNull();
+  });
+
+  it('handles -inf on silent input', () => {
+    const silent = SUMMARY.replace('-16.2 LUFS', '-inf LUFS');
+    expect(parseEbur128Summary(silent)).toBeNull();
+  });
+});
+
+describe('measureLoudnessFile', () => {
+  it('measures a real encoded file', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { encodePcmToAudio } = await import('../tts/mp3.js');
+    const { resolveLoudnormOptions } = await import('../tts/loudnorm.js');
+
+    const SR = 24_000;
+    const n = SR * 2;
+    const pcm = Buffer.alloc(n * 2);
+    for (let i = 0; i < n; i += 1) {
+      pcm.writeInt16LE(Math.round(9000 * Math.sin((2 * Math.PI * 220 * i) / SR)), i * 2);
+    }
+    const dir = mkdtempSync(join(tmpdir(), 'measure-'));
+    try {
+      const mp3 = await encodePcmToAudio(pcm, SR, {
+        format: 'mp3',
+        loudnorm: resolveLoudnormOptions(),
+      });
+      const p = join(dir, 'a.mp3');
+      writeFileSync(p, mp3);
+      const m = await measureLoudnessFile(p);
+      expect(m).not.toBeNull();
+      /* Normalised toward the -16 target, so a wide sanity band only — the
+         golden tier is where exact values get pinned. */
+      expect(m!.i).toBeGreaterThan(-30);
+      expect(m!.i).toBeLessThan(-5);
+      expect(m!.lra).toBeGreaterThanOrEqual(0);
+      expect(m!.tp).toBeLessThan(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null for a missing file rather than throwing', async () => {
+    expect(await measureLoudnessFile('no-such-file.mp3')).toBeNull();
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npm --prefix server run test -- --run measure-loudness`
+Expected: FAIL — cannot resolve `./measure-loudness.js`.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Create `server/src/audio/measure-loudness.ts`:
+
+```ts
+/* Real EBU R128 measurement of a FINISHED audio file (ops-36, finding 10).
+
+   Why this exists: ffmpeg's `loudnorm` filter reports `output_i` / `output_lra`
+   / `output_tp`, and the chapter sidecar used to persist those. They are the
+   filter's own internal figures, not a measurement of the encoded result —
+   `output_tp` in particular is the ceiling that was REQUESTED. On the golden
+   fixture the sidecar claimed LRA 0.5 LU and true peak -1.5 dBTP where the
+   audio actually measures 1.7 LU and a -1.2 dBFS sample peak (a true peak
+   below sample peak is impossible). The Listen view renders those numbers to
+   users, so they have to be real.
+
+   Deliberately fails SOFT: the audio is already on disk by the time this runs,
+   so a measurement failure must degrade to "no sidecar values", never break
+   the finalize path. */
+
+import { spawn } from 'node:child_process';
+
+export interface MeasuredLoudness {
+  /** Integrated loudness (LUFS) of the finished file. */
+  i: number;
+  /** Loudness range (LU) — a real EBU R128 LRA, not loudnorm's estimate. */
+  lra: number;
+  /** True peak (dBFS/dBTP) as measured, not as targeted. */
+  tp: number;
+}
+
+/** Parse ffmpeg's `ebur128` end-of-run Summary block.
+ *
+ *  Returns null unless all three fields are present AND finite — `-inf` on
+ *  silent input yields null rather than an Infinity that would poison the
+ *  sidecar and the UI that renders it. */
+export function parseEbur128Summary(stderr: string): MeasuredLoudness | null {
+  const num = (re: RegExp): number | null => {
+    const m = re.exec(stderr);
+    if (!m) return null;
+    const v = Number(m[1]);
+    return Number.isFinite(v) ? v : null;
+  };
+  const i = num(/^\s*I:\s*(-?[\d.]+|-inf)\s*LUFS/m);
+  const lra = num(/^\s*LRA:\s*(-?[\d.]+|-inf)\s*LU\s*$/m);
+  const tp = num(/^\s*Peak:\s*(-?[\d.]+|-inf)\s*dBFS/m);
+  if (i === null || lra === null || tp === null) return null;
+  return { i, lra, tp };
+}
+
+/** Run one `ebur128` analysis pass over `path`. ~1.5 s per 10 minutes of
+ *  audio — about 9 % of the encode step, against a pipeline dominated by
+ *  synthesis. Resolves null on any failure. */
+export async function measureLoudnessFile(path: string): Promise<MeasuredLoudness | null> {
+  return new Promise<MeasuredLoudness | null>((resolve) => {
+    const child = spawn(
+      'ffmpeg',
+      ['-nostats', '-i', path, '-af', 'ebur128=peak=true:framelog=quiet', '-f', 'null', '-'],
+      { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true },
+    );
+    const chunks: Buffer[] = [];
+    child.stderr.on('data', (c) => chunks.push(c));
+    child.on('error', () => resolve(null));
+    child.on('close', (code) => {
+      if (code !== 0) return resolve(null);
+      resolve(parseEbur128Summary(Buffer.concat(chunks).toString('utf8')));
+    });
+  });
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `npm --prefix server run test -- --run measure-loudness` → PASS.
+Run: `npm run typecheck` → clean.
+
+> If the real-ffmpeg case fails on the `Peak:` regex, print the actual stderr and
+> adjust the pattern to match **this** ffmpeg's summary shape — then add the observed
+> shape as a second `parseEbur128Summary` fixture so the drift is pinned.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add server/src/audio/measure-loudness.ts server/src/audio/measure-loudness.test.ts
+git commit -m "feat(server): measure finished chapter audio with ebur128"
+```
+
+---
+
+### Task 4c: Persist real measurements in the loudness sidecar
+
+**Files:**
+- Modify: `server/src/audio/finalize-chapter-write.ts`
+- Modify: `server/src/tts/loudnorm.ts` (doc comments on `LoudnormSidecarJson`)
+- Modify: `openapi.yaml` (`ChapterLoudness` field descriptions), regenerate `src/lib/api-types.ts`
+- Test: `server/src/audio/finalize-chapter-write.test.ts`
+
+- [ ] **Step 1: Rewrite the sidecar after the rename**
+
+In `finalize-chapter-write.ts`, the `onLoudnessMeasured` callback (`:127-138`) currently writes the sidecar before the file exists. Keep it — it remains the fallback when measurement fails — but add a rewrite after `await rename(tmpAudio, audioPath)` (`:214`), beside the existing `writeChapterPeaksFile` call:
+
+```ts
+  /* ops-36 finding 10 — replace loudnorm's self-reported figures with a real
+     EBU R128 measurement of the file we just wrote. `i`/`lra`/`tp` are rendered
+     to users by the Listen view's loudness badge, and loudnorm's `output_tp` is
+     the ceiling it was ASKED for, not what the audio reached. Fails soft: the
+     audio is already on disk, so a failed measurement leaves the loudnorm-
+     derived sidecar in place rather than breaking the render. */
+  if (loudnormStats) {
+    try {
+      const real = await measureLoudnessFile(audioPath);
+      if (real) {
+        await writeChapterLufsFile(
+          { ...(loudnormStats as LoudnormSidecarJson), i: real.i, lra: real.lra, tp: real.tp },
+          lufsPath,
+        );
+      } else {
+        console.warn(
+          `[splice] ebur128 measurement unavailable for ${chapter.slug}; ` +
+            `sidecar keeps loudnorm's self-reported figures`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `[splice] failed to re-measure loudness for ${chapter.slug}: ${(err as Error).message}`,
+      );
+    }
+  }
+```
+
+Import `measureLoudnessFile` from `./measure-loudness.js`.
+
+**`normalizationType` and `twoPass` are carried through unchanged** — they are loudnorm's own state, not measurements, and are legitimately sourced from it.
+
+- [ ] **Step 2: Add the regression test**
+
+In `finalize-chapter-write.test.ts`, add a case asserting the written `.lufs.json` matches an independent `ebur128` reading of the produced `.mp3` — not loudnorm's numbers:
+
+```ts
+  it('persists a REAL ebur128 measurement, not loudnorm self-reports', async () => {
+    // …run finalizeChapterAudioWrite as the neighbouring tests do…
+    const sidecar = JSON.parse(readFileSync(lufsPath, 'utf8'));
+    const real = await measureLoudnessFile(join(audioRoot, `${slug}.mp3`));
+    expect(real).not.toBeNull();
+    expect(sidecar.i).toBeCloseTo(real!.i, 1);
+    expect(sidecar.lra).toBeCloseTo(real!.lra, 1);
+    expect(sidecar.tp).toBeCloseTo(real!.tp, 1);
+    /* The regression this locks: loudnorm reports tp as the REQUESTED ceiling
+       (-1.5), which is not a measurement and can sit below the sample peak. */
+    expect(sidecar.tp).not.toBe(-1.5);
+    // loudnorm's own state still comes from loudnorm.
+    expect(sidecar.normalizationType).toBeDefined();
+  });
+```
+
+- [ ] **Step 3: Correct the contract documentation**
+
+`LoudnormSidecarJson`'s doc comment (`loudnorm.ts:62-72`) says `i`/`lra`/`tp` are "the POST-normalisation values ffmpeg's second-pass loudnorm filter reports as `output_*`". That is now wrong. Replace with: measured from the finished file by `ebur128` (`server/src/audio/measure-loudness.ts`); on measurement failure they fall back to loudnorm's self-reports, which are NOT measurements — `tp` in particular is the requested ceiling.
+
+Apply the same correction to `openapi.yaml`'s `ChapterLoudness` descriptions for `i`, `lra` and `tp` (`:5263-5294`), then `npm run openapi:types`.
+
+- [ ] **Step 4: Confirm the QA-gate limitation and file it if warranted**
+
+`finalize-chapter-write.ts:145` feeds `measured.tp` into `evaluateChapterQa` as `truePeakDb`, and it runs **before** the rename — so it still sees loudnorm's `-1.5`, meaning a true-peak QA check that always observes exactly the target. Read `evaluateChapterQa` and determine whether that makes the check inert. **If it does, file a `bug` issue** (do not reorder QA in this PR — moving it after the rename has its own blast radius) and note it in plan 272.
+
+- [ ] **Step 5: Verify and commit**
+
+```bash
+npm --prefix server run test -- --run finalize-chapter-write measure-loudness
+npm run typecheck
+git add server/src/audio/finalize-chapter-write.ts server/src/audio/finalize-chapter-write.test.ts server/src/tts/loudnorm.ts openapi.yaml src/lib/api-types.ts
+git commit -m "fix(server): persist real ebur128 loudness in the chapter sidecar"
 ```
 
 ---
@@ -2038,7 +2328,11 @@ Append one line to `docs/release-notes-next.md` under the current in-progress se
 
 > - `golden-audio`: the assembly tier now compares its output against a recorded, ffmpeg-stamped baseline across four layers instead of a 20-LU tolerance band; `--bless` is now suite-scoped (#PR)
 
-**Do not** add anything to `RELEASE_NOTES.md`, and say so explicitly in the PR body: golden-audio is a dev-only opt-in tier absent from the release artifact, so there is no user-facing delta. (Before-shipping step 5 requires the skip be stated, not silently taken.)
+**`RELEASE_NOTES.md` IS required** — reversing an earlier draft of this plan, which said the change was dev-only. Tasks 4b/4c fix a shipped, user-readable defect, so add a brand-voice line to the in-progress version section, roughly:
+
+> Chapter loudness figures on the Listen view are now measured from the finished audio. The loudness-range and true-peak numbers were previously reported by the normaliser rather than measured, so they could be well off — the integrated loudness reading was always right.
+
+Add the matching technical line to `docs/release-notes-next.md` alongside the `--bless` entry.
 
 - [ ] **Step 4: Add the on-box acceptance row**
 

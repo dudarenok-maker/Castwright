@@ -229,6 +229,28 @@ gain-invariant, so attenuating the fixture cannot flip the mode. Measured: `targ
 does — `normalization_type = linear`, `output_i = -19.29`, and `ebur128` confirms LRA
 preserved at 2.0. That gives a second baseline covering the arm the code requests.
 
+**10. The loudness sidecar stores loudnorm's self-reports, and the UI displays them as
+measurements. Two of the three are wrong.** This is finding 4's root cause reaching a
+user-facing surface. `src/components/listen/listen-player-region.tsx:478` renders a
+per-chapter badge whose hover tooltip reads *"On target — −16.3 LUFS (target -16 LUFS).
+LRA 0.5 LU, true peak -1.5 dBTP."* Measured against the actual audio:
+
+| tooltip shows | `ebur128` on the file | verdict |
+|---|---|---|
+| `-16.28 LUFS` | `-16.2 LUFS` | accurate |
+| **`LRA 0.5 LU`** | **`1.7 LU`** | **3.4× off** |
+| **`true peak -1.5 dBTP`** | sample peak `-1.2 dBFS` | **impossible** — true peak cannot be below sample peak |
+
+`-1.5` is the *ceiling that was requested*, not what the audio reached. `lra` is
+loudnorm's internal estimate, not an EBU R128 loudness range. Only `i` is a real
+measurement, and only by coincidence — loudnorm's `output_i` happens to be close.
+
+**Fixed in this work rather than deferred**, because it is the same defect this spec has
+been fighting all along (trusting a tool's derived self-report) and because the fix is
+cheap. Measured cost of one `ebur128` pass over the written file: **1.54 s on a 10-minute
+chapter — +9 % of the encode step, ~4.6 s on a 30-minute chapter** — against a generation
+pipeline dominated by synthesis. See §2b.
+
 ## Goals
 
 - Make the assembly golden tier able to fail for an audio reason.
@@ -331,16 +353,19 @@ telling the two apart is exactly the discrimination §Goals promises:
 
 ```
 L2 sidecar: normalizationType is absent (baseline "dynamic")
-  This is NOT a mode flip. The sidecar fell back to the input-side
-  measurement, which means the second-pass loudnorm stderr JSON was not
-  parsed — most likely an ffmpeg log-format change. Check `i`: it will
-  read ~-21.70 (input side) rather than ~-16.28 (output side).
+  This is NOT a mode flip. It means the second-pass loudnorm stderr JSON
+  was not parsed — most likely an ffmpeg log-format change. Since §2b, `i`
+  / `lra` / `tp` come from an ebur128 pass over the finished file, so they
+  stay CORRECT on this path and will not corroborate: normalizationType's
+  absence is the only signal.
   run: ffmpeg 9.0  |  baseline: ffmpeg 8.1  |  mode: LOOSE
 ```
 
-The compounding case is handled by the same message: on a fallback `i` is the input-side
-`-21.70`, so L2's ±0.3 band fires too — and the message pre-empts the misread by naming
-the expected value.
+**This is a deliberate trade.** Before §2b, a parse failure also corrupted `i` (it fell
+back to the input-side `-21.70`), so L2's ±0.3 band fired as a second, noisier tell.
+Making the sidecar honest removes that tell — the numbers are now right on every path.
+That is the correct trade: a user-facing surface stops lying, and the harness keeps a
+clean single signal for the condition instead of a corrupted-data side effect.
 
 `mp3.ts` is **not** changed to stamp a mode in the fallback branches: there is no mode to
 stamp. The fallback is **not** changed to flip `twoPass` to `false` either — that would
@@ -382,6 +407,40 @@ to apply *to the encoder's sidecars*, not to relufs-produced ones.
 contradicts `loudnorm.ts:66-70` and reality — measured `i` is `-16.28`
 (post-normalisation); the first pass read `-21.70`. Since this PR edits that exact block,
 the wrong sentence is corrected in the same diff.
+
+### 2b. The sidecar carries real measurements (finding 10)
+
+**What changes.** After `finalizeChapterAudioWrite` renames the encoded audio into place
+(`finalize-chapter-write.ts:214`), one `ebur128` pass measures the *finished file* and the
+sidecar is rewritten from those numbers. `i`, `lra` and `tp` become genuine EBU R128
+measurements of what the listener will hear.
+
+`normalizationType` still comes from loudnorm's second-pass JSON — that is loudnorm's own
+*state*, not a measurement, and is legitimately sourced from it. `twoPass` is unchanged.
+
+**Why measure after the rename rather than inside the encode.** The sidecar is written
+today from `encodePcmToAudio`'s `onLoudnessMeasured` callback (`:127-138`), which fires
+before the file exists. Measurement needs a file, and specifically the *final* one — a
+pipe decode reintroduces the untrimmed-padding problem finding 2 documents.
+
+**Three consequences worth stating:**
+
+1. **The UI needs no change.** The same three numbers render; they simply become true.
+   That is the fix — not new chrome.
+2. **L2 pins real measurements**, which is strictly better for the harness: it stops
+   pinning a tool's internal estimate and starts pinning the audio.
+3. **L2's absence diagnosis changes.** Revision 3's message told the reader that on a
+   second-pass parse failure `i` would read `~-21.70` (the input side). Once `i` comes
+   from `ebur128`, it is correct on every path, so that tell disappears —
+   **`normalizationType` becomes the sole signal of a parse failure**, and L2's message
+   says so.
+
+**One known limitation, deliberately not fixed here.** The advisory QA gate at
+`finalize-chapter-write.ts:145` consumes `measured.tp` as `truePeakDb`, and it runs
+*before* the rename, so it still sees loudnorm's `-1.5` ceiling rather than a measurement
+— meaning a true-peak QA check that always observes exactly the target. Reordering QA
+after the rename is a larger change with its own blast radius. The plan requires the
+implementer to confirm the behaviour and file it if reordering is warranted.
 
 ### 3. Baseline artifacts
 
@@ -626,8 +685,13 @@ Three accuracy notes:
   `archive/185-golden-audio-regression.md`).
 - `docs/features/archive/185-golden-audio-regression.md` — pointer to 272.
 - CLAUDE.md Commands section — `--bless`'s new suite-scoped meaning.
-- `docs/release-notes-next.md` — one line for the `--bless` behaviour change.
-  `RELEASE_NOTES.md` skipped: no user-facing delta.
+- `docs/release-notes-next.md` — the `--bless` behaviour change **and** the sidecar
+  measurement fix.
+- **`RELEASE_NOTES.md` — now REQUIRED**, reversing revision 3's skip. §2b is a
+  user-facing correctness fix: the per-chapter loudness badge on the Listen view has been
+  showing a loudness range ~3.4× off and a true-peak figure that was the requested ceiling
+  rather than a measurement. That is a shipped defect a user could read, so it earns a
+  brand-voice line.
 - `docs/testing/onbox-acceptance-register.md` — **one row.** GPU-free is not
   verifiable-in-PR: the entire cross-build half of this design (the LOOSE branch, the
   mismatch warning, and whether L1–L3's hard assertions survive another build — the
