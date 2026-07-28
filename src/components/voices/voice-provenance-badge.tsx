@@ -1,12 +1,17 @@
 /* fs-38 Wave 1, Task 16 — VoiceProvenanceBadge.
 
    ONE shared badge for a character's/voice's per-engine override SLOT
-   (`overrideTtsVoices[engine]`), rendered by three surfaces so they read the
-   same provenance the same way: the In-use Designed cards in
-   `src/views/voices.tsx`, the panel cards in `voice-library-panel.tsx`, and
-   the drawer rows in `profile-drawer.tsx`. Landing it once here is what lets
-   Wave 3's cloned/imported treatments (spec §4 "shared voice-card treatment")
-   extend a single component instead of three drifted copies.
+   (`overrideTtsVoices[engine]`), rendered by two surfaces so they read the
+   same provenance the same way: the In-use Designed cards footer in
+   `src/views/voices.tsx`, and (as of Wave 3c) the cloned-entry provenance
+   marker on the "My voices" library card in
+   `src/components/voices/voice-library-card.tsx`. `voice-library-panel.tsx`
+   and `profile-drawer.tsx` render `VoiceLibraryEntry` objects directly
+   (inherently "My voice") rather than an override slot, so they don't
+   consume this component — despite `voice-library-panel.tsx` name-dropping
+   it in a comment. Landing this once here is what lets Wave 3's cloned/
+   imported treatments (spec §4 "shared voice-card treatment") extend a
+   single component instead of drifted copies.
 
    Reads exactly `voice.overrideTtsVoices[engine]` — pinned via the
    `VoiceProvenanceSlot` type below, derived from `Voice['overrideTtsVoices']`
