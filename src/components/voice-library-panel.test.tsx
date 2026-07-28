@@ -10,6 +10,7 @@ import userEvent from '@testing-library/user-event';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { voiceLibrarySlice, type VoiceLibraryEntry, type VoiceLibraryState } from '../store/voice-library-slice';
+import { castSlice, castActions } from '../store/cast-slice';
 import { VoiceCard, VoiceLibraryPanel } from './voice-library-panel';
 import type { Character, Voice } from '../lib/types';
 
@@ -18,8 +19,13 @@ const assignLibraryVoiceMock =
     (
       voiceUuid: string,
       args: { bookId: string; characterId: string; modelKey?: string },
-    ) => Promise<{ updated: number }>
+    ) => Promise<{ updated: number; written: ('qwen' | 'coqui')[] }>
   >();
+/* assignVoice's thunk re-fetches the library on success — default matches
+   every existing test's expectation of an empty catalog; overridden per-test
+   (mockResolvedValueOnce) when a test needs the "My voices" group to survive
+   past that re-fetch to assert on state settled after the assign. */
+const listVoiceLibraryMock = vi.fn(() => Promise.resolve({ voices: [] as VoiceLibraryEntry[] }));
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -27,7 +33,7 @@ vi.mock('../lib/api', () => ({
       voiceUuid: string,
       args: { bookId: string; characterId: string; modelKey?: string },
     ) => assignLibraryVoiceMock(voiceUuid, args),
-    listVoiceLibrary: () => Promise.resolve({ voices: [] }),
+    listVoiceLibrary: () => listVoiceLibraryMock(),
   },
 }));
 
@@ -682,6 +688,8 @@ describe('VoiceLibraryPanel — "My voices" group (fs-38 Wave 1, Task 16)', () =
 
   beforeEach(() => {
     assignLibraryVoiceMock.mockReset();
+    listVoiceLibraryMock.mockReset();
+    listVoiceLibraryMock.mockResolvedValue({ voices: [] });
   });
 
   it('renders nothing when the library is empty', () => {
@@ -703,7 +711,7 @@ describe('VoiceLibraryPanel — "My voices" group (fs-38 Wave 1, Task 16)', () =
   });
 
   it('tapping Assign then a character dispatches assignVoice(uuid, {bookId, characterId, modelKey}) — modelKey falls back to the session default for an unengined character', async () => {
-    assignLibraryVoiceMock.mockResolvedValue({ updated: 1 });
+    assignLibraryVoiceMock.mockResolvedValue({ updated: 1, written: ['qwen'] });
     render(
       <VoiceLibraryPanel
         {...noopProps}
@@ -729,7 +737,7 @@ describe('VoiceLibraryPanel — "My voices" group (fs-38 Wave 1, Task 16)', () =
   });
 
   it('omits modelKey when the caller has no session ttsModelKey context (pre-fix behaviour preserved)', async () => {
-    assignLibraryVoiceMock.mockResolvedValue({ updated: 1 });
+    assignLibraryVoiceMock.mockResolvedValue({ updated: 1, written: ['qwen'] });
     render(<VoiceLibraryPanel {...noopProps} bookId="b1" characters={[marlow]} />, {
       myVoices: [entry],
     });
@@ -752,7 +760,7 @@ describe('VoiceLibraryPanel — "My voices" group (fs-38 Wave 1, Task 16)', () =
      whenever the session default (here, Qwen) and the account default
      disagree. Now the session's actual Qwen key is threaded through. */
   it('sends the session Qwen model key for an unengined character on a Qwen session default — the false-409/false-200 fix', async () => {
-    assignLibraryVoiceMock.mockResolvedValue({ updated: 1 });
+    assignLibraryVoiceMock.mockResolvedValue({ updated: 1, written: ['qwen'] });
     render(
       <VoiceLibraryPanel
         {...noopProps}
@@ -774,7 +782,7 @@ describe('VoiceLibraryPanel — "My voices" group (fs-38 Wave 1, Task 16)', () =
   });
 
   it('sends the character\'s own pinned 1.7B tier for a character already persisted onto Qwen, even when the session default is a different engine', async () => {
-    assignLibraryVoiceMock.mockResolvedValue({ updated: 1 });
+    assignLibraryVoiceMock.mockResolvedValue({ updated: 1, written: ['qwen'] });
     const qwenChar: Character = {
       ...marlow,
       id: 'halloran',
@@ -820,5 +828,56 @@ describe('VoiceLibraryPanel — "My voices" group (fs-38 Wave 1, Task 16)', () =
     expect(
       await screen.findByTestId('voice-library-my-voices-error'),
     ).toHaveTextContent('Cloned voice is not ready to assign yet.');
+  });
+
+  /* GATE 2 C-2 — the drawer's [F1] fix (profile-drawer.test.tsx "does NOT
+     write the coqui slot when the assign response says only qwen was
+     written") solves exactly this for the drawer; the panel's own
+     "My voices" assign path had no equivalent. A designed entry with no
+     retained reference clip, assigned to a coqui-routed character, returns
+     200 with `written: ['qwen']` — a partial success indistinguishable from
+     a full one unless the caller reconciles against `written` rather than
+     the engine it asked for. */
+  it('[C-2] reconciles against `written` and surfaces a notice — does not silently succeed — when a coqui-routed character declines the entry', async () => {
+    assignLibraryVoiceMock.mockResolvedValue({ updated: 1, written: ['qwen'] });
+    /* The assign thunk re-fetches the library on success — keep the entry in
+       that response so the "My voices" group (and the error notice inside
+       it) is still mounted once the assign settles. */
+    listVoiceLibraryMock.mockResolvedValue({ voices: [entry] });
+    const coquiChar: Character = { ...marlow, id: 'coqui-char', ttsEngine: 'coqui' };
+    const store = configureStore({
+      reducer: { voiceLibrary: voiceLibrarySlice.reducer, cast: castSlice.reducer },
+      preloadedState: {
+        voiceLibrary: { ...voiceLibrarySlice.getInitialState(), entries: [entry] },
+      },
+    });
+    store.dispatch(castActions.setCharacters([coquiChar]));
+    rtlRender(
+      <VoiceLibraryPanel
+        {...noopProps}
+        bookId="b1"
+        characters={[coquiChar]}
+        ttsModelKey="coqui-xtts-v2"
+      />,
+      { wrapper: ({ children }) => <Provider store={store}>{children}</Provider> },
+    );
+
+    fireEvent.click(screen.getByTestId('my-voices-panel-assign-lib1'));
+    fireEvent.click(screen.getByTestId('my-voices-panel-assign-target-lib1-coqui-char'));
+
+    expect(
+      await screen.findByTestId('voice-library-my-voices-error'),
+    ).toHaveTextContent('can’t be used on Coqui XTTS v2');
+
+    const coquiCharAfter = store
+      .getState()
+      .cast.characters.find((c) => c.id === 'coqui-char');
+    /* THE discriminator: pre-fix nothing dispatched into the cast slice at
+       all, so BOTH assertions below would fail pre-fix — the qwen slot that
+       DID land never showed up, and (were the panel to have mirrored the
+       routed engine unconditionally, the placebo-shaped alternative fix)
+       the undefined coqui slot would catch that too. */
+    expect(coquiCharAfter?.overrideTtsVoices?.coqui).toBeUndefined();
+    expect(coquiCharAfter?.overrideTtsVoices?.qwen?.libraryUuid).toBe('lib1');
   });
 });

@@ -3,9 +3,10 @@ import { IconStar, IconDrag, IconCheck, IconSearch } from '../lib/icons';
 import { VoiceSwatch, Pill } from './primitives';
 import type { Character, TtsModelKey, Voice } from '../lib/types';
 import { findCharacterForVoice } from '../lib/voice-character-link';
-import { modelKeyForEngineChoice } from '../lib/tts-models';
+import { engineForModelKey, modelKeyForEngineChoice } from '../lib/tts-models';
 import { useAppDispatch, useAppSelector } from '../store';
 import { assignVoice, type VoiceLibraryEntry } from '../store/voice-library-slice';
+import { castActions } from '../store/cast-slice';
 
 type Tab = 'all' | 'current' | 'library';
 
@@ -274,6 +275,43 @@ export function VoiceLibraryPanel({
                     assignVoice({ voiceUuid: entry.voiceUuid, bookId, characterId, modelKey }),
                   )
                     .unwrap()
+                    .then(({ written }) => {
+                      /* Gate 2 C-2 — mirror the profile drawer's `useMyVoice`
+                         reconcile-from-the-response discipline: a 200 only
+                         means the slots in `written` actually landed (`qwen`
+                         is unconditional; `coqui` only when the entry is
+                         clone-capable there too), never the engine we asked
+                         for. Without this, a partial success (designed entry,
+                         no retained clip, assigned to a coqui-routed
+                         character) closed the popover with no notice and no
+                         reconciliation — the user believed the coqui assign
+                         landed when the character was still on a stock
+                         catalogue voice. */
+                      for (const engine of written) {
+                        dispatch(
+                          castActions.setOverrideVoiceName({
+                            characterId,
+                            engine,
+                            name: `${engine === 'coqui' ? 'xtts' : 'qwen'}-${entry.voiceUuid}`,
+                            libraryUuid: entry.voiceUuid,
+                            provenance: entry.provenance,
+                          }),
+                        );
+                      }
+                      /* Only reachable for coqui in practice — qwen is
+                         unconditional, and coqui is the only OTHER
+                         clone-capable engine `written` ever names. */
+                      if (
+                        modelKey &&
+                        engineForModelKey(modelKey) === 'coqui' &&
+                        !written.includes('coqui')
+                      ) {
+                        setMyVoicesAssignError(
+                          `“${entry.name}” can’t be used on Coqui XTTS v2 — it has no recording to derive from. ` +
+                            `It’s assigned on Qwen only, so this character still uses a catalogue voice on Coqui.`,
+                        );
+                      }
+                    })
                     .catch((e) => {
                       setMyVoicesAssignError(
                         (e as Error).message || 'Could not assign this voice.',
