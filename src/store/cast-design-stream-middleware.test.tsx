@@ -9,6 +9,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
+import { render, screen } from '@testing-library/react';
+import { Provider } from 'react-redux';
 import type { CastDesignCallbacks } from '../lib/api';
 
 interface StartCall {
@@ -85,6 +87,7 @@ import { createCastDesignMiddleware } from './cast-design-stream-middleware';
 import { castDesignSlice, castDesignActions } from './cast-design-slice';
 import { castSlice } from './cast-slice';
 import { notificationsSlice } from './notifications-slice';
+import { ToastStack } from '../components/toast-stack';
 
 function makeStore(recorded?: { type: string }[]) {
   const recorder: import('@reduxjs/toolkit').Middleware = () => (next) => (action) => {
@@ -168,7 +171,7 @@ describe('castDesignMiddleware', () => {
     );
     const { cb } = startCalls[0];
     cb.onCharacterDesigned?.({ characterId: 'c1', voiceId: 'qwen-c1' });
-    cb.onIdle?.({ done: 1, total: 1, skipped: 0, failures: [] });
+    cb.onIdle?.({ done: 1, total: 1, skipped: 0, clonedSkips: [], failures: [] });
 
     expect(store.getState().castDesign.active?.state).toBe('done');
     expect(store.getState().notifications.toasts.at(-1)?.message).toContain('Designed 1');
@@ -193,6 +196,7 @@ describe('castDesignMiddleware', () => {
       done: 1,
       total: 2,
       skipped: 0,
+      clonedSkips: [],
       failures: [{ characterId: 'c1', name: 'Wren', error: 'no gemini key' }],
     });
 
@@ -225,9 +229,52 @@ describe('castDesignMiddleware', () => {
     const { cb } = startCalls[0];
     cb.onCharacterDesigned?.({ characterId: 'c1', voiceId: 'qwen-c1' });
     cb.onCharacterSkipped?.({ characterId: 'c2' });
-    cb.onIdle?.({ done: 1, total: 2, skipped: 1, failures: [] });
+    cb.onIdle?.({ done: 1, total: 2, skipped: 1, clonedSkips: [], failures: [] });
     expect(store.getState().castDesign.active?.skipped).toBe(1);
     expect(store.getState().notifications.toasts.at(-1)?.message).toContain('1 skipped');
+  });
+
+  /* GATE 2 C-6 — server/src/routes/cast-design.ts's `job.clonedSkips` names
+     the characters a bulk sweep protected from being silently retargeted
+     off a clone. "Design full cast" quietly designing fewer characters than
+     asked is exactly the silence this exists to remove, so the names must
+     reach the terminal summary — not just fold into the anonymous `skipped`
+     count. Renders the real `ToastStack` off the SAME store the middleware
+     dispatched into, so this proves the names land in the DOM, not merely
+     that the field was parsed off the SSE frame. */
+  it('[C-6] names the clone-protected skips in the terminal summary toast, and it reaches the DOM', () => {
+    const store = makeStore();
+    store.dispatch(
+      castDesignActions.designAllRequested({
+        bookId: 'b1',
+        characterIds: ['c1', 'c2', 'c3'],
+        modelKey: 'k',
+      }),
+    );
+    const { cb } = startCalls[0];
+    cb.onCharacterDesigned?.({ characterId: 'c1', voiceId: 'qwen-c1' });
+    cb.onIdle?.({
+      done: 1,
+      total: 3,
+      skipped: 2,
+      clonedSkips: [
+        { characterId: 'c2', name: 'Anna' },
+        { characterId: 'c3', name: 'Viktor' },
+      ],
+      failures: [],
+    });
+
+    const toastMessage = store.getState().notifications.toasts.at(-1)?.message;
+    expect(toastMessage).toContain('already cloned: Anna, Viktor');
+
+    render(
+      <Provider store={store}>
+        <ToastStack />
+      </Provider>,
+    );
+    /* THE discriminator: pre-fix `clonedSkips` is parsed nowhere — this
+       text never reaches a toast, so it never reaches the DOM either. */
+    expect(screen.getByText(/already cloned: Anna, Viktor/)).toBeInTheDocument();
   });
 
   it('resubscribe: opens a bare subscribe and seeds from resume_from', () => {
@@ -279,7 +326,7 @@ describe('castDesignMiddleware', () => {
     cb.onPhase?.({ characterId: 'c1', phase: 'designing' });
     cb.onPhase?.({ characterId: 'c1', phase: 'rendering' });
     cb.onCharacterDesigned?.({ characterId: 'c1', voiceId: 'qwen-c1' });
-    cb.onIdle?.({ done: 1, total: 1, skipped: 0, failures: [] });
+    cb.onIdle?.({ done: 1, total: 1, skipped: 0, clonedSkips: [], failures: [] });
 
     expect(recorded.map((a) => a.type)).toEqual(
       expect.arrayContaining([
@@ -321,7 +368,7 @@ describe('castDesignMiddleware', () => {
       previewUrl: '/x.mp3',
       persona: 'warm',
     });
-    cb.onIdle?.({ done: 0, total: 1, skipped: 0, failures: [] });
+    cb.onIdle?.({ done: 0, total: 1, skipped: 0, clonedSkips: [], failures: [] });
 
     const types = recorded.map((a) => a.type);
     expect(types).toContain('castDesign/previewReady');
@@ -482,7 +529,7 @@ describe('castDesignMiddleware', () => {
     const { cb } = startCalls[0];
     // Record one fallback via the viaFallback path, then call onIdle.
     cb.onVariantDesigned?.({ characterId: 'c', emotion: 'angry', voiceId: 'qwen-c__angry', viaFallback: true });
-    cb.onIdle?.({ done: 1, total: 1, skipped: 0, failures: [] });
+    cb.onIdle?.({ done: 1, total: 1, skipped: 0, clonedSkips: [], failures: [] });
 
     const toasts = (store.getState() as { notifications: { toasts: { message: string }[] } }).notifications.toasts;
     expect(toasts.at(-1)?.message).toMatch(/1 via fallback/);

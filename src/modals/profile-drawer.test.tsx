@@ -1681,6 +1681,38 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     expect(promoteQwenVoice).not.toHaveBeenCalled();
   });
 
+  /* GATE 2 C-6 — mirrors server/src/routes/single-design.ts's 409
+     `clone_protected` guard: a FIRST design on a character already carrying
+     a cloned voice (on EITHER clone-capable engine) would silently retarget
+     it off that clone. api.ts's mock layer is deliberately stateless for
+     cast, so nothing in mock mode would ever refuse this without the
+     client-side mirror added alongside the server fix — this pins that the
+     drawer refuses BEFORE ever dispatching, with the specific "cloned
+     voice" message, not a generic failure. */
+  it('[C-6] refuses a FIRST design when the character already has a cloned Coqui voice, with the specific message — never dispatches', async () => {
+    const { dispatchSpy } = renderWithBook({
+      ...baseChar,
+      ttsEngine: 'coqui',
+      voiceStyle: 'a steady adult voice',
+      overrideTtsVoices: {
+        coqui: { name: 'xtts-lib-1', libraryUuid: 'lib-1', provenance: 'cloned' },
+      },
+    });
+    dispatchSpy.mockClear();
+    selectQwen();
+    fireEvent.click(screen.getByTestId('qwen-design-voice'));
+
+    expect(screen.getByTestId('qwen-design-error')).toHaveTextContent(
+      'already has a cloned voice',
+    );
+    /* THE discriminator: pre-fix nothing stops the dispatch — the mock
+       cast-design layer has no cast state to refuse it against, so the
+       character would be silently "designed" onto Qwen, off its clone. */
+    expect(dispatchSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: castDesignActions.designSingleRequested.type }),
+    );
+  });
+
   it('renders DesignProgress when a single design is in flight for this character', async () => {
     const { store } = renderWithBook({ ...baseChar, voiceStyle: 'a steady adult voice' });
     selectQwen();

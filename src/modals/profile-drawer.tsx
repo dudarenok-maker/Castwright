@@ -1079,6 +1079,29 @@ export function ProfileDrawer({
        FIRST design there is nothing to compare against. `designedVoiceId` is
        non-null iff a bespoke voice already exists for this character. */
     const isRedesign = designedVoiceId !== null;
+    /* GATE 2 C-6 — mirrors the server's `characterHasClonedSlot` guard
+       (single-design.ts): a FIRST design pins ttsEngine='qwen' and persists
+       unconditionally, so a character already cloned on EITHER clone-capable
+       engine would be silently retargeted off that clone — the exact defect
+       the server's 409 (`clone_protected`) exists to prevent. Checked here
+       too, not left to the round-trip: api.ts's mock layer is deliberately
+       stateless for cast ("the cast lives in redux, not the mock" —
+       mockOverrideLibraryCast), so it cannot itself answer this, and would
+       otherwise silently "design" a cloned character under mock/e2e/dev —
+       exactly the silent substitution this wave exists to remove. Reads the
+       same `character` this component already uses for `coquiCloneLocked`
+       below. A REDESIGN (preview) is never gated — the preview branch never
+       persists via applyOverrideToCastFiles, matching the server. */
+    if (
+      !isRedesign &&
+      (character.overrideTtsVoices?.qwen?.provenance === 'cloned' ||
+        character.overrideTtsVoices?.coqui?.provenance === 'cloned')
+    ) {
+      setEngineError(
+        `"${character.name}" already has a cloned voice and cannot be designed on Qwen without silently retargeting it off that clone.`,
+      );
+      return;
+    }
     /* DISPATCH a background single design instead of awaiting the API: the job
        survives closing the drawer / a reload (the middleware owns the SSE,
        persists a first design, and stages a re-design's preview). The drawer

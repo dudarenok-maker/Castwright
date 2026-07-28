@@ -5724,6 +5724,12 @@ export interface CastDesignCallbacks {
     done: number;
     total: number;
     skipped: number;
+    /** GATE 2 C-6 — the subset of `skipped` that the clone-protection guard
+        refused to touch (already cloned on qwen or coqui), named so the
+        terminal summary can say WHO was protected and why, not just fold
+        them into the bare `skipped` count. `server/src/routes/cast-design.ts`
+        `job.clonedSkips`. */
+    clonedSkips: Array<{ characterId: string; name: string }>;
     failures: Array<{ characterId: string; name: string; error: string }>;
   }) => void;
   /** Catastrophic abort (NOT a per-character failure). */
@@ -5756,6 +5762,8 @@ interface CastDesignStreamEvent {
   total?: number;
   done?: number;
   skipped?: number;
+  /** GATE 2 C-6 — carried on the `idle` frame; see `CastDesignCallbacks.onIdle`. */
+  clonedSkips?: Array<{ characterId: string; name: string }>;
   currentName?: string | null;
   characterId?: string;
   name?: string;
@@ -5897,6 +5905,7 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
           done: e.done ?? 0,
           total: e.total ?? 0,
           skipped: e.skipped ?? 0,
+          clonedSkips: e.clonedSkips ?? [],
           failures: e.failures ?? [],
         });
         break;
@@ -6045,11 +6054,11 @@ async function mockStartSingleDesign(
       voiceId: `qwen-${args.characterId}`,
     });
   }
-  cb.onIdle?.({ done: args.preview ? 0 : 1, total: 1, skipped: 0, failures: [] });
+  cb.onIdle?.({ done: args.preview ? 0 : 1, total: 1, skipped: 0, clonedSkips: [], failures: [] });
 }
 
 async function mockSubscribeSingleDesign(_bookId: string, cb: CastDesignCallbacks): Promise<void> {
-  cb.onIdle?.({ done: 0, total: 0, skipped: 0, failures: [] });
+  cb.onIdle?.({ done: 0, total: 0, skipped: 0, clonedSkips: [], failures: [] });
 }
 
 async function mockGetSingleDesignStatus(_bookId: string): Promise<SingleDesignStatus> {
@@ -6111,12 +6120,12 @@ async function mockStartCastDesign(
       done += 1;
     }
   }
-  cb.onIdle?.({ done, total, skipped: 0, failures: [] });
+  cb.onIdle?.({ done, total, skipped: 0, clonedSkips: [], failures: [] });
 }
 
 async function mockSubscribeCastDesign(_bookId: string, cb: CastDesignCallbacks): Promise<void> {
   /* No live job to re-attach to under mocks — idle immediately. */
-  cb.onIdle?.({ done: 0, total: 0, skipped: 0, failures: [] });
+  cb.onIdle?.({ done: 0, total: 0, skipped: 0, clonedSkips: [], failures: [] });
 }
 
 async function mockGetCastDesignStatus(_bookId: string): Promise<CastDesignStatus> {
