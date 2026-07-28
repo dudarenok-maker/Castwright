@@ -42,53 +42,70 @@ async function runRepair(mw: MiddlewareAPI, req: QaRepairRequest): Promise<void>
   let repairedCount = 0;
   let failure: string | null = null;
 
-  await api.streamQaRepair({
-    bookId,
-    chapterId,
-    onTick: (ev: QaRepairTick) => {
-      if (ev.type === 'warning' && ev.message) {
-        /* The advisory this consumer exists for. `clearMismatchedDesignedVoices`
-           dropped a reused designed voice whose baked manifest language differs
-           from the book's, so the repair will re-record those lines in a
-           DIFFERENT voice than the one the user picked. The repair is non-fatal
-           and still proceeds, which is exactly why a silent drop was wrong.
-           Deduped by code, matching generation-stream-runner's `warning` arm. */
-        dispatch(
-          notificationsActions.pushToast({
-            kind: 'warn',
-            message: ev.message,
-            dedupeKey: `qa-repair-warning:${ev.code ?? ev.message}`,
-          }),
-        );
-      } else if (ev.type === 'qa_scan') {
-        dispatch(
-          notificationsActions.pushToast({
-            kind: 'info',
-            message:
-              ev.flaggedCount === 0
-                ? `Chapter ${chapterId}: nothing flagged.`
-                : `Chapter ${chapterId}: re-recording ${ev.flaggedCount} line${
-                    ev.flaggedCount === 1 ? '' : 's'
-                  }…`,
-            dedupeKey: toastKey,
-          }),
-        );
-      } else if (ev.type === 'qa_repair_complete') {
-        repairedCount = ev.repaired?.length ?? 0;
-        /* Refresh the Listen row — a re-record changes duration, and the
-           renderedAt stamp is what cache-busts the audio element. */
-        dispatch(
-          chaptersActions.markChapterAudioUpdated({
-            chapterId,
-            durationSec: ev.durationSec,
-            renderedAt: String(Date.now()),
-          }),
-        );
-      } else if (ev.type === 'chapter_failed') {
-        failure = ev.errorReason;
-      }
-    },
-  });
+  /* Minor (GATE 2 report-C) — an unexpected throw out of streamQaRepair or
+     an onTick handler used to reject this promise straight past the
+     finish/summary-toast dispatches below, stranding `qaRepair.running`
+     `true` forever with no way back (the row's button disabled until
+     reload). Caught here, not per-callsite, so every failure mode — network,
+     a bad frame, a throwing reducer — still reaches the same cleanup. */
+  try {
+    await api.streamQaRepair({
+      bookId,
+      chapterId,
+      onTick: (ev: QaRepairTick) => {
+        if (ev.type === 'warning' && ev.message) {
+          /* The advisory this consumer exists for. `clearMismatchedDesignedVoices`
+             dropped a reused designed voice whose baked manifest language differs
+             from the book's, so the repair will re-record those lines in a
+             DIFFERENT voice than the one the user picked. The repair is non-fatal
+             and still proceeds, which is exactly why a silent drop was wrong.
+             Deduped by code, matching generation-stream-runner's `warning` arm. */
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'warn',
+              message: ev.message,
+              dedupeKey: `qa-repair-warning:${ev.code ?? ev.message}`,
+            }),
+          );
+        } else if (ev.type === 'qa_scan') {
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'info',
+              message:
+                ev.flaggedCount === 0
+                  ? `Chapter ${chapterId}: nothing flagged.`
+                  : `Chapter ${chapterId}: re-recording ${ev.flaggedCount} line${
+                      ev.flaggedCount === 1 ? '' : 's'
+                    }…`,
+              dedupeKey: toastKey,
+            }),
+          );
+        } else if (ev.type === 'qa_repair_complete') {
+          repairedCount = ev.repaired?.length ?? 0;
+          /* Refresh the Listen row — a re-record changes duration, and the
+             renderedAt stamp is what cache-busts the audio element. Guarded on
+             `currentBookId`, matching generation-stream-runner's tick guard:
+             `chapters` is keyed by bare `chapterId` alone (ids repeat 1..N
+             across every book), so a repair that finishes after the user has
+             navigated to a DIFFERENT book would otherwise stamp that other
+             book's same-numbered chapter with this repair's duration. */
+          if (mw.getState().chapters.currentBookId === bookId) {
+            dispatch(
+              chaptersActions.markChapterAudioUpdated({
+                chapterId,
+                durationSec: ev.durationSec,
+                renderedAt: String(Date.now()),
+              }),
+            );
+          }
+        } else if (ev.type === 'chapter_failed') {
+          failure = ev.errorReason;
+        }
+      },
+    });
+  } catch (e) {
+    failure = e instanceof Error ? e.message : 'Unexpected error during repair.';
+  }
 
   dispatch(notificationsActions.dismissByKey(toastKey));
   dispatch(qaRepairActions.finish(req));

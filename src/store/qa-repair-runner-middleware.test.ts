@@ -28,7 +28,7 @@ const WARN_MESSAGE =
   '1 designed voice(s) were cleared because they were designed for a different language ' +
   'than this book — re-design Eliza Carrick before generating.';
 
-function makeStore() {
+function makeStore(currentBookId: string | null = 'bk1') {
   return configureStore({
     reducer: {
       qaRepair: qaRepairSlice.reducer,
@@ -36,7 +36,7 @@ function makeStore() {
       notifications: notificationsSlice.reducer,
     },
     preloadedState: {
-      chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS },
+      chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS, currentBookId },
     },
     middleware: (getDefault) => getDefault().concat(qaRepairRunnerMiddleware()),
   });
@@ -133,5 +133,60 @@ describe('qaRepairRunnerMiddleware', () => {
       .getState()
       .notifications.toasts.find((t) => t.dedupeKey === 'qa-repair-bk1-1-done');
     expect(done).toMatchObject({ kind: 'error', message: 'Chapter 1 repair failed — boom' });
+  });
+
+  /* GATE 2 C-5 — `chapters` is keyed by bare `chapterId` alone and holds
+     WHICHEVER book is currently hydrated (`currentBookId`); chapter ids
+     repeat 1..N across every book. Mirrors generation-stream-runner's own
+     `currentBookId` tick guard (onStreamTick). Without it, a repair that
+     started on book A and finishes after the user has navigated to book B
+     stamps A's repaired duration onto B's same-numbered chapter row. */
+  it('[C-5] does not stamp the chapters slice when a different book is open by the time the repair completes', async () => {
+    /* The slice holds book "bk2" (a different book from the one the repair
+       was started on) by the time the completion frame arrives — exactly
+       the "navigated away mid-repair" scenario. */
+    const store = makeStore('bk2');
+    store.dispatch(qaRepairActions.start({ bookId: 'bk1', chapterId: 1 }));
+    await flush();
+
+    /* The repair still finishes and clears busy + toasts normally... */
+    expect(store.getState().qaRepair.running['bk1:1']).toBeUndefined();
+    const done = store
+      .getState()
+      .notifications.toasts.find((t) => t.dedupeKey === 'qa-repair-bk1-1-done');
+    expect(done).toMatchObject({ kind: 'info', message: 'Chapter 1: re-recorded 2 lines.' });
+    /* ...but the AMBIENT chapters slice — now holding bk2's rows — must be
+       untouched: no duration/renderedAt stamp landed on its chapter 1. */
+    const ch = store.getState().chapters.chapters.find((c) => c.id === 1)!;
+    expect(ch.duration).toBe('2:00');
+    expect(ch.audioRenderedAt).toBeUndefined();
+  });
+
+  /* Minor (GATE 2 report-C) — no try/catch around api.streamQaRepair meant an
+     unexpected throw (network error, a bad frame, a throwing onTick handler)
+     rejected `runRepair` straight past the `finish` dispatch — `void`-fired
+     from the middleware, so nothing ever caught it. `qaRepair.running` was
+     stranded `true` forever: the row's repair button stayed disabled with no
+     way back short of a reload. */
+  it('[Minor] clears the busy flag and still shows an error toast when streamQaRepair throws unexpectedly', async () => {
+    streamQaRepairSpy.mockImplementation(async () => {
+      throw new Error('sidecar unreachable');
+    });
+    const store = makeStore();
+    store.dispatch(qaRepairActions.start({ bookId: 'bk1', chapterId: 1 }));
+    expect(store.getState().qaRepair.running['bk1:1']).toBe(true);
+
+    await flush();
+
+    /* THE discriminator: pre-fix this stays `true` forever — the promise
+       rejection never reaches the `qaRepair/finish` dispatch. */
+    expect(store.getState().qaRepair.running['bk1:1']).toBeUndefined();
+    const done = store
+      .getState()
+      .notifications.toasts.find((t) => t.dedupeKey === 'qa-repair-bk1-1-done');
+    expect(done).toMatchObject({
+      kind: 'error',
+      message: 'Chapter 1 repair failed — sidecar unreachable',
+    });
   });
 });
