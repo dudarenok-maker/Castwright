@@ -338,6 +338,44 @@ history at cut time.
   button fired mid-render, and the same unguarded-unload race in the Whisper
   (ASR) and ECAPA speaker engines — which, unlike Coqui, were already being
   auto-evicted, so that one was reachable in production.
+- **The five engine in-flight counters are now lock-guarded** (#1917, PR #NNNN).
+  `x += 1` on a plain attribute is not atomic — CPython can switch threads at
+  any bytecode boundary — so a concurrent forward could lose a decrement and
+  leave that engine's counter stuck above zero, silently disabling its idle
+  eviction for the rest of the process's lifetime, with no error and no log
+  line. All five counters (Coqui, Whisper/ASR, ECAPA/speaker, and both Qwen
+  VoiceDesign and Base) now share one lock-guarded `InFlightCounter`; the lock
+  is held only for the mutation itself, never across a forward, so eviction's
+  fast-out stays non-blocking. **Also fixes a related pre-existing bug found in
+  passing:** `CoquiEngine.synthesize`, `WhisperEngine.transcribe` and
+  `SpeakerEngine.embed` all decremented their in-flight count *before*
+  re-stamping `_last_used` on the way out, leaving a window where the
+  admission path could see an idle-looking engine mid-forward and evict it.
+- **A Stop pressed mid-load no longer leaves Coqui XTTS pinned to a stale GPU**
+  (#1918, PR #NNNN). Loading a fresh model used to publish seven fields with
+  no lock while `unload()` took the lock and reset those same fields, so a Stop
+  during the ~90 s cold load could have the still-running loader overwrite the
+  unload's resets — leaving a live model whose `_device` never got restored to
+  `_requested_device`, bypassing GPU placement on the next load. The publish is
+  now atomic and load-epoch-guarded: `unload()` unconditionally bumps a load
+  epoch, and a load that finishes after losing the race discards its
+  result instead of publishing on top of a teardown.
+- **VRAM eviction now stops as soon as a request fits, and never throws away a
+  reserved model** (#1920, PR #NNNN). Previously a small request (e.g. a
+  400 MB ASR call) ran every eviction branch unconditionally, so it could free
+  several GB from Qwen and still unload a resident Coqui XTTS — a ~90 s reload
+  — for no reason. Eviction is now an ordered, cheapest-reload-first step list
+  that re-probes real capacity after each step and stops the moment the
+  request fits. It also now consults the reservation ledger and skips any
+  engine whose operation has already been admitted, closing a window where an
+  in-flight, already-reserved model could be evicted out from under it.
+- **Pressing Stop no longer reports a timeout while the model unloads anyway**
+  (#1921, PR #NNNN). `POST /api/sidecar/unload` previously ran under the same
+  2 s budget as the sidecar health probe, so stopping a model mid-render
+  reported an error a couple of seconds in and then unloaded for real up to a
+  minute later. The unload route now gets its own 90 s budget (mirroring the
+  existing `/load` route), and the UI shows a disabled "Stopping…" state for
+  the whole wait instead of a misleading failure.
 
 ---
 

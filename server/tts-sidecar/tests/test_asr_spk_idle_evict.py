@@ -2,7 +2,7 @@
 
 Both engines hold `_infer_lock` across their forward but their `unload()`
 never acquires it, and `maybe_free_idle` calls `unload()` directly. Since both
-are already driven by `_idle_evict(0.0)`, an admission-path evict can null the
+are already driven by `_idle_evict_steps(0.0)`, an admission-path evict can null the
 model mid-forward. Same defect the Coqui work fixed, one layer over.
 
 Round-1 review (#1894) added two further pins:

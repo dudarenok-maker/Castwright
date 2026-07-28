@@ -296,6 +296,19 @@ recurring shapes are recorded in that PR's review notes; the ones that bite here
   `qwen.1.7b.design` / `qwen.1.7b.mint` / `qwen.1.7b` / `qwen`) in the ledger
   instead of the engine, and threading that key through both `try_hold` sites.
   Deliberately out of scope here; file it if the design work is wanted.
+- **A discarded cold load can now make a second Stop block for the length of a
+  fresh ~90 s reload** ([#1925](https://github.com/dudarenok-maker/Castwright/issues/1925)).
+  §3's atomic publish means a load that loses the epoch race is thrown away
+  rather than published, so `synthesize`'s in-lock re-ensure — which has always
+  been allowed to reload — can now run a full cold load **while holding
+  `_synth_lock`**, narrowing the window in which a second Stop is responsive.
+  The *shape* (the re-ensure reloading under the lock) is pre-existing; what
+  this branch changed is the trigger set — previously the losing loader
+  published anyway, which was the #1918 bug, so the re-ensure hit its fast-out
+  instead. This is a narrow Stop-responsiveness regression traded against the
+  torn state / placement bypass §3 closes, which was worse. Deliberately not
+  fixed here — it needs a design decision (retry outside the lock vs.
+  fail-as-cancelled vs. publish-or-bail) — filed as #1925 rather than folded in.
 
 ## 9. Owed acceptance
 
@@ -303,3 +316,7 @@ Row **A20** (#1894) already asks the tester to record what the Stop control
 reports during a render. That row's criteria are updated rather than duplicated:
 the expected observation changes from "records whatever it reports" to
 "Stop shows *Stopping…* and then completes, with no 2 s error". No new row.
+
+## Ship notes
+
+Shipped: TBD (filled at merge). Merge SHA: TBD. Closes #1917, #1918, #1920, #1921.

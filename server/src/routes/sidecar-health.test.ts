@@ -718,9 +718,10 @@ describe('POST /api/sidecar/unload', () => {
        this aborted at 2s and returned 503 while the model unloaded anyway a
        moment later — the user saw a failure for something that worked.
 
-       The mock MUST honour `init.signal`. The route aborts via AbortController
-       (sidecar-health.ts:411-412, :417); a mock that ignores the signal lets
-       `controller.abort()` fire into the void, the promise resolves anyway, and
+       The mock MUST honour `init.signal`. The route aborts via the unload
+       handler's `AbortController` / `controller.signal` (sidecar-health.ts); a
+       mock that ignores the signal lets `controller.abort()` fire into the
+       void, the promise resolves anyway, and
        the test passes against the UNFIXED 2s budget. That is the exact placebo
        shape this branch exists to stop shipping. */
     fetchMock.mockImplementationOnce(
