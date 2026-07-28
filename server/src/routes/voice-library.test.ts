@@ -642,6 +642,25 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
     expect(res.status).toBe(403);
   });
 
+  it('POST /:uuid/sample 403s a cloned voice with no consent record at all (#1808 — a fully-absent consent block can only exist as legacy/corrupted on-disk state now that writeEntry() guards it, so seed the manifest directly)', async () => {
+    mkdirSync(vl.entryDir('s-noconsent'), { recursive: true });
+    writeFileSync(
+      join(vl.entryDir('s-noconsent'), 'voice.json'),
+      JSON.stringify({
+        voiceUuid: 's-noconsent',
+        name: 'Legacy',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        createdAt: 'x',
+        updatedAt: 'x',
+      }),
+    );
+    const res = await request(app).post('/api/voice-library/s-noconsent/sample').send({});
+    expect(res.status).toBe(403);
+  });
+
   /* #1801 — the sample route's failures arrive from a DIFFERENT layer than
      design/redesign's: `SidecarTtsProvider` throws a plain Error annotated
      `{ transient, status, poisoned }` (tts/sidecar.ts `throwForResponse`), or
@@ -1711,6 +1730,23 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     await vl.writeEntry(makeEntry({ voiceUuid: 'nostage-1', provenance: 'designed' }));
     const res = await request(app).post('/api/voice-library/nostage-1/redesign/promote').send({});
     expect(res.status).toBe(409);
+  });
+
+  it('promote 409s WITHOUT deleting the live .pt on a double-promote (#1804 data-loss guard)', async () => {
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+    await vl.writeEntry(makeEntry({ voiceUuid: 'doublepromo-1', provenance: 'designed' }));
+    const liveP = qwenVoice.qwenVoicePtPath('qwen-doublepromo-1');
+    writeFileSync(liveP, 'LIVE');
+    // No preview `.pt` staged — mirrors a double-promote (second click after
+    // the first already consumed the preview).
+
+    const res = await request(app)
+      .post('/api/voice-library/doublepromo-1/redesign/promote')
+      .send({});
+
+    expect(res.status).toBe(409);
+    expect(existsSync(liveP)).toBe(true); // live artifact must survive
+    expect(readFileSync(liveP, 'utf8')).toBe('LIVE');
   });
 
   it('404s design-lifecycle routes for an unknown uuid', async () => {
