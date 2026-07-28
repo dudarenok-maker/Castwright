@@ -4,7 +4,9 @@
 
 **Goal:** Make the golden-audio assembly tier (Suite B) able to fail for an audio reason, by comparing the produced MP3 against a recorded, ffmpeg-stamped baseline across four independent layers.
 
-**Architecture:** One pipeline run in a `beforeAll` (first pass → synth → finalize → decode) feeds four independent `it` blocks: L1 pins ffmpeg's loudnorm *measurement*, L2 pins the `.lufs.json` sidecar including a newly-persisted `normalizationType`, L3 pins the decoded byte count and a per-100 ms RMS envelope, L4 pins the encoded MP3 (MD5 on a byte-identical ffmpeg build, RMS-error otherwise). A `GOLDEN_BLESS=1` branch writes the baseline instead of asserting.
+**Architecture:** Two pipeline runs in a `beforeAll` (first pass → synth → finalize → decode, at the shipped `-16` target and again at `-20`) feed six independent `it` blocks: L1 pins ffmpeg's loudnorm *measurement*, L2 pins the `.lufs.json` sidecar including a newly-persisted `normalizationType`, L3 pins the decoded byte count plus a per-100 ms RMS envelope with an audibility ceiling on silent windows, L4 pins the encoded MP3 (MD5 on a byte-identical ffmpeg build, RMS-error otherwise), L5 pins spectral tilt — the one thing no energy-based layer can see — and a sixth covers the `linear` loudnorm arm the shipped target never reaches. A `GOLDEN_BLESS=1` branch writes the baselines instead of asserting.
+
+**Scope note:** this plan folds in **ops-44 (#1910)** as Task 9b and **ops-46 (#1912)** as Task 9c. **ops-45 (#1911)** deliberately stays a separate follow-up — it lives in the Python sidecar harness and needs Kokoro weights, so it cannot be verified in this PR.
 
 **Tech Stack:** TypeScript, Vitest (node env), real ffmpeg subprocesses, Node `node:crypto` md5, `node:test` for the runner script.
 
@@ -16,7 +18,8 @@
 
 - **Branch:** all work lands on `docs/docs-ops36-golden-comparison` in the worktree `.claude/worktrees/docs+ops36-golden-comparison`. Do not commit to the primary checkout.
 - **The golden tier stays opt-in.** Never add `test:golden-audio` (or `:assembly`) to `test:all`, `verify`, `verify:fast*`, or any CI workflow. `server/vitest.config.ts` must keep excluding `src/**/*.golden.test.ts`.
-- **Every number in the spec is measured.** Do not round, re-derive, or "improve" a tolerance. The exact values: L1 `±0.1`, L2 `±0.3`, L3 envelope `±10 %` relative with a `-50 dBFS` skip floor, L4-loose `rmse < 16 %`.
+- **Every number in the spec is measured.** Do not round, re-derive, or "improve" a tolerance. The exact values: L1 `±0.1`, L2 `±0.3`, L3 envelope `±10 %` relative with a `-50 dBFS` skip floor and a `-45 dBFS` audibility ceiling, L4-loose `rmse < 16 %`, L5 tilt `±3.5 %`.
+- **Never trust a tool's self-reported derived number.** This cost three revisions. ffmpeg's `loudnorm` reports `output_lra`, and comparing it to `input_lra` suggested a fivefold loudness-range collapse; an independent `ebur128` measurement of the finished audio showed the real figure is 2.0 → 1.7 LU. If a number matters, measure the artifact.
 - **Baseline literals** (ffmpeg `8.1.1-full_build-www.gyan.dev`): `input_i -21.70`, `input_lra 3.00`, `input_tp -4.15`, `input_thresh -31.75`; sidecar `i -16.28`, `lra 0.50`, `normalizationType "dynamic"`; decoded `274432` bytes, `2` quiet windows skipped, `57` full windows; `mp3Md5 d7d6d0aa41ca947da5465dfd289f0f15`; mp3 `55749` bytes. **These are this box's values — Task 7 regenerates them by blessing, and the committed baseline is whatever bless produces.** They are listed so a wildly different value is recognised as a bug rather than accepted.
 - **OpenAPI is the type source of truth.** Never hand-edit `src/lib/api-types.ts`; regenerate with `npm run openapi:types`. Never hand-edit `src/lib/types.ts:56` — it is a re-export of the generated type.
 - **Commit convention:** `<type>(<scope>): <subject>`. Scopes used here: `server`, `scripts`, `docs`. Never `--no-verify`.
@@ -1737,6 +1740,231 @@ git commit -m "test(server): assert golden-assembly layers 3 and 4 against the b
 
 ---
 
+### Task 9b: Layer 5 — spectral tilt (folds in ops-44 / #1910)
+
+Every layer so far is an **energy** instrument. A cross-build resampler or lowpass change that dulls the top end — audible on speech — moves window RMS by hundredths of a dB and ~5–6 % RMS-error, so it passes L1–L4 on LOOSE. One extra float closes it.
+
+**Files:**
+- Modify: `server/src/tts/golden-baseline.ts`, `server/src/tts/golden-baseline.test.ts`
+- Modify: `server/src/tts/golden-assembly.golden.test.ts`
+
+**Interfaces:**
+- Consumes: `toInt16`, the `art`/`baseline` objects.
+- Produces: `spectralTilt(samples) → number`; `TOL.spectralTiltRel`; `AssemblyBaseline.spectralTilt`.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `golden-baseline.test.ts` (`sine` helper is local to this block):
+
+```ts
+describe('spectralTilt', () => {
+  function tone(n: number, freqRatio: number): Int16Array {
+    const out = new Int16Array(n);
+    for (let i = 0; i < n; i += 1) out[i] = Math.round(12000 * Math.sin(2 * Math.PI * freqRatio * i));
+    return out;
+  }
+
+  it('is gain-invariant — the statistic must not move when only level changes', () => {
+    const x = tone(4800, 0.05);
+    const loud = new Int16Array(x.length);
+    for (let i = 0; i < x.length; i += 1) loud[i] = Math.round(x[i] * 0.5);
+    expect(spectralTilt(loud)).toBeCloseTo(spectralTilt(x), 6);
+  });
+
+  it('rises with frequency — that is what makes it a tilt proxy', () => {
+    // A higher-frequency tone has a larger sample-to-sample difference for the
+    // same RMS, which is exactly the property a lowpass destroys.
+    expect(spectralTilt(tone(4800, 0.2))).toBeGreaterThan(spectralTilt(tone(4800, 0.02)));
+  });
+
+  it('is 0 for a constant signal and finite for silence', () => {
+    expect(spectralTilt(new Int16Array(100).fill(1000))).toBeCloseTo(0, 9);
+    expect(Number.isFinite(spectralTilt(new Int16Array(100)))).toBe(true);
+  });
+});
+```
+
+And extend the `TOL` case with `expect(TOL.spectralTiltRel).toBe(0.035);`.
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npm --prefix server run test -- --run golden-baseline`
+Expected: FAIL — `spectralTilt is not a function`.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Add to `TOL` in `golden-baseline.ts`:
+
+```ts
+  /** L5 — relative tolerance on the spectral-tilt proxy. Derived from a
+   *  measured curve (spec finding 8): codec noise 0.16 %, gain-invariance
+   *  floor 1.29 %, smallest real signal (10 kHz lowpass) 9.90 %. 3.5 % is the
+   *  geometric mean of the last two — 2.7x above noise, 2.8x below signal.
+   *  NOTE the detectable band is bounded by Nyquist: at 24 kHz there is no
+   *  content above 12 kHz, so this catches lowpassing at/below ~10 kHz only. */
+  spectralTiltRel: 0.035,
+```
+
+Add the field to `AssemblyBaseline` after `decoded`:
+
+```ts
+  /** L5 — rms(first difference) / rms(signal) of the decoded PCM. */
+  spectralTilt: number;
+```
+
+And the function, after `pcmRms`:
+
+```ts
+/** Spectral-tilt proxy: RMS of the first difference over RMS of the signal.
+ *
+ *  A first difference is a crude high-pass, so this ratio rises with the
+ *  signal's high-frequency content and — critically — is GAIN-INVARIANT, since
+ *  numerator and denominator scale together. That makes it sensitive to
+ *  exactly the regression every other layer misses (a resampler or lowpass
+ *  change dulling the top end) while ignoring the loudness changes L1-L4
+ *  already cover. FFT-free and deterministic. */
+export function spectralTilt(samples: Int16Array): number {
+  if (samples.length < 2) return 0;
+  let diff = 0;
+  let sig = 0;
+  for (let i = 1; i < samples.length; i += 1) {
+    const d = samples[i] - samples[i - 1];
+    diff += d * d;
+    sig += samples[i] * samples[i];
+  }
+  if (sig === 0) return 0;
+  return Math.sqrt(diff / (samples.length - 1)) / Math.sqrt(sig / (samples.length - 1));
+}
+```
+
+- [ ] **Step 4: Wire it into the golden test**
+
+In `golden-assembly.golden.test.ts`: add `spectralTilt` to the `./golden-baseline.js` import; add `spectralTilt: number` to the `Artifacts` interface and `spectralTilt: spectralTilt(decoded)` to the `art = {…}` literal; add `spectralTilt: art.spectralTilt` to `writeBaseline`'s recorded object. Then add the layer:
+
+```ts
+  it('L5 — spectral tilt matches the baseline', () => {
+    if (BLESS) return;
+    const rel = (art.spectralTilt - baseline!.spectralTilt) / baseline!.spectralTilt;
+    expect(
+      Math.abs(rel),
+      `L5 spectral-tilt drift: ${art.spectralTilt.toFixed(6)} vs baseline ` +
+        `${baseline!.spectralTilt.toFixed(6)} (${(rel * 100).toFixed(2)} %, tol ` +
+        `${TOL.spectralTiltRel * 100} %). Every other layer is an ENERGY instrument, ` +
+        `so a resampler or lowpass change that dulls the top end shows up HERE ` +
+        `and nowhere else. A gain change does not move this number.${modeLine()}`,
+    ).toBeLessThanOrEqual(TOL.spectralTiltRel);
+  });
+```
+
+- [ ] **Step 5: Re-bless, verify, and prove L5 can fail**
+
+```bash
+npm run test:golden-audio -- --assembly-only --bless   # baseline gains spectralTilt (~0.4862)
+npm run test:golden-audio:assembly                     # PASS, 7 tests
+npm --prefix server run test -- --run golden-baseline  # PASS
+npm run typecheck                                      # clean
+```
+
+Then prove it fires: temporarily insert `-af lowpass=f=10000` into the fixture path (or hand-edit the baseline's `spectralTilt` to `0.44`) and confirm L5 fails at ≈9.9 %. Revert.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add server/src/tts/golden-baseline.ts server/src/tts/golden-baseline.test.ts server/src/tts/golden-assembly.golden.test.ts server/src/tts/__fixtures__/golden-chapter.baseline.json
+git commit -m "test(server): add golden-assembly layer 5 — spectral tilt
+
+Closes #1910"
+```
+
+---
+
+### Task 9c: Cover the linear loudnorm arm (folds in ops-46 / #1912)
+
+Every assertion so far runs at the shipped `-16` target, which on this fixture always takes the **dynamic** path. So the `linear` arm — the mode `buildSecondPassFilterString` actually requests — has **zero coverage**. Attenuating the fixture cannot fix that: crest factor is gain-invariant. A second baseline at `target = -20` does (measured: `normalization_type = linear`).
+
+This matters most later. If #1909 is fixed by adding a limiter or lowering the target, production flips to linear and this tier would be pinning a mode nothing uses.
+
+**Files:**
+- Modify: `server/src/tts/golden-assembly.golden.test.ts`
+- Create (by blessing): `server/src/tts/__fixtures__/golden-chapter.linear.baseline.json`
+
+**Interfaces:**
+- Consumes: everything from Tasks 6–9b.
+- Produces: `linearArt` (a second artifacts object) and `linearBaseline`.
+
+- [ ] **Step 1: Add the second pipeline run**
+
+Extract the pipeline body from `beforeAll` into a local `runPipeline(target: number)` returning the `Artifacts` shape, then call it twice:
+
+```ts
+const LINEAR_TARGET = -20;
+const LINEAR_BASELINE_PATH = join(FIXTURE_DIR, 'golden-chapter.linear.baseline.json');
+
+let linearArt: Artifacts;
+let linearBaseline: AssemblyBaseline | null = null;
+```
+
+In `beforeAll`, after the primary run: `linearArt = await runPipeline(LINEAR_TARGET);`
+
+> **Budget note.** This doubles the hook to **8 ffmpeg spawns**. The four-spawn
+> version measured well under the explicit 60 s budget, so this stays inside it —
+> but re-check the reported hook duration at Step 3 rather than assuming.
+
+Bless writes both; the assert path loads both. The linear baseline records the **same shape minus `envelope100ms`'s partner binary** — there is no `.decoded.pcm` for this arm, so L4 on it is tight-only.
+
+- [ ] **Step 2: Add the linear-arm assertions**
+
+```ts
+  it('L-linear — the linear loudnorm arm produces the expected audio', () => {
+    if (BLESS) return;
+    const b = linearBaseline!;
+
+    /* The whole point of this arm: the mode the code REQUESTS. If this reads
+       "dynamic", the target no longer clears the true-peak ceiling and the
+       fixture has stopped covering the linear path at all. */
+    expect(
+      linearArt.sidecar?.normalizationType,
+      `L-linear: expected loudnorm to take the LINEAR arm at target ` +
+        `${LINEAR_TARGET}, got "${linearArt.sidecar?.normalizationType}". Crest ` +
+        `factor must exceed |target - tp| to trip dynamic; if that changed, this ` +
+        `arm covers nothing.${modeLine()}`,
+    ).toBe('linear');
+
+    expect(Math.abs(linearArt.sidecar!.i - b.sidecar.i)).toBeLessThanOrEqual(TOL.sidecarLu);
+    expect(linearArt.decoded.length * 2).toBe(b.decoded.bytes);
+
+    const v = compareEnvelope(b.envelope100ms, linearArt.envelope);
+    expect(v.ok, `L-linear envelope: ${(v.worstRelDelta * 100).toFixed(1)} % @ w${v.worstIndex}`).toBe(true);
+    expect(v.loudInQuietIndex).toBe(-1);
+
+    if (isTight()) expect(linearArt.mp3Md5).toBe(b.mp3Md5);
+  });
+```
+
+- [ ] **Step 3: Bless, verify, and check the budget**
+
+```bash
+npm run test:golden-audio -- --assembly-only --bless
+cat server/src/tts/__fixtures__/golden-chapter.linear.baseline.json | head -12
+```
+Confirm `normalizationType: "linear"` and `sidecar.i` ≈ `-19.29`. Then:
+
+```bash
+npm run test:golden-audio:assembly    # PASS, 8 tests — note the beforeAll duration
+npm run typecheck
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add server/src/tts/golden-assembly.golden.test.ts server/src/tts/__fixtures__/golden-chapter.linear.baseline.json
+git commit -m "test(server): cover the linear loudnorm arm with a second baseline
+
+Closes #1912"
+```
+
+---
+
 ### Task 10: Prove the suite can fail — the demonstration
 
 A green run proves nothing here; passing is what the tier already did. This task produces the evidence table for the PR body.
@@ -1755,6 +1983,9 @@ For each row: apply the perturbation, run `npm run test:golden-audio:assembly`, 
 | L3 | 2.0 LU loudnorm drift | worst window ≈38.7 % > 10 % |
 | L4-tight | re-encode at `-q:a 3` (temporarily change the `quality` in `finalizeChapterAudioWrite`'s call) | md5 differs |
 | L4-loose | baseline `ffmpegBanner` faked + 2.0 LU drift | rmse ≈24.8 % > 16 % |
+| L3 (quiet ceiling) | inject a −20 dBFS tone into a baseline-silent window of the fixture tail | `loudInQuietIndex` fires; the relative check stays silent, which is the point |
+| L5 | `-af lowpass=f=10000` applied to the fixture before synthesis | tilt moves ≈9.9 % > 3.5 % |
+| L-linear | raise `LINEAR_TARGET` from `-20` to `-16` | mode reads `dynamic` — the arm stops covering linear |
 
 - [ ] **Step 2: Verify the tree is clean afterwards**
 
@@ -1822,9 +2053,9 @@ All four were filed on 2026-07-28, before implementation started, because the fi
 | issue | shape | what |
 |---|---|---|
 | [#1909](https://github.com/dudarenok-maker/Castwright/issues/1909) | `bug`, `area:srv` | loudnorm rides syllables on most chapters — linear requested, dynamic applied |
-| [#1910](https://github.com/dudarenok-maker/Castwright/issues/1910) | ops-44, `moscow:could` | golden-assembly is blind to spectral tilt on the cross-build path |
-| [#1911](https://github.com/dudarenok-maker/Castwright/issues/1911) | ops-45, `moscow:should` | no golden tier asserts audio CONTENT (right words, right voice) |
-| [#1912](https://github.com/dudarenok-maker/Castwright/issues/1912) | ops-46, `moscow:could` | the linear loudnorm arm has zero golden coverage |
+| [#1910](https://github.com/dudarenok-maker/Castwright/issues/1910) | ops-44 | **FOLDED IN — Task 9b.** Put `Closes #1910` in the PR body. |
+| [#1911](https://github.com/dudarenok-maker/Castwright/issues/1911) | ops-45, `moscow:should` | no golden tier asserts audio CONTENT — **stays a follow-up**, deliberately: it lives in Suite A (Python/pytest, real Kokoro weights), so folding it in would make this a two-harness PR whose new leg cannot be verified here. |
+| [#1912](https://github.com/dudarenok-maker/Castwright/issues/1912) | ops-46 | **FOLDED IN — Task 9c.** Put `Closes #1912` in the PR body. |
 
 **No `docs/BACKLOG.md` row is owed for any of them**, and this is a deliberate finding rather than an omission: `scripts/backlog-sync.mjs:3` queries **`type:feature` issues only**, so `type:chore` items never appear in that file — ops-36 itself (#1880) is likewise absent — and `bug`-labelled issues stay off it by the convention in CLAUDE.md's "The backlog". All four are on the Castwright Kanban board via `add-to-project.yml` (verified). Do **not** run `npm run backlog:sync --apply` on this branch: it currently emits only unrelated churn from other board edits, which would couple scope onto a docs-only PR.
 

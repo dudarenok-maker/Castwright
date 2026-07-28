@@ -111,9 +111,34 @@ filter is implementation-defined. Cross-build behaviour is **unmeasured** (see �
 **4. `linear=true` does not hold on this fixture — loudnorm falls back to `dynamic`.**
 The fixture's true peak is `-4.15` dBTP, so the +5.70 dB needed to reach `-16` LUFS
 would land at `+1.55` dBTP, past the `-1.5` ceiling. ffmpeg reports
-`normalization_type: "dynamic"` and compresses **LRA 3.00 → 0.50**; `output_i` lands at
-**`-16.28`**, not `-16.00`. So the persisted `lufs.i` does *not* converge on target by
-construction, and pinning it is worth more than first estimated.
+`normalization_type: "dynamic"`, and `output_i` lands at **`-16.28`**, not `-16.00`. So
+the persisted `lufs.i` does *not* converge on target by construction, and pinning it is
+worth more than first estimated.
+
+**The compression is real but MILD, and an earlier revision of this spec overstated it
+by an order of magnitude.** Revisions 1–3 said "compresses LRA 3.00 → 0.50, a fivefold
+reduction", taking loudnorm's own `input_lra` / `output_lra` self-reports at face value.
+Those use a different internal gating than an EBU R128 measurement of the finished audio
+and are not comparable to each other. Measured independently with `ebur128` on the
+decoded output:
+
+```
+INPUT fixture                I=-21.0 LUFS   LRA=2.0 LU
+OUTPUT target -16 (dynamic)  I=-16.2 LUFS   LRA=1.7 LU     <- 15 % reduction, not 5x
+OUTPUT target -20 (linear)   I=-19.3 LUFS   LRA=2.0 LU     <- preserved exactly
+```
+
+The mechanism is confirmed — linear mode preserves the loudness range exactly, dynamic
+mode reduces it — but the magnitude is **0.3 LU**, not the collapse previously claimed.
+This is the same failure mode as revision 1's, one level up: trusting a tool's *derived
+self-report* instead of measuring the artifact. Recorded rather than quietly fixed.
+
+**5b. `output_lra` does NOT discriminate loudnorm's mode.** Measured: `0.5` under dynamic
+(`target -16`) and `0.6` under linear (`target -20`) — a 0.1 LU difference, comfortably
+inside L2's ±0.3 band. An earlier revision claimed `lra` was the backstop that would catch
+a silent `dynamic` → `linear` flip (0.50 → ~3.00); that was an assumption, and it is
+false. **`normalizationType` is the only reliable discriminator**, which makes the sidecar
+widening in §2 load-bearing rather than a convenience.
 
 **5. `normalization_type` is parsed then discarded — and `twoPass: true` does NOT imply
 a mode is present.** `LoudnormSidecarJson` (`loudnorm.ts:73-86`) is
@@ -176,6 +201,34 @@ is w16 at **-44.7 dBFS, 5.3 dB of headroom**, and the count stays exactly 2 unde
 perturbation tested (at 2.0 LU drift w16 moves only to -41.9 dB).
 `quietWindowsSkipped === 2` is therefore a safe hard assertion, not a latent flake.
 
+**8. Every layer above is an ENERGY instrument — spectral balance is invisible to all of
+them.** A cross-build resampler or lowpass change that shaves the top end is the classic
+"the new build sounds dull" regression and is audible on TTS speech, but it moves window
+RMS by hundredths of a dB and contributes ~5–6 % RMS-error, so it passes L1–L4 on LOOSE.
+
+A first-difference/energy ratio — `rms(x[i] − x[i−1]) / rms(x)` — is an FFT-free,
+deterministic proxy for spectral tilt. Measured through the production path (baseline
+`0.486238`):
+
+| perturbation | Δ tilt | reads as |
+|---|---|---|
+| same re-encode | 0.00 % | determinism |
+| encoder quality 2 → 4 | **0.16 %** | codec noise floor |
+| gain +6 dB | **−1.29 %** | practical invariance floor |
+| lowpass 12 kHz | 0.00 % | *no-op — 12 kHz IS Nyquist at 24 kHz* |
+| lowpass 10 kHz | **−9.90 %** | smallest real signal |
+| lowpass 8 kHz | −24.08 % | |
+
+Threshold **±3.5 %** — the geometric mean of the 1.29 % invariance floor and the 9.90 %
+signal (√(1.29 × 9.90) = 3.57), giving 2.7× above noise and 2.8× below signal. Note the
+detectable band is bounded above by Nyquist: at 24 kHz there is no content above 12 kHz,
+so this catches lowpassing at or below ~10 kHz and nothing higher.
+
+**9. The `linear` loudnorm arm is never exercised at the shipped target.** Crest factor is
+gain-invariant, so attenuating the fixture cannot flip the mode. Measured: `target = -20`
+does — `normalization_type = linear`, `output_i = -19.29`, and `ebur128` confirms LRA
+preserved at 2.0. That gives a second baseline covering the arm the code requests.
+
 ## Goals
 
 - Make the assembly golden tier able to fail for an audio reason.
@@ -207,6 +260,15 @@ arbitration** between them; which combination fails is itself diagnostic.
 | **L2** | `i`, `lra`, `normalizationType` | the written `.lufs.json` | ±0.3 LU; mode **exact**, absence gets its own message | ffmpeg's **gain application** changing, a `dynamic` → `linear` flip, **and** a second-pass-JSON parse failure (finding 5). |
 | **L3** | decoded byte count + per-100 ms RMS envelope | `.mp3` decoded **from the written file** | count **exact** (finding 2); envelope ±10 %, windows below -50 dBFS on **either** side skipped, union count asserted `=== 2`, plus a **-45 dBFS absolute ceiling** on windows the baseline recorded as quiet | timing/duration shifts, resampler changes, an audible artifact landing in a pause, and **where** a change is located. |
 | **L4** | the encoded `.mp3` | file bytes | **tight:** MD5 equality · **loose:** RMS-error < 16 % | anything at all on a matched build; gross drift and catastrophe on a mismatched one. |
+| **L5** | spectral tilt of the decoded PCM | `rms(firstDifference) / rms(signal)` | ±3.5 % relative | a resampler or lowpass change that dulls the top end — audible on speech, and invisible to every energy-based layer above (finding 8). |
+
+**A sixth assertion covers the `linear` arm.** Everything above runs against the shipped
+`-16` target, which on this fixture always takes the **dynamic** path — so the `linear`
+arm, the mode the code actually requests, would otherwise have zero coverage. A second
+baseline recorded at `target = -20` (measured: `normalization_type = linear`) asserts L2,
+L3 and L4-tight on that arm. This matters most *later*: if #1909 is fixed by adding a
+limiter or lowering the target, the production path flips to linear and the tier would
+otherwise be pinning a mode nothing uses (finding 9).
 
 **Tolerances derived from finding 6, not picked:**
 
@@ -235,8 +297,11 @@ arbitration** between them; which combination fails is itself diagnostic.
   15 dB above codec silence-reconstruction noise (so a cross-build decode cannot
   false-red it) and 25 dB below speech.
 - **L2 drops `tp`.** `output_tp = -1.50` is the configured ceiling loudnorm clamps to;
-  pinning it asserts almost nothing. `lra` is the field that moves under a mode flip
-  (0.50 → ~3.00), and `i` is non-tautological per finding 4.
+  pinning it asserts almost nothing. `i` is non-tautological per finding 4.
+- **`normalizationType` is the ONLY thing in L2 that catches a mode flip** (finding 5b).
+  `lra` was assumed to be the backstop and measurably is not — it reads 0.5 dynamic vs
+  0.6 linear, inside the ±0.3 band. It is still pinned, because it moves under a *gain*
+  change, but it earns its place for that reason and not this one.
 
 **L3 decodes from the written file** (finding 2). The tier pins the *audio*; pipe-mode
 padding is an incidental decoder behaviour. Cost: the tier no longer exercises
@@ -321,11 +386,16 @@ the wrong sentence is corrected in the same diff.
 ### 3. Baseline artifacts
 
 ```
-golden-chapter.pcm            274 432 B  input fixture              (exists)
-golden-chapter.json               505 B  segment meta               (exists)
-golden-chapter.baseline.json    ~2 KB    L1/L2/L3 + MD5 + provenance   NEW
-golden-chapter.decoded.pcm    274 432 B  L4-loose reference            NEW
+golden-chapter.pcm                   274 432 B  input fixture                    (exists)
+golden-chapter.json                      505 B  segment meta                     (exists)
+golden-chapter.baseline.json           ~2 KB    L1/L2/L3/L5 + MD5 + provenance      NEW
+golden-chapter.decoded.pcm           274 432 B  L4-loose reference                  NEW
+golden-chapter.linear.baseline.json    ~2 KB    the linear arm (target -20)         NEW
 ```
+
+The linear baseline deliberately has **no** paired `.decoded.pcm`: L4 on that arm is
+tight-only (MD5), so a mismatched build skips it rather than doubling the repo's binary
+weight for a secondary arm.
 
 Every literal is **measured**, except the one marked `«bless»`:
 
@@ -533,6 +603,8 @@ Three accuracy notes:
   | L3 | loudnorm drift 2.0 LU | worst window 38.7 % > 10 % | finding 6 |
   | L4-tight | re-encode at `-q:a 3` | MD5 differs | findings 1–2 |
   | L4-loose | loudnorm drift 2.0 LU | rmse 24.8 % > 16 % | finding 6 |
+  | L5 | `lowpass=f=10000` on the fixture | tilt moves ≈9.9 % > 3.5 % | finding 8 |
+  | L-linear | raise `LINEAR_TARGET` to `-16` | mode reads `dynamic` | finding 9 |
 
   A single flipped byte in the fixture — revision 2's L1 perturbation — is **not** used:
   one sample in 137 216 moves integrated loudness by orders of magnitude less than ±0.1 LU,
@@ -577,6 +649,10 @@ triage with two facts, both re-measured through the production path for this spe
   correlated with input level — the loudest syllable windows are held ~1.5 dB below the
   gain everything else gets. That is a compressor riding syllables. At `target = -20` the
   same measurement collapses to a **0.41 dB** spread, i.e. effectively linear.
+  **Independently confirmed by `ebur128` on the finished audio: LRA 2.0 → 1.7 under
+  dynamic, 2.0 → 2.0 under linear.** Note this is a **15 % reduction, not the "fivefold"
+  an earlier revision claimed** from loudnorm's own self-report (finding 4) — the effect
+  is real and directional, but small on this fixture.
 - **The "fallback" is probably the COMMON path, and it varies per chapter.** The trip
   condition is crest factor (`input_tp − input_i`) exceeding `|target − tp|` = 14.5 dB at
   the shipped `-16` target. This fixture sits at **17.55 dB**, and 12–18 dB is ordinary for
