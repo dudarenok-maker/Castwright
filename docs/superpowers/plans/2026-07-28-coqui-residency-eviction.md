@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let the sidecar reclaim an idle, resident Coqui XTTS (~3 GB) when another op is starved for VRAM, instead of failing that op with `NoCapacityError` — and fix the unguarded `unload()` race that makes any Coqui eviction unsafe today.
+**Goal:** Let the sidecar reclaim an idle, resident Coqui XTTS (~3 GB) when another op is starved for VRAM, instead of failing that op with `NoCapacityError` — and close the unguarded `unload()` race that makes any such eviction unsafe, in all three engines that have it (Coqui, Whisper/ASR, ECAPA).
 
 **Architecture:** Extend the sidecar's existing idle-evict framework rather than adding Node-side machinery. `PlacementController.admit`/`reservation` already call `_idle_evict(device_key)` immediately before returning `noCapacity`, then re-probe and retry the fit. `CoquiEngine` gains the same `_synth_lock` + `maybe_free_idle(ttl)` discipline the two `QwenEngine` methods use, and `_idle_evict` gains a Coqui branch plus awareness of which engine is admitting (so a starved Coqui op never evicts the model it is about to reload). No Node-side eviction logic changes; the only Node edit is a deletion.
 
@@ -37,9 +37,12 @@
 | `server/src/config/registry.ts` | `sidecar.coquiIdleTtl` knob | 4 |
 | `docs/wiki/Advanced-Settings.md` | Knob's user-facing row (§9) | 4 |
 | `server/src/gpu/describe-vram-blockers.ts` + `.test.ts` | Drop the now-redundant Coqui blocker entry | 5 |
-| `docs/features/249-fs60-xtts-language-eligibility.md` | Cross-reference the new reclaim | 6 |
-| `docs/testing/onbox-acceptance-register.md` | New row grouped with A19 | 6 |
-| `docs/release-notes-next.md`, `RELEASE_NOTES.md` | Shipping notes | 6 |
+| `server/tts-sidecar/tests/test_asr_spk_idle_evict.py` | **New.** ASR + ECAPA unload/forward race | 6 |
+| `docs/features/249-fs60-xtts-language-eligibility.md` | Cross-reference the new reclaim | 7 |
+| `docs/testing/onbox-acceptance-register.md` | New row grouped with A19 | 7 |
+| `docs/release-notes-next.md`, `RELEASE_NOTES.md` | Shipping notes | 7 |
+
+Task 6 also touches `main.py` (`WhisperEngine`, `SpeakerEngine`), but in a region no other task goes near — it is independent of Tasks 1-5 and could ship alone.
 
 ---
 
@@ -957,7 +960,316 @@ git commit -m "fix(server): stop naming Coqui as a VRAM blocker admission now ev
 
 ---
 
-### Task 6: Documentation, on-box acceptance, release notes
+### Task 6: Close the same race in `WhisperEngine` and `SpeakerEngine`
+
+ASR and ECAPA have the identical unguarded-unload defect Task 1 fixed in Coqui — and unlike Coqui, **they are already driven by `_idle_evict(0.0)` today** (`main.py:2572`, `:2577`), so the race is live right now, not merely enabled by this branch.
+
+It is a *smaller* fix than Coqui's: both engines already own an `_infer_lock` (`:4785`, `:4938`) and already hold it across their forward. Their `unload()` simply never acquires it.
+
+**Files:**
+- Modify: `server/tts-sidecar/main.py` — `WhisperEngine.__init__` (~`:4785`), `transcribe` (`:4867-4872`), `unload` (`:4902-4910`), `maybe_free_idle` (`:4913-4921`); `SpeakerEngine.__init__` (~`:4938`), `embed` (`:4990-5001`), `unload` (`:5005-5013`), `maybe_free_idle` (`:5016-5023`)
+- Test: `server/tts-sidecar/tests/test_asr_spk_idle_evict.py` (create)
+
+**Interfaces:**
+- Consumes: nothing from Tasks 1-5 (deliberately independent — this task could ship alone).
+- Produces: nothing later tasks depend on.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `server/tts-sidecar/tests/test_asr_spk_idle_evict.py`:
+
+```python
+"""ASR + ECAPA unload/infer race (#1894, found during its review).
+
+Both engines hold `_infer_lock` across their forward but their `unload()`
+never acquires it, and `maybe_free_idle` calls `unload()` directly. Since both
+are already driven by `_idle_evict(0.0)`, an admission-path evict can null the
+model mid-forward. Same defect the Coqui work fixed, one layer over.
+"""
+import importlib, os, sys, threading, time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+main = importlib.import_module("main")
+
+
+def test_asr_unload_waits_for_an_in_flight_transcribe(monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+
+    class _FakeModel:
+        def transcribe(self, audio, **kw):
+            entered.set()
+            release.wait(timeout=5)
+            return ([], type("I", (), {"language": "en"})())
+
+    eng = main.WhisperEngine()
+    monkeypatch.setattr(eng, "_ensure_loaded", lambda device=None: None)
+    monkeypatch.setattr(eng, "_pcm_to_float32_16k", lambda pcm, sr: [0.0])
+    eng._model = _FakeModel()
+    eng._last_used = time.monotonic()
+
+    errors: list[BaseException] = []
+
+    def run():
+        try:
+            eng.transcribe(b"\x00\x00", 16000)
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+
+    t = threading.Thread(target=run)
+    t.start()
+    assert entered.wait(timeout=5), "transcribe never entered the forward"
+
+    freed = threading.Event()
+
+    def run_unload():
+        eng.unload()
+        freed.set()
+
+    u = threading.Thread(target=run_unload)
+    u.start()
+    assert not freed.wait(timeout=0.3), "unload() did not wait for the forward"
+
+    release.set()
+    t.join(timeout=5)
+    u.join(timeout=5)
+    assert errors == [], f"transcribe raised while unload raced it: {errors!r}"
+    assert eng._model is None
+
+
+def test_asr_maybe_free_idle_skips_an_in_flight_transcribe(monkeypatch):
+    """The fast-out must exist, or admission blocks on the whole forward."""
+    eng = main.WhisperEngine()
+    eng._model = object()
+    eng._last_used = time.monotonic() - 600.0  # long idle
+    eng._infer_in_flight = 1
+    assert eng.maybe_free_idle(120.0) is False
+    assert eng._model is not None
+
+
+def test_spk_unload_waits_for_an_in_flight_embed(monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+
+    class _FakeEncoder:
+        def encode_batch(self, t):
+            entered.set()
+            release.wait(timeout=5)
+            import numpy as np
+            return _FakeOut(np.ones((1, 4), dtype="float32"))
+
+    class _FakeOut:
+        def __init__(self, arr):
+            self._arr = arr
+
+        def squeeze(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return self._arr.squeeze()
+
+        def astype(self, dt):
+            return self._arr.squeeze().astype(dt)
+
+    eng = main.SpeakerEngine()
+    eng._model = _FakeEncoder()
+    eng._last_used = time.monotonic()
+
+    errors: list[BaseException] = []
+
+    def run():
+        try:
+            eng.embed(b"\x00\x00" * 160, 16000)
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+
+    t = threading.Thread(target=run)
+    t.start()
+    assert entered.wait(timeout=5), "embed never entered the forward"
+
+    freed = threading.Event()
+
+    def run_unload():
+        eng.unload()
+        freed.set()
+
+    u = threading.Thread(target=run_unload)
+    u.start()
+    assert not freed.wait(timeout=0.3), "unload() did not wait for the forward"
+
+    release.set()
+    t.join(timeout=5)
+    u.join(timeout=5)
+    assert errors == [], f"embed raised while unload raced it: {errors!r}"
+    assert eng._model is None
+
+
+def test_spk_maybe_free_idle_skips_an_in_flight_embed(monkeypatch):
+    eng = main.SpeakerEngine()
+    monkeypatch.setattr(main, "_parse_device", lambda d: ("cuda", 0))
+    eng._model = object()
+    eng._last_used = time.monotonic() - 600.0
+    eng._infer_in_flight = 1
+    assert eng.maybe_free_idle(120.0) is False
+    assert eng._model is not None
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `server/tts-sidecar/.venv/Scripts/python.exe -m pytest server/tts-sidecar/tests/test_asr_spk_idle_evict.py -v`
+Expected: the two `unload_waits` tests FAIL on `assert not freed.wait(...)` (nothing serializes them); the two `maybe_free_idle` tests FAIL because `_infer_in_flight` does not exist and the model is freed anyway.
+
+- [ ] **Step 3: Add the in-flight counters**
+
+In `WhisperEngine.__init__`, beside `self._infer_lock = threading.Lock()` (`:4785`):
+
+```python
+        # Claimed BEFORE `_infer_lock` so `maybe_free_idle` can fast-out
+        # without blocking the admission path on a whole forward (#1894).
+        self._infer_in_flight = 0
+```
+
+Add the identical two lines to `SpeakerEngine.__init__`, beside `:4938`.
+
+- [ ] **Step 4: Claim the counter around each forward**
+
+`WhisperEngine.transcribe` currently reads:
+
+```python
+        self._ensure_loaded(device=device)
+        assert self._model is not None
+        audio = self._pcm_to_float32_16k(pcm, sample_rate)
+        with self._infer_lock:
+            self._last_used = time.monotonic()
+            segments, info = self._model.transcribe(
+```
+
+Change it to claim before the lock and re-ensure inside it — the same pair Task 1 applies to Coqui, for the same reason (`main.py:3835-3838`):
+
+```python
+        self._ensure_loaded(device=device)
+        audio = self._pcm_to_float32_16k(pcm, sample_rate)
+        self._infer_in_flight += 1
+        self._last_used = time.monotonic()
+        try:
+            with self._infer_lock:
+                # Re-ensure under the lock: an idle-evict holds `_infer_lock`
+                # to null the model, so one ensured before the lock can be gone
+                # in the gap. No-op on the warm path.
+                self._ensure_loaded(device=device)
+                model = self._model
+                assert model is not None
+                self._last_used = time.monotonic()
+                segments, info = model.transcribe(
+```
+
+…and the rest of the `with` block is unchanged except that `self._model` becomes the local `model`. Close the `try` with:
+
+```python
+        finally:
+            self._infer_in_flight -= 1
+            self._last_used = time.monotonic()
+```
+
+placed after the `with` block ends (i.e. wrapping only the locked section, leaving the post-processing that builds `text`/`words` outside).
+
+`SpeakerEngine.embed` gets the same treatment, with one difference: its `ensure_loaded` is **async**, so it cannot re-ensure under the lock. Re-check and raise the documented precondition instead — the counter is what actually closes the race:
+
+```python
+    def embed(self, pcm: bytes, sample_rate: int) -> list[float]:
+        if self._model is None:
+            raise RuntimeError("call await ensure_loaded() before embed()")
+        import torch
+        audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        if sample_rate != self.TARGET_SR:  # numpy resample (no torchaudio dep)
+            n = int(round(len(audio) * self.TARGET_SR / sample_rate))
+            audio = np.interp(np.linspace(0, len(audio), n, endpoint=False),
+                              np.arange(len(audio)), audio).astype(np.float32)
+        t = torch.from_numpy(audio).unsqueeze(0)
+        self._infer_in_flight += 1
+        self._last_used = time.monotonic()
+        try:
+            with self._infer_lock, torch.no_grad():
+                # `ensure_loaded` is async here, so unlike WhisperEngine we
+                # cannot reload under the lock — re-check and surface the
+                # documented precondition. The `_infer_in_flight` claim above
+                # is what actually stops an idle-evict getting here (#1894).
+                model = self._model
+                if model is None:
+                    raise RuntimeError("model was unloaded during embed()")
+                emb = model.encode_batch(t).squeeze().cpu().numpy().astype(np.float32)
+        finally:
+            self._infer_in_flight -= 1
+            self._last_used = time.monotonic()
+        norm = float(np.linalg.norm(emb))
+        return (emb / norm if norm > 0 else emb).tolist()
+```
+
+- [ ] **Step 5: Make `unload()` acquire the lock, with the reclaim outside it**
+
+Both `unload()`s currently null the model and call `_reclaim_host_and_vram()` with no lock. Give each the same locked-drop / unlocked-reclaim split Task 1 uses on Coqui, and for the same reason — `_idle_evict` runs on the event loop (`main.py:5081-5082`).
+
+`WhisperEngine.unload`:
+
+```python
+    def unload(self) -> bool:
+        """Drop the model + reclaim. Idempotent. Returns True iff a model was
+        actually freed (so the watchdog can log only real frees).
+
+        Acquires `_infer_lock` so it cannot null the model out from under an
+        in-flight transcribe (#1894). The reclaim runs after the lock is
+        released — this is reached from `_idle_evict` on the event loop.
+        """
+        with self._infer_lock:
+            if self._model is None:
+                return False
+            self._model = None
+        _reclaim_host_and_vram()
+        log.info("Whisper ASR model unloaded.")
+        return True
+```
+
+`SpeakerEngine.unload` is identical apart from its log line (`"ECAPA speaker model unloaded."`).
+
+- [ ] **Step 6: Give both `maybe_free_idle`s the in-flight fast-out**
+
+`WhisperEngine.maybe_free_idle` — add the counter check to the existing guards:
+
+```python
+        if self._model is None or self._infer_in_flight > 0:
+            return False
+```
+
+Same edit in `SpeakerEngine.maybe_free_idle`, keeping its existing cuda-only guard first:
+
+```python
+        if _parse_device(self.device)[0] != "cuda" or self._model is None:
+            return False
+        if self._infer_in_flight > 0:
+            return False
+```
+
+- [ ] **Step 7: Run to verify they pass**
+
+Run: `server/tts-sidecar/.venv/Scripts/python.exe -m pytest server/tts-sidecar/tests/test_asr_spk_idle_evict.py -v`
+Expected: 4 passed.
+
+- [ ] **Step 8: Run the full sidecar suite**
+
+Run: `npm run test:sidecar`
+Expected: all pass. Watch `test_transcribe_embed_admission.py` and any ASR/SPK test that constructs these engines directly — a missed `_infer_in_flight` initialiser surfaces there as an `AttributeError`.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add server/tts-sidecar/main.py server/tts-sidecar/tests/test_asr_spk_idle_evict.py
+git commit -m "fix(sidecar): guard ASR and ECAPA unloads against an in-flight forward"
+```
+
+---
+
+### Task 7: Documentation, on-box acceptance, release notes
 
 **Files:**
 - Modify: `docs/features/249-fs60-xtts-language-eligibility.md`
@@ -1036,7 +1348,9 @@ Append to `docs/release-notes-next.md` under **`## 🎙️ Voices & casting`** (
   op never evicts itself) and device-targeted. Tunable via `COQUI_IDLE_TTL` /
   `sidecar.coquiIdleTtl` (default 30 s). Also fixes an unguarded `CoquiEngine
   .unload()` that could crash an in-flight synth when the Stop button fired
-  mid-render.
+  mid-render, and the same unguarded-unload race in the Whisper (ASR) and ECAPA
+  speaker engines — which, unlike Coqui, were already being auto-evicted, so
+  that one was reachable in production.
 ```
 
 Add the matching user-facing line to the in-progress version section at the top of `RELEASE_NOTES.md`, in brand voice:
@@ -1074,7 +1388,7 @@ PR title: `fix(sidecar,server): reclaim an idle Coqui when an op is VRAM-starved
 PR body must contain `Closes #1894`, a `## Summary` and a `## Test plan` section, and a link to the spec. It must also call out two things a reviewer would otherwise have to rediscover:
 
 - Four test files still construct the `'Coqui XTTS' / 'Use its Stop button…'` blocker literal by hand (Task 5 Step 5). They stay green because they never call `describeVramBlockers`, but they now encode a string the product can no longer emit.
-- The same unguarded-unload race fixed here for Coqui is still live in `WhisperEngine` and `SpeakerEngine`, which are *already* auto-evicted — see the follow-up section at the end of this plan.
+- Task 6 fixes the *same class* of bug in `WhisperEngine` and `SpeakerEngine`, which were already being auto-evicted — so that race was live in production, not introduced by this branch. Reviewers should read Task 6's diff as a bug fix on its own merits, independent of the Coqui feature.
 
 **No `docs/features/` regression plan is created for this work**, and that is deliberate rather than an omission of Before-shipping checklist step 1: the design of record is the spec, the invariants it touches live in plan 249 (updated in Step 1), and the acceptance debt is register row A20. Say so in the PR body so the gate reads as answered, not skipped.
 
@@ -1082,8 +1396,3 @@ PR body must contain `Closes #1894`, a `## Summary` and a `## Test plan` section
 
 Per CLAUDE.md's Before-shipping checklist step 10 and the model-routing skill: dispatch a `code-review` pass at the tier the PR's scope calls for. This PR is multi-scope (`sidecar,server`) → **high** effort, Premium tier. Triage and fold findings before merge. Do not merge on a Critical finding without re-review.
 
----
-
-## Post-Plan Follow-Up (not part of this branch)
-
-`WhisperEngine.maybe_free_idle` (`main.py:4913-4921`) and `SpeakerEngine.maybe_free_idle` (`:5015-5023`) have the same unguarded-unload race Task 1 fixes in Coqui — no lock, no in-flight counter, and their `unload()`s null the model while `transcribe`/`embed` dereference it. Unlike Coqui, **they are already auto-evicted through `_idle_evict(0.0)` today**, so the race is live for them now. This needs its own issue and its own branch; it is deliberately out of scope here because bundling three engines with different in-flight accounting would make this change unreviewable.
