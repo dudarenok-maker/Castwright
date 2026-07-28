@@ -345,7 +345,7 @@ class _FakeEvictSingleton:
 class _FakeEvictCoqui(main.CoquiEngine):
     """CoquiEngine stand-in whose `maybe_free_idle` just records it was
     called (real CoquiEngine() construction is cheap — no model I/O). Must
-    subclass CoquiEngine, not just duck-type its surface: `_idle_evict`'s
+    subclass CoquiEngine, not just duck-type its surface: `_idle_evict_steps`'s
     Coqui branch is `isinstance`-guarded (#1894 review) the same way its Qwen
     sibling already was."""
 
@@ -374,12 +374,26 @@ def _wire_evict_engines(monkeypatch, qwen_dev, asr_dev, spk_dev, coqui_dev="cpu"
     return qwen, asr, spk, coqui
 
 
+def _run(device_key, engine):
+    """Build the steps, assert on their names, then RUN them — the builder
+    never invokes the lambdas, so the existing per-engine call counters and
+    the TTL assertion only mean anything if we drive them here."""
+    steps = main._idle_evict_steps(device_key, engine)
+    names = [s.name for s in steps]
+    freed = any([s.run() for s in steps])  # list, not generator — no short-circuit
+    return names, freed
+
+
 def test_idle_evict_only_frees_engines_on_target_card(monkeypatch):
     """Qwen on cuda:0, ASR on cuda:1, SPK on cuda:0. Admitting onto cuda:0 must
     free Qwen (design + base17) and SPK, but NOT ASR (different card) — the
     multi-GPU over-eviction #1721 fixes."""
     qwen, asr, spk, coqui = _wire_evict_engines(monkeypatch, "cuda:0", "cuda:1", "cuda:0")
-    assert main._idle_evict("cuda:0", "qwen") is True
+    names, freed = _run("cuda:0", "qwen")
+    assert "qwen.design" in names and "qwen.base17" in names
+    assert "spk" in names
+    assert "asr" not in names  # resident on the OTHER card — no step built
+    assert freed is True
     assert (qwen.design_freed, qwen.base17_freed) == (1, 1)
     assert spk.freed == 1
     assert asr.freed == 0  # resident on the OTHER card — left alone
@@ -389,7 +403,9 @@ def test_idle_evict_targets_the_other_card(monkeypatch):
     """Same layout, admitting onto cuda:1 instead: only ASR (the cuda:1
     resident) is freed; Qwen + SPK on cuda:0 are untouched."""
     qwen, asr, spk, coqui = _wire_evict_engines(monkeypatch, "cuda:0", "cuda:1", "cuda:0")
-    assert main._idle_evict("cuda:1", "qwen") is True
+    names, freed = _run("cuda:1", "qwen")
+    assert names == ["asr"]
+    assert freed is True
     assert asr.freed == 1
     assert (qwen.design_freed, qwen.base17_freed) == (0, 0)
     assert spk.freed == 0
@@ -400,7 +416,11 @@ def test_idle_evict_skips_cpu_resident_engines(monkeypatch):
     never evicts it (evicting would just cost a needless reload). ASR defaults
     to cpu — admitting onto cuda:0 must leave it alone."""
     qwen, asr, spk, coqui = _wire_evict_engines(monkeypatch, "cuda:0", "cpu", "cpu")
-    assert main._idle_evict("cuda:0", "qwen") is True  # qwen still freed
+    names, freed = _run("cuda:0", "qwen")
+    assert "qwen.design" in names and "qwen.base17" in names  # qwen still freed
+    assert "asr" not in names
+    assert "spk" not in names
+    assert freed is True
     assert asr.freed == 0
     assert spk.freed == 0
 
@@ -409,23 +429,30 @@ def test_idle_evict_unindexed_cuda_is_card_zero(monkeypatch):
     """A resident engine reporting bare "cuda" (no index) normalises to card 0,
     so it's freed for a cuda:0 admission and spared for cuda:1."""
     qwen, asr, spk, coqui = _wire_evict_engines(monkeypatch, "cuda", "cuda", "cuda")
-    assert main._idle_evict("cuda:1", "qwen") is False  # nothing on card 1
+    names, freed = _run("cuda:1", "qwen")
+    assert names == []  # nothing on card 1
+    assert freed is False
     assert (qwen.design_freed, spk.freed, asr.freed) == (0, 0, 0)
-    assert main._idle_evict("cuda:0", "qwen") is True
+    names, freed = _run("cuda:0", "qwen")
+    assert freed is True
     assert (qwen.design_freed, qwen.base17_freed, asr.freed, spk.freed) == (1, 1, 1, 1)
 
 
 def test_idle_evict_frees_an_idle_coqui_on_the_target_card(monkeypatch):
     """#1894 — a starved non-Coqui op reclaims a resident, idle XTTS."""
     _q, _a, _s, coqui = _wire_evict_engines(monkeypatch, "cpu", "cpu", "cpu", coqui_dev="cuda:0")
-    assert main._idle_evict("cuda:0", "qwen") is True
+    names, freed = _run("cuda:0", "qwen")
+    assert "coqui" in names
+    assert freed is True
     assert coqui.freed == 1
     assert coqui.ttls == [main._coqui_idle_ttl()]
 
 
 def test_idle_evict_skips_coqui_on_another_card(monkeypatch):
     _q, _a, _s, coqui = _wire_evict_engines(monkeypatch, "cpu", "cpu", "cpu", coqui_dev="cuda:1")
-    assert main._idle_evict("cuda:0", "qwen") is False
+    names, freed = _run("cuda:0", "qwen")
+    assert names == []
+    assert freed is False
     assert coqui.freed == 0
 
 
@@ -435,7 +462,9 @@ def test_idle_evict_never_evicts_coqui_for_a_coqui_op(monkeypatch):
     about to reload. Admission gives a resident engine no free pass, so this
     is reachable."""
     _q, _a, _s, coqui = _wire_evict_engines(monkeypatch, "cpu", "cpu", "cpu", coqui_dev="cuda:0")
-    assert main._idle_evict("cuda:0", "coqui") is False
+    names, freed = _run("cuda:0", "coqui")
+    assert "coqui" not in names  # self-eviction guard — no step built at all
+    assert freed is False
     assert coqui.freed == 0
 
 
@@ -448,33 +477,3 @@ def test_coqui_idle_ttl_defaults_and_floors(monkeypatch):
     assert main._coqui_idle_ttl() == 30.0
     monkeypatch.setenv("COQUI_IDLE_TTL", "not-a-number")
     assert main._coqui_idle_ttl() == 30.0
-
-
-def test_idle_evict_coqui_declining_does_not_clobber_an_earlier_free(monkeypatch):
-    """An earlier branch (Qwen, ASR, SPK) freed successfully and set freed=True.
-    When Coqui's maybe_free_idle returns False, the composition must preserve
-    the True: `freed = coqui.maybe_free_idle(...) or freed`, not clobbering."""
-    qwen, asr, spk, coqui = _wire_evict_engines(
-        monkeypatch, "cuda:0", "cpu", "cpu", coqui_dev="cuda:0", coqui_result=False
-    )
-    assert main._idle_evict("cuda:0", "qwen") is True
-    assert qwen.design_freed == 1  # early branch freed
-    assert coqui.freed == 1  # Coqui branch called
-    assert coqui.result is False  # Coqui declined
-
-
-def test_idle_evict_survives_a_raising_coqui(monkeypatch):
-    """Coqui's maybe_free_idle raises while a Qwen engine on the same card
-    frees successfully. The exception is swallowed, the Qwen result survives."""
-    qwen, asr, spk, coqui = _wire_evict_engines(
-        monkeypatch, "cuda:0", "cpu", "cpu", coqui_dev="cuda:0"
-    )
-    # Monkeypatch Coqui to raise when maybe_free_idle is called
-    original_maybe_free_idle = coqui.maybe_free_idle
-    def raising_maybe_free_idle(ttl_seconds):
-        raise RuntimeError("boom")
-    monkeypatch.setattr(coqui, "maybe_free_idle", raising_maybe_free_idle)
-
-    # Should not propagate; Qwen freed, so overall result is True
-    assert main._idle_evict("cuda:0", "qwen") is True
-    assert qwen.design_freed == 1

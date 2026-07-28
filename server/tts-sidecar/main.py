@@ -38,7 +38,7 @@ import time
 import wave
 from collections import deque
 from contextlib import asynccontextmanager, contextmanager
-from typing import Any, Callable, Optional
+from typing import Any, Callable, NamedTuple, Optional
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -1576,7 +1576,7 @@ class CoquiEngine(Engine):
 
     def maybe_free_idle(self, ttl_seconds: float) -> bool:
         """Free the resident XTTS model when it has been idle longer than
-        `ttl_seconds`. Returns True if it freed. Driven by `_idle_evict` on
+        `ttl_seconds`. Returns True if it freed. Driven by `_idle_evict_steps` on
         the admission path (#1894) — Coqui deliberately has NO background
         watchdog, unlike the Qwen/ASR/ECAPA idle-evicts, so this only ever
         runs when another op is genuinely starved for VRAM.
@@ -1590,7 +1590,7 @@ class CoquiEngine(Engine):
         clears the cached speaker manifest.
 
         The reclaim runs AFTER the lock is released, and this method is called
-        synchronously on the event loop by `_idle_evict` — see
+        synchronously on the event loop by `_idle_evict_steps` — see
         `_reclaim_after_drop`.
         """
         # Cheap, lock-free fast-outs first: nothing loaded, mid-forward, or
@@ -2592,7 +2592,7 @@ class PlacementController:
         footprints: Optional["FootprintTable"] = None,
         ledger: Optional["ReservationLedger"] = None,
         reserve_mb: Optional[Callable[[], int]] = None,
-        idle_evict: Optional[Callable[[str, str], bool]] = None,
+        idle_evict_steps: Optional[Callable[[str, str], list["EvictStep"]]] = None,
         is_resident: Optional[Callable[[str], Optional[str]]] = None,
     ) -> None:
         self.probe = probe
@@ -2602,7 +2602,7 @@ class PlacementController:
         # the actual per-device cushion is `_device_reserve_mb(total, cap)`,
         # min(5% of that device's own VRAM, this cap). See `_device_reserve_mb`.
         self.reserve_mb = reserve_mb if reserve_mb is not None else (lambda: int(os.environ.get("GPU_RESERVE_MB", 500)))
-        self.idle_evict = idle_evict if idle_evict is not None else (lambda device_key, engine: False)
+        self.idle_evict_steps = idle_evict_steps if idle_evict_steps is not None else (lambda device_key, engine: [])
         self.is_resident = is_resident if is_resident is not None else (lambda engine: None)
 
     @staticmethod
@@ -2646,6 +2646,37 @@ class PlacementController:
                 best_key, best_headroom = key, headroom
         return best_key
 
+    def _evict_until(
+        self, device_key: str, engine: str, fits: Callable[[], Any]
+    ) -> Any:
+        """Run eviction steps one at a time, re-probing after each, and stop the
+        moment `fits()` reports success (#1920A).
+
+        `fits` is the caller's own retry — `try_hold` for `reservation()` (which
+        holds), `best_fit` for `admit()` (which does not) — so "enough freed" is
+        decided by LIVE capacity, never by a boolean 'something was freed'.
+        Returns whatever `fits()` returned on success, or None.
+
+        A step that raises is skipped, not fatal: eviction is best-effort, and
+        one engine's teardown failing must not deny the whole admission.
+        """
+        held_by = self.ledger.engines_holding(device_key)
+        for step in self.idle_evict_steps(device_key, engine):
+            if step.reserved_key is not None and step.reserved_key in held_by:
+                # This engine's op is already admitted and holds VRAM for it
+                # (#1920B) — the reservation spans the whole op, including the
+                # window before its worker thread claims the in-flight counter.
+                continue
+            try:
+                if not step.run():
+                    continue
+            except Exception:
+                continue
+            got = fits()
+            if got is not None:
+                return got
+        return None
+
     def admit(
         self,
         engine: str,
@@ -2680,13 +2711,17 @@ class PlacementController:
             return {"device": "cpu"}
 
         worst = self._worst_device_key(devices)
-        if worst is not None and self.idle_evict(worst, engine):
-            devices = self.probe()
-            candidates = self._gpu_candidates(devices, constraint)
-            key = self.ledger.best_fit(candidates, peak, reserve_cap)
+        if worst is not None:
+            def _fits():
+                probed = self.probe()
+                return self.ledger.best_fit(
+                    self._gpu_candidates(probed, constraint), peak, reserve_cap
+                )
+
+            key = self._evict_until(worst, engine, _fits)
             if key is not None:
                 return {"device": key}
-            worst = self._worst_device_key(devices)
+            worst = self._worst_device_key(self.probe())
         # A resident engine can only ever run on its own device, so point Node
         # at THAT device to evict from — not a roomier non-resident GPU where an
         # evict wouldn't let this (non-migratable) model fit. A pinned (but not
@@ -2755,10 +2790,16 @@ class PlacementController:
         held = self.ledger.try_hold(candidates, peak, reserve_cap, engine)
         if held is None and not (cpu_capable and not heavy):
             worst = self._worst_device_key(devices)
-            if worst is not None and self.idle_evict(worst, engine):
+            if worst is not None:
+                def _fits():
+                    probed = self.probe()
+                    return self.ledger.try_hold(
+                        self._gpu_candidates(probed, constraint), peak, reserve_cap, engine
+                    )
+
+                held = self._evict_until(worst, engine, _fits)
+            if held is None:
                 devices = self.probe()
-                candidates = self._gpu_candidates(devices, constraint)
-                held = self.ledger.try_hold(candidates, peak, reserve_cap, engine)
 
         if held is not None:
             admission: dict = {"device": held[0]}
@@ -2849,71 +2890,83 @@ def _same_card(resident: Optional[str], target: str) -> bool:
     return (idx_r or 0) == (idx_t or 0)
 
 
-def _idle_evict(device_key: str, engine: str) -> bool:
-    """PlacementController.idle_evict: best-effort attempt to free idle
-    transient GPU state to make room for the admitting op on `device_key`.
-    Tries each idle-evictable engine (Qwen VoiceDesign + 1.7B-Base share the
-    Qwen engine's card; ASR; ECAPA) with ttl=0 (evict now regardless of recent
-    use) and returns True if anything freed.
+class EvictStep(NamedTuple):
+    """One candidate eviction on the admission path.
 
-    Device-targeted (#1721): only evicts an engine whose resident card matches
-    `device_key`, so a genuine multi-GPU box never frees an idle engine sitting
-    on a DIFFERENT card than the one the op needs (over-eviction — efficiency
-    only, never an OOM). An engine on cpu is likewise skipped: it holds no VRAM
-    on the target card, so freeing it couldn't admit this op. The device strings
-    match how the rest of the sidecar reasons about residency (`_is_resident`,
-    `shares_device`) — Qwen's design/base17 both live on the shared
-    `qwen._device`, ASR on `ASR._device`, ECAPA on `SPK.device`.
+    `name` is for logs and tests. `reserved_key` is the engine key the
+    reservation ledger would record for an op using this model, or None when
+    the ledger's engine granularity is the WRONG granularity for this step
+    (see the Qwen steps below). `run` frees it and reports whether it did.
+    """
 
-    `engine` is the ADMITTING op's engine. The engines evicted here are
-    transient or secondary, so freeing them can never be self-defeating —
-    except Coqui (#1894), which is a primary synth engine: a starved Coqui op
-    must not evict the model it is about to reload. See its branch below."""
-    freed = False
+    name: str
+    reserved_key: Optional[str]
+    run: Callable[[], bool]
+
+
+def _idle_evict_steps(device_key: str, engine: str) -> list["EvictStep"]:
+    """The eviction candidates that apply on `device_key` for an op belonging to
+    `engine`, ORDERED CHEAPEST-RELOAD-FIRST.
+
+    Ordering is load-bearing because `PlacementController` re-probes after each
+    step and stops as soon as the starved request fits (#1920A): the first
+    sufficient step is the only one that runs, so the cheapest must be tried
+    first. Reload costs: ECAPA ~200 MB / ~1 s, ASR ~400 MB / ~1 s, Qwen
+    VoiceDesign + 1.7B-Base seconds, Coqui XTTS ~3 GB / ~90 s.
+
+    Device-targeted (#1721): an engine whose resident card is not `device_key`
+    yields no step — freeing it could not admit this op. An engine on cpu is
+    likewise skipped.
+
+    Coqui (#1894) is the only PRIMARY synth engine on the list, so it is omitted
+    entirely when the admitting op is itself Coqui: evicting would unload the
+    model that op is about to reload. It also uses a real idle TTL rather than
+    the 0.0 the transient models take.
+    """
+    steps: list["EvictStep"] = []
+    if _same_card(getattr(SPK, "device", None), device_key):
+        steps.append(EvictStep("spk", "spk", lambda: SPK.maybe_free_idle(0.0)))
+    if _same_card(getattr(ASR, "_device", None), device_key):
+        steps.append(EvictStep("asr", "asr", lambda: ASR.maybe_free_idle(0.0)))
     qwen = ENGINES.get("qwen")
     if isinstance(qwen, QwenEngine) and _same_card(qwen._device, device_key):
-        try:
-            freed = qwen.maybe_free_idle_design(0.0) or freed
-        except Exception:
-            pass
-        try:
-            freed = qwen.maybe_free_idle_base17(0.0) or freed
-        except Exception:
-            pass
-    if _same_card(getattr(ASR, "_device", None), device_key):
-        try:
-            freed = ASR.maybe_free_idle(0.0) or freed
-        except Exception:
-            pass
-    if _same_card(getattr(SPK, "device", None), device_key):
-        try:
-            freed = SPK.maybe_free_idle(0.0) or freed
-        except Exception:
-            pass
-    # Coqui (#1894). Unlike everything above, this is a PRIMARY synth engine —
-    # so it is skipped when the admitting op is itself Coqui (evicting would
-    # unload the model that op is about to reload), and it uses a real idle TTL
-    # rather than the 0.0 the transient models take.
+        # `reserved_key=None` deliberately. EVERY Qwen route reserves under the
+        # bare key "qwen" — /load base (:7071), /load 1.7b (:7046),
+        # /design_voice (:7284), /clone (:7406), /mint (:7502), /synthesize
+        # (:7693) — so the ledger cannot tell Qwen's three models apart. With
+        # reserved_key="qwen", one Qwen op holding a reservation would make a
+        # SECOND starved Qwen op skip both cheap Qwen steps and fall through to
+        # evicting Coqui: a ~90 s XTTS reload taken to avoid freeing an idle
+        # 5 GB design model. Qwen's per-model in-flight guards
+        # (`_design_in_flight`, `_base17_in_flight`) are the right granularity
+        # and already cover the forward itself.
+        #
+        # KNOWN RESIDUAL: this leaves #1920B open for Qwen specifically — a
+        # /design_voice admitted but not yet at its `_design_in_flight` claim
+        # can have a warm VoiceDesign model evicted underneath it, the same
+        # window the ledger closes for Coqui/ASR/ECAPA. Recorded in the design's
+        # Known limitations. Closing it properly means recording
+        # FootprintTable._key(...) (`qwen.1.7b.design` / `.mint` / `qwen.1.7b` /
+        # `qwen`) in the ledger instead of the bare engine — out of scope here.
+        steps.append(EvictStep("qwen.design", None, lambda: qwen.maybe_free_idle_design(0.0)))
+        steps.append(EvictStep("qwen.base17", None, lambda: qwen.maybe_free_idle_base17(0.0)))
     if engine != "coqui":
         coqui = ENGINES.get("coqui")
         if isinstance(coqui, CoquiEngine) and _same_card(getattr(coqui, "_device", None), device_key):
-            try:
-                freed = coqui.maybe_free_idle(_coqui_idle_ttl()) or freed
-            except Exception:
-                pass
-    return freed
+            steps.append(EvictStep("coqui", "coqui", lambda: coqui.maybe_free_idle(_coqui_idle_ttl())))
+    return steps
 
 
 # Module-level admission instance /synthesize reserves against when the flag
-# is on. `probe`/`idle_evict`/`is_resident` are real deps (not test doubles);
-# tests monkeypatch `_placement.probe` (and the env flag) for determinism —
-# see test_devices.py.
+# is on. `probe`/`idle_evict_steps`/`is_resident` are real deps (not test
+# doubles); tests monkeypatch `_placement.probe` (and the env flag) for
+# determinism — see test_devices.py.
 _placement = PlacementController(
     probe=probe_capacity,
     footprints=FootprintTable(),
     ledger=ReservationLedger(),
     reserve_mb=lambda: int(os.environ.get("GPU_RESERVE_MB", 500)),
-    idle_evict=_idle_evict,
+    idle_evict_steps=_idle_evict_steps,
     is_resident=_is_resident,
 )
 
@@ -5284,7 +5337,7 @@ class WhisperEngine:
 
         Acquires `_infer_lock` so it cannot null the model out from under an
         in-flight transcribe (#1894). The reclaim runs after the lock is
-        released — this is reached from `_idle_evict` on the event loop.
+        released — this is reached from `_idle_evict_steps` on the event loop.
         """
         with self._infer_lock:
             dropped = self._drop_model_locked()
@@ -5455,7 +5508,7 @@ class SpeakerEngine:
 
         Acquires `_infer_lock` so it cannot null the model out from under an
         in-flight embed (#1894). The reclaim runs after the lock is
-        released — this is reached from `_idle_evict` on the event loop.
+        released — this is reached from `_idle_evict_steps` on the event loop.
         """
         with self._infer_lock:
             dropped = self._drop_model_locked()

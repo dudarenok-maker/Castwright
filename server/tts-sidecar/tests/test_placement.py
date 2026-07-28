@@ -47,14 +47,14 @@ def test_device_reserve_mb(total_mb, cap, expected):
     assert main._device_reserve_mb(total_mb, cap) == expected
 
 
-def make(devices, peak, reserve_cap=768, idle_evict=None, resident=None):
+def make(devices, peak, reserve_cap=768, idle_evict_steps=None, resident=None):
     fp = type("F", (), {"peak_mb": lambda *_: peak, "record": lambda *_: None})()
     return main.PlacementController(
         probe=lambda: devices,
         footprints=fp,
         ledger=main.ReservationLedger(),
         reserve_mb=lambda: reserve_cap,
-        idle_evict=idle_evict or (lambda dk, eng: False),
+        idle_evict_steps=idle_evict_steps or (lambda dk, eng: []),
         is_resident=resident or (lambda e: None),
     )
 
@@ -98,7 +98,9 @@ def test_idle_evict_then_place():
         footprints=fp,
         ledger=ledger,
         reserve_mb=lambda: 768,
-        idle_evict=lambda dk, eng: (ledger.release(tok) or True),
+        idle_evict_steps=lambda dk, eng: [
+            main.EvictStep("release", None, lambda: (ledger.release(tok) or True))
+        ],
         is_resident=lambda e: None,
     )
     assert pc.admit("qwen", "q", {}, False, True)["device"] == "cuda:0"
@@ -126,18 +128,21 @@ def test_starved_qwen_admits_after_coqui_is_evicted():
     evicted = []
 
     def evict(device_key, engine):
-        if engine == "coqui":
-            return False
         evicted.append((device_key, engine))
         state["free"] = 8000
         return True
+
+    def steps(device_key, engine):
+        if engine == "coqui":
+            return []
+        return [main.EvictStep("coqui", "coqui", lambda: evict(device_key, engine))]
 
     pc = main.PlacementController(
         probe=devices,
         footprints=fp,
         ledger=ledger,
         reserve_mb=lambda: 768,
-        idle_evict=evict,
+        idle_evict_steps=steps,
         is_resident=lambda e: None,
     )
     assert pc.admit("qwen", "q", {}, False, True)["device"] == "cuda:0"
@@ -149,7 +154,7 @@ def test_starved_qwen_reservation_admits_after_coqui_is_evicted():
     uses `reservation()` (a @contextmanager), not `admit()` (see the note on
     the sibling test above). A starved qwen op is admitted once the idle
     Coqui occupying the device's VRAM is evicted by the injected
-    `idle_evict` (modelled as low `freeMb`, not a ledger hold — see the note
+    `idle_evict_steps` (modelled as low `freeMb`, not a ledger hold — see the note
     on the sibling test above)."""
     state = {"free": 5192}
     devices = lambda: [dev(free=state["free"])]
@@ -158,23 +163,288 @@ def test_starved_qwen_reservation_admits_after_coqui_is_evicted():
     evicted = []
 
     def evict(device_key, engine):
-        if engine == "coqui":
-            return False
         evicted.append((device_key, engine))
         state["free"] = 8000
         return True
+
+    def steps(device_key, engine):
+        if engine == "coqui":
+            return []
+        return [main.EvictStep("coqui", "coqui", lambda: evict(device_key, engine))]
 
     pc = main.PlacementController(
         probe=devices,
         footprints=fp,
         ledger=ledger,
         reserve_mb=lambda: 768,
-        idle_evict=evict,
+        idle_evict_steps=steps,
         is_resident=lambda e: None,
     )
     with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
         assert admission["device"] == "cuda:0"
     assert evicted == [("cuda:0", "qwen")]
+
+
+# --- step-wise eviction with a real re-probe (#1920A + #1920B) --------------
+#
+# `PlacementController._evict_until` drives `idle_evict_steps(...)` one step
+# at a time, re-probing after each and stopping the moment the starved op
+# actually fits — instead of the old `_idle_evict` running every branch
+# unconditionally and accumulating `freed = X or freed`. Every test below
+# mutates the fake probe's `freeMb` from inside a step's `run()`, never just
+# returns True — a step that "succeeds" without changing capacity would let a
+# broken short-circuit (or a broken loop) pass unnoticed.
+
+
+def test_a_small_op_satisfied_by_the_first_step_leaves_coqui_resident():
+    """A 400 MB ASR op on a full card: freeing the cheap engine is enough, so
+    the ~90s-to-reload Coqui must never be touched.
+
+    Fails against the wrong implementation: today every branch runs
+    unconditionally, so `evicted` would end as ['asr', 'coqui'] instead of
+    stopping after the first sufficient step."""
+    state = {"free": 200, "total": 8192}
+    devices = lambda: [dev(free=state["free"], total=state["total"])]
+    ledger = main.ReservationLedger()
+    fp = type("F", (), {"peak_mb": lambda *_: 400, "record": lambda *_: None})()
+    evicted = []
+    coqui_touched = []
+
+    def free_asr():
+        evicted.append("asr")
+        state["free"] += 5000  # the cheap engine alone frees plenty
+        return True
+
+    def free_coqui():
+        coqui_touched.append("coqui")
+        state["free"] += 3000
+        return True
+
+    def steps(device_key, engine):
+        return [
+            main.EvictStep("asr", "asr", free_asr),
+            main.EvictStep("coqui", "coqui", free_coqui),
+        ]
+
+    pc = main.PlacementController(
+        probe=devices,
+        footprints=fp,
+        ledger=ledger,
+        reserve_mb=lambda: 768,
+        idle_evict_steps=steps,
+        is_resident=lambda e: None,
+    )
+    with pc.reservation("asr", None, {}, cpu_capable=False, heavy=True) as admission:
+        assert admission["device"] == "cuda:0"
+    assert evicted == ["asr"]
+    assert coqui_touched == []  # the ~90s reload was never needed
+
+
+def test_a_large_op_the_first_step_cannot_satisfy_still_reaches_coqui():
+    """The guard against over-correcting. A 6 GB op is NOT satisfied by
+    freeing 200 MB, so the loop must keep going and still reach Coqui.
+
+    Fails against the naive `if not freed: ...` one-liner, which stops after
+    the first success and never frees enough — admission would report
+    noCapacity even though Coqui's freed VRAM would have been enough."""
+    state = {"free": 500, "total": 8192}
+    devices = lambda: [dev(free=state["free"], total=state["total"])]
+    ledger = main.ReservationLedger()
+    fp = type("F", (), {"peak_mb": lambda *_: 6000, "record": lambda *_: None})()
+    evicted = []
+
+    def free_asr():
+        evicted.append("asr")
+        state["free"] += 200  # not enough on its own
+        return True
+
+    def free_coqui():
+        evicted.append("coqui")
+        state["free"] += 6000  # this one is enough
+        return True
+
+    def steps(device_key, engine):
+        return [
+            main.EvictStep("asr", "asr", free_asr),
+            main.EvictStep("coqui", "coqui", free_coqui),
+        ]
+
+    pc = main.PlacementController(
+        probe=devices,
+        footprints=fp,
+        ledger=ledger,
+        reserve_mb=lambda: 768,
+        idle_evict_steps=steps,
+        is_resident=lambda e: None,
+    )
+    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+        assert admission["device"] == "cuda:0"
+    assert evicted == ["asr", "coqui"]  # both steps had to run
+
+
+def test_an_engine_holding_a_reservation_is_not_evicted():
+    """#1920B. Hold a Coqui reservation on cuda:0, then admit a starved Qwen
+    op.
+
+    Fails against the wrong implementation: without the ledger check the
+    Coqui step runs and the reserved model is thrown away — admission would
+    then succeed with `coqui_touched` non-empty instead of reporting
+    noCapacity."""
+    state = {"free": 500, "total": 8192}
+    devices = lambda: [dev(free=state["free"], total=state["total"])]
+    ledger = main.ReservationLedger()
+    ledger.hold("cuda:0", 3000, "coqui")  # coqui's op is mid-flight, holding VRAM
+    fp = type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})()
+    coqui_touched = []
+
+    def free_coqui():
+        coqui_touched.append("coqui")
+        state["free"] += 3000
+        return True
+
+    def steps(device_key, engine):
+        return [main.EvictStep("coqui", "coqui", free_coqui)]
+
+    pc = main.PlacementController(
+        probe=devices,
+        footprints=fp,
+        ledger=ledger,
+        reserve_mb=lambda: 768,
+        idle_evict_steps=steps,
+        is_resident=lambda e: None,
+    )
+    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+        assert admission == {"noCapacity": {"neededMb": 3000, "deviceKey": "cuda:0"}}
+    assert coqui_touched == []
+
+
+def test_declining_step_does_not_stop_the_loop():
+    """Moved from test_devices.py's `_idle_evict` coverage (#1920A converted
+    the `or freed` composition into a controller-driven loop). A step that
+    returns False (declined) must not abort iteration — the loop keeps trying
+    subsequent steps until one succeeds and `fits()` reports capacity.
+
+    Fails against `if not step.run(): return None` (treating a decline as
+    fatal instead of `continue`)."""
+    state = {"free": 500, "total": 8192}
+    devices = lambda: [dev(free=state["free"], total=state["total"])]
+    ledger = main.ReservationLedger()
+    fp = type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})()
+    ran = []
+
+    def declines():
+        ran.append("declines")
+        return False  # nothing freed; loop must continue
+
+    def succeeds():
+        ran.append("succeeds")
+        state["free"] += 3000
+        return True
+
+    def steps(device_key, engine):
+        return [
+            main.EvictStep("declines", None, declines),
+            main.EvictStep("succeeds", None, succeeds),
+        ]
+
+    pc = main.PlacementController(
+        probe=devices,
+        footprints=fp,
+        ledger=ledger,
+        reserve_mb=lambda: 768,
+        idle_evict_steps=steps,
+        is_resident=lambda e: None,
+    )
+    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+        assert admission["device"] == "cuda:0"
+    assert ran == ["declines", "succeeds"]
+
+
+def test_a_raising_step_does_not_abort_the_loop():
+    """Moved from test_devices.py's `_idle_evict` coverage (the old
+    `except Exception: pass` swallow now lives in the controller loop). One
+    engine's teardown raising must not deny the whole admission — eviction is
+    best-effort, so the loop must skip the raiser and keep going.
+
+    Fails against a loop with no try/except around `step.run()`: the
+    RuntimeError would propagate out of the `with pc.reservation(...)` block
+    instead of being swallowed."""
+    state = {"free": 500, "total": 8192}
+    devices = lambda: [dev(free=state["free"], total=state["total"])]
+    ledger = main.ReservationLedger()
+    fp = type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})()
+    ran = []
+
+    def raises():
+        ran.append("raises")
+        raise RuntimeError("boom")
+
+    def succeeds():
+        ran.append("succeeds")
+        state["free"] += 3000
+        return True
+
+    def steps(device_key, engine):
+        return [
+            main.EvictStep("raises", None, raises),
+            main.EvictStep("succeeds", None, succeeds),
+        ]
+
+    pc = main.PlacementController(
+        probe=devices,
+        footprints=fp,
+        ledger=ledger,
+        reserve_mb=lambda: 768,
+        idle_evict_steps=steps,
+        is_resident=lambda e: None,
+    )
+    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+        assert admission["device"] == "cuda:0"
+    assert ran == ["raises", "succeeds"]
+
+
+class _FakeStepQwen(main.QwenEngine):
+    name = "qwen"
+
+    def __init__(self, device):
+        super().__init__()
+        self._device = device
+
+    def maybe_free_idle_design(self, ttl_seconds):
+        return True
+
+    def maybe_free_idle_base17(self, ttl_seconds):
+        return True
+
+
+class _FakeStepCoqui(main.CoquiEngine):
+    def __init__(self, device):
+        super().__init__()
+        self._device = device
+
+    def maybe_free_idle(self, ttl_seconds):
+        return True
+
+
+def test_steps_run_cheapest_reload_first(monkeypatch):
+    """Ordering is load-bearing BECAUSE of the short-circuit: with it, the
+    first sufficient step is the only one that runs, so the cheapest must be
+    tried first — reload costs: ECAPA ~200 MB / ~1 s, ASR ~400 MB / ~1 s,
+    Qwen VoiceDesign + 1.7B-Base seconds, Coqui XTTS ~3 GB / ~90 s.
+
+    Fails against a build that puts Coqui (or any of the transient engines)
+    out of cheapest-first order."""
+    qwen = _FakeStepQwen("cuda:0")
+    coqui = _FakeStepCoqui("cuda:0")
+    asr = type("A", (), {"_device": "cuda:0", "maybe_free_idle": lambda self, ttl: True})()
+    spk = type("S", (), {"device": "cuda:0", "maybe_free_idle": lambda self, ttl: True})()
+    monkeypatch.setitem(main.ENGINES, "qwen", qwen)
+    monkeypatch.setitem(main.ENGINES, "coqui", coqui)
+    monkeypatch.setattr(main, "ASR", asr)
+    monkeypatch.setattr(main, "SPK", spk)
+
+    names = [s.name for s in main._idle_evict_steps("cuda:0", "asr")]
+    assert names == ["spk", "asr", "qwen.design", "qwen.base17", "coqui"]
 
 
 def test_try_hold_is_atomic_under_concurrency():
@@ -249,7 +519,7 @@ def test_resident_reservation_holds_on_its_device():
         footprints=fp,
         ledger=ledger,
         reserve_mb=lambda: 768,
-        idle_evict=lambda dk, eng: False,
+        idle_evict_steps=lambda dk, eng: [],
         is_resident=lambda e: "cuda:0",
     )
     with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as a:
