@@ -205,7 +205,7 @@ arbitration** between them; which combination fails is itself diagnostic.
 |---|---|---|---|---|
 | **L1** | `input_i`, `input_lra`, `input_tp`, `input_thresh` | `runLoudnormFirstPass` on the raw fixture | ±0.1 LU/dB | ffmpeg's EBU R128 **measurement** changing (finding 3). |
 | **L2** | `i`, `lra`, `normalizationType` | the written `.lufs.json` | ±0.3 LU; mode **exact**, absence gets its own message | ffmpeg's **gain application** changing, a `dynamic` → `linear` flip, **and** a second-pass-JSON parse failure (finding 5). |
-| **L3** | decoded byte count + per-100 ms RMS envelope | `.mp3` decoded **from the written file** | count **exact** (finding 2); envelope ±10 %, windows below -50 dBFS on **either** side skipped, union count asserted `=== 2` | timing/duration shifts, resampler changes, and **where** a change is located. |
+| **L3** | decoded byte count + per-100 ms RMS envelope | `.mp3` decoded **from the written file** | count **exact** (finding 2); envelope ±10 %, windows below -50 dBFS on **either** side skipped, union count asserted `=== 2`, plus a **-45 dBFS absolute ceiling** on windows the baseline recorded as quiet | timing/duration shifts, resampler changes, an audible artifact landing in a pause, and **where** a change is located. |
 | **L4** | the encoded `.mp3` | file bytes | **tight:** MD5 equality · **loose:** RMS-error < 16 % | anything at all on a matched build; gross drift and catastrophe on a mismatched one. |
 
 **Tolerances derived from finding 6, not picked:**
@@ -224,6 +224,16 @@ arbitration** between them; which combination fails is itself diagnostic.
 - **A characterised gap band:** 0.6–1.2 LU of drift trips L3 but not L4-loose (e.g.
   0.75 LU → 12.7 % envelope, 11.07 % rmse). Harmless under "no arbitration", but named
   so the failure-combination diagnostic has no unlabelled regime.
+- **Quiet windows carry a -45 dBFS absolute ceiling on top of the skip rule**, because
+  the skip is asymmetric and only one direction was closed. loud → silenced grows the
+  skipped count and is caught. **quiet → LOUD is not:** an artifact injected into a
+  pause — a click, a hum, an uninitialised buffer, even a -20 dBFS beep — leaves the
+  count unchanged and is skipped by the relative check. On the LOOSE path nothing else
+  sees it either: a one-window -20 dBFS beep contributes ~15 % RMS-error, under L4's
+  16 % gate, and moves integrated `i` by far less than ±0.3 LU. TIGHT's md5 catches it,
+  but LOOSE is exactly the mode the owed on-box acceptance exercises. The ceiling sits
+  15 dB above codec silence-reconstruction noise (so a cross-build decode cannot
+  false-red it) and 25 dB below speech.
 - **L2 drops `tp`.** `output_tp = -1.50` is the configured ceiling loudnorm clamps to;
   pinning it asserts almost nothing. `lra` is the field that moves under a mode flip
   (0.50 → ~3.00), and `i` is non-tautological per finding 4.
@@ -559,13 +569,41 @@ Three accuracy notes:
 ## Out of scope
 
 **The `linear` → `dynamic` fallback and the LRA 3.00 → 0.50 compression (finding 4) is not
-fixed here.** Whether a fivefold loudness-range reduction is right for speech needs
-listening, not arithmetic. This design **pins `normalizationType: "dynamic"` as the
-baseline — locking in current behaviour, including behaviour that may be wrong.** That is
-correct for a regression harness, whose job is to detect change rather than adjudicate
-correctness, but the risk is named: a pin quietly becomes a specification. It is **filed as
-its own backlog issue plus its `docs/BACKLOG.md` row in the same round**, so the question
-stays open on the board instead of being settled by a fixture.
+fixed here** — but it is **not a parked chore either.** An independent review upgraded its
+triage with two facts, both re-measured through the production path for this spec:
+
+- **The applied gain is time-varying, not a single offset.** Per-100 ms gain across the
+  fixture's 55 audible windows runs **3.72 → 5.44 dB, a 1.72 dB spread**, negatively
+  correlated with input level — the loudest syllable windows are held ~1.5 dB below the
+  gain everything else gets. That is a compressor riding syllables. At `target = -20` the
+  same measurement collapses to a **0.41 dB** spread, i.e. effectively linear.
+- **The "fallback" is probably the COMMON path, and it varies per chapter.** The trip
+  condition is crest factor (`input_tp − input_i`) exceeding `|target − tp|` = 14.5 dB at
+  the shipped `-16` target. This fixture sits at **17.55 dB**, and 12–18 dB is ordinary for
+  clean narrated speech. So most real chapters are likely compressed — and which ones are
+  is data-dependent, so a single book can mix compressed and uncompressed chapters.
+  Chapter-to-chapter processing inconsistency is its own audible defect class, independent
+  of whether dynamic mode is objectionable in isolation.
+
+On this unusually flat (LRA 3.0) fixture the measured effect is mild, and I would not call
+it clearly objectionable. The concern is the extrapolation: a real chapter at LRA 6–9 — a
+whispered scene against a shouted one — would see several dB of ride plus pause-level
+pump-up. **That extrapolation needs a listen on a real chapter. It is not settled by
+arithmetic, and this spec does not claim otherwise.**
+
+The conventional remedy, for the issue body rather than this PR: don't use loudnorm's
+dynamic mode on speech you care about. Best first — linear gain to target plus a true-peak
+limiter (`alimiter`) at -1.5 dBTP, which touches peaks only and leaves the envelope
+intact; or lower the target (-18/-19 LUFS is the audiobook-platform norm; -16 is a
+music/podcast-streaming number, which is *why* the ceiling binds).
+
+This design still **pins `normalizationType: "dynamic"` as the baseline — locking in
+current behaviour, including behaviour that may be wrong.** That remains right for a
+regression harness, whose job is to detect change rather than adjudicate correctness, and
+the pin is an asset on both sides of the decision: when the fix lands, the harness
+re-blesses and L2's mode pin then *protects* it. But the follow-up is filed as a
+**prioritized quality bug carrying the two facts above plus a concrete A/B recipe** (one
+real chapter, linear + `alimiter` vs. current) — not as a reflex `type:chore`.
 
 ## Risks
 

@@ -172,6 +172,27 @@ describe('compareEnvelope', () => {
     // Skipped, so the huge relative delta at index 1 is NOT reported...
     expect(v.ok).toBe(true);
     // ...which is exactly why the caller asserts the skipped COUNT separately.
+    expect(v.loudInQuietIndex).toBe(-1);
+  });
+
+  it('flags an artifact injected into a window the baseline recorded as silent', () => {
+    /* The skip rule is asymmetric: quiet -> LOUD keeps `skipped` unchanged and
+       is skipped by the relative check, so without the absolute ceiling a beep
+       or hum in the trailing silence passes L3 — and, on the LOOSE path, every
+       other layer too. */
+    const beep = 0.1; // ~-20 dBFS
+    const v = compareEnvelope([loud, quiet], [loud, beep]);
+    expect(v.skipped).toBe(1);
+    expect(v.ok).toBe(true); // the RELATIVE check still says nothing
+    expect(v.loudInQuietIndex).toBe(1);
+    expect(v.loudInQuietDbfs).toBeCloseTo(-20, 0);
+  });
+
+  it('tolerates codec silence-reconstruction noise below the audibility ceiling', () => {
+    // -55 dBFS in a baseline-silent window: below -45, so not flagged. A
+    // cross-build MP3 decode legitimately produces noise at this level.
+    const v = compareEnvelope([loud, quiet], [loud, 0.0018]);
+    expect(v.loudInQuietIndex).toBe(-1);
   });
 
   it('detects a time-shifted copy — the envelope moves even when the samples do not', () => {
@@ -292,6 +313,16 @@ export const TOL = {
   /** L3 — windows quieter than this on EITHER side are skipped. At -67 dBFS a
    *  10 % relative band is a fraction of one int16 quantisation step. */
   quietFloorDbfs: -50,
+  /** L3 — absolute ceiling for a window the BASELINE recorded as quiet.
+   *
+   *  The skip rule is asymmetric on its own: loud->silenced grows the skipped
+   *  count and is caught, but quiet->LOUD is skipped (baseline side is below
+   *  the floor), leaves the count unchanged, and passes. A hum, a click, or a
+   *  -20 dBFS beep injected into the trailing silence would sail through all
+   *  four layers on the LOOSE path. This ceiling closes that direction: 15 dB
+   *  above codec silence-reconstruction noise (so cross-build noise cannot
+   *  false-red it), 25 dB below speech (so anything audible trips it). */
+  quietCeilingDbfs: -45,
   /** L4-loose — relative RMS-error. Geometric mean of a 2.35x-wide separation
    *  (noise floor 10.55 %, target signal 24.79 %): sqrt(.1055 * .2479) = .1617.
    *  This is the WEAKEST layer — see the spec's §1. */
@@ -301,6 +332,7 @@ export const TOL = {
 } as const;
 
 export interface EnvelopeVerdict {
+  /** The RELATIVE check only. `loudInQuietIndex` is asserted separately. */
   ok: boolean;
   /** Index of the worst non-skipped window, or -1 when every window skipped. */
   worstIndex: number;
@@ -310,6 +342,12 @@ export interface EnvelopeVerdict {
   worstAtSec: number;
   /** How many windows the -50 dBFS floor excluded. Asserted by the caller. */
   skipped: number;
+  /** Index of a window the baseline recorded as quiet but this run made
+   *  audible (>= `TOL.quietCeilingDbfs`), or -1. Catches an artifact injected
+   *  into silence, which the relative check skips by construction. */
+  loudInQuietIndex: number;
+  /** dBFS of that window in this run. -Infinity when there is none. */
+  loudInQuietDbfs: number;
 }
 
 /** dBFS of a normalised RMS value. -Infinity for digital silence. */
@@ -378,23 +416,35 @@ export function rmsError(a: Int16Array, b: Int16Array): number {
 
 /** Compare two RMS envelopes window-by-window.
  *
- *  A window is skipped when EITHER side falls below `TOL.quietFloorDbfs`.
- *  Skipping on the baseline side alone would let a regression that SILENCES a
- *  loud window escape; the union rule closes that, and the caller asserts the
- *  skipped count so the excluded set cannot silently grow. */
+ *  A window is skipped for the RELATIVE check when either side falls below
+ *  `TOL.quietFloorDbfs` — a 10 % band at -67 dBFS is a fraction of one
+ *  quantisation step, so a relative comparison there is noise.
+ *
+ *  That skip is asymmetric, and the asymmetry is the point of the second
+ *  check. loud -> silenced grows `skipped` and the caller catches it. But
+ *  quiet -> LOUD keeps the count unchanged and is skipped by the relative
+ *  check, so an artifact injected into silence would pass. Windows the
+ *  BASELINE recorded as quiet therefore also get an absolute ceiling. */
 export function compareEnvelope(
   baseline: number[],
   actual: number[],
   windowMs: number = TOL.windowMs,
 ): EnvelopeVerdict {
   const floor = 10 ** (TOL.quietFloorDbfs / 20);
+  const ceiling = 10 ** (TOL.quietCeilingDbfs / 20);
   const n = Math.min(baseline.length, actual.length);
   let worstIndex = -1;
   let worstRelDelta = 0;
   let skipped = 0;
+  let loudInQuietIndex = -1;
+  let loudInQuietRms = 0;
   for (let i = 0; i < n; i += 1) {
     if (baseline[i] < floor || actual[i] < floor) {
       skipped += 1;
+      if (baseline[i] < floor && actual[i] >= ceiling && actual[i] > loudInQuietRms) {
+        loudInQuietRms = actual[i];
+        loudInQuietIndex = i;
+      }
       continue;
     }
     const rel = Math.abs(actual[i] - baseline[i]) / baseline[i];
@@ -409,6 +459,8 @@ export function compareEnvelope(
     worstRelDelta,
     worstAtSec: worstIndex < 0 ? 0 : (worstIndex * windowMs) / 1000,
     skipped,
+    loudInQuietIndex,
+    loudInQuietDbfs: loudInQuietIndex < 0 ? -Infinity : dbfs(loudInQuietRms),
   };
 }
 
@@ -1582,10 +1634,22 @@ Add `compareEnvelope` and `rmsError` to the `./golden-baseline.js` import. **Del
       v.skipped,
       `L3: ${v.skipped} window(s) fell below ${TOL.quietFloorDbfs} dBFS on one ` +
         `side or the other; the baseline recorded ` +
-        `${baseline!.decoded.quietWindowsSkipped}. A changed count means the ` +
-        `audio got quieter or louder somewhere, which is itself the ` +
+        `${baseline!.decoded.quietWindowsSkipped}. A GROWN count means audio ` +
+        `that used to be there went quiet, which is itself the ` +
         `regression.${modeLine()}`,
     ).toBe(baseline!.decoded.quietWindowsSkipped);
+
+    /* The opposite direction. A window the baseline recorded as silent that
+       this run made audible keeps `skipped` unchanged AND is skipped by the
+       relative check, so nothing above would see it — and on the LOOSE path a
+       -20 dBFS beep contributes only ~15 % rmse, under L4's 16 % gate. */
+    expect(
+      v.loudInQuietIndex,
+      `L3: window ${v.loudInQuietIndex} (t=${(v.loudInQuietIndex * 0.1).toFixed(1)}s) ` +
+        `is ${v.loudInQuietDbfs.toFixed(1)} dBFS but the baseline recorded it as ` +
+        `silent. Something audible — a click, hum, or uninitialised buffer — ` +
+        `landed in a pause. Ceiling is ${TOL.quietCeilingDbfs} dBFS.${modeLine()}`,
+    ).toBe(-1);
 
     expect(
       v.ok,
@@ -1753,11 +1817,35 @@ In `docs/testing/onbox-acceptance-register.md`, add:
 
 - [ ] **Step 5: File the follow-up issue and its backlog row**
 
+**File this as a quality bug, not a chore.** An independent review established that the "fallback" is likely the common path on real chapters, which changes its priority.
+
 ```bash
-gh issue create --title "srv-NN — loudnorm falls back to dynamic mode and compresses LRA 3.00 -> 0.50" --label "type:chore,area:srv" --body "..."
+gh issue create \
+  --title "srv-NN — loudnorm rides syllables on most chapters: linear requested, dynamic applied" \
+  --label "type:chore,area:srv,moscow:should" \
+  --body-file <(cat <<'BODY'
+...
+BODY
+)
 ```
 
-Body must record: `linear=true` is requested (`loudnorm.ts:293`) but the fixture's `-4.15` dBTP true peak means the +5.70 dB to reach `-16` LUFS would breach the `-1.5` ceiling, so ffmpeg falls back to `dynamic` and compresses **LRA 3.00 → 0.50**; that ops-36 **pins this as the baseline**, locking in behaviour that may be wrong; and that settling it needs listening, not arithmetic. Then add the thin row to `docs/BACKLOG.md` linking the issue.
+The body must carry all five, because the first two are what make this more than a curiosity:
+
+1. **The applied gain is time-varying.** Measured through `encodePcmToAudio` on the golden fixture: per-100 ms gain across 55 audible windows runs **3.72 → 5.44 dB (1.72 dB spread)**, negatively correlated with input level. That is a compressor, not a gain stage. At `target = -20` the spread collapses to **0.41 dB**.
+2. **It is probably the common path, and varies per chapter.** Trip condition is crest factor (`input_tp − input_i`) > `|target − tp|` = **14.5 dB** at the shipped `-16`. The fixture is **17.55 dB**; 12–18 dB is ordinary for clean narrated speech. Which chapters trip it is data-dependent, so one book can mix compressed and uncompressed chapters — inconsistency is its own defect.
+3. **The mechanism.** `linear=true` is requested (`loudnorm.ts:293`), but the +5.70 dB needed to reach `-16` LUFS would put the `-4.15` dBTP peak at `+1.55`, past the `-1.5` ceiling. LRA goes **3.00 → 0.50**.
+4. **ops-36 pins this as the baseline**, locking in behaviour that may be wrong — deliberate for a regression harness, and the pin protects the fix once it lands.
+5. **A concrete A/B recipe**, because arithmetic cannot settle it: render one real chapter (`server/src/__fixtures__/the-coalfall-commission.md`) twice — current, vs. linear gain + `alimiter` at `-1.5` dBTP — and listen. Note that `-18`/`-19` LUFS is the audiobook-platform norm and `-16` is a music/podcast-streaming number, which is why the ceiling binds.
+
+Then add the thin row to `docs/BACKLOG.md` linking the issue.
+
+- [ ] **Step 5b: File the three deferred hardening items**
+
+Each is a real gap this PR deliberately does not close. One issue each, `area:ops`, plus BACKLOG rows:
+
+- **Spectral-tilt blind spot.** All four layers are energy instruments. A cross-build resampler or lowpass change that shaves content above ~8–10 kHz — the classic "new build sounds dull" regression, audible on TTS speech — moves window RMS by hundredths of a dB and contributes ~5–6 % rmse, so it passes L1–L4 on LOOSE (TIGHT's md5 catches it). Cheap deterministic fix: record `rms(firstDifference(samples)) / rms(samples)` in the baseline as a tilt proxy and calibrate its tolerance the way finding 6 calibrated the others.
+- **Suite A has no content assertion.** Suite B replays fixed PCM by construction, so a wrong voice, a truncated or repeated word, or gross voice damage is structurally invisible to it — and Suite A pins only per-line *duration*. The repo already ships CPU-capable `faster-whisper` (srv-31): transcribing each golden line and asserting WER ≈ 0 against the fixture text is the cheapest real voice-quality assertion available here.
+- **The linear loudnorm arm has zero golden coverage.** Every golden run exercises the dynamic fallback, and attenuating the fixture does not help (crest is gain-invariant). A second baseline recorded at a lower target (e.g. `-20`, where the +1.7 dB gain clears the ceiling) would cover it. This becomes *essential* the day the item above lands and the main path flips to linear.
 
 - [ ] **Step 6: Run the branch battery**
 
