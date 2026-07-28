@@ -445,6 +445,12 @@ export async function encodePcmToAudio(
             tp: secondPass.output_tp,
             target: opts.loudnorm.target,
             twoPass: true,
+            normalizationType:
+              secondPass.normalization_type === 'linear'
+                ? 'linear'
+                : secondPass.normalization_type === 'dynamic'
+                  ? 'dynamic'
+                  : undefined,
             measuredAt: pendingSidecar.measuredAt,
           };
         } else {
@@ -537,6 +543,63 @@ export async function decodeAudioToPcm(input: Buffer, sampleRate: number): Promi
       if ((err as NodeJS.ErrnoException).code !== 'EPIPE') reject(err);
     });
     child.stdin.end(input);
+  });
+}
+
+/** Decode an encoded audio FILE to raw s16le mono PCM at `sampleRate`.
+
+    Deliberately separate from `decodeAudioToPcm`, which feeds `pipe:0`. On a
+    NON-SEEKABLE input ffmpeg does not apply the LAME tag's end-padding trim,
+    so a pipe decode returns ~495 samples more than the source PCM. A seekable
+    file input round-trips to the exact input length. The golden-assembly tier
+    (ops-36) pins the decoded byte count, so it needs the file form.
+
+    Same subprocess handling as its pipe sibling: friendly spawn-failure hint,
+    reject on non-zero exit. */
+export async function decodeAudioFileToPcm(
+  inputPath: string,
+  sampleRate: number,
+): Promise<Buffer> {
+  const args = [
+    '-loglevel',
+    'error',
+    '-i',
+    inputPath,
+    '-f',
+    's16le',
+    '-acodec',
+    'pcm_s16le',
+    '-ac',
+    '1',
+    '-ar',
+    String(sampleRate),
+    'pipe:1',
+  ];
+  return new Promise<Buffer>((resolve, reject) => {
+    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    child.stdout.on('data', (c) => stdoutChunks.push(c));
+    child.stderr.on('data', (c) => stderrChunks.push(c));
+    child.on('error', (err) => {
+      reject(
+        new Error(
+          `Failed to spawn ffmpeg (decode file): ${err.message}. ` +
+            `Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).`,
+        ),
+      );
+    });
+    child.on('close', (code) => {
+      const stderr = Buffer.concat(stderrChunks).toString('utf8');
+      if (code === 0) resolve(Buffer.concat(stdoutChunks));
+      else
+        reject(
+          new Error(
+            `ffmpeg (decode file ${inputPath}) exited with code ${code}: ` +
+              `${stderr.trim() || '(no stderr)'}`,
+          ),
+        );
+    });
   });
 }
 

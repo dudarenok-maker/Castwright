@@ -57,3 +57,58 @@ describe('decodeAudioToPcm', () => {
     expect(pcm.length).toBeGreaterThan(24_000 * 2 * 4); // > ~4s of 24kHz mono s16le
   });
 });
+
+describe('decodeAudioFileToPcm', () => {
+  it('round-trips an encode to the EXACT input length, unlike the pipe decode', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { decodeAudioFileToPcm, decodeAudioToPcm } = await import('./mp3.js');
+
+    const original = sine(1.0, SR);
+    const mp3 = await encodePcmToAudio(original, SR, { format: 'mp3', quality: 2 });
+    const dir = mkdtempSync(join(tmpdir(), 'decode-file-'));
+    try {
+      const path = join(dir, 'a.mp3');
+      writeFileSync(path, mp3);
+
+      const fromFile = await decodeAudioFileToPcm(path, SR);
+      const fromPipe = await decodeAudioToPcm(mp3, SR);
+
+      /* The seekable input lets ffmpeg honour the LAME gapless tag, so the
+         round-trip is exact. The pipe decode appends untrimmed padding — this
+         is the difference L3 depends on, so it is pinned here. */
+      expect(fromFile.length).toBe(original.length);
+      expect(fromPipe.length).toBeGreaterThan(fromFile.length);
+
+      // The pipe decode contains the file decode as an exact leading prefix.
+      expect(fromPipe.subarray(0, fromFile.length).equals(fromFile)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('forces the output onto the requested sample grid', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { decodeAudioFileToPcm } = await import('./mp3.js');
+
+    const mp3 = await encodePcmToAudio(sine(1.0, SR), SR, { format: 'mp3', quality: 2 });
+    const dir = mkdtempSync(join(tmpdir(), 'decode-file-rate-'));
+    try {
+      const path = join(dir, 'a.mp3');
+      writeFileSync(path, mp3);
+      const pcm16k = await decodeAudioFileToPcm(path, 16_000);
+      expect(pcmDurationSec(pcm16k.length, 16_000)).toBeGreaterThan(0.95);
+      expect(pcmDurationSec(pcm16k.length, 16_000)).toBeLessThan(1.05);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects with a readable error when the file does not exist', async () => {
+    const { decodeAudioFileToPcm } = await import('./mp3.js');
+    await expect(decodeAudioFileToPcm('no-such-file.mp3', SR)).rejects.toThrow(/decode/i);
+  });
+});

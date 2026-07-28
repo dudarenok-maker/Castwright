@@ -11,10 +11,17 @@
 // Flags (after `--` when run via npm):
 //   --assembly-only        run only Suite B
 //   --sidecar-only         run only Suite A
-//   --bless                record the Kokoro baseline (GOLDEN_BLESS=1) instead
-//                          of asserting (Suite A only). To re-capture the Suite B
-//                          recorded-PCM fixture, run
+//   --bless                bless the SELECTED suites — bless follows suite selection.
+//                          Bare --bless records both baselines,
+//                          `--assembly-only --bless` records only Suite B's
+//                          golden-chapter.baseline.json + .decoded.pcm, and
+//                          `--sidecar-only --bless` records only Suite A's
+//                          kokoro-baseline.json. To re-capture the Suite B
+//                          INPUT fixture (not its baseline), run
 //                          server/tts-sidecar/tests/golden/capture_assembly_fixture.py.
+//                          NOTE: `npm run test:golden-audio:assembly` bypasses
+//                          this runner, so it can never bless — use the full
+//                          `npm run test:golden-audio -- --assembly-only --bless`.
 //   --engine=<kokoro|coqui|qwen>   narrow Suite A via pytest `-k <engine>`
 //
 // Cross-engine sanity (Coqui/Qwen) additionally needs its own opt-in env:
@@ -59,7 +66,15 @@ function run(label, cmd, cmdArgs, { env, shell } = {}) {
 
 if (!sidecarOnly) {
   // Suite B — GPU-free assembly golden (real ffmpeg, recorded PCM fixture).
-  run('assembly (Suite B)', 'npm', ['--prefix', 'server', 'run', 'test:golden'], { shell: true });
+  run('assembly (Suite B)', 'npm', ['--prefix', 'server', 'run', 'test:golden'], {
+    shell: true,
+    // Explicit `undefined` (not `{}`) so an ambient GOLDEN_BLESS=1 exported in
+    // the shell can't leak through on the non-bless path and silently turn an
+    // ordinary assert run into a bless that overwrites committed fixtures —
+    // `run()`'s `{ ...process.env, ...env }` spread only clears an inherited
+    // key when this object explicitly sets it to `undefined`.
+    env: { GOLDEN_BLESS: bless ? '1' : undefined },
+  });
 }
 
 if (!assemblyOnly) {
@@ -69,7 +84,8 @@ if (!assemblyOnly) {
     'sidecar (Suite A)',
     process.execPath,
     ['scripts/run-powershell.mjs', 'server/tts-sidecar/run-golden-tests.ps1', ...pytestArgs],
-    { env: bless ? { GOLDEN_BLESS: '1' } : {} },
+    // Same ambient-leak guard as the Suite B call above.
+    { env: { GOLDEN_BLESS: bless ? '1' : undefined } },
   );
 }
 
