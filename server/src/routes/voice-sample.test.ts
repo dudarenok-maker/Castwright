@@ -4,7 +4,7 @@
    run doesn't leak files into the dev server's audio dir. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, readdirSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -744,6 +744,87 @@ describe('voice-sample router', () => {
       expect(synthesize).not.toHaveBeenCalled();
       // ...and no MP3 was left in a cache scope no purge can reach.
       expect(res.body.url).toBeUndefined();
+    });
+
+    /* GATE 2 fix (C-B2) — the uuid TAIL, the half the C4 prefix fold left
+       open. `xtts-ABC` against a real uuid of `abc` renders while consent is
+       valid (NTFS/APFS resolve it), but the audition lands in a
+       `raw-coqui-<djb2('xtts-ABC')>` scope `purgeCloneArtifacts` cannot
+       compute and the sidecar's latents stay resident under the raw key that
+       canonical-key `/xtts/evict-voice` misses — so a later revoke answers
+       200 with `failed: []`, claiming an erasure it did not achieve.
+
+       The fixture makes the divergence explicit rather than relying on the
+       host filesystem: the entry DIRECTORY is `<uuid>` in one spelling while
+       its manifest's own `voiceUuid` is another. That is exactly the state
+       `readEntry` observes on NTFS/APFS when a client sends a case-varied
+       tail — it resolves the real entry, whose canonical uuid is spelled
+       differently from the key it was asked for — and it reproduces on a
+       case-SENSITIVE CI runner too, where the case-varied request would
+       simply 404 and prove nothing.
+
+       Asserting the status alone would be the placebo shape: what actually
+       matters is that no audio was produced and nothing was left in a cache
+       scope no purge can reach, so both are asserted. */
+    it('GATE 2 C-B2: a non-canonical uuid TAIL is refused, not rendered under a key revoke cannot erase', async () => {
+      const canonicalUuid = 'tail-case-1';
+      const requestedKey = 'Tail-Case-1'; // what a case-varied client sends
+      const dir = join(workspaceDir, 'voice-library', requestedKey);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, 'voice.json'),
+        JSON.stringify({
+          voiceUuid: canonicalUuid,
+          name: 'Gran',
+          provenance: 'cloned',
+          tags: [],
+          pinned: false,
+          engines: {},
+          consent: { ...baseConsent }, // consent is VALID — this is not a consent bypass
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        }),
+      );
+
+      const res = await request(app).post('/api/voices/v_anyone/sample').send({
+        modelKey: 'coqui-xtts-v2',
+        rawEngine: 'coqui',
+        rawSpeaker: `xtts-${requestedKey}`,
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('noncanonical_clone_key');
+      // No audio of this person's voice was produced at all...
+      expect(synthesize).not.toHaveBeenCalled();
+      // ...and nothing landed in a cache scope no purge sweep can compute.
+      expect(res.body.url).toBeUndefined();
+      expect(readdirSync(audioDir)).toHaveLength(0);
+    });
+
+    it('GATE 2 C-B2: the canonical key for the same entry still renders', async () => {
+      /* The discriminating pair for the test above — proves the refusal keys
+         off "not this voice's own key", not off the entry being unusable. */
+      const canonicalUuid = 'tail-case-2';
+      await writeEntry({
+        voiceUuid: canonicalUuid,
+        name: 'Gran',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        consent: { ...baseConsent },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const res = await request(app).post('/api/voices/v_anyone/sample').send({
+        modelKey: 'coqui-xtts-v2',
+        rawEngine: 'coqui',
+        rawSpeaker: `xtts-${canonicalUuid}`,
+      });
+
+      expect(res.status).toBe(200);
+      expect(synthesize).toHaveBeenCalledTimes(1);
     });
 
     it('(raw analogue of d) a non-cloned (designed) library voice is unaffected via the raw-speaker bypass', async () => {

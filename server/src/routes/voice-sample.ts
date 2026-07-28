@@ -158,10 +158,13 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
        Only the PREFIX is folded — the uuid tail is sliced verbatim, never
        lower-cased. `randomUUID()` and `nanoid()` both mint mixed-case uuids,
        so lower-casing the tail would break `readEntry` on a case-sensitive
-       filesystem. A case-varied UUID is not a bypass either way: on NTFS/APFS
-       `readEntry`'s own `existsSync` matches it exactly as the sidecar's
-       `os.path.isfile` does, and on a case-sensitive filesystem neither
-       resolves. */
+       filesystem. This comment used to claim a case-varied UUID was "not a
+       bypass either way" because `readEntry`'s `existsSync` resolves it on
+       NTFS/APFS exactly as the sidecar's `os.path.isfile` does. That is true
+       of the consent gate and false of erasure — resolving is precisely what
+       makes it render while the CACHE SCOPE and the sidecar's latents key
+       still follow the raw, case-varied string. GATE 2 C-B2; the refusal that
+       closes it is below, after the consent check. */
     const prefix = `${manifestSlotFor(engine)}-`; // manifestSlotFor already returns lower-case
     if (voiceName.toLowerCase().startsWith(prefix)) {
       const libraryUuid = voiceName.slice(prefix.length);
@@ -169,6 +172,41 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
       if (clonedVoiceLacksConsent(entry)) {
         return res.status(403).json({
           error: 'This cloned voice has no valid consent and cannot be played.',
+        });
+      }
+      /* GATE 2 fix (C-B2) — the uuid TAIL, the half the C4 prefix fold left
+         open. `xtts-ABC` where the real uuid is `abc` renders happily while
+         consent is valid: `readEntry`'s `existsSync` resolves it on NTFS/APFS
+         (see the comment above), the sidecar's canonical-prefix check passes
+         because only the tail varies, and `os.path.isfile` opens the real
+         `xtts-abc.pt`. What it leaves behind is unreachable by revoke — the
+         audition MP3 lands in a `raw-coqui-<djb2('xtts-ABC')>` scope
+         `purgeCloneArtifacts` never computes (it only ever hashes the
+         canonical key), and the sidecar's TTL-less `_latents_cache` /
+         `_evict_epoch` are dicts keyed on the RAW voice id, which
+         canonical-key `/xtts/evict-voice` pops by exact key and misses. The
+         revoke then answers 200 with `failed: []` — claiming a total erasure
+         it did not achieve, which is Property 2's exact failure mode.
+
+         REFUSE, don't normalise — the same choice the sidecar makes for a
+         case-varied prefix (main.py's `VoiceNotDesignedError`), and for the
+         same reason: folding the KEY (rather than the comparison) would make
+         Node write an artifact under one name and look for it under another
+         on a case-sensitive filesystem, so a purge would miss it outright —
+         deepening the very hole this closes. Only the COMPARISON is
+         case-insensitive, and it is implicit: `readEntry` resolved the entry
+         case-insensitively, so `entry.voiceUuid` IS the canonical spelling of
+         whatever the client asked for, and a byte-mismatch against it means
+         the client sent a key that is not this voice's own. Costs nothing
+         real: the only producer of these keys (`cloneStorageKey`) always
+         emits the entry's own uuid verbatim. */
+      if (entry && entry.voiceUuid !== libraryUuid) {
+        return res.status(400).json({
+          code: 'noncanonical_clone_key',
+          message:
+            `"${voiceName}" is not this voice's canonical key — it differs from ` +
+            `"${cloneStorageKey(engine, entry.voiceUuid)}". Refusing rather than rendering ` +
+            'under a key revoke could never erase.',
         });
       }
       /* Fix wave (cache-scope gap) — for a CLONED voice reached via the

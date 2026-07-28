@@ -6721,8 +6721,20 @@ export interface operations {
                     "application/json": components["schemas"]["VoiceSample"];
                 };
             };
-            /** @description Invalid model key */
+            /**
+             * @description Invalid model key, or (`code: noncanonical_clone_key`) a cloned-voice
+             *     key whose uuid tail is not that voice's own canonical spelling —
+             *     refused rather than rendered, because it would cache under a scope
+             *     revoke can never erase.
+             */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description This cloned voice has no valid consent and cannot be played */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
