@@ -357,7 +357,7 @@ def test_idle_evict_only_frees_engines_on_target_card(monkeypatch):
     free Qwen (design + base17) and SPK, but NOT ASR (different card) — the
     multi-GPU over-eviction #1721 fixes."""
     qwen, asr, spk = _wire_evict_engines(monkeypatch, "cuda:0", "cuda:1", "cuda:0")
-    assert main._idle_evict("cuda:0") is True
+    assert main._idle_evict("cuda:0", "qwen") is True
     assert (qwen.design_freed, qwen.base17_freed) == (1, 1)
     assert spk.freed == 1
     assert asr.freed == 0  # resident on the OTHER card — left alone
@@ -367,7 +367,7 @@ def test_idle_evict_targets_the_other_card(monkeypatch):
     """Same layout, admitting onto cuda:1 instead: only ASR (the cuda:1
     resident) is freed; Qwen + SPK on cuda:0 are untouched."""
     qwen, asr, spk = _wire_evict_engines(monkeypatch, "cuda:0", "cuda:1", "cuda:0")
-    assert main._idle_evict("cuda:1") is True
+    assert main._idle_evict("cuda:1", "qwen") is True
     assert asr.freed == 1
     assert (qwen.design_freed, qwen.base17_freed) == (0, 0)
     assert spk.freed == 0
@@ -378,7 +378,7 @@ def test_idle_evict_skips_cpu_resident_engines(monkeypatch):
     never evicts it (evicting would just cost a needless reload). ASR defaults
     to cpu — admitting onto cuda:0 must leave it alone."""
     qwen, asr, spk = _wire_evict_engines(monkeypatch, "cuda:0", "cpu", "cpu")
-    assert main._idle_evict("cuda:0") is True  # qwen still freed
+    assert main._idle_evict("cuda:0", "qwen") is True  # qwen still freed
     assert asr.freed == 0
     assert spk.freed == 0
 
@@ -387,7 +387,7 @@ def test_idle_evict_unindexed_cuda_is_card_zero(monkeypatch):
     """A resident engine reporting bare "cuda" (no index) normalises to card 0,
     so it's freed for a cuda:0 admission and spared for cuda:1."""
     qwen, asr, spk = _wire_evict_engines(monkeypatch, "cuda", "cuda", "cuda")
-    assert main._idle_evict("cuda:1") is False  # nothing on card 1
+    assert main._idle_evict("cuda:1", "qwen") is False  # nothing on card 1
     assert (qwen.design_freed, spk.freed, asr.freed) == (0, 0, 0)
-    assert main._idle_evict("cuda:0") is True
+    assert main._idle_evict("cuda:0", "qwen") is True
     assert (qwen.design_freed, qwen.base17_freed, asr.freed, spk.freed) == (1, 1, 1, 1)

@@ -2419,7 +2419,7 @@ class PlacementController:
         footprints: Optional["FootprintTable"] = None,
         ledger: Optional["ReservationLedger"] = None,
         reserve_mb: Optional[Callable[[], int]] = None,
-        idle_evict: Optional[Callable[[str], bool]] = None,
+        idle_evict: Optional[Callable[[str, str], bool]] = None,
         is_resident: Optional[Callable[[str], Optional[str]]] = None,
     ) -> None:
         self.probe = probe
@@ -2429,7 +2429,7 @@ class PlacementController:
         # the actual per-device cushion is `_device_reserve_mb(total, cap)`,
         # min(5% of that device's own VRAM, this cap). See `_device_reserve_mb`.
         self.reserve_mb = reserve_mb if reserve_mb is not None else (lambda: int(os.environ.get("GPU_RESERVE_MB", 500)))
-        self.idle_evict = idle_evict if idle_evict is not None else (lambda device_key: False)
+        self.idle_evict = idle_evict if idle_evict is not None else (lambda device_key, engine: False)
         self.is_resident = is_resident if is_resident is not None else (lambda engine: None)
 
     @staticmethod
@@ -2507,7 +2507,7 @@ class PlacementController:
             return {"device": "cpu"}
 
         worst = self._worst_device_key(devices)
-        if worst is not None and self.idle_evict(worst):
+        if worst is not None and self.idle_evict(worst, engine):
             devices = self.probe()
             candidates = self._gpu_candidates(devices, constraint)
             key = self.ledger.best_fit(candidates, peak, reserve_cap)
@@ -2582,7 +2582,7 @@ class PlacementController:
         held = self.ledger.try_hold(candidates, peak, reserve_cap)
         if held is None and not (cpu_capable and not heavy):
             worst = self._worst_device_key(devices)
-            if worst is not None and self.idle_evict(worst):
+            if worst is not None and self.idle_evict(worst, engine):
                 devices = self.probe()
                 candidates = self._gpu_candidates(devices, constraint)
                 held = self.ledger.try_hold(candidates, peak, reserve_cap)
@@ -2676,7 +2676,7 @@ def _same_card(resident: Optional[str], target: str) -> bool:
     return (idx_r or 0) == (idx_t or 0)
 
 
-def _idle_evict(device_key: str) -> bool:
+def _idle_evict(device_key: str, engine: str) -> bool:
     """PlacementController.idle_evict: best-effort attempt to free idle
     transient GPU state to make room for the admitting op on `device_key`.
     Tries each idle-evictable engine (Qwen VoiceDesign + 1.7B-Base share the
@@ -2690,7 +2690,12 @@ def _idle_evict(device_key: str) -> bool:
     on the target card, so freeing it couldn't admit this op. The device strings
     match how the rest of the sidecar reasons about residency (`_is_resident`,
     `shares_device`) — Qwen's design/base17 both live on the shared
-    `qwen._device`, ASR on `ASR._device`, ECAPA on `SPK.device`."""
+    `qwen._device`, ASR on `ASR._device`, ECAPA on `SPK.device`.
+
+    `engine` is the ADMITTING op's engine. The engines evicted here are
+    transient or secondary, so freeing them can never be self-defeating —
+    except Coqui (#1894), which is a primary synth engine: a starved Coqui op
+    must not evict the model it is about to reload. See its branch below."""
     freed = False
     qwen = ENGINES.get("qwen")
     if isinstance(qwen, QwenEngine) and _same_card(qwen._device, device_key):

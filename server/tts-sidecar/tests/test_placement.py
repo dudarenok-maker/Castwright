@@ -54,7 +54,7 @@ def make(devices, peak, reserve_cap=768, idle_evict=None, resident=None):
         footprints=fp,
         ledger=main.ReservationLedger(),
         reserve_mb=lambda: reserve_cap,
-        idle_evict=idle_evict or (lambda dk: False),
+        idle_evict=idle_evict or (lambda dk, eng: False),
         is_resident=resident or (lambda e: None),
     )
 
@@ -98,7 +98,7 @@ def test_idle_evict_then_place():
         footprints=fp,
         ledger=ledger,
         reserve_mb=lambda: 768,
-        idle_evict=lambda dk: (ledger.release(tok) or True),
+        idle_evict=lambda dk, eng: (ledger.release(tok) or True),
         is_resident=lambda e: None,
     )
     assert pc.admit("qwen", "q", {}, False, True)["device"] == "cuda:0"
@@ -176,7 +176,7 @@ def test_resident_reservation_holds_on_its_device():
         footprints=fp,
         ledger=ledger,
         reserve_mb=lambda: 768,
-        idle_evict=lambda dk: False,
+        idle_evict=lambda dk, eng: False,
         is_resident=lambda e: "cuda:0",
     )
     with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as a:
