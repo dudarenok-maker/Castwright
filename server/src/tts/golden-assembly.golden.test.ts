@@ -41,6 +41,7 @@ import {
   selectMode,
   compareEnvelope,
   rmsError,
+  spectralTilt,
   TOL,
   type AssemblyBaseline,
 } from './golden-baseline.js';
@@ -125,6 +126,7 @@ interface Artifacts {
   mp3Md5: string;
   decoded: Int16Array;
   envelope: number[];
+  spectralTilt: number;
   banner: string | null;
   audioRoot: string;
 }
@@ -205,6 +207,7 @@ function writeBaseline(): void {
       bytes: art.decoded.length * 2,
       quietWindowsSkipped: art.envelope.filter((v) => v < floor).length,
     },
+    spectralTilt: art.spectralTilt,
     envelope100ms: art.envelope,
     mp3Md5: art.mp3Md5,
   };
@@ -303,6 +306,7 @@ beforeAll(async () => {
       mp3Md5: md5(mp3),
       decoded,
       envelope: rmsEnvelope(decoded, meta.sampleRate),
+      spectralTilt: spectralTilt(decoded),
       banner: ffmpegBannerLine(),
       audioRoot,
     };
@@ -545,5 +549,18 @@ describe('golden assembly (GPU-free)', () => {
         `${TOL.rmseLoose * 100} %. Note this layer cannot see drift below ` +
         `~1.2 LU — L1 covers that range at +/-0.1 LU.${modeLine()}`,
     ).toBeLessThan(TOL.rmseLoose);
+  });
+
+  it('L5 — spectral tilt matches the baseline', () => {
+    if (BLESS) return;
+    const rel = (art.spectralTilt - baseline!.spectralTilt) / baseline!.spectralTilt;
+    expect(
+      Math.abs(rel),
+      `L5 spectral-tilt drift: ${art.spectralTilt.toFixed(6)} vs baseline ` +
+        `${baseline!.spectralTilt.toFixed(6)} (${(rel * 100).toFixed(2)} %, tol ` +
+        `${TOL.spectralTiltRel * 100} %). Every other layer is an ENERGY instrument, ` +
+        `so a resampler or lowpass change that dulls the top end shows up HERE ` +
+        `and nowhere else. A gain change does not move this number.${modeLine()}`,
+    ).toBeLessThanOrEqual(TOL.spectralTiltRel);
   });
 });

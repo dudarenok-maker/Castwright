@@ -30,6 +30,8 @@ export interface AssemblyBaseline {
   firstPass: { input_i: number; input_lra: number; input_tp: number; input_thresh: number };
   sidecar: { i: number; lra: number; normalizationType: 'linear' | 'dynamic' };
   decoded: { bytes: number; quietWindowsSkipped: number };
+  /** L5 — rms(first difference) / rms(signal) of the decoded PCM. */
+  spectralTilt: number;
   envelope100ms: number[];
   mp3Md5: string;
 }
@@ -63,6 +65,13 @@ export const TOL = {
   rmseLoose: 0.16,
   /** L3 — envelope window width. */
   windowMs: 100,
+  /** L5 — relative tolerance on the spectral-tilt proxy. Derived from a
+   *  measured curve (spec finding 8): codec noise 0.16 %, gain-invariance
+   *  floor 1.29 %, smallest real signal (10 kHz lowpass) 9.90 %. 3.5 % is the
+   *  geometric mean of the last two — 2.7x above noise, 2.8x below signal.
+   *  NOTE the detectable band is bounded by Nyquist: at 24 kHz there is no
+   *  content above 12 kHz, so this catches lowpassing at/below ~10 kHz only. */
+  spectralTiltRel: 0.035,
 } as const;
 
 export interface EnvelopeVerdict {
@@ -111,6 +120,27 @@ export function pcmRms(samples: Int16Array): number {
     sum += v * v;
   }
   return Math.sqrt(sum / samples.length);
+}
+
+/** Spectral-tilt proxy: RMS of the first difference over RMS of the signal.
+ *
+ *  A first difference is a crude high-pass, so this ratio rises with the
+ *  signal's high-frequency content and — critically — is GAIN-INVARIANT, since
+ *  numerator and denominator scale together. That makes it sensitive to
+ *  exactly the regression every other layer misses (a resampler or lowpass
+ *  change dulling the top end) while ignoring the loudness changes L1-L4
+ *  already cover. FFT-free and deterministic. */
+export function spectralTilt(samples: Int16Array): number {
+  if (samples.length < 2) return 0;
+  let diff = 0;
+  let sig = 0;
+  for (let i = 1; i < samples.length; i += 1) {
+    const d = samples[i] - samples[i - 1];
+    diff += d * d;
+    sig += samples[i] * samples[i];
+  }
+  if (sig === 0) return 0;
+  return Math.sqrt(diff / (samples.length - 1)) / Math.sqrt(sig / (samples.length - 1));
 }
 
 /** Per-window normalised RMS. Full windows only — a trailing partial window is

@@ -12,6 +12,7 @@ import {
   md5,
   dbfs,
   toInt16,
+  spectralTilt,
   TOL,
 } from './golden-baseline.js';
 
@@ -194,6 +195,32 @@ describe('toInt16', () => {
   });
 });
 
+describe('spectralTilt', () => {
+  function tone(n: number, freqRatio: number): Int16Array {
+    const out = new Int16Array(n);
+    for (let i = 0; i < n; i += 1) out[i] = Math.round(12000 * Math.sin(2 * Math.PI * freqRatio * i));
+    return out;
+  }
+
+  it('is gain-invariant — the statistic must not move when only level changes', () => {
+    const x = tone(4800, 0.05);
+    const loud = new Int16Array(x.length);
+    for (let i = 0; i < x.length; i += 1) loud[i] = Math.round(x[i] * 0.5);
+    expect(spectralTilt(loud)).toBeCloseTo(spectralTilt(x), 6);
+  });
+
+  it('rises with frequency — that is what makes it a tilt proxy', () => {
+    // A higher-frequency tone has a larger sample-to-sample difference for the
+    // same RMS, which is exactly the property a lowpass destroys.
+    expect(spectralTilt(tone(4800, 0.2))).toBeGreaterThan(spectralTilt(tone(4800, 0.02)));
+  });
+
+  it('is 0 for a constant signal and finite for silence', () => {
+    expect(spectralTilt(new Int16Array(100).fill(1000))).toBeCloseTo(0, 9);
+    expect(Number.isFinite(spectralTilt(new Int16Array(100)))).toBe(true);
+  });
+});
+
 describe('TOL', () => {
   it('carries the spec-derived constants', () => {
     expect(TOL.firstPassLu).toBe(0.1);
@@ -202,5 +229,6 @@ describe('TOL', () => {
     expect(TOL.quietFloorDbfs).toBe(-50);
     expect(TOL.rmseLoose).toBe(0.16);
     expect(TOL.windowMs).toBe(100);
+    expect(TOL.spectralTiltRel).toBe(0.035);
   });
 });
