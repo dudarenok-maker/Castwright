@@ -601,9 +601,21 @@ This design still **pins `normalizationType: "dynamic"` as the baseline — lock
 current behaviour, including behaviour that may be wrong.** That remains right for a
 regression harness, whose job is to detect change rather than adjudicate correctness, and
 the pin is an asset on both sides of the decision: when the fix lands, the harness
-re-blesses and L2's mode pin then *protects* it. But the follow-up is filed as a
-**prioritized quality bug carrying the two facts above plus a concrete A/B recipe** (one
-real chapter, linear + `alimiter` vs. current) — not as a reflex `type:chore`.
+re-blesses and L2's mode pin then *protects* it. The follow-up is filed as
+**[#1909](https://github.com/dudarenok-maker/Castwright/issues/1909)** — a `bug`, carrying
+the two facts above plus a concrete A/B recipe (one real chapter, linear + `alimiter` vs.
+current) — not as a reflex `type:chore`.
+
+Three further gaps this design does not close are filed alongside it:
+**[#1910](https://github.com/dudarenok-maker/Castwright/issues/1910)** (ops-44 — all four
+layers are energy instruments, so a spectral-tilt change passes on LOOSE),
+**[#1911](https://github.com/dudarenok-maker/Castwright/issues/1911)** (ops-45 — no golden
+tier asserts audio *content*; Suite B replays fixed PCM by construction and Suite A pins
+only duration, so the combined voice-quality coverage is "the engine still produces roughly
+the right number of samples"), and
+**[#1912](https://github.com/dudarenok-maker/Castwright/issues/1912)** (ops-46 — the
+`linear` arm has zero golden coverage, which becomes total the day #1909 is fixed and the
+main path flips to linear).
 
 ## Risks
 

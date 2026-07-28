@@ -1815,7 +1815,23 @@ In `docs/testing/onbox-acceptance-register.md`, add:
 
 > **ops-36 — golden-assembly on a second ffmpeg build.** Run `npm run test:golden-audio:assembly` on a box whose `ffmpeg -version` banner differs from the baseline's. Record: which of L1/L2/L3 fire and their deltas; whether L4 took the LOOSE path; and L4-loose's actual RMS-error. **Why owed:** the entire cross-build half of the design — the LOOSE branch, the mismatch warning, and whether L1–L3's hard assertions survive another build — cannot be exercised on a box with one ffmpeg, and the tier sits outside `verify.yml`, so CI never runs it. The LOOSE path ships having never executed. Criteria: `docs/features/272-golden-assembly-comparison.md`.
 
-- [ ] **Step 5: File the follow-up issue and its backlog row**
+- [ ] **Step 5: Verify the follow-up issues (ALREADY FILED — do not re-file)**
+
+All four were filed on 2026-07-28, before implementation started, because the first is a defect in shipped audio and should not wait on this PR:
+
+| issue | shape | what |
+|---|---|---|
+| [#1909](https://github.com/dudarenok-maker/Castwright/issues/1909) | `bug`, `area:srv` | loudnorm rides syllables on most chapters — linear requested, dynamic applied |
+| [#1910](https://github.com/dudarenok-maker/Castwright/issues/1910) | ops-44, `moscow:could` | golden-assembly is blind to spectral tilt on the cross-build path |
+| [#1911](https://github.com/dudarenok-maker/Castwright/issues/1911) | ops-45, `moscow:should` | no golden tier asserts audio CONTENT (right words, right voice) |
+| [#1912](https://github.com/dudarenok-maker/Castwright/issues/1912) | ops-46, `moscow:could` | the linear loudnorm arm has zero golden coverage |
+
+**No `docs/BACKLOG.md` row is owed for any of them**, and this is a deliberate finding rather than an omission: `scripts/backlog-sync.mjs:3` queries **`type:feature` issues only**, so `type:chore` items never appear in that file — ops-36 itself (#1880) is likewise absent — and `bug`-labelled issues stay off it by the convention in CLAUDE.md's "The backlog". All four are on the Castwright Kanban board via `add-to-project.yml` (verified). Do **not** run `npm run backlog:sync --apply` on this branch: it currently emits only unrelated churn from other board edits, which would couple scope onto a docs-only PR.
+
+Cross-link the three ops items from plan 272's follow-ups section, and confirm #1909 is referenced from the spec's "Out of scope".
+
+<details>
+<summary>Original filing instructions, retained for reference</summary>
 
 **File this as a quality bug, not a chore.** An independent review established that the "fallback" is likely the common path on real chapters, which changes its priority.
 
@@ -1846,6 +1862,8 @@ Each is a real gap this PR deliberately does not close. One issue each, `area:op
 - **Spectral-tilt blind spot.** All four layers are energy instruments. A cross-build resampler or lowpass change that shaves content above ~8–10 kHz — the classic "new build sounds dull" regression, audible on TTS speech — moves window RMS by hundredths of a dB and contributes ~5–6 % rmse, so it passes L1–L4 on LOOSE (TIGHT's md5 catches it). Cheap deterministic fix: record `rms(firstDifference(samples)) / rms(samples)` in the baseline as a tilt proxy and calibrate its tolerance the way finding 6 calibrated the others.
 - **Suite A has no content assertion.** Suite B replays fixed PCM by construction, so a wrong voice, a truncated or repeated word, or gross voice damage is structurally invisible to it — and Suite A pins only per-line *duration*. The repo already ships CPU-capable `faster-whisper` (srv-31): transcribing each golden line and asserting WER ≈ 0 against the fixture text is the cheapest real voice-quality assertion available here.
 - **The linear loudnorm arm has zero golden coverage.** Every golden run exercises the dynamic fallback, and attenuating the fixture does not help (crest is gain-invariant). A second baseline recorded at a lower target (e.g. `-20`, where the +1.7 dB gain clears the ceiling) would cover it. This becomes *essential* the day the item above lands and the main path flips to linear.
+
+</details>
 
 - [ ] **Step 6: Run the branch battery**
 
