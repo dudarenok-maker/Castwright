@@ -335,9 +335,15 @@ Every literal is **measured**, except the one marked `«bless»`:
 ```
 
 The `loudnorm` block separates *"ffmpeg changed"* from *"someone moved
-`audio.loudnorm.targetLufs`"*. The `encode` block does the same for `-q:a` / `-ar` /
-`-write_xing`: revision 1's own failure proves a changed encode parameter produces a
-completely different artifact, and the version gate cannot see it.
+`audio.loudnorm.targetLufs`"* — and L2 asserts it, so the two cannot be confused.
+
+The `encode` block is **provenance only, not an assertion.** Revision 1's own failure
+proves a changed encode parameter produces a completely different artifact, but
+`finalizeChapterAudioWrite` hardcodes `-q:a` internally, so the test cannot observe it
+and comparing a recorded literal against another recorded literal would prove nothing.
+What actually guards a changed encode parameter is **L4-tight's md5**, which any `-q:a`
+change moves. The block is recorded so a human reading a failure knows what the baseline
+was taken under.
 
 ### 4. Bless ordering (and why the first bless must not hard-fail)
 

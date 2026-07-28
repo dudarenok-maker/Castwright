@@ -34,7 +34,12 @@ The pure statistics the golden tier compares with. No ffmpeg, no I/O — so it i
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `AssemblyBaseline`, `TOL`, `EnvelopeVerdict`, `rmsEnvelope(samples, sampleRate, windowMs?) → number[]`, `pcmRms(samples) → number`, `rmsError(a, b) → number` (a ratio: `0.0808` means 8.08 %), `compareEnvelope(baseline, actual, sampleRate, windowMs?) → EnvelopeVerdict`, `md5(buf) → string`, `dbfs(rms) → number`, `toInt16(buf) → Int16Array`.
+- Produces: `AssemblyBaseline`, `TOL`, `EnvelopeVerdict`, `rmsEnvelope(samples, sampleRate, windowMs?) → number[]`, `pcmRms(samples) → number`, `rmsError(a, b) → number` (a ratio: `0.0808` means 8.08 %), `compareEnvelope(baseline, actual, windowMs?) → EnvelopeVerdict`, `selectMode(runBanner, baselineBanner) → 'TIGHT' | 'LOOSE'`, `md5(buf) → string`, `dbfs(rms) → number`, `toInt16(buf) → Int16Array`.
+
+> **`compareEnvelope` takes no `sampleRate`.** It derives `worstAtSec` from
+> `windowMs` alone, and `server/tsconfig.json:11` sets `noUnusedParameters: true`
+> — an unused parameter is a `typecheck` failure, and Vitest does not typecheck,
+> so it would pass here and only surface three commits later.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -51,6 +56,7 @@ import {
   pcmRms,
   rmsError,
   compareEnvelope,
+  selectMode,
   md5,
   dbfs,
   toInt16,
@@ -136,7 +142,7 @@ describe('compareEnvelope', () => {
 
   it('passes identical envelopes and reports the skipped count', () => {
     const base = [loud, loud, quiet, loud];
-    const v = compareEnvelope(base, [...base], SR);
+    const v = compareEnvelope(base, [...base]);
     expect(v.ok).toBe(true);
     expect(v.skipped).toBe(1);
   });
@@ -144,7 +150,7 @@ describe('compareEnvelope', () => {
   it('fails a window past the relative tolerance and names where', () => {
     const base = [loud, loud, loud, loud];
     const actual = [loud, loud, loud * 1.15, loud];
-    const v = compareEnvelope(base, actual, SR);
+    const v = compareEnvelope(base, actual);
     expect(v.ok).toBe(false);
     expect(v.worstIndex).toBe(2);
     expect(v.worstRelDelta).toBeCloseTo(0.15, 3);
@@ -153,7 +159,7 @@ describe('compareEnvelope', () => {
 
   it('passes a window inside the relative tolerance', () => {
     const base = [loud, loud];
-    const v = compareEnvelope(base, [loud, loud * 1.05], SR);
+    const v = compareEnvelope(base, [loud, loud * 1.05]);
     expect(v.ok).toBe(true);
   });
 
@@ -161,11 +167,39 @@ describe('compareEnvelope', () => {
     // A regression that silences a loud window must not escape via the floor.
     const base = [loud, loud];
     const actual = [loud, quiet];
-    const v = compareEnvelope(base, actual, SR);
+    const v = compareEnvelope(base, actual);
     expect(v.skipped).toBe(1);
     // Skipped, so the huge relative delta at index 1 is NOT reported...
     expect(v.ok).toBe(true);
     // ...which is exactly why the caller asserts the skipped COUNT separately.
+  });
+
+  it('detects a time-shifted copy — the envelope moves even when the samples do not', () => {
+    // A resampler or padding change shifts content between windows.
+    const base = [loud, loud, loud * 0.2, loud];
+    const shifted = [loud, loud * 0.2, loud, loud];
+    expect(compareEnvelope(base, shifted).ok).toBe(false);
+  });
+});
+
+describe('selectMode', () => {
+  const BANNER = 'ffmpeg version 8.1.1-full_build-www.gyan.dev Copyright (c) 2000-2026';
+
+  it('is TIGHT only for a byte-identical banner', () => {
+    expect(selectMode(BANNER, BANNER)).toBe('TIGHT');
+  });
+
+  it('is LOOSE for a different build of the SAME version', () => {
+    // The whole reason the gate is not MAJOR.MINOR: same 8.1, different LAME.
+    expect(selectMode('ffmpeg version 8.1.1-ubuntu Copyright (c) 2000-2026', BANNER)).toBe(
+      'LOOSE',
+    );
+  });
+
+  it('is LOOSE for a different version and when either side is absent', () => {
+    expect(selectMode('ffmpeg version 9.0 Copyright (c) 2000-2027', BANNER)).toBe('LOOSE');
+    expect(selectMode(null, BANNER)).toBe('LOOSE');
+    expect(selectMode(BANNER, null)).toBe('LOOSE');
   });
 });
 
@@ -228,8 +262,12 @@ export interface AssemblyBaseline {
   ffmpegBanner: string;
   /** Parsed MAJOR.MINOR, for the failure message only. */
   ffmpegVersion: string | null;
-  /** Encode parameters the baseline was taken under. A change here produces a
-   *  completely different artifact and the version gate cannot see it. */
+  /** Encode parameters the baseline was taken under. PROVENANCE ONLY — no
+   *  layer asserts it, because `finalizeChapterAudioWrite` hardcodes `-q:a`
+   *  internally and the test cannot observe it. What actually guards a changed
+   *  encode parameter is L4-tight's md5, which a `-q:a` change moves. This
+   *  block exists so a human reading a failure knows what the baseline was
+   *  recorded under; do not mistake it for an assertion. */
   encode: { format: string; quality: number; sampleRate: number; writeXing: boolean };
   /** Loudnorm knobs, so a failure separates "ffmpeg changed" from "someone
    *  moved audio.loudnorm.targetLufs". */
@@ -347,7 +385,6 @@ export function rmsError(a: Int16Array, b: Int16Array): number {
 export function compareEnvelope(
   baseline: number[],
   actual: number[],
-  sampleRate: number,
   windowMs: number = TOL.windowMs,
 ): EnvelopeVerdict {
   const floor = 10 ** (TOL.quietFloorDbfs / 20);
@@ -380,6 +417,22 @@ export function compareEnvelope(
 export function md5(buf: Buffer): string {
   return createHash('md5').update(buf).digest('hex');
 }
+
+/** TIGHT only when the running ffmpeg banner is byte-identical to the one the
+ *  baseline was recorded under.
+ *
+ *  Deliberately exact-string, not MAJOR.MINOR: two 8.1 builds can ship
+ *  different LAME, so a version match does not promise identical output. Lives
+ *  here rather than in the golden test file so the branch is unit-testable —
+ *  on any single box one of the two arms never executes, and an untested arm
+ *  that only runs on someone else's machine is the worst kind. */
+export function selectMode(
+  runBanner: string | null,
+  baselineBanner: string | null,
+): 'TIGHT' | 'LOOSE' {
+  if (!runBanner || !baselineBanner) return 'LOOSE';
+  return runBanner === baselineBanner ? 'TIGHT' : 'LOOSE';
+}
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -387,7 +440,12 @@ export function md5(buf: Buffer): string {
 Run: `npm --prefix server run test -- --run golden-baseline`
 Expected: PASS, all cases.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Typecheck before committing**
+
+Run: `npm run typecheck`
+Expected: clean. Vitest does **not** typecheck, so a green Step 4 proves nothing about `noUnusedLocals` / `noUnusedParameters` (`server/tsconfig.json:10-11`). Catching it here rather than at Task 4 keeps the branch from carrying three commits that don't compile.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add server/src/tts/golden-baseline.ts server/src/tts/golden-baseline.test.ts
@@ -476,7 +534,7 @@ Expected: FAIL — `decodeAudioFileToPcm is not a function`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `server/src/tts/mp3.ts`, immediately **after** the closing brace of `decodeAudioToPcm` (which ends around `:544`), add:
+In `server/src/tts/mp3.ts`, immediately **after** the closing brace of `decodeAudioToPcm` (`:541`) and before the `audioExtForFormat` doc comment, add:
 
 ```ts
 /** Decode an encoded audio FILE to raw s16le mono PCM at `sampleRate`.
@@ -565,24 +623,46 @@ The TIGHT/LOOSE gate needs the **full** `ffmpeg -version` first line. `FfmpegPro
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `server/src/diagnostics/ffmpeg.test.ts`:
+**This file mocks `node:child_process`** (`ffmpeg.test.ts:15-17`) and resets the mock in `beforeEach` (`:37`), so `ffmpegBannerLine()` will never see a real ffmpeg here. Drive the existing `bins(present, banner)` helper at `:32` instead — which is better coverage anyway, since a multi-line stub actually exercises the "first line only" split that a real single-line check cannot.
+
+Add `ffmpegBannerLine` to the existing import at `:20`, then append:
 
 ```ts
 describe('ffmpegBannerLine', () => {
-  it('returns the first banner line when ffmpeg is present', async () => {
-    const { ffmpegBannerLine } = await import('./ffmpeg.js');
-    const line = ffmpegBannerLine();
-    // ffmpeg is a hard prerequisite for the server test suite (preflight
-    // enforces it), so this is not conditional.
-    expect(line).toMatch(/^ffmpeg version /);
-    // First line ONLY — the banner continues with configuration/lib lines.
-    expect(line).not.toContain('\n');
+  const MULTILINE =
+    'ffmpeg version 8.1.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers\n' +
+    'built with gcc 14.2.0 (Rev1, Built by MSYS2 project)\n' +
+    'configuration: --enable-gpl --enable-libmp3lame\n';
+
+  it('returns the FIRST line only, trimmed', () => {
+    bins({ ffmpeg: true, ffprobe: true }, MULTILINE);
+    expect(ffmpegBannerLine()).toBe(
+      'ffmpeg version 8.1.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers',
+    );
   });
 
-  it('carries more than the parsed MAJOR.MINOR, so two builds are distinguishable', async () => {
-    const { ffmpegBannerLine, parseFfmpegVersion } = await import('./ffmpeg.js');
+  it('handles CRLF line endings', () => {
+    bins({ ffmpeg: true, ffprobe: true }, 'ffmpeg version 8.1\r\nbuilt with gcc\r\n');
+    expect(ffmpegBannerLine()).toBe('ffmpeg version 8.1');
+  });
+
+  it('carries more than the parsed MAJOR.MINOR, so two builds are distinguishable', () => {
+    bins({ ffmpeg: true, ffprobe: true }, MULTILINE);
     const line = ffmpegBannerLine()!;
-    expect(line.length).toBeGreaterThan((parseFfmpegVersion(line) ?? '').length);
+    /* This is the whole point: parseFfmpegVersion collapses both the Gyan and
+       the Ubuntu 8.1 builds to "8.1", but they can ship different LAME. */
+    expect(parseFfmpegVersion(line)).toBe('8.1');
+    expect(line.length).toBeGreaterThan('8.1'.length);
+  });
+
+  it('returns null when ffmpeg is absent', () => {
+    bins({ ffmpeg: false, ffprobe: false });
+    expect(ffmpegBannerLine()).toBeNull();
+  });
+
+  it('returns null when ffmpeg is present but silent', () => {
+    bins({ ffmpeg: true, ffprobe: true }, '');
+    expect(ffmpegBannerLine()).toBeNull();
   });
 });
 ```
@@ -672,19 +752,26 @@ Then add a new case immediately after the existing `'falls back to input_i when 
       .mockImplementationOnce(() => fakeFfmpegChild({ stderr: firstPassStderr }))
       .mockImplementationOnce(() => fakeFfmpegChild({ stderr: 'no json here' }));
 
-    const { encodePcmToAudio } = await import('./mp3.js');
-    let sidecar: { twoPass: boolean; normalizationType?: 'linear' | 'dynamic' } | null = null;
-    await encodePcmToAudio(Buffer.alloc(2), 24_000, {
-      quality: 2,
-      loudnorm: { target: -16, lra: 11, tp: -1.5, twoPass: true },
-      onLoudnessMeasured: (s) => {
-        sidecar = s;
-      },
-    });
+    /* The fallback path warns on console. Silence it as the sibling fallback
+       test in this file does, so the suite output stays readable. */
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { encodePcmToAudio } = await import('./mp3.js');
+      let sidecar: { twoPass: boolean; normalizationType?: 'linear' | 'dynamic' } | null = null;
+      await encodePcmToAudio(Buffer.alloc(2), 24_000, {
+        quality: 2,
+        loudnorm: { target: -16, lra: 11, tp: -1.5, twoPass: true },
+        onLoudnessMeasured: (s) => {
+          sidecar = s;
+        },
+      });
 
-    expect(sidecar).not.toBeNull();
-    expect(sidecar!.twoPass).toBe(true);
-    expect(sidecar!.normalizationType).toBeUndefined();
+      expect(sidecar).not.toBeNull();
+      expect(sidecar!.twoPass).toBe(true);
+      expect(sidecar!.normalizationType).toBeUndefined();
+    } finally {
+      warn.mockRestore();
+    }
   });
 ```
 
@@ -722,7 +809,7 @@ Expected: FAIL — `expected undefined to be 'linear'` on the success-path case.
                   : undefined,
 ```
 
-**3c.** In `openapi.yaml`, add the property to `ChapterLoudness` after `twoPass` (around `:5300`). **Do not add it to the `required:` list at `:5256`** — existing sidecars on disk lack it:
+**3c.** In `openapi.yaml`, add the property to `ChapterLoudness`. The `twoPass` property ends at `:5290` and `measuredAt` begins at `:5291` — insert between them. **Do not add it to the `required:` list at `:5256`** — existing sidecars on disk lack it:
 
 ```yaml
         normalizationType:
@@ -820,7 +907,7 @@ test('the header documents that --bless follows suite selection', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `node --test scripts/tests/run-golden-audio.test.mjs`
-Expected: FAIL on the first two cases ("Suite B run() must forward GOLDEN_BLESS" and the header case).
+Expected: FAIL on case 1 ("Suite B run() must forward GOLDEN_BLESS") and case 3 (the header case). Case 2 passes already — it pins Suite A's existing behaviour, which this task must not break.
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -839,8 +926,8 @@ if (!sidecarOnly) {
 **3b.** In the header comment, replace the `--bless` line:
 
 ```js
-//   --bless                bless the SELECTED suites (bless follows suite
-//                          selection): bare --bless records both baselines,
+//   --bless                bless the SELECTED suites — bless follows suite selection.
+//                          Bare --bless records both baselines,
 //                          `--assembly-only --bless` records only Suite B's
 //                          golden-chapter.baseline.json + .decoded.pcm, and
 //                          `--sidecar-only --bless` records only Suite A's
@@ -974,6 +1061,9 @@ const sentences: SentenceOutput[] = meta.segments.map((s, i) => ({
 
 interface Artifacts {
   synth: Awaited<ReturnType<typeof synthesiseChapter>>;
+  /** The finalize call's own return value. Kept because it is this repo's only
+      coverage of `segmentCount` / `durationSec` on that result. */
+  finalized: { segmentCount: number; durationSec: number };
   firstPass: LoudnormFirstPassStats;
   sidecar: LoudnormSidecarJson | null;
   mp3: Buffer;
@@ -1037,7 +1127,7 @@ beforeAll(async () => {
       resolveLoudnormOptions(),
     );
 
-    await finalizeChapterAudioWrite({
+    const finalized = await finalizeChapterAudioWrite({
       bookId,
       bookDir,
       chapter: { id: 1, slug: SLUG, title: 'Chapter 1' },
@@ -1064,6 +1154,7 @@ beforeAll(async () => {
 
     art = {
       synth,
+      finalized,
       firstPass,
       sidecar,
       mp3,
@@ -1120,6 +1211,11 @@ describe('golden assembly (GPU-free)', () => {
   });
 
   it('finalizeChapterAudioWrite writes the audio and its sidecars', () => {
+    /* Carried over from the pre-ops-36 test: this is the repo's only coverage
+       of the finalize result's segmentCount / durationSec. */
+    expect(art.finalized.segmentCount).toBe(meta.segments.length);
+    expect(art.finalized.durationSec).toBeCloseTo(art.synth.durationSec, 1);
+
     expect(existsSync(join(art.audioRoot, `${SLUG}.mp3`))).toBe(true);
     expect(existsSync(join(art.audioRoot, `${SLUG}.segments.json`))).toBe(true);
     expect(existsSync(join(art.audioRoot, `${SLUG}.lufs.json`))).toBe(true);
@@ -1146,7 +1242,12 @@ Expected: PASS, 2 tests. Note the reported duration of the `beforeAll` hook — 
 - [ ] **Step 3: Confirm the tier is still excluded from the gating suite**
 
 Run: `npm --prefix server run test -- --run golden-assembly`
-Expected: **no test files matched** — `server/vitest.config.ts` excludes `*.golden.test.ts`.
+Expected: **`No test files found, exiting with code 1`**, and the printed `exclude:` list contains `src/**/*.golden.test.ts`.
+
+> **Exit code 1 IS the pass condition here**, and npm will print an `ERR!`
+> block. That is vitest reporting that its own filter matched nothing because
+> the config excludes the file — exactly what this step verifies. Do not
+> "fix" it.
 
 - [ ] **Step 4: Commit**
 
@@ -1182,11 +1283,11 @@ const BLESS_CMD = 'npm run test:golden-audio -- --assembly-only --bless';
 
 let baseline: AssemblyBaseline | null = null;
 
-/** TIGHT only on a byte-identical ffmpeg build. Two different 8.1 builds can
-    ship different LAME, so MAJOR.MINOR is not enough to promise identical
-    output. */
+/** Thin delegate — the branch logic lives in `golden-baseline.ts` so it can be
+    unit-tested. On any one box only one arm ever runs, and the other arm would
+    otherwise ship having never executed anywhere. */
 function isTight(): boolean {
-  return baseline !== null && art.banner !== null && art.banner === baseline.ffmpegBanner;
+  return selectMode(art.banner, baseline?.ffmpegBanner ?? null) === 'TIGHT';
 }
 
 /** Suffix every failure message carries, so a cold reader knows which mode
@@ -1212,6 +1313,19 @@ function loadBaseline(): AssemblyBaseline {
 }
 
 function writeBaseline(): void {
+  /* Refuse to record a baseline whose mode is missing. If the second-pass JSON
+     failed to parse at bless time, `normalizationType` is undefined,
+     JSON.stringify drops the key, and L2 would then compare undefined to
+     undefined and pass forever — defeating the exact absence-diagnosis L2
+     exists for. A poisoned baseline is worse than no baseline. */
+  if (!art.sidecar || art.sidecar.normalizationType === undefined) {
+    throw new Error(
+      `golden assembly BLESS: refusing to record a baseline without ` +
+        `sidecar.normalizationType. The second-pass loudnorm JSON was not ` +
+        `parsed (sidecar ${art.sidecar ? `i=${art.sidecar.i}` : 'absent'}). ` +
+        `Fix that first — recording now would bake in a hole.`,
+    );
+  }
   const { target, lra, tp } = resolveLoudnormOptions();
   const floor = 10 ** (-50 / 20);
   const recorded: AssemblyBaseline = {
@@ -1227,9 +1341,9 @@ function writeBaseline(): void {
       input_thresh: art.firstPass.input_thresh,
     },
     sidecar: {
-      i: art.sidecar!.i,
-      lra: art.sidecar!.lra,
-      normalizationType: art.sidecar!.normalizationType!,
+      i: art.sidecar.i,
+      lra: art.sidecar.lra,
+      normalizationType: art.sidecar.normalizationType,
     },
     decoded: {
       bytes: art.decoded.length * 2,
@@ -1250,13 +1364,31 @@ function writeBaseline(): void {
 }
 ```
 
-Add `parseFfmpegVersion` to the existing `../diagnostics/ffmpeg.js` import, and `AssemblyBaseline` to the `./golden-baseline.js` import.
+Add `parseFfmpegVersion` to the existing `../diagnostics/ffmpeg.js` import, and `selectMode` plus `type AssemblyBaseline` to the `./golden-baseline.js` import.
 
 At the **end** of the `beforeAll` body (after `art = {...}`, still inside the hook but **outside** the `try`/`catch`), add:
 
 ```ts
-  if (BLESS) writeBaseline();
-  else baseline = loadBaseline();
+  if (BLESS) {
+    writeBaseline();
+  } else {
+    baseline = loadBaseline();
+    /* Announce LOOSE on a PASSING run too. Every other mention of the mode
+       lives inside a failure message, so without this an operator running the
+       tier on a second ffmpeg build — the owed on-box acceptance — would get
+       a green run and no way to tell whether the LOOSE path was even taken. */
+    if (!isTight()) {
+      console.warn(
+        `\n[golden-assembly] LOOSE mode — the ffmpeg banner differs from the ` +
+          `baseline's.\n` +
+          `  run:      ${art.banner ?? '(absent)'}\n` +
+          `  baseline: ${baseline.ffmpegBanner}\n` +
+          `  L4 compares decoded RMS-error instead of the MP3 md5. A mismatch ` +
+          `here means the comparison is CONFOUNDED, not that anything ` +
+          `regressed.\n`,
+      );
+    }
+  }
 ```
 
 Then guard both existing `it` blocks by adding this as their first line:
@@ -1287,10 +1419,12 @@ Confirm against the Global Constraints: `input_i` ≈ `-21.70`, `sidecar.i` ≈ 
 
 Run: `npm run test:golden-audio:assembly` → Expected: PASS (2 tests, baseline now loaded).
 
+Use `git stash` rather than a temp path — it is shell-agnostic (this repo's primary shell is PowerShell, where `/tmp` resolves to `C:\tmp`) and cannot lose the file:
+
 ```bash
-mv server/src/tts/__fixtures__/golden-chapter.baseline.json /tmp/bl.json
+git stash push -- server/src/tts/__fixtures__/golden-chapter.baseline.json
 npm run test:golden-audio:assembly   # Expected: FAIL, "baseline missing at ..." naming the bless command
-mv /tmp/bl.json server/src/tts/__fixtures__/golden-chapter.baseline.json
+git stash pop
 npm run test:golden-audio:assembly   # Expected: PASS again
 ```
 
@@ -1440,7 +1574,7 @@ Add `compareEnvelope` and `rmsError` to the `./golden-baseline.js` import. **Del
         `noise.${modeLine()}`,
     ).toBe(baseline!.decoded.bytes);
 
-    const v = compareEnvelope(baseline!.envelope100ms, art.envelope, meta.sampleRate);
+    const v = compareEnvelope(baseline!.envelope100ms, art.envelope);
 
     /* The skipped set must not silently grow: a regression that quietens a
        loud window would otherwise escape through the -50 dBFS floor. */
@@ -1482,6 +1616,15 @@ Add `compareEnvelope` and `rmsError` to the `./golden-baseline.js` import. **Del
        its noise floor (10.55 %) and target signal (24.79 %) are only 2.35x
        apart. L3's envelope is the sound LOOSE instrument. */
     const ref = toInt16(readFileSync(DECODED_PATH));
+    /* L3 owns the length assertion, but L3 and L4 are deliberately independent
+       `it`s — so if L3 failed, L4 would silently compare truncated arrays and
+       report a reassuring number. Assert it here too. */
+    expect(
+      ref.length,
+      `L4 (LOOSE): the reference PCM is ${ref.length} samples but this run ` +
+        `decoded ${art.decoded.length}. RMS-error over a truncated overlap is ` +
+        `meaningless — see L3 for the real verdict.${modeLine()}`,
+    ).toBe(art.decoded.length);
     const err = rmsError(ref, art.decoded);
     expect(
       err,
@@ -1514,8 +1657,11 @@ Revert: `git checkout server/src/tts/__fixtures__/golden-chapter.baseline.json` 
 - [ ] **Step 4: Confirm the tier is still opt-in**
 
 ```bash
-npm --prefix server run test -- --run golden-assembly   # Expected: no files matched
-grep -rn "test:golden" .github/workflows/ package.json  # Expected: no CI reference
+# Expected: "No test files found, exiting with code 1" — exit 1 is the PASS
+# condition (the config excludes the file), so npm's ERR! block is expected.
+npm --prefix server run test -- --run golden-assembly
+# Expected: hits only the three test:golden-audio* script definitions, no CI.
+grep -rn "test:golden" .github/workflows/ package.json
 ```
 
 - [ ] **Step 5: Commit**
@@ -1575,13 +1721,37 @@ Write the six captured failure messages into the PR body draft. No commit.
 
 Copy `docs/features/TEMPLATE.md`, set `status: active`, and document: the four layers with their derived tolerances and the curve they came from; the TIGHT/LOOSE version gate and the **unproven bet** that L1–L3 stay hard across builds; the bless recipe (full-runner form only); the `normalizationType` migration including that absence is meaningful and `relufs-existing.mjs` legitimately omits it; and the pin risk — `dynamic` is locked in as the baseline, which is correct for a regression harness but must not become the specification.
 
-- [ ] **Step 2: Add the on-box acceptance row**
+- [ ] **Step 2: The four cross-link edits**
+
+**`docs/features/INDEX.md`** — add under the ops area, matching the surrounding row format:
+
+> `272-golden-assembly-comparison.md` — golden-audio assembly tier compares real output against a recorded, ffmpeg-stamped baseline (ops-36)
+
+**`docs/features/269-ffmpeg-version-floor.md`** — two edits. Add `272` to the `Related:` line, and **fix the dead link at `:27-28`**: `archive/185-golden-audio.md` does not exist; the file is `archive/185-golden-audio-regression.md`. Both the link text and the target need correcting.
+
+**`docs/features/archive/185-golden-audio-regression.md`** — one line under its status block:
+
+> **Follow-up (2026-07-28):** Suite B's assembly tier compared no output bytes until ops-36; the four-layer comparison and its baseline live in [`272-golden-assembly-comparison.md`](../272-golden-assembly-comparison.md).
+
+**`CLAUDE.md`** — in the Commands section, the `test:golden-audio` bullet currently describes `--bless` as "re-records `kokoro-baseline.json` after a fixture/model change". Replace that clause with:
+
+> `--bless` (re-records the baselines of the **selected** suites — bare `--bless` does both, `--assembly-only --bless` records Suite B's `golden-chapter.baseline.json` + `.decoded.pcm`, `--sidecar-only --bless` records `kokoro-baseline.json`; note `npm run test:golden-audio:assembly` bypasses the runner and so can never bless)
+
+- [ ] **Step 3: Release notes**
+
+Append one line to `docs/release-notes-next.md` under the current in-progress section, in the file's existing PR-refed style:
+
+> - `golden-audio`: the assembly tier now compares its output against a recorded, ffmpeg-stamped baseline across four layers instead of a 20-LU tolerance band; `--bless` is now suite-scoped (#PR)
+
+**Do not** add anything to `RELEASE_NOTES.md`, and say so explicitly in the PR body: golden-audio is a dev-only opt-in tier absent from the release artifact, so there is no user-facing delta. (Before-shipping step 5 requires the skip be stated, not silently taken.)
+
+- [ ] **Step 4: Add the on-box acceptance row**
 
 In `docs/testing/onbox-acceptance-register.md`, add:
 
 > **ops-36 — golden-assembly on a second ffmpeg build.** Run `npm run test:golden-audio:assembly` on a box whose `ffmpeg -version` banner differs from the baseline's. Record: which of L1/L2/L3 fire and their deltas; whether L4 took the LOOSE path; and L4-loose's actual RMS-error. **Why owed:** the entire cross-build half of the design — the LOOSE branch, the mismatch warning, and whether L1–L3's hard assertions survive another build — cannot be exercised on a box with one ffmpeg, and the tier sits outside `verify.yml`, so CI never runs it. The LOOSE path ships having never executed. Criteria: `docs/features/272-golden-assembly-comparison.md`.
 
-- [ ] **Step 3: File the follow-up issue and its backlog row**
+- [ ] **Step 5: File the follow-up issue and its backlog row**
 
 ```bash
 gh issue create --title "srv-NN — loudnorm falls back to dynamic mode and compresses LRA 3.00 -> 0.50" --label "type:chore,area:srv" --body "..."
@@ -1589,12 +1759,12 @@ gh issue create --title "srv-NN — loudnorm falls back to dynamic mode and comp
 
 Body must record: `linear=true` is requested (`loudnorm.ts:293`) but the fixture's `-4.15` dBTP true peak means the +5.70 dB to reach `-16` LUFS would breach the `-1.5` ceiling, so ffmpeg falls back to `dynamic` and compresses **LRA 3.00 → 0.50**; that ops-36 **pins this as the baseline**, locking in behaviour that may be wrong; and that settling it needs listening, not arithmetic. Then add the thin row to `docs/BACKLOG.md` linking the issue.
 
-- [ ] **Step 4: Run the branch battery**
+- [ ] **Step 6: Run the branch battery**
 
 Run: `npm run verify:fast:branch`
 Expected: PASS. (The golden tier is not in it — by design.)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add docs/ CLAUDE.md
@@ -1609,4 +1779,18 @@ git commit -m "docs(docs): add plan 272 for the golden-assembly output compariso
 
 **Deliberately not done:** the `linear`→`dynamic` fallback (filed in Task 11); routing `test:golden-audio:assembly` through the runner (Task 5 leaves the alias alone so the on-box acceptance recipe keeps working).
 
-**Verified while writing:** the `audio.loudnorm.targetLufs` env key is `AUDIO_LOUDNORM_TARGET` (`server/src/config/registry.ts:905`); `scripts/tests/*.test.mjs` run under `npm run test:hooks` via `node --test`; `server/vitest.config.ts:28`-equivalent excludes `src/**/*.golden.test.ts` so `golden-baseline.test.ts` gates on every push while the golden tier stays opt-in; and `mp3-spawn-args.test.ts`'s existing second-pass fixture already carries `"normalization_type" : "linear"`, so Task 4's success-path assertion needs no new fixture.
+**Verified while writing:** the `audio.loudnorm.targetLufs` env key is `AUDIO_LOUDNORM_TARGET` (`server/src/config/registry.ts:905`); `scripts/tests/*.test.mjs` run under `npm run test:hooks` via `node --test`; `server/vitest.config.ts` excludes `src/**/*.golden.test.ts` so `golden-baseline.test.ts` gates on every push while the golden tier stays opt-in; and `mp3-spawn-args.test.ts`'s existing second-pass fixture already carries `"normalization_type" : "linear"`, so Task 4's success-path assertion needs no new fixture.
+
+**Fixed after an adversarial review of this plan** — each was a real defect, not a style note:
+
+- `compareEnvelope` took an unused `sampleRate`, which `noUnusedParameters` (`server/tsconfig.json:11`) rejects. Vitest does not typecheck, so Task 1 would have gone green and the failure would have surfaced three commits later. Parameter dropped; a typecheck step added to Task 1.
+- Task 3's test assumed real ffmpeg, but `ffmpeg.test.ts:15` mocks `node:child_process` and resets it per-test — the test could never have passed. Rewritten onto the file's existing `bins()` helper, which also exercises the multi-line split a real banner check cannot.
+- Task 5's header regex could not match the header Task 5 itself writes (`suite` and `selection` fell on different lines). Header reflowed.
+- The spec's "TIGHT/LOOSE branch selection is unit-tested" was implemented nowhere: `isTight` was local to the opt-in golden file, so on any one box the other arm never runs. Extracted to `selectMode()` in `golden-baseline.ts` with unit cases.
+- The spec's LOOSE-path `console.warn` existed only inside failure messages, so a **passing** LOOSE run printed nothing — which would have silently defeated the owed on-box acceptance row. Added to `beforeAll`.
+- Task 6 claimed "no assertion changes" while dropping the `finalizeChapterAudioWrite` result binding and with it the repo's only coverage of `segmentCount`/`durationSec`. Binding kept and both re-asserted.
+- Two verification steps expected "no test files matched" from a command that exits **1**; a subagent would read that as a failed step. Stated that exit 1 is the pass condition.
+- Task 11 listed eight doc surfaces and gave steps for three. All eight now have concrete wording.
+- `writeBaseline` would have recorded `normalizationType: undefined` on a parse failure, and L2 would then compare `undefined === undefined` and pass forever — defeating the exact diagnosis L2 exists for. It now throws.
+- Smaller: a `console.warn` spy on Task 4's fallback test, `git stash` instead of a bash-only `/tmp` round-trip, an L4-loose length guard (L3 and L4 are independent `it`s, so a length change would otherwise let L4 compare truncated arrays), a time-shifted envelope case, and corrected `openapi.yaml` / `mp3.ts` anchors.
+- The `encode` baseline block was described as guarding a changed encode parameter; it cannot, since `finalizeChapterAudioWrite` hardcodes `-q:a` internally. Re-labelled provenance-only, with L4-tight's md5 named as the actual guard.
