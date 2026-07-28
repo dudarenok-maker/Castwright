@@ -59,9 +59,21 @@ $kokoroPresent = (Test-Path $modelPath) -and (Test-Path $voicesPath)
 # Qwen-weights probe -- only when Kokoro is absent (importing torch costs a few
 # seconds; skip it on the common Kokoro-present path). Same check the Python
 # tests use: qwen_tts importable AND a CUDA device.
+#
+# `import qwen_tts` pulls in torchaudio, which probes for a `sox` binary on
+# PATH and (when absent) prints a warning line to stderr. Under Windows
+# PowerShell 5.1's `$ErrorActionPreference = 'Stop'` (set at the top of this
+# script), redirecting a native command's stderr wraps EACH stderr line in a
+# terminating ErrorRecord -- so this probe crashed the whole gate even though
+# python itself exited cleanly. Locally relax to 'Continue' for just this
+# call so a stray stderr line can't abort the script; $LASTEXITCODE (not the
+# absence of a thrown error) is the actual presence signal either way.
 $qwenPresent = $false
 if (-not $kokoroPresent) {
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     & $venvPython -c "import sys, qwen_tts, torch; sys.exit(0 if torch.cuda.is_available() else 1)" *> $null
+    $ErrorActionPreference = $prevEap
     if ($LASTEXITCODE -eq 0) { $qwenPresent = $true }
 }
 

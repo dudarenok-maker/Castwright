@@ -800,4 +800,25 @@ describe('VoiceLibraryPanel — "My voices" group (fs-38 Wave 1, Task 16)', () =
       }),
     );
   });
+
+  /* #1896 — the panel's assign dispatch was fire-and-forget: a server
+     rejection (revoked / not-ready / wrong-engine 409) vanished silently,
+     with nothing telling the user their assign didn't happen. Mirrors
+     profile-drawer.test.tsx's equivalent rejection test — asserts the
+     rejecting path actually SETS the user-visible message (not merely
+     that no exception escapes, the classic placebo shape on this branch). */
+  it('surfaces the server error inline when assignLibraryVoice rejects', async () => {
+    assignLibraryVoiceMock.mockRejectedValueOnce(
+      new Error('Cloned voice is not ready to assign yet.'),
+    );
+    render(<VoiceLibraryPanel {...noopProps} bookId="b1" characters={[marlow]} />, {
+      myVoices: [entry],
+    });
+    fireEvent.click(screen.getByTestId('my-voices-panel-assign-lib1'));
+    fireEvent.click(screen.getByTestId('my-voices-panel-assign-target-lib1-marlow'));
+
+    expect(
+      await screen.findByTestId('voice-library-my-voices-error'),
+    ).toHaveTextContent('Cloned voice is not ready to assign yet.');
+  });
 });
