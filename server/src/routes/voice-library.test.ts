@@ -1057,7 +1057,7 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
      no-clip case below — the two tests only diverge once the disk check is
      actually wired in. */
   it('D-B: a designed entry WITH a retained reference clip on disk also writes the coqui slot (both slots, engine-correct names)', async () => {
-    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
     await vl.writeEntry(makeEntry({ voiceUuid: 'designed-clip-1', provenance: 'designed' }));
     writeFileSync(paths.qwenVoiceWavPath('qwen-designed-clip-1__master'), 'REF-CLIP');
 

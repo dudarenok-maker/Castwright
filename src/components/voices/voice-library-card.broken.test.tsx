@@ -127,6 +127,17 @@ describe('deriveClonedVoiceState', () => {
     ).toBe('repairable');
   });
 
+  /* Residual (review, fs-38 Wave 3c, Task 28) — the two tests above pair a
+     failed/stale xtts with a HEALTHY qwen slot. A coqui-only cloned entry
+     (no qwen artifact at all — `entry.engines.qwen` absent, not merely
+     healthy) exercises `qwenEngineState(undefined)`, which was covered by
+     inspection but had no explicit fixture. */
+  it('is "repairable" for a coqui-only cloned entry (no qwen artifact) with a failed coqui engine', () => {
+    expect(deriveClonedVoiceState(makeCloned({ engines: { xtts: { status: 'failed' } } }))).toBe(
+      'repairable',
+    );
+  });
+
   it('is "repairable" when engines.xtts.status is "stale" but qwen is healthy', () => {
     expect(
       deriveClonedVoiceState(

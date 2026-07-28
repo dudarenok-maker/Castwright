@@ -114,4 +114,24 @@ describe('xtts voice paths', () => {
   it('throws PathContainmentError on a traversal voiceId for the sidecar path', () => {
     expect(() => xttsVoiceSidecarPath('../../evil')).toThrow(PathContainmentError);
   });
+
+  /* M5 (review) — the two artifact helpers had no non-ASCII / empty-sanitize
+     case (a parity gap the qwen siblings also lack — see Task 12's ledger
+     note). `sanitizeIdSegment` only rewrites separators/NUL/repeated dots,
+     so a non-ASCII voiceId passes through unchanged; `safeSegment` (which
+     runs first) throws on an empty segment before sanitisation ever runs. */
+  it('preserves a non-ASCII voiceId unchanged in the latents/sidecar paths', () => {
+    const latents = xttsVoiceLatentsPath('xtts-Война');
+    const sidecar = xttsVoiceSidecarPath('xtts-Война');
+    expect(path.relative(xttsVoicesDir(), latents)).toBe('xtts-Война.pt');
+    expect(path.relative(xttsVoicesDir(), sidecar)).toBe('xtts-Война.json');
+  });
+
+  it('throws PathContainmentError on an empty voiceId for the latents path', () => {
+    expect(() => xttsVoiceLatentsPath('')).toThrow(PathContainmentError);
+  });
+
+  it('throws PathContainmentError on an empty voiceId for the sidecar path', () => {
+    expect(() => xttsVoiceSidecarPath('')).toThrow(PathContainmentError);
+  });
 });
