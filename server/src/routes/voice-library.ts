@@ -600,9 +600,17 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
    ready — and Task 13's `xtts-<uuid>` purge had no cache entries under that
    scope to ever reach. Restricted to the two clone-capable engines
    (`isCloneEngine`) because a library entry's `engines` map only ever
-   carries a `qwen` and/or `xtts` slot; omitted → the 0.6B Qwen base,
-   keeping the current frontend caller (which still only ever sends a Qwen
-   tier) working unchanged. */
+   carries a `qwen` and/or `xtts` slot; omitted → the 0.6B Qwen base, which
+   is what a caller that sends no `modelKey` at all still gets.
+
+   GATE 1 — this used to add "keeping the current frontend caller (which
+   still only ever sends a Qwen tier) working unchanged". That was true when
+   written and stopped being true in 918cbff5: `VoiceLibraryCard.playSample`
+   (src/components/voices/voice-library-card.tsx) now picks its preview
+   engine off the entry's own slot statuses — qwen when `engines.qwen` reads
+   `ready`, else coqui when `engines.xtts` does — so this route's Coqui arm
+   IS reached from the UI, not just from an API client. Do not treat the
+   coqui path here as untrodden. */
 voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response) => {
   /* Hoisted above the try so the catch below can name which engine the
      un-derived-artifact 409 (below) is about — assigned only once the
