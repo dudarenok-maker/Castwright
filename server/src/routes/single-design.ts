@@ -28,6 +28,7 @@ import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import { designQwenVoiceForCharacter, ensureCharacterVoiceUuid } from './qwen-voice.js';
 import { applyOverrideToCastFiles } from './voices.js';
+import { characterHasClonedSlot } from '../tts/clone-engines.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { markDesignBusy, clearDesignBusy, isDesignBusy } from '../tts/design-lock.js';
 
@@ -234,6 +235,28 @@ singleDesignRouter.post(
     const cast = await readJson<CastFile>(castJsonPath(bookDir));
     const character = cast?.characters?.find((c) => c.id === characterId);
     if (!character) return res.status(404).json({ error: `Character "${characterId}" not found.` });
+
+    /* GATE 2 fix-lane-1b — a design sweep must not retarget a cloned
+       character off its clone. The non-preview ("first design") branch of
+       runSingleDesign below persists via applyOverrideToCastFiles, which
+       pins ttsEngine = 'qwen' unconditionally; if this character already
+       carries a cloned voice on coqui (the fail-safe, provenance-only
+       characterHasClonedSlot test — the same guard I-B1 used at the
+       voice-override route, not the uuid-validating resolution predicates
+       in clone-engines.ts), that pin would silently retarget it off its
+       clone while the marker stays intact. Unlike the bulk sweep, a single
+       design has exactly one character to report on, so "skip and report"
+       collapses to "refuse this one and say why" — refused HERE, before
+       the SSE stream starts and before any GPU work runs, so the response
+       is an honest 409 rather than a hollow "designed" event for a design
+       that was never actually persisted. The preview ("redesign") branch
+       never calls applyOverrideToCastFiles, so it is not gated here. */
+    if (!preview && characterHasClonedSlot(character)) {
+      return res.status(409).json({
+        error: `"${character.name ?? characterId}" already has a cloned voice and cannot be designed on Qwen without silently retargeting it off that clone.`,
+        code: 'clone_protected',
+      });
+    }
 
     /* SSE framing (mirror cast-design.ts). */
     res.setHeader('Content-Type', 'text/event-stream');
