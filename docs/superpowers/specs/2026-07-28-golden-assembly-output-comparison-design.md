@@ -3,12 +3,15 @@
 **Date:** 2026-07-28
 **Issue:** [ops-36 / #1880](https://github.com/dudarenok-maker/Castwright/issues/1880)
 **Status:** approved — ready for `writing-plans`
-**Revision:** 2 — rewritten after an adversarial `assumption-checker` pass falsified
-three of the four "measured" findings in revision 1. See "What revision 1 got wrong".
-**Related:** [`docs/features/269-ffmpeg-version-floor.md`](../../features/269-ffmpeg-version-floor.md)
+**Revision:** 3. Revision 1 was falsified by an adversarial pass (three of four
+"measured" findings taken through a hand-rolled ffmpeg call). Revision 2 was reviewed by
+two independent adversarial passes — one empirical, one design — which confirmed those
+fixes but found two Criticals in the *hardening*. See "Review history".
+**Regression plan:** [`docs/features/272-golden-assembly-comparison.md`](../../features/272-golden-assembly-comparison.md)
+**Related:** [`269-ffmpeg-version-floor.md`](../../features/269-ffmpeg-version-floor.md)
 (ops-35 / [#1877](https://github.com/dudarenok-maker/Castwright/issues/1877) — this is
 its deferred half),
-[`docs/features/archive/185-golden-audio-regression.md`](../../features/archive/185-golden-audio-regression.md)
+[`archive/185-golden-audio-regression.md`](../../features/archive/185-golden-audio-regression.md)
 (ops-11 — the harness this extends)
 
 ## Problem
@@ -18,155 +21,168 @@ described as feeding a committed PCM fixture through the real `synthesiseChapter
 ffmpeg loudnorm. It does — and then compares the result to nothing.
 
 `server/src/tts/golden-assembly.golden.test.ts` asserts segment count, `sampleRate`,
-per-segment `startSec`/`endSec`, and `result.pcm.length` — every one of them
-**computed from the input fixture's own byte lengths**, so they restate the input
-rather than measure the output. Beyond that it checks file existence for the `.mp3`
-and `.segments.json`, and a **20-LU-wide** loudness band (`-30 < i < -10`, `:213-214`).
+per-segment `startSec`/`endSec`, and `result.pcm.length` — every one of them **computed
+from the input fixture's own byte lengths**, so they restate the input rather than
+measure the output. Beyond that it checks file existence for the `.mp3` and
+`.segments.json`, and a **20-LU-wide** loudness band (`-30 < i < -10`, `:213-214`).
 
 No assertion touches the produced audio. An ffmpeg upgrade that shifted loudnorm by
-2 LU, changed LAME framing, or altered the MP3 byte stream passes silently. This is
-the only place in the repo that runs real audio through the real encoder, and it
-cannot currently fail for an audio reason.
+2 LU, changed LAME framing, or altered the MP3 byte stream passes silently. This is the
+only place in the repo that runs real audio through the real encoder, and it cannot
+currently fail for an audio reason.
 
-ops-35 shipped the ffmpeg version floor and asked whether this suite should record
-the ffmpeg version its baseline was produced with. It deliberately did not, because
-the premise didn't hold: a version stamp on a tolerance-band assertion implies a
-comparison the test does not make. Recording provenance for a 20-LU band is
-decoration. This spec is the honest remainder.
+ops-35 shipped the ffmpeg version floor and asked whether this suite should record the
+ffmpeg version its baseline was produced with. It deliberately did not, because the
+premise didn't hold: a version stamp on a tolerance-band assertion implies a comparison
+the test does not make. This spec is the honest remainder.
 
-## What revision 1 got wrong
+## Review history
 
-Revision 1 opened its findings with *"All four were measured on this box, not
-assumed."* They were measured — on an artifact the production code never emits. The
-probe used `-b:a 128k` CBR and **omitted the output `-ar` pin**, which is the
-plan-71 / ffmpeg-8 fix documented at `mp3.ts:161-166`. The result was a **48 kHz**
-MP3 exhibiting the exact resample leak `buildMp3FfmpegArgs` exists to prevent:
+Recorded because the failure mode repeated, and the repeat is the lesson.
 
-```
-                     revision 1 probe    real path (encodePcmToAudio, verified 2x)
-ffmpeg args          -b:a 128k           -ar 24000 -q:a 2 -write_xing 1
-output sample rate   48000 Hz            24000 Hz
-mp3 bytes            92589               55749
-mp3 md5              94f3f429…           d7d6d0aa41ca947da5465dfd289f0f15
-```
+**Revision 1 → 2.** The findings section opened *"All four were measured on this box,
+not assumed."* They were measured on an artifact production never emits: the probe used
+`-b:a 128k` CBR and **omitted the output `-ar` pin** (the plan-71 / ffmpeg-8 fix at
+`mp3.ts:161-166`), yielding a **48 kHz** MP3 exhibiting the exact resample leak
+`buildMp3FfmpegArgs` exists to prevent. Three defects followed: a wrong committed
+`mp3Md5`; a **false** decode-round-trip claim that would have shipped L3 born red; and
+tolerances calibrated against nothing. A fourth was independent — L2 pinned
+`normalization_type`, which is parsed and then discarded, never written to disk.
 
-Three consequences, all corrected below: the committed `mp3Md5` literal was wrong;
-the decode round-trip claim was **false** in a way that would have shipped L3 born
-red; and the tolerance set was calibrated against nothing. A fourth error was
-independent of the probe — L2 pinned a field that is never written to disk.
+**Revision 2 → 3.** An empirical pass re-derived every number through the production
+path and **confirmed the fixes**, including the highest-risk one:
+`finalizeChapterAudioWrite` writes a byte-identical file to `encodePcmToAudio`
+(`Buffer.compare === 0`), stable across fresh processes, so the committed md5 is
+correct. But it found the revision-1 error class recurring in miniature — two rows of
+the calibration curve were measured **without the skip rule the design itself
+mandates** (finding 6). A parallel design pass found two Criticals in the new
+machinery: the `twoPass === true` gate introduced to fix revision 1's L2 defect is
+itself unsound (finding 5), and the first bless is impossible as specified (§4).
 
-The lesson is recorded rather than buried: **measure through the production call
-path, not through a hand-rolled equivalent.** Every number in this revision was taken
-via `encodePcmToAudio` / `decodeAudioToPcm` / `runLoudnormFirstPass` under `tsx`.
+**The durable lesson, twice earned:** measure through the production call path, and
+measure with the *same rule the design will apply*. An adjacent artifact or an adjacent
+metric produces numbers that look like evidence and are not.
 
 ## Findings
 
 ffmpeg `8.1.1-full_build-www.gyan.dev`; fixture
 `server/src/tts/__fixtures__/golden-chapter.pcm` (274 432 bytes, 24 kHz mono s16le,
-137 216 samples, 5.72 s).
+137 216 samples, 5.7173 s — `ffprobe` `duration=5.717333`). Every number independently
+reproduced by a second party.
 
-**1. The encoded MP3 is byte-identical across repeat runs on one build.**
-Through the real `encodePcmToAudio`: `55749` bytes,
-md5 `d7d6d0aa41ca947da5465dfd289f0f15`, twice. No ID3 timestamp, no `creation_time`,
-no temp path, no cover art; the only version-bearing bytes are `TSSE=Lavf62.12.101`
-and the `Lavc62.28` LAME tag, both build-constant. **The MD5 tight path is viable** —
-this is load-bearing, and it means the sample-wise machinery is needed only on the
-cross-build path.
+**1. The encoded MP3 is byte-identical across repeat runs, processes, and call paths.**
+`encodePcmToAudio` → `55749` bytes, md5 `d7d6d0aa41ca947da5465dfd289f0f15`.
+**`finalizeChapterAudioWrite` writes a byte-identical file** — it calls
+`encodePcmToAudio(pcm, sr, {format:'mp3', quality: 2, loudnorm: resolveLoudnormOptions()})`
+and writes the returned buffer verbatim, adding no metadata (`Buffer.compare === 0`).
+Stable across two separate fresh processes. `synthesiseChapter`'s output PCM is also
+byte-identical to the raw fixture, so measuring the first pass against the raw fixture
+is legitimate. No ID3 timestamp, no `creation_time`, no temp path, no cover art; the
+only version-bearing bytes are `TSSE=Lavf62.12.101` and the `Lavc62.28` LAME tag, both
+build-constant. **The MD5 tight path is viable.**
 
 **2. The decode round-trip is length-preserving only from a SEEKABLE input.**
-Revision 1 claimed it was exact and it is not, via the path the code actually uses:
 
 ```
 decode the real mp3 from a FILE   ->  274 432 B   == input, exactly
 decode the real mp3 from a PIPE   ->  275 422 B   +495 samples of untrimmed padding
 ```
 
-`decodeAudioToPcm` (`mp3.ts:501-516`) feeds the buffer on `pipe:0`. On a non-seekable
-input ffmpeg does **not** apply the LAME tag's end-padding trim. The extra samples are
-a pure trailing append (the pipe decode contains the file decode as an exact prefix at
-lag 0). This design therefore decodes **from the written file** — see Design §1, L3.
+`decodeAudioToPcm` (`mp3.ts:501-516`) feeds the buffer on `pipe:0`; on a non-seekable
+input ffmpeg does **not** apply the LAME tag's end-padding trim. The extra samples are a
+pure trailing append (the pipe decode contains the file decode as an exact lag-0
+prefix). This design therefore decodes **from the written file** — see §1 L3 and §8.
 
-From a file the length is `274 432` and stable across every perturbation tested,
-including an encoder-quality change: **137 216 samples = 57 full 100 ms windows plus a
-416-sample tail**, dropped identically on both sides.
+File-decode length is `274 432` at `-q:a` 0/2/3/5/9 (mp3 sizes 70269 / 55749 / 52389 /
+40437 / 23997) and under every perturbation in finding 6 — all 14 rows had length delta
+0. **137 216 samples = 57 full 100 ms windows + a 416-sample tail**, dropped identically
+on both sides.
 
-**3. The first-pass loudnorm measurement is bit-stable.**
-Repeat analysis passes over the same input bytes return character-identical JSON:
-`input_i -21.70`, `input_lra 3.00`, `input_tp -4.15`, `input_thresh -31.75`. Fixed
-input, no encoder in the path.
+**3. The first-pass loudnorm measurement is bit-stable.** Five consecutive
+`runLoudnormFirstPass` calls → one distinct result: `input_i -21.70`, `input_lra 3.00`,
+`input_tp -4.15`, `input_thresh -31.75`, `target_offset 1.17`.
 
 Revision 1 extended this into *"EBU R128 is spec-defined and stable within a version
 line"* and used it to justify hard cross-build assertions. **That extension is
-withdrawn** — it was unevidenced. What BS.1770 defines is an *algorithm*; what L1 pins
-is ffmpeg's `loudnorm` implementation output, including an oversampled true-peak
-estimate whose filter is implementation-defined. Cross-build behaviour here is
-**unmeasured**, and the design says so rather than asserting otherwise (see §3).
+withdrawn** — it was unevidenced. BS.1770 defines an *algorithm*; L1 pins ffmpeg's
+`loudnorm` implementation output, including an oversampled true-peak estimate whose
+filter is implementation-defined. Cross-build behaviour is **unmeasured** (see §5).
 
 **4. `linear=true` does not hold on this fixture — loudnorm falls back to `dynamic`.**
-`buildSecondPassFilterString` requests `linear=true` (`loudnorm.ts:293`). Measured: the
-fixture's true peak is `-4.15` dBTP, so the ~5.7 dB gain needed to reach `-16` LUFS
-would push the peak past the `-1.5` ceiling. ffmpeg reports
-`normalization_type: "dynamic"` and compresses the chapter from **LRA 3.00 to LRA
-0.50**. `output_i` lands at **`-16.28`**, not `-16.00`.
+The fixture's true peak is `-4.15` dBTP, so the +5.70 dB needed to reach `-16` LUFS
+would land at `+1.55` dBTP, past the `-1.5` ceiling. ffmpeg reports
+`normalization_type: "dynamic"` and compresses **LRA 3.00 → 0.50**; `output_i` lands at
+**`-16.28`**, not `-16.00`. So the persisted `lufs.i` does *not* converge on target by
+construction, and pinning it is worth more than first estimated.
 
-This falsifies the assumption this design started from — that the persisted `lufs.i`
-converges on target by construction and is near-tautological to assert. It does not
-converge exactly, and it is a genuine output of ffmpeg's dynamic-mode algorithm.
-Pinning it is worth more than first estimated. Whether the fivefold compression is
-*correct* is a separate question — see "Out of scope".
+**5. `normalization_type` is parsed then discarded — and `twoPass: true` does NOT imply
+a mode is present.** `LoudnormSidecarJson` (`loudnorm.ts:73-86`) is
+`{i, lra, tp, target, twoPass, measuredAt}`. `mp3.ts:440` parses the mode; `:442-449`
+drops it.
 
-**5. `normalization_type` is parsed and then discarded — it is not on disk.**
-`LoudnormSidecarJson` (`loudnorm.ts:73-86`) is `{i, lra, tp, target, twoPass,
-measuredAt}`. `encodePcmToAudio` parses the mode at `mp3.ts:440` and drops it when
-building the sidecar (`:442-449`); the type's own comment says *"Not surfaced to the
-UI today; captured here for log copy."* Verified on disk:
+Revision 2's fix — "L2 asserts the mode only when `twoPass === true`" — is **unsound**.
+The provisional sidecar is stamped `twoPass: true` at `mp3.ts:296-304` **before the
+encode**, and is replaced only when the second-pass stderr JSON exists, parses, and is
+finite. Three fallback branches leave it untouched, all with pinned tests in
+`mp3-spawn-args.test.ts`:
 
-```
-{"i":-16.28,"lra":0.5,"tp":-1.5,"target":-16,"twoPass":true,"measuredAt":"…"}
-```
+| branch | site | sidecar |
+|---|---|---|
+| no JSON block in stderr | `mp3.ts:466` | `twoPass: true`, `i` = **input** side, no mode |
+| parse throw | `mp3.ts:457` | same |
+| non-finite `output_i` | `mp3.ts:450` | same |
+| unusable first pass (silent input) | `mp3.ts:305-312` | **no sidecar written at all** |
 
-Revision 1's L2 pinned a field that does not exist. Resolved by widening the sidecar —
-see §2 and the scope note there.
+Independently corroborated on disk: **`scripts/relufs-existing.mjs:235` is a second
+writer** of `.lufs.json` and also emits `twoPass: true` with structurally no mode
+(`ebur128` has none). Resolution in §2.
 
-**6. RMS-error between decoded MP3s is dominated by codec noise, not by audio
-content.** The full calibration curve, every row through the production path:
+**6. RMS-error between decoded MP3s is dominated by codec noise, not audio content.**
+Every row through the production path, **with the envelope column computed under L3's
+own skip rule** (windows below -50 dBFS excluded — revision 2 reported two of these rows
+without it, and both happened to be window 35, the -67.1 dBFS window L3 skips):
 
-| perturbation | RMS-error | worst envelope window |
+| perturbation | RMS-error | worst envelope window *(skip rule applied)* |
 |---|---|---|
 | identical re-encode | 0.00 % | 0.0 % |
-| input gain +0.5 dB | 0.41 % | 1.9 % |
+| input gain +0.5 dB | 0.41 % | 0.3 % (w17) |
+| **encoder quality 2 → 3 (inaudible)** | **8.08 %** | **1.6 % (w49)** |
+| **encoder quality 2 → 4** | **10.55 %** | **2.0 %** |
 | loudnorm drift 0.1 LU | 4.80 % | 4.0 % |
-| **encoder quality 2 → 3 (inaudible)** | **8.08 %** | **3.3 %** |
 | loudnorm drift 0.5 LU | 8.78 % | 8.5 % |
+| loudnorm drift 0.75 LU | 11.07 % | 12.7 % |
+| loudnorm drift 1.0 LU | 13.01 % | — |
+| loudnorm drift 1.5 LU | 19.23 % | — |
 | **loudnorm drift 2.0 LU** (the issue's own case) | **24.79 %** | **38.7 %** |
 | loudnorm drift 3.0 LU | 34.74 % | 61.6 % |
 | middle segment silenced | 72.56 % | 100.0 % |
 
-Two things fall out, and both change the design:
+Three consequences, all of which shape §1:
 
-- **Input gain is a useless calibration perturbation** — two-pass loudnorm normalises
-  it away by construction (+0.5 dB in → 0.41 % out). Revision 1 would have calibrated
-  against exactly the thing the pipeline is designed to remove.
-- **A 0.1 LU loudnorm drift (4.80 %) sits BELOW the codec-noise floor (8.08 %).**
-  RMS-error cannot separate sub-0.5-LU drift from an encoder change. It can separate
-  2 LU cleanly. So L4 is a gross-drift and catastrophe detector, not a precision
-  instrument — L1 and L2 are the precision instruments, and L1 pins measurement drift
-  at ±0.1 LU directly, which L4 could never do.
+- **Input gain is a useless calibration perturbation** — two-pass loudnorm normalises it
+  away by construction (+0.5 dB in → 0.41 % out).
+- **A 0.1 LU drift (4.80 %) sits below the codec-noise floor (8.08–10.55 %).** RMS-error
+  cannot separate sub-0.5-LU drift from an encoder change. L1 covers that range at
+  ±0.1 LU, forty times finer.
+- **RMS-error is a low-dynamic-range instrument.** Its noise floor (10.55 %) and its
+  target signal (24.79 %) are only **2.35× apart**. No threshold has comfortable margins
+  on both sides — see §1's derivation.
 
-Revision 1's ±3 % envelope tolerance would have **fired on the inaudible encoder
-change** (3.3 %). Its `corr > 0.995` gate would have **passed** it (0.9979).
-
-**7. The envelope's quiet windows cannot carry a relative tolerance.**
-Measured on the real decode: 57 windows spanning 56 dB, median RMS `0.1349`, quietest
-`4.42e-4` (**-67.1 dBFS**) at window 35. At that window ±3 % is **0.435 LSB** at
-int16 — narrower than one quantisation step. Two of 57 windows sit below -50 dBFS.
+**7. The envelope's quiet windows cannot carry a relative tolerance.** 57 windows
+spanning 56.1 dB; median RMS `0.1349`; minimum `4.422e-4` (**-67.1 dBFS**) at window 35.
+At that window ±3 % is **0.435 LSB** at int16 — narrower than one quantisation step.
+Exactly **2** windows sit below -50 dBFS (w35 at -67.1, w56 at -66.6); the third-quietest
+is w16 at **-44.7 dBFS, 5.3 dB of headroom**, and the count stays exactly 2 under every
+perturbation tested (at 2.0 LU drift w16 moves only to -41.9 dB).
+`quietWindowsSkipped === 2` is therefore a safe hard assertion, not a latent flake.
 
 ## Goals
 
 - Make the assembly golden tier able to fail for an audio reason.
 - Keep it GPU-free, opt-in, and outside `test:all` / `verify` (ops-11 / plan 185).
-- Distinguish "ffmpeg drifted" from "someone changed a loudnorm knob" in the failure
-  message, since those are different bugs that otherwise present identically.
+- **Discriminate causes in the failure message** — "ffmpeg drifted", "someone moved a
+  loudnorm knob", and "ffmpeg's log format changed so the second-pass JSON went
+  unparsed" are three different bugs that must not present identically.
 - Record the ffmpeg provenance of the baseline and report a mismatch as information.
 
 ## Non-goals
@@ -174,95 +190,134 @@ int16 — narrower than one quantisation step. Two of 57 windows sit below -50 d
 - Byte-exact MP3 comparison **across** ffmpeg builds.
 - Raising the ffmpeg floor (ops-35 set it at 6.0).
 - Fixing the `linear` → `dynamic` fallback (finding 4).
-- Changing what `loudnorm.ts` **parses**. (Widening what it *persists* is in scope and
-  deliberate — see §2.)
+- Changing what `loudnorm.ts` **parses**. Widening what it *persists* is in scope: the
+  parser already extracts `normalization_type` correctly, and this design changes only
+  whether that already-parsed value survives to disk.
 
 ## Design
 
 ### 1. Four comparison layers
 
-Four independent assertions over a single pipeline run. There is deliberately **no
-arbitration** between them — each fails on its own terms, and which combination fails
-is itself diagnostic.
+Four independent assertions over one pipeline run. There is deliberately **no
+arbitration** between them; which combination fails is itself diagnostic.
 
 | # | Pins | Source | Tolerance | Catches |
 |---|---|---|---|---|
-| **L1** | `input_i`, `input_lra`, `input_tp`, `input_thresh` | `runLoudnormFirstPass` on the raw fixture | ±0.1 LU/dB | ffmpeg's EBU R128 **measurement** changing. Same input bytes, no encoder — the most sensitive signal available (finding 3). |
-| **L2** | `i`, `lra`, `normalizationType` | the written `.lufs.json` | ±0.3 LU; mode string **exact** | ffmpeg's **gain application** changing, including a silent `dynamic` → `linear` flip (finding 4). |
-| **L3** | decoded byte count + per-100 ms RMS envelope | `.mp3` decoded **from the written file** | count **exact** (finding 2); envelope ±10 % relative, windows below -50 dBFS skipped | timing/duration shifts, resampler changes, and **where** a change is located. |
-| **L4** | the encoded `.mp3` | file bytes | **tight:** MD5 equality (finding 1) · **loose:** RMS-error < 15 % | anything at all on a matched build; gross drift and catastrophe on a mismatched one. |
+| **L1** | `input_i`, `input_lra`, `input_tp`, `input_thresh` | `runLoudnormFirstPass` on the raw fixture | ±0.1 LU/dB | ffmpeg's EBU R128 **measurement** changing (finding 3). |
+| **L2** | `i`, `lra`, `normalizationType` | the written `.lufs.json` | ±0.3 LU; mode **exact**, absence gets its own message | ffmpeg's **gain application** changing, a `dynamic` → `linear` flip, **and** a second-pass-JSON parse failure (finding 5). |
+| **L3** | decoded byte count + per-100 ms RMS envelope | `.mp3` decoded **from the written file** | count **exact** (finding 2); envelope ±10 %, windows below -50 dBFS on **either** side skipped, union count asserted `=== 2` | timing/duration shifts, resampler changes, and **where** a change is located. |
+| **L4** | the encoded `.mp3` | file bytes | **tight:** MD5 equality · **loose:** RMS-error < 16 % | anything at all on a matched build; gross drift and catastrophe on a mismatched one. |
 
-**Tolerances are derived from finding 6's curve, not picked:**
+**Tolerances derived from finding 6, not picked:**
 
-- **L4-loose `rmse < 15 %`** sits above the codec-noise floor (8.08 %) and below the
-  2 LU drift the issue names (24.79 %). It deliberately does **not** catch sub-0.5-LU
-  drift; L1 catches that at ±0.1 LU, forty times more sensitively.
-- **L3 envelope ±10 %** sits above the encoder-change worst window (3.3 %) and below
-  the 2 LU worst window (38.7 %).
-- **Windows below -50 dBFS are skipped, not floored** (finding 7). A floor would leave
-  those windows silently unchecked at an absurd effective tolerance; skipping states
-  the gap. The skipped count is asserted (`=== 2`) so a fixture change that quietens
-  the audio surfaces rather than silently disabling coverage.
-- **L2 drops `tp`.** `output_tp = -1.50` is the configured ceiling that loudnorm
-  clamps to; pinning it asserts almost nothing. `lra` is the field that actually moves
-  (0.50 vs ~3.00 under a mode flip), and `i` is non-tautological per finding 4.
+- **L3 envelope ±10 %.** Noise floor under the skip rule is 1.6–2.0 %; the threshold
+  fires at **≈0.6 LU** of drift. Separation from noise ≈ **5–6×**. Well-founded.
+- **L4-loose 16 %.** Noise floor 10.55 %, target signal 24.79 % — only 2.35× apart, so
+  no threshold has comfortable margins. 16 % is the **geometric mean**
+  (√(10.55 × 24.79) = 16.17), giving a balanced 1.52× below / 1.55× above. It fires at
+  ≈1.2 LU.
+- **L4-loose is the weakest layer and is labelled as such.** It exists for the
+  cross-build path, where a different LAME is precisely what has not been measured; its
+  calibration rests on `-q:a` steps as a proxy. If any layer produces a false red on a
+  second build, it is this one. **L3's envelope is the sound LOOSE instrument**;
+  L4-loose is a catastrophe-and-gross-drift backstop.
+- **A characterised gap band:** 0.6–1.2 LU of drift trips L3 but not L4-loose (e.g.
+  0.75 LU → 12.7 % envelope, 11.07 % rmse). Harmless under "no arbitration", but named
+  so the failure-combination diagnostic has no unlabelled regime.
+- **L2 drops `tp`.** `output_tp = -1.50` is the configured ceiling loudnorm clamps to;
+  pinning it asserts almost nothing. `lra` is the field that moves under a mode flip
+  (0.50 → ~3.00), and `i` is non-tautological per finding 4.
 
-**L3 decodes from the written file, not via `decodeAudioToPcm`** (finding 2). The
-tier's job is to pin the *audio*, and pipe-mode padding is an incidental decoder
-behaviour, not audio. The cost is that the golden tier no longer exercises the shipped
-`decodeAudioToPcm` helper — accepted, because pinning that helper was never this
-tier's purpose.
+**L3 decodes from the written file** (finding 2). The tier pins the *audio*; pipe-mode
+padding is an incidental decoder behaviour. Cost: the tier no longer exercises
+`decodeAudioToPcm` — accepted, since pinning that helper was never its purpose.
 
-**L3 and L4 are LOOSE-path instruments.** On TIGHT, an MD5 match means the decoded PCM
-is bit-identical, so the envelope and RMS-error are exactly zero and both layers are
-vacuous. That is not a defect — it is why one tolerance set, sized for cross-build,
-suffices.
+**L3 and L4-loose are LOOSE-path instruments.** On TIGHT, an MD5 match means the decoded
+PCM is bit-identical, so both are exactly zero and vacuous. (L4-**tight** is the
+strongest assertion in the design — "vacuous on TIGHT" applies to L4-loose only.) This
+is why one tolerance set, sized for cross-build, suffices. When MD5 *differs* on the
+TIGHT path, L3 and L4-loose run with cross-build-sized tolerances looser than a
+same-build comparison warrants; the design accepts that rather than carrying a second
+tolerance set, because a TIGHT-path MD5 mismatch is already a hard failure.
 
 **What earns L4 alongside L3:** envelope RMS is blind to sign and to within-window
-structure. A phase inversion leaves every envelope window identical while RMS-error
-goes to 200 %; a single click is averaged away by a 2400-sample window. L4 says
-*whether*, L3 says *where*, and neither subsumes the other.
+structure. A phase inversion leaves every envelope window identical while RMS-error goes
+to 200 %; a single click is averaged away by a 2400-sample window. L4 says *whether*, L3
+says *where*.
 
-### 2. Widening `LoudnormSidecarJson` (scope, stated plainly)
+### 2. L2, the sidecar mode, and the `twoPass` trap
 
-L2's mode pin requires `normalizationType` on disk. This is a **persisted-contract
-change**, and its full cost was not visible when the choice was made — it is recorded
-here so it can still be reversed:
+Finding 5 kills the `twoPass === true` gate. The replacement:
+
+**L2 asserts `normalizationType === 'dynamic'` unconditionally, and gives absence its
+own diagnosis.** Absence is not "the mode flipped" — it means the second-pass JSON was
+never parsed, i.e. ffmpeg changed its loudnorm log format. That is a *different bug*, and
+telling the two apart is exactly the discrimination §Goals promises:
+
+```
+L2 sidecar: normalizationType is absent (baseline "dynamic")
+  This is NOT a mode flip. The sidecar fell back to the input-side
+  measurement, which means the second-pass loudnorm stderr JSON was not
+  parsed — most likely an ffmpeg log-format change. Check `i`: it will
+  read ~-21.70 (input side) rather than ~-16.28 (output side).
+  run: ffmpeg 9.0  |  baseline: ffmpeg 8.1  |  mode: LOOSE
+```
+
+The compounding case is handled by the same message: on a fallback `i` is the input-side
+`-21.70`, so L2's ±0.3 band fires too — and the message pre-empts the misread by naming
+the expected value.
+
+`mp3.ts` is **not** changed to stamp a mode in the fallback branches: there is no mode to
+stamp. The fallback is **not** changed to flip `twoPass` to `false` either — that would
+be a behaviour change with its own blast radius across `loudness-report.tsx`'s drift
+gating, and it is out of scope.
+
+**The silent-input path writes no sidecar at all** (`mp3.ts:305-312`). L2 therefore
+asserts the sidecar file exists before reading it, with its own message.
+
+**Surfaces the widening touches** — enumerated, corrected, and verified:
 
 | Surface | Change |
 |---|---|
-| `server/src/tts/loudnorm.ts:73` | add `normalizationType: 'linear' \| 'dynamic'` to `LoudnormSidecarJson` |
-| `server/src/tts/mp3.ts:442` | stop discarding the parsed mode; carry it into `pendingSidecar` |
-| `openapi.yaml:5370` | add the field to `ChapterLoudness` (the mirrored schema) |
+| `server/src/tts/loudnorm.ts:73` | add `normalizationType?: 'linear' \| 'dynamic'` to `LoudnormSidecarJson` |
+| `server/src/tts/mp3.ts:442-449` | carry the already-parsed mode into `pendingSidecar` (success branch only) |
+| `openapi.yaml:5254` | add the field to `ChapterLoudness` — **not** to its `required:` list at `:5256` |
 | `src/lib/api-types.ts` | regenerate via `npm run openapi:types` |
-| `src/lib/types.ts:52` | hand-mirrored sidecar shape |
-| `server/src/routes/book-state.ts:385`, `routes/chapter-audio.ts:79` | read `LoudnormSidecarJson` — must tolerate the field's absence |
 
-**Migration:** existing `.lufs.json` files on disk lack the field. It is therefore
-**optional** in the type (`normalizationType?`), and the single-pass path leaves it
-undefined (single-pass does no re-measurement, so there is no mode to report). L2
-asserts it only when `twoPass === true`.
+Two rows revision 2 listed are **removed as wrong**: `src/lib/types.ts:56` is
+`export type ChapterLoudness = components['schemas']['ChapterLoudness']` — a re-export of
+the generated type needing zero change (hand-editing it would violate the "OpenAPI is the
+type source of truth" convention); and the two route readers (`book-state.ts:396-400`,
+`chapter-audio.ts:83`) duck-type on `i`/`target` and already tolerate absence.
 
-**Adjacent defect found in the schema being edited:** `openapi.yaml:5380` documents
-`i` as *"In two-pass mode this is the FIRST-pass measurement of the source PCM."*
-That contradicts `loudnorm.ts:66-70` and reality — measured `i` is `-16.28`, the
-*post*-normalisation value; the first-pass measurement was `-21.70`. Since this PR
-edits that exact schema block, the wrong sentence is corrected in the same diff. It is
-noted rather than folded in silently.
+**Verified safe:** no zod or schema validation of the sidecar exists anywhere; the schema
+has no `additionalProperties: false`; no test asserts the encoder-produced sidecar's exact
+key set; `src/lib/api.ts:889-908`'s mock builder stays valid under an optional field and
+`src/mocks/canned-data.ts` carries no lufs at all; and `npx openapi-typescript
+./openapi.yaml` reproduces `src/lib/api-types.ts` **byte-for-byte** today, so the
+regeneration diff is scoped to `ChapterLoudness` alone.
+
+**A known second writer stays as-is:** `scripts/relufs-existing.mjs:235` writes
+`twoPass: true` with no mode because `ebur128` has none. That is correct and the field is
+optional; it is named here so the "absence means a parse failure" diagnosis is understood
+to apply *to the encoder's sidecars*, not to relufs-produced ones.
+
+**Adjacent defect in the schema being edited:** `openapi.yaml:5266-5269` documents `i` as
+*"In two-pass mode this is the FIRST-pass measurement of the source PCM."* That
+contradicts `loudnorm.ts:66-70` and reality — measured `i` is `-16.28`
+(post-normalisation); the first pass read `-21.70`. Since this PR edits that exact block,
+the wrong sentence is corrected in the same diff.
 
 ### 3. Baseline artifacts
 
-Two new committed files in `server/src/tts/__fixtures__/`:
-
 ```
 golden-chapter.pcm            274 432 B  input fixture              (exists)
-golden-chapter.json               528 B  segment meta               (exists)
+golden-chapter.json               505 B  segment meta               (exists)
 golden-chapter.baseline.json    ~2 KB    L1/L2/L3 + MD5 + provenance   NEW
 golden-chapter.decoded.pcm    274 432 B  L4-loose reference            NEW
 ```
 
-Every literal below is **measured**, except the two marked `«bless»`, which are
-written at bless time and appear here only to show the shape:
+Every literal is **measured**, except the one marked `«bless»`:
 
 ```jsonc
 {
@@ -280,54 +335,75 @@ written at bless time and appear here only to show the shape:
 ```
 
 The `loudnorm` block separates *"ffmpeg changed"* from *"someone moved
-`audio.loudnorm.targetLufs`"* — different bugs that otherwise present identically. The
-`encode` block does the same for `-q:a` / `-ar` / `-write_xing`: revision 1's own
-failure proves a changed encode parameter produces a completely different artifact,
-and the version gate cannot see it.
+`audio.loudnorm.targetLufs`"*. The `encode` block does the same for `-q:a` / `-ar` /
+`-write_xing`: revision 1's own failure proves a changed encode parameter produces a
+completely different artifact, and the version gate cannot see it.
 
-**A missing baseline is a hard failure**, not a skip, naming the bless command.
-Absence means someone deleted a committed file, and skipping would recreate the exact
+### 4. Bless ordering (and why the first bless must not hard-fail)
+
+Revision 2 said *"a missing baseline is a hard failure"* **and** that bless writes the
+artifacts — with no ordering. Since both artifacts are NEW, a literal implementation
+hard-fails on the first bless, naming the bless command that just failed. Ordering, now
+explicit:
+
+```
+if (GOLDEN_BLESS) {
+  // do NOT load the baseline; do NOT assert any layer.
+  run the pipeline, write both artifacts, print what was written, exit 0
+} else {
+  // baseline load is mandatory
+  missing baseline -> HARD FAIL naming the bless command
+  run the pipeline, assert L1..L4
+}
+```
+
+**Each `it` block early-returns under bless.** The alternative reading — bless writes in
+`beforeAll` while the `it` blocks still run — would compare the run against a baseline
+derived from *that same run* and pass **vacuously**: green, exit 0, nothing verified.
+That reading is rejected explicitly, because an accidental bless would otherwise produce
+a meaningless green whose only mitigation is the `git status` diff.
+
+**A missing baseline on the asserting path stays a hard failure** — both artifacts are
+committed, so absence means someone deleted a file, and skipping would recreate the
 silent-pass problem this issue exists to close.
 
-### 4. The version gate
+### 5. The version gate
 
-`FfmpegProbe` (`diagnostics/ffmpeg.ts:29`) exposes only the parsed `MAJOR.MINOR`; the
-raw banner is captured by the module-private `present()` at `:84` and discarded. Two
-different `8.1` builds — Gyan on Windows, distro on Ubuntu, different LAME — would
-claim a match and then fail a tight comparison.
+`FfmpegProbe` (`diagnostics/ffmpeg.ts:29`) exposes only the parsed `MAJOR.MINOR`; the raw
+banner is captured by the module-private `present()` at `:84` and discarded. Two different
+`8.1` builds — Gyan on Windows, distro on Ubuntu, different LAME — would claim a match and
+then fail a tight comparison.
 
-**Add one named export**, `ffmpegBannerLine(): string | null`, returning the first line
-of `ffmpeg -version`. Deliberately **not** a change to `FfmpegProbe`: that shape
-crosses into `routes/diagnostics.ts`, `routes/setup-readiness.ts` and the
-hand-mirrored `BlockerCause` in `src/lib/api.ts`. Note it **spawns afresh** — the
-probe is deliberately uncached (`:93-98`), so there is no captured stdout to reuse.
-Trivial cost in an opt-in test.
+**Add one named export**, `ffmpegBannerLine(): string | null`, returning the first line of
+`ffmpeg -version`. Deliberately **not** a change to `FfmpegProbe`: that shape crosses into
+`routes/diagnostics.ts`, `routes/setup-readiness.ts` and the hand-mirrored `BlockerCause`
+in `src/lib/api.ts`. It **spawns afresh** — the probe is deliberately uncached (`:93-98`),
+so there is no captured stdout to reuse. Its paired test goes in the existing
+`diagnostics/ffmpeg.test.ts`.
 
 ```
 banner === baseline.ffmpegBanner   →  TIGHT   L4 asserts MD5 equality
-otherwise                          →  LOOSE   L4 asserts rmse < 15 %
+otherwise                          →  LOOSE   L4 asserts rmse < 16 %
                                               + console.warn naming both versions
 ```
 
-**L1–L3 remain hard on both paths**, per the approved design. Revision 1 justified
-this with a claim that has since been withdrawn (finding 3), so the honest statement
-is: *this is an unproven bet.* Cross-build stability of ffmpeg's loudnorm output is
-unmeasured here — one box, one build. The bet is that a different build of the same
-version lands inside ±0.1, and that a different *version* moving `input_i` is the news
-ops-36 exists to deliver. **The first cross-machine run settles it**, and that run is
-an owed on-box acceptance (see Documentation). If the bet loses, the fix is to
-tolerance-gate L1–L3 on the LOOSE path exactly as L4 already is.
+**L1–L3 remain hard on both paths**, per the approved design — and this is an **unproven
+bet**, stated as one. Cross-build stability of ffmpeg's loudnorm output is unmeasured: one
+box, one build. The bet is that a different build of the same version lands inside ±0.1,
+and that a different *version* moving `input_i` is the news ops-36 exists to deliver.
+**The first cross-machine run settles it** — that run is an owed on-box acceptance
+(§Documentation). If the bet loses, the fix is to tolerance-gate L1–L3 on the LOOSE path
+exactly as L4 already is.
 
-One structural consequence, since L3's exact byte count now gates L4-loose's
-equal-length precondition: **the comparison module truncates to `min(len)` before
-computing RMS-error**, and the length delta is asserted separately. L4-loose can
-therefore always run, even if L3's count assertion is the thing that failed.
+The comparison module truncates to `min(len)` before computing RMS-error so the math
+cannot NaN on unequal lengths, and asserts the length delta separately. Note this is *not*
+what gives L4 independence from L3 — separate `it` blocks are (§8).
 
-### 5. Failure reporting
+### 6. Failure reporting
 
-An opt-in tier that fails once a year is read cold, and `toBeCloseTo`'s diff is
-useless for a 57-float array. Every layer's message carries baseline, actual, delta,
-tolerance, both ffmpeg versions, the tight/loose mode, and the bless command:
+An opt-in tier that fails once a year is read cold, and `toBeCloseTo`'s diff is useless for
+a 57-float array. Every layer's message carries baseline, actual, delta, tolerance, both
+ffmpeg versions, the tight/loose mode, and the bless command:
 
 ```
 L1 first-pass drift: input_i -22.10 (baseline -21.70, delta -0.40 LU, tol 0.10)
@@ -335,10 +411,10 @@ L1 first-pass drift: input_i -22.10 (baseline -21.70, delta -0.40 LU, tol 0.10)
   If intended, re-bless: npm run test:golden-audio -- --assembly-only --bless
 ```
 
-L3 reports the **worst window and its timestamp** (`12.4 % @ w35, t=3.5s`) rather than
-dumping both arrays.
+L3 reports the **worst window and its timestamp** (`12.4 % @ w35, t=3.5s`), not both
+arrays.
 
-### 6. Bless flow
+### 7. Bless flow
 
 `--bless` becomes **suite-scoped**, composing with the flags already in
 `scripts/run-golden-audio.mjs`:
@@ -349,129 +425,150 @@ npm run test:golden-audio -- --assembly-only --bless    Suite B only
 npm run test:golden-audio -- --sidecar-only  --bless    Suite A only  (today's behaviour)
 ```
 
-The runner passes `GOLDEN_BLESS=1` into the Suite B vitest spawn — today it reaches
-only Suite A (`run-golden-audio.mjs:65-74`, inside `if (!assemblyOnly)`). The test
-branches on it, writing both artifacts instead of asserting, printing what it wrote
-and a "review the diff before committing" line, and exiting 0.
+**Plumbing is verified clean and the change is one line.** `run-golden-audio.mjs:46-50`
+spawns with `env: { ...process.env, ...env }`; `server/vitest.config.golden.ts` declares no
+`env`/`define`; its only setup file `server/src/test-setup.ts` sets exactly one variable
+(`USER_SETTINGS_FILE`, with `??=`); `pool: 'forks'` inherits `process.env`. The work is
+adding `{ env: bless ? { GOLDEN_BLESS: '1' } : {} }` to the Suite B `run(…)` at `:63`,
+which today passes no env object.
 
-Two precision notes revision 1 got loose:
+Today `--assembly-only --bless` is a no-op **for bless only** — Suite B still runs and
+asserts normally.
 
-- Today `--assembly-only --bless` is a no-op **for bless only** — Suite B still runs
-  and asserts normally; it does not "exit 0 having done nothing".
-- `npm run test:golden-audio:assembly` calls `npm --prefix server run test:golden`
-  **directly** (root `package.json:65`), bypassing the runner — so that alias can
-  never bless, regardless of flags. The plan must either route it through the runner
-  or document that blessing requires the full runner form.
+**Unresolved at plan level, with a constraint:** `npm run test:golden-audio:assembly`
+calls `npm --prefix server run test:golden` directly (root `package.json:65`), bypassing
+the runner, so that alias can never bless. Either route it through the runner or document
+the full-runner form as the bless path. **Whichever is chosen must keep the alias working
+as a plain assert-only invocation**, because the owed on-box acceptance row prescribes
+running exactly that alias against a second ffmpeg build.
 
-An accidental bless is visible in `git status` as a 274 KB binary diff plus a readable
-JSON diff.
-
-### 7. Code layout
+### 8. Code layout
 
 **New pure module** `server/src/tts/golden-baseline.ts` — the `AssemblyBaseline` type,
 tolerance constants, and the comparison math: `rmsEnvelope`, `pcmRms`, `rmsError`,
-`compareEnvelope`, `md5`. No ffmpeg, no I/O. **No `correlation`** — finding 6 shows it
-passes (0.9979) changes that move every one of 57 envelope windows, so it was not
-earning its place.
+`compareEnvelope`, `md5`. No ffmpeg, no I/O.
 
-**`golden-baseline.test.ts`** is *not* named `*.golden.test.ts`, so it runs in the
-ordinary `test:server` tier that gates every push. This matters: the golden tier is
-opt-in and may go a year between runs, so its comparison math must be proven by a
-suite that runs continuously. Tests drive known signals — silence, full-scale, a
-gain-scaled copy, a phase-inverted copy (envelope identical, RMS-error 200 % — the
-case that justifies L4's existence), a sample-shifted copy, and an envelope with a
-sub--50 dBFS window to pin the skip rule. The TIGHT/LOOSE branch selection is unit-
-tested with synthetic banner strings, since a real second ffmpeg build is not
-available in CI.
+**`correlation` is not included.** Revision 2 justified dropping it by citing a single row
+where `corr > 0.995` passed the encoder change — but that row shows correlation *agreeing*
+with L3 and L4-loose, which is correct behaviour, not uselessness. The honest reason is
+simplicity: one fewer statistic to explain and calibrate, and RMS-error already separates
+the 2 LU case. Stated as a design call, not as a measurement. (For the record: encoder
+quality 2→3 gives Pearson **0.9967** over samples and 0.9999 over envelope windows —
+revision 2's "0.9979" was wrong in both readings.)
+
+**A file decode helper does not exist and must be written.** `decodeAudioToPcm` is
+hardcoded to `'-i', 'pipe:0'` and takes a `Buffer`; nothing in `server/src` decodes audio
+from a path. **Decision: add `decodeAudioFileToPcm(path, sampleRate)` to `mp3.ts`** beside
+its pipe sibling, with a paired case in the existing `mp3.test.ts`. The alternative — a
+test-local helper in the golden file — was rejected because it puts the decode path
+outside any continuously-running suite, which is the same argument this section uses to
+justify `golden-baseline.test.ts`. This is production code added for a test; it is ~15
+lines mirroring an existing function, and it is counted in the file inventory rather than
+smuggled in.
+
+**`golden-baseline.test.ts`** is *not* named `*.golden.test.ts`, so it runs in the ordinary
+`test:server` tier (`server/vitest.config.ts` excludes precisely `src/**/*.golden.test.ts`).
+The golden tier is opt-in and may go a year between runs, so its comparison math must be
+proven by a suite that runs continuously. Tests drive known signals: silence, full-scale, a
+gain-scaled copy, a **phase-inverted copy** (envelope identical, RMS-error 200 % — the case
+that justifies L4's existence), a sample-shifted copy, and an envelope containing a
+sub--50 dBFS window to pin the skip rule. TIGHT/LOOSE branch selection is unit-tested with
+synthetic banner strings, since a real second ffmpeg build is not available in CI.
 
 **`golden-assembly.golden.test.ts`** gains a `beforeAll` that runs the pipeline once —
 first pass, synth, finalize, decode — into a module-scoped artifacts object, with the
-tempdir workspace moving from test 2's `try`/`finally` to `beforeAll`/`afterAll`. The
-`it` blocks become thin assertions over it, and bless writes from that one place.
+tempdir workspace moving from test 2's `try`/`finally` to `beforeAll`/`afterAll`. The `it`
+blocks become thin assertions over it.
 
-Two accuracy corrections to revision 1's framing of this:
+Three accuracy notes:
 
-- Its *"one pipeline run, four readings of it"* overstates the economy. L1's source is
-  `runLoudnormFirstPass` on the raw fixture — a **separate ffmpeg spawn**, on top of
-  the one `encodePcmToAudio` runs internally. Four spawns total. The encode's
-  second-pass stderr already re-reports `input_*`, but `encodePcmToAudio` does not
-  expose it, so the extra spawn is pragmatic rather than economical. The restructure
-  is still right — four *encodes* would mean each layer measuring a different artifact
-   — but it should be argued on coherence, not cost.
-- The `process.env.WORKSPACE_DIR` set inside test 2 is **already inert**.
-  `workspace/paths.ts:35-39` computes `WORKSPACE_ROOT` at module-eval time, and the
-  golden test statically imports `synthesise-chapter.js`, which statically imports
-  `paths.js` — so the module is fully evaluated before the env assignment runs, and
-  the dynamic `import()` returns the cached module. Verified: `WORKSPACE_SOURCE` reads
-  `default`, not `env`. The test is not workspace-isolated today and never has been;
-  it is harmless only because `finalizeChapterAudioWrite` takes an explicit `bookDir`.
-  The plan should delete the inert env-set + dynamic-import pair, or keep them with a
-  comment saying why they are inert — not silently relocate them and imply they work.
+- **Separate `it` blocks are what give the layers independence.** A failing `expect` in one
+  Vitest `it` does not abort a sibling. But a **`beforeAll` throw** (ffmpeg absent, spawn
+  failure, decode error) fails all four at once, and §1's "which combination fails is
+  diagnostic" collapses to one opaque hook error. The hook therefore wraps its failures
+  with a message saying the pipeline itself did not complete, so a hook error is never
+  misread as a layer verdict.
+- **Timeout budget changes.** `vitest.config.golden.ts` sets `hookTimeout: 30_000`; today's
+  test 2 makes **2** ffmpeg spawns under `testTimeout`, and the redesign moves **4** (raw
+  first pass, finalize's internal first pass, encode, decode) into that one hook on
+  `maxWorkers: 1`. Ample for 5.7 s of audio, but it is a real budget change and the plan
+  confirms rather than assumes it.
+- **The `WORKSPACE_DIR` env-set being relocated is already inert.**
+  `workspace/paths.ts:35-39` computes `WORKSPACE_ROOT` at module-eval time, and the golden
+  test statically imports `synthesise-chapter.js` → `paths.js`, so the module is evaluated
+  before the assignment runs and the dynamic `import()` returns the cached module
+  (`WORKSPACE_SOURCE` reads `default`, not `env`). The test is not workspace-isolated today
+  and never has been; it is harmless only because `finalizeChapterAudioWrite` takes an
+  explicit `bookDir`. The plan deletes the inert env-set + dynamic-import pair rather than
+  silently relocating it and implying it works.
 
 ## Testing
 
-- `golden-baseline.test.ts` in `test:server` — gates every push.
+- `golden-baseline.test.ts` and the `mp3.test.ts` / `diagnostics/ffmpeg.test.ts` additions
+  run in `test:server` — they gate every push.
 - `npm run test:golden-audio:assembly` green locally.
 - **The deliverable is a demonstration, not a green run.** Passing is what the suite
-  already does. The PR body records **one perturbation per layer**, each with its
-  measured value from finding 6's curve:
+  already does. The PR body records **one perturbation per layer**:
 
-  | layer | perturbation | expected |
-  |---|---|---|
-  | L1 | flip a byte in the input fixture | `input_i` moves; hard fail |
-  | L2 | move `audio.loudnorm.targetLufs` | `i` moves ≫ ±0.3; hard fail |
-  | L3 | loudnorm drift 2.0 LU | worst window 38.7 % > 10 % |
-  | L4-tight | re-encode at `-q:a 3` | MD5 differs |
-  | L4-loose | loudnorm drift 2.0 LU | rmse 24.8 % > 15 % |
+  | layer | perturbation | expected | source |
+  |---|---|---|---|
+  | L1 | −3 dB gain on the fixture PCM | `input_i` moves ≈3 LU ≫ ±0.1 | reasoned |
+  | L2 | move `audio.loudnorm.targetLufs` | `i` moves ≫ ±0.3 | reasoned |
+  | L3 | loudnorm drift 2.0 LU | worst window 38.7 % > 10 % | finding 6 |
+  | L4-tight | re-encode at `-q:a 3` | MD5 differs | findings 1–2 |
+  | L4-loose | loudnorm drift 2.0 LU | rmse 24.8 % > 16 % | finding 6 |
 
-  That the suite *can* fail is the entire point of ops-36.
+  A single flipped byte in the fixture — revision 2's L1 perturbation — is **not** used:
+  one sample in 137 216 moves integrated loudness by orders of magnitude less than ±0.1 LU,
+  so the demonstration would show L1 *not* failing. It could move `input_tp`, a different
+  field; a −3 dB gain moves `input_i` as the row claims.
 
 ## Documentation
 
-- New section in `docs/features/269-ffmpeg-version-floor.md` (active — already frames
-  ops-36 as its deferred half): layers, derived tolerances, bless recipe, version gate.
-- One pointer line in `docs/features/archive/185-golden-audio-regression.md` → 269.
-  (Note: 269's line 28 currently links `185-golden-audio.md`, which does not exist —
-  fix that dead link while editing the file.)
-- CLAUDE.md Commands section: `--bless`'s new suite-scoped meaning.
-- `docs/release-notes-next.md` — **one line**, reversing revision 1's skip. The
-  technical register is the right home for a documented CLI behaviour change
-  (`--bless` going from Suite-A-only to suite-scoped), especially one this PR is
-  simultaneously editing CLAUDE.md for. `RELEASE_NOTES.md` is still skipped: no
-  user-facing delta.
-- `docs/testing/onbox-acceptance-register.md` — **one row**, reversing revision 1's
-  "not applicable" call. GPU-free is not the same as verifiable-in-PR: the entire
-  cross-build half of this design (the LOOSE branch, the mismatch warning, and whether
-  L1–L3's hard assertions survive another build — the unproven bet in §4) cannot be
-  exercised on a box with one ffmpeg, and the golden tier is deliberately outside
-  `verify.yml`, so CI's Ubuntu ffmpeg will not exercise it either. **The LOOSE path
-  would otherwise ship having never executed.** The row: *run
+- **New regression plan `docs/features/272-golden-assembly-comparison.md`** — reversing
+  revision 2's "no new plan file". The change is ~18-20 files across four scopes
+  (server / generated-frontend / scripts / docs) and alters a persisted on-disk contract
+  plus the OpenAPI schema; that is "substantial/cross-cutting" under Before-shipping step
+  1, and it pulls a `high`-effort code-review gate as a multi-scope PR. (Plan numbers 270
+  and 271 are taken — `270-openapi-setup-surface.md` and, in a worktree,
+  `271-fs38-wave3c-xtts.md`.)
+- `docs/features/INDEX.md` — entry under ops.
+- `docs/features/269-ffmpeg-version-floor.md` — cross-link to 272, and fix its dead link at
+  line 28 (`archive/185-golden-audio.md` does not exist; the file is
+  `archive/185-golden-audio-regression.md`).
+- `docs/features/archive/185-golden-audio-regression.md` — pointer to 272.
+- CLAUDE.md Commands section — `--bless`'s new suite-scoped meaning.
+- `docs/release-notes-next.md` — one line for the `--bless` behaviour change.
+  `RELEASE_NOTES.md` skipped: no user-facing delta.
+- `docs/testing/onbox-acceptance-register.md` — **one row.** GPU-free is not
+  verifiable-in-PR: the entire cross-build half of this design (the LOOSE branch, the
+  mismatch warning, and whether L1–L3's hard assertions survive another build — the
+  unproven bet in §5) cannot be exercised on a box with one ffmpeg, and the golden tier
+  sits outside `verify.yml`, so CI's Ubuntu ffmpeg will not exercise it either. **The LOOSE
+  path would otherwise ship having never executed.** Row: *run
   `npm run test:golden-audio:assembly` against a second ffmpeg build; record which of
-  L1/L2/L3 fire, their deltas, and whether L4-loose was reached.*
-- **No new plan file.** One test file, one helper module, one baseline pair, a runner
-  flag, and a scoped sidecar-field addition; 269 is the right home.
+  L1/L2/L3 fire, their deltas, whether L4-loose was reached, and its rmse.*
+- `docs/BACKLOG.md` — the thin row for the follow-up issue below, in the same round.
 
 ## Out of scope
 
-Beyond the issue's own list, one item discovered while measuring:
-
-**The `linear` → `dynamic` fallback and the resulting LRA 3.00 → 0.50 compression
-(finding 4) is not fixed here.** Whether a fivefold loudness-range reduction is correct
-for speech needs listening, not arithmetic, to settle. This design **pins
-`normalizationType: "dynamic"` as the baseline — locking in current behaviour,
-including behaviour that may turn out to be wrong.** That is the correct call for a
-regression harness, whose job is to detect change rather than adjudicate correctness,
-but the risk is named: a pin quietly becomes a specification. It gets **filed as its
-own backlog issue in the same round**, so the question stays open on the board instead
-of being settled by a test fixture.
+**The `linear` → `dynamic` fallback and the LRA 3.00 → 0.50 compression (finding 4) is not
+fixed here.** Whether a fivefold loudness-range reduction is right for speech needs
+listening, not arithmetic. This design **pins `normalizationType: "dynamic"` as the
+baseline — locking in current behaviour, including behaviour that may be wrong.** That is
+correct for a regression harness, whose job is to detect change rather than adjudicate
+correctness, but the risk is named: a pin quietly becomes a specification. It is **filed as
+its own backlog issue plus its `docs/BACKLOG.md` row in the same round**, so the question
+stays open on the board instead of being settled by a fixture.
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| **L1–L3 hard across builds is an unproven bet** (finding 3's withdrawn claim) | Named as unproven in §4; the owed on-box acceptance row is what settles it; the fallback (tolerance-gate L1–L3 on LOOSE) is pre-described |
-| A pin becomes a spec — `dynamic` mode locked in before anyone decides it is right | Filed as a separate issue in the same round; called out in the 269 section |
-| Widening `LoudnormSidecarJson` touches the OpenAPI contract | Full surface enumerated in §2; field is optional, so existing sidecars and single-pass output stay valid |
-| L4-loose cannot see sub-0.5-LU drift (finding 6) | By design and stated; L1 covers that range at ±0.1 LU, 40× finer |
-| An accidental `--bless` masks a real regression | 274 KB binary + readable JSON diff in `git status`; bless prints what it wrote |
-| The fixture is 5.7 s of clean English speech, and 2 of its 57 windows are unchecked | Accepted, unchanged from ops-11; the skipped-window count is itself asserted so the gap cannot silently grow |
+| **L1–L3 hard across builds is an unproven bet** (finding 3's withdrawn claim) | Named as unproven in §5; the owed on-box row settles it; the fallback (tolerance-gate L1–L3 on LOOSE) is pre-described |
+| **L4-loose's margins are thin** — 1.5× either side, calibrated on `-q:a` steps as a proxy for a build change | Labelled the weakest layer in §1; L3 is the sound LOOSE instrument; the on-box row records L4-loose's actual rmse on a second build |
+| A pin becomes a spec — `dynamic` locked in before anyone decides it is right | Separate issue + BACKLOG row in the same round; called out in 272 |
+| Widening `LoudnormSidecarJson` touches the OpenAPI contract | Surfaces enumerated and verified in §2; field optional; regeneration proven to scope to `ChapterLoudness` alone |
+| A `beforeAll` throw masks all four layers | Hook wraps failures with a "pipeline did not complete" message so it cannot be misread as a layer verdict |
+| An accidental `--bless` masks a real regression | Bless skips all assertions (§4) so it cannot produce a vacuous green; 274 KB binary + readable JSON diff in `git status` |
+| The fixture is 5.7 s of clean English speech, and 2 of its 57 windows are unchecked | Accepted, unchanged from ops-11; the skipped count is asserted so the gap cannot silently grow |
