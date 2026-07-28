@@ -6,8 +6,6 @@ on the worker pool via asyncio.to_thread, so `unload()` could null `_tts` while
 """
 import importlib, os, sys, threading, time
 
-import pytest  # for the xfail marker on the evict-gap test (removed in Task 2)
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 main = importlib.import_module("main")
 
@@ -123,7 +121,6 @@ def test_synthesize_tracks_in_flight_and_last_used(monkeypatch):
     assert eng._last_used > 0.0
 
 
-@pytest.mark.xfail(raises=AttributeError, strict=False)
 def test_synthesize_survives_an_evict_that_wins_the_ensure_gap(monkeypatch):
     """The OTHER interleaving, and the one the counter alone does not cover.
 
@@ -149,3 +146,58 @@ def test_synthesize_survives_an_evict_that_wins_the_ensure_gap(monkeypatch):
     # the lock finds `_tts is None` and reloads.
     eng.synthesize("xtts", "Claribel Dervla", "hello")
     assert eng._tts is not None
+
+
+def test_maybe_free_idle_noop_when_nothing_resident():
+    eng = main.CoquiEngine()
+    assert eng.maybe_free_idle(0.0) is False
+
+
+def test_maybe_free_idle_does_not_free_a_freshly_loaded_model(monkeypatch):
+    """A model loaded but never synthesised must NOT read as infinitely idle.
+    `_last_used` starts at 0.0, so without a stamp at load time the engine is
+    evictable the instant it finishes the ~90s load the user just paid for."""
+    eng = _loaded_coqui(monkeypatch, _FakeTts())
+    assert eng.maybe_free_idle(30.0) is False
+    assert eng._tts is not None
+
+
+def test_maybe_free_idle_respects_the_ttl(monkeypatch):
+    eng = _loaded_coqui(monkeypatch, _FakeTts())
+    eng._last_used = time.monotonic()  # just used
+    assert eng.maybe_free_idle(30.0) is False
+    assert eng._tts is not None
+
+
+def test_maybe_free_idle_frees_past_the_ttl(monkeypatch):
+    eng = _loaded_coqui(monkeypatch, _FakeTts())
+    eng._last_used = time.monotonic() - 120.0  # idle for two minutes
+    assert eng.maybe_free_idle(30.0) is True
+    assert eng._tts is None
+
+
+def test_maybe_free_idle_skips_an_in_flight_synth(monkeypatch):
+    """Fast-out must not block the admission path on a forward, and must not
+    free a model that is mid-use."""
+    eng = _loaded_coqui(monkeypatch, _FakeTts())
+    eng._last_used = time.monotonic() - 120.0
+    eng._synth_in_flight = 1
+    assert eng.maybe_free_idle(30.0) is False
+    assert eng._tts is not None
+
+
+def test_maybe_free_idle_restores_the_device_preference(monkeypatch):
+    """#1730 gap 3. `_ensure_loaded` overwrites `_device` with the ADMITTED
+    card; only /load passes an override, so a lazy /synthesize reload reads
+    `_device`. If the evict nulls `_tts` inline instead of running the full
+    teardown, the next cold load pins itself to the last admitted card and
+    bypasses placement entirely."""
+    eng = _loaded_coqui(monkeypatch, _FakeTts())
+    eng._requested_device = "auto"
+    eng._device = "cuda:1"  # as _ensure_loaded would have left it
+    eng._last_used = time.monotonic() - 120.0
+
+    assert eng.maybe_free_idle(30.0) is True
+    assert eng._device == "auto"
+    assert eng._speakers == []
+    assert eng._resolved_device == "cpu"

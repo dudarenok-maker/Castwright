@@ -1336,6 +1336,11 @@ class CoquiEngine(Engine):
             log.warning("Could not enumerate Coqui speakers (%s). Skipping pre-validation.", e)
             self._speakers = []
 
+        # A freshly loaded model has not been "idle since epoch": without this
+        # stamp `maybe_free_idle` frees the model the user just spent ~90s
+        # loading, before its first synth ever runs (#1894).
+        self._last_used = time.monotonic()
+
     def unload(self) -> None:
         """Drop references to the loaded XTTS model and free GPU memory.
         Used by POST /unload when the UI's Stop button fires (or when the
@@ -1402,6 +1407,46 @@ class CoquiEngine(Engine):
             except Exception as e:
                 log.warning("torch.cuda.empty_cache() failed (%s) — model is dropped, VRAM will free on GC.", e)
         log.info("Coqui model unloaded.")
+
+    def maybe_free_idle(self, ttl_seconds: float) -> bool:
+        """Free the resident XTTS model when it has been idle longer than
+        `ttl_seconds`. Returns True if it freed. Driven by `_idle_evict` on
+        the admission path (#1894) — Coqui deliberately has NO background
+        watchdog, unlike the Qwen/ASR/ECAPA idle-evicts, so this only ever
+        runs when another op is genuinely starved for VRAM.
+
+        The idle test is re-validated UNDER `_synth_lock` and skipped while a
+        synth is in flight, so admission can never free the model out from
+        under an active forward. Mirrors
+        `QwenEngine.maybe_free_idle_design`, with one deliberate difference:
+        it calls `_drop_model_locked()` rather than nulling `_tts` inline,
+        because Coqui's teardown also restores `_device` (#1730 gap 3) and
+        clears the cached speaker manifest.
+
+        The reclaim runs AFTER the lock is released, and this method is called
+        synchronously on the event loop by `_idle_evict` — see
+        `_reclaim_after_drop`.
+        """
+        # Cheap, lock-free fast-outs first: nothing loaded, mid-forward, or
+        # used recently. Skipping the lock here matters — a forward can run
+        # for seconds and admission must not block on it.
+        if self._tts is None or self._synth_in_flight > 0:
+            return False
+        if time.monotonic() - self._last_used <= ttl_seconds:
+            return False
+        # Re-validate under the lock: `synthesize` claims `_synth_in_flight`
+        # and refreshes `_last_used` BEFORE taking the lock, so a check that
+        # still finds it idle here cannot be racing a forward.
+        with self._synth_lock:
+            if self._tts is None or self._synth_in_flight > 0:
+                return False
+            if time.monotonic() - self._last_used <= ttl_seconds:
+                return False
+            dropped, torch_module = self._drop_model_locked()
+        if not dropped:
+            return False
+        self._reclaim_after_drop(torch_module)
+        return True
 
     def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
         # Load OUTSIDE the lock: a cold XTTS pull takes ~90s and holding
