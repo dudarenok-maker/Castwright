@@ -227,6 +227,7 @@ describe('TOL', () => {
     expect(TOL.sidecarLu).toBe(0.3);
     expect(TOL.envelopeRel).toBe(0.1);
     expect(TOL.quietFloorDbfs).toBe(-50);
+    expect(TOL.quietCeilingDbfs).toBe(-45);
     expect(TOL.rmseLoose).toBe(0.16);
     expect(TOL.windowMs).toBe(100);
     expect(TOL.spectralTiltRel).toBe(0.035);

@@ -28,7 +28,7 @@ export interface AssemblyBaseline {
    *  moved audio.loudnorm.targetLufs". */
   loudnorm: { target: number; lra: number; tp: number };
   firstPass: { input_i: number; input_lra: number; input_tp: number; input_thresh: number };
-  sidecar: { i: number; lra: number; normalizationType: 'linear' | 'dynamic' };
+  sidecar: { i: number; lra: number; tp: number; normalizationType: 'linear' | 'dynamic' };
   decoded: { bytes: number; quietWindowsSkipped: number };
   /** L5 — rms(first difference) / rms(signal) of the decoded PCM. */
   spectralTilt: number;

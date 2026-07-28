@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { measureLoudnessFile } from './measure-loudness.js';
+import { resolveLoudnormOptions } from '../tts/loudnorm.js';
 
 const AUTHOR = 'Finalize Author';
 const SERIES = 'Standalones';
@@ -191,9 +192,17 @@ describe('finalizeChapterAudioWrite loudness sidecar (ops-36 finding 10)', () =>
     expect(sidecar.i).toBeCloseTo(real!.i, 1);
     expect(sidecar.lra).toBeCloseTo(real!.lra, 1);
     expect(sidecar.tp).toBeCloseTo(real!.tp, 1);
-    /* The regression this locks: loudnorm reports tp as the REQUESTED ceiling
-       (-1.5), which is not a measurement and can sit below the sample peak. */
-    expect(sidecar.tp).not.toBe(-1.5);
+    /* The regression this locks: loudnorm reports tp as the REQUESTED ceiling,
+       which is not a measurement and can sit below the sample peak. Derived
+       from resolveLoudnormOptions() rather than hardcoded, so a moved
+       AUDIO_LOUDNORM_TP doesn't quietly turn this inert. This assertion is
+       INDEPENDENT of `measureLoudnessFile` (unlike the toBeCloseTo checks
+       above, which compare the sidecar to the same function under test): a
+       self-report would read EXACTLY the requested ceiling, so a
+       consistently-wrong parser that just echoed the ceiling back would fail
+       here even though it would pass the toBeCloseTo checks. */
+    const { tp: requestedCeiling } = resolveLoudnormOptions();
+    expect(sidecar.tp).not.toBe(requestedCeiling);
     // loudnorm's own state still comes from loudnorm.
     expect(sidecar.normalizationType).toBeDefined();
   });

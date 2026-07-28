@@ -22,6 +22,7 @@
   "sidecar": {
     "i": -19.3,
     "lra": 2,
+    "tp": -2.6,
     "normalizationType": "linear"
   },
   "decoded": {

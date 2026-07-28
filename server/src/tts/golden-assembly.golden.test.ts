@@ -205,7 +205,7 @@ function writeBaseline(a: Artifacts, baselinePath: string, decodedPath: string |
     );
   }
   const { target, lra, tp } = a.loudnorm;
-  const floor = 10 ** (-50 / 20);
+  const floor = 10 ** (TOL.quietFloorDbfs / 20);
   const recorded: AssemblyBaseline = {
     recordedAt: new Date().toISOString().slice(0, 10),
     ffmpegBanner: a.banner ?? '',
@@ -221,6 +221,7 @@ function writeBaseline(a: Artifacts, baselinePath: string, decodedPath: string |
     sidecar: {
       i: a.sidecar.i,
       lra: a.sidecar.lra,
+      tp: a.sidecar.tp,
       normalizationType: a.sidecar.normalizationType,
     },
     decoded: {
@@ -383,10 +384,10 @@ beforeAll(async () => {
       );
     }
   }
-  /* Eight ffmpeg spawns now (two runs x [raw first pass, finalize's internal
-     first pass, encode, decode]) on ~5.7s of audio each. The config's
-     hookTimeout is 30s; this explicit budget documents the headroom rather
-     than relying on it. */
+  /* Ten ffmpeg spawns now (two runs x [raw first pass, finalize's internal
+     first pass, measureLoudnessFile's ebur128 pass, encode, decode]) on ~5.7s
+     of audio each. The config's hookTimeout is 30s; this explicit budget
+     documents the headroom rather than relying on it. */
 }, 60_000);
 
 afterAll(() => {
@@ -485,6 +486,7 @@ describe('golden assembly (GPU-free)', () => {
     for (const [name, actual, expected] of [
       ['i', s.i, b.i],
       ['lra', s.lra, b.lra],
+      ['tp', s.tp, b.tp],
     ] as [string, number, number][]) {
       const delta = actual - expected;
       expect(
@@ -502,11 +504,13 @@ describe('golden assembly (GPU-free)', () => {
       s.normalizationType,
       s.normalizationType === undefined
         ? `L2: normalizationType is absent (baseline "${b.normalizationType}").\n` +
-          `  This is NOT a mode flip. The sidecar fell back to the input-side ` +
-          `measurement, which means the second-pass loudnorm stderr JSON was ` +
-          `not parsed — most likely an ffmpeg log-format change. Check \`i\`: ` +
-          `it will read ~${baseline!.firstPass.input_i} (input side) rather ` +
-          `than ~${b.i} (output side).${modeLine()}`
+          `  This is NOT a mode flip. It means the second-pass loudnorm stderr ` +
+          `JSON was not parsed — most likely an ffmpeg log-format change. ` +
+          `\`i\`/\`lra\`/\`tp\` are UNAFFECTED: finalizeChapterAudioWrite ` +
+          `re-measures them for real via ebur128 regardless of whether the ` +
+          `second pass parsed, so they still read output-side. ` +
+          `normalizationType alone is missing, because nothing recovers ` +
+          `it once the second-pass JSON fails to parse.${modeLine()}`
         : `L2: loudnorm mode changed — "${s.normalizationType}" vs baseline ` +
           `"${b.normalizationType}". A dynamic->linear flip alters how the ` +
           `chapter sounds while leaving integrated loudness near ` +
