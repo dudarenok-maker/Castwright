@@ -422,7 +422,7 @@ on the dropped entry today).
 
 ## 6. Owed on-box acceptance
 
-Two things unit tests cannot reach, both needing a real 8 GB card:
+Three things unit tests cannot reach, all needing a real 8 GB card:
 
 1. Whether reclaiming ~3 GB actually admits the blocked op, or the freed VRAM is
    immediately taken by something else.
@@ -430,6 +430,15 @@ Two things unit tests cannot reach, both needing a real 8 GB card:
    across chapters of one book means it is too short**; a render that still fails
    `NoCapacityError` with an idle Coqui resident means it is too long. Record
    which, with the observed interval.
+3. What the **Stop control reports** when pressed during a live Coqui render.
+   `unload()` now takes `_synth_lock` (§4.1), so it blocks for the length of the
+   in-flight forward, while `POST /api/sidecar/unload` allows only 2 s. The
+   expected symptom is a timeout/failure toast even though the unload and the
+   chapter both complete fine moments later. That trade — a visible 503 in place
+   of a killed chapter — is tracked in
+   [#1921](https://github.com/dudarenok-maker/Castwright/issues/1921), and this
+   is the only place it can be observed. Record whether the toast fired and how
+   long the eventual unload took.
 
 **Must be run pinned to a single card** (`CUDA_VISIBLE_DEVICES=0`). The dev box
 is dual-GPU (`cuda:0` 4070 8 GB, `cuda:1` 5070Ti 16 GB), and `_worst_device_key`

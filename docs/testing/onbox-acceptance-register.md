@@ -360,7 +360,7 @@ operation on real hardware, and whether the 30 s TTL is tuned for real chapter g
   Coqui resident means it is too long. Record which, with the observed interval
   between the evict and the next Coqui use, so the default can be moved off 30 s with
   evidence rather than a guess.
-- Also confirm the Task 1 fix: press **Stop** on Coqui while a chapter is rendering
+- Also confirm the Stop-button crash fix: press **Stop** on Coqui while a chapter is rendering
   through it. The chapter must continue to completion — before #1894 this could kill
   it with `AttributeError: 'NoneType' object has no attribute 'tts'`. Also record
   what the **Stop control itself** reports: `CoquiEngine.unload()` now acquires
