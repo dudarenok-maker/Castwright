@@ -11,10 +11,11 @@ Round-1 review (#1894) added two further pins:
     + CUDA init is not a reliable proxy for "was blocked" (it can simply be
     slow, in either direction, on either engine).
   - `maybe_free_idle` needs a THIRD leg mirroring `CoquiEngine`: re-validate
-    `_infer_in_flight` (not just `self._model`) under the lock, not only via
+    `_in_flight` (not just `self._model`) under the lock, not only via
     the lock-free fast-out. Without it, a counter that goes from 0 -> 1 while
     `maybe_free_idle` is queued on the lock is invisible to it, and it evicts
-    a model a forward has already claimed.
+    a model a forward has already claimed. `_in_flight` is an `InFlightCounter`
+    (#1917), not a plain int — see main.py.
 """
 import importlib, os, sys, threading, time
 
@@ -81,9 +82,13 @@ def test_asr_maybe_free_idle_skips_an_in_flight_transcribe(monkeypatch):
     eng = main.WhisperEngine()
     eng._model = object()
     eng._last_used = time.monotonic() - 600.0  # long idle
-    eng._infer_in_flight = 1
-    assert eng.maybe_free_idle(120.0) is False
-    assert eng._model is not None
+    claim = eng._in_flight.claim()
+    claim.__enter__()  # hold a real claim open, mirroring an in-flight forward
+    try:
+        assert eng.maybe_free_idle(120.0) is False
+        assert eng._model is not None
+    finally:
+        claim.__exit__(None, None, None)
 
 
 def test_asr_maybe_free_idle_reevaluates_the_counter_under_the_lock(monkeypatch):
@@ -94,7 +99,7 @@ def test_asr_maybe_free_idle_reevaluates_the_counter_under_the_lock(monkeypatch)
     eng = main.WhisperEngine()
     eng._model = object()
     eng._last_used = time.monotonic() - 600.0  # long idle
-    eng._infer_in_flight = 0
+    assert eng._in_flight.value == 0  # the InFlightCounter's own default
 
     lock_acquired = threading.Event()
     set_counter = threading.Event()
@@ -105,7 +110,7 @@ def test_asr_maybe_free_idle_reevaluates_the_counter_under_the_lock(monkeypatch)
         with eng._infer_lock:
             lock_acquired.set()
             set_counter.wait(timeout=5)
-            eng._infer_in_flight = 1
+            eng._in_flight._n = 1  # simulate a concurrent forward's claim
             counter_set.set()
             holder_release.wait(timeout=5)
 
@@ -206,9 +211,13 @@ def test_spk_maybe_free_idle_skips_an_in_flight_embed(monkeypatch):
     monkeypatch.setattr(main, "_parse_device", lambda d: ("cuda", 0))
     eng._model = object()
     eng._last_used = time.monotonic() - 600.0
-    eng._infer_in_flight = 1
-    assert eng.maybe_free_idle(120.0) is False
-    assert eng._model is not None
+    claim = eng._in_flight.claim()
+    claim.__enter__()  # hold a real claim open, mirroring an in-flight forward
+    try:
+        assert eng.maybe_free_idle(120.0) is False
+        assert eng._model is not None
+    finally:
+        claim.__exit__(None, None, None)
 
 
 def test_spk_maybe_free_idle_reevaluates_the_counter_under_the_lock(monkeypatch):
@@ -219,7 +228,7 @@ def test_spk_maybe_free_idle_reevaluates_the_counter_under_the_lock(monkeypatch)
     monkeypatch.setattr(main, "_parse_device", lambda d: ("cuda", 0))
     eng._model = object()
     eng._last_used = time.monotonic() - 600.0
-    eng._infer_in_flight = 0
+    assert eng._in_flight.value == 0  # the InFlightCounter's own default
 
     lock_acquired = threading.Event()
     set_counter = threading.Event()
@@ -230,7 +239,7 @@ def test_spk_maybe_free_idle_reevaluates_the_counter_under_the_lock(monkeypatch)
         with eng._infer_lock:
             lock_acquired.set()
             set_counter.wait(timeout=5)
-            eng._infer_in_flight = 1
+            eng._in_flight._n = 1  # simulate a concurrent forward's claim
             counter_set.set()
             holder_release.wait(timeout=5)
 

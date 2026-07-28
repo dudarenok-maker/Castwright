@@ -1118,6 +1118,53 @@ async def _configure_vd_kokoro_coupling() -> None:
     _VD_KOKORO._shares_device = _compute_vd_kokoro_shares_device()
 
 
+class InFlightCounter:
+    """Thread-safe in-flight counter for an engine's forward (#1917).
+
+    Each engine's `maybe_free_idle` uses this as a fast-out so admission never
+    blocks on a forward that may run for seconds. The count therefore has to be
+    readable WITHOUT the engine's forward lock — but `x += 1` on a plain
+    attribute is LOAD_ATTR / BINARY_OP / STORE_ATTR, and CPython can switch
+    threads between any two of those. Two concurrent forwards can lose a
+    decrement, and because every caller's predicate is `> 0`, a counter stuck
+    above zero disables that engine's eviction for the remaining process
+    lifetime — silently, with no error and no log line.
+
+    The lock here is held for the mutation only, never across a forward, so the
+    fast-out stays non-blocking with respect to the work it exists to avoid
+    waiting on.
+    """
+
+    def __init__(self, lock: Optional[Any] = None) -> None:
+        self._lock = lock if lock is not None else threading.Lock()
+        self._n = 0
+
+    @contextmanager
+    def claim(self):
+        """Bracket one forward. Decrements in a `finally`, so a raising forward
+        cannot leave the guard stuck above zero."""
+        with self._lock:
+            self._n += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._n -= 1
+
+    @property
+    def busy(self) -> bool:
+        """True while at least one forward is in flight. `> 0`, never `!= 0` —
+        a drifted-negative count must not wedge eviction off."""
+        with self._lock:
+            return self._n > 0
+
+    @property
+    def value(self) -> int:
+        """Raw count. For tests and diagnostics; production reads `busy`."""
+        with self._lock:
+            return self._n
+
+
 class Engine:
     """Each engine returns mono PCM as int16 little-endian + a sample rate.
     We never persist audio here — the Node side encodes PCM to MP3 and
@@ -1165,8 +1212,8 @@ class CoquiEngine(Engine):
         self._synth_lock = threading.Lock()
         # Read lock-free by `maybe_free_idle` so a busy engine short-circuits
         # without blocking the admission path on a forward that may run for
-        # seconds.
-        self._synth_in_flight = 0
+        # seconds. Thread-safe (#1917) — see `InFlightCounter`.
+        self._in_flight = InFlightCounter()
         self._last_used = 0.0
         self._language = os.environ.get("COQUI_LANGUAGE", "en")
         self._device = _read_device_env("COQUI_DEVICE") or "auto"  # auto | cpu | cuda | cuda:N
@@ -1447,15 +1494,15 @@ class CoquiEngine(Engine):
         # Cheap, lock-free fast-outs first: nothing loaded, mid-forward, or
         # used recently. Skipping the lock here matters — a forward can run
         # for seconds and admission must not block on it.
-        if self._tts is None or self._synth_in_flight > 0:
+        if self._tts is None or self._in_flight.busy:
             return False
         if time.monotonic() - self._last_used <= ttl_seconds:
             return False
-        # Re-validate under the lock: `synthesize` claims `_synth_in_flight`
+        # Re-validate under the lock: `synthesize` claims `_in_flight`
         # and refreshes `_last_used` BEFORE taking the lock, so a check that
         # still finds it idle here cannot be racing a forward.
         with self._synth_lock:
-            if self._tts is None or self._synth_in_flight > 0:
+            if self._tts is None or self._in_flight.busy:
                 return False
             if time.monotonic() - self._last_used <= ttl_seconds:
                 return False
@@ -1474,21 +1521,26 @@ class CoquiEngine(Engine):
         # is the timestamp — main.py:3835-3838 spells out the same TOCTOU for
         # Qwen: an evict can read a stale `_last_used` and free the model in the
         # gap between the ensure above and the acquire below. The pair
-        # (`_synth_in_flight` set here + the re-ensure under the lock) closes it.
-        # Decremented in the finally so a failure can't leave the guard stuck.
-        self._synth_in_flight += 1
-        self._last_used = time.monotonic()
-        try:
-            with self._synth_lock:
-                # Re-ensure under the lock: a concurrent /unload or admission
-                # evict holds `_synth_lock` to null the model, so one ensured
-                # before the lock can be gone in the gap. No-op on the warm
-                # path (`_ensure_loaded` early-returns when `_tts` is set).
-                self._ensure_loaded(model)
-                return self._synthesize_locked(model, voice, text, language)
-        finally:
-            self._synth_in_flight -= 1
+        # (`_in_flight` claimed here + the re-ensure under the lock) closes it.
+        with self._in_flight.claim():
             self._last_used = time.monotonic()
+            # Re-stamp on the way out in an INNER finally, BEFORE the claim's
+            # own decrement runs (#1917) — `maybe_free_idle` is called with
+            # `ttl=0.0` from the admission path, so a decrement that lands
+            # before this re-stamp leaves a window where `.busy` reads False
+            # while `_last_used` is still the pre-forward value, which reads
+            # as "idle" and gets evicted.
+            try:
+                with self._synth_lock:
+                    # Re-ensure under the lock: a concurrent /unload or
+                    # admission evict holds `_synth_lock` to null the model,
+                    # so one ensured before the lock can be gone in the gap.
+                    # No-op on the warm path (`_ensure_loaded` early-returns
+                    # when `_tts` is set).
+                    self._ensure_loaded(model)
+                    return self._synthesize_locked(model, voice, text, language)
+            finally:
+                self._last_used = time.monotonic()
 
     def _synthesize_locked(
         self, model: str, voice: str, text: str, language: Optional[str] = None
@@ -1498,7 +1550,7 @@ class CoquiEngine(Engine):
         Binds `self._tts` to a local up front so the forward never re-reads an
         attribute a concurrent unload could null. The assert is a cheap
         invariant, NOT the race guard — the guard is the caller's
-        `_synth_in_flight` claim plus its re-ensure under the lock.
+        `_in_flight` claim plus its re-ensure under the lock.
         """
         tts = self._tts
         assert tts is not None
@@ -3110,8 +3162,9 @@ class QwenEngine(Engine):
         # once QWEN_BASE17_IDLE_TTL elapses since the last use. Mirrors the
         # VoiceDesign `_design_last_used` / `_design_in_flight` pair: the
         # in-flight guard stops the watchdog freeing it mid-forward.
+        # Thread-safe (#1917) — see `InFlightCounter`.
         self._base17_last_used: float = 0.0
-        self._base17_in_flight: int = 0
+        self._base17_in_flight = InFlightCounter()
         # Monotonic timestamp of the last voice-design activity. The startup
         # idle watchdog frees the heavy transient VoiceDesign model once this
         # goes stale (QWEN_DESIGN_IDLE_TTL), so a cast-review session's rapid
@@ -3124,11 +3177,13 @@ class QwenEngine(Engine):
         # to elapse mid-design, and a watchdog free in the unguarded window
         # between _ensure_design_loaded() and the _synth_lock forward nulls
         # `_design` → "'NoneType' object has no attribute 'generate_voice_design'".
-        # Incremented at entry / decremented in a finally; `maybe_free_idle_design`
-        # bails while it's > 0. Read/written under the GIL (simple int), which is
-        # sufficient here: the airtight backstop is the re-ensure under _synth_lock
-        # inside design_voice — this guard just stops the wasteful, racy free.
-        self._design_in_flight: int = 0
+        # Claimed at entry / released in a finally; `maybe_free_idle_design`
+        # bails while `.busy`. Thread-safe (#1917) — see `InFlightCounter`: a
+        # plain int here can silently lose a decrement and disable this
+        # engine's eviction for the rest of the process lifetime. The
+        # airtight backstop is still the re-ensure under `_synth_lock` inside
+        # design_voice — this guard just stops the wasteful, racy free.
+        self._design_in_flight = InFlightCounter()
         # Designed-voice embeddings cache. Default lives next to this file
         # under voices/qwen/ (exact back-compat when QWEN_VOICES_DIR unset).
         # The Node server points QWEN_VOICES_DIR at the per-workspace tree
@@ -3423,17 +3478,24 @@ class QwenEngine(Engine):
     def _base17_activity(self):
         """Bracket a 1.7B-Base forward (mint OR 1.7B synth/batch): refresh the
         idle timestamp and hold the in-flight guard so the idle watchdog can't
-        free the model mid-forward (issue #1024). Mirrors design_voice's manual
+        free the model mid-forward (issue #1024). Mirrors design_voice's
         `_design_in_flight` bracketing, factored because three sites drive the
-        1.7B-Base (mint_variant + synthesize + synthesize_batch). The int
-        inc/dec is GIL-atomic — same rationale as `_design_in_flight`."""
+        1.7B-Base (mint_variant + synthesize + synthesize_batch). Thread-safe
+        (#1917) — see `InFlightCounter`.
+
+        Exit ordering is load-bearing: the re-stamp lives in an INNER
+        `finally`, run BEFORE the `claim()` context manager's own `finally`
+        decrements the count. `maybe_free_idle_base17` is reached with
+        `ttl=0.0` from the admission path, so a decrement that lands before
+        the re-stamp opens a window where `.busy` reads False while
+        `_base17_last_used` is still the pre-forward value — which reads as
+        idle and gets evicted."""
         self._base17_last_used = time.monotonic()
-        self._base17_in_flight += 1
-        try:
-            yield
-        finally:
-            self._base17_last_used = time.monotonic()
-            self._base17_in_flight -= 1
+        with self._base17_in_flight.claim():
+            try:
+                yield
+            finally:
+                self._base17_last_used = time.monotonic()
 
     def maybe_free_idle_base17(self, ttl_seconds: float) -> bool:
         """Free the resident 1.7B-Base model once it's idled past `ttl_seconds`
@@ -3448,12 +3510,12 @@ class QwenEngine(Engine):
         under an active mint or 1.7B generate. Nulls inline (calling
         `unload_base17()` would re-acquire the non-reentrant `_synth_lock` →
         deadlock); the gc/empty_cache reclaim runs after the lock is released."""
-        if self._base17 is None or self._base17_in_flight > 0:
+        if self._base17 is None or self._base17_in_flight.busy:
             return False
         if time.monotonic() - self._base17_last_used <= ttl_seconds:
             return False
         with self._synth_lock:
-            if self._base17 is None or self._base17_in_flight > 0:
+            if self._base17 is None or self._base17_in_flight.busy:
                 return False
             if time.monotonic() - self._base17_last_used <= ttl_seconds:
                 return False
@@ -3917,7 +3979,7 @@ class QwenEngine(Engine):
         (which re-acquires the non-reentrant `_synth_lock` → deadlock); the
         gc/empty_cache reclaim runs after the lock is released."""
         # Cheap, lock-free fast-outs first (no model, or recently used).
-        if self._design is None or self._design_in_flight > 0:
+        if self._design is None or self._design_in_flight.busy:
             return False
         if time.monotonic() - self._design_last_used <= ttl_seconds:
             return False
@@ -3925,7 +3987,7 @@ class QwenEngine(Engine):
         # and runs its forward while holding `_synth_lock`, so a check that still
         # finds it idle here cannot be mid-forward.
         with self._synth_lock:
-            if self._design is None or self._design_in_flight > 0:
+            if self._design is None or self._design_in_flight.busy:
                 return False
             if time.monotonic() - self._design_last_used <= ttl_seconds:
                 return False
@@ -3989,11 +4051,14 @@ class QwenEngine(Engine):
         # so the idle watchdog can't free the VoiceDesign model out from under
         # it. The timestamp alone is a TOCTOU (the watchdog can read a stale value
         # and free in the gap before the _synth_lock forward); `_design_in_flight`
-        # + the re-ensure under the lock below close that race. Decremented in the
-        # finally so a failure can't leave the guard stuck > 0.
+        # + the re-ensure under the lock below close that race. Released in
+        # `claim()`'s own finally so a failure can't leave the guard stuck.
+        # No inner re-stamp-before-decrement dance needed here (unlike
+        # `_base17_activity` / `CoquiEngine.synthesize` / `transcribe` /
+        # `embed`) — the only `_design_last_used` re-stamp on this path already
+        # runs BEFORE the `return` below, i.e. before this `with` block's exit.
         self._design_last_used = time.monotonic()
-        self._design_in_flight += 1
-        try:
+        with self._design_in_flight.claim():
             # Phase timer (mirrors the synth path's load_ms/gen_ms). `t0` brackets
             # the whole operation so the structured timing line below can split a
             # slow design into its phases — see that log.info for the field map.
@@ -4170,8 +4235,6 @@ class QwenEngine(Engine):
             # the model warm; a pause past the TTL lets the watchdog reclaim it.
             self._design_last_used = time.monotonic()
             return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
-        finally:
-            self._design_in_flight -= 1
 
     def clone_voice(
         self, voice_id: str, ref_audio: Any, ref_sr: int, ref_text: str,
@@ -4939,7 +5002,8 @@ class WhisperEngine:
         self._infer_lock = threading.Lock()
         # Claimed BEFORE `_infer_lock` so `maybe_free_idle` can fast-out
         # without blocking the admission path on a whole forward (#1894).
-        self._infer_in_flight = 0
+        # Thread-safe (#1917) — see `InFlightCounter`.
+        self._in_flight = InFlightCounter()
         # Monotonic timestamp of the last transcribe — drives the idle watchdog.
         self._last_used: float = 0.0
         self._device = (os.environ.get("ASR_DEVICE", "cpu").strip().lower() or "cpu")
@@ -5023,30 +5087,32 @@ class WhisperEngine:
         route→load gap; `None` is the pre-admission path."""
         self._ensure_loaded(device=device)
         audio = self._pcm_to_float32_16k(pcm, sample_rate)
-        self._infer_in_flight += 1
-        self._last_used = time.monotonic()
-        try:
-            with self._infer_lock:
-                # Re-ensure under the lock: an idle-evict holds `_infer_lock`
-                # to null the model, so one ensured before the lock can be gone
-                # in the gap. No-op on the warm path.
-                self._ensure_loaded(device=device)
-                model = self._model
-                assert model is not None
-                self._last_used = time.monotonic()
-                segments, info = model.transcribe(
-                    audio,
-                    language=language,
-                    beam_size=1,                     # greedy
-                    temperature=0.0,                 # deterministic → idempotent verdicts
-                    condition_on_previous_text=word_timestamps,  # True only for captions
-                    vad_filter=True,                 # drop non-speech so silence isn't "transcribed"
-                    word_timestamps=word_timestamps,
-                )
-                segs = list(segments)
-        finally:
-            self._infer_in_flight -= 1
+        with self._in_flight.claim():
             self._last_used = time.monotonic()
+            # Re-stamp on the way out in an INNER finally, BEFORE the claim's
+            # own decrement runs (#1917) — see CoquiEngine.synthesize for why
+            # the ordering matters.
+            try:
+                with self._infer_lock:
+                    # Re-ensure under the lock: an idle-evict holds
+                    # `_infer_lock` to null the model, so one ensured before
+                    # the lock can be gone in the gap. No-op on the warm path.
+                    self._ensure_loaded(device=device)
+                    model = self._model
+                    assert model is not None
+                    self._last_used = time.monotonic()
+                    segments, info = model.transcribe(
+                        audio,
+                        language=language,
+                        beam_size=1,                     # greedy
+                        temperature=0.0,                 # deterministic → idempotent verdicts
+                        condition_on_previous_text=word_timestamps,  # True only for captions
+                        vad_filter=True,                 # drop non-speech so silence isn't "transcribed"
+                        word_timestamps=word_timestamps,
+                    )
+                    segs = list(segments)
+            finally:
+                self._last_used = time.monotonic()
         text = " ".join((s.text or "").strip() for s in segs).strip()
         logprobs = [s.avg_logprob for s in segs if s.avg_logprob is not None]
         no_speech = [s.no_speech_prob for s in segs if s.no_speech_prob is not None]
@@ -5118,18 +5184,18 @@ class WhisperEngine:
         used recently — skipping the lock here matters, a forward can run
         for seconds and admission must not block on it. Re-validated UNDER
         the lock before dropping (#1894): `transcribe` claims
-        `_infer_in_flight` and refreshes `_last_used` BEFORE taking the lock,
+        `_in_flight` and refreshes `_last_used` BEFORE taking the lock,
         so a counter that flips to nonzero WHILE this is queued on the lock
         is otherwise invisible to the cheap check above. Calls
         `_drop_model_locked()` directly rather than `unload()` — re-entering
         `_infer_lock` here would self-deadlock.
         """
-        if self._model is None or self._infer_in_flight > 0:
+        if self._model is None or self._in_flight.busy:
             return False
         if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
             return False
         with self._infer_lock:
-            if self._model is None or self._infer_in_flight > 0:
+            if self._model is None or self._in_flight.busy:
                 return False
             if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
                 return False
@@ -5157,7 +5223,8 @@ class SpeakerEngine:
         self._infer_lock = threading.Lock()
         # Claimed BEFORE `_infer_lock` so `maybe_free_idle` can fast-out
         # without blocking the admission path on a whole forward (#1894).
-        self._infer_in_flight = 0
+        # Thread-safe (#1917) — see `InFlightCounter`.
+        self._in_flight = InFlightCounter()
         # Monotonic timestamp of the last embed — drives the idle watchdog.
         self._last_used: float = 0.0
         self.device = os.environ.get("SPK_DEVICE", "cpu")
@@ -5218,21 +5285,23 @@ class SpeakerEngine:
             audio = np.interp(np.linspace(0, len(audio), n, endpoint=False),
                               np.arange(len(audio)), audio).astype(np.float32)
         t = torch.from_numpy(audio).unsqueeze(0)
-        self._infer_in_flight += 1
-        self._last_used = time.monotonic()
-        try:
-            with self._infer_lock, torch.no_grad():
-                # `ensure_loaded` is async here, so unlike WhisperEngine we
-                # cannot reload under the lock — re-check and surface the
-                # documented precondition. The `_infer_in_flight` claim above
-                # is what actually stops an idle-evict getting here (#1894).
-                model = self._model
-                if model is None:
-                    raise RuntimeError("model was unloaded during embed()")
-                emb = model.encode_batch(t).squeeze().cpu().numpy().astype(np.float32)
-        finally:
-            self._infer_in_flight -= 1
+        with self._in_flight.claim():
             self._last_used = time.monotonic()
+            # Re-stamp on the way out in an INNER finally, BEFORE the claim's
+            # own decrement runs (#1917) — see CoquiEngine.synthesize for why
+            # the ordering matters.
+            try:
+                with self._infer_lock, torch.no_grad():
+                    # `ensure_loaded` is async here, so unlike WhisperEngine we
+                    # cannot reload under the lock — re-check and surface the
+                    # documented precondition. The `_in_flight` claim above
+                    # is what actually stops an idle-evict getting here (#1894).
+                    model = self._model
+                    if model is None:
+                        raise RuntimeError("model was unloaded during embed()")
+                    emb = model.encode_batch(t).squeeze().cpu().numpy().astype(np.float32)
+            finally:
+                self._last_used = time.monotonic()
         norm = float(np.linalg.norm(emb))
         return (emb / norm if norm > 0 else emb).tolist()
 
@@ -5286,7 +5355,7 @@ class SpeakerEngine:
         loaded / mid-forward / used recently) — skipping the lock matters, a
         forward can run for seconds and admission must not block on it.
         Re-validated UNDER the lock before dropping (#1894): `embed` claims
-        `_infer_in_flight` and refreshes `_last_used` BEFORE taking the lock,
+        `_in_flight` and refreshes `_last_used` BEFORE taking the lock,
         so a counter that flips to nonzero WHILE this is queued on the lock
         is otherwise invisible to the cheap check above. Calls
         `_drop_model_locked()` directly rather than `unload()` — re-entering
@@ -5294,14 +5363,14 @@ class SpeakerEngine:
         """
         if _parse_device(self.device)[0] != "cuda" or self._model is None:
             return False
-        if self._infer_in_flight > 0:
+        if self._in_flight.busy:
             return False
         if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
             return False
         with self._infer_lock:
             if _parse_device(self.device)[0] != "cuda" or self._model is None:
                 return False
-            if self._infer_in_flight > 0:
+            if self._in_flight.busy:
                 return False
             if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
                 return False

@@ -372,7 +372,7 @@ def test_design_voice_survives_design_model_freed_in_the_gap(
 
 def test_watchdog_does_not_free_design_while_in_flight(fake_qwen_runtime) -> None:
     """`maybe_free_idle_design` must refuse to free the VoiceDesign model while a
-    design is in flight (`_design_in_flight` > 0), even past the idle TTL — the
+    design is in flight (`_design_in_flight.busy`), even past the idle TTL — the
     plan-161 race where a long compare-modal dwell crosses the TTL mid-design.
     Once nothing is in flight, an idle model is freed as before."""
     engine = fake_qwen_runtime["engine"]
@@ -380,11 +380,11 @@ def test_watchdog_does_not_free_design_while_in_flight(fake_qwen_runtime) -> Non
     assert engine._design is not None
     engine._design_last_used = 0.0  # ancient → past any ttl
 
-    engine._design_in_flight = 1
+    engine._design_in_flight._n = 1
     assert engine.maybe_free_idle_design(0.0) is False
     assert engine._design is not None  # NOT freed while a design is in flight
 
-    engine._design_in_flight = 0
+    engine._design_in_flight._n = 0
     assert engine.maybe_free_idle_design(0.0) is True
     assert engine._design is None  # freed once idle AND not in flight
 
@@ -532,8 +532,8 @@ def test_mint_variant_keeps_base17_warm_across_mints(fake_qwen_runtime, monkeypa
     monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda device=None: None)  # already warm
     eng.mint_variant("v1", "v1__angry", "Angrily.", "English", None, None)
     eng.mint_variant("v1", "v1__sad", "Sadly.", "English", None, None)
-    assert eng._base17 is warm         # same object across both mints — no reload churn
-    assert eng._base17_in_flight == 0  # in-flight guard balanced after both mints
+    assert eng._base17 is warm               # same object across both mints — no reload churn
+    assert eng._base17_in_flight.value == 0  # in-flight guard balanced after both mints
 
 
 def test_idle_watchdog_frees_idle_base17(fake_qwen_runtime) -> None:
@@ -542,7 +542,6 @@ def test_idle_watchdog_frees_idle_base17(fake_qwen_runtime) -> None:
     VoiceDesign idle watchdog."""
     eng = fake_qwen_runtime["engine"]
     eng._base17 = object()   # watchdog only inspects identity/flags, never calls the model
-    eng._base17_in_flight = 0
     eng._base17_last_used = time.monotonic()
     assert eng.maybe_free_idle_base17(600.0) is False   # still within the idle window → warm
     assert eng._base17 is not None
@@ -553,15 +552,15 @@ def test_idle_watchdog_frees_idle_base17(fake_qwen_runtime) -> None:
 
 def test_idle_watchdog_does_not_free_base17_while_in_flight(fake_qwen_runtime) -> None:
     """maybe_free_idle_base17 must refuse to free the 1.7B-Base while a mint or
-    1.7B synth is in flight (`_base17_in_flight` > 0), even past the TTL — the
+    1.7B synth is in flight (`_base17_in_flight.busy`), even past the TTL — the
     same race the VoiceDesign guard prevents."""
     eng = fake_qwen_runtime["engine"]
     eng._base17 = object()           # watchdog only inspects identity/flags, never calls the model
     eng._base17_last_used = 0.0      # ancient → past any ttl
-    eng._base17_in_flight = 1
+    eng._base17_in_flight._n = 1
     assert eng.maybe_free_idle_base17(0.0) is False
     assert eng._base17 is not None   # NOT freed mid-forward
-    eng._base17_in_flight = 0
+    eng._base17_in_flight._n = 0
     assert eng.maybe_free_idle_base17(0.0) is True
     assert eng._base17 is None       # freed once idle AND not in flight
 
@@ -1326,7 +1325,7 @@ def test_mint_variant_anchors_to_base_and_marks_json(fake_qwen_runtime, monkeypa
     eng.mint_variant("v1", "v1__angry", "Delivered angrily.", "English", None, "uuid-1")
     assert "instruct_synth" in calls   # the 1.7B work ran …
     assert eng._base17 is not None     # … and the model stays WARM (no per-mint unload, #1024)
-    assert eng._base17_in_flight == 0  # the in-flight guard balanced (entry +1 / finally −1)
+    assert eng._base17_in_flight.value == 0  # the in-flight guard balanced (claim entered/exited)
     import json as _json
     meta = _json.load(open(os.path.join(vdir, "v1__angry.json"), encoding="utf-8"))
     assert meta["anchoredTo"] == "v1" and meta["mintMethod"] == "anchored-icl-instruct"
