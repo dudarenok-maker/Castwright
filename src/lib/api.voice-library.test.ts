@@ -11,6 +11,7 @@ import {
   mockDeleteVoiceLibrary,
   mockPromoteLibraryRedesign,
   mockAssignLibraryVoice,
+  mockRevokeVoiceLibraryEntry,
   _mockAssignGuardError,
   _resetMockVoiceLibrary,
 } from './api';
@@ -85,6 +86,10 @@ describe('mock voice library', () => {
     const after = await mockListVoiceLibrary();
     const persisted = after.voices.find((v) => v.voiceUuid === 'lib-pinned');
     expect(persisted?.persona).toBe('A jovial retired quartermaster, tenor, softer edge.');
+  });
+
+  it('#1808 — revoke on an unknown voiceUuid throws a clear error instead of crashing on find()!', async () => {
+    await expect(mockRevokeVoiceLibraryEntry('nope')).rejects.toThrow(/no voice-library entry/i);
   });
 });
 

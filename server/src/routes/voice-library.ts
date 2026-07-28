@@ -293,7 +293,9 @@ voiceLibraryRouter.post('/:voiceUuid/redesign', async (req: Request, res: Respon
    THEN best-effort evict the sidecar's in-memory prompt cache — the same
    file-op-first ordering as qwen-voice.ts's promote-voice. Purges the cached
    auditions and bumps persona/updatedAt on the manifest. A missing preview
-   `.pt` (nothing staged / double-promote) → 409. */
+   `.pt` (nothing staged / double-promote) → 409 — checked via `stat` BEFORE
+   the live `.pt` is removed (#1804), so a double-promote can't delete a live
+   artifact when the replacement was never staged. */
 voiceLibraryRouter.post('/:voiceUuid/redesign/promote', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
@@ -304,13 +306,14 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/promote', async (req: Request, res
     const previewKey = `${storageKey}-preview`;
 
     try {
-      await rm(qwenVoicePtPath(storageKey), { force: true });
-      await rename(qwenVoicePtPath(previewKey), qwenVoicePtPath(storageKey));
+      await stat(qwenVoicePtPath(previewKey));
     } catch (e) {
       return res
         .status(409)
         .json({ error: `No staged preview voice to promote (${(e as Error).message}).` });
     }
+    await rm(qwenVoicePtPath(storageKey), { force: true });
+    await rename(qwenVoicePtPath(previewKey), qwenVoicePtPath(storageKey));
     await rm(qwenVoiceSidecarPath(storageKey), { force: true }).catch(() => {});
     await rename(qwenVoiceSidecarPath(previewKey), qwenVoiceSidecarPath(storageKey)).catch(() => {});
 
@@ -780,7 +783,7 @@ voiceLibraryRouter.post(
       const captureMethod = (req.body?.captureMethod === 'record' ? 'record' : 'upload') as 'record' | 'upload';
       const candidateId = randomUUID();
       const result = await ingestCloneSample(file.buffer, { captureMethod, candidateId });
-      return res.status(202).json({ ...result, qualityWarnings: result.qualityWarnings });
+      return res.status(202).json(result);
     } catch (e) {
       const status = (e as { status?: number }).status ?? 502;
       return res.status(status).json({ error: (e as Error).message || 'Clone-sample ingest failed.' });

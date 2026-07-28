@@ -34,6 +34,18 @@ it('rejects a cloned entry with no consent', async () => {
   const { writeEntry } = await import('./voice-library.js');
   await expect(writeEntry({ ...base, provenance: 'cloned' })).rejects.toThrow(/consent/i);
 });
+it.each(['personName', 'relationship', 'permittedUse', 'attestedAt', 'attestedBy'] as const)(
+  '#1808 — rejects a cloned entry with a consent object missing %s (each of the 5 structural checks individually)',
+  async (missingField) => {
+    const { writeEntry } = await import('./voice-library.js');
+    // Deliberately structurally-incomplete — cast past the required-field type
+    // so the runtime guard (not the compiler) is what's under test.
+    const incomplete = { ...consent, [missingField]: undefined } as unknown as typeof consent;
+    await expect(
+      writeEntry({ ...base, provenance: 'cloned', consent: incomplete }),
+    ).rejects.toThrow(/consent/i);
+  },
+);
 it('accepts a cloned entry with structurally-valid consent', async () => {
   const { writeEntry, readEntry } = await import('./voice-library.js');
   await writeEntry({ ...base, provenance: 'cloned', consent });

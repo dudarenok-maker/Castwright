@@ -100,4 +100,19 @@ describe('CloneCapturePanel', () => {
     fireEvent.click(cont());
     expect(onReady).toHaveBeenCalledWith(expect.objectContaining({ transcript: atCap }));
   });
+
+  /* #1808 — the checkbox's accessible name is the short "I attest"
+     aria-label; the full attestation sentence lives in a sibling <span> that
+     must be programmatically associated via aria-describedby, not left as a
+     visual-only neighbor a screen reader skips. */
+  it('associates the attest checkbox with the full attestation sentence via aria-describedby', () => {
+    render(wrap(<CloneCapturePanel onReady={vi.fn()} />));
+    const checkbox = screen.getByLabelText(/i attest/i);
+    const describedById = checkbox.getAttribute('aria-describedby');
+    expect(describedById).toBeTruthy();
+    const sentence = document.getElementById(describedById!);
+    expect(sentence).toHaveTextContent(
+      'I attest I have this person’s permission to clone their voice.',
+    );
+  });
 });

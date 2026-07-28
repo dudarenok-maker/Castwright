@@ -10,10 +10,13 @@ vi.mock('../lib/api', () => ({
     }),
     listVoiceLibrary: vi.fn().mockResolvedValue({ voices: [] }),
     revokeVoiceLibraryEntry: vi.fn().mockResolvedValue({ voiceUuid: 'r1', name: 'X', provenance: 'cloned', consent: { revokedAt: 'now' } }),
+    cloneVoiceSample: vi.fn().mockResolvedValue({
+      candidateId: 'cand-1', transcript: 'hi there', durationSeconds: 9, sampleRate: 24_000, qualityWarnings: [],
+    }),
   },
 }));
 
-import { voiceLibrarySlice, cloneVoice, revokeVoice } from './voice-library-slice';
+import { voiceLibrarySlice, cloneVoice, revokeVoice, cloneSample } from './voice-library-slice';
 
 function makeStore() {
   return configureStore({ reducer: { voiceLibrary: voiceLibrarySlice.reducer } });
@@ -41,4 +44,15 @@ it('revokeVoice calls the api and refetches', async () => {
   const { api } = await import('../lib/api');
   expect(api.revokeVoiceLibraryEntry).toHaveBeenCalledWith('r1');
   expect(api.listVoiceLibrary).toHaveBeenCalled();
+});
+
+it('#1808 — cloneSample calls api.cloneVoiceSample with the form and resolves its response (thin passthrough)', async () => {
+  const store = makeStore();
+  const form = new FormData();
+  const action = await store.dispatch(cloneSample(form) as never);
+  const { api } = await import('../lib/api');
+  expect(api.cloneVoiceSample).toHaveBeenCalledWith(form);
+  expect((action as { payload: unknown }).payload).toEqual({
+    candidateId: 'cand-1', transcript: 'hi there', durationSeconds: 9, sampleRate: 24_000, qualityWarnings: [],
+  });
 });
