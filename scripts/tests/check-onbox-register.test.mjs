@@ -495,3 +495,240 @@ ${bodyE}
     `expected a total-mismatch error, got: ${JSON.stringify(errors)}`,
   );
 });
+
+// --- ops-44 independent-review follow-up (issue #1913 review comment) ---
+
+test('review fix 1: an unterminated fenced code block is reported, not silently swallowed', () => {
+  // Mirrors the review's exact repro: glance table says A = 1, body genuinely
+  // has ### A1 and ### A2, with one stray ``` line inserted before ### A2.
+  // Before the fix this returned [] (exit 0) — the fence blanked ### A2 and
+  // everything after it, so check 1 never saw the mismatch.
+  const text = `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+| **A** | Setup A | 1 |
+
+**1 owed.** Oldest: **2026-01-01**.
+
+---
+
+## Group A — setup a
+
+### A1 · thing 1
+
+Body text.
+
+\`\`\`
+### A2 · thing 2
+
+Body text.
+
+---
+`;
+  const errors = checkRegister(text);
+  assert.equal(errors.length, 1, `expected exactly one error, got: ${JSON.stringify(errors)}`);
+  assert.match(
+    errors[0],
+    /^Unterminated fenced code block opened at line \d+ — everything after it was ignored\.$/,
+  );
+});
+
+test('review fix 1: the no-fence control case still reports the count mismatch', () => {
+  // Same document as the previous test with the stray fence removed — proves
+  // the fence, not some other change, was what hid the mismatch.
+  const text = `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+| **A** | Setup A | 1 |
+
+**1 owed.** Oldest: **2026-01-01**.
+
+---
+
+## Group A — setup a
+
+### A1 · thing 1
+
+Body text.
+
+### A2 · thing 2
+
+Body text.
+
+---
+`;
+  const errors = checkRegister(text);
+  assert.ok(
+    errors.some(
+      (e) =>
+        e ===
+        'Group A: glance table says 1, body has 2 rows (A1–A2). Update the table or the body.',
+    ),
+    `expected the Group A count-mismatch error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('review fix 1: a fence opened before "## At a glance" also degrades loudly', () => {
+  // If the whole document (including the "## At a glance" heading itself)
+  // gets swallowed by an unterminated fence, the failure must still be named
+  // as an unterminated fence — not surface as the unrelated "No At a glance
+  // section found" message, which would misdirect the fix.
+  const text = '```\n' + buildRegister();
+  const errors = checkRegister(text);
+  assert.equal(errors.length, 1, `expected exactly one error, got: ${JSON.stringify(errors)}`);
+  assert.equal(
+    errors[0],
+    'Unterminated fenced code block opened at line 1 — everything after it was ignored.',
+  );
+});
+
+test('review fix 2: dotted sub-numbering ("### A2.1") is rejected, not silently counted as row 2', () => {
+  // \b alone (the pre-fix regex) treats "." as a word boundary just like
+  // whitespace, so `### A2.1` and `### A2.2` were both silently counted as
+  // row 2 — producing a phantom "duplicate row 2" contiguity error instead
+  // of the correct invalid-row-heading rejection.
+  const text = `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+| **A** | Setup A | 4 |
+
+**4 owed.** Oldest: **2026-01-01**.
+
+---
+
+## Group A — setup a
+
+### A1 · thing 1
+
+Body text.
+
+### A2.1 · thing 2 part 1
+
+Body text.
+
+### A2.2 · thing 2 part 2
+
+Body text.
+
+### A3 · thing 3
+
+Body text.
+
+---
+`;
+  const errors = checkRegister(text);
+  assert.ok(
+    errors.some(
+      (e) =>
+        e ===
+        'Row heading "### A2.1 · thing 2 part 1" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+    ),
+    `expected the A2.1 rejection, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    errors.some(
+      (e) =>
+        e ===
+        'Row heading "### A2.2 · thing 2 part 2" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+    ),
+    `expected the A2.2 rejection, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    !errors.some((e) => e.includes('are not contiguous')),
+    `did not expect a phantom "duplicate row 2" contiguity error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('review fix 3: an invalid row heading suppresses checks 1 and 4 for that letter, leaving only the rejection messages', () => {
+  // The decision comment's own motivating case: A2 split into A2a/A2b (table
+  // bumped to 3 to "absorb" the split) instead of annotating a single row's
+  // title. Table (3) vs. the one still-valid body row (A1) would otherwise
+  // ALSO report a count mismatch on top of the two rejections. Deliberately
+  // NOT sized so the counts happen to reconcile (unlike the pre-existing
+  // A19b fixture, which dodges this case) — this test fails if fix 3 is
+  // reverted.
+  const text = `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+| **A** | Setup A | 3 |
+
+**3 owed.** Oldest: **2026-01-01**.
+
+---
+
+## Group A — setup a
+
+### A1 · thing 1
+
+Body text.
+
+### A2a · thing 2 part a
+
+Body text.
+
+### A2b · thing 2 part b
+
+Body text.
+
+---
+`;
+  const errors = checkRegister(text);
+  assert.deepEqual(errors, [
+    'Row heading "### A2a · thing 2 part a" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+    'Row heading "### A2b · thing 2 part b" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+  ]);
+});
+
+test('review fix 4: CRLF line endings do not leak a raw \\r into the invalid-row-heading message', () => {
+  const text = [
+    '# On-box acceptance register',
+    '',
+    '## At a glance',
+    '',
+    '| Group | Setup | Rows |',
+    '|---|---|---|',
+    '| **A** | Setup A | 1 |',
+    '',
+    '**1 owed.** Oldest: **2026-01-01**.',
+    '',
+    '---',
+    '',
+    '## Group A — setup a',
+    '',
+    '### A1 · thing 1',
+    '',
+    'Body text.',
+    '',
+    '### A19b · sub',
+    '',
+    'Body text.',
+    '',
+    '---',
+    '',
+  ].join('\r\n');
+  const errors = checkRegister(text);
+  assert.ok(
+    errors.some(
+      (e) =>
+        e ===
+        'Row heading "### A19b · sub" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+    ),
+    `expected the sub-lettered-row error with no trailing \\r, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    !errors.some((e) => e.includes('\r')),
+    `expected no error message to contain a raw \\r, got: ${JSON.stringify(errors)}`,
+  );
+});

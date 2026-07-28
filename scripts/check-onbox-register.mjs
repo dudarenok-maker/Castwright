@@ -28,23 +28,43 @@ import { readFileSync } from 'node:fs';
 // heading inside a fence for a real one. Toggling is per-delimiter — a line
 // only closes a fence when it starts with the SAME delimiter that opened it,
 // so a `~~~` line inside a ```-fenced block is just content, not a closer.
+//
+// Also reports whether a fence was left open at EOF, and the (1-based) line
+// it opened on — an unterminated fence blanks everything after it, which
+// must be surfaced as an error rather than silently validating a truncated
+// document (ops-44, issue #1913 review finding: this previously made a
+// stray fence line make the rest of the register invisible to every check
+// below, reporting "no errors" over a truncated read).
+//
+// Residual limitation, deliberately not fixed here: two *balanced* stray
+// fences bracketing a real row still hide that row without leaving anything
+// open at EOF, so this check can't catch it — and the contiguity check (4)
+// only surfaces it when the hidden row isn't the group's highest-numbered
+// one (a hidden top row just looks like a smaller-but-still-contiguous
+// group).
 function stripFences(text) {
   const lines = text.split('\n');
   let openFence = null;
-  return lines
-    .map((line) => {
+  let openFenceLine = null;
+  const stripped = lines
+    .map((line, i) => {
       const trimmed = line.trimStart();
       if (openFence) {
-        if (trimmed.startsWith(openFence)) openFence = null;
+        if (trimmed.startsWith(openFence)) {
+          openFence = null;
+          openFenceLine = null;
+        }
         return '';
       }
       if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
         openFence = trimmed.startsWith('```') ? '```' : '~~~';
+        openFenceLine = i + 1;
         return '';
       }
       return line;
     })
     .join('\n');
+  return { text: stripped, unterminatedFenceLine: openFenceLine };
 }
 
 // Splits the document into `## `-level sections: { title, body } from just
@@ -115,12 +135,19 @@ function parseBodyGroups(sections) {
     // section's own letter followed by a digit — anything else (e.g. a
     // `### Notes` subheading) isn't row-shaped and is never even looked at,
     // so group sections may legitimately gain non-row subheadings. A
-    // candidate then either parses as a strict `<Letter><N>` (word boundary
-    // right after the digits) or doesn't — e.g. a sub-lettered `A19b`, whose
-    // digits run straight into a trailing letter with no boundary — and is
+    // candidate then either parses as a strict `<Letter><N>` (whitespace or
+    // end-of-string right after the digits) or doesn't — e.g. a sub-lettered
+    // `A19b`, or dotted sub-numbering like `A2.1` (`\b` alone would accept
+    // both: a non-word character, including `.`, `-`, `(`, `/`, `'`, `+`,
+    // satisfies a word boundary just as well as whitespace does) — and is
     // collected in `invalidRowHeadings` instead of being silently dropped.
-    const candidateRegex = new RegExp(`^### (${letter}\\d[^\\n]*)$`, 'gm');
-    const rowRegex = new RegExp(`^${letter}(\\d+)\\b`);
+    // `[^\r\n]*` (not `[^\n]*`) so a CRLF line ending doesn't leave a raw
+    // `\r` inside the captured heading text. The trailing `\r?` (outside the
+    // capture group, so it isn't included in `headingText`) absorbs a CRLF
+    // line's `\r` before `$` — `$` in multiline mode only matches directly
+    // before `\n`, so without it a CRLF line would fail to match at all.
+    const candidateRegex = new RegExp(`^### (${letter}\\d[^\\r\\n]*)\\r?$`, 'gm');
+    const rowRegex = new RegExp(`^${letter}(\\d+)(?=\\s|$)`);
     const numbers = [];
     for (const match of section.body.matchAll(candidateRegex)) {
       const headingText = match[1];
@@ -153,7 +180,21 @@ function formatRowList(letter, numbers) {
 // Runs all checks and returns a list of human-readable error strings — empty
 // when the register is internally coherent.
 export function checkRegister(text) {
-  const sections = splitSections(stripFences(text));
+  const { text: fenceStrippedText, unterminatedFenceLine } = stripFences(text);
+  const sections = splitSections(fenceStrippedText);
+
+  // An unterminated fence blanks everything after it (stripFences treats an
+  // open fence's remaining lines as still-inside-the-fence content), so
+  // every check below would silently validate a truncated document. Report
+  // it up front and bail before any other check can run against that
+  // truncated read — a partial check here would just produce more wrong
+  // numbers on top of the missing-rows problem itself.
+  if (unterminatedFenceLine !== null) {
+    return [
+      `Unterminated fenced code block opened at line ${unterminatedFenceLine} — everything after it was ignored.`,
+    ];
+  }
+
   const glanceSection = sections.find((s) => s.title === 'At a glance');
   if (!glanceSection) {
     return ['No "## At a glance" section found — cannot check the register.'];
@@ -173,6 +214,13 @@ export function checkRegister(text) {
   const tableLetters = new Set(tableGroups.keys());
   const bodyLetters = new Set(bodyGroups.keys());
   const malformedLetterSet = new Set(malformedLetters);
+  // Mirrors malformedLetterSet: a letter with an invalid row heading (e.g.
+  // `### A2a`/`### A2b` from splitting a row instead of annotating its
+  // title) already gets the rejection message above — suppressing checks 1
+  // and 4 for it avoids also reporting a count/contiguity mismatch that's
+  // just an artifact of the same rejected heading (ops-44, issue #1913
+  // review finding).
+  const invalidRowHeadingLetterSet = new Set(invalidRowHeadings.map((r) => r.letter));
   const errors = [];
 
   // Malformed glance-table rows (wrong cell count, or a non-integer last
@@ -229,8 +277,11 @@ export function checkRegister(text) {
 
   // Check 1: per-group counts (only for groups present on both sides —
   // a group missing from one side is already reported by check 3 above).
+  // A letter with an invalid row heading is skipped — see
+  // invalidRowHeadingLetterSet above.
   for (const letter of tableLetters) {
     if (!bodyLetters.has(letter)) continue;
+    if (invalidRowHeadingLetterSet.has(letter)) continue;
     const tableCount = tableGroups.get(letter);
     const bodyNumbers = bodyGroups.get(letter);
     if (tableCount !== bodyNumbers.length) {
@@ -255,9 +306,11 @@ export function checkRegister(text) {
   }
 
   // Check 4: row numbers within a group are contiguous from 1, no gaps or
-  // duplicates.
+  // duplicates. A letter with an invalid row heading is skipped — see
+  // invalidRowHeadingLetterSet above.
   for (const [letter, numbers] of bodyGroups) {
     if (numbers.length === 0) continue;
+    if (invalidRowHeadingLetterSet.has(letter)) continue;
     const sorted = [...numbers].sort((a, b) => a - b);
     const isContiguous =
       new Set(sorted).size === sorted.length && sorted.every((n, i) => n === i + 1);
