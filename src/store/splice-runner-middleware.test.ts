@@ -176,10 +176,10 @@ describe('spliceRunnerMiddleware', () => {
        confusing the user. This test verifies the guard by starting a splice
        for bk1, switching to bk2 before completion, and asserting bk2's
        chapter 1 is NOT updated. */
-    let completionCallback: (() => void) | null = null;
+    const completionCallbackHolder: { fn: (() => void) | null } = { fn: null };
     streamSpliceSpy.mockImplementation(async (args: SpliceArgs) => {
       /* Defer the completion callback so we can switch books before it fires. */
-      completionCallback = () => {
+      completionCallbackHolder.fn = () => {
         args.onTick({
           type: 'splice_complete',
           chapterId: args.chapterId,
@@ -206,8 +206,10 @@ describe('spliceRunnerMiddleware', () => {
     store.dispatch({ type: 'chapters/setCurrentBookId', payload: 'bk2' });
 
     /* Now fire the completion callback — the middleware should NOT update
-       chapter 1 because currentBookId is now bk2, not bk1. */
-    completionCallback?.();
+       chapter 1 because currentBookId is now bk2, not bk1. Verify the mock
+       actually set the callback; if not, the test would pass vacuously. */
+    expect(completionCallbackHolder.fn).not.toBeNull();
+    completionCallbackHolder.fn?.();
     await flush();
 
     /* Verify: chapter 1 should NOT have been stamped with the new audio time. */
