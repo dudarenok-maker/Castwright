@@ -1156,6 +1156,18 @@ class CoquiEngine(Engine):
         # call would race past the `_tts is None` check and load XTTS twice.
         self._loading: bool = False
         self._load_lock: asyncio.Lock = asyncio.Lock()
+        # Serialises the synth forward against unload() (#1894). A threading
+        # .Lock, NOT the asyncio `_load_lock` above: both /synthesize and
+        # /unload reach this class through `asyncio.to_thread`, i.e. on worker
+        # threads, so an asyncio primitive would not serialise them. Mirrors
+        # QwenEngine's `_synth_lock`. NON-REENTRANT — a holder must call
+        # `_drop_model_locked()`, never `unload()`.
+        self._synth_lock = threading.Lock()
+        # Read lock-free by `maybe_free_idle` so a busy engine short-circuits
+        # without blocking the admission path on a forward that may run for
+        # seconds.
+        self._synth_in_flight = 0
+        self._last_used = 0.0
         self._language = os.environ.get("COQUI_LANGUAGE", "en")
         self._device = _read_device_env("COQUI_DEVICE") or "auto"  # auto | cpu | cuda | cuda:N
         self._requested_device = self._device  # preserved before any auto-resolution
@@ -1329,9 +1341,35 @@ class CoquiEngine(Engine):
         Used by POST /unload when the UI's Stop button fires (or when the
         Analysing screen's Load button auto-evicts the TTS model to make
         room for the analyzer LLM). Idempotent — safe to call when nothing
-        is loaded."""
+        is loaded.
+
+        Acquires `_synth_lock` so it cannot null `_tts` out from under an
+        in-flight forward (#1894): the route offloads both this and
+        /synthesize to the worker pool, so they genuinely overlap. MUST NOT
+        be called while already holding `_synth_lock` — it is non-reentrant.
+        Internal holders call `_drop_model_locked()` + `_reclaim_after_drop()`.
+        """
+        with self._synth_lock:
+            dropped, torch_module = self._drop_model_locked()
+        if dropped:
+            self._reclaim_after_drop(torch_module)
+
+    def _drop_model_locked(self) -> tuple[bool, Any]:
+        """Reset every field the loaded model owns. CALLER MUST HOLD
+        `_synth_lock`. Returns `(dropped, torch_module)` — the torch handle is
+        returned rather than used here because the reclaim runs outside the
+        lock (see `_reclaim_after_drop`).
+
+        Split out (#1894) so `maybe_free_idle` reuses the FULL teardown rather
+        than nulling `_tts` inline the way QwenEngine's
+        `maybe_free_idle_design` does. Qwen can null inline because `_design`
+        carries no paired state; Coqui's teardown also restores
+        `self._device = self._requested_device` (the #1730 gap-3 fix), and
+        skipping it would leave the next lazy /synthesize cold-loading onto
+        the last admitted card, bypassing placement entirely.
+        """
         if self._tts is None:
-            return
+            return (False, None)
         torch_module = self._torch
         self._tts = None
         self._torch = None
@@ -1342,17 +1380,21 @@ class CoquiEngine(Engine):
         # re-resolve from the ORIGINAL request (e.g. 'auto'), not the last card.
         self._device = self._requested_device
         self._use_half = False
+        return (True, torch_module)
+
+    def _reclaim_after_drop(self, torch_module: Any) -> None:
+        """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
+        `_synth_lock` RELEASED — `gc.collect()` over a multi-GB torch graph is
+        slow, and `_idle_evict` calls this path synchronously on the event
+        loop, where a stall would freeze /health (main.py:5081-5082).
+        """
         # Break the dropped model's reference cycles NOW (see
         # _reclaim_host_and_vram) — nn.Module graphs aren't refcount-freed, and
         # a lagging cyclic GC under load is what leaked host RAM (2026-05-30).
         gc.collect()
         # `torch.cuda.empty_cache()` releases the cached allocator blocks
-        # back to the driver. Python's GC will reclaim the model's tensors
-        # once `self._tts = None` drops the last reference, but the cached
-        # allocator can hold those blocks for the next allocation — calling
-        # empty_cache makes the freed VRAM visible to other processes (e.g.
-        # the Ollama daemon) immediately, which is the whole point of the
-        # auto-evict-on-load flow.
+        # back to the driver, making the freed VRAM visible to other processes
+        # immediately — the whole point of the auto-evict-on-load flow.
         if torch_module is not None:
             try:
                 if torch_module.cuda.is_available():
@@ -1362,8 +1404,42 @@ class CoquiEngine(Engine):
         log.info("Coqui model unloaded.")
 
     def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
+        # Load OUTSIDE the lock: a cold XTTS pull takes ~90s and holding
+        # `_synth_lock` across it would block /unload (the Stop button) for
+        # that whole window.
         self._ensure_loaded(model)
-        assert self._tts is not None
+        # Claim BEFORE the acquire. The counter alone is NOT enough and neither
+        # is the timestamp — main.py:3835-3838 spells out the same TOCTOU for
+        # Qwen: an evict can read a stale `_last_used` and free the model in the
+        # gap between the ensure above and the acquire below. The pair
+        # (`_synth_in_flight` set here + the re-ensure under the lock) closes it.
+        # Decremented in the finally so a failure can't leave the guard stuck.
+        self._synth_in_flight += 1
+        self._last_used = time.monotonic()
+        try:
+            with self._synth_lock:
+                # Re-ensure under the lock: a concurrent /unload or admission
+                # evict holds `_synth_lock` to null the model, so one ensured
+                # before the lock can be gone in the gap. No-op on the warm
+                # path (`_ensure_loaded` early-returns when `_tts` is set).
+                self._ensure_loaded(model)
+                return self._synthesize_locked(model, voice, text, language)
+        finally:
+            self._synth_in_flight -= 1
+            self._last_used = time.monotonic()
+
+    def _synthesize_locked(
+        self, model: str, voice: str, text: str, language: Optional[str] = None
+    ) -> SynthResult:
+        """The forward itself. CALLER MUST HOLD `_synth_lock`.
+
+        Binds `self._tts` to a local up front so the forward never re-reads an
+        attribute a concurrent unload could null. The assert is a cheap
+        invariant, NOT the race guard — the guard is the caller's
+        `_synth_in_flight` claim plus its re-ensure under the lock.
+        """
+        tts = self._tts
+        assert tts is not None
         effective_language = language or self._language
 
         # Pre-flight validation. If the caller's `voice` isn't in this model's
@@ -1400,18 +1476,18 @@ class CoquiEngine(Engine):
         # inference on a model that wasn't trained mixed-precision.
         if self._use_half and self._torch is not None:
             with self._torch.autocast(device_type="cuda", dtype=self._torch.float16):
-                audio = self._tts.tts(
+                audio = tts.tts(
                     text=text,
                     speaker=actual_voice,
                     language=effective_language,
                 )
         else:
-            audio = self._tts.tts(
+            audio = tts.tts(
                 text=text,
                 speaker=actual_voice,
                 language=effective_language,
             )
-        sample_rate = int(getattr(self._tts.synthesizer, "output_sample_rate", 24000))
+        sample_rate = int(getattr(tts.synthesizer, "output_sample_rate", 24000))
         pcm = _float_audio_to_int16_le(audio)
         return SynthResult(pcm=pcm, sample_rate=sample_rate, substituted_from=substituted_from)
 
