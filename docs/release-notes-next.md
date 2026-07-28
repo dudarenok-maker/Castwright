@@ -325,7 +325,7 @@ history at cut time.
   success-path property) and owed on-box as register row A19. Five regression tests in
   `server/src/tts/synthesise-chapter-coqui-fallback.test.ts`; the sibling residency asymmetry
   (nothing ever evicts Coqui after the last Coqui chapter) stays open as #1894.
-- **Idle Coqui XTTS is now reclaimed under VRAM pressure** (#1894, PR #NNN) —
+- **Idle Coqui XTTS is now reclaimed under VRAM pressure** (#1894, PR #1924) —
   the sidecar's admission path frees a resident-but-idle XTTS before reporting
   `noCapacity`, instead of failing the starved operation. Engine-aware (a Coqui
   op never evicts itself) and device-targeted. Tunable via `COQUI_IDLE_TTL` /
