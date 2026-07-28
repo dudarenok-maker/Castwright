@@ -31,6 +31,7 @@ import {
   runLoudnormFirstPass,
   resolveLoudnormOptions,
   type LoudnormFirstPassStats,
+  type LoudnormOptions,
   type LoudnormSidecarJson,
 } from './loudnorm.js';
 import { ffmpegBannerLine, parseFfmpegVersion } from '../diagnostics/ffmpeg.js';
@@ -122,6 +123,12 @@ interface Artifacts {
   finalized: { segmentCount: number; durationSec: number };
   firstPass: LoudnormFirstPassStats;
   sidecar: LoudnormSidecarJson | null;
+  /** The knobs actually resolved DURING this run — not re-derived after the
+      fact. `runPipeline` forces `AUDIO_LOUDNORM_TARGET` for its own duration
+      and restores it before returning, so a caller re-calling
+      `resolveLoudnormOptions()` afterwards would see the WRONG run's target
+      once a later `runPipeline` call has moved on. */
+  loudnorm: LoudnormOptions;
   mp3: Buffer;
   mp3Md5: string;
   decoded: Int16Array;
@@ -132,14 +139,25 @@ interface Artifacts {
 }
 
 let art: Artifacts;
-let workspaceRoot: string;
+/** ops-36 Task 9c: the linear-loudnorm-arm run, at `LINEAR_TARGET`. */
+let linearArt: Artifacts;
+const workspaceRoots: string[] = [];
 
 const BASELINE_PATH = join(FIXTURE_DIR, 'golden-chapter.baseline.json');
 const DECODED_PATH = join(FIXTURE_DIR, 'golden-chapter.decoded.pcm');
+/* The shipped `-16` target always takes the DYNAMIC loudnorm fallback on this
+   fixture (crest factor never exceeds |target - tp|), so the LINEAR arm —
+   the mode `buildSecondPassFilterString` actually requests — has zero
+   coverage from the primary run. A second run at -20 LUFS reaches it
+   (measured: normalization_type = linear). Attenuating the fixture cannot
+   substitute for this: crest factor is gain-invariant. */
+const LINEAR_TARGET = -20;
+const LINEAR_BASELINE_PATH = join(FIXTURE_DIR, 'golden-chapter.linear.baseline.json');
 const BLESS = process.env.GOLDEN_BLESS === '1';
 const BLESS_CMD = 'npm run test:golden-audio -- --assembly-only --bless';
 
 let baseline: AssemblyBaseline | null = null;
+let linearBaseline: AssemblyBaseline | null = null;
 
 /** Thin delegate — the branch logic lives in `golden-baseline.ts` so it can be
     unit-tested. On any one box only one arm ever runs, and the other arm would
@@ -159,71 +177,84 @@ function modeLine(): string {
   );
 }
 
-function loadBaseline(): AssemblyBaseline {
-  if (!existsSync(BASELINE_PATH)) {
+function loadBaseline(path: string): AssemblyBaseline {
+  if (!existsSync(path)) {
     throw new Error(
-      `golden assembly: baseline missing at ${BASELINE_PATH}.\n` +
-        `  Both baseline artifacts are committed, so absence means one was deleted.\n` +
+      `golden assembly: baseline missing at ${path}.\n` +
+        `  The baseline is committed, so absence means it was deleted.\n` +
         `  To record a new baseline: ${BLESS_CMD}`,
     );
   }
-  return JSON.parse(readFileSync(BASELINE_PATH, 'utf8')) as AssemblyBaseline;
+  return JSON.parse(readFileSync(path, 'utf8')) as AssemblyBaseline;
 }
 
-function writeBaseline(): void {
+/** `decodedPath === null` for the linear arm: there is no `.decoded.pcm`
+    partner for it, so L4 on that arm is tight-only (see the L-linear `it`). */
+function writeBaseline(a: Artifacts, baselinePath: string, decodedPath: string | null): void {
   /* Refuse to record a baseline whose mode is missing. If the second-pass JSON
      failed to parse at bless time, `normalizationType` is undefined,
      JSON.stringify drops the key, and L2 would then compare undefined to
      undefined and pass forever — defeating the exact absence-diagnosis L2
      exists for. A poisoned baseline is worse than no baseline. */
-  if (!art.sidecar || art.sidecar.normalizationType === undefined) {
+  if (!a.sidecar || a.sidecar.normalizationType === undefined) {
     throw new Error(
       `golden assembly BLESS: refusing to record a baseline without ` +
         `sidecar.normalizationType. The second-pass loudnorm JSON was not ` +
-        `parsed (sidecar ${art.sidecar ? `i=${art.sidecar.i}` : 'absent'}). ` +
+        `parsed (sidecar ${a.sidecar ? `i=${a.sidecar.i}` : 'absent'}). ` +
         `Fix that first — recording now would bake in a hole.`,
     );
   }
-  const { target, lra, tp } = resolveLoudnormOptions();
+  const { target, lra, tp } = a.loudnorm;
   const floor = 10 ** (-50 / 20);
   const recorded: AssemblyBaseline = {
     recordedAt: new Date().toISOString().slice(0, 10),
-    ffmpegBanner: art.banner ?? '',
-    ffmpegVersion: parseFfmpegVersion(art.banner ?? ''),
+    ffmpegBanner: a.banner ?? '',
+    ffmpegVersion: parseFfmpegVersion(a.banner ?? ''),
     encode: { format: 'mp3', quality: 2, sampleRate: meta.sampleRate, writeXing: true },
     loudnorm: { target, lra, tp },
     firstPass: {
-      input_i: art.firstPass.input_i,
-      input_lra: art.firstPass.input_lra,
-      input_tp: art.firstPass.input_tp,
-      input_thresh: art.firstPass.input_thresh,
+      input_i: a.firstPass.input_i,
+      input_lra: a.firstPass.input_lra,
+      input_tp: a.firstPass.input_tp,
+      input_thresh: a.firstPass.input_thresh,
     },
     sidecar: {
-      i: art.sidecar.i,
-      lra: art.sidecar.lra,
-      normalizationType: art.sidecar.normalizationType,
+      i: a.sidecar.i,
+      lra: a.sidecar.lra,
+      normalizationType: a.sidecar.normalizationType,
     },
     decoded: {
-      bytes: art.decoded.length * 2,
-      quietWindowsSkipped: art.envelope.filter((v) => v < floor).length,
+      bytes: a.decoded.length * 2,
+      quietWindowsSkipped: a.envelope.filter((v) => v < floor).length,
     },
-    spectralTilt: art.spectralTilt,
-    envelope100ms: art.envelope,
-    mp3Md5: art.mp3Md5,
+    spectralTilt: a.spectralTilt,
+    envelope100ms: a.envelope,
+    mp3Md5: a.mp3Md5,
   };
-  writeFileSync(BASELINE_PATH, `${JSON.stringify(recorded, null, 2)}\n`);
-  writeFileSync(DECODED_PATH, Buffer.from(art.decoded.buffer, 0, art.decoded.length * 2));
+  writeFileSync(baselinePath, `${JSON.stringify(recorded, null, 2)}\n`);
+  if (decodedPath) {
+    writeFileSync(decodedPath, Buffer.from(a.decoded.buffer, 0, a.decoded.length * 2));
+  }
   console.log(
     `\n[golden-assembly BLESS] wrote:\n` +
-      `  ${BASELINE_PATH}\n` +
-      `  ${DECODED_PATH} (${art.decoded.length * 2} B)\n` +
-      `  ffmpeg: ${art.banner}\n` +
+      `  ${baselinePath}\n` +
+      (decodedPath ? `  ${decodedPath} (${a.decoded.length * 2} B)\n` : '') +
+      `  ffmpeg: ${a.banner}\n` +
       `  NO assertions ran. Review the diff before committing.\n`,
   );
 }
 
-beforeAll(async () => {
-  workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-golden-assembly-'));
+/** Runs the full synth -> loudnorm -> encode -> decode pipeline once, at
+    `target` LUFS, and returns its artifacts. `target` is applied by forcing
+    `AUDIO_LOUDNORM_TARGET` for the duration of this call only — the env is
+    restored (not just cleared) before returning, so a second call cannot see
+    a first call's override, and a caller's own pre-existing override (e.g. a
+    box-level env var) is not clobbered permanently. */
+async function runPipeline(target: number): Promise<Artifacts> {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-golden-assembly-'));
+  workspaceRoots.push(workspaceRoot);
+  const prevTargetEnv = process.env.AUDIO_LOUDNORM_TARGET;
+  process.env.AUDIO_LOUDNORM_TARGET = String(target);
   try {
     const [{ finalizeChapterAudioWrite }, { makeBookId }] = await Promise.all([
       import('../audio/finalize-chapter-write.js'),
@@ -266,11 +297,8 @@ beforeAll(async () => {
     /* L1's source: the raw fixture measured directly. This is a SEPARATE
        ffmpeg spawn from the one finalizeChapterAudioWrite runs internally —
        `encodePcmToAudio` does not expose its own first-pass stats. */
-    const firstPass = await runLoudnormFirstPass(
-      synth.pcm,
-      synth.sampleRate,
-      resolveLoudnormOptions(),
-    );
+    const loudnorm = resolveLoudnormOptions();
+    const firstPass = await runLoudnormFirstPass(synth.pcm, synth.sampleRate, loudnorm);
 
     const finalized = await finalizeChapterAudioWrite({
       bookId,
@@ -297,11 +325,12 @@ beforeAll(async () => {
       ? (JSON.parse(readFileSync(lufsPath, 'utf8')) as LoudnormSidecarJson)
       : null;
 
-    art = {
+    return {
       synth,
       finalized,
       firstPass,
       sidecar,
+      loudnorm,
       mp3,
       mp3Md5: md5(mp3),
       decoded,
@@ -314,14 +343,30 @@ beforeAll(async () => {
     /* A hook failure kills every `it` at once, so it must not read as a layer
        verdict. Name it for what it is. */
     throw new Error(
-      `golden assembly: the PIPELINE did not complete — this is NOT a layer ` +
-        `verdict and says nothing about audio drift. Cause: ${(e as Error).message}`,
+      `golden assembly (target ${target}): the PIPELINE did not complete — ` +
+        `this is NOT a layer verdict and says nothing about audio drift. ` +
+        `Cause: ${(e as Error).message}`,
     );
+  } finally {
+    if (prevTargetEnv === undefined) delete process.env.AUDIO_LOUDNORM_TARGET;
+    else process.env.AUDIO_LOUDNORM_TARGET = prevTargetEnv;
   }
+}
+
+beforeAll(async () => {
+  /* Preserve whatever this box already resolves to (env override or the -16
+     default) for the primary run — `runPipeline` re-asserts it via env so the
+     LINEAR_TARGET run afterwards cannot leak into it. */
+  const primaryTarget = resolveLoudnormOptions().target;
+  art = await runPipeline(primaryTarget);
+  linearArt = await runPipeline(LINEAR_TARGET);
+
   if (BLESS) {
-    writeBaseline();
+    writeBaseline(art, BASELINE_PATH, DECODED_PATH);
+    writeBaseline(linearArt, LINEAR_BASELINE_PATH, null);
   } else {
-    baseline = loadBaseline();
+    baseline = loadBaseline(BASELINE_PATH);
+    linearBaseline = loadBaseline(LINEAR_BASELINE_PATH);
     /* Announce LOOSE on a PASSING run too. Every other mention of the mode
        lives inside a failure message, so without this an operator running the
        tier on a second ffmpeg build — the owed on-box acceptance — would get
@@ -338,13 +383,14 @@ beforeAll(async () => {
       );
     }
   }
-  /* Four ffmpeg spawns (raw first pass, finalize's internal first pass, encode,
-     decode) on ~5.7s of audio. The config's hookTimeout is 30s; this explicit
-     budget documents the headroom rather than relying on it. */
+  /* Eight ffmpeg spawns now (two runs x [raw first pass, finalize's internal
+     first pass, encode, decode]) on ~5.7s of audio each. The config's
+     hookTimeout is 30s; this explicit budget documents the headroom rather
+     than relying on it. */
 }, 60_000);
 
 afterAll(() => {
-  if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
+  for (const root of workspaceRoots) rmSync(root, { recursive: true, force: true });
 });
 
 describe('golden assembly (GPU-free)', () => {
@@ -562,5 +608,30 @@ describe('golden assembly (GPU-free)', () => {
         `so a resampler or lowpass change that dulls the top end shows up HERE ` +
         `and nowhere else. A gain change does not move this number.${modeLine()}`,
     ).toBeLessThanOrEqual(TOL.spectralTiltRel);
+  });
+
+  it('L-linear — the linear loudnorm arm produces the expected audio', () => {
+    if (BLESS) return;
+    const b = linearBaseline!;
+
+    /* The whole point of this arm: the mode the code REQUESTS. If this reads
+       "dynamic", the target no longer clears the true-peak ceiling and the
+       fixture has stopped covering the linear path at all. */
+    expect(
+      linearArt.sidecar?.normalizationType,
+      `L-linear: expected loudnorm to take the LINEAR arm at target ` +
+        `${LINEAR_TARGET}, got "${linearArt.sidecar?.normalizationType}". Crest ` +
+        `factor must exceed |target - tp| to trip dynamic; if that changed, this ` +
+        `arm covers nothing.${modeLine()}`,
+    ).toBe('linear');
+
+    expect(Math.abs(linearArt.sidecar!.i - b.sidecar.i)).toBeLessThanOrEqual(TOL.sidecarLu);
+    expect(linearArt.decoded.length * 2).toBe(b.decoded.bytes);
+
+    const v = compareEnvelope(b.envelope100ms, linearArt.envelope);
+    expect(v.ok, `L-linear envelope: ${(v.worstRelDelta * 100).toFixed(1)} % @ w${v.worstIndex}`).toBe(true);
+    expect(v.loudInQuietIndex).toBe(-1);
+
+    if (isTight()) expect(linearArt.mp3Md5).toBe(b.mp3Md5);
   });
 });
