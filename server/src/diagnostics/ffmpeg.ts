@@ -109,3 +109,22 @@ export function probeFfmpeg(): FfmpegProbe {
     minimum,
   };
 }
+
+/** First line of `ffmpeg -version` — the full banner including build and
+ *  compiler, e.g. "ffmpeg version 8.1.1-full_build-www.gyan.dev Copyright …".
+ *
+ *  `FfmpegProbe.version` deliberately carries only MAJOR.MINOR, which is the
+ *  right granularity for a floor check but NOT for deciding whether two
+ *  installs will produce byte-identical output: two 8.1 builds can ship
+ *  different LAME. The golden-assembly tier (ops-36) gates its exact MP3
+ *  comparison on this string.
+ *
+ *  Spawns afresh — `probeFfmpeg` is deliberately uncached (see the block
+ *  comment above it), so there is no captured stdout to reuse. Null when
+ *  ffmpeg is absent or produced no output. */
+export function ffmpegBannerLine(): string | null {
+  const ff = present('ffmpeg');
+  if (!ff.ok) return null;
+  const first = ff.stdout.split(/\r?\n/, 1)[0]?.trim();
+  return first ? first : null;
+}

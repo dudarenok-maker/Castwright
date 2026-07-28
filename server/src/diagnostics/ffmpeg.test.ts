@@ -16,7 +16,13 @@ vi.mock('node:child_process', () => ({
   spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
 }));
 
-import { probeFfmpeg, parseFfmpegVersion, isBelowFloor, readFfmpegFloor } from './ffmpeg.js';
+import {
+  probeFfmpeg,
+  parseFfmpegVersion,
+  isBelowFloor,
+  readFfmpegFloor,
+  ffmpegBannerLine,
+} from './ffmpeg.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CASES = JSON.parse(
@@ -117,5 +123,43 @@ describe('ffmpeg version parsing (shared corpus)', () => {
 
   it('reads the declared floor from root package.json', () => {
     expect(readFfmpegFloor()).toBe('6.0');
+  });
+});
+
+describe('ffmpegBannerLine', () => {
+  const MULTILINE =
+    'ffmpeg version 8.1.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers\n' +
+    'built with gcc 14.2.0 (Rev1, Built by MSYS2 project)\n' +
+    'configuration: --enable-gpl --enable-libmp3lame\n';
+
+  it('returns the FIRST line only, trimmed', () => {
+    bins({ ffmpeg: true, ffprobe: true }, MULTILINE);
+    expect(ffmpegBannerLine()).toBe(
+      'ffmpeg version 8.1.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers',
+    );
+  });
+
+  it('handles CRLF line endings', () => {
+    bins({ ffmpeg: true, ffprobe: true }, 'ffmpeg version 8.1\r\nbuilt with gcc\r\n');
+    expect(ffmpegBannerLine()).toBe('ffmpeg version 8.1');
+  });
+
+  it('carries more than the parsed MAJOR.MINOR, so two builds are distinguishable', () => {
+    bins({ ffmpeg: true, ffprobe: true }, MULTILINE);
+    const line = ffmpegBannerLine()!;
+    /* This is the whole point: parseFfmpegVersion collapses both the Gyan and
+       the Ubuntu 8.1 builds to "8.1", but they can ship different LAME. */
+    expect(parseFfmpegVersion(line)).toBe('8.1');
+    expect(line.length).toBeGreaterThan('8.1'.length);
+  });
+
+  it('returns null when ffmpeg is absent', () => {
+    bins({ ffmpeg: false, ffprobe: false });
+    expect(ffmpegBannerLine()).toBeNull();
+  });
+
+  it('returns null when ffmpeg is present but silent', () => {
+    bins({ ffmpeg: true, ffprobe: true }, '');
+    expect(ffmpegBannerLine()).toBeNull();
   });
 });
