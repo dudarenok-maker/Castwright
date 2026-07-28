@@ -214,7 +214,7 @@ In `CoquiEngine.__init__`, immediately after `self._load_lock: asyncio.Lock = as
         # /unload reach this class through `asyncio.to_thread`, i.e. on worker
         # threads, so an asyncio primitive would not serialise them. Mirrors
         # QwenEngine's `_synth_lock`. NON-REENTRANT — a holder must call
-        # `_unload_locked()`, never `unload()`.
+        # `_drop_model_locked()`, never `unload()`.
         self._synth_lock = threading.Lock()
         # Read lock-free by `maybe_free_idle` so a busy engine short-circuits
         # without blocking the admission path on a forward that may run for
@@ -380,10 +380,10 @@ git commit -m "fix(sidecar): guard Coqui unload against an in-flight synth"
 
 ### Task 2: `CoquiEngine.maybe_free_idle(ttl_seconds)`
 
-The reclaim method itself, not yet wired to anything. Modelled on `QwenEngine.maybe_free_idle_design` (`main.py:3752-3789`) but routed through `_unload_locked()`.
+The reclaim method itself, not yet wired to anything. Modelled on `QwenEngine.maybe_free_idle_design` (`main.py:3752-3789`) but routed through `_drop_model_locked()` + `_reclaim_after_drop()`.
 
 **Files:**
-- Modify: `server/tts-sidecar/main.py` — `CoquiEngine`, immediately after `_unload_locked`
+- Modify: `server/tts-sidecar/main.py` — `CoquiEngine`, immediately after `_reclaim_after_drop`
 - Test: `server/tts-sidecar/tests/test_coqui_idle_evict.py`
 
 **Interfaces:**
