@@ -108,6 +108,11 @@ export function VoiceLibraryPanel({
     [myVoicesEntries],
   );
   const [assigningLibraryUuid, setAssigningLibraryUuid] = useState<string | null>(null);
+  /* #1896 — mirrors profile-drawer.tsx's `libraryActionError`: the panel's
+     own "My voices" assign dispatch was fire-and-forget, so a server
+     rejection (revoked / not-ready / wrong-engine 409) had nowhere to
+     surface. Same local-error idiom, one component over. */
+  const [myVoicesAssignError, setMyVoicesAssignError] = useState<string | null>(null);
   /* Whether any voice belongs to the open book's series (a sibling book — the
      `source === 'library'` half — that shares its author + series). The server
      tags these `inCurrentSeries`. A standalone (or a one-book series) has none,
@@ -263,13 +268,28 @@ export function VoiceLibraryPanel({
                   const modelKey = ttsModelKey
                     ? modelKeyForEngineChoice(engineChoice, ttsModelKey, qwenTier)
                     : undefined;
-                  dispatch(
-                    assignVoice({ voiceUuid: entry.voiceUuid, bookId, characterId, modelKey }),
-                  );
+                  setMyVoicesAssignError(null);
                   setAssigningLibraryUuid(null);
+                  void dispatch(
+                    assignVoice({ voiceUuid: entry.voiceUuid, bookId, characterId, modelKey }),
+                  )
+                    .unwrap()
+                    .catch((e) => {
+                      setMyVoicesAssignError(
+                        (e as Error).message || 'Could not assign this voice.',
+                      );
+                    });
                 }}
               />
             ))}
+            {myVoicesAssignError && (
+              <p
+                data-testid="voice-library-my-voices-error"
+                className="text-[11px] text-red-600/90 font-medium px-1"
+              >
+                ⚠ {myVoicesAssignError}
+              </p>
+            )}
           </div>
         )}
         {shown.length === 0 && q ? (
