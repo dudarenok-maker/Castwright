@@ -1655,15 +1655,31 @@ class CoquiEngine(Engine):
         # tells you which. This branch has NO catalogue fallback either way —
         # `_load_voice_latents` raises `VoiceNotDesignedError` (below) if the
         # `.pt` is missing, unconditionally. On the CHAPTER-RENDER path, the
-        # guarantee that never fires for a stranded/never-derived designed
-        # voice comes from the Node side's pre-render pre-pass
-        # (`resolveDesignedVoicesForChapter`'s coqui arm, clone-voice-resolver
-        # .ts), NOT from the key shape: that pre-pass removes a designed
-        # voice's coqui slot for the chapter whenever it can't guarantee an
-        # artifact backs it, so a chapter-render `xtts-<uuid>` request only
-        # ever reaches this engine with cached latents actually available (or
-        # already cloned this session). That pre-pass does NOT run ahead of
-        # every caller, though — `routes/voice-sample.ts` and the voice-
+        # Node side's pre-render pre-pass (`resolveDesignedVoicesForChapter`'s
+        # coqui arm, clone-voice-resolver.ts) removes a designed voice's coqui
+        # slot ahead of synth so a raise here doesn't kill a chapter that
+        # could have rendered on a catalogue voice (D-F's fail-SOFT arm).
+        #
+        # GATE 1 I-3 — that pre-pass is NOT a guarantee this branch never
+        # fires on a chapter render, and this comment used to claim it was
+        # ("only ever reaches this engine with cached latents actually
+        # available"). It is the same overclaim already corrected on the Node
+        # side's twin guard (`server/src/tts/sidecar.ts`, the
+        # `x-voice-substituted-from` branch); keep the two readings the same.
+        # The pre-pass drops the slot only when there is NO artifact on disk
+        # AND the voice-library entry does not read `cloned`
+        # (clone-voice-resolver.ts's `if (!ptExists && entry?.provenance !==
+        # 'cloned')`). Two deliberate exceptions follow from that:
+        #   - a STALE-but-present `.pt` is kept rather than downgraded (it
+        #     still renders correctly today), so the slot survives;
+        #   - an entry reading `cloned` with no artifact at all keeps its slot
+        #     ON PURPOSE — soft-removing a real person's voice would be a
+        #     Property-1 substitution, so D-F's fail-LOUD arm applies and the
+        #     raise below IS the intended outcome, not a leak.
+        # So a chapter-render `xtts-<uuid>` can still arrive here with no
+        # cached latents; that is by design, and this branch is what makes it
+        # loud. The pre-pass also does NOT run ahead of every caller —
+        # `routes/voice-sample.ts` and the voice-
         # library `/sample` route reach this engine directly with a
         # `pickVoiceForEngine`-resolved `xtts-<uuid>`, so THIS branch (the
         # `.pt`-presence check below) is still the only thing standing
