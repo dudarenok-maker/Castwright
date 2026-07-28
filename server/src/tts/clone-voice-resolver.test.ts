@@ -1289,6 +1289,36 @@ describe('resolveClonedVoicesForChapter', () => {
       expect(thrown?.message).toContain('Re-enable Qwen or Coqui');
     });
 
+    /* M-6 (review, fs-38 Wave 3c) — the remedy label used to join a Set in
+       INSERTION order, so a coqui-first broken list produced "Re-enable
+       Coqui or Qwen" while the qwen-first case above produced "Re-enable
+       Qwen or Coqui" — the same underlying failure, different copy, purely
+       a function of report order. This test reports coqui BEFORE qwen and
+       still expects the canonical "Qwen or Coqui" order. */
+    it('a coqui-then-qwen report order still names them in canonical (qwen, coqui) order', async () => {
+      const coquiEntry = baseEntry({ voiceUuid: 'u1', engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } } });
+      const qwenEntry = baseEntry({ voiceUuid: 'u2', engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } } });
+      const deps = makeDeps({
+        readEntry: vi.fn(async (uuid: string) => (uuid === 'u1' ? coquiEntry : qwenEntry)),
+      });
+
+      let thrown: UnresolvableClonedVoiceError | undefined;
+      try {
+        await resolveClonedVoicesForChapter(
+          [
+            { characterName: 'Reeve', characterId: 'reeve', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: true },
+            { characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u2', engine: 'qwen', wrongEngine: false, engineUnavailable: true },
+          ],
+          deps,
+        );
+      } catch (e) {
+        thrown = e as UnresolvableClonedVoiceError;
+      }
+
+      expect(thrown?.message).toContain('Re-enable Qwen or Coqui');
+      expect(thrown?.message).not.toContain('Re-enable Coqui or Qwen');
+    });
+
     it('a qwen-unavailable voice still says "Re-enable Qwen" (byte-identical to pre-Task-18 text)', async () => {
       const entry = baseEntry({ engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } } });
       const deps = makeDeps({ readEntry: vi.fn(async () => entry) });

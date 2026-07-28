@@ -19,7 +19,13 @@ import type { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js'
 // isArtifactVersionStale comparand so the classifier and
 // routes/voice-library.ts's withComputedStaleness can never drift on what
 // "stale" means.
-import { manifestSlotFor, cloneStorageKey, isArtifactVersionStale, type CloneEngine } from './clone-engines.js';
+import {
+  manifestSlotFor,
+  cloneStorageKey,
+  isArtifactVersionStale,
+  CLONE_ENGINE_LIST,
+  type CloneEngine,
+} from './clone-engines.js';
 
 /* Review I1 — a repair-path derive (below, both the cloned and the designed
    orchestrator) only needs the sidecar to write the `.pt`; the `previewPcm`
@@ -117,8 +123,13 @@ export class UnresolvableClonedVoiceError extends Error {
       const unavailableEngines = new Set(
         broken.filter((b) => b.reason === 'engine-unavailable').map((b) => b.engine ?? 'qwen'),
       );
+      /* M-6 (review) — a Set preserves INSERTION order, so joining it
+         directly made the label depend on which engine's broken entry came
+         first in `broken` (caller-supplied order), not on anything
+         meaningful. Sort by CLONE_ENGINE_LIST's canonical order instead, so
+         the copy is stable regardless of report order. */
       const engineLabel =
-        [...unavailableEngines]
+        CLONE_ENGINE_LIST.filter((e) => unavailableEngines.has(e))
           .map((e) => (e === 'coqui' ? 'Coqui' : 'Qwen'))
           .join(' or ') || 'Qwen';
       remedies.push(`Re-enable ${engineLabel} or restore the missing voice(s)`);
