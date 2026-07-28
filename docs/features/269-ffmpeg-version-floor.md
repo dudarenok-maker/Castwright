@@ -206,4 +206,26 @@ Requires a box where ffmpeg can be swapped — see the on-box register row.
 
 ## Ship notes
 
-_Pending._
+**Shipped 2026-07-27** in [#1881](https://github.com/dudarenok-maker/Castwright/pull/1881),
+merge commit `c7ceee9b`.
+
+`status:` stays **`active`**, not `stable` — the plan does **not** move to
+`archive/` yet, because its on-box acceptance
+([register row E6](../testing/onbox-acceptance-register.md)) is still owed.
+Every assertion this plan ships drives a **mocked `spawnSync`**; no test has
+met a real ffmpeg binary of any version. Per the Before-shipping checklist, a
+row comes out only when the acceptance was actually run on the box, or the repo
+owner confirms it was exercised for real — "tests pass, so it's presumably
+fine" never removes it.
+
+Post-merge steps completed: `npm run wiki:sync` ran 2026-07-28 (0 added, 48
+changed, 0 removed) and the published
+[Installing Castwright](https://github.com/dudarenok-maker/Castwright/wiki/Installing-Castwright)
+page was verified to show "ffmpeg 6.0 or newer on PATH" and "validated on
+Ubuntu 24.04+". Until that ran, the wizard's outdated-ffmpeg card linked to a
+page that still said only "ffmpeg on PATH" with no floor.
+
+Deferred by design: [#1880](https://github.com/dudarenok-maker/Castwright/issues/1880)
+(ops-36) — the golden-audio assembly tier asserts a 20-LU loudness band and
+fixture-derived durations, not output bytes, so the ffmpeg version stamp #1877
+asked about would have implied a comparison that test does not make.

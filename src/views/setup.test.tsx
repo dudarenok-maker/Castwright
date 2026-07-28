@@ -34,7 +34,7 @@ const READINESS = {
     tts: { status: 'fail', cause: 'no-engine-installed', message: '', remediation: '' },
     analyzer: { status: 'fail', cause: 'no-gemini-key', message: '', remediation: '' },
   },
-  info: { gpu: 'CPU — no GPU detected' },
+  info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
 } as const;
 
 describe('SetupView', () => {

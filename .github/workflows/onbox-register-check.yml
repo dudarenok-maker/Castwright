@@ -1,0 +1,37 @@
+name: On-box register check
+
+on:
+  pull_request:
+    # Path-filtered (unlike verify.yml): this check has nothing to say about
+    # a PR that doesn't touch the register, and unlike verify.yml it is not
+    # a required status check, so there's no "must still report green" case
+    # to preserve for an unrelated PR.
+    paths:
+      - 'docs/testing/onbox-acceptance-register.md'
+      # Also fire on the checker itself (and its own workflow file) so
+      # editing the checker exercises it against the real register, rather
+      # than only ever running against a register that hasn't changed.
+      - 'scripts/check-onbox-register.mjs'
+      - '.github/workflows/onbox-register-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check on-box acceptance register consistency
+    runs-on: ubuntu-latest
+    # Tiny script; cap explicitly so a hung run can't bill the 360-min
+    # default (same rationale as pr-title-lint.yml / pr-issue-link.yml).
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Check on-box register consistency
+        run: node scripts/check-onbox-register.mjs
