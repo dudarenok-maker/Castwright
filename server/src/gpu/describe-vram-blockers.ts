@@ -7,14 +7,21 @@
    action already taken — and (since finding 5) that holds regardless of
    whether the blocked op is itself Qwen or a non-Qwen engine (Coqui/Kokoro):
    evictIdleQwenBase now reclaims BOTH idle Qwen tiers for a non-Qwen op, not
-   just the one tier a Qwen op's own elevate-only rule would free. Both Coqui
-   and Kokoro have a Stop pill reachable
-   wherever they're resident (the pill in the top bar / global TTS notice
-   banner — see src/components/tts-notice-banner.tsx, Task 10), but the
-   remedies still differ: stopping Coqui is a durable fix (nothing reloads
-   it), while Kokoro is the eagerly-resident fallback gated by the "Preload
-   Kokoro at startup" setting — stopping it only frees the VRAM until the
-   sidecar next restarts, so the actionable fix names the setting instead. */
+   just the one tier a Qwen op's own elevate-only rule would free. Coqui is
+   excluded for the same reason since #1894 — the sidecar's admission path
+   reclaims an idle XTTS before it ever reports noCapacity.
+
+   Coqui's exclusion is a deliberate trade, not a clean win: when the evict
+   DECLINES (Coqui mid-forward for a sibling chapter) the user loses the one
+   actionable line this list would have given them. Accepted because pressing
+   Stop at that moment would kill a live render — the honest remedy there is
+   "wait", and an entry advising a destructive action is worse than no entry.
+
+   Kokoro stays listed. It has a Stop pill reachable wherever it's resident
+   (the top bar / global TTS notice banner — src/components/tts-notice-banner
+   .tsx), but stopping it only frees the VRAM until the sidecar next restarts,
+   because it's the eagerly-resident fallback gated by the "Preload Kokoro at
+   startup" setting — so the actionable fix names the setting instead. */
 
 export interface VramBlocker {
   /** Display name, as the user sees it in the UI. */
@@ -32,9 +39,6 @@ export interface VramBlockerHealth {
 
 export function describeVramBlockers(health: VramBlockerHealth): VramBlocker[] {
   const out: VramBlocker[] = [];
-  if (health.coquiLoaded) {
-    out.push({ model: 'Coqui XTTS', remedy: 'Use its Stop button, at the top of the window.' });
-  }
   if (health.kokoroLoaded) {
     out.push({ model: 'Kokoro', remedy: 'Turn off "Preload Kokoro at startup" in settings.' });
   }

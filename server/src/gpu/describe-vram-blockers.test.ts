@@ -2,11 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { describeVramBlockers } from './describe-vram-blockers.js';
 
 describe('describeVramBlockers', () => {
-  it('names Coqui with the top-bar-pill remedy', () => {
-    const out = describeVramBlockers({ coquiLoaded: true });
-    expect(out).toEqual([
-      { model: 'Coqui XTTS', remedy: 'Use its Stop button, at the top of the window.' },
-    ]);
+  it('does not list Coqui — admission auto-evicts an idle one (#1894)', () => {
+    expect(describeVramBlockers({ coquiLoaded: true })).toEqual([]);
   });
 
   it('names Kokoro with the preload-setting remedy, not "stop it"', () => {
@@ -22,7 +19,7 @@ describe('describeVramBlockers', () => {
   });
 
   it('lists both when both are resident', () => {
-    expect(describeVramBlockers({ coquiLoaded: true, kokoroLoaded: true })).toHaveLength(2);
+    expect(describeVramBlockers({ coquiLoaded: true, kokoroLoaded: true })).toHaveLength(1);
   });
 
   it('never names a Qwen base — admission frees those itself', () => {
